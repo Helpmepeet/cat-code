@@ -349,3 +349,28 @@ test('a peer.message.routed record carries who/what/outcome and can never carry 
     ).toThrow('unsafe field')
   }
 })
+
+test('a usage worker failure carries its category and magnitudes, and still no free-form slot', () => {
+  const failed = createOperationalRecord(
+    {
+      level: 'warn',
+      event: 'worker.failed',
+      process: 'main',
+      fields: { role: 'usage-stats', reason: 'state-budget', phase: 'replay', category: 'state-bytes', elapsedMs: 900, count: 70_000_000, limit: 67_108_864, code: 'SQLITE_FULL', sources: 3200, rows: 16_000 },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(failed.fields).toMatchObject({ reason: 'state-budget', limit: 67_108_864, code: 'SQLITE_FULL' })
+  expect(parseOperationalRecord({ ...failed })).not.toBeNull()
+  for (const field of ['pid', 'message', 'source', 'path']) {
+    expect(() => createOperationalRecord(
+      { level: 'warn', event: 'worker.failed', process: 'main', fields: { [field]: 'x' } },
+      { launchId: 'launch', processInstanceId: 'process' },
+    )).toThrow(`unsafe field ${field}`)
+  }
+  // `limit` joined the universe for this event only.
+  expect(() => createOperationalRecord(
+    { level: 'info', event: 'app.start', process: 'main', fields: { limit: 1 } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field limit')
+})

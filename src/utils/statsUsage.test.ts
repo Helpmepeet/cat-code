@@ -439,6 +439,32 @@ test('state and integer overflow are explicit collection errors', async () => {
     })).rejects.toBeInstanceOf(UsageResourceError);
 });
 
+test('each collector guard names its budget and records the observed value against its limit', async () => {
+    const path = await file([msg(asOf, 'a', 5)]);
+    const entries = await collectRetainedUsage([path], asOf, { maxIdentities: 1 }).then(() => null, (e: unknown) => e as UsageResourceError);
+    expect(entries).toMatchObject({ reason: 'state-budget', detail: { guard: 'state-entries', limit: 1 } });
+    expect(entries!.detail.observed).toBeGreaterThan(1);
+    const bytes = await collectRetainedUsage([path], asOf, { maxStateBytes: 1 }).then(() => null, (e: unknown) => e as UsageResourceError);
+    expect(bytes).toMatchObject({ reason: 'state-budget', detail: { guard: 'state-bytes', limit: 1 } });
+    expect(bytes!.detail.observed).toBeGreaterThan(1);
+    const huge = msg(asOf, 'a', Number.MAX_SAFE_INTEGER);
+    huge.message.usage.output_tokens = 0;
+    huge.message.usage.cache_read_input_tokens = 0;
+    huge.message.usage.cache_creation_input_tokens = 0;
+    await writeFile(path, [huge, msg(asOf, 'b', 1, 't2')].map(row => JSON.stringify(row)).join('\n'));
+    const overflow = await collectRetainedUsage([path], asOf).then(() => null, (e: unknown) => e as UsageResourceError);
+    expect(overflow).toMatchObject({ reason: 'state-budget', detail: { guard: 'counter-overflow' } });
+});
+test('retained-state metrics report the estimated high-water mark and never exceed the enforced budget', async () => {
+    const metrics = { retainedEntries: 0, retainedBytes: 0 };
+    await collectRetainedUsage([await file([msg(asOf, 'a', 5), msg(asOf, 'b', 7, 't2')])], asOf, { metrics });
+    expect(metrics.retainedEntries).toBeGreaterThan(0);
+    expect(metrics.retainedBytes).toBeGreaterThan(metrics.retainedEntries);
+    const tight = { retainedEntries: 0, retainedBytes: 0 };
+    await expect(collectRetainedUsage([await file([msg(asOf, 'a', 5)])], asOf, { maxIdentities: 3, metrics: tight })).rejects.toBeInstanceOf(UsageResourceError);
+    expect(tight.retainedEntries).toBeGreaterThan(3);
+});
+
 test('hourly requests and matched errors deduplicate and respect request windows and cutoff', async () => {
     const result = (id: string, error: unknown = undefined, time = asOf) => ({ type: 'user', sessionId: 's', uuid: `result-${id}-${String(error)}`, timestamp: time, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: error, content: 'not inspected' }] } });
     const request = (id: string, time = '2026-09-13T10:00:00.000Z') => msg(time, id, 1, id);

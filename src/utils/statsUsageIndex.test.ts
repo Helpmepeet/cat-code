@@ -4,9 +4,10 @@ import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { collectIndexedUsage, readSavedUsage, usageIndexPath } from './statsUsageIndex.js';
+import { collectIndexedUsage, emptyUsageIndexMetrics, readSavedUsage, usageIndexPath } from './statsUsageIndex.js';
 import { collectRetainedUsage, UsageResourceError } from './statsUsage.js';
 import { projectAutoModeDiagnosticPayload, reduceAutoModeUsage, type RetainedAutoModeRecord } from './autoModeUsage.js';
+import { UsageFailure } from './statsFailure.js';
 import { usageProjectId } from '../../app/shared/usageDashboard.js';
 import { fitUsageDashboardSnapshot, groupUsageSummary } from '../../app/sidecar/usageSummary.js';
 const roots: string[] = [];
@@ -284,7 +285,15 @@ for (const failure of ['copy-full', 'write-full', 'final-commit', 'deadline'] as
         return close.apply(this, args);
     });
     try {
-        await expect(collectIndexedUsage([file], cutoff, options)).rejects.toThrow(failure === 'deadline' ? 'Usage collection timeout' : 'Usage identity storage limit or write failure');
+        const error = await collectIndexedUsage([file], cutoff, options).then(() => null, (caught: unknown) => caught);
+        expect(error).toBeInstanceOf(UsageFailure);
+        const failed = error as UsageFailure;
+        expect(failed.message).toBe(failure === 'deadline' ? 'Usage collection timeout' : 'Usage identity storage limit or write failure');
+        // Capacity is only SQLITE_FULL; an I/O fault on the final commit is a storage failure.
+        expect({ reason: failed.reason, phase: failed.phase, sqliteCode: failed.detail.sqliteCode }).toEqual(
+            failure === 'deadline' ? { reason: 'deadline', phase: 'replay', sqliteCode: undefined }
+                : failure === 'final-commit' ? { reason: 'storage-failure', phase: 'replay', sqliteCode: 'SQLITE_IOERR' }
+                    : { reason: 'storage-capacity', phase: 'replay', sqliteCode: 'SQLITE_FULL' });
         expect(injected).toBe(true);
         if (failure.endsWith('full')) expect(fullRolledBack).toBe(true);
         else expect(pendingBatchAtClose).toBe(true);
@@ -905,3 +914,171 @@ test('older snapshots rebuild hourly tokens and daily outcomes from the index, t
     expect(reads).toBe(0);
     expect(warm.ranges).toEqual(rebuilt.ranges);
 });
+
+async function failedIndex(path: string, file: string, install: (restore: Array<() => void>) => void) {
+    const restore: Array<() => void> = [];
+    try {
+        install(restore);
+        return await collectIndexedUsage([file], cutoff, opts(path)).then(() => null, (caught: unknown) => caught as UsageFailure);
+    } finally { for (const undo of restore) undo(); }
+}
+async function savedWithAppend() {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('saved')) + '\n');
+    const saved = await collectIndexedUsage([file], cutoff, opts(path));
+    await appendFile(file, Array.from({ length: 1000 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
+    return { path, file, saved };
+}
+async function expectLastGood(path: string, saved: unknown) {
+    expect(readSavedUsage(path)).toEqual(saved as never);
+    const reader = new Database(path, { readonly: true });
+    try { expect(reader.query<{ count: number }, []>('SELECT count(*) AS count FROM records').get()!.count).toBe(1); }
+    finally { reader.close(); }
+}
+test('a full index while inserting records is capacity; the snapshot and its timestamp survive', async () => {
+    const { path, file, saved } = await savedWithAppend();
+    const exec = Database.prototype.exec;
+    const error = await failedIndex(path, file, restore => {
+        const spy = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+            const result = exec.call(this, sql);
+            if (sql.startsWith('CREATE TABLE IF NOT EXISTS sources') && this.filename === path) {
+                const pages = this.query<{ page_count: number }, []>('PRAGMA page_count').get()!.page_count;
+                exec.call(this, `PRAGMA max_page_count=${pages + 2}`);
+            }
+            return result;
+        });
+        restore.push(() => spy.mockRestore());
+    });
+    expect(error).toBeInstanceOf(UsageFailure);
+    expect({ reason: error!.reason, phase: error!.phase, guard: error!.detail.guard, sqliteCode: error!.detail.sqliteCode })
+        .toEqual({ reason: 'storage-capacity', phase: 'index', guard: 'index-pages', sqliteCode: 'SQLITE_FULL' });
+    // Sizes the history without describing it.
+    expect(error!.detail.sources).toBe(1);
+    expect(error!.detail.rows).toBeGreaterThanOrEqual(0);
+    await expectLastGood(path, saved);
+    expect(readSavedUsage(path)!.computedAt).toBe(saved.computedAt);
+});
+for (const statement of ['INSERT INTO records', 'INSERT OR REPLACE INTO sources'] as const) test(`SQLite I/O failure at "${statement}" is a storage failure, not capacity, and is never swallowed as an unreadable source`, async () => {
+    const { path, file, saved } = await savedWithAppend();
+    const query = Database.prototype.query;
+    const error = await failedIndex(path, file, restore => {
+        const spy = spyOn(Database.prototype, 'query').mockImplementation(function (this: Database, sql: string) {
+            const prepared = query.call(this, sql);
+            return sql.startsWith(statement) && this.filename === path
+                ? { run: () => { throw Object.assign(new Error('injected /private/path I/O failure'), { code: 'SQLITE_IOERR' }); } } as never
+                : prepared;
+        } as never);
+        restore.push(() => spy.mockRestore());
+    });
+    expect(error).toBeInstanceOf(UsageFailure);
+    expect({ reason: error!.reason, phase: error!.phase, sqliteCode: error!.detail.sqliteCode }).toEqual({ reason: 'storage-failure', phase: 'index', sqliteCode: 'SQLITE_IOERR' });
+    await expectLastGood(path, saved);
+});
+test('a deadline during indexing or replay names the phase that was running', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, Array.from({ length: 50 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
+    const expired = await collectIndexedUsage([file], cutoff, { path, deadline: Date.now() - 1 }).then(() => null, (caught: unknown) => caught as UsageFailure);
+    expect({ reason: expired!.reason, phase: expired!.phase }).toEqual({ reason: 'deadline', phase: 'index' });
+    const options = { ...opts(path), finalize(snapshot: Parameters<NonNullable<Parameters<typeof collectIndexedUsage>[2]['finalize']>>[0]) { options.deadline = Date.now() - 1; return snapshot; } };
+    const failure = await collectIndexedUsage([file], cutoff, options).then(() => null, (caught: unknown) => caught as UsageFailure);
+    expect({ reason: failure!.reason, phase: failure!.phase }).toEqual({ reason: 'deadline', phase: 'finalize' });
+});
+test('index metrics separate inserted rows from replayed rows and prefix verification', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, Array.from({ length: 300 }, (_, id) => JSON.stringify(row(String(id)))).join('\n') + '\n');
+    const cold = emptyUsageIndexMetrics();
+    await collectIndexedUsage([file], cutoff, { ...opts(path), metrics: cold });
+    expect(cold).toMatchObject({ sourcesChanged: 1, rowsInserted: 300, rowsReplayed: 300, prefixVerifiedBytes: 0, reusedAggregate: false });
+    expect(cold.retained.retainedEntries).toBeGreaterThan(0);
+    const unchanged = emptyUsageIndexMetrics();
+    await collectIndexedUsage([file], cutoff, { ...opts(path), metrics: unchanged });
+    expect(unchanged).toMatchObject({ sourcesChanged: 0, rowsInserted: 0, rowsReplayed: 0, reusedAggregate: true });
+    const size = (await stat(file)).size;
+    await appendFile(file, JSON.stringify(row('late')) + '\n');
+    const append = emptyUsageIndexMetrics();
+    await collectIndexedUsage([file], cutoff, { ...opts(path), metrics: append });
+    // One new row still replays the whole index and re-reads the old prefix.
+    expect(append).toMatchObject({ sourcesChanged: 1, rowsInserted: 1, rowsReplayed: 301, prefixVerifiedBytes: size });
+});
+
+// Timing state lives in per-run scratch storage, never on the heap.
+const timingRows = (calls: number, options: { split?: boolean; session?: string; retryEvery?: number } = {}) => {
+    const session = options.session ?? 's';
+    const at = (index: number) => new Date(Date.parse(cutoff) - (calls + 10) * 1000 + index * 1000).toISOString();
+    const system = (subtype: string, index: number, fields: Record<string, unknown>) => ({ type: 'system', subtype, sessionId: session, uuid: `${subtype}-${session}-${index}-${String(fields.attempt_id ?? fields.tool_use_id)}`, timestamp: at(index), schema_version: 1, ...fields });
+    const starts: unknown[] = [], ends: unknown[] = [];
+    for (let i = 0; i < calls; i++) {
+        const attempts = options.retryEvery && i % options.retryEvery === 0 ? 2 : 1;
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            const ids = { call_id: `call-${i}`, attempt_id: `call-${i}-a${attempt}` };
+            starts.push(system('model_attempt_start', i, { ...ids, attempt_index: attempt, provider: 'firstParty', model: 'claude-sonnet-4-6', mode: attempt === 1 ? 'streaming' : 'non_streaming' }));
+            if (attempt === 1 && i % 3 === 0) ends.push(system('model_attempt_first_text', i, { ...ids, duration_ms: 10 + i % 40 }));
+            if (i % 11 !== 0) ends.push(system('model_attempt_end', i, { ...ids, outcome: attempt === attempts ? (i % 7 === 0 ? 'failed' : 'succeeded') : 'failed', duration_ms: 100 + (i * 37) % 900 }));
+        }
+        starts.push(system('tool_execution_start', i, { tool_use_id: `tool-${i}` }));
+        if (i % 13 !== 0) ends.push(system('tool_execution_end', i, { tool_use_id: `tool-${i}`, outcome: i % 5 === 0 ? 'failed' : 'succeeded', duration_ms: 5 + (i * 11) % 300 }));
+    }
+    // An end that precedes its start, and a first-text longer than its end, are counted invalid.
+    ends.unshift(system('model_attempt_end', 0, { call_id: 'ghost', attempt_id: 'ghost-a1', outcome: 'succeeded', duration_ms: 5 }));
+    return options.split === false ? interleave(starts, ends) : [...starts, ...ends];
+};
+const interleave = (a: unknown[], b: unknown[]) => { const out: unknown[] = []; for (let i = 0; i < Math.max(a.length, b.length); i++) { if (i < a.length) out.push(a[i]); if (i < b.length) out.push(b[i]); } return out; };
+const writeRows = (file: string, rows: unknown[]) => writeFile(file, rows.map(item => JSON.stringify(item)).join('\n') + '\n');
+
+test('timings read through scratch storage match the heap collector exactly, with a bounded newest-events timeline', async () => {
+    const { path, file } = await fixture();
+    const rows = [row('anchor'), ...timingRows(70, { retryEvery: 4 })];
+    await writeRows(file, rows);
+    const indexed = await collectIndexedUsage([file], cutoff, opts(path));
+    const heap = await collectRetainedUsage([file], cutoff);
+    expect(indexed.ranges).toEqual(heap.ranges);
+    for (const range of ['7d', '30d', 'all'] as const) expect(indexed.ranges[range].timing.models.state).toBe('available');
+    // 70 calls, 18 of them retried once more: 88 model attempts plus 70 tools, 158 events in one contributor.
+    const timeline = indexed.ranges['7d'].days.at(-1)!.contributors.items[0]!.timeline;
+    expect(timeline).toMatchObject({ state: 'truncated', omitted: 158 - 12 });
+    expect(timeline.items).toHaveLength(12);
+    const starts = timeline.items.map(item => item.startedAt);
+    expect([...starts].sort()).toEqual(starts);
+    expect(starts.at(-1)).toBe(new Date(Date.parse(cutoff) - 11_000).toISOString());
+    expect(indexed.ranges['7d'].timing.models).toMatchObject({ logicalCalls: 70, retriedCalls: 18, streamingAttempts: 70 });
+    expect(indexed.coverage.invalidTimings).toBeGreaterThan(0);
+});
+
+test('a changed timing persists even though scratch storage returns copies, across a memory-to-disk spill', async () => {
+    const { path, file } = await fixture();
+    await writeRows(file, [row('anchor'), ...timingRows(400)]);
+    const exec = Database.prototype.exec;
+    const close = Database.prototype.close;
+    let capped = false, spilled = false;
+    const limit = spyOn(Database.prototype, 'exec').mockImplementation(function (this: Database, sql: string) {
+        const result = exec.call(this, sql);
+        if (this.filename === ':memory:' && !capped) { capped = true; exec.call(this, 'PRAGMA max_page_count=32'); }
+        return result;
+    });
+    const observe = spyOn(Database.prototype, 'close').mockImplementation(function (this: Database, ...args: Parameters<Database['close']>) {
+        if (this.filename.endsWith('/scratch.sqlite')) spilled = true;
+        return close.apply(this, args);
+    });
+    try {
+        const indexed = await collectIndexedUsage([file], cutoff, opts(path));
+        // Starts and ends are separated by hundreds of rows, so the spill falls between them.
+        expect(spilled).toBe(true);
+        expect(indexed.ranges).toEqual((await collectRetainedUsage([file], cutoff)).ranges);
+        expect(indexed.ranges['7d'].timing.models.outcomes.succeeded).toBeGreaterThan(250);
+        expect(indexed.ranges['7d'].timing.tools.duration.samples).toBeGreaterThan(250);
+    } finally { observe.mockRestore(); limit.mockRestore(); }
+});
+
+test('tens of thousands of distinct timed calls stay inside the state budget the heap collector exceeded', async () => {
+    const { path, file } = await fixture();
+    const calls = 45_000;
+    await writeRows(file, timingRows(calls, { split: false }));
+    // The previous heap-resident design needed ~1.6 KiB per call and exhausted the 64 MiB budget here.
+    await expect(collectRetainedUsage([file], cutoff)).rejects.toMatchObject({ reason: 'state-budget', detail: { guard: 'state-bytes' } });
+    const metrics = emptyUsageIndexMetrics();
+    const indexed = await collectIndexedUsage([file], cutoff, { ...opts(path), metrics });
+    expect(metrics.retained.retainedBytes).toBeLessThan(2 * 1024 * 1024);
+    expect(indexed.ranges['7d'].timing.models.logicalCalls).toBe(calls);
+    expect(indexed.ranges['7d'].timing.tools.outcomes.started).toBe(calls);
+    expect(readSavedUsage(path)).toEqual(indexed);
+}, 120000);

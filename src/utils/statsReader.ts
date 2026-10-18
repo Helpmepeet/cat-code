@@ -1,5 +1,6 @@
 import { open, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { usageDeadlineFailure } from './statsFailure.js';
 export type StatsCheckpoint = { offset: number; generation: string; digest: string };
 export const STATS_CHUNK_BYTES = 64 * 1024;
 export const STATS_RECORD_BYTES = 4 * 1024 * 1024;
@@ -41,7 +42,7 @@ export async function readStatsRecords(path: string, consume: (record: StatsReco
         const check = () => {
             options.signal?.throwIfAborted();
             if (options.deadline !== undefined && Date.now() > options.deadline)
-                throw new Error('Usage collection timeout');
+                throw usageDeadlineFailure('index');
         };
         // Growth and inode identity alone cannot prove append-only behavior:
         // an in-place edit followed by an append has both. Verify the previous

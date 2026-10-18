@@ -38,58 +38,81 @@ const durationSummary = (values: readonly number[]): UsageDurationSummary => {
   }
 }
 
-const outcomes = (
-  values: readonly { outcome: UsageExecutionOutcome }[],
-): UsageTimingOutcomes => {
-  const result = emptyOutcomes()
-  result.started = values.length
-  for (const value of values) result[value.outcome]++
-  return result
+/**
+ * Streaming form of `summarizeUsageTiming`. Model attempts must arrive grouped
+ * by `callId` (any consistent order), which lets logical and retried calls be
+ * counted without a per-call map. Duration samples stay numbers only.
+ */
+export function createUsageTimingAccumulator() {
+  const modelOutcomes = emptyOutcomes()
+  const toolOutcomes = emptyOutcomes()
+  const responseDurations: number[] = []
+  const firstTextDurations: number[] = []
+  const toolDurations: number[] = []
+  let started = 0
+  let streamingAttempts = 0
+  let logicalCalls = 0
+  let retriedCalls = 0
+  let toolsStarted = 0
+  let currentCall: string | null = null
+  let currentAttempts = 0
+  return {
+    addModel(attempt: MeasuredModelAttempt): void {
+      if (attempt.callId !== currentCall) {
+        currentCall = attempt.callId
+        currentAttempts = 0
+        logicalCalls++
+      }
+      if (++currentAttempts === 2) retriedCalls++
+      started++
+      modelOutcomes[attempt.outcome]++
+      if (attempt.mode === 'streaming') {
+        streamingAttempts++
+        if (attempt.firstTextMs !== null) firstTextDurations.push(attempt.firstTextMs)
+      }
+      if (attempt.outcome === 'succeeded' && attempt.durationMs !== null) {
+        responseDurations.push(attempt.durationMs)
+      }
+    },
+    addTool(execution: MeasuredToolExecution): void {
+      toolsStarted++
+      toolOutcomes[execution.outcome]++
+      if (execution.outcome === 'succeeded' && execution.durationMs !== null) {
+        toolDurations.push(execution.durationMs)
+      }
+    },
+    finish(): UsageTimingSummary {
+      modelOutcomes.started = started
+      toolOutcomes.started = toolsStarted
+      return {
+        models: {
+          state: started > 0 ? 'available' : 'unavailable',
+          logicalCalls,
+          retriedCalls,
+          streamingAttempts,
+          outcomes: modelOutcomes,
+          responseDuration: durationSummary(responseDurations),
+          firstText: durationSummary(firstTextDurations),
+        },
+        tools: {
+          state: toolsStarted > 0 ? 'available' : 'unavailable',
+          outcomes: toolOutcomes,
+          duration: durationSummary(toolDurations),
+        },
+      }
+    },
+  }
 }
 
 export function summarizeUsageTiming(
   models: readonly MeasuredModelAttempt[],
   tools: readonly MeasuredToolExecution[],
 ): UsageTimingSummary {
-  const callAttempts = new Map<string, number>()
-  for (const attempt of models) {
-    callAttempts.set(attempt.callId, (callAttempts.get(attempt.callId) ?? 0) + 1)
-  }
-  return {
-    models: {
-      state: models.length > 0 ? 'available' : 'unavailable',
-      logicalCalls: callAttempts.size,
-      retriedCalls: [...callAttempts.values()].filter(count => count > 1).length,
-      streamingAttempts: models.filter(attempt => attempt.mode === 'streaming')
-        .length,
-      outcomes: outcomes(models),
-      responseDuration: durationSummary(
-        models.flatMap(attempt =>
-          attempt.outcome === 'succeeded' && attempt.durationMs !== null
-            ? [attempt.durationMs]
-            : [],
-        ),
-      ),
-      firstText: durationSummary(
-        models.flatMap(attempt =>
-          attempt.mode !== 'streaming' || attempt.firstTextMs === null
-            ? []
-            : [attempt.firstTextMs],
-        ),
-      ),
-    },
-    tools: {
-      state: tools.length > 0 ? 'available' : 'unavailable',
-      outcomes: outcomes(tools),
-      duration: durationSummary(
-        tools.flatMap(execution =>
-          execution.outcome === 'succeeded' && execution.durationMs !== null
-            ? [execution.durationMs]
-            : [],
-        ),
-      ),
-    },
-  }
+  const accumulator = createUsageTimingAccumulator()
+  const grouped = [...models].sort((a, b) => (a.callId < b.callId ? -1 : a.callId > b.callId ? 1 : 0))
+  for (const attempt of grouped) accumulator.addModel(attempt)
+  for (const execution of tools) accumulator.addTool(execution)
+  return accumulator.finish()
 }
 
 export const unavailableUsageTiming = (): UsageTimingSummary =>

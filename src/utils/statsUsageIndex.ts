@@ -6,7 +6,8 @@ import { basename, dirname, join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { getClaudeConfigHomeDir } from './envUtils.js';
 import { readStatsRecords, type StatsReadQuality, type StatsCheckpoint } from './statsReader.js';
-import { collectRetainedUsage, UsageResourceError, type UsageIdentityStore } from './statsUsage.js';
+import { collectRetainedUsage, usageTimingCall, type StoredModelTiming, type StoredToolTiming, type UsageCollectionMetrics, type UsageIdentityStore, type UsageTimingTable } from './statsUsage.js';
+import { UsageFailure, classifyEscapedError, classifyStorageError, sqliteCodeOf, usageDeadlineFailure, type UsageFailurePhase } from './statsFailure.js';
 import { localDateKey, shiftLocalCalendarDays } from './usageWindow.js';
 import { projectAutoModeCapability, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 import { USAGE_EFFORT_LEVELS, type UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
@@ -18,6 +19,10 @@ export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashbo
 // 256 GiB at SQLite's default 4 KiB pages, without preallocating disk space.
 // Applied on every connection, so changing this does not require a rebuild.
 const DISK_MAX_PAGE_COUNT = 67108864;
+// Per-run scratch schemas. `seq` preserves first-seen order, which the collector
+// relies on when it creates contributors for timing-only activity.
+const SCRATCH_IDENTITIES = 'CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;';
+const SCRATCH_TIMINGS = 'CREATE TABLE timings(seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL, started REAL NOT NULL, call TEXT NOT NULL, value TEXT NOT NULL, UNIQUE(kind,key));';
 const writerLockOptions = { realpath: false, stale: 180000, update: 30000, retries: 0 };
 // Fitting changes must replay indexed events, even when source files are unchanged.
 const SAVED_USAGE_FITTING_VERSION = 1;
@@ -103,12 +108,28 @@ export function readSavedUsage(path = usageIndexPath()): UsageDashboardSnapshot 
     finally { db?.close(); }
 }
 
+/** Optional per-run counters for benchmarking and failure diagnostics. */
+export type UsageIndexMetrics = {
+    indexMs: number;
+    replayMs: number;
+    finalizeMs: number;
+    sourcesChanged: number;
+    rowsInserted: number;
+    rowsReplayed: number;
+    /** Bytes of an unchanged prefix read back to prove append-only growth. */
+    prefixVerifiedBytes: number;
+    reusedAggregate: boolean;
+    retained: UsageCollectionMetrics;
+};
+export const emptyUsageIndexMetrics = (): UsageIndexMetrics => ({ indexMs: 0, replayMs: 0, finalizeMs: 0, sourcesChanged: 0, rowsInserted: 0, rowsReplayed: 0, prefixVerifiedBytes: 0, reusedAggregate: false, retained: { retainedEntries: 0, retainedBytes: 0 } });
+
 type UsageIndexOptions = {
     path?: string;
     deadline: number;
     timezone?: string;
     finalize?: (snapshot: UsageDashboardSnapshot) => UsageDashboardSnapshot;
     onReadSource?: (path: string) => void;
+    metrics?: UsageIndexMetrics;
 };
 
 async function cleanupOlderUsageIndexes(path: string): Promise<void> {
@@ -176,12 +197,16 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
     // the durable index/WAL on every small append.
     let scratch = new Database(':memory:');
     let scratchDirectory: string | undefined;
-    const check = () => { if (Date.now() > options.deadline) throw new Error('Usage collection timeout'); };
+    let phase: UsageFailurePhase = 'index';
+    // Counters are cheap, so failures can report sizes even when the caller passed none.
+    const metrics = options.metrics ?? emptyUsageIndexMetrics();
+    const phaseStartedAt = performance.now();
+    const check = () => { if (Date.now() > options.deadline) throw usageDeadlineFailure(phase); };
     try {
         // SQLite serializes writers, atomically publishes the index and snapshot,
         // and rolls back an interrupted refresh. Readers retain the last commit.
         db.exec(`PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA cache_size=-4096; PRAGMA max_page_count=${DISK_MAX_PAGE_COUNT};`);
-        scratch.exec('PRAGMA max_page_count=16384; CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;');
+        scratch.exec(`PRAGMA max_page_count=16384; ${SCRATCH_IDENTITIES} ${SCRATCH_TIMINGS}`);
         db.exec('BEGIN IMMEDIATE');
         db.exec(`CREATE TABLE IF NOT EXISTS sources(path TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, quality TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS records(path TEXT NOT NULL, offset INTEGER NOT NULL, generation TEXT NOT NULL, timestamp REAL, value TEXT NOT NULL, PRIMARY KEY(path,offset)) WITHOUT ROWID;
@@ -207,6 +232,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             try { before = await stat(file); } catch { before = null; }
             if (before && cached?.fingerprint === fingerprint(before)) continue;
             changed = true;
+            metrics.sourcesChanged++;
             try {
                 options.onReadSource?.(file);
                 let checkpoint: StatsCheckpoint | null = null, continued = false;
@@ -218,11 +244,13 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                     if (value === null) return;
                     const timestamp = object(value) && typeof value.timestamp === 'string' ? Date.parse(value.timestamp) : NaN;
                     try { insert.run(file, item.offset, item.generation, Number.isFinite(timestamp) ? timestamp : null, JSON.stringify(value)); }
-                    catch { throw new UsageResourceError('Usage index storage limit or write failure'); }
+                    catch (error) { throw classifyStorageError(error, 'index', 'Usage index storage limit or write failure', 'index-pages'); }
+                    metrics.rowsInserted++;
                 }, { deadline: options.deadline, continuation: prior,
                     onReset: () => { db.query('DELETE FROM records WHERE path=?').run(file); },
                     onCheckpoint: (value, used) => { checkpoint = value; continued = used; },
                 });
+                if (continued && prior) metrics.prefixVerifiedBytes += prior.offset;
                 if (continued && cached) {
                     const previous = JSON.parse(cached.quality) as StatsReadQuality;
                     quality.parseErrors += previous.parseErrors;
@@ -236,12 +264,18 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                     stable ? fingerprint(after) : '', JSON.stringify({ ...quality, ...(stable && checkpoint ? { checkpoint } : {}) }));
             } catch (error) {
                 check();
-                if (error instanceof UsageResourceError) throw error;
+                if (error instanceof UsageFailure) throw error;
+                // A SQLite fault is never an unreadable source; retrying it would publish a partial index.
+                if (sqliteCodeOf(error)) throw classifyStorageError(error, 'index', 'Usage index storage failure');
                 db.query('DELETE FROM records WHERE path=?').run(file);
                 db.query('DELETE FROM sources WHERE path=?').run(file);
                 // Missing/unreadable sources are retried and counted by aggregation.
             }
         }
+        metrics.indexMs = performance.now() - phaseStartedAt;
+        phase = 'replay';
+        const replayStartedAt = performance.now();
+        let finalizeStartedAt = replayStartedAt;
         const hasRecordBetween = (start: number, end: number) => db.query('SELECT 1 FROM records WHERE timestamp > ? AND timestamp <= ? LIMIT 1').get(start, end);
         const timezone = options.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
         const newlyEligible = saved && hasRecordBetween(Date.parse(saved.asOf), Date.parse(asOf));
@@ -255,6 +289,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
         // Within one local day, reuse totals only while both current and prior
         // observed cutoffs have admitted no additional records.
         if (!changed && saved && saved.timezone === timezone && asOf >= saved.asOf && localDateKey(Date.parse(asOf), timezone) === localDateKey(Date.parse(saved.asOf), timezone) && !newlyEligible && !newlyEligibleComparison) {
+            metrics.reusedAggregate = true;
             snapshot = structuredClone(saved);
             snapshot.asOf = asOf;
             snapshot.computedAt = new Date().toISOString();
@@ -266,6 +301,12 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
         } else {
             let get = scratch.query<{ value: string }, [string, string]>('SELECT value FROM identities WHERE kind=? AND key=?');
             let put = scratch.query('INSERT OR REPLACE INTO identities VALUES (?,?,?)');
+            const prepareTimings = () => ({
+                get: scratch.query<{ value: string }, [string, string]>('SELECT value FROM timings WHERE kind=? AND key=?'),
+                // Update in place so a changed entry keeps its first-seen position.
+                put: scratch.query('INSERT INTO timings(kind,key,started,call,value) VALUES (?,?,?,?,?) ON CONFLICT(kind,key) DO UPDATE SET value=excluded.value'),
+            });
+            let timingStatements = prepareTimings();
             let scratchWrites = 0;
             const commitScratchBatch = (store: Database) => {
                 if (!store.inTransaction) return;
@@ -291,12 +332,18 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                 const disk = new Database(join(scratchDirectory, 'scratch.sqlite'), { create: true });
                 try {
                     const mode = disk.query<{ journal_mode: string }, []>('PRAGMA journal_mode=PERSIST').get();
-                    if (mode?.journal_mode !== 'persist') throw new UsageResourceError('Usage scratch journal mode unavailable');
-                    disk.exec(`PRAGMA synchronous=OFF; PRAGMA max_page_count=${DISK_MAX_PAGE_COUNT}; CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;`);
+                    if (mode?.journal_mode !== 'persist') throw new UsageFailure('Usage scratch journal mode unavailable', 'storage-failure', 'replay');
+                    disk.exec(`PRAGMA synchronous=OFF; PRAGMA max_page_count=${DISK_MAX_PAGE_COUNT}; ${SCRATCH_IDENTITIES} ${SCRATCH_TIMINGS}`);
                     const copy = disk.query('INSERT INTO identities VALUES (?,?,?)');
                     for (const row of scratch.query<{ kind: string; key: string; value: string }, []>('SELECT kind,key,value FROM identities').iterate()) {
                         beginScratchWrite(disk);
                         copy.run(row.kind, row.key, row.value);
+                        finishScratchWrite(disk);
+                    }
+                    const copyTiming = disk.query('INSERT INTO timings(seq,kind,key,started,call,value) VALUES (?,?,?,?,?,?)');
+                    for (const row of scratch.query<{ seq: number; kind: string; key: string; started: number; call: string; value: string }, []>('SELECT seq,kind,key,started,call,value FROM timings ORDER BY seq').iterate()) {
+                        beginScratchWrite(disk);
+                        copyTiming.run(row.seq, row.kind, row.key, row.started, row.call, row.value);
                         finishScratchWrite(disk);
                     }
                     commitScratchBatch(disk);
@@ -305,39 +352,69 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                 scratch = disk;
                 get = scratch.query('SELECT value FROM identities WHERE kind=? AND key=?');
                 put = scratch.query('INSERT OR REPLACE INTO identities VALUES (?,?,?)');
+                timingStatements = prepareTimings();
+            };
+            // Every scratch write may need to spill from memory to disk once; both
+            // tables share that retry so their caps and failure mapping agree.
+            const writeScratch = (run: () => void) => {
+                try {
+                    const write = () => {
+                        if (scratchDirectory) beginScratchWrite(scratch);
+                        run();
+                        if (scratchDirectory) finishScratchWrite(scratch);
+                    };
+                    try { write(); }
+                    catch (error) {
+                        if (scratchDirectory || !object(error) || error.code !== 'SQLITE_FULL') throw error;
+                        spillScratch();
+                        write();
+                    }
+                } catch (error) {
+                    check();
+                    throw classifyStorageError(error, 'replay', 'Usage identity storage limit or write failure', 'identity-pages');
+                }
             };
             const digest = (key: string) => createHash('sha256').update(key).digest('hex');
+            const timingTable = <T extends { startedAt: number }>(kind: string, callOf: (value: T) => string): UsageTimingTable<T> => ({
+                get(key) {
+                    const row = timingStatements.get.get(kind, digest(key));
+                    return row ? JSON.parse(row.value) as T : undefined;
+                },
+                put(key, value) {
+                    const hashed = digest(key), encoded = JSON.stringify(value), call = callOf(value);
+                    writeScratch(() => { timingStatements.put.run(kind, hashed, value.startedAt, call, encoded); });
+                },
+                *scan(window, order) {
+                    const rows = scratch.query<{ value: string }, [string, number, number, number]>(
+                        `SELECT value FROM timings WHERE kind=? AND started>=? AND started<? AND started<=? ORDER BY ${order === 'call' ? 'call,seq' : 'seq'}`,
+                    ).iterate(kind, window.start, window.end, window.cutoff);
+                    for (const row of rows) {
+                        check();
+                        yield JSON.parse(row.value) as T;
+                    }
+                },
+            });
             const identities: UsageIdentityStore = {
                 map<T>(name: string) { return {
                     get(key: string): T | undefined { const row = get.get(name, digest(key)); return row ? JSON.parse(row.value) as T : undefined; },
                     set(key: string, value: T) {
-                        try {
-                            const hashed = digest(key), encoded = JSON.stringify(value);
-                            const write = () => {
-                                if (scratchDirectory) beginScratchWrite(scratch);
-                                put.run(name, hashed, encoded);
-                                if (scratchDirectory) finishScratchWrite(scratch);
-                            };
-                            try { write(); }
-                            catch (error) {
-                                if (scratchDirectory || !object(error) || error.code !== 'SQLITE_FULL') throw error;
-                                spillScratch();
-                                write();
-                            }
-                        } catch (error) {
-                            check();
-                            throw new UsageResourceError('Usage identity storage limit or write failure');
-                        }
+                        const hashed = digest(key), encoded = JSON.stringify(value);
+                        writeScratch(() => { put.run(name, hashed, encoded); });
                     },
                 }; },
                 set(name: string) { const map = identities.map<boolean>(name); return { has: key => map.get(key) === true, add: key => map.set(key, true) }; },
+                timings: {
+                    model: timingTable<StoredModelTiming>('model', usageTimingCall),
+                    tool: timingTable<StoredToolTiming>('tool', () => ''),
+                },
             };
-            snapshot = await collectRetainedUsage(files, asOf, { deadline: options.deadline, timezone, identities,
+            snapshot = await collectRetainedUsage(files, asOf, { deadline: options.deadline, timezone, identities, metrics: metrics.retained,
                 readRecords: async (file, consume) => {
                     const source = db.query<{ quality: string }, [string]>('SELECT quality FROM sources WHERE path=?').get(file);
                     if (!source) throw new Error('Usage source unavailable');
                     for (const row of db.query<{ value: string; offset: number; generation: string }, [string]>('SELECT value,offset,generation FROM records WHERE path=? ORDER BY offset').iterate(file)) {
                         check();
+                        metrics.rowsReplayed++;
                         await consume({ value: JSON.parse(row.value), offset: row.offset, generation: row.generation });
                     }
                     return JSON.parse(source.quality) as StatsReadQuality;
@@ -349,18 +426,30 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
             try { commitScratchBatch(scratch); }
             catch (error) {
                 check();
-                throw new UsageResourceError('Usage identity storage limit or write failure');
+                throw classifyStorageError(error, 'replay', 'Usage identity storage limit or write failure', 'identity-pages');
             }
+            metrics.replayMs = performance.now() - replayStartedAt;
+            phase = 'finalize';
+            finalizeStartedAt = performance.now();
             snapshot = options.finalize?.(snapshot) ?? snapshot;
         }
+        phase = 'finalize';
         check();
         db.query('INSERT OR REPLACE INTO snapshot VALUES (1,?)').run(JSON.stringify({ fittingVersion: SAVED_USAGE_FITTING_VERSION, snapshot }));
         db.exec('DELETE FROM identities; COMMIT;');
+        metrics.finalizeMs = performance.now() - finalizeStartedAt;
         return snapshot;
     } catch (error) {
         try { db.exec('ROLLBACK'); } catch { /* Opening/schema failures have no transaction. */ }
-        if (object(error) && error.code === 'SQLITE_FULL') throw new UsageResourceError('Usage index storage limit');
-        throw error;
+        // collectIndexedUsage repairs these two codes by rebuilding; every other SQLite fault is classified here.
+        const code = sqliteCodeOf(error);
+        if (code === 'SQLITE_CORRUPT' || code === 'SQLITE_NOTADB') throw error;
+        const failure = classifyEscapedError(error, phase);
+        if (failure instanceof UsageFailure) {
+            failure.detail.sources ??= files.length;
+            failure.detail.rows ??= failure.phase === 'index' ? metrics.rowsInserted : metrics.rowsReplayed;
+        }
+        throw failure;
     } finally {
         scratch.close(); db.close();
         if (scratchDirectory) rmSync(scratchDirectory, { recursive: true, force: true });

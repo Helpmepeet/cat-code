@@ -44,3 +44,23 @@ test('D1/V1: cold usage worker reads retained history with broken account storag
         await rm(root, { recursive: true, force: true });
     }
 }, 40000);
+
+test('a real worker run that trips the discovery limit reports the guard on stderr while stdout stays the strict public error', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'usage-worker-limit-'));
+    try {
+        const project = join(root, 'config', 'projects', 'fixture');
+        await mkdir(project, { recursive: true });
+        await mkdir(join(root, 'home'), { recursive: true });
+        // One more directory entry than the 25,000-source discovery cap.
+        await Promise.all(Array.from({ length: 25_001 }, (_, id) => writeFile(join(project, `s${id}.jsonl`), '')));
+        const seen: unknown[] = [];
+        const result = await runUsageStatsWorker({ command: process.execPath, args: ['run', join(import.meta.dir, 'usageStatsWorker.ts'), '--bare'], cwd: join(import.meta.dir, '../..'), env: { HOME: join(root, 'home'), CLAUDE_CONFIG_DIR: join(root, 'config'), CLAUDE_CODE_SIMPLE: '1', ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', CODEX_HOME: join(root, 'home', 'codex') }, timeoutMs: 60000, onDiagnostic: d => seen.push(d) });
+        expect(result).toEqual({ type: 'error', version: 1, code: 'resource-limit' });
+        expect(seen).toHaveLength(1);
+        expect(seen[0]).toMatchObject({ reason: 'discovery-limit', phase: 'discovery', guard: 'directory-entries', limit: 25000 });
+        expect(JSON.stringify(seen)).not.toContain(root);
+    }
+    finally {
+        await rm(root, { recursive: true, force: true });
+    }
+}, 90000);
