@@ -38,6 +38,7 @@ const NULL_RENDERING_TYPES = [
   'max_turns_reached',
   'task_reminder',
   'peer_coordination_state',
+  'peer_roster_snapshot',
   'auto_mode',
   'auto_mode_exit',
   'output_token_usage',

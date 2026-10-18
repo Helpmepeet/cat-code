@@ -200,6 +200,7 @@ export type QueryEngineConfig = {
   setSDKStatus?: (status: SDKStatus) => void
   publishSubagentFrame?: ToolUseContext['publishSubagentFrame']
   getPostCompactRuntimeAttachments?: ToolUseContext['getPostCompactRuntimeAttachments']
+  getTurnStartRuntimeAttachments?: ToolUseContext['getTurnStartRuntimeAttachments']
   abortController?: AbortController
   orphanedPermission?: OrphanedPermission
   /** Internal accepted-input gate for the deferred continuation runner. */
@@ -377,6 +378,7 @@ export class QueryEngine {
       setSDKStatus,
       publishSubagentFrame,
       getPostCompactRuntimeAttachments,
+      getTurnStartRuntimeAttachments,
       orphanedPermission,
       deferredAttemptUuid,
       deferredJobId,
@@ -570,6 +572,7 @@ export class QueryEngine {
       setSDKStatus,
       publishSubagentFrame,
       getPostCompactRuntimeAttachments,
+      getTurnStartRuntimeAttachments,
     }
 
     let systemPrompt = buildEffectiveSystemPrompt({
@@ -840,6 +843,7 @@ export class QueryEngine {
       setSDKStatus,
       publishSubagentFrame,
       getPostCompactRuntimeAttachments,
+      getTurnStartRuntimeAttachments,
     }
 
     headlessProfilerCheckpoint('before_skills_plugins')

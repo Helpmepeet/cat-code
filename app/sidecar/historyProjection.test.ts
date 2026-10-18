@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { compactResumeFixture } from '../../src/utils/conversationRecovery.fixture.js'
 import { deserializeMessagesWithInterruptDetection } from '../../src/utils/conversationRecovery.js'
+import { createAttachmentMessage } from '../../src/utils/attachments.js'
 import {
   createAssistantAPIErrorMessage,
   createAssistantMessage,
@@ -14,6 +15,23 @@ import {
 } from './historyProjection.js'
 
 describe('restored history projection', () => {
+  test('peer snapshots remain model-only and produce no desktop transcript frames', () => {
+    const user = createUserMessage({ content: 'Visible prompt' })
+    const history = [
+      user,
+      createAttachmentMessage({
+        type: 'peer_coordination_state', asOf: '2026-10-18T00:00:00.000Z',
+        peers: [{ name: 'Bear', status: 'live' }],
+      }),
+      createAttachmentMessage({
+        type: 'peer_roster_snapshot', workspace: '/workspace',
+        asOf: '2026-10-18T00:00:00.000Z', quotedRoster: '{"peers":[{"name":"Bear","status":"live"}]}',
+      }),
+    ]
+    expect(projectResumedHistory(history)).toEqual(projectResumedHistory([user]))
+    expect(projectResumedHistory(history)).toHaveLength(1)
+  })
+
   test('replays the compact boundary without the internal recovery sentinel', () => {
     const recovered = deserializeMessagesWithInterruptDetection(
       compactResumeFixture(),

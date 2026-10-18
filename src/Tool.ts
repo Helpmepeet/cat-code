@@ -254,6 +254,10 @@ export type ToolUseContext = {
   getPostCompactRuntimeAttachments?: (
     input: PostCompactRuntimeAttachmentsInput,
   ) => Promise<Attachment[]>
+  getTurnStartRuntimeAttachments?: (input: {
+    agentId?: AgentId
+    messages: readonly Message[]
+  }) => Promise<Attachment[]>
   abortController: AbortController
   /** Internal executor hook fired immediately before a permitted tool effect starts. */
   onToolExecutionStart?: () => void

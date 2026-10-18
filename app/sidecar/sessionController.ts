@@ -76,6 +76,7 @@ import {
 import { createSendToPeerTool } from './sendToPeerTool.js'
 import { createReadPeerTool } from './readPeerTool.js'
 import { createPeerCompactContext } from './peerCompactContext.js'
+import { createPeerStartContext, getPeerStartSnapshotMode } from './peerStartContext.js'
 import { createProbeAdapter } from './probeAdapter.js'
 import {
   createSidecarPermissionDomain,
@@ -568,6 +569,16 @@ export async function createNormalSidecarQueryEngineConfig(
           ? {
               getPostCompactRuntimeAttachments: createPeerCompactContext({
                 appSessionId,
+              }),
+              getTurnStartRuntimeAttachments: createPeerStartContext({
+                cwd,
+                mode: getPeerStartSnapshotMode({
+                  managed: false,
+                  cwd,
+                  initialMessages,
+                  resumedInitialState,
+                  workspaceJump,
+                }),
               }),
             }
           : {}),
