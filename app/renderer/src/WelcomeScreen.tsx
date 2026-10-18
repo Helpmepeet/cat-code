@@ -56,6 +56,7 @@ import sleepingCat from './assets/mascot-100/sleeping.png'
 import catStretching from './assets/mascot-100/stretching.png'
 import catThinking from './assets/mascot-100/thinking.png'
 import catWaving from './assets/mascot-100/waving.png'
+import { generatedWelcomeCats } from './generatedWelcomeCats.js'
 import { basename } from './pathUtils.js'
 import { ProviderLogo } from './ProviderLogo.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
@@ -71,6 +72,7 @@ const welcomeCats = [
   catStretching,
   catThinking,
   catWaving,
+  ...generatedWelcomeCats,
 ] as const
 
 // Pick once per renderer load so every Welcome surface in the window shares its cat.
