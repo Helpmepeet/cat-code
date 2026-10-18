@@ -10,6 +10,22 @@ export const MAX_USAGE_TOOL_BUILDS_PER_DAY = 8;
 export const MAX_USAGE_DAY_CONTRIBUTORS = 20;
 export const MAX_USAGE_CONTRIBUTOR_MODELS = 4;
 export const MAX_USAGE_TIMELINE_EVENTS = 12;
+export const MAX_USAGE_RANKED_SESSIONS = 45;
+export const MAX_USAGE_SKILLS = 5;
+export type UsageTokenSources = Record<'chat' | 'subagents' | 'compaction', UsageTokens>;
+export type UsageCallCount = UsageCategory & { requests: number };
+export const USAGE_INTEGRATIONS = ['peers', 'web', 'image', 'computer', 'workspaces', 'claude-cli'] as const;
+export type UsageRankedSession = UsageSessionContributor & {
+    /** Latest valid retained activity in this range, including attributed subagents. */
+    lastActiveAt: string;
+    /** Exact ordinal ranks across every range contributor, not daily ranks. */
+    rank: { tokens: number; requests: number; errors: number };
+    tokenSources: UsageTokenSources;
+    tools: UsageTool[];
+    days: { date: string; tokens: UsageTokens; requests: number; results: number; errors: number }[];
+    /** All-history omits unbounded per-session daily detail. */
+    dailyDetail: 'full' | 'unavailable';
+};
 /** Stable join key for a canonical cwd already present in the session catalog. */
 export function usageProjectId(cwd: string): string {
     const value = cwd.replace(/[\\/]+$/, '');
@@ -133,7 +149,7 @@ export type UsageSessionContributor = {
     requests: number;
     results: number;
     errors: number;
-    /** Exact ranks across every contributor in the local calendar day. */
+    /** Exact ordinal ranks within the containing day or ranked-session range. */
     rank?: { tokens: number; requests: number; errors: number };
     /** Required on validated snapshots; optional only for pre-grouping callers. */
     tokenCost?: UsageTokenCostEstimate;
@@ -175,6 +191,9 @@ export type UsageParallel = {
     tenMinutePeaks?: [number, number][];
 };
 export type UsageDay = {
+    tokenSources: UsageTokenSources;
+    skills: UsageCallCount[];
+    integrations: UsageCallCount[];
     /** Actual elapsed local-hour intervals for this day (23, 24, or 25 during DST). */
     hours?: UsageHour[];
     /** Recorded outcomes matched to requests in this day or bucket. */
@@ -198,6 +217,10 @@ export type UsageDay = {
 };
 /** Bounded accounting for the equal local calendar interval immediately before a recent range. */
 export type UsagePreviousPeriod = {
+    /** Canonical valid-usage identities, matching effort requests plus unattributed requests. */
+    modelRequests: number;
+    results: number;
+    errors: number;
     startInclusive: string;
     endInclusive: string;
     tokens: UsageTokens;
@@ -209,6 +232,9 @@ export type UsagePreviousPeriod = {
     cacheWriteReporting: 'reported' | 'partial' | 'unreported' | 'unavailable';
 };
 export type UsageRangeSummary = {
+    rankedSessions: { state: 'full' | 'truncated'; omitted: number; medianTokens: number | null; top10Tokens: number; items: UsageRankedSession[] };
+    skills: UsageCallCount[];
+    integrations: UsageCallCount[];
     range: UsageWindow;
     /** All uses sparse local-calendar buckets; absent means one calendar day. */
     bucketDays?: number;
@@ -260,7 +286,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 2;
     metricVersion: 1;
-    countingVersion: 21;
+    countingVersion: 22;
     pricingVersion: typeof USAGE_PRICING_VERSION;
     snapshotId: string;
     scope: 'retained-transcripts';
