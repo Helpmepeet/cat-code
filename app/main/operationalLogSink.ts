@@ -47,6 +47,8 @@ const DEDUPE_EXEMPT_EVENTS: ReadonlySet<string> = new Set([
   'session.turn.completed',
   'session.turn.stalled',
   'peer.message.routed',
+  // Distinct bounded stages and worker invocations collide on the same key.
+  'workspace.jump.timing',
 ])
 
 export type OperationalLogSink = {
