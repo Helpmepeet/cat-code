@@ -12,6 +12,8 @@
  * module-scope statement in each worker, above every engine import.
  */
 
+import { workerTiming, workerTimingSync } from '../shared/workerTiming.js'
+
 /** The one error-to-string form all three workers use for their diagnostics. */
 export function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -62,12 +64,12 @@ export function emitWorkerRecord(
  * calls here run once the graph is loaded either way.
  */
 export async function bootstrapWorkerEngine(): Promise<void> {
-  const [{ ensureEngineMacro }, { enableConfigs }] = await Promise.all([
-    import('./initializeRuntime.js'),
+  const [{ ensureEngineMacro }, { enableConfigs }] = await workerTiming('worker_bootstrap_imports', () => Promise.all([
+    import('./engineMetadata.js'),
     import('../../src/utils/config.js'),
-  ])
+  ]))
   ensureEngineMacro()
-  enableConfigs()
+  workerTimingSync('configuration_prepare', () => enableConfigs())
 }
 
 /**

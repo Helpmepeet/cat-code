@@ -92,3 +92,40 @@ test('every routed peer message from one sender is recorded, not deduped as a re
   expect(routed.map(record => record.fields.outcome)).toEqual(['queued_live', 'woke_session'])
   expect(lines.some(record => record.event === 'log.suppressed')).toBe(false)
 })
+
+test('workspace timing retains adjacent boundaries and worker invocations inside the dedupe window', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-operational-log-jump-'))
+  const sink = createOperationalLogSink({
+    configDir: root,
+    now: () => new Date('2026-10-18T00:00:00.000Z'),
+  })
+  const stages = [
+    { phase: 'request_received_to_acceptance', outcome: 'started', durationMs: 0 },
+    { phase: 'request_received_to_provider_request_observed', outcome: 'started', durationMs: 0 },
+    { phase: 'request_received_to_acceptance', outcome: 'completed', durationMs: 500 },
+    { phase: 'request_received_to_provider_request_observed', outcome: 'completed', durationMs: 2000 },
+  ] as const
+  const workers = [
+    { phase: 'worker_bootstrap_imports', outcome: 'completed', durationMs: 400, invocationId: 'worker-a' },
+    { phase: 'listing_worker', outcome: 'completed', durationMs: 500, invocationId: 'worker-a' },
+    { phase: 'listing_worker', outcome: 'completed', durationMs: 510, invocationId: 'worker-b' },
+  ] as const
+  try {
+    for (const fields of stages) {
+      sink.write({ level: 'info', event: 'workspace.jump.timing', process: 'main', appSessionId: 'app-jump', fields })
+    }
+    for (const fields of workers) {
+      sink.write({ level: 'info', event: 'workspace.jump.timing', process: 'main', fields })
+    }
+  } finally {
+    sink.close()
+  }
+  const records = readdirSync(sink.getDirectory())
+    .filter(name => name.endsWith('.jsonl'))
+    .flatMap(name => readFileSync(join(sink.getDirectory(), name), 'utf8').split('\n'))
+    .filter(Boolean)
+    .map(line => JSON.parse(line))
+  expect(records.filter(record => record.event === 'workspace.jump.timing').map(record => record.fields))
+    .toEqual([...stages, ...workers])
+  expect(records.some(record => record.event === 'log.suppressed')).toBe(false)
+})

@@ -1,5 +1,6 @@
 import { MAX_RELOCATION_RECORD_BYTES, parseSessionRelocationRequest } from '../shared/sessionRelocationWorker.js'
 import { bootstrapWorkerEngine, emitWorkerRecord, runDisposableWorker } from './workerRuntime.js'
+import { workerTiming } from '../shared/workerTiming.js'
 
 runDisposableWorker('session-relocation', async () => {
   const chunks: Buffer[] = []
@@ -15,8 +16,8 @@ runDisposableWorker('session-relocation', async () => {
   const request = parseSessionRelocationRequest(JSON.parse(input))
   if (!request) throw new Error('Invalid move request')
   await bootstrapWorkerEngine()
-  const { relocateSession } = await import('../../src/utils/sessionRelocation.js')
-  await relocateSession(request)
+  const { relocateSession } = await workerTiming('relocation_module_load', () => import('../../src/utils/sessionRelocation.js'))
+  await workerTiming('relocation_work', () => relocateSession(request))
   await emitWorkerRecord({ type: 'session-relocation-result', version: 1, ok: true }, MAX_RELOCATION_RECORD_BYTES, 'move result')
   process.exit(0)
 })

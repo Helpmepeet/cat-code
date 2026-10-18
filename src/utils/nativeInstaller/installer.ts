@@ -799,6 +799,7 @@ async function updateSymlink(
 
 export async function checkInstall(
   force: boolean = false,
+  budget?: import('../ownedCommandBudget.js').OwnedCommandBudget,
 ): Promise<SetupMessage[]> {
   // Skip all installation checks if disabled via environment variable
   if (isEnvTruthy(process.env.DISABLE_INSTALLATION_CHECKS)) {
@@ -806,7 +807,7 @@ export async function checkInstall(
   }
 
   // Get the actual installation type and config
-  const installationType = await getCurrentInstallationType()
+  const installationType = await getCurrentInstallationType(budget)
 
   // Skip checks for development builds - config.installMethod from a previous
   // native installation shouldn't trigger warnings when running dev builds

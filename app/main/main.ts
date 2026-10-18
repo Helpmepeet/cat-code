@@ -1405,7 +1405,14 @@ function createSupervisor(): SidecarSupervisor {
     // as the supervisor-wide default for probe/legacy callers.
     sidecarCwd: process.cwd(),
     log: line => logLegacyDiagnostic(line, 'supervisor', 'supervisor'),
-    onOperationalRecord: record => operationalLog.writeRecord(record),
+    onOperationalRecord: record => {
+      operationalLog.writeRecord(record)
+      if (record.event === 'workspace.jump.timing' && record.fields.phase === 'continuation_to_provider_request' &&
+          record.fields.outcome === 'completed' && record.appSessionId && record.engineSessionId &&
+          typeof record.fields.operationId === 'string' && typeof record.fields.generation === 'string') {
+        workspaceJump?.observeProviderRequest(record.appSessionId, record.engineSessionId, record.fields.operationId, record.fields.generation)
+      }
+    },
     onDeliveryTraceRecord: record => deliveryTrace.mark({
       sessionId: record.sessionId,
       trace: record.trace,
@@ -2121,9 +2128,12 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       return
     }
     if (frame.kind === 'host.request') {
+      // Main-local receipt of the supervisor-delivered frame, before tracing
+      // and peer-plane validation. Never sourced from the request payload.
+      const receivedAt = performance.now()
       const received = traceFrame(frame, 'supervisor.socket.received')
       traceFrame(received, 'host.received')
-      void peerPlane?.handleRequest(event.sessionId, frame)
+      void peerPlane?.handleRequest(event.sessionId, frame, receivedAt)
       return
     }
     if (frame.kind === 'workspace.handoff.result' || frame.kind === 'workspace.handoff.state') {
@@ -2483,8 +2493,7 @@ function registerIpcHandlers(): void {
       const sessionId = (arg as { sessionId: SessionId }).sessionId
     // SF5 — route through the host so the registry's advisory fields (pid /
     // socketPath) are refreshed from the fresh child; the host also evicts replay.
-      if (workspaceJump?.isReserved(sessionId)) return Promise.resolve({ ok: false, error: { code: 'session_not_found', message: 'Wait for the workspace change to settle.' } })
-      return host.restartSession(sessionId).then(result => {
+      return host.restartSession(sessionId, { workspaceJumpReserved: workspaceJump?.isReserved(sessionId) ?? false }).then(result => {
         if (result.ok) scheduledTasks?.interrupt(sessionId)
         return result
       })
@@ -4429,17 +4438,24 @@ function ensureHost(): Host {
   registryLaunchSettled = launched
 
   host = new Host({
+    timing: input => operationalLog.write({ ...input, process: 'host' }),
     hasPendingSubmit,
     supervisor,
     registry,
     validateCwd,
     managedStorage,
-    relocate: request => runSessionRelocationWorker({
-      command: sidecarLaunch().command,
-      args: sidecarLaunch().argsFor('relocation'),
-      cwd: request.source.cwd,
-      request: { type: 'session-relocation', version: 1, ...request },
-    }),
+    relocate: request => {
+      const invocation = randomUUID()
+      return runSessionRelocationWorker({
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('relocation'),
+        cwd: request.source.cwd,
+        request: { type: 'session-relocation', version: 1, ...request },
+        onTiming: measurement => operationalLog.write({ process: 'main', level: 'info', event: 'workspace.jump.timing',
+          appSessionId: request.appSessionId, engineSessionId: request.engineSessionId,
+          fields: { ...measurement, invocationId: invocation } }),
+      })
+    },
     peerMoveState: appSessionId => ({
       presence: peerPlane?.presenceOf(appSessionId),
       pending: peerPlane?.pendingFor(appSessionId).length ?? 0,
@@ -4504,7 +4520,7 @@ function ensureHost(): Host {
     send: (id, message) => forwardInternal(id, message) === null,
     acceptsStatus: (id, status) => registry.sessions.find(row => row.appSessionId === id)?.engineSessionId === status.engineSessionId,
     observe: (id, status) => { try { workspaceJump?.observe(id, status) } catch { /* retain unreadable state */ } },
-    recover: (id, _operationId) => { try { workspaceJump?.queryStatus(id) } catch { /* retain unreadable state */ } },
+    recover: (id, _operationId) => { try { workspaceJump?.requestFreshEvidence(id) } catch { /* retain unreadable state */ } },
   })
   if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
   workspaceStatusTimer = setInterval(() => {
@@ -4513,7 +4529,9 @@ function ensureHost(): Host {
     }
   }, 30_000)
   workspaceStatusTimer.unref()
+  workspaceJump?.dispose()
   workspaceJump = new WorkspaceJumpCoordinator({
+    timing: input => operationalLog.write({ ...input, process: 'main' }),
     host,
     row: appSessionId => registry.sessions.find(row => row.appSessionId === appSessionId),
     knownProjects: () => [
@@ -4525,9 +4543,24 @@ function ensureHost(): Host {
       })),
     ],
     validateCwd,
-    trustedProjectRoots: roots => runWorkspaceListingWorker({ command: sidecarLaunch().command,
-      args: sidecarLaunch().argsFor('workspace-listing'), cwd: process.cwd(),
-      request: { type: 'workspace-list', version: 1, roots: [...roots] } }),
+    trustedProjectRoots: async roots => {
+      const invocation = randomUUID()
+      const started = performance.now()
+      let outcome: 'completed' | 'failed' = 'failed'
+      // Invocation identity binds child-local durations to this complete main
+      // wait. Child clocks are never compared with main's monotonic clock.
+      const record = (measurement: { phase: string; durationMs: number; outcome: 'completed' | 'failed' }) => {
+        try { operationalLog.write({ process: 'main', level: 'info', event: 'workspace.jump.timing',
+          fields: { ...measurement, invocationId: invocation } }) } catch { /* Observation only. */ }
+      }
+      try {
+        const result = await runWorkspaceListingWorker({ command: sidecarLaunch().command,
+          args: sidecarLaunch().argsFor('workspace-listing'), cwd: process.cwd(),
+          request: { type: 'workspace-list', version: 1, roots: [...roots] }, onTiming: record })
+        outcome = 'completed'
+        return result
+      } finally { record({ phase: 'listing_worker', durationMs: performance.now() - started, outcome }) }
+    },
     verifyReady: async (identity, boundary, state) => {
       const observed = observedWorkspaceHandoffs.get(identity.appSessionId)
       if (!observed || observed.generation !== identity.generation || observed.operationId !== state.operationId ||
@@ -4537,6 +4570,8 @@ function ensureHost(): Host {
       return delivery.kind === 'result' && ['accepted','already_applied'].includes(delivery.result.disposition)
     },
     control: (state, action) => requestWorkspaceControl(state.appSessionId, state.operationId, action),
+    waitForControlSlot: (id, operationId, generation) => workspaceControl?.waitForSlot(id, operationId, generation) ?? Promise.resolve(false),
+    controlSlotOccupied: (id, operationId) => workspaceControl?.isSlotOccupied(id, operationId) ?? true,
     onStateChanged: state => { host?.publishWorkspaceJumpDisplay(state) },
   })
   // Reconcile durable operations before any restored sidecar can start turns.
@@ -4562,9 +4597,10 @@ function ensureHost(): Host {
       finish: (id, operationId, cwd) => liveHost.finishWorkspaceTransition(id, operationId, cwd),
     },
     workspaceRequests: {
-      handleRequest: (appSessionId, request) => workspaceJump!.handleRequest(appSessionId, request),
+      // Carry the main frame-receive clock through validation and dispatch.
+      handleRequest: (appSessionId, request, receivedAt) => workspaceJump!.handleRequest(appSessionId, request, receivedAt),
       afterResponse: (appSessionId, request, answered) => workspaceJump!.afterResponse(appSessionId, request, answered),
-      isReserved: appSessionId => workspaceJump!.isReserved(appSessionId),
+      isPeerAccessBlocked: appSessionId => workspaceJump!.isPeerAccessBlocked(appSessionId),
     },
     rows: () => liveRegistry.sessions,
     setPeerNotice: (appSessionId, notice) => liveRegistry.setPeerNotice(appSessionId, notice),
@@ -4713,6 +4749,9 @@ if (!gotSingleInstanceLock) {
  * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
  */
 function shutdownRuntime(): void {
+  workspaceJump?.dispose()
+  if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
+  workspaceStatusTimer = null
   desktopPower?.dispose()
   desktopPower = undefined
   const endingLidMode = lidMode
@@ -4835,8 +4874,6 @@ app.on('window-all-closed', () => {
   peerPlane = null
   observedWorkspaceHandoffs.clear()
   workspaceControl?.dispose()
-  if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
-  workspaceStatusTimer = null
   registryForDebug = null
   scheduleDebugStateExport.cancel()
   // F2 — drop buffered frames from the closed window so a macOS reopen never

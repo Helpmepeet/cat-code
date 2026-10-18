@@ -1,6 +1,7 @@
 import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { getCwd } from '../../src/utils/cwd.js'
+import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import type { WorkspaceObserver } from './workspaceObservation.js'
 import { isLidWorkControl } from '../shared/lidClosed.js'
 import type { LidWorkRuntime } from '../../src/services/lidClosedWork.js'
@@ -298,6 +299,7 @@ export type SidecarServerOptions = {
    * explains it (OBSERVABILITY-MINIMUM.md §3).
    */
   onTurnLifecycle?: (event: SidecarTurnLifecycleEvent) => void
+  onConnectionReady?: () => void
   /** Quiet interval before a running turn is reported stalled. */
   turnStallMs?: number
   /**
@@ -564,6 +566,9 @@ export class SidecarServer {
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly onWorkspaceTrusted: (() => void) | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
+  private unsubscribeDiagnostics: (() => void) | null = null
+  private diagnosticsStartTimer: ReturnType<typeof setTimeout> | null = null
+  private diagnosticsStarted = false
   private readonly workspaceObserver: WorkspaceObserver | undefined
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
   private readonly slashCatalog: readonly SlashCatalogEntry[]
@@ -597,6 +602,7 @@ export class SidecarServer {
   private readonly onDeliveryStage: ((trace: DeliveryTrace, stage: Extract<DeliveryStage, 'engine.produced' | 'sidecar.received' | 'sidecar.socket.queued' | 'sidecar.socket.sent'>, frameKind: string) => void) | null
   private readonly onFrameDropped: ((reason: OutboundDropReason, frameKind: ServerFrame['kind']) => void) | null
   private readonly onTurnLifecycle: ((event: SidecarTurnLifecycleEvent) => void) | null
+  private readonly onConnectionReady: (() => void) | undefined
   private readonly turnStallMs: number
   /** Turn-scoped stall state; all of it is reset by the next `startTurn`. */
   private turnStartedAtMs = 0
@@ -851,12 +857,19 @@ export class SidecarServer {
     this.onDeliveryStage = options.onDeliveryStage ?? null
     this.onFrameDropped = options.onFrameDropped ?? null
     this.onTurnLifecycle = options.onTurnLifecycle ?? null
+    this.onConnectionReady = options.onConnectionReady
     this.turnStallMs = options.turnStallMs ?? DEFAULT_TURN_STALL_MS
 
     // Subscribe once; broadcast every event to all connected clients as a raw
     // `event` frame. (P1-0 has one client, but the fan-out matches the WS
     // server's broadcast model.)
-    this.unsubscribeHandoffStatus = this.controller.subscribeHandoffStatus(() => this.publishHandoffState())
+    this.unsubscribeDiagnostics = this.diagnostics?.subscribe(() => {
+      for (const connection of this.connections) this.sendDiagnosticsSnapshot(connection)
+    }) ?? null
+    this.unsubscribeHandoffStatus = this.controller.subscribeHandoffStatus(() => {
+      this.publishHandoffState()
+      this.scheduleDiagnostics()
+    })
     this.unsubscribe = this.controller.subscribe(event => {
       if (event.type === 'message' && (event.message.type === 'user' || event.message.type === 'result')) {
         void this.workspaceObserver?.conversationContinued().then(() => {
@@ -886,7 +899,10 @@ export class SidecarServer {
           this.handoffResult = null
           this.handoffReadySent = false
           this.handoffCancellationSent = false
-        } else queueMicrotask(() => this.publishHandoffReady())
+        } else queueMicrotask(() => {
+          this.publishHandoffReady()
+          this.scheduleDiagnostics()
+        })
       }
       this.observeTurnEvent(event)
       this.broadcastEvent(event)
@@ -1113,6 +1129,7 @@ export class SidecarServer {
       loadEarlierComplete: false,
     }
     this.connections.add(connection)
+    this.scheduleDiagnostics()
     // Keep the `app.ready` handshake at the IPC attachment boundary.
     const readyPayload = {
       type: 'app.ready' as const,
@@ -1418,6 +1435,11 @@ export class SidecarServer {
   /** Tear down the controller + permission-context subscriptions. */
   close(): void {
     this.closed = true
+    if (this.diagnosticsStartTimer) clearTimeout(this.diagnosticsStartTimer)
+    this.diagnosticsStartTimer = null
+    this.unsubscribeDiagnostics?.()
+    this.unsubscribeDiagnostics = null
+    this.diagnostics?.dispose()
     this.clearIdleTimer()
     this.clearTurnStallTimer()
     if (this.handoffStateTimer) clearTimeout(this.handoffStateTimer)
@@ -1809,7 +1831,26 @@ export class SidecarServer {
       // queue orders 'next' ahead of 'later'.
       if (this.drainOneQueuedPrompt()) return
       this.drainOneTaskNotification()
+      this.scheduleDiagnostics()
     })
+  }
+
+  private scheduleDiagnostics(): void {
+    if (!this.diagnostics || this.diagnosticsStarted || this.closed || this.diagnosticsStartTimer || this.connections.size === 0) return
+    // A task, not a microtask: queued input and turn finalizers get first
+    // refusal. Readiness is neither attachment nor continuation settlement.
+    this.diagnosticsStartTimer = setTimeout(() => {
+      this.diagnosticsStartTimer = null
+      if (this.closed || this.parking || this.connections.size === 0 || this.activeTurn ||
+          this.controller.isTurnActive() || this.handoffExecutionTask ||
+          this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification()) return
+      const handoff = this.controller.getWorkspaceHandoffSnapshot()
+      if (handoff && (handoff.gate.mode === 'held' || handoff.execution !== 'terminal' || handoff.record.kind !== 'valid' ||
+          !handoff.record.record.terminal)) return
+      if (!handoff && this.controller.getHandoffReservation()) return
+      this.diagnosticsStarted = true
+      this.diagnostics?.start()
+    }, 0)
   }
 
   /**
@@ -1974,6 +2015,7 @@ export class SidecarServer {
               this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
               this.publishHandoffState()
               this.publishHandoffReady()
+              this.scheduleDiagnostics()
             })
           } catch (error) {
             this.activeTurn = false
@@ -2931,6 +2973,7 @@ export class SidecarServer {
     message: AppSubmitMessage,
     submitId: string | undefined,
   ): void {
+    queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId })
     const refuseSubmit = (
       code: ErrorFrame['code'],
       text: string,
@@ -5199,8 +5242,8 @@ export class SidecarServer {
 
   /**
    * P4-14 — build + send the diagnostics snapshot to one connection.
-   * Spawn-time-frozen like settings: `getSnapshot()` is a pure read, no live
-   * re-broadcast (the doctor/install checks run once at spawn).
+   * Pending reads emit nothing. Completion broadcasts once, and reconnects
+   * reuse the retained aggregate without running installation checks again.
    */
   private sendDiagnosticsSnapshot(connection: Connection): void {
     this.sendDomainSnapshot(connection, this.diagnostics, 'diagnostics.snapshot', diagnostics => ({
@@ -5648,6 +5691,7 @@ export class SidecarServer {
       if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.queued', frame.kind)
       connection.socket.write(encoded, () => {
         if (trace) this.onDeliveryStage?.(trace, 'sidecar.socket.sent', frame.kind)
+        if (frame.kind === 'ready') this.onConnectionReady?.()
       })
     } catch (error) {
       this.log(

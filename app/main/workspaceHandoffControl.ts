@@ -23,6 +23,8 @@ export class WorkspaceHandoffControl {
   private readonly authorizedOperations = new Map<string, string>()
   private readonly windows = new Map<string, { started: number; count: number; latest?: WorkspaceHandoffSnapshot; timer?: ReturnType<typeof setTimeout> }>()
   private readonly operations = new Map<string, string>()
+  private readonly slotWaiters = new Map<string, Set<() => void>>()
+  private disposed = false
   constructor(private readonly deps: {
     generation: (sessionId: string) => string | null | undefined
     send: (sessionId: string, message: { type: 'workspace.handoff'; requestId: string; operationId: string; forGeneration: string } & WorkspaceControlAction) => boolean
@@ -30,13 +32,27 @@ export class WorkspaceHandoffControl {
     observe: (sessionId: string, status: WorkspaceHandoffSnapshot) => void
     recover: (sessionId: string, operationId: string) => void
   }) {}
+  isSlotOccupied(sessionId: string, operationId: string): boolean { return this.operations.has(`${sessionId}:${operationId}`) }
+  async waitForSlot(sessionId: string, operationId: string, generation: string): Promise<boolean> {
+    if (this.disposed) return false
+    const slot = `${sessionId}:${operationId}`
+    while (this.operations.has(slot)) {
+      await new Promise<void>(resolve => {
+        let waiters = this.slotWaiters.get(slot)
+        if (!waiters) this.slotWaiters.set(slot, waiters = new Set())
+        waiters.add(resolve)
+      })
+      if (this.disposed || this.deps.generation(sessionId) !== generation) return false
+    }
+    return this.deps.generation(sessionId) === generation
+  }
   request(sessionId: string, operationId: string, action: WorkspaceControlAction): Promise<WorkspaceControlDelivery> {
     const generation = this.deps.generation(sessionId)
     const key = `${sessionId}:${operationId}`
     // Cancellation has its own priority slot. The in-flight storage/continue
     // acknowledgement cannot delay application at the engine's closure latch.
     const slot = action.action === 'cancel' ? `${key}:cancel` : key
-    if (!generation || this.pending.size >= 128 || this.operations.has(slot)) return Promise.resolve({ kind: 'unavailable' })
+    if (this.disposed || !generation || this.pending.size >= 128 || this.operations.has(slot)) return Promise.resolve({ kind: 'unavailable' })
     if (this.authorizedOperations.get(sessionId) !== operationId) {
       const previousWindow = this.windows.get(sessionId)
       if (previousWindow?.timer) clearTimeout(previousWindow.timer)
@@ -52,6 +68,9 @@ export class WorkspaceHandoffControl {
       const settle = (value: WorkspaceControlDelivery) => {
         clearTimeout(timer); this.pending.delete(requestId)
         if (this.operations.get(slot) === requestId) this.operations.delete(slot)
+        const waiters = this.slotWaiters.get(slot)
+        this.slotWaiters.delete(slot)
+        for (const wake of waiters ?? []) wake()
         resolve(value)
       }
       this.operations.set(slot, requestId)
@@ -73,12 +92,15 @@ export class WorkspaceHandoffControl {
     this.receive(sessionId, f as unknown as WorkspaceControlResult)
   }
   receiveState(sessionId: string, status: WorkspaceHandoffSnapshot): void {
+    if (this.disposed) return
     if (status.appSessionId !== sessionId || status.observerGeneration !== this.deps.generation(sessionId) || this.authorizedOperations.has(sessionId) && this.authorizedOperations.get(sessionId) !== status.operationId || !this.deps.acceptsStatus(sessionId, status)) return
     const now = Date.now()
     let window = this.windows.get(sessionId)
     if (!window || now - window.started >= HANDOFF_STATE_WINDOW_MS) { if (window?.timer) clearTimeout(window.timer); window = { started: now, count: 0 }; this.windows.set(sessionId, window) }
     if (++window.count <= MAX_HANDOFF_STATES_PER_WINDOW) { this.deps.observe(sessionId, status); return }
-    if (!window.latest || window.latest.observerGeneration !== status.observerGeneration || window.latest.statusSeq < status.statusSeq) window.latest = status
+    if (!window.latest || window.latest.observerGeneration !== status.observerGeneration ||
+        window.latest.admissionGeneration !== status.admissionGeneration && status.admissionGeneration !== null ||
+        window.latest.admissionGeneration === status.admissionGeneration && window.latest.statusSeq < status.statusSeq) window.latest = status
     if (!window.timer) window.timer = setTimeout(() => {
       const latest = window!.latest
       this.windows.delete(sessionId)
@@ -97,5 +119,5 @@ export class WorkspaceHandoffControl {
   disconnect(sessionId: string): void {
     for (const pending of this.pending.values()) if (pending.sessionId === sessionId) pending.settle({ kind: 'disconnected' })
   }
-  dispose(): void { for (const window of this.windows.values()) if (window.timer) clearTimeout(window.timer); this.windows.clear(); this.authorizedOperations.clear(); for (const pending of this.pending.values()) pending.settle({ kind: 'disconnected' }) }
+  dispose(): void { this.disposed = true; for (const window of this.windows.values()) if (window.timer) clearTimeout(window.timer); this.windows.clear(); this.authorizedOperations.clear(); for (const pending of this.pending.values()) pending.settle({ kind: 'disconnected' }) }
 }

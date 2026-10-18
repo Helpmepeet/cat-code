@@ -16,6 +16,7 @@ type ExecFileOptions = {
   timeout?: number
   killSignal?: ExecaOptions['killSignal']
   killProcessGroupOnTimeout?: boolean
+  killProcessGroupOnAbort?: boolean
   preserveOutputOnError?: boolean
   // Setting useCwd=false avoids circular dependencies during initialization
   // getCwd() -> PersistentShell -> logEvent() -> execFileNoThrow
@@ -39,6 +40,7 @@ export function execFileNoThrow(
     timeout: options.timeout,
     killSignal: options.killSignal,
     killProcessGroupOnTimeout: options.killProcessGroupOnTimeout,
+    killProcessGroupOnAbort: options.killProcessGroupOnAbort,
     preserveOutputOnError: options.preserveOutputOnError,
     cwd: options.useCwd ? getCwd() : undefined,
     env: options.env,
@@ -56,6 +58,8 @@ type ExecFileWithCwdOptions = {
    * pipes at the timeout deadline. Windows keeps execa's direct-child behavior.
    */
   killProcessGroupOnTimeout?: boolean
+  /** Own the invocation's descendants and captured pipes on cancellation too. */
+  killProcessGroupOnAbort?: boolean
   preserveOutputOnError?: boolean
   maxBuffer?: number
   cwd?: string
@@ -104,6 +108,7 @@ export function execFileNoThrowWithCwd(
     timeout: finalTimeout = 10 * SECONDS_IN_MINUTE * MS_IN_SECOND,
     killSignal,
     killProcessGroupOnTimeout = false,
+    killProcessGroupOnAbort = false,
     preserveOutputOnError: finalPreserveOutput = true,
     cwd: finalCwd,
     env: finalEnv,
@@ -118,12 +123,16 @@ export function execFileNoThrowWithCwd(
   },
 ): Promise<{ stdout: string; stderr: string; code: number; error?: string }> {
   return new Promise(resolve => {
+    if (killProcessGroupOnAbort && abortSignal?.aborted) {
+      resolve({ stdout: '', stderr: '', code: 1, error: 'Command aborted' })
+      return
+    }
     // Use execa for cross-platform .bat/.cmd compatibility on Windows
     const isolateProcessGroup =
-      killProcessGroupOnTimeout && process.platform !== 'win32'
+      (killProcessGroupOnTimeout || killProcessGroupOnAbort) && process.platform !== 'win32'
     const subprocess = execa(file, args, {
       maxBuffer,
-      signal: abortSignal,
+      cancelSignal: abortSignal,
       timeout: finalTimeout,
       killSignal,
       ...(isolateProcessGroup
@@ -136,10 +145,25 @@ export function execFileNoThrowWithCwd(
       input: finalInput,
       reject: false, // Don't throw on non-zero exit codes
     })
-    const hardDeadline =
-      !isolateProcessGroup || finalTimeout === undefined
+    let hardDeadline: ReturnType<typeof setTimeout> | undefined
+    const abortOwnedProcess = () => {
+      if (hardDeadline) clearTimeout(hardDeadline)
+      try {
+        if (isolateProcessGroup && subprocess.pid !== undefined) process.kill(-subprocess.pid, 'SIGKILL')
+        else subprocess.kill('SIGKILL')
+      } catch {
+        // The owned process already exited.
+      }
+      subprocess.stdin?.destroy()
+      subprocess.stdout?.destroy()
+      subprocess.stderr?.destroy()
+      resolve({ stdout: '', stderr: '', code: 1, error: 'Command aborted' })
+    }
+    hardDeadline =
+      !killProcessGroupOnTimeout || !isolateProcessGroup || finalTimeout === undefined
         ? undefined
         : setTimeout(() => {
+            abortSignal?.removeEventListener('abort', abortOwnedProcess)
             // On POSIX, a timed-out command may have descendants holding the
             // captured pipes open after execa has killed the direct child.
             // detached gives this invocation its own process group, so this
@@ -150,6 +174,7 @@ export function execFileNoThrowWithCwd(
             } catch {
               // The process group already exited.
             }
+            subprocess.stdin?.destroy()
             subprocess.stdout?.destroy()
             subprocess.stderr?.destroy()
             resolve({
@@ -159,8 +184,13 @@ export function execFileNoThrowWithCwd(
               error: 'Command timed out',
             })
           }, finalTimeout + 250)
+    if (killProcessGroupOnAbort) {
+      abortSignal?.addEventListener('abort', abortOwnedProcess, { once: true })
+      if (abortSignal?.aborted) abortOwnedProcess()
+    }
     subprocess
       .then(result => {
+        abortSignal?.removeEventListener('abort', abortOwnedProcess)
         if (hardDeadline) clearTimeout(hardDeadline)
         if (result.failed) {
           if (finalPreserveOutput) {
@@ -186,6 +216,7 @@ export function execFileNoThrowWithCwd(
         }
       })
       .catch((error: ExecaError) => {
+        abortSignal?.removeEventListener('abort', abortOwnedProcess)
         if (hardDeadline) clearTimeout(hardDeadline)
         logError(error)
         void resolve({ stdout: '', stderr: '', code: 1 })

@@ -2,6 +2,7 @@ import { isRelocationControls, readSessionRelocation, writeSessionRelocation, ty
 import type { RelocationRequest } from '../../src/utils/sessionRelocationState.js'
 import { hasVerifiedSourceCompensation, readWorkspaceJump, type WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
 import type { RunControlsSnapshot } from '../shared/protocol.js'
+import { createWorkspaceJumpTiming, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
 /**
  * The host composition layer (D1 — `decisions/REGISTRY.md` §6/§6.1; trust zone —
  * `decisions/SECURITY-MINIMUM.md` Addendum, T8 / HC1–HC4).
@@ -160,6 +161,7 @@ export type HostOptions = {
   evictReplay?: (appSessionId: SessionId) => void
   /** Structured logger. Defaults to stderr. */
   log?: (line: string) => void
+  timing?: WorkspaceJumpTimingSink
   /** Clock (spawn rate window). Injected for deterministic HC4 tests. */
   now?: () => number
   /**
@@ -267,8 +269,11 @@ export class Host implements HostApi {
    * so a lost cursor costs nothing but a re-scan from a different offset.
    */
   private peerNameCursor = randomPeerNameCursor()
+  private readonly timing
+  private readonly moveReadyTimes = new Map<string, number>()
 
   constructor(options: HostOptions) {
+    this.timing = createWorkspaceJumpTiming(options.timing)
     this.hasPendingSubmit = options.hasPendingSubmit ?? (() => false)
     this.supervisor = options.supervisor
     this.registry = options.registry
@@ -310,6 +315,7 @@ export class Host implements HostApi {
 
   private async onSupervisorEvent(event: SupervisorEvent): Promise<void> {
     const appSessionId = event.sessionId
+    if (event.type === 'exit') this.moveReadyTimes.delete(appSessionId)
 
     if (event.type === 'frame') {
       if (event.frame.kind === 'ready') this.workspaceObservations.delete(appSessionId)
@@ -317,6 +323,7 @@ export class Host implements HostApi {
         this.workspaceObservations.set(appSessionId, event.frame.workspace)
       }
       if (event.frame.kind === 'ready') {
+        this.moveReadyTimes.set(appSessionId, performance.now())
         this.runControls.delete(appSessionId)
         this.permissionModes.delete(appSessionId)
         this.prePlanModes.delete(appSessionId)
@@ -1206,8 +1213,8 @@ export class Host implements HostApi {
   }
 
   /* --------------------------------------------------------------------- *
-   * closeSession — graceful shutdown; row kept restorable + marked clean; MUST
-   * evict replay state (the P3-0 carry).
+   * closeSession — graceful shutdown; saved conversations stay restorable,
+   * unused sessions leave the registry. MUST evict replay state (the P3-0 carry).
    * --------------------------------------------------------------------- */
 
   async closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
@@ -1229,8 +1236,10 @@ export class Host implements HostApi {
     // — the named eviction requirement; AttachmentGate.clearSession in main).
     this.workspaceTransitions.delete(appSessionId)
     this.evictReplay(appSessionId)
-    // Row is KEPT (restorable): mark clean, clear advisory runtime fields.
+    // Cleanup rechecks persisted input/history under the registry lock. Managed
+    // identity alone makes an open blank Chat resumable, not worth archiving.
     await this.registry.markClean(appSessionId)
+    await this.registry.discardEmptySession(appSessionId)
     this.surfaceRegistryHealth(appSessionId)
     this.closing.delete(appSessionId)
 
@@ -1733,11 +1742,12 @@ export class Host implements HostApi {
     let reopenedOriginal = false
     try {
       // Reuse the existing idle gate. A declined park times out without killing work.
-      await this.parkForMove(appSessionId)
+      const timingIdentity = { appSessionId, engineSessionId: movingRow.engineSessionId, operationId: jump?.operationId, generation: this.supervisor.getSessionGeneration(appSessionId) ?? undefined }
+      await this.timing.span(timingIdentity, 'park_to_clean_exit', () => this.parkForMove(appSessionId))
       sourceParked = true
       if (hasPeerWork()) throw new Error('Finish active peer work and deliveries before moving this Chat')
       if (jump && !jump.beforeMutation()) throw new Error('The workspace change was cancelled')
-      await this.relocate({ appSessionId, engineSessionId: movingRow.engineSessionId, source, target, controls })
+      await this.timing.span(timingIdentity, 'relocation_worker', () => this.relocate!({ appSessionId, engineSessionId: movingRow.engineSessionId!, source, target, controls }))
       const destinationEmpty = readSessionRelocation(movingRow.engineSessionId)?.empty === true
       moveCommitted = true
       await this.registry.updateLocation(appSessionId, target.cwd, target.binding)
@@ -1749,6 +1759,7 @@ export class Host implements HostApi {
       this.runControls.delete(appSessionId)
       // spawn owns the reservation from here, including its failure release.
       moveReservation = null
+      const replacementEnd = this.timing.start(timingIdentity, 'replacement_to_controls')
       const result = await this.spawn({ appSessionId, cwd: target.cwd, binding: target.binding,
         ...(destinationEmpty ? { freshEngineSessionId: movingRow.engineSessionId } : { resumeEngineSessionId: movingRow.engineSessionId }),
         title: row.title, forked: row.forked,
@@ -1756,8 +1767,11 @@ export class Host implements HostApi {
         permissionMode: controls.mode,
         preferSpawnModel: true,
       }, reservation)
-      if (!result.ok) throw new Error(result.error.message)
-      await this.waitForReadyMode(appSessionId, controls)
+      if (!result.ok) { replacementEnd('failed'); throw new Error(result.error.message) }
+      try { await this.waitForReadyMode(appSessionId, controls); replacementEnd() }
+      catch (error) { replacementEnd('failed'); throw error }
+      const readyAt = this.moveReadyTimes.get(appSessionId)
+      if (readyAt !== undefined) this.timing.write({ ...timingIdentity, generation: this.supervisor.getSessionGeneration(appSessionId) ?? undefined }, 'ready_to_controls', 'completed', performance.now() - readyAt)
       destinationVerified = true
       if (sourceWasInactive) {
         await this.parkForMove(appSessionId)
@@ -1860,9 +1874,8 @@ export class Host implements HostApi {
     }
   }
 
-  async restartSession(appSessionId: SessionId): Promise<HostResult<void>> {
+  async restartSession(appSessionId: SessionId, options: { workspaceJumpReserved?: boolean } = {}): Promise<HostResult<void>> {
     await this.launched
-    if (this.workspaceJumpReservations.has(appSessionId)) return hostError('session_unreachable', 'This Chat has a pending workspace change')
     if (this.moving.has(appSessionId)) return hostError('session_unreachable', 'This Chat is moving')
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
@@ -1873,9 +1886,18 @@ export class Host implements HostApi {
     if (!supervisorRecord) {
       return hostError('session_not_found', `session ${appSessionId} is not live`)
     }
+    const workspaceJumpReserved = this.workspaceJumpReservations.has(appSessionId) || options.workspaceJumpReserved === true
+    // A lost transport needs an explicit replacement to report saved handoff
+    // evidence. Keep its reservation; replacement never readmits continuation.
+    if (workspaceJumpReserved && !isTerminalStatus(supervisorRecord.status) && supervisorRecord.status !== 'disconnected') {
+      return hostError('session_unreachable', 'This Chat has a pending workspace change')
+    }
     const row = this.registry.findSession(appSessionId)
     if (!row) {
       return hostError('session_not_found', `session ${appSessionId} has no registry row`)
+    }
+    if (workspaceJumpReserved && this.moveRecordBlocked(row.engineSessionId)) {
+      return hostError('session_unreachable', 'This Chat has an unfinished or unreadable move. Restore its saved backup before reopening it')
     }
     // Re-validate the row's cwd BEFORE anything destructive (HC1 defense in
     // depth, same as `restoreSession`). The supervisor restart KILLS the live
@@ -1960,18 +1982,20 @@ export class Host implements HostApi {
    * shutdownAll — die-with-window (B3). SYNCHRONOUS: mark every LIVE row clean
    * (one atomic write) + evict its replay, THEN kill the sidecars. A clean quit
    * must not masquerade as crash recovery on the next launch (which the orphan
-   * sweep would report if rows stayed `shutdown:null`). Rows are KEPT
-   * (restorable), same as closeSession. Sync because it runs on
+   * sweep would report if rows stayed `shutdown:null`). Saved conversations are
+   * kept; unused rows are discarded, as on closeSession. Sync because it runs on
    * `window-all-closed`/`before-quit`, where the process may exit before an async
    * persist could settle.
    * --------------------------------------------------------------------- */
 
   shutdownAll(): void {
     const marked = this.registry.markLiveCleanSync()
+    const removed = this.registry.lastRemovedEmptySessionIds
     for (const appSessionId of marked) {
       this.evictReplay(appSessionId)
     }
     this.supervisor.shutdown()
+    for (const appSessionId of removed) this.emitRemoved(appSessionId)
   }
 
   /* --------------------------------------------------------------------- *

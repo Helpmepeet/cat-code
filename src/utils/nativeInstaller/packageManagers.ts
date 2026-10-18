@@ -164,7 +164,7 @@ export function detectWinget(): boolean {
  * like Ubuntu/Debian, 'pacman' in PATH may resolve to the pacman game
  * (/usr/games/pacman) rather than the Arch package manager.
  */
-export const detectPacman = memoize(async (): Promise<boolean> => {
+export const detectPacman = memoize(async (budget?: import('../ownedCommandBudget.js').OwnedCommandBudget): Promise<boolean> => {
   const platform = getPlatform()
 
   if (platform !== 'linux') {
@@ -181,7 +181,10 @@ export const detectPacman = memoize(async (): Promise<boolean> => {
   const result = await execFileNoThrow('pacman', ['-Qo', execPath], {
     timeout: 5000,
     useCwd: false,
+    ...budget?.commandOptions(),
   })
+  budget?.throwIfExpired()
+  if (budget && result.error && !result.error.includes('ENOENT') && !/exit code \d+/.test(result.error)) throw new Error(`Could not check pacman installation: ${result.error}`)
 
   if (result.code === 0 && result.stdout) {
     logForDebugging(`Detected pacman installation: ${result.stdout.trim()}`)
@@ -197,7 +200,7 @@ export const detectPacman = memoize(async (): Promise<boolean> => {
  *
  * We use `dpkg -S <execPath>` to check if the executable is owned by a dpkg-managed package.
  */
-export const detectDeb = memoize(async (): Promise<boolean> => {
+export const detectDeb = memoize(async (budget?: import('../ownedCommandBudget.js').OwnedCommandBudget): Promise<boolean> => {
   const platform = getPlatform()
 
   if (platform !== 'linux') {
@@ -214,7 +217,10 @@ export const detectDeb = memoize(async (): Promise<boolean> => {
   const result = await execFileNoThrow('dpkg', ['-S', execPath], {
     timeout: 5000,
     useCwd: false,
+    ...budget?.commandOptions(),
   })
+  budget?.throwIfExpired()
+  if (budget && result.error && !result.error.includes('ENOENT') && !/exit code \d+/.test(result.error)) throw new Error(`Could not check Debian installation: ${result.error}`)
 
   if (result.code === 0 && result.stdout) {
     logForDebugging(`Detected deb installation: ${result.stdout.trim()}`)
@@ -230,7 +236,7 @@ export const detectDeb = memoize(async (): Promise<boolean> => {
  *
  * We use `rpm -qf <execPath>` to check if the executable is owned by an RPM package.
  */
-export const detectRpm = memoize(async (): Promise<boolean> => {
+export const detectRpm = memoize(async (budget?: import('../ownedCommandBudget.js').OwnedCommandBudget): Promise<boolean> => {
   const platform = getPlatform()
 
   if (platform !== 'linux') {
@@ -247,7 +253,10 @@ export const detectRpm = memoize(async (): Promise<boolean> => {
   const result = await execFileNoThrow('rpm', ['-qf', execPath], {
     timeout: 5000,
     useCwd: false,
+    ...budget?.commandOptions(),
   })
+  budget?.throwIfExpired()
+  if (budget && result.error && !result.error.includes('ENOENT') && !/exit code \d+/.test(result.error)) throw new Error(`Could not check RPM installation: ${result.error}`)
 
   if (result.code === 0 && result.stdout) {
     logForDebugging(`Detected rpm installation: ${result.stdout.trim()}`)
@@ -264,7 +273,7 @@ export const detectRpm = memoize(async (): Promise<boolean> => {
  * We use `apk info --who-owns <execPath>` to check if the executable is owned
  * by an apk-managed package.
  */
-export const detectApk = memoize(async (): Promise<boolean> => {
+export const detectApk = memoize(async (budget?: import('../ownedCommandBudget.js').OwnedCommandBudget): Promise<boolean> => {
   const platform = getPlatform()
 
   if (platform !== 'linux') {
@@ -284,8 +293,11 @@ export const detectApk = memoize(async (): Promise<boolean> => {
     {
       timeout: 5000,
       useCwd: false,
+      ...budget?.commandOptions(),
     },
   )
+  budget?.throwIfExpired()
+  if (budget && result.error && !result.error.includes('ENOENT') && !/exit code \d+/.test(result.error)) throw new Error(`Could not check APK installation: ${result.error}`)
 
   if (result.code === 0 && result.stdout) {
     logForDebugging(`Detected apk installation: ${result.stdout.trim()}`)
@@ -299,7 +311,7 @@ export const detectApk = memoize(async (): Promise<boolean> => {
  * Memoized function to detect which package manager installed Claude
  * Returns 'unknown' if no package manager is detected
  */
-export const getPackageManager = memoize(async (): Promise<PackageManager> => {
+export const getPackageManager = memoize(async (budget?: import('../ownedCommandBudget.js').OwnedCommandBudget): Promise<PackageManager> => {
   if (detectHomebrew()) {
     return 'homebrew'
   }
@@ -316,19 +328,19 @@ export const getPackageManager = memoize(async (): Promise<PackageManager> => {
     return 'asdf'
   }
 
-  if (await detectPacman()) {
+  if (await detectPacman(budget)) {
     return 'pacman'
   }
 
-  if (await detectApk()) {
+  if (await detectApk(budget)) {
     return 'apk'
   }
 
-  if (await detectDeb()) {
+  if (await detectDeb(budget)) {
     return 'deb'
   }
 
-  if (await detectRpm()) {
+  if (await detectRpm(budget)) {
     return 'rpm'
   }
 

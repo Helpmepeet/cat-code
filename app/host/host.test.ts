@@ -51,6 +51,7 @@ import {
 import { createShellState, reduceShellState } from '../renderer/src/shellState.js'
 import { mergeRosterSnapshot } from '../renderer/src/rosterBootstrap.js'
 import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
+import { readWorkspaceJump, writeWorkspaceJump, type WorkspaceJumpStateV2 } from '../../src/utils/workspaceJumpState.js'
 
 /* ------------------------------------------------------------------------- *
  * Fake supervisor — the exact public surface the host calls.
@@ -341,7 +342,9 @@ function tempDir(): string {
 function writeTranscript(storageDir: string, engineSessionId: string): void {
   const dir = join(storageDir, 'transcripts')
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, `${engineSessionId}.jsonl`), '{"type":"summary"}\n')
+  writeFileSync(join(dir, `${engineSessionId}.jsonl`), `${JSON.stringify({
+    type: 'user', sessionId: engineSessionId, message: { role: 'user', content: 'Saved conversation' },
+  })}\n`)
 }
 
 /**
@@ -530,6 +533,169 @@ test('agent move reports durable destination when relocation commits but its res
     expect(moved.relocation?.phase).toBe('complete')
     expect(h.registry.findSession(id)?.cwd).toBe(realpathSync(h.cwd))
     expect(h.supervisor.spawnedIds).toHaveLength(1)
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  }
+})
+
+async function movedReservedJump(storageRoot: string, beforePermission?: (h: Harness, appSessionId: SessionId) => Promise<void>): Promise<{ h: Harness; state: WorkspaceJumpStateV2 }> {
+  const managedStorage = new ManagedStorage({ appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership') })
+  const h = makeHost({ managedStorage,
+    validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+    relocate: async request => {
+      expect(h.supervisor.records.get(request.appSessionId)?.status).toBe('exited')
+      expect(h.host.isMoving(request.appSessionId)).toBe(true)
+      expect(await h.host.restartSession(request.appSessionId, { workspaceJumpReserved: true }))
+        .toMatchObject({ ok: false, error: { code: 'session_unreachable', message: 'This Chat is moving' } })
+      writeSessionRelocation({ version: 1, ...request, original: request.source,
+        phase: 'complete', backup: join(storageRoot, 'private-backup'), movedAt: 2 })
+    },
+  })
+  const created = await h.host.createManagedChat()
+  if (!created.ok) throw new Error(created.error.message)
+  const appSessionId = created.value.appSessionId, engineSessionId = randomUUID(), operationId = randomUUID()
+  writeTranscript(h.storageDir, engineSessionId)
+  h.supervisor.emitReady(appSessionId, engineSessionId)
+  emitMoveReadyContext(h.supervisor, appSessionId)
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineSessionId)
+  await h.registry.markInputAccepted(appSessionId)
+  const sourceGeneration = h.host.getSessionGeneration(appSessionId)!
+  expect((await h.host.reserveWorkspaceJump(appSessionId, operationId, sourceGeneration)).ok).toBe(true)
+  h.supervisor.onSend = (id, message) => {
+    if ((message as { type?: string }).type === 'app.park') h.supervisor.emitPark(id)
+  }
+  const moving = h.host.moveWorkspaceJump(appSessionId, operationId, h.cwd, () => true)
+  let completed = false
+  void moving.then(() => { completed = true })
+  await settle(() => h.supervisor.spawnedIds.length === 2)
+  h.supervisor.emitReady(appSessionId, engineSessionId)
+  if (beforePermission) {
+    await beforePermission(h, appSessionId)
+    expect(completed).toBe(false)
+  }
+  emitMoveReadyContext(h.supervisor, appSessionId)
+  const moved = await moving
+  expect(moved.result.ok).toBe(true)
+  expect(moved.location).toBe('destination')
+  const state: WorkspaceJumpStateV2 = {
+    version: 2, revision: 1, origin: 'fresh', appSessionId, engineSessionId, operationId, sourceGeneration,
+    source: { cwd: created.value.cwd, binding: created.value.binding! },
+    target: { cwd: realpathSync(h.cwd), binding: { kind: 'project' } },
+    acceptedAt: 1, phase: 'settled', location: 'destination', consumed: true,
+    continuation: { id: randomUUID(), admissionGeneration: h.host.getSessionGeneration(appSessionId)!,
+      dispatch: 'consumed', outcome: 'pending', receiptRevision: 1, checkpointSha256: null },
+    cancellation: null, review: { required: false, noticeUuid: null, reconciledInputUuid: null },
+    release: { target: 'held', authorizedRevision: null, confirmed: null },
+  }
+  writeWorkspaceJump(state)
+  return { h, state }
+}
+
+test('workspace jump ready cannot complete host movement before restored permission context', async () => {
+  const storageRoot = tempDir(), previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageRoot
+  try {
+    await movedReservedJump(storageRoot, async (h, id) => {
+      h.supervisor.emit({ type: 'frame', sessionId: id, frame: {
+        kind: 'run-controls.snapshot', protocolVersion: 4, sessionId: id,
+        runControls: { model: { selected: 'claude-opus-4-1' }, effort: { selected: null }, fast: { active: false } },
+      } as never })
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(h.host.isMoving(id)).toBe(true)
+    })
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  }
+})
+
+for (const localReservation of [false, true]) {
+  test.each(['exited', 'failed', 'disconnected'] as const)(
+    `explicit restart recovers a lost destination transport without releasing its ${localReservation ? 'local and durable' : 'durable-only'} jump hold (%s)`,
+    async status => {
+      const storageRoot = tempDir(), previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+      process.env.CLAUDE_CONFIG_DIR = storageRoot
+      try {
+        const { h, state } = await movedReservedJump(storageRoot)
+        const id = state.appSessionId
+        if (!localReservation) h.host.releaseWorkspaceJump(id, state.operationId)
+        const generation = h.host.getSessionGeneration(id), pid = h.supervisor.getSessionProcessId(id)
+        h.supervisor.setStatus(id, status)
+        h.supervisor.sent.length = 0
+        h.evicted.length = 0
+
+        const restarted = await h.host.restartSession(id, { workspaceJumpReserved: true })
+        expect(restarted.ok).toBe(true)
+        expect(h.host.getSessionGeneration(id)).not.toBe(generation)
+        expect(h.supervisor.getSessionProcessId(id)).not.toBe(pid)
+        expect(h.supervisor.records.get(id)).toMatchObject({
+          status: 'spawning', cwd: state.target.cwd, resumeEngineSessionId: state.engineSessionId,
+        })
+        expect(h.registry.findSession(id)).toMatchObject({
+          cwd: state.target.cwd, binding: state.target.binding, engineSessionId: state.engineSessionId,
+          enginePid: h.supervisor.getSessionProcessId(id), socketPath: h.supervisor.getSessionSocketPath(id),
+        })
+        expect(h.evicted).toEqual([id])
+        expect(readWorkspaceJump(id)).toEqual(state)
+        expect(h.host.isWorkspaceJumpReserved(id)).toBe(localReservation)
+        expect(h.supervisor.sent).toEqual([])
+        if (localReservation) expect(h.host.beginBranchSwitch()).toBe(false)
+
+        const replacementGeneration = h.host.getSessionGeneration(id)
+        expect((await h.host.restartSession(id, { workspaceJumpReserved: true })).ok).toBe(false)
+        expect(h.host.getSessionGeneration(id)).toBe(replacementGeneration)
+      } finally {
+        if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+        else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+    },
+  )
+}
+
+test.each(['spawning', 'connecting', 'ready'] as const)('reserved restart leaves a healthy or starting destination alone (%s)', async status => {
+  const storageRoot = tempDir(), previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageRoot
+  try {
+    const { h, state } = await movedReservedJump(storageRoot)
+    const id = state.appSessionId, generation = h.host.getSessionGeneration(id)
+    h.supervisor.setStatus(id, status)
+    h.evicted.length = 0
+    expect((await h.host.restartSession(id)).ok).toBe(false)
+    h.host.releaseWorkspaceJump(id, state.operationId)
+    expect((await h.host.restartSession(id, { workspaceJumpReserved: true })).ok).toBe(false)
+    expect(h.host.getSessionGeneration(id)).toBe(generation)
+    expect(h.evicted).toEqual([])
+    expect(readWorkspaceJump(id)).toEqual(state)
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  }
+})
+
+test('reserved recovery restart still refuses an unfinished move and failed resume preflight', async () => {
+  const storageRoot = tempDir(), previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageRoot
+  try {
+    const { h, state } = await movedReservedJump(storageRoot)
+    const id = state.appSessionId, generation = h.host.getSessionGeneration(id)
+    h.supervisor.setStatus(id, 'disconnected')
+    h.evicted.length = 0
+    writeSessionRelocation({ version: 1, appSessionId: id, engineSessionId: state.engineSessionId,
+      original: state.source, source: state.source, target: state.target, phase: 'moving',
+      controls: { mode: 'default' }, backup: join(storageRoot, 'private-backup'), movedAt: 2 })
+    const unfinished = await h.host.restartSession(id, { workspaceJumpReserved: true })
+    expect(unfinished).toMatchObject({ ok: false, error: { code: 'session_unreachable' } })
+    writeSessionRelocation({ version: 1, appSessionId: id, engineSessionId: state.engineSessionId,
+      original: state.source, source: state.source, target: state.target, phase: 'complete',
+      controls: { mode: 'default' }, backup: join(storageRoot, 'private-backup'), movedAt: 2 })
+    rmSync(join(h.storageDir, 'transcripts', `${state.engineSessionId}.jsonl`))
+    const missingTranscript = await h.host.restartSession(id, { workspaceJumpReserved: true })
+    expect(missingTranscript).toMatchObject({ ok: false, error: { code: 'session_not_found' } })
+    expect(h.host.getSessionGeneration(id)).toBe(generation)
+    expect(h.host.isWorkspaceJumpReserved(id)).toBe(true)
+    expect(h.evicted).toEqual([])
+    expect(readWorkspaceJump(id)).toEqual(state)
   } finally {
     if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
@@ -2098,6 +2264,7 @@ test('closeSession removes a pre-ready row instead of emitting an uncloseable ex
   expect(result.ok).toBe(true)
 
   expect(h.supervisor.records.has(appSessionId)).toBe(false)
+  expect(h.registry.findSession(appSessionId)).toBeUndefined()
   expect(h.host.listSessions().some(s => s.appSessionId === appSessionId)).toBe(false)
   expect(
     h.events.some(e => e.type === 'session-removed' && e.appSessionId === appSessionId),
@@ -2105,6 +2272,69 @@ test('closeSession removes a pre-ready row instead of emitting an uncloseable ex
   expect(
     h.events.some(e => e.type === 'session-status' && e.session.appSessionId === appSessionId),
   ).toBe(false)
+})
+
+test('closing unused managed Chats removes their sidebar rows and stays removed after relaunch', async () => {
+  const root = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(root, 'user-data'),
+    ownershipDir: join(root, 'ownership'),
+  })
+  const h = makeHost({
+    managedStorage,
+    validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+  })
+  let shell = createShellState()
+  h.host.subscribe(event => { shell = reduceShellState(shell, event) })
+  for (const metadataOnly of [false, true]) {
+    const created = await h.host.createManagedChat()
+    if (!created.ok) throw new Error('create failed')
+    const { appSessionId, cwd } = created.value
+    const engineId = randomUUID()
+    h.supervisor.emitReady(appSessionId, engineId)
+    await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineId)
+    const userFile = join(cwd, 'keep.txt')
+    writeFileSync(userFile, 'Do not remove user files')
+    if (metadataOnly) {
+      const dir = join(h.storageDir, 'transcripts')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, `${engineId}.jsonl`), '{"type":"custom-title","customTitle":"New chat"}\n')
+    }
+    expect(shell.byId[appSessionId]).toBeDefined()
+    h.events.length = 0
+    expect((await h.host.closeSession(appSessionId)).ok).toBe(true)
+    expect(h.registry.findSession(appSessionId)).toBeUndefined()
+    expect(h.host.listSessions().some(row => row.appSessionId === appSessionId)).toBe(false)
+    expect(shell.byId[appSessionId]).toBeUndefined()
+    expect(shell.tabs[appSessionId]).toBeUndefined()
+    expect(h.events.filter(event => event.type === 'session-removed' && event.appSessionId === appSessionId)).toHaveLength(1)
+    expect(readFileSync(userFile, 'utf8')).toBe('Do not remove user files')
+  }
+  const relaunched = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+  })
+  expect(await relaunched.launch()).toEqual([])
+  expect(relaunched.sessions).toEqual([])
+})
+
+test('closing after an accepted first prompt preserves an interrupted conversation without a result', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const { appSessionId } = created.value
+  const engineId = randomUUID()
+  h.supervisor.emitReady(appSessionId, engineId)
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineId)
+  writeTranscript(h.storageDir, engineId)
+  h.supervisor.emitEventFrame(appSessionId, {
+    type: 'message', message: { type: 'user', message: { role: 'user', content: 'Interrupted first turn' } },
+  })
+  await settle(() => h.registry.findSession(appSessionId)?.hasAcceptedInput === true)
+  expect(h.registry.findSession(appSessionId)?.lastMessageSentAt).toBeNull()
+  expect((await h.host.closeSession(appSessionId)).ok).toBe(true)
+  expect(h.registry.findSession(appSessionId)?.hasAcceptedInput).toBe(true)
+  expect(h.host.listSessions().find(row => row.appSessionId === appSessionId)?.restorable).toBe(true)
 })
 
 /* ------------------------------------------------------------------------- *
@@ -2567,12 +2797,12 @@ test('a session opened and never typed in is never offered as restorable: no uni
   expect(restored.ok).toBe(false)
   if (!restored.ok) expect(restored.error.code).toBe('session_not_found')
 
-  // CONTRAST — the SAME row once a turn materializes its transcript is a real
-  // offer again. The verdict tracks the transcript, nothing else.
+  // A late file cannot resurrect a discarded desktop address. Real history
+  // remains discoverable independently through the engine catalog.
   writeTranscript(h.storageDir, 'engine-never-typed')
   const offered = h.host.listSessions().find(s => s.appSessionId === appSessionId)
-  expect(offered?.restorable).toBe(true)
-  expect(h.host.canPreview(appSessionId)).toBe(true)
+  expect(offered).toBeUndefined()
+  expect(h.host.canPreview(appSessionId)).toBe(false)
 })
 
 test('restartSession refuses to resume an engineSessionId with no transcript (the asymmetry with restoreSession is closed)', async () => {
@@ -2967,6 +3197,11 @@ test('shutdownAll marks live rows clean and kills the sidecars', async () => {
   const b = await h.host.createSession({ cwd: h.cwd })
   expect(a.ok && b.ok).toBe(true)
   if (!a.ok || !b.ok) return
+  h.supervisor.emitReady(a.value.appSessionId, 'engine-quit-a')
+  h.supervisor.emitReady(b.value.appSessionId, 'engine-quit-b')
+  await settle(() => h.registry.findSession(b.value.appSessionId)?.engineSessionId === 'engine-quit-b')
+  writeTranscript(h.storageDir, 'engine-quit-a')
+  writeTranscript(h.storageDir, 'engine-quit-b')
 
   // Both rows are live (shutdown: null) before the quit.
   expect(h.registry.findSession(a.value.appSessionId)?.shutdown).toBeNull()
@@ -2982,6 +3217,53 @@ test('shutdownAll marks live rows clean and kills the sidecars', async () => {
   expect(h.supervisor.records.size).toBe(0)
   expect(h.evicted).toContain(a.value.appSessionId)
   expect(h.evicted).toContain(b.value.appSessionId)
+})
+
+test('shutdownAll discards unused ready and parked Chats but preserves their files', async () => {
+  const root = tempDir()
+  const h = makeHost({
+    managedStorage: new ManagedStorage({
+      appDataBase: join(root, 'user-data'),
+      ownershipDir: join(root, 'ownership'),
+    }),
+    validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+  })
+  const ids: string[] = []
+  const files: string[] = []
+  for (const parked of [false, true]) {
+    const created = await h.host.createManagedChat()
+    if (!created.ok) throw new Error('create failed')
+    const { appSessionId, cwd } = created.value
+    const engineId = randomUUID()
+    ids.push(appSessionId)
+    files.push(join(cwd, 'keep.txt'))
+    writeFileSync(files.at(-1)!, 'preserved')
+    h.supervisor.emitReady(appSessionId, engineId)
+    await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === engineId)
+    if (parked) {
+      h.supervisor.emitPark(appSessionId)
+      await settle(() => h.registry.findSession(appSessionId)?.shutdown === 'parked')
+    }
+  }
+  // Supervisor callbacks persist asynchronously. Drain them before exercising
+  // the synchronous exit writer against the same registry file.
+  await settle(() => {
+    const doc = JSON.parse(readFileSync(h.registry.filePath, 'utf8')) as { sessions: { shutdown: string | null }[] }
+    return doc.sessions.some(row => row.shutdown === 'parked')
+  })
+  h.host.shutdownAll()
+  expect(h.supervisor.records.size).toBe(0)
+  expect(h.registry.sessions).toEqual([])
+  for (const id of ids) {
+    expect(h.evicted).toContain(id)
+    expect(h.events.some(event => event.type === 'session-removed' && event.appSessionId === id)).toBe(true)
+  }
+  for (const file of files) expect(readFileSync(file, 'utf8')).toBe('preserved')
+  const relaunched = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+  })
+  expect(await relaunched.launch()).toEqual([])
 })
 
 /* ------------------------------------------------------------------------- *
@@ -3137,6 +3419,7 @@ test('F3: closeSession still records a CLEAN shutdown (the closing guard holds)'
   const id = created.value.appSessionId
   h.supervisor.emitReady(id, 'engine-clean-test')
   await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-clean-test')
+  writeTranscript(h.storageDir, 'engine-clean-test')
 
   const closed = await h.host.closeSession(id)
   expect(closed.ok).toBe(true)
@@ -3301,6 +3584,12 @@ test('shutdownAll marks every live row clean so the next launch sweep sees no cr
   const first = await h.host.createSession({ cwd: h.cwd })
   const second = await h.host.createSession({ cwd: h.cwd })
   expect(first.ok && second.ok).toBe(true)
+  if (!first.ok || !second.ok) throw new Error('create failed')
+  h.supervisor.emitReady(first.value.appSessionId, 'engine-clean-first')
+  h.supervisor.emitReady(second.value.appSessionId, 'engine-clean-second')
+  await settle(() => h.registry.findSession(second.value.appSessionId)?.engineSessionId === 'engine-clean-second')
+  writeTranscript(h.storageDir, 'engine-clean-first')
+  writeTranscript(h.storageDir, 'engine-clean-second')
   expect(h.registry.sessions.every(row => row.shutdown === null)).toBe(true)
 
   h.host.shutdownAll()

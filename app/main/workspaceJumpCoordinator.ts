@@ -3,6 +3,7 @@
  */
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
+import { createWorkspaceJumpTiming, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
 import { isWorkspaceHandoffSnapshot, type WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import type { WorkspaceControlAction, WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import type { Host, CwdValidation } from '../host/host.js'
@@ -11,7 +12,7 @@ import type { PeerRegistryRow, ValidatedHostRequest } from './peerRequestPlane.j
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 import {
   hasVerifiedSourceCompensation, loadWorkspaceJumpRetention, readWorkspaceJump, workspaceJumpDirectory, workspaceJumpRequiresRetention, writeWorkspaceJump,
-  upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate, type WorkspaceJumpBoundary, type WorkspaceJumpStateV2,
+  upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate, workspaceJumpAllowsQueuedInput, type WorkspaceJumpBoundary, type WorkspaceJumpStateV2,
 } from '../../src/utils/workspaceJumpState.js'
 
 export { loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
@@ -32,19 +33,26 @@ export type WorkspaceJumpCoordinatorDeps = {
    * its observed SDKResultHandoff, and the current active-chain boundary.
    */
   verifyReady: (identity: WorkspaceJumpIdentity, boundary: WorkspaceJumpBoundary, state: WorkspaceJumpStateV2) => boolean | Promise<boolean>
+  /** Cumulative snapshots enter observe through the control plane's bounded receiver. */
   control: (state: WorkspaceJumpStateV2, action: WorkspaceControlAction) => Promise<WorkspaceControlDelivery>
+  waitForControlSlot?: (appSessionId: string, operationId: string, generation: string) => Promise<boolean>
+  controlSlotOccupied?: (appSessionId: string, operationId: string) => boolean
   /** Holds source/destination turn admission and user reconciliation gates. */
   onStateChanged?: (state: WorkspaceJumpStateV2) => void
   directory?: string
   now?: () => number
+  timing?: WorkspaceJumpTimingSink
 }
 
 const refuse = (message: string): { ok: false; error: HostRequestError } => ({ ok: false, error: { code: 'unavailable', message } })
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const MAX_CANCELLED_OPERATIONS_PER_GENERATION = 128
 type GenerationCancellations = { engineSessionId: string; generation: string; operationIds: Set<string>; closed: boolean }
+type LiveMove = { operationId: string; engineSessionId: string; continuationId: string; sourceGeneration: string; destination: string; generation?: string }
 
 export class WorkspaceJumpCoordinator {
+  private readonly timing
+  private readonly acceptedTimings = new Map<string, { operationId: string; received?: (outcome?: 'completed' | 'failed' | 'unavailable') => void; end: (outcome?: 'completed' | 'failed' | 'unavailable') => void; boundary: (outcome?: 'completed' | 'failed' | 'unavailable') => void; admission?: (outcome?: 'completed' | 'failed' | 'unavailable') => void; providerObserved?: boolean; admissionObserved?: boolean }>()
   private readonly directory: string
   private readonly handles = new Map<string, { appSessionId: string; generation: string; path: string }>()
   private readonly running = new Map<string, Promise<void>>()
@@ -54,14 +62,40 @@ export class WorkspaceJumpCoordinator {
   private readonly effectKeys = new Set<string>()
   private readonly accepting = new Map<string, string>()
   private readonly cancellations = new Map<string, GenerationCancellations>()
-  constructor(private readonly deps: WorkspaceJumpCoordinatorDeps) { this.directory = deps.directory ?? workspaceJumpDirectory() }
+  private readonly liveMoves = new Map<string, LiveMove>()
+  private readonly freshEvidence = new Map<string, number>()
+  private readonly refusedContinuations = new Set<string>()
+  private readonly observationRetries = new Map<string, { operationId: string; generation: string; attempts: number; timer?: ReturnType<typeof setTimeout> }>()
+  private disposed = false
+  constructor(private readonly deps: WorkspaceJumpCoordinatorDeps) {
+    this.directory = deps.directory ?? workspaceJumpDirectory()
+    this.timing = createWorkspaceJumpTiming(deps.timing)
+  }
+
+  /** Main observes the provider marker's delivery, not a foreign process clock. */
+  observeProviderRequest(appSessionId: string, engineSessionId: string, operationId: string, generation: string): void {
+    const state = this.snapshot(appSessionId)
+    const pending = this.acceptedTimings.get(appSessionId)
+    if (!pending || pending.operationId !== operationId || state?.operationId !== operationId ||
+        state.engineSessionId !== engineSessionId || state.location !== 'destination' ||
+        state.continuation.admissionGeneration !== generation || this.identity(appSessionId)?.generation !== generation) return
+    pending.end()
+    pending.received?.()
+    pending.providerObserved = true
+    if (pending.admissionObserved) this.acceptedTimings.delete(appSessionId)
+  }
 
   snapshot(appSessionId: string): WorkspaceJumpStateV2 | null { const state = readWorkspaceJump(appSessionId, this.directory); return state ? upgradeWorkspaceJumpState(state) : null }
   loadRetention(): ReturnType<typeof loadWorkspaceJumpRetention> { return loadWorkspaceJumpRetention(this.directory) }
   /** Retire only ephemeral discovery authority; durable history is never erased. */
   forgetHandles(appSessionId: string): void {
     for (const [handle, entry] of this.handles) if (entry.appSessionId === appSessionId) this.handles.delete(handle)
-    if (!this.identity(appSessionId)) this.cancellations.delete(appSessionId)
+    if (!this.identity(appSessionId)) {
+      this.cancellations.delete(appSessionId)
+      const pending = this.acceptedTimings.get(appSessionId)
+      pending?.end('unavailable'); pending?.received?.('unavailable'); pending?.boundary('unavailable'); pending?.admission?.('unavailable')
+      this.acceptedTimings.delete(appSessionId)
+    }
   }
   retains(appSessionId: string): boolean {
     try { const s = this.snapshot(appSessionId); return !!s && workspaceJumpRequiresRetention(s, this.identity(appSessionId)?.generation) }
@@ -73,6 +107,22 @@ export class WorkspaceJumpCoordinator {
       if (!state) return false
       if (state.continuation.outcome === 'legacy_settled' && !state.review.required) return false
       return !workspaceJumpHasConfirmedGate(state)
+    } catch { return true }
+  }
+  /** Destination work may use project peers without releasing the recovery hold. */
+  isPeerAccessBlocked(appSessionId: string): boolean {
+    if (!this.isReserved(appSessionId)) return false
+    try {
+      const state = this.snapshot(appSessionId)
+      const row = this.deps.row(appSessionId)
+      const generation = this.deps.host.getSessionGeneration(appSessionId)
+      const live = this.observations.get(appSessionId)
+      return !state || row?.binding?.kind !== 'project' || row.cwd !== state.target.cwd ||
+        row.engineSessionId !== state.engineSessionId || state.continuation.outcome !== 'pending' ||
+        !live || live.observerGeneration !== generation || live.operationId !== state.operationId ||
+        live.continuationId !== state.continuation.id || live.record.kind !== 'valid' ||
+        !live.record.record.consumed || !live.record.record.inputCommitted ||
+        !workspaceJumpAllowsQueuedInput(state, live)
     } catch { return true }
   }
   requiresReview(appSessionId: string): boolean {
@@ -123,11 +173,15 @@ export class WorkspaceJumpCoordinator {
     return record === null || hasVerifiedSourceCompensation(state, record, appSessionId, row.engineSessionId, row.cwd)
   }
   private roots(): string[] {
-    const recent = new Map<string, number>()
+    const candidates = new Map<string, number>()
     for (const project of this.deps.knownProjects()) {
-      const validated = this.deps.validateCwd(project.path)
-      if (!validated.ok) continue
       const used = Number.isFinite(project.lastUsedAt) ? project.lastUsedAt : 0
+      candidates.set(project.path, Math.max(candidates.get(project.path) ?? used, used))
+    }
+    const recent = new Map<string, number>()
+    for (const [path, used] of candidates) {
+      const validated = this.deps.validateCwd(path)
+      if (!validated.ok) continue
       recent.set(validated.realpath, Math.max(recent.get(validated.realpath) ?? 0, used))
     }
     // Conversation duplicates and aliases cannot consume the workspace bound.
@@ -163,7 +217,7 @@ export class WorkspaceJumpCoordinator {
     })
     return { ok: true, value: { workspaces, eligible: true } }
   }
-  private async accept(appSessionId: string, operationId: string, handle: string): Promise<Result<'workspace.jump'>> {
+  private async accept(appSessionId: string, operationId: string, handle: string, onAccepted: () => void): Promise<Result<'workspace.jump'>> {
     if (!UUID.test(operationId) || this.accepting.has(appSessionId)) return refuse('A workspace change is already being considered')
     this.accepting.set(appSessionId, operationId)
     let reserved = false
@@ -198,6 +252,10 @@ export class WorkspaceJumpCoordinator {
         ...(previous?.compensation ? { compensation: previous.compensation } : {}),
         continuation: { id: randomUUID(), admissionGeneration: null, dispatch: 'none', outcome: 'pending', receiptRevision: null, checkpointSha256: null },
       } as WorkspaceJumpStateV2)
+      onAccepted()
+      this.acceptedTimings.set(appSessionId, { operationId,
+        end: this.timing.start({ ...identity, operationId }, 'accepted_to_provider_request_observed'),
+        boundary: this.timing.start({ ...identity, operationId }, 'accepted_to_source_boundary') })
       return { ok: true, value: { operationId, status: 'accepted' } }
     } catch {
       if (reserved) {
@@ -229,13 +287,37 @@ export class WorkspaceJumpCoordinator {
     if (!current || current.operationId !== state.operationId || current.phase !== 'accepted' || current.cancellation ||
         this.identity(appSessionId)?.generation !== state.sourceGeneration) return refuse('This workspace change was cancelled or replaced')
     this.save({ ...current, phase: 'ready', boundary })
+    this.acceptedTimings.get(appSessionId)?.boundary()
     return { ok: true, value: { operationId: state.operationId, status: 'ready' } }
   }
-  async handleRequest(appSessionId: string, request: WorkspaceRequest): Promise<Result> {
+  async handleRequest(appSessionId: string, request: WorkspaceRequest, receivedAt = this.timing.now()): Promise<Result> {
     try {
       switch (request.verb) {
-        case 'workspaces.list': return await this.list(appSessionId)
-        case 'workspace.jump': return await this.accept(appSessionId, request.operationId, request.destinationHandle)
+        case 'workspaces.list': return await this.timing.span({ ...this.identity(appSessionId), appSessionId }, 'catalog', () => this.list(appSessionId))
+        case 'workspace.jump': {
+          // Production supplies main's supervisor-frame receipt clock, before
+          // peer-plane validation. Direct internal callers default to dispatch.
+          // Both spans include validation, fresh trust, reservation and save.
+          const identity = { ...this.identity(appSessionId), appSessionId, operationId: request.operationId }
+          const acceptance = this.timing.start(identity, 'request_received_to_acceptance', receivedAt)
+          const received = this.timing.start(identity, 'request_received_to_provider_request_observed', receivedAt)
+          try {
+            const result = await this.accept(appSessionId, request.operationId, request.destinationHandle, acceptance)
+            const pending = this.acceptedTimings.get(appSessionId)
+            if (result.ok && pending?.operationId === request.operationId) {
+              acceptance()
+              pending.received = received
+            } else {
+              acceptance('unavailable')
+              received('unavailable')
+            }
+            return result
+          } catch (error) {
+            acceptance('failed')
+            received('unavailable')
+            throw error
+          }
+        }
         case 'workspace.ready': return await this.ready(appSessionId, request)
         case 'workspace.cancel': {
           const state = this.snapshot(appSessionId)
@@ -251,7 +333,15 @@ export class WorkspaceJumpCoordinator {
     if (request.verb !== 'workspace.ready') return
     if (!answered) { void this.cancel(appSessionId, request.operationId); return }
     if (this.running.has(appSessionId)) return
-    const task = this.move(appSessionId, request.operationId).catch(() => undefined).finally(() => this.running.delete(appSessionId))
+    const task = this.move(appSessionId, request.operationId).catch(() => {
+      this.scheduleObservation(appSessionId)
+    }).finally(() => {
+      this.running.delete(appSessionId)
+      try {
+        if (this.liveMoves.get(appSessionId)?.operationId === request.operationId &&
+            this.snapshot(appSessionId)?.continuation.admissionGeneration !== this.identity(appSessionId)?.generation) this.liveMoves.delete(appSessionId)
+      } catch { this.liveMoves.delete(appSessionId) /* Durable unreadable state remains retained. */ }
+    })
     this.running.set(appSessionId, task)
   }
   async cancel(appSessionId: string, operationId?: string, requestedBy: 'stop' | 'close' = 'stop'): Promise<boolean> {
@@ -269,25 +359,103 @@ export class WorkspaceJumpCoordinator {
     if (state.phase === 'accepted' || state.phase === 'ready') this.settleWarning(appSessionId, 'cancelled')
     return true
   }
-  private effect(appSessionId: string, action: WorkspaceControlAction): void {
+  private effect(appSessionId: string, action: WorkspaceControlAction, retry = false): void {
     const state = this.snapshot(appSessionId)
     const generation = this.identity(appSessionId)?.generation
-    if (!state || !generation) return
+    if (this.disposed || !state || !generation) return
     const key = `${state.operationId}:${generation}:${JSON.stringify(action)}`
     if (this.effectKeys.has(key)) return
     this.effectKeys.add(key)
-    const task = Promise.resolve().then(() => {
+    let sent = false
+    const task = Promise.resolve().then(async () => {
+      if (action.action !== 'cancel' && this.deps.waitForControlSlot) {
+        do {
+          if (!await this.deps.waitForControlSlot(appSessionId, state.operationId, generation)) return { kind: 'unavailable' } as const
+        } while (this.deps.controlSlotOccupied?.(appSessionId, state.operationId))
+      }
       const current = this.snapshot(appSessionId)
-      if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation || action.action === 'release' && current.release.authorizedRevision !== action.authorizationRevision || action.action === 'continue' && (current.cancellation || current.continuation.admissionGeneration !== generation || current.continuation.dispatch === 'consumed')) return { kind: 'unavailable' } as const
+      const identity = this.identity(appSessionId)
+      const row = this.deps.row(appSessionId)
+      if (this.disposed || !current || current.operationId !== state.operationId || identity?.generation !== generation ||
+          action.action === 'release' && current.release.authorizedRevision !== action.authorizationRevision ||
+          action.action === 'continue' && (current.engineSessionId !== state.engineSessionId || identity.engineSessionId !== state.engineSessionId ||
+            current.sourceGeneration !== state.sourceGeneration || current.continuation.id !== state.continuation.id ||
+            current.target.cwd !== state.target.cwd || row?.cwd !== state.target.cwd || row.binding?.kind !== 'project' ||
+            current.location !== 'destination' || current.phase !== 'settled' || current.cancellation ||
+            current.continuation.admissionGeneration !== generation || current.continuation.dispatch === 'consumed' ||
+            current.continuation.outcome !== 'pending')) return { kind: 'unavailable' } as const
+      if (retry) {
+        if (!this.canRetry(appSessionId) || (this.redeliveries.get(state.operationId) ?? 0) >= 1) return { kind: 'unavailable' } as const
+        this.redeliveries.set(state.operationId, 1)
+      }
+      if (action.action === 'continue') {
+        const prior = this.observations.get(appSessionId)
+        this.freshEvidence.set(`${state.operationId}:${generation}`,
+          prior?.admissionGeneration === current.continuation.admissionGeneration ? prior.statusSeq : 0)
+        this.liveMoves.delete(appSessionId)
+      }
+      sent = true
       return this.deps.control(current, action)
     }).then(delivery => {
       const current = this.snapshot(appSessionId)
       if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation) return
-      if (delivery.kind === 'result' && delivery.result.status) this.observe(appSessionId, delivery.result.status)
-    }).catch(() => undefined).finally(() => { this.effectKeys.delete(key); this.effects.delete(task) })
+      if (action.action === 'continue' && delivery.kind === 'result' && delivery.result.disposition === 'refused') {
+        this.refusedContinuations.add(`${state.operationId}:${generation}`)
+      }
+      if (sent && (delivery.kind !== 'result' || delivery.result.disposition === 'busy' ||
+          delivery.result.disposition === 'accepted' && action.action === 'continue' && !delivery.result.status)) this.scheduleObservation(appSessionId)
+      if (action.action === 'continue' && delivery.kind === 'result' &&
+          (delivery.result.disposition === 'accepted' || delivery.result.disposition === 'already_applied')) {
+        const pending = this.acceptedTimings.get(appSessionId)
+        pending?.admission?.()
+        if (pending) pending.admissionObserved = true
+        if (pending?.providerObserved) this.acceptedTimings.delete(appSessionId)
+      }
+      if (action.action === 'continue' && delivery.kind !== 'result' && current.continuation.dispatch === 'consumed') {
+        const pending = this.acceptedTimings.get(appSessionId)
+        pending?.admission?.('unavailable')
+        if (pending) pending.admissionObserved = true
+        if (pending?.providerObserved) this.acceptedTimings.delete(appSessionId)
+      }
+    }).finally(() => {
+      this.effectKeys.delete(key)
+      this.effects.delete(task)
+      if (action.action === 'status' || action.action === 'continue') this.retryContinuation(appSessionId)
+    }).catch(() => { if (sent) this.scheduleObservation(appSessionId) })
     this.effects.add(task)
   }
+  private canRetry(appSessionId: string): boolean {
+    const state = this.snapshot(appSessionId)
+    const status = this.observations.get(appSessionId)
+    const generation = this.identity(appSessionId)?.generation
+    if (!state || !status || !generation || status.operationId !== state.operationId ||
+        status.observerGeneration !== generation || status.admissionGeneration !== state.continuation.admissionGeneration ||
+        status.execution !== 'idle' || status.record.kind !== 'absent' ||
+        state.continuation.admissionGeneration !== generation || state.continuation.dispatch !== 'unknown' ||
+        state.continuation.outcome !== 'pending' || state.cancellation ||
+        this.refusedContinuations.has(`${state.operationId}:${generation}`) ||
+        status.statusSeq <= (this.freshEvidence.get(`${state.operationId}:${generation}`) ?? -1)) return false
+    return true
+  }
+  private retryContinuation(appSessionId: string): void {
+    if (!this.canRetry(appSessionId)) return
+    const state = this.snapshot(appSessionId)!
+    const generation = this.identity(appSessionId)!.generation
+    const action = { action: 'continue' as const, continuationId: state.continuation.id }
+    const prefix = `${state.operationId}:${generation}:`
+    // State can arrive before the status acknowledgement frees the command slot.
+    // Neither that wait nor an already scheduled continuation spends the retry.
+    if (this.effectKeys.has(`${prefix}${JSON.stringify({ action: 'status' })}`) ||
+        this.effectKeys.has(`${prefix}${JSON.stringify(action)}`)) return
+    const attempts = this.redeliveries.get(state.operationId) ?? 0
+    if (attempts < 1) {
+      this.effect(appSessionId, action, true)
+    }
+  }
   private settleWarning(appSessionId: string, outcome: 'failed' | 'cancelled' | 'uncertain'): void {
+    const pending = this.acceptedTimings.get(appSessionId)
+    pending?.end('unavailable'); pending?.received?.('unavailable'); pending?.boundary('unavailable'); pending?.admission?.('unavailable')
+    this.acceptedTimings.delete(appSessionId)
     const state = this.snapshot(appSessionId)
     if (!state || state.location === 'unknown') return
     this.save({ ...state, phase: 'settled', review: { ...state.review, required: true } })
@@ -300,7 +468,8 @@ export class WorkspaceJumpCoordinator {
     const generation = this.identity(appSessionId)?.generation
     if (!state || !generation || status.observerGeneration !== generation || status.appSessionId !== appSessionId || status.engineSessionId !== state.engineSessionId || status.operationId !== state.operationId || status.continuationId !== state.continuation.id || status.sourceGeneration !== state.sourceGeneration || status.admissionGeneration !== state.continuation.admissionGeneration || status.operationSha256 !== workspaceJumpOperationSha256(state)) return false
     const previous = this.observations.get(appSessionId)
-    if (previous?.operationId === state.operationId && previous.observerGeneration === generation && previous.statusSeq >= status.statusSeq) return false
+    if (previous?.operationId === state.operationId && previous.observerGeneration === generation &&
+        previous.admissionGeneration === status.admissionGeneration && previous.statusSeq >= status.statusSeq) return false
     let next = state
     if (status.record.kind === 'valid') {
       const record = status.record.record
@@ -326,27 +495,85 @@ export class WorkspaceJumpCoordinator {
     else if (next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
     else if (status.execution === 'unconfirmed' && next.continuation.outcome !== 'success' && !next.review.noticeUuid) this.effect(appSessionId, { action: 'settle', outcome: 'uncertain' })
     else if (['idle','terminal'].includes(status.execution) && next.continuation.outcome !== 'success' && !next.review.noticeUuid && (next.cancellation || next.continuation.outcome !== 'pending')) this.settleWarning(appSessionId, next.cancellation?.application === 'prevented_start' || next.cancellation?.application === 'abort_signalled' ? 'cancelled' : next.continuation.dispatch === 'none' ? 'failed' : 'uncertain')
-    else if (status.execution === 'idle' && status.record.kind === 'absent' && next.continuation.admissionGeneration === generation && next.continuation.dispatch === 'unknown' && next.continuation.outcome === 'pending' && !next.cancellation) {
-      const attempts = this.redeliveries.get(next.operationId) ?? 0
-      if (attempts < 1) { this.redeliveries.set(next.operationId, attempts + 1); this.effect(appSessionId, { action: 'continue', continuationId: next.continuation.id }) }
-    }
+    else this.retryContinuation(appSessionId)
     return true
   }
   liveObservation(appSessionId: string): WorkspaceHandoffSnapshot | undefined { return this.observations.get(appSessionId) }
   queryStatus(appSessionId: string, attachment = false): void {
-    try { if (attachment || this.retains(appSessionId)) this.effect(appSessionId, { action: 'status' }) } catch { /* Unreadable state remains retained. */ }
+    try {
+      if (this.disposed || !(attachment || this.retains(appSessionId))) return
+      const owner = this.liveMoves.get(appSessionId)
+      const state = this.snapshot(appSessionId)
+      const identity = this.identity(appSessionId)
+      const row = this.deps.row(appSessionId)
+      if (owner && state && identity && owner.operationId === state.operationId &&
+          owner.engineSessionId === identity.engineSessionId && owner.continuationId === state.continuation.id &&
+          owner.sourceGeneration === state.sourceGeneration && owner.destination === state.target.cwd &&
+          row?.cwd === owner.destination && row.binding?.kind === 'project' &&
+          identity.generation !== owner.sourceGeneration && (!owner.generation || owner.generation === identity.generation) &&
+          !state.cancellation && state.continuation.outcome === 'pending' && state.continuation.dispatch !== 'consumed' &&
+          (state.phase === 'moving' || state.continuation.admissionGeneration === identity.generation)) {
+        owner.generation = identity.generation
+        return
+      }
+      this.clearObservationRetry(appSessionId)
+      this.effect(appSessionId, { action: 'status' })
+    } catch { /* Unreadable state remains retained. */ }
+  }
+  private clearObservationRetry(appSessionId: string): void {
+    const retry = this.observationRetries.get(appSessionId)
+    if (retry?.timer) clearTimeout(retry.timer)
+    this.observationRetries.delete(appSessionId)
+  }
+  private scheduleObservation(appSessionId: string): void {
+    let state: WorkspaceJumpStateV2 | null
+    try { state = this.snapshot(appSessionId) } catch { /* Retain unreadable state for periodic recovery. */ return }
+    const generation = this.identity(appSessionId)?.generation
+    if (this.disposed || !state || !generation || !this.retains(appSessionId)) return
+    let retry = this.observationRetries.get(appSessionId)
+    if (!retry || retry.operationId !== state.operationId || retry.generation !== generation) {
+      this.clearObservationRetry(appSessionId)
+      retry = { operationId: state.operationId, generation, attempts: 0 }
+      this.observationRetries.set(appSessionId, retry)
+    }
+    if (retry.timer || retry.attempts >= 3) return
+    const scheduled = retry
+    retry.timer = setTimeout(() => {
+      scheduled.timer = undefined
+      try {
+        if (this.disposed || !this.retains(appSessionId) || this.snapshot(appSessionId)?.operationId !== scheduled.operationId ||
+            this.identity(appSessionId)?.generation !== scheduled.generation) return
+        this.effect(appSessionId, { action: 'status' })
+      } catch { /* Unreadable state remains retained for periodic recovery. */ }
+    }, [250, 1_000, 4_000][retry.attempts++]!)
+    retry.timer.unref?.()
+  }
+  requestFreshEvidence(appSessionId: string): void { this.scheduleObservation(appSessionId) }
+  dispose(): void {
+    this.disposed = true
+    this.liveMoves.clear()
+    for (const id of this.observationRetries.keys()) this.clearObservationRetry(id)
   }
   private async move(appSessionId: string, operationId: string): Promise<void> {
     const state = this.snapshot(appSessionId)
-    if (!state || state.operationId !== operationId || state.phase !== 'ready' || state.cancellation) return
+    if (!state || state.operationId !== operationId || state.origin !== 'fresh' || state.phase !== 'ready' || state.cancellation ||
+        state.continuation.admissionGeneration !== null || state.continuation.dispatch !== 'none' ||
+        this.identity(appSessionId)?.generation !== state.sourceGeneration) return
+    const owner: LiveMove = { operationId, engineSessionId: state.engineSessionId, continuationId: state.continuation.id,
+      sourceGeneration: state.sourceGeneration, destination: state.target.cwd }
+    this.liveMoves.set(appSessionId, owner)
     const moved = await this.deps.host.moveWorkspaceJump(appSessionId, operationId, state.target.cwd, () => {
       const current = this.snapshot(appSessionId)
-      if (!current || current.operationId !== operationId || current.cancellation || current.phase !== 'ready') return false
+      if (this.liveMoves.get(appSessionId) !== owner || !current || current.operationId !== operationId ||
+          current.engineSessionId !== owner.engineSessionId || current.sourceGeneration !== owner.sourceGeneration ||
+          current.continuation.id !== owner.continuationId || current.target.cwd !== owner.destination ||
+          current.cancellation || current.phase !== 'ready') return false
       this.save({ ...current, phase: 'moving', location: 'unknown' })
       return true
     })
     const current = this.snapshot(appSessionId)
-    if (!current || current.operationId !== operationId || current.engineSessionId !== state.engineSessionId || current.sourceGeneration !== state.sourceGeneration || this.identity(appSessionId)?.engineSessionId !== state.engineSessionId) return
+    if (this.disposed || this.liveMoves.get(appSessionId) !== owner || !current || current.operationId !== operationId || current.engineSessionId !== state.engineSessionId || current.sourceGeneration !== state.sourceGeneration || this.identity(appSessionId)?.engineSessionId !== state.engineSessionId ||
+        current.continuation.id !== owner.continuationId || current.target.cwd !== owner.destination) return
     const compensation = moved.location === 'source' && moved.relocation?.phase === 'complete' &&
       moved.relocation.source.cwd === current.target.cwd && moved.relocation.source.binding.kind === 'project' &&
       JSON.stringify(moved.relocation.target) === JSON.stringify(current.source)
@@ -355,13 +582,22 @@ export class WorkspaceJumpCoordinator {
     this.save({ ...current, location: moved.location, consumed: current.consumed || moved.location === 'destination',
       ...(compensation ? { compensation } : {}) })
     if (!moved.result.ok || moved.location !== 'destination' || current.cancellation) {
+      this.liveMoves.delete(appSessionId)
       this.settleWarning(appSessionId, current.cancellation ? 'cancelled' : 'failed')
       return
     }
     const next = this.snapshot(appSessionId)!
     const generation = this.identity(appSessionId)?.generation
-    if (!generation) return
+    if (owner.generation && generation !== owner.generation) {
+      this.liveMoves.delete(appSessionId)
+      this.settleWarning(appSessionId, 'uncertain')
+      return
+    }
+    if (!generation || generation === state.sourceGeneration || this.deps.row(appSessionId)?.cwd !== owner.destination ||
+        this.deps.row(appSessionId)?.binding?.kind !== 'project' || next.continuation.outcome !== 'pending') return
     this.save({ ...next, phase: 'settled', continuation: { ...next.continuation, admissionGeneration: generation, dispatch: 'unknown' } })
+    const pending = this.acceptedTimings.get(appSessionId)
+    if (pending?.operationId === operationId) pending.admission = this.timing.start({ appSessionId, engineSessionId: state.engineSessionId, operationId, generation }, 'admission_to_continuation')
     this.effect(appSessionId, { action: 'continue', continuationId: next.continuation.id })
   }
   async settleRecovery(appSessionId: string, operationId: string): Promise<boolean> {
@@ -380,6 +616,8 @@ export class WorkspaceJumpCoordinator {
   }
   /** Main restart/process loss: never replay accepted, ready, or admitted work. */
   recover(appSessionId: string): WorkspaceJumpStateV2 | null {
+    this.liveMoves.delete(appSessionId)
+    this.clearObservationRetry(appSessionId)
     const state = this.snapshot(appSessionId)
     if (!state || !workspaceJumpRequiresRetention(state)) return state
     let location: WorkspaceJumpStateV2['location'] = 'unknown'

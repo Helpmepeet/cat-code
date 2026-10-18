@@ -13,8 +13,8 @@
  * active account (already on `accounts.snapshot`) — the renderer derives both
  * from the snapshots those domains already emit.
  *
- * Read-only, spawn-time-frozen (matches the settings seam's posture): the
- * doctor/install checks run once at spawn, no live re-poll.
+ * Required instructions and cheap facts are prepared at construction. Optional
+ * installation checks run once, only when the session lifecycle permits them.
  *
  * ZERO transport knowledge: frames, validation, and limits stay in
  * `sidecarServer.ts`.
@@ -31,6 +31,8 @@ import {
 } from '../../src/utils/status.js'
 import { SandboxManager } from '../../src/utils/sandbox/sandbox-adapter.js'
 import type { DiagnosticsSnapshot } from '../shared/protocol.js'
+import { getMemoryFiles } from '../../src/utils/claudemd.js'
+import { createOwnedCommandBudget } from '../../src/utils/ownedCommandBudget.js'
 
 /**
  * The RESOLVED model this session runs. Prefers the store's own resolved/override
@@ -75,40 +77,32 @@ function effortToDisplay(effort: AppState['effortValue']): string | null {
 }
 
 export type SidecarDiagnosticsDomain = {
-  /** The spawn-time doctor/status facts for this session. null if the read failed. */
+  start(): void
+  subscribe(listener: () => void): () => void
+  dispose(): void
+  /** Null until the whole aggregate is available, including any failure warnings. */
   getSnapshot(): DiagnosticsSnapshot | null
 }
 
-/**
- * `appStateStore` is the SAME live store the engine's QueryEngine reads
- * (`mainLoopModel`) — not a re-derivation, matching the permission domain's
- * rule. The doctor/install checks shell out and read disk, so construction is
- * async; `getSnapshot()` is then a pure, throw-free read of the captured value.
- */
+// Provisional, not a measured npm tail percentile: retained healthy checks took
+// 72–78ms and the controlled delay was 200ms. Five seconds allows substantial
+// headroom while bounding stuck work; no long-healthy npm distribution exists.
+export const OPTIONAL_INSTALLATION_BUDGET_MS = 5_000
+
 export async function createSidecarDiagnosticsDomain(
   appStateStore: Store<AppState>,
 ): Promise<SidecarDiagnosticsDomain> {
-  const snapshot = await readDiagnosticsSnapshotOnce(appStateStore)
-  return {
-    getSnapshot() {
-      return snapshot
-    },
-  }
-}
-
-async function readDiagnosticsSnapshotOnce(
-  appStateStore: Store<AppState>,
-): Promise<DiagnosticsSnapshot | null> {
+  // This is the existing eager instruction-loading point. Do not defer it or
+  // discover twice: getMemoryFiles owns the shared cache and instruction hooks.
+  let facts: Omit<DiagnosticsSnapshot, 'installationWarnings' | 'healthWarnings'> | null = null
   try {
-    const [installationWarnings, healthWarnings, memoryWarnings, gitBranch] =
-      await Promise.all([
-        buildInstallationDiagnostics(),
-        buildInstallationHealthDiagnostics(),
-        buildMemoryDiagnostics(),
-        readSessionBranch(),
-      ])
+    const files = await getMemoryFiles()
+    const [memoryWarnings, gitBranch] = await Promise.all([
+      buildMemoryDiagnostics(files),
+      readSessionBranch(),
+    ])
     const state = appStateStore.getState()
-    return {
+    facts = {
       version: MACRO.VERSION,
       mainLoopModel: state.mainLoopModel,
       mainLoopModelForSession: resolveSessionModel(state),
@@ -116,20 +110,62 @@ async function readDiagnosticsSnapshotOnce(
       fastMode: state.fastMode ?? false,
       sandboxEnabled: SandboxManager.isSandboxingEnabled(),
       gitBranch,
-      // The engine builders are typed `Diagnostic[]` (`ReactNode`); today they
-      // yield plain strings, but a future JSX-emitting variant would be silently
-      // dropped by `checkJsonSafe` on the outbound frame. Coerce explicitly so
-      // the wire stays `string[]` by construction, not by luck.
-      installationWarnings: installationWarnings.map(String),
-      healthWarnings: healthWarnings.map(String),
       memoryWarnings: memoryWarnings.map(String),
     }
   } catch (error) {
-    process.stderr.write(
-      `[sidecar] diagnostics snapshot read failed (session runs without a diagnostics snapshot): ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-    return null
+    process.stderr.write(`[sidecar] diagnostics preparation failed: ${error instanceof Error ? error.message : String(error)}\n`)
+  }
+  let snapshot: DiagnosticsSnapshot | null = null
+  let started = false
+  let disposed = false
+  let budget: ReturnType<typeof createOwnedCommandBudget> | null = null
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => snapshot,
+    subscribe(listener) {
+      if (!disposed) listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    start() {
+      const prepared = facts
+      if (started || disposed || !prepared) return
+      started = true
+      const owned = budget = createOwnedCommandBudget(OPTIONAL_INSTALLATION_BUDGET_MS)
+      // The abort listener settles the aggregate even if a non-subprocess probe
+      // never resolves. Both probe promises retain rejection handlers; owned
+      // subprocesses receive the same signal and deadline, not an abandoned race.
+      const probe = (label: string, read: () => Promise<unknown[]>) => new Promise<string[]>(resolve => {
+        const aborted = () => resolve(['Installation checks cancelled or timed out.'])
+        owned.signal.addEventListener('abort', aborted, { once: true })
+        Promise.resolve().then(() => {
+          owned.throwIfExpired()
+          return read()
+        }).then(warnings => warnings.map(String)).then(
+          resolve,
+          error => {
+            process.stderr.write(`[sidecar] ${label} diagnostics failed: ${error instanceof Error ? error.message : String(error)}\n`)
+            resolve(['Installation checks could not be completed.'])
+          },
+        ).finally(() => owned.signal.removeEventListener('abort', aborted))
+      })
+      void Promise.all([
+        probe('installation', () => buildInstallationDiagnostics(owned)),
+        probe('health', () => buildInstallationHealthDiagnostics(owned)),
+      ]).then(([installationWarnings, healthWarnings]) => {
+        if (disposed) return
+        snapshot = { ...prepared, installationWarnings, healthWarnings }
+        for (const listener of listeners) {
+          try { listener() } catch {
+            process.stderr.write('[sidecar] diagnostics subscriber failed\n')
+          }
+        }
+      }).finally(() => owned.dispose())
+    },
+    dispose() {
+      if (disposed) return
+      disposed = true
+      listeners.clear()
+      budget?.dispose()
+    },
   }
 }

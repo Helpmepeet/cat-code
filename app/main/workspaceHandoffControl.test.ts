@@ -42,6 +42,23 @@ test('one outstanding command preserves cancellation priority; disconnect is del
   expect(await cancellation).toEqual({ kind: 'disconnected' })
 })
 
+test('slot wait does not send or block cancellation and wakes after command acknowledgement', async () => {
+  const h = harness()
+  const pending = h.control.request(h.id, h.operationId, { action: 'status' })
+  let available = false
+  const waiting = h.control.waitForSlot(h.id, h.operationId, h.generation).then(value => { available = value })
+  const cancellation = h.control.request(h.id, h.operationId, { action: 'cancel', cancelId: randomUUID() })
+  await Promise.resolve()
+  expect(available).toBe(false)
+  expect(h.sent.map(message => message.action)).toEqual(['status', 'cancel'])
+  h.control.receive(h.id, { requestId: h.sent[0]!.requestId, operationId: h.operationId,
+    action: 'status', disposition: 'accepted' })
+  await Promise.all([pending, waiting])
+  expect(available).toBe(true)
+  h.control.disconnect(h.id)
+  await cancellation
+})
+
 test('strict receiving rejects extra keys, wrong generation and refusal without a reason before observation or correlation', async () => {
   const h = harness()
   const pending = h.control.request(h.id, h.operationId, { action: 'status' })
@@ -53,6 +70,53 @@ test('strict receiving rejects extra keys, wrong generation and refusal without 
   h.control.receiveFrame(h.id, result)
   expect((await pending).kind).toBe('result')
   expect(h.observations).toEqual([h.status])
+})
+
+test('rate-window exhaustion retains latest idle evidence after the occupied slot frees', async () => {
+  const callbacks: (() => void)[] = []
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void) => {
+    callbacks.push(callback); return 0 as unknown as ReturnType<typeof setTimeout>
+  }) as typeof setTimeout)
+  try {
+    const h = harness()
+    const pending = h.control.request(h.id, h.operationId, { action: 'status' })
+    for (let index = 1; index <= 32; index++) h.control.receiveState(h.id, { ...h.status, statusSeq: index })
+    const idle = { ...h.status, statusSeq: 33, execution: 'idle' as const }
+    h.control.receiveState(h.id, idle)
+    expect(h.observations).toHaveLength(32)
+    h.control.receive(h.id, { requestId: h.sent[0]!.requestId, operationId: h.operationId,
+      action: 'status', disposition: 'accepted' })
+    expect((await pending).kind).toBe('result')
+    callbacks[1]!()
+    expect(h.observations.at(-1)).toEqual(idle)
+    expect(h.recoveries).toEqual([h.operationId])
+    const cancellation = h.control.request(h.id, h.operationId, { action: 'cancel', cancelId: randomUUID() })
+    const continuation = h.control.request(h.id, h.operationId, { action: 'continue', continuationId: idle.continuationId })
+    expect(h.sent.map(message => message.action)).toEqual(['status', 'cancel', 'continue'])
+    h.control.disconnect(h.id)
+    await Promise.all([cancellation, continuation])
+  } finally { timer.mockRestore() }
+})
+
+test('rate-limited null admission cannot hide current admission evidence whose sequence restarted', async () => {
+  const callbacks: (() => void)[] = []
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void) => {
+    callbacks.push(callback); return 0 as unknown as ReturnType<typeof setTimeout>
+  }) as typeof setTimeout)
+  try {
+    const h = harness()
+    const authorization = h.control.request(h.id, h.operationId, { action: 'status' })
+    h.control.disconnect(h.id); await authorization
+    for (let sequence = 1; sequence <= 33; sequence++) {
+      h.control.receiveState(h.id, { ...h.status, admissionGeneration: null, statusSeq: sequence })
+    }
+    const admitted = { ...h.status, statusSeq: 1, execution: 'idle' as const }
+    h.control.receiveState(h.id, admitted)
+    h.control.receiveState(h.id, { ...h.status, admissionGeneration: null, statusSeq: 100 })
+    callbacks[1]!()
+    expect(h.observations.at(-1)).toEqual(admitted)
+    expect(h.recoveries).toEqual([h.operationId])
+  } finally { timer.mockRestore() }
 })
 
 test('stale operation and foreign membership cannot replace the current operation snapshot at rate overflow', async () => {

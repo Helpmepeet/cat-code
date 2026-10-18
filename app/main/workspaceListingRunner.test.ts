@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
+import type { WorkerTiming } from '../shared/workerTiming.js'
 
 const directories: string[] = []
 afterEach(() => { for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -26,7 +27,9 @@ test('real observation worker lists only saved-trusted roots without executing c
   writeFileSync(join(h.trusted, '.claude', 'settings.json'), JSON.stringify({ hooks: {
     SessionStart: [{ hooks: [{ type: 'command', command: `touch '${marker}'` }] }],
   } }))
+  const timings: WorkerTiming[] = []
   const roots = await runWorkspaceListingWorker({ command: process.execPath,
+    onTiming: timing => { timings.push(timing) },
     args: [fileURLToPath(new URL('../sidecar/workspaceListingWorker.ts', import.meta.url))], cwd: h.trusted,
     env: { NODE_ENV: 'production', CLAUDE_CONFIG_DIR: h.config, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1',
       ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '' },
@@ -34,6 +37,10 @@ test('real observation worker lists only saved-trusted roots without executing c
   })
   expect(roots).toEqual([h.trusted])
   expect(existsSync(marker)).toBe(false)
+  expect(timings.map(timing => timing.phase).sort()).toEqual([
+    'build_metadata', 'build_provenance_git', 'configuration_prepare', 'trust_evaluation', 'worker_bootstrap_imports',
+  ])
+  expect(timings.every(timing => timing.outcome === 'completed' && timing.durationMs >= 0)).toBe(true)
 }, 20_000)
 
 test.each([

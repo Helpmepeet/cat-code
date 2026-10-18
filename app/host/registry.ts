@@ -31,12 +31,16 @@ import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js
 import { execFileSync } from 'node:child_process'
 import {
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   fsyncSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
+  readSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -464,6 +468,13 @@ export class SessionRegistry {
    */
   private writeFailed = false
 
+  private removedEmptySessionIds: string[] = []
+
+  /** Rows removed by the latest empty-session cleanup, including clean quit. */
+  get lastRemovedEmptySessionIds(): string[] {
+    return [...this.removedEmptySessionIds]
+  }
+
   constructor(options: RegistryOptions = {}) {
     this.retainSession = options.retainSession ?? (() => false)
     this.dir = options.storageDir ?? defaultRegistryDir()
@@ -554,11 +565,9 @@ export class SessionRegistry {
     }
     // (2) liveness sweep for rows with shutdown == null.
     this.sweepOrphans()
-    // (3) reap over-bound + missing-transcript + null-engineSessionId-clean rows.
-    this.reap()
-    // Persist the post-launch state (best-effort — a failed write never fails
-    // the launch; the in-memory doc is authoritative for this run).
-    await this.persist()
+    // (3) Reap empty, missing-transcript, and over-bound rows after merging
+    // under the write lock, so concurrent accepted input cannot be erased.
+    await this.persist('launch')
     // (4) restore-offer data.
     return this.restorable()
   }
@@ -693,10 +702,12 @@ export class SessionRegistry {
    * an extra case.) The `shutdown !== null` guard is a safety net rather than a
    * live branch: `sweepOrphans` runs first and settles every row.
    */
-  private reap(): void {
+  private reap(doc: RegistryDocument): void {
     // Drop missing-transcript rows and null-engineSessionId terminal rows.
-    this.doc.sessions = this.doc.sessions.filter(row => {
-      if (this.retainSession(row.appSessionId)) return true
+    doc.sessions = doc.sessions.filter(row => {
+      if (row.shutdown === null || row.shutdown === 'parked' ||
+          this.retainSession(row.appSessionId) || row.hasAcceptedInput === true ||
+          row.lastMessageSentAt !== null || row.forked) return true
       if (row.shutdown !== null && row.engineSessionId === null) {
         this.log(
           `[registry] reaped ${row.shutdown} row with no engineSessionId (${row.appSessionId}): ` +
@@ -714,7 +725,7 @@ export class SessionRegistry {
       return true
     })
 
-    this.enforceBound()
+    this.enforceBound(doc)
   }
 
   private transcriptMissing(row: RegistrySession): boolean {
@@ -728,7 +739,70 @@ export class SessionRegistry {
     // transcript. The managed ownership ledger keeps that empty Chat addressable.
     if (row.binding.kind === 'managed' && row.hasAcceptedInput === false) return false
     const path = this.transcriptPathFor(row.cwd, row.engineSessionId)
-    return !existsSync(path)
+    try {
+      lstatSync(path)
+      return false
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT'
+    }
+  }
+
+  /** True only when this call durably removes a closed, proven-empty row. */
+  async discardEmptySession(appSessionId: string): Promise<boolean> {
+    await this.persist(new Set([appSessionId]))
+    return this.removedEmptySessionIds.includes(appSessionId)
+  }
+
+  private removeEmptyRows(doc: RegistryDocument, ids?: ReadonlySet<string>): string[] {
+    const removed: string[] = []
+    doc.sessions = doc.sessions.filter(row => {
+      if ((ids && !ids.has(row.appSessionId)) || !this.isEmptyTerminalRow(row)) return true
+      removed.push(row.appSessionId)
+      this.log(row.engineSessionId === null
+        ? `[registry] reaped ${row.shutdown} row with no engineSessionId (${row.appSessionId}): never acquired content, not restorable`
+        : `[registry] removed empty session (${row.appSessionId})`)
+      return false
+    })
+    return removed
+  }
+
+  private isEmptyTerminalRow(row: RegistrySession): boolean {
+    if (row.shutdown === null || row.shutdown === 'parked' ||
+        this.retainSession(row.appSessionId) || row.hasAcceptedInput === true ||
+        row.lastMessageSentAt !== null || row.forked) return false
+    if (row.engineSessionId === null) return true
+    try {
+      if (readSessionRelocation(row.engineSessionId)?.phase === 'moving') return false
+    } catch { return false }
+    let fd: number | undefined
+    try {
+      try {
+        fd = openSync(this.transcriptPathFor(row.cwd, row.engineSessionId),
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ENOENT' && row.hasAcceptedInput === false
+      }
+      const maxBytes = 1024 * 1024
+      const stat = fstatSync(fd)
+      if (!stat.isFile() || stat.size > maxBytes) return false
+      const bytes = Buffer.alloc(maxBytes + 1)
+      let length = 0
+      while (length < bytes.length) {
+        const count = readSync(fd, bytes, length, bytes.length - length, null)
+        if (count === 0) break
+        length += count
+      }
+      if (length > maxBytes) return false
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(0, length))
+      for (const line of text.split('\n')) {
+        if (!line.trim()) continue
+        const record: unknown = JSON.parse(line)
+        if (!isRecord(record) || typeof record.type !== 'string') return false
+        if (record.type === 'user' || record.type === 'assistant') return false
+      }
+      return true
+    } catch { return false }
+    finally { if (fd !== undefined) closeSync(fd) }
   }
 
   /**
@@ -764,17 +838,17 @@ export class SessionRegistry {
    * there would let a row-menu toggle, repeated, refuse peer creation outright.
    * The ordering keeps the bound and the churn rule exactly as they were.
    */
-  private enforceBound(): string[] {
-    if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
+  private enforceBound(doc: RegistryDocument = this.doc): string[] {
+    if (doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
-    const terminal = this.doc.sessions
+    const terminal = doc.sessions
       .filter(row => isReapableForBound(row) && !this.retainSession(row.appSessionId))
       .sort(
         (a, b) =>
           Number(a.peerWakeBlocked === true) - Number(b.peerWakeBlocked === true) ||
           a.lastAttachedAt - b.lastAttachedAt,
       )
-    const removeCount = this.doc.sessions.length - MAX_REGISTRY_SESSIONS
+    const removeCount = doc.sessions.length - MAX_REGISTRY_SESSIONS
     const doomedRows = terminal.slice(0, removeCount)
     const doomed = new Set(doomedRows.map(r => r.appSessionId))
     if (doomed.size > 0) {
@@ -800,7 +874,7 @@ export class SessionRegistry {
           }
         }
       }
-      this.doc.sessions = this.doc.sessions.filter(r => !doomed.has(r.appSessionId))
+      doc.sessions = doc.sessions.filter(r => !doomed.has(r.appSessionId))
       this.log(`[registry] reaped ${doomed.size} over-bound terminal row(s)`)
     }
     return [...doomed]
@@ -1267,6 +1341,7 @@ export class SessionRegistry {
    * Returns the ids it marked.
    */
   markLiveCleanSync(): string[] {
+    this.removedEmptySessionIds = []
     const marked: string[] = []
     for (const row of this.doc.sessions) {
       if (row.shutdown !== null && row.shutdown !== 'parked') continue
@@ -1295,7 +1370,9 @@ export class SessionRegistry {
       )
       merged.hostPid = process.pid
       merged.updatedAt = Date.now()
+      const removed = this.removeEmptyRows(merged, new Set(marked))
       atomicWriteJson(this.path, merged)
+      this.removedEmptySessionIds = removed
       this.doc = merged
       this.persistedDoc = cloneDocument(merged)
       this.writeFailed = false
@@ -1324,7 +1401,8 @@ export class SessionRegistry {
    * (§5, HostErrorCode `registry_unavailable`). The in-memory doc stays the
    * source of truth for this run.
    */
-  private async persist(): Promise<void> {
+  private async persist(cleanup?: 'launch' | ReadonlySet<string>): Promise<void> {
+    if (cleanup !== undefined) this.removedEmptySessionIds = []
     if (this.readFailed) {
       this.writeFailed = true
       this.log('[registry] skipping write because the registry could not be read this run')
@@ -1387,7 +1465,11 @@ export class SessionRegistry {
       )
       merged.hostPid = process.pid
       merged.updatedAt = Date.now()
+      const removed = cleanup === undefined ? [] :
+        this.removeEmptyRows(merged, cleanup === 'launch' ? undefined : cleanup)
+      if (cleanup === 'launch') this.reap(merged)
       atomicWriteJson(this.path, merged)
+      if (cleanup !== undefined) this.removedEmptySessionIds = removed
       this.doc = merged
       this.persistedDoc = cloneDocument(merged)
       this.writeFailed = false

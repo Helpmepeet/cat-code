@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { getSessionId } from '../../src/bootstrap/state.js'
+import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import { z } from '../../node_modules/zod/v4'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../src/Tool.js'
 import { lazySchema } from '../../src/utils/lazySchema.js'
@@ -40,16 +42,17 @@ export function createWorkspaceJumpTools(requestHost: PeerHostRequester = reques
     if (initialContext) return initialContext
     initialContext = new Promise(resolve => {
       let current = true
-      const abort = () => { current = false; signal.removeEventListener('abort', abort); resolve(undefined) }
+      const abort = () => { current = false; queryTimingBoundary({ stage: 'catalog_unavailable', engineSessionId: getSessionId() }); signal.removeEventListener('abort', abort); resolve(undefined) }
       signal.addEventListener('abort', abort, { once: true })
       // One observation per process, including failure. A timeout or Stop must
       // not seed a late response or initiate a retry behind the user's turn.
       void requestHost('workspaces.list', {}, { timeoutMs: 3000 }).then(result => {
         if (!current || signal.aborted) return
+        queryTimingBoundary({ stage: result.ok && result.value.eligible ? 'catalog_available' : 'catalog_unavailable', engineSessionId: getSessionId() })
         if (!result.ok || !result.value.eligible) { resolve(undefined); return }
         cache(result.value.workspaces)
         resolve(buildKnownWorkspaceContext(result.value.workspaces))
-      }, () => { if (current) resolve(undefined) }).finally(() => signal.removeEventListener('abort', abort))
+      }, () => { if (current) { queryTimingBoundary({ stage: 'catalog_unavailable', engineSessionId: getSessionId() }); resolve(undefined) } }).finally(() => signal.removeEventListener('abort', abort))
     })
     return initialContext
   }
