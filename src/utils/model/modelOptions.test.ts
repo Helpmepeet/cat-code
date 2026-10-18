@@ -97,6 +97,27 @@ function labelCount(options: { label: string }[], label: string): number {
 }
 
 describe('Haiku 5.5', () => {
+  test('Codex cross-provider Haiku uses the configured destination catalog and custom metadata', async () => {
+    const keys = ['CLAUDE_CODE_USE_BEDROCK', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION'] as const
+    const saved = keys.map(key => process.env[key])
+    try {
+      tier = 'codex'
+      setSessionProvider('openai')
+      process.env.CLAUDE_CODE_USE_BEDROCK = '1'
+      delete process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+      const { getModelOptions } = await import('./modelOptions.js')
+      expect(getModelOptions(false).find(option => option.value === 'haiku')?.label).toBe('Haiku 4.5')
+      process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL = 'custom-haiku'
+      process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME = 'Custom fast model'
+      process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION = 'Custom destination'
+      expect(getModelOptions(false).find(option => option.value === 'haiku')).toMatchObject({
+        label: 'Custom fast model', description: 'Custom destination', descriptionForModel: 'Custom destination (custom-haiku)',
+      })
+    } finally {
+      keys.forEach((key, index) => { if (saved[index] === undefined) delete process.env[key]; else process.env[key] = saved[index] })
+    }
+  })
+
   test('the haiku alias resolves to Haiku 5.5 and the picker offers it once', async () => {
     const { getModelOptions } = await import('./modelOptions.js')
     const { parseUserSpecifiedModel, getMarketingNameForModel } = await import(

@@ -27,7 +27,7 @@ import {
 } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import { checkOpus1mAccess } from './check1mAccess.js'
-import { getAPIProvider } from './providers.js'
+import { getAPIProvider, getConfiguredAnthropicProvider } from './providers.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import {
   getCanonicalName,
@@ -204,10 +204,8 @@ function getFable5Option(): ModelOption {
 }
 
 function getCustomHaikuOption(): ModelOption | undefined {
-  const is3P = getAPIProvider() !== 'firstParty'
   const customHaikuModel = process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
-  // When a 3P user has a custom haiku model string, show it directly
-  if (is3P && customHaikuModel) {
+  if (customHaikuModel) {
     return {
       value: 'haiku',
       label: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME ?? customHaikuModel,
@@ -220,7 +218,7 @@ function getCustomHaikuOption(): ModelOption | undefined {
 }
 
 function getHaiku55Option(): ModelOption {
-  const is3P = getAPIProvider() !== 'firstParty'
+  const is3P = getConfiguredAnthropicProvider() !== 'firstParty'
   return {
     value: 'haiku',
     label: 'Haiku 5.5',
@@ -231,7 +229,7 @@ function getHaiku55Option(): ModelOption {
 }
 
 function getHaiku45Option(): ModelOption {
-  const is3P = getAPIProvider() !== 'firstParty'
+  const is3P = getConfiguredAnthropicProvider() !== 'firstParty'
   return {
     value: 'haiku',
     label: 'Haiku 4.5',
@@ -254,8 +252,12 @@ function getHaiku35Option(): ModelOption {
 
 function getHaikuOption(): ModelOption {
   // Return correct Haiku option based on provider
-  const haikuModel = getDefaultHaikuModel()
-  return haikuModel === getModelStrings().haiku45
+  const custom = getCustomHaikuOption()
+  if (custom) return custom
+  const haikuModel = getDefaultHaikuModel(getConfiguredAnthropicProvider())
+  return haikuModel === getModelStrings().haiku55
+    ? getHaiku55Option()
+    : haikuModel === getModelStrings().haiku45
     ? getHaiku45Option()
     : getHaiku35Option()
 }
@@ -382,7 +384,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         getFable5Option(),
         getOpus55Option(),
         getSonnet55Option(),
-        getHaiku55Option(),
+        getHaikuOption(),
       )
     }
     return codexOptions

@@ -249,7 +249,7 @@ function RunControl({
     permissionContext !== null ||
     onSetModel != null || onSetEffort != null || onSetFast != null
   )
-  const modelEnabled = snapshot != null && onSetModel != null && snapshot.model.options.length > 0
+  const modelEnabled = snapshot != null && onSetModel != null && snapshot.model.options.some(option => option.value !== null)
   // The provider-default row is not offered: it names no model, so picking it
   // hands the choice back to the engine. A session already on it still reads
   // its resolved model on the face.

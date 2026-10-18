@@ -255,14 +255,14 @@ export function getDefaultSonnetModel(): ModelName {
 }
 
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
-export function getDefaultHaikuModel(): ModelName {
+export function getDefaultHaikuModel(provider = getAPIProvider()): ModelName {
   if (process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
     return process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
   }
 
   // Haiku 4.5 is available on all platforms (first-party, Foundry, Bedrock, Vertex);
   // 3P providers keep it until Haiku 5.5 is confirmed there.
-  if (isAnthropicCloudProvider()) {
+  if (isAnthropicCloudProvider(provider)) {
     return getModelStrings().haiku45
   }
   return getModelStrings().haiku55

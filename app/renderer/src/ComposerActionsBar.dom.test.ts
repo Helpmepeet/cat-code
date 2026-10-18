@@ -52,6 +52,28 @@ async function open(trigger: HTMLButtonElement) {
   return document.querySelector<HTMLElement>('[role="menu"][aria-label="Permission mode"]')!
 }
 
+test('a Default-only model list disables the empty model submenu', async () => {
+  const runControls = bar(() => {}).props.runControls
+  if (!runControls) throw new Error('Expected run controls in the bar fixture')
+  const tree = await harness.mount(bar(() => {}, {
+    runControls: {
+      ...runControls,
+      model: {
+        ...runControls.model,
+        options: [{ value: null, label: 'Default', provider: 'openai', effortOptions: [] }],
+      },
+    },
+  }))
+  const trigger = modeFace(tree.container)
+  await act(async () => trigger.click())
+  await act(async () => { await harness.nextFrame() })
+  const model = document.querySelector<HTMLButtonElement>('[role="menuitem"][aria-label^="Model: "]')!
+  expect(model).not.toBeNull()
+  expect(model.disabled).toBe(true)
+  await act(async () => model.click())
+  expect(document.querySelector('[role="menu"][aria-label="Model"]')).toBeNull()
+})
+
 // Browser captures own actual clipping/geometry. This DOM case protects the
 // separate pointer/focus risk when a menu is outside its trigger's DOM subtree.
 test('menu pointer selection and Escape restore the owning face, while outside click keeps its focus', async () => {
