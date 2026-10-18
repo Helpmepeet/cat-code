@@ -277,7 +277,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                     const previous = JSON.parse(cached.quality) as StatsReadQuality;
                     quality.parseErrors += previous.parseErrors;
                     quality.oversizedRecords += previous.oversizedRecords;
-                    quality.oversizedToolResults += previous.oversizedToolResults;
+                    quality.oversizedToolResults += previous.oversizedToolResults ?? 0;
                 }
                 const after = await stat(file);
                 // Retry changing files next time. The current bounded read remains
