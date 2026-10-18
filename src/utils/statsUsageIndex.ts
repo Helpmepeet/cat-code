@@ -14,14 +14,14 @@ import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js
 import { logForDebugging } from './debug.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v11.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v12.sqlite');
 // 256 GiB at SQLite's default 4 KiB pages, without preallocating disk space.
 // Applied on every connection, so changing this does not require a rebuild.
 const DISK_MAX_PAGE_COUNT = 67108864;
 const writerLockOptions = { realpath: false, stale: 180000, update: 30000, retries: 0 };
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-/** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
+/** Accounting fields only; Skill identifiers are allowlisted, never arguments or bodies. */
 function projectRecord(v: unknown): unknown {
     if (!object(v) || !['assistant', 'user', 'system', 'attachment'].includes(String(v.type))) return null;
     const row: Record<string, unknown> = {};
@@ -36,7 +36,8 @@ function projectRecord(v: unknown): unknown {
             if (object(u.input_tokens_details)) (message.usage as Record<string, unknown>).input_tokens_details = { cached_tokens: scalar(u.input_tokens_details.cached_tokens) };
         }
         // Keep original block indexes for missing-ID fallback identities.
-        if (Array.isArray(m.content)) message.content = m.content.map(b => object(b) && b.type === 'tool_use' ? { type: b.type, id: typeof b.id === 'string' ? b.id : undefined, name: typeof b.name === 'string' ? b.name : undefined } : null);
+        if (Array.isArray(m.content)) message.content = m.content.map(b => object(b) && b.type === 'tool_use' ? { type: b.type, id: typeof b.id === 'string' ? b.id : undefined, name: typeof b.name === 'string' ? b.name : undefined,
+            ...(b.name === 'Skill' && object(b.input) && typeof b.input.skill === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(b.input.skill) && new TextEncoder().encode(b.input.skill).byteLength <= 160 ? { input: { skill: b.input.skill } } : {}) } : null);
         row.message = message;
     }
     if (v.type === 'user' && object(v.message) && Array.isArray(v.message.content)) {

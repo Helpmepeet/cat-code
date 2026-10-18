@@ -7,6 +7,7 @@ import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSumm
 import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts, ratesForPrompt } from './modelCostRates.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
+import type { UsageTokenSources, UsageCallCount, UsageRankedSession } from '../../app/shared/usageDashboard.js';
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
     classifyHistoricalAutoModeToolResult,
@@ -35,6 +36,16 @@ export interface UsageIdentityStore {
     set(name: string): { has(key: string): boolean; add(key: string): unknown };
 }
 const zero = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
+const zeroSources = (): UsageTokenSources => ({ chat: zero(), subagents: zero(), compaction: zero() });
+const integration = (name: string | null): string | null => {
+    if (['SendToPeer', 'ReadPeer', 'ListPeers', 'CreatePeer', 'Announce'].includes(name ?? '')) return 'peers';
+    if (['WebFetch', 'WebSearch'].includes(name ?? '')) return 'web';
+    if (['JumpWorkspace', 'ListWorkspaces'].includes(name ?? '')) return 'workspaces';
+    if (name?.startsWith('mcp__cua-driver__')) return 'computer';
+    if (name === 'ImageGen' || name === 'GenerateImage') return 'image';
+    if (name === 'ClaudeCli') return 'claude-cli';
+    return null;
+};
 const zeroEffort = (): UsageEffort => ({ state: 'unavailable', requests: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0, ultra: 0 }, tokens: { low: 0, medium: 0, high: 0, xhigh: 0, max: 0, ultra: 0 }, unattributedRequests: 0 });
 const zeroParallel = (): UsageParallel => ({ state: 'unavailable', minutes: [0, 0, 0], peak: 0 });
 const effortLevel = (value: unknown): UsageEffortLevel | null =>
@@ -243,7 +254,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf, timezone);
         if (range === 'all') { bounds.startDate = localDateKey(cutoff, timezone); bounds.startInclusive = new Date(localMidnight(bounds.startDate, timezone)).toISOString(); bounds.dates = []; }
-        const summary: UsageRangeSummary = { range, startDate: bounds.startDate, endDateExclusive: bounds.endDateExclusive, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, ...(range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf, timezone }), parallel: zeroParallel(), effort: zeroEffort(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+        const summary: UsageRangeSummary = { rankedSessions: { state: "full", omitted: 0, medianTokens: null, top10Tokens: 0, items: [] }, skills: [], integrations: [], range, startDate: bounds.startDate, endDateExclusive: bounds.endDateExclusive, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, ...(range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokenSources: zeroSources(), skills: [], integrations: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf, timezone }), parallel: zeroParallel(), effort: zeroEffort(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
         const autoModeAccumulator = createAutoModeUsageAccumulator({
             rangeStart: range === 'all' ? '0000-01-01T00:00:00.000Z' : bounds.startInclusive,
             rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(),
@@ -251,7 +262,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             timezone,
             onRetain: reserveState,
         });
-        return { summary, autoModeAccumulator, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
+        return { summary, autoModeAccumulator, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), lastActivity: new Map<string, string>(), rangeContributors: new Map<string, UsageRankedSession>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
             }>() };
@@ -263,7 +274,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const end = shiftLocalCalendarDays(cutoff, -days, timezone);
         return { days, start, end, sessions: new Set(), activeDays: new Set(), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, summary: {
             startInclusive: new Date(start).toISOString(), endInclusive: new Date(end).toISOString(),
-            tokens: zero(), sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
+            tokens: zero(), sessions: 0, records: 0, requests: 0, results: 0, errors: 0, modelRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable',
         } };
     });
     const eligibleComparisons = (timestamp: number) => comparisons.filter(s => timestamp >= s.start && timestamp <= s.end);
@@ -272,7 +283,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         let day = s.dayMap.get(date);
         if (!day) {
             reserve(date, 1024);
-            day = { date, ...(s.summary.range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() };
+            day = { date, ...(s.summary.range === '7d' ? { hours: localDayHours(date, timezone, true) } : {}), results: 0, errors: 0, tools: [], tokenSources: zeroSources(), skills: [], integrations: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] }, parallel: zeroParallel(), effort: zeroEffort() };
             s.dayMap.set(date, day);
             s.summary.days.push(day);
             if (date < s.summary.startDate) {
@@ -302,6 +313,12 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             day.tools.push(tool);
         }
         return tool;
+    };
+    const countDimension = (items: UsageCallCount[], value: string | null, integrationGroup = false) => {
+        const cat = integrationGroup && value ? { id: value, kind: 'named' as const, label: value } : category(value);
+        let item = items.find(item => item.id === cat.id);
+        if (!item) { reserve(`dimension:${cat.id}`, 512); item = { ...cat, requests: 0 }; items.push(item); }
+        item.requests = plus(item.requests, 1);
     };
     const addBuildRequest = (tool: UsageDayTool, build: ToolValue['build'], timestamp: number) => {
         if (!build) return;
@@ -361,6 +378,28 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         return contributor;
     };
+    const rangeContributor = (s: typeof states[number], session: string, date: string) => {
+        let item = s.rangeContributors.get(session);
+        if (!item) {
+            reserve(`range:${session}`, 1536);
+            const meta = sessionMetadata.get(session)!;
+            item = { lastActiveAt: s.lastActivity.get(session)!, id: opaqueId(session), engineSessionId: meta.engineSessionId, project: null, tokens: zero(), tokenSources: zeroSources(), requests: 0, results: 0, errors: 0, rank: { tokens: 0, requests: 0, errors: 0 }, tokenCost: zeroCost(), models: [], tools: [], days: [], dailyDetail: s.summary.range === 'all' ? 'unavailable' : 'full', modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } };
+            s.rangeContributors.set(session, item);
+        }
+        let day = item.days.find(item => item.date === date);
+        if (!day && item.dailyDetail === 'full') {
+            reserve(`range-day:${session}:${date}`, 256);
+            day = { date, tokens: zero(), requests: 0, results: 0, errors: 0 };
+            item.days.push(day);
+        }
+        return { item, day };
+    };
+    const sessionTool = (item: UsageRankedSession, name: string | null) => {
+        const cat = category(name);
+        let tool = item.tools.find(tool => tool.id === cat.id);
+        if (!tool) { reserve(`session-tool:${item.id}:${cat.id}`, 384); tool = { ...cat, requests: 0, results: 0, errors: 0 }; item.tools.push(tool); }
+        return tool;
+    };
     // Disk-backed identities have a separate storage cap; category/session maps
     // still use the original bounded heap budget.
     const reserveIdentity = (key: string, bytes?: number) => { if (!options.identities) reserve(key, bytes); };
@@ -371,7 +410,17 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!request || !result || result.counted || result.timestamp < request.timestamp) return;
         result.counted = true;
         results.set(key, result);
+        for (const s of eligibleComparisons(request.timestamp)) {
+            s.summary.results = plus(s.summary.results, 1);
+            if (result.error) s.summary.errors = plus(s.summary.errors, 1);
+        }
         for (const s of states.filter(s => usageTimestampEligible(request.timestamp, s.start, s.end, cutoff))) {
+            const { item, day: sessionDay } = rangeContributor(s, request.session, request.date);
+            const sessionToolCount = sessionTool(item, request.name);
+            for (const target of [item, sessionToolCount, ...(sessionDay ? [sessionDay] : [])]) {
+                target.results = plus(target.results, 1);
+                if (result.error) target.errors = plus(target.errors, 1);
+            }
             const tool = s.tools.get(category(request.name).id)!;
             tool.results = plus(tool.results, 1);
             if (result.error) tool.errors = plus(tool.errors, 1);
@@ -470,8 +519,21 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!record(row) || !['assistant', 'user', 'attachment', 'system'].includes(String(row.type)))
             return;
         const isSubagent = file.includes(`${sep}subagents${sep}`);
+        const tokenSource = !isSubagent ? 'chat' : /^agent-acompact-[0-9a-f]{16}\.jsonl$/.test(basename(file)) ? 'compaction' : 'subagents';
         if (!isSubagent && row.isSidechain === true)
             return;
+        const activityAt = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+        if (Number.isFinite(activityAt) && activityAt >= Date.parse('0000-01-01T00:00:00.000Z') && activityAt < Date.parse('+010000-01-01T00:00:00.000Z') && activityAt <= cutoff) {
+            const project = isSubagent ? dirname(dirname(dirname(file))) : dirname(file);
+            const mainId = nonempty(row.sessionId) ? row.sessionId : isSubagent ? basename(dirname(dirname(file))) : basename(file, '.jsonl');
+            const session = JSON.stringify([project, mainId]);
+            const at = new Date(activityAt).toISOString();
+            for (const s of states.filter(s => usageTimestampEligible(activityAt, s.start, s.end, cutoff))) {
+                const previous = s.lastActivity.get(session);
+                if (!previous) reserve(`last-activity:${session}`, 128);
+                if (!previous || at > previous) s.lastActivity.set(session, at);
+            }
+        }
         const autoModeCapability = row.type === 'system'
             ? projectAutoModeCapability(row)
             : null;
@@ -588,6 +650,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const s of eligibleStates) {
             const day = ensureDay(s, date);
             if (!isSubagent && !alreadyRecorded) {
+                rangeContributor(s, session, date);
                 s.summary.records = plus(s.summary.records, 1);
                 day.records = plus(day.records, 1);
                 if (!s.sessions.has(session)) {
@@ -822,6 +885,21 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const cat = category(name);
                 for (const s of eligibleStates) {
                     const day = ensureDay(s, date);
+                    const { item, day: sessionDay } = rangeContributor(s, session, date);
+                    item.requests = plus(item.requests, 1);
+                    const tally = sessionTool(item, name);
+                    tally.requests = plus(tally.requests, 1);
+                    if (sessionDay) sessionDay.requests = plus(sessionDay.requests, 1);
+                    if (name === 'Skill') {
+                        const skill = record(block.input) && typeof block.input.skill === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/.test(block.input.skill) && new TextEncoder().encode(block.input.skill).byteLength <= 160 ? block.input.skill : null;
+                        countDimension(s.summary.skills, skill);
+                        countDimension(day.skills, skill);
+                    }
+                    const group = integration(name);
+                    if (group) {
+                        countDimension(s.summary.integrations, group, true);
+                        countDimension(day.integrations, group, true);
+                    }
                     s.summary.requests = plus(s.summary.requests, 1);
                     day.requests = plus(day.requests, 1);
                     const dayTool = ensureDayTool(day, cat.id);
@@ -912,6 +990,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             reserveIdentity(key);
         const effort = prior ? prior.effort : currentEffort.get(file) ?? null;
         usage.set(key, { tokens: maximum, model: cat.id, effort });
+        if (!prior) for (const s of eligibleComparisons(timestamp))
+            s.summary.modelRequests = plus(s.summary.modelRequests, 1);
         if (!prior) for (const s of eligibleStates) {
             const day = ensureDay(s, date);
             if (effort) day.effort.requests[effort] = plus(day.effort.requests[effort], 1);
@@ -931,6 +1011,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const day = ensureDay(s, date);
             addTokens(s.summary.tokens, delta);
             addTokens(day.tokens, delta);
+            addTokens(day.tokenSources[tokenSource], delta);
+            const rangeSession = rangeContributor(s, session, date);
+            addTokens(rangeSession.item.tokens, delta);
+            addTokens(rangeSession.item.tokenSources[tokenSource], delta);
+            if (rangeSession.day) addTokens(rangeSession.day.tokens, delta);
             if (day.hours) {
                 const hourIndex = Math.floor((timestamp - Date.parse(day.hours[0]!.startAt!)) / 3600000);
                 const slot = day.hours[hourIndex];
@@ -947,6 +1032,15 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
             addTokens(model.tokens, delta);
             const tokenCost = standardTokenCost(modelName, delta, maximum.fresh + maximum.read + maximum.write);
+            addCost(rangeSession.item.tokenCost!, tokenCost);
+            let rangeModel = rangeSession.item.models.find(model => model.id === cat.id);
+            if (!rangeModel) {
+                reserve(`range-model:${session}:${cat.id}`, 384);
+                rangeModel = { ...cat, tokens: zero(), tokenCost: zeroCost() };
+                rangeSession.item.models.push(rangeModel);
+            }
+            addTokens(rangeModel.tokens, delta);
+            addCost(rangeModel.tokenCost!, tokenCost);
             addCost(model.tokenCost!, tokenCost);
             if (contributor) addCost(contributor.tokenCost!, tokenCost);
             if (contributor) {
@@ -1052,6 +1146,30 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         day.parallel.tenMinutePeaks?.sort((a, b) => a[0] - b[0]);
     for (const s of states) {
         s.summary.days.sort((a, b) => a.date.localeCompare(b.date));
+        const rangeItems = [...s.rangeContributors.entries()].map(([session, item]) => {
+            item.lastActiveAt = s.lastActivity.get(session)!;
+            const meta = sessionMetadata.get(session);
+            if (meta?.projectId && meta.label && !meta.conflicted) item.project = { id: meta.projectId, label: meta.label };
+            if (meta?.conflicted) item.engineSessionId = null;
+            item.days.sort((a, b) => a.date.localeCompare(b.date));
+            return item;
+        });
+        const ordered = {
+            tokens: [...rangeItems].sort((a, b) => total(b.tokens) - total(a.tokens) || a.id.localeCompare(b.id)),
+            requests: [...rangeItems].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id)),
+            errors: [...rangeItems].sort((a, b) => b.errors - a.errors || total(b.tokens) - total(a.tokens) || a.id.localeCompare(b.id)),
+        };
+        for (const metric of ['tokens', 'requests', 'errors'] as const)
+            ordered[metric].forEach((item, index) => { item.rank ??= { tokens: 0, requests: 0, errors: 0 }; item.rank[metric] = index + 1; });
+        const selected = new Set([...ordered.tokens.slice(0, 30), ...ordered.errors.slice(0, 15)]);
+        const items = ordered.tokens.filter(item => selected.has(item));
+        const omitted = rangeItems.length - items.length;
+        const middle = Math.floor(ordered.tokens.length / 2);
+        const medianTokens = ordered.tokens.length === 0 ? null : ordered.tokens.length % 2
+            ? total(ordered.tokens[middle]!.tokens)
+            : total(ordered.tokens[middle - 1]!.tokens) + (total(ordered.tokens[middle]!.tokens) - total(ordered.tokens[middle - 1]!.tokens)) / 2;
+        const top10Tokens = ordered.tokens.slice(0, 10).reduce((sum, item) => plus(sum, total(item.tokens)), 0);
+        s.summary.rankedSessions = { state: omitted ? 'truncated' : 'full', omitted, medianTokens, top10Tokens, items };
         s.summary.models = [...s.models.values()];
         s.summary.tools = [...s.tools.values()];
         s.summary.activeDays = s.summary.days.filter(d => total(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length;
@@ -1131,7 +1249,13 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const day of all.summary.days) {
             const date = bucketDate(day.date);
             let bucket = buckets.get(date);
-            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, results: 0, errors: 0, tools: [], records: 0, sessions: bucketSessions.get(date)?.size ?? 0, models: [], cacheWriteReporting: 'unavailable', parallel: zeroParallel(), effort: zeroEffort() }; buckets.set(date, bucket); }
+            if (!bucket) { bucket = { ...day, date, tokens: zero(), tokenSources: zeroSources(), skills: [], integrations: [], requests: 0, results: 0, errors: 0, tools: [], records: 0, sessions: bucketSessions.get(date)?.size ?? 0, models: [], cacheWriteReporting: 'unavailable', parallel: zeroParallel(), effort: zeroEffort() }; buckets.set(date, bucket); }
+            for (const source of ['chat', 'subagents', 'compaction'] as const) addTokens(bucket.tokenSources[source], day.tokenSources[source]);
+            for (const dimension of ['skills', 'integrations'] as const) for (const value of day[dimension]) {
+                let target = bucket[dimension].find(item => item.id === value.id);
+                if (!target) { reserve(`bucket:${date}:${dimension}:${value.id}`, 512); target = { ...value, requests: 0 }; bucket[dimension].push(target); }
+                target.requests = plus(target.requests, value.requests);
+            }
             for (const i of [0, 1, 2] as const) bucket.parallel.minutes[i] = plus(bucket.parallel.minutes[i], day.parallel.minutes[i]);
             bucket.parallel.peak = Math.max(bucket.parallel.peak, day.parallel.peak);
             if (day.parallel.state === 'available') bucket.parallel.state = 'available';
@@ -1237,5 +1361,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 21, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 22, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

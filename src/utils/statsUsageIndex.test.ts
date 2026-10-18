@@ -39,7 +39,7 @@ test('max_page_count belongs to each connection and can be raised without rebuil
 });
 test('refresh removes older indexes, orphaned sidecars and stale locks but retains current, future, corrupt and unrelated files', async () => {
     const fixtureFiles = await fixture();
-    const root = dirname(fixtureFiles.path), path = join(root, 'index-v11.sqlite'), file = fixtureFiles.file;
+    const root = dirname(fixtureFiles.path), path = join(root, 'index-v12.sqlite'), file = fixtureFiles.file;
     await writeFile(file, JSON.stringify(row('retained')));
     await collectIndexedUsage([file], cutoff, opts(path));
     const inode = (await stat(path)).ino;
@@ -47,7 +47,7 @@ test('refresh removes older indexes, orphaned sidecars and stale locks but retai
     try { marker.exec('CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES (\'no rebuild\');'); }
     finally { marker.close(); }
     const removed: string[] = [];
-    for (let version = 1; version < 11; version++) {
+    for (let version = 1; version < 12; version++) {
         if (version === 3) continue;
         for (const part of ['', '-wal', '-shm']) {
             // Cover orphaned sidecars without the database itself as well.
@@ -67,14 +67,14 @@ test('refresh removes older indexes, orphaned sidecars and stale locks but retai
     await utimes(join(root, 'index-v3.sqlite.lock'), stale, stale);
     removed.push('index-v3.sqlite.lock');
     const kept = [
-        'index-v12.sqlite', 'index-v12.sqlite-wal', 'index-v12.sqlite-shm',
+        'index-v13.sqlite', 'index-v13.sqlite-wal', 'index-v13.sqlite-shm',
         'index-v1.sqlite.corrupt-backup', 'index-v1.sqlite.corrupt-backup-wal', 'index-v1.sqlite.corrupt-backup-shm',
-        'index-v11.sqlite.corrupt-backup', 'notes.txt', 'other.sqlite', 'index-v10.sqlite.bak',
+        'index-v12.sqlite.corrupt-backup', 'notes.txt', 'other.sqlite', 'index-v10.sqlite.bak',
     ];
     for (const name of kept) await writeFile(join(root, name), 'keep');
-    await mkdir(join(root, 'index-v12.sqlite.lock'));
+    await mkdir(join(root, 'index-v13.sqlite.lock'));
     await mkdir(join(root, 'index-v1.sqlite.corrupt-backup.lock'));
-    kept.push('index-v12.sqlite.lock', 'index-v1.sqlite.corrupt-backup.lock');
+    kept.push('index-v13.sqlite.lock', 'index-v1.sqlite.corrupt-backup.lock');
     let reads = 0;
     const caps: number[] = [];
     const exec = Database.prototype.exec;
@@ -97,11 +97,11 @@ test('refresh removes older indexes, orphaned sidecars and stale locks but retai
     finally { reader.close(); }
     const remaining = await readdir(root);
     for (const name of removed) expect(remaining).not.toContain(name);
-    for (const name of [...kept, 'index-v11.sqlite']) expect(remaining).toContain(name);
+    for (const name of [...kept, 'index-v12.sqlite']) expect(remaining).toContain(name);
 });
 test('cleanup skips an older process mid-refresh and retries after its writer lock is released', async () => {
     const { path: fixturePath } = await fixture();
-    const root = dirname(fixturePath), older = join(root, 'index-v10.sqlite'), path = join(root, 'index-v11.sqlite');
+    const root = dirname(fixturePath), older = join(root, 'index-v10.sqlite'), path = join(root, 'index-v12.sqlite');
     const seed = new Database(older, { create: true });
     try { seed.exec('CREATE TABLE retained(value TEXT)'); } finally { seed.close(); }
     const child = Bun.spawn([process.execPath, '-e', `
@@ -137,7 +137,7 @@ test('cleanup skips an older process mid-refresh and retries after its writer lo
 });
 test('cleanup leaves the current database WAL and SHM in place', async () => {
     const { path: fixturePath } = await fixture();
-    const root = dirname(fixturePath), path = join(root, 'index-v11.sqlite');
+    const root = dirname(fixturePath), path = join(root, 'index-v12.sqlite');
     const current = new Database(path, { create: true });
     try {
         current.exec('PRAGMA journal_mode=WAL; CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES (\'in WAL\');');
@@ -453,7 +453,7 @@ test('v14 comparison snapshots rebuild from indexed records without rereading so
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(21);
+    expect(rebuilt.countingVersion).toBe(22);
     expect(rebuilt.ranges['7d'].previousPeriod!.tokens.fresh).toBe(9);
 });
 test('failed refresh rolls back and preserves the last committed snapshot', async () => {
@@ -600,8 +600,8 @@ test('excludes historical Auto mode inference and tool-result content', async ()
         expect(projected).not.toContain('policy_blocked');
     } finally { db.close(); }
 });
-test('uses a successor index path when Ultra enters the projection', () => {
-    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v11.sqlite');
+test('uses a successor index path for allowlisted analytics skill identifiers', () => {
+    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v12.sqlite');
 });
 test('cold and warm index snapshots retain owning-session attribution without retaining content', async () => {
     const { path, file } = await fixture();
@@ -717,7 +717,7 @@ test('v17 grouped snapshots rebuild named categories from indexed records withou
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(21);
+    expect(rebuilt.countingVersion).toBe(22);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
     const warm = await collectIndexedUsage([file], cutoff, options);
@@ -754,7 +754,7 @@ test('v19 snapshots hiding edit tools rebuild diagnostics from unchanged indexed
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(21);
+    expect(rebuilt.countingVersion).toBe(22);
     for (const range of ['7d', '30d', 'all'] as const) {
         const edit = rebuilt.ranges[range].tools.find(tool => tool.label === 'Edit')!;
         expect(edit).toMatchObject({ requests: 4, results: 4, errors: 3 });
@@ -800,7 +800,7 @@ test('v20 grouped snapshots restore recent tool identities from indexed records 
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(21);
+    expect(rebuilt.countingVersion).toBe(22);
     for (const range of ['7d', '30d'] as const) {
         expect(rebuilt.ranges[range].tools.filter(tool => tool.kind === 'named').map(tool => tool.label).sort()).toEqual([...tools].sort());
         expect(rebuilt.ranges[range].tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(rebuilt.ranges[range].requests);

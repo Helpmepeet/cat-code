@@ -8,6 +8,52 @@ import { fitUsageDashboardSnapshot, groupUsageSummary } from './usageSummary.js'
 import { parseUsageCollectionLine, parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 import { MAX_USAGE_RECORD_BYTES } from '../shared/usageDashboard.js';
 import { defaultUsageToolSelection, usageToolErrorSeries } from '../renderer/src/usageToolErrorTrendState.js';
+test('analytics detail fits the envelope without changing source tokens or pre-cut skill and integration totals', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-analytics-fit-'));
+    try {
+        const path = join(dir, 's.jsonl'), rows = [];
+        for (let day = 0; day < 30; day++) for (let session = 0; session < 40; session++) {
+            const id = `${day}-${session}`;
+            rows.push({ type: 'assistant', sessionId: `s${session}`, uuid: id, timestamp: new Date(Date.UTC(2026, 7, 15 + day, 10)).toISOString(), message: {
+                id, model: 'model', usage: { input_tokens: 1 }, content: [
+                    { type: 'tool_use', id: `${id}-skill`, name: 'Skill', input: { skill: `skill-${session % 12}` } },
+                    { type: 'tool_use', id: `${id}-peer`, name: 'SendToPeer' },
+                    { type: 'tool_use', id: `${id}-custom`, name: `Custom${session}` },
+                ],
+            } });
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z', { timezone: 'UTC' });
+        const raw = structuredClone(snapshot.ranges);
+        fitUsageDashboardSnapshot(snapshot);
+        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type).toBe('usage');
+        expect(Buffer.byteLength(JSON.stringify({ type: 'usage', version: 1, snapshot }))).toBeLessThanOrEqual(MAX_USAGE_RECORD_BYTES);
+        for (const key of ['7d', '30d', 'all'] as const) {
+            const range = snapshot.ranges[key];
+            expect(range.tokens).toEqual(raw[key].tokens);
+            expect(range.skills.reduce((sum, item) => sum + item.requests, 0)).toBe(range.requests / 3);
+            expect(range.skills.filter(item => item.kind === 'named')).toHaveLength(5);
+            expect(range.skills.some(item => item.kind === 'other')).toBe(true);
+            expect(range.integrations).toEqual([{ id: 'peers', kind: 'named', label: 'peers', requests: range.requests / 3 }]);
+            expect(range.days.map(day => day.tokenSources)).toEqual(raw[key].days.map(day => day.tokenSources));
+            expect(range.rankedSessions.omitted + range.rankedSessions.items.length).toBe(40);
+            for (const item of range.rankedSessions.items) {
+                expect(item.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(item.requests);
+                expect(item.tokenSources.chat).toEqual(item.tokens);
+                expect(item.lastActiveAt).toBe(raw[key].rankedSessions.items.find(rawItem => rawItem.id === item.id)!.lastActiveAt);
+            }
+            const cut = groupUsageSummary(raw[key], 8, 0, 0, 0, 0, 0);
+            expect(cut.skills).toEqual(range.skills);
+            expect(cut.integrations).toEqual(range.integrations);
+            expect(cut.rankedSessions).toEqual({ state: 'truncated', omitted: 40, medianTokens: raw[key].rankedSessions.medianTokens, top10Tokens: raw[key].rankedSessions.top10Tokens, items: [] });
+            expect(range.rankedSessions.medianTokens).toBe(raw[key].rankedSessions.medianTokens);
+            expect(range.rankedSessions.top10Tokens).toBe(raw[key].rankedSessions.top10Tokens);
+            const minimal = groupUsageSummary(raw[key], 0, 0, 0, 0, 0, 0, 0);
+            expect(minimal.skills).toEqual([{ id: 'other', kind: 'other', label: 'Other', requests: range.requests / 3 }]);
+            expect(minimal.days.reduce((sum, day) => sum + day.skills.reduce((n, item) => n + item.requests, 0), 0)).toBe(range.requests / 3);
+        }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+});
 test('B1-B3/V1: populated three-range grouping retains exact totals and fits the byte envelope', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-size-'));
     try {
@@ -154,7 +200,7 @@ test('all-history detail falls back before recent tool identities are grouped aw
         }
         expect(snapshot.ranges['7d'].tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual(tools.slice(0, 2).sort());
         expect(snapshot.ranges['30d'].tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual(tools.slice(0, 2).sort());
-        expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual([tools[0]]);
+        expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named' && tool.errors > 0).map(tool => tool.label).sort()).toEqual(tools.slice(0, 2).sort());
         expect(snapshot.ranges.all.requests).toBe(10_800);
         expect(snapshot.ranges.all.days.reduce((sum, day) => sum + day.errors, 0)).toBe(1_200);
         expect(snapshot.ranges['7d'].tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(snapshot.ranges['7d'].requests);
