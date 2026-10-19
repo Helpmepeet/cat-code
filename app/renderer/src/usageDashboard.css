@@ -1,6 +1,4 @@
 .usage-page { overflow:auto; flex:1; min-width:0; padding:24px 28px 52px; color:var(--color-text-primary); }
-/* Sidebar already reserves the collapsed rail in flow; clear only its overlay. */
-aside.sidebar-expanded + .lid-content .usage-page { margin-left:max(0px,calc(var(--sidebar-expanded-width,18rem) - 48px)); }
 /* Keep the shared window material visible between cards in glass mode. */
 html[data-glass='on'] .usage-page { background:transparent; }
 .usage-content {

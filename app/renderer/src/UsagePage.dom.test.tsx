@@ -60,36 +60,33 @@ test('a genuinely empty collector result still shows the empty state', async () 
     expect(tree.container.querySelector('[aria-label="Reliability"]')).toBeNull();
 });
 
-test('only analytics clears the expanded overlay beyond the reserved rail at variable sidebar widths', async () => {
-    const css = readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8');
-    const rule = css.match(/(aside\.sidebar-expanded \+ \.lid-content \.usage-page)\s*\{\s*margin-left:([^;]+);/)!;
-    expect(rule).not.toBeNull();
-    const [, selector, clearance] = rule;
-    expect(clearance).toBe('max(0px,calc(var(--sidebar-expanded-width,18rem) - 48px))');
-    const rail = Number(clearance!.match(/- (\d+)px/)![1]);
-    const pagePadding = css.match(/\.usage-page \{[^}]*padding:(\d+)px (\d+)px (\d+)px;/)!;
-    const horizontalPadding = Number(pagePadding[2]) * 2;
-    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
-    const tree = await harness.mount(<div className="analytics-shell-test"><div className="rail-spacer"/><aside/><div className="lid-content"><div><UsagePage state={{ snapshot, status: 'ready' }} selection={initialUsageSelection} onSelectionChange={() => {}}/><main className="chat-test"/></div></div></div>);
-    const shell = tree.container.querySelector<HTMLElement>('.analytics-shell-test')!;
-    const aside = shell.querySelector('aside')!, page = shell.querySelector<HTMLElement>('.usage-page')!;
-    expect(page.matches(selector!)).toBe(false);
-    expect(shell.querySelector('.chat-test')!.matches(selector!)).toBe(false);
-    for (const sidebarWidth of [48, 192, 288, 420]) {
-        shell.style.setProperty('--sidebar-expanded-width', `${sidebarWidth}px`);
-        aside.classList.add('sidebar-expanded');
-        expect(page.matches(selector!)).toBe(true);
-        expect(shell.style.getPropertyValue('--sidebar-expanded-width')).toBe(`${sidebarWidth}px`);
-        const extraClearance = Math.max(0, sidebarWidth - rail);
-        for (const windowWidth of [1440, 1280, 900]) {
-            const contentWidth = windowWidth - rail - extraClearance - horizontalPadding;
-            expect(contentWidth).toBe(windowWidth - sidebarWidth - 56);
-            if (sidebarWidth === 288) expect(contentWidth).toBe(({ 1440: 1096, 1280: 936, 900: 556 } as Record<number, number>)[windowWidth]);
+test('analytics keeps its page spacing when the sidebar opens, resizes and closes', async () => {
+    const styles = document.createElement('style');
+    styles.textContent = 'main { margin:0; }'
+        + readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8')
+        + readFileSync(new URL('./usageDailyChart.css', import.meta.url), 'utf8');
+    document.head.append(styles);
+    try {
+        // Happy DOM does not resolve max()/calc(), so guard sidebar-dependent rules too.
+        expect(styles.textContent).not.toMatch(/[^{}]*\.sidebar-expanded[^{}]*\.usage-page[^{}]*\{/);
+        const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+        const tree = await harness.mount(<div className="analytics-shell-test"><div className="rail-spacer"/><aside/><div className="lid-content"><div><UsagePage state={{ snapshot, status: 'ready' }} selection={initialUsageSelection} onSelectionChange={() => {}}/></div></div></div>);
+        const shell = tree.container.querySelector<HTMLElement>('.analytics-shell-test')!;
+        const aside = shell.querySelector('aside')!, page = shell.querySelector<HTMLElement>('.usage-page')!;
+        const spacing = () => {
+            const computed = getComputedStyle(page);
+            return { marginLeft: computed.marginLeft, marginRight: computed.marginRight, paddingLeft: computed.paddingLeft, paddingRight: computed.paddingRight };
+        };
+        const collapsed = spacing();
+        expect(collapsed.marginLeft).toBe('0px');
+        for (const sidebarWidth of [192, 288, 420]) {
+            shell.style.setProperty('--sidebar-expanded-width', `${sidebarWidth}px`);
+            aside.classList.add('sidebar-expanded');
+            expect(spacing()).toEqual(collapsed);
+            aside.classList.remove('sidebar-expanded');
+            expect(spacing()).toEqual(collapsed);
         }
-        aside.classList.remove('sidebar-expanded');
-        expect(page.matches(selector!)).toBe(false);
-        expect(1440 - rail - horizontalPadding).toBe(1336);
-    }
+    } finally { styles.remove(); }
 });
 
 test('Analytics uses the computed 14px prototype scale without changing root typography or fixed-pixel text', async () => {
