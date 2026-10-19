@@ -31,6 +31,10 @@ process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:9'
 type ScriptedModel = (messages: unknown[]) => AsyncGenerator<unknown>
 let scriptedModel: ScriptedModel | null = null
 const realDeps = await import('../../src/query/deps.js')
+// mock.module rewrites this namespace in place and mock.restore() does not undo
+// it, so later files in the process call the mock. Reading productionDeps
+// through the namespace there would tail-call itself forever.
+const realProductionDeps = realDeps.productionDeps
 const scriptedDeps = () => ({
   uuid: () => randomUUID(),
   microcompact: async (messages: unknown) => ({ messages }),
@@ -39,7 +43,7 @@ const scriptedDeps = () => ({
 })
 mock.module('../../src/query/deps.js', () => ({
   ...realDeps,
-  productionDeps: () => scriptedModel ? scriptedDeps() : realDeps.productionDeps(),
+  productionDeps: () => scriptedModel ? scriptedDeps() : realProductionDeps(),
 }))
 const realQueryModule = await import('../../src/query.js')
 const realQuery = realQueryModule.query
