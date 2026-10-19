@@ -9,6 +9,7 @@ import {
   type WorkspaceReorderHandlers,
 } from './Sidebar.js'
 import { SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY } from './sidebarHiddenWorkspaces.js'
+import { SessionWorkMarksContext, type SessionWorkMark } from './sessionWorkState.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
 import {
   PINNED_SESSION_DRAG_MIME,
@@ -286,102 +287,89 @@ test('no row renders a visible status label; status stays in aria-label only', (
   expect(history).toContain('aria-label="session H, history"')
 })
 
-// ── O1 (operator ruling 2026-07-31): the live-only dot ───────────────────────
-// A single small unlabeled dot on LIVE rows, absent otherwise. Bound: no chip,
-// no status word, no per-state colour vocabulary, nothing at all on a not-live
-// row. Liveness comes from `row.live` (a registry row with a running process),
-// not from `deriveMergedRowVisual().kind`, which also calls a non-restorable
-// `exited` row live. The exact markup is asserted so an interpolated
-// arbitrary-value class (the Tailwind v4 trap, invisible to a headless test)
-// cannot slip in.
+// ── Work marks (operator, 2026-10-19) ───────────────────────────────────────
+// A row carries at most one decorative mark for its WORK: running, waiting on
+// the user, last turn failed, or an unread reply. Liveness alone draws nothing.
+// Which mark a session gets is `sessionWorkState.test.ts`; these pin the
+// markup each mark renders and that the words reach the accessible name. The
+// exact markup is asserted so an interpolated arbitrary-value class (the
+// Tailwind v4 trap, invisible to a headless test) cannot slip in.
 //
 // PLACEMENT IS NOT COVERED HERE, by construction: this suite renders to static
-// markup, so it pins WHICH rows carry a dot and cannot see WHERE the dot lands.
-// The lane's geometry (centred on the title's line box, reserved on every row so
-// live and not-live share a text edge) is operator-verified only.
-const LIVE_DOT_LANE_OPEN =
-  '<span aria-hidden="true" class="pointer-events-none flex h-[17px] w-1.5 shrink-0 items-center self-start">'
-const LIVE_DOT =
-  `${LIVE_DOT_LANE_OPEN}<span class="h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]"></span></span>`
-const EMPTY_DOT_LANE = `${LIVE_DOT_LANE_OPEN}</span>`
+// markup, so it cannot see WHERE the mark lands. The lane's geometry (centred
+// on the title's line box, reserved on every row) is operator-verified only.
+const MARK_LANE_OPEN =
+  '<span aria-hidden="true" class="pointer-events-none flex h-[17px] w-2 shrink-0 items-center justify-center self-start">'
+const EMPTY_MARK_LANE = `${MARK_LANE_OPEN}</span>`
 
-test('a live registry row carries the O1 dot, unlabeled and announced only once', () => {
+function renderMarkedRow(
+  r: MergedSessionRow,
+  mark: SessionWorkMark,
+  over: { archived?: boolean } = {},
+): string {
+  const marks = new Map<SessionId, SessionWorkMark>()
+  if (r.appSessionId) marks.set(r.appSessionId, mark)
+  return renderToStaticMarkup(
+    <SessionWorkMarksContext.Provider value={marks}>
+      <SidebarRowItem
+        row={r}
+        isActive={false}
+        onSelectLive={noop}
+        onRestore={noop}
+        onOpenHistory={noop}
+        archived={over.archived}
+      />
+    </SessionWorkMarksContext.Provider>,
+  )
+}
+
+test('a live row with no work to report carries no mark', () => {
   const html = renderRow(registryRow('l', { displayLabel: 'L' }))
-  expect(html).toContain(LIVE_DOT)
-  // Decorative: the state is already in the aria-label, so the dot adds no
-  // second announcement and no visible text.
+  expect(html).toContain(EMPTY_MARK_LANE)
+  expect(html).not.toContain('rounded-full')
   expect(html).toContain('aria-label="session L, live"')
-  expect(html).not.toContain('>live<')
 })
 
-test('a restorable registry row carries no dot at all', () => {
-  const html = renderRow(
-    registryRow('r', {
-      displayLabel: 'R',
-      live: false,
-      restorable: true,
-      parked: false,
-      status: 'exited',
-    }),
-  )
-  expect(html).not.toContain('rounded-full')
-  // The lane still renders, so this row's title starts at the same x as a live
-  // row's and the dot's presence never shifts text.
-  expect(html).toContain(EMPTY_DOT_LANE)
+test('each work mark renders its own glyph and names itself in the row label', () => {
+  const row = registryRow('m', { displayLabel: 'M' })
+
+  const working = renderMarkedRow(row, 'working')
+  expect(working).toContain(`${MARK_LANE_OPEN}<svg width="8" height="8" viewBox="0 0 8 8" class="text-text-subtle motion-safe:animate-spin">`)
+  expect(working).toContain('aria-label="session M, live, working"')
+
+  const needs = renderMarkedRow(row, 'needs-you')
+  expect(needs).toContain(`${MARK_LANE_OPEN}<span class="text-[11px] font-bold leading-[17px] text-accent">?</span></span>`)
+  expect(needs).toContain('aria-label="session M, live, waiting for you"')
+
+  const failed = renderMarkedRow(row, 'failed')
+  expect(failed).toContain(`${MARK_LANE_OPEN}<span class="h-1.5 w-1.5 rounded-full bg-tone-danger"></span></span>`)
+  expect(failed).toContain('aria-label="session M, live, last turn failed"')
+
+  const unseen = renderMarkedRow(row, 'unseen')
+  expect(unseen).toContain(`${MARK_LANE_OPEN}<span class="h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]"></span></span>`)
+  expect(unseen).toContain('aria-label="session M, live, unread reply"')
 })
 
-test('a non-restorable exited registry row carries no dot (row.live, not visual.kind)', () => {
-  // `deriveMergedRowVisual` folds this row to kind `live` (inRegistry && !restorable);
-  // `row.live` is false because the process is gone. The dot follows `row.live`.
-  const html = renderRow(
-    registryRow('x', {
-      displayLabel: 'X',
-      live: false,
-      restorable: false,
-      parked: false,
-      status: 'exited',
-    }),
-  )
-  expect(html).not.toContain('rounded-full')
+test('a parked row keeps its unread mark; an archived row shows none', () => {
+  const parked = registryRow('p', {
+    displayLabel: 'P',
+    live: false,
+    restorable: true,
+    parked: true,
+    status: 'disconnected',
+  })
+  expect(renderMarkedRow(parked, 'unseen')).toContain('bg-tone-good')
+  const archived = renderMarkedRow(registryRow('a', { displayLabel: 'A' }), 'unseen', { archived: true })
+  expect(archived).toContain(EMPTY_MARK_LANE)
+  expect(archived).not.toContain('unread reply')
 })
 
-test('history rows carry no dot, openable or browse-only', () => {
-  const openable = renderRow(
-    historyRow('h', { displayLabel: 'H', cwd: '/tmp/proj' }),
-  )
-  expect(openable).not.toContain('rounded-full')
-
+test('history rows carry no mark and keep the reserved lane', () => {
+  const openable = renderRow(historyRow('h', { displayLabel: 'H', cwd: '/tmp/proj' }))
   const browseOnly = renderRow(historyRow('o', { displayLabel: 'O', cwd: '' }))
-  expect(browseOnly).not.toContain('rounded-full')
-
-  // Both keep the reserved lane, so a mixed group has one straight text edge.
-  expect(openable).toContain(EMPTY_DOT_LANE)
-  expect(browseOnly).toContain(EMPTY_DOT_LANE)
-})
-
-test('a mixed group paints exactly one dot in exactly one tone', () => {
-  const html = renderGroup([
-    registryRow('a', { displayLabel: 'Alpha' }),
-    registryRow('b', {
-      displayLabel: 'Beta',
-      live: false,
-      restorable: true,
-      parked: false,
-      status: 'exited',
-    }),
-    registryRow('c', {
-      displayLabel: 'Gamma',
-      live: false,
-      restorable: true,
-      parked: false,
-      status: 'disconnected',
-    }),
-    historyRow('h', { displayLabel: 'Delta', cwd: '/tmp/proj' }),
-  ])
-  expect(html.match(/rounded-full/g)).toHaveLength(1)
-  // One tone only — no per-state colour vocabulary.
-  expect(html.match(/bg-tone-/g)).toHaveLength(1)
-  expect(html).toContain(LIVE_DOT)
+  expect(openable).toContain(EMPTY_MARK_LANE)
+  expect(browseOnly).toContain(EMPTY_MARK_LANE)
+  expect(openable).not.toContain('rounded-full')
 })
 
 // ── #10 per-workspace new-session "+" ────────────────────────────────────────

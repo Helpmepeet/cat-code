@@ -70,6 +70,13 @@ import {
 } from './pageTabNavigation.js'
 import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
+import {
+  INITIAL_SESSION_WORK_STATE,
+  reduceSessionWork,
+  selectSessionWorkMark,
+  SessionWorkMarksContext,
+  type SessionWorkMark,
+} from './sessionWorkState.js'
 import { selectShellDescriptors } from './sidebarState.js'
 import {
   createArchivedSessions,
@@ -783,6 +790,15 @@ export function App() {
     undefined,
     createConnectionState,
   )
+  const [sessionWork, dispatchSessionWork] = useReducer(
+    reduceSessionWork,
+    INITIAL_SESSION_WORK_STATE,
+  )
+  // Read by the frame subscription, which outlives any one render: a turn that
+  // ends in a session on screen is seen, and the first batch is main's
+  // attachment replay (see `SessionWorkAction`).
+  const onScreenSessionsRef = useRef<ReadonlySet<SessionId>>(new Set())
+  const sessionWorkBaselineTakenRef = useRef(false)
   // Acknowledge UI commitment only after React has committed a render caused by
   // the reducer batch. Dispatch return alone intentionally never satisfies it.
   useEffect(() => {
@@ -1137,6 +1153,13 @@ export function App() {
         if (!frame.deliveryTrace) continue
         bridge.deliveryAck(frame.sessionId, frame.deliveryTrace.sequence, frame.deliveryTrace.deliveryAttempt, frame.deliveryTrace.streamEpoch, frame.deliveryTrace.traceId, 'renderer.subscription.received')
       }
+      dispatchSessionWork({
+        type: 'frames',
+        frames,
+        visible: onScreenSessionsRef.current,
+        baseline: !sessionWorkBaselineTakenRef.current,
+      })
+      sessionWorkBaselineTakenRef.current = true
       const previewing = new Set<SessionId>()
       for (const sessionId in shellRef.current.previews) {
         previewing.add(sessionId)
@@ -1443,6 +1466,7 @@ export function App() {
           sessionId: event.appSessionId,
         })
         dispatchConnection({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchSessionWork({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchTasks({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchLease({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchWorkers({ type: 'session-removed', sessionId: event.appSessionId })
@@ -3574,18 +3598,26 @@ export function App() {
   // seeding with `''` would make the one report that un-protects everything the
   // one report that can never be sent.
   const reportedVisibleRef = useRef<string | null>(null)
-  useEffect(() => {
-    // Panes render only under the chat view (`activeView === 'chat'` below), so
-    // while the user is on Settings/Sessions/Accounts nothing is on screen and
-    // nothing is protected. Without this, leaving the app parked on a non-chat
-    // page would exempt every session from the TTL indefinitely, which is the
-    // abandoned-tab case the TTL exists for.
+  // Panes render only under the chat view (`activeView === 'chat'` below), so
+  // while the user is on Settings/Sessions/Accounts nothing is on screen and
+  // nothing is protected. Without this, leaving the app parked on a non-chat
+  // page would exempt every session from the TTL indefinitely, which is the
+  // abandoned-tab case the TTL exists for. The same set decides which sessions'
+  // finished turns count as seen.
+  const onScreenSessions = useMemo(() => {
     const visible = new Set<SessionId>()
     if (activeView === 'chat') {
       for (const panel of workspaceLayout.panels) visible.add(panel.sessionId)
       if (activeSessionId) visible.add(activeSessionId)
     }
-    const sessionIds = [...visible].sort()
+    return visible
+  }, [activeView, workspaceLayout.panels, activeSessionId])
+  useEffect(() => {
+    onScreenSessionsRef.current = onScreenSessions
+    dispatchSessionWork({ type: 'seen', sessionIds: [...onScreenSessions] })
+  }, [onScreenSessions])
+  useEffect(() => {
+    const sessionIds = [...onScreenSessions].sort()
     const key = sessionIds.join(' ')
     if (key === reportedVisibleRef.current) return
     try {
@@ -3608,7 +3640,25 @@ export function App() {
       // is a deliberate user action, so this is a bound, not a working regime,
       // and the failure direction is less protection, never a wrongful park.
     }
-  }, [workspaceLayout, activeSessionId, activeView])
+  }, [onScreenSessions])
+
+  // The sidebar's per-row work mark, for every session any store knows about.
+  const sessionWorkMarks = useMemo(() => {
+    const marks = new Map<SessionId, SessionWorkMark>()
+    const ids = new Set<SessionId>([
+      ...(Object.keys(connection.sessions) as SessionId[]),
+      ...(Object.keys(sessionWork.sessions) as SessionId[]),
+    ])
+    for (const sessionId of ids) {
+      const mark = selectSessionWorkMark({
+        connection: connection.sessions[sessionId],
+        pendingPermissionCount: selectPendingPermissionCount(permissions, sessionId),
+        work: sessionWork.sessions[sessionId],
+      })
+      if (mark) marks.set(sessionId, mark)
+    }
+    return marks
+  }, [connection, permissions, sessionWork])
 
   const setSessionPrompt = useCallback(
     (
@@ -4586,6 +4636,7 @@ export function App() {
         <div className="flex min-h-0 flex-1">
         {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
          * restore-offer, alongside the TabBar's live ∪ preview view. */}
+        <SessionWorkMarksContext.Provider value={sessionWorkMarks}>
         <Sidebar
           rows={sessionCatalogRows}
           archivedSessions={archivedSessions}
@@ -4633,6 +4684,7 @@ export function App() {
             selectGlobalAccountsSnapshot(accounts),
           )}
         />
+        </SessionWorkMarksContext.Provider>
 
         <div className="lid-content relative flex min-w-0 flex-1 flex-col">
           <LidClosedNotice />

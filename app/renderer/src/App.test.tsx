@@ -401,8 +401,12 @@ test('wiring tripwire: the park policy is told which panes are on screen', () =>
   // checked for `activeView === 'chat'`, which the explanatory comment directly
   // above the code also contains — so replacing the real condition with `true`
   // left every assertion green. A tripwire that cannot fail is worse than none.
+  // The visible set is a memo shared with the sidebar's seen-turn tracking, so
+  // the slice runs through the effect that REPORTS it, not the memo's close.
+  const reportAt = source.indexOf('getBridge().reportVisibleSessions(sessionIds)', start)
+  expect(reportAt).toBeGreaterThan(-1)
   const body = source
-    .slice(start, source.indexOf('\n  }, [', start))
+    .slice(start, source.indexOf('\n  }, [', reportAt))
     .split('\n')
     .filter(line => !line.trim().startsWith('//'))
     .join('\n')
@@ -414,6 +418,8 @@ test('wiring tripwire: the park policy is told which panes are on screen', () =>
   // Panes only exist under the chat view; a non-chat page protects nothing.
   expect(body).toContain("if (activeView === 'chat') {")
   expect(body).toContain('getBridge().reportVisibleSessions(sessionIds)')
+  // The report sends that same memoized set.
+  expect(body).toContain('const sessionIds = [...onScreenSessions].sort()')
   // The dedupe key is recorded only AFTER a delivered send, so a call throttled
   // by the preload's shared rate guard retries instead of pinning main to a
   // stale set.

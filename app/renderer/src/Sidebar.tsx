@@ -6,7 +6,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  * the active account plus the nav destinations.
  *
  * One-line rows (operator, 2026-09-27, `docs/design-html/2026-09-27-sidebar-one-line-rows.html`):
- * a row is its title and the live dot, nothing else. The recency and the session
+ * a row is its title and its work mark, nothing else. The recency and the session
  * name left the row; the name moved into the row tooltip. Resting titles use the
  * muted ink and brighten under the pointer. The open rail's footer rests as one
  * strip of icons and grows into the labelled list only while the pointer is
@@ -15,7 +15,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  * Design source (2026-08-01): the operator's Claude Design project "Cat Code
  * Sidebar", `components/sidebar/index.html`. It supersedes the older
  * `Sidebar.jsx` prototype grammar for THIS surface; anything it does not speak
- * to (workspace reordering, the live dot) is unchanged from
+ * to (workspace reordering, the work mark) is unchanged from
  * the P4-4 true-up below.
  *
  * Data (SESSIONS-UNIFICATION — operator ruling 2026-07-20): it renders the
@@ -27,10 +27,9 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  * id); a history row with no recorded workspace (MAJOR-1) is browse-only.
  *
  * §0 fidelity flags (divergences from the design source, by design):
- *  - ➕ KEPT, not in the design source: the O1 live dot. The recency subtitle
- *    it used to sit beside was cut by the operator on 2026-09-27 (one-line rows);
- *    the session NAME that shared that line (PEER-SESSIONS R4) moved into the
- *    row tooltip.
+ *  - ➕ not in the design source: the work mark (below). The recency subtitle
+ *    was cut by the operator on 2026-09-27 (one-line rows); the session NAME
+ *    that shared that line (PEER-SESSIONS R4) moved into the row tooltip.
  *  - 🔁 adapted: the design source also drags SESSION rows to reorder them
  *    inside a project. That is not built. A manual per-project row order would
  *    fight the CC-2 float-to-top ruling (a row rises only when its session sends
@@ -40,25 +39,22 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *    picker, or creates a chat without a project when no project is active.
  *  - Rows render NO visible status chip: the design source's rows are bare, and
  *    the operator ruled out per-row status labels (2026-07-20). Status TEXT
- *    stays in the `aria-label` only (the O1 dot below is unlabeled, and is the
- *    single exception). A browse-only history row still offers its actions.
+ *    stays in the `aria-label` only (the work mark below is unlabeled, and is
+ *    the single exception). A browse-only history row still offers its actions.
  *  - The per-workspace "+" renders only for a group that has at least one
  *    registry row to name (HC1: createSessionInWorkspace needs a registry id,
  *    not a path); a pure-terminal-history workspace has no such id, so its "+"
  *    is hidden (🔁 adapted — a fresh session there still goes via ⌘T / picker).
- *  - ➕ real-added, and a deliberate departure (operator ruling O1, 2026-07-31):
- *    a single small unlabeled dot on LIVE rows, absent otherwise. It is the
- *    minimum exception to the 2026-07-20 bare-row ruling, matching the standing
- *    live-vs-not-live target with no text. Its BOUND: no chip, no status word,
- *    no per-state colour vocabulary, and nothing at all on a row that is not
- *    live. Liveness is read from `row.live` (`sessionsCatalogState.ts:200` — a
- *    registry row with a running process), NOT `deriveMergedRowVisual().kind`,
- *    which also calls a non-restorable `exited` row live. Decorative
- *    (`aria-hidden`): the state is already in the row's `aria-label`, and a
- *    second announcement would be a duplicate. It sits in a fixed leading lane
- *    that EVERY row reserves, centred on the title's line box, so its presence
- *    never reflows the title. Richer per-state status
- *    still surfaces on the TabBar.
+ *  - ➕ real-added (operator, 2026-10-19, replacing the 2026-07-31 O1 live
+ *    dot, which marked process liveness and so said nothing): one small
+ *    unlabeled WORK mark, from `SessionWorkMarksContext` (`sessionWorkState.ts`
+ *    owns which). A running turn is a neutral spinner, a waiting request an
+ *    accent "?", a failed last turn a danger dot, an unread reply a good dot.
+ *    Connection state (starting, parked, disconnected, closed) draws nothing.
+ *    Its BOUND: no chip and no status word. Decorative (`aria-hidden`): its
+ *    words ride in the row's `aria-label`. It sits in a fixed leading lane that
+ *    EVERY row reserves, centred on the title's line box, so its presence never
+ *    reflows the title.
  *  - Every nav destination is wired; none is mocked. The same destination set is
  *    directly visible in both rail states so hover expansion cannot replace the
  *    button a pointer is approaching with an intermediary toggle.
@@ -97,6 +93,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -105,6 +102,11 @@ import {
   type ReactNode,
 } from 'react'
 import type { SessionId } from '../../shared/protocol.js'
+import {
+  SESSION_WORK_MARK_LABEL,
+  SessionWorkMarksContext,
+  type SessionWorkMark,
+} from './sessionWorkState.js'
 import { formatAccountsNeedingSignIn } from './accountsPageModel.js'
 import { usePopoverFocus } from './overlayFocus.js'
 import {
@@ -1767,6 +1769,8 @@ export function SidebarRowItem({
   const visual = deriveMergedRowVisual(row)
   const title = row.displayLabel
   const appSessionId = row.appSessionId
+  const workMarks = useContext(SessionWorkMarksContext)
+  const workMark = appSessionId && !archived ? (workMarks.get(appSessionId) ?? null) : null
   // The session name (PEER-SESSIONS R4) leads the tooltip: the one-line row
   // (operator, 2026-09-27) has no subtitle to carry it. A registry field, so it
   // reads the same live, parked or closed; a row with no name (a history row, or
@@ -1817,7 +1821,7 @@ export function SidebarRowItem({
       tabIndex={actionable ? 0 : -1}
       aria-current={isActive ? 'true' : undefined}
       aria-disabled={actionable || showActions ? undefined : 'true'}
-      aria-label={`session ${title}, ${visual.label}${openable ? '' : ', open from terminal'}`}
+      aria-label={`session ${title}, ${visual.label}${workMark ? `, ${SESSION_WORK_MARK_LABEL[workMark]}` : ''}${openable ? '' : ', open from terminal'}`}
       aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
       title={
         openable
@@ -1941,20 +1945,17 @@ export function SidebarRowItem({
         />
       ) : null}
 
-      {/* O1 (operator ruling 2026-07-31) — the live-only dot. One tone, no
-       * label. The LANE renders on every row and only the dot inside it is
-       * conditional, so a live row and a not-live row share one text edge and
-       * neither reflows. The lane is exactly as tall as the title's line box, so
-       * the dot centres on the title. The soft ring around it is the "live halo"
-       * the operator picked on 2026-09-27. Static classes: an interpolated
-       * arbitrary value silently no-ops in this Tailwind v4 setup. */}
+      {/* The work mark (operator, 2026-10-19; `sessionWorkState.ts`). The LANE
+       * renders on every row and only the mark inside it is conditional, so
+       * marked and unmarked rows share one text edge and neither reflows. The
+       * lane is exactly as tall as the title's line box, so the mark centres on
+       * the title. Static classes: an interpolated arbitrary value silently
+       * no-ops in this Tailwind v4 setup. */}
       <span
         aria-hidden="true"
-        className="pointer-events-none flex h-[17px] w-1.5 shrink-0 items-center self-start"
+        className="pointer-events-none flex h-[17px] w-2 shrink-0 items-center justify-center self-start"
       >
-        {row.live && !archived ? (
-          <span className="h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]" />
-        ) : null}
+        {workMark ? <WorkMarkGlyph mark={workMark} /> : null}
       </span>
 
       {/* Resting titles take the muted ink so a long roster does not read as one
@@ -2182,6 +2183,45 @@ function NavItemRail({
       ) : null}
     </button>
   )
+}
+
+/** The row's work mark: a turn running, a request waiting on the user, a failed
+ * last turn, or a reply not yet seen. Colour follows urgency (accent for the
+ * user's move, danger for a failure, good for a finished reply, neutral for
+ * work in progress); connection state has no mark at all. */
+function WorkMarkGlyph({ mark }: { mark: SessionWorkMark }) {
+  switch (mark) {
+    case 'working':
+      return (
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          className="text-text-subtle motion-safe:animate-spin"
+        >
+          <circle
+            cx="4"
+            cy="4"
+            r="3"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeDasharray="11 19"
+            strokeLinecap="round"
+          />
+        </svg>
+      )
+    case 'needs-you':
+      return (
+        <span className="text-[11px] font-bold leading-[17px] text-accent">?</span>
+      )
+    case 'failed':
+      return <span className="h-1.5 w-1.5 rounded-full bg-tone-danger" />
+    case 'unseen':
+      return (
+        <span className="h-1.5 w-1.5 rounded-full bg-tone-good ring-[2.5px] ring-tone-good/[0.18]" />
+      )
+  }
 }
 
 /* ── Icons (ported from the design source's inline SVGs; attribute-only, no CSS) ── */
