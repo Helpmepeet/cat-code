@@ -65,7 +65,7 @@ export function ProseArrivalPreview() {
   }
 
   return (
-    <div className="h-[152px] overflow-hidden rounded-lg border border-shell-seam bg-app-bg px-4 py-3">
+    <div data-window-card className="h-[152px] overflow-hidden rounded-lg border border-shell-seam bg-app-bg px-4 py-3">
       {/* Keyed by option so switching restarts the delivery instead of showing
           the new timing only from the next chunk onward. */}
       <div className="md-prose font-sans font-medium text-sm leading-relaxed" key={arrival}>

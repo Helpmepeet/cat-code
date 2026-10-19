@@ -62,7 +62,7 @@ function WaitingState() {
 function MemorySummary({ snapshot }: { snapshot: MemorySnapshot }) {
   const counts = selectMemoryInstructionCounts(snapshot)
   return (
-    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+    <section data-window-card className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">
@@ -121,7 +121,7 @@ function Count({ label, value }: { label: string; value: number }) {
 function InstructionFiles({ snapshot }: { snapshot: MemorySnapshot }) {
   const groups = selectInstructionFilesByType(snapshot)
   return (
-    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+    <section data-window-card className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
       <h3 className="mb-3 text-sm font-semibold text-text-primary">
         Instruction files
       </h3>
@@ -195,7 +195,7 @@ function MemTypeChip({ type }: { type: string }) {
 function AutoMemories({ snapshot }: { snapshot: MemorySnapshot }) {
   const now = Date.now()
   return (
-    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+    <section data-window-card className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-text-primary">
           Auto memories
@@ -259,7 +259,7 @@ function AgentMemories({ snapshot }: { snapshot: MemorySnapshot }) {
   if (snapshot.agentMemories.length === 0) return null
   const count = snapshot.agentMemories.length
   return (
-    <section className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
+    <section data-window-card className="mb-5 rounded-xl border border-shell-seam bg-shell-chrome p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-text-primary">Agent memory</h3>
         <span className="font-mono text-[11px] text-text-subtle">

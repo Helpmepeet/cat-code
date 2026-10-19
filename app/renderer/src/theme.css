@@ -684,8 +684,8 @@ html[data-glass='on'] body::before {
  * Opaque against a translucent page it stops being invisible and becomes the
  * slab the grammar exists to avoid, whichever way the wallpaper pushes it. So
  * the marker means "repeats the page ground", not "fills the window", and small
- * inset boxes that repeat it carry it too (`TranscriptView` CodeBlock,
- * `GoalsPage`).
+ * inset boxes that repeat it carry it too (`TranscriptView` CodeBlock).
+ * A recess inside a card is not page ground; it uses `data-window-recess`.
  *
  * Deliberately NOT carried by every `bg-app-bg`: a text input or a scroller
  * inside an opaque dialog is a recess in a PANEL, not a repeat of the page, and
@@ -707,7 +707,7 @@ html[data-glass='on'] [data-window-ground] {
 }
 
 /*
- * Flow chrome: the sidebar and the tab bar. They frame the content rather than
+ * Flow chrome: in-flow bars and rails. They frame the content rather than
  * repeating its ground, so glass THINS them instead of clearing them, and they
  * keep reading as a frame.
  *
@@ -738,6 +738,26 @@ html[data-glass='on'] [data-window-ground] {
  * transcript through is not a menu.
  */
 html[data-glass='on'] [data-window-chrome] {
+  background: light-dark(rgba(9, 9, 11, 0.045), rgba(7, 7, 9, 0.12));
+}
+
+/*
+ * In-flow content cards use the Usage panel's fill, edge, line and soft shadow,
+ * but retain their own radius. These values are local to the marked element,
+ * never theme tokens: floating surfaces and inputs must keep their solid fills.
+ * No backdrop filter: a page card has no painted content behind it to sample.
+ */
+html[data-glass='on'] [data-window-card] {
+  --window-card-line: light-dark(rgba(0, 0, 0, .08), rgba(255, 255, 255, .08));
+  --window-card-edge: light-dark(rgba(255, 255, 255, .85), rgba(255, 255, 255, .12));
+  border: 0;
+  background: light-dark(rgba(255, 255, 255, .5), rgba(52, 52, 60, .36));
+  box-shadow: inset 0 .5px 0 var(--window-card-edge),
+    inset 0 0 0 .5px var(--window-card-line), 0 8px 30px rgba(0, 0, 0, .12);
+}
+
+/* A darker wash of the card beneath, not another opaque ground or card coat. */
+html[data-glass='on'] [data-window-recess] {
   background: light-dark(rgba(9, 9, 11, 0.045), rgba(7, 7, 9, 0.12));
 }
 

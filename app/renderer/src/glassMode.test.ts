@@ -7,6 +7,7 @@
  */
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'fs'
+import ts from 'typescript'
 import {
   GLASS_STORAGE_KEY,
   readGlassFromStorage,
@@ -23,6 +24,49 @@ function themeCss(): string {
 
 function usageCss(): string {
   return readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8')
+}
+
+function rendererTags(file: string) {
+  const source = ts.createSourceFile(
+    file,
+    readFileSync(new URL(`./${file}`, import.meta.url), 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  )
+  const tags: {
+    tag: string
+    attributes: Map<string, string>
+    classes: string
+    floating: boolean
+    line: number
+  }[] = []
+  const visit = (node: ts.Node, floating: boolean) => {
+    const opening = ts.isJsxElement(node) ? node.openingElement
+      : ts.isJsxSelfClosingElement(node) ? node : null
+    if (opening) {
+      const attributes = new Map<string, string>()
+      for (const property of opening.attributes.properties) {
+        if (ts.isJsxAttribute(property)) {
+          attributes.set(property.name.getText(source), property.initializer?.getText(source) ?? '')
+        }
+      }
+      const classes = attributes.get('className') ?? ''
+      floating ||= /\b(fixed|absolute)\b/.test(classes) ||
+        /"?(dialog|listbox|menu)"?/.test(attributes.get('role') ?? '') ||
+        ['SAModal', 'ComposerPopoverPanel'].includes(opening.tagName.getText(source))
+      tags.push({
+        tag: opening.tagName.getText(source),
+        attributes,
+        classes,
+        floating,
+        line: source.getLineAndCharacterOfPosition(opening.getStart(source)).line + 1,
+      })
+    }
+    ts.forEachChild(node, child => visit(child, floating))
+  }
+  visit(source, false)
+  return tags
 }
 
 /**
@@ -212,7 +256,7 @@ test('the inset boxes that repeat the page ground are cleared too', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^[ \t]*\/\/.*$/gm, '')
 
-  for (const file of ['TranscriptView.tsx', 'GoalsPage.tsx']) {
+  for (const file of ['TranscriptView.tsx']) {
     const source = strip(file)
     // The attribute has to sit in the SAME opening tag as the ground class, not
     // merely somewhere in the file.
@@ -223,6 +267,119 @@ test('the inset boxes that repeat the page ground are cleared too', () => {
       marked: true,
     })
   }
+})
+
+test('page cards use the Usage frost without changing their radius or adding blur', () => {
+  const css = themeCss()
+  const card = css.match(/html\[data-glass='on'\] \[data-window-card\]\s*\{([^}]*)\}/)?.[1] ?? ''
+  const usage = usageCss()
+  const usageValues = usage.match(/html\[data-glass='on'\] \.usage-content\s*\{([^}]*)\}/)?.[1] ?? ''
+  const usagePanel = usage.match(/html\[data-glass='on'\] \.usage-panel,[^{]*\{([^}]*)\}/)?.[1] ?? ''
+  const declaration = (body: string, property: string) =>
+    body.match(new RegExp(`(?:^|;)\\s*${property}:([^;]+);`))?.[1]?.replace(/\s+/g, '') ?? ''
+
+  expect(translucentPair(card)).toEqual({ light: true, dark: true })
+  expect(declaration(card, 'background')).toBe(declaration(usageValues, '--usage-panel'))
+  expect(declaration(card, '--window-card-line')).toBe(declaration(usageValues, '--usage-glass-line'))
+  expect(declaration(card, '--window-card-edge')).toBe(declaration(usageValues, '--usage-glass-edge'))
+  expect(declaration(card, 'box-shadow').replaceAll('--window-card-', '--usage-glass-'))
+    .toBe(declaration(usagePanel, 'box-shadow'))
+  expect(declaration(card, 'border')).toBe('0')
+  expect(card).not.toMatch(/border-radius|backdrop-filter/)
+
+  // Markers must do nothing without the preference, including for hover/focus.
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '')
+  for (const [, selectors] of withoutComments.matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+    if (!/data-window-(card|recess)/.test(selectors ?? '')) continue
+    for (const selector of (selectors ?? '').split(',')) {
+      expect(selector.trim()).toStartWith("html[data-glass='on'] ")
+    }
+  }
+})
+
+test('each repaired card and framing strip carries its marker on that element', () => {
+  const surfaces = [
+    ['GoalsPage.tsx', 'data-window-card', 'bg-shell-chrome', 1],
+    ['MemoryPage.tsx', 'data-window-card', 'bg-shell-chrome', 4],
+    ['AccountsPage.tsx', 'data-window-card', 'bg-surface-panel', 1],
+    ['PermissionRulesEditor.tsx', 'data-window-card', 'bg-surface-raised/50', 2],
+    ['ToolCardStylePreview.tsx', 'data-window-card', 'bg-app-bg', 1],
+    ['ProseArrivalPreview.tsx', 'data-window-card', 'bg-app-bg', 1],
+    ['ScheduledTasksPage.tsx', 'data-window-chrome', 'md:w-[272px]', 1],
+    ['WorkspacePanels.tsx', 'data-window-chrome', 'bg-shell-chrome', 2],
+    ['App.tsx', 'data-window-chrome', 'text-tone-danger', 1],
+  ] as const
+  for (const [file, marker, classes, count] of surfaces) {
+    const tags = rendererTags(file).filter(tag => tag.classes.includes(classes) && !tag.floating)
+    expect({ file, count: tags.length }).toEqual({ file, count })
+    for (const tag of tags) {
+      expect({ file, line: tag.line, marked: tag.attributes.has(marker) })
+        .toEqual({ file, line: tag.line, marked: true })
+    }
+  }
+})
+
+test('the Goals summary is a tinted card recess, not page ground or another card', () => {
+  const summary = rendererTags('GoalsPage.tsx').find(tag => tag.tag === 'pre')
+  expect(summary?.attributes.has('data-window-recess')).toBe(true)
+  expect(summary?.attributes.has('data-window-ground')).toBe(false)
+  expect(summary?.attributes.has('data-window-card')).toBe(false)
+  const recess = themeCss().match(/html\[data-glass='on'\] \[data-window-recess\]\s*\{([^}]*)\}/)?.[1] ?? ''
+  expect(translucentPair(recess)).toEqual({ light: true, dark: true })
+  expect(recess).not.toContain('background: transparent')
+  expect(recess).not.toContain('rgba(52, 52, 60, .36)')
+})
+
+test('opaque ground cards cannot silently return on another page', () => {
+  const exempt = new Map([
+    ['RendererErrorBoundary.tsx', 'fault surfaces stay solid'],
+    ['StartupSurfaces.tsx', 'startup cards and their recesses belong to the launch dialog'],
+    ['SessionActionDialogs.tsx', 'recesses are children of the shared action dialog'],
+    ['AskQuestionFlow.tsx', 'the question control supplies the solid backing for its Other text input'],
+  ])
+  const offenders: string[] = []
+  for (const file of readdirSync(new URL('.', import.meta.url))) {
+    if (!file.endsWith('.tsx') || file.includes('.test.') || exempt.has(file)) continue
+    for (const tag of rendererTags(file)) {
+      if (tag.floating || /^(input|select|textarea|button|span)$/.test(tag.tag)) continue
+      // A focus-within shell is the painted part of a text input, not a card.
+      if (tag.classes.includes('focus-within:')) continue
+      if (!/\brounded/.test(tag.classes) ||
+          !/\bbg-(app-bg|shell-chrome|surface-panel|surface-raised)\b|\bbg-\[light-dark\(/.test(tag.classes)) continue
+      if (!['data-window-card', 'data-window-ground', 'data-window-recess']
+        .some(marker => tag.attributes.has(marker))) {
+        offenders.push(`${file}:${tag.line}`)
+      }
+    }
+  }
+  expect(offenders).toEqual([])
+})
+
+test('floating surfaces and controls never acquire page-card or chrome markers', () => {
+  const leaking: string[] = []
+  for (const file of readdirSync(new URL('.', import.meta.url))) {
+    if (!file.endsWith('.tsx') || file.includes('.test.')) continue
+    for (const tag of rendererTags(file)) {
+      const marked = ['data-window-card', 'data-window-chrome', 'data-window-recess']
+        .some(marker => tag.attributes.has(marker))
+      if (marked && (tag.floating || /^(input|select|textarea)$/.test(tag.tag))) {
+        leaking.push(`${file}:${tag.line}`)
+      }
+      if (tag.attributes.has('data-window-overlay')) {
+        expect(file).toBe('Sidebar.tsx')
+      }
+    }
+  }
+  expect(leaking).toEqual([])
+  const backdrop = rendererTags('TranscriptView.tsx')
+    .find(tag => tag.attributes.has('data-image-preview-backdrop'))
+  expect(backdrop).toBeDefined()
+  expect(backdrop?.classes).toContain('bg-scrim')
+  expect(backdrop?.attributes.has('data-window-overlay')).toBe(false)
+  const questionControl = rendererTags('AskQuestionFlow.tsx')
+    .find(tag => tag.classes.includes('bg-[light-dark('))
+  expect(questionControl).toBeDefined()
+  expect([...questionControl!.attributes.keys()].some(name => name.startsWith('data-window-'))).toBe(false)
 })
 
 /**

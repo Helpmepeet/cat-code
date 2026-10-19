@@ -435,7 +435,7 @@ test('a sent image preview supports every dismiss route and restores thumbnail f
 
   await click(trigger)
   await harness.nextFrame()
-  await click(document.body.querySelector<HTMLElement>('[data-window-overlay]'))
+  await click(document.body.querySelector<HTMLElement>('[data-image-preview-backdrop]'))
   expect(
     document.body.querySelector(
       '[role="dialog"][aria-label="Sent image preview"]',
@@ -501,7 +501,7 @@ test('clicking a generated image opens the shared image preview', async () => {
     'data:image/png;base64,AAAA',
   )
 
-  await click(document.body.querySelector<HTMLElement>('[data-window-overlay]'))
+  await click(document.body.querySelector<HTMLElement>('[data-image-preview-backdrop]'))
   expect(dialog?.isConnected).toBe(false)
 })
 

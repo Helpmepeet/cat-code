@@ -4890,7 +4890,7 @@ export function App() {
           ) : null}
 
           {shellError ? (
-            <div className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
+            <div data-window-chrome className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
               <span className="min-w-0 flex-1">{shellError}</span>
               <button
                 type="button"

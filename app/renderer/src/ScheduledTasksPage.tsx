@@ -310,6 +310,7 @@ export function ScheduledTasksPage({
     <main className="flex min-h-0 min-w-0 flex-1">
       <nav
         aria-label="Scheduled tasks"
+        data-window-chrome
         className={`${detailOpen ? 'hidden md:block' : 'block'} w-full shrink-0 overflow-y-auto border-r border-shell-seam bg-shell-chrome px-2.5 pb-6 pt-[18px] md:w-[272px]`}
       >
         <h1 className="mb-2.5 px-2.5 text-[15px] font-semibold tracking-[-0.01em] text-text-primary">Scheduled</h1>

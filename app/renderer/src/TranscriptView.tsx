@@ -5814,7 +5814,7 @@ export function ImagePreview({
   return createPortal(
     <div
       role="presentation"
-      data-window-overlay
+      data-image-preview-backdrop
       onClick={onClose}
       className="fixed inset-0 z-[200] flex items-center justify-center bg-scrim p-8 backdrop-blur-sm"
     >

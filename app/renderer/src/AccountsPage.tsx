@@ -1110,6 +1110,7 @@ export function AccountsPage({
                 {snapshot.anthropicAccounts.map(account => (
                   <div
                     key={account.id}
+                    data-window-card
                     className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-surface-panel px-4 py-3"
                   >
                     <span

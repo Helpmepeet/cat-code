@@ -82,7 +82,7 @@ const PREVIEW_ROWS: NestedTranscriptRow[] = [
 
 export function ToolCardStylePreview() {
   return (
-    <div className="h-[188px] overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
+    <div data-window-card className="h-[188px] overflow-hidden rounded-lg border border-shell-seam bg-app-bg">
       <TranscriptRowsView rows={PREVIEW_ROWS} />
     </div>
   )

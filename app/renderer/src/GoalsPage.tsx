@@ -107,7 +107,7 @@ function GoalSection({
 function GoalCard({ row }: { row: ThreadGoalRow }) {
   const { goal } = row
   return (
-    <section className="rounded-xl border border-shell-seam bg-shell-chrome p-5">
+    <section data-window-card className="rounded-xl border border-shell-seam bg-shell-chrome p-5">
       <div className="mb-4 flex flex-wrap items-center gap-x-2 gap-y-1">
         <StatusBadge status={goal.status} />
         <span className="text-[12px] text-text-muted">{row.displayLabel}</span>
@@ -146,9 +146,7 @@ function GoalCard({ row }: { row: ThreadGoalRow }) {
         <Metric label="Time used" value={`${goal.timeUsedSeconds}s`} />
       </div>
 
-      {/* Same page-ground repeat as the transcript's fenced blocks; glass
-       * clears it so it does not become a slab (`TranscriptView` CodeBlock). */}
-      <pre data-window-ground className="mt-5 whitespace-pre-wrap rounded-lg border border-shell-seam bg-app-bg p-4 font-mono text-[12px] leading-relaxed text-text-muted">
+      <pre data-window-recess className="mt-5 whitespace-pre-wrap rounded-lg border border-shell-seam bg-app-bg p-4 font-mono text-[12px] leading-relaxed text-text-muted">
         {goal.summary}
       </pre>
     </section>

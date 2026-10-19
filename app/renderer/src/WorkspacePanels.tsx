@@ -116,7 +116,7 @@ export function WorkspaceLayout({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {notice ? (
-        <div className="border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-warn">
+        <div data-window-chrome className="border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-warn">
           {notice}
         </div>
       ) : null}
@@ -286,6 +286,7 @@ function PanelHeader({
 }) {
   return (
     <div
+      data-window-chrome
       className="flex h-9 shrink-0 items-center gap-2 border-b border-shell-seam bg-shell-chrome px-3"
       onClick={() => onFocusPanel(index, panel.sessionId)}
     >
