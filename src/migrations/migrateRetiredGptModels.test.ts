@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -68,6 +68,15 @@ afterEach(() => {
 })
 
 describe('migrateRetiredGptModels', () => {
+  test('returns settings errors without remapping the runtime override', () => {
+    writeFileSync(join(settingsDir, 'settings.json'), '{')
+    mainLoopOverride = 'gpt-5.6-sol'
+
+    expect(migrateRetiredGptModels()).toBeInstanceOf(Error)
+    expect(mainLoopOverrideWrites).toEqual([])
+    expect(mainLoopOverride).toBe('gpt-5.6-sol')
+  })
+
   test('remaps every user-owned model surface and de-duplicates the resulting allowlist', () => {
     setUserSettings({
       model: 'gpt-5.6-sol',

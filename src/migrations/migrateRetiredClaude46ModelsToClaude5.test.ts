@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -84,6 +84,15 @@ afterEach(() => {
 })
 
 describe('migrateRetiredClaude46ModelsToClaude5', () => {
+  test('returns settings errors without remapping the runtime override', () => {
+    writeFileSync(join(settingsDir, 'settings.json'), '{')
+    mainLoopOverride = 'claude-sonnet-4-6'
+
+    expect(migrateRetiredClaude46ModelsToClaude5()).toBeInstanceOf(Error)
+    expect(mainLoopOverrideWrites).toEqual([])
+    expect(mainLoopOverride).toBe('claude-sonnet-4-6')
+  })
+
   test('remaps every first-party user-owned model surface without overwriting a current override', () => {
     setUserSettings({
       model: 'claude-sonnet-4-6[1m]',
