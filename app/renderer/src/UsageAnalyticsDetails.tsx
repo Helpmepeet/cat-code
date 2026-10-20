@@ -172,9 +172,7 @@ function CacheDots({ summary }: { summary: UsageRangeSummary }) {
 }
 export function UsageAnalyticsCache(props: UsageAnalyticsDateProps) {
     const { summary } = props;
-    const complete = summary.cacheWriteReporting === 'reported';
     return <Section title="Cache">
-        {!complete && <p className="uad-cache-caveat">Cache writes are {summary.cacheWriteReporting === 'partial' ? 'only partly reported' : summary.cacheWriteReporting === 'unreported' ? 'not reported' : 'unavailable'}, so hit rates may read high and uncached input low.</p>}
         <div className="uad-cache-grid"><Card title="Cache hit rate" note={summary.bucketDays && summary.bucketDays > 1 ? `Per ${summary.bucketDays} days` : undefined} controls={<div className="uad-range-rate"><i className="uad-dash" />Range rate {detailPercent(summary.cachedInputShare)}</div>}>
             <DayLine {...props} label="Daily cache hit rate" />
             <div className="uad-inner-head"><div><h3>Uncached input</h3></div><ul className="uad-legend uad-cache-legend"><li><i className="uad-fresh-key" />Fresh input</li><li><i className="uad-write-key" />Cache writes</li></ul></div>

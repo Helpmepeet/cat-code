@@ -82,8 +82,6 @@
 .usage-hero-number { font-size:38.5px; font-weight:680; letter-spacing:-.04em; line-height:1.05; margin:4px 0 2px; font-variant-numeric:tabular-nums; }
 .usage-daily-explorer .usage-note { line-height:1.45; }
 .usage-daily-delta { margin-top:6px; color:var(--usage-secondary); font-size:12px; }
-.usage-cache-coverage { display:block; color:var(--usage-secondary); font-size:11px; font-weight:400; line-height:1.35; letter-spacing:normal; white-space:normal; }
-.usage-metric-foot .usage-cache-coverage { margin-bottom:3px; }
 .usage-daily-metrics { max-width:100%; }
 .usage-daily-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin:12px 0 8px; }
 .usage-daily-chips { display:flex; flex-wrap:wrap; gap:6px; min-height:26px; }

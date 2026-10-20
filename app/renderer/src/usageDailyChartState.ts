@@ -13,14 +13,6 @@ export function usageDailyDayLabel(summary: UsageRangeSummary, date: string): st
     const day = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC', ...((summary.bucketDays ?? 1) === 1 ? { weekday: 'short' as const } : {}) }).format(new Date(`${date}T12:00:00Z`));
     return count <= 1 ? day : `${day} + ${count - 1} ${count === 2 ? 'day' : 'days'}`;
 }
-export function usageCacheCoverageLabel(reporting: UsageRangeSummary['cacheWriteReporting']): string {
-    switch (reporting) {
-        case 'reported': return '';
-        case 'partial': return 'Writes partly reported';
-        case 'unreported': return 'Writes not reported';
-        case 'unavailable': return 'Write coverage unavailable';
-    }
-}
 export function usagePinnedBucket(summary: UsageRangeSummary, date: string): string {
     if (!date) return '';
     const timestamp = Date.parse(`${date}T00:00:00Z`);

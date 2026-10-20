@@ -71,12 +71,11 @@ test('hourly activity labels canonical counts as tool requests', async () => {
     expect(tree.container.querySelector('.uad-heatmap')?.textContent).toContain('7 tool requests');
     expect(tree.container.textContent).not.toContain('model requests');
 });
-test('incomplete cache-write coverage qualifies the reported cache rate without changing its denominator', async () => {
+test('incomplete cache-write coverage keeps the cache rate and adds no qualification', async () => {
     const { summary } = await fixture();
     summary.cacheWriteReporting = 'partial';
     const tree = await harness.mount(<CacheOwner summary={summary} />);
-    expect(tree.container.querySelectorAll('.uad-cache-caveat')).toHaveLength(1);
-    expect(tree.container.querySelector('.uad-cache-caveat')?.textContent).toContain('only partly reported');
+    expect(tree.container.textContent).not.toContain('Cache writes are');
     expect(tree.container.textContent).toContain('Range rate 60.0%');
     expect(tree.container.textContent).not.toContain('Reported');
 });

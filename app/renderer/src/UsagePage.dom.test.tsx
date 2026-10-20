@@ -164,7 +164,6 @@ test('all four metric rows span the card and center the spark in the space besid
                     expect(getComputedStyle(card).gridTemplateRows).toBe('auto auto 1fr');
                     expect(getComputedStyle(card.querySelector('.usage-metric-foot')!).alignSelf).toBe('end');
                 }
-                expect(tree.container.querySelector('.usage-metric-cache .usage-cache-coverage')?.textContent).toBe('Writes partly reported');
                 const buildRow = getComputedStyle(tree.container.querySelector('.usage-latest-build .usage-metric-row')!);
                 expect(buildRow.justifyContent).toBe('flex-start');
                 expect(buildRow.gap).toBe('6px');
@@ -505,7 +504,7 @@ test('sparse All chart marks leave calendar gaps and clamp a partial final bucke
     expect(tree.container.querySelectorAll('.usage-daily-areas > path')).toHaveLength(4);
 });
 
-test('cache percentages retain counts and qualify the selected day or range write coverage', async () => {
+test('cache percentages retain counts and show no write-coverage qualification for any reporting state', async () => {
     const snapshot = await recordedSnapshot(), summary = snapshot.ranges['7d'], day = summary.days[0]!;
     summary.tokens = { fresh: 20, read: 80, write: 0, output: 0 };
     day.tokens = { ...summary.tokens };
@@ -514,32 +513,14 @@ test('cache percentages retain counts and qualify the selected day or range writ
     const tree = await harness.mount(render(''));
     const cacheStat = () => [...tree.container.querySelectorAll('.usage-daily-stats > div')].find(node => node.querySelector('dt')?.textContent === 'From cache')!;
     const summaryCard = () => tree.container.querySelector('.usage-metric-cache')!;
-    for (const [reporting, qualification] of [
-        ['unreported', 'Writes not reported'],
-        ['partial', 'Writes partly reported'],
-        ['unavailable', 'Write coverage unavailable'],
-        ['reported', ''],
-    ] as const) {
+    for (const reporting of ['unreported', 'partial', 'unavailable', 'reported'] as const) {
         summary.cacheWriteReporting = reporting;
         day.cacheWriteReporting = reporting;
         for (const date of ['', day.date]) {
             await tree.render(render(date));
-            expect(cacheStat().querySelector('dd')!.textContent).toContain('80.0%');
+            expect(cacheStat().querySelector('dd')!.textContent).toBe('80.0%');
             expect(summaryCard().querySelector('strong')!.textContent).toBe('80.0%');
-            expect(cacheStat().querySelector('.usage-cache-coverage')?.textContent ?? '').toBe(qualification);
-            expect(summaryCard().querySelector('.usage-cache-coverage')?.textContent ?? '').toBe(qualification);
+            expect(tree.container.textContent).not.toMatch(/Writes (partly|not) reported|Write coverage unavailable|Cache writes are/);
         }
     }
-    summary.cacheWriteReporting = 'unreported';
-    day.cacheWriteReporting = 'reported';
-    await tree.render(render(day.date));
-    expect(cacheStat().querySelector('.usage-cache-coverage')).toBeNull();
-    expect(summaryCard().querySelector('.usage-cache-coverage')!.textContent).toBe('Writes not reported');
-    summary.cacheWriteReporting = 'reported';
-    day.cacheWriteReporting = 'partial';
-    await tree.render(render(day.date));
-    expect(cacheStat().querySelector('.usage-cache-coverage')!.textContent).toBe('Writes partly reported');
-    expect(summaryCard().querySelector('.usage-cache-coverage')).toBeNull();
-    expect(summary.tokens.write).toBe(0);
-    expect(day.tokens.write).toBe(0);
 });

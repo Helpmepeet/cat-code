@@ -49,14 +49,14 @@ test('latest build is explicitly qualified and has a meaningful empty sample sta
     expect(render()).toContain('Latest build with at least 200 tool results');
 });
 
-test('summary sparks and rate changes use prototype forms without losing write qualifications', () => {
+test('summary sparks and rate changes use prototype forms without cache-write qualifications', () => {
     const summary = comparable();
     summary.cacheWriteReporting = 'partial';
     const html = renderToStaticMarkup(<UsageMetrics summary={summary} unknown="–" partial={false}/>);
     expect(html).toContain('viewBox="0 0 63 28"');
     expect(html).toContain('offset="0.25"');
     expect(html).toContain('usage-metric-delta usage-change-good');
-    expect(html).toContain('Writes partly reported');
+    expect(html).not.toContain('Writes partly reported');
     summary.previousPeriod!.errors = 1;
     const worse = renderToStaticMarkup(<UsageMetrics summary={summary} unknown="–" partial={false}/>);
     expect(worse).toContain('usage-metric-delta usage-change-bad');

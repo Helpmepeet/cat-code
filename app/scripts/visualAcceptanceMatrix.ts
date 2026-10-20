@@ -492,7 +492,7 @@ export async function runAnalyticsMatrix(window: BrowserWindow, outDir: string):
       await settle(450)
       const state = await snapshot()
       if (state.range !== range || state.appearance !== appearance || state.glass !== glass) throw new Error(`Wrong matrix state: ${name}`)
-      if (state.cacheQualifications.length !== 2 || state.cacheQualifications.some((label: string) => label !== 'Writes partly reported')) throw new Error(`Missing partial cache-write qualifications: ${name}`)
+      if (state.cacheQualifications.length !== 0) throw new Error(`Unexpected cache-write qualifications: ${name}`)
       const frames: string[] = []
       const step = state.clientHeight - 160
       for (let scroll = 0, tile = 0; ; scroll += step, tile++) {
