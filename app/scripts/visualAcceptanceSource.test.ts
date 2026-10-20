@@ -194,7 +194,7 @@ function designFixture(): Record<string, any> {
   const spanCards = Object.fromEntries([['daily', 8, 0], ['inspector', 4, 8], ['cache', 8, 0], ['cacheModels', 4, 8]].map(([key, span, offset]) => [key, node(14, (1092 + 14) * Number(span) / 12 - 14, 500, 316 + (1092 + 14) * Number(offset) / 12)]))
   const metrics = {
     heading: node(20), content: { x: 316, width: 1092 }, gutters: { left: 28, right: 28 }, range: '7d',
-    summaryLayout: Object.fromEntries(['requests', 'sessions', 'cache', 'toolErrors'].map(key => [key, { value: node(22.75, 42, 25, 333), spark: node(14, 63, 28, 383) }])),
+    summaryLayout: Object.fromEntries(['requests', 'sessions', 'cache', 'toolErrors'].map(key => [key, { row: node(14, 113, 30, 333), value: node(22.75, 42, 25, 333), spark: node(14, 63, 28, 383) }])),
     integrationHeaderGaps: Object.fromEntries(['skills', 'integrations'].map(key => [key, { header: { y: 0, height: 40 }, total: { y: 10, height: 30 }, chart: { y: 56, height: 220 }, qualifiers: [], headerToChart: 16, totalToChart: 16 }])),
     typography: {
       hero: node(38.5), inspectorTitle: node(17.5),
@@ -379,24 +379,26 @@ test('integration header gate catches the missing 16px gap but records qualifica
   for (const field of ['summaryLayout', 'alignItems', 'justifyItems', 'justifyContent', 'alignSelf', 'justifySelf', 'sparkSvg', 'headerToChart', 'totalToChart']) expect(script).toContain(field)
   expect(script).toContain('summaryKeys.slice(0,4)')
 })
-test('summary spark gate accepts intrinsic 8px gaps at wide and narrow sizes without equating values', () => {
+test('summary spark gate keeps the prototype 8px gap and centers the app spark in the free row space', () => {
   for (const width of [1092, 552]) {
     const reference = designFixture(), app = structuredClone(reference)
     reference.content.width = app.content.width = width
+    const rowWidth = width === 1092 ? 220 : 160, centered = 333 + 55 + 8 + (rowWidth - 55 - 8 - 63) / 2
     for (const key of ['requests', 'sessions', 'cache', 'toolErrors']) {
+      app.summaryLayout[key].row.rect.width = rowWidth
       app.summaryLayout[key].value.rect.width = 55
-      app.summaryLayout[key].spark.rect.x = 333 + 55 + 8
+      app.summaryLayout[key].spark.rect.x = centered
     }
     app.summaryLayout.latestBuild = { value: { rect: null }, spark: { rect: null } }
     expect(evaluateDesign(app, reference)).toEqual([])
-    app.summaryLayout.requests.spark.rect.x = 333 + 55 + 83
+    app.summaryLayout.requests.spark.rect.x = 333 + 55 + 8
     const failures = evaluateDesign(app, reference)
     expect(failures).toHaveLength(1)
-    expect(failures[0]).toMatchObject({ path: 'summaryLayout.requests.app.sparkToValueGap', actual: 83, expected: 8, tolerance: .1 })
-    app.summaryLayout.requests.spark.rect.x = 333 + 55 + 8.1
+    expect(failures[0]).toMatchObject({ path: 'summaryLayout.requests.app.sparkCenterOffset', expected: 0, tolerance: 1 })
+    app.summaryLayout.requests.spark.rect.x = centered + .5
     expect(evaluateDesign(app, reference)).toEqual([])
-    app.summaryLayout.requests.spark.rect.x = 333 + 55 + 8.2
-    expect(evaluateDesign(app, reference).some(f => f.path.endsWith('sparkToValueGap'))).toBe(true)
+    reference.summaryLayout.requests.spark.rect.x = 383 + 1
+    expect(evaluateDesign(app, reference).some(f => f.path === 'summaryLayout.requests.prototype.sparkToValueGap')).toBe(true)
   }
 })
 test('native profile evidence records computed gradient stops without adding an ink equality gate', () => {

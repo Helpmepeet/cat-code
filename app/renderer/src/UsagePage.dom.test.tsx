@@ -128,7 +128,7 @@ test('Analytics uses the computed 14px prototype scale without changing root typ
     } finally { styles.remove(); }
 });
 
-test('all four metric rows use intrinsic grid-item sizing and an eight-pixel spark gap at wide and narrow widths', async () => {
+test('all four metric rows span the card and center the spark in the space beside the value at wide and narrow widths', async () => {
     const styles = document.createElement('style');
     styles.textContent = readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8')
         + readFileSync(new URL('./usageDailyChart.css', import.meta.url), 'utf8')
@@ -154,8 +154,10 @@ test('all four metric rows use intrinsic grid-item sizing and an eight-pixel spa
                 for (const card of cards) {
                     const row = card.querySelector('.usage-metric-row')!, computed = getComputedStyle(row);
                     expect(computed.display).toBe('flex');
-                    expect(computed.justifySelf).toBe('start');
+                    expect(computed.justifySelf).not.toBe('start');
                     expect(computed.justifyContent).toBe('space-between');
+                    expect(getComputedStyle(row.querySelector('svg')!).marginLeft).toBe('auto');
+                    expect(getComputedStyle(row.querySelector('svg')!).marginRight).toBe('auto');
                     expect(computed.gap).toBe('8px');
                     expect(getComputedStyle(row.querySelector('svg')!).width).toBe('63px');
                     expect(getComputedStyle(card).display).toBe('grid');
@@ -164,7 +166,6 @@ test('all four metric rows use intrinsic grid-item sizing and an eight-pixel spa
                 }
                 expect(tree.container.querySelector('.usage-metric-cache .usage-cache-coverage')?.textContent).toBe('Writes partly reported');
                 const buildRow = getComputedStyle(tree.container.querySelector('.usage-latest-build .usage-metric-row')!);
-                expect(buildRow.justifySelf).not.toBe('start');
                 expect(buildRow.justifyContent).toBe('flex-start');
                 expect(buildRow.gap).toBe('6px');
             }

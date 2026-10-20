@@ -256,9 +256,11 @@ export function evaluateDesign(app: Record<string, any>, prototype: Record<strin
   for (const key of ['requests', 'sessions', 'cache', 'toolErrors']) {
     const a = app.summaryLayout?.[key], p = prototype.summaryLayout?.[key], path = `summaryLayout.${key}`
     if (!required(`${path}.value`, a?.value, p?.value) || !required(`${path}.spark`, a?.spark, p?.spark)) continue
-    for (const [side, layout] of [['app', a], ['prototype', p]] as const) {
-      near(`${path}.${side}.sparkToValueGap`, number(layout.spark.rect.x) - number(layout.value.rect.x) - number(layout.value.rect.width), 8, .1)
-    }
+    near(`${path}.prototype.sparkToValueGap`, number(p.spark.rect.x) - number(p.value.rect.x) - number(p.value.rect.width), 8, .1)
+    // The app deliberately centers the spark in the space right of the value; the row's 8px gap stays as the minimum.
+    const leftFree = number(a.spark.rect.x) - number(a.value.rect.x) - number(a.value.rect.width) - 8
+    const rightFree = number(a.row?.rect?.x) + number(a.row?.rect?.width) - number(a.spark.rect.x) - number(a.spark.rect.width)
+    near(`${path}.app.sparkCenterOffset`, leftFree - rightFree, 0, 1)
   }
   const components = (v: unknown): number[] => typeof v === 'string' ? v.trim().split(/\s+/).map(number) : []
   const edges = (v: unknown) => {
