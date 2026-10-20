@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { getSystemPrompt } from './prompts.js'
+import { getSystemPrompt, LEAN_SYSTEM_PROMPT_ENV } from './prompts.js'
 import {
   getGPTIntroSection,
   getGPTToneAndStyleSection,
@@ -576,5 +576,57 @@ describe('available tools in assembled prompts', () => {
     expect(getWebSearchPrompt()).toContain('list relevant URLs from the search results as markdown hyperlinks')
     expect(prompt).toContain('or returned by your web searches or otherwise read with a tool')
     expect(prompt).toContain('Never infer a deeper path')
+  })
+})
+
+describe('lean Claude assembly', () => {
+  const LEAN_TOOLS = [
+    { name: 'Agent' },
+    { name: 'Bash' },
+    { name: 'Read' },
+    { name: 'Edit' },
+  ] as unknown as Parameters<typeof getSystemPrompt>[0]
+  const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
+
+  afterEach(() => {
+    if (saved === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+    else process.env[LEAN_SYSTEM_PROMPT_ENV] = saved
+    clearSystemPromptSections()
+  })
+
+  const build = async (model: string, lean: boolean) => {
+    if (lean) process.env[LEAN_SYSTEM_PROMPT_ENV] = '1'
+    else delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+    return (await getSystemPrompt(LEAN_TOOLS, model)).join('\n')
+  }
+
+  test('replaces the enumerated Claude sections and keeps the decided behavior sections', async () => {
+    const prompt = await build('claude-opus-5', true)
+    for (const kept of ['# Harness', '# Acting with care', '# Delivering work', '# Corrections', '# Style']) {
+      expect(prompt).toContain(`${kept}\n`)
+    }
+    for (const dropped of ['# System\n', '# Doing tasks', '# Executing actions with care', '# Using your tools', '# Tone and style', '# Communicating with the user']) {
+      expect(prompt).not.toContain(dropped)
+    }
+    expect(prompt).toContain('Do not spawn an agent only to review or verify work unless the user asks for another agent')
+    expect(prompt).not.toContain('Before spawning, require a concrete reason')
+  })
+
+  test('is off by default and never changes the GPT style', async () => {
+    expect(await build('claude-opus-5', false)).toContain('# Doing tasks')
+    const gptOff = await build('gpt-5.6-terra', false)
+    clearSystemPromptSections()
+    expect(await build('gpt-5.6-terra', true)).toBe(gptOff)
+  })
+
+  // The session guidance section is cached; a key without the lean flag would
+  // serve whichever variant was built first for the rest of the session.
+  test('a warm section cache does not serve the other variant its session guidance', async () => {
+    const full = await build('claude-opus-5', false)
+    const lean = await build('claude-opus-5', true)
+    expect(full).toContain('Before spawning, require a concrete reason')
+    expect(lean).not.toContain('Before spawning, require a concrete reason')
+    expect(lean).toContain('Do not spawn an agent only to review or verify work')
+    expect(await build('claude-opus-5', false)).toBe(full)
   })
 })

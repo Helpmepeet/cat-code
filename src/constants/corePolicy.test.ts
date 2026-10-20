@@ -17,7 +17,7 @@ import {
   setFlagSettingsInline,
   setFlagSettingsPath,
 } from '../bootstrap/state.js'
-import { getSystemPrompt } from './prompts.js'
+import { getSystemPrompt, LEAN_SYSTEM_PROMPT_ENV } from './prompts.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 import { getManagedSessionPolicy, setManagedSessionPolicy } from '../utils/managedSessionPolicy.js'
 import { clearMdmSettingsCache } from '../utils/settings/mdm/settings.js'
@@ -167,6 +167,19 @@ const VARIANTS = [
   {
     label: 'default GPT',
     build: () => getSystemPrompt(TOOLS, GPT_MODEL),
+  },
+  {
+    label: 'lean Claude',
+    build: async () => {
+      const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
+      process.env[LEAN_SYSTEM_PROMPT_ENV] = '1'
+      try {
+        return await getSystemPrompt(TOOLS, CLAUDE_MODEL)
+      } finally {
+        if (saved === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+        else process.env[LEAN_SYSTEM_PROMPT_ENV] = saved
+      }
+    },
   },
 ] as const
 

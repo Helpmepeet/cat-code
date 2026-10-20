@@ -18,7 +18,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { getSystemPrompt } from './prompts.js'
+import { getSystemPrompt, LEAN_SYSTEM_PROMPT_ENV } from './prompts.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 import * as outputStyles from './outputStyles.js'
 import { getGPTPromptFamily } from './promptStyle.js'
@@ -265,6 +265,17 @@ describe('assembled system prompt', () => {
       checkAgainstSnapshot(name, prompt)
     })
   }
+
+  test('claude-opus-5.lean matches its checked-in snapshot', async () => {
+    const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
+    process.env[LEAN_SYSTEM_PROMPT_ENV] = '1'
+    try {
+      checkAgainstSnapshot('claude-opus-5.lean', await assemble(FULL_TOOLS, 'claude-opus-5'))
+    } finally {
+      if (saved === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+      else process.env[LEAN_SYSTEM_PROMPT_ENV] = saved
+    }
+  })
 
   // A normalization gap would otherwise show up as a snapshot that churns on
   // someone else's machine instead of as a failure here.

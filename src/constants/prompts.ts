@@ -465,6 +465,78 @@ function getSimpleToneAndStyleSection(): string {
 }
 
 /**
+ * Opt-in lean assembly for the Claude style, modelled on upstream's lean path
+ * for its newest models. Upstream's lean block drops the prompt-injection and
+ * tool-output-is-data rules along with `# System`; this one carries every
+ * `corePolicy.ts` invariant, which is the reason it is not a port.
+ * Evidence and comparator: docs/reports/2026-08-10-system-prompt-architecture-cat-vs-upstream.md
+ * §3.0 and §5 item 0.
+ */
+export const LEAN_SYSTEM_PROMPT_ENV = 'CAT_CODE_LEAN_SYSTEM_PROMPT'
+
+function isLeanClaudePrompt(gpt: boolean): boolean {
+  return !gpt && isEnvTruthy(process.env[LEAN_SYSTEM_PROMPT_ENV])
+}
+
+function getLeanHarnessSection(): string {
+  const items = [
+    `Text you output outside of tool use is displayed to the user as GitHub-flavored markdown.`,
+    `Tools run behind a user-selected permission mode; a denied call means the user declined it, so adjust instead of retrying it verbatim.`,
+    TOOL_OUTPUT_IS_DATA_RULE,
+    RUNTIME_METADATA_RULE,
+    PROMPT_INJECTION_RULE,
+    HOOK_AUTHORITY_RULE,
+    getConversationCompressionInstruction(),
+    `Prefer the dedicated file and search tools over shell commands when one fits. Independent tool calls can run in parallel in one response; never run file edits concurrently when their paths overlap.`,
+    `Reference code as file_path:line_number.`,
+    `Write code that reads like the surrounding code: match its comment density, naming, and idiom.`,
+  ]
+  return ['# Harness', ...prependBullets(items)].join('\n')
+}
+
+function getLeanActionsSection(): string {
+  return `# Acting with care
+
+For actions that are hard to reverse or outward-facing, confirm first unless durably authorized or explicitly told to proceed without asking; approval in one context doesn't extend to the next. Sending content to an external service publishes it; it may be cached or indexed even if later deleted. Before deleting or overwriting, look at the target: unfamiliar files, branches, or locks may be someone's in-progress work.
+
+${PROJECT_INSTRUCTION_AUTHORITY_RULE} If a loaded instruction file or skill causes you to pause, ask for permission, or leave work unfinished, name the file and quote the instruction, separating its requirement from your interpretation.
+
+${RETRY_RULE}
+
+${OUTCOME_REPORTING_RULE}`
+}
+
+function getLeanStyleSection(): string {
+  const items = [
+    `Do not use em dashes in your own prose. Avoid volunteering time estimates for coding work.`,
+    `When writing a prompt, or any other text meant to be copied verbatim (not run as a command), put it in a \`\`\`text fenced code block.`,
+    `Reference GitHub issues and pull requests as owner/repo#123.`,
+  ]
+  return ['# Style', ...prependBullets(items)].join('\n')
+}
+
+function getLeanSessionGuidanceSection(
+  enabledTools: Set<string>,
+  skillToolCommands: Command[],
+): string | null {
+  const hasSkills =
+    skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
+  const items = [
+    enabledTools.has(AGENT_TOOL_NAME)
+      ? `Use the ${AGENT_TOOL_NAME} tool when independent parallel work, isolating large intermediate output, or an explicit user request justifies it; otherwise work directly. Do not spawn an agent only to review or verify work unless the user asks for another agent.`
+      : null,
+    hasSkills
+      ? `/<skill-name> is shorthand for a user-invocable skill; run it with the ${SKILL_TOOL_NAME} tool, and only for skills listed in its user-invocable skills section.`
+      : null,
+    hasSkills
+      ? `When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
+      : null,
+  ].filter(item => item !== null)
+  if (items.length === 0) return null
+  return ['# Session-specific guidance', ...prependBullets(items)].join('\n')
+}
+
+/**
  * Key inputs for sections that branch on the enabled tool set. Sorted because
  * the guidance builders test membership, so ordering cannot change the output.
  * Contrast `additionalWorkingDirectories`, which is keyed unsorted: the
@@ -515,6 +587,7 @@ function buildDynamicPromptSections({
   outputStyleConfig,
   settings,
   includeFeatureGatedSections,
+  lean,
 }: {
   gpt: boolean
   model: string
@@ -526,19 +599,23 @@ function buildDynamicPromptSections({
   outputStyleConfig: OutputStyleConfig | null
   settings: ReturnType<typeof getInitialSettings>
   includeFeatureGatedSections: boolean
+  lean: boolean
 }) {
   return [
     systemPromptSection(
       'session_guidance',
       {
         gpt,
+        lean,
         tools: toolNamesKeyInput(enabledTools),
         skills: skillNamesKeyInput(skillToolCommands),
       },
       () =>
         gpt
           ? getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
-          : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
+          : lean
+            ? getLeanSessionGuidanceSection(enabledTools, skillToolCommands)
+            : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
     systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
     systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
@@ -715,6 +792,7 @@ export async function getSystemPrompt(
     ].filter(s => s !== null)
   }
 
+  const lean = isLeanClaudePrompt(gpt)
   const dynamicSections = buildDynamicPromptSections({
     gpt,
     model,
@@ -726,6 +804,7 @@ export async function getSystemPrompt(
     outputStyleConfig,
     settings,
     includeFeatureGatedSections: true,
+    lean,
   })
 
   const resolvedDynamicSections =
@@ -743,6 +822,20 @@ export async function getSystemPrompt(
   const hasDoingTasksSection =
     (outputStyleConfig === null ||
       outputStyleConfig.keepCodingInstructions === true)
+
+  if (lean) {
+    logForDebugging(`[SystemPrompt] path=lean`)
+    return [
+      getSimpleIntroSection(outputStyleConfig),
+      getLeanHarnessSection(),
+      getLeanActionsSection(),
+      getDeliveringWorkSection(),
+      getCorrectionsSection(),
+      getLeanStyleSection(),
+      ...(shouldUseGlobalCacheScope() ? [SYSTEM_PROMPT_DYNAMIC_BOUNDARY] : []),
+      ...resolvedDynamicSections,
+    ].filter(s => s !== null)
+  }
 
   return [
     // --- Static content (cacheable) ---
