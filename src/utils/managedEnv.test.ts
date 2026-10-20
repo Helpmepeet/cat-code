@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { clearDebugModeCache } from './debug.js'
 
 describe('applyConfigEnvironmentVariables', () => {
   const originalDebug = process.env.DEBUG
+  let mocksEnabled = false
 
   beforeEach(() => {
     delete process.env.DEBUG
+    clearDebugModeCache()
+    mocksEnabled = true
   })
 
   afterEach(() => {
@@ -13,16 +17,29 @@ describe('applyConfigEnvironmentVariables', () => {
     } else {
       process.env.DEBUG = originalDebug
     }
+    clearDebugModeCache()
+    mocksEnabled = false
     mock.restore()
   })
 
   test('refreshes debug mode after settings env enables DEBUG', async () => {
+    const realConfig = { ...await import('./config.js') }
+    const realSettings = { ...await import('./settings/settings.js') }
     await mock.module('./config.js', () => ({
-      getGlobalConfig: () => ({ env: {} }),
+      ...realConfig,
+      getGlobalConfig: (...args: Parameters<typeof realConfig.getGlobalConfig>) =>
+        mocksEnabled ? { env: {} } : realConfig.getGlobalConfig(...args),
     }))
     await mock.module('./settings/settings.js', () => ({
-      getSettings_DEPRECATED: () => ({ env: { DEBUG: 'true' } }),
-      getSettingsForSource: () => null,
+      ...realSettings,
+      getSettings_DEPRECATED: (...args: Parameters<typeof realSettings.getSettings_DEPRECATED>) =>
+        mocksEnabled
+          ? { env: { DEBUG: 'true' } }
+          : realSettings.getSettings_DEPRECATED(...args),
+      getSettingsForSource: (...args: Parameters<typeof realSettings.getSettingsForSource>) =>
+        mocksEnabled
+          ? null
+          : realSettings.getSettingsForSource(...args),
     }))
     await mock.module('../services/remoteManagedSettings/syncCache.js', () => ({
       isRemoteManagedSettingsEligible: () => false,
