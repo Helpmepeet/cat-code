@@ -892,20 +892,19 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   )
   expect(unnamed).not.toContain('You are ')
   // The rest of the doctrine still applies: an unnamed session still gets the
-  // whole guideline, including the create-only-when-asked rule.
+  // whole guideline, including the create-only-when-asked rule. A read-back
+  // acknowledgment once cost the creator a turn for nothing
+  // (docs/prompts/2026-09-06-peer-exchange-register.md §3).
   expect(unnamed).toContain(
-    'Nothing obliges an acknowledgment; a short okay or silence can both be right',
+    'a read-back or acknowledgment is not needed',
   )
   // The relay to the user carries the outcome, not the peer's evidence: one
   // creator reproduced its peer's whole command list and the user read the
   // same commit twice (docs/prompts/2026-09-06-peer-exchange-register.md §8).
   expect(unnamed).toContain(
-    'summarize it faithfully as an outcome, not as evidence: the commands and their results belong in the tab of the session that ran them',
+    'summarize it faithfully as an outcome, not as evidence, and credit the peer: its commands and their results stay in its own tab',
   )
-  expect(unnamed).toContain("the run is in Bear's tab")
-  expect(unnamed).toContain(
-    'when they ask for a prompt, write text; do not create one unasked',
-  )
+  expect(unnamed).toContain('Create a peer only when the user asks for a session')
 
   // Paragraph breaks only. The decision document's hard wraps are its own
   // 80-column layout, not part of the text, and a sentence broken mid-clause is
@@ -958,14 +957,16 @@ test('PEER-SESSIONS §5 — a peer report replaces the local final without cance
   expect(doctrine).toContain(
     "that peer is your audience. Send the requested answer, result, blocker, or completion report with SendToPeer",
   )
+  // Only a queued send counts as the report: a not_delivered or unconfirmed
+  // result leaves the local final report in place.
   expect(doctrine).toContain(
-    'After SendToPeer succeeds, STOP. Do not repeat, summarize, or reproduce that report in your own final response',
+    'Once SendToPeer reports the message queued, STOP. Do not repeat, summarize, or reproduce that report in your own final response',
   )
   expect(doctrine).toContain(
-    'This rule overrides the ordinary instruction to give the user a self-contained final report',
+    'this rule overrides the ordinary instruction to give the user a self-contained final report',
   )
   expect(doctrine).toContain(
-    'answer that message normally here too. This does not cancel or redirect the report to the peer',
+    'answer them here too; that does not cancel the report to the peer',
   )
   expect(doctrine).toContain(
     'A message from another peer does not count as the user speaking to you',

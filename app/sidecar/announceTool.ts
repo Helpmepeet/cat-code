@@ -35,7 +35,7 @@ export function createAnnounceTool(requestHost: PeerHostRequester = requestPeerH
     toAutoClassifierInput: input => JSON.stringify(input),
     async description() { return 'Post or replace your scope notice on the peer roster' },
     async prompt() {
-      return 'Post your notice on the peer roster when it would save peers asking what you are doing. Other sessions in this workspace see it when they call ListPeers; posting notifies no one. Describe the whole task, not your progress: post it once you know the task, and replace it only when you are given a different one. Only the main conversational agent may call this tool; subagents report their scope to it instead. The whole notice must fit in 1 KiB, with up to 16 entries in touches.'
+      return 'Post your notice on the peer roster when it would save peers asking what you are doing. Other sessions in this workspace see it when they call ListPeers; posting notifies no one. Describe the whole task, not your progress: post it once you know the task, and replace it only when you are given a different one or need to edit a shared file outside the areas it names. Only the main conversational agent may call this tool; subagents report their scope to it instead. The whole notice must fit in 1 KiB, with up to 16 entries in touches.'
     },
     async call(input, context): Promise<{ data: Output }> {
       if (context.agentId) return { data: { ok: false, message: 'Only the main conversational agent may post the session’s notice. Report your scope to it instead.' } }
