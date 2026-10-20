@@ -46,7 +46,8 @@ need the broader affected package checks.
 | Area | Checks |
 |---|---|
 | Engine | `bun run build:dev:full` and `bun test <specific test paths>` |
-| Desktop | `bun test app/`, `bun run --cwd app typecheck`, `bun run --cwd app typecheck:sidecar` |
+| Desktop routine | `bun run --cwd app test`, `bun run --cwd app typecheck`, `bun run --cwd app typecheck:sidecar` |
+| Desktop slow regressions | `bun run --cwd app test:slow` (or an affected group below); `bun run --cwd app test:all` runs routine and slow tests together |
 | Renderer build inputs | `bun run --cwd app renderer:build` |
 | Desktop security/runtime integration | `bun run --cwd app test:hardening` (launches Electron; needs authorization for that run) |
 | Docs only | `git diff --check` and `bun run maps:lint`; check changed links |
@@ -55,6 +56,22 @@ need the broader affected package checks.
   `cat-code exec` exercises the Claude harness only, not Codex or Cat Code.
 - Avoid bare `bun test`: some account suites require file-isolated runs.
   Local `docs/maps/build-release-testing.md`, when available, gives details.
+- Desktop test tiers are owned by `app/scripts/desktopTests.ts`. The routine
+  command excludes only explicitly reviewed files, not all process/integration
+  tests. New tests stay routine by default. No assertions or tests are disabled.
+  Run `bun run --cwd app test:slow workspace` for workspace jumps, relocation,
+  trust/startup gates, and handoff recovery; `test:slow native` for lid-helper
+  lifecycle/power observation; `test:slow analytics` for retained-usage collection,
+  indexing, snapshot budgeting, and usage-worker deadlines; `test:slow runtime`
+  for session bootstrap/resume/leases, permissions, forced/background work,
+  scheduling, catalog/backfill/account workers, diagnostics and cleanup;
+  `test:slow tooling` for editor launch and capture/harness process lifetimes.
+  These are required area regression checks, including the jump file named
+  "baseline", not disposable benchmarks.
+  Run all slow groups for cross-cutting desktop runtime changes, and
+  `bun run --cwd app test:all` before packaging/install validation.
+  Direct `bun test ./app` still runs everything. Do not use `bun test app/`:
+  Bun treats it as a substring filter and can run stale copies under `tmp/`.
 - Root typecheck has existing engine errors. Require no new diagnostics from
   the change; `build:dev:full` includes the separate undefined-name gate.
   The sidecar typecheck wrapper scopes errors to owned sidecar/shared files.
