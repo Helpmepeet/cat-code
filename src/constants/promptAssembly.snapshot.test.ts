@@ -361,15 +361,16 @@ describe('assembled system prompt', () => {
     }
   })
 
-  test('patch evidence does not relax other mutation tools\' Read prerequisites', async () => {
+  test('shell inspection supports mutations while patch deletion requires a recorded Read', async () => {
     const patch = await assemble(toolList('apply_patch', 'Bash'), 'gpt-6-astra')
-    expect(patch).toContain('Shell reads can supply the evidence for apply_patch updates')
-    expect(patch).toContain('they do not satisfy recorded-read requirements for deletion or other mutation tools')
+    expect(patch).toContain('Shell reads can supply this understanding.')
+    expect(patch).toContain('Bare apply_patch Delete requires a complete recorded Read and unchanged file identity.')
     for (const mutationTool of ['Edit', 'Write']) {
       const prompt = await assemble(toolList(mutationTool, 'Read', 'Bash'), 'gpt-6-astra')
       expect(prompt).toContain('Read before modifying:')
-      expect(prompt).toContain('Follow the chosen mutation tool\'s Read prerequisites')
-      expect(prompt).not.toContain('Shell reads can supply the evidence')
+      expect(prompt).toContain('Shell reads can supply this understanding.')
+      expect(prompt).not.toContain('recorded Read')
+      expect(prompt).not.toContain('mutation tool\'s Read prerequisites')
     }
     expect(await assemble(MINIMAL_TOOLS, 'gpt-6-astra')).not.toContain('Read before modifying:')
   })

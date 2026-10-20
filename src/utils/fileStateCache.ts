@@ -9,13 +9,13 @@ export type FileState = {
   limit: number | undefined
   // True only when this state came from a Read tool result returned to the
   // model. The range/truncation fields below still decide whether the model
-  // saw enough to authorize a whole-file replacement. Internal refreshes and
+  // saw enough to authorize a bare file deletion. Internal refreshes and
   // attachment bookkeeping must never set this.
   isWriteAuthorizedRead?: boolean
   // True when this entry was populated by auto-injection (e.g. CLAUDE.md) and
   // the injected content did not match disk (stripped HTML comments, stripped
   // frontmatter, truncated MEMORY.md). The model has only seen a partial view;
-  // Edit/Write must require an explicit Read first. `content` here holds the
+  // This cannot authorize a bare deletion. `content` here holds the
   // RAW disk bytes (for getChangedFiles diffing), not what the model saw.
   isPartialView?: boolean
   // True when Read stopped before the requested file view was complete, either
@@ -23,15 +23,15 @@ export type FileState = {
   // isPartialView, which also gates Read's dedup — a truncated read is still a
   // valid dedup target, it just isn't proof the model saw the whole file.
   isTruncatedView?: boolean
-  // Captured alongside a Read. FileWrite uses it only with model-visible,
-  // complete reads and rechecks it just before replacing the file.
+  // Captured alongside a Read. Bare deletion requires a model-visible,
+  // complete read and rechecks this identity before removing the file.
   fileIdentity?: FileIdentity
 }
 
 /**
- * FileWrite replaces the entire file, so only a complete, unbounded Read from
- * the first line can authorize it. Targeted reads remain valid for tools that
- * make targeted edits, but not for whole-file replacement.
+ * A bare deletion carries no old-content anchors, so only a complete, unbounded
+ * model-visible Read from the first line can authorize it. Edit and Write do not
+ * depend on this provenance.
  */
 export function isCompleteUnboundedRead(
   fileState: FileState | undefined,

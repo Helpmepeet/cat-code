@@ -1,4 +1,4 @@
-import { dirname, isAbsolute } from 'path'
+import { dirname } from 'path'
 import { diagnosticTracker } from '../../services/diagnosticTracking.js'
 import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnosticRegistry.js'
 import { getLspServerManager } from '../../services/lsp/manager.js'
@@ -10,7 +10,6 @@ import {
   deleteFileWithVerifiedIdentity,
   fileIdentitiesEqual,
   getFileIdentity,
-  getFileModificationTime,
   type FileIdentity,
   writeTextContentWithVerifiedIdentity,
 } from '../../utils/file.js'
@@ -191,58 +190,6 @@ function validateEditableFileSizeValue(
   }
 }
 
-export function validateFileWasRead(
-  fullFilePath: string,
-  filePathForUser: string,
-  toolUseContext: ToolUseContext,
-  errorCode: number,
-): ValidationFailure | null {
-  const readTimestamp = toolUseContext.readFileState.get(fullFilePath)
-  if (readTimestamp && !readTimestamp.isPartialView) {
-    return null
-  }
-  return {
-    result: false,
-    behavior: 'ask',
-    message: 'File has not been read yet. Read it first before writing to it.',
-    meta: {
-      isFilePathAbsolute: String(isAbsolute(filePathForUser)),
-    },
-    errorCode,
-  }
-}
-
-export function validateFileNotModifiedSinceRead(
-  fullFilePath: string,
-  fileContent: string,
-  toolUseContext: ToolUseContext,
-  errorCode: number,
-): ValidationFailure | null {
-  const readTimestamp = toolUseContext.readFileState.get(fullFilePath)
-  if (!readTimestamp) {
-    return null
-  }
-
-  const lastWriteTime = getFileModificationTime(fullFilePath)
-  if (lastWriteTime <= readTimestamp.timestamp) {
-    return null
-  }
-
-  const isFullRead =
-    readTimestamp.offset === undefined && readTimestamp.limit === undefined
-  if (isFullRead && fileContent === readTimestamp.content) {
-    return null
-  }
-
-  return {
-    result: false,
-    behavior: 'ask',
-    message:
-      'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
-    errorCode,
-  }
-}
-
 export async function readFileForEdit(
   absoluteFilePath: string,
   prepared?: PreparedFileMutation,
@@ -295,51 +242,6 @@ export async function readFileForEdit(
     }
     throw e
   }
-}
-
-export function assertFileUnchangedSinceRead(
-  absoluteFilePath: string,
-  originalFileContents: string,
-  readFileState: ToolUseContext['readFileState'],
-): void {
-  const lastRead = readFileState.get(absoluteFilePath)
-  // No baseline means we can't detect external modification — skip the check.
-  // validateFileWasRead (FileEditTool) or validateFileNotModifiedSinceRead
-  // (FilePatchTool) already return cleanly on !lastRead, so this is consistent.
-  if (!lastRead) return
-  const lastWriteTime = getFileModificationTime(absoluteFilePath)
-  if (lastWriteTime > lastRead.timestamp) {
-    const isFullRead = lastRead.offset === undefined && lastRead.limit === undefined
-    const contentUnchanged = isFullRead && originalFileContents === lastRead.content
-    if (!contentUnchanged) {
-      throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
-    }
-  }
-}
-
-export async function assertPreparedFileUnchangedSinceRead(
-  absoluteFilePath: string,
-  originalFileContents: string,
-  readFileState: ToolUseContext['readFileState'],
-  prepared: PreparedFileMutation,
-): Promise<void> {
-  if (prepared.pathnameLimited) {
-    assertFileUnchangedSinceRead(
-      absoluteFilePath,
-      originalFileContents,
-      readFileState,
-    )
-    return
-  }
-  const lastRead = readFileState.get(absoluteFilePath)
-  if (!lastRead || prepared.existing === undefined) return
-  const identity = await prepared.existing.currentIdentity()
-  const lastWriteTime = Math.floor(identity.modifiedAtMs)
-  if (lastWriteTime <= lastRead.timestamp) return
-  const isFullRead =
-    lastRead.offset === undefined && lastRead.limit === undefined
-  if (isFullRead && originalFileContents === lastRead.content) return
-  throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
 }
 
 export async function fileHistorySourceForPreparedMutation(

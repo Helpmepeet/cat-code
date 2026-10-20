@@ -4382,8 +4382,8 @@ export function REPL({
     for (const file of memoryFiles) {
       // When the injected content doesn't match disk (stripped HTML comments,
       // stripped frontmatter, MEMORY.md truncation), cache the RAW disk bytes
-      // with isPartialView so Edit/Write require a real Read first while
-      // getChangedFiles + nested_memory dedup still work.
+      // with isPartialView so read dedup does not treat it as a complete view,
+      // while getChangedFiles still compares against the disk content.
       readFileState.current.set(file.path, {
         content: file.contentDiffersFromDisk ? file.rawContent ?? file.content : file.content,
         timestamp: Date.now(),

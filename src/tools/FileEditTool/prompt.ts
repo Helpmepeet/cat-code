@@ -1,14 +1,13 @@
 import { isGPTPromptStyle } from '../../constants/promptStyle.js'
 import { isCompactLinePrefixEnabled } from '../../utils/file.js'
 import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
-import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 
 function getEditConstraintLines(): string[] {
   const prefixFormat = isCompactLinePrefixEnabled()
     ? 'line number + tab'
     : 'spaces + line number + arrow'
   const lines = [
-    `You must use your \`${FILE_READ_TOOL_NAME}\` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.`,
+    'Inspect the relevant current file contents before editing.',
     `When copying text from Read output, preserve the exact indentation (tabs/spaces) that appears AFTER the line number prefix. The line number prefix format is: ${prefixFormat}. Everything after that is the real file content to match. Never include any part of the line number prefix in \`old_string\` or \`new_string\`.`,
     'Prefer editing existing files in the codebase. Do not create new files unless explicitly required.',
     'Use emojis only if the user explicitly requests them.',

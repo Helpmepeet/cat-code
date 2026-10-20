@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { getEmptyToolPermissionContext } from '../../Tool.js'
 import {
   MAX_PERSISTED_FIRST_LINE_LENGTH,
   MAX_PERSISTED_PATCH_LINE_LENGTH,
@@ -23,18 +24,21 @@ afterEach(() => {
   }
 })
 
-function callEdit(input: {
-  file_path: string
-  old_string: string
-  new_string: string
-}) {
+function callEdit(
+  input: { file_path: string; old_string: string; new_string: string },
+  readFileState = createFileStateCacheWithSizeLimit(10),
+  beforeCall?: () => void,
+) {
   const toolInput = { ...input, replace_all: false }
   const context = {
-      readFileState: createFileStateCacheWithSizeLimit(10),
+      readFileState,
       updateFileHistoryState: () => undefined,
+      getAppState: () => ({
+        toolPermissionContext: getEmptyToolPermissionContext(),
+      }),
   }
   return FileEditTool.prepareExecution!(toolInput as never).then(
-    prepared => {
+    async prepared => {
       Object.assign(context, {
         preparedExecution: {
           toolName: FileEditTool.name,
@@ -42,15 +46,82 @@ function callEdit(input: {
           state: prepared.state,
         },
       })
-      return FileEditTool.call(
-        toolInput as never,
-        context as never,
-        undefined as never,
-        { uuid: 'test-parent' } as never,
-      ).finally(prepared.cleanup)
+      try {
+        const validation = await FileEditTool.validateInput(toolInput as never, context as never)
+        if (!validation.result) throw new Error(validation.message)
+        beforeCall?.()
+        return await FileEditTool.call(
+          toolInput as never,
+          context as never,
+          undefined as never,
+          { uuid: 'test-parent' } as never,
+        )
+      } finally {
+        await prepared.cleanup()
+      }
     },
   )
 }
+
+describe('Edit execution snapshots', () => {
+  test.each(['absent', 'partial', 'stale'])('edits with %s read history', async history => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-history-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'target.txt')
+    writeFileSync(filePath, 'current\nkeep\n')
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    if (history !== 'absent') {
+      readFileState.set(filePath, {
+        content: 'old content\n',
+        timestamp: 0,
+        offset: 1,
+        limit: 1,
+        isPartialView: history === 'partial',
+      })
+    }
+
+    await callEdit({
+      file_path: filePath,
+      old_string: 'current',
+      new_string: 'updated',
+    }, readFileState)
+
+    expect(readFileSync(filePath, 'utf8')).toBe('updated\nkeep\n')
+  })
+
+  test.each([
+    { contents: 'other\n', message: 'String to replace not found' },
+    { contents: 'target\ntarget\n', message: 'Found 2 matches' },
+  ])('rejects an invalid current match: $message', async ({ contents, message }) => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-match-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'target.txt')
+    writeFileSync(filePath, contents)
+
+    await expect(callEdit({
+      file_path: filePath,
+      old_string: 'target',
+      new_string: 'updated',
+    })).rejects.toThrow(message)
+    expect(readFileSync(filePath, 'utf8')).toBe(contents)
+  })
+
+  test('preserves an external edit after validation without a prior Read', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-conflict-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'target.txt')
+    writeFileSync(filePath, 'target\nkeep\n')
+
+    await expect(callEdit({
+      file_path: filePath,
+      old_string: 'target',
+      new_string: 'updated',
+    }, undefined, () => {
+      writeFileSync(filePath, 'target\nexternal change\n')
+    })).rejects.toThrow()
+    expect(readFileSync(filePath, 'utf8')).toBe('target\nexternal change\n')
+  })
+})
 
 describe('FileEditTool persisted result size', () => {
   test('validates content and size from the retained capability without pathname access', async () => {

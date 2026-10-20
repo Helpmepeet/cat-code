@@ -151,7 +151,7 @@ export function getGPTDoingTasksSection(
     `INVESTIGATION: Gather enough evidence to complete the requested analysis or change, including the coverage the user asked for. A plausible edit alone is not sufficient. Act once that evidence is sufficient; retrieve more to resolve a material gap. Respect decisions the user has already made.`,
     ...((editToolName || enabledTools.has(FILE_WRITE_TOOL_NAME)) && (enabledTools.has(FILE_READ_TOOL_NAME) || enabledTools.has(BASH_TOOL_NAME))
       ? [
-          `Read before modifying: Read the current contents of an existing file before changing it; re-read if concurrent edits may have changed it. Follow the chosen mutation tool's Read prerequisites.${editToolName === FILE_PATCH_TOOL_NAME && enabledTools.has(BASH_TOOL_NAME) ? ` Shell reads can supply the evidence for ${FILE_PATCH_TOOL_NAME} updates; they do not satisfy recorded-read requirements for deletion or other mutation tools.` : ''}`,
+          `Read before modifying: Inspect the relevant current contents of an existing file before changing it; re-read if concurrent edits may have changed it.${enabledTools.has(BASH_TOOL_NAME) ? ' Shell reads can supply this understanding.' : ''}${editToolName === FILE_PATCH_TOOL_NAME ? ` Bare ${FILE_PATCH_TOOL_NAME} Delete requires a complete recorded Read and unchanged file identity.` : ''}`,
         ]
       : []),
     `SECURE CHANGES: Do not introduce security vulnerabilities; correct insecure code you introduce.`,

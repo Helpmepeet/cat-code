@@ -39,7 +39,6 @@ import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from './constants.js'
 import { getEditToolDescription } from './prompt.js'
 import {
-  assertPreparedFileUnchangedSinceRead,
   backfillObservableFilePath,
   checkSingleFileWritePermissions,
   isUncPath,
@@ -49,8 +48,6 @@ import {
   readFileForEdit,
   validateEditableFileSize,
   validateEditDenyRule,
-  validateFileNotModifiedSinceRead,
-  validateFileWasRead,
   validateTeamMemorySecrets,
   writeFileWithSideEffects,
 } from './shared.js'
@@ -175,8 +172,7 @@ export const FileEditTool = buildTool({
   renderToolUseErrorMessage,
   async validateInput(input: FileEditInput, toolUseContext: ToolUseContext) {
     const { file_path, old_string, new_string, replace_all = false } = input
-    // Use expandPath for consistent path normalization (especially on Windows
-    // where "/" vs "\" can cause readFileState lookup mismatches)
+    // Normalize paths consistently with the prepared filesystem capability.
     const fullFilePath = expandPath(file_path)
     const prepared = getPreparedFileMutation(
       toolUseContext,
@@ -286,26 +282,6 @@ export const FileEditTool = buildTool({
         message: `File is a Jupyter Notebook. Use the ${NOTEBOOK_EDIT_TOOL_NAME} to edit this file.`,
         errorCode: 5,
       }
-    }
-
-    const unreadValidation = validateFileWasRead(
-      fullFilePath,
-      file_path,
-      toolUseContext,
-      6,
-    )
-    if (unreadValidation) {
-      return unreadValidation
-    }
-
-    const staleValidation = validateFileNotModifiedSinceRead(
-      fullFilePath,
-      fileContent,
-      toolUseContext,
-      7,
-    )
-    if (staleValidation) {
-      return staleValidation
     }
 
     const file = fileContent
@@ -457,8 +433,7 @@ export const FileEditTool = buildTool({
         prepared,
       )
 
-    // 2. Load current state and confirm no changes since last read
-    // Please avoid async operations between here and writing to disk to preserve atomicity
+    // Match against the execution snapshot; publication verifies its identity.
     const {
       content: originalFileContents,
       fileExists,
@@ -466,15 +441,6 @@ export const FileEditTool = buildTool({
       lineEndings: endings,
         identity,
     } = await readFileForEdit(absoluteFilePath, prepared)
-
-    if (fileExists) {
-      await assertPreparedFileUnchangedSinceRead(
-        absoluteFilePath,
-        originalFileContents,
-        readFileState,
-        prepared,
-      )
-    }
 
     // 3. Use findActualString to handle quote normalization
     const actualOldString =

@@ -151,7 +151,7 @@ function readTranscript(options: {
   ]
 }
 
-describe('extractReadFilesFromMessages Write authorization', () => {
+describe('extractReadFilesFromMessages bare-delete read provenance', () => {
   test('restores a complete unbounded Read as authorizing', () => {
     const filePath = '/tmp/restored-complete.txt'
     const cache = extractReadFilesFromMessages(
@@ -172,7 +172,7 @@ describe('extractReadFilesFromMessages Write authorization', () => {
     expect(isCompleteUnboundedRead(cache.get(filePath))).toBe(true)
   })
 
-  test('preserves truncation so a partial Read cannot authorize Write', () => {
+  test('preserves truncation so a partial Read cannot authorize bare deletion', () => {
     const filePath = '/tmp/restored-partial.txt'
     const cache = extractReadFilesFromMessages(
       readTranscript({ filePath, partial: true }),

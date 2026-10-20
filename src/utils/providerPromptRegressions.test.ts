@@ -212,12 +212,19 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('FileWrite requires a complete Read before whole-file replacement', () => {
-    const prompt = getWriteToolDescription('openai')
-
-    expect(prompt).toContain('without offset or limit')
-    expect(prompt).toContain('complete, untruncated contents')
-    expect(prompt).toContain('targeted edit tool instead of Write')
+  test('Edit and Write require inspection without a recorded Read prerequisite', () => {
+    for (const provider of ['firstParty', 'openai'] as const) {
+      for (const prompt of [getEditToolDescription(provider), getWriteToolDescription(provider)]) {
+        expect(prompt).toContain('Inspect the relevant current file contents')
+        expect(prompt).not.toContain('must use')
+        expect(prompt).not.toContain('MUST use')
+        expect(prompt).not.toContain('without offset or limit')
+        expect(prompt).not.toContain('complete, untruncated contents')
+        expect(prompt).not.toContain('too large for a complete Read')
+      }
+      expect(getWriteToolDescription(provider)).toContain('overwrites the existing file')
+      expect(getWriteToolDescription(provider)).toContain('for complete rewrites')
+    }
   })
 
   test('OpenAI uses apply_patch prompt instead of FileEdit prompt', () => {

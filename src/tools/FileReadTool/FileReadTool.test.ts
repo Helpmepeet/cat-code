@@ -538,7 +538,7 @@ describe('missing-file exact function recovery', () => {
     await runWithCwdOverride(entry.directory, () =>
       runRealToolUse(FileWriteTool, { file_path: entry.actual, content: 'replaced\n' }, entry.context),
     )
-    expect(readFileSync(entry.actual, 'utf8')).toBe(original)
+    expect(readFileSync(entry.actual, 'utf8')).toBe('replaced\n')
     const normal = await runWithCwdOverride(entry.directory, () =>
       callFileReadToolWithPreparedCapability({ file_path: entry.actual }, entry.context),
     )
@@ -777,14 +777,18 @@ describe('default line limit', () => {
     }
   })
 
-  test('real Read then Write lifecycle rejects a retargeted symlink', async () => {
-    const allowed = join(tmpDir, 'lifecycle-read-target.txt')
-    const outside = join(tmpDir, 'lifecycle-outside-target.txt')
-    const alias = join(tmpDir, 'lifecycle-write-link.txt')
+  test.each(['allowed', 'denied'])('real Write checks the current symlink target when it is %s', async access => {
+    const allowed = join(tmpDir, `lifecycle-read-target-${access}.txt`)
+    const outside = join(tmpDir, `lifecycle-outside-target-${access}.txt`)
+    const alias = join(tmpDir, `lifecycle-write-link-${access}.txt`)
     writeFileSync(allowed, 'read before swap\n')
     writeFileSync(outside, 'outside marker\n')
     symlinkSync(allowed, alias)
-    const context = createLifecycleContext([FileReadTool, FileWriteTool])
+    const context = createLifecycleContext([FileReadTool, FileWriteTool], {
+      alwaysDenyRules: access === 'denied'
+        ? { session: [`Edit(/${getFileIdentity(outside).canonicalPath})`] }
+        : {},
+    })
     const previousSimple = process.env.CLAUDE_CODE_SIMPLE
     const previousHistory = process.env.CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING
     process.env.CLAUDE_CODE_SIMPLE = '1'
@@ -806,11 +810,13 @@ describe('default line limit', () => {
       symlinkSync(outside, alias)
       await runRealToolUse(
         FileWriteTool,
-        { file_path: alias, content: 'must not reach outside\n' },
+        { file_path: alias, content: 'current prepared target\n' },
         context,
       )
       expect(readFileSync(allowed, 'utf8')).toBe('read before swap\n')
-      expect(readFileSync(outside, 'utf8')).toBe('outside marker\n')
+      expect(readFileSync(outside, 'utf8')).toBe(
+        access === 'denied' ? 'outside marker\n' : 'current prepared target\n',
+      )
     } finally {
       if (previousSimple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
       else process.env.CLAUDE_CODE_SIMPLE = previousSimple
@@ -1022,8 +1028,7 @@ describe('truncated reads are not proof the file was read', () => {
 
     await readWith(context, filePath)
 
-    // FileWriteTool rejects on this flag: a write replaces the whole file, so
-    // having seen only its head must not satisfy the read-before-write gate.
+    // Bare deletion requires the complete file, not just its head.
     expect(context.readFileState.get(filePath)?.isTruncatedView).toBe(true)
   })
 
@@ -1335,8 +1340,8 @@ describe('read deduplication follows file identity', () => {
   })
 })
 
-describe('whole-file Write authorization provenance', () => {
-  test('internal reads do not authorize Write, but model-visible reads do', async () => {
+describe('complete model-visible Read provenance', () => {
+  test('internal reads do not authorize bare deletion, but complete model-visible reads do', async () => {
     const filePath = writeLines('authorization.txt', 2)
     const internalContext = createContext()
     await readWith(internalContext, filePath)

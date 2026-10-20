@@ -250,8 +250,8 @@ export type MemoryFileInfo = {
   // stripped frontmatter, truncated MEMORY.md) such that it no longer matches
   // the bytes on disk. When set, `rawContent` holds the unmodified disk bytes
   // so callers can cache a `isPartialView` readFileState entry — presence in
-  // cache provides dedup + change detection, but Edit/Write still require an
-  // explicit Read before proceeding.
+  // cache provides dedup + change detection, but this cannot authorize a bare
+  // deletion.
   contentDiffersFromDisk?: boolean
   rawContent?: string
 }

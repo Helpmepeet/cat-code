@@ -21,11 +21,7 @@ import {
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { isENOENT } from '../../utils/errors.js'
 import { readFileSyncWithMetadata } from '../../utils/fileRead.js'
-import {
-  fileIdentitiesEqual,
-  getFileIdentity,
-} from '../../utils/file.js'
-import { isCompleteUnboundedRead } from '../../utils/fileStateCache.js'
+import { getFileIdentity } from '../../utils/file.js'
 import {
   fileHistoryEnabled,
   fileHistoryTrackEdit,
@@ -51,7 +47,6 @@ import {
 } from '../../utils/permissions/filesystem.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
-import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import {
   fileHistorySourceForPreparedMutation,
   writeFileWithSideEffects,
@@ -285,44 +280,6 @@ export const FileWriteTool = buildTool({
         errorCode: 4,
       }
     }
-    const currentIdentity = prepared.existing
-      ? {
-          canonicalPath: prepared.canonicalPath,
-          ...prepared.existing.identity,
-        }
-      : undefined
-    if (currentIdentity === undefined) return { result: true }
-
-    const readTimestamp = toolUseContext.readFileState.get(fullFilePath)
-    if (!isCompleteUnboundedRead(readTimestamp)) {
-      return {
-        result: false,
-        message:
-          'File has not been read completely from the beginning. Writing replaces the whole file, so use an unbounded Read first. If the file is too large for that, use a targeted edit tool instead.',
-        errorCode: 2,
-      }
-    }
-
-    if (readTimestamp.fileIdentity === undefined ||
-      !fileIdentitiesEqual(readTimestamp.fileIdentity, currentIdentity)) {
-      return {
-        result: false,
-        message:
-          'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
-        errorCode: 3,
-      }
-    }
-
-    const lastWriteTime = Math.floor(currentIdentity.modifiedAtMs)
-    if (lastWriteTime > readTimestamp.timestamp) {
-      return {
-        result: false,
-        message:
-          'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
-        errorCode: 3,
-      }
-    }
-
     return { result: true }
   },
   async call(
@@ -388,15 +345,7 @@ export const FileWriteTool = buildTool({
       await getFsImplementation().mkdir(dirname(fullFilePath))
     }
 
-    // Ensure parent directory exists before the atomic read-modify-write section.
-    // Must stay OUTSIDE the critical section below (a yield between the staleness
-    // check and writeTextContent lets concurrent edits interleave), and BEFORE the
-    // write (lazy-mkdir-on-ENOENT would fire a spurious tengu_atomic_write_error
-    // inside writeFileSyncAndFlush_DEPRECATED before ENOENT propagates back).
     if (fileHistoryEnabled()) {
-      // Backup captures pre-edit content — safe to call before the staleness
-      // check (idempotent v1 backup keyed on content hash; if staleness fails
-      // later we just have an unused backup, not corrupt state).
       await fileHistoryTrackEdit(
         updateFileHistoryState,
         boundPath,
@@ -405,8 +354,7 @@ export const FileWriteTool = buildTool({
       )
     }
 
-    // Load current state and confirm no changes since last read.
-    // Please avoid async operations between here and writing to disk to preserve atomicity.
+    // Bind publication to the execution snapshot, not the model's read history.
     let meta: Awaited<ReturnType<typeof readPreparedFileMetadata>> | null
     try {
       meta =
@@ -426,31 +374,6 @@ export const FileWriteTool = buildTool({
       }
     }
 
-    let expectedIdentity: ReturnType<typeof getFileIdentity> | undefined
-    if (meta !== null) {
-      const lastRead = readFileState.get(fullFilePath)
-      // Recheck the same whole-file-read condition used at permission time:
-      // another tool call can replace the cache entry while this write waits.
-      if (!isCompleteUnboundedRead(lastRead)) {
-        throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
-      }
-      if (
-        lastRead.fileIdentity === undefined ||
-        !fileIdentitiesEqual(
-          lastRead.fileIdentity,
-          prepared.pathnameLimited
-            ? getFileIdentity(fullFilePath)
-            : {
-                canonicalPath: prepared.canonicalPath,
-                ...prepared.existing!.identity,
-              },
-        )
-      ) {
-        throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
-      }
-      expectedIdentity = lastRead.fileIdentity
-    }
-
     const enc = meta?.encoding ?? 'utf8'
     const oldContent = meta?.content ?? null
 
@@ -466,7 +389,7 @@ export const FileWriteTool = buildTool({
       encoding: enc,
       lineEndings: 'LF',
       readFileState,
-      expectedIdentity,
+      expectedIdentity: meta?.identity,
       preparedMutation: prepared.parent === undefined ? undefined : prepared,
     })
 
