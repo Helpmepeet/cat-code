@@ -149,5 +149,9 @@ export const SESSION_WORK_MARK_LABEL: Record<SessionWorkMark, string> = {
   unseen: 'unread reply',
 }
 
-/** Each registry session's mark, keyed by app session id; App provides it to the Sidebar. */
+/** Each registry session's mark, keyed by app session id; App provides it to the Sidebar and TabBar. */
 export const SessionWorkMarksContext = createContext<ReadonlyMap<SessionId, SessionWorkMark>>(new Map())
+
+/** Sessions that hold a TabBar tab, so the sidebar can set their rows apart
+ * from sessions that are only in the roster (operator, 2026-10-20). */
+export const OpenTabSessionsContext = createContext<ReadonlySet<SessionId>>(new Set())

@@ -9,7 +9,7 @@
  */
 
 import {
-  useLayoutEffect, useRef,
+  useContext, useLayoutEffect, useRef,
   type AnimationEventHandler, type KeyboardEvent,
 } from 'react'
 import { useEntranceLatch } from './entranceLatch.js'
@@ -21,7 +21,9 @@ import {
 } from './sessionActions.js'
 import { tabLabel } from './tabBarModel.js'
 import { targetKey, type NavigationTarget, type PageTab } from './pageTabNavigation.js'
-import type { TabTone, TabVisualState } from './tabStatus.js'
+import type { TabVisualState } from './tabStatus.js'
+import { SESSION_WORK_MARK_LABEL, SessionWorkMarksContext } from './sessionWorkState.js'
+import { WorkMarkGlyph } from './SessionWorkMarkGlyph.js'
 import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 import { ActionBranchIcon } from './SessionActionIcons.js'
 import {
@@ -438,6 +440,7 @@ function Tab({
   const { descriptor, visual } = tab
   const id = descriptor.appSessionId
   const title = tabLabel(descriptor)
+  const workMark = useContext(SessionWorkMarksContext).get(id) ?? null
   // First-nine jump-key hint. App's chord handler accepts ⌘ OR Ctrl; the label
   // is ⌘ (mac-first desktop app) — no clean renderer-side platform signal to
   // vary it (S3), so the primary accelerator is shown.
@@ -466,7 +469,7 @@ function Tab({
       // move focus among the rest (handled in TabBar).
       tabIndex={isTabbable ? 0 : -1}
       title={`${descriptor.binding?.kind === 'managed' ? title : descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
-      aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${visual.needsAttention ? ', permission request waiting' : ''}`}
+      aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${workMark ? `, ${SESSION_WORK_MARK_LABEL[workMark]}` : ''}`}
       draggable
       onPointerDown={event => {
         console.log('[TabBar] pointerdown', title, {
@@ -516,11 +519,15 @@ function Tab({
         />
       ) : null}
 
-      {visual.needsAttention ? (
-        <AttentionBadge />
-      ) : (
-        <StatusDot tone={visual.tone} />
-      )}
+      {/* The same work mark as the session's sidebar row (`sessionWorkState.ts`
+       * picks it), in a lane every tab reserves so a mark appearing never shifts
+       * the title. Decorative: its words ride in the tab's `aria-label`. */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none flex h-[17px] w-2 shrink-0 items-center justify-center"
+      >
+        {workMark ? <WorkMarkGlyph mark={workMark} /> : null}
+      </span>
 
       {descriptor.forked ? (
         <span className="flex shrink-0 text-text-subtle" aria-hidden="true">
@@ -601,51 +608,4 @@ function Tab({
       </button>
     </div>
   )
-}
-
-/**
- * A solid tone dot — the tab's ONLY status signal. The status word that used to
- * sit beside the title (`preview`, `disconnected`, `closed`, …) was removed:
- * the operator's target for a tab is live vs not-live, and a row of tabs reading
- * PREVIEW PREVIEW PREVIEW buried the session names it qualified. The word still
- * reaches assistive tech through the tab's `aria-label`.
- */
-function StatusDot({ tone }: { tone: TabTone }) {
-  return (
-    <span
-      className={`h-1.5 w-1.5 shrink-0 rounded-full ${toneDotClass(tone)}`}
-      aria-hidden="true"
-    />
-  )
-}
-
-/**
- * Background-attention badge — a pulsing accent dot signalling a permission
- * request waiting in a BACKGROUND session (never silently queued). It replaces
- * the status dot so the pulse is the tab's leading signal.
- */
-function AttentionBadge() {
-  return (
-    <span
-      className="relative flex h-2 w-2 shrink-0 items-center justify-center"
-      aria-label="Permission request waiting"
-      title="Permission request waiting"
-    >
-      <span className="absolute h-2 w-2 animate-ping rounded-full bg-accent opacity-75" />
-      <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-    </span>
-  )
-}
-
-function toneDotClass(tone: TabTone): string {
-  switch (tone) {
-    case 'live':
-      return 'bg-tone-good'
-    case 'busy':
-      return 'bg-accent'
-    case 'warn':
-      return 'bg-tone-warn'
-    case 'dead':
-      return 'bg-tone-danger'
-  }
 }

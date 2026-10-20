@@ -72,6 +72,7 @@ import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import {
   INITIAL_SESSION_WORK_STATE,
+  OpenTabSessionsContext,
   reduceSessionWork,
   selectSessionWorkMark,
   SessionWorkMarksContext,
@@ -1697,6 +1698,15 @@ export function App() {
     }
     return entries
   }, [tabs, tabNavigation.tabs])
+  const openTabSessionIds = useMemo(
+    () =>
+      new Set(
+        tabBarEntries.flatMap(entry =>
+          entry.kind === 'session' ? [entry.model.descriptor.appSessionId] : [],
+        ),
+      ),
+    [tabBarEntries],
+  )
   const paneSessionIds = useMemo(
     () => tabs.map(tab => tab.descriptor.appSessionId),
     [tabs],
@@ -3642,7 +3652,7 @@ export function App() {
     }
   }, [onScreenSessions])
 
-  // The sidebar's per-row work mark, for every session any store knows about.
+  // The work mark each sidebar row and tab shows, for every session any store knows about.
   const sessionWorkMarks = useMemo(() => {
     const marks = new Map<SessionId, SessionWorkMark>()
     const ids = new Set<SessionId>([
@@ -4607,6 +4617,7 @@ export function App() {
          * drawn into. It sits ABOVE the rail rather than beside it for that
          * reason alone — the lights own the top-left corner, which the rail
          * cannot yield while it is also a full-height column. */}
+        <SessionWorkMarksContext.Provider value={sessionWorkMarks}>
         <TabBar
           tabs={tabs}
           navigationTabs={tabBarEntries}
@@ -4632,11 +4643,13 @@ export function App() {
           onAddPanel={addWorkspacePanel}
           onRemovePanel={removeWorkspacePanel}
         />
+        </SessionWorkMarksContext.Provider>
 
         <div className="flex min-h-0 flex-1">
         {/* Sidebar rail (P3-5b): the full roster (live ∪ restorable) + the
          * restore-offer, alongside the TabBar's live ∪ preview view. */}
         <SessionWorkMarksContext.Provider value={sessionWorkMarks}>
+        <OpenTabSessionsContext.Provider value={openTabSessionIds}>
         <Sidebar
           rows={sessionCatalogRows}
           archivedSessions={archivedSessions}
@@ -4684,6 +4697,7 @@ export function App() {
             selectGlobalAccountsSnapshot(accounts),
           )}
         />
+        </OpenTabSessionsContext.Provider>
         </SessionWorkMarksContext.Provider>
 
         <div className="lid-content relative flex min-w-0 flex-1 flex-col">

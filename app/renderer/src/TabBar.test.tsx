@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
+import type { SessionId } from '../../shared/protocol.js'
+import { SessionWorkMarksContext, type SessionWorkMark } from './sessionWorkState.js'
 import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
 import type { TabVisualState } from './tabStatus.js'
@@ -123,11 +125,11 @@ test('no status word is printed on a tab, whatever the status', () => {
     ],
     'a',
   )
-  // The tone dot is the whole visual signal; the word survives only inside the
-  // tab's accessible name.
+  // Connection state draws no mark, matching the sidebar row; the word survives
+  // only inside the tab's accessible name.
   expect(html).not.toContain('>disconnected<')
   expect(html).not.toContain('>ready<')
-  expect(html).toContain('bg-tone-danger')
+  expect(html).not.toContain('rounded-full')
   expect(html).toContain('aria-label="Session b, disconnected"')
 })
 
@@ -140,13 +142,28 @@ test('a restartable (dead) tab renders the restart affordance', () => {
   expect(html).toContain('aria-label="Restart session')
 })
 
-test('a background permission raises a visible attention badge on the tab', () => {
-  const html = render(
-    [tab('a', { needsAttention: true }, { title: 'busy-bg' })],
-    'other',
+test('a tab shows the same work mark as its sidebar row, named in its label', () => {
+  const marks = new Map<SessionId, SessionWorkMark>([
+    ['a' as SessionId, 'needs-you'],
+    ['b' as SessionId, 'working'],
+  ])
+  const html = renderToStaticMarkup(
+    <SessionWorkMarksContext.Provider value={marks}>
+      <TabBar
+        tabs={[tab('a'), tab('b'), tab('c')]}
+        activeSessionId="c"
+        onSelect={noop}
+        onClose={noop}
+        onRestart={noop}
+        onNewTab={noop}
+      />
+    </SessionWorkMarksContext.Provider>,
   )
-  expect(html).toContain('Permission request waiting')
-  expect(html).toContain('animate-ping')
+  expect(html).toContain('<span class="text-[11px] font-bold leading-[17px] text-accent">?</span>')
+  expect(html).toContain('motion-safe:animate-spin')
+  expect(html).toContain('aria-label="Session a, ready, waiting for you"')
+  expect(html).toContain('aria-label="Session b, ready, working"')
+  expect(html).toContain('aria-label="Session c, ready"')
 })
 
 test('every tab exposes a close affordance', () => {

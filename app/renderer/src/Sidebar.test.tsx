@@ -9,7 +9,11 @@ import {
   type WorkspaceReorderHandlers,
 } from './Sidebar.js'
 import { SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY } from './sidebarHiddenWorkspaces.js'
-import { SessionWorkMarksContext, type SessionWorkMark } from './sessionWorkState.js'
+import {
+  OpenTabSessionsContext,
+  SessionWorkMarksContext,
+  type SessionWorkMark,
+} from './sessionWorkState.js'
 import type { MergedSessionRow, WorkspaceGroup } from './sessionsCatalogState.js'
 import {
   PINNED_SESSION_DRAG_MIME,
@@ -370,6 +374,50 @@ test('history rows carry no mark and keep the reserved lane', () => {
   expect(openable).toContain(EMPTY_MARK_LANE)
   expect(browseOnly).toContain(EMPTY_MARK_LANE)
   expect(openable).not.toContain('rounded-full')
+})
+
+// ── Open-in-a-tab rows (operator, 2026-10-20) ───────────────────────────────
+// A session that holds a tab rests on a neutral tint with full title ink, so it
+// reads apart from roster-only rows; the selected row keeps its accent instead.
+
+function renderOpenTabRow(
+  r: MergedSessionRow,
+  over: { isActive?: boolean; archived?: boolean } = {},
+): string {
+  return renderToStaticMarkup(
+    <OpenTabSessionsContext.Provider value={new Set(r.appSessionId ? [r.appSessionId] : [])}>
+      <SidebarRowItem
+        row={r}
+        isActive={over.isActive ?? false}
+        onSelectLive={noop}
+        onRestore={noop}
+        onOpenHistory={noop}
+        archived={over.archived}
+      />
+    </OpenTabSessionsContext.Provider>,
+  )
+}
+
+test('a row whose session holds a background tab is tinted and named so', () => {
+  const html = renderOpenTabRow(registryRow('t', { displayLabel: 'T' }))
+  expect(html).toContain('hover:bg-accent/[0.07] bg-shell-active')
+  expect(html).toContain('truncate text-[12.5px] leading-[17px] text-text-primary')
+  expect(html).toContain('aria-label="session T, live, open in a tab"')
+
+  const closed = renderRow(registryRow('t', { displayLabel: 'T' }))
+  expect(closed).not.toContain('bg-shell-active')
+  expect(closed).toContain('text-text-muted group-hover:text-text-primary')
+})
+
+test('the selected row and archived rows ignore the open-tab treatment', () => {
+  const active = renderOpenTabRow(registryRow('t', { displayLabel: 'T' }), { isActive: true })
+  expect(active).toContain('border-accent/[0.18] bg-accent/[0.09]')
+  expect(active).not.toContain('bg-shell-active')
+  expect(active).not.toContain('open in a tab')
+
+  const archived = renderOpenTabRow(registryRow('t', { displayLabel: 'T' }), { archived: true })
+  expect(archived).not.toContain('bg-shell-active')
+  expect(archived).not.toContain('open in a tab')
 })
 
 // ── #10 per-workspace new-session "+" ────────────────────────────────────────

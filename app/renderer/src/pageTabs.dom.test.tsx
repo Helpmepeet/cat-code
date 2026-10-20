@@ -364,7 +364,7 @@ test('hidden conversation keeps draft, receives messages and permission attentio
   await app.click('Accounts')
   await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'permission.requested', request: { requestId: 'perm', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'date' }, tool_use_id: 'tool' } } } },
     { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'message', message: { type: 'assistant', uuid: 'message-1', message: { role: 'assistant', content: [{ type: 'text', text: 'arrived while hidden' }] } } } } as ServerFrame)
-  expect(app.tabs()[0]?.getAttribute('aria-label')).toContain('permission request waiting')
+  expect(app.tabs()[0]?.getAttribute('aria-label')).toContain('waiting for you')
   expect(app.visible.at(-1)).toEqual([])
   await app.key('1')
   expect(app.selected()[0]).toContain('Session a,')
