@@ -107,7 +107,7 @@ export const designMetricsScript = (prototype: boolean) => `(() => {
     const spark=button?.querySelector(proto?'.cc-spark':'.usage-metric-row svg');
     return [key,{button:element(button),row:element(row),value:element(value),spark:element(spark),sparkSvg:element(proto?spark?.querySelector('svg'):spark)}];
   }));
-  const trioSelectors=Object.fromEntries(['sessions','top10','subagents','compaction','median'].map((key,i)=>[key,proto?'#sessions .cc-trio > div:nth-child('+(i+1)+') .cc-stat-value':'.uas-figures > div:nth-child('+(i+1)+') dd']));
+  const trioSelectors=Object.fromEntries(['top10','subagents','compaction','median'].map((key,i)=>[key,proto?'#sessions .cc-trio > div:nth-child('+(i+2)+') .cc-stat-value':'.uas-figures > div:nth-child('+(i+1)+') dd']));
   for(const [keys,prototypeRoot,appRoot] of [
     [['cacheServed','cacheFresh'],'#cache-models .cc-trio','[aria-label="Cache"] .uad-stats'],
     [['callsSucceeded','callsFailed','callsRetried'],'#model-calls .cc-trio','.uad-reliability-grid > .uad-card:first-child .uad-stats'],

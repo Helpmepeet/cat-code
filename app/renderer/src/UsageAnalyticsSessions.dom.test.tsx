@@ -20,12 +20,12 @@ async function fixture() {
 test('last active dates use the dashboard reporting timezone', async () => {
     const summary = await fixture();
     summary.rankedSessions.items[0]!.lastActiveAt = '2026-10-17T23:30:00Z';
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} timezone="Asia/Bangkok" />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} timezone="Asia/Bangkok" />);
     expect(tree.container.querySelector('time[datetime="2026-10-17T23:30:00Z"]')?.textContent).toBe('Oct 18');
 });
 test('session rows expand with Enter, Space and click; catalog navigation remains a separate action', async () => {
     const summary = await fixture(); const opened: string[] = [];
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} partial onOpenSession={value => opened.push(value.sessionId)} />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} onOpenSession={value => opened.push(value.sessionId)} />);
     const session = tree.container.querySelector<HTMLTableRowElement>('.uas-session-row')!;
     expect(session.textContent).toContain('Catalog title');
     expect(session.getAttribute('aria-expanded')).toBe('false');
@@ -44,7 +44,7 @@ test('session rows expand with Enter, Space and click; catalog navigation remain
 });
 test('sort switch and sortable headers change ranking and aria-sort', async () => {
     const summary = await fixture();
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} />);
     const errors = [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'By tool errors')!;
     await act(async () => errors.click());
     expect(tree.container.querySelector('.uas-session-row')?.textContent).toContain('Session b');
@@ -54,19 +54,19 @@ test('sort switch and sortable headers change ranking and aria-sort', async () =
     await act(async () => header.click());
     expect(header.parentElement?.getAttribute('aria-sort')).toBe('ascending');
     expect(tree.container.querySelector('.uas-session-row')?.textContent).toContain('Catalog title');
-    expect(tree.container.textContent).toContain('20 omitted');
+    expect(tree.container.textContent).toContain('Top 2 of 22 sessions');
 });
 test('all-history does not fabricate session days and integrations use supplied categories', async () => {
     const summary = await fixture(); summary.range = 'all'; summary.bucketDays = 4;
     for (const item of summary.rankedSessions.items) item.dailyDetail = 'unavailable';
     summary.skills = [{ id: 'review', kind: 'named', label: 'Review', requests: 3 }];
     summary.days[0]!.skills = summary.skills;
-    const sessions = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
+    const sessions = await harness.mount(<UsageAnalyticsSessions summary={summary} />);
     await act(async () => sessions.container.querySelector<HTMLTableRowElement>('.uas-session-row')!.click());
     expect(sessions.container.textContent).toContain('Daily session detail is unavailable');
-    const integrations = await harness.mount(<UsageAnalyticsIntegrations summary={summary} partial />);
+    const integrations = await harness.mount(<UsageAnalyticsIntegrations summary={summary} />);
     expect(integrations.container.textContent).toContain('Review');
-    expect(integrations.container.textContent).toContain('Each retained bucket spans up to 4 days.');
+    expect(integrations.container.textContent).not.toContain('retained');
     expect(integrations.container.textContent).toContain('No integration calls recorded.');
 });
 test('all seven headers sort displayed values and expose direction with independently arranged items', async () => {
@@ -78,7 +78,7 @@ test('all seven headers sort displayed values and expose direction with independ
         { ...base, id: 'b', engineSessionId: 'b', tokens: { ...zero, fresh: 20 }, requests: 30, errors: 3, results: 3, tokenSources: { chat: zero, subagents: { ...zero, fresh: 18 }, compaction: zero }, lastActiveAt: '2026-10-16T10:00:00Z' },
     ];
     const rows = [{ ...row, displayLabel: 'Zulu' }, { ...row, sessionId: 'b', displayLabel: 'Alpha' }, { ...row, sessionId: 'c', displayLabel: 'Middle' }];
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={rows} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={rows} />);
     const names = () => [...tree.container.querySelectorAll('.uas-session-row .uas-title')].map(element => element.textContent);
     for (const [label, expected, direction] of [
         ['Session', ['Alpha', 'Middle', 'Zulu'], 'ascending'],
@@ -107,18 +107,18 @@ test('five range figures retain collector median and top ten share after envelop
     summary.days[0]!.tokenSources.compaction = { ...zero, fresh: 100 };
     summary.rankedSessions.items = [];
     summary.rankedSessions.omitted = 22;
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
-    expect([...tree.container.querySelectorAll('.uas-figures dd')].map(element => element.textContent)).toEqual(['22', '90.0%', '20.0%', '10.0%', '37']);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} />);
+    expect([...tree.container.querySelectorAll('.uas-figures dd')].map(element => element.textContent)).toEqual(['90.0%', '20.0%', '10.0%', '37']);
     expect(tree.container.textContent).toContain('Ranked session detail is unavailable for this range.');
-    expect(tree.container.textContent).toContain('0 ranked sessions shown; 22 omitted. Range totals include all sessions.');
+    expect(tree.container.textContent).not.toContain('Top 0');
     expect(tree.container.textContent).not.toContain('No contributing sessions recorded.');
 });
 test('only a truly empty contributor population says no contributing sessions were recorded', async () => {
     const summary = (await collectRetainedUsage([], '2026-10-18T12:00:00Z')).ranges['7d'];
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} />);
     expect(tree.container.textContent).toContain('No contributing sessions recorded.');
     expect(tree.container.textContent).not.toContain('Ranked session detail is unavailable');
-    expect(tree.container.textContent).not.toContain('omitted');
+    expect(tree.container.textContent).not.toMatch(/Top \d+ of \d+ sessions/);
 });
 test('session metadata, error cues, compact tools and source shares survive expansion', async () => {
     const summary = await fixture();
@@ -129,7 +129,7 @@ test('session metadata, error cues, compact tools and source shares survive expa
     summary.rankedSessions.items[1]!.errors = 1;
     summary.rankedSessions.items[1]!.results = 20;
     summary.rankedSessions.items.push({ ...a, id: 'hot', engineSessionId: 'hot', errors: 20, results: 20 });
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} sessionRows={[row]} />);
     expect(tree.container.querySelector('.uas-title')?.getAttribute('title')).toBe('Catalog title');
     expect(tree.container.querySelector('.uas-meta')?.textContent).toContain('Sol');
     expect(tree.container.querySelector('time')?.textContent).toBe('Oct 17');
@@ -149,7 +149,7 @@ test('multi-day session chart is 120px high and spans only its retained daily da
     const summary = await fixture();
     const a = summary.rankedSessions.items[0]!;
     a.days = ['2026-10-15', '2026-10-17'].map(date => ({ date, tokens: a.tokens, requests: 2, results: 2, errors: 0 }));
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} />);
     await act(async () => tree.container.querySelector<HTMLTableRowElement>('.uas-session-row')!.click());
     const chart = tree.container.querySelector('.uas-chart svg')!;
     expect(chart.getAttribute('height')).toBe('120');
@@ -161,7 +161,7 @@ test('integration plot has fixed height, smooth paths and full-plot nearest hove
     const summary = await fixture();
     summary.skills = [{ id: 'a', kind: 'named', label: 'Alpha', requests: 10 }, { id: 'b', kind: 'named', label: 'Beta', requests: 8 }];
     summary.days[3]!.skills = [{ ...summary.skills[0]!, requests: 2 }, { ...summary.skills[1]!, requests: 8 }];
-    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} />);
     const svg = tree.container.querySelector('.uas-chart svg')!;
     expect(svg.getAttribute('height')).toBe('220');
     expect(svg.querySelector('path')?.getAttribute('d')).toContain(' C');
@@ -182,14 +182,14 @@ test('All integration date labels thin by physical bounds without removing clust
     const skill = { id: 'review', kind: 'named' as const, label: 'Review', requests: 1 };
     summary.skills = [{ ...skill, requests: dates.length }];
     summary.days = dates.map(date => ({ ...summary.days[0]!, date, skills: [skill] }));
-    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} />);
     const svg = tree.container.querySelector('.uas-chart svg')!;
     expect([...svg.querySelectorAll('.uas-x-axis-label')].map(node => node.textContent)).toEqual(['Aug 15', 'Sep 28', 'Oct 18']);
     expect(svg.querySelector('.uas-line')?.getAttribute('d')?.split(' C')).toHaveLength(dates.length);
 });
 test('only token and error numbers carry the session numeric emphasis', async () => {
     const summary = await fixture();
-    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} partial={false} />);
+    const tree = await harness.mount(<UsageAnalyticsSessions summary={summary} />);
     const rows = [...tree.container.querySelectorAll('.uas-session-row')];
     for (const row of rows) {
         expect([...row.querySelectorAll('.uas-session-number')].map(number => [...row.children].indexOf(number.parentElement!))).toEqual([1, 4]);
@@ -201,11 +201,11 @@ test('integration headings include every qualification before the chart separati
     summary.range = '30d';
     summary.skills = [{ id: 'review', kind: 'named', label: 'Review', requests: 3 }];
     summary.days[0]!.skills = summary.skills;
-    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} partial />);
+    const tree = await harness.mount(<UsageAnalyticsIntegrations summary={summary} />);
     const card = tree.container.querySelector<HTMLDivElement>('.uas-integrations .uas-card')!;
     const header = card.querySelector('.uas-integration-header')!;
-    expect(header.textContent).toContain('Skills used3Partial retained history.Weekly totals');
-    expect(header.querySelectorAll('.uas-note')).toHaveLength(2);
+    expect(header.textContent).toContain('Skills used3Weekly totals');
+    expect(header.querySelectorAll('.uas-note')).toHaveLength(1);
     expect(header.nextElementSibling?.classList.contains('uas-chart')).toBe(true);
     expect(header.parentElement).toBe(card);
 });

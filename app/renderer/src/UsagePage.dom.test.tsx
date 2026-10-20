@@ -198,10 +198,9 @@ test('chart activation pins and toggles off without changing on focus; clear res
     const hits = tree.container.querySelectorAll<SVGGElement>('.usage-daily-hit');
     await act(async () => hits[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })));
     expect(document.activeElement).toBe(hits[1]);
-    expect(tree.container.querySelector('.usage-daily-detail')!.textContent).toContain('Selected range');
+    expect(tree.container.querySelector('.usage-daily-detail h3')!.textContent).toBe('Last 7 days');
     await act(async () => hits[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(hits[0]!.getAttribute('aria-pressed')).toBe('true');
-    expect(tree.container.querySelector('.usage-daily-detail')!.textContent).toContain('Pinned day');
     expect(tree.container.querySelector('.usage-daily-detail h3')!.textContent).toMatch(/^[A-Z][a-z]{2}, [A-Z][a-z]{2} \d/);
     expect(tree.container.querySelector('.usage-daily-stats')!.textContent).toContain('Tokens123');
     await click(hits[0]!);

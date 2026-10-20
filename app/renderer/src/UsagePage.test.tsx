@@ -21,7 +21,7 @@ test('loading, failure, partial and confirmed empty history remain distinct', ()
 
 test('prototype page has summary, daily explorer and inspector without duplicated legacy panels', () => {
     const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: populated(), status: 'ready' }}/>);
-    for (const text of ['Model requests', 'Sessions', 'Input from cache', 'Tool error rate', 'Latest build errors', 'Tokens processed', 'Selected range', 'Model families', 'Where the tokens go', 'Cache', 'Activity', 'Models', 'Reliability']) expect(html).toContain(text);
+    for (const text of ['Model requests', 'Sessions', 'Input from cache', 'Tool error rate', 'Latest build errors', 'Tokens processed', 'Last 7 days', 'Model families', 'Where the tokens go', 'Cache', 'Activity', 'Models', 'Reliability']) expect(html).toContain(text);
     for (const removed of ['usage-token-flow-panel', 'usage-values', 'usage-tool-pair', 'Parallel sessions', 'Reasoning effort', 'Prompt cache']) expect(html).not.toContain(removed);
     expect(html).toContain('<h4>Latency</h4>');
     expect(html).toContain('Model latency is unavailable.');
@@ -41,7 +41,7 @@ test('inspector remains present with no model attribution and uses reported cach
     const copy = populated(), summary = copy.ranges['7d'], day = summary.days[0]!;
     day.tokens = { fresh: 10, read: 80, write: 10, output: 23 };
     const html = renderToStaticMarkup(<UsagePage {...selectionProps} state={{ snapshot: copy, status: 'ready' }} selection={{ range: '7d', date: day.date }}/>);
-    expect(html).toContain('Pinned day'); expect(html).toContain('Tokens</dt><dd>123'); expect(html).toContain('80.0%');
+    expect(html).toContain('usage-daily-detail usage-pinned'); expect(html).toContain('Tokens</dt><dd>123'); expect(html).toContain('80.0%');
 });
 
 test('frame has content-width breakpoints, reduced motion and page-owned surfaces', () => {

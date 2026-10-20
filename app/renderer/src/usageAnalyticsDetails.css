@@ -29,8 +29,7 @@
 .usage-page .usage-analytics-details h2, .usage-analytics-details h2 { margin: 0; font-size: 17.5px; font-weight: 680; letter-spacing: -.02em; }
 .usage-analytics-details h3 { margin: 0; font-size: 14px; font-weight: 620; letter-spacing: -.01em; }
 .usage-analytics-details h4 { margin: 0 0 10px; font-size: 12px; font-weight: 500; }
-.usage-analytics-details p, .usage-analytics-details .uad-section-head > span { margin: 5px 0 12px; color: var(--uad-muted); font-size: 12px; line-height: 1.45; }
-.usage-analytics-details .uad-section-head > span { font-size: 12.5px; }
+.usage-analytics-details p { margin: 5px 0 12px; color: var(--uad-muted); font-size: 12px; line-height: 1.45; }
 html[data-appearance=light] .usage-analytics-details { --uad-shadow: 0 1px 2px rgba(24, 24, 27, .05), 0 8px 24px -14px rgba(24, 24, 27, .18); }
 .usage-analytics-details .uad-card { display: flex; flex-direction: column; padding: 20px; min-width: 0; border: 1px solid var(--uad-hair); border-radius: 14px; background: var(--uad-card); box-shadow: var(--usage-card-shadow, var(--uad-shadow)); transition: border-color 200ms ease-out; }
 .usage-analytics-details .uad-card:hover { border-color: color-mix(in srgb, var(--color-text-primary) 12%, transparent); }
@@ -167,7 +166,6 @@ html[data-appearance=light] .usage-analytics-details { --uad-shadow: 0 1px 2px r
 .usage-analytics-details .uad-latency-range { stroke: var(--uad-sol); stroke-opacity: .35; stroke-width: 6; stroke-linecap: round; }
 .usage-analytics-details .uad-latency-p50 { fill: var(--uad-sol); stroke: var(--uad-card); stroke-width: 2; }
 .usage-analytics-details .uad-latency-p95 { fill: var(--uad-card); stroke: var(--uad-sol); stroke-width: 2; }
-.usage-analytics-details .uad-sample-count { font-size: 10px; }
 .usage-analytics-details .uad-tools { list-style: none; margin: 0; padding: 0; }
 .usage-analytics-details .uad-tools button, .usage-analytics-details .uad-tools-head { box-sizing: border-box; width: calc(100% + 16px); margin: 0 -8px; display: grid; grid-template-columns: minmax(98px, 1.3fr) minmax(49px, .6fr) minmax(70px, 1.2fr) minmax(49px, .6fr); align-items: center; gap: 12px; text-align: right; }
 .usage-analytics-details .uad-tools button { padding: 7px 8px; border: 0; border-top: 1px solid var(--uad-hair); border-radius: 0; background: transparent; font-size: 12.5px; }

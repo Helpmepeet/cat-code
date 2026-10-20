@@ -6,8 +6,8 @@ import { usageTenMinuteClock, usageTenMinuteSlotCount } from './usageWorkPattern
 import { usageStackedAreaGeometry } from './usageStackedAreaState.js';
 import './usageAnalyticsDetails.css';
 
-function Section({ title, partial, children }: { title: string; partial: boolean; children: ReactNode }) {
-    return <section className="usage-analytics-details" aria-label={title}><header className="uad-section-head"><h2>{title}</h2>{partial && <span>Partial retained history</span>}</header>{children}</section>;
+function Section({ title, children }: { title: string; children: ReactNode }) {
+    return <section className="usage-analytics-details" aria-label={title}><header className="uad-section-head"><h2>{title}</h2></header>{children}</section>;
 }
 function Card({ title, note, children, className = '', id, controls }: { title: string; note?: string; children: ReactNode; className?: string; id?: string; controls?: ReactNode }) {
     return <article id={id} className={`uad-card ${className}`}><header><div><h3>{title}</h3>{note && <p>{note}</p>}</div>{controls}</header>{children}</article>;
@@ -52,7 +52,7 @@ function ModelLatency({ timing }: { timing: UsageTimingSummary }) {
     const rowHeight = 64, height = rows.length * rowHeight + 26;
     const describe = (row: typeof rows[number]) => `${row.label}: median ${analyticsDuration(row.p50Ms)}, p95 ${analyticsDuration(row.p95Ms)}; ${row.samples.toLocaleString()} samples`;
     const active = rows.find(row => row.id === hovered);
-    return <div ref={ref} className="uad-latency"><h4>Latency</h4><p>Recorded samples only. Positive durations use a log scale; zero is shown separately.</p>
+    return <div ref={ref} className="uad-latency"><h4>Latency</h4>
         {timing.models.state === 'unavailable' && <p>Model latency is unavailable.</p>}
         {timing.tools.state === 'unavailable' && <p>Tool latency is unavailable.</p>}
         <div className="uad-latency-legend"><span><i />Median</span><span><i className="uad-latency-hollow" />p95</span></div>
@@ -60,7 +60,7 @@ function ModelLatency({ timing }: { timing: UsageTimingSummary }) {
             {ticks.map(tick => <g key={tick}><line className="uad-grid" x1={x(tick)} x2={x(tick)} y1="0" y2={height - 22} /><text x={x(tick)} y={height - 6} textAnchor="middle">{analyticsDuration(tick)}</text></g>)}
             <text className="uad-zero-label" x={zeroX} y={height - 6} textAnchor="middle">0 ms</text>
             {rows.map((row, i) => <g key={row.id} tabIndex={0} aria-label={describe(row)} onFocus={() => setHovered(row.id)} onBlur={() => setHovered('')} onMouseEnter={() => setHovered(row.id)}>
-                <text x="0" y={i * rowHeight + 30}>{row.label}</text><text className="uad-sample-count" x="0" y={i * rowHeight + 46}>{row.samples.toLocaleString()} samples</text>
+                <text x="0" y={i * rowHeight + 30}>{row.label}</text>
                 {row.p50Ms === null && row.p95Ms === null ? <text x={positiveLeft} y={i * rowHeight + 32}>Unavailable</text> : <>
                     <line className="uad-grid" x1={positiveLeft} x2={width - 16} y1={i * rowHeight + 30} y2={i * rowHeight + 30} />
                     {row.p50Ms !== null && row.p95Ms !== null && <line className="uad-latency-range" x1={x(row.p50Ms)} x2={x(row.p95Ms)} y1={i * rowHeight + 30} y2={i * rowHeight + 30} />}
@@ -115,7 +115,7 @@ function UncachedArea({ summary, selectedDate, onSelectDate }: UsageAnalyticsDat
         {peakDay && peak > 0 && <text className="uad-ink uad-peak" x={calendar.center(peakDay.date)} y={Math.max(top + 11, y(peak) - 8)} textAnchor={calendar.center(peakDay.date) > right - 90 ? 'end' : calendar.center(peakDay.date) < left + 90 ? 'start' : 'middle'}>{analyticsDayLabel(peakDay.date)} · {detailCompact(peak)}</text>}
         {analyticsDateTicks(summary, right - left).map(date => <text key={date} x={calendar.center(date)} y={height - 6} textAnchor="middle">{analyticsDayLabel(date)}</text>)}
         {summary.days.map(day => <g key={day.date} role="button" tabIndex={0} aria-label={`${day.date}: ${detailCompact(day.tokens.fresh + day.tokens.write)} uncached input tokens`} aria-pressed={selectedDate === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => setHovered(day.date)} onBlur={() => setHovered('')} onClick={() => onSelectDate(selectedDate === day.date ? '' : day.date)} onKeyDown={e => activate(e, () => onSelectDate(selectedDate === day.date ? '' : day.date))}><rect className="uad-hit" x={calendar.start(day.date)} y={top} width={calendar.bandWidth(day.date)} height={bottom - top} /><title>{`${day.date}: ${day.tokens.fresh} fresh input; ${day.tokens.write} reported cache writes`}</title></g>)}
-        {active && <><line className="uad-rule" x1={calendar.center(active.date)} x2={calendar.center(active.date)} y1={top} y2={bottom} /><circle className="uad-hover-fresh" cx={calendar.center(active.date)} cy={y(active.tokens.fresh)} r="3.5" /><circle className="uad-hover-write" cx={calendar.center(active.date)} cy={y(active.tokens.fresh + active.tokens.write)} r="3.5" /><ChartTip x={calendar.center(active.date)} y={(top + bottom) / 2} width={width} height={height} title={analyticsDayLabel(active.date)} lines={[{ label: 'Reported cache writes', value: active.tokens.write.toLocaleString(), className: 'uad-tip-write' }, { label: 'Fresh input', value: active.tokens.fresh.toLocaleString(), className: 'uad-tip-fresh' }, { label: 'Total', value: (active.tokens.fresh + active.tokens.write).toLocaleString() }]} /></>}
+        {active && <><line className="uad-rule" x1={calendar.center(active.date)} x2={calendar.center(active.date)} y1={top} y2={bottom} /><circle className="uad-hover-fresh" cx={calendar.center(active.date)} cy={y(active.tokens.fresh)} r="3.5" /><circle className="uad-hover-write" cx={calendar.center(active.date)} cy={y(active.tokens.fresh + active.tokens.write)} r="3.5" /><ChartTip x={calendar.center(active.date)} y={(top + bottom) / 2} width={width} height={height} title={analyticsDayLabel(active.date)} lines={[{ label: 'Cache writes', value: active.tokens.write.toLocaleString(), className: 'uad-tip-write' }, { label: 'Fresh input', value: active.tokens.fresh.toLocaleString(), className: 'uad-tip-fresh' }, { label: 'Total', value: (active.tokens.fresh + active.tokens.write).toLocaleString() }]} /></>}
     </svg><div className="uad-readout" aria-live="off">{active ? `${active.date}: ${active.tokens.fresh.toLocaleString()} fresh input; ${active.tokens.write.toLocaleString()} reported cache writes` : ''}</div></div>;
 }
 function DayLine({ summary, selectedDate, onSelectDate, label }: UsageAnalyticsDateProps & { label: string }) {
@@ -152,13 +152,13 @@ function DayLine({ summary, selectedDate, onSelectDate, label }: UsageAnalyticsD
         {active && <><line className="uad-rule" x1={calendar.center(active.date)} x2={calendar.center(active.date)} y1={top} y2={bottom} />{values[activeIndex] != null && <circle className="uad-hover-dot" cx={calendar.center(active.date)} cy={y(values[activeIndex]!)} r="5" />}<ChartTip x={calendar.center(active.date)} y={values[activeIndex] != null ? y(values[activeIndex]!) : height / 2} width={width} height={height} title={analyticsDayLabel(active.date)} lines={[{ label, value: detailPercent(values[activeIndex] ?? null) }]} /></>}
     </svg><div className="uad-readout" aria-live="off">{active ? `${active.date}: ${detailPercent(values[activeIndex] ?? null)}` : ''}</div></div>;
 }
-function CacheDots({ summary, complete }: { summary: UsageRangeSummary; complete: boolean }) {
+function CacheDots({ summary }: { summary: UsageRangeSummary }) {
     const [hovered, setHovered] = useState('');
     const { ref, width } = useAnalyticsChartWidth(340);
     const { rows, left, right, domain, x } = analyticsCacheRows(summary, width);
     const maxInput = Math.max(1, ...rows.map(m => detailInput(m.tokens))), height = rows.length * 30 + 28;
     const active = rows.find(m => m.id === hovered);
-    return <div ref={ref}>{rows.length ? <svg className="uad-chart uad-dots" viewBox={`0 0 ${width} ${height}`} role="group" aria-label={complete ? 'Cache hit rate by model' : 'Reported cache hit rate by model'} onMouseLeave={() => setHovered('')}>
+    return <div ref={ref}>{rows.length ? <svg className="uad-chart uad-dots" viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Cache hit rate by model" onMouseLeave={() => setHovered('')}>
         {analyticsTicks(domain[0], domain[1], Math.max(2, Math.floor((right - left) / 64))).map(t => <g key={t}><line className="uad-grid" x1={x(t)} x2={x(t)} y1="4" y2={height - 24} /><text x={x(t)} y={height - 6} textAnchor="middle">{t}%</text></g>)}
         {summary.cachedInputShare !== null && <line className="uad-reference" x1={x(summary.cachedInputShare)} x2={x(summary.cachedInputShare)} y1="4" y2={height - 24} />}
         {rows.map((m, i) => <g key={m.id} tabIndex={0} aria-label={`${m.label}: ${detailPercent(detailRate(m.tokens))}; ${detailInput(m.tokens).toLocaleString()} input tokens`} opacity={hovered && hovered !== m.id ? .4 : 1} className={`uad-family-${analyticsModelFamily(m.label)}`} onMouseEnter={() => setHovered(m.id)} onMouseLeave={() => setHovered('')} onFocus={() => setHovered(m.id)} onBlur={() => setHovered('')}>
@@ -171,24 +171,22 @@ function CacheDots({ summary, complete }: { summary: UsageRangeSummary; complete
     </svg> : <p>No reported model input.</p>}<div className="uad-readout" aria-live="off">{active ? `${active.label}: ${detailPercent(detailRate(active.tokens))}; ${detailInput(active.tokens).toLocaleString()} input tokens` : ''}</div></div>;
 }
 export function UsageAnalyticsCache(props: UsageAnalyticsDateProps) {
-    const { summary, partial } = props;
+    const { summary } = props;
     const complete = summary.cacheWriteReporting === 'reported';
-    return <Section title="Cache" partial={partial}><div className="uad-cache-grid">
-        <Card title={complete ? 'Cache hit rate' : 'Reported cache hit rate'} note={`${summary.bucketDays && summary.bucketDays > 1 ? `Per ${summary.bucketDays} days` : 'Per day'}; cache reads over all reported input`} controls={<div className="uad-range-rate"><i className="uad-dash" />{complete ? 'Range rate' : 'Reported range rate'} {detailPercent(summary.cachedInputShare)}</div>}>
-            {!complete && <p>Cache write coverage is incomplete. Rates reflect reported input, not a complete measured rate.</p>}
-            <DayLine {...props} label={complete ? 'Daily cache hit rate' : 'Daily reported cache hit rate'} />
-            <div className="uad-inner-head"><div><h3>Uncached input</h3><p>Fresh input plus reported cache writes</p></div><ul className="uad-legend uad-cache-legend"><li><i className="uad-fresh-key" />Fresh input</li><li><i className="uad-write-key" />Reported cache writes</li></ul></div>
-            {!complete && <p>Cache writes: {summary.cacheWriteReporting === 'partial' ? 'partially reported' : summary.cacheWriteReporting === 'unreported' ? 'not reported' : 'unavailable'}. Uncached input may be understated.</p>}
+    return <Section title="Cache">
+        {!complete && <p className="uad-cache-caveat">Cache writes are {summary.cacheWriteReporting === 'partial' ? 'only partly reported' : summary.cacheWriteReporting === 'unreported' ? 'not reported' : 'unavailable'}, so hit rates may read high and uncached input low.</p>}
+        <div className="uad-cache-grid"><Card title="Cache hit rate" note={summary.bucketDays && summary.bucketDays > 1 ? `Per ${summary.bucketDays} days` : undefined} controls={<div className="uad-range-rate"><i className="uad-dash" />Range rate {detailPercent(summary.cachedInputShare)}</div>}>
+            <DayLine {...props} label="Daily cache hit rate" />
+            <div className="uad-inner-head"><div><h3>Uncached input</h3></div><ul className="uad-legend uad-cache-legend"><li><i className="uad-fresh-key" />Fresh input</li><li><i className="uad-write-key" />Cache writes</li></ul></div>
             <UncachedArea {...props} />
         </Card>
-        <Card title={complete ? 'Hit rate by model' : 'Reported hit rate by model'} note="Dot size shows reported input tokens; dashed line marks the range rate">
-            {!complete && <p>Rates reflect reported input; missing cache writes can overstate the cache share.</p>}
+        <Card title="Hit rate by model">
             <dl className="uad-stats uad-trio uad-duo"><div><dt>Served from cache</dt><dd>{detailCompact(summary.tokens.read)}</dd></div><div><dt>Sent fresh</dt><dd>{detailCompact(summary.tokens.fresh)}</dd></div></dl>
-            <CacheDots summary={summary} complete={complete} />{summary.detail.omittedModels > 0 && <p>{summary.detail.omittedModels} model labels grouped into Other.</p>}
+            <CacheDots summary={summary} />
         </Card></div></Section>;
 }
 
-export function UsageAnalyticsActivity({ summary, timezone, partial, selectedDate, onSelectDate }: UsageAnalyticsActivityProps) {
+export function UsageAnalyticsActivity({ summary, timezone, selectedDate, onSelectDate }: UsageAnalyticsActivityProps) {
     const [mode, setMode] = useState<'requests' | 'sessions'>('requests');
     const [hovered, setHovered] = useState<{ date: string; slot: number } | null>(null);
     const { ref, width } = useAnalyticsChartWidth(800);
@@ -221,9 +219,7 @@ export function UsageAnalyticsActivity({ summary, timezone, partial, selectedDat
     const active = activeDay && hovered ? cellData(activeDay, hovered.slot) : null;
     const totalMinutes = summary.parallel.minutes.reduce((sum, n) => sum + n, 0);
     const minuteSegments = analyticsCompositionSegments(summary.parallel.minutes);
-    return <Section title="Activity" partial={partial}><Card title={mode === 'requests' ? 'Tool requests by hour' : 'Sessions running at once'} note={`${timezone}. ${mode === 'requests' ? 'Repeated local hours are combined.' : 'Peaks per elapsed 10 minutes.'}`} controls={<div className="uad-head-right"><ul className="uad-legend">{mode === 'requests' ? <><li><i className="uad-level-1" />Fewer</li><li><i className="uad-level-5" />More tool requests</li></> : [1, 2, 3, 4, 5].map(n => <li key={n}><i className={`uad-level-${n}`} />{n === 5 ? '5+' : n}</li>)}</ul><div className="uad-segmented" role="group" aria-label="Activity view">{(['requests', 'sessions'] as const).map(value => <button key={value} aria-pressed={mode === value} onClick={() => { setMode(value); setHovered(null); }}>{value === 'requests' ? 'Tool requests' : 'Sessions at once'}</button>)}</div></div>}>
-        {(summary.bucketDays ?? 1) > 1 && <p>Each retained bucket spans up to {summary.bucketDays} days. Daily time-of-day detail is unavailable.</p>}
-        {summary.range === 'all' && (summary.bucketDays ?? 1) === 1 && available && <p>Only retained days are shown; gaps are not filled.</p>}
+    return <Section title="Activity"><Card title={mode === 'requests' ? 'Tool requests by hour' : 'Sessions running at once'} controls={<div className="uad-head-right"><ul className="uad-legend">{mode === 'requests' ? <><li><i className="uad-level-1" />Fewer</li><li><i className="uad-level-5" />More tool requests</li></> : [1, 2, 3, 4, 5].map(n => <li key={n}><i className={`uad-level-${n}`} />{n === 5 ? '5+' : n}</li>)}</ul><div className="uad-segmented" role="group" aria-label="Activity view">{(['requests', 'sessions'] as const).map(value => <button key={value} aria-pressed={mode === value} onClick={() => { setMode(value); setHovered(null); }}>{value === 'requests' ? 'Tool requests' : 'Sessions at once'}</button>)}</div></div>}>
         <div ref={ref}>{!available ? <p className="uad-empty">{mode === 'requests' ? 'Hourly tool request detail is unavailable for this range.' : 'Ten-minute concurrency detail is unavailable for this range.'}</p> : <svg className="uad-chart uad-heatmap" viewBox={`0 0 ${width} ${height}`} role="group" aria-label={mode === 'requests' ? 'Hourly tool request heatmap' : 'Ten-minute concurrency heatmap'} onMouseLeave={() => setHovered(null)}><Gradient id={id} color="var(--uad-profile-color)" />
             {mode === 'requests' && <g className="uad-profile"><path className="uad-profile-fill" fill={`url(#${id})`} d={`${profilePath} L${profile.at(-1)!.x},42 L${profile[0]!.x},42 Z`} /><path className="uad-profile-line" d={profilePath} />{profiles.map((n, i) => <g key={i}><title>{`${String(i).padStart(2, '0')}:00: ${n} tool requests across this range`}</title>{hovered?.slot === i && <circle cx={profile[i]!.x} cy={profile[i]!.y} r="3.5" />}</g>)}</g>}
             {summary.days.map((day, row) => {
@@ -248,7 +244,7 @@ export function UsageAnalyticsActivity({ summary, timezone, partial, selectedDat
     </Card></Section>;
 }
 
-export function UsageAnalyticsModels({ summary, partial, modelFamilies, onModelFamiliesChange }: UsageAnalyticsModelsProps) {
+export function UsageAnalyticsModels({ summary, modelFamilies, onModelFamiliesChange }: UsageAnalyticsModelsProps) {
     const [sort, setSort] = useState<{ key: 'model' | 'tokens' | 'share' | 'output' | 'spend'; ascending: boolean }>({ key: 'tokens', ascending: false });
     const familyTotals = new Map<string, number>();
     for (const model of summary.models) { const family = analyticsModelFamily(model.label); familyTotals.set(family, (familyTotals.get(family) ?? 0) + detailTotal(model.tokens)); }
@@ -259,9 +255,9 @@ export function UsageAnalyticsModels({ summary, partial, modelFamilies, onModelF
         return (sort.key === 'model' ? a.label.localeCompare(b.label) : value(a) - value(b)) * (sort.ascending ? 1 : -1);
     });
     const chips = <div className="uad-controls uad-model-chips" role="group" aria-label="Model families">{families.map(family => <button key={family} className={`uad-family-${family}`} aria-pressed={!modelFamilies.length || modelFamilies.includes(family)} onClick={() => { const current = modelFamilies.length ? [...modelFamilies] : families; const next = current.includes(family) ? current.filter(f => f !== family) : [...current.filter(f => f !== 'none'), family]; onModelFamiliesChange(next.length === families.length ? [] : next.length ? next : ['none']); }}>{analyticsFamilyLabels[family]}</button>)}</div>;
-    return <Section title="Models" partial={partial}><Card title="Models" note="Spend is a configured standard-rate estimate, not a bill. Unpriced tokens are excluded." controls={chips}>
+    return <Section title="Models"><Card title="Models" controls={chips}>
         <div className="uad-table-wrap"><table><thead><tr>{([['model', 'Model'], ['tokens', 'Tokens'], ['share', 'Share'], ['trend', 'Trend'], ['output', 'Output'], ['spend', 'Spend estimate']] as const).map(([key, label]) => <th key={key} className={key === 'trend' || key === 'output' ? 'uad-narrow-hide' : ''} aria-sort={key === sort.key ? sort.ascending ? 'ascending' : 'descending' : undefined}>{key === 'trend' ? label : <button onClick={() => setSort({ key, ascending: sort.key === key ? !sort.ascending : key === 'model' })}>{label}</button>}</th>)}</tr></thead><tbody>{rows.map(m => <tr key={m.id} className={`${modelFamilies.length && !modelFamilies.includes(analyticsModelFamily(m.label)) ? 'uad-dim' : ''} uad-family-${analyticsModelFamily(m.label)}`}><th scope="row"><span className="uad-dot" />{m.label}{m.kind === 'unknown' ? ' (unknown)' : m.kind === 'other' ? ' (grouped)' : ''}</th><td>{detailCompact(detailTotal(m.tokens))}</td><td>{detailPercent(total ? detailTotal(m.tokens) / total * 100 : null)}</td><td className="uad-narrow-hide uad-trend"><Spark values={analyticsCalendarValues(summary, d => d.models.find(row => row.id === m.id)?.total ?? 0)} /></td><td className="uad-narrow-hide">{detailCompact(m.tokens.output)}</td><td>{m.tokenCost?.pricedTokens ? `$${m.tokenCost.usd.toFixed(2)}${m.tokenCost.pricedTokens < detailTotal(m.tokens) ? ' partial' : ''}` : 'Unpriced'}</td></tr>)}</tbody></table></div>
-        {!rows.length && <p>No model observations.</p>}{summary.detail.omittedModels > 0 && <p>{summary.detail.omittedModels} model labels grouped into Other.</p>}
+        {!rows.length && <p>No model observations.</p>}
     </Card></Section>;
 }
 function BuildScatter({ summary, onSelectBuild }: { summary: UsageRangeSummary; onSelectBuild: UsageAnalyticsReliabilityProps['onSelectBuild'] }) {
@@ -275,9 +271,7 @@ function BuildScatter({ summary, onSelectBuild }: { summary: UsageRangeSummary; 
         return analyticsNearestPoint(geo.points, (event.clientX - bounds.left) * width / (bounds.width || width), (event.clientY - bounds.top) * 280 / (bounds.height || 280));
     };
     const pick = (point: typeof geo.points[number]) => { setSelected(point.key); onSelectBuild(point.sha); };
-    const results = summary.tools.reduce((sum, tool) => sum + tool.results, 0);
-    const displayed = geo.points.reduce((sum, point) => sum + point.results, 0);
-    return <Card id="usage-build-chart" title="Error rate by build" className="uad-build-card" note="Builds with at least 200 tool results. Dot size shows results." controls={<ul className="uad-legend uad-build-legend"><li><i className="uad-build-key" />Committed</li><li><i className="uad-build-key uad-hollow-key" />Uncommitted</li><li><i className="uad-error-key" />Over 1.5× median</li>{geo.median !== null && <li><i className="uad-dash" />Median {detailPercent(geo.median)}</li>}</ul>}>
+    return <Card id="usage-build-chart" title="Error rate by build" className="uad-build-card" note="Builds with at least 200 tool results." controls={<ul className="uad-legend uad-build-legend"><li><i className="uad-build-key" />Committed</li><li><i className="uad-build-key uad-hollow-key" />Uncommitted</li><li><i className="uad-error-key" />Over 1.5× median</li>{geo.median !== null && <li><i className="uad-dash" />Median {detailPercent(geo.median)}</li>}</ul>}>
         <div ref={ref}>{geo.points.length ? <svg className="uad-chart uad-builds" viewBox={`0 0 ${width} 280`} role="group" aria-label="Tool error rate by build" onMouseLeave={() => setHovered('')}>
             {analyticsTicks(0, geo.maxRate).map(tick => <g key={tick}><line className="uad-grid" x1={geo.left} x2={geo.right} y1={geo.y(tick)} y2={geo.y(tick)} /><text x={geo.left - 8} y={geo.y(tick) + 4} textAnchor="end">{tick}%</text></g>)}
             <line className="uad-base" x1={geo.left} x2={geo.right} y1={geo.bottom} y2={geo.bottom} />
@@ -289,26 +283,24 @@ function BuildScatter({ summary, onSelectBuild }: { summary: UsageRangeSummary; 
             {active && <ChartTip x={active.x} y={active.y} width={width} height={280} title={`${active.sha}${active.dirty ? ' · Uncommitted' : ''}`} lines={[{ label: 'First retained request', value: active.first }, { label: 'Tool results', value: active.results.toLocaleString() }, { label: 'Error rate', value: detailPercent(active.rate) }]} />}
         </svg> : <p>No builds with at least 200 tool results.</p>}</div>
         <div className="uad-readout uad-build-readout" aria-live="off">{active && <><span className="uad-build-sha">{active.sha}</span>{active.dirty ? ' · Uncommitted changes' : ' · Committed'} · {detailPercent(active.rate)} · {active.errors.toLocaleString()} errors / {active.results.toLocaleString()} results · First retained request {active.first}</>}</div>
-        <p>{detailCompact(displayed)} of {detailCompact(results)} tool results have displayed build attribution.{geo.builds.omitted > 0 ? ' Additional build observations were omitted.' : ''}</p>
     </Card>;
 }
-export function UsageAnalyticsReliability({ summary, partial, selectedToolId, onSelectTool, onSelectRoute, onSelectBuild }: UsageAnalyticsReliabilityProps) {
+export function UsageAnalyticsReliability({ summary, selectedToolId, onSelectTool, onSelectRoute, onSelectBuild }: UsageAnalyticsReliabilityProps) {
     const outcomes = summary.timing.models;
     const results = summary.tools.reduce((sum, t) => sum + t.results, 0), errors = summary.tools.reduce((sum, t) => sum + t.errors, 0);
     const auto = summary.autoMode.allTools;
     const decisions = Object.values(auto.outcomes).reduce((sum, count) => sum + count, 0);
-    return <Section title="Reliability" partial={partial}><div className="uad-reliability-grid">
-        <Card title="Model calls" note="Recorded attempt outcomes; retries can produce multiple attempts per logical call.">
+    return <Section title="Reliability"><div className="uad-reliability-grid">
+        <Card title="Model calls">
             {outcomes.state === 'unavailable' ? <p>Model call outcomes are unavailable.</p> : <ModelOutcomes models={outcomes} />}
             <ModelLatency timing={summary.timing} />
         </Card>
-        <Card title="Tools" note="Red marks rates over 1.5× the overall rate with at least 10 errors.">
+        <Card title="Tools" note="Red: over 1.5× the overall rate">
             <div className="uad-tools-head"><span>Tool</span><span>Results</span><span>{(summary.bucketDays ?? 1) > 1 ? 'Errors per bucket' : 'Errors per day'}</span><span>Error rate</span></div>
             <ol className="uad-tools">{[...summary.tools].sort((a, b) => (a.kind === 'other' ? 1 : 0) - (b.kind === 'other' ? 1 : 0) || b.results - a.results).map(tool => <li key={tool.id}><button aria-pressed={selectedToolId === tool.id} className={`${analyticsToolClass(tool.label)} ${tool.results && results && tool.errors / tool.results > errors / results * 1.5 && tool.errors >= 10 ? 'uad-hot' : ''}`} onClick={() => onSelectTool(tool.id)}><span className="uad-tool-name" title={tool.label}><i className="uad-dot" /><span>{tool.label}{tool.kind === 'unknown' ? ' (unknown)' : tool.kind === 'other' ? ' (grouped)' : ''}</span></span><span className="uad-tool-volume">{detailCompact(tool.results)}</span><Spark height={22} values={analyticsCalendarValues(summary, d => d.tools.find(t => t.id === tool.id)?.errors ?? 0)} /><span className="uad-tool-rate">{detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}</span></button></li>)}</ol>
-            {summary.detail.omittedTools > 0 && <p>{summary.detail.omittedTools} tool labels grouped into Other.</p>}
         </Card>
         <BuildScatter summary={summary} onSelectBuild={onSelectBuild} />
-        <Card title="Auto mode" className="uad-auto-card" note="Permission observations by the check that answered.">
+        <Card title="Auto mode" className="uad-auto-card">
             {auto.coverage.state === 'unavailable' ? <p>Auto-mode observations are unavailable.</p> : <>{auto.coverage.state === 'partial' && <p>Partial auto-mode observations.</p>}<dl className="uad-stats uad-trio"><div><dt>Decisions</dt><dd>{detailCompact(decisions)}</dd></div><div><dt>Held for review</dt><dd>{auto.outcomes.review_required.toLocaleString()}</dd></div><div><dt>Blocked</dt><dd>{auto.outcomes.policy_blocked.toLocaleString()}</dd></div></dl>
                 <RouteTreemap summary={summary} onSelectRoute={onSelectRoute} />
                 {!summary.autoMode.routes.some(route => route.count > 0) && <p>No route observations.</p>}

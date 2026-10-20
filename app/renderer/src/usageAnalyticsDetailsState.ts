@@ -2,7 +2,7 @@ import type { UsageRangeSummary, UsageTokens, UsageTimingSummary } from '../../s
 import type { AutoModeUsageRoute } from '../../shared/usageAutoMode.js';
 import { isFilePatchToolName } from '../../../src/tools/FilePatchTool/constants.js';
 
-export type UsageAnalyticsDetailProps = { summary: UsageRangeSummary; partial: boolean };
+export type UsageAnalyticsDetailProps = { summary: UsageRangeSummary };
 export type UsageAnalyticsDateProps = UsageAnalyticsDetailProps & { selectedDate: string; onSelectDate: (date: string) => void };
 export type UsageAnalyticsActivityProps = UsageAnalyticsDateProps & { timezone: string };
 export type UsageAnalyticsModelsProps = UsageAnalyticsDetailProps & { modelFamilies: readonly string[]; onModelFamiliesChange: (families: string[]) => void };

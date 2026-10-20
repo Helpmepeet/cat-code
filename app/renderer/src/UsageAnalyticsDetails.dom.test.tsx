@@ -29,11 +29,11 @@ async function fixture() {
 }
 function CacheOwner({ summary }: { summary: UsageRangeSummary }) {
     const [selectedDate, onSelectDate] = useState('');
-    return <UsageAnalyticsCache summary={summary} partial={false} selectedDate={selectedDate} onSelectDate={onSelectDate} />;
+    return <UsageAnalyticsCache summary={summary} selectedDate={selectedDate} onSelectDate={onSelectDate} />;
 }
 function ModelsOwner({ summary }: { summary: UsageRangeSummary }) {
     const [modelFamilies, onModelFamiliesChange] = useState<string[]>([]);
-    return <UsageAnalyticsModels summary={summary} partial={false} modelFamilies={modelFamilies} onModelFamiliesChange={onModelFamiliesChange} />;
+    return <UsageAnalyticsModels summary={summary} modelFamilies={modelFamilies} onModelFamiliesChange={onModelFamiliesChange} />;
 }
 test('cache preserves percentage units and pins then unpins via keyboard', async () => {
     const { summary } = await fixture();
@@ -50,13 +50,13 @@ test('cache preserves percentage units and pins then unpins via keyboard', async
 });
 test('activity toggles modes and does not borrow hourly detail for a longer range', async () => {
     const { summary, snapshot } = await fixture();
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone={snapshot.timezone} partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone={snapshot.timezone} selectedDate="" onSelectDate={() => {}} />);
     expect(tree.container.querySelector('.uad-heatmap')).not.toBeNull();
     const toggle = [...tree.container.querySelectorAll('button')].find(b => b.textContent === 'Sessions at once')!;
     await act(async () => toggle.click());
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
     expect(tree.container.textContent).toContain('Time by sessions at once');
-    const longer = await harness.mount(<UsageAnalyticsActivity summary={snapshot.ranges['30d']} timezone={snapshot.timezone} partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const longer = await harness.mount(<UsageAnalyticsActivity summary={snapshot.ranges['30d']} timezone={snapshot.timezone} selectedDate="" onSelectDate={() => {}} />);
     expect(longer.container.textContent).toContain('Hourly tool request detail is unavailable for this range.');
     expect(longer.container.querySelector('.uad-heatmap')).toBeNull();
 });
@@ -64,7 +64,7 @@ test('hourly activity labels canonical counts as tool requests', async () => {
     const { summary } = await fixture();
     summary.days[0]!.hours![0]!.requests = 7;
     summary.days[0]!.requests = 7;
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={() => {}} />);
     expect(tree.container.querySelector('h3')?.textContent).toBe('Tool requests by hour');
     expect([...tree.container.querySelectorAll('button')].map(button => button.textContent)).toContain('Tool requests');
     expect(tree.container.querySelector('.uad-heatmap')?.getAttribute('aria-label')).toBe('Hourly tool request heatmap');
@@ -75,10 +75,10 @@ test('incomplete cache-write coverage qualifies the reported cache rate without 
     const { summary } = await fixture();
     summary.cacheWriteReporting = 'partial';
     const tree = await harness.mount(<CacheOwner summary={summary} />);
-    expect(tree.container.textContent).toContain('Reported cache hit rate');
-    expect(tree.container.textContent).toContain('Reported range rate 60.0%');
-    expect(tree.container.textContent).toContain('not a complete measured rate');
-    expect(tree.container.textContent).toContain('Reported hit rate by model');
+    expect(tree.container.querySelectorAll('.uad-cache-caveat')).toHaveLength(1);
+    expect(tree.container.querySelector('.uad-cache-caveat')?.textContent).toContain('only partly reported');
+    expect(tree.container.textContent).toContain('Range rate 60.0%');
+    expect(tree.container.textContent).not.toContain('Reported');
 });
 test('30-day supplied ten-minute concurrency is available without hourly requests', async () => {
     const { snapshot } = await fixture();
@@ -87,7 +87,7 @@ test('30-day supplied ten-minute concurrency is available without hourly request
     summary.days[0]!.parallel.peak = 4;
     summary.days[0]!.parallel.tenMinutePeaks = [[6, 4]];
     const dates: string[] = [];
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={date => dates.push(date)} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={date => dates.push(date)} />);
     expect(tree.container.textContent).toContain('Hourly tool request detail is unavailable for this range.');
     const toggle = [...tree.container.querySelectorAll('button')].find(b => b.textContent === 'Sessions at once')!;
     await act(async () => toggle.click());
@@ -106,10 +106,9 @@ test('sparse all-history buckets never fabricate a daily concurrency timeline', 
     const summary = snapshot.ranges.all;
     summary.bucketDays = 4;
     summary.days = [snapshot.ranges['7d'].days[0]!];
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={() => {}} />);
     await act(async () => [...tree.container.querySelectorAll('button')].find(b => b.textContent === 'Sessions at once')!.click());
     expect(tree.container.querySelector('.uad-heatmap')).toBeNull();
-    expect(tree.container.textContent).toContain('Each retained bucket spans up to 4 days.');
     expect(tree.container.textContent).toContain('Ten-minute concurrency detail is unavailable for this range.');
 });
 test('single-day sparse all-history slots display only supplied days', async () => {
@@ -118,10 +117,9 @@ test('single-day sparse all-history slots display only supplied days', async () 
     summary.bucketDays = 1;
     summary.days = [snapshot.ranges['7d'].days[0]!, snapshot.ranges['7d'].days[6]!];
     for (const day of summary.days) day.parallel = { state: 'available', minutes: [0, 0, 0], peak: 0, tenMinutePeaks: [] };
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={() => {}} />);
     await act(async () => [...tree.container.querySelectorAll('button')].find(b => b.textContent === 'Sessions at once')!.click());
     expect(tree.container.querySelectorAll('.uad-heatmap [role=button]')).toHaveLength(2);
-    expect(tree.container.textContent).toContain('Only retained days are shown; gaps are not filled.');
 });
 test('model chips are controlled and table headers sort without converting unpriced tokens to free spend', async () => {
     const { summary } = await fixture();
@@ -139,7 +137,7 @@ test('model chips are controlled and table headers sort without converting unpri
 test('reliability routes tool, route and build selections through parent callbacks', async () => {
     const { summary } = await fixture();
     const calls: string[] = [];
-    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial onSelectTool={id => calls.push(`tool:${id}`)} onSelectRoute={route => calls.push(`route:${route}`)} onSelectBuild={sha => calls.push(`build:${sha}`)} />);
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={id => calls.push(`tool:${id}`)} onSelectRoute={route => calls.push(`route:${route}`)} onSelectBuild={sha => calls.push(`build:${sha}`)} />);
     await act(async () => tree.container.querySelector<HTMLButtonElement>('.uad-tools button')!.click());
     await act(async () => tree.container.querySelector<SVGGElement>('.uad-routes [role=button]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     await act(async () => tree.container.querySelector<SVGGElement>('.uad-builds [role=button]')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })));
@@ -153,7 +151,7 @@ test('model outcomes show composition shares and route hover preserves unknown s
     summary.timing.models.state = 'available';
     summary.timing.models.outcomes = { started: 10, succeeded: 6, failed: 2, cancelled: 1, incomplete: 1 };
     summary.autoMode.routes = [{ route: 'unknown', outcome: 'unknown_outcome', count: 2 }];
-    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
     expect(tree.container.querySelector('.uad-outcome-succeeded')?.textContent).toContain('60.0%');
     expect(tree.container.querySelector('.uad-outcome-failed')?.textContent).toContain('20.0%');
     const route = tree.container.querySelector<SVGGElement>('.uad-routes [role=button]')!;
@@ -167,7 +165,7 @@ test('build chart applies the 200-result threshold to points and median and owns
         { sha: 'eligible', dirty: false, requests: 200, results: 200, errors: 20, firstObservedAt: '2026-10-12T14:00:00Z' },
     );
     const calls: string[] = [];
-    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={sha => calls.push(sha)} />);
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={sha => calls.push(sha)} />);
     const article = tree.container.querySelector('article#usage-build-chart')!;
     expect(article.querySelector('h3')?.textContent).toBe('Error rate by build');
     expect(article.textContent).toContain('Builds with at least 200 tool results.');
@@ -186,7 +184,7 @@ test('build chart applies the 200-result threshold to points and median and owns
 test('build chart states when no build meets the result threshold', async () => {
     const { summary } = await fixture();
     summary.days[0]!.tools[0]!.builds!.items[0]!.results = 199;
-    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
     expect(tree.container.querySelector('#usage-build-chart')?.textContent).toContain('No builds with at least 200 tool results.');
     expect(tree.container.querySelector('.uad-builds')).toBeNull();
 });
@@ -195,10 +193,10 @@ test('supporting SVG tooltips render complete single text strings', async () => 
     const cache = renderToStaticMarkup(<CacheOwner summary={summary} />);
     expect(cache).toContain('<title>Sol: 60.0%, 100 input tokens</title>');
     expect(cache).toContain(`<title>${summary.days[0]!.date}: 20 fresh input; 20 reported cache writes</title>`);
-    const reliability = renderToStaticMarkup(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const reliability = renderToStaticMarkup(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
     expect(reliability).toContain('<title>abc123: 2 errors / 208 results; first retained request 2026-10-12T12:00:00Z</title>');
     summary.parallel = { state: 'available', minutes: [2, 3, 4], peak: 3 };
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={() => {}} />);
     expect(tree.container.querySelector('.uad-profile title')?.textContent).toBe('00:00: 0 tool requests across this range');
     await act(async () => [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Sessions at once')!.click());
     expect([...tree.container.querySelectorAll('.uad-composition title')].map(title => title.textContent)).toEqual(['1 session: 2 minutes', '2 sessions: 3 minutes', '3 or more sessions: 4 minutes']);
@@ -210,7 +208,7 @@ test('model latency renders retained median and p95 with independent sample coun
     summary.timing.models.outcomes = { started: 20, succeeded: 18, failed: 1, cancelled: 0, incomplete: 1 };
     summary.timing.models.responseDuration = { samples: 7, p50Ms: 1200, p95Ms: 9000 };
     summary.timing.models.firstText = { samples: 3, p50Ms: 250, p95Ms: 800 };
-    const props = { summary, partial: true, onSelectTool: () => {}, onSelectRoute: () => {}, onSelectBuild: () => {} };
+    const props = { summary, onSelectTool: () => {}, onSelectRoute: () => {}, onSelectBuild: () => {} };
     const tree = await harness.mount(<UsageAnalyticsReliability {...props} />);
     expect(tree.container.querySelectorAll('.uad-latency-p50')).toHaveLength(2);
     expect(tree.container.querySelectorAll('.uad-latency-p95')).toHaveLength(2);
@@ -227,7 +225,7 @@ test('latency zeros have their own rail and unavailable quantiles are never plot
     summary.timing.models.state = 'available';
     summary.timing.models.responseDuration = { samples: 2, p50Ms: 0, p95Ms: 0 };
     summary.timing.models.firstText = { samples: 0, p50Ms: null, p95Ms: null };
-    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
     expect(tree.container.querySelector('.uad-latency-p50')?.getAttribute('cx')).toBe(tree.container.querySelector('.uad-zero-label')?.getAttribute('x'));
     expect(tree.container.querySelector('.uad-latency-p95')?.getAttribute('cx')).toBe(tree.container.querySelector('.uad-zero-label')?.getAttribute('x'));
     expect(tree.container.querySelectorAll('.uad-latency-p50')).toHaveLength(1);
@@ -277,7 +275,7 @@ test('uncached annotations locate the peak and retain calendar averages includin
     await act(async () => pick.dispatchEvent(new FocusEvent('focusin', { bubbles: true })));
     expect(chart.querySelectorAll('.uad-hover-fresh, .uad-hover-write')).toHaveLength(2);
     expect(chart.querySelectorAll('.uad-tooltip .uad-tip-marker')).toHaveLength(2);
-    expect(chart.querySelector('[role=tooltip]')?.textContent).toContain('Reported cache writes20');
+    expect(chart.querySelector('[role=tooltip]')?.textContent).toContain('Cache writes20');
     expect(tree.container.querySelector('.uad-cache-legend .uad-write-key')).not.toBeNull();
 });
 
@@ -300,7 +298,7 @@ test('cache dot rows show values and colored stems, isolate hover, and restore o
 test('activity draws a smooth profile and highlights the hovered row and hour with eight time ticks', async () => {
     const { summary } = await fixture();
     summary.days[0]!.hours![0]!.requests = 20;
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={() => {}} />);
     const chart = tree.container.querySelector('.uad-heatmap')!;
     expect(chart.querySelector('.uad-profile-line')?.getAttribute('d')).toContain('C');
     expect(chart.querySelector('.uad-profile-fill')?.getAttribute('d')).toContain('Z');
@@ -320,7 +318,7 @@ test('concurrency colors remain fixed across peak changes and duration legend re
     const { summary } = await fixture();
     for (const day of summary.days) day.parallel = { state: 'available', peak: 1, minutes: [0, 0, 0], tenMinutePeaks: [[0, 1]] };
     summary.parallel = { state: 'available', peak: 1, minutes: [60, 120, 60] };
-    const props = { summary, timezone: 'UTC', partial: false, selectedDate: '', onSelectDate: () => {} };
+    const props = { summary, timezone: 'UTC', selectedDate: '', onSelectDate: () => {} };
     const tree = await harness.mount(<UsageAnalyticsActivity {...props} />);
     await act(async () => [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Sessions at once')!.click());
     const first = tree.container.querySelector('.uad-heatmap [data-slot="0"]')!;
@@ -354,7 +352,7 @@ test('tool duration remains plotted when model outcomes and model latency are un
     const { summary } = await fixture();
     summary.timing.tools.state = 'available';
     summary.timing.tools.duration = { samples: 7, p50Ms: 0, p95Ms: 300 };
-    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
     expect(tree.container.textContent).toContain('Model call outcomes are unavailable.');
     expect(tree.container.querySelectorAll('.uad-latency-chart [tabindex]')).toHaveLength(3);
     expect(tree.container.querySelectorAll('.uad-latency-p50')).toHaveLength(1);
@@ -369,7 +367,7 @@ test('outcome strip uses exact composition and selected tool rows reflect contro
     const { summary } = await fixture();
     summary.timing.models.state = 'available';
     summary.timing.models.outcomes = { started: 10, succeeded: 6, failed: 2, cancelled: 1, incomplete: 1 };
-    const props = { summary, partial: false, onSelectTool: () => {}, onSelectRoute: () => {}, onSelectBuild: () => {} };
+    const props = { summary, onSelectTool: () => {}, onSelectRoute: () => {}, onSelectBuild: () => {} };
     const tree = await harness.mount(<UsageAnalyticsReliability {...props} selectedToolId="bash" />);
     const strip = tree.container.querySelector('.uad-outcome-composition')!;
     const succeeded = strip.querySelector('.uad-outcome-succeeded')!, failed = strip.querySelector('.uad-outcome-failed')!;
@@ -388,7 +386,7 @@ test('build scatter provides grid, flagged labels, legends and nearest-point hov
         { sha: 'low', dirty: false, requests: 200, results: 200, errors: 0, firstObservedAt: '2026-10-12T15:00:00Z' },
     );
     const selected: string[] = [];
-    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={sha => selected.push(sha)} />);
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={sha => selected.push(sha)} />);
     const chart = tree.container.querySelector('.uad-builds')!;
     expect(chart.querySelectorAll('.uad-grid').length).toBeGreaterThan(2);
     expect(chart.querySelector('.uad-flagged-build')?.textContent).toBe('high');
@@ -418,7 +416,7 @@ test('routes reflow at measured widths, isolate hover and expose Decisions with 
         disconnect() {}
     } as unknown as typeof ResizeObserver;
     try {
-        const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+        const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
         const chart = tree.container.querySelector('.uad-routes')!;
         expect(chart.getAttribute('viewBox')).toBe('0 0 320 230');
         expect(tree.container.querySelector('.uad-auto-card dt')?.textContent).toBe('Decisions');
@@ -448,7 +446,7 @@ test('fall-back concurrency keeps both repeated local hours and the final elapse
     day.date = '2026-11-01';
     day.parallel = { state: 'available', peak: 3, minutes: [0, 0, 0], tenMinutePeaks: [[6, 1], [12, 2], [149, 3]] };
     summary.days = [day];
-    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="America/New_York" partial={false} selectedDate="" onSelectDate={() => {}} />);
+    const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="America/New_York" selectedDate="" onSelectDate={() => {}} />);
     await act(async () => [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Sessions at once')!.click());
     const chart = tree.container.querySelector('.uad-heatmap')!;
     const cells = chart.querySelectorAll('rect[data-slot]');
@@ -480,7 +478,7 @@ test('hourly tokens combine repeated hours only when every supplied interval rep
     const first = summary.days[0]!.hours![0]!;
     first.requests = 2; first.tokens = 100;
     summary.days[0]!.hours!.push({ ...first, requests: 3, tokens: 200 });
-    const props = { summary, timezone: 'UTC', partial: false, selectedDate: '', onSelectDate: () => {} };
+    const props = { summary, timezone: 'UTC', selectedDate: '', onSelectDate: () => {} };
     const tree = await harness.mount(<UsageAnalyticsActivity {...props} />);
     let cell = tree.container.querySelector('.uad-heatmap [data-slot="0"]')!;
     await act(async () => cell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
@@ -520,7 +518,7 @@ test('section headings retain the final type scale when the common page styleshe
     styles.textContent = readFileSync(new URL('./usageAnalyticsDetails.css', import.meta.url), 'utf8') + '\n' + readFileSync(new URL('./usageDashboard.css', import.meta.url), 'utf8');
     document.head.append(styles);
     try {
-        const tree = await harness.mount(<main className="usage-page"><UsageAnalyticsCache summary={summary} partial={false} selectedDate="" onSelectDate={() => {}} /></main>);
+        const tree = await harness.mount(<main className="usage-page"><UsageAnalyticsCache summary={summary} selectedDate="" onSelectDate={() => {}} /></main>);
         const heading = tree.container.querySelector('h2')!;
         expect(getComputedStyle(heading).fontSize).toBe('17.5px');
         expect(getComputedStyle(heading).fontWeight).toBe('680');
@@ -546,7 +544,7 @@ test('cache row hover clears on entering its own chart axis rather than waiting 
 test('build plot hover clears at the axis while a selected build remains the readout fallback', async () => {
     const { summary } = await fixture();
     summary.days[0]!.tools[0]!.builds!.items.push({ sha: 'other', dirty: false, requests: 200, results: 200, errors: 80, firstObservedAt: '2026-10-12T14:00:00Z' });
-    const props = { summary, partial: false, onSelectTool: () => {}, onSelectRoute: () => {}, onSelectBuild: () => {} };
+    const props = { summary, onSelectTool: () => {}, onSelectRoute: () => {}, onSelectBuild: () => {} };
     const tree = await harness.mount(<UsageAnalyticsReliability {...props} />);
     const chart = tree.container.querySelector('.uad-builds')!, overlay = chart.querySelector('.uad-build-pick')!, axis = chart.querySelector('text')!;
     const points = chart.querySelectorAll<SVGGElement>('[role=button]');
@@ -578,7 +576,7 @@ test('Details retains the prototype fourteen-pixel baseline under a sixteen-pixe
     styles.textContent = 'html { font-size: 16px; line-height: 1.5; }\n' + readFileSync(new URL('./usageAnalyticsDetails.css', import.meta.url), 'utf8') + '\n.usage-analytics-details { --uad-hair: #ddd; }';
     document.head.append(styles);
     try {
-        const tree = await harness.mount(<main className="usage-page"><CacheOwner summary={summary} /><ModelsOwner summary={summary} /><UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} /></main>);
+        const tree = await harness.mount(<main className="usage-page"><CacheOwner summary={summary} /><ModelsOwner summary={summary} /><UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} /></main>);
         const css = (selector: string) => getComputedStyle(tree.container.querySelector(selector)!);
         expect(getComputedStyle(document.documentElement).fontSize).toBe('16px');
         expect(css('.usage-analytics-details').fontSize).toBe('14px');
@@ -656,7 +654,7 @@ test('Details retains the prototype fourteen-pixel baseline under a sixteen-pixe
 
 test('Activity profile gradient receives its accent color explicitly without changing cache or spark gradient colors', async () => {
     const { summary } = await fixture();
-    const tree = await harness.mount(<><CacheOwner summary={summary} /><ModelsOwner summary={summary} /><UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={() => {}} /></>);
+    const tree = await harness.mount(<><CacheOwner summary={summary} /><ModelsOwner summary={summary} /><UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={() => {}} /></>);
     const profile = tree.container.querySelector('.uad-profile-fill')!;
     const profileGradient = tree.container.querySelector('.uad-heatmap linearGradient')!;
     expect(profile.getAttribute('fill')).toBe(`url(#${profileGradient.id})`);
@@ -670,7 +668,7 @@ test('narrow concurrency axis has compact unique ticks and a separate shared ela
     const { summary } = await fixture();
     const bounds = spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width: 340, height: 230, x: 0, y: 0, left: 0, top: 0, right: 340, bottom: 230, toJSON() { return {}; } }));
     try {
-        const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" partial={false} selectedDate="" onSelectDate={() => {}} />);
+        const tree = await harness.mount(<UsageAnalyticsActivity summary={summary} timezone="UTC" selectedDate="" onSelectDate={() => {}} />);
         await act(async () => [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Sessions at once')!.click());
         const chart = tree.container.querySelector('.uad-heatmap')!;
         const labels = chart.querySelectorAll('.uad-x-axis-label');
@@ -698,7 +696,7 @@ test('single-build scatter renders unique minute-resolution labels without colli
     const bounds = spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(() => ({ width, height: 230, x: 0, y: 0, left: 0, top: 0, right: width, bottom: 230, toJSON() { return {}; } }));
     try {
         for (width of [340, 640]) {
-            const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} partial={false} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+            const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
             const chart = tree.container.querySelector('.uad-builds')!;
             expect(chart.querySelectorAll('[role=button]')).toHaveLength(1);
             const labels = chart.querySelectorAll('.uad-x-axis-label');
