@@ -52,6 +52,8 @@ export type SubagentDockRow = SubagentDockEntry & {
   stripLines: [string | null, string | null]
   chipLines: [string | null, string | null]
   settling: boolean
+  /** Every run's tool use for this agent, launch first, in transcript order. */
+  runToolUseIds: string[]
 }
 export type DerivedSubagentDock = {
   active: SubagentDockRow[]
@@ -120,7 +122,7 @@ function agentCandidates(rows: readonly NestedTranscriptRow[]): readonly NestedT
   return candidates
 }
 
-function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'tasks' | 'workers'>, state: SubagentDockState): Map<string, NestedToolUseRow> {
+function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'tasks' | 'workers'>, state: SubagentDockState): { latest: Map<string, NestedToolUseRow>; runs: Map<string, string[]> } {
   const { transcriptRows: rows, tasks, workers } = input
   const candidates = agentCandidates(rows)
   const agentByToolUseId = new Map((tasks?.subagents ?? []).map(agent => [agent.toolUseId, agent.agentId]))
@@ -140,6 +142,7 @@ function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'task
     idsByName.set(key, [...idsByName.get(key) ?? [], id])
   }
   const byId = new Map<string, NestedToolUseRow>()
+  const runs = new Map<string, string[]>()
   // Only parent agent cards belong in the parent's dock; nested agents have their own owner.
   for (const row of candidates) {
     if (row.toolName === 'ResumeAgent' && row.result) {
@@ -160,9 +163,10 @@ function latestAgentRows(input: Pick<SubagentDockInput, 'transcriptRows' | 'task
     if (agentId !== null) {
       byId.delete(agentId)
       byId.set(agentId, row)
+      runs.set(agentId, [...runs.get(agentId) ?? [], row.toolUseId])
     }
   }
-  return byId
+  return { latest: byId, runs }
 }
 function stringField(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
@@ -170,7 +174,7 @@ function stringField(value: unknown): string | null {
 
 /** Retains observed terminal evidence after workers.snapshot evicts it. */
 export function reconcileSubagentDockState(previous: SubagentDockState, input: SubagentDockInput): SubagentDockState {
-  const rows = latestAgentRows(input, previous)
+  const rows = latestAgentRows(input, previous).latest
   const workers = new Map(input.workers.map(worker => [worker.agentId, worker]))
   const tasks = new Map((input.tasks?.items ?? []).filter(task => task.type === 'local_agent').map(task => [task.id, task]))
   const entries: Record<string, SubagentDockEntry> = {}
@@ -284,7 +288,7 @@ function join(parts: (string | null | undefined)[]): string | null {
   return present.length ? present.join(' · ') : null
 }
 export function selectSubagentDock(state: SubagentDockState, input: SubagentDockInput): DerivedSubagentDock {
-  const rows = latestAgentRows(input, state)
+  const { latest: rows, runs } = latestAgentRows(input, state)
   const active: SubagentDockRow[] = []
   const finished: SubagentDockRow[] = []
   let nextUpdateAt: number | null = null
@@ -319,7 +323,7 @@ export function selectSubagentDock(state: SubagentDockState, input: SubagentDock
     const settling = terminal && !input.reducedMotion && entry.settleUntil !== null && entry.settleUntil > input.nowMs
     const stateWord = entry.state === 'completed' ? 'done' : entry.state
     const dockRow: SubagentDockRow = {
-      ...entry, model, account, rowModel, stateWord, settling,
+      ...entry, model, account, rowModel, stateWord, settling, runToolUseIds: runs.get(entry.agentId) ?? [],
       chipLines: [lineA, lineB],
       stripLines: [rowModel && model ? join(lineA?.split(' · ').filter(part => part !== model) ?? []) : lineA, lineB],
     }

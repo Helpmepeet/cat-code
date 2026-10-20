@@ -48,7 +48,7 @@ function worker(id = 'a', patch: Partial<SubagentDockRow> = {}): SubagentDockRow
     agentId: id, runKey: `launch-${id}`, toolUseId: `launch-${id}`, name: `worker-${id}`, task: `Task ${id}`, type: 'explore',
     state: 'running', model: 'claude-sonnet-4-5', rowModel: null, recordedAccount: null, account: null, usageLabel: null,
     verdict: null, resultSummary: null, blockReason: null, launchOrder: 0, terminalAt: null, resumedAt: null,
-    lastSeenAt: 0, missingSince: null, settleUntil: null, stateWord: '', stripLines: [null, null], chipLines: [null, null], settling: false, ...patch,
+    lastSeenAt: 0, missingSince: null, settleUntil: null, stateWord: '', stripLines: [null, null], chipLines: [null, null], settling: false, runToolUseIds: [], ...patch,
   }
 }
 const a = worker()
@@ -217,7 +217,7 @@ test('missing, orphaned and partially restored steps stay truthful and refresh w
   expect(tree.container.querySelector('.subagent-side-availability')).not.toBeNull()
 })
 
-test('real SessionPane opens projected child reasoning and keeps parent Agent expansion independent', async () => {
+test('real SessionPane opens projected child reasoning, and the parent Agent card opens the panel without nesting steps', async () => {
   let transcript = createTranscriptState()
   const message = (uuid: string, parent: string | null, role: 'assistant' | 'user', content: unknown[], extra = {}) => ({
     kind: 'event', protocolVersion: 4, sessionId: 'session-1',
@@ -242,11 +242,36 @@ test('real SessionPane opens projected child reasoning and keeps parent Agent ex
   expect(tree.container.querySelector('aside')?.textContent).toContain('Child reply')
   expect(tree.container.querySelector('.subagent-side-header')?.textContent).toContain('3 tool calls · 21.0k tokens')
   const parentCard = tree.container.querySelector('[data-agent-tool-id="live-agent"]')!
-  const expand = parentCard.querySelector<HTMLButtonElement>('button[aria-expanded]')!
-  expect(expand.getAttribute('aria-expanded')).toBe('false')
-  await act(async () => { expand.click() })
-  expect(expand.getAttribute('aria-expanded')).toBe('true')
-  expect(tree.container.querySelector('aside')).not.toBeNull()
+  // Steps live only in the panel: the parent card nests none and never expands.
+  expect(tree.container.querySelector('main')?.textContent).not.toContain('Child reply')
+  expect(parentCard.querySelector('button[aria-expanded]')).toBeNull()
+  await click(tree.container, '[aria-label="Close subagent panel"]')
+  expect(tree.container.querySelector('aside')).toBeNull()
+  await act(async () => { parentCard.querySelector<HTMLButtonElement>('button')!.click() })
+  expect(tree.container.querySelector('aside')?.textContent).toContain('Child reply')
+  expect(tree.container.querySelector('main')?.textContent).not.toContain('Child reply')
+})
+
+test('a resume keeps the open panel and its earlier steps above the resumed run', async () => {
+  const resumeCard: NestedToolUseRow = {
+    ...agent('a', [prose('resumed-step', 'Resumed reply')]), id: 'resume-row-a', toolUseId: 'resume-a', toolName: 'ResumeAgent',
+    input: { agentId: 'a', prompt: 'Check again' },
+  }
+  const original: NestedToolUseRow = { ...agent(), status: 'success', result: { isError: false, content: 'Finished', diff: null, agentId: 'a' } }
+  const fallback = (_row: SubagentDockRow) => { throw new Error('the panel must stay open') }
+  const tree = await harness.mount(workspace({ rows: [original], active: [b], finished: [worker('a', { state: 'completed', runToolUseIds: ['launch-a'] })], fallback }))
+  await click(tree.container, '[data-finished-toggle]')
+  await click(tree.container, '[data-dock-row="a"]')
+  const body = tree.container.querySelector('.subagent-side-body')!
+  expect(body.textContent).toContain('The dock opens the worker.')
+  const resumed = worker('a', { state: 'resumed', runKey: 'resume-a', toolUseId: 'resume-a', resumedAt: 2000, runToolUseIds: ['launch-a', 'resume-a'] })
+  await tree.render(workspace({ rows: [original, resumeCard], active: [resumed, b], finished: [], fallback }))
+  expect(tree.container.querySelector('.subagent-side-body')).toBe(body)
+  expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-a, resumed')
+  const text = body.textContent ?? ''
+  expect(text.indexOf('The dock opens the worker.')).toBeGreaterThanOrEqual(0)
+  expect(text.indexOf('Resumed reply')).toBeGreaterThan(text.indexOf('The dock opens the worker.'))
+  expect(body.querySelector('.subagent-side-availability')).toBeNull()
 })
 
 test('an open panel follows its run into the background but not into a resume without a run of its own', async () => {

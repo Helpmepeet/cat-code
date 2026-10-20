@@ -36,7 +36,7 @@ afterAll(async () => { globalThis.ResizeObserver = oldObserver; window.matchMedi
 function row(overrides: Partial<SubagentDockRow> = {}): SubagentDockRow {
   return {
     agentId: 'worker-a', runKey: 'run-a', toolUseId: 'tool-a', name: 'Ada', task: 'Inspect the parser', type: 'Explore', state: 'running', model: 'GPT-6.1 Sol', recordedAccount: null, usageLabel: null, verdict: null, resultSummary: null, blockReason: null, launchOrder: 0, terminalAt: null, resumedAt: null, lastSeenAt: 10, missingSince: null, settleUntil: null,
-    stateWord: '', account: null, rowModel: null, stripLines: ['GPT-6.1 Sol', 'Reading the parser'], chipLines: ['GPT-6.1 Sol', 'Reading the parser'], settling: false, ...overrides,
+    stateWord: '', account: null, rowModel: null, stripLines: ['GPT-6.1 Sol', 'Reading the parser'], chipLines: ['GPT-6.1 Sol', 'Reading the parser'], settling: false, runToolUseIds: [], ...overrides,
   }
 }
 function state(active: SubagentDockRow[], finished: SubagentDockRow[] = []): DerivedSubagentDock {

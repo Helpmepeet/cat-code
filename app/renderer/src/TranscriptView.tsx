@@ -166,7 +166,7 @@ import {
 import { AgentFace } from './AgentChrome.js'
 import { deriveTarget, derivePeerTargetParts, peerTargetFragment, toolCardFilePath, displayFilePath, type PeerTargetParts } from './transcriptToolTarget.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
-import { AgentRevealContext, containsAgentTool, type AgentRevealRequest } from './transcriptAgentReveal.js'
+import { AgentPanelContext, AgentRevealContext, containsAgentTool, type AgentRevealRequest } from './transcriptAgentReveal.js'
 import { agentToolSourceOf, agentActivityOf, agentProgressBadge, agentModelOf, agentAccountLabel } from './transcriptAgent.js'
 import {
   AGENT_STATE_TONE_CLASS,
@@ -4160,7 +4160,9 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     (row.toolName === 'Agent' || row.toolName === 'Task') &&
     row.input.run_in_background === true
   const completion = isLaunchRecord ? null : row.agentCompletion
-  const childCount = row.children.length
+  // Where the side panel is available, the agent's steps live only there.
+  const openPanel = useContext(AgentPanelContext)
+  const childCount = openPanel === null ? row.children.length : 0
   // ONE expression, so the card's `body` stays null when there is genuinely no
   // body — two sibling expressions would make it an array and give every
   // childless agent card an affordance that expands to nothing.
@@ -4270,7 +4272,15 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           Send to background
         </button>
       )}
-      {body === null ? (
+      {openPanel !== null ? (
+        <button
+          type="button"
+          onClick={() => openPanel(row)}
+          className="block w-full text-left"
+        >
+          {lines}
+        </button>
+      ) : body === null ? (
         lines
       ) : (
         <button
@@ -4292,7 +4302,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           {STEPS_NOT_LOADED_LABEL}
         </div>
       ) : null}
-      {expanded && body !== null ? (
+      {(expanded || openPanel !== null) && body !== null ? (
         <div
           className={`${TOOL_CARD_BODY_CLASS[cardStyle]} ${TOOL_CARD_BODY_INNER_CLASS[cardStyle]}`}
         >

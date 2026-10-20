@@ -138,7 +138,7 @@ test('clear stays cleared as transcript evidence arrives, but a resumed backgrou
   const resumeRow = agentRow({ toolUseId: 'resume-a', toolName: 'ResumeAgent', input: { agentId: 'a', prompt: 'Check again' }, status: 'success', result: { isError: false, content: 'Started', diff: null, agentUsage: { totalTokens: 9000, toolUses: 99 } }, agentCompletion: { status: 'completed', summary: 'Done', result: 'Checked', usage: { totalTokens: 500, toolUses: 1, durationMs: 100 } } })
   const done = view(resumed.state, { workers: [worker({ status: 'completed', isBackgrounded: true })], tasks: { items: [task({ status: 'completed', resumedAt: 2000, endTime: 3000 })], subagents: [] }, transcriptRows: [oldRow, resumeRow], clearMarkers, nowMs: 4000, reducedMotion: true })
   expect(done.finished).toHaveLength(1)
-  expect(done.finished[0]).toMatchObject({ runKey: 'resume-a', usageLabel: '1 tool call · 500 tokens' })
+  expect(done.finished[0]).toMatchObject({ runKey: 'resume-a', usageLabel: '1 tool call · 500 tokens', runToolUseIds: ['launch-a', 'resume-a'] })
 })
 
 test('capped unordered completions stay cleared after cold reload, while independent later runs remain eligible', () => {
