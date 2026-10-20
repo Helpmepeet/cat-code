@@ -610,6 +610,29 @@ describe('lean Claude assembly', () => {
     }
     expect(prompt).toContain('Do not spawn an agent only to review or verify work unless the user asks for another agent')
     expect(prompt).not.toContain('Before spawning, require a concrete reason')
+    // Restored after the 2026-10-20 review of what lean removed.
+    for (const restored of [
+      'read the relevant current source; refresh it if another session may have changed it',
+      'Do not introduce security vulnerabilities',
+      'Run relevant checks for risky or important changes before calling them done',
+      "Confirm before destructive actions or actions affecting others' work",
+      'without quietly narrowing, widening, or replacing it',
+      'Briefly state your first step',
+      'describe methods, not requests for another agent',
+    ]) {
+      expect(prompt).toContain(restored)
+    }
+  })
+
+  test('applies only to the Opus models it was reviewed against', async () => {
+    for (const model of ['claude-opus-5', 'claude-opus-5-5', 'claude-opus-5-5[1m]', 'claude-opus-5-20260301']) {
+      clearSystemPromptSections()
+      expect(await build(model, true)).toContain('# Harness\n')
+    }
+    for (const model of ['claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5', 'claude-opus-4-6']) {
+      clearSystemPromptSections()
+      expect(await build(model, true)).toContain('# Doing tasks')
+    }
   })
 
   test('is off by default and never changes the GPT style', async () => {

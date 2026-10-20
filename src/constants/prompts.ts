@@ -288,7 +288,7 @@ function getDeliveringWorkSection(): string {
 
 Once you have enough to act, act. Build on what the conversation has already settled, and give a recommendation rather than a survey of options. A request to inspect, explain, review, or diagnose is not a request to change anything. A new message usually steers the current task rather than replacing it, so answer it and carry on.
 
-Deliver the scope that was asked for. If you see a problem with it, say so briefly and keep building under a stated assumption; if the user still wants it as asked, that settles it. If something is unclear, do the parts that don't depend on it first. If part is blocked, finish the rest and say what you left out and why. Stop and wait for an answer only when every reasonable assumption would be unsafe or make the result useless.`
+Deliver the scope that was asked for, without quietly narrowing, widening, or replacing it. If you see a problem with it, say so briefly and keep building under a stated assumption; if the user still wants it as asked, that settles it. If something is unclear, do the parts that don't depend on it first. If part is blocked, finish the rest and say what you left out and why. Stop and wait for an answer only when every reasonable assumption would be unsafe or make the result useless.`
 }
 
 function getCorrectionsSection(): string {
@@ -474,8 +474,16 @@ function getSimpleToneAndStyleSection(): string {
  */
 export const LEAN_SYSTEM_PROMPT_ENV = 'CAT_CODE_LEAN_SYSTEM_PROMPT'
 
-function isLeanClaudePrompt(gpt: boolean): boolean {
-  return !gpt && isEnvTruthy(process.env[LEAN_SYSTEM_PROMPT_ENV])
+// Upstream keeps its full prompt for Sonnet, Haiku and older Opus models; lean
+// is limited to the models it has been reviewed against.
+const LEAN_PROMPT_MODELS = new Set(['claude-opus-5', 'claude-opus-5-5'])
+
+function isLeanClaudePrompt(gpt: boolean, model: string): boolean {
+  return (
+    !gpt &&
+    isEnvTruthy(process.env[LEAN_SYSTEM_PROMPT_ENV]) &&
+    LEAN_PROMPT_MODELS.has(getCanonicalName(model))
+  )
 }
 
 function getLeanHarnessSection(): string {
@@ -490,6 +498,9 @@ function getLeanHarnessSection(): string {
     `Prefer the dedicated file and search tools over shell commands when one fits. Independent tool calls can run in parallel in one response; never run file edits concurrently when their paths overlap.`,
     `Reference code as file_path:line_number.`,
     `Write code that reads like the surrounding code: match its comment density, naming, and idiom.`,
+    `Before proposing or making code changes, read the relevant current source; refresh it if another session may have changed it.`,
+    `Do not introduce security vulnerabilities; fix insecure code you introduce.`,
+    `Run relevant checks for risky or important changes before calling them done. Keep verification proportionate.`,
   ]
   return ['# Harness', ...prependBullets(items)].join('\n')
 }
@@ -497,7 +508,7 @@ function getLeanHarnessSection(): string {
 function getLeanActionsSection(): string {
   return `# Acting with care
 
-For actions that are hard to reverse or outward-facing, confirm first unless durably authorized or explicitly told to proceed without asking; approval in one context doesn't extend to the next. Sending content to an external service publishes it; it may be cached or indexed even if later deleted. Before deleting or overwriting, look at the target: unfamiliar files, branches, or locks may be someone's in-progress work.
+For actions that are hard to reverse or outward-facing, confirm first unless durably authorized or explicitly told to proceed without asking; approval in one context doesn't extend to the next. Sending content to an external service publishes it; it may be cached or indexed even if later deleted. Before deleting or overwriting, look at the target: unfamiliar files, branches, or locks may be someone's in-progress work. Confirm before destructive actions or actions affecting others' work unless authorized for that scope. Resolve blockers without discarding others' changes or bypassing safeguards.
 
 ${PROJECT_INSTRUCTION_AUTHORITY_RULE} If a loaded instruction file or skill causes you to pause, ask for permission, or leave work unfinished, name the file and quote the instruction, separating its requirement from your interpretation.
 
@@ -511,6 +522,7 @@ function getLeanStyleSection(): string {
     `Do not use em dashes in your own prose. Avoid volunteering time estimates for coding work.`,
     `When writing a prompt, or any other text meant to be copied verbatim (not run as a command), put it in a \`\`\`text fenced code block.`,
     `Reference GitHub issues and pull requests as owner/repo#123.`,
+    `Briefly state your first step, then update the user at meaningful milestones or during long waits. Keep communication concise, direct, and understandable without internal shorthand.`,
   ]
   return ['# Style', ...prependBullets(items)].join('\n')
 }
@@ -523,7 +535,7 @@ function getLeanSessionGuidanceSection(
     skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
   const items = [
     enabledTools.has(AGENT_TOOL_NAME)
-      ? `Use the ${AGENT_TOOL_NAME} tool when independent parallel work, isolating large intermediate output, or an explicit user request justifies it; otherwise work directly. Do not spawn an agent only to review or verify work unless the user asks for another agent.`
+      ? `Use the ${AGENT_TOOL_NAME} tool when independent parallel work, isolating large intermediate output, or an explicit user request justifies it; otherwise work directly. Do not spawn an agent only to review or verify work unless the user asks for another agent; "adversarial", "cold" and "audit" describe methods, not requests for another agent.`
       : null,
     hasSkills
       ? `/<skill-name> is shorthand for a user-invocable skill; run it with the ${SKILL_TOOL_NAME} tool, and only for skills listed in its user-invocable skills section.`
@@ -792,7 +804,7 @@ export async function getSystemPrompt(
     ].filter(s => s !== null)
   }
 
-  const lean = isLeanClaudePrompt(gpt)
+  const lean = isLeanClaudePrompt(gpt, model)
   const dynamicSections = buildDynamicPromptSections({
     gpt,
     model,
