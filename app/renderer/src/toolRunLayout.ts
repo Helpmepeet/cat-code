@@ -26,13 +26,18 @@
  * changes family, it does not merge families. `family` on the item is what the
  * view dispatches on, exactly as `GroupedToolGroup` dispatches on `groupKind`.
  *
- * WHY EDIT AND WRITE ARE NOT HERE, checked rather than assumed: the engine puts
- * them in `isNonCollapsibleToolUse`, so an edit deliberately BREAKS a collapse
- * group (`collapseReadSearch.ts:345-368`; only memory-file writes are exempt),
- * and the ledger already cut the prototype's many-files edit switcher because
- * `FileEditTool` returns ONE file's patch (§05 `MultiDiffCard`). Both sources say
- * no, and an individual edit card carries its filename and ±counts, which
- * is real information a run would hide.
+ * EDITS GROUP ONLY WITHIN ONE FILE. The engine puts edits in
+ * `isNonCollapsibleToolUse` (`collapseReadSearch.ts`), and a mixed-file run would
+ * hide what an individual edit card carries: its filename and ±counts. A run of
+ * edits to the SAME file hides neither, because the head states the shared path
+ * once and sums the counts, while each member keeps its own counts, status and
+ * diff. A model routinely sends a dozen small replacements to one file in a
+ * single response, and one card per replacement buried the turn
+ * (operator-approved, 2026-10-20). So an edit's run key carries its `file_path`,
+ * and a change of file ends the run exactly as a change of family does. The key
+ * is the INPUT path, not the result's diff path, so a pending call keys the same
+ * before and after its result lands. Writes stay out: a write replaces the file
+ * whole, so there is no sequence of partial changes to fold.
  */
 
 import type { ReasoningLayoutItem } from './reasoningLayout.js'
@@ -41,7 +46,7 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 export type ToolRunMember = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
 
 /** The families that group. Not every family: see the header. */
-export const TOOL_RUN_FAMILIES = ['read', 'grep'] as const
+export const TOOL_RUN_FAMILIES = ['read', 'grep', 'edit'] as const
 
 export type ToolRunFamily = (typeof TOOL_RUN_FAMILIES)[number]
 
@@ -73,9 +78,21 @@ export const TOOL_RUN_MIN_MEMBERS = 2
  */
 export function toolRunFamily(row: NestedTranscriptRow): ToolRunFamily | null {
   if (row.kind !== 'tool-use' || row.children.length > 0) return null
-  return (TOOL_RUN_FAMILIES as readonly string[]).includes(row.toolFamily)
-    ? (row.toolFamily as ToolRunFamily)
-    : null
+  if (!(TOOL_RUN_FAMILIES as readonly string[]).includes(row.toolFamily)) return null
+  // An edit with no named file (a multi-file patch) has no file to share a run on.
+  if (row.toolFamily === 'edit' && editRunPath(row) === null) return null
+  return row.toolFamily as ToolRunFamily
+}
+
+/** The file an edit run is keyed on: the call's own `file_path` input. */
+export function editRunPath(row: ToolRunMember): string | null {
+  const filePath = row.input['file_path']
+  return typeof filePath === 'string' && filePath.length > 0 ? filePath : null
+}
+
+/** Rows join one run only while this matches: the family, plus the file for edits. */
+function toolRunKey(family: ToolRunFamily, row: ToolRunMember): string {
+  return family === 'edit' ? `edit:${editRunPath(row) ?? ''}` : family
 }
 
 // Same input-reference caching as `groupReasoningRuns` (`reasoningLayout.ts:177`)
@@ -107,6 +124,7 @@ export function groupToolRuns(
   // where members exist without one and no pair of variables that can drift.
   let run: {
     family: ToolRunFamily
+    key: string
     entries: { item: TranscriptLayoutItem; row: ToolRunMember }[]
   } | null = null
   let foundRun = false
@@ -132,10 +150,11 @@ export function groupToolRuns(
       const row = item.row
       const family = toolRunFamily(row)
       if (family !== null) {
-        // A change of family ends the previous run and starts a new one, rather
-        // than merging two kinds under one head.
-        if (run !== null && run.family !== family) flush()
-        run ??= { family, entries: [] }
+        // A change of family, or of file for edits, ends the previous run and
+        // starts a new one, rather than merging two kinds under one head.
+        const key = toolRunKey(family, row)
+        if (run !== null && run.key !== key) flush()
+        run ??= { family, key, entries: [] }
         run.entries.push({ item, row })
         continue
       }

@@ -159,11 +159,70 @@ test('a non-groupable tool breaks the run, exactly like the engine collapse rule
   expect(kinds(grouped)).toEqual(['tool-run:read', 'tool-use', 'tool-run:read'])
 })
 
-test('edit and write never group — the engine breaks its groups on them', () => {
-  expect(toolRunFamily(toolRow('e', 'edit'))).toBeNull()
+function editRow(id: string, filePath: string): NestedTranscriptRow {
+  return toolRow(id, 'edit', {
+    input: { file_path: filePath, old_string: 'a', new_string: 'b' },
+  } as Partial<NestedTranscriptRow>)
+}
+
+test('consecutive edits to the same file fold into one run', () => {
+  const grouped = groupToolRuns([
+    single(editRow('e1', '/repo/a.ts')),
+    single(editRow('e2', '/repo/a.ts')),
+    single(editRow('e3', '/repo/a.ts')),
+  ])
+
+  expect(kinds(grouped)).toEqual(['tool-run:edit'])
+  const run = grouped[0]
+  if (run?.kind !== 'tool-run') throw new Error('expected a tool run')
+  expect(run.id).toBe('edit-run:e1')
+  expect(run.members.map(member => member.id)).toEqual(['e1', 'e2', 'e3'])
+})
+
+test('a change of file ends an edit run, so each card still names one file', () => {
+  const grouped = groupToolRuns([
+    single(editRow('e1', '/repo/a.ts')),
+    single(editRow('e2', '/repo/a.ts')),
+    single(editRow('e3', '/repo/b.ts')),
+    single(editRow('e4', '/repo/b.ts')),
+    single(editRow('e5', '/repo/a.ts')),
+  ])
+
+  expect(kinds(grouped)).toEqual(['tool-run:edit', 'tool-run:edit', 'tool-use'])
+  const [first, second] = grouped
+  if (first?.kind !== 'tool-run' || second?.kind !== 'tool-run') {
+    throw new Error('expected two edit runs')
+  }
+  expect(first.members.map(member => member.id)).toEqual(['e1', 'e2'])
+  expect(second.members.map(member => member.id)).toEqual(['e3', 'e4'])
+})
+
+test('edits to different files never share a run', () => {
+  expect(
+    kinds(groupToolRuns([single(editRow('e1', '/repo/a.ts')), single(editRow('e2', '/repo/b.ts'))])),
+  ).toEqual(['tool-use', 'tool-use'])
+})
+
+test('a read of the same file breaks an edit run', () => {
+  const grouped = groupToolRuns([
+    single(editRow('e1', '/repo/a.ts')),
+    single(toolRow('r', 'read', { input: { file_path: '/repo/a.ts' } } as Partial<NestedTranscriptRow>)),
+    single(editRow('e2', '/repo/a.ts')),
+  ])
+
+  expect(kinds(grouped)).toEqual(['tool-use', 'tool-use', 'tool-use'])
+})
+
+test('an edit with no named file, and every write, keeps its own card', () => {
+  const patch = toolRow('p', 'edit', { input: { patch: '*** Begin Patch' } } as Partial<NestedTranscriptRow>)
+
+  expect(toolRunFamily(patch)).toBeNull()
   expect(toolRunFamily(toolRow('w', 'write'))).toBeNull()
   expect(
-    kinds(groupToolRuns([single(toolRow('e1', 'edit')), single(toolRow('e2', 'edit'))])),
+    kinds(groupToolRuns([single(patch), single(toolRow('p2', 'edit', { input: {} } as Partial<NestedTranscriptRow>))])),
+  ).toEqual(['tool-use', 'tool-use'])
+  expect(
+    kinds(groupToolRuns([single(toolRow('w1', 'write')), single(toolRow('w2', 'write'))])),
   ).toEqual(['tool-use', 'tool-use'])
 })
 

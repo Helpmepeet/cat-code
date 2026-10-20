@@ -5700,6 +5700,117 @@ test('adjacent reads collapse into ONE card that counts the files', () => {
   expect(occurrences(html, '>Read</span>')).toBe(1)
 })
 
+function runEditRow(
+  id: string,
+  filePath: string,
+  over: {
+    oldString?: string
+    status?: ToolCardStatus
+    hunks?: { newStart: number; lines: string[] }[]
+  } = {},
+): NestedTranscriptRow {
+  const status = over.status ?? 'success'
+  const hunks = over.hunks ?? [{ newStart: 10, lines: [' ctx', ' ctx', '-old', '+new'] }]
+  return toolRow({
+    id,
+    toolName: 'Edit',
+    toolFamily: 'edit',
+    input: { file_path: filePath, old_string: over.oldString ?? 'old', new_string: 'new' },
+    status,
+    result:
+      status === 'error'
+        ? { content: 'String to replace not found in file.', isError: true, diff: null }
+        : {
+            content: 'updated',
+            isError: false,
+            diff: {
+              filePath,
+              hunks: hunks.map(hunk => ({
+                oldStart: hunk.newStart,
+                oldLines: 1,
+                newStart: hunk.newStart,
+                newLines: 1,
+                lines: hunk.lines,
+              })),
+            },
+          },
+  })
+}
+
+test('consecutive edits to one file collapse into ONE card with the path once and summed counts', () => {
+  const html = renderMany(
+    [
+      runEditRow('e1', '/repo/app/a.tsx'),
+      runEditRow('e2', '/repo/app/a.tsx', {
+        hunks: [{ newStart: 40, lines: [' ctx', '-x', '-y', '+z'] }],
+      }),
+      runEditRow('e3', '/repo/app/a.tsx'),
+    ],
+    false,
+    '/repo',
+  )
+  const text = visibleText(html)
+
+  expect(occurrences(html, '>Edit</span>')).toBe(1)
+  expect(occurrences(text, 'app/a.tsx')).toBe(1)
+  expect(text).toContain('3 edits')
+  // 1+1+1 additions, 1+2+1 deletions.
+  expect(text).toContain('+3')
+  expect(text).toContain('−4')
+  // Collapsed by default: the per-edit rows are inside the closed body.
+  expect(text).not.toContain('line 12')
+})
+
+test('an open edit run names each member by the first line it changed', () => {
+  const html = renderMany(
+    [
+      runEditRow('e1', '/repo/a.tsx'),
+      runEditRow('e2', '/repo/a.tsx', {
+        hunks: [
+          { newStart: 40, lines: ['-x', '+z'] },
+          { newStart: 90, lines: ['-x', '+z'] },
+        ],
+      }),
+    ],
+    true,
+  )
+  const text = visibleText(html)
+
+  // newStart 10 plus the two leading context lines: the changed line, not the hunk's.
+  expect(text).toContain('line 12')
+  expect(text).not.toContain('line 10')
+  expect(text).toContain('line 40 and 1 more')
+})
+
+test('a failed edit inside a run fails the head, opens itself, and is named by its text', () => {
+  const html = renderMany([
+    runEditRow('e1', '/repo/a.tsx'),
+    runEditRow('e2', '/repo/a.tsx', {
+      status: 'error',
+      oldString: '\n    <p>DISTINCT_OLD_TEXT</p>\n',
+    }),
+  ])
+  const text = visibleText(html)
+
+  expect(html).toContain('aria-label="failed"')
+  expect(text).toContain('&lt;p&gt;DISTINCT_OLD_TEXT&lt;/p&gt;')
+  expect(text).toContain('String to replace not found in file.')
+  // Only the edit that succeeded counts toward the head.
+  expect(text).toContain('+1')
+  expect(text).toContain('−1')
+})
+
+test('an edit to another file starts its own card', () => {
+  const html = renderMany([
+    runEditRow('e1', '/repo/a.tsx'),
+    runEditRow('e2', '/repo/a.tsx'),
+    runEditRow('e3', '/repo/b.tsx'),
+  ])
+
+  expect(occurrences(html, '>Edit</span>')).toBe(2)
+  expect(visibleText(html)).toContain('2 edits')
+})
+
 test('an expanded run member carries no inspector footer either', () => {
   // The removed footer rendered once per OPEN MEMBER, not once per card, so a
   // three-file run with every member open used to draw three of them

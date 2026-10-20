@@ -228,6 +228,7 @@ import {
   useToolCardExpansionStore,
 } from './toolCardExpansion.js'
 import {
+  editRunPath,
   groupToolRuns,
   type ToolRunFamily,
   type ToolRunMember,
@@ -3510,6 +3511,11 @@ function ToolRunCard({
     <ToolCardShell
       family={family}
       target={head.target}
+      targetFilePath={
+        head.filePath === undefined || members[0] === undefined
+          ? undefined
+          : { rawPath: head.filePath, sessionId: members[0].sessionId }
+      }
       status={status}
       sub={head.sub}
       headerBadge={head.badge}
@@ -3562,10 +3568,35 @@ function toolRunHead(
   cwd: string | null,
 ): {
   target: string
-  sub: string
+  sub?: string
   badge: ReactNode
   hoistedPrefix: string
+  filePath?: string
 } {
+  if (family === 'edit') {
+    // Every member names the same file (the run key), so the head states it once
+    // and sums the members that carry a diff. A running or failed edit has none.
+    const filePath = editRunPath(members[0]) ?? ''
+    const total = members.reduce((sum, member) => {
+      const counts = rowDiffCounts(member)
+      return counts === null
+        ? sum
+        : { adds: sum.adds + counts.adds, dels: sum.dels + counts.dels }
+    }, { adds: 0, dels: 0 })
+    return {
+      target: displayFilePath(filePath, cwd),
+      hoistedPrefix: '',
+      filePath,
+      badge: (
+        <>
+          <span className="shrink-0 font-mono text-[11px] text-text-faint">
+            {members.length} edits
+          </span>
+          {diffCountsBadge(total)}
+        </>
+      ),
+    }
+  }
   if (family === 'read') {
     const target = `${members.length} ${members.length === 1 ? 'file' : 'files'}`
     const hoistedPrefix = commonDirPrefix(members.map(memberReadPath))
@@ -3741,6 +3772,7 @@ const ToolRunRow = memo(function ToolRunRow({
             {digest}
           </span>
         ) : null}
+        {family === 'edit' ? diffCountBadge(row) : null}
         {row.status !== 'success' ? (
           <span className="flex shrink-0 items-center gap-1.5">
             <span
@@ -3782,6 +3814,10 @@ const ToolRunRow = memo(function ToolRunRow({
  *
  * A search has no such structure, so its pattern is one truncating run, and it
  * reuses `deriveTarget` rather than re-deriving which input field names a search.
+ *
+ * An edit shares its file with the whole run, so it is named by WHERE it changed
+ * the file. A call with no diff (still running, failed, stopped) has no location
+ * to state, so it shows the start of the text it was asked to replace instead.
  */
 function ToolRunRowLabel({
   family,
@@ -3793,7 +3829,23 @@ function ToolRunRowLabel({
   hoistedPrefix: string
 }) {
   const filePathContext = useContext(FilePathMenuContext)
-  if (family !== 'read') {
+  if (family === 'edit') {
+    const location = editLocationLabel(row)
+    return location !== null ? (
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
+        <span className="text-text-ghost">line </span>
+        {location.line}
+        {location.more === null ? null : (
+          <span className="text-text-ghost">{location.more}</span>
+        )}
+      </span>
+    ) : (
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-subtle">
+        {editSnippet(row)}
+      </span>
+    )
+  }
+  if (family === 'grep') {
     return (
       <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary">
         {deriveTarget(row)}
@@ -3859,6 +3911,38 @@ function readRangeLabel(row: ToolRunMember): string | null {
 }
 
 /**
+ * The first line an edit changed, in the edited file's numbering, or null when
+ * the row has no diff. A hunk opens with unchanged context lines, so `newStart`
+ * alone names a line the edit did not touch; the context ahead of the first
+ * change is skipped. A `replace_all` that changed several places says how many
+ * more, since naming only the first would read as a one-place edit.
+ */
+function editLocationLabel(
+  row: ToolRunMember,
+): { line: number; more: string | null } | null {
+  const hunks = selectToolDiffs(row.result)[0]?.hunks ?? []
+  const first = hunks[0]
+  if (first === undefined) return null
+  const leadingContext = first.lines.findIndex(
+    line => line.startsWith('+') || line.startsWith('-'),
+  )
+  return {
+    line: first.newStart + Math.max(0, leadingContext),
+    more: hunks.length > 1 ? ` and ${hunks.length - 1} more` : null,
+  }
+}
+
+/** The first non-blank line of the text an edit was asked to replace. */
+function editSnippet(row: ToolRunMember): string {
+  const oldString = row.input['old_string']
+  if (typeof oldString === 'string') {
+    const line = oldString.split('\n').find(text => text.trim().length > 0)
+    if (line !== undefined) return line.trim()
+  }
+  return row.toolName
+}
+
+/**
  * The right-hand digest, or null when the payload cannot supply one (an error, a
  * call still running, an unrecognised shape). Null renders nothing rather than a
  * zero, so a row never asserts a count it did not measure.
@@ -3872,7 +3956,9 @@ function readRangeLabel(row: ToolRunMember): string | null {
  * memory file by its prefix, which is exactly the claim this doc comment forbids.
  */
 function toolRunDigest(family: ToolRunFamily, row: ToolRunMember): string | null {
-  if (family !== 'read') {
+  // An edit's digest is its coloured ±counts, drawn by the row itself.
+  if (family === 'edit') return null
+  if (family === 'grep') {
     const digest = memberGrepDigest(row)
     return digest === null ? null : formatGrepDigest(digest)
   }
@@ -6733,9 +6819,9 @@ function countDiff(diff: ToolDiffProjection): { adds: number; dels: number } {
   return { adds, dels }
 }
 
-function diffCountBadge(row: ToolUseNestedRow): ReactNode {
+function rowDiffCounts(row: ToolUseNestedRow): { adds: number; dels: number } | null {
   const diffs = selectToolDiffs(row.result)
-  const counts = diffs.length > 0
+  return diffs.length > 0
     ? diffs.reduce((total, diff) => {
         const counts = countDiff(diff)
         return { adds: total.adds + counts.adds, dels: total.dels + counts.dels }
@@ -6746,6 +6832,13 @@ function diffCountBadge(row: ToolUseNestedRow): ReactNode {
         row.input.content.length > 0
       ? { adds: row.input.content.split('\n').length, dels: 0 }
       : null
+}
+
+function diffCountBadge(row: ToolUseNestedRow): ReactNode {
+  return diffCountsBadge(rowDiffCounts(row))
+}
+
+function diffCountsBadge(counts: { adds: number; dels: number } | null): ReactNode {
   if (counts === null || (counts.adds === 0 && counts.dels === 0)) return undefined
   return (
     <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10.5px] tabular-nums">
