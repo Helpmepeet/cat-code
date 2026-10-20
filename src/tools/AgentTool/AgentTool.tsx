@@ -19,7 +19,7 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import { selectAvailableMcpServerNames } from '../../services/mcp/mcpState.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
-import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getTokenCountFromTracker, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { backgroundAgentTask, completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getTokenCountFromTracker, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
@@ -1533,6 +1533,16 @@ export const AgentTool = buildTool({
           foregroundRunId = registration.runId;
           const parentSignal = toolUseContext.abortController.signal;
           const forwardParentAbort = () => {
+            if (parentSignal.reason === 'interrupt') {
+              const task = toolUseContext.getAppState().tasks[registration.taskId];
+              // Transfer the live iterator instead of forwarding the parent cut
+              // into the worker's independent controller.
+              if (isLocalAgentTask(task) && task.status === 'running' &&
+                  task.runId === registration.runId && !registration.abortController.signal.aborted &&
+                  (task.isBackgrounded || backgroundAgentTask(
+                    registration.taskId, toolUseContext.getAppState, rootSetAppState, registration.runId,
+                  ))) return;
+            }
             registration.abortController.abort(parentSignal.reason);
           };
           if (parentSignal.aborted) {

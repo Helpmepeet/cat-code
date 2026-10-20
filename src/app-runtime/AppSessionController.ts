@@ -55,6 +55,7 @@ export type AppSessionControllerAdapter = {
     signal: AbortSignal
     onPermissionRequest: (
       request: AppPermissionRequest,
+      signal?: AbortSignal,
     ) => Promise<AppPermissionResponse>
   }): AsyncIterable<SDKMessage>
   persistHandoffOutcome?: (operationId: string, outcome: HandoffTerminalOutcome) => Promise<SDKMessage[]>
@@ -80,6 +81,8 @@ type AppSessionEventListener = (event: AppSessionEvent) => void
 type PendingPermissionRequest = {
   request: AppPermissionRequest
   resolve: (response: AppPermissionResponse) => void
+  signal?: AbortSignal
+  cleanup?: () => void
 }
 
 export class AppSessionController {
@@ -321,6 +324,7 @@ export class AppSessionController {
     }
 
     this.pendingPermissionRequests.delete(requestId)
+    pendingRequest.cleanup?.()
     noteLidWorkApproval(requestId, false)
     pendingRequest.resolve(response)
     this.emit(createPermissionResolvedEvent(pendingRequest.request, response))
@@ -335,20 +339,25 @@ export class AppSessionController {
       return
     }
 
-    if (
+    const alreadyAborting =
       this.abortState.status === 'requested' ||
       this.abortState.status === 'aborted'
-    ) {
-      return
-    }
 
-    this.setAbortState({ status: 'requested', reason })
+    if (!alreadyAborting) this.setAbortState({ status: 'requested', reason })
 
-    for (const requestId of this.pendingPermissionRequests.keys()) {
+    for (const [requestId, pending] of this.pendingPermissionRequests) {
+      // A submit cut cancels the main tool signal, not a detached worker's.
+      // Unscoped adapters retain the fail-closed turn-level fallback.
+      if (adapterIntent === 'interrupt' && pending.signal) continue
       this.respondToPermissionRequest(requestId, {
         behavior: 'deny',
         message: reason,
       })
+    }
+    if (alreadyAborting) return
+    if (!this.activeTurn) {
+      this.setAbortState({ status: 'aborted', reason })
+      return
     }
 
     this.abortController?.abort(reason)
@@ -465,7 +474,7 @@ export class AppSessionController {
               },
             },
             signal: this.abortController.signal,
-            onPermissionRequest: request => this.waitForPermissionResponse(request),
+            onPermissionRequest: (request, signal) => this.waitForPermissionResponse(request, signal),
           })
 
           for await (const message of messages) {
@@ -543,8 +552,10 @@ export class AppSessionController {
 
   private waitForPermissionResponse(
     request: AppPermissionRequest,
+    signal?: AbortSignal,
   ): Promise<AppPermissionResponse> {
-    if (this.abortController?.signal.aborted) {
+    const ownerSignal = signal ?? this.abortController?.signal
+    if (ownerSignal?.aborted) {
       return Promise.resolve({
         behavior: 'deny',
         message: this.getAbortReason(),
@@ -552,10 +563,17 @@ export class AppSessionController {
     }
 
     return new Promise(resolve => {
+      const cancel = () => this.respondToPermissionRequest(request.requestId, {
+        behavior: 'deny',
+        message: typeof ownerSignal?.reason === 'string' ? ownerSignal.reason : this.getAbortReason(),
+      })
       this.pendingPermissionRequests.set(request.requestId, {
         request,
         resolve,
+        signal,
+        cleanup: () => ownerSignal?.removeEventListener('abort', cancel),
       })
+      ownerSignal?.addEventListener('abort', cancel, { once: true })
       noteLidWorkApproval(request.requestId, true, request.request.agent_id)
       this.emit(createPermissionRequestedEvent(request))
     })

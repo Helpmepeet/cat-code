@@ -20,6 +20,7 @@ import type {
 
 export type AppPermissionRequestHandler = (
   request: AppPermissionRequest,
+  signal?: AbortSignal,
 ) => Promise<AppPermissionResponse>
 
 export type AppRuntimeCanUseToolOptions = {
@@ -89,7 +90,7 @@ export function createAppRuntimeCanUseTool({
         tool_use_id: toolUseID,
         agent_id: toolUseContext.agentId,
       },
-    })
+    }, toolUseContext.abortController?.signal)
 
     const decision = permissionPromptToolResultToPermissionDecision(
       normalizePermissionResponse(result, updatedInput, toolUseID),

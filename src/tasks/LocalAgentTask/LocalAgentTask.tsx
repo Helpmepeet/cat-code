@@ -1491,19 +1491,27 @@ export function registerAgentForeground({
  * Background a specific foreground agent task.
  * @returns true if backgrounded successfully, false otherwise
  */
-export function backgroundAgentTask(taskId: string, getAppState: () => AppState, setAppState: SetAppState): boolean {
+export function backgroundAgentTask(taskId: string, getAppState: () => AppState, setAppState: SetAppState, expectedRunId?: string): boolean {
   const state = getAppState();
   const task = state.tasks[taskId];
-  if (!isLocalAgentTask(task) || task.isBackgrounded) {
+  if (!isLocalAgentTask(task) || task.isBackgrounded || task.status !== 'running' ||
+      task.abortController?.signal.aborted ||
+      (expectedRunId !== undefined && task.runId !== expectedRunId)) {
     return false;
   }
+  const resolver = backgroundSignalResolvers.get(taskId);
+  if (expectedRunId !== undefined && (!task.abortController || !resolver)) return false;
 
-  // Update state to mark as backgrounded
+  let backgrounded = false;
   setAppState(prev => {
     const prevTask = prev.tasks[taskId];
-    if (!isLocalAgentTask(prevTask)) {
+    if (!isLocalAgentTask(prevTask) || prevTask.isBackgrounded ||
+        prevTask.status !== 'running' || prevTask.runId !== task.runId ||
+        prevTask.abortController !== task.abortController ||
+        prevTask.abortController?.signal.aborted) {
       return prev;
     }
+    backgrounded = true;
     return {
       ...prev,
       tasks: {
@@ -1516,13 +1524,11 @@ export function backgroundAgentTask(taskId: string, getAppState: () => AppState,
     };
   });
 
-  // Resolve the background signal to interrupt the agent loop
-  const resolver = backgroundSignalResolvers.get(taskId);
-  if (resolver) {
-    resolver();
+  if (backgrounded) {
+    resolver?.();
     backgroundSignalResolvers.delete(taskId);
   }
-  return true;
+  return backgrounded;
 }
 
 /**

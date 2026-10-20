@@ -348,6 +348,54 @@ describe('AppSessionController', () => {
     })
   })
 
+  test('submit-interrupt preserves worker-scoped approvals between turns and cancellation still settles them', async () => {
+    const main = new AbortController()
+    const worker = new AbortController()
+    const laterWorker = new AbortController()
+    let requestPermission!: Parameters<import('./AppSessionController.js').AppSessionControllerAdapter['runTurn']>[0]['onPermissionRequest']
+    let releaseTurn!: () => void
+    const gate = new Promise<void>(resolve => { releaseTurn = resolve })
+    let mainResponse: Promise<AppPermissionResponse>
+    let workerResponse: Promise<AppPermissionResponse>
+    const request = (requestId: string, agentId?: string) => ({
+      requestId,
+      request: {
+        subtype: 'can_use_tool' as const, tool_name: 'Bash', input: { command: 'pwd' },
+        tool_use_id: requestId, agent_id: agentId,
+      },
+    })
+    const controller = new AppSessionController({
+      async *runTurn({ onPermissionRequest }) {
+        requestPermission = onPermissionRequest
+        mainResponse = onPermissionRequest(request('main'), main.signal)
+        workerResponse = onPermissionRequest(request('worker', 'worker-1'), worker.signal)
+        await gate
+      },
+      abort() {
+        main.abort('interrupt')
+        releaseTurn()
+      },
+    })
+    const turn = controller.submit('start')
+    controller.abort('force-send', 'interrupt')
+    await turn
+    expect(await mainResponse!).toMatchObject({ behavior: 'deny' })
+    expect(controller.getPendingPermissionRequests().map(request => request.requestId)).toEqual(['worker'])
+    expect(controller.respondToPermissionRequest('worker', { behavior: 'allow', updatedInput: { command: 'pwd' } })).toBe(true)
+    expect(await workerResponse!).toMatchObject({ behavior: 'allow' })
+
+    const later = requestPermission(request('later', 'worker-1'), worker.signal)
+    expect(controller.getPendingPermissionRequests().map(request => request.requestId)).toEqual(['later'])
+    worker.abort('Task stopped')
+    expect(await later).toEqual({ behavior: 'deny', message: 'Task stopped' })
+    expect(controller.getPendingPermissionRequests()).toHaveLength(0)
+
+    const afterAbort = requestPermission(request('after-abort', 'worker-2'), laterWorker.signal)
+    controller.abort('Stop waiting')
+    expect(await afterAbort).toEqual({ behavior: 'deny', message: 'Stop waiting' })
+    expect(controller.getPendingPermissionRequests()).toHaveLength(0)
+  })
+
   test('waitUntilIdle settles from the active-turn writer without polling', async () => {
     let releaseTurn: (() => void) | undefined
     const turnGate = new Promise<void>(resolve => {

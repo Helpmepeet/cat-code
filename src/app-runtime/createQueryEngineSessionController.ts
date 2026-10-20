@@ -26,6 +26,7 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
   handoffReconciliationAdmission?: true
   onPermissionRequest?: (
     request: AppPermissionRequest,
+    signal?: AbortSignal,
   ) => Promise<AppPermissionResponse>
 }
 

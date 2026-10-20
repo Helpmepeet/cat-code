@@ -22,6 +22,7 @@ import {
 } from '../../services/api/codex-websocket-transport.js'
 import {
   appendLocalAgentSystemMessage,
+  backgroundAgentTask,
   claimPendingMessagesForRequest,
   completeAgentTask,
   enqueueAgentNotification,
@@ -143,6 +144,38 @@ describe('LocalAgentTask foreground cleanup', () => {
     ['failed', 'failed'],
     ['killed', 'was stopped'],
   ] as const
+
+  test('background admission rejects a stale run and a stop racing its state update', () => {
+    const registration = registerAgentForeground({
+      agentId: 'handoff-race', description: 'handoff race', prompt: 'test',
+      selectedAgent: { agentType: 'general-purpose', getSystemPrompt: () => '' } as never,
+      setAppState,
+    })
+    expect(backgroundAgentTask('handoff-race', () => appState, setAppState, 'stale-run')).toBe(false)
+    const stopBeforeUpdate = (update: (prev: AppState) => AppState) => {
+      killAsyncAgent('handoff-race', setAppState, registration.runId)
+      setAppState(update)
+    }
+    expect(backgroundAgentTask('handoff-race', () => appState, stopBeforeUpdate, registration.runId)).toBe(false)
+    expect(appState.tasks['handoff-race']).toMatchObject({ status: 'killed', isBackgrounded: false })
+    expect(backgroundAgentTask('handoff-race', () => appState, setAppState, registration.runId)).toBe(false)
+  })
+
+  test('background admission transfers only the expected live worker controller', async () => {
+    const registration = registerAgentForeground({
+      agentId: 'handoff-live', description: 'handoff live', prompt: 'test',
+      selectedAgent: { agentType: 'general-purpose', getSystemPrompt: () => '' } as never,
+      setAppState,
+    })
+    expect(backgroundAgentTask('handoff-live', () => appState, setAppState, registration.runId)).toBe(true)
+    await registration.backgroundSignal
+    expect(appState.tasks['handoff-live']).toMatchObject({
+      status: 'running', isBackgrounded: true, runId: registration.runId,
+      abortController: registration.abortController,
+    })
+    expect(registration.abortController.signal.aborted).toBe(false)
+    killAsyncAgent('handoff-live', setAppState, registration.runId)
+  })
 
   test('unregisterAgentForeground releases the foreground agent codex lease', () => {
     seedCodexAccountPoolForTest({

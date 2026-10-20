@@ -47,24 +47,21 @@ export function createQueryEngineAppSession(
   return {
     async *submitMessage(prompt, options?: QueryEngineSessionOptions) {
       engine.refreshAbortController?.()
+      // Detached workers still use this session's permission route between turns.
       currentPermissionHandler = options?.onPermissionRequest
-      try {
-        if (options?.handoffContinuation) {
-          if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
-          yield* engine.continueHandoff(options.handoffContinuation.operationId, options)
-        } else yield* engine.submitMessage(prompt, {
-          uuid: options?.uuid,
-          isMeta: options?.isMeta,
-          origin: options?.origin,
-          onInputPersisted: options?.onInputPersisted,
-          handoffReconciliationAdmission: options?.handoffReconciliationAdmission,
-          onHandoffInputCommitted: options?.onHandoffInputCommitted,
-          onExecutionClosed: options?.onExecutionClosed,
-          handoffReconciliationContext: options?.handoffReconciliationContext,
-        })
-      } finally {
-        currentPermissionHandler = undefined
-      }
+      if (options?.handoffContinuation) {
+        if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
+        yield* engine.continueHandoff(options.handoffContinuation.operationId, options)
+      } else yield* engine.submitMessage(prompt, {
+        uuid: options?.uuid,
+        isMeta: options?.isMeta,
+        origin: options?.origin,
+        onInputPersisted: options?.onInputPersisted,
+        handoffReconciliationAdmission: options?.handoffReconciliationAdmission,
+        onHandoffInputCommitted: options?.onHandoffInputCommitted,
+        onExecutionClosed: options?.onExecutionClosed,
+        handoffReconciliationContext: options?.handoffReconciliationContext,
+      })
     },
     readHandoffOutcome(operationId) { return engine.readHandoffOutcome?.(operationId) ?? Promise.resolve(null) },
     recoverHandoffReconciliation(notice) {
