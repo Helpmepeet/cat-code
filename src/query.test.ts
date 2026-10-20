@@ -48,6 +48,7 @@ import {
 } from './bootstrap/state.js'
 import { getMainLoopModel } from './utils/model/model.js'
 import { drainSdkEvents } from './utils/sdkEventQueue.js'
+import { HARNESS_FEEDBACK_EXPIRES_AT } from './constants/temporaryHarnessFeedback.js'
 
 function createAssistantMessage(text: string, uuid: string): AssistantMessage {
   return {
@@ -173,6 +174,55 @@ describe('peer roster snapshot inheritance', () => {
       expect(messages).toContain(snapshot)
       expect(context.messages).toContain(snapshot)
     })
+  }
+})
+
+describe('temporary harness feedback request assembly', () => {
+  for (const provider of ['openai', 'firstParty'] as const) {
+    for (const child of [false, true]) {
+      for (const expired of [false, true]) {
+        test(`${provider} ${child ? 'worker' : 'main'} feedback is ${expired ? 'expired' : 'active'}`, async () => {
+          const clock = spyOn(Date, 'now').mockReturnValue(
+            HARNESS_FEEDBACK_EXPIRES_AT + (expired ? 0 : -1),
+          )
+          try {
+            const messages = [createUserMessage({ content: 'Complete the assigned task.' })]
+            const context = createToolUseContext(messages)
+            context.options.mainLoopProvider = provider
+            context.options.mainLoopModel = provider === 'openai'
+              ? 'gpt-5.6-terra'
+              : 'claude-sonnet-4-6'
+            if (child) context.agentId = asAgentId('feedback-worker')
+            const requests: string[] = []
+            for await (const _message of query({
+              messages,
+              toolUseContext: context,
+              systemPrompt: asSystemPrompt(['custom main or worker instructions']),
+              userContext: {},
+              systemContext: {},
+              querySource: child ? 'agent:verification' : 'repl_main_thread',
+              canUseTool: async () => ({ behavior: 'deny', message: 'No tools expected' }),
+              deps: {
+                uuid: () => 'feedback-query',
+                microcompact: async input => ({ messages: input }),
+                autocompact: async () => ({ wasCompacted: false }),
+                callModel: async function* ({ systemPrompt, openAIInstructionAssembly }) {
+                  requests.push(openAIInstructionAssembly?.instructions ?? systemPrompt.join('\n'))
+                  yield createAssistantMessage('Task complete.', 'feedback-response')
+                },
+              },
+            })) { /* Exercise the real main/worker query loop, without an API call. */ }
+
+            expect(requests).toHaveLength(1)
+            expect(requests[0]).toContain('custom main or worker instructions')
+            expect(requests[0]!.includes('# Temporary harness feedback')).toBe(!expired)
+            expect(requests[0]!.includes('harness-feedback.md')).toBe(!expired)
+          } finally {
+            clock.mockRestore()
+          }
+        })
+      }
+    }
   }
 })
 

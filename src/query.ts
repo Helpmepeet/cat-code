@@ -76,6 +76,7 @@ import {
 } from './services/api/errorUtils.js'
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { buildProviderInstructionAssembly } from './services/api/instructionAssembly.js'
+import { withTemporaryHarnessFeedback } from './constants/temporaryHarnessFeedback.js'
 import {
   createAgentPendingMessageAttachment,
   createAttachmentMessage,
@@ -839,6 +840,7 @@ async function* queryLoop(
     // it predates the experiment and is already the control-arm baseline.
     const mediaRecoveryEnabled =
       reactiveCompact?.isReactiveCompactEnabled() ?? false
+    const requestSystemPrompt = withTemporaryHarnessFeedback(systemPrompt)
     if (
       !compactionResult &&
       querySource !== 'compact' &&
@@ -854,7 +856,7 @@ async function* queryLoop(
       const nonMessageOverheadTokens = await measureNonMessageOverheadTokens({
         model: currentModel,
         toolUseContext,
-        systemPrompt,
+        systemPrompt: requestSystemPrompt,
         userContext,
         systemContext,
       })
@@ -936,7 +938,7 @@ async function* queryLoop(
           instructionAssembly = buildProviderInstructionAssembly({
             provider: currentProvider,
             messages: messagesForQuery,
-            systemPrompt,
+            systemPrompt: requestSystemPrompt,
             userContext,
             systemContext,
           })
