@@ -190,6 +190,49 @@ test('an outside click collapses a pinned sidebar on a non-Chat page', async () 
   expect(tree.container.querySelector('[aria-label="Pin sidebar open"]')).not.toBeNull()
 })
 
+test('an outside pointerdown dismisses an unpinned Chat sidebar even when propagation stops', async () => {
+  const tree = await harness.mount(sidebar())
+  const aside = tree.container.querySelector('aside')!
+  await hoverOpenAt(aside, 200)
+  const search = tree.container.querySelector<HTMLInputElement>('input')!
+  await act(async () => { search.focus() })
+
+  await act(async () => {
+    search.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  expect(aside.className).toContain('sidebar-expanded')
+
+  const outside = document.createElement('button')
+  outside.addEventListener('pointerdown', event => event.stopPropagation())
+  tree.container.appendChild(outside)
+  let clicks = 0
+  outside.addEventListener('click', () => { clicks += 1 })
+  await act(async () => {
+    outside.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    outside.focus()
+    outside.click()
+  })
+  expect(aside.className).toContain('w-12')
+  expect(clicks).toBe(1)
+
+  // A later hover must not resurrect the focus state from before dismissal.
+  await hoverOpenAt(aside, 200)
+  await act(async () => {
+    aside.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: outside }))
+    await new Promise(resolve => setTimeout(resolve, 400))
+  })
+  expect(aside.className).toContain('w-12')
+})
+
+test('outside pointerdown preserves a sidebar held open by its row menu', async () => {
+  const tree = await harness.mount(sidebar({ menuActive: true }))
+  const aside = tree.container.querySelector('aside')!
+  await act(async () => {
+    tree.container.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  expect(aside.className).toContain('sidebar-expanded')
+})
+
 test('New chat, Chats plus, and Add project dispatch separate actions with no sessions', async () => {
   const calls: string[] = []
   const tree = await harness.mount(
@@ -317,6 +360,43 @@ test('an open rail grows the footer when the pointer enters the band and rests i
     })
     expect(footerShowsList(tree.container)).toBe(false)
   })
+})
+
+test('replacing a focused footer button does not leave the unpinned Chat sidebar stuck open', async () => {
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar())
+    const aside = tree.container.querySelector('aside')!
+    await hoverOpenAt(aside, 200)
+    const destination = tree.container.querySelector<HTMLButtonElement>(
+      '[data-sidebar-nav-id="goals"]',
+    )!
+    await act(async () => { destination.focus() })
+    await act(async () => {
+      aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP + 1 }))
+    })
+    expect(destination.isConnected).toBe(false)
+    expect(aside.contains(document.activeElement)).toBe(false)
+
+    await act(async () => {
+      aside.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: tree.container }))
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    expect(aside.className).toContain('w-12')
+  })
+})
+
+test('keyboard entry preserves focus when the collapsed navigation is replaced', async () => {
+  const tree = await harness.mount(sidebar())
+  const aside = tree.container.querySelector('aside')!
+  const destination = tree.container.querySelector<HTMLButtonElement>(
+    '[data-sidebar-nav-id="goals"]',
+  )!
+  await act(async () => { destination.focus() })
+  expect(destination.isConnected).toBe(false)
+  expect(aside.className).toContain('sidebar-expanded')
+  expect(document.activeElement).toBe(
+    tree.container.querySelector('[data-sidebar-nav-id="goals"]'),
+  )
 })
 
 function sessionRow(id: string, over: Partial<MergedSessionRow> = {}): MergedSessionRow {

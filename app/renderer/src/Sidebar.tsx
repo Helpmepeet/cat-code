@@ -447,6 +447,7 @@ export function Sidebar({
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setPinned(false)
     setHovering(false)
+    setFocusWithin(false)
     setDismissed(true)
   }, [])
   const selectView = (view: SidebarView) => {
@@ -518,7 +519,7 @@ export function Sidebar({
   useEffect(() => {
     if (
       !open ||
-      activeView === 'chat' ||
+      (activeView === 'chat' && pinned) ||
       menuActive ||
       typeof document === 'undefined'
     ) {
@@ -529,9 +530,9 @@ export function Sidebar({
       if (!(target instanceof Node) || asideRef.current?.contains(target)) return
       collapseSidebar()
     }
-    document.addEventListener('pointerdown', onPointerDown)
-    return () => document.removeEventListener('pointerdown', onPointerDown)
-  }, [activeView, collapseSidebar, menuActive, open])
+    document.addEventListener('pointerdown', onPointerDown, true)
+    return () => document.removeEventListener('pointerdown', onPointerDown, true)
+  }, [activeView, collapseSidebar, menuActive, open, pinned])
 
   // When that overlay CLOSES, its full-screen backdrop swallowed the click, so
   // the pointer is wherever the menu was with no `onMouseLeave` to follow and
@@ -812,6 +813,14 @@ export function Sidebar({
     refocusNavId.current = null
     navRefs.current.get(navId)?.focus()
   }, [open, footerExpanded, readFooterExpanded])
+
+  // Removing a focused control does not emit blur. Reconcile after each commit,
+  // after any navigation focus handoff has finished.
+  useLayoutEffect(() => {
+    if (focusWithin && !asideRef.current?.contains(document.activeElement)) {
+      setFocusWithin(false)
+    }
+  })
 
   const accountButton = accountAlias ? (
     <button
