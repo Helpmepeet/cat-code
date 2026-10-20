@@ -1,9 +1,18 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { lstat, mkdtemp, readFile, rm, stat, symlink } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import type { ExecaReturnValue } from 'execa'
 
+let execaStubActive = false
+
+const actualExeca = await import('execa')
+const realExeca = actualExeca.execa
+const realExecaSync = actualExeca.execaSync
 const mockExeca = mock(async (command: string) => {
+  if (!execaStubActive) {
+    return realExeca(command) as Promise<ExecaReturnValue<string>>
+  }
   if (command.includes('POSIX file')) {
     const match = command.match(/POSIX file "([^"]+)"/)
     if (!match?.[1]) throw new Error('private screenshot path missing')
@@ -27,8 +36,12 @@ const mockExeca = mock(async (command: string) => {
 })
 
 mock.module('execa', () => ({
+  ...actualExeca,
   execa: mockExeca,
-  execaSync: mock(() => ({ exitCode: 0, stdout: '', stderr: '' })),
+  execaSync: (...args: Parameters<typeof realExecaSync>) =>
+    execaStubActive
+      ? { exitCode: 0, stdout: '', stderr: '' }
+      : realExecaSync(...args),
 }))
 
 const { shouldLogNativeClipboardFallbackError, getImageFromClipboard } =
@@ -38,14 +51,20 @@ let tempRoot = ''
 const previousTempDir = process.env.CLAUDE_CODE_TMPDIR
 
 afterEach(async () => {
+  execaStubActive = false
   if (previousTempDir === undefined) delete process.env.CLAUDE_CODE_TMPDIR
   else process.env.CLAUDE_CODE_TMPDIR = previousTempDir
   if (tempRoot) await rm(tempRoot, { recursive: true, force: true })
   tempRoot = ''
   mockExeca.mockClear()
+  mock.restore()
 })
 
 describe('imagePaste native clipboard fallback', () => {
+  beforeEach(() => {
+    execaStubActive = true
+  })
+
   test('does not report missing optional native clipboard module as an error', () => {
     expect(
       shouldLogNativeClipboardFallbackError(
@@ -68,6 +87,10 @@ describe('imagePaste native clipboard fallback', () => {
 })
 
 describe('imagePaste private screenshot lifecycle', () => {
+  beforeEach(() => {
+    execaStubActive = true
+  })
+
   test('uses a private file instead of the preseeded legacy symlink and cleans it', async () => {
     tempRoot = await mkdtemp(join(tmpdir(), 'image-paste-private-'))
     const outside = join(tempRoot, 'outside.png')

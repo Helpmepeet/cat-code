@@ -1,25 +1,51 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import type { ToolPermissionContext } from '../../Tool.js'
 
 const applyPromptToMarkdown = mock(async () => 'summarized content')
+const actualUtils = await import('./utils.js')
+const realUtils = { ...actualUtils }
+const realApplyPromptToMarkdown = actualUtils.applyPromptToMarkdown
+const realGetURLMarkdownContent = actualUtils.getURLMarkdownContent
+const realIsPreapprovedUrl = actualUtils.isPreapprovedUrl
+let webFetchStubActive = false
 
-mock.module('./utils.js', () => ({
-  applyPromptToMarkdown,
-  getURLMarkdownContent: mock(async () => ({
+mock.module('./utils.js', () => {
+  const getURLMarkdownContent = mock(async () => ({
     bytes: 24,
     code: 200,
     codeText: 'OK',
     content: 'Fetched markdown content.',
     contentType: 'text/html',
-  })),
-  isPreapprovedUrl: () => false,
-  MAX_MARKDOWN_LENGTH: 100_000,
-}))
+  }))
+  return {
+    ...realUtils,
+    applyPromptToMarkdown: async (...args: Parameters<typeof actualUtils.applyPromptToMarkdown>) =>
+      webFetchStubActive
+        ? applyPromptToMarkdown(...args)
+        : realApplyPromptToMarkdown(...args),
+    getURLMarkdownContent: async (
+      ...args: Parameters<typeof actualUtils.getURLMarkdownContent>
+    ) =>
+      webFetchStubActive
+        ? getURLMarkdownContent(...args)
+        : realGetURLMarkdownContent(...args),
+    isPreapprovedUrl: (...args: Parameters<typeof actualUtils.isPreapprovedUrl>) =>
+      webFetchStubActive
+        ? false
+        : realIsPreapprovedUrl(...args),
+  }
+})
 
 describe('WebFetchTool', () => {
+  beforeEach(() => {
+    webFetchStubActive = true
+  })
+
   afterEach(() => {
+    webFetchStubActive = false
     applyPromptToMarkdown.mockClear()
+    mock.restore()
   })
 
   test('forwards the public tool-context agent owner to markdown processing', async () => {

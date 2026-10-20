@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import {
   getCodexLeaseForOwner,
@@ -13,16 +13,28 @@ import { asSystemPrompt } from './systemPromptType.js'
 let queryError: Error | undefined
 let lastQueryParams: { maxTurns?: number } | undefined
 let onQuery: ((context: ToolUseContext) => void) | undefined
+let queryStubActive = false
 
-mock.module('../query.js', () => ({
-  query: mock(async function* (params: { maxTurns?: number; toolUseContext: ToolUseContext }) {
+const actualQuery = await import('../query.js')
+const realQuery = actualQuery.query
+const realQueryNamespace = { ...actualQuery }
+
+mock.module('../query.js', () => {
+  const query = mock(async function* (
+    params: { maxTurns?: number; toolUseContext: ToolUseContext },
+  ) {
+    if (!queryStubActive) {
+      yield* realQuery(params as never)
+      return
+    }
     lastQueryParams = params
     onQuery?.(params.toolUseContext)
     if (queryError) {
       throw queryError
     }
-  }),
-}))
+  })
+  return { ...realQueryNamespace, query }
+})
 
 function createCacheSafeParams(): CacheSafeParams {
   const toolUseContext = {
@@ -65,9 +77,15 @@ async function runForkedAgentWithOwner(): Promise<void> {
 }
 
 describe('runForkedAgent turn cap', () => {
+  beforeEach(() => {
+    queryStubActive = true
+  })
+
   afterEach(() => {
+    queryStubActive = false
     lastQueryParams = undefined
     resetCodexLeaseManagerForTest()
+    mock.restore()
   })
 
   // The background forks (agent summary, prompt suggestion, session memory,
@@ -98,10 +116,16 @@ describe('runForkedAgent turn cap', () => {
 })
 
 describe('runForkedAgent Codex resource cleanup', () => {
+  beforeEach(() => {
+    queryStubActive = true
+  })
+
   afterEach(() => {
+    queryStubActive = false
     queryError = undefined
     onQuery = undefined
     resetCodexLeaseManagerForTest()
+    mock.restore()
   })
 
   test('releases the isolated tool-context owner after completion without a transcript ID', async () => {

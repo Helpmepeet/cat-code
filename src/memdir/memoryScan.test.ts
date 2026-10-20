@@ -1,4 +1,4 @@
-import { afterEach, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 
 const files = Array.from({ length: 250 }, (_, index) => `memory-${index}.md`)
 let activeStats = 0
@@ -7,19 +7,30 @@ let headerReads = 0
 let abortDuringHeaders: AbortController | null = null
 
 const actualFsPromises = await import('fs/promises')
+const realReaddir = actualFsPromises.readdir
+const realStat = actualFsPromises.stat
+const actualReadFileInRange = await import('../utils/readFileInRange.js')
+const realReadFileInRange = actualReadFileInRange.readFileInRange
 
 await mock.module('fs/promises', () => ({
   ...actualFsPromises,
-  readdir: async () => files,
-  stat: async (filePath: string) => {
+  readdir: async (...args: Parameters<typeof realReaddir>) =>
+    isScanStubActive ? files : realReaddir(...args),
+  stat: async (...args: Parameters<typeof realStat>) => {
+    if (!isScanStubActive) return realStat(...args)
     activeStats += 1
     maxActiveStats = Math.max(maxActiveStats, activeStats)
     await Promise.resolve()
     activeStats -= 1
+    const filePath = args[0] as string
     const match = filePath.match(/memory-(\d+)\.md$/)
-    return { mtimeMs: Number(match?.[1] ?? 0) }
+    return { mtimeMs: Number(match?.[1] ?? 0) } as Awaited<
+      ReturnType<typeof realStat>
+    >
   },
 }))
+
+let isScanStubActive = false
 
 await mock.module('../utils/readFileInRange.js', () => ({
   readFileInRange: async (
@@ -29,6 +40,15 @@ await mock.module('../utils/readFileInRange.js', () => ({
     _encoding: undefined,
     signal: AbortSignal,
   ) => {
+    if (!isScanStubActive) {
+      return realReadFileInRange(
+        filePath,
+        _start,
+        _end,
+        _encoding,
+        signal,
+      )
+    }
     headerReads += 1
     if (headerReads === 8) abortDuringHeaders?.abort()
     if (signal.aborted) throw new Error('aborted')
@@ -42,7 +62,13 @@ await mock.module('../utils/readFileInRange.js', () => ({
 
 const { MAX_MEMORY_FILES, MEMORY_SCAN_CONCURRENCY, scanMemoryFiles } = await import('./memoryScan.js')
 
+beforeEach(() => {
+  isScanStubActive = true
+})
+
 afterEach(() => {
+  isScanStubActive = false
+  mock.restore()
   activeStats = 0
   maxActiveStats = 0
   headerReads = 0

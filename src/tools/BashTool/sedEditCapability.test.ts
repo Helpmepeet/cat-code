@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -25,29 +25,40 @@ import {
 } from '../../utils/swarm/permissionSync.js'
 
 const actualShell = await import('../../utils/Shell.js')
+const realShellExec = actualShell.exec
+const realShellNamespace = { ...actualShell }
+let shellStubActive = false
 let mockedShellCalls = 0
+const shellExecStub = async (...args: Parameters<typeof realShellExec>) => {
+  if (!shellStubActive) return realShellExec(...args)
+  mockedShellCalls++
+  return {
+    result: Promise.resolve({
+      stdout: 'mocked shell result',
+      stderr: '',
+      code: 0,
+      interrupted: false,
+      exitAttribution: null,
+    }),
+    cleanup() {},
+  }
+}
 mock.module('../../utils/Shell.js', () => ({
-  ...actualShell,
-  exec: async () => {
-    mockedShellCalls++
-    return {
-      result: Promise.resolve({
-        stdout: 'mocked shell result',
-        stderr: '',
-        code: 0,
-        interrupted: false,
-        exitAttribution: null,
-      }),
-      cleanup() {},
-    }
-  },
+  ...realShellNamespace,
+  exec: shellExecStub,
 }))
 const { BashTool } = await import('./BashTool.js')
 
 const temporaryDirectories: string[] = []
 
+beforeEach(() => {
+  shellStubActive = true
+})
+
 afterEach(() => {
+  shellStubActive = false
   mockedShellCalls = 0
+  mock.restore()
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
   }
