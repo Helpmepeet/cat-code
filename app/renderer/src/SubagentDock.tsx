@@ -40,6 +40,7 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   const [announcement, setAnnouncement] = useState('')
   const previousStates = useRef<Map<string, string> | null>(null)
   const rows = [...state.active, ...state.finished]
+  const rowLayoutKey = JSON.stringify([state.active.map(row => row.agentId), state.finished.map(row => row.agentId)])
   const freshResumes = new Set(rows.filter(row => row.state === 'resumed' && previousStates.current !== null && previousStates.current.get(row.agentId) !== `${row.state}:${row.runKey}:${row.resumedAt ?? ''}`).map(row => row.agentId))
   const hasRows = rows.length > 0
   const { flat, fits } = subagentDockLayout(geometry.width, geometry.transcriptWidth)
@@ -150,10 +151,10 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
     if (!panel.current) return
     // Animation transforms must not become the next update's layout baseline.
     const nextRects = dockRowRects(panel.current)
-    const cancel = !reducedMotion && expanded && !morphing ? animateDockReorder(panel.current, previousRects.current) : () => {}
+    const cancel = !reducedMotion && expanded && !morphing ? animateDockReorder(panel.current, previousRects.current, nextRects) : () => {}
     previousRects.current = nextRects
     return cancel
-  }, [state, finishedOpen, expanded, morphing, reducedMotion, hidden])
+  }, [rowLayoutKey, finishedOpen, expanded, morphing, reducedMotion, hidden])
 
   useLayoutEffect(() => {
     const element = tooltip.current

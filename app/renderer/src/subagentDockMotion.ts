@@ -2,20 +2,26 @@ const EASING = 'cubic-bezier(.2,0,0,1)'
 type Rects = Map<string, DOMRect>
 export function dockRowRects(panel: HTMLElement): Rects {
   const result: Rects = new Map()
+  const list = panel.querySelector<HTMLElement>('.subagent-dock-list') ?? panel
+  const origin = list.getBoundingClientRect()
   for (const row of panel.querySelectorAll<HTMLElement>('[data-dock-row]')) {
     if (row.closest('[inert]')) continue
     const id = row.dataset.dockRow
-    if (id) result.set(id, row.getBoundingClientRect())
+    if (!id) continue
+    const box = row.getBoundingClientRect()
+    // Content coordinates distinguish row movement from scrolling or pane movement.
+    result.set(id, new DOMRect(box.left - origin.left + list.scrollLeft, box.top - origin.top + list.scrollTop, box.width, box.height))
   }
   return result
 }
-export function animateDockReorder(panel: HTMLElement, previous: Rects) {
+export function animateDockReorder(panel: HTMLElement, previous: Rects, current: Rects) {
   const animations: Animation[] = []
   for (const row of panel.querySelectorAll<HTMLElement>('[data-dock-row]')) {
     if (row.closest('[inert]') || !row.animate) continue
     const before = previous.get(row.dataset.dockRow ?? '')
-    if (!before) continue
-    const dy = before.top - row.getBoundingClientRect().top
+    const after = current.get(row.dataset.dockRow ?? '')
+    if (!before || !after) continue
+    const dy = before.top - after.top
     if (Math.abs(dy) > .5) animations.push(row.animate([
       { transform: `translateY(${dy}px)` }, { transform: 'none' },
     ], { duration: 260, easing: EASING }))

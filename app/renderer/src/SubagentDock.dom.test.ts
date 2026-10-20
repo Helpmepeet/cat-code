@@ -211,8 +211,48 @@ for (const finishBeforeUpdate of [false, true]) {
           ada,
         ])))
         expect(animations).toBe(2)
+        expect([...offsets.values()]).toEqual(finishBeforeUpdate ? [] : [50, -50])
       }
       expect([...tree.container.querySelectorAll('[data-dock-row]')].map(element => element.getAttribute('data-dock-row'))).toEqual(['worker-b', 'worker-a'])
+    } finally {
+      await harness.unmountAll()
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+      HTMLElement.prototype.animate = originalAnimate
+    }
+  })
+}
+
+for (const movement of ['scroll', 'pane move'] as const) {
+  test(`${movement} does not animate unchanged rows or distort a later reorder`, async () => {
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    const originalAnimate = HTMLElement.prototype.animate
+    let listTop = 100
+    const moves: [string, number][] = []
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (this.classList.contains('subagent-dock-list')) return new DOMRect(1300, listTop, 280, 100)
+      if (!this.hasAttribute('data-dock-row')) return originalRect.call(this)
+      const list = this.closest<HTMLElement>('.subagent-dock-list')!
+      const rows = [...list.querySelectorAll('[data-dock-row]')]
+      return new DOMRect(1300, listTop + rows.indexOf(this) * 50 - list.scrollTop, 280, 50)
+    }
+    HTMLElement.prototype.animate = function (frames) {
+      const transform = (frames as Keyframe[])[0]?.transform
+      const offset = typeof transform === 'string' ? /^translateY\(([-\d.]+)px\)$/.exec(transform) : null
+      if (this.dataset.dockRow && offset) moves.push([this.dataset.dockRow, Number(offset[1])])
+      return { cancel() {} } as Animation
+    }
+    try {
+      const ada = row()
+      const grace = row({ agentId: 'worker-b', name: 'Grace', launchOrder: 1 })
+      const linus = row({ agentId: 'worker-c', name: 'Linus', launchOrder: 2 })
+      const tree = await mount(fixture(state([ada, grace, linus])))
+      expect(moves).toEqual([])
+      if (movement === 'scroll') tree.container.querySelector('.subagent-dock-list')!.scrollTop = 35
+      else listTop += 80
+      await tree.render(fixture(state([{ ...ada, task: 'Still reading' }, grace, linus])))
+      expect(moves).toEqual([])
+      await tree.render(fixture(state([grace, ada, linus])))
+      expect(moves).toEqual([['worker-b', 50], ['worker-a', -50]])
     } finally {
       await harness.unmountAll()
       HTMLElement.prototype.getBoundingClientRect = originalRect
