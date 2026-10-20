@@ -913,7 +913,11 @@ export async function getAttachments(
     maybe('nested_memory', () => getNestedMemoryAttachments(context)),
     // relevant_memories moved to async prefetch (startRelevantMemoryPrefetch)
     maybe('dynamic_skill', () => getDynamicSkillAttachments(context)),
-    maybe('skill_listing', () => getSkillListingAttachments(context)),
+    maybe('skill_listing', () =>
+      process.env.NODE_ENV === 'test'
+        ? Promise.resolve([])
+        : getSkillListingAttachments(context),
+    ),
     // Inter-turn skill discovery now runs via startSkillDiscoveryPrefetch
     // (query.ts, concurrent with the main turn). The blocking call that
     // previously lived here was the assistant_turn signal — 97% of those
@@ -2722,29 +2726,23 @@ const sentSkillNames = new Map<string, Set<string>>()
 // post-compact re-injection costs ~4K tokens/event for marginal benefit.
 export function resetSentSkillNames(): void {
   sentSkillNames.clear()
-  suppressNext = false
 }
 
-/**
- * Suppress the next skill-listing injection. Called by conversationRecovery
- * on --resume when a skill_listing attachment already exists in the
- * transcript.
- *
- * `sentSkillNames` is module-scope — process-local. Each `claude -p` spawn
- * starts with an empty Map, so without this every resume re-injects the
- * full ~600-token listing even though it's already in the conversation from
- * the prior process. Shows up on every --resume; particularly loud for
- * daemons that respawn frequently.
- *
- * Trade-off: skills added between sessions won't be announced until the
- * next non-resume session. Acceptable — skill_listing was never meant to
- * cover cross-process deltas, and the agent can still call them (they're
- * in the Skill tool's runtime registry regardless).
- */
-export function suppressNextSkillListing(): void {
-  suppressNext = true
+/** Restore only names actually announced in the resumed main-thread context. */
+export function restoreSkillListingState(listings: readonly string[]): void {
+  const names = new Set<string>()
+  for (const listing of listings) {
+    for (const line of listing.split('\n')) {
+      if (!line.startsWith('- ')) continue
+      const entry = line.slice(2)
+      // Namespace colons belong to the name; only colon-space starts a description.
+      const separator = entry.indexOf(': ')
+      const name = (separator === -1 ? entry : entry.slice(0, separator)).trim()
+      if (name) names.add(name)
+    }
+  }
+  sentSkillNames.set('', names)
 }
-let suppressNext = false
 
 // When skill-search is enabled and the filtered (bundled + MCP) listing exceeds
 // this count, fall back to bundled-only. Protects MCP-heavy users (100+ servers)
@@ -2769,13 +2767,9 @@ export function filterToBundledAndMcp(commands: Command[]): Command[] {
   return filtered
 }
 
-async function getSkillListingAttachments(
+export async function getSkillListingAttachments(
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
-  if (process.env.NODE_ENV === 'test') {
-    return []
-  }
-
   // Skip skill listing for agents that don't have the Skill tool — they can't use skills directly.
   if (
     !toolUseContext.options.tools.some(t => toolMatchesName(t, SKILL_TOOL_NAME))
@@ -2812,17 +2806,6 @@ async function getSkillListingAttachments(
   if (!sent) {
     sent = new Set()
     sentSkillNames.set(agentKey, sent)
-  }
-
-  // Resume path: prior process already injected a listing; it's in the
-  // transcript. Mark everything current as sent so only post-resume deltas
-  // (skills loaded later via /reload-plugins etc) get announced.
-  if (suppressNext) {
-    suppressNext = false
-    for (const cmd of allCommands) {
-      sent.add(cmd.name)
-    }
-    return []
   }
 
   // Find skills we haven't sent yet

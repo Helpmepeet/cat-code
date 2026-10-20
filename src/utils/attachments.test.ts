@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'crypto'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
 import type { ToolUseContext } from '../Tool.js'
+import { getProjectRoot, setProjectRoot } from '../bootstrap/state.js'
+import { clearCommandsCache } from '../commands.js'
+import { SkillTool } from '../tools/SkillTool/SkillTool.js'
 import { TEAM_LEAD_NAME } from './swarm/constants.js'
 import {
   readTeamSnapshot,
@@ -25,12 +28,21 @@ import {
   _attachmentsForTest,
   createAttachmentMessage,
   getAttachments,
+  getSkillListingAttachments,
   getTaskReminderAttachments,
   getTodoReminderAttachments,
+  resetSentSkillNames,
   TODO_REMINDER_CONFIG,
   type Attachment,
 } from './attachments.js'
-import { createAssistantMessage, normalizeAttachmentForAPI } from './messages.js'
+import {
+  createAssistantMessage,
+  createCompactBoundaryMessage,
+  createUserMessage,
+  normalizeAttachmentForAPI,
+} from './messages.js'
+import { restoreSkillStateFromMessages } from './conversationRecovery.js'
+import { translateToCodexBody } from '../services/api/codex-fetch-adapter.js'
 import { createTask, getTaskListId, updateTask } from './tasks.js'
 import { TodoWriteTool } from '../tools/TodoWriteTool/TodoWriteTool.js'
 import { TaskUpdateTool } from '../tools/TaskUpdateTool/TaskUpdateTool.js'
@@ -114,6 +126,171 @@ describe('turn-start runtime attachments', () => {
     const result = await getAttachments(null, context(() => new Promise(() => {})), null, [])
     expect(result.filter(a => a.type === 'peer_roster_snapshot')).toEqual([])
     expect(Date.now() - start).toBeLessThan(2000)
+  })
+})
+
+describe('resumed skill listings', () => {
+  const keys = ['ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_DISABLE_POLICY_SKILLS'] as const
+  let previous: Array<string | undefined>
+  let directory: string
+  let originalProjectRoot: string
+
+  beforeEach(() => {
+    previous = keys.map(key => process.env[key])
+    directory = mkdtempSync(join(tmpdir(), 'resume-skill-listing-'))
+    originalProjectRoot = getProjectRoot()
+    setProjectRoot(directory)
+    process.env.ANTHROPIC_API_KEY = 'test-skill-listing-key'
+    process.env.CLAUDE_CONFIG_DIR = directory
+    process.env.CLAUDE_CODE_DISABLE_POLICY_SKILLS = '1'
+    resetSentSkillNames()
+    clearCommandsCache()
+  })
+
+  afterEach(() => {
+    keys.forEach((key, index) => {
+      if (previous[index] === undefined) delete process.env[key]
+      else process.env[key] = previous[index]
+    })
+    setProjectRoot(originalProjectRoot)
+    resetSentSkillNames()
+    clearCommandsCache()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  function addSkill(name: string, description: string) {
+    const path = join(directory, 'skills', name)
+    mkdirSync(path, { recursive: true })
+    writeFileSync(join(path, 'SKILL.md'), `---\ndescription: ${description}\n---\nFollow the skill instructions.\n`)
+    clearCommandsCache()
+  }
+
+  function context(agentId?: string): ToolUseContext {
+    return {
+      agentId,
+      options: { tools: [SkillTool], mainLoopModel: 'gpt-6.1-sol' },
+      getAppState: () => ({ mcp: { commands: [] } }),
+    } as unknown as ToolUseContext
+  }
+
+  function listingContent(attachments: Attachment[]) {
+    return attachments.flatMap(attachment =>
+      attachment.type === 'skill_listing' ? [attachment.content] : [],
+    ).join('\n')
+  }
+
+  test('newly installed skills reach resumed model input without repeating unchanged skills', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    const original = await getSkillListingAttachments(context())
+    expect(listingContent(original)).toContain('- resume-original-skill:')
+    addSkill('resume-added-skill', 'A newly available capability')
+    resetSentSkillNames()
+    restoreSkillStateFromMessages(original.map(createAttachmentMessage))
+
+    const delta = await getSkillListingAttachments(context())
+    expect(listingContent(delta)).toContain('- resume-added-skill: A newly available capability')
+    expect(listingContent(delta)).not.toContain('- resume-original-skill:')
+    const normalized = delta.flatMap(normalizeAttachmentForAPI)
+    expect(JSON.stringify(normalized)).toContain('resume-added-skill')
+    const { codexBody } = translateToCodexBody({
+      model: 'gpt-6.1-sol',
+      _openaiInstructionAssembly: {
+        instructions: 'Use available skills when appropriate.',
+        inputMessages: normalized.map(message => message.message),
+      },
+    })
+    expect(JSON.stringify(codexBody.input)).toContain('resume-added-skill')
+    expect(await getSkillListingAttachments(context())).toEqual([])
+  })
+
+  test('unchanged resume does not repeat the existing listing', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    const original = await getSkillListingAttachments(context())
+    resetSentSkillNames()
+    restoreSkillStateFromMessages(original.map(createAttachmentMessage))
+    expect(await getSkillListingAttachments(context())).toEqual([])
+  })
+
+  test('a child attachment pass cannot consume the main-thread resume state', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    const original = await getSkillListingAttachments(context())
+    addSkill('resume-added-skill', 'A newly available capability')
+    resetSentSkillNames()
+    restoreSkillStateFromMessages(original.map(createAttachmentMessage))
+
+    const child = await getSkillListingAttachments(context('resume-child'))
+    expect(listingContent(child)).toContain('- resume-original-skill:')
+    expect(listingContent(child)).toContain('- resume-added-skill:')
+    const main = await getSkillListingAttachments(context())
+    expect(listingContent(main)).toContain('- resume-added-skill:')
+    expect(listingContent(main)).not.toContain('- resume-original-skill:')
+  })
+
+  test('resuming without a listing does not inherit a previous conversation announcement', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    await getSkillListingAttachments(context())
+    restoreSkillStateFromMessages([])
+    expect(listingContent(await getSkillListingAttachments(context()))).toContain('- resume-original-skill:')
+  })
+
+  test('legacy names-only and namespaced listings suppress only their advertised names', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    addSkill('resume:namespace:skill', 'A namespaced capability')
+    addSkill('resume-added-skill', 'A newly available capability')
+    restoreSkillStateFromMessages([createAttachmentMessage({
+      type: 'skill_listing',
+      content: '- resume-original-skill\n- resume:namespace:skill: A namespaced capability',
+      skillCount: 2,
+      isInitial: true,
+    })])
+
+    const content = listingContent(await getSkillListingAttachments(context()))
+    expect(content).toContain('- resume-added-skill:')
+    expect(content).not.toContain('- resume-original-skill:')
+    expect(content).not.toContain('- resume:namespace:skill:')
+  })
+
+  test('resume merges initial and delta listings without reannouncing either batch', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    const original = await getSkillListingAttachments(context())
+    addSkill('resume-added-skill', 'A newly available capability')
+    const delta = await getSkillListingAttachments(context())
+    resetSentSkillNames()
+    restoreSkillStateFromMessages([...original, ...delta].map(createAttachmentMessage))
+
+    expect(await getSkillListingAttachments(context())).toEqual([])
+  })
+
+  test('a listing before the compact boundary does not suppress resumed announcements', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    const original = await getSkillListingAttachments(context())
+    resetSentSkillNames()
+    restoreSkillStateFromMessages([
+      ...original.map(createAttachmentMessage),
+      createCompactBoundaryMessage('auto', 100_000),
+      createUserMessage({ content: 'Continue the task.', isCompactSummary: true }),
+    ])
+
+    expect(listingContent(await getSkillListingAttachments(context()))).toContain('- resume-original-skill:')
+  })
+
+  test('restoring main-thread listings leaves an existing child announcement intact', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    const original = await getSkillListingAttachments(context())
+    await getSkillListingAttachments(context('resume-child'))
+    restoreSkillStateFromMessages(original.map(createAttachmentMessage))
+
+    expect(await getSkillListingAttachments(context('resume-child'))).toEqual([])
+  })
+
+  test('malformed historical listing content does not break recovery', async () => {
+    addSkill('resume-original-skill', 'An existing capability')
+    restoreSkillStateFromMessages([{
+      ...createAttachmentMessage({ type: 'skill_listing', content: '', skillCount: 1, isInitial: true }),
+      attachment: { type: 'skill_listing', content: null, skillCount: 1, isInitial: true },
+    } as unknown as Parameters<typeof restoreSkillStateFromMessages>[0][number]])
+
+    expect(listingContent(await getSkillListingAttachments(context()))).toContain('- resume-original-skill:')
   })
 })
 

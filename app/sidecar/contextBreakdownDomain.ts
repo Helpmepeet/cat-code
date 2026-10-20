@@ -82,9 +82,9 @@ export function createRealContextBreakdownExecutor(deps: {
       // verbs used to, and were moved onto this same read for these reasons.
       // Despite the name it is not a reader: it runs `processSessionStartHooks`
       // ('resume') — the user's own SessionStart hooks, arbitrary shell — appends
-      // their output to the messages, trips `restoreSkillStateFromMessages`'s
-      // fire-once `suppressNextSkillListing` latch, and copies plan + file history
-      // to disk (`src/utils/conversationRecovery.ts:603-626`). Firing those from a
+      // their output to the messages, restores invoked skills and announcement
+      // state through `restoreSkillStateFromMessages`, and copies plan + file
+      // history to disk. Firing those from a
       // read-only popover in the LIVE process would change what the model sees.
       // `transcriptBackfillWorker.ts:46-50` sets `CLAUDE_CODE_SIMPLE=1` purely to
       // neuter the hook branch for this same call; the live sidecar is not bare,

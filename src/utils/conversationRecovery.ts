@@ -28,7 +28,7 @@ import {
   LOCAL_COMMAND_STDERR_TAG,
   LOCAL_COMMAND_STDOUT_TAG,
 } from '../constants/xml.js'
-import { suppressNextSkillListing } from './attachments.js'
+import { restoreSkillListingState } from './attachments.js'
 import {
   getWorkspaceResumeAttachmentView,
   markWorkspaceResumeAttachments,
@@ -44,6 +44,7 @@ import {
   filterOrphanedThinkingOnlyMessages,
   filterUnresolvedToolUses,
   filterWhitespaceOnlyAssistantMessages,
+  getMessagesAfterCompactBoundary,
   isToolUseResultMessage,
   NO_RESPONSE_REQUESTED,
   normalizeMessages,
@@ -534,6 +535,8 @@ function isTerminalToolResult(
  * @internal Exported for testing - use loadConversationForResume instead
  */
 export function restoreSkillStateFromMessages(messages: Message[]): void {
+  const visibleMessages = new Set(getMessagesAfterCompactBoundary(messages))
+  const skillListings: string[] = []
   for (const message of messages) {
     if (message.type !== 'attachment') {
       continue
@@ -550,14 +553,15 @@ export function restoreSkillStateFromMessages(messages: Message[]): void {
         }
       }
     }
-    // A prior process already injected the skills-available reminder — it's
-    // in the transcript the model is about to see. sentSkillNames is
-    // process-local, so without this every resume re-announces the same
-    // ~600 tokens. Fire-once latch; consumed on the first attachment pass.
-    if (attachment.type === 'skill_listing') {
-      suppressNextSkillListing()
+    if (
+      attachment.type === 'skill_listing' &&
+      visibleMessages.has(message) &&
+      typeof attachment.content === 'string'
+    ) {
+      skillListings.push(attachment.content)
     }
   }
+  restoreSkillListingState(skillListings)
 }
 
 /**
