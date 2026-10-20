@@ -2617,6 +2617,67 @@ describe('large transcript resume preserves selection and recoverable content', 
     )
   }
 
+  test.each(
+    ['user', 'thread-goal-updated', 'thread-goal-cleared'].flatMap(type =>
+      [24, 25, 26, 27, 28, 29, 30].map(carryBytes => ({ type, carryBytes })),
+    ),
+  )('compacted resume retains chunk-split $type with $carryBytes carried bytes', async ({ type, carryBytes }) => {
+    const { createThreadGoal } = await import('./threadGoal.js')
+    const { readTranscriptForLoad } = await import('./sessionStoragePortable.js')
+    const prompt = row('user', null, 0, {
+      message: { role: 'user', content: 'older prompt' },
+    })
+    const goal = createThreadGoal(sessionId, 'Retain the saved goal')
+    const splitEntry = type === 'user'
+      ? row(type, prompt.uuid, 1, { message: { role: 'user', content: 'older continuation' } })
+      : {
+          type,
+          sessionId,
+          ...(type === 'thread-goal-updated' ? { goal } : { goalId: goal.goalId }),
+          timestamp: '2026-10-09T00:00:01.000Z',
+        }
+    const oldContent = row('user', prompt.uuid, 2, {
+      message: { role: 'user', content: 'x'.repeat(6 * 1024 * 1024) },
+    })
+    const boundary = row('system', null, 3, {
+      subtype: 'compact_boundary',
+      logicalParentUuid: oldContent.uuid,
+      content: 'Conversation compacted',
+      level: 'info',
+      compactMetadata: { trigger: 'auto', preTokens: 200_000 },
+    })
+    const summary = row('user', boundary.uuid, 4, {
+      isCompactSummary: true,
+      message: { role: 'user', content: 'Retained compact summary' },
+    })
+    const serialize = ({ type, subtype, ...fields }: Record<string, unknown>) =>
+      JSON.stringify({ type, ...(subtype ? { subtype } : {}), ...fields })
+    const firstLine = serialize(prompt)
+    // Put the next record's prefix across the metadata reader's 64 KiB chunk.
+    const padding = ' '.repeat(64 * 1024 - carryBytes - 1 - Buffer.byteLength(firstLine))
+    const path = join(root, `${sessionId}.jsonl`)
+    const bytes = `${firstLine}${padding}\n${[
+      splitEntry,
+      { type: 'custom-title', sessionId, customTitle: 'Saved title' },
+      oldContent,
+      boundary,
+      summary,
+    ].map(serialize).join('\n')}\n`
+    await writeFile(path, bytes)
+
+    const scan = await readTranscriptForLoad(path, Buffer.byteLength(bytes))
+    expect(scan.boundaryStartOffset).toBeGreaterThan(0)
+    const loaded = await loadTranscriptFile(path)
+    expect([...loaded.messages.keys()]).toEqual([boundary.uuid, summary.uuid])
+    expect(loaded.messages.get(summary.uuid)).toMatchObject({ message: summary.message })
+    expect(loaded.customTitles.get(sessionId)).toBe('Saved title')
+    if (type === 'thread-goal-updated') {
+      expect(loaded.threadGoals.get(sessionId)).toEqual(goal)
+    } else if (type === 'thread-goal-cleared') {
+      expect(loaded.threadGoals.get(sessionId)).toBeNull()
+    }
+  })
+
   test.each([
     { label: 'below the 5 MiB threshold', siblingBytes: 4 * 1024 * 1024, retainedBytes: 0 },
     { label: 'above 5 MiB with less than half removable bytes', siblingBytes: 2 * 1024 * 1024, retainedBytes: 4 * 1024 * 1024 },

@@ -4812,8 +4812,8 @@ const METADATA_TYPE_MARKERS = [
   '"type":"pr-link"',
 ]
 const METADATA_MARKER_BUFS = METADATA_TYPE_MARKERS.map(m => Buffer.from(m))
-// Longest marker is 22 bytes; +1 for leading `{` = 23.
-const METADATA_PREFIX_BOUND = 25
+const METADATA_PREFIX_BOUND =
+  1 + Math.max(...METADATA_MARKER_BUFS.map(marker => marker.length))
 
 // null = carry spans whole chunk. Skips concat when carry provably isn't
 // a metadata line (markers sit at byte 1 after `{`).
