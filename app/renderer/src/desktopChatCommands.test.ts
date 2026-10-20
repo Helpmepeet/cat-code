@@ -72,6 +72,12 @@ describe('desktop chat commands', () => {
       'update-config',
       'verify',
       'stuck',
+      'review',
+      'pr-comments',
+      'cache-stats',
+      'touch-all',
+      'batch',
+      'insights',
       'understand-anything:understand',
       'understand-anything:understand-diff',
       'understand-anything:understand-domain',
@@ -82,7 +88,14 @@ describe('desktop chat commands', () => {
       'understand-anything:understand-onboard',
       'understand-anything:understand-chat',
     ]
-    const kept = ['compact', 'review-impl', 'accounts', 'frontend-design:frontend-design']
+    const kept = [
+      'compact',
+      'review-impl',
+      'accounts',
+      'simplify',
+      'init',
+      'frontend-design:frontend-design',
+    ]
     const names = [...removed, ...kept]
     const rich = names.map(name => ({ name, description: `${name} description` }))
     const catalog = source === 'rich'

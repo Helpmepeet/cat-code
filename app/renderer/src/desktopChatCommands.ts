@@ -17,6 +17,12 @@ const HIDDEN_DESKTOP_SLASH_COMMANDS = new Set([
   'update-config',
   'verify',
   'stuck',
+  'review',
+  'pr-comments',
+  'cache-stats',
+  'touch-all',
+  'batch',
+  'insights',
 ])
 
 /** Desktop-only commands are recognized only when the whole draft is a command. */
