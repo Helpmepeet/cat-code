@@ -4067,6 +4067,55 @@ test('renders curated auth and execution failures without raw errors', () => {
   expect(execution).not.toContain('provider stack trace')
 })
 
+test('settled retry notices omit the retry glyph and metadata', () => {
+  for (const state of ['success', 'failure', 'stopped'] as const) {
+    const content = state === 'success' ? 'Overloaded. Went through on try 3.' : 'Overloaded. Stopped after 3 tries.'
+    const html = render({
+      ...frameSource, id: 'retry', kind: 'system-notice', noticeType: 'api_retry', content,
+      retry: { reason: 'Overloaded', attempt: 2, delayMs: 1000, state, updateId: 'last-retry', replay: false },
+    })
+    expect(html).toContain(content)
+    expect(html).not.toContain('↻')
+    expect(html).not.toContain(' in ')
+  }
+})
+
+test('failed turns show one tailored card and Retry only on the latest idle plain text turn', () => {
+  const user: NestedTranscriptRow = {
+    ...frameSource, id: 'user', frameId: 'user-frame', kind: 'user-text', role: 'user',
+    messageId: 'user-message', blockIndex: 0, parentToolUseId: null,
+    isReplay: false, content: 'Sample request',
+  }
+  const result: NestedTranscriptRow = {
+    ...frameSource, id: 'failure', kind: 'result', subtype: 'error_during_execution',
+    isError: true, errors: [], errorStatus: 529, providerMessage: 'Repeated 529 Overloaded errors',
+  }
+  const draw = (rows: NestedTranscriptRow[], turnLive = false) => renderToStaticMarkup(
+    <TranscriptRowsView rows={rows} turnLive={turnLive} onRetryTurn={() => {}} onOpenAccounts={() => {}} onSaveDiagnostics={() => {}} />,
+  )
+  const html = draw([user, result])
+  expect(html).toContain('The service is overloaded')
+  expect(html).toContain('>Retry</button>')
+  expect(html).not.toContain('Repeated 529')
+  expect(html).not.toContain('Save diagnostics')
+  expect(draw([user, result], true)).not.toContain('>Retry</button>')
+  expect(draw([user, result, { ...user, id: 'next-user', frameId: 'next-frame' }])).not.toContain('>Retry</button>')
+  const laterFailure = { ...result, id: 'next-failure', frameId: 'next-result' }
+  expect(draw([user, result, { ...user, id: 'next-user', frameId: 'next-frame' }, laterFailure]).match(/>Retry<\/button>/g)).toHaveLength(1)
+  for (const [providerCode, providerMessage, title] of [
+    ['rate_limit', 'Codex account usage limit reached. Use /switch-account to switch.', 'Usage limit reached'],
+    ['authentication_failed', 'OAuth token revoked · Please run /login', 'Sign-in expired'],
+    ['unknown', 'Request refused. Please run /login', 'This turn could not finish'],
+  ]) {
+    const tailored = draw([user, { ...result, errorStatus: undefined, providerCode, providerMessage }])
+    expect(tailored).toContain(title!)
+    expect(tailored).not.toContain('/login')
+    expect(tailored).not.toContain('/switch-account')
+    expect(tailored).toContain('>Retry</button>')
+    expect(tailored).toContain(providerCode === 'unknown' ? 'Save diagnostics bundle' : 'Open Accounts')
+  }
+})
+
 test('P4-60: an unknown error subtype renders a generic failure label', () => {
   const html = render({
     ...frameSource,

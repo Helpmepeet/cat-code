@@ -47,6 +47,7 @@ import {
   type SessionId,
 } from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
+import { observeRetryWait } from './retryClock.js'
 
 type FrameRowSource = {
   /** Stable React/projector identity derived only from producer identifiers. */
@@ -435,6 +436,16 @@ export type SystemNoticeRow = FrameRowSource & {
     | 'account_diagnostic'
     | 'provider_error'
   content: string
+  retry?: {
+    reason: string
+    attempt: number
+    delayMs: number
+    updateId: string
+    replay: boolean
+    state: 'waiting' | 'success' | 'failure' | 'stopped'
+    status?: number
+  }
+  providerCode?: string
 }
 
 /** Durable user-interruption provenance, rendered without its hidden body. */
@@ -452,6 +463,9 @@ export type ResultRow = FrameRowSource & {
   errors: string[]
   durationMs?: number
   totalCostUsd?: number
+  providerMessage?: string
+  providerCode?: string
+  errorStatus?: number
 }
 
 export type CompactBoundaryRow = FrameRowSource & {
@@ -1508,6 +1522,7 @@ export function projectServerFrames(
         draft,
         frame.event.message,
         recoveryInsertAt,
+        frame.replay === true,
       )
     ) {
       if (recoveryInsertAt === null) {
@@ -1837,6 +1852,7 @@ function projectMessage(
   draft: SessionDraft,
   message: SDKMessage,
   recoveryInsertAt: number | null,
+  replay: boolean,
 ): boolean {
   switch (message.type) {
     case 'assistant':
@@ -1862,7 +1878,7 @@ function projectMessage(
       return projectResultFrame(draft, message, recoveryInsertAt)
 
     case 'system':
-      return projectSystemFrame(draft, message, recoveryInsertAt)
+      return projectSystemFrame(draft, message, recoveryInsertAt, replay)
 
     case 'tool_progress':
       // P2-2 scope: live activity on the correlated tool card
@@ -2030,14 +2046,23 @@ function projectAssistantFrame(
     // No usable id: nothing is appended and nothing is marked seen, so the only
     // state this frame may leave behind is the fold above.
     if (!noticeFrameId) return changed
-    return appendSystemNotice(
+    const appended = appendSystemNotice(
       draft,
       noticeFrameId,
       'provider_error',
       text,
       recoveryInsertAt,
       nonEmptyString(message.parent_tool_use_id),
-    ) || changed
+    )
+    if (appended) {
+      ensureOwnedRows(draft)
+      const index = draft.session.rows.findIndex(row => row.frameId === noticeFrameId)
+      const row = draft.session.rows[index]
+      if (row?.kind === 'system-notice') {
+        draft.session.rows[index] = { ...row, providerCode: message.error }
+      }
+    }
+    return appended || changed
   }
   const messageId = nonEmptyString(body.id) ?? frameId
   if (!messageId) return changed
@@ -2071,6 +2096,7 @@ function projectAssistantFrame(
     })
     return row === null ? [] : [row]
   })
+  if (rows.length > 0) settleRetries(draft, parentToolUseId, 'success', recoveryInsertAt)
   for (const row of rows) {
     if (!('messageId' in row) || !('blockIndex' in row)) continue
     const key = streamBlockKey(row.messageId, row.blockIndex)
@@ -2172,6 +2198,7 @@ function projectStreamEvent(
     const delta = isRecord(event.delta) ? event.delta : null
     const key = streamBlockKey(draft.session.currentStreamMessageId, event.index)
     if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+      if (delta.text.length > 0) settleRetries(draft, nonEmptyString(message.parent_tool_use_id), 'success', null)
       const existing = draft.session.streamingTextBlocks[key] ?? {
         messageId: draft.session.currentStreamMessageId,
         blockIndex: event.index,
@@ -2274,6 +2301,7 @@ function projectUserFrame(
   // block in it is attributed the same way (image blocks stay image rows).
   const origin = projectMessageOrigin(message.origin)
   if (origin?.kind === 'interruption') {
+    settleRetries(draft, parentToolUseId, 'stopped', recoveryInsertAt)
     // The body is model-facing interruption protocol, not operator prose. Its
     // explicit, persisted origin is the durable display fact for live and replay.
     return appendFrameRows(draft, frameId, [{
@@ -2387,6 +2415,30 @@ function projectResultFrame(
   if (result === null || errors === null || durationMs === null || totalCostUsd === null) {
     return changed
   }
+  const turnRows = currentScopeRows(draft, null, recoveryInsertAt)
+  const provider = [...turnRows].reverse().find(row =>
+    row.kind === 'system-notice' && row.noticeType === 'provider_error',
+  )
+  const retry = [...turnRows].reverse().find(row => row.kind === 'system-notice' && row.retry)
+  // Only the failure-card subtypes render the provider text (`turnFailureCopy`);
+  // folding it into any other result would drop it from view.
+  const foldsProvider = message.is_error && provider?.kind === 'system-notice' &&
+    (subtype === 'error_during_execution' || subtype === 'error_auth_required')
+  const failure = foldsProvider && provider?.kind === 'system-notice'
+    ? { providerMessage: provider.content, providerCode: provider.providerCode }
+    : {}
+  const errorStatus = retry?.kind === 'system-notice' ? retry.retry?.status : undefined
+  let insertAt = recoveryInsertAt
+  if (foldsProvider) {
+    ensureOwnedRows(draft)
+    const previousLength = draft.session.rows.length
+    draft.session.rows = draft.session.rows.filter(row =>
+      !turnRows.includes(row) || row.kind !== 'system-notice' || row.noticeType !== 'provider_error',
+    )
+    if (insertAt !== null) insertAt -= previousLength - draft.session.rows.length
+    draft.rowIndexes = null
+  }
+  settleRetries(draft, null, subtype === 'interrupted' ? 'stopped' : message.is_error ? 'failure' : 'success', insertAt)
   // A submit-interrupt result is only a live lifecycle byproduct. An explicit
   // stop already has a durable interruption row, so its result is also redundant.
   if (
@@ -2405,17 +2457,20 @@ function projectResultFrame(
     kind: 'result',
     subtype,
     isError: message.is_error,
+    ...failure,
+    ...(errorStatus === undefined ? {} : { errorStatus }),
     ...(result === undefined ? {} : { result }),
     errors: errors ?? [],
     ...(durationMs === undefined ? {} : { durationMs }),
     ...(totalCostUsd === undefined ? {} : { totalCostUsd }),
-  }], recoveryInsertAt) || changed
+  }], insertAt) || changed
 }
 
 function projectSystemFrame(
   draft: SessionDraft,
   message: Extract<SDKMessage, { type: 'system' }>,
   recoveryInsertAt: number | null,
+  replay: boolean,
 ): boolean {
   const frameId = nonEmptyString(message.uuid)
   if (!frameId || draft.session.seenFrameIds[frameId]) return false
@@ -2471,9 +2526,44 @@ function projectSystemFrame(
     }
     case 'api_retry': {
       const text = retryNoticeText(message.error)
-      return text === null
-        ? false
-        : appendSystemNotice(draft, frameId, 'api_retry', text, recoveryInsertAt)
+      if (text === null) return false
+      const raw: Record<string, unknown> = message
+      const parent = nonEmptyString(raw.parent_tool_use_id)
+      const existing = currentScopeRows(draft, parent, recoveryInsertAt).reverse().find(
+        row => row.kind === 'system-notice' && row.retry?.state === 'waiting',
+      )
+      const reason = message.error_status === 529
+        ? 'Overloaded'
+        : text.replace(/\. (?:Retrying|Continuing automatically)\.$/, '').replace(/[.]+$/, '')
+      const retry: NonNullable<SystemNoticeRow['retry']> = {
+        reason,
+        attempt: typeof message.attempt === 'number' && Number.isFinite(message.attempt)
+          ? Math.max(1, Math.floor(message.attempt)) : 1,
+        delayMs: typeof message.retry_delay_ms === 'number' && Number.isFinite(message.retry_delay_ms)
+          ? Math.max(0, message.retry_delay_ms) : 0,
+        updateId: frameId,
+        replay,
+        state: 'waiting',
+        ...(typeof message.error_status === 'number' ? { status: message.error_status } : {}),
+      }
+      if (existing?.kind === 'system-notice') {
+        ensureOwnedRows(draft)
+        const index = draft.session.rows.indexOf(existing)
+        const updatedRetry = { ...retry, attempt: Math.max(existing.retry!.attempt, retry.attempt) }
+        observeRetryWait(updatedRetry)
+        draft.session.rows[index] = {
+          ...existing, content: `${reason}. Retrying.`,
+          retry: updatedRetry,
+        }
+        markFrameSeen(draft, frameId)
+        return true
+      }
+      observeRetryWait(retry)
+      const appended = appendSystemNotice(draft, frameId, 'api_retry', `${reason}. Retrying.`, recoveryInsertAt, parent)
+      const index = draft.session.rows.findIndex(row => row.frameId === frameId)
+      const row = draft.session.rows[index]
+      if (row?.kind === 'system-notice') draft.session.rows[index] = { ...row, retry }
+      return appended
     }
     case 'local_command_output':
       return typeof message.content === 'string'
@@ -2485,6 +2575,37 @@ function projectSystemFrame(
         : false
     default:
       return false
+  }
+}
+
+function currentScopeRows(draft: SessionDraft, parent: string | null, insertAt: number | null) {
+  const rows: TranscriptRow[] = []
+  for (let index = (insertAt ?? draft.session.rows.length) - 1; index >= 0; index--) {
+    const row = draft.session.rows[index]!
+    const scope = 'parentToolUseId' in row ? row.parentToolUseId ?? null : null
+    if (scope === parent && (row.kind === 'result' || row.kind === 'turn-stopped' || row.kind === 'user-text')) break
+    if (scope === parent) rows.push(row)
+  }
+  return rows.reverse()
+}
+
+function settleRetries(
+  draft: SessionDraft,
+  parent: string | null,
+  state: 'success' | 'failure' | 'stopped',
+  insertAt: number | null,
+): void {
+  for (const row of currentScopeRows(draft, parent, insertAt)) {
+    if (row.kind !== 'system-notice' || row.retry?.state !== 'waiting') continue
+    ensureOwnedRows(draft)
+    // withRetry reports the failed attempt before waiting for the next call.
+    // Stopping during that wait only proves those failed calls were made.
+    const tries = state === 'stopped' ? row.retry.attempt : row.retry.attempt + 1
+    draft.session.rows[draft.session.rows.indexOf(row)] = {
+      ...row,
+      retry: { ...row.retry, state },
+      content: `${row.retry.reason}. ${state === 'success' ? `Went through on try ${tries}` : `Stopped after ${tries} ${tries === 1 ? 'try' : 'tries'}`}.`,
+    }
   }
 }
 

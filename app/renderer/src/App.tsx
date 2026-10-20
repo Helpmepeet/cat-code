@@ -3417,9 +3417,10 @@ export function App() {
 
   function submitSession(
     sessionId: SessionId,
-    event: FormEvent<HTMLFormElement>,
+    event: FormEvent<HTMLFormElement> | null,
+    retryText?: string,
   ): void {
-    event.preventDefault()
+    event?.preventDefault()
     const submittedDraft = selectPromptDraft(promptDraftsRef.current, sessionId)
     if (isDesktopNewChatCommand(submittedDraft)) {
       void executeDesktopNewChat(sessionId).then(result => {
@@ -3441,6 +3442,10 @@ export function App() {
     const sessionConnection = selectConnection(connection, sessionId)
     const images = selectImageAttachments(imageAttachmentState, sessionId)
     const file = selectFileAttachment(fileAttachmentState, sessionId)
+    if (retryText !== undefined && (
+      submittedDraft.trim() || images.length > 0 || file !== null ||
+      !sessionConnection.inputEnabled || !sessionLog.inputEnabled
+    )) return
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
@@ -3449,8 +3454,8 @@ export function App() {
     // mid-turn submit is NOT parked: it goes out and the engine queues it into
     // the running turn. Only a terminal session refuses outright.
     const action = planSessionSubmit({
-      draft: selectPromptDraft(promptDrafts, sessionId),
-      pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
+      draft: retryText ?? selectPromptDraft(promptDrafts, sessionId),
+      pasteEntries: retryText === undefined ? selectSessionPasteState(pasteState, sessionId).entries : [],
       hasImages: images.length > 0 || file !== null,
       preview: hasPreviewTranscript(previewTranscript, sessionId),
       connectionStatus: sessionConnection.status,
@@ -4392,6 +4397,7 @@ export function App() {
 	              setSessionPrompt(sessionId, value, reason)
 	            }
 	            submit={event => submitSession(sessionId, event)}
+	            retryTurn={text => submitSession(sessionId, null, text)}
 	            mentionItems={selectAgentMentionItems(
 	              selectAgentConfigSnapshot(agentConfig, sessionId),
 	            )}

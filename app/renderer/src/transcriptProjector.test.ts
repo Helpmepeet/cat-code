@@ -362,7 +362,7 @@ test('marks a persisted cancelled tool result separately from a failure', () => 
   expect(selectTranscriptRows(state, 'session-1')[0]).not.toBe(pending)
 })
 
-test('projects typed provider error text before the curated result seam', () => {
+test('folds typed provider errors into the result instead of a separate notice', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
   const play = (message: SDKMessage) => {
@@ -399,11 +399,11 @@ test('projects typed provider error text before the curated result seam', () => 
 
   expect(selectTranscriptRows(state, 'session-1')).toEqual([
     expect.objectContaining({
-      kind: 'system-notice',
-      noticeType: 'provider_error',
-      content: 'OAuth access token has been revoked',
+      kind: 'result',
+      subtype: 'error_auth_required',
+      providerCode: 'authentication_failed',
+      providerMessage: 'OAuth access token has been revoked',
     }),
-    expect.objectContaining({ kind: 'result', subtype: 'error_auth_required' }),
   ])
 })
 
@@ -2418,7 +2418,7 @@ test('projects user-visible system notices and emits boundary rows once', () => 
   ])
   expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
     { trigger: 'auto', preTokens: 1234 },
-    { noticeType: 'api_retry', content: 'Overloaded' },
+    { noticeType: 'api_retry', content: 'Overloaded. Went through on try 3.', retry: { state: 'success' } },
     {
       subtype: 'success',
       isError: false,
@@ -2466,13 +2466,9 @@ test('renders a retry notice whether the frame carries copy or a bare code', () 
   )
 
   const rows = selectTranscriptRows(state, 'session-1')
-  expect(rows.map(row => row.kind)).toEqual(['system-notice', 'system-notice'])
+  expect(rows.map(row => row.kind)).toEqual(['system-notice'])
   expect(rows).toMatchObject([
-    {
-      noticeType: 'api_retry',
-      content: 'Connection interrupted. Continuing automatically.',
-    },
-    { noticeType: 'api_retry', content: 'Rate limited. Retrying.' },
+    { noticeType: 'api_retry', content: 'Rate limited. Retrying.', retry: { attempt: 2 } },
   ])
 
   // The batch path is the one a replayed transcript actually takes, which is
@@ -2493,6 +2489,100 @@ test('renders a retry notice whether the frame carries copy or a bare code', () 
   expect(selectTranscriptRows(batch, 'session-2')).toMatchObject([
     { noticeType: 'api_retry', content: 'Rate limited. Retrying.' },
   ])
+})
+
+test('retry heartbeats coalesce, redelivery is a no-op, and a real assistant settles the series', () => {
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  const retry = (id: string, attempt: number, delay: number, parent?: string) => messageFrame('session-1', {
+    type: 'system', subtype: 'api_retry', uuid: id, attempt,
+    max_retries: 10, retry_delay_ms: delay, error_status: 529,
+    error: { type: 'assistant_error', error: 'rate_limit', message: 'Rate limited. Retrying.' },
+    ...(parent ? { parent_tool_use_id: parent } : {}),
+  } as unknown as SDKMessage)
+  const first = retry('retry-1', 1, 120000)
+  state = projectServerFrame(state, first)
+  const rowId = selectTranscriptRows(state, 'session-1')[0]!.id
+  state = projectServerFrame(state, retry('retry-heartbeat', 1, 60000))
+  state = projectServerFrame(state, retry('retry-2', 2, 8000))
+  const duplicate = retry('retry-2', 2, 8000)
+  expect(projectServerFrame(state, duplicate)).toBe(state)
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([{
+    id: rowId, content: 'Overloaded. Retrying.', retry: { attempt: 2, delayMs: 8000 },
+  }])
+  state = projectServerFrame(state, retry('child-retry', 1, 1000, 'agent-tool'))
+  state = projectServerFrame(state, messageFrame('session-1', {
+    type: 'assistant', uuid: 'assistant-after-retry',
+    message: { id: 'reply', role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+    parent_tool_use_id: null,
+  } as unknown as SDKMessage))
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
+    { id: rowId, content: 'Overloaded. Went through on try 3.', retry: { state: 'success' } },
+    { parentToolUseId: 'agent-tool', retry: { state: 'waiting' } },
+    { kind: 'assistant-text' },
+  ])
+  state = projectServerFrame(state, retry('new-series', 1, 1000))
+  expect(selectTranscriptRows(state, 'session-1').filter(row => row.kind === 'system-notice')).toHaveLength(3)
+})
+
+test('stopping a retry wait settles the row using the known failed attempt count', () => {
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', {
+    type: 'system', subtype: 'api_retry', uuid: 'retry-before-stop', attempt: 2,
+    max_retries: 10, retry_delay_ms: 1000, error: 'rate_limit',
+  } as unknown as SDKMessage))
+  state = projectServerFrame(state, messageFrame('session-1', {
+    type: 'user', uuid: 'stop-retry', origin: { kind: 'interruption' },
+    message: { role: 'user', content: '<hidden interruption>' }, parent_tool_use_id: null,
+  } as unknown as SDKMessage))
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
+    { content: 'Rate limited. Stopped after 2 tries.', retry: { state: 'stopped' } },
+    { kind: 'turn-stopped' },
+  ])
+})
+
+test('transport recovery retries read as one reason, not two sentences', () => {
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', {
+    type: 'system', subtype: 'api_retry', uuid: 'transport-1', attempt: 1,
+    max_retries: 3, retry_delay_ms: 0, error_status: null,
+    error: { type: 'assistant_error', error: 'connection_error', message: 'Connection interrupted. Continuing automatically.' },
+  } as unknown as SDKMessage))
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
+    { content: 'Connection interrupted. Retrying.' },
+  ])
+  state = projectServerFrame(state, messageFrame('session-1', {
+    type: 'assistant', uuid: 'after-transport',
+    message: { id: 'reply', role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+    parent_tool_use_id: null,
+  } as unknown as SDKMessage))
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({
+    content: 'Connection interrupted. Went through on try 2.',
+  })
+})
+
+test('recovered retries fold deterministically and failed results absorb provider notices without moving live rows', () => {
+  const messages = [
+    { type: 'system', subtype: 'api_retry', uuid: 'r1', attempt: 1, max_retries: 2, retry_delay_ms: 1000, error_status: 529, error: 'rate_limit' },
+    { type: 'system', subtype: 'api_retry', uuid: 'r2', attempt: 2, max_retries: 2, retry_delay_ms: 500, error_status: 529, error: 'rate_limit' },
+    { type: 'assistant', uuid: 'provider-fail', error: 'rate_limit', parent_tool_use_id: null, message: { id: 'err', role: 'assistant', content: [{ type: 'text', text: 'Repeated 529 Overloaded errors' }] } },
+    { type: 'result', subtype: 'error_during_execution', uuid: 'failed-result', is_error: true, errors: [] },
+  ] as unknown as SDKMessage[]
+  const recovered = messages.map(message => ({ ...messageFrame('session-1', message), replay: true as const, recovered: true as const }))
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', {
+    type: 'assistant', uuid: 'live-output', message: { id: 'live', role: 'assistant', content: [{ type: 'text', text: 'Live tail' }] },
+  } as unknown as SDKMessage))
+  state = projectServerFrames(state, recovered)
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
+    { content: 'Overloaded. Stopped after 3 tries.', retry: { state: 'failure', replay: true } },
+    { kind: 'result', errorStatus: 529, providerCode: 'rate_limit', providerMessage: 'Repeated 529 Overloaded errors' },
+    { kind: 'assistant-text', content: 'Live tail' },
+  ])
+  expect(projectServerFrames(state, recovered)).toBe(state)
+  const replay = projectServerFrames(projectServerFrame(createTranscriptState(), ready('session-1')), messages.map(message => ({
+    ...messageFrame('session-1', message), replay: true as const,
+  })))
+  expect(selectTranscriptRows(replay, 'session-1')).toEqual(selectTranscriptRows(state, 'session-1').slice(0, 2))
 })
 
 test('replays the full S1 turn grammar end-to-end into a correct transcript', () => {

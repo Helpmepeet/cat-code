@@ -107,6 +107,8 @@ import {
   type AgentCompletionProjection,
   type NestedToolUseRow,
   type NestedTranscriptRow,
+  type SystemNoticeRow,
+  type ResultRow,
   type TranscriptDisplayItem,
   type TranscriptState,
   type ToolCardStatus,
@@ -116,6 +118,8 @@ import {
   type ToolResultProjection,
   type UserImageSource,
 } from './transcriptProjector.js'
+import { retryableTurn, turnFailureCopy } from './turnFailure.js'
+import { retryWaitSeconds } from './retryClock.js'
 import { selectBashCardText } from './bashCommandLabel.js'
 import { withoutTodoRows } from './todoPlan.js'
 import {
@@ -319,6 +323,8 @@ const ToolInspectorContext = createContext<((row: ToolUseNestedRow, fileIndex?: 
 const TurnErrorActionsContext = createContext<{
   openAccounts?: () => void
   saveDiagnostics?: () => void
+  retry?: () => void
+  retryResultId?: string
 }>({})
 
 /**
@@ -391,6 +397,7 @@ export const TranscriptView = memo(function TranscriptView({
   onLoadEarlier,
   onOpenAccounts,
   onSaveDiagnostics,
+  onRetryTurn,
   onMessageAction,
   agentBackground = null,
   createdPeerNavigation,
@@ -445,6 +452,7 @@ export const TranscriptView = memo(function TranscriptView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
+  onRetryTurn?: (text: string) => void
   /** Present only for an ordinary live pane. */
   onMessageAction?: MessageActionHandler
   /**
@@ -503,6 +511,7 @@ export const TranscriptView = memo(function TranscriptView({
       onLoadEarlier={onLoadEarlier}
       onOpenAccounts={onOpenAccounts}
       onSaveDiagnostics={onSaveDiagnostics}
+      onRetryTurn={onRetryTurn}
       onMessageAction={onMessageAction}
       agentBackground={agentBackground}
       createdPeerNavigation={createdPeerNavigation}
@@ -621,6 +630,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onLoadEarlier,
   onOpenAccounts,
   onSaveDiagnostics,
+  onRetryTurn,
   onMessageAction,
   agentBackground = null,
   createdPeerNavigation = null,
@@ -660,6 +670,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
+  onRetryTurn?: (text: string) => void
   onMessageAction?: MessageActionHandler
   createdPeerNavigation?: CreatedPeerNavigation | null
   toolCardExpansionStore?: ToolCardExpansionStore | null
@@ -673,6 +684,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   moveBackDisabled?: boolean
 }) {
   const workspaceMove = readWorkspaceMoveDisplay(workspaceMoveInput)
+  const retryTarget = !turnLive && restorePhase === null ? retryableTurn(rows) : null
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
   // overlay is a sibling of the transcript column, not nested in a scrolling row.
@@ -950,7 +962,13 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
             <CreatedPeerNavigationContext.Provider value={createdPeerNavigation}>
               <ToolInspectorContext.Provider value={openInspector}>
                 <TurnErrorActionsContext.Provider
-                  value={{ openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics }}
+                  value={{
+                    openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics,
+                    ...(retryTarget && onRetryTurn ? {
+                      retryResultId: retryTarget.resultId,
+                      retry: () => onRetryTurn(retryTarget.text),
+                    } : {}),
+                  }}
                 >
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
                     {content}
@@ -1779,7 +1797,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
 
     case 'system-notice':
       return (
-        <SystemNoticeBox noticeType={row.noticeType} content={row.content} />
+        <SystemNoticeBox noticeType={row.noticeType} content={row.content} retry={row.retry} />
       )
 
     case 'task-notification':
@@ -1797,6 +1815,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
     case 'result':
       return (
         <ResultSeam
+          row={row}
           isError={row.isError}
           subtype={row.subtype}
           durationMs={row.durationMs}
@@ -6341,6 +6360,7 @@ function RedactedThinkingBlock() {
 function SystemNoticeBox({
   noticeType,
   content,
+  retry,
 }: {
   noticeType:
     | 'api_retry'
@@ -6348,16 +6368,32 @@ function SystemNoticeBox({
     | 'account_diagnostic'
     | 'provider_error'
   content: string
+  retry?: SystemNoticeRow['retry']
 }) {
   const { glyph, glyphTone } = NOTICE_STYLE[noticeType]
+  const { turnLive } = useContext(TranscriptMotionContext)
+  const [seconds, setSeconds] = useState<number | null>(null)
+  useEffect(() => {
+    setSeconds(null)
+    if (!turnLive || !retry || retry.state !== 'waiting' || retry.replay || retry.delayMs <= 0) return
+    const tick = () => setSeconds(retryWaitSeconds(retry))
+    tick()
+    const timer = setInterval(tick, 250)
+    return () => clearInterval(timer)
+  }, [retry?.updateId, turnLive, retry?.state, retry?.replay, retry?.delayMs])
   return (
     <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
-      <span className={`text-[12px] leading-5 ${glyphTone}`} aria-hidden>
+      {!retry || retry.state === 'waiting' ? <span className={`text-[12px] leading-5 ${glyphTone}`} aria-hidden>
         {glyph}
-      </span>
-      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs text-text-muted">
+      </span> : null}
+      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-text-muted">
         {content}
       </span>
+      {retry?.state === 'waiting' && seconds !== null && seconds > 0 ? (
+        <span className="shrink-0 font-mono text-[11px] leading-5 tabular-nums text-text-subtle">
+          try {retry.attempt + 1} in {seconds}s
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -6677,17 +6713,19 @@ const RESULT_ERROR_LABELS = new Map([
 ])
 
 function ResultSeam({
+  row,
   isError,
   subtype,
   durationMs,
   totalCostUsd,
 }: {
+  row: ResultRow
   isError: boolean
   subtype: string
   durationMs?: number
   totalCostUsd?: number
 }) {
-  const { openAccounts, saveDiagnostics } = useContext(TurnErrorActionsContext)
+  const { openAccounts, saveDiagnostics, retry, retryResultId } = useContext(TurnErrorActionsContext)
   // #6 (operator, 2026-07-19): the success turn-footer was removed — a completed
   // turn shows no seam. Only error/abort/interrupted turns still surface a seam so
   // a stopped or broken turn stays visible.
@@ -6696,23 +6734,15 @@ function ResultSeam({
   if (isInterrupted) {
     return <Seam tone="neutral" label="Stopped" boldLabel />
   }
-  if (subtype === 'error_auth_required') {
+  if (subtype === 'error_auth_required' || subtype === 'error_during_execution') {
+    const copy = turnFailureCopy(row)
     return (
       <TurnErrorCard
-        title="Sign-in expired"
-        detail="Sign in again in Accounts to continue."
-        actionLabel="Open Accounts"
-        onAction={openAccounts}
-      />
-    )
-  }
-  if (subtype === 'error_during_execution') {
-    return (
-      <TurnErrorCard
-        title="This turn could not finish"
-        detail="Try again. If this keeps happening, save a diagnostics bundle."
-        actionLabel="Save diagnostics bundle"
-        onAction={saveDiagnostics}
+        title={copy.title}
+        detail={copy.detail}
+        actionLabel={copy.action === 'accounts' ? 'Open Accounts' : 'Save diagnostics bundle'}
+        onAction={copy.action === 'accounts' ? openAccounts : copy.action === 'diagnostics' ? saveDiagnostics : undefined}
+        onRetry={retryResultId === row.id ? retry : undefined}
       />
     )
   }
@@ -6738,26 +6768,50 @@ function TurnErrorCard({
   detail,
   actionLabel,
   onAction,
+  onRetry,
 }: {
   title: string
   detail: string
   actionLabel: string
   onAction?: () => void
+  onRetry?: () => void
 }) {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-lg border border-tone-danger/30 bg-tone-danger/5 px-3 py-2">
       <div className="min-w-0 flex-1">
         <div className="text-xs font-semibold text-text-primary">{title}</div>
-        <div className="mt-0.5 text-xs text-text-muted">{detail}</div>
+        {detail ? <div className="mt-0.5 text-xs text-text-muted">{detail}</div> : null}
       </div>
-      {onAction ? (
-        <button
-          type="button"
-          onClick={onAction}
-          className="rounded-md border border-shell-seam px-2 py-1 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent"
-        >
-          {actionLabel}
-        </button>
+      {onRetry || onAction ? (
+        <div className="flex gap-1.5">
+          {onRetry && actionLabel !== 'Open Accounts' ? (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-md border border-shell-seam px-2 py-1 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent"
+            >
+              Retry
+            </button>
+          ) : null}
+          {onAction ? (
+            <button
+              type="button"
+              onClick={onAction}
+              className="rounded-md border border-shell-seam px-2 py-1 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent"
+            >
+              {actionLabel}
+            </button>
+          ) : null}
+          {onRetry && actionLabel === 'Open Accounts' ? (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="rounded-md border border-shell-seam px-2 py-1 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent"
+            >
+              Retry
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </div>
   )

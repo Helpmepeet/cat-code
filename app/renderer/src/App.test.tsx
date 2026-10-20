@@ -2152,11 +2152,14 @@ test('renders a restart control only for a terminal session state', () => {
     expect(markup).toContain('Restart')
     expect(markup).not.toContain(`Session ${status}.`)
     expect(markup).toContain('This session')
+    expect(markup).toContain('border-tone-danger/30')
+    expect(markup).not.toContain('Restart it to')
   }
 
   const unavailable = render('restore_failed')
   expect(unavailable).toContain('saved conversation is unavailable')
-  expect(unavailable).toContain('cannot be restarted')
+  expect(unavailable).not.toContain('cannot be restarted')
+  expect(unavailable).toContain('border-tone-danger/30')
   expect(unavailable).not.toContain('>Restart<')
 
   // No session at all: nothing to restart.
