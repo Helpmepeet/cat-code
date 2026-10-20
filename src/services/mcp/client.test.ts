@@ -13,6 +13,8 @@ import type {
 
 const persistedIds: string[] = []
 let headerHelperAbortSignal: AbortSignal | undefined
+const realExecFileNoThrowWithCwd =
+  realExecFileNoThrow.execFileNoThrowWithCwd
 
 mock.module('../../utils/toolResultStorage.js', () => ({
   ...realToolResultStorage,
@@ -39,7 +41,7 @@ mock.module('../../utils/execFileNoThrow.js', () => ({
     ...args: Parameters<typeof realExecFileNoThrow.execFileNoThrowWithCwd>
   ) => {
     if (args[0] !== 'test-hanging-helper') {
-      return realExecFileNoThrow.execFileNoThrowWithCwd(...args)
+      return realExecFileNoThrowWithCwd(...args)
     }
     headerHelperAbortSignal = args[2]?.abortSignal
     return new Promise(resolve => {

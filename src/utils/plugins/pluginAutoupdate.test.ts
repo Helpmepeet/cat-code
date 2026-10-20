@@ -11,12 +11,13 @@ let installedPluginFixture: Record<string, unknown> = { plugins: {} }
 let onMarketplaceRefresh: ((name: string) => Promise<void>) | null = null
 
 const actualSettings = await import('../settings/settings.js')
+const realGetSettingsForSource = actualSettings.getSettingsForSource
 mock.module('../settings/settings.js', () => ({
   ...actualSettings,
   getSettingsForSource: (source: string) =>
     source === 'policySettings'
       ? policySettings
-      : actualSettings.getSettingsForSource(
+      : realGetSettingsForSource(
           source as Parameters<typeof actualSettings.getSettingsForSource>[0],
         ),
 }))

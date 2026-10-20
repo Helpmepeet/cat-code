@@ -76,17 +76,18 @@ mock.module('./runAgent.js', () => ({
 }))
 
 const realSleepModule = await import('../../utils/sleep.js')
+const realSleep = realSleepModule.sleep
 let resolvePendingMcpPoll: (() => void) | undefined
 mock.module('../../utils/sleep.js', () => ({
   ...realSleepModule,
-  sleep: async (...args: Parameters<typeof realSleepModule.sleep>) => {
+  sleep: async (...args: Parameters<typeof realSleep>) => {
     const resolve = resolvePendingMcpPoll
     if (resolve) {
       resolvePendingMcpPoll = undefined
       resolve()
       return
     }
-    await realSleepModule.sleep(...args)
+    await realSleep(...args)
   },
 }))
 

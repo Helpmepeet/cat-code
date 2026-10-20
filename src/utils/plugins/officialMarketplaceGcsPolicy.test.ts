@@ -39,12 +39,13 @@ const validArchive = Buffer.from(
 let responseArchive = validArchive
 
 const actualSettings = await import('../settings/settings.js')
+const realGetSettingsForSource = actualSettings.getSettingsForSource
 mock.module('../settings/settings.js', () => ({
   ...actualSettings,
   getSettingsForSource: (source: string) =>
     source === 'policySettings'
       ? policySettings
-      : actualSettings.getSettingsForSource(
+      : realGetSettingsForSource(
           source as Parameters<typeof actualSettings.getSettingsForSource>[0],
         ),
 }))
