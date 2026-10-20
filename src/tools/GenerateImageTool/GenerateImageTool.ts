@@ -908,6 +908,7 @@ async function generateWithCodexRetries(
 export const GenerateImageTool = buildTool({
   name: GENERATE_IMAGE_TOOL_NAME,
   searchHint: 'generate images with GPT',
+  shouldDefer: true,
   maxResultSizeChars: 20_000,
   strict: true,
   async description(input) {

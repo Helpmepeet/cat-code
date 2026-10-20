@@ -176,9 +176,12 @@ async function searchToolsWithKeywords(
   // from subagents/post-compaction). Checks deferred first, then falls back
   // to the full tool set — selecting an already-loaded tool is a harmless
   // no-op that lets the model proceed without retry churn.
+  // Aliases count too: goal prompts name `update_goal`, the tool is `UpdateGoal`.
+  const matchesQuery = (t: Tool): boolean =>
+    t.name.toLowerCase() === queryLower ||
+    (t.aliases?.some(alias => alias.toLowerCase() === queryLower) ?? false)
   const exactMatch =
-    deferredTools.find(t => t.name.toLowerCase() === queryLower) ??
-    tools.find(t => t.name.toLowerCase() === queryLower)
+    deferredTools.find(matchesQuery) ?? tools.find(matchesQuery)
   if (exactMatch) {
     return [exactMatch.name]
   }

@@ -27,6 +27,7 @@ function validateCreateGoalInput(): ValidationResult {
 export const CreateGoalTool = buildTool({
   name: 'CreateGoal',
   aliases: ['create_goal'],
+  shouldDefer: true,
   maxResultSizeChars: 100_000,
   get inputSchema(): InputSchema {
     return inputSchema()

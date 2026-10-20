@@ -69,6 +69,7 @@ function describeUnresolvedWorkers(
 export const UpdateGoalTool = buildTool({
   name: 'UpdateGoal',
   aliases: ['update_goal'],
+  shouldDefer: true,
   maxResultSizeChars: 100_000,
   get inputSchema(): InputSchema {
     return inputSchema()

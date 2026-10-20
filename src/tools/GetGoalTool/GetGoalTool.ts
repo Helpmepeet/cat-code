@@ -16,6 +16,7 @@ type Output = ThreadGoalToolResponse
 export const GetGoalTool = buildTool({
   name: 'GetGoal',
   aliases: ['get_goal'],
+  shouldDefer: true,
   maxResultSizeChars: 100_000,
 
   get inputSchema(): InputSchema {
