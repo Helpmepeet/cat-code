@@ -1820,7 +1820,8 @@ export function SessionPane({
             onSaveDiagnostics={() => void requestDiagnosticsSave(toast)}
             onRetryTurn={!generating && !prompt.trim() && images.length === 0 && !fileAttachment &&
               !preparingImage && !pickingFile && !activeDescriptor?.moving &&
-              composerGate.engineInputEnabled && !branchSwitchPending && !managedFolderUnavailable &&
+              (composerGate.engineInputEnabled || (composerGate.connectPending && pendingSubmit === null)) &&
+              !branchSwitchPending && !managedFolderUnavailable &&
               projectRoute === null ? retryTurn : undefined}
             onMessageAction={activeDescriptor?.moving ? undefined : onMessageAction}
             createdPeerNavigation={createdPeerNavigation}

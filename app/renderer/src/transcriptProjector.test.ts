@@ -2540,6 +2540,51 @@ test('stopping a retry wait settles the row using the known failed attempt count
   ])
 })
 
+test('the first streamed text settles a waiting retry before any finalized reply or result', () => {
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  const play = (message: unknown) => { state = projectServerFrame(state, messageFrame('session-1', message as SDKMessage)) }
+  play({ type: 'system', subtype: 'api_retry', uuid: 'stream-retry', attempt: 1, max_retries: 10, retry_delay_ms: 1000, error: 'rate_limit' })
+  play({ type: 'stream_event', event: { type: 'message_start', message: { id: 'msg-after-retry' } }, uuid: 'stream-start' })
+  play({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hel' } }, uuid: 'stream-delta' })
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({
+    content: 'Rate limited. Went through on try 2.', retry: { state: 'success' },
+  })
+})
+
+test('a recovered series does not lend its status to a later unrelated failure', () => {
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  const play = (message: unknown) => { state = projectServerFrame(state, messageFrame('session-1', message as SDKMessage)) }
+  play({ type: 'system', subtype: 'api_retry', uuid: 'early-529', attempt: 1, max_retries: 10, retry_delay_ms: 1000, error_status: 529, error: 'rate_limit' })
+  play({ type: 'assistant', uuid: 'reply-after-529', parent_tool_use_id: null, message: { id: 'r', role: 'assistant', content: [{ type: 'text', text: 'Partial work' }] } })
+  play({ type: 'assistant', uuid: 'context-fail', error: 'invalid_request', parent_tool_use_id: null, message: { id: 'e', role: 'assistant', content: [{ type: 'text', text: 'Request exceeds the context window' }] } })
+  play({ type: 'result', subtype: 'error_during_execution', uuid: 'late-fail', is_error: true, errors: [] })
+  const result = selectTranscriptRows(state, 'session-1').find(row => row.kind === 'result')
+  expect(result).toMatchObject({ providerMessage: 'Request exceeds the context window' })
+  expect(result).not.toHaveProperty('errorStatus')
+})
+
+test('a retry loaded from earlier history settles against the reply already below it', () => {
+  let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+  state = projectServerFrame(state, messageFrame('session-1', {
+    type: 'assistant', uuid: 'retained-reply', parent_tool_use_id: null,
+    message: { id: 'kept', role: 'assistant', content: [{ type: 'text', text: 'Retained answer' }] },
+  } as unknown as SDKMessage))
+  state = projectServerFrame(state, {
+    ...messageFrame('session-1', {
+      type: 'system', subtype: 'api_retry', uuid: 'earlier-retry', attempt: 2,
+      max_retries: 10, retry_delay_ms: 4000, error_status: 529, error: 'rate_limit',
+    } as unknown as SDKMessage),
+    replay: true as const, recovered: true as const,
+  })
+  // Mid-batch the series stays open: more of it may still be arriving.
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({ retry: { state: 'waiting' } })
+  state = projectServerFrame(state, loadEarlierResult('session-1', true))
+  expect(selectTranscriptRows(state, 'session-1')).toMatchObject([
+    { content: 'Overloaded. Went through on try 3.', retry: { state: 'success' } },
+    { kind: 'assistant-text', content: 'Retained answer' },
+  ])
+})
+
 test('transport recovery retries read as one reason, not two sentences', () => {
   let state = projectServerFrame(createTranscriptState(), ready('session-1'))
   state = projectServerFrame(state, messageFrame('session-1', {

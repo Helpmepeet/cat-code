@@ -1496,6 +1496,9 @@ export function projectServerFrames(
       // `ok` too because a refusal learned nothing: leaving the boundary standing
       // is the recoverable direction (press again), removing it is not.
       const complete = frame.ok === true && frame.complete === true
+      if (draft.session.recoveryInsertAt !== null && settleRecoveredRetries(draft)) {
+        draft.changed = true
+      }
       // B1: this frame closes the batch. The next recovery reaches FURTHER back,
       // so it must start at the head again rather than continue beneath the rows
       // this one inserted.
@@ -1526,6 +1529,7 @@ export function projectServerFrames(
       )
     ) {
       if (recoveryInsertAt === null) {
+        if (previousRecoveryInsertAt !== null) settleRecoveredRetries(draft)
         draft.session.recoveryInsertAt = null
       } else if (draft.session.recoveryInsertAt === previousRecoveryInsertAt) {
         draft.session.recoveryInsertAt = recoveryInsertAt
@@ -2419,7 +2423,9 @@ function projectResultFrame(
   const provider = [...turnRows].reverse().find(row =>
     row.kind === 'system-notice' && row.noticeType === 'provider_error',
   )
-  const retry = [...turnRows].reverse().find(row => row.kind === 'system-notice' && row.retry)
+  // Only a series still waiting failed with this turn; a settled one recovered
+  // and says nothing about why the turn ended.
+  const retry = [...turnRows].reverse().find(row => row.kind === 'system-notice' && row.retry?.state === 'waiting')
   // Only the failure-card subtypes render the provider text (`turnFailureCopy`);
   // folding it into any other result would drop it from view.
   const foldsProvider = message.is_error && provider?.kind === 'system-notice' &&
@@ -2596,17 +2602,58 @@ function settleRetries(
   insertAt: number | null,
 ): void {
   for (const row of currentScopeRows(draft, parent, insertAt)) {
+    settleRetryRow(draft, draft.session.rows.indexOf(row), state)
+  }
+}
+
+function settleRetryRow(
+  draft: SessionDraft,
+  index: number,
+  state: 'success' | 'failure' | 'stopped',
+): boolean {
+  const row = draft.session.rows[index]
+  if (row?.kind !== 'system-notice' || row.retry?.state !== 'waiting') return false
+  ensureOwnedRows(draft)
+  // withRetry reports the failed attempt before waiting for the next call.
+  // Stopping during that wait only proves those failed calls were made.
+  const tries = state === 'stopped' ? row.retry.attempt : row.retry.attempt + 1
+  draft.session.rows[index] = {
+    ...row,
+    retry: { ...row.retry, state },
+    content: `${row.retry.reason}. ${state === 'success' ? `Went through on try ${tries}` : `Stopped after ${tries} ${tries === 1 ? 'try' : 'tries'}`}.`,
+  }
+  return true
+}
+
+/**
+ * A recovery batch inserts older frames ABOVE rows the stream already
+ * delivered, so a retry it inserts can sit above the reply or result that ended
+ * it, and no later frame will settle it. Run only when the batch closes: until
+ * then, later frames of the same series may still be on their way.
+ */
+function settleRecoveredRetries(draft: SessionDraft): boolean {
+  let settled = false
+  for (let index = 0; index < draft.session.rows.length; index++) {
+    const row = draft.session.rows[index]!
     if (row.kind !== 'system-notice' || row.retry?.state !== 'waiting') continue
-    ensureOwnedRows(draft)
-    // withRetry reports the failed attempt before waiting for the next call.
-    // Stopping during that wait only proves those failed calls were made.
-    const tries = state === 'stopped' ? row.retry.attempt : row.retry.attempt + 1
-    draft.session.rows[draft.session.rows.indexOf(row)] = {
-      ...row,
-      retry: { ...row.retry, state },
-      content: `${row.retry.reason}. ${state === 'success' ? `Went through on try ${tries}` : `Stopped after ${tries} ${tries === 1 ? 'try' : 'tries'}`}.`,
+    const parent = row.parentToolUseId ?? null
+    for (let later = index + 1; later < draft.session.rows.length; later++) {
+      const next = draft.session.rows[later]!
+      if (('parentToolUseId' in next ? next.parentToolUseId ?? null : null) !== parent) continue
+      if (next.kind === 'user-text') break
+      const outcome = next.kind === 'assistant-text'
+        ? 'success'
+        : next.kind === 'turn-stopped'
+          ? 'stopped'
+          : next.kind === 'result'
+            ? next.subtype === 'interrupted' ? 'stopped' : next.isError ? 'failure' : 'success'
+            : null
+      if (outcome === null) continue
+      settled = settleRetryRow(draft, index, outcome) || settled
+      break
     }
   }
+  return settled
 }
 
 function appendSystemNotice(

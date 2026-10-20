@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { TranscriptView, TranscriptRowsView } from './TranscriptView.js'
 import { ConnectionRecovery } from './SessionPane.js'
@@ -47,6 +47,20 @@ test('live retry metadata is a countdown for the next call; settlement removes g
   expect(tree.container.textContent).not.toContain(' in ')
 })
 
+test('the live countdown ticks down while the wait runs', async () => {
+  const start = Date.now()
+  const state = projectServerFrame(readyState(), frame({ ...retry, uuid: 'ticking-retry' }))
+  const tree = await harness.mount(<TranscriptView state={state} activeSessionId="session" turnLive />)
+  expect(tree.container.textContent).toContain('try 4 in 12s')
+  const clock = spyOn(Date, 'now').mockImplementation(() => start + 5000)
+  try {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    expect(tree.container.textContent).toContain('try 4 in 7s')
+  } finally {
+    clock.mockRestore()
+  }
+})
+
 test('restored retry history never starts a countdown even while the session is running', async () => {
   const state = projectServerFrame(readyState(), frame(retry, true))
   const tree = await harness.mount(<TranscriptView state={state} activeSessionId="session" turnLive />)
@@ -65,6 +79,11 @@ test('Retry sends the failed turn text to the submit callback and disappears whi
   expect(button).toBeDefined()
   await act(async () => button!.click())
   expect(submitted).toEqual(['Retry this exact text'])
+  // The engine has not answered yet, so the turn is still idle: a second click
+  // must not send the same message again.
+  await act(async () => button!.click())
+  expect(submitted).toEqual(['Retry this exact text'])
+  expect([...tree.container.querySelectorAll('button')].some(control => control.textContent === 'Retry')).toBe(false)
   await tree.render(draw(true))
   expect([...tree.container.querySelectorAll('button')].some(control => control.textContent === 'Retry')).toBe(false)
 })

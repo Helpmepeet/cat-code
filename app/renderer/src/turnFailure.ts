@@ -17,6 +17,15 @@ export function turnFailureCopy(row: Pick<ResultRow, 'subtype' | 'providerCode' 
   return { title: 'This turn could not finish', detail: detail || 'Try again. If this keeps happening, save a diagnostics bundle.', action: 'diagnostics' as const }
 }
 
+/**
+ * A resend is refused only while an attached turn is running, where it would
+ * queue into that turn. Every other state goes through the ordinary submit
+ * planner, which holds the prompt for a parked or spawning session.
+ */
+export function retrySendBlocked(connection: { status: string; inputEnabled: boolean }, logInputEnabled: boolean): boolean {
+  return connection.status === 'ready' && !(connection.inputEnabled && logInputEnabled)
+}
+
 /** Only an unambiguous plain-text turn can be resent without attachment state. */
 export function retryableTurn(rows: readonly NestedTranscriptRow[]): { resultId: string; text: string } | null {
   let resultIndex = rows.length - 1

@@ -202,6 +202,7 @@ import {
   type RetainedSubmitState,
   type TransportErrorState,
 } from './composerState.js'
+import { retrySendBlocked } from './turnFailure.js'
 import {
   WorkspaceLayout,
   type WorkspacePanelView,
@@ -3444,7 +3445,7 @@ export function App() {
     const file = selectFileAttachment(fileAttachmentState, sessionId)
     if (retryText !== undefined && (
       submittedDraft.trim() || images.length > 0 || file !== null ||
-      !sessionConnection.inputEnabled || !sessionLog.inputEnabled
+      retrySendBlocked(sessionConnection, sessionLog.inputEnabled)
     )) return
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref

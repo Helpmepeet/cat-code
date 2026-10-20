@@ -684,7 +684,20 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   moveBackDisabled?: boolean
 }) {
   const workspaceMove = readWorkspaceMoveDisplay(workspaceMoveInput)
-  const retryTarget = !turnLive && restorePhase === null ? retryableTurn(rows) : null
+  // A sent Retry starts no turn until the engine answers, so nothing else hides
+  // the button in between; the ref stops a second click in the same frame.
+  const retriedRef = useRef(new Set<string>())
+  const [retried, setRetried] = useState<ReadonlySet<string>>(() => new Set())
+  const candidate = !turnLive && restorePhase === null ? retryableTurn(rows) : null
+  const retryTarget = candidate && !retried.has(candidate.resultId) ? candidate : null
+  const sendRetry = retryTarget && onRetryTurn
+    ? () => {
+      if (retriedRef.current.has(retryTarget.resultId)) return
+      retriedRef.current.add(retryTarget.resultId)
+      setRetried(new Set(retriedRef.current))
+      onRetryTurn(retryTarget.text)
+    }
+    : undefined
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
   // overlay is a sibling of the transcript column, not nested in a scrolling row.
@@ -964,9 +977,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                 <TurnErrorActionsContext.Provider
                   value={{
                     openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics,
-                    ...(retryTarget && onRetryTurn ? {
+                    ...(retryTarget && sendRetry ? {
                       retryResultId: retryTarget.resultId,
-                      retry: () => onRetryTurn(retryTarget.text),
+                      retry: sendRetry,
                     } : {}),
                   }}
                 >

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { turnFailureCopy, retryableTurn } from './turnFailure.js'
+import { turnFailureCopy, retryableTurn, retrySendBlocked } from './turnFailure.js'
 import { observeRetryWait, retryWaitSeconds } from './retryClock.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
@@ -41,4 +41,12 @@ test('countdowns use receipt time, do not restart on remount, and omit replay or
   const zero = { delayMs: 0, replay: false }
   observeRetryWait(zero, 1000)
   expect(retryWaitSeconds(zero, 1000)).toBeNull()
+})
+
+test('a resend waits only on a running attached turn; parked and spawning sessions go to the submit planner', () => {
+  expect(retrySendBlocked({ status: 'ready', inputEnabled: true }, true)).toBe(false)
+  expect(retrySendBlocked({ status: 'ready', inputEnabled: false }, true)).toBe(true)
+  expect(retrySendBlocked({ status: 'ready', inputEnabled: true }, false)).toBe(true)
+  expect(retrySendBlocked({ status: 'parked', inputEnabled: false }, false)).toBe(false)
+  expect(retrySendBlocked({ status: 'starting', inputEnabled: false }, false)).toBe(false)
 })
