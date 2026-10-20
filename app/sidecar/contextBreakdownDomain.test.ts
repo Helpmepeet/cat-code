@@ -165,21 +165,20 @@ mock.module('../../src/utils/sessionStorage.js', () => ({
 // happens inside the mocked-module closure, which the checker can't see is
 // what runs). Cast only at the point of use instead.
 let capturedToolUseContext: unknown
-const FAKE_ANALYSIS: ContextData = {
-  categories: [{ name: 'System prompt', tokens: 4_200, color: 'promptBorder' }],
-  totalTokens: 4_200,
-  maxTokens: 200_000,
-  model: 'gpt-5.6-luna',
-} as unknown as ContextData
-
-const realAnalyzeContext = await import('../../src/utils/analyzeContext.js')
+const actualAnalyzeContext = await import('../../src/utils/analyzeContext.js')
+const { analyzeContextUsage: analyzeContextUsageImpl } = actualAnalyzeContext
+const actualCommands = await import('../../src/commands.js')
+mock.module('../../src/commands.js', () => ({
+  ...actualCommands,
+  getCommands: async () => [],
+}))
 mock.module('../../src/utils/analyzeContext.js', () => ({
-  ...realAnalyzeContext,
+  ...actualAnalyzeContext,
   analyzeContextUsage: async (
     ..._args: unknown[]
   ): Promise<ContextData> => {
     capturedToolUseContext = _args[6]
-    return FAKE_ANALYSIS
+    return await analyzeContextUsageImpl(..._args)
   },
 }))
 

@@ -1,53 +1,28 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { SettingsUpdater } from '../utils/settings/settings.js'
+import {
+  getSettingsForSource,
+  updateSettingsForSource,
+} from '../utils/settings/settings.js'
+import { resetSettingsCache } from '../utils/settings/settingsCache.js'
 import type { SettingsJson } from '../utils/settings/types.js'
 
-let userSettings: SettingsJson | null = null
-let updateCalls: Array<Partial<SettingsJson>> = []
 let mainLoopOverride: string | undefined
 let mainLoopOverrideWrites: Array<string | undefined> = []
 let provider = 'firstParty'
-let updateError: Error | null = null
+let settingsDir: string
+let originalConfigDir: string | undefined
 
-const actualSettings = await import('../utils/settings/settings.js')
-mock.module('../utils/settings/settings.js', () => ({
-  ...actualSettings,
-  getInitialSettings: () => userSettings ?? {},
-  getSettingsForSource: () => userSettings,
-  updateSettingsForSource: (
-    _source: string,
-    patch: SettingsJson | SettingsUpdater,
-  ) => {
-    if (updateError) return { error: updateError }
-    if (typeof patch === 'function') {
-      const next = patch(userSettings)
-      if (next) {
-        updateCalls.push(next)
-        userSettings = next
-      }
-      return { error: null }
-    }
-    updateCalls.push(patch)
-    if (userSettings) {
-      const mergedOverrides = patch.modelOverrides
-        ? Object.fromEntries(
-            Object.entries({
-              ...userSettings.modelOverrides,
-              ...patch.modelOverrides,
-            }).filter(([, value]) => value !== undefined),
-          )
-        : userSettings.modelOverrides
-      userSettings = {
-        ...userSettings,
-        ...patch,
-        ...(patch.modelOverrides ? { modelOverrides: mergedOverrides } : {}),
-      }
-    }
-    return { error: null }
-  },
-}))
+mock.module('../utils/envUtils.js', async () => {
+  const actual = await import('../utils/envUtils.js')
+  return {
+    ...actual,
+    getClaudeConfigHomeDir: () => process.env.CLAUDE_CONFIG_DIR!,
+  }
+})
 
 const actualState = await import('../bootstrap/state.js')
 mock.module('../bootstrap/state.js', () => ({
@@ -83,12 +58,13 @@ const ENV_KEYS = [
 const envSnapshot = new Map<string, string | undefined>()
 
 beforeEach(() => {
-  userSettings = null
-  updateCalls = []
+  originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  settingsDir = mkdtempSync(join(tmpdir(), 'retired-claude-models-'))
+  process.env.CLAUDE_CONFIG_DIR = settingsDir
+  resetSettingsCache()
   mainLoopOverride = undefined
   mainLoopOverrideWrites = []
   provider = 'firstParty'
-  updateError = null
   for (const key of ENV_KEYS) {
     envSnapshot.set(key, process.env[key])
     delete process.env[key]
@@ -96,6 +72,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  resetSettingsCache()
+  rmSync(settingsDir, { recursive: true, force: true })
   for (const key of ENV_KEYS) {
     const value = envSnapshot.get(key)
     if (value === undefined) {
@@ -109,16 +89,8 @@ afterEach(() => {
 })
 
 describe('migrateRetiredClaude46ModelsToClaude5', () => {
-  test('reports a settings-write error so startup keeps the migration pending', () => {
-    userSettings = { model: 'claude-sonnet-4-6' }
-    updateError = new Error('settings lock unavailable')
-
-    expect(migrateRetiredClaude46ModelsToClaude5()).toBe(updateError)
-    expect(mainLoopOverrideWrites).toEqual([])
-  })
-
   test('remaps every first-party user-owned model surface without overwriting a current override', () => {
-    userSettings = {
+    setUserSettings({
       model: 'claude-sonnet-4-6[1m]',
       availableModels: [
         'claude-sonnet-4-6',
@@ -131,26 +103,20 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
         'claude-sonnet-5': 'keep-current-sonnet-override',
         'claude-opus-4-6': 'legacy-opus-override',
       },
-    }
+    })
     mainLoopOverride = 'claude-opus-4-6[1m]'
 
     migrateRetiredClaude46ModelsToClaude5()
     migrateRetiredClaude46ModelsToClaude5()
 
-    expect(updateCalls).toEqual([
-      {
-        model: 'claude-sonnet-5',
-        availableModels: [
-          'claude-sonnet-5',
-          'claude-opus-5',
-          'claude-fable-5',
-        ],
-        modelOverrides: {
-          'claude-sonnet-5': 'keep-current-sonnet-override',
-          'claude-opus-5': 'legacy-opus-override',
-        },
+    expect(getSettingsForSource('userSettings')).toEqual({
+      model: 'claude-sonnet-5',
+      availableModels: ['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'],
+      modelOverrides: {
+        'claude-sonnet-5': 'keep-current-sonnet-override',
+        'claude-opus-5': 'legacy-opus-override',
       },
-    ])
+    })
     expect(mainLoopOverrideWrites).toEqual(['claude-opus-5'])
     expect(mainLoopOverride).toBe('claude-opus-5')
   })
@@ -179,25 +145,21 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
   // the migration's version bump still fires unconditionally and it never runs again.
   test('runs the migration even when the current/persisted provider is not firstParty', () => {
     provider = 'openai'
-    userSettings = {
+    setUserSettings({
       model: 'claude-opus-4-6',
       availableModels: ['claude-opus-4-6', 'claude-sonnet-4-6'],
       modelOverrides: {
         'claude-opus-4-6': 'my-endpoint-id',
       },
-    }
+    })
 
     migrateRetiredClaude46ModelsToClaude5()
 
-    expect(updateCalls).toEqual([
-      {
-        model: 'claude-opus-5',
-        availableModels: ['claude-opus-5', 'claude-sonnet-5'],
-        modelOverrides: {
-          'claude-opus-5': 'my-endpoint-id',
-        },
-      },
-    ])
+    expect(getSettingsForSource('userSettings')).toEqual({
+      model: 'claude-opus-5',
+      availableModels: ['claude-opus-5', 'claude-sonnet-5'],
+      modelOverrides: { 'claude-opus-5': 'my-endpoint-id' },
+    })
   })
 
   // Regression for the migration's substring canonicalization rewriting namespaced/proxy
@@ -206,27 +168,28 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
   // the retired id embedded in that namespaced string and clobber the prefix on disk.
   test('does not rewrite a namespaced model id when ANTHROPIC_BASE_URL points at a custom gateway', () => {
     process.env.ANTHROPIC_BASE_URL = 'https://my-gateway.example.com'
-    userSettings = {
+    setUserSettings({
       model: 'anthropic/claude-sonnet-4-6',
-    }
+    })
 
     migrateRetiredClaude46ModelsToClaude5()
 
-    expect(updateCalls).toEqual([])
-    expect(userSettings.model).toBe('anthropic/claude-sonnet-4-6')
+    expect(getSettingsForSource('userSettings')?.model).toBe(
+      'anthropic/claude-sonnet-4-6',
+    )
   })
 
   // The substring canonicalization itself is correct and required for dated snapshot ids
   // (e.g. claude-opus-4-6-20260101) — only the gateway-namespaced case above should be
   // excluded. Pins against the default (unset) ANTHROPIC_BASE_URL.
   test('still remaps a dated first-party snapshot id when no gateway is configured', () => {
-    userSettings = {
+    setUserSettings({
       model: 'claude-opus-4-6-20260101',
-    }
+    })
 
     migrateRetiredClaude46ModelsToClaude5()
 
-    expect(updateCalls).toEqual([{ model: 'claude-opus-5' }])
+    expect(getSettingsForSource('userSettings')?.model).toBe('claude-opus-5')
   })
 
   // The migration must not lose the existing "third-party providers keep their 4.6
@@ -235,16 +198,23 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
   // id it can't route with.
   test('preserves a third-party-shaped 4.6 pin when a 3P provider is configured via env', () => {
     process.env.CLAUDE_CODE_USE_BEDROCK = '1'
-    userSettings = {
+    setUserSettings({
       model: 'us.anthropic.claude-opus-4-6-v1:0',
-    }
+    })
 
     migrateRetiredClaude46ModelsToClaude5()
 
-    expect(updateCalls).toEqual([])
-    expect(userSettings.model).toBe('us.anthropic.claude-opus-4-6-v1:0')
+    expect(getSettingsForSource('userSettings')?.model).toBe(
+      'us.anthropic.claude-opus-4-6-v1:0',
+    )
   })
 })
+
+function setUserSettings(settings: SettingsJson): void {
+  const result = updateSettingsForSource('userSettings', settings)
+  expect(result.error).toBeNull()
+  resetSettingsCache()
+}
 
 test('startup wiring tripwire keeps the Claude 4.6 retirement migration active', () => {
   const ownerSource = readFileSync(

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import type { AgentId } from '../../types/ids.js'
 import type { Message } from '../../types/message.js'
 import { runWithAgentContext } from '../../utils/agentContext.js'
@@ -10,38 +10,7 @@ type QuerySource = Parameters<
   typeof import('./promptCacheBreakDetection.js').checkResponseForCacheBreak
 >[0]
 
-// Captured prompt-cache-break diagnostics. promptCacheBreakDetection records the
-// final classified reason via recordPromptCacheBreak (transcript write); we
-// intercept it to observe the reason for both the main and subagent paths, since
-// the user-visible warning is only queued for the main thread.
-type CapturedBreak = {
-  querySource: string
-  agentId?: AgentId
-  reason: string
-  staleResponseIdRetry: boolean
-}
-const capturedBreaks: CapturedBreak[] = []
-
 const STALE_EVICTION_LABEL = 'server evicted previous_response_id'
-
-beforeEach(async () => {
-  capturedBreaks.length = 0
-  // Capture the real sessionStorage module BEFORE mocking so we can preserve
-  // every other export (filesystem helpers transitively read getProjectDir from
-  // here) and override only recordPromptCacheBreak.
-  const actualSessionStorage = await import('../../utils/sessionStorage.js')
-  await mock.module('src/utils/sessionStorage.js', () => ({
-    ...actualSessionStorage,
-    recordPromptCacheBreak: (entry: CapturedBreak) => {
-      capturedBreaks.push({
-        querySource: entry.querySource,
-        agentId: entry.agentId,
-        reason: entry.reason,
-        staleResponseIdRetry: entry.staleResponseIdRetry,
-      })
-    },
-  }))
-})
 
 afterEach(async () => {
   const { resetPromptCacheBreakDetection } = await import(
@@ -61,8 +30,18 @@ async function drivStaleRetryThenBreak(opts: {
   querySource: QuerySource
   trackingKey: string
   agentId?: AgentId
-}): Promise<typeof import('./promptCacheBreakDetection.js')> {
+}): Promise<{
+  mod: typeof import('./promptCacheBreakDetection.js')
+  recorded: Array<Parameters<typeof import('../../utils/sessionStorage.js').recordPromptCacheBreak>[0]>
+}> {
   const mod = await import('./promptCacheBreakDetection.js')
+  const sessionStorage = await import('../../utils/sessionStorage.js')
+  const recorded: Array<
+    Parameters<typeof sessionStorage.recordPromptCacheBreak>[0]
+  > = []
+  spyOn(sessionStorage, 'recordPromptCacheBreak').mockImplementation(
+    entry => recorded.push(entry),
+  )
   const {
     recordPromptState,
     checkResponseForCacheBreak,
@@ -103,18 +82,18 @@ async function drivStaleRetryThenBreak(opts: {
     opts.agentId,
   )
 
-  return mod
+  return { mod, recorded }
 }
 
 describe('promptCacheBreakDetection stale previous_response_id retry', () => {
   test('main thread: stale retry surfaces the eviction reason and a user warning', async () => {
-    const mod = await drivStaleRetryThenBreak({
+    const { mod, recorded } = await drivStaleRetryThenBreak({
       querySource: 'repl_main_thread' as QuerySource,
       trackingKey: 'repl_main_thread',
     })
 
     // Diagnostic reason carries the eviction label.
-    const mainBreak = capturedBreaks.find(
+    const mainBreak = recorded.find(
       b => b.querySource === 'repl_main_thread',
     )
     expect(mainBreak).toBeDefined()
@@ -128,14 +107,14 @@ describe('promptCacheBreakDetection stale previous_response_id retry', () => {
 
   test('subagent: stale retry under the raw agentId surfaces the eviction reason', async () => {
     const agentId = 'agent_subtask_42' as AgentId
-    const mod = await drivStaleRetryThenBreak({
+    const { mod, recorded } = await drivStaleRetryThenBreak({
       // Tracked prefix so getTrackingKey keys by the raw agentId.
       querySource: 'agent:custom' as QuerySource,
       trackingKey: agentId,
       agentId,
     })
 
-    const subBreak = capturedBreaks.find(b => b.agentId === agentId)
+    const subBreak = recorded.find(b => b.agentId === agentId)
     expect(subBreak).toBeDefined()
     expect(subBreak?.staleResponseIdRetry).toBe(true)
     expect(subBreak?.reason).toContain(STALE_EVICTION_LABEL)
@@ -150,13 +129,13 @@ describe('promptCacheBreakDetection stale previous_response_id retry', () => {
     // the raw agentId) must not flip the subagent's staleResponseIdRetry flag,
     // so the eviction label would be missing from the resulting break.
     const agentId = 'agent_subtask_99' as AgentId
-    await drivStaleRetryThenBreak({
+    const { recorded } = await drivStaleRetryThenBreak({
       querySource: 'agent:custom' as QuerySource,
       trackingKey: `agent:${agentId}`, // the buggy mapping
       agentId,
     })
 
-    const subBreak = capturedBreaks.find(b => b.agentId === agentId)
+    const subBreak = recorded.find(b => b.agentId === agentId)
     expect(subBreak).toBeDefined()
     // A break is still detected (cache read dropped), but it is NOT labeled as a
     // stale-response-id eviction because the notify missed the tracking key.
@@ -169,6 +148,13 @@ describe('promptCacheBreakDetection compact ownership', () => {
   test('main-thread compact shares the main cache state and surfaces its warning', async () => {
     const mod = await import('./promptCacheBreakDetection.js')
     const { recordPromptState, checkResponseForCacheBreak } = mod
+    const sessionStorage = await import('../../utils/sessionStorage.js')
+    const recorded: Array<
+      Parameters<typeof sessionStorage.recordPromptCacheBreak>[0]
+    > = []
+    spyOn(sessionStorage, 'recordPromptCacheBreak').mockImplementation(
+      entry => recorded.push(entry),
+    )
     const system = [{ type: 'text' as const, text: 'stable system prompt' }]
     const noMessages: Message[] = []
 
@@ -201,7 +187,7 @@ describe('promptCacheBreakDetection compact ownership', () => {
       'compact_helper_main' as AgentId,
     )
 
-    const mainCompactBreak = capturedBreaks.find(
+    const mainCompactBreak = recorded.find(
       b =>
         b.querySource === 'compact' &&
         b.reason.includes('model changed (gpt-5.6-sol → gpt-5.6-luna)'),
@@ -220,6 +206,13 @@ describe('promptCacheBreakDetection compact ownership', () => {
   test('subagent compact stays agent-scoped and does not surface in the parent', async () => {
     const mod = await import('./promptCacheBreakDetection.js')
     const { recordPromptState, checkResponseForCacheBreak } = mod
+    const sessionStorage = await import('../../utils/sessionStorage.js')
+    const recorded: Array<
+      Parameters<typeof sessionStorage.recordPromptCacheBreak>[0]
+    > = []
+    spyOn(sessionStorage, 'recordPromptCacheBreak').mockImplementation(
+      entry => recorded.push(entry),
+    )
     const parentAgentId = 'agent_explorer_42' as AgentId
     const compactHelperId = 'compact_helper_42' as AgentId
     const system = [{ type: 'text' as const, text: 'stable agent prompt' }]
@@ -265,7 +258,7 @@ describe('promptCacheBreakDetection compact ownership', () => {
       },
     )
 
-    const subagentCompactBreak = capturedBreaks.find(
+    const subagentCompactBreak = recorded.find(
       b =>
         b.querySource === 'compact' &&
         b.reason.includes('model changed (gpt-5.6-sol → gpt-5.6-luna)'),

@@ -542,6 +542,10 @@ describe('sessionActionsDomain — whole-conversation fork durability', () => {
       resetProjectForTesting()
     } finally {
       try {
+        storedInterruptedTurn = null
+        storedLog = null
+        sessionStartHookRuns = 0
+        renderedMessages = null
         setOriginalCwd(originalCwd)
         switchSession(asSessionId(originalSessionId), originalProjectDir)
       } finally {

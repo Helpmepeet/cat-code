@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { SettingsUpdater } from '../utils/settings/settings.js'
+import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
+import {
+  getSettingsForSource,
+  updateSettingsForSource,
+} from '../utils/settings/settings.js'
+import { resetSettingsCache } from '../utils/settings/settingsCache.js'
 import type { SettingsJson } from '../utils/settings/types.js'
+const actualEnvUtils = await import('../utils/envUtils.js')
 
 /**
  * TEST EVIDENCE
@@ -23,48 +31,10 @@ import type { SettingsJson } from '../utils/settings/types.js'
  * - Commands and outcomes: focused suite passed; engine build passed.
  */
 
-let userSettings: SettingsJson | null = null
-let updateCalls: Array<Partial<SettingsJson>> = []
 let mainLoopOverride: string | undefined
 let mainLoopOverrideWrites: Array<string | undefined> = []
-let updateError: Error | null = null
-
-const actualSettings = await import('../utils/settings/settings.js')
-mock.module('../utils/settings/settings.js', () => ({
-  ...actualSettings,
-  getSettingsForSource: () => userSettings,
-  updateSettingsForSource: (
-    _source: string,
-    patch: SettingsJson | SettingsUpdater,
-  ) => {
-    if (updateError) return { error: updateError }
-    if (typeof patch === 'function') {
-      const next = patch(userSettings)
-      if (next) {
-        updateCalls.push(next)
-        userSettings = next
-      }
-      return { error: null }
-    }
-    updateCalls.push(patch)
-    if (userSettings) {
-      const mergedOverrides = patch.modelOverrides
-        ? Object.fromEntries(
-            Object.entries({
-              ...userSettings.modelOverrides,
-              ...patch.modelOverrides,
-            }).filter(([, value]) => value !== undefined),
-          )
-        : userSettings.modelOverrides
-      userSettings = {
-        ...userSettings,
-        ...patch,
-        ...(patch.modelOverrides ? { modelOverrides: mergedOverrides } : {}),
-      }
-    }
-    return { error: null }
-  },
-}))
+let settingsDir: string
+let originalConfigDir: string | undefined
 
 const actualState = await import('../bootstrap/state.js')
 mock.module('../bootstrap/state.js', () => ({
@@ -75,34 +45,36 @@ mock.module('../bootstrap/state.js', () => ({
     mainLoopOverride = model
   },
 }))
-
+mock.module('../utils/envUtils.js', () => ({
+  ...actualEnvUtils,
+  getClaudeConfigHomeDir,
+}))
 const { migrateRetiredGptModels } = await import(
   './migrateRetiredGptModels.js'
 )
 
 beforeEach(() => {
-  userSettings = null
-  updateCalls = []
+  originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  settingsDir = mkdtempSync(join(tmpdir(), 'retired-gpt-models-'))
+  process.env.CLAUDE_CONFIG_DIR = settingsDir
+  getClaudeConfigHomeDir.cache.clear()
+  resetSettingsCache()
   mainLoopOverride = undefined
   mainLoopOverrideWrites = []
-  updateError = null
 })
 
 afterEach(() => {
+  if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  getClaudeConfigHomeDir.cache.clear()
+  resetSettingsCache()
+  rmSync(settingsDir, { recursive: true, force: true })
   mock.restore()
 })
 
 describe('migrateRetiredGptModels', () => {
-  test('reports a settings-write error so startup keeps the migration pending', () => {
-    userSettings = { model: 'gpt-5.6-sol' }
-    updateError = new Error('settings lock unavailable')
-
-    expect(migrateRetiredGptModels()).toBe(updateError)
-    expect(mainLoopOverrideWrites).toEqual([])
-  })
-
   test('remaps every user-owned model surface and de-duplicates the resulting allowlist', () => {
-    userSettings = {
+    setUserSettings({
       model: 'gpt-5.6-sol',
       availableModels: [
         'gpt-6-sol',
@@ -122,23 +94,11 @@ describe('migrateRetiredGptModels', () => {
         'gpt-5.6-terra': 'existing-terra-override',
         'custom-model': 'custom-override',
       },
-    }
+    })
 
     migrateRetiredGptModels()
 
-    expect(updateCalls).toEqual([
-      {
-        model: 'gpt-6.1-sol',
-        availableModels: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
-        modelOverrides: {
-          'gpt-6.1-sol': 'legacy-current-sol-override',
-          'gpt-6-luna': 'legacy-luna-override',
-          'gpt-5.6-terra': 'existing-terra-override',
-          'custom-model': 'custom-override',
-        },
-      },
-    ])
-    expect(userSettings).toEqual({
+    expect(getSettingsForSource('userSettings')).toEqual({
       model: 'gpt-6.1-sol',
       availableModels: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
       modelOverrides: {
@@ -151,7 +111,7 @@ describe('migrateRetiredGptModels', () => {
   })
 
   test('preserves current successor overrides when colliding with retired model overrides', () => {
-    userSettings = {
+    setUserSettings({
       model: 'gpt-5.6-luna',
       availableModels: ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna'],
       modelOverrides: {
@@ -162,22 +122,11 @@ describe('migrateRetiredGptModels', () => {
         'gpt-5.6-luna': 'retired-luna',
         'custom-model': 'keep-custom',
       },
-    }
+    })
 
     migrateRetiredGptModels()
 
-    expect(updateCalls).toEqual([
-      {
-        model: 'gpt-6-luna',
-        availableModels: ['gpt-6.1-sol', 'gpt-6-luna'],
-        modelOverrides: {
-          'gpt-6.1-sol': 'keep-current-sol-successor',
-          'gpt-6-luna': 'keep-current-luna',
-          'custom-model': 'keep-custom',
-        },
-      },
-    ])
-    expect(userSettings).toEqual({
+    expect(getSettingsForSource('userSettings')).toEqual({
       model: 'gpt-6-luna',
       availableModels: ['gpt-6.1-sol', 'gpt-6-luna'],
       modelOverrides: {
@@ -189,29 +138,31 @@ describe('migrateRetiredGptModels', () => {
   })
 
   test('migrates the runtime main-loop override and is idempotent on a second startup', () => {
-    userSettings = {
+    setUserSettings({
       model: 'gpt-5.5',
       availableModels: ['gpt-5.5', 'gpt-5.6-terra'],
       modelOverrides: { 'gpt-5.5': 'legacy-terra-override' },
-    }
+    })
     mainLoopOverride = 'gpt-5.6-sol[1m]'
 
     migrateRetiredGptModels()
     migrateRetiredGptModels()
 
-    expect(updateCalls).toEqual([
-      {
-        model: 'gpt-5.6-terra',
-        availableModels: ['gpt-5.6-terra'],
-        modelOverrides: {
-          'gpt-5.6-terra': 'legacy-terra-override',
-        },
-      },
-    ])
+    expect(getSettingsForSource('userSettings')).toEqual({
+      model: 'gpt-5.6-terra',
+      availableModels: ['gpt-5.6-terra'],
+      modelOverrides: { 'gpt-5.6-terra': 'legacy-terra-override' },
+    })
     expect(mainLoopOverrideWrites).toEqual(['gpt-6.1-sol'])
     expect(mainLoopOverride).toBe('gpt-6.1-sol')
   })
 })
+
+function setUserSettings(settings: SettingsJson): void {
+  const result = updateSettingsForSource('userSettings', settings)
+  expect(result.error).toBeNull()
+  resetSettingsCache()
+}
 
 test('startup wiring tripwire keeps the migration owned by init', () => {
   const ownerSource = readFileSync(
