@@ -1413,7 +1413,7 @@ describe('finalizeFailedAgentLaunch', () => {
     expect(terminalCalls).toHaveLength(1)
   })
 
-  test('persists generic handles for tracked launch failures and advances allocation', async () => {
+  test('persists generic handles for tracked launch failures and excludes recorded handles', async () => {
     const tempProjectDir = mkdtempSync(join(tmpdir(), 'agent-tool-failed-launch-'))
     const sessionId = 'session-123'
     Math.random = () => 0
@@ -1441,7 +1441,7 @@ describe('finalizeFailedAgentLaunch', () => {
 
       expect(failedWorker?.handle).toBe('Ada')
       expect(failedWorker?.handle).not.toBe('agent-123')
-      expect(allocateWorkerName()).toBe('Katherine')
+      expect(allocateWorkerName([failedWorker!.handle!])).toBe('Katherine')
     } finally {
       await rm(tempProjectDir, { recursive: true, force: true })
     }

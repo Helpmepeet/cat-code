@@ -17,7 +17,6 @@ const GENERIC_WORKER_NAMES = [
 ]
 
 const activeNames = new Set<string>()
-let poolCursor: number | undefined
 
 function getReservedNames(
   reservedNames: Iterable<string> = [],
@@ -31,21 +30,18 @@ function getReservedNames(
 
 function pickNext(reservedNames: Iterable<string>): string {
   const reserved = getReservedNames(reservedNames)
-  const pool = GENERIC_WORKER_NAMES
-  const startIndex = poolCursor ?? Math.floor(Math.random() * pool.length)
-  for (let offset = 0; offset < pool.length; offset += 1) {
-    const index = (startIndex + offset) % pool.length
-    const candidate = pool[index]!
-    if (!reserved.has(recipientNameKey(candidate))) {
-      poolCursor = (index + 1) % pool.length
-      return candidate
-    }
+  const available = GENERIC_WORKER_NAMES.filter(
+    name => !reserved.has(recipientNameKey(name)),
+  )
+  if (available.length > 0) {
+    return available[Math.floor(Math.random() * available.length)]!
   }
 
-  const baseName = pool[startIndex]!
+  const baseName = GENERIC_WORKER_NAMES[
+    Math.floor(Math.random() * GENERIC_WORKER_NAMES.length)
+  ]!
   let suffix = 2
   while (reserved.has(recipientNameKey(`${baseName}-${suffix}`))) suffix += 1
-  poolCursor = (startIndex + 1) % pool.length
   return `${baseName}-${suffix}`
 }
 
@@ -62,7 +58,7 @@ export function tryReserveWorkerName(name: string): boolean {
 }
 
 /**
- * Advances the pool cursor and returns a free candidate name without
+ * Randomly selects a free candidate name without
  * reserving it. Callers must acquire `tryReserveWorkerName` before awaiting
  * external allocation or using the candidate.
  */
@@ -86,5 +82,4 @@ export function releaseWorkerName(name: string): void {
 
 export function resetWorkerNamesForTests(): void {
   activeNames.clear()
-  poolCursor = undefined
 }

@@ -22,6 +22,17 @@ describe('workerNames', () => {
     expect(allocateWorkerName()).toBe('Ada')
   })
 
+  test('randomizes each allocation instead of following the pool sequence', () => {
+    Math.random = () => 0
+    expect(allocateWorkerName()).toBe('Ada')
+
+    Math.random = () => 1 - Number.EPSILON
+    expect(allocateWorkerName()).toBe('Peyton-Jones')
+
+    Math.random = () => 0
+    expect(allocateWorkerName()).toBe('Katherine')
+  })
+
   test('skips names already reserved by restored workers', () => {
     Math.random = () => 0
     expect(tryReserveWorkerName('Ada')).toBe(true)
@@ -29,13 +40,17 @@ describe('workerNames', () => {
     expect(allocateWorkerName()).toBe('Katherine')
   })
 
-  test('does not immediately reuse a released worker handle', () => {
+  test('makes a fresh random selection after releasing a worker handle', () => {
     Math.random = () => 0
 
     const firstName = allocateWorkerName()
     releaseWorkerName(firstName)
 
-    expect(allocateWorkerName()).toBe('Katherine')
+    Math.random = () => 1 - Number.EPSILON
+    expect(allocateWorkerName()).toBe('Peyton-Jones')
+
+    Math.random = () => 0
+    expect(allocateWorkerName()).toBe(firstName)
   })
 
   test('uses a suffixed handle when the pool is exhausted', () => {
@@ -47,7 +62,11 @@ describe('workerNames', () => {
 
     expect(new Set(names).size).toBe(75)
     expect(allocateWorkerName(['ADA-2', 'ada-3'])).toBe('Ada-4')
-    expect(allocateWorkerName()).toBe('Katherine-2')
+    expect(allocateWorkerName()).toBe('Ada-2')
+    expect(allocateWorkerName()).toBe('Ada-3')
+
+    Math.random = () => 1 - Number.EPSILON
+    expect(allocateWorkerName()).toBe('Peyton-Jones-2')
   })
 
   test('excludes restored names case-insensitively without reserving candidate selection', () => {
