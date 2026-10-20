@@ -56,4 +56,41 @@ describe('desktop chat commands', () => {
       { name: 'new', description: 'Start a new chat.' },
     ])
   })
+
+  test.each(['rich', 'names-only'])('omits unused commands from the %s menu', source => {
+    const removed = [
+      'release-notes',
+      'heapdump',
+      'install-agents',
+      'rename-account',
+      'security-review',
+      'context',
+      'cost',
+      'lorem-ipsum',
+      'skillify',
+      'remember',
+      'update-config',
+      'verify',
+      'stuck',
+      'understand-anything:understand',
+      'understand-anything:understand-diff',
+      'understand-anything:understand-domain',
+      'understand-anything:understand-dashboard',
+      'understand-anything:understand-knowledge',
+      'understand-anything:understand-explain',
+      'understand-anything:understand-figma',
+      'understand-anything:understand-onboard',
+      'understand-anything:understand-chat',
+    ]
+    const kept = ['compact', 'review-impl', 'accounts', 'frontend-design:frontend-design']
+    const names = [...removed, ...kept]
+    const rich = names.map(name => ({ name, description: `${name} description` }))
+    const catalog = source === 'rich'
+      ? mergeDesktopSlashCatalog(rich, names)
+      : mergeDesktopSlashCatalog([], names)
+
+    expect(catalog.map(entry => entry.name)).toEqual([...kept, 'clear', 'new'])
+    expect(names).toEqual([...removed, ...kept])
+    expect(rich.map(entry => entry.name)).toEqual(names)
+  })
 })
