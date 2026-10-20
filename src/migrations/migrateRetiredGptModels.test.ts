@@ -10,7 +10,6 @@ import {
 } from '../utils/settings/settings.js'
 import { resetSettingsCache } from '../utils/settings/settingsCache.js'
 import type { SettingsJson } from '../utils/settings/types.js'
-const actualEnvUtils = await import('../utils/envUtils.js')
 
 /**
  * TEST EVIDENCE
@@ -44,10 +43,6 @@ mock.module('../bootstrap/state.js', () => ({
     mainLoopOverrideWrites.push(model)
     mainLoopOverride = model
   },
-}))
-mock.module('../utils/envUtils.js', () => ({
-  ...actualEnvUtils,
-  getClaudeConfigHomeDir,
 }))
 const { migrateRetiredGptModels } = await import(
   './migrateRetiredGptModels.js'

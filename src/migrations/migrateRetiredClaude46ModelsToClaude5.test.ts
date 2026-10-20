@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { getClaudeConfigHomeDir } from '../utils/envUtils.js'
 import {
   getSettingsForSource,
   updateSettingsForSource,
@@ -15,14 +16,6 @@ let mainLoopOverrideWrites: Array<string | undefined> = []
 let provider = 'firstParty'
 let settingsDir: string
 let originalConfigDir: string | undefined
-
-mock.module('../utils/envUtils.js', async () => {
-  const actual = await import('../utils/envUtils.js')
-  return {
-    ...actual,
-    getClaudeConfigHomeDir: () => process.env.CLAUDE_CONFIG_DIR!,
-  }
-})
 
 const actualState = await import('../bootstrap/state.js')
 mock.module('../bootstrap/state.js', () => ({
@@ -61,6 +54,7 @@ beforeEach(() => {
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   settingsDir = mkdtempSync(join(tmpdir(), 'retired-claude-models-'))
   process.env.CLAUDE_CONFIG_DIR = settingsDir
+  getClaudeConfigHomeDir.cache.clear()
   resetSettingsCache()
   mainLoopOverride = undefined
   mainLoopOverrideWrites = []
@@ -74,6 +68,7 @@ beforeEach(() => {
 afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  getClaudeConfigHomeDir.cache.clear()
   resetSettingsCache()
   rmSync(settingsDir, { recursive: true, force: true })
   for (const key of ENV_KEYS) {
