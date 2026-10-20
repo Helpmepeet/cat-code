@@ -15,8 +15,8 @@ In plan mode, you'll:
 
 // One variant for every user type. The former external-only text told the model
 // to prefer plan mode for most implementation work and to "err on the side of
-// planning", which contradicts the ACT OR ASK rule in the GPT system
-// prompt (proceed when intent is clear and the step is reversible).
+// planning", which contradicts the GPT system prompt's acting rule in
+// `getGPTActionsSection` (proceed with reversible in-scope steps without asking).
 export function getEnterPlanModeToolPrompt(): string {
   // When interview phase is enabled, omit the "What Happens" section —
   // detailed workflow instructions arrive via the plan_mode attachment (messages.ts).

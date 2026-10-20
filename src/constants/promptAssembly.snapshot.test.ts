@@ -302,9 +302,9 @@ describe('assembled system prompt', () => {
     for (const gpt6Prompt of [astra, sol, replayedSol, luna]) {
       for (const calibration of [
         'Once those checks pass, broaden or repeat them only',
-        'FOLLOW-THROUGH: Infer action intent from context',
+        'Infer action intent from context',
         'Check whether a file or skill requirement applies',
-        'WRITING: Build connected paragraphs',
+        'Build connected paragraphs',
       ]) {
         expect(gpt6Prompt).toContain(calibration)
         expect(baseline).not.toContain(calibration)
@@ -320,7 +320,7 @@ describe('assembled system prompt', () => {
       }
       expect(prompt).toContain('does not by itself authorize implementation')
       expect(prompt).toContain('confirm first unless the user or loaded durable instructions already authorize that scope')
-      expect(prompt).toContain('FORMAT: Prefer prose and light formatting')
+      expect(prompt).toContain('Prefer prose and light formatting')
     }
   })
 
@@ -331,14 +331,14 @@ describe('assembled system prompt', () => {
     const astra = await assemble(FULL_TOOLS, 'gpt-6-astra', false)
     const last = await assemble(FULL_TOOLS, 'gpt-5.6-terra', false)
     expect(last).toBe(first)
-    expect(first).not.toContain('FOLLOW-THROUGH:')
-    expect(astra).toContain('FOLLOW-THROUGH:')
+    expect(first).not.toContain('Infer action intent from context')
+    expect(astra).toContain('Infer action intent from context')
     const minimal = await assemble(MINIMAL_TOOLS, 'gpt-6-astra', false)
     // Loaded file/skill instructions can affect work without a current Skill tool.
     expect(minimal).toContain('Check whether a file or skill requirement applies')
-    expect(minimal).not.toContain('AGENT TOOL:')
-    expect(minimal).not.toContain('Read before modifying:')
-    expect(first).toContain('AGENT TOOL:')
+    expect(minimal).not.toContain('Work directly unless delegation has a concrete benefit')
+    expect(minimal).not.toContain('Inspect the relevant current contents of an existing file before changing it')
+    expect(first).toContain('Work directly unless delegation has a concrete benefit')
   })
 
   test('family selection matches exact transport identity, including malformed names', async () => {
@@ -357,7 +357,7 @@ describe('assembled system prompt', () => {
       const expected = model === 'gpt-6-astra' || model === 'gpt-6.1-sol' || model === 'gpt-6-sol' || model === 'gpt-6-luna'
       expect(getGPTPromptFamily(model) === 'gpt-6').toBe(expected)
       const prompt = (await getSystemPrompt(MINIMAL_TOOLS, model, [], [], 'openai')).join('\n')
-      expect(prompt.includes('FOLLOW-THROUGH:')).toBe(expected)
+      expect(prompt.includes('Infer action intent from context')).toBe(expected)
     }
   })
 
@@ -367,18 +367,18 @@ describe('assembled system prompt', () => {
     expect(patch).toContain('Bare apply_patch Delete requires a complete recorded Read and unchanged file identity.')
     for (const mutationTool of ['Edit', 'Write']) {
       const prompt = await assemble(toolList(mutationTool, 'Read', 'Bash'), 'gpt-6-astra')
-      expect(prompt).toContain('Read before modifying:')
+      expect(prompt).toContain('Inspect the relevant current contents of an existing file before changing it')
       expect(prompt).toContain('Shell reads can supply this understanding.')
       expect(prompt).not.toContain('recorded Read')
       expect(prompt).not.toContain('mutation tool\'s Read prerequisites')
     }
-    expect(await assemble(MINIMAL_TOOLS, 'gpt-6-astra')).not.toContain('Read before modifying:')
+    expect(await assemble(MINIMAL_TOOLS, 'gpt-6-astra')).not.toContain('Inspect the relevant current contents of an existing file before changing it')
   })
 
   test('task tools retain optional routing without repeating their lifecycle descriptions', async () => {
     for (const taskTool of ['TodoWrite', 'TaskCreate']) {
       const prompt = await assemble(toolList(taskTool, 'Bash'), 'gpt-5.6-terra')
-      expect(prompt).toContain(`TASK TRACKING: When task tracking helps, use ${taskTool}.`)
+      expect(prompt).toContain(`When task tracking helps, use ${taskTool}.`)
       expect(prompt).not.toContain('Do not batch completions')
     }
   })
@@ -391,7 +391,7 @@ describe('assembled system prompt', () => {
         userContext: { project: 'fixture user instructions' },
         systemContext: { gitStatus: 'fixture volatile status' },
       }).openAIInstructionAssembly!
-      expect(assembly.instructions.includes('FOLLOW-THROUGH:')).toBe(model === 'gpt-6-astra')
+      expect(assembly.instructions.includes('Infer action intent from context')).toBe(model === 'gpt-6-astra')
       expect(assembly.instructions).toContain(OUTCOME_REPORTING_RULE)
       expect(assembly.instructions).toContain('fixture user instructions')
       expect(assembly.instructions).not.toContain('fixture volatile status')

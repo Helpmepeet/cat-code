@@ -111,7 +111,6 @@ describe('GPT read discipline guidance', () => {
     try {
       const guidance = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
 
-      expect(guidance).toContain('READ DISCIPLINE:')
       expect(guidance).toContain('Read files systematically when the requested coverage requires it')
       expect(guidance).not.toContain('do not sweep a directory file-by-file')
       expect(guidance).toContain('Keep output bounded to what the task needs')
@@ -133,16 +132,16 @@ describe('GPT read discipline guidance', () => {
   })
 
   test('Claude style does not carry the GPT read discipline rule', () => {
-    expect(promptsSource).not.toContain('READ DISCIPLINE:')
+    expect(promptsSource).not.toContain('Read files systematically when the requested coverage requires it')
   })
 })
 
 describe('GPT web research guidance', () => {
   test('appears only when WebSearch is enabled and names WebFetch only when present', () => {
-    expect(getGPTUsingToolsSection(new Set(['Read']))).not.toContain('WEB RESEARCH:')
+    expect(getGPTUsingToolsSection(new Set(['Read']))).not.toContain('Search with WebSearch instead of answering from memory')
 
     const searchOnly = getGPTUsingToolsSection(new Set(['WebSearch']))
-    expect(searchOnly).toContain('WEB RESEARCH: Search with WebSearch instead of answering from memory')
+    expect(searchOnly).toContain('Search with WebSearch instead of answering from memory')
     expect(searchOnly).toContain('search again in extended mode')
     expect(searchOnly).toContain('when the user asks what people recommend or think about something')
     expect(searchOnly).not.toContain('WebFetch')
@@ -159,7 +158,7 @@ describe('GPT web research guidance', () => {
         typeof getSystemPrompt
       >[0]
       const prompt = (await getSystemPrompt(tools, 'gpt-6-sol')).join('\n')
-      expect(prompt).toContain('WEB RESEARCH: Search with WebSearch')
+      expect(prompt).toContain('Search with WebSearch instead of answering from memory')
     } finally {
       clearSystemPromptSections()
     }
@@ -198,18 +197,18 @@ describe('GPT section boundaries', () => {
     }
 
     const actions = sectionNamed('# Acting and Asking')
-    expect(actions).toContain('ACT OR ASK:')
-    expect(actions).toContain('REQUEST SCOPE:')
+    expect(actions).toContain('Proceed with in-scope reads, local edits, tests, builds')
+    expect(actions).toContain('does not by itself authorize implementation')
 
     const usingTools = sectionNamed('# Using Your Tools')
-    expect(usingTools).toContain('READ DISCIPLINE:')
-    expect(usingTools).toContain('AGENT TOOL:')
+    expect(usingTools).toContain('Read files systematically when the requested coverage requires it')
+    expect(usingTools).toContain('Work directly unless delegation has a concrete benefit')
 
     const sessionGuidance = sectionNamed('# Session-Specific Guidance')
-    expect(sessionGuidance).not.toContain('ACT OR ASK')
-    expect(sessionGuidance).not.toContain('INVESTIGATION:')
-    expect(sessionGuidance).not.toContain('READ DISCIPLINE:')
-    expect(sessionGuidance).not.toContain('AGENT TOOL:')
+    expect(sessionGuidance).not.toContain('Proceed with in-scope reads, local edits, tests, builds')
+    expect(sessionGuidance).not.toContain('Gather enough evidence to complete the requested analysis')
+    expect(sessionGuidance).not.toContain('Read files systematically when the requested coverage requires it')
+    expect(sessionGuidance).not.toContain('Work directly unless delegation has a concrete benefit')
   })
 
   // The placement assertions above pass with every rule body emptied, so they
@@ -222,7 +221,7 @@ describe('GPT section boundaries', () => {
     expect(prompt).toContain(
       'confirm first unless the user or loaded durable instructions already authorize that scope',
     )
-    expect(prompt).toContain('RISKY ACTIONS include')
+    expect(prompt).toContain('Risky actions include')
     expect(prompt).toContain(
       'does not by itself authorize implementation',
     )

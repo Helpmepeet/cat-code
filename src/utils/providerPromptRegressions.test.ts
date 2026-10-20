@@ -241,11 +241,11 @@ describe('provider and prompt regressions', () => {
     // needs both an edit tool and a way to read the file first.
     for (const editTool of ['apply_patch', 'Edit']) {
       expect(getGPTDoingTasksSection(new Set(['Read', editTool]), 'gpt-5.6')).toContain(
-        'Read before modifying:',
+        'Inspect the relevant current contents of an existing file before changing it',
       )
     }
     expect(getGPTDoingTasksSection(new Set(['Read']), 'gpt-5.6')).not.toContain(
-      'Read before modifying:',
+      'Inspect the relevant current contents of an existing file before changing it',
     )
   })
 
@@ -482,7 +482,7 @@ describe('provider and prompt regressions', () => {
     const section = getGPTUsingToolsSection(new Set(['Bash', FILE_PATCH_TOOL_NAME]))
     const bash = getBashPrompt('openai')
     expect(section).not.toContain('RULE — File mutations:')
-    expect(section).not.toContain('RULE — Show the diff:')
+    expect(section).not.toContain('show the resulting git diff before moving on')
     expect(bash).toContain('Do not use Python to read or write files')
     expect(section).not.toContain('Do not use Python to read or write files')
     expect(bash).toContain('show the resulting git diff before moving on')
@@ -495,7 +495,7 @@ describe('provider and prompt regressions', () => {
       expect(getGrepDescription(provider)).not.toContain('Use Agent')
     }
     const guidance = getGPTUsingToolsSection(new Set(['Agent']))
-    expect(guidance.includes('EXPLORE AGENT:')).toBe(areExplorePlanAgentsEnabled())
+    expect(guidance.includes('When delegation is justified, use')).toBe(areExplorePlanAgentsEnabled())
     expect(guidance).not.toContain('targeted lookups directly')
     if (areExplorePlanAgentsEnabled()) {
       expect(guidance).toContain('Multiple searches or files alone do not require delegation')
@@ -661,11 +661,11 @@ describe('provider and prompt regressions', () => {
     // The dump used to pass an empty tool list, so these gated rules were
     // missing and file routing named Edit instead of Apply_patch — evals built
     // on the dump measured a prompt no session runs.
-    expect(withTools).toContain('AGENT TOOL:')
-    expect(withTools).toContain('TASK TRACKING:')
-    expect(withTools).toContain('READ DISCIPLINE:')
+    expect(withTools).toContain('Work directly unless delegation has a concrete benefit')
+    expect(withTools).toContain('When task tracking helps, use')
+    expect(withTools).toContain('Read files systematically when the requested coverage requires it')
     expect(withTools).not.toContain('RULE — File mutations:')
-    expect(withoutTools).not.toContain('AGENT TOOL:')
+    expect(withoutTools).not.toContain('Work directly unless delegation has a concrete benefit')
     expect(withoutTools).not.toContain(
       `Use ${FILE_PATCH_TOOL_NAME} for local file edits.`,
     )
@@ -687,19 +687,19 @@ describe('provider and prompt regressions', () => {
     // tool, no Agent tool, no task-tracking tool.
     expect(restrictedSection).not.toContain('RULE — File mutations')
     expect(restrictedSection).not.toContain('PATHS:')
-    expect(restrictedSection).not.toContain('AGENT TOOL:')
-    expect(restrictedSection).not.toContain('AGENT FORK:')
-    expect(restrictedSection).not.toContain('AGENT TYPES:')
-    expect(restrictedSection).not.toContain('EXPLORE AGENT:')
-    expect(restrictedSection).not.toContain('TASK TRACKING:')
+    expect(restrictedSection).not.toContain('Work directly unless delegation has a concrete benefit')
+    expect(restrictedSection).not.toContain('creates a background fork')
+    expect(restrictedSection).not.toContain('use implementor for bounded implementation slices')
+    expect(restrictedSection).not.toContain('When delegation is justified, use')
+    expect(restrictedSection).not.toContain('When task tracking helps, use')
     // Deliberate tripwire: the `RULE — Tool routing` block that named a tool
     // per file operation was deleted, so no arrow routing line may return.
     expect(restrictedSection).not.toContain('File editing →')
     // The rules that hold for any tool set still ship.
-    expect(restrictedSection).toContain('READ DISCIPLINE:')
+    expect(restrictedSection).toContain('Read files systematically when the requested coverage requires it')
     expect(restrictedSection).toContain('Keep output bounded to what the task needs')
-    expect(restrictedSection).not.toContain('RULE — Show the diff:')
-    expect(restrictedSection).toContain('PARALLELISM:')
+    expect(restrictedSection).not.toContain('show the resulting git diff before moving on')
+    expect(restrictedSection).toContain('Issue independent tool calls together in one turn')
     expect(restrictedSection).toContain(
       'Never run file mutations concurrently when their paths overlap or may alias',
     )

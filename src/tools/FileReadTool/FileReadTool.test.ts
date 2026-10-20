@@ -1089,7 +1089,7 @@ describe('prompt steers the model to targeted ranges', () => {
   test('the offset and limit parameter text agrees with that prompt', () => {
     // These two descriptions used to say "only provide if the file is too
     // large to read at once", which told the model the opposite of both
-    // OFFSET_INSTRUCTION_TARGETED and the system prompt's READ DISCIPLINE.
+    // OFFSET_INSTRUCTION_TARGETED and the GPT prompt's read-systematically rule.
     const shape = FileReadTool.inputSchema.shape
     const offset = shape.offset.description ?? ''
     const limit = shape.limit.description ?? ''
