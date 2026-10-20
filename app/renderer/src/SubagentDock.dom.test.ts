@@ -176,6 +176,51 @@ test('resume from Finished preserves the row and its full arrival across unrelat
   expect(button(tree.container, 'Ada, resumed').classList.contains('subagent-dock-arrival')).toBe(true)
 })
 
+for (const finishBeforeUpdate of [false, true]) {
+  test(`row movement does not replay on live updates ${finishBeforeUpdate ? 'after' : 'during'} a reorder animation`, async () => {
+    const originalRect = HTMLElement.prototype.getBoundingClientRect
+    const originalAnimate = HTMLElement.prototype.animate
+    const offsets = new Map<HTMLElement, number>()
+    let animations = 0
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      if (!this.hasAttribute('data-dock-row')) return originalRect.call(this)
+      const rows = [...this.closest('.subagent-dock-list')!.querySelectorAll('[data-dock-row]')]
+      return new DOMRect(1300, rows.indexOf(this) * 50 + (offsets.get(this) ?? 0), 280, 50)
+    }
+    HTMLElement.prototype.animate = function (frames) {
+      const transform = (frames as Keyframe[])[0]?.transform
+      const offset = typeof transform === 'string' ? /^translateY\(([-\d.]+)px\)$/.exec(transform) : null
+      if (this.hasAttribute('data-dock-row') && offset) {
+        animations++
+        offsets.set(this, Number(offset[1]))
+      }
+      return { cancel: () => { offsets.delete(this) } } as Animation
+    }
+    try {
+      const ada = row()
+      const grace = row({ agentId: 'worker-b', name: 'Grace', launchOrder: 1 })
+      const tree = await mount(fixture(state([ada, grace])))
+      expect(animations).toBe(0)
+      await tree.render(fixture(state([grace, ada])))
+      expect(animations).toBe(2)
+      expect([...offsets.values()]).toEqual([50, -50])
+      if (finishBeforeUpdate) offsets.clear()
+      for (let update = 0; update < 4; update++) {
+        await tree.render(fixture(state([
+          { ...grace, stripLines: ['GPT-6.1 Sol', `Reading file ${update}`] },
+          ada,
+        ])))
+        expect(animations).toBe(2)
+      }
+      expect([...tree.container.querySelectorAll('[data-dock-row]')].map(element => element.getAttribute('data-dock-row'))).toEqual(['worker-b', 'worker-a'])
+    } finally {
+      await harness.unmountAll()
+      HTMLElement.prototype.getBoundingClientRect = originalRect
+      HTMLElement.prototype.animate = originalAnimate
+    }
+  })
+}
+
 test('reduced motion resumes instantly and an empty dock leaves no controls', async () => {
   reduced = true
   const tree = await mount(fixture(state([], [row({ state: 'completed' })])))

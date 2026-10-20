@@ -148,8 +148,10 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   useLayoutEffect(() => {
     if (hidden) { previousRects.current = new Map(); return }
     if (!panel.current) return
+    // Animation transforms must not become the next update's layout baseline.
+    const nextRects = dockRowRects(panel.current)
     const cancel = !reducedMotion && expanded && !morphing ? animateDockReorder(panel.current, previousRects.current) : () => {}
-    previousRects.current = dockRowRects(panel.current)
+    previousRects.current = nextRects
     return cancel
   }, [state, finishedOpen, expanded, morphing, reducedMotion, hidden])
 
