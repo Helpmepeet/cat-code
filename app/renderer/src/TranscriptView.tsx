@@ -3104,6 +3104,10 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // shape does not change when the call was stopped: the row still says who
   // this session was talking to and what it said.
   if (isPeerSpeechCall(row.toolName)) return <PeerSpeechRow row={row} />
+  const fileDiffs = row.result?.fileDiffs
+  if (row.toolFamily === 'edit' && fileDiffs && fileDiffs.length > 1) {
+    return <PatchFileCards row={row} diffs={fileDiffs} />
+  }
   const peerPresentation = peerToolPresentation(row.toolName, row.input)
   const peerParts =
     peerPresentation === null
@@ -3222,6 +3226,71 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         </div>
       ) : null}
     </div>
+  )
+}
+
+function PatchFileCards({
+  row,
+  diffs,
+}: {
+  row: ToolUseNestedRow
+  diffs: ToolDiffProjection[]
+}) {
+  const keys = useMemo(
+    () => diffs.map((diff, index) => `${index}:${diff.filePath}`),
+    [diffs],
+  )
+  return (
+    <div className="flex flex-col gap-2">
+      <BoundedChildList
+        className="flex flex-col gap-2"
+        childGap={8}
+        estimatedChildHeight={NESTED_ROW_ESTIMATED_HEIGHT}
+        keys={keys}
+        renderChild={index => <PatchFileCard row={row} diff={diffs[index]} fileIndex={index} />}
+      />
+      {row.children.length > 0 ? (
+        <div className="border-l border-accent/20 pl-3">
+          <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function PatchFileCard({
+  row,
+  diff,
+  fileIndex,
+}: {
+  row: ToolUseNestedRow
+  diff: ToolDiffProjection
+  fileIndex: number
+}) {
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const filePathContext = useContext(FilePathMenuContext)
+  const openInspector = useContext(ToolInspectorContext)
+  return (
+    <ToolCardShell
+      family="edit"
+      target={displayFilePath(diff.filePath, filePathContext?.cwd ?? null)}
+      targetFilePath={{ rawPath: diff.filePath, sessionId: row.sessionId }}
+      status={row.status}
+      headerBadge={diffCountsBadge(countDiff(diff))}
+      expansionKey={`${row.toolUseId}:file:${fileIndex}:${diff.filePath}`}
+      defaultExpanded={toolsExpanded || row.status === 'error' || row.status === 'cancelled'}
+    >
+      <FileDiffNavigator
+        diffs={[diff]}
+        showPath={false}
+        renderDiff={file => (
+          <DiffView
+            diff={file}
+            onOpenFull={openInspector ? () => openInspector(row, fileIndex) : null}
+          />
+        )}
+      />
+    </ToolCardShell>
   )
 }
 

@@ -5811,6 +5811,42 @@ test('an edit to another file starts its own card', () => {
   expect(visibleText(html)).toContain('2 edits')
 })
 
+test('one multi-file patch gives each file its own card, including empty additions and deletions', () => {
+  const row = toolRow({
+    toolName: 'apply_patch',
+    toolFamily: 'edit',
+    input: { input: '*** Begin Patch' },
+    result: {
+      content: 'updated',
+      isError: false,
+      diff: null,
+      fileDiffs: [
+        {
+          filePath: '/repo/a.ts',
+          operation: 'update',
+          hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-old', '+new'] }],
+        },
+        { filePath: '/repo/empty.txt', operation: 'delete', hunks: [] },
+        { filePath: '/repo/created.txt', operation: 'add', hunks: [] },
+      ],
+    },
+  })
+  const closed = renderMany([row], false, '/repo')
+  expect(occurrences(closed, '>Edit</span>')).toBe(3)
+  expect(visibleText(closed)).toContain('a.ts')
+  expect(visibleText(closed)).toContain('empty.txt')
+  expect(visibleText(closed)).toContain('created.txt')
+  expect(closed).not.toContain('File number')
+  expect(closed).not.toContain('Next file')
+  expect(occurrences(closed, 'aria-expanded="false"')).toBe(3)
+
+  const opened = renderMany([row], true, '/repo')
+  expect(visibleText(opened)).toContain('Deleted')
+  expect(visibleText(opened)).toContain('Added')
+  expect(occurrences(visibleText(opened), 'No diff lines.')).toBe(2)
+  expect(opened).not.toContain('Next file')
+})
+
 test('an expanded run member carries no inspector footer either', () => {
   // The removed footer rendered once per OPEN MEMBER, not once per card, so a
   // three-file run with every member open used to draw three of them

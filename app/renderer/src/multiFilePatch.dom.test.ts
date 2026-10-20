@@ -131,7 +131,7 @@ async function setInput(input: HTMLInputElement, value: string) {
   })
 }
 
-test('a production multi-file patch opens the selected later file, searches and copies its retained diff with bounded DOM', async () => {
+test('a production multi-file patch renders separate file cards and opens the matching retained diff with bounded DOM', async () => {
   const clipboardWrites: string[] = []
   const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
   Object.defineProperty(navigator, 'clipboard', {
@@ -140,18 +140,28 @@ test('a production multi-file patch opens the selected later file, searches and 
   })
   try {
     const projected = await projectPatchRows()
-    const tree = await harness.mount(createElement(ToolsExpandedContext.Provider, { value: { expanded: true, setExpanded: () => {} } },
+    const tree = await harness.mount(createElement(ToolsExpandedContext.Provider, { value: { expanded: false, setExpanded: () => {} } },
       createElement(TranscriptRowsView, { rows: projected.rows, cwd: '/repo' }),
     ))
-    const fileNumber = tree.container.querySelector<HTMLInputElement>('[aria-label="File number"]')!
-    // This fails before the repair because the first file is the only diff the
-    // production projector hands to the card, so no later-file action exists.
-    await act(async () => { button(tree.container, 'Next file').click() })
-    expect(fileNumber.value).toBe('2')
-    expect(tree.container.querySelector('[title="/repo/src/b.ts"]')).not.toBeNull()
-    expect(tree.container.querySelector('[title="/repo/src/a.ts"]')).toBeNull()
-    expect(tree.container.textContent).toContain('+402')
-    expect(tree.container.textContent).toContain('−3')
+    expect(tree.container.querySelector('[aria-label="File number"]')).toBeNull()
+    expect(tree.container.querySelector('[aria-label="Next file"]')).toBeNull()
+    const headers = [...tree.container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]')]
+    const first = headers.find(item => item.textContent?.includes('src/a.ts'))!
+    const second = headers.find(item => item.textContent?.includes('src/b.ts'))!
+    expect(first).toBeDefined()
+    expect(second).toBeDefined()
+    expect(first.textContent).toContain('+1')
+    expect(second.textContent).toContain('+401')
+    expect(second.textContent).toContain('−1')
+    expect(tree.container.textContent).not.toContain('firstAfter')
+    expect(tree.container.textContent).not.toContain('secondAfter')
+    await act(async () => { second.click() })
+    expect(first.getAttribute('aria-expanded')).toBe('false')
+    expect(second.getAttribute('aria-expanded')).toBe('true')
+    expect(tree.container.textContent).toContain('tail_399')
+    expect(tree.container.textContent).not.toContain('firstAfter')
+    expect(headers.length).toBeLessThan(305)
+    expect(tree.container.querySelectorAll('*').length).toBeLessThan(MAX_MOUNTED_OUTPUT_LINES * 6)
     const openFull = [...tree.container.querySelectorAll<HTMLButtonElement>('button')]
       .find(item => item.textContent?.trim() === 'Open full output')!
     expect(openFull).toBeDefined()
