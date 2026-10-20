@@ -546,7 +546,12 @@ describe('provider and prompt regressions', () => {
   test('Claude advertises file capabilities without excluding shell commands', async () => {
     setSessionProvider('firstParty')
     const tools = getTools(getEmptyToolPermissionContext())
+    // The full Claude prompt carries this inventory; lean relies on the tool descriptions.
+    const savedLean = process.env.CAT_CODE_LEAN_SYSTEM_PROMPT
+    process.env.CAT_CODE_LEAN_SYSTEM_PROMPT = '0'
     const prompt = (await getSystemPrompt(tools, 'claude-opus-5')).join('\n')
+    if (savedLean === undefined) delete process.env.CAT_CODE_LEAN_SYSTEM_PROMPT
+    else process.env.CAT_CODE_LEAN_SYSTEM_PROMPT = savedLean
     expect(prompt).toContain('Read: file contents.')
     expect(prompt).toContain('Edit: exact string replacements.')
     expect(prompt).not.toContain('Do NOT use the Bash to run commands')

@@ -161,18 +161,27 @@ async function withPromptEnv<T>(
 
 const VARIANTS = [
   {
-    label: 'default Claude',
-    build: () => getSystemPrompt(TOOLS, CLAUDE_MODEL),
+    label: 'full Claude',
+    build: async () => {
+      const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
+      process.env[LEAN_SYSTEM_PROMPT_ENV] = '0'
+      try {
+        return await getSystemPrompt(TOOLS, CLAUDE_MODEL)
+      } finally {
+        if (saved === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+        else process.env[LEAN_SYSTEM_PROMPT_ENV] = saved
+      }
+    },
   },
   {
     label: 'default GPT',
     build: () => getSystemPrompt(TOOLS, GPT_MODEL),
   },
   {
-    label: 'lean Claude',
+    label: 'lean Claude (default)',
     build: async () => {
       const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
-      process.env[LEAN_SYSTEM_PROMPT_ENV] = '1'
+      delete process.env[LEAN_SYSTEM_PROMPT_ENV]
       try {
         return await getSystemPrompt(TOOLS, CLAUDE_MODEL)
       } finally {

@@ -261,14 +261,21 @@ describe('assembled system prompt', () => {
 
   for (const [name, model, tools] of cases) {
     test(`${name} matches its checked-in snapshot`, async () => {
-      const prompt = await assemble(tools, model)
-      checkAgainstSnapshot(name, prompt)
+      // claude-opus-5.full pins the full assembly, which lean replaced as the default.
+      const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
+      if (name === 'claude-opus-5.full') process.env[LEAN_SYSTEM_PROMPT_ENV] = '0'
+      try {
+        checkAgainstSnapshot(name, await assemble(tools, model))
+      } finally {
+        if (saved === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+        else process.env[LEAN_SYSTEM_PROMPT_ENV] = saved
+      }
     })
   }
 
   test('claude-opus-5.lean matches its checked-in snapshot', async () => {
     const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
-    process.env[LEAN_SYSTEM_PROMPT_ENV] = '1'
+    delete process.env[LEAN_SYSTEM_PROMPT_ENV]
     try {
       checkAgainstSnapshot('claude-opus-5.lean', await assemble(FULL_TOOLS, 'claude-opus-5'))
     } finally {

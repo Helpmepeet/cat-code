@@ -39,7 +39,7 @@ import {
   isScratchpadEnabled,
   getScratchpadDir,
 } from '../utils/permissions/filesystem.js'
-import { isEnvTruthy } from '../utils/envUtils.js'
+import { isEnvDefinedFalsy, isEnvTruthy } from '../utils/envUtils.js'
 import { isReplModeEnabled } from '../tools/REPLTool/constants.js'
 import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
@@ -465,7 +465,9 @@ function getSimpleToneAndStyleSection(): string {
 }
 
 /**
- * Opt-in lean assembly for the Claude style, modelled on upstream's lean path
+ * Lean assembly for the Claude style, the default for the models in
+ * LEAN_PROMPT_MODELS; CAT_CODE_LEAN_SYSTEM_PROMPT=0 restores the full one.
+ * Modelled on upstream's lean path
  * for its newest models. Upstream's lean block drops the prompt-injection and
  * tool-output-is-data rules along with `# System`; this one carries every
  * `corePolicy.ts` invariant, which is the reason it is not a port.
@@ -481,13 +483,16 @@ const LEAN_PROMPT_MODELS = new Set(['claude-opus-5', 'claude-opus-5-5'])
 function isLeanClaudePrompt(gpt: boolean, model: string): boolean {
   return (
     !gpt &&
-    isEnvTruthy(process.env[LEAN_SYSTEM_PROMPT_ENV]) &&
+    !isEnvDefinedFalsy(process.env[LEAN_SYSTEM_PROMPT_ENV]) &&
     LEAN_PROMPT_MODELS.has(getCanonicalName(model))
   )
 }
 
 function getLeanHarnessSection(): string {
   const items = [
+    isManagedSession()
+      ? `Interpret the task from the user's request. The working directory is a place to work, not evidence that its existing files or a repository are the subject of the request.`
+      : null,
     `Text you output outside of tool use is displayed to the user as GitHub-flavored markdown.`,
     `Tools run behind a user-selected permission mode; a denied call means the user declined it, so adjust instead of retrying it verbatim.`,
     TOOL_OUTPUT_IS_DATA_RULE,
@@ -501,7 +506,7 @@ function getLeanHarnessSection(): string {
     `Before proposing or making code changes, read the relevant current source; refresh it if another session may have changed it.`,
     `Do not introduce security vulnerabilities; fix insecure code you introduce.`,
     `Run relevant checks for risky or important changes before calling them done. Keep verification proportionate.`,
-  ]
+  ].filter(item => item !== null)
   return ['# Harness', ...prependBullets(items)].join('\n')
 }
 

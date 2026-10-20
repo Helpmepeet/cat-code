@@ -561,13 +561,21 @@ describe('available tools in assembled prompts', () => {
       expect(prompt).toContain('grep')
     }
 
+    // The full Claude prompt lists file tools; lean leaves that to the tool descriptions.
     const dedicated = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'AskUserQuestion']
       .map(name => ({ name })) as unknown as Parameters<typeof getSystemPrompt>[0]
-    const prompt = (await getSystemPrompt(dedicated, 'claude-opus-5-5', [], [], 'firstParty')).join('\n')
-    expect(prompt).toContain('Read: file contents.')
-    expect(prompt).toContain('Edit: exact string replacements.')
-    expect(prompt).toContain('Grep: content searches.')
-    expect(prompt).toContain('Escalate to the user with AskUserQuestion')
+    const savedLean = process.env[LEAN_SYSTEM_PROMPT_ENV]
+    process.env[LEAN_SYSTEM_PROMPT_ENV] = '0'
+    try {
+      const prompt = (await getSystemPrompt(dedicated, 'claude-opus-5-5', [], [], 'firstParty')).join('\n')
+      expect(prompt).toContain('Read: file contents.')
+      expect(prompt).toContain('Edit: exact string replacements.')
+      expect(prompt).toContain('Grep: content searches.')
+      expect(prompt).toContain('Escalate to the user with AskUserQuestion')
+    } finally {
+      if (savedLean === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+      else process.env[LEAN_SYSTEM_PROMPT_ENV] = savedLean
+    }
   })
 
   test('Claude allows tool-returned citation URLs while retaining the ban on invented paths', async () => {
@@ -595,8 +603,8 @@ describe('lean Claude assembly', () => {
   })
 
   const build = async (model: string, lean: boolean) => {
-    if (lean) process.env[LEAN_SYSTEM_PROMPT_ENV] = '1'
-    else delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+    if (lean) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+    else process.env[LEAN_SYSTEM_PROMPT_ENV] = '0'
     return (await getSystemPrompt(LEAN_TOOLS, model)).join('\n')
   }
 
@@ -635,7 +643,10 @@ describe('lean Claude assembly', () => {
     }
   })
 
-  test('is off by default and never changes the GPT style', async () => {
+  test('is the default for its models, =0 restores the full prompt, and GPT never changes', async () => {
+    delete process.env[LEAN_SYSTEM_PROMPT_ENV]
+    expect((await getSystemPrompt(LEAN_TOOLS, 'claude-opus-5')).join('\n')).toContain('# Harness\n')
+    clearSystemPromptSections()
     expect(await build('claude-opus-5', false)).toContain('# Doing tasks')
     const gptOff = await build('gpt-5.6-terra', false)
     clearSystemPromptSections()
