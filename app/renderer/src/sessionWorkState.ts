@@ -7,16 +7,17 @@
  * Connection state is deliberately absent. Starting, parked, disconnected and
  * closed rows carry no mark; only these four do:
  *  - `needs-you`: a permission request or question is waiting.
- *  - `working`:   a turn is running.
+ *  - `working`:   a turn or subagent is running.
  *  - `failed`:    the last turn ended in an error. Cleared when the next turn starts.
  *  - `unseen`:    a turn ended while the session was not on screen. Cleared by viewing it.
  *
  * `working` and `needs-you` are read from the stores that already own them
- * (`connectionState`, `permissionState`). This module owns only the two facts no
- * other store keeps: the last turn's outcome and whether its end was seen.
+ * (`connectionState`, `workersState`, `permissionState`). This module owns only
+ * the two facts no other store keeps: the last turn's outcome and whether its
+ * end was seen.
  */
 import { createContext } from 'react'
-import type { ServerFrame, SessionId } from '../../shared/protocol.js'
+import type { LiveWorkersSnapshot, ServerFrame, SessionId } from '../../shared/protocol.js'
 import type { ConnectionSnapshot } from './connectionState.js'
 
 export type SessionWorkMark = 'needs-you' | 'working' | 'failed' | 'unseen'
@@ -120,7 +121,7 @@ function resultFailed(message: unknown): boolean | null {
 
 /**
  * The one mark a row shows, by urgency: a waiting request outranks a running
- * turn (the turn is blocked on it), and a failure outranks an unread reply.
+ * turn or subagent, and a failure outranks an unread reply.
  * `working` and `needs-you` require a ready connection, matching the TabBar's
  * attention rule: a dropped session cannot show or answer its stale queue.
  */
@@ -128,14 +129,16 @@ export function selectSessionWorkMark({
   connection,
   pendingPermissionCount,
   work,
+  workers,
 }: {
   connection: ConnectionSnapshot | undefined
   pendingPermissionCount: number
   work: SessionWorkEntry | undefined
+  workers?: LiveWorkersSnapshot | null
 }): SessionWorkMark | null {
   const ready = connection?.status === 'ready'
   if (ready && pendingPermissionCount > 0) return 'needs-you'
-  if (ready && !connection.inputEnabled) return 'working'
+  if (ready && (!connection.inputEnabled || workers?.workers.some(worker => worker.status === 'running'))) return 'working'
   if (work?.failed) return 'failed'
   if (work && work.turnEnds > work.seenTurnEnds) return 'unseen'
   return null

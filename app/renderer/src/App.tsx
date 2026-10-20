@@ -3658,17 +3658,19 @@ export function App() {
     const ids = new Set<SessionId>([
       ...(Object.keys(connection.sessions) as SessionId[]),
       ...(Object.keys(sessionWork.sessions) as SessionId[]),
+      ...(Object.keys(workersState.bySession) as SessionId[]),
     ])
     for (const sessionId of ids) {
       const mark = selectSessionWorkMark({
         connection: connection.sessions[sessionId],
         pendingPermissionCount: selectPendingPermissionCount(permissions, sessionId),
         work: sessionWork.sessions[sessionId],
+        workers: selectLiveWorkersSnapshot(workersState, sessionId),
       })
       if (mark) marks.set(sessionId, mark)
     }
     return marks
-  }, [connection, permissions, sessionWork])
+  }, [connection, permissions, sessionWork, workersState])
 
   const setSessionPrompt = useCallback(
     (

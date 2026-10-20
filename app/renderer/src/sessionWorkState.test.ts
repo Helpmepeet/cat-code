@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
-import type { ServerFrame, SessionId } from '../../shared/protocol.js'
+import type { LiveWorkerItem, LiveWorkersSnapshot, ServerFrame, SessionId } from '../../shared/protocol.js'
 import type { ConnectionSnapshot } from './connectionState.js'
+import { createWorkersState, reduceWorkersState } from './workersState.js'
 import {
   INITIAL_SESSION_WORK_STATE,
   reduceSessionWork,
@@ -31,6 +32,50 @@ const ready: ConnectionSnapshot = { status: 'ready', inputEnabled: true }
 const busy: ConnectionSnapshot = { status: 'ready', inputEnabled: false }
 const mark = (state: SessionWorkState, id: SessionId, connection: ConnectionSnapshot | undefined = ready, pendingPermissionCount = 0) =>
   selectSessionWorkMark({ connection, pendingPermissionCount, work: state.sessions[id] })
+
+const worker = (agentId: string, status: LiveWorkerItem['status'] = 'running', isBackgrounded = true): LiveWorkerItem => ({
+  agentId, status, isBackgrounded, handle: null, role: null, description: null,
+})
+const workersFrame = (sessionId: SessionId, workers: LiveWorkerItem[]): ServerFrame => ({
+  kind: 'workers.snapshot', protocolVersion: 4, sessionId, workers: { workers },
+})
+const workerMark = (workers: LiveWorkersSnapshot | undefined, connection = ready, pendingPermissionCount = 0) =>
+  selectSessionWorkMark({ connection, pendingPermissionCount, work: undefined, workers })
+
+test('an idle parent stays working until its last running subagent settles', () => {
+  let workers = createWorkersState()
+  const update = (items: LiveWorkerItem[]) => {
+    workers = reduceWorkersState(workers, { type: 'frame', frame: workersFrame(A, items) })
+    return workerMark(workers.bySession[A])
+  }
+  expect(update([worker('first'), worker('second')])).toBe('working')
+  expect(workerMark(workers.bySession[B])).toBeNull()
+  expect(update([worker('first', 'completed'), worker('second')])).toBe('working')
+  expect(update([worker('first', 'completed'), worker('second', 'completed')])).toBeNull()
+  // A resumed foreground worker is active too.
+  expect(update([worker('second', 'running', false)])).toBe('working')
+  expect(update([])).toBeNull()
+})
+
+test('settled subagents never spin, including a blocked handoff', () => {
+  expect(workerMark({ workers: [
+    worker('done', 'completed'),
+    worker('failed', 'failed'),
+    worker('stopped', 'killed'),
+    { ...worker('blocked', 'completed'), handoffStatus: 'blocked' },
+  ] })).toBeNull()
+})
+
+test('active subagents respect attention priority and connection liveness', () => {
+  const workers = { workers: [worker('background')] }
+  expect(workerMark(workers, ready, 1)).toBe('needs-you')
+  for (const status of ['connecting', 'starting', 'disconnected', 'dead', 'parked', 'restore_failed'] as const) {
+    expect(workerMark(workers, { status, inputEnabled: false })).toBeNull()
+  }
+  const work = apply([turn(A, true), result(A, true, 'error_max_turns'), turn(A, false)]).sessions[A]
+  expect(selectSessionWorkMark({ connection: ready, pendingPermissionCount: 0, work, workers })).toBe('working')
+  expect(selectSessionWorkMark({ connection: ready, pendingPermissionCount: 0, work, workers: { workers: [] } })).toBe('failed')
+})
 
 test('a turn that ends off screen is unseen until the session is viewed', () => {
   let state = apply([turn(A, true), turn(A, false)])
