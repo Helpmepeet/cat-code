@@ -344,46 +344,57 @@ const FIXTURE_SESSION_ID = '11111111-2222-4333-8444-555555555555'
 let sessionStartHookRuns = 0
 let storedInterruptedTurn: InterruptedTurnRecordV1 | null = null
 let storedLog: LogOption | null = null
+let sessionActionMocksEnabled = false
 
-const realSessionStart = await import('../../src/utils/sessionStart.js')
+const realSessionStart = { ...await import('../../src/utils/sessionStart.js') }
 mock.module('../../src/utils/sessionStart.js', () => ({
   ...realSessionStart,
-  processSessionStartHooks: async () => {
-    sessionStartHookRuns += 1
-    return []
-  },
+  processSessionStartHooks: (...args: Parameters<typeof realSessionStart.processSessionStartHooks>) =>
+    sessionActionMocksEnabled
+      ? (sessionStartHookRuns++, Promise.resolve([]))
+      : realSessionStart.processSessionStartHooks(...args),
 }))
 
-const realInterruptedTurn = await import('../../src/utils/interruptedTurn.js')
+const realInterruptedTurn = { ...await import('../../src/utils/interruptedTurn.js') }
 mock.module('../../src/utils/interruptedTurn.js', () => ({
   ...realInterruptedTurn,
-  readInterruptedTurnRecord: async () => storedInterruptedTurn,
-  takeInterruptedTurnRecord: async () => {
+  readInterruptedTurnRecord: (...args: Parameters<typeof realInterruptedTurn.readInterruptedTurnRecord>) =>
+    sessionActionMocksEnabled
+      ? Promise.resolve(storedInterruptedTurn)
+      : realInterruptedTurn.readInterruptedTurnRecord(...args),
+  takeInterruptedTurnRecord: (...args: Parameters<typeof realInterruptedTurn.takeInterruptedTurnRecord>) => {
+    if (!sessionActionMocksEnabled) return realInterruptedTurn.takeInterruptedTurnRecord(...args)
     const record = storedInterruptedTurn
     storedInterruptedTurn = null
-    return record
+    return Promise.resolve(record)
   },
-  consumeInterruptedTurnRecord: async () => {
+  consumeInterruptedTurnRecord: (...args: Parameters<typeof realInterruptedTurn.consumeInterruptedTurnRecord>) => {
+    if (!sessionActionMocksEnabled) return realInterruptedTurn.consumeInterruptedTurnRecord(...args)
     storedInterruptedTurn = null
+    return Promise.resolve()
   },
 }))
 
-const realSessionStorage = await import('../../src/utils/sessionStorage.js')
+const realSessionStorage = { ...await import('../../src/utils/sessionStorage.js') }
 mock.module('../../src/utils/sessionStorage.js', () => ({
   ...realSessionStorage,
-  getLastSessionLog: async () => storedLog,
+  getLastSessionLog: (...args: Parameters<typeof realSessionStorage.getLastSessionLog>) =>
+    sessionActionMocksEnabled
+      ? Promise.resolve(storedLog)
+      : realSessionStorage.getLastSessionLog(...args),
 }))
 
 // The plain-text renderer mounts the terminal component tree, which never
 // settles without a TTY, so it is replaced by a recorder. What it RECEIVES is
 // the interesting half here anyway: those are the messages the read produced.
 let renderedMessages: Message[] | null = null
-const realExportRenderer = await import('../../src/utils/exportRenderer.js')
+const realExportRenderer = { ...await import('../../src/utils/exportRenderer.js') }
 mock.module('../../src/utils/exportRenderer.js', () => ({
   ...realExportRenderer,
-  renderMessagesToPlainText: async (messages: Message[]) => {
-    renderedMessages = messages
-    return 'RENDERED'
+  renderMessagesToPlainText: (...args: Parameters<typeof realExportRenderer.renderMessagesToPlainText>) => {
+    if (!sessionActionMocksEnabled) return realExportRenderer.renderMessagesToPlainText(...args)
+    renderedMessages = args[0] as Message[]
+    return Promise.resolve('RENDERED')
   },
 }))
 
@@ -449,9 +460,18 @@ function forkOnlyController(
 
 describe('sessionActionsDomain — read-only actions never resume', () => {
   beforeEach(() => {
+    sessionActionMocksEnabled = true
     sessionStartHookRuns = 0
     storedInterruptedTurn = fixtureInterruptedTurn()
     storedLog = fixtureLog()
+    renderedMessages = null
+  })
+
+  afterEach(() => {
+    sessionActionMocksEnabled = false
+    sessionStartHookRuns = 0
+    storedInterruptedTurn = null
+    storedLog = null
     renderedMessages = null
   })
 
