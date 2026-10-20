@@ -124,7 +124,7 @@ for (const trusted of [true, false]) test(`scheduled dispatch uses the host, soc
   manager.run(task.id)
   await waitFor(() => trusted ? manager.snapshot().runs[0]?.status === 'waiting' : manager.snapshot().runs[0]?.status === 'failed')
   const run = manager.snapshot().runs[0]!
-  expect(host.listSessions().find(row => row.appSessionId === run.appSessionId)?.cwd).toBe(project)
+  expect(host.listSessions().find(row => row.appSessionId === run.appSessionId)?.cwd).toBe(realpathSync(project))
   if (trusted) {
     await waitFor(() => permissionIds.length === 2)
     expect(permissionIds).toEqual(['scheduled-permission', 'scheduled-permission-two'])

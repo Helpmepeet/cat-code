@@ -53,21 +53,28 @@ mock.module('../../src/query.js', () => ({
     realQuery(scriptedModel ? { ...args, deps: scriptedDeps() } as never : args),
 }))
 const realUserInput = await import('../../src/utils/processUserInput/processUserInput.js')
+const realProcessUserInput = realUserInput.processUserInput
 mock.module('../../src/utils/processUserInput/processUserInput.js', () => ({
   ...realUserInput,
-  processUserInput: async ({ input, uuid }: { input: string; uuid?: string }) => ({
-    messages: [createUserMessage({ content: input, ...(uuid ? { uuid } : {}) } as never)],
-    shouldQuery: true,
-    allowedTools: [],
-  }),
+  processUserInput: async (args: Parameters<typeof realProcessUserInput>[0]) =>
+    scriptedModel ? {
+      messages: [createUserMessage({ content: args.input, ...(args.uuid ? { uuid: args.uuid } : {}) } as never)],
+      shouldQuery: true,
+      allowedTools: [],
+    } : realProcessUserInput(args),
 }))
 const realQueryContext = await import('../../src/utils/queryContext.js')
+const realFetchSystemPromptParts = realQueryContext.fetchSystemPromptParts
 mock.module('../../src/utils/queryContext.js', () => ({
   ...realQueryContext,
-  fetchSystemPromptParts: async () => ({ defaultSystemPrompt: [], userContext: {}, systemContext: {} }),
+  fetchSystemPromptParts: async (args: Parameters<typeof realFetchSystemPromptParts>[0]) =>
+    scriptedModel
+      ? { defaultSystemPrompt: [], userContext: {}, systemContext: {} }
+      : realFetchSystemPromptParts(args),
 }))
 
 const { createUserMessage, createAssistantMessage } = await import('../../src/utils/messages.js')
+const { clearUserContextCache } = await import('../../src/context.js')
 const { QueryEngine } = await import('../../src/QueryEngine.js')
 const { createRuntimeBackedAppSession } = await import('../../src/app-runtime/createRuntimeBackedAppSession.js')
 const { getDefaultAppState } = await import('../../src/state/AppStateStore.js')
@@ -306,3 +313,25 @@ test('a foreground worker keeps its own turn alive while it works', async () => 
     scriptedModel = null
   }
 }, 60_000)
+
+test('inactive scripting delegates input validation and prompt context to the real functions', async () => {
+  expect(scriptedModel).toBeNull()
+  await expect(realUserInput.processUserInput({
+    input: [], mode: 'bash', setToolJSX() {},
+    context: { getAppState: getDefaultAppState },
+  } as never)).rejects.toThrow('Mode: bash requires a string input.')
+  const previous = process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS
+  process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = '1'
+  clearUserContextCache()
+  try {
+    const parts = await realQueryContext.fetchSystemPromptParts({
+      tools: [], mainLoopModel: 'claude-sonnet-4-6', additionalWorkingDirectories: [],
+      mcpClients: [], customSystemPrompt: '',
+    })
+    expect(parts.userContext.currentDate).toMatch(/^Today's date is /)
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS
+    else process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS = previous
+    clearUserContextCache()
+  }
+})

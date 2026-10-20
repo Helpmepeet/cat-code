@@ -7,9 +7,11 @@ import z from 'zod/v4'
 let queryDeps: any
 let fixtureRoot: string
 const realDeps = await import('../../query/deps.js')
+// Capture before mock.module rewrites the imported namespace in place.
+const realProductionDeps = realDeps.productionDeps
 mock.module('../../query/deps.js', () => ({
   ...realDeps,
-  productionDeps: () => queryDeps ?? realDeps.productionDeps(),
+  productionDeps: () => queryDeps ?? realProductionDeps(),
 }))
 const realConfig = await import('../../query/config.js')
 const realBuildQueryConfig = realConfig.buildQueryConfig

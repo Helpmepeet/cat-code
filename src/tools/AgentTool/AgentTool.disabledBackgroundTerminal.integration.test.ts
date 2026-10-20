@@ -10,9 +10,11 @@ const sourceRoot = process.env.CAT_CODE_TEST_ROOT ?? join(import.meta.dir, '../.
 
 let queryDeps: any
 const realDeps = await import(sourceRoot + '/src/query/deps.js')
+// Capture before mock.module rewrites the imported namespace in place.
+const realProductionDeps = realDeps.productionDeps
 mock.module(sourceRoot + '/src/query/deps.js', () => ({
   ...realDeps,
-  productionDeps: () => queryDeps ?? realDeps.productionDeps(),
+  productionDeps: () => queryDeps ?? realProductionDeps(),
 }))
 const realConfig = await import(sourceRoot + '/src/query/config.js')
 const realBuildQueryConfig = realConfig.buildQueryConfig
@@ -37,6 +39,7 @@ const { AgentTool } = await import(sourceRoot + '/src/tools/AgentTool/AgentTool.
 const { getDefaultAppState } = await import(sourceRoot + '/src/state/AppStateStore.js')
 
 afterAll(async () => {
+  queryDeps = undefined
   mock.restore()
   resetStateForTests()
   await rm(process.env.CLAUDE_CONFIG_DIR!, { recursive: true, force: true })

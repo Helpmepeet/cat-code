@@ -11,8 +11,10 @@ process.env.CLAUDE_CONFIG_DIR = join(root, 'config')
 process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
 let queryDeps: any
 const realDeps = await import('../../query/deps.js')
+// Capture before mock.module rewrites the imported namespace in place.
+const realProductionDeps = realDeps.productionDeps
 mock.module('../../query/deps.js', () => ({
-  ...realDeps, productionDeps: () => queryDeps ?? realDeps.productionDeps(),
+  ...realDeps, productionDeps: () => queryDeps ?? realProductionDeps(),
 }))
 const { resetStateForTests, switchSession, setCwdState } = await import('../../bootstrap/state.js')
 const { asSessionId, asAgentId } = await import('../../types/ids.js')
@@ -35,6 +37,7 @@ async function git(cwd: string, ...args: string[]) {
 }
 
 afterAll(async () => {
+  queryDeps = undefined
   mock.restore()
   await flushSessionStorage()
   await releaseActiveTranscriptLease()

@@ -24,9 +24,11 @@ mock.module('./utils/attachments.js', () => ({
 }))
 let queryDeps: any = null
 const actualDeps = await import('./query/deps.js')
+// Capture before mock.module rewrites the imported namespace in place.
+const realProductionDeps = actualDeps.productionDeps
 mock.module('./query/deps.js', () => ({
   ...actualDeps,
-  productionDeps: () => queryDeps ?? actualDeps.productionDeps(),
+  productionDeps: () => queryDeps ?? realProductionDeps(),
 }))
 const { query } = await import('./query.js')
 const actualQueryModule = await import('./query.js')
