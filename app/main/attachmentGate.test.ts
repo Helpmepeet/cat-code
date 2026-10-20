@@ -10,6 +10,12 @@ import { expect, test } from 'bun:test'
 
 import { AttachmentGate } from './attachmentGate.js'
 import {
+  createTranscriptState,
+  projectServerFrames,
+  selectTranscriptRows,
+} from '../renderer/src/transcriptProjector.js'
+import { retryWaitSeconds } from '../renderer/src/retryClock.js'
+import {
   FrameReplayBuffer,
   isReplayTruncationFrame,
 } from './replayBuffer.js'
@@ -21,6 +27,58 @@ import {
 } from '../shared/protocol.js'
 
 const SID: SessionId = 'sess-1'
+
+test('renderer reload does not restart a buffered live retry countdown', () => {
+  const gate = new AttachmentGate(new FrameReplayBuffer())
+  gate.onFrame(SID, readyFrame())
+  gate.onRendererReady()
+  const frame: ServerFrame = {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    event: {
+      type: 'message',
+      message: {
+        type: 'system', subtype: 'api_retry', uuid: 'retry-reload',
+        attempt: 1, max_retries: 10, retry_delay_ms: 8000,
+        error_status: 529,
+        error: { type: 'assistant_error', message: 'Overloaded' },
+      } as never,
+    },
+  }
+  const originalNow = Date.now
+  let now = 100_000
+  Date.now = () => now
+  try {
+    const live = gate.onFrame(SID, frame)
+    const liveState = projectServerFrames(createTranscriptState(), [readyFrame(), ...live])
+    const retry = selectTranscriptRows(liveState, SID).find(row => row.kind === 'system-notice')!
+    if (retry.kind !== 'system-notice' || !retry.retry) throw new Error('Missing live retry')
+    expect(retryWaitSeconds(retry.retry)).toBe(8)
+    now += 5000
+    expect(retryWaitSeconds(retry.retry)).toBe(3)
+
+    gate.onNavigationStart()
+    const replayed = gate.onRendererReady()
+    const restored = projectServerFrames(createTranscriptState(), replayed)
+    const row = selectTranscriptRows(restored, SID).find(row => row.kind === 'system-notice')!
+    if (row.kind !== 'system-notice' || !row.retry) throw new Error('Missing restored retry')
+    expect(retryWaitSeconds(row.retry)).toBeNull()
+    expect(row.retry.state).toBe('waiting')
+    expect(gate.snapshotSession(SID).find(item => item.kind === 'event')).toBe(frame)
+    expect(frame).not.toHaveProperty('replay')
+
+    const heartbeat = structuredClone(frame)
+    if (heartbeat.kind !== 'event' || heartbeat.event.type !== 'message') throw new Error('Missing heartbeat')
+    Object.assign(heartbeat.event.message, { uuid: 'retry-heartbeat', retry_delay_ms: 3000 })
+    const updated = projectServerFrames(restored, gate.onFrame(SID, heartbeat))
+    const updatedRow = selectTranscriptRows(updated, SID).find(item => item.kind === 'system-notice')!
+    if (updatedRow.kind !== 'system-notice' || !updatedRow.retry) throw new Error('Missing updated retry')
+    expect(retryWaitSeconds(updatedRow.retry)).toBe(3)
+  } finally {
+    Date.now = originalNow
+  }
+})
 
 function readyFrame(sessionId: SessionId = SID): ServerFrame {
   return {

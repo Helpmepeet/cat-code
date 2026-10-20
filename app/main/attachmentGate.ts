@@ -231,7 +231,19 @@ export class AttachmentGate {
     if (this.attached) return []
     this.attached = true
     this.replayCoalescing.clear()
-    return this.buffer.snapshot()
+    return this.buffer.snapshot().map(frame => {
+      // Buffered retry delays are no longer fresh. Reuse history presentation
+      // for these messages so a new document cannot restart their countdown.
+      if (
+        frame.kind === 'event' &&
+        frame.event.type === 'message' &&
+        frame.event.message.type === 'system' &&
+        frame.event.message.subtype === 'api_retry'
+      ) {
+        return { ...frame, replay: true }
+      }
+      return frame
+    })
   }
 
   /** A new document is loading (reload or new window): re-arm for a fresh replay. */
