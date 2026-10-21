@@ -5,12 +5,10 @@ import { generateTaskId } from '../Task.js'
 import type { CommandAttribution } from './bash/exitAttribution.js'
 import { formatDuration } from './format.js'
 import { killProcessGroupSync, killProcessTree } from './processTree.js'
-import { isProcessDescendant, readProcessMemoryBytes, readProcessParents } from './processSnapshot.js'
-import type { TestCommandLimits } from './testCommandLimits.js'
+import { isProcessDescendant, readProcessParents } from './processSnapshot.js'
 import {
   MAX_TASK_OUTPUT_BYTES,
   MAX_TASK_OUTPUT_BYTES_DISPLAY,
-  DiskTaskOutput,
 } from './task/diskOutput.js'
 import { TaskOutput } from './task/TaskOutput.js'
 
@@ -140,9 +138,6 @@ class ShellCommandImpl implements ShellCommand {
   #timeoutId: NodeJS.Timeout | null = null
   #sizeWatchdog: NodeJS.Timeout | null = null
   #killedForSize = false
-  #resourceDeadline: NodeJS.Timeout | undefined
-  #memoryWatchdog: NodeJS.Timeout | undefined
-  #resourceFailure: string | undefined
   #maxOutputBytes: number
   #abortSignal: AbortSignal
   #onTimeoutCallback:
@@ -176,7 +171,6 @@ class ShellCommandImpl implements ShellCommand {
     taskOutput: TaskOutput,
     shouldAutoBackground = false,
     maxOutputBytes = MAX_TASK_OUTPUT_BYTES,
-    limits?: TestCommandLimits,
   ) {
     this.#childProcess = childProcess
     this.#abortSignal = abortSignal
@@ -202,7 +196,6 @@ class ShellCommandImpl implements ShellCommand {
     }
 
     this.result = this.#createResultPromise()
-    if (limits) this.#startResourceWatchdog(limits)
   }
 
   get status(): 'running' | 'backgrounded' | 'completed' | 'killed' {
@@ -228,80 +221,6 @@ class ShellCommandImpl implements ShellCommand {
     } catch {
       return false
     }
-  }
-
-  #stopResourceWatchdog(): void {
-    clearTimeout(this.#resourceDeadline)
-    clearInterval(this.#memoryWatchdog)
-    this.#resourceDeadline = undefined
-    this.#memoryWatchdog = undefined
-  }
-
-  #startResourceWatchdog(limits: TestCommandLimits): void {
-    const child = this.#childProcess
-    let stopping = false
-    const stop = async (message: string): Promise<void> => {
-      if (stopping) return
-      stopping = true
-      // Test runners can create detached children outside the shell's group.
-      // Recheck ancestry while the tracked root is live, signal those exact
-      // PIDs first, then reap the original group through the normal path.
-      const parents = await readProcessParents().catch(() => undefined)
-      if (
-        this.#childProcess !== child ||
-        (this.#status !== 'running' && this.#status !== 'backgrounded')
-      ) return
-      this.#resourceFailure = message
-      if (child.pid && parents?.has(child.pid)) {
-        for (const pid of parents.keys()) {
-          if (pid !== child.pid && isProcessDescendant(pid, child.pid, parents)) {
-            try { process.kill(pid, 'SIGKILL') } catch { /* Already exited. */ }
-          }
-        }
-      }
-      this.#doKill(SIGKILL)
-    }
-    this.#resourceDeadline = setTimeout(() => {
-      void stop(`Test command killed: exceeded ${formatDuration(limits.timeoutMs)} execution limit`)
-    }, limits.timeoutMs)
-    this.#resourceDeadline.unref()
-    let reading = false
-    let failures = 0
-    this.#memoryWatchdog = setInterval(() => {
-      if (reading) return
-      reading = true
-      void (async () => {
-        try {
-          const root = child.pid
-          if (!root || child.exitCode !== null || child.signalCode !== null) return
-          const parents = await readProcessParents()
-          if (!parents.has(root)) return
-          let bytes = 0
-          for (const pid of parents.keys()) {
-            if (!isProcessDescendant(pid, root, parents)) continue
-            try { bytes += await readProcessMemoryBytes(pid) }
-            catch (error) {
-              // A descendant can exit between ps and its memory read. A failed
-              // root read, however, cannot silently disable the safety limit.
-              if (pid !== root) {
-                try { process.kill(pid, 0) }
-                catch (gone) {
-                  if ((gone as NodeJS.ErrnoException).code === 'ESRCH') continue
-                }
-              }
-              throw error
-            }
-          }
-          failures = 0
-          if (bytes > limits.maxMemoryBytes) {
-            await stop(`Test command killed: process tree exceeded ${Math.round(limits.maxMemoryBytes / 1024 ** 2)} MiB memory limit`)
-          }
-        } catch {
-          if (++failures >= 3) await stop('Test command killed: could not monitor process memory')
-        } finally { reading = false }
-      })()
-    }, 250)
-    this.#memoryWatchdog.unref()
   }
 
   #abortHandler(): void {
@@ -425,19 +344,11 @@ class ShellCommandImpl implements ShellCommand {
   }
 
   async #handleExit(code: number): Promise<void> {
-    this.#stopResourceWatchdog()
     this.#cleanupListeners()
     if (this.#status === 'running' || this.#status === 'backgrounded') {
       this.#status = 'completed'
     }
 
-    // Persist the reason beside background output too. Bash's stderr fd is
-    // merged into this file; an ExecResult-only stderr would be lost there.
-    if (this.#resourceFailure && this.taskOutput.stdoutToFile) {
-      const diagnostic = new DiskTaskOutput(this.taskOutput.taskId)
-      diagnostic.append(`\n${this.#resourceFailure}\n`)
-      await diagnostic.flush()
-    }
     const stdout = await this.taskOutput.getStdout()
     const result: ExecResult = {
       code,
@@ -459,9 +370,7 @@ class ShellCommandImpl implements ShellCommand {
       }
     }
 
-    if (this.#resourceFailure && !this.taskOutput.stdoutToFile) {
-      result.stderr = prependStderr(this.#resourceFailure, result.stderr)
-    } else if (this.#killedForSize) {
+    if (this.#killedForSize) {
       result.stderr = prependStderr(
         `Background command killed: output file exceeded ${MAX_TASK_OUTPUT_BYTES_DISPLAY}`,
         result.stderr,
@@ -481,7 +390,6 @@ class ShellCommandImpl implements ShellCommand {
   }
 
   #doKill(code?: number): void {
-    this.#stopResourceWatchdog()
     this.#status = 'killed'
     killProcessTree(this.#childProcess, 'SIGKILL')
     this.#resolveExitCode(code ?? SIGKILL)
@@ -511,7 +419,6 @@ class ShellCommandImpl implements ShellCommand {
   }
 
   cleanup(): void {
-    this.#stopResourceWatchdog()
     this.#stdoutWrapper?.cleanup()
     this.#stderrWrapper?.cleanup()
     this.taskOutput.clear()
@@ -537,7 +444,6 @@ export function wrapSpawn(
   taskOutput: TaskOutput,
   shouldAutoBackground = false,
   maxOutputBytes = MAX_TASK_OUTPUT_BYTES,
-  limits?: TestCommandLimits,
 ): ShellCommand {
   return new ShellCommandImpl(
     childProcess,
@@ -546,7 +452,6 @@ export function wrapSpawn(
     taskOutput,
     shouldAutoBackground,
     maxOutputBytes,
-    limits,
   )
 }
 

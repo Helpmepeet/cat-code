@@ -26,7 +26,6 @@ import {
 import { getTaskOutputDir } from './task/diskOutput.js'
 import { TaskOutput } from './task/TaskOutput.js'
 import { which } from './which.js'
-import type { TestCommandLimits } from './testCommandLimits.js'
 
 export type { ExecResult } from './ShellCommand.js'
 
@@ -177,7 +176,6 @@ export type ExecOptions = {
   preventCwdChanges?: boolean
   shouldUseSandbox?: boolean
   shouldAutoBackground?: boolean
-  testCommandLimits?: TestCommandLimits
   /** When provided, stdout is piped (not sent to file) and this callback fires on each data chunk. */
   onStdout?: (data: string) => void
   /**
@@ -213,7 +211,6 @@ export async function exec(
     onStdout,
     agentId,
     exitSemanticCommands,
-    testCommandLimits,
   } = options ?? {}
   const commandTimeout = timeout || DEFAULT_TIMEOUT
   const workerScoped = isWorkerScopedExec(agentId)
@@ -376,8 +373,6 @@ export async function exec(
       commandTimeout,
       taskOutput,
       shouldAutoBackground,
-      undefined,
-      testCommandLimits,
     )
 
     // Close our copy of the fd — the child has its own dup.

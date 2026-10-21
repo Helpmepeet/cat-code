@@ -50,7 +50,6 @@ import { trackGitOperations } from '../shared/gitOperationTracking.js';
 import { bashToolHasPermission, commandHasAnyCd, matchWildcardPattern, permissionRuleExtractPrefix } from './bashPermissions.js';
 import { interpretCommandResult, SEMANTIC_COMMAND_NAMES } from './commandSemantics.js';
 import { checkKillOwnership } from './killOwnership.js';
-import { getTestCommandLimits } from '../../utils/testCommandLimits.js';
 import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from './prompt.js';
 import { checkReadOnlyConstraints } from './readOnlyValidation.js';
 import { applySedSubstitution, parseSedEditCommand } from './sedEditParser.js';
@@ -1020,7 +1019,6 @@ async function* runShellCommand({
     preventCwdChanges,
     shouldUseSandbox: shouldUseSandbox(input),
     shouldAutoBackground,
-    testCommandLimits: input.work_lifetime === 'service' ? undefined : getTestCommandLimits(command),
     // Already carried this far to attribute background tasks to their agent.
     // exec needs the same fact to decide whether the child gets the worker
     // environment allowlist.

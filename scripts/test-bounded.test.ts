@@ -1,26 +1,26 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { getDefaultAppState } from '../../state/AppStateStore.js'
-import type { ToolUseContext } from '../../Tool.js'
-import { asAgentId } from '../../types/ids.js'
-import { ShellError } from '../../utils/errors.js'
-import { isLocalShellTask } from '../../tasks/LocalShellTask/guards.js'
-import { BashTool } from './BashTool.js'
+import { getDefaultAppState } from '../src/state/AppStateStore.js'
+import type { ToolUseContext } from '../src/Tool.js'
+import { asAgentId } from '../src/types/ids.js'
+import { ShellError } from '../src/utils/errors.js'
+import { isLocalShellTask } from '../src/tasks/LocalShellTask/guards.js'
+import { BashTool } from '../src/tools/BashTool/BashTool.js'
 
 let work: string
-const names = ['CLAUDE_CONFIG_DIR', 'CAT_CODE_TEST_TIMEOUT_MS', 'CAT_CODE_TEST_MAX_MEMORY_MB'] as const
-const previous = names.map(name => process.env[name])
+const previous = process.env.CLAUDE_CONFIG_DIR
+const runner = fileURLToPath(new URL('./test-bounded.ts', import.meta.url))
 beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), 'bash-test-limits-'))
   process.env.CLAUDE_CONFIG_DIR = work
 })
 afterAll(() => {
-  names.forEach((name, i) => {
-    if (previous[i] === undefined) delete process.env[name]
-    else process.env[name] = previous[i]
-  })
+  if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = previous
   rmSync(work, { recursive: true, force: true })
 })
 
@@ -40,6 +40,10 @@ function fixture(name: string, body: string): string {
   return `${JSON.stringify(process.execPath)} test ${JSON.stringify(path)}`
 }
 
+function bounded(command: string, timeoutMs: number, memoryMb: number): string {
+  return `${JSON.stringify(process.execPath)} ${JSON.stringify(runner)} --timeout-ms ${timeoutMs} --memory-mb ${memoryMb} -- ${command}`
+}
+
 async function waitForTask(context: ToolUseContext, taskId: string) {
   for (let i = 0; i < 200; i++) {
     const task = context.getAppState().tasks[taskId]
@@ -49,11 +53,9 @@ async function waitForTask(context: ToolUseContext, taskId: string) {
   throw new Error('task did not terminate')
 }
 
-test.skipIf(process.platform === 'win32')('finite test memory is bounded outside its blocked event loop', async () => {
-  process.env.CAT_CODE_TEST_TIMEOUT_MS = '10000'
-  process.env.CAT_CODE_TEST_MAX_MEMORY_MB = '192'
+test.skipIf(process.platform !== 'darwin')('the explicit runner caps a blocked detached child and reaps it', async () => {
   // Self-bounded to 256 MiB even on the broken implementation. The busy loop
-  // blocks the test runner's own timer, but not the engine's resource monitor.
+  // blocks the test runner's own timer, but not the supervisor.
   const pidFile = join(work, 'allocation.pid')
   const workerFile = join(work, 'allocation-worker.ts')
   writeFileSync(workerFile, `
@@ -75,7 +77,7 @@ test.skipIf(process.platform === 'win32')('finite test memory is bounded outside
     await once(child, 'exit');
   `)
   let error: unknown
-  try { await BashTool.call({ command }, context()) } catch (caught) { error = caught }
+  try { await BashTool.call({ command: bounded(command, 10000, 192) }, context()) } catch (caught) { error = caught }
   expect(error).toBeInstanceOf(ShellError)
   expect((error as ShellError).stderr).toContain('memory limit')
   const pid = Number(readFileSync(pidFile, 'utf8'))
@@ -86,14 +88,12 @@ test.skipIf(process.platform === 'win32')('finite test memory is bounded outside
   expect(alive).toBe(false)
 })
 
-test.skipIf(process.platform === 'win32')('the test deadline survives explicit and timeout-driven backgrounding', async () => {
-  process.env.CAT_CODE_TEST_TIMEOUT_MS = '800'
-  process.env.CAT_CODE_TEST_MAX_MEMORY_MB = '512'
+test.skipIf(process.platform !== 'darwin')('the test deadline survives explicit and timeout-driven backgrounding', async () => {
   for (const explicit of [true, false]) {
     const ctx = context()
     const command = fixture(`deadline-${explicit}`, 'await Bun.sleep(1800);')
     try {
-      const { data } = await BashTool.call({ command, timeout: 100,
+      const { data } = await BashTool.call({ command: bounded(command, 800, 512), timeout: 100,
         ...(explicit ? { run_in_background: true } : {}),
       }, ctx)
       expect(data.backgroundTaskId).toBeDefined()
@@ -108,24 +108,18 @@ test.skipIf(process.platform === 'win32')('the test deadline survives explicit a
   }
 })
 
-test('ordinary background commands keep running beyond the configured test deadline', async () => {
-  process.env.CAT_CODE_TEST_TIMEOUT_MS = '100'
-  process.env.CAT_CODE_TEST_MAX_MEMORY_MB = '1'
-  for (const input of [
-    { command: `${JSON.stringify(process.execPath)} -e 'setTimeout(() => console.log("ordinary done"), 600)'` },
-    { command: fixture('service', 'await Bun.sleep(600);'), work_lifetime: 'service' as const },
-  ]) {
-    const ctx = context()
-    try {
-      const { data } = await BashTool.call({ ...input, timeout: 100, run_in_background: true }, ctx)
-      expect(data.backgroundTaskId).toBeDefined()
-      const task = await waitForTask(ctx, data.backgroundTaskId!)
-      expect(task.status).toBe('completed')
-      expect(task.result?.code).toBe(0)
-    } finally {
-      for (const task of Object.values(ctx.getAppState().tasks)) {
-        if (isLocalShellTask(task) && task.status === 'running') task.shellCommand?.kill()
-      }
-    }
+test.skipIf(process.platform !== 'darwin')('the runner preserves argv, output and exit codes', async () => {
+  for (const code of [0, 7]) {
+    const child = spawn(process.execPath, [runner, '--', process.execPath, '-e',
+      'console.log(process.argv[1]); process.exit(Number(process.argv[2]))',
+      'one argument; not shell code', String(code),
+    ], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = '', stderr = ''
+    child.stdout!.on('data', chunk => { stdout += chunk.toString() })
+    child.stderr!.on('data', chunk => { stderr += chunk.toString() })
+    const exitCode = await new Promise(resolve => child.once('close', resolve))
+    expect(exitCode).toBe(code)
+    expect(stdout.trim()).toBe('one argument; not shell code')
+    expect(stderr).toBe('')
   }
 })
