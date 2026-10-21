@@ -4416,10 +4416,15 @@ export class SidecarServer {
     }
 
     // Resolve through the engine's OWN decision path. `questions`/`metadata` are
-    // the engine's gated fields (never the wire); only `answers` is attached.
+    // the engine's gated fields (never the wire). Replace answers and annotations
+    // together so model-supplied notes or previews cannot survive a new pick.
     this.controller.respondToPermissionRequest(message.requestId, {
       behavior: 'allow',
-      updatedInput: { ...gatedInput, answers: reconstructed.answers },
+      updatedInput: {
+        ...gatedInput,
+        answers: reconstructed.answers,
+        annotations: reconstructed.annotations,
+      },
     })
   }
 
@@ -6582,13 +6587,20 @@ const peerDeliverMessageSchema = z.object({
  * labels and re-reads the gated questions (handleAskUserQuestionAnswer), so the
  * semantic checks (index in range, cardinality vs multiSelect, question count)
  * are done against the LIVE pending request, never trusted from the frame. The
- * inner `{optionIndices, other}` object is `.strict()` so an extra nested key is
+ * answer and note objects are `.strict()` so an extra nested key is
  * rejected, not stripped (checkStrictKeys guards only the top level).
  */
 const askUserQuestionAnswerSchema = z
   .object({
-    optionIndices: z.array(z.number().int().nonnegative()),
+    optionIndices: z.array(z.number().int().nonnegative()).max(MAX_ANSWER_QUESTIONS),
     other: z.string().max(MAX_QUESTION_ANSWER_CHARS).optional(),
+    notes: z
+      .array(z.object({
+        optionIndex: z.number().int().nonnegative(),
+        text: z.string().max(MAX_QUESTION_ANSWER_CHARS),
+      }).strict())
+      .max(MAX_ANSWER_QUESTIONS)
+      .optional(),
   })
   .strict()
 
@@ -7111,7 +7123,11 @@ function extractGatedToolInput(
 }
 
 type AskUserQuestionReconstructResult =
-  | { ok: true; answers: Record<string, string> }
+  | {
+      ok: true
+      answers: Record<string, string>
+      annotations: Record<string, { notes: string }>
+    }
   | { ok: false; reason: string }
 
 /** One engine-minted question, defensively narrowed from the gated input. */
@@ -7131,8 +7147,8 @@ type NarrowedGatedQuestion = {
  * the tool's answer map by that text, so two identically-worded questions would
  * pass the arity check, each validate, and then collapse onto one entry — the
  * engine receiving a partially answered tool result while the boundary reported
- * success. `AskUserQuestionTool` allows 1-4 questions with no uniqueness rule,
- * so fail closed here (surfaces as the existing `bad_request`).
+ * success. The engine also enforces unique question texts; fail closed here
+ * for malformed gated input (surfaces as the existing `bad_request`).
  */
 function narrowGatedQuestions(
   gatedInput: Record<string, unknown> | undefined,
@@ -7169,8 +7185,8 @@ function narrowGatedQuestions(
  * `answers: Record<questionText, answerString>` from a renderer answer frame,
  * validated against the ENGINE's own gated questions. Option indices are
  * resolved to the engine's own labels (C1 byte-fidelity); the built-in "Other…"
- * freeform text is the only renderer-authored byte (bounded, model-visible text
- * only). Fail-closed on any structural mismatch; the request stays pending.
+ * freeform text and option notes are bounded renderer-authored, model-visible
+ * text only. Fail-closed on any structural mismatch; the request stays pending.
  */
 function reconstructAskUserQuestionAnswers(
   gatedInput: Record<string, unknown> | undefined,
@@ -7188,6 +7204,7 @@ function reconstructAskUserQuestionAnswers(
   }
 
   const map: Record<string, string> = {}
+  const annotations: Record<string, { notes: string }> = {}
   for (let qi = 0; qi < questions.length; qi++) {
     const question = questions[qi]!
     const answer = answers[qi]!
@@ -7213,6 +7230,23 @@ function reconstructAskUserQuestionAnswers(
       seen.add(index)
     }
 
+    const noted = new Set<number>()
+    for (const note of answer.notes ?? []) {
+      if (!seen.has(note.optionIndex) || noted.has(note.optionIndex)) {
+        return {
+          ok: false,
+          reason: `note must reference a distinct selected option for question ${qi}`,
+        }
+      }
+      noted.add(note.optionIndex)
+    }
+    // Use selection order, not wire note order, and only engine-owned labels.
+    const notes = indices.flatMap(index => {
+      const note = answer.notes?.find(note => note.optionIndex === index)
+      return note ? [`${question.options[index]}: ${note.text}`] : []
+    })
+    if (notes.length > 0) annotations[question.question] = { notes: notes.join('\n') }
+
     const componentCount = indices.length + (hasOther ? 1 : 0)
     if (componentCount === 0) {
       return { ok: false, reason: `question ${qi} has no answer` }
@@ -7233,7 +7267,7 @@ function reconstructAskUserQuestionAnswers(
     map[question.question] = parts.join(', ')
   }
 
-  return { ok: true, answers: map }
+  return { ok: true, answers: map, annotations }
 }
 
 /** Structural deep equality for JSON-shaped values (T6 echo check). */

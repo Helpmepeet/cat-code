@@ -340,6 +340,41 @@ function composerOf(tree: MountedTree): HTMLElement {
   return composer
 }
 
+test('Chat about this closes the question and focuses the composer, not an old restore target', async () => {
+  const messages: string[] = []
+  function QuestionPane() {
+    const [open, setOpen] = useState(true)
+    return <SessionPane
+      {...idleSessionPaneProps()}
+      askQuestion={open ? {
+        request: {
+          requestId: 'question-chat',
+          request: { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: {}, tool_use_id: 'tool-chat' },
+        },
+        submitted: false,
+        questions: [{ question: 'Which library?', header: 'Library', multiSelect: false, options: [
+          { label: 'date-fns', description: '', preview: null },
+          { label: 'luxon', description: '', preview: null },
+        ] }],
+      } : null}
+      onChatQuestions={message => { messages.push(message); setOpen(false) }}
+    />
+  }
+  const before = document.createElement('button')
+  document.body.appendChild(before)
+  before.focus()
+  const tree = await harness.mount(<QuestionPane />)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  const chat = Array.from(tree.container.querySelectorAll('button'))
+    .find(button => button.textContent === 'Chat about this')!
+  await act(async () => { chat.focus(); chat.click() })
+  expect(messages).toHaveLength(1)
+  expect(messages[0]).toContain('Which library?: No answer given')
+  expect(tree.container.querySelector('[aria-labelledby="ask-question-question-chat"]')).toBeNull()
+  expect(document.activeElement).toBe(composerOf(tree))
+  before.remove()
+})
+
 /** Put the caret at `offset` in the composer's first text node. */
 function placeCaret(root: Node, offset: number): void {
   const walk = (node: Node): Text | null => {

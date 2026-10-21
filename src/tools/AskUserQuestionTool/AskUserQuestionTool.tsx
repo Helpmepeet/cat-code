@@ -19,7 +19,7 @@ const questionOptionSchema = lazySchema(() => z.object({
 const questionSchema = lazySchema(() => z.object({
   question: z.string().describe('The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: "Which library should we use for date formatting?" If multiSelect is true, phrase it accordingly, e.g. "Which features do you want to enable?"'),
   header: z.string().describe(`Very short label displayed as a chip/tag (max ${ASK_USER_QUESTION_TOOL_CHIP_WIDTH} chars). Examples: "Auth method", "Library", "Approach".`),
-  options: z.array(questionOptionSchema()).min(2).max(4).describe(`The available choices for this question. Must have 2-4 options. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.`),
+  options: z.union([z.array(questionOptionSchema()).length(0), z.array(questionOptionSchema()).min(2).max(4)]).describe(`Use an empty array for a free-text question, or provide 2-4 choices. Never provide exactly one option. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.`),
   multiSelect: z.boolean().default(false).describe('Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.')
 }));
 const annotationsSchema = lazySchema(() => {
@@ -108,7 +108,7 @@ function _temp(t0) {
 }
 export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
   name: ASK_USER_QUESTION_TOOL_NAME,
-  searchHint: 'prompt the user with a multiple-choice question',
+  searchHint: 'ask the user a free-text or multiple-choice question',
   maxResultSizeChars: 100_000,
   alwaysLoad: true,
   async description() {
@@ -238,7 +238,7 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     }).join(', ');
     return {
       type: 'tool_result',
-      content: `User has answered your questions: ${answersText}. You can now continue with the user's answers in mind.`,
+      content: `User has answered your questions: ${answersText}.`,
       tool_use_id: toolUseID
     };
   }

@@ -47,7 +47,7 @@ export type AskQuestion = {
   question: string
   /** SOURCE-BACKED: `questionSchema` `header` (the chip label). */
   header: string
-  /** SOURCE-BACKED: `questionSchema` `options` (2–4). */
+  /** SOURCE-BACKED: `questionSchema` `options` (zero for text, or 2–4). */
   options: AskQuestionOption[]
   /** SOURCE-BACKED: `questionSchema` `multiSelect` (default false). */
   multiSelect: boolean

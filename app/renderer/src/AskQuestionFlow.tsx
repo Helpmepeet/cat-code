@@ -1,6 +1,7 @@
 /**
  * Renders `AskUserQuestion` on the docked permission rail. The renderer sends
- * option indices and freeform text; the sidecar attaches engine-owned labels.
+ * option indices, selected-option notes and freeform text; the sidecar attaches
+ * engine-owned labels.
  *
  * The dock scrolls its panel region, while this card's height ceiling keeps one
  * question from taking the whole region. A split workspace mounts a card per
@@ -17,6 +18,8 @@ import type { AskQuestion } from './askQuestionState.js'
 import {
   abandonOtherText,
   buildAskAnswerPayload,
+  buildAskChatMessage,
+  hasAskAnswer,
   type AskQuestionDraft,
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
@@ -74,7 +77,7 @@ function markerClass(
     : active
       ? 'border-text-primary/50 bg-transparent'
       : 'border-text-primary/[0.28] bg-transparent'
-  return `mt-px flex h-4 w-4 shrink-0 items-center justify-center border font-mono text-[10px] font-semibold leading-none ${shape} ${tone}`
+  return `ask-option-marker flex h-4 w-4 shrink-0 items-center justify-center border font-mono text-[10px] font-semibold leading-none ${shape} ${tone}`
 }
 
 /** A row's digit shortcut brightens on the keyboard highlight. */
@@ -98,6 +101,7 @@ export function AskQuestionFlow({
   pendingCount,
   onAnswer,
   onCancel,
+  onChat,
 }: {
   questions: AskQuestion[]
   requestId: string
@@ -120,6 +124,7 @@ export function AskQuestionFlow({
   pendingCount?: number
   onAnswer: (answers: AskUserQuestionAnswer[]) => void
   onCancel: () => void
+  onChat?: (message: string) => void
 }) {
   const [localDraft, setLocalDraft] = useState<AskQuestionDraft>(() => savedDraft ?? {
     questionIndex: 0,
@@ -133,6 +138,8 @@ export function AskQuestionFlow({
   const [cursor, setCursor] = useState(0)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
   const [otherActive, setOtherActive] = useState(false)
+  const [noteIndex, setNoteIndex] = useState<number | null>(null)
+  const noteInputRef = useRef<HTMLInputElement>(null)
   const otherInputRef = useRef<HTMLInputElement>(null)
   const isComposingRef = useRef(false)
   const cardRef = useRef<HTMLElement>(null)
@@ -145,6 +152,7 @@ export function AskQuestionFlow({
 
   const q = questions[qi]
   const optionCount = q ? q.options.length : 0
+  const freeText = optionCount === 0
   const otherIndex = optionCount // the "Other…" row sits after the options
   const rowCount = optionCount + 1
   const draft = answers[qi] ?? { optionIndices: [], other: '' }
@@ -158,21 +166,37 @@ export function AskQuestionFlow({
   // Counts the freeform row too, or the line reads "2 selected" under three
   // rows drawn as chosen.
   const selectedCount = draft.optionIndices.length + (otherFilled ? 1 : 0)
-  const canAdvance = !otherPending && (draft.optionIndices.length > 0 || otherFilled)
+  const canAdvance = (freeText || !otherPending) && hasAskAnswer(draft)
   const isLast = qi >= questions.length - 1
 
   // Reset per-question transient UI when the step changes (committed answers in
-  // `answers` persist — the flow only advances forward, like the prototype).
+  // `answers` persist, including option-specific notes and freeform text).
   useEffect(() => {
-    setCursor(0)
+    const saved = answers[qi]
+    setCursor(saved?.optionIndices[0] ?? (saved?.other.trim() ? optionCount : 0))
     setHoverIndex(null)
     setOtherActive(false)
+    setNoteIndex(null)
+    isComposingRef.current = false
+    const active = document.activeElement
+    if (
+      isActivePane &&
+      !isModalOverlayOpen() &&
+      (cardRef.current?.contains(active) || active === document.body)
+    ) {
+      if (freeText) otherInputRef.current?.focus()
+      else cardRef.current?.focus()
+    }
   }, [qi])
 
   useEffect(() => {
     if (otherActive) otherInputRef.current?.focus()
     else isComposingRef.current = false
   }, [otherActive])
+
+  useEffect(() => {
+    if (noteIndex !== null) noteInputRef.current?.focus()
+  }, [noteIndex])
 
   // The height ceiling below made this a keyboard-driven list inside a scroll
   // container, so the cursor can now leave the viewport: ↑↓ past the visible
@@ -214,8 +238,10 @@ export function AskQuestionFlow({
     let took = false
     const timer = setTimeout(() => {
       if (isModalOverlayOpen()) return
-      node.focus()
-      took = document.activeElement === node
+      const field = node.querySelector<HTMLInputElement>('[data-ask-free-text]')
+      if (field) field.focus()
+      else node.focus()
+      took = document.activeElement === node || node.contains(document.activeElement)
       setKeysLive(took)
     }, 0)
     return () => {
@@ -263,6 +289,7 @@ export function AskQuestionFlow({
     if (!q) return
     if (q.multiSelect) {
       updateDraft(current => ({
+        ...current,
         optionIndices: current.optionIndices.includes(index)
           ? current.optionIndices.filter(i => i !== index)
           : [...current.optionIndices, index],
@@ -270,9 +297,10 @@ export function AskQuestionFlow({
       }))
     } else {
       // Single-select: one option supersedes any freeform text.
-      updateDraft(() => ({ optionIndices: [index], other: '' }))
+      updateDraft(current => ({ ...current, optionIndices: [index], other: '' }))
       setOtherActive(false)
     }
+    setNoteIndex(null)
   }
 
   function focusCursor(next: number) {
@@ -290,7 +318,7 @@ export function AskQuestionFlow({
   function moveCursor(next: number) {
     setCursor(next)
     if (q && !q.multiSelect && next < optionCount) {
-      updateDraft(() => ({ optionIndices: [next], other: '' }))
+      updateDraft(current => ({ ...current, optionIndices: [next], other: '' }))
       setOtherActive(false)
     }
     // Space is native button activation when a row has focus. Keep that focus
@@ -301,13 +329,16 @@ export function AskQuestionFlow({
   function setOtherText(value: string) {
     // Single-select: typing a freeform answer clears the option pick; multi keeps it.
     updateDraft(current => ({
+      ...current,
       optionIndices: q?.multiSelect ? current.optionIndices : [],
       other: value,
     }))
   }
 
   function advance() {
+    if (freeText && !otherText.trim()) return
     if (
+      !freeText &&
       (cursor === otherIndex || otherPending) &&
       !otherActive &&
       !otherText.trim()
@@ -321,16 +352,39 @@ export function AskQuestionFlow({
       // Multi-select must stay explicit or Enter would end the step after one
       // choice and make its remaining options unreachable.
       if (!q || q.multiSelect || otherActive || cursor >= optionCount) return
-      const selected = { optionIndices: [cursor], other: '' }
+      const selected = { ...draft, optionIndices: [cursor], other: '' }
       nextAnswers = nextAnswers.map((value, i) => (i === qi ? selected : value))
     }
     if (!isLast) {
       updateFlowDraft(() => ({ questionIndex: qi + 1, answers: nextAnswers }))
       return
     }
+    // Clickable headers can reach the last step before earlier ones are filled.
+    const unanswered = nextAnswers.findIndex(answer => !hasAskAnswer(answer))
+    if (unanswered !== -1) {
+      updateFlowDraft(() => ({ questionIndex: unanswered, answers: nextAnswers }))
+      return
+    }
     // Build the wire payload: option INDICES + trimmed freeform per question. The
     // sidecar re-attaches the engine's own labels and joins them (outputSchema).
     onAnswer(buildAskAnswerPayload(nextAnswers))
+  }
+
+  function goToQuestion(index: number) {
+    if (submitted || index === qi) return
+    updateFlowDraft(current => ({ ...current, questionIndex: index }))
+  }
+
+  function openNote(index: number) {
+    if (!draft.optionIndices.includes(index) || submitted) return
+    setNoteIndex(index)
+    setOtherActive(false)
+    setCursor(index)
+    updateDraft(current => ({
+      ...current,
+      notes: { ...current.notes, [index]: current.notes?.[index] ?? '' },
+    }))
+    if (noteIndex === index) noteInputRef.current?.focus()
   }
 
   useEffect(() => {
@@ -385,6 +439,7 @@ export function AskQuestionFlow({
         if (
           control !== null &&
           control !== otherInputRef.current &&
+          control !== noteInputRef.current &&
           !flowClaimsRowEnter
         ) {
           return
@@ -395,12 +450,26 @@ export function AskQuestionFlow({
       if (submitted) return
       const key = event.key
       const target = event.target as HTMLElement | null
-      const inOurInput = otherActive && target === otherInputRef.current
+      const inNote = target === noteInputRef.current
+      const inOurInput = (otherActive || freeText) && target === otherInputRef.current
+
+      if (inNote) {
+        if (key === 'Escape' || key === 'Enter') {
+          event.preventDefault()
+          isComposingRef.current = false
+          cardRef.current?.focus()
+        }
+        return
+      }
 
       if (inOurInput) {
         // Typing into the freeform field: Enter advances, Escape leaves the field.
         if (key === 'Escape') {
           event.preventDefault()
+          if (freeText) {
+            onCancel()
+            return
+          }
           setOtherActive(false)
           updateDraft(abandonOtherText)
           // Leaving the field unmounts the focused input, which drops focus to
@@ -414,6 +483,7 @@ export function AskQuestionFlow({
         }
         return // let the input handle the rest
       }
+      if (element?.closest('input, textarea, [contenteditable="true"]')) return
 
       // Never hijack keys typed into an unrelated field (e.g. the composer).
       if (key === 'Escape') {
@@ -424,6 +494,19 @@ export function AskQuestionFlow({
       if (key === 'Enter') {
         event.preventDefault()
         advance()
+        return
+      }
+      if (key === 'ArrowLeft' && qi > 0) {
+        event.preventDefault()
+        goToQuestion(qi - 1)
+        return
+      }
+      if (freeText) return
+      if (key === 'n' && !event.ctrlKey) {
+        if (draft.optionIndices.includes(cursor)) {
+          event.preventDefault()
+          openNote(cursor)
+        }
         return
       }
       if (key === ' ' && q?.multiSelect && cursor < optionCount) {
@@ -503,51 +586,44 @@ export function AskQuestionFlow({
        * to the viewport rather than to the dock on purpose, so that in a window
        * with room the card sits at its natural height and the dock's own
        * scroller never engages. */}
-      <div className="max-h-[60vh] overflow-y-auto px-4 pb-2.5 pt-3">
+      <div className="max-h-[60vh] overflow-y-auto px-3.5 pb-2 pt-2.5">
       {/* Header, step progress, and queued count share one line. */}
-      <div className="flex h-[15px] items-center gap-2">
+      <div className="flex min-h-[15px] items-center gap-2">
         <span className="flex text-accent">
           <QuestionGlyph />
         </span>
-        <span className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.1em] text-accent">
-          {q.header || 'Question'}
-        </span>
-        {questions.length > 1 || showPending ? (
+        {questions.length > 1 ? (
+          <div aria-label="Questions" className="ask-question-steps">
+            {questions.map((question, index) => (
+              <button
+                aria-current={index === qi ? 'step' : undefined}
+                className={`ask-question-step ${index === qi ? 'text-accent' : hasAskAnswer(answers[index]) ? 'text-text-muted' : 'text-text-faint'}`}
+                data-ask-step={index}
+                disabled={submitted}
+                key={index}
+                onClick={() => goToQuestion(index)}
+                type="button"
+              >
+                {question.header || 'Question'}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="text-[10px] font-bold uppercase leading-[15px] tracking-[0.1em] text-accent">
+            {q.header || 'Question'}
+          </span>
+        )}
+        {showPending ? (
           <span className="ml-auto flex items-center gap-2.5 font-mono text-[10.5px] tabular-nums text-text-faint">
-            {questions.length > 1 ? (
-              <span className="flex items-center gap-1">
-                {questions.map((_, i) => (
-                  <span
-                    aria-hidden
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      i === qi
-                        ? 'bg-accent'
-                        : answers[i] &&
-                            (answers[i]!.optionIndices.length > 0 ||
-                              answers[i]!.other.trim().length > 0)
-                          ? 'bg-accent/40'
-                          : 'bg-text-primary/15'
-                    }`}
-                    key={i}
-                  />
-                ))}
-                <span className="ml-[3px]">{qi + 1}/{questions.length}</span>
-              </span>
-            ) : null}
-            {questions.length > 1 && showPending ? (
-              <span className="h-2.5 w-px bg-shell-seam" />
-            ) : null}
-            {showPending ? (
-              <span>
-                <b className="font-medium text-text-muted">{pendingCount}</b> pending
-              </span>
-            ) : null}
+            <span>
+              <b className="font-medium text-text-muted">{pendingCount}</b> pending
+            </span>
           </span>
         ) : null}
       </div>
 
       <h2
-        className="mt-1.5 text-[15px] font-semibold leading-5 text-text-primary"
+        className="mt-1 text-sm font-semibold leading-[18px] text-text-primary"
         id={titleId}
       >
         {q.question}
@@ -557,7 +633,7 @@ export function AskQuestionFlow({
        * anything (§7): a single-select list needs no instruction. The line
        * doubles as the running confirmation that a pick registered, which is
        * the second channel the checkboxes alone did not give the operator. */}
-      {q.multiSelect ? (
+      {q.multiSelect && !freeText ? (
         <p className="mt-0.5 text-xs leading-4 text-text-subtle">
           {selectedCount > 0
             ? `${selectedCount} selected`
@@ -566,22 +642,37 @@ export function AskQuestionFlow({
       ) : null}
 
       {/* Options — label + description, radio/checkbox marker, preview badge */}
-      <div
+      {freeText ? (
+        <input
+          aria-label="Your answer"
+          className="ask-question-input ask-question-free-text"
+          data-ask-free-text
+          disabled={submitted}
+          maxLength={MAX_QUESTION_ANSWER_CHARS}
+          onChange={event => setOtherText(event.target.value)}
+          onCompositionStart={() => { isComposingRef.current = true }}
+          onCompositionEnd={() => { isComposingRef.current = false }}
+          onBlur={() => { isComposingRef.current = false }}
+          ref={otherInputRef}
+          value={otherText}
+        />
+      ) : <div
         aria-labelledby={q.multiSelect ? undefined : titleId}
-        className="-mx-2 mt-2 flex flex-col gap-0.5"
+        className="-mx-2 mt-1.5 flex flex-col gap-px"
         role={q.multiSelect ? undefined : 'radiogroup'}
       >
         {q.options.map((option, i) => {
           const active = cursor === i && !otherActive
           const checked = !otherPending && draft.optionIndices.includes(i)
+          const showNote = checked && (noteIndex === i || draft.notes?.[i] !== undefined)
           return (
+            <div className={`ask-option-wrap ${showNote ? 'ask-option-with-note' : ''} ${keysAdvertised && i < 9 ? 'ask-option-with-key' : ''}`} key={i}>
             <button
               aria-checked={checked}
-              className={`flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2 py-[5px] text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
+              className={`ask-option-choice flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
               data-ask-active={active ? 'true' : undefined}
               data-ask-option
               disabled={submitted}
-              key={i}
               onClick={() => toggleOption(i)}
               role={q.multiSelect ? 'checkbox' : 'radio'}
               // Focus moves the highlight. Arrow and digit shortcuts pick;
@@ -602,12 +693,12 @@ export function AskQuestionFlow({
               >
                 {checked ? '✓' : ''}
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[13px] font-medium leading-[17px] text-text-primary">
+              <span className="ask-option-text min-w-0 flex-1">
+                <span className="ask-option-label text-[13px] font-medium leading-[17px] text-text-primary">
                   {option.label}
                 </span>
                 {option.description ? (
-                  <span className="mt-px block text-xs leading-4 text-text-subtle">
+                  <span className="ask-option-description text-xs leading-4 text-text-subtle">
                     {option.description}
                   </span>
                 ) : null}
@@ -617,16 +708,55 @@ export function AskQuestionFlow({
                   preview
                 </span>
               ) : null}
+              {checked && !showNote ? <span aria-hidden className="ask-option-note-space" /> : null}
               {keysAdvertised && i < 9 ? (
                 <KeyCap active={active}>{i + 1}</KeyCap>
               ) : null}
             </button>
+            {checked && !showNote ? (
+              <button
+                aria-label={`Add a note to ${option.label}`}
+                className={`ask-option-note-button ${keysAdvertised && i < 9 ? 'ask-option-note-keyed' : ''}`}
+                disabled={submitted}
+                onClick={() => openNote(i)}
+                type="button"
+              >note</button>
+            ) : null}
+            {showNote ? (
+              <div className={`ask-option-note ${rowTone(checked, active)}`}>
+                <input
+                  aria-label={`Note for ${option.label}`}
+                  className="ask-question-input"
+                  disabled={submitted}
+                  maxLength={MAX_QUESTION_ANSWER_CHARS}
+                  onChange={event => {
+                    const value = event.target.value
+                    updateDraft(current => ({
+                      ...current,
+                      notes: { ...current.notes, [i]: value },
+                    }))
+                  }}
+                  onFocus={() => {
+                    setCursor(i)
+                    setNoteIndex(i)
+                    setOtherActive(false)
+                    setHoverIndex(null)
+                  }}
+                  onBlur={() => { isComposingRef.current = false }}
+                  onCompositionStart={() => { isComposingRef.current = true }}
+                  onCompositionEnd={() => { isComposingRef.current = false }}
+                  ref={noteIndex === i ? noteInputRef : undefined}
+                  value={draft.notes?.[i] ?? ''}
+                />
+              </div>
+            ) : null}
+            </div>
           )
         })}
 
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
-          className={`flex items-start gap-2.5 rounded-lg px-2 py-[5px] ${rowTone(
+          className={`flex items-center gap-2.5 rounded-lg px-2 py-1 ${rowTone(
             otherFilled || otherPending,
             cursor === otherIndex,
           )}`}
@@ -683,7 +813,7 @@ export function AskQuestionFlow({
             </KeyCap>
           ) : null}
         </div>
-      </div>
+      </div>}
 
       {/* Preview follows hover, then the keyboard highlight. */}
       {focusedPreview ? (
@@ -698,7 +828,20 @@ export function AskQuestionFlow({
       ) : null}
 
       {/* Footer actions end with the primary action. */}
-      <div className="mt-2 flex items-center justify-end gap-1.5 border-t border-shell-seam pt-2">
+      <div className="ask-question-footer mt-1.5 flex items-center gap-1.5">
+        {qi > 0 ? (
+          <button className="ask-question-ghost" disabled={submitted} onClick={() => goToQuestion(qi - 1)} type="button">
+            Back
+            {keysAdvertised ? <span className="ask-question-key">←</span> : null}
+          </button>
+        ) : null}
+        <button
+          className="ask-question-ghost"
+          disabled={submitted}
+          onClick={() => onChat?.(buildAskChatMessage(questions, flowDraftRef.current.answers))}
+          type="button"
+        >Chat about this</button>
+        <span className="flex-1" />
         <button
           className="inline-flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-xs leading-4 text-text-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
           disabled={submitted}

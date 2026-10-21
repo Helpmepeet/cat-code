@@ -14,13 +14,14 @@
  * `permissionKeysAreLive` predicate still rules.
  */
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act, useState } from 'react'
+import { act, useRef, useState } from 'react'
 
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import type { AskQuestion } from './askQuestionState.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
 import type { AskQuestionDraft } from './askQuestionFlowModel.js'
+import { useModalFocus } from './overlayFocus.js'
 
 let harness: DomTestHarness
 
@@ -116,6 +117,7 @@ type Calls = {
 
 async function mountFlow(questions: AskQuestion[] = SINGLE) {
   const calls: Calls = { answers: [], cancels: 0 }
+  const chats: string[] = []
   const tree = await harness.mount(
     <AskQuestionFlow
       isActivePane
@@ -123,6 +125,7 @@ async function mountFlow(questions: AskQuestion[] = SINGLE) {
       onCancel={() => {
         calls.cancels += 1
       }}
+      onChat={message => chats.push(message)}
       questions={questions}
       requestId="perm-1"
     />,
@@ -135,7 +138,7 @@ async function mountFlow(questions: AskQuestion[] = SINGLE) {
   const rows = Array.from(
     card.querySelectorAll<HTMLButtonElement>('button[data-ask-active], button'),
   )
-  return { calls, tree, card }
+  return { calls, chats, tree, card }
 }
 
 /** Focus inside act(): the row's own `onFocus` moves the cursor. */
@@ -346,6 +349,9 @@ test('controlled question progress keeps answers and Other text across a pane re
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
   let card = tree.container.querySelector('section')!
   await press(card, '2')
+  await press(card, 'n')
+  await typeText(card.querySelector('input')!, 'keep through remount')
+  await press(card.querySelector('input')!, 'Enter')
   await press(card, 'Enter')
   await act(async () => {
     const rows = optionRows(card)
@@ -369,7 +375,7 @@ test('controlled question progress keeps answers and Other text across a pane re
   expect(card.textContent).toContain('another feature')
   await act(async () => { buttonWithText(card, 'Submit').click() })
   expect(calls.answers).toEqual([[
-    { optionIndices: [1] },
+    { optionIndices: [1], notes: [{ optionIndex: 1, text: 'keep through remount' }] },
     { optionIndices: [0, 1], other: 'another feature' },
   ]])
 })
@@ -782,4 +788,194 @@ test('deactivating a pane releases focus from its question option', async () => 
   await press(previous, 'Enter')
   expect(calls.answers).toHaveLength(0)
   previous.remove()
+})
+
+async function typeText(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
+test('Back and clickable headers retain answers and use answered step colours', async () => {
+  const { card, calls } = await mountFlow(TWO_QUESTIONS)
+  expect(card.textContent).not.toContain('Back')
+  const steps = () => Array.from(card.querySelectorAll<HTMLButtonElement>('[data-ask-step]'))
+  expect(steps()[0]!.className).toContain('text-accent')
+  expect(steps()[1]!.className).toContain('text-text-faint')
+  await press(card, '2')
+  await press(card, 'Enter')
+  expect(steps()[0]!.className).toContain('text-text-muted')
+  expect(steps()[1]!.getAttribute('aria-current')).toBe('step')
+  await press(card, '2')
+  await press(card, 'ArrowLeft')
+  expect(optionRows(card).map(checkedState)).toEqual(['false', 'true', 'false'])
+  expect(card.textContent).not.toContain('Back')
+  await act(async () => steps()[1]!.click())
+  expect(optionRows(card).map(checkedState)).toEqual(['false', 'true'])
+  await act(async () => buttonWithText(card, 'Back').click())
+  await act(async () => steps()[1]!.click())
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [1] }, { optionIndices: [1] }]])
+})
+
+test('jumping to the last header cannot submit unanswered earlier questions', async () => {
+  const { card, calls } = await mountFlow(TWO_QUESTIONS)
+  await act(async () => card.querySelector<HTMLButtonElement>('[data-ask-step="1"]')!.click())
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([])
+  expect(card.querySelector('[aria-current="step"]')?.textContent).toBe('Library')
+  await press(card, '2')
+  await press(card, 'Enter')
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [1] }, { optionIndices: [0] }]])
+})
+
+test('notes stay with the picked option rather than following the cursor or replacement pick', async () => {
+  const { card, calls } = await mountFlow()
+  await press(card, 'n')
+  expect(card.querySelector('input')).toBeNull()
+  await press(card, '1')
+  const noteButton = card.querySelector<HTMLButtonElement>('[aria-label="Add a note to date-fns"]')!
+  expect(noteButton).not.toBeNull()
+  await act(async () => noteButton.click())
+  const note = card.querySelector<HTMLInputElement>('[aria-label="Note for date-fns"]')!
+  expect(document.activeElement).toBe(note)
+  await typeText(note, 'use the small bundle')
+  await press(note, 'Enter')
+  expect(calls.answers).toEqual([])
+  await press(card, '2')
+  expect(card.querySelector('input')).toBeNull()
+  await press(card, 'n')
+  const secondNote = card.querySelector<HTMLInputElement>('[aria-label="Note for luxon"]')!
+  expect(secondNote.value).toBe('')
+  expect(document.activeElement).toBe(secondNote)
+  await typeText(secondNote, 'need timezones')
+  await press(secondNote, 'Escape')
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[
+    { optionIndices: [1], notes: [{ optionIndex: 1, text: 'need timezones' }] },
+  ]])
+})
+
+test('multi-select notes survive Back and stay indexed when another option is deselected', async () => {
+  const sequence = [MULTI[0]!, TWO_QUESTIONS[1]!]
+  const { card, calls } = await mountFlow(sequence)
+  await press(card, '1')
+  await press(card, 'n')
+  await typeText(card.querySelector('input')!, 'first note')
+  await press(card.querySelector('input')!, 'Enter')
+  await press(card, '2')
+  await press(card, 'n')
+  await typeText(card.querySelector<HTMLInputElement>('[aria-label="Note for timezones"]')!, 'second note')
+  await press(document.activeElement!, 'Enter')
+  await press(card, 'Enter')
+  await press(card, 'ArrowLeft')
+  expect(card.querySelector<HTMLInputElement>('[aria-label="Note for parsing"]')!.value).toBe('first note')
+  expect(card.querySelector<HTMLInputElement>('[aria-label="Note for timezones"]')!.value).toBe('second note')
+  await press(card, '1') // deselect only parsing
+  await press(card, 'Enter')
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([[
+    { optionIndices: [1], notes: [{ optionIndex: 1, text: 'second note' }] },
+    { optionIndices: [0] },
+  ]])
+})
+
+test('note fields keep typing, caret movement and IME keys instead of navigating the card', async () => {
+  const { card, calls } = await mountFlow(TWO_QUESTIONS)
+  await press(card, 'Enter')
+  await press(card, '1')
+  await press(card, 'n')
+  const input = card.querySelector('input')!
+  await typeText(input, 'note')
+  for (const key of ['ArrowLeft', '2', 'n', 'o']) {
+    expect((await press(input, key)).defaultPrevented).toBe(false)
+  }
+  await act(async () => input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true })))
+  expect((await press(input, 'Enter')).defaultPrevented).toBe(false)
+  expect((await press(input, 'Escape')).defaultPrevented).toBe(false)
+  expect(document.activeElement).toBe(input)
+  expect(calls.answers).toEqual([])
+  await act(async () => input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true })))
+  await press(input, 'Enter')
+  expect(document.activeElement).toBe(card)
+})
+
+test('zero-option questions require real text and retain it across Back and headers', async () => {
+  const textQuestion: AskQuestion = { question: 'What name?', header: 'Name', options: [], multiSelect: false }
+  const { card, calls } = await mountFlow([TWO_QUESTIONS[0]!, textQuestion])
+  await press(card, '1')
+  await press(document.activeElement!, 'Enter')
+  expect(optionRows(card)).toEqual([])
+  expect(card.textContent).not.toContain('Other…')
+  const input = card.querySelector<HTMLInputElement>('[aria-label="Your answer"]')!
+  expect(document.activeElement).toBe(input)
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+  await press(card, 'Enter')
+  expect(calls.answers).toEqual([])
+  await focusIn(input)
+  await typeText(input, '   ')
+  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
+  await typeText(input, '  My project  ')
+  expect((await press(input, 'ArrowLeft')).defaultPrevented).toBe(false)
+  expect((await press(input, '1')).defaultPrevented).toBe(false)
+  expect((await press(input, 'Enter', { isComposing: true })).defaultPrevented).toBe(false)
+  await act(async () => buttonWithText(card, 'Back').click())
+  await act(async () => card.querySelector<HTMLButtonElement>('[data-ask-step="1"]')!.click())
+  const restored = card.querySelector<HTMLInputElement>('[aria-label="Your answer"]')!
+  expect(restored.value).toBe('  My project  ')
+  await press(restored, 'Enter')
+  expect(calls.answers).toEqual([[{ optionIndices: [0] }, { optionIndices: [], other: 'My project' }]])
+})
+
+test('Chat about this reports partial picks, notes and unanswered questions without submitting', async () => {
+  const { card, calls, chats } = await mountFlow(TWO_QUESTIONS)
+  await press(card, '2')
+  await press(card, 'n')
+  await typeText(card.querySelector('input')!, 'explain this first')
+  await act(async () => buttonWithText(card, 'Chat about this').click())
+  expect(calls.answers).toEqual([])
+  expect(calls.cancels).toBe(0)
+  expect(chats).toHaveLength(1)
+  expect(chats[0]).toContain('Which date library?: luxon (user notes: explain this first)')
+  expect(chats[0]).toContain('Which runtime?: No answer given')
+})
+
+test('new note and Back shortcuts respect inactive panes, modal overlays and composer focus', async () => {
+  const { card, tree } = await mountFlow(TWO_QUESTIONS)
+  await press(card, 'Enter')
+  await press(card, '1')
+  const props = {
+    questions: TWO_QUESTIONS,
+    requestId: 'perm-1',
+    onAnswer: () => {},
+    onCancel: () => {},
+  }
+  const assertUnchanged = () => {
+    expect(card.querySelector('[aria-current="step"]')?.textContent).toBe('Runtime')
+    expect(card.querySelector('input')).toBeNull()
+  }
+  await tree.render(<AskQuestionFlow {...props} isActivePane={false} />)
+  await press(card, 'ArrowLeft')
+  await press(card, 'n')
+  assertUnchanged()
+  await tree.render(<AskQuestionFlow {...props} isActivePane />)
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+  function Modal() {
+    const ref = useRef<HTMLDivElement>(null)
+    useModalFocus({ open: true, containerRef: ref, onEscape: () => {} })
+    return <div aria-modal="true" role="dialog" ref={ref} tabIndex={-1} />
+  }
+  const overlay = await harness.mount(<Modal />)
+  await press(card, 'ArrowLeft')
+  await press(card, 'n')
+  assertUnchanged()
+  await overlay.unmount()
+  const composer = document.createElement('textarea')
+  document.body.appendChild(composer)
+  await focusIn(composer)
+  expect((await press(composer, 'ArrowLeft')).defaultPrevented).toBe(false)
+  expect((await press(composer, 'n')).defaultPrevented).toBe(false)
+  assertUnchanged()
 })

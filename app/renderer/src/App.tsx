@@ -4269,6 +4269,14 @@ export function App() {
 	                buildDenyResponse('User declined to answer questions'),
 	              )
 	            }}
+	            onChatQuestions={message => {
+	              if (!sessionAskQuestion || sessionAskQuestion.submitted) return
+	              respondToPermission(
+	                sessionId,
+	                sessionAskQuestion.request.requestId,
+	                buildDenyResponse(message),
+	              )
+	            }}
 	            permissionContext={selectPermissionContext(permissions, sessionId)}
 	            permissionKeyTargetRequestId={
 	              sessionId === activeSessionId

@@ -41,7 +41,7 @@ type Props = {
   onRemoveImage?: (id: number) => void;
 };
 export function QuestionView(t0) {
-  const $ = _c(114);
+  const $ = _c(116);
   const {
     question,
     questions,
@@ -66,6 +66,7 @@ export function QuestionView(t0) {
     onRemoveImage
   } = t0;
   const hideSubmitTab = t1 === undefined ? false : t1;
+  const isFreeText = question.options.length === 0;
   const isInPlanMode = useAppState(_temp) === "plan";
   const [isFooterFocused, setIsFooterFocused] = useState(false);
   const [footerIndex, setFooterIndex] = useState(0);
@@ -202,11 +203,11 @@ export function QuestionView(t0) {
       t11 = $[25];
     }
     let t12;
-    if ($[26] !== t10 || $[27] !== t11 || $[28] !== t9) {
+    if ($[26] !== t10 || $[27] !== t11 || $[28] !== t9 || $[114] !== isFreeText) {
       t12 = {
         type: "input" as const,
         value: "__other__",
-        label: "Other",
+        label: question.options.length === 0 ? "Answer" : "Other",
         placeholder: t9,
         initialValue: t10,
         onChange: t11
@@ -215,6 +216,7 @@ export function QuestionView(t0) {
       $[27] = t11;
       $[28] = t9;
       $[29] = t12;
+      $[114] = isFreeText;
     } else {
       t12 = $[29];
     }
@@ -295,8 +297,8 @@ export function QuestionView(t0) {
     t11 = $[57];
   }
   let t12;
-  if ($[58] !== currentQuestionIndex || $[59] !== handleFocus || $[60] !== handleOpenEditor || $[61] !== isFooterFocused || $[62] !== onAnswer || $[63] !== onCancel || $[64] !== onImagePaste || $[65] !== onRemoveImage || $[66] !== onSubmit || $[67] !== onUpdateQuestionState || $[68] !== options || $[69] !== pastedContents || $[70] !== question.multiSelect || $[71] !== question.question || $[72] !== questionStates || $[73] !== questionText || $[74] !== questions.length) {
-    t12 = <Box marginTop={1}>{question.multiSelect ? <SelectMulti key={question.question} options={options} defaultValue={questionStates[question.question]?.selectedValue as string[] | undefined} onChange={values => {
+  if ($[58] !== currentQuestionIndex || $[59] !== handleFocus || $[60] !== handleOpenEditor || $[61] !== isFooterFocused || $[62] !== onAnswer || $[63] !== onCancel || $[64] !== onImagePaste || $[65] !== onRemoveImage || $[66] !== onSubmit || $[67] !== onUpdateQuestionState || $[68] !== options || $[69] !== pastedContents || $[70] !== question.multiSelect || $[71] !== question.question || $[72] !== questionStates || $[73] !== questionText || $[74] !== questions.length || $[115] !== isFreeText) {
+    t12 = <Box marginTop={1}>{question.multiSelect && !isFreeText ? <SelectMulti key={question.question} options={options} defaultValue={questionStates[question.question]?.selectedValue as string[] | undefined} onChange={values => {
         onUpdateQuestionState(questionText, {
           selectedValue: values
         }, true);
@@ -308,6 +310,7 @@ export function QuestionView(t0) {
           selectedValue: value_1
         }, false);
         const textInput_0 = value_1 === "__other__" ? questionStates[questionText]?.textInputValue : undefined;
+        if (isFreeText && !textInput_0?.trim()) return;
         onAnswer(questionText, value_1, textInput_0);
       }} onFocus={handleFocus} onCancel={onCancel} onDownFromLastItem={handleDownFromLastItem} isDisabled={isFooterFocused} layout="compact-vertical" onOpenEditor={handleOpenEditor} onImagePaste={onImagePaste} pastedContents={pastedContents} onRemoveImage={onRemoveImage} />}</Box>;
     $[58] = currentQuestionIndex;
@@ -323,6 +326,7 @@ export function QuestionView(t0) {
     $[68] = options;
     $[69] = pastedContents;
     $[70] = question.multiSelect;
+    $[115] = isFreeText;
     $[71] = question.question;
     $[72] = questionStates;
     $[73] = questionText;

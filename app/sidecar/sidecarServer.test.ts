@@ -4748,6 +4748,7 @@ const ASK_QUESTIONS = [
 function askQuestionAdapter(
   questions: unknown,
   onResolved: (r: AppPermissionResponse) => void,
+  extraInput: Record<string, unknown> = {},
 ): AppSessionControllerAdapter {
   return {
     async *runTurn({ onPermissionRequest }) {
@@ -4756,7 +4757,7 @@ function askQuestionAdapter(
         request: {
           subtype: 'can_use_tool',
           tool_name: 'AskUserQuestion',
-          input: { questions, metadata: { source: 'test' } },
+          input: { ...extraInput, questions, metadata: { source: 'test' } },
           tool_use_id: 'toolu_ask',
         },
       }
@@ -4816,6 +4817,90 @@ test('C5 — LIVE PATH: an index answer resolves the real request with engine-la
   expect(input.questions).toEqual(ASK_QUESTIONS)
   expect(input.metadata).toEqual({ source: 'test' })
 })
+
+test('C5 — selected option notes use engine labels and replace model-supplied annotations', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter(ASK_QUESTIONS, r => { resolved = r }, {
+      answers: { stale: 'model answer' },
+      annotations: { 'Which date library?': { notes: 'stale', preview: 'stale preview' } },
+    }),
+  )
+  const { server, conn } = connect(controller)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  server.handleData(conn, askAnswerFrame([
+    { optionIndices: [0] },
+    { optionIndices: [0, 2], notes: [
+      { optionIndex: 2, text: 'second note' },
+      { optionIndex: 0, text: 'first note' },
+    ] },
+  ]))
+  await waitFor(() => resolved !== null)
+  const input = allowInput(resolved) as Record<string, unknown>
+  expect(input.answers).toEqual({
+    'Which date library?': 'date-fns',
+    'Which features?': 'parsing, timezones',
+  })
+  expect(input.annotations).toEqual({
+    'Which features?': { notes: 'parsing: first note\ntimezones: second note' },
+  })
+})
+
+test('C5 — zero-option questions accept only nonblank free text and clear stale annotations', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(
+    askQuestionAdapter([{ question: 'Details?', options: [] }], r => { resolved = r }, {
+      annotations: { 'Details?': { notes: 'stale' } },
+    }),
+  )
+  const { server, received, conn } = connect(controller)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  for (const answer of [
+    { optionIndices: [], other: '   ' },
+    { optionIndices: [0], other: 'text' },
+    { optionIndices: [], other: 'text', notes: [{ optionIndex: 0, text: 'note' }] },
+  ]) {
+    server.handleData(conn, askAnswerFrame([answer]))
+    expect(received.at(-1)).toMatchObject({ kind: 'error', code: 'bad_request', requestId: 'perm-1' })
+    expect(controller.getPendingPermissionRequests()).toHaveLength(1)
+  }
+  server.handleData(conn, askAnswerFrame([{ optionIndices: [], other: '  user text  ' }]))
+  await waitFor(() => resolved !== null)
+  expect(answersOf(resolved)).toEqual({ 'Details?': 'user text' })
+  expect((allowInput(resolved) as Record<string, unknown>).annotations).toEqual({})
+})
+
+for (const notes of [
+  [{ optionIndex: 0, text: 'one' }, { optionIndex: 0, text: 'two' }],
+  [{ optionIndex: 1, text: 'unselected' }],
+  [{ optionIndex: 3, text: 'out of range' }],
+  [{ optionIndex: -1, text: 'negative' }],
+  [{ optionIndex: 0.5, text: 'fraction' }],
+  [{ optionIndex: 0, text: 'x'.repeat(5000) }],
+  [{ optionIndex: 0, text: 'note', label: 'forged' }],
+  [{ optionIndex: 0, text: 'note', preview: 'forged' }],
+  Array.from({ length: 5 }, () => ({ optionIndex: 0, text: 'note' })),
+]) {
+  test(`C5 — invalid notes stay pending and correlate (${JSON.stringify(notes).slice(0, 100)})`, async () => {
+    let resolved: AppPermissionResponse | null = null
+    const controller = new AppSessionController(
+      askQuestionAdapter(ASK_QUESTIONS, r => { resolved = r }),
+    )
+    const { server, received, conn } = connect(controller)
+    void controller.submit('go')
+    await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+    server.handleData(conn, askAnswerFrame([
+      { optionIndices: [0] }, { optionIndices: [0, 2], notes },
+    ]))
+    expect(received.at(-1)).toMatchObject({ kind: 'error', code: 'bad_request', requestId: 'perm-1' })
+    expect(resolved).toBeNull()
+    expect(controller.getPendingPermissionRequests()).toHaveLength(1)
+    server.handleData(conn, askAnswerFrame([{ optionIndices: [0] }, { optionIndices: [0] }]))
+    await waitFor(() => resolved !== null)
+  })
+}
 
 test('C5 — LIVE PATH: a single-select "Other…" freeform answer is the freeform text', async () => {
   let resolved: AppPermissionResponse | null = null

@@ -5,6 +5,7 @@ import { AskQuestionFlow } from './AskQuestionFlow.js'
 import {
   abandonOtherText,
   buildAskAnswerPayload,
+  buildAskChatMessage,
 } from './askQuestionFlowModel.js'
 import type { AskQuestion } from './askQuestionState.js'
 import {
@@ -123,9 +124,9 @@ test('the card body is a bounded scroller', () => {
   // `composerDock.test.tsx`).
   expect(html).toContain('max-h-[60vh]')
   expect(html).toContain('overflow-y-auto')
-  expect(html).toContain('pt-3')
-  expect(html).toContain('pb-2.5')
-  expect(html).toContain('gap-0.5')
+  expect(html).toContain('pt-2.5')
+  expect(html).toContain('pb-2')
+  expect(html).toContain('gap-px')
   expect(html).not.toContain('bg-[#0d0d0f]')
 })
 
@@ -220,13 +221,17 @@ test('single question shows a Submit footer with no full-width key legend or ste
   expect(html).not.toContain('Pick as many as you like')
 })
 
-test('multi-question shows Next question + stepper + the multi-select badge on q2', () => {
+test('multi-question shows Next question and clickable question headers', () => {
   const html = render(MULTI)
   // First step footer advances rather than submits.
   expect(html).toContain('Next question')
   expect(html).not.toContain('Submit')
-  // Stepper "1/2".
-  expect(html).toContain('1/2')
+  expect(html).toContain('data-ask-step="0"')
+  expect(html).toContain('data-ask-step="1"')
+  expect(html).toContain('aria-current="step"')
+  expect(html).toContain('Features')
+  expect(html).not.toContain('1/2')
+  expect(html).not.toContain('Back')
 })
 
 test('a multi-select question says so in words, without a full-width key legend', () => {
@@ -275,7 +280,7 @@ test('every option row can be clicked, and says so', () => {
   const html = render(SINGLE)
   // Both the option rows and the "Other…" row, each named exactly: measured as
   // a computed `cursor: default` on every row before this change.
-  expect(html).toContain('flex w-full cursor-pointer items-start')
+  expect(html).toContain('flex w-full cursor-pointer items-center')
   expect(html).toContain('flex-1 cursor-pointer bg-transparent')
 })
 
@@ -300,6 +305,29 @@ test('buildAskAnswerPayload trims and carries a real freeform answer', () => {
   expect(
     buildAskAnswerPayload([{ optionIndices: [], other: '  moment  ' }]),
   ).toEqual([{ optionIndices: [], other: 'moment' }])
+})
+
+test('only notes for currently selected indices enter the wire payload', () => {
+  expect(buildAskAnswerPayload([{
+    optionIndices: [1, 2],
+    other: '',
+    notes: { 0: 'old choice', 1: '  keep this  ', 2: '   ' },
+  }])).toEqual([{
+    optionIndices: [1, 2],
+    notes: [{ optionIndex: 1, text: 'keep this' }],
+  }])
+})
+
+test('Chat summary preserves multi-select and Other answers and says when none was given', () => {
+  const questions = [...MULTI, { ...SINGLE[0]!, question: 'Name?', options: [] }]
+  const message = buildAskChatMessage(questions, [
+    { optionIndices: [], other: '' },
+    { optionIndices: [0, 1], other: '  custom feature  ' },
+    { optionIndices: [], other: '  my name  ' },
+  ])
+  expect(message).toContain('Which date library should we use?: No answer given')
+  expect(message).toContain('Which features do you need?: parsing, timezones, custom feature')
+  expect(message).toContain('Name?: my name')
 })
 
 test('leaving the freeform field keeps the option the user already picked', () => {

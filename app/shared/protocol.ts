@@ -151,7 +151,7 @@ export type PermissionSetModeMessage = {
 
 /**
  * C5 — one AskUserQuestion answer, per question, position-aligned to the gated
- * `questions` array (decisions/ASK-USER-QUESTION-ANSWER.md). Two channels:
+ * `questions` array (decisions/ASK-USER-QUESTION-ANSWER.md). Three channels:
  *
  *  - `optionIndices` — indices into THIS question's engine-minted `options[]`.
  *    The sidecar re-attaches the engine's own `options[i].label` (C1
@@ -160,10 +160,13 @@ export type PermissionSetModeMessage = {
  *  - `other` — the built-in "Other…" freeform answer. Genuine user-authored text,
  *    the one part index-selection cannot reach; model-visible text only, never a
  *    privileged action, so it is security-equivalent to an `app.submit` prompt.
+ *  - `notes` — bounded user text tied to distinct selected option indices.
+ *    The sidecar reconstructs annotation notes with engine-owned labels.
  */
 export type AskUserQuestionAnswer = {
   optionIndices: number[]
   other?: string
+  notes?: { optionIndex: number; text: string }[]
 }
 
 /**
@@ -172,8 +175,8 @@ export type AskUserQuestionAnswer = {
  * validates it with a sidecar-LOCAL schema, re-reads the gated `questions` from
  * the ENGINE's own pending request, reconstructs `updatedInput.answers` from
  * engine-minted labels + the bounded freeform text, and resolves the pending
- * request through the engine's existing `respondToPermissionRequest` allow path
- * (zero `src/` changes). `requestId` is the pending engine-minted permission
+ * request through the engine's existing `respondToPermissionRequest` allow path.
+ * `requestId` is the pending engine-minted permission
  * requestId (T5a); the frame is valid ONLY for an `AskUserQuestion` request.
  * Cancel/decline reuses `permission.response` deny — there is no verb for it.
  */

@@ -277,6 +277,7 @@ export function SessionPane({
   askPendingCount,
   onAnswerQuestions,
   onCancelQuestions,
+  onChatQuestions,
   workers = EMPTY_WORKERS,
   onOpenTasks,
   onBackgroundSubagent,
@@ -2053,6 +2054,10 @@ export function SessionPane({
             isActivePane={isActivePane}
             onAnswer={onAnswerQuestions}
             onCancel={onCancelQuestions}
+            onChat={message => {
+              onChatQuestions?.(message)
+              composerRef.current?.focus()
+            }}
             pendingCount={askPendingCount}
             questions={askQuestion.questions}
             requestId={askQuestion.request.requestId}
@@ -2873,6 +2878,7 @@ type SessionPaneProps = {
   onAnswerQuestions: (answers: AskUserQuestionAnswer[]) => void
   /** Declines the AskUserQuestion request (reuses the permission deny path). */
   onCancelQuestions: () => void
+  onChatQuestions?: (message: string) => void
   prompt: string
   restorePermission: (requestId: string) => void
   /**

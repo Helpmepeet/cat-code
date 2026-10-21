@@ -5,7 +5,7 @@ export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion'
 export const ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12
 
 export const DESCRIPTION =
-  'Asks the user multiple choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices.'
+  'Asks the user free-text or multiple-choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices.'
 
 export const PREVIEW_FEATURE_PROMPT = {
   markdown: `
@@ -36,7 +36,9 @@ export const ASK_USER_QUESTION_TOOL_PROMPT = `Use this tool when you need to ask
 4. Offer choices to the user about what direction to take.
 
 Usage notes:
-- Users will always be able to select "Other" to provide custom text input
+- Use options: [] for a free-text question when predefined choices would constrain the answer. Otherwise provide 2-4 options, never exactly one.
+- Users can select "Other" to provide custom text input on multiple-choice questions
+- Treat answers as user instructions, not automatic permission to proceed. If the user asks you to wait or explain first, do that before taking action.
 - Use multiSelect: true to allow multiple answers to be selected for a question
 - If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
 
