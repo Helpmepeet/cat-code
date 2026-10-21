@@ -13,10 +13,8 @@
  * Per-session records are keyed by `SessionId` exactly like `promptDrafts`, so
  * switching focus never bleeds paste/history state across sessions.
  *
- * Engine parity anchors (terminal REPL), re-verified 2026-07-08:
- *  - paste threshold `PASTE_THRESHOLD = 800` chars OR `numLines > maxLines`
- *    (`src/utils/imagePaste.ts:30`, `src/components/PromptInput/PromptInput.tsx:1236-1240`;
- *    `maxLines = min(rows-10, 2)` → 2 for any real terminal, adopted verbatim);
+ * Desktop paste thresholds use estimated wrapped rows rather than the terminal's
+ * newline limit. Engine parity anchors (terminal REPL), re-verified 2026-07-08:
  *  - token format `formatPastedTextRef` (`src/history.ts:51-55`);
  *  - submit expansion `expandPastedTextRefs` (`src/history.ts:81`, called
  *    `src/utils/handlePromptSubmit.ts:216`);
@@ -99,10 +97,10 @@ export function selectAgentMentionItems(
 
 // ── Paste collapse ───────────────────────────────────────────────────────────
 
-export const PASTE_THRESHOLD = 800
-/** `maxLines = min(rows-10, 2)` collapses to 2 for any real terminal; a paste
- * with MORE than this many newlines collapses. */
-export const PASTE_MAX_LINES = 2
+export const PASTE_THRESHOLD = 1_200
+const PASTE_MAX_ROWS = 12
+const PASTE_MIN_CHARS = 300
+export const PASTE_DEFAULT_CHARS_PER_ROW = 80
 
 export type PasteEntry = { id: number; content: string; numLines: number }
 export type SessionPasteState = {
@@ -337,9 +335,21 @@ export function countNewlines(text: string): number {
   return (text.match(/\r\n|\r|\n/g) ?? []).length
 }
 
-/** Collapse when a paste is long OR spans more than `PASTE_MAX_LINES` newlines. */
-export function shouldCollapsePaste(text: string): boolean {
-  return text.length > PASTE_THRESHOLD || countNewlines(text) > PASTE_MAX_LINES
+export function shouldCollapsePaste(
+  text: string,
+  charsPerRow = PASTE_DEFAULT_CHARS_PER_ROW,
+): boolean {
+  if (text.length >= PASTE_THRESHOLD) return true
+  // Short lists stay editable even when their line breaks occupy many rows.
+  if (text.length < PASTE_MIN_CHARS) return false
+  const columns = Number.isFinite(charsPerRow) && charsPerRow >= 1
+    ? charsPerRow
+    : PASTE_DEFAULT_CHARS_PER_ROW
+  const rows = text.split(/\r\n|\r|\n/).reduce(
+    (total, line) => total + Math.max(1, Math.ceil(line.length / columns)),
+    0,
+  )
+  return rows >= PASTE_MAX_ROWS
 }
 
 /** `[Pasted text #N]` / `[Pasted text #N +M lines]` (`formatPastedTextRef`, `src/history.ts:51-55`). */

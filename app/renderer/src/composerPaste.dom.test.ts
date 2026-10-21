@@ -305,7 +305,7 @@ test('an HTML-only paste is canceled without changing the controlled draft', asy
 test('a large paste still becomes one inline paste pill', async () => {
   const observed = observation()
   const initial = 'start END'
-  const content = '    line one\n\tline two\n  line three\nline four  \n'
+  const content = '    line one\n\tline two\n  line three\nline four  \n'.repeat(30)
   const richHtml = `<pre class="transcript-code">${content}</pre>`
   const tree = await harness.mount(
     createElement(ControlledPane, {
@@ -320,7 +320,7 @@ test('a large paste still becomes one inline paste pill', async () => {
   await dispatchPaste(composer, event)
   await harness.nextFrame()
 
-  const token = formatPasteRef(1, 4)
+  const token = formatPasteRef(1, countNewlines(content))
   expect(event.defaultPrevented).toBe(true)
   expect(observed.collapsed).toEqual([
     { content, start: 'start '.length, end: initial.length },
@@ -328,6 +328,52 @@ test('a large paste still becomes one inline paste pill', async () => {
   expect(readComposerText(composer)).toBe(`start ${token}`)
   expect(composer.querySelector(`[${PASTE_TOKEN_ATTR}="${token}"]`)).not.toBeNull()
   expect(composer.querySelector('pre')).toBeNull()
+})
+
+test('a short multiline paste stays editable instead of becoming a pill', async () => {
+  const observed = observation()
+  const tree = await harness.mount(
+    createElement(ControlledPane, { initialPrompt: '', observation: observed }),
+  )
+  const composer = composerOf(tree)
+  const content = 'one\ntwo\nthree\nfour'
+  await dispatchPaste(composer, clipboardPaste({ text: content }))
+  await harness.nextFrame()
+
+  expect(observed.collapsed).toEqual([])
+  expect(readComposerText(composer)).toBe(content)
+  expect(composer.querySelector(`[${PASTE_TOKEN_ATTR}]`)).toBeNull()
+})
+
+test.each([
+  { width: 440, fontSize: 20, collapses: true },
+  { width: 840, fontSize: 20, collapses: false },
+  { width: 440, fontSize: 10, collapses: false },
+])('paste adapts to width $width and font size $fontSize', async ({ width, fontSize, collapses }) => {
+  const observed = observation()
+  const initial = 'before selected after'
+  const tree = await harness.mount(
+    createElement(ControlledPane, { initialPrompt: initial, observation: observed }),
+  )
+  const composer = composerOf(tree)
+  Object.defineProperty(composer, 'clientWidth', { configurable: true, value: width })
+  composer.style.fontSize = `${fontSize}px`
+  composer.style.paddingLeft = '20px'
+  composer.style.paddingRight = '20px'
+  selectText(composer, 7, 15)
+  const content = 'x'.repeat(480)
+  const event = clipboardPaste({ text: content })
+  await dispatchPaste(composer, event)
+  await harness.nextFrame()
+
+  expect(event.defaultPrevented).toBe(true)
+  expect(observed.collapsed).toEqual(
+    collapses ? [{ content, start: 7, end: 15 }] : [],
+  )
+  expect(readComposerText(composer)).toBe(
+    `before ${collapses ? formatPasteRef(1, 0) : content} after`,
+  )
+  expect(composer.querySelector(`[${PASTE_TOKEN_ATTR}]`) !== null).toBe(collapses)
 })
 
 test('an image paste is prevented from entering the text draft', async () => {

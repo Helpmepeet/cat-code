@@ -47,6 +47,7 @@ import { ProjectRoutingBar } from './ProjectRoutingBar.js'
 import type { ProjectRouteChoice, ProjectRouteSnapshot } from '../../shared/projectRouting.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
 import { ComposerInput } from './ComposerInput.js'
+import { estimateComposerCharsPerRow } from './composerDom.js'
 import { TodoStepReadout } from './TodoPlanPanel.js'
 import { selectTodoPlan, selectTodoReadout } from './todoPlan.js'
 import type { TodoPlan } from './todoPlan.js'
@@ -1480,7 +1481,7 @@ export function SessionPane({
     const end = composer.selectionEnd
     pendingCaretRef.current = { base: end, prevLength: prompt.length }
     setHistoryNav(EMPTY_HISTORY_NAV)
-    if (shouldCollapsePaste(text)) {
+    if (shouldCollapsePaste(text, estimateComposerCharsPerRow(composer.element))) {
       onPaste(text, start, end)
       return
     }

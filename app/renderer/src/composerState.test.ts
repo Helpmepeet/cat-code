@@ -32,8 +32,6 @@ import {
   parseMentionQuery,
   pasteIdAtCaret,
   pasteTokenBeforeCaret,
-  PASTE_MAX_LINES,
-  PASTE_THRESHOLD,
   reduceFileAttachmentRemoved,
   reduceFileAttachmentSelected,
   reduceHistoryPushed,
@@ -258,13 +256,42 @@ describe('agent mention items', () => {
 })
 
 describe('paste collapse model', () => {
-  test('threshold: long text OR more than PASTE_MAX_LINES newlines collapses', () => {
+  test('short text and tiny multiline lists stay inline', () => {
     expect(shouldCollapsePaste('short one-liner')).toBe(false)
-    expect(shouldCollapsePaste('a\nb\nc')).toBe(false) // 2 newlines == max, inline
-    expect(shouldCollapsePaste('a\nb\nc\nd')).toBe(true) // 3 newlines > max
-    expect(shouldCollapsePaste('x'.repeat(PASTE_THRESHOLD + 1))).toBe(true)
-    expect(shouldCollapsePaste('x'.repeat(PASTE_THRESHOLD))).toBe(false)
-    expect(PASTE_MAX_LINES).toBe(2)
+    expect(shouldCollapsePaste('a\nb\nc\nd')).toBe(false)
+    expect(shouldCollapsePaste('a\n'.repeat(100))).toBe(false)
+    expect(shouldCollapsePaste('x'.repeat(299), 10)).toBe(false)
+    expect(shouldCollapsePaste('')).toBe(false)
+  })
+
+  test('the character cap applies even in a wide composer', () => {
+    expect(shouldCollapsePaste('x'.repeat(1_199), 200)).toBe(false)
+    expect(shouldCollapsePaste('x'.repeat(1_200), 200)).toBe(true)
+    expect(shouldCollapsePaste('x'.repeat(1_201), 200)).toBe(true)
+  })
+
+  test('wrapped rows adapt to available columns with inclusive boundaries', () => {
+    expect(shouldCollapsePaste('x'.repeat(880), 80)).toBe(false)
+    expect(shouldCollapsePaste('x'.repeat(881), 80)).toBe(true)
+    expect(shouldCollapsePaste('x'.repeat(1_000), 80)).toBe(true)
+    expect(shouldCollapsePaste('x'.repeat(1_000), 100)).toBe(false)
+    expect(shouldCollapsePaste('x'.repeat(300), 25)).toBe(true)
+  })
+
+  test('explicit newlines, blank lines and wrapping all contribute rows', () => {
+    for (const newline of ['\n', '\r', '\r\n']) {
+      expect(shouldCollapsePaste(Array(11).fill('x'.repeat(30)).join(newline))).toBe(false)
+      expect(shouldCollapsePaste(Array(12).fill('x'.repeat(30)).join(newline))).toBe(true)
+      expect(shouldCollapsePaste(`${'x'.repeat(300)}${newline.repeat(8)}`)).toBe(true)
+      expect(shouldCollapsePaste(Array(6).fill('x'.repeat(81)).join(newline))).toBe(true)
+    }
+  })
+
+  test('invalid or unavailable column estimates use the default width', () => {
+    for (const columns of [0, -1, NaN, Infinity]) {
+      expect(shouldCollapsePaste('x'.repeat(1_000), columns)).toBe(true)
+      expect(shouldCollapsePaste('x'.repeat(800), columns)).toBe(false)
+    }
   })
 
   test('countNewlines handles \\r\\n, \\r and \\n', () => {

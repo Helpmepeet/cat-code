@@ -22,13 +22,26 @@
  * contract is testable in the SSR-only renderer suite, which has no DOM.
  */
 
-import { PASTE_REF_RE } from './composerState.js'
+import { PASTE_DEFAULT_CHARS_PER_ROW, PASTE_REF_RE } from './composerState.js'
 
 /** Marks a pill node and carries the exact token text it stands in for. */
 export const PASTE_TOKEN_ATTR = 'data-paste-token'
 
 const TEXT_NODE = 3
 const ELEMENT_NODE = 1
+
+export function estimateComposerCharsPerRow(root: HTMLElement): number {
+  const style = getComputedStyle(root)
+  const padding = (Number.parseFloat(style.paddingLeft) || 0)
+    + (Number.parseFloat(style.paddingRight) || 0)
+  const width = root.clientWidth - padding
+  // Half an em approximates average Latin glyph width without changing the
+  // editable DOM or its selection. This is a size estimate, not browser layout.
+  const averageCharWidth = Number.parseFloat(style.fontSize) * 0.5
+  return width > 0 && averageCharWidth > 0
+    ? Math.max(1, Math.floor(width / averageCharWidth))
+    : PASTE_DEFAULT_CHARS_PER_ROW
+}
 
 /**
  * The subset of `Node` the serializer touches. Declared structurally (with
