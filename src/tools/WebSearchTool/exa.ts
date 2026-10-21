@@ -1,3 +1,6 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { AbortError, isAbortError } from '../../utils/errors.js'
 
 export type WebSearchFreshness = 'day' | 'week' | 'month' | 'year' | 'any'
@@ -10,6 +13,8 @@ export type WebSearchInput = {
   exclude_domains?: string[]
   freshness?: WebSearchFreshness
   mode?: WebSearchMode
+  content?: 'highlights' | 'text'
+  max_characters?: number
 }
 
 export type WebSearchResult = {
@@ -18,6 +23,7 @@ export type WebSearchResult = {
   publishedDate?: string
   author?: string
   highlights?: string[]
+  text?: string
 }
 
 export type WebSearchOutput = {
@@ -30,20 +36,25 @@ type ExaSearchRequest = {
   query: string
   numResults: number
   type: 'auto' | 'deep'
-  contents: { highlights: { maxCharacters: number } }
+  contents: {
+    highlights?: { maxCharacters: number }
+    text?: { maxCharacters: number }
+  }
   includeDomains?: string[]
   excludeDomains?: string[]
   startPublishedDate?: string
 }
 
 const EXA_SEARCH_URL = 'https://api.exa.ai/search'
+const EXA_MCP_URL = 'https://mcp.exa.ai/mcp?tools=web_search_advanced_exa'
 const EXA_SEARCH_TIMEOUT_MS = 20_000
 // Deep search runs several searches server-side; a probe on 2026-10-05 took
 // 11s against 3.6s for auto.
 const EXA_DEEP_SEARCH_TIMEOUT_MS = 60_000
 const EXA_TIMEOUT_MESSAGE = 'Exa search timed out.'
 const DEFAULT_MAX_RESULTS = 10
-const MAX_RESULTS = 10
+export const MAX_RESULTS = 100
+export const MAX_CONTENT_CHARACTERS = 50_000
 const MAX_HIGHLIGHT_CHARACTERS = 2000
 const FRESHNESS_DAYS: Record<Exclude<WebSearchFreshness, 'any'>, number> = {
   day: 1,
@@ -55,6 +66,18 @@ const FRESHNESS_DAYS: Record<Exclude<WebSearchFreshness, 'any'>, number> = {
 function clampMaxResults(value: number | undefined): number {
   if (value === undefined) return DEFAULT_MAX_RESULTS
   return Math.max(1, Math.min(MAX_RESULTS, value))
+}
+
+function contentMode(input: WebSearchInput): 'highlights' | 'text' {
+  return input.content ?? (input.mode === 'extended' ? 'text' : 'highlights')
+}
+
+function contentCharacters(input: WebSearchInput): number {
+  const fallback = contentMode(input) === 'text' ? 10_000 : MAX_HIGHLIGHT_CHARACTERS
+  return Math.max(
+    1,
+    Math.min(MAX_CONTENT_CHARACTERS, input.max_characters ?? fallback),
+  )
 }
 
 function startPublishedDateForFreshness(
@@ -85,16 +108,19 @@ function buildExaSearchRequest(
 ): ExaSearchRequest {
   return withoutUndefined({
     query: input.query.trim(),
-    numResults: clampMaxResults(input.max_results),
+    numResults: clampMaxResults(
+      input.max_results ?? (input.mode === 'extended' ? 20 : undefined),
+    ),
     type: input.mode === 'extended' ? 'deep' : 'auto',
-    contents: { highlights: { maxCharacters: MAX_HIGHLIGHT_CHARACTERS } },
+    contents:
+      contentMode(input) === 'text'
+        ? { text: { maxCharacters: contentCharacters(input) } }
+        : { highlights: { maxCharacters: contentCharacters(input) } },
     includeDomains: compactDomains(input.include_domains),
     excludeDomains: compactDomains(input.exclude_domains),
     startPublishedDate: startPublishedDateForFreshness(input.freshness, now),
   })
 }
-
-const MAX_HIGHLIGHTS_PER_RESULT = 3
 
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0
@@ -102,16 +128,20 @@ function optionalString(value: unknown): string | undefined {
     : undefined
 }
 
-function optionalStringArray(value: unknown): string[] | undefined {
+function optionalStringArray(
+  value: unknown,
+  maxCharacters: number,
+): string[] | undefined {
   if (!Array.isArray(value)) return undefined
-  const strings = value
-    .filter(
-      (item): item is string =>
-        typeof item === 'string' && item.trim().length > 0,
-    )
-    .map(item => item.trim().slice(0, MAX_HIGHLIGHT_CHARACTERS))
-  const capped = strings.slice(0, MAX_HIGHLIGHTS_PER_RESULT)
-  return capped.length > 0 ? capped : undefined
+  const strings: string[] = []
+  let remaining = maxCharacters
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim() || remaining <= 0) continue
+    const highlight = item.trim().slice(0, remaining)
+    strings.push(highlight)
+    remaining -= highlight.length
+  }
+  return strings.length > 0 ? strings : undefined
 }
 
 function parseHttpUrl(value: unknown): string | undefined {
@@ -131,6 +161,7 @@ function parseExaSearchResponse(
   query: string,
   durationSeconds: number,
   resultLimit: number,
+  input: WebSearchInput = { query },
 ): WebSearchOutput {
   if (!body || typeof body !== 'object') {
     throw new Error('Exa search returned an unexpected response.')
@@ -150,7 +181,13 @@ function parseExaSearchResponse(
 
     const publishedDate = optionalString(result.publishedDate)
     const author = optionalString(result.author)
-    const highlights = optionalStringArray(result.highlights)
+    const text =
+      contentMode(input) === 'text' && typeof result.text === 'string'
+        ? result.text.slice(0, contentCharacters(input))
+        : undefined
+    const highlights = text
+      ? undefined
+      : optionalStringArray(result.highlights, contentCharacters(input))
 
     return [
       {
@@ -159,6 +196,7 @@ function parseExaSearchResponse(
         ...(publishedDate ? { publishedDate } : {}),
         ...(author ? { author } : {}),
         ...(highlights ? { highlights } : {}),
+        ...(text ? { text } : {}),
       },
     ]
   }).slice(0, clampMaxResults(resultLimit))
@@ -189,24 +227,85 @@ function formatExaStatusError(status: number): string {
   return `Exa search failed with HTTP ${status}.`
 }
 
-/**
- * Whether a search could actually be issued. The key is read at CALL time
- * (`getExaApiKey`), so without this the tool advertises itself to the model,
- * gets picked, and throws — a wasted turn instead of a tool that simply is not
- * there. `WebSearchTool.isEnabled` gates on it.
- */
-export function hasExaApiKey(): boolean {
-  return (process.env.EXA_API_KEY?.trim().length ?? 0) > 0
-}
-
-function getExaApiKey(): string {
-  const apiKey = process.env.EXA_API_KEY?.trim()
-  if (!apiKey) {
-    throw new Error(
-      'EXA_API_KEY is not set. Set it in the shell environment before using WebSearch.',
+async function searchKeylessExa(
+  input: WebSearchInput,
+  signal: AbortSignal,
+  timeoutMs: number,
+): Promise<unknown> {
+  const request = buildExaSearchRequest(input)
+  const client = new Client({ name: 'cat-code', version: '1.0' })
+  const transport = new StreamableHTTPClientTransport(new URL(EXA_MCP_URL), {
+    // Cover initialization, response bodies, and the transport's optional SSE
+    // connection with the same deadline as the search itself.
+    fetch: async (url, init) => {
+      const response = await globalThis.fetch(url, {
+        ...init,
+        signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
+      })
+      if (!response.ok && !(init?.method === 'GET' && response.status === 405)) {
+        void response.body?.cancel().catch(() => {})
+        throw new Error(formatExaStatusError(response.status))
+      }
+      return response
+    },
+  })
+  try {
+    await client.connect(transport, { signal, timeout: timeoutMs })
+    const result = CallToolResultSchema.parse(
+      await client.callTool(
+        {
+          name: 'web_search_advanced_exa',
+          arguments: withoutUndefined({
+            query: request.query,
+            numResults: request.numResults,
+            // Hosted keyless MCP does not offer the REST API's deep search type.
+            type: 'auto',
+            includeDomains: request.includeDomains,
+            excludeDomains: request.excludeDomains,
+            startPublishedDate: request.startPublishedDate,
+            enableHighlights: contentMode(input) === 'highlights',
+            highlightsMaxCharacters: request.contents.highlights?.maxCharacters,
+            // Advanced MCP always requests text; keep it minimal in highlights mode.
+            textMaxCharacters: request.contents.text?.maxCharacters ?? 1,
+          }),
+        },
+        CallToolResultSchema,
+        { signal, timeout: timeoutMs },
+      ),
     )
+    if (result.isError) {
+      const message = result.content
+        .flatMap(block => (block.type === 'text' ? [block.text] : []))
+        .join('\n')
+      if (/429|rate.?limit/i.test(message)) {
+        throw new Error(formatExaStatusError(429))
+      }
+      throw new Error(
+        'Exa keyless search failed. Try again later or configure EXA_API_KEY for account-backed access.',
+      )
+    }
+    if (Array.isArray(result.structuredContent?.results)) {
+      return result.structuredContent
+    }
+    for (const block of result.content) {
+      if (block.type !== 'text') continue
+      try {
+        const body: unknown = JSON.parse(block.text)
+        if (
+          body &&
+          typeof body === 'object' &&
+          Array.isArray((body as Record<string, unknown>).results)
+        ) {
+          return body
+        }
+      } catch {
+        // Only JSON search results are accepted, never arbitrary server text.
+      }
+    }
+    throw new Error('Exa search returned an unexpected response.')
+  } finally {
+    await client.close()
   }
-  return apiKey
 }
 
 function timeoutMsForMode(mode: WebSearchMode | undefined): number {
@@ -229,7 +328,7 @@ async function searchExaWithTimeoutMs(
     throw new AbortError('WebSearch was cancelled.')
   }
 
-  const apiKey = getExaApiKey()
+  const apiKey = process.env.EXA_API_KEY?.trim()
   const abortController = new AbortController()
   let timedOut = false
   let rejectCancellation: (error: Error) => void = () => {}
@@ -253,6 +352,19 @@ async function searchExaWithTimeoutMs(
     const request = buildExaSearchRequest(input)
     const withCancellation = <T>(promise: Promise<T>): Promise<T> =>
       Promise.race([promise, cancellationPromise])
+
+    if (!apiKey) {
+      const body = await withCancellation(
+        searchKeylessExa(input, abortController.signal, timeoutMs),
+      )
+      return parseExaSearchResponse(
+        body,
+        input.query.trim(),
+        (performance.now() - start) / 1000,
+        request.numResults,
+        input,
+      )
+    }
 
     const response = await withCancellation(
       globalThis.fetch(EXA_SEARCH_URL, {
@@ -292,21 +404,16 @@ async function searchExaWithTimeoutMs(
       input.query.trim(),
       durationSeconds,
       request.numResults,
+      input,
     )
   } catch (error) {
     if (signal.aborted) {
       throw new AbortError('WebSearch was cancelled.')
     }
-    if (timedOut && isAbortError(error)) {
+    if (timedOut) {
       throw new Error(EXA_TIMEOUT_MESSAGE)
     }
     if (error instanceof Error && error.message.startsWith('Exa ')) {
-      throw error
-    }
-    if (
-      error instanceof Error &&
-      error.message === 'Exa search returned an unexpected response.'
-    ) {
       throw error
     }
     throw new Error('Exa search failed. Check your network connection.')

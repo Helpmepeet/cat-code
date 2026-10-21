@@ -16,7 +16,9 @@ export function renderToolUseMessage({
   exclude_domains,
   max_results,
   freshness,
-  mode
+  mode,
+  content,
+  max_characters
 }: Partial<{
   query: string;
   include_domains?: string[];
@@ -24,6 +26,8 @@ export function renderToolUseMessage({
   max_results?: number;
   freshness?: string;
   mode?: string;
+  content?: string;
+  max_characters?: number;
 }>, {
   verbose
 }: {
@@ -42,6 +46,12 @@ export function renderToolUseMessage({
     }
     if (mode === 'extended') {
       message += ', extended';
+    }
+    if (content) {
+      message += `, content: ${content}`;
+    }
+    if (typeof max_characters === 'number') {
+      message += `, characters per result: ${max_characters}`;
     }
     if (freshness && freshness !== 'any') {
       message += `, freshness: ${freshness}`;

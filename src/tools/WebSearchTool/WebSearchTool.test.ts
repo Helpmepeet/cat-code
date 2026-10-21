@@ -19,6 +19,45 @@ function collectReactText(node: React.ReactNode): string {
   return ''
 }
 
+// Exa advanced MCP returns search JSON inside a text block. Exercise that
+// boundary through the SDK, including both supported HTTP response formats.
+function mockKeylessExa(
+  result: Record<string, unknown>,
+  wire: 'json' | 'sse' = 'json',
+) {
+  const requests: Array<{
+    url: string
+    headers: Headers
+    body: { method: string; params?: Record<string, unknown>; id?: number }
+  }> = []
+  globalThis.fetch = (async (url, init) => {
+    if (init?.method === 'GET') return new Response(null, { status: 405 })
+    const body = JSON.parse(String(init?.body))
+    requests.push({ url: String(url), headers: new Headers(init?.headers), body })
+    if (!('id' in body)) return new Response(null, { status: 202 })
+    const rpcResult = body.method === 'initialize'
+      ? {
+          protocolVersion: '2025-03-26',
+          capabilities: { tools: {} },
+          serverInfo: { name: 'exa', version: '1' },
+        }
+      : result
+    const response = JSON.stringify({ jsonrpc: '2.0', id: body.id, result: rpcResult })
+    if (wire === 'json') {
+      return new Response(response, { headers: { 'content-type': 'application/json' } })
+    }
+    const bytes = new TextEncoder().encode(`event: message\ndata: ${response}\n\n`)
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes.slice(0, 23))
+        controller.enqueue(bytes.slice(23))
+        controller.close()
+      },
+    }), { headers: { 'content-type': 'text/event-stream' } })
+  }) as typeof globalThis.fetch
+  return requests
+}
+
 describe('Exa WebSearch request mapping', () => {
   afterEach(() => {
     delete process.env.EXA_API_KEY
@@ -61,7 +100,7 @@ describe('Exa WebSearch request mapping', () => {
     ).toBe('React 19 docs')
   })
 
-  test('defensively clamps max_results to the Cat Code v1 limit', async () => {
+  test('defensively clamps max_results to Exa public bounds', async () => {
     const { _forTest } = await import('./exa.js')
 
     expect(
@@ -69,9 +108,9 @@ describe('Exa WebSearch request mapping', () => {
         .numResults,
     ).toBe(1)
     expect(
-      _forTest.buildExaSearchRequest({ query: 'high', max_results: 100 })
+      _forTest.buildExaSearchRequest({ query: 'high', max_results: 1000 })
         .numResults,
-    ).toBe(10)
+    ).toBe(100)
   })
 
   test('maps include and exclude domains to Exa field names', async () => {
@@ -117,7 +156,7 @@ describe('Exa WebSearch response parsing', () => {
               'POST /search accepts query and numResults.',
               'This second highlight is retained.',
               'This third highlight is retained.',
-              'This fourth highlight is dropped by Cat Code.',
+              'This fourth highlight is retained within the character budget.',
             ],
             text: 'Full page text should be ignored even if Exa returns it.',
             summary: 'Summary should be ignored in v1.',
@@ -145,6 +184,7 @@ describe('Exa WebSearch response parsing', () => {
             'POST /search accepts query and numResults.',
             'This second highlight is retained.',
             'This third highlight is retained.',
+            'This fourth highlight is retained within the character budget.',
           ],
         },
       ],
@@ -270,14 +310,128 @@ describe('Exa WebSearch fetch execution', () => {
     Object.assign(process.env, originalEnv)
   })
 
-  test('requires EXA_API_KEY', async () => {
+  test('searches without a key through the public MCP endpoint', async () => {
+    delete process.env.EXA_API_KEY
+    const requests = mockKeylessExa({
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          results: [{ title: 'Bun docs', url: 'https://bun.com/docs', highlights: ['Bun implements fetch.'] }],
+        }),
+      }],
+    })
     const { searchExa } = await import('./exa.js')
+    const result = await searchExa({ query: 'Bun fetch' }, new AbortController().signal)
+    expect(result.results).toEqual([{
+      title: 'Bun docs', url: 'https://bun.com/docs', highlights: ['Bun implements fetch.'],
+    }])
+    expect(requests.every(request => new URL(request.url).hostname === 'mcp.exa.ai')).toBe(true)
+    expect(requests.every(request =>
+      !request.headers.has('x-api-key') && !request.headers.has('authorization'),
+    )).toBe(true)
+    expect(requests.find(request => request.body.method === 'tools/call')?.body.params).toMatchObject({
+      name: 'web_search_advanced_exa',
+      arguments: { query: 'Bun fetch', numResults: 10 },
+    })
+  })
 
-    await expect(
-      searchExa({ query: 'missing key' }, new AbortController().signal),
-    ).rejects.toThrow(
-      'EXA_API_KEY is not set. Set it in the shell environment before using WebSearch.',
+  test.each(['json', 'sse'] as const)('delivers broader results and page text through WebSearch (%s)', async wire => {
+    delete process.env.EXA_API_KEY
+    const body = {
+      results: Array.from({ length: 101 }, (_, index) => ({
+        title: `Source ${index + 1}`,
+        url: `https://example.com/${index + 1}`,
+        text: 'source text '.repeat(1000),
+        highlights: ['Duplicate content should not consume the text budget.'],
+      })),
+      requestId: 'private-exa-diagnostic',
+    }
+    const requests = mockKeylessExa({ content: [{ type: 'text', text: JSON.stringify(body) }] }, wire)
+    const { WebSearchTool } = await import('./WebSearchTool.js')
+    const input = WebSearchTool.inputSchema.parse({
+      query: 'runtime docs', max_results: 100, content: 'text', max_characters: 8000,
+      include_domains: ['example.com'], exclude_domains: ['blocked.example'], freshness: 'week',
+    })
+    const output = await WebSearchTool.call(
+      input,
+      { abortController: new AbortController() } as never,
+      undefined as never,
+      undefined as never,
+      undefined,
     )
+    expect(output.data.results).toHaveLength(100)
+    expect(output.data.results.every(result => result.text?.length === 8000)).toBe(true)
+    const formatted = WebSearchTool.mapToolResultToToolResultBlockParam(output.data, 'search')
+    expect(formatted.content).toContain('100. Source 100')
+    expect(formatted.content).toContain(`Page text:\n${'source text '.repeat(1000).slice(0, 8000)}`)
+    expect(formatted.content).not.toContain('private-exa-diagnostic')
+    expect(formatted.content).not.toContain('Duplicate content')
+    expect(requests.find(request => request.body.method === 'tools/call')?.body.params).toMatchObject({
+      arguments: {
+        numResults: 100, textMaxCharacters: 8000, enableHighlights: false,
+        includeDomains: ['example.com'], excludeDomains: ['blocked.example'], startPublishedDate: expect.any(String),
+      },
+    })
+  })
+
+  test('uses broader text defaults for keyless extended mode without sending unsupported deep type', async () => {
+    process.env.EXA_API_KEY = ' '
+    const requests = mockKeylessExa({
+      content: [],
+      structuredContent: { results: [{ title: 'Source', url: 'https://example.com', text: 'Full source' }] },
+    })
+    const { searchExa } = await import('./exa.js')
+    const output = await searchExa({ query: 'extended', mode: 'extended' }, new AbortController().signal)
+    expect(output.results[0]?.text).toBe('Full source')
+    expect(requests.find(request => request.body.method === 'tools/call')?.body.params).toMatchObject({
+      arguments: { type: 'auto', numResults: 20, textMaxCharacters: 10000 },
+    })
+  })
+
+  test.each([
+    [
+      { isError: true, content: [{ type: 'text', text: '429 Rate limit reached; private diagnostic' }] },
+      'Exa rate limit exceeded with HTTP 429.',
+    ],
+    [{ isError: true, content: [{ type: 'text', text: 'private diagnostic' }] }, 'Exa keyless search failed.'],
+    [{ content: [{ type: 'text', text: 'private diagnostic' }] }, 'Exa search returned an unexpected response.'],
+  ])('reports MCP failures safely (%#)', async (response, message) => {
+    delete process.env.EXA_API_KEY
+    mockKeylessExa(response)
+    const { searchExa } = await import('./exa.js')
+    await expect(searchExa({ query: 'failure' }, new AbortController().signal)).rejects.toThrow(message)
+  })
+
+  test('reports keyless HTTP rate limits without reading raw error bodies', async () => {
+    delete process.env.EXA_API_KEY
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('private diagnostic'))
+      },
+    }), { status: 429 })) as unknown as typeof globalThis.fetch
+    const { _forTest } = await import('./exa.js')
+    await expect(_forTest.searchExaWithTimeoutMs(
+      { query: 'limited' }, new AbortController().signal, 100,
+    )).rejects.toThrow('Exa rate limit exceeded with HTTP 429. Try again later or use fewer searches.')
+  })
+
+  test.each(['timeout', 'cancel'] as const)('bounds keyless initialization and aborts HTTP (%s)', async reason => {
+    delete process.env.EXA_API_KEY
+    const controller = new AbortController()
+    let requestSignal: AbortSignal | null | undefined
+    globalThis.fetch = (async (_url, init) => {
+      requestSignal = init?.signal
+      if (reason === 'cancel') controller.abort()
+      return await new Promise<Response>(() => {})
+    }) as typeof globalThis.fetch
+    const { _forTest } = await import('./exa.js')
+    const promise = _forTest.searchExaWithTimeoutMs({ query: 'pending' }, controller.signal, 10)
+    if (reason === 'timeout') await expect(promise).rejects.toThrow('Exa search timed out.')
+    else {
+      const { AbortError } = await import('../../utils/errors.js')
+      await expect(promise).rejects.toBeInstanceOf(AbortError)
+    }
+    expect(requestSignal?.aborted).toBe(true)
   })
 
   test('posts to Exa Search with x-api-key auth', async () => {
@@ -287,7 +441,11 @@ describe('Exa WebSearch fetch execution', () => {
       requests.push({ url: String(url), init: init ?? {} })
       return new Response(
         JSON.stringify({
-          results: [{ title: 'Docs', url: 'https://docs.example.com' }],
+          results: Array.from({ length: 15 }, (_, index) => ({
+            title: `Docs ${index + 1}`,
+            url: `https://docs.example.com/${index + 1}`,
+            text: 'x'.repeat(9000),
+          })),
           requestId: 'req_ignored',
           costDollars: { total: 0.001 },
         }),
@@ -297,15 +455,12 @@ describe('Exa WebSearch fetch execution', () => {
 
     const { searchExa } = await import('./exa.js')
     const result = await searchExa(
-      { query: 'docs', max_results: 3 },
+      { query: 'docs', max_results: 15, content: 'text', max_characters: 8000, mode: 'extended' },
       new AbortController().signal,
     )
 
-    expect(result).toEqual({
-      query: 'docs',
-      durationSeconds: expect.any(Number),
-      results: [{ title: 'Docs', url: 'https://docs.example.com/' }],
-    })
+    expect(result.results).toHaveLength(15)
+    expect(result.results[14]).toEqual({ title: 'Docs 15', url: 'https://docs.example.com/15', text: 'x'.repeat(8000) })
     expect(requests).toHaveLength(1)
     expect(requests[0]?.url).toBe('https://api.exa.ai/search')
     const headers = requests[0]?.init.headers as Record<string, string>
@@ -313,8 +468,9 @@ describe('Exa WebSearch fetch execution', () => {
     expect(headers.authorization).toBeUndefined()
     expect(JSON.parse(String(requests[0]?.init.body))).toMatchObject({
       query: 'docs',
-      numResults: 3,
-      type: 'auto',
+      numResults: 15,
+      type: 'deep',
+      contents: { text: { maxCharacters: 8000 } },
     })
   })
 
@@ -534,21 +690,18 @@ describe('WebSearchTool Exa integration', () => {
     expect(WebSearchTool.isEnabled()).toBe(true)
   })
 
-  // The key is only read at call time (`exa.ts` `getExaApiKey`), so an
-  // unkeyed install used to advertise the tool and then throw on the model's
-  // first use of it. Disabled is the honest state.
-  test('disables WebSearch when no Exa key is set', async () => {
+  test('offers WebSearch when no Exa key is set', async () => {
     delete process.env.EXA_API_KEY
     const { WebSearchTool } = await import('./WebSearchTool.js')
 
-    expect(WebSearchTool.isEnabled()).toBe(false)
+    expect(WebSearchTool.isEnabled()).toBe(true)
   })
 
   test('treats a blank Exa key as absent', async () => {
     process.env.EXA_API_KEY = '   '
     const { WebSearchTool } = await import('./WebSearchTool.js')
 
-    expect(WebSearchTool.isEnabled()).toBe(false)
+    expect(WebSearchTool.isEnabled()).toBe(true)
   })
 
   test('keeps WebSearch out of the auto-mode safe allowlist', async () => {
@@ -585,24 +738,28 @@ describe('WebSearchTool Exa integration', () => {
     expect(
       WebSearchTool.inputSchema.safeParse({
         query: 'latest TypeScript changelog',
-        max_results: 3,
         include_domains: ['typescriptlang.org'],
         exclude_domains: ['example.com'],
         freshness: 'month',
         mode: 'extended',
+        max_results: 100,
+        content: 'text',
+        max_characters: 50000,
       }).success,
     ).toBe(true)
     expect(
       WebSearchTool.inputSchema.safeParse({ query: 'bad', mode: 'deep' })
         .success,
     ).toBe(false)
+    expect(WebSearchTool.inputSchema.safeParse({ query: 'bad', max_characters: 50001 }).success).toBe(false)
+    expect(WebSearchTool.inputSchema.safeParse({ query: 'bad', max_characters: 0 }).success).toBe(false)
 
     expect(
       WebSearchTool.inputSchema.safeParse({ query: 'bad', max_results: 0 })
         .success,
     ).toBe(false)
     expect(
-      WebSearchTool.inputSchema.safeParse({ query: 'bad', max_results: 11 })
+      WebSearchTool.inputSchema.safeParse({ query: 'bad', max_results: 101 })
         .success,
     ).toBe(false)
     expect(
@@ -645,20 +802,20 @@ describe('WebSearchTool Exa integration', () => {
 })
 
 describe('WebSearchTool Exa prompt and UI', () => {
-  test('describes compact Exa-era results and removes stale hosted-search wording', async () => {
+  test('explains source citations and current search controls', async () => {
     const { getLocalMonthYear } = await import('../../constants/common.js')
     const { getWebSearchPrompt } = await import('./prompt.js')
 
     const prompt = getWebSearchPrompt()
 
     expect(prompt).toContain(
-      'Search the web and use compact results to inform responses.',
+      'Search the web and use retrieved sources to inform responses. Search works without an API key.',
     )
     expect(prompt).toContain(
       'Use this for current documentation, package/API references, GitHub or repository docs, changelogs, issue/error lookup, and general web research.',
     )
     expect(prompt).toContain(
-      'Results include titles, URLs, dates when available, authors when available, and bounded highlights. Full page text and summaries are not returned in v1.',
+      'Use content "text" to read fuller sources',
     )
     expect(prompt).toContain(
       'Use include_domains when the relevant site is known, such as official docs or GitHub repository documentation.',
@@ -696,6 +853,8 @@ describe('WebSearchTool Exa prompt and UI', () => {
         {
           query: 'React changelog',
           max_results: 3,
+          content: 'text',
+          max_characters: 8000,
           freshness: 'month',
           include_domains: ['react.dev', 'github.com'],
           exclude_domains: ['w3schools.com'],
@@ -703,7 +862,7 @@ describe('WebSearchTool Exa prompt and UI', () => {
         { verbose: true },
       ),
     ).toBe(
-      '"React changelog", max results: 3, freshness: month, only including domains: react.dev, github.com, excluding domains: w3schools.com',
+      '"React changelog", max results: 3, content: text, characters per result: 8000, freshness: month, only including domains: react.dev, github.com, excluding domains: w3schools.com',
     )
 
     expect(

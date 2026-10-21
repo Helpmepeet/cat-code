@@ -94,6 +94,18 @@ bun run build:dev:full
 ./cli-dev
 ```
 
+Web search works through Exa's free, rate-limited keyless service without
+additional setup. Optionally set `EXA_API_KEY` in the environment used to launch
+Cat Code to use your Exa account instead, including deep search in extended mode.
+Account-backed requests use that account's credits and limits.
+
+Search defaults to 10 results with short highlights. The agent can request up
+to 100 results, select `content: "text"` for fuller page content, and set
+`max_characters` up to 50,000 per result. Extended mode defaults to 20 results
+and 10,000 characters of page text per result. Keyless extended mode uses regular
+search with those broader defaults; deep search requires an API key. Exa can
+return fewer results or less page content than requested.
+
 ## Inside the project
 
 The desktop uses Electron, React, and TypeScript, with a Bun engine process for

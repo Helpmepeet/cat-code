@@ -12,7 +12,8 @@ import {
   renderToolUseProgressMessage,
 } from './UI.js'
 import {
-  hasExaApiKey,
+  MAX_CONTENT_CHARACTERS,
+  MAX_RESULTS,
   searchExa,
   type WebSearchOutput,
   type WebSearchResult,
@@ -25,10 +26,25 @@ const inputSchema = lazySchema(() =>
       .number()
       .int()
       .min(1)
-      .max(10)
+      .max(MAX_RESULTS)
       .optional()
       .describe(
-        'Maximum number of results. Defaults to 10. Must be between 1 and 10.',
+        'Maximum number of results, from 1 to 100. Defaults to 10, or 20 in extended mode.',
+      ),
+    content: z
+      .enum(['highlights', 'text'])
+      .optional()
+      .describe(
+        'Return relevant highlights or fuller page text. Defaults to highlights, or text in extended mode.',
+      ),
+    max_characters: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_CONTENT_CHARACTERS)
+      .optional()
+      .describe(
+        'Maximum content characters per result, from 1 to 50000. Defaults to 2000 for highlights or 10000 for text.',
       ),
     include_domains: z
       .array(z.string().trim().min(1))
@@ -48,7 +64,7 @@ const inputSchema = lazySchema(() =>
       .enum(['standard', 'extended'])
       .optional()
       .describe(
-        '"standard" (default): one quick search. "extended": a multi-step deep search, slower and about twice the cost; finds sources a single query misses.',
+        '"standard" (default): compact search. "extended": broader results and fuller page text; also uses deep search when EXA_API_KEY is configured.',
       ),
   }),
 )
@@ -64,6 +80,7 @@ const searchResultSchema = lazySchema(() =>
       .describe('Published date when Exa provides it'),
     author: z.string().optional().describe('Author when Exa provides it'),
     highlights: z.array(z.string()).optional().describe('Relevant highlights'),
+    text: z.string().optional().describe('Page text, bounded by max_characters'),
   }),
 )
 
@@ -72,7 +89,7 @@ export type SearchResult = WebSearchResult
 const outputSchema = lazySchema(() =>
   z.object({
     query: z.string().describe('The search query that was executed'),
-    results: z.array(searchResultSchema()).describe('Compact web search results'),
+    results: z.array(searchResultSchema()).describe('Web search results'),
     durationSeconds: z
       .number()
       .describe('Time taken to complete the search operation'),
@@ -100,12 +117,8 @@ export const WebSearchTool = buildTool({
     const summary = getToolUseSummary(input)
     return summary ? `Searching for ${summary}` : 'Searching the web'
   },
-  // The Exa key is the tool's only credential and it is read at call time
-  // (`exa.ts` `getExaApiKey`), which threw. Advertising a tool that cannot run
-  // spends a model turn to produce an error, so an absent key removes it from
-  // the schema instead — the same shape as the privacy gate beside it.
   isEnabled() {
-    return !isEssentialTrafficOnly() && hasExaApiKey()
+    return !isEssentialTrafficOnly()
   },
   get inputSchema(): InputSchema {
     return inputSchema()
@@ -191,6 +204,9 @@ export const WebSearchTool = buildTool({
           result.highlights.forEach(highlight => {
             formattedOutput += `- ${highlight}\n`
           })
+        }
+        if (result.text) {
+          formattedOutput += `Page text:\n${result.text}\n`
         }
         formattedOutput += '\n'
       })
