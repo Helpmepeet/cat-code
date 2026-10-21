@@ -1878,6 +1878,10 @@ export function App() {
       claim,
       () => {
         pendingExplicitSessionRef.current = sessionId
+        setComposerFocusRequests(current => ({
+          ...current,
+          [sessionId]: (current[sessionId] ?? 0) + 1,
+        }))
         setWorkspaceLayoutState(current =>
           focusOrAssignWorkspaceSession(current, sessionId).state,
         )

@@ -2770,7 +2770,7 @@ type SessionPaneProps = {
   toolCardExpansionStore?: ToolCardExpansionStore | null
   /** This pane is the operator's focused one — gates window-level keyboard ownership in a split. */
   isActivePane: boolean
-  /** Monotonic request to focus this pane's composer after a historical rewrite. */
+  /** Monotonic request to focus this pane's composer. */
   composerFocusRequest?: number
   /** Cache-backed transcript is currently painted; operational stores stay live-only. */
   preview?: boolean

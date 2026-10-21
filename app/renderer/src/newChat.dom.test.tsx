@@ -121,6 +121,9 @@ test.each([
   expect(directoryCreates).toBe(entry === 'folder' ? 1 : 0)
   expect(tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
   expect(tree.container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Normal chat')
+  if (entry === 'shortcut') {
+    expect(document.activeElement).toBe(tree.container.querySelector('[aria-label="Prompt"]'))
+  }
 })
 
 function descriptor(id: string, project = false): SessionDescriptor {
