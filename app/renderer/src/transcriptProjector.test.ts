@@ -4409,10 +4409,145 @@ test('TaskOutput narrows a local agent clean answer from its structured retrieva
   const row = selectTranscriptRows(state, 'session-1')[0]
   if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
   expect(row.result?.taskOutput).toEqual({
+    retrievalStatus: 'success',
     taskId: 'task-1',
+    taskType: 'local_agent',
+    status: 'completed',
     description: 'Find every caller of the retry helper',
     output: 'Four callers in the request layer.',
+    exitCode: null,
+    error: null,
   })
+})
+
+function projectToolRoundTrip(
+  toolName: string,
+  input: Record<string, unknown>,
+  content: unknown,
+  toolUseResult: unknown,
+) {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_round_trip',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_round_trip', name: toolName, input }],
+      },
+      parent_tool_use_id: null,
+      uuid: '00000000-0000-4000-8000-0000000d3001',
+    }),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_round_trip', content, is_error: false }],
+      },
+      parent_tool_use_id: null,
+      tool_use_result: toolUseResult,
+      uuid: '00000000-0000-4000-8000-0000000d3002',
+    } as SDKMessage),
+  )
+  const row = selectTranscriptRows(state, 'session-1')[0]
+  if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+  return row
+}
+
+test('TaskOutput keeps a failed shell task state and exit code, not just a successful retrieval', () => {
+  const row = projectToolRoundTrip(
+    'TaskOutput',
+    { task_id: 'shell-1' },
+    '<retrieval_status>success</retrieval_status>\n\n<status>failed</status>',
+    {
+      retrieval_status: 'success',
+      task: {
+        task_id: 'shell-1',
+        task_type: 'local_bash',
+        status: 'failed',
+        description: 'Run test suite',
+        output: '41 pass\n1 fail\n',
+        exitCode: 1,
+      },
+    },
+  )
+
+  expect(row.result?.taskOutput).toEqual({
+    retrievalStatus: 'success',
+    taskId: 'shell-1',
+    taskType: 'local_bash',
+    status: 'failed',
+    description: 'Run test suite',
+    output: '41 pass\n1 fail',
+    exitCode: 1,
+    error: null,
+  })
+})
+
+test('TaskOutput never shows a local agent output field: running guidance and raw transcripts stay out', () => {
+  const running = projectToolRoundTrip(
+    'TaskOutput',
+    { task_id: 'agent-1' },
+    '<retrieval_status>not_ready</retrieval_status>',
+    {
+      retrieval_status: 'not_ready',
+      task: {
+        task_id: 'agent-1',
+        task_type: 'local_agent',
+        status: 'running',
+        description: 'Audit parser edge cases',
+        output: 'Still running; await the automatic completion notification.',
+      },
+    },
+  )
+  expect(running.result?.taskOutput).toMatchObject({
+    retrievalStatus: 'not_ready',
+    status: 'running',
+    output: null,
+  })
+
+  const stopped = projectToolRoundTrip(
+    'TaskOutput',
+    { task_id: 'agent-2' },
+    '<retrieval_status>success</retrieval_status>',
+    {
+      retrieval_status: 'success',
+      task: {
+        task_id: 'agent-2',
+        task_type: 'local_agent',
+        status: 'failed',
+        description: 'Audit parser edge cases',
+        output: '{"type":"user","message":{}}',
+        error: 'Worker crashed',
+      },
+    },
+  )
+  expect(stopped.result?.taskOutput).toMatchObject({
+    status: 'failed',
+    output: null,
+    error: 'Worker crashed',
+  })
+})
+
+test('ToolSearch projects its structured matches; its tool_reference content carries no text', () => {
+  const row = projectToolRoundTrip(
+    'ToolSearch',
+    { query: 'select:WebFetch,WebSearch' },
+    [
+      { type: 'tool_reference', tool_name: 'WebFetch' },
+      { type: 'tool_reference', tool_name: 'WebSearch' },
+    ],
+    { matches: ['WebFetch', 'WebSearch'], query: 'select:WebFetch,WebSearch', total_deferred_tools: 41 },
+  )
+
+  expect(row.toolFamily).toBe('other')
+  expect(row.result?.content).toBe('')
+  expect(row.result?.toolSearch).toEqual({ matches: ['WebFetch', 'WebSearch'] })
 })
 
 test('a non-Agent tool_use_result leaves agentName absent, never an empty string', () => {

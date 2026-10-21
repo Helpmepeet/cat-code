@@ -1221,7 +1221,23 @@ test('ack card: a non-ack result keeps its existing rendering untouched', () => 
   expect(html).toContain('Tool') // still the neutral family
 })
 
-test('TaskOutput renders the structured agent answer in a Task Output card', () => {
+function taskOutputProjection(
+  fields: Partial<NonNullable<ToolResultProjection['taskOutput']>>,
+): NonNullable<ToolResultProjection['taskOutput']> {
+  return {
+    retrievalStatus: 'success',
+    taskId: 'task-1',
+    taskType: 'local_agent',
+    status: 'completed',
+    description: 'Find every caller of the retry helper',
+    output: null,
+    exitCode: null,
+    error: null,
+    ...fields,
+  }
+}
+
+test('TaskOutput renders the structured agent answer under the task description', () => {
   const html = render(
     toolRow({
       toolName: 'TaskOutput',
@@ -1232,20 +1248,124 @@ test('TaskOutput renders the structured agent answer in a Task Output card', () 
         content:
           '<retrieval_status>success</retrieval_status><output>raw payload</output>',
         diff: null,
-        taskOutput: {
-          taskId: 'task-1',
-          description: 'Find every caller of the retry helper',
+        taskOutput: taskOutputProjection({
           output: 'Four callers, all in the request layer.',
-        },
+        }),
       },
     }),
   )
 
-  expect(html).toContain('Task Output')
+  expect(html).toContain('Output')
   expect(html).toContain('Find every caller of the retry helper')
   expect(html).toContain('Four callers, all in the request layer.')
   expect(html).not.toContain('&lt;retrieval_status&gt;')
-  expect(html).toContain('task-1')
+  expect(html).not.toContain('Task Output')
+  expect(html).not.toContain('task-1')
+  expect(html).toContain('aria-label="done"')
+})
+
+test('TaskOutput takes the task state: a shell that exited 1 reads failed, not done', () => {
+  const html = render(
+    toolRow({
+      toolName: 'TaskOutput',
+      toolFamily: 'other',
+      status: 'success',
+      result: {
+        isError: false,
+        content:
+          '<retrieval_status>success</retrieval_status>\n\n<status>failed</status>\n\n<exit_code>1</exit_code>',
+        diff: null,
+        taskOutput: taskOutputProjection({
+          taskType: 'local_bash',
+          status: 'failed',
+          description: 'Run test suite',
+          output: '1 fail',
+          exitCode: 1,
+        }),
+      },
+    }),
+  )
+  const text = visibleText(html)
+
+  expect(html).toContain('aria-label="failed"')
+  expect(html).not.toContain('aria-label="done"')
+  expect(text).toContain('Run test suite')
+  expect(text).toContain('exit 1')
+  expect(text).toContain('1 fail')
+  expect(text).not.toContain('<retrieval_status>')
+  expect(text).not.toContain('TaskOutput')
+})
+
+test('TaskOutput that timed out on a running task reads still running, with no body for an agent', () => {
+  const html = renderExpanded(
+    toolRow({
+      toolName: 'TaskOutput',
+      toolFamily: 'other',
+      status: 'success',
+      result: {
+        isError: false,
+        content:
+          '<retrieval_status>timeout</retrieval_status>\n\n<output>\nStill running; await the automatic completion notification.\n</output>',
+        diff: null,
+        taskOutput: taskOutputProjection({
+          retrievalStatus: 'timeout',
+          status: 'running',
+        }),
+      },
+    }),
+  )
+  const text = visibleText(html)
+
+  expect(html).toContain('aria-label="running"')
+  expect(text).toContain('still running')
+  expect(text).not.toContain('Still running; await')
+  expect(text).not.toContain('No output.')
+})
+
+test('ToolSearch names the tools a select query loaded instead of a Skill card saying nothing', () => {
+  const html = renderExpanded(
+    toolRow({
+      toolName: 'ToolSearch',
+      toolFamily: 'other',
+      input: { query: 'select:WebFetch,WebSearch' },
+      status: 'success',
+      result: {
+        isError: false,
+        content: '',
+        diff: null,
+        toolSearch: { matches: ['WebFetch', 'WebSearch'] },
+      },
+    }),
+  )
+  const text = visibleText(html)
+
+  expect(text).toContain('Tools')
+  expect(text).toContain('WebFetch, WebSearch')
+  expect(text).not.toContain('Skill')
+  expect(text).not.toContain('ToolSearch')
+  expect(text).not.toContain('No output.')
+})
+
+test('ToolSearch keyword query keeps the query in the header and lists what loaded', () => {
+  const html = renderExpanded(
+    toolRow({
+      toolName: 'ToolSearch',
+      toolFamily: 'other',
+      input: { query: 'notebook jupyter' },
+      status: 'success',
+      result: {
+        isError: false,
+        content: '',
+        diff: null,
+        toolSearch: { matches: ['NotebookEdit'] },
+      },
+    }),
+  )
+  const text = visibleText(html)
+
+  expect(text).toContain('notebook jupyter')
+  expect(text).toContain('NotebookEdit')
+  expect(text).not.toContain('No output.')
 })
 
 test('P4-18b: an expanded edit card keeps its counts in the shell and one current-file gutter', () => {

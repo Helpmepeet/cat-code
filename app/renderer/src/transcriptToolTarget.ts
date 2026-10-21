@@ -129,6 +129,7 @@ export function deriveTarget(
   }
   const peerParts = derivePeerTargetParts(row.toolName, str, input)
   if (peerParts !== null) return peerTargetText(peerParts)
+  if (row.toolName === 'ToolSearch') return toolSearchCardView(row).target
   switch (row.toolFamily) {
     case 'bash':
       return str('command') ?? row.toolName
@@ -166,6 +167,49 @@ export function deriveTarget(
     default:
       return row.toolName
   }
+}
+
+/**
+ * The ToolSearch card's header and body lines. A `select:` query names the tools
+ * it wants (`ToolSearchTool.ts` select parsing), so the header lists them and the
+ * body only appears when what loaded differs from what was asked for: a missing
+ * name, or an alias resolved to its real name. A keyword query keeps the query in
+ * the header and lists what it loaded. Anything else (no match, an error, a
+ * result without the structured matches) shows the engine's own text.
+ */
+export function toolSearchCardView(row: ToolUseNestedRow): {
+  target: string
+  lines: string[]
+} {
+  const rawQuery = row.input['query']
+  const query = typeof rawQuery === 'string' ? rawQuery.trim() : ''
+  const selected = /^select:(.+)$/i.exec(query)
+  const requested =
+    selected === null
+      ? null
+      : selected[1]!.split(',').map(name => name.trim()).filter(Boolean)
+  const target =
+    requested !== null && requested.length > 0
+      ? requested.join(', ')
+      : query.length > 0
+        ? query
+        : row.toolName
+  const result = row.result
+  if (!result) return { target, lines: [] }
+  const matches = result.toolSearch?.matches
+  if (result.isError || matches === undefined || matches.length === 0) {
+    return {
+      target,
+      lines: result.content.length > 0 ? result.content.split('\n') : [],
+    }
+  }
+  const sameAsRequested =
+    requested !== null &&
+    requested.length === matches.length &&
+    requested.every(name =>
+      matches.some(match => match.toLowerCase() === name.toLowerCase()),
+    )
+  return { target, lines: sameAsRequested ? [] : matches }
 }
 
 export function toolCardFilePath(row: ToolUseNestedRow): string | null {

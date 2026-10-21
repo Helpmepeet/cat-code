@@ -275,14 +275,30 @@ export type ToolResultProjection = {
    */
   agentUsage?: { totalTokens: number; toolUses: number }
   /**
-   * Structured TaskOutput retrieval for a local agent. The display consumes the
-   * clean `task.result` when present, falling back to `task.output`; it never
-   * parses the model-facing XML/text payload.
+   * Structured TaskOutput retrieval (`TaskOutputTool` `TaskOutputToolOutput`).
+   * The display reads these fields and never parses the model-facing XML/text
+   * payload. `output` is null when the engine supplied nothing a user should
+   * read: a local agent's `output` is either the model's own "still running"
+   * guidance or, once finished without a clean `result`, the raw on-disk
+   * transcript, so only `task.result` counts for that type.
    */
   taskOutput?: {
+    retrievalStatus: 'success' | 'timeout' | 'not_ready'
     taskId: string
+    taskType: string
+    status: string
     description: string
-    output: string
+    output: string | null
+    exitCode: number | null
+    error: string | null
+  }
+  /**
+   * ToolSearch's structured result. Its model-facing content is a list of
+   * `tool_reference` blocks, which carry no text, so without this the card has
+   * nothing to show for a search that loaded tools.
+   */
+  toolSearch?: {
+    matches: string[]
   }
   /**
    * The immutable destination supplied by the `CreatePeer` tool's own structured
@@ -2719,6 +2735,7 @@ function projectToolResultBlock(
   const agentAccount = extractAgentAccount(toolUseResult)
   const agentUsage = extractAgentUsage(toolUseResult)
   const taskOutput = extractTaskOutput(toolUseResult)
+  const toolSearch = extractToolSearch(toolUseResult)
   const createdPeer =
     block.is_error === true ? null : extractCreatedPeer(toolUseResult)
   const contentProjection = projectToolResultContent(block.content)
@@ -2761,6 +2778,7 @@ function projectToolResultBlock(
     ...(agentAccount !== null ? { agentAccount } : {}),
     ...(agentUsage !== null ? { agentUsage } : {}),
     ...(taskOutput !== null ? { taskOutput } : {}),
+    ...(toolSearch !== null ? { toolSearch } : {}),
     ...(createdPeer !== null ? { createdPeer } : {}),
   }
 }
@@ -2980,16 +2998,64 @@ function extractAgentAccount(
 function extractTaskOutput(
   toolUseResult: unknown,
 ): ToolResultProjection['taskOutput'] | null {
-  if (!isRecord(toolUseResult) || toolUseResult.retrieval_status !== 'success') {
+  if (!isRecord(toolUseResult)) return null
+  const retrievalStatus = toolUseResult.retrieval_status
+  if (
+    retrievalStatus !== 'success' &&
+    retrievalStatus !== 'timeout' &&
+    retrievalStatus !== 'not_ready'
+  ) {
     return null
   }
   const task = toolUseResult.task
-  if (!isRecord(task) || task.task_type !== 'local_agent') return null
+  if (!isRecord(task)) return null
   const taskId = nonEmptyString(task.task_id)
+  const taskType = nonEmptyString(task.task_type)
+  const status = nonEmptyString(task.status)
   const description = nonEmptyString(task.description)
-  const output = nonEmptyString(task.result) ?? nonEmptyString(task.output)
-  if (taskId === null || description === null || output === null) return null
-  return { taskId, description, output }
+  if (taskId === null || taskType === null || status === null || description === null) {
+    return null
+  }
+  const output =
+    taskType === 'local_agent'
+      ? nonEmptyString(task.result)
+      : typeof task.output === 'string' && task.output.trim().length > 0
+        ? task.output.trimEnd()
+        : null
+  const exitCode =
+    typeof task.exitCode === 'number' && Number.isInteger(task.exitCode)
+      ? task.exitCode
+      : null
+  return {
+    retrievalStatus,
+    taskId,
+    taskType,
+    status,
+    description,
+    output,
+    exitCode,
+    error: nonEmptyString(task.error),
+  }
+}
+
+function extractToolSearch(
+  toolUseResult: unknown,
+): ToolResultProjection['toolSearch'] | null {
+  if (
+    !isRecord(toolUseResult) ||
+    typeof toolUseResult.query !== 'string' ||
+    typeof toolUseResult.total_deferred_tools !== 'number'
+  ) {
+    return null
+  }
+  const matches: unknown = toolUseResult.matches
+  if (
+    !Array.isArray(matches) ||
+    !matches.every((match): match is string => typeof match === 'string')
+  ) {
+    return null
+  }
+  return { matches }
 }
 
 /** Canonical display form for names from both live frames and result objects. */
@@ -3182,7 +3248,6 @@ function deriveToolFamily(toolName: string): ToolFamily {
     case 'LSP':
       return 'lsp'
     case 'Skill':
-    case 'ToolSearch':
       return 'skill'
     case 'Agent':
     case 'Task':

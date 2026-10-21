@@ -168,7 +168,7 @@ import {
   type FaceAxes,
 } from './agentFace.js'
 import { AgentFace } from './AgentChrome.js'
-import { deriveTarget, derivePeerTargetParts, peerTargetFragment, toolCardFilePath, displayFilePath, type PeerTargetParts } from './transcriptToolTarget.js'
+import { deriveTarget, derivePeerTargetParts, peerTargetFragment, toolCardFilePath, displayFilePath, toolSearchCardView, type PeerTargetParts } from './transcriptToolTarget.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
 import { AgentPanelContext, AgentRevealContext, containsAgentTool, type AgentRevealRequest } from './transcriptAgentReveal.js'
 import { agentToolSourceOf, agentActivityOf, agentProgressBadge, agentModelOf, agentAccountLabel } from './transcriptAgent.js'
@@ -3136,6 +3136,8 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // shape does not change when the call was stopped: the row still says who
   // this session was talking to and what it said.
   if (isPeerSpeechCall(row.toolName)) return <PeerSpeechRow row={row} />
+  // Also ahead of the cancelled branch: a stopped search keeps its own mark.
+  if (row.toolName === 'ToolSearch') return <ToolSearchCard row={row} />
   const fileDiffs = row.result?.fileDiffs
   if (row.toolFamily === 'edit' && fileDiffs && fileDiffs.length > 1) {
     return <PatchFileCards row={row} diffs={fileDiffs} />
@@ -3538,30 +3540,123 @@ function ToolCancelledBody() {
   )
 }
 
-function TaskOutputCard({ row }: { row: ToolUseNestedRow }) {
-  const output = row.result?.taskOutput
-  if (!output) return null
+/**
+ * ToolSearch keeps the Search family's mark and hue but not its word: it loads
+ * tool definitions rather than searching files, and it is not in the `grep`
+ * family because that family folds into Grep/Glob runs (`toolRunLayout.ts`).
+ */
+const TOOL_SEARCH_PRESENTATION = { mark: FAMILY_STYLE.grep.mark, word: 'Tools' }
+
+function ToolSearchCard({ row }: { row: ToolUseNestedRow }) {
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const view = toolSearchCardView(row)
+  const body =
+    row.status === 'cancelled' ? (
+      <ToolCancelledBody />
+    ) : view.lines.length > 0 ? (
+      <PlainLinesBody
+        content={view.lines.join('\n')}
+        isError={row.result?.isError === true}
+        onOpenFull={null}
+        toolUseId={row.toolUseId}
+      />
+    ) : null
   return (
     <ToolCardShell
-      family="other"
-      target="Task Output"
+      family={row.toolFamily}
+      presentation={TOOL_SEARCH_PRESENTATION}
+      tone={FAMILY_STYLE.grep.color}
+      target={view.target}
       status={row.status}
       expansionKey={row.toolUseId}
-      defaultExpanded
-      headerBadge={
-        <span className="font-mono text-[10px] text-text-subtle">
-          {output.taskId.slice(0, 8)}
-        </span>
+      defaultExpanded={
+        toolsExpanded || row.status === 'error' || row.status === 'cancelled'
       }
     >
-      <div className="flex flex-col gap-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-text-subtle">
-          {output.description}
-        </span>
-        <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-muted">
-          {output.output}
+      {body}
+    </ToolCardShell>
+  )
+}
+
+type TaskOutputProjection = NonNullable<ToolResultProjection['taskOutput']>
+
+/**
+ * The card's state is the TASK's, not the retrieval call's: a read that worked
+ * on a shell that exited 1 is a failure to the user, and a read that timed out
+ * means the task is still going. A call that itself failed or was stopped keeps
+ * its own state.
+ */
+function taskOutputCardStatus(
+  rowStatus: ToolCardStatus,
+  task: TaskOutputProjection,
+): ToolCardStatus {
+  if (rowStatus !== 'success') return rowStatus
+  switch (task.status) {
+    case 'running':
+    case 'pending':
+      return 'pending'
+    case 'failed':
+      return 'error'
+    case 'killed':
+      return 'cancelled'
+    default:
+      return task.exitCode !== null && task.exitCode !== 0 ? 'error' : 'success'
+  }
+}
+
+function TaskOutputCard({ row }: { row: ToolUseNestedRow }) {
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const task = row.result?.taskOutput
+  if (!task) return null
+  const status = taskOutputCardStatus(row.status, task)
+  const family = task.taskType === 'local_bash' ? FAMILY_STYLE.bash : FAMILY_STYLE.agent
+  const isAgentAnswer = task.taskType === 'local_agent' && task.output !== null
+  const badge =
+    status === 'pending'
+      ? 'still running'
+      : task.exitCode !== null && task.exitCode !== 0
+        ? `exit ${task.exitCode}`
+        : null
+  const hasBody = task.output !== null || task.error !== null
+  return (
+    <ToolCardShell
+      family={row.toolFamily}
+      presentation={{ mark: family.mark, word: 'Output' }}
+      tone={family.color}
+      target={task.description}
+      targetNode={<span className="text-text-primary">{task.description}</span>}
+      status={status}
+      expansionKey={row.toolUseId}
+      defaultExpanded={toolsExpanded || status === 'error' || isAgentAnswer}
+      headerBadge={
+        badge === null ? undefined : (
+          <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-text-subtle">
+            {badge}
+          </span>
+        )
+      }
+    >
+      {hasBody ? (
+        <div className="flex flex-col gap-1.5">
+          {task.output === null ? null : isAgentAnswer ? (
+            <div className="whitespace-pre-wrap break-words text-xs leading-relaxed text-text-muted">
+              {task.output}
+            </div>
+          ) : (
+            <PlainLinesBody
+              content={task.output}
+              isError={false}
+              onOpenFull={null}
+              toolUseId={row.toolUseId}
+            />
+          )}
+          {task.error === null ? null : (
+            <div className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-tone-danger">
+              {task.error}
+            </div>
+          )}
         </div>
-      </div>
+      ) : null}
     </ToolCardShell>
   )
 }
