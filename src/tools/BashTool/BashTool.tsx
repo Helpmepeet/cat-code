@@ -50,6 +50,7 @@ import { trackGitOperations } from '../shared/gitOperationTracking.js';
 import { bashToolHasPermission, commandHasAnyCd, matchWildcardPattern, permissionRuleExtractPrefix } from './bashPermissions.js';
 import { interpretCommandResult, SEMANTIC_COMMAND_NAMES } from './commandSemantics.js';
 import { checkKillOwnership } from './killOwnership.js';
+import { getTestCommandLimits } from '../../utils/testCommandLimits.js';
 import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from './prompt.js';
 import { checkReadOnlyConstraints } from './readOnlyValidation.js';
 import { applySedSubstitution, parseSedEditCommand } from './sedEditParser.js';
@@ -603,7 +604,7 @@ export const BashTool = buildTool({
     // deny returned here is honoured at step 1d of the permission pipeline,
     // before any of those. Kept out of bashPermissions.ts because
     // bashToolHasPermission sits against Bun's feature() DCE budget.
-    const ownership = checkKillOwnership(input.command, context);
+    const ownership = await checkKillOwnership(input.command, context);
     if (ownership) return ownership;
     return bashToolHasPermission(input, context);
   },
@@ -1019,6 +1020,7 @@ async function* runShellCommand({
     preventCwdChanges,
     shouldUseSandbox: shouldUseSandbox(input),
     shouldAutoBackground,
+    testCommandLimits: input.work_lifetime === 'service' ? undefined : getTestCommandLimits(command),
     // Already carried this far to attribute background tasks to their agent.
     // exec needs the same fact to decide whether the child gets the worker
     // environment allowlist.

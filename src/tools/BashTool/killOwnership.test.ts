@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { spawn } from 'child_process'
+import { once } from 'node:events'
 import type { AppState } from '../../state/AppState.js'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import { asAgentId } from '../../types/ids.js'
@@ -15,6 +16,7 @@ import {
   ownedShellPids,
 } from './killOwnership.js'
 import { BashTool } from './BashTool.js'
+import { readProcessParents, isProcessDescendant } from '../../utils/processSnapshot.js'
 
 // A general-purpose subagent swept the machine for process ids in one Bash
 // call and terminated fifteen of them in the next. Splitting discovery from
@@ -40,7 +42,7 @@ function shellTask(
     status,
     command: 'cat-code -p --model gpt-5.6-luna',
     completionStatusSentInAttachment: false,
-    shellCommand: { pid } as unknown as ShellCommand,
+    shellCommand: { pid, status } as unknown as ShellCommand,
     lastReportedTotalLines: 0,
     isBackgrounded: true,
     agentId,
@@ -112,8 +114,8 @@ describe('kill ownership at the Bash permission entry point', () => {
     expect(result.behavior).not.toBe('deny')
   })
 
-  test('another agent owning the process is not the same as owning it', () => {
-    const result = checkKillOwnership(
+  test('another agent owning the process is not the same as owning it', async () => {
+    const result = await checkKillOwnership(
       'kill -9 37882',
       context({
         agentId: RITCHIE,
@@ -123,8 +125,8 @@ describe('kill ownership at the Bash permission entry point', () => {
     expect(result?.behavior).toBe('deny')
   })
 
-  test('a finished task no longer lends its process id', () => {
-    const result = checkKillOwnership(
+  test('a finished task no longer lends its process id', async () => {
+    const result = await checkKillOwnership(
       'kill 37882',
       context({
         agentId: RITCHIE,
@@ -134,8 +136,8 @@ describe('kill ownership at the Bash permission entry point', () => {
     expect(result?.behavior).toBe('deny')
   })
 
-  test('one unowned target in a list of owned ones still denies', () => {
-    const result = checkKillOwnership(
+  test('one unowned target in a list of owned ones still denies', async () => {
+    const result = await checkKillOwnership(
       'kill 37882 37884',
       context({
         agentId: RITCHIE,
@@ -144,13 +146,13 @@ describe('kill ownership at the Bash permission entry point', () => {
     )
     expect(expectDeny(result).decisionReason).toEqual({
       type: 'asyncAgent',
-      reason: 'kill targets 37884 were not started by this agent',
+      reason: 'kill targets 37884 are not owned by a running shell of this agent',
     })
   })
 
-  test('the deny message points at no tool the worker lacks', () => {
+  test('the deny message points at no tool the worker lacks', async () => {
     const message = expectDeny(
-      checkKillOwnership(INCIDENT_COMMAND, context({ agentId: RITCHIE })),
+      await checkKillOwnership(INCIDENT_COMMAND, context({ agentId: RITCHIE })),
     ).message
     expect(message).not.toContain('TaskStop')
     expect(message).not.toContain('KillShell')
@@ -180,8 +182,8 @@ describe('kill forms a subagent cannot be allowed', () => {
     'echo hi && kill 37882',
   ]
   for (const command of denied) {
-    test(command, () => {
-      const result = checkKillOwnership(command, context({ agentId: RITCHIE }))
+    test(command, async () => {
+      const result = await checkKillOwnership(command, context({ agentId: RITCHIE }))
       expect(result?.behavior).toBe('deny')
     })
   }
@@ -199,8 +201,8 @@ describe('commands that only mention stopping something', () => {
     'bun test src/tools/BashTool/killOwnership.test.ts',
   ]
   for (const command of allowed) {
-    test(command, () => {
-      expect(checkKillOwnership(command, context({ agentId: RITCHIE }))).toBe(
+    test(command, async () => {
+      expect(await checkKillOwnership(command, context({ agentId: RITCHIE }))).toBe(
         null,
       )
     })
@@ -208,6 +210,46 @@ describe('commands that only mention stopping something', () => {
 })
 
 describe('ownership is read from a real spawned shell', () => {
+  test('the permission entry point admits a live test child, but not its group or another worker', async () => {
+    if (process.platform === 'win32') return
+    // The shell remains the tracked task; the worker sees the long-running
+    // command's child PID in ps, exactly as in the memory incident.
+    const child = spawn('/bin/sh', ['-c', 'sleep 30 & wait'], {
+      detached: true, stdio: 'ignore',
+    })
+    const shellCommand = wrapSpawn(child, new AbortController().signal, 30_000,
+      new TaskOutput('kill_ownership_descendant_test', null, false))
+    const task = { ...shellTask(RITCHIE, undefined), shellCommand }
+    const owner = context({ agentId: RITCHIE, tasks: { t: task } })
+    try {
+      let descendant: number | undefined
+      for (let i = 0; i < 50 && !descendant; i++) {
+        const parents = await readProcessParents()
+        descendant = [...parents.keys()].find(pid => pid !== child.pid && isProcessDescendant(pid, child.pid!, parents))
+        if (!descendant) await Bun.sleep(20)
+      }
+      expect(descendant).toBeDefined()
+      const permission = await BashTool.checkPermissions({ command: `kill -TERM ${descendant}` }, owner)
+      expect(permission.behavior).not.toBe('deny')
+      expect((await checkKillOwnership(`kill -- -${descendant}`, owner))?.behavior).toBe('deny')
+      expect((await checkKillOwnership(`kill ${descendant}`, context({
+        agentId: GOLDSTINE, tasks: { t: task },
+      })))?.behavior).toBe('deny')
+      // Carry the admitted command through BashTool.call, then wait for the
+      // original shell result. This verifies the permission and launch paths.
+      const exited = once(child, 'exit')
+      await BashTool.call({ command: `kill -TERM ${descendant}` }, owner)
+      await exited
+      await shellCommand.result
+      expect(await checkKillOwnership(`kill ${descendant}`, owner)).toMatchObject({ behavior: 'deny' })
+      expect(await checkKillOwnership(`kill ${child.pid}`, owner)).toMatchObject({ behavior: 'deny' })
+    } finally {
+      shellCommand.kill()
+      await shellCommand.result
+      shellCommand.cleanup()
+    }
+  })
+
   test('a running shell task lends the process id of its own child', async () => {
     if (process.platform === 'win32') {
       return
@@ -240,7 +282,7 @@ describe('ownership is read from a real spawned shell', () => {
 describe('findKillInvocations', () => {
   test('reads a process group target as its positive group id', () => {
     expect(findKillInvocations('kill -9 -37882')).toEqual([
-      { kind: 'pids', program: 'kill', pids: [37882] },
+      { kind: 'pids', program: 'kill', pids: [37882], groups: [37882] },
     ])
   })
 

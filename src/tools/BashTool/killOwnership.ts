@@ -63,7 +63,7 @@ const MAX_SIGNAL_NUMBER = 64
 
 export type KillTargets =
   /** Every target resolved to a literal number. Group ids are stored positive. */
-  | { kind: 'pids'; program: string; pids: number[] }
+  | { kind: 'pids'; program: string; pids: number[]; groups?: number[] }
   /** At least one target cannot be resolved without running the command. */
   | { kind: 'unresolvable'; program: string }
 
@@ -93,8 +93,9 @@ function programName(token: string): string {
  * argument is something other than a literal number or a signal flag, because
  * a target we cannot name is a target we cannot prove is ours.
  */
-function parseKillArguments(args: string[]): number[] | null {
+function parseKillArguments(args: string[]): { pids: number[]; groups?: number[] } | null {
   const pids: number[] = []
+  const groups: number[] = []
   let optionsEnded = false
   for (let i = 0; i < args.length; i++) {
     const arg = unquote(args[i]!)
@@ -124,6 +125,7 @@ function parseKillArguments(args: string[]): number[] | null {
           continue
         }
         pids.push(value)
+        groups.push(value)
         continue
       }
       if (!optionsEnded && /^[A-Za-z][A-Za-z0-9]*$/.test(body)) {
@@ -137,7 +139,7 @@ function parseKillArguments(args: string[]): number[] | null {
     }
     return null
   }
-  return pids
+  return { pids, ...(groups.length ? { groups } : {}) }
 }
 
 /**
@@ -187,11 +189,11 @@ export function findKillInvocations(command: string): KillTargets[] {
       found.push({ kind: 'unresolvable', program })
       continue
     }
-    const pids = parseKillArguments(tokens.slice(i + 1))
+    const targets = parseKillArguments(tokens.slice(i + 1))
     found.push(
-      pids === null
+      targets === null
         ? { kind: 'unresolvable', program }
-        : { kind: 'pids', program, pids },
+        : { kind: 'pids', program, ...targets },
     )
   }
   return found
@@ -212,8 +214,9 @@ export function ownedShellPids(
       task.agentId === agentId &&
       task.status === 'running'
     ) {
-      const pid = task.shellCommand?.pid
-      if (pid !== undefined) {
+      const shell = task.shellCommand
+      const pid = shell?.pid
+      if (pid !== undefined && (shell?.status === 'running' || shell?.status === 'backgrounded')) {
         pids.add(pid)
       }
     }
@@ -230,12 +233,12 @@ const DENY_GUIDANCE =
 /**
  * Deny a subagent's attempt to terminate a process it did not start.
  * Returns null for the main thread, for commands that terminate nothing, and
- * for targets that are all this agent's own shells.
+ * for targets that are all this agent's own live shells or positive descendants.
  */
-export function checkKillOwnership(
+export async function checkKillOwnership(
   command: string,
   context: ToolUseContext,
-): PermissionResult | null {
+): Promise<PermissionResult | null> {
   const agentId = context.agentId
   if (!agentId) {
     return null
@@ -249,6 +252,10 @@ export function checkKillOwnership(
     return null
   }
   const owned = ownedShellPids(agentId, context.getAppState())
+  const shells = Object.values(context.getAppState().tasks ?? {})
+    .filter(isLocalShellTask)
+    .filter(task => task.agentId === agentId && task.status === 'running')
+    .flatMap(task => task.shellCommand ? [task.shellCommand] : [])
   for (const invocation of invocations) {
     if (invocation.kind === 'unresolvable') {
       return {
@@ -264,18 +271,33 @@ export function checkKillOwnership(
         },
       }
     }
-    const foreign = invocation.pids.filter(pid => !owned.has(pid))
+    const foreign: number[] = []
+    for (const pid of invocation.pids) {
+      if (owned.has(pid)) continue
+      // A negative target signals an entire group. Descendant ownership only
+      // proves one positive PID; it must not lend an unrelated group that id.
+      let descendant = false
+      if (!invocation.groups?.includes(pid)) {
+        for (const shell of shells) {
+          if (await shell.ownsProcess?.(pid)) {
+            descendant = true
+            break
+          }
+        }
+      }
+      if (!descendant) foreign.push(pid)
+    }
     if (foreign.length > 0) {
       return {
         behavior: 'deny',
         message:
           `Permission to use ${BASH_TOOL_NAME} with command ${command} has been denied. ` +
-          `You did not start ${foreign.length === 1 ? 'process' : 'processes'} ` +
-          `${foreign.join(', ')}, and other work on this machine may depend on ${foreign.length === 1 ? 'it' : 'them'}. ` +
+          `Could not verify that ${foreign.length === 1 ? 'process' : 'processes'} ` +
+          `${foreign.join(', ')} ${foreign.length === 1 ? 'belongs' : 'belong'} to a running command you started. ` +
           DENY_GUIDANCE,
         decisionReason: {
           type: 'asyncAgent',
-          reason: `kill targets ${foreign.join(', ')} were not started by this agent`,
+          reason: `kill targets ${foreign.join(', ')} are not owned by a running shell of this agent`,
         },
       }
     }

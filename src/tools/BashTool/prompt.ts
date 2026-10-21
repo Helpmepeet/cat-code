@@ -260,6 +260,7 @@ export function getBashPrompt(
     'Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.',
     'If a command fails or returns no output, do not assume success: check the exit status and stderr, then retry with a corrected command or report the failure with its output. Empty output is a result to interpret, not a completion signal.',
     `You may specify an optional timeout in milliseconds (up to ${getMaxTimeoutMs()}ms / ${getMaxTimeoutMs() / 60000} minutes). By default, your command will timeout after ${getDefaultTimeoutMs()}ms (${getDefaultTimeoutMs() / 60000} minutes).`,
+    'On macOS and Linux, recognized finite bun/npm/pnpm/yarn test commands have a separate 30-minute execution limit and a process-tree memory limit of 4 GiB or one quarter of physical RAM, whichever is smaller. These limits remain active after backgrounding. Configure CAT_CODE_TEST_TIMEOUT_MS and CAT_CODE_TEST_MAX_MEMORY_MB in the engine environment to override them. Watch mode and commands mixing tests with other work keep their ordinary command behavior.',
     ...(backgroundNote !== null ? [backgroundNote] : []),
     'When issuing multiple commands:',
     multipleCommandsSubitems,
