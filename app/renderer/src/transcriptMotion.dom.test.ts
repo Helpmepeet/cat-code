@@ -4,7 +4,7 @@ import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { ServerFrame } from '../../shared/protocol.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { TranscriptMotionContext, useTranscriptMotion } from './transcriptMotion.js'
-import { TranscriptRowsView, ToolInspectorOverlay } from './TranscriptView.js'
+import { TranscriptRowsView } from './TranscriptView.js'
 import {
   createTranscriptState,
   projectServerFrame,
@@ -360,24 +360,6 @@ test('a new nested streaming row receives a first-batch arrival after its parent
   const tree = await harness.mount(createElement(MotionProbe, { rows: [parent] }))
   await tree.render(createElement(MotionProbe, { rows: [{ ...parent, children: [child] }] }))
   expect(tree.container.querySelector('[data-arriving]')?.getAttribute('data-arriving')).toBe('true')
-})
-
-test('inspector animates an open action, not a pre-opened mount or remount', async () => {
-  let state = projectServerFrame(createTranscriptState(), ready)
-  state = project(state, assistant(f, 'bash-3', 'Bash', { command: 'echo detail' }))
-  state = project(state, result(g, 'bash-3', 'detail'))
-  const row = rows(state).find(row => row.kind === 'tool-use')
-  if (!row || row.kind !== 'tool-use') throw new Error('projector lost tool card')
-  const closed = await harness.mount(createElement(ToolInspectorOverlay, { row: null, onClose: () => {} }))
-  await closed.render(createElement(ToolInspectorOverlay, { row, onClose: () => {} }))
-  expect(closed.container.querySelector('.animate-scrim-in')).not.toBeNull()
-  expect(closed.container.querySelector('.animate-drawer-in')).not.toBeNull()
-  await closed.render(createElement(ToolInspectorOverlay, { row, onClose: () => {} }))
-  expect(closed.container.querySelector('.animate-drawer-in')).not.toBeNull()
-  await closed.unmount()
-  const remount = await harness.mount(createElement(ToolInspectorOverlay, { row, onClose: () => {} }))
-  expect(remount.container.querySelector('.animate-scrim-in')).toBeNull()
-  expect(remount.container.querySelector('.animate-drawer-in')).toBeNull()
 })
 
 test('live row arrival survives a split-commit regroup without restarting the wrapper', async () => {

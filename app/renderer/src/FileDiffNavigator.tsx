@@ -8,11 +8,15 @@ export function FileDiffNavigator({
   diffs,
   initialFileIndex = 0,
   showPath = true,
+  barClassName = 'mb-2',
+  bodyClassName,
   renderDiff,
 }: {
   diffs: readonly ToolDiffProjection[]
   initialFileIndex?: number
   showPath?: boolean
+  barClassName?: string
+  bodyClassName?: string
   renderDiff: (diff: ToolDiffProjection, index: number) => ReactNode
 }): ReactNode {
   const [fileIndex, setFileIndex] = useState(initialFileIndex)
@@ -24,7 +28,7 @@ export function FileDiffNavigator({
   return (
     <>
       {multiple || showPath || diff.operation ? (
-        <div className="mb-2 flex min-w-0 items-center gap-2 font-mono text-[11px] text-text-muted">
+        <div className={`${barClassName} flex min-w-0 items-center gap-2 font-mono text-[11px] text-text-muted`}>
           {multiple ? (
             <>
               <button type="button" aria-label="Previous file" className={buttonClass}
@@ -47,7 +51,7 @@ export function FileDiffNavigator({
           {showPath ? <span className="min-w-0 truncate" title={diff.filePath}>{diff.filePath}</span> : null}
         </div>
       ) : null}
-      <div key={`${selectedIndex}:${diff.filePath}`}>{renderDiff(diff, selectedIndex)}</div>
+      <div key={`${selectedIndex}:${diff.filePath}`} className={bodyClassName}>{renderDiff(diff, selectedIndex)}</div>
     </>
   )
 }

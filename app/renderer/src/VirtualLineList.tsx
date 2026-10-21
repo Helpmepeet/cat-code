@@ -57,12 +57,19 @@ export function VirtualLineList({
   lines,
   activeIndex,
   className,
+  label,
   renderBeforeIndex,
   renderLine,
 }: {
   lines: readonly string[]
   activeIndex: number | null
   className: string
+  /**
+   * Names the scroller and makes it a focusable region. A list that IS the body
+   * of its surface needs this so the keyboard can scroll it; one inline in a
+   * card leaves it unset and stays out of the tab order.
+   */
+  label?: string
   renderBeforeIndex?: (index: number) => ReactNode
   renderLine: (line: string, index: number) => ReactNode
 }): ReactNode {
@@ -251,6 +258,9 @@ export function VirtualLineList({
     <div
       ref={rootRef}
       className={className}
+      role={label === undefined ? undefined : 'region'}
+      aria-label={label}
+      tabIndex={label === undefined ? undefined : 0}
       onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
     >
       {lineWindow.topSpacerHeight > 0 ? (

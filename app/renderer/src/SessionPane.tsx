@@ -1699,7 +1699,8 @@ export function SessionPane({
     <SubagentWorkspace key={activeSessionId} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
       onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
       onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
-      onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}>
+      onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}
+      outputRows={revealHidden ? selectNestedTranscriptRows(transcript, activeSessionId, true) : nestedRows}>
     <main className="session-pane relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-8">
       {/* No chat header row: the prototype's ChatView has none (the session
        * title lives in the TabBar; the title + actions overflow menu is the

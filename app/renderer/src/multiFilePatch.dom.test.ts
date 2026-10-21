@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ServerFrame } from '../../shared/protocol.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
+import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { createTranscriptState, projectServerFrame, selectNestedTranscriptRows } from './transcriptProjector.js'
@@ -141,7 +142,12 @@ test('a production multi-file patch renders separate file cards and opens the ma
   try {
     const projected = await projectPatchRows()
     const tree = await harness.mount(createElement(ToolsExpandedContext.Provider, { value: { expanded: false, setExpanded: () => {} } },
-      createElement(TranscriptRowsView, { rows: projected.rows, cwd: '/repo' }),
+      createElement(SubagentWorkspace, {
+        dock: { active: [], finished: [], chipFaces: [], nextUpdateAt: null },
+        collapsed: false, onCollapsedChange() {}, onClearFinished() {}, onDetailsVisibleChange() {},
+        onFallback() {}, onOpenWorkers() {}, rows: projected.rows, cwd: '/repo',
+        children: createElement(TranscriptRowsView, { rows: projected.rows, cwd: '/repo' }),
+      }),
     ))
     expect(tree.container.querySelector('[aria-label="File number"]')).toBeNull()
     expect(tree.container.querySelector('[aria-label="Next file"]')).toBeNull()
@@ -167,12 +173,15 @@ test('a production multi-file patch renders separate file cards and opens the ma
     expect(openFull).toBeDefined()
     await act(async () => { openFull.click() })
 
-    const dialog = tree.container.querySelector<HTMLElement>('[role="dialog"]')!
+    const dialog = tree.container.querySelector<HTMLElement>('aside[aria-label="Full output"]')!
     expect(dialog).not.toBeNull()
-    expect(dialog.textContent).toContain('Diff · /repo/src/b.ts')
+    const fileBar = () => dialog.querySelector('.tool-output-files')?.textContent ?? ''
+    expect(fileBar()).toContain('/repo/src/b.ts')
     expect(dialog.querySelector<HTMLInputElement>('[aria-label="File number"]')!.value).toBe('2')
-    expect(dialog.textContent).not.toContain('Diff · /repo/extra-299.txt')
-    expect(dialog.querySelectorAll('[aria-label="Search output"]').length).toBe(2)
+    expect(fileBar()).not.toContain('/repo/extra-299.txt')
+    // The patch's text result is a second tab, not a second stacked toolbar.
+    expect(dialog.querySelectorAll('[aria-label="Search output"]').length).toBe(1)
+    expect([...dialog.querySelectorAll('[role="tab"]')].map(tab => tab.textContent)).toEqual(['Changes', 'Result'])
     expect(dialog.querySelectorAll('*').length).toBeLessThan(MAX_MOUNTED_OUTPUT_LINES * 6)
 
     await act(async () => { button(dialog, 'Copy output').click() })
@@ -189,25 +198,25 @@ test('a production multi-file patch renders separate file cards and opens the ma
     expect(dialog.querySelector('mark')?.textContent).toBe('tail_399')
 
     await act(async () => { button(dialog, 'Next file').click() })
-    expect(dialog.textContent).toContain('Diff · /repo/removed.ts')
+    expect(fileBar()).toContain('/repo/removed.ts')
     expect(dialog.textContent).toContain('Deleted')
     await act(async () => { button(dialog, 'Copy output').click() })
     expect(clipboardWrites.at(-1)).toBe('-removedContent')
     expect(dialog.querySelector<HTMLInputElement>('[aria-label="Search output"]')!.value).toBe('')
 
     await act(async () => { button(dialog, 'Next file').click() })
-    expect(dialog.textContent).toContain('Diff · /repo/empty.txt')
+    expect(fileBar()).toContain('/repo/empty.txt')
     expect(dialog.textContent).toContain('Deleted')
     expect(dialog.textContent).toContain('No diff lines.')
-    await act(async () => { button(dialog, 'Copy output').click() })
-    expect(clipboardWrites.at(-1)).toBe('')
+    // Nothing to search or copy, so no toolbar to hang those controls on.
+    expect(dialog.querySelector('[aria-label="Copy output"]')).toBeNull()
 
     const drawerFileNumber = dialog.querySelector<HTMLInputElement>('[aria-label="File number"]')!
     await setInput(drawerFileNumber, '305')
-    expect(dialog.textContent).toContain('Diff · /repo/extra-299.txt')
+    expect(fileBar()).toContain('/repo/extra-299.txt')
     expect(dialog.textContent).toContain('Added')
     expect(button(dialog, 'Next file').disabled).toBe(true)
-    expect(dialog.querySelectorAll('[aria-label="Search output"]').length).toBe(2)
+    expect(dialog.textContent).toContain('No diff lines.')
     expect(dialog.querySelectorAll('*').length).toBeLessThan(MAX_MOUNTED_OUTPUT_LINES * 6)
   } finally {
     if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor)

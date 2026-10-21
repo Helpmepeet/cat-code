@@ -2,10 +2,11 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
-  ToolInspectorOverlay,
   TranscriptRowsView,
   TranscriptView,
 } from './TranscriptView.js'
+import { ToolInspector } from './ToolInspector.js'
+import { ToolOutputContext } from './toolOutputPanel.js'
 import {
   findNestedToolUseRow,
   logLineClass,
@@ -5052,21 +5053,25 @@ test('an expanded card whose output fits offers no route to the drawer at all', 
   expect(html).not.toContain('Open full output')
 })
 
-test('P4-1: the inspector overlay renders the REAL projected row (drawer + backdrop)', () => {
+test('the full-output panel renders the REAL projected row, docked rather than modal', () => {
   const html = renderToStaticMarkup(
-    <ToolInspectorOverlay row={projectedBashRow()} onClose={() => {}} />,
+    <ToolInspector row={projectedBashRow()} onClose={() => {}} />,
   )
-  // The header names the ROW, not the drawer: the generic "Tool inspector"
+  // The header names the ROW, not the panel: the generic "Tool inspector"
   // title and the Tool/Summary/Status/Input stack under it went with the footer.
-  expect(html).toContain('echo hi') // real input summary, from the projected row
+  expect(html).toContain('echo hi') // real input target, from the projected row
   expect(html).not.toContain('Tool inspector')
   expect(html).toContain('hi from the shell') // real correlated result output
-  expect(html).toContain('bg-scrim') // the dimmed dismiss backdrop
+  // Docked beside the transcript (operator, 2026-10-21): no dimmed backdrop and
+  // no modal dialog keeping the transcript out of reach.
+  expect(html).toContain('<aside class="tool-output-panel" aria-label="Full output"')
+  expect(html).not.toContain('bg-scrim')
+  expect(html).not.toContain('aria-modal')
 })
 
-test('P4-1: the inspector overlay renders nothing when closed (null row)', () => {
+test('the full-output panel renders nothing when closed (null row)', () => {
   expect(
-    renderToStaticMarkup(<ToolInspectorOverlay row={null} onClose={() => {}} />),
+    renderToStaticMarkup(<ToolInspector row={null} onClose={() => {}} />),
   ).toBe('')
 })
 
@@ -5591,7 +5596,11 @@ test('P4-36 — a long file WRITE states the gap too (the second silent body)', 
 })
 
 test('P4-36 — the band offers the route to the complete text, and it is the only one', () => {
-  const html = render(longToolRow('read', 900))
+  const html = renderToStaticMarkup(
+    <ToolOutputContext.Provider value={() => {}}>
+      <TranscriptRowsView rows={[longToolRow('read', 900)]} />
+    </ToolOutputContext.Provider>,
+  )
   expect(html).toContain('Open full output')
   // The band is now the ONLY route in: the card footer that also opened the
   // drawer was removed 2026-08-13. This count was the P4-45 guard against two

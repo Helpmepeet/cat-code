@@ -138,6 +138,13 @@ import {
 } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
+  DIFF_ROW_CLASS,
+  DIFF_SIGN_CLASS,
+  FAMILY_STYLE,
+  WORD_DIM_CLASS,
+  WORD_EMPH_CLASS,
+} from './toolCardPalette.js'
+import {
   MAX_PROSE_ARRIVAL_STAGGER_MS,
   PROSE_ARRIVAL_WORD_CLASS,
   PROSE_ARRIVAL_WORD_STAGGER_MS,
@@ -180,7 +187,7 @@ import { formatModelDisplayName } from './statsState.js'
 import {
   LeaseSnapshotContext,
 } from './leaseState.js'
-import { ToolInspector } from './ToolInspector.js'
+import { ToolOutputContext } from './toolOutputPanel.js'
 import { FileDiffNavigator } from './FileDiffNavigator.js'
 import { selectToolDiffs } from './toolDiffs.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
@@ -213,7 +220,6 @@ import { selectHighlightedSourceRows } from './sourceHighlight.js'
 import {
   selectDiffRows,
   selectRowWordSegments,
-  type DiffLineKind,
   type DiffRow,
   type WordDiffSide,
 } from './diffRowModel.js'
@@ -239,7 +245,6 @@ import {
   type TranscriptLayoutItem,
 } from './toolRunLayout.js'
 import { TranscriptMotionContext, useTranscriptMotion } from './transcriptMotion.js'
-import { useEntranceOnChange } from './entranceLatch.js'
 import {
   formatGrepDigest,
   grepDigest,
@@ -247,7 +252,6 @@ import {
   type GrepDigest,
 } from './grepResult.js'
 import {
-  findNestedToolUseRow,
   logLineClass,
   narrationRowIds,
   resolveToolCardExpanded,
@@ -264,25 +268,10 @@ import {
 } from './inlineOutputWindow.js'
 
 /**
- * P4-1 open-from-card handle: the truncation reveal band calls this with its
- * card's own REAL projected row to open the `ToolInspector` drawer. Provided by
- * `TranscriptRowsView`, which owns the selected-row state and renders the
- * overlay. Default `null` so a tool card rendered outside a transcript (a direct
- * unit test) simply omits the band's button. The published value is a stable
- * `useCallback` handle, so exposing it via context never defeats the memoized
- * row subtree.
- *
- * The band is now the ONLY route in. The always-present `Inspector` card footer
- * that also held this handle was removed 2026-08-13
- * (`docs/reports/2026-08-12-tool-inspector-ux-review.md`): it was a second
- * always-visible entry to a destination that repeated the card, so the drawer is
- * reached only for output a card had to cut.
- */
-/**
  * Backgrounding one running subagent, from its own transcript card.
  *
  * A context rather than a prop drilled through the row tree, mirroring
- * `ToolInspectorContext` right below: an agent card sits an unknown number of
+ * `ToolOutputContext` (`toolOutputPanel.ts`): an agent card sits an unknown number of
  * levels down (top-level row, delegate-group member, nested sub-agent branch),
  * and every level between here and it is generic over row kind.
  *
@@ -317,9 +306,6 @@ const AGENT_BACKGROUND_ANCHOR_CLASS: Record<ToolCardStyle, string> = {
   lines: 'right-0 h-[25px]',
 }
 
-const ToolInspectorContext = createContext<((row: ToolUseNestedRow, fileIndex?: number) => void) | null>(
-  null,
-)
 const TurnErrorActionsContext = createContext<{
   openAccounts?: () => void
   saveDiagnostics?: () => void
@@ -327,13 +313,6 @@ const TurnErrorActionsContext = createContext<{
   retryResultId?: string
 }>({})
 
-/**
- * Re-derive the inspected tool row from the CURRENT rows by id (review F1). The
- * inspector stores only the id; deriving the row each render means a late-arriving
- * tool_result updates the open drawer instead of pinning the stale open-time
- * snapshot, and a vanished id (row pruned / session switched) resolves to null →
- * the drawer closes.
- */
 /**
  * IS-C (M5) — how a restore reads while it is NOT yet a live session. App
  * derives this from the preview flag + connection status (never a frame):
@@ -698,12 +677,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       onRetryTurn(retryTarget.text)
     }
     : undefined
-  // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
-  // — above the memoized rows — so opening the drawer never mutates a row and the
-  // overlay is a sibling of the transcript column, not nested in a scrolling row.
-  const [inspection, setInspection] = useState<{ id: string; fileIndex: number } | null>(null)
-  const openInspector = useCallback((row: ToolUseNestedRow, fileIndex = 0) => setInspection({ id: row.id, fileIndex }), [])
-  const closeInspector = useCallback(() => setInspection(null), [])
   const [filePathMenuState, setFilePathMenuState] = useState<{
     anchor: FilePathActionsAnchor
     rawPath: string
@@ -761,9 +734,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     rows.length === 0 ? null : rows[0].sessionId,
   )
   const faceRegistry = inheritedFaces ?? ownFaces
-  // Re-derive from the LIVE rows so a late tool_result updates the drawer and a
-  // vanished row closes it, instead of pinning the open-time snapshot (F1).
-  const inspected = inspection === null ? null : findNestedToolUseRow(rows, inspection.id)
   const moveView = useWorkspaceMoveView(workspaceMove, boundaryRows, restorePhase === null && !loadEarlierPending)
   const displayRows = useMemo(() => withoutReplacedMoveNotice(withoutWorkspaceTools(rows), workspaceMove), [rows, workspaceMove])
   const moveTransition = useMemo(() => workspaceMove ? {
@@ -973,7 +943,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         <LeaseSnapshotContext.Provider value={leases}>
           <AgentBackgroundContext.Provider value={agentBackground}>
             <CreatedPeerNavigationContext.Provider value={createdPeerNavigation}>
-              <ToolInspectorContext.Provider value={openInspector}>
                 <TurnErrorActionsContext.Provider
                   value={{
                     openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics,
@@ -985,7 +954,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                 >
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
                     {content}
-                    <ToolInspectorOverlay row={inspected} initialFileIndex={inspection?.fileIndex} onClose={closeInspector} />
                     {filePathMenuState ? (
                       <FilePathActionsMenu
                         anchor={filePathMenuState.anchor}
@@ -998,7 +966,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                     ) : null}
                   </FilePathMenuContext.Provider>
                 </TurnErrorActionsContext.Provider>
-              </ToolInspectorContext.Provider>
             </CreatedPeerNavigationContext.Provider>
           </AgentBackgroundContext.Provider>
         </LeaseSnapshotContext.Provider>
@@ -1008,61 +975,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     </TranscriptMotionContext.Provider>
   )
 })
-
-/**
- * P4-1 mount: the `ToolInspector` drawer as a right-side overlay (prototype
- * OutputInspector, Messages.jsx:254 — `position: fixed`, dimmed backdrop, Esc to
- * close). Rendered by `TranscriptRowsView` from the REAL projected row a card's
- * reveal band handed to `openInspector`; a null row renders nothing. Fixed
- * positioning keeps
- * it off the transcript's own scroller (App owns `transcriptScrollRef`), so
- * opening the drawer never perturbs stick-to-bottom. Display degrades gracefully:
- * `ToolInspector` renders text nodes only and never throws on a malformed input.
- */
-export function ToolInspectorOverlay({
-  row,
-  initialFileIndex,
-  onClose,
-}: {
-  row: ToolUseNestedRow | null
-  initialFileIndex?: number
-  onClose: () => void
-}) {
-  const scrimEntrance = useEntranceOnChange(row !== null, row !== null, 'animate-scrim-in')
-  const panelEntrance = useEntranceOnChange(row !== null, row !== null, 'animate-drawer-in')
-  const dialogRef = useRef<HTMLDivElement>(null)
-  useModalFocus({
-    open: row !== null,
-    containerRef: dialogRef,
-    onEscape: onClose,
-  })
-  if (!row) return null
-  return (
-    <div className="fixed inset-0 z-[200] flex justify-end">
-      <div
-        className={`${scrimEntrance.active ? 'animate-scrim-in ' : ''}absolute inset-0 bg-scrim backdrop-blur-[1px]`}
-        ref={scrimEntrance.ref}
-        onAnimationEnd={scrimEntrance.onAnimationEnd}
-        onClick={onClose}
-        aria-hidden
-      />
-      <div
-        ref={element => {
-          dialogRef.current = element
-          panelEntrance.ref(element)
-        }}
-        className={`${panelEntrance.active ? 'animate-drawer-in ' : ''}relative flex h-full shadow-2xl`}
-        onAnimationEnd={panelEntrance.onAnimationEnd}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Full output"
-        tabIndex={-1}
-      >
-        <ToolInspector row={row} initialFileIndex={initialFileIndex} onClose={onClose} />
-      </div>
-    </div>
-  )
-}
 
 const SKELETON_BAR_WIDTHS = ['w-3/4', 'w-full', 'w-5/6', 'w-2/3', 'w-4/5'] as const
 
@@ -2438,40 +2350,6 @@ type OrphanedAgentNestedRow = Extract<
   { kind: 'orphaned-agent' }
 >
 
-/**
- * P4-18b tool-card FAMILY grammar (`Messages.jsx` FrameEShell). Each family's
- * identity is its glyph + uppercase word + accent, applied to the mark/word
- * ONLY (never rails or washes). These are STATIC class strings — Tailwind's
- * scanner never sees an interpolated `text-[${hex}]` (the dynamic-class trap),
- * so the family hues live as literal arbitrary-value classes in this map. The
- * hues match the prototype's family palette; tokenized ones (edit/agent pink,
- * `other` muted) reuse theme tokens.
- */
-const FAMILY_STYLE: Record<
-  ToolFamily,
-  { mark: string; word: string; color: string }
-> = {
-  bash: { mark: '$', word: 'Bash', color: 'text-[light-dark(#4d7c0f,#a3e635)]' },
-  read: { mark: '≡', word: 'Read', color: 'text-[light-dark(#2563eb,#60a5fa)]' },
-  write: { mark: '+', word: 'Write', color: 'text-[light-dark(#c2410c,#fb923c)]' },
-  edit: { mark: '±', word: 'Edit', color: 'text-accent' },
-  grep: { mark: '⌕', word: 'Search', color: 'text-[light-dark(#a35f00,#fbbf24)]' },
-  web: { mark: '↗', word: 'Web', color: 'text-[light-dark(#0e7490,#22d3ee)]' },
-  mcp: { mark: '⧉', word: 'MCP', color: 'text-[light-dark(#7c3aed,#c084fc)]' },
-  notebook: { mark: '▣', word: 'Notebook', color: 'text-[light-dark(#c2410c,#f97316)]' },
-  lsp: { mark: '◈', word: 'LSP', color: 'text-[light-dark(#dc2626,#f87171)]' },
-  skill: { mark: '§', word: 'Skill', color: 'text-[light-dark(#0f766e,#5eead4)]' },
-  agent: { mark: '◆', word: 'Agent', color: 'text-accent' },
-  // Same WORD as the spawn family, hollow mark against its filled one: ◆ creates
-  // an agent, ◇ acts on one that already exists. The hue is the prototype's own
-  // agent-family violet (`Messages.jsx` FE_FAMC `agent:'#a78bfa'`), which this
-  // app left unused by tokenizing its agent family to `text-accent` — an
-  // existing palette hue, not a new one. Literal class string, never
-  // interpolated (the dynamic-class trap this map's header documents).
-  'agent-control': { mark: '◇', word: 'Agent', color: 'text-[light-dark(#6d28d9,#a78bfa)]' },
-  imagegen: { mark: '◰', word: 'Image', color: 'text-[light-dark(#a21caf,#e879f9)]' },
-  other: { mark: '•', word: 'Tool', color: 'text-text-muted' },
-}
 
 /**
  * Cancellation is an engine-persisted result status. It is distinct from a
@@ -3303,7 +3181,7 @@ function PatchFileCard({
 }) {
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
   const filePathContext = useContext(FilePathMenuContext)
-  const openInspector = useContext(ToolInspectorContext)
+  const openOutput = useContext(ToolOutputContext)
   return (
     <ToolCardShell
       family="edit"
@@ -3320,7 +3198,7 @@ function PatchFileCard({
         renderDiff={file => (
           <DiffView
             diff={file}
-            onOpenFull={openInspector ? () => openInspector(row, fileIndex) : null}
+            onOpenFull={openOutput ? () => openOutput(row, fileIndex) : null}
           />
         )}
       />
@@ -4766,16 +4644,16 @@ function ToolCardBody({
 }) {
   // Read before any early return so the hook order is stable across families.
   // The reveal band's escape hatch, over this same real projected row; null
-  // outside a transcript, where the band simply omits the button.
-  const openInspector = useContext(ToolInspectorContext)
-  const openFull = openInspector ? () => openInspector(row) : null
+  // outside a workspace, where the band simply omits the button.
+  const openOutput = useContext(ToolOutputContext)
+  const openFull = openOutput ? () => openOutput(row) : null
 
   if (row.result?.fileDiffs?.length) {
     return (
       <FileDiffNavigator
         diffs={row.result.fileDiffs}
         renderDiff={(diff, index) => (
-          <DiffView diff={diff} onOpenFull={openInspector ? () => openInspector(row, index) : null} />
+          <DiffView diff={diff} onOpenFull={openOutput ? () => openOutput(row, index) : null} />
         )}
       />
     )
@@ -7079,35 +6957,6 @@ function diffCountsBadge(counts: { adds: number; dels: number } | null): ReactNo
   )
 }
 
-// Diff semantics live on the add/delete wash and glyph, while source text takes
-// its base and token colors from the selected code theme.
-const DIFF_ROW_CLASS: Record<DiffLineKind, string> = {
-  // Exact prototype row washes rgba(34,197,94,0.1) / rgba(239,68,68,0.1). NOT the
-  // green-500/red-500 utilities — Tailwind v4's oklch palette drifted those to
-  // #00c758 / #fb2c36, so a literal hex keeps the prototype value exact.
-  add: 'bg-[#22c55e]/10',
-  del: 'bg-[#ef4444]/10',
-  ctx: '',
-}
-
-const DIFF_SIGN_CLASS: Record<DiffLineKind, string> = {
-  add: 'text-tone-success',
-  del: 'text-tone-danger',
-  ctx: 'text-text-ghost',
-}
-
-// Word-level intra-line highlight (prototype DiffView, Messages.jsx:160-168): a
-// CHANGED word carries the exact rgba(248,113,113,0.28) / rgba(74,222,128,0.26)
-// wash (= tone-danger/28, tone-success/26) with a 2px radius + 1px x-pad; an
-// UNCHANGED word dims by opacity so syntax-token colors still lead.
-const WORD_EMPH_CLASS: Record<'del' | 'add', string> = {
-  del: 'rounded-[2px] bg-tone-danger/28 px-px',
-  add: 'rounded-[2px] bg-tone-success/26 px-px',
-}
-const WORD_DIM_CLASS: Record<'del' | 'add', string> = {
-  del: 'opacity-60',
-  add: 'opacity-60',
-}
 
 /**
  * One file's hunks, with the current-file line number in one gutter. The header

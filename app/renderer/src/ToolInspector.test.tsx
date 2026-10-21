@@ -3,9 +3,9 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ToolInspector } from './ToolInspector.js'
 import { describeToolForInspector } from './toolInspectorModel.js'
-import type { ToolUseRow } from './transcriptProjector.js'
+import type { NestedToolUseRow } from './transcriptProjector.js'
 
-function mkToolRow(overrides: Partial<ToolUseRow>): ToolUseRow {
+function mkToolRow(overrides: Partial<NestedToolUseRow>): NestedToolUseRow {
   return {
     id: 's:m:0:toolu_1',
     sessionId: 's',
@@ -21,18 +21,18 @@ function mkToolRow(overrides: Partial<ToolUseRow>): ToolUseRow {
     status: 'pending',
     agentCompletion: null,
     result: null,
+    children: [],
     ...overrides,
   }
 }
 
-test('derives a summary from the real input', () => {
-  const model = describeToolForInspector(
-    mkToolRow({ input: { file_path: '/etc/hosts' } }),
-  )
-  expect(model.summary).toBe('/etc/hosts')
+test('frames the target the way the card does, cwd-relative', () => {
+  const row = mkToolRow({ input: { file_path: '/etc/hosts' } })
+  expect(describeToolForInspector(row).target).toBe('/etc/hosts')
+  expect(describeToolForInspector(row, '/etc').target).toBe('hosts')
 })
 
-test('a resolved Bash card surfaces its summary + output', () => {
+test('a resolved Bash card surfaces its target + output', () => {
   const model = describeToolForInspector(
     mkToolRow({
       toolName: 'Bash',
@@ -42,8 +42,9 @@ test('a resolved Bash card surfaces its summary + output', () => {
       result: { isError: false, content: 'hi\n', diff: null },
     }),
   )
-  expect(model.summary).toBe('echo hi')
+  expect(model.target).toBe('echo hi')
   expect(model.output).toBe('hi\n')
+  expect(model.outputLanguage).toBeNull()
 })
 
 test('a FileEdit result exposes the narrowed diff', () => {
@@ -75,22 +76,43 @@ test('a FileEdit result exposes the narrowed diff', () => {
   expect(model.diffs[0]?.hunks[0].lines).toEqual(['-old', '+new'])
 })
 
-test('narrows tolerantly: empty input has no summary, a non-record input degrades to {}', () => {
-  expect(describeToolForInspector(mkToolRow({ input: {} })).summary).toBe('none')
+test('narrows tolerantly: empty input names the tool, a non-record input degrades to {}', () => {
+  expect(describeToolForInspector(mkToolRow({ input: {} })).target).toBe('Read')
   // A junk input shape (defensive — the wire is unknown) must not crash: it
-  // degrades to `{}`, which is what the `none` summary reports.
+  // degrades to `{}`, which names the tool the way an empty input does.
   const junk = mkToolRow({ input: 42 as unknown as Record<string, unknown> })
-  expect(describeToolForInspector(junk).summary).toBe('none')
+  expect(describeToolForInspector(junk).target).toBe('Read')
 })
 
-test('falls back to the first string value when no priority key is present', () => {
+test('an MCP target reads as server and tool, as on the card', () => {
   const model = describeToolForInspector(
-    mkToolRow({ input: { limit: 10, note: 'inspect me' } }),
+    mkToolRow({ toolName: 'mcp__github__get_issue', toolFamily: 'mcp', input: { number: 7 } }),
   )
-  expect(model.summary).toBe('inspect me')
+  expect(model.target).toBe('github › get_issue')
 })
 
-test('renders the drawer over a real row (diff lines, row named in the header)', () => {
+test('a read or a written file is coloured as its source; a failed write is not', () => {
+  const read = describeToolForInspector(mkToolRow({
+    input: { file_path: '/w/a.ts' },
+    result: { isError: false, content: '1\tconst x = 1', diff: null },
+  }))
+  expect(read.outputLanguage).not.toBeNull()
+  const written = describeToolForInspector(mkToolRow({
+    toolName: 'Write', toolFamily: 'write',
+    input: { file_path: '/w/a.ts', content: 'const x = 1' },
+    result: { isError: false, content: 'File created', diff: null },
+  }))
+  expect(written.outputLanguage).toBe(read.outputLanguage)
+  const failed = describeToolForInspector(mkToolRow({
+    toolName: 'Write', toolFamily: 'write',
+    input: { file_path: '/w/a.ts', content: 'const x = 1' },
+    result: { isError: true, content: 'EACCES', diff: null },
+  }))
+  expect(failed.outputLanguage).toBeNull()
+  expect(failed.failed).toBe(true)
+})
+
+test('renders the panel over a real row (diff lines, row named in the header)', () => {
   const html = renderToStaticMarkup(
     <ToolInspector
       row={mkToolRow({
@@ -117,16 +139,22 @@ test('renders the drawer over a real row (diff lines, row named in the header)',
       })}
     />,
   )
-  // The header names the row (`deriveSummary` over the real input), and the
-  // generic title above it is gone with the rest of the metadata stack.
+  // The header names the row in the card's grammar, and the generic title
+  // above it is gone with the rest of the metadata stack.
   expect(html).toContain('/app/x.ts')
+  expect(html).toContain('>Edit</span>')
   expect(html).not.toContain('Tool inspector')
-  // Diff line tones.
-  expect(html).toContain('text-tone-good')
+  // Diff signs in the card's tones, and the row washes with them.
+  expect(html).toContain('text-tone-success')
   expect(html).toContain('text-tone-danger')
+  expect(html).toContain('bg-[#22c55e]/10')
+  // Changes and a text result are two tabs, not two stacked toolbars.
+  expect(html).toContain('>Changes</button>')
+  expect(html).toContain('>Result</button>')
+  expect(html.split('aria-label="Search output"').length - 1).toBe(1)
 })
 
-test('the drawer opens on the output, not on a restatement of the card', () => {
+test('the panel opens on the output, not on a restatement of the card', () => {
   // 2026-08-13 (`docs/reports/2026-08-12-tool-inspector-ux-review.md`): the
   // Tool / Summary / Status / raw-Input stack that used to sit above the output
   // repeated the expanded card the user reached this from. All four are gone.
@@ -142,12 +170,12 @@ test('the drawer opens on the output, not on a restatement of the card', () => {
     />,
   )
 
-  expect(html).toContain('Output') // the one section label left, plus Diff
+  expect(html).toContain('aria-label="Output"') // the body, and nothing above it
   expect(html).not.toContain('>Tool<')
   expect(html).not.toContain('>Summary<')
   expect(html).not.toContain('>Status<')
   expect(html).not.toContain('>Input<')
-  // The raw structured input went with them: no JSON keys reach the drawer.
+  // The raw structured input went with them: no JSON keys reach the panel.
   expect(html).not.toContain('description')
 })
 
@@ -180,15 +208,15 @@ test('renders a Diff section for a real Apply_patch row (E1 — edit-family, fil
       })}
     />,
   )
-  // The Diff section header + the patched path render.
-  expect(html).toContain('Diff · ')
+  // The patched path names the row, and the panel opens on its changes.
   expect(html).toContain('/app/y.ts')
+  expect(html).toContain('aria-selected="true" tabindex="0">Changes</button>')
   // Add/remove diff-line tones present (proves hunk lines rendered).
-  expect(html).toContain('text-tone-good')
+  expect(html).toContain('text-tone-success')
   expect(html).toContain('text-tone-danger')
 })
 
-test('a diff-less Bash row shows NO Diff section (contrast to Apply_patch)', () => {
+test('a diff-less Bash row has no Changes tab (contrast to Apply_patch)', () => {
   const html = renderToStaticMarkup(
     <ToolInspector
       row={mkToolRow({
@@ -200,7 +228,8 @@ test('a diff-less Bash row shows NO Diff section (contrast to Apply_patch)', () 
       })}
     />,
   )
-  expect(html).not.toContain('Diff · ')
+  expect(html).not.toContain('role="tablist"')
+  expect(html).not.toContain('Changes')
 })
 
 test('renders nothing when there is no row', () => {
@@ -275,7 +304,7 @@ test('P4-37: a row with no output has no toolbar to hang controls on', () => {
 })
 
 /* --------------------------------------------------------------------------- *
- * Bounded mounting (CC-59). The drawer is the only route to a complete output,
+ * Bounded mounting (CC-59). The panel is the only route to a complete output,
  * so what it must NOT do is mount all of one. SSR proves the first paint; the
  * geometry and the budgets themselves are proven in `lineWindow.test.ts` and
  * `outputSearchModel.test.ts`.
@@ -297,7 +326,7 @@ test('a multi-megabyte single line mounts a bounded chunk, and copy still holds 
   )
   expect(model.output?.length).toBe(3_000_017)
   const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('.writeText(body)')
+  expect(source).toContain('.writeText(copy)')
 })
 
 test('the wrap toggle lives on the scroll box, so it qualifies the measurements', () => {
@@ -309,7 +338,7 @@ test('the wrap toggle lives on the scroll box, so it qualifies the measurements'
   expect(list.indexOf('className=')).toBeLessThan(list.indexOf('renderLine='))
 })
 
-test('no em dash reaches the drawer (CLAUDE.md §7)', () => {
+test('no em dash reaches the panel (CLAUDE.md §7)', () => {
   const html = renderToStaticMarkup(
     <ToolInspector row={bashRowWithOutput('a\nb')} />,
   )
@@ -317,11 +346,11 @@ test('no em dash reaches the drawer (CLAUDE.md §7)', () => {
 })
 
 /* --------------------------------------------------------------------------- *
- * The drawer over a file READ, whose payload arrives already numbered
+ * The panel over a file READ, whose payload arrives already numbered
  * (`readSource.ts`; `FileReadTool.ts:721` → `addLineNumbers`).
  * --------------------------------------------------------------------------- */
 
-function readRowWithOutput(content: string, filePath = '/w/a.ts'): ToolUseRow {
+function readRowWithOutput(content: string, filePath = '/w/a.ts'): NestedToolUseRow {
   return mkToolRow({
     toolName: 'Read',
     toolFamily: 'read',
@@ -331,21 +360,24 @@ function readRowWithOutput(content: string, filePath = '/w/a.ts'): ToolUseRow {
   })
 }
 
-test('the drawer shows the file line numbers, not its own count beside them', () => {
+test('the panel shows the file line numbers, not its own count beside them', () => {
   const html = renderToStaticMarkup(
     <ToolInspector row={readRowWithOutput('812\tconst x = 1\n813\tconst y = 2')} />,
   )
 
-  // The engine prefix is gone from the body…
-  expect(html).not.toContain('812\tconst x = 1')
-  expect(html).toContain('const x = 1')
+  // The engine prefix is gone from the body, which reads as the file's source
+  // in the code theme while nothing is being searched…
+  const text = html.replace(/<[^>]+>/g, '')
+  expect(text).not.toContain('812\tconst x = 1')
+  expect(text).toContain('const x = 1')
+  expect(html).toContain('hljs-keyword')
   // …and the gutter carries the file's real lines, not 1 and 2.
-  expect(html).toContain('>812</span>')
-  expect(html).toContain('>813</span>')
-  expect(html).not.toContain('>1</span>')
+  expect(html).toContain('tool-output-gutter">812</span>')
+  expect(html).toContain('tool-output-gutter">813</span>')
+  expect(html).not.toContain('tool-output-gutter">1</span>')
 })
 
-test('output that is not a numbered read passes through the drawer untouched', () => {
+test('output that is not a numbered read passes through the panel untouched', () => {
   const html = renderToStaticMarkup(
     <ToolInspector row={bashRowWithOutput('total 4\ndrwxr-xr-x  2 pt')} />,
   )
@@ -356,7 +388,7 @@ test('output that is not a numbered read passes through the drawer untouched', (
 })
 
 /* --------------------------------------------------------------------------- *
- * The drawer over a file WRITE. The card's reveal band sends a windowed write
+ * The panel over a file WRITE. The card's reveal band sends a windowed write
  * here saying `Open full output`, so this panel has to answer with the file the
  * card was showing, not the engine's one-sentence ack.
  * --------------------------------------------------------------------------- */
@@ -364,7 +396,7 @@ test('output that is not a numbered read passes through the drawer untouched', (
 function writeToolRow(
   input: Record<string, unknown>,
   result: { content: string; isError: boolean },
-): ToolUseRow {
+): NestedToolUseRow {
   return mkToolRow({
     toolName: 'Write',
     toolFamily: 'write',
@@ -374,7 +406,7 @@ function writeToolRow(
   })
 }
 
-test('a write drawer opens on the file that was written, not the ack', () => {
+test('a write panel opens on the file that was written, not the ack', () => {
   const model = describeToolForInspector(
     writeToolRow(
       { file_path: '/w/a.ts', content: 'const x = 1\nconst y = 2' },
@@ -382,12 +414,12 @@ test('a write drawer opens on the file that was written, not the ack', () => {
     ),
   )
 
-  // Since 2026-08-13 the drawer no longer renders the raw input, so this
+  // Since 2026-08-13 the panel no longer renders the raw input, so this
   // selection is the whole of what a write shows.
   expect(model.output).toBe('const x = 1\nconst y = 2')
 })
 
-test('a failed write keeps its error in the drawer, since no file was written', () => {
+test('a failed write keeps its error in the panel, since no file was written', () => {
   const model = describeToolForInspector(
     writeToolRow(
       { file_path: '/w/a.ts', content: 'const x = 1' },

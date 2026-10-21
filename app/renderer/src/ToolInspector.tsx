@@ -1,220 +1,466 @@
 /**
- * P4-1 shared primitive — `ToolInspector` (Surfaces.jsx:1090-1147).
+ * The full-output panel: a tool call's complete output, docked beside the
+ * transcript in `SubagentWorkspace`'s right-hand slot.
  *
- * A read-only side drawer over a transcript tool row's REAL result. It reuses
- * the projector's `ToolUseRow` shape (transcriptProjector.ts) with ZERO casts
- * and narrows tolerantly — a malformed/partial input never crashes the drawer,
- * it degrades to the `none` placeholder.
- *
- * P4-37 adds the output tools the prototype's `OutputInspector` carries
- * (Messages.jsx:255-352): copy, literal search with wrap-around match stepping
- * and scroll-to-centre, and a soft-wrap toggle. Every windowed tool card points
- * the user here (`InlineRevealBand`, P4-36), so this drawer is the app's only
- * route to a full output and it has to be readable, searchable and copyable. The
- * Search decisions live in `outputSearchModel.ts`; this file owns the DOM
- * controls, clipboard writes, and bounded presentation.
+ * WHY DOCKED (operator, 2026-10-21). This used to be a 420px modal drawer over a
+ * dimmed, blurred transcript, with its output in a 384px box inside a scroller
+ * of its own, so most of a tall window was spent on nothing and the card it
+ * came from could not be looked at while it was open. It now takes the slot the
+ * worker panel already uses: the transcript stays readable and clickable, a
+ * second `Open full output` swaps what the panel shows, and the body is the
+ * panel's whole remaining height. The width is the operator's to drag and is
+ * remembered (`toolOutputPanel.ts`).
  *
  * WHY IT IS OUTPUT AND DIFF ONLY (2026-08-13,
- * `docs/reports/2026-08-12-tool-inspector-ux-review.md`). It used to open on a
- * Tool / Summary / Status / raw-Input stack and put the output last, so landing
- * here from `Open full output` meant scrolling past four fields the expanded
- * card had already shown in its own purpose-built body. Those four are gone and
- * the row's identity moved into the header, which is the one thing the card
- * cannot say once it is dimmed behind the backdrop. The drawer is now what its
- * one entry point promises: the complete output, searchable and copyable. The
- * raw structured input is no longer surfaced anywhere for a resolved call —
- * flagged in that report, not lost by accident.
+ * `docs/reports/2026-08-12-tool-inspector-ux-review.md`). The Tool / Summary /
+ * Status / raw-Input stack that used to lead it restated the expanded card. The
+ * header carries the row's identity in the card's own grammar (mark, word,
+ * target), and the bodies are what the reveal band promised: the complete
+ * output, searchable and copyable. A call that carries both changes and a text
+ * result shows them as two tabs, each with its own search, rather than as two
+ * stacked toolbars.
+ *
+ * COLOUR AND SEARCH. A file read, a written file and a diff paint in the code
+ * theme while the search field is empty. A query switches every row to plain
+ * text with its matches marked, because the highlighter's spans and the match
+ * segments cannot both own one line's text.
  *
  * Security (hard gate): this renders untrusted tool input and model/tool output.
- * Everything is a text node — the derived summary, plain strings for
- * output/diff, and the search paints matched runs by SPLITTING the line into
- * text segments, never by building markup. NEVER
- * `dangerouslySetInnerHTML`, never `eval`, never a live control (the prototype's
- * "Open diff in IDE" affordance has no real verb and is dropped — flagged in the
- * report).
+ * Everything is a text node or a highlighter-built element tree (`sourceHighlight.ts`),
+ * and search paints matched runs by SPLITTING the line into text segments, never
+ * by building markup. NEVER `dangerouslySetInnerHTML`, never `eval`.
  */
 
-import { useMemo, useState, type ReactNode } from 'react'
+import {
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react'
 import type {
+  NestedToolUseRow,
   ToolDiffProjection,
-  ToolUseRow,
 } from './transcriptProjector.js'
 import { describeToolForInspector } from './toolInspectorModel.js'
-import { selectRawDiffLines } from './diffRowModel.js'
+import {
+  selectDiffRows,
+  selectRawDiffLines,
+  selectRowWordSegments,
+  type DiffRow,
+} from './diffRowModel.js'
+import { highlightedWordSegments } from './diffHighlight.js'
 import { FileDiffNavigator } from './FileDiffNavigator.js'
 import {
   describeOutputSearch,
   selectOutputLineChunk,
   stepMatchIndex,
 } from './outputSearchModel.js'
-import { parseReadSource } from './readSource.js'
+import { parseReadSource, readSourceLanguage } from './readSource.js'
+import { selectHighlightedSourceRows } from './sourceHighlight.js'
+import {
+  ActionCheckIcon,
+  ActionChevronIcon,
+  ActionCloseIcon,
+  ActionCopyIcon,
+} from './SessionActionIcons.js'
+import {
+  DIFF_ROW_CLASS,
+  DIFF_SIGN_CLASS,
+  FAMILY_STYLE,
+  WORD_DIM_CLASS,
+  WORD_EMPH_CLASS,
+} from './toolCardPalette.js'
+import {
+  TOOL_OUTPUT_DEFAULT_WIDTH,
+  TOOL_OUTPUT_MIN_WIDTH,
+  TOOL_OUTPUT_WIDTH_STEP,
+  clampToolOutputWidth,
+  readToolOutputWidth,
+  writeToolOutputWidth,
+} from './toolOutputPanel.js'
 import { useToast } from './toastContext.js'
 import { VirtualLineList } from './VirtualLineList.js'
+import './toolOutputPanel.css'
+
+type OutputView = 'changes' | 'result'
+
+const VIEW_LABEL: Record<OutputView, string> = {
+  changes: 'Changes',
+  result: 'Result',
+}
 
 export function ToolInspector({
   row,
-  initialFileIndex,
+  cwd = null,
+  initialFileIndex = 0,
+  back = null,
   onClose,
 }: {
-  row: ToolUseRow | null
+  row: NestedToolUseRow | null
+  cwd?: string | null
   initialFileIndex?: number
+  /** The worker panel this one replaced, which Back and Escape return to. */
+  back?: { label: string; onBack: () => void } | null
   onClose?: () => void
 }): ReactNode {
   if (!row) return null
-  const model = describeToolForInspector(row)
   return (
-    <div className="flex w-[420px] shrink-0 flex-col border-l border-shell-seam bg-surface-panel">
-      <div className="flex items-center justify-between gap-2 border-b border-shell-seam px-[18px] py-3.5">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-accent">
-            {model.family}
-          </span>
-          {/* WHICH output, not WHAT this drawer is. The generic title used to sit
-              here above a Tool/Summary/Status/Input stack that restated the card
-              the user had already expanded; the header now carries the only fact
-              the card cannot supply once it is dimmed behind the backdrop, which
-              is the row this output belongs to. */}
-          <span className="min-w-0 truncate font-mono text-[12.5px] text-text-primary">
-            {model.summary}
-          </span>
+    <OutputPanel
+      row={row}
+      cwd={cwd}
+      initialFileIndex={initialFileIndex}
+      back={back}
+      onClose={onClose}
+    />
+  )
+}
+
+/** Hooks live here, under the null-row guard above, never beside it. */
+function OutputPanel({
+  row,
+  cwd,
+  initialFileIndex,
+  back,
+  onClose,
+}: {
+  row: NestedToolUseRow
+  cwd: string | null
+  initialFileIndex: number
+  back: { label: string; onBack: () => void } | null
+  onClose?: () => void
+}) {
+  const model = useMemo(() => describeToolForInspector(row, cwd), [row, cwd])
+  const views: OutputView[] = []
+  if (model.diffs.length > 0) views.push('changes')
+  if (model.output !== null) views.push('result')
+  const [picked, setPicked] = useState<OutputView | null>(null)
+  const view = picked !== null && views.includes(picked) ? picked : views[0] ?? null
+  const [wrap, setWrap] = useState(false)
+  const panelRef = useRef<HTMLElement | null>(null)
+  const text = useMemo(
+    () => model.output === null ? null : selectTextSource(model.output, model.numberedRead),
+    [model.output, model.numberedRead],
+  )
+  const changes = useMemo(() => countChanges(model.diffs), [model.diffs])
+
+  // Into the body on open, so the keyboard scrolls and searches it at once.
+  useLayoutEffect(() => {
+    const panel = panelRef.current
+    const target = panel?.querySelector<HTMLElement>('[role="region"]') ??
+      panel?.querySelector<HTMLElement>('.tool-output-close')
+    target?.focus({ preventScroll: true })
+  }, [])
+
+  const dismiss = back?.onBack ?? onClose
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
+    if (event.defaultPrevented) return
+    if ((event.metaKey || event.ctrlKey) && !event.altKey && event.key.toLowerCase() === 'f') {
+      const search = panelRef.current?.querySelector<HTMLInputElement>('input[data-output-search]')
+      if (!search) return
+      event.preventDefault()
+      search.focus()
+      search.select()
+      return
+    }
+    if (event.key === 'Escape' && dismiss) {
+      // Claimed so the session's own Escape listeners (a permission card's
+      // deny) do not also act on it.
+      event.preventDefault()
+      dismiss()
+    }
+  }
+
+  const base = FAMILY_STYLE[model.family]
+  const mark = model.presentation?.mark ?? base.mark
+  const word = model.presentation?.word ?? base.word
+
+  return (
+    <aside
+      ref={panelRef}
+      className="tool-output-panel"
+      aria-label="Full output"
+      onKeyDown={onKeyDown}
+    >
+      <ResizeHandle />
+      <header className="tool-output-header">
+        <div className="tool-output-identity">
+          {back ? (
+            <button
+              type="button"
+              className="tool-output-back"
+              aria-label={`Back to ${back.label}`}
+              onClick={back.onBack}
+            >
+              <ActionChevronIcon />
+              <span>{back.label}</span>
+            </button>
+          ) : null}
+          <div className="tool-output-line">
+            <span className={`tool-output-mark ${base.color}`} aria-hidden>{mark}</span>
+            <span className={`tool-output-word ${base.color}`}>{word}</span>
+            <span className="tool-output-target" title={model.target}>{model.target}</span>
+          </div>
+          <OutputFacts
+            view={view}
+            failed={model.failed}
+            text={text}
+            changes={changes}
+            files={model.diffs.length}
+          />
         </div>
         {onClose ? (
           <button
             type="button"
-            onClick={onClose}
+            className="tool-output-close"
             aria-label="Close full output"
-            className="flex h-[22px] w-[22px] shrink-0 items-center justify-center text-base leading-none text-text-subtle hover:text-text-primary"
+            onClick={onClose}
           >
-            ×
+            <ActionCloseIcon />
           </button>
         ) : null}
-      </div>
+      </header>
 
-      <div className="flex-1 overflow-y-auto px-[18px] py-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {model.diffs.length > 0 ? (
+      {views.length > 1 ? (
+        <div className="tool-output-tabs" role="tablist" aria-label="Output views">
+          {views.map(option => (
+            <button
+              key={option}
+              type="button"
+              role="tab"
+              className="tool-output-tab"
+              aria-selected={option === view}
+              tabIndex={option === view ? 0 : -1}
+              onClick={() => setPicked(option)}
+              onKeyDown={event => {
+                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                event.preventDefault()
+                const next = views[(views.indexOf(option) + (event.key === 'ArrowRight' ? 1 : views.length - 1)) % views.length]
+                setPicked(next)
+                const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+                tabs?.[views.indexOf(next)]?.focus()
+              }}
+            >
+              {VIEW_LABEL[option]}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {view === 'changes' ? (
+        <div className="tool-output-view">
           <FileDiffNavigator
-            key={row.id}
             diffs={model.diffs}
             initialFileIndex={initialFileIndex}
-            showPath={false}
-            renderDiff={diff => <DiffPanel diff={diff} />}
+            showPath={model.diffs.length > 1}
+            barClassName="tool-output-files"
+            bodyClassName="tool-output-view"
+            renderDiff={diff => <DiffBody diff={diff} wrap={wrap} onWrap={setWrap} />}
           />
-        ) : null}
+        </div>
+      ) : view === 'result' && text !== null ? (
+        <OutputBody
+          key={`result:${row.id}`}
+          lines={text.lines}
+          body={text.body}
+          copy={text.body}
+          gutter={index => text.numbers?.[index] ?? index + 1}
+          language={model.outputLanguage}
+          diffRows={null}
+          wrap={wrap}
+          onWrap={setWrap}
+        />
+      ) : (
+        <p className="tool-output-empty">No output.</p>
+      )}
+    </aside>
+  )
+}
 
-        {model.output ? (
-          <OutputPanel text={model.output} numberedRead={model.family === 'read'} />
-        ) : null}
-      </div>
-    </div>
+type TextSource = {
+  /** One entry per painted row: the engine's read prefix is already removed. */
+  lines: readonly string[]
+  /** What search runs over and copy hands over. */
+  body: string
+  /** The file's own line numbers for a numbered read, else null. */
+  numbers: readonly number[] | null
+}
+
+/**
+ * A file READ arrives already numbered (`readSource.ts`), so the engine's `N\t`
+ * prefix is parsed off here for the same three reasons it is on the card. The
+ * gutter can then show the file's real lines rather than a count that restarts
+ * at 1 on an offset read; a search for `1` no longer matches every line's
+ * number; and copy hands over the file rather than the file plus a column of
+ * digits. Other tools keep their output byte for byte, even when it resembles a
+ * numbered file read.
+ */
+function selectTextSource(output: string, numberedRead: boolean): TextSource {
+  const parsed = numberedRead ? parseReadSource(output) : null
+  if (parsed === null || parsed.numbers === null) {
+    return { lines: output.split('\n'), body: output, numbers: null }
+  }
+  return { lines: parsed.lines, body: parsed.lines.join('\n'), numbers: parsed.numbers }
+}
+
+function countChanges(diffs: readonly ToolDiffProjection[]): { adds: number; dels: number } {
+  let adds = 0
+  let dels = 0
+  for (const diff of diffs) {
+    for (const hunk of diff.hunks) {
+      for (const line of hunk.lines) {
+        if (line.startsWith('+')) adds++
+        else if (line.startsWith('-')) dels++
+      }
+    }
+  }
+  return { adds, dels }
+}
+
+/** The size of what is showing: how much there is to read, and how much changed. */
+function OutputFacts({
+  view,
+  failed,
+  text,
+  changes,
+  files,
+}: {
+  view: OutputView | null
+  failed: boolean
+  text: TextSource | null
+  changes: { adds: number; dels: number }
+  files: number
+}) {
+  const facts: ReactNode[] = []
+  if (failed) facts.push(<span key="failed" className="text-tone-danger">Failed</span>)
+  if (view === 'changes') {
+    if (changes.adds > 0) facts.push(<span key="adds" className="text-[light-dark(#15803d,#86efac)]">+{formatCount(changes.adds)}</span>)
+    if (changes.dels > 0) facts.push(<span key="dels" className="text-[light-dark(#dc2626,#fca5a5)]">−{formatCount(changes.dels)}</span>)
+    if (files > 1) facts.push(<span key="files">{formatCount(files)} files</span>)
+  } else if (view === 'result' && text !== null) {
+    const first = text.numbers?.[0]
+    const last = text.numbers?.[text.numbers.length - 1]
+    facts.push(
+      <span key="lines">
+        {first !== undefined && last !== undefined && first !== 1
+          ? `Lines ${formatCount(first)}–${formatCount(last)}`
+          : `${formatCount(text.lines.length)} ${text.lines.length === 1 ? 'line' : 'lines'}`}
+      </span>,
+    )
+  }
+  if (facts.length === 0) return null
+  return <div className="tool-output-facts">{facts}</div>
+}
+
+function formatCount(value: number): string {
+  return value.toLocaleString('en-US')
+}
+
+/**
+ * One file's patch as a body. Windowed for the same reason the card's diff is
+ * (CC-62): nothing upstream caps a patch, so a whole-file write reaches here as
+ * thousands of lines. Search runs over the line bodies without their signs, and
+ * copy hands over the patch itself, signs included.
+ */
+function DiffBody({
+  diff,
+  wrap,
+  onWrap,
+}: {
+  diff: ToolDiffProjection
+  wrap: boolean
+  onWrap: (wrap: boolean) => void
+}) {
+  const rows = useMemo(() => selectDiffRows(diff), [diff])
+  // A context row keeps the patch's leading space (`selectDiffRows`). This body
+  // draws every sign in its own column, so that space would set each unchanged
+  // line one character right of the changed lines around it.
+  const lines = useMemo(
+    () => rows.map(row => row.kind === 'ctx' && row.body.startsWith(' ') ? row.body.slice(1) : row.body),
+    [rows],
+  )
+  const body = useMemo(() => lines.join('\n'), [lines])
+  const copy = useMemo(() => selectRawDiffLines(diff).join('\n'), [diff])
+  if (rows.length === 0) return <p className="tool-output-empty">No diff lines.</p>
+  return (
+    <OutputBody
+      lines={lines}
+      body={body}
+      copy={copy}
+      gutter={index => rows[index]?.currentLabel ?? ''}
+      language={readSourceLanguage(diff.filePath)}
+      diffRows={rows}
+      wrap={wrap}
+      onWrap={onWrap}
+    />
   )
 }
 
 /**
- * The drawer's own diff body: the raw patch lines, tinted by sign.
- *
- * Windowed for the same reason the card's diff is (CC-62): nothing upstream
- * caps a patch, so a whole-file write reaches here as thousands of lines and
- * this panel used to mount every one of them. The row list stays complete; only
- * the mounted range is bounded, and the virtualizer bounds each row's
- * characters too, which is what a minified line needs.
- */
-function DiffPanel({ diff }: { diff: ToolDiffProjection }) {
-  const text = useMemo(() => selectRawDiffLines(diff).join('\n'), [diff])
-  return <div className="mb-4">
-    {diff.hunks.length === 0 ? <div className="mb-2 font-mono text-[11.5px] text-text-subtle">No diff lines.</div> : null}
-    <OutputPanel text={text} label={`Diff · ${diff.filePath}`} diff />
-  </div>
-}
-
-/** Off is the prototype's default: long lines scroll rather than reflow. */
-const WRAP_BUTTON_CLASS = {
-  on: 'border-accent/40 text-accent-soft',
-  off: 'border-shell-seam text-text-muted hover:text-text-primary',
-} as const
-
-/**
- * Literal classes only — an interpolated arbitrary value never reaches the JIT.
- *
- * These sit on the SCROLL BOX rather than on each line, and `white-space` and
- * `overflow-wrap` both inherit, so the rows read the same rule either way. The
- * reason for moving them is geometry: `VirtualLineList` folds its container's
- * class list into the layout revision that qualifies every measured row height,
- * and a wrap toggle changes every one of those heights without changing a
- * character of text. Toggling Wrap therefore invalidates the measurements taken
- * under the old mode instead of leaving stale ones behind rows that no longer
- * match them.
+ * Literal classes only, and on the SCROLL BOX rather than on each row:
+ * `VirtualLineList` folds its container's class list into the layout revision
+ * that qualifies every measured row height, and a wrap toggle changes every one
+ * of those heights without changing a character of text. Toggling Wrap
+ * therefore invalidates the measurements taken under the old mode instead of
+ * leaving stale ones behind rows that no longer match them.
  */
 const LINE_TEXT_CLASS = {
-  wrap: 'whitespace-pre-wrap break-words',
-  nowrap: 'whitespace-pre',
+  wrap: 'tool-output-scroller is-wrapped',
+  nowrap: 'tool-output-scroller',
 } as const
 
-const STEP_BUTTON_CLASS = {
-  enabled: 'text-text-muted hover:text-text-primary',
-  disabled: 'text-text-ghost',
-} as const
+const MATCH_CLASS = 'rounded-sm bg-tone-warn/25 px-px text-[light-dark(#834a00,#fde68a)]'
 
 /**
- * The output body plus its toolbar (prototype `OutputInspector`,
- * Messages.jsx:325-352). A separate component because the drawer returns early
- * on a null row: hooks live under that guard, never beside it.
- *
- * A file READ arrives already numbered (`readSource.ts`), so this drawer had the
- * same double-gutter the read card had: the engine's `N\t` prefix inside every
- * line, and this panel's own `index + 1` beside it. The prefix is parsed off
- * here for the same three reasons it is on the card. The gutter can then show
- * the file's real lines rather than a count that restarts at 1 on an offset
- * read; a search for `1` no longer matches every line's number; and copy hands
- * over the file rather than the file plus a column of digits. Other tools keep
- * their output byte for byte, even when it resembles a numbered file read.
- *
- * Syntax coloring stops at the card and does not come in here: this body paints
- * matched runs by splitting each line into segments, and a highlighter returns
- * ONE token tree for the whole block whose spans cross line boundaries. The two
- * cannot both own the text. Search is what a drawer is for, so search wins.
+ * The toolbar and the body it acts on. Search state belongs to one body, so a
+ * different file or view starts a fresh search.
  */
-function OutputPanel({
-  text,
-  numberedRead = false,
-  label = 'Output',
-  diff = false,
+function OutputBody({
+  lines,
+  body,
+  copy,
+  gutter,
+  language,
+  diffRows,
+  wrap,
+  onWrap,
 }: {
-  text: string
-  numberedRead?: boolean
-  label?: string
-  diff?: boolean
+  lines: readonly string[]
+  body: string
+  copy: string
+  gutter: (index: number) => ReactNode
+  language: string | null
+  diffRows: readonly DiffRow[] | null
+  wrap: boolean
+  onWrap: (wrap: boolean) => void
 }) {
   const [query, setQuery] = useState('')
   const [matchIndex, setMatchIndex] = useState(0)
-  const [wrap, setWrap] = useState(false)
   const [copied, setCopied] = useState(false)
   const toast = useToast()
-  // Memoized against the search below, which re-runs on every keystroke while
-  // this depends only on the output itself.
-  const source = useMemo(
-    () => numberedRead ? parseReadSource(text) : { lines: text.split('\n'), numbers: null },
-    [text, numberedRead],
-  )
-  const body = useMemo(
-    () => (source.numbers === null ? text : source.lines.join('\n')),
-    [source, text],
-  )
   const search = useMemo(
     () => describeOutputSearch(body, query, matchIndex),
     [body, query, matchIndex],
   )
+  // Memoized apart from the search, which re-runs on every keystroke while
+  // this depends only on the body. Null past the highlighter's ceilings, and
+  // for text that is not a file's source.
+  const coloured = useMemo(
+    () => selectHighlightedSourceRows(lines, language),
+    [lines, language],
+  )
   const matchCount = search.matchCount
-
   const step = (delta: number): void => {
     setMatchIndex(index => stepMatchIndex(index, delta, matchCount))
   }
 
-  const copy = (): void => {
+  const copyOutput = (): void => {
     const clipboard =
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
     if (!clipboard) return
     void clipboard
-      .writeText(body)
+      .writeText(copy)
       .then(() => {
         setCopied(true)
         setTimeout(() => setCopied(false), 1200)
@@ -225,126 +471,128 @@ function OutputPanel({
 
   return (
     <>
-      <SectionLabel>{label}</SectionLabel>
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-lg border border-shell-seam bg-white/[0.02] px-2 focus-within:border-accent/35">
-          <span className="shrink-0 text-text-faint">
-            <SearchIcon />
-          </span>
+      <div className="tool-output-toolbar">
+        <label className="tool-output-search">
+          <SearchIcon />
           <input
             type="text"
+            data-output-search=""
             aria-label="Search output"
-            placeholder="Search output…"
+            placeholder="Search"
             value={query}
+            spellCheck={false}
             onChange={event => {
               setQuery(event.target.value)
               setMatchIndex(0)
             }}
-            className="min-w-0 flex-1 bg-transparent font-mono text-[12px] text-text-primary outline-none placeholder:text-text-subtle"
+            onKeyDown={event => {
+              if (event.key === 'Enter' && matchCount > 0) {
+                event.preventDefault()
+                step(event.shiftKey ? -1 : 1)
+              } else if (event.key === 'Escape' && query.length > 0) {
+                // The first Escape clears the search; the next one closes.
+                event.preventDefault()
+                setQuery('')
+                setMatchIndex(0)
+              }
+            }}
           />
           {search.searching ? (
             <>
-              <span className="shrink-0 text-[11px] text-text-faint [font-variant-numeric:tabular-nums]">
-                {search.label}
-              </span>
+              <span className="tool-output-count">{search.label}</span>
               <button
                 type="button"
+                className="tool-output-step"
                 onClick={() => step(-1)}
                 disabled={matchCount === 0}
                 aria-label="Previous match"
-                className={`shrink-0 px-0.5 text-[13px] leading-none ${
-                  matchCount === 0
-                    ? STEP_BUTTON_CLASS.disabled
-                    : STEP_BUTTON_CLASS.enabled
-                }`}
               >
-                ‹
+                <ChevronGlyph direction="up" />
               </button>
               <button
                 type="button"
+                className="tool-output-step"
                 onClick={() => step(1)}
                 disabled={matchCount === 0}
                 aria-label="Next match"
-                className={`shrink-0 px-0.5 text-[13px] leading-none ${
-                  matchCount === 0
-                    ? STEP_BUTTON_CLASS.disabled
-                    : STEP_BUTTON_CLASS.enabled
-                }`}
               >
-                ›
+                <ChevronGlyph direction="down" />
               </button>
             </>
           ) : null}
-        </div>
+        </label>
         <button
           type="button"
-          onClick={() => setWrap(current => !current)}
+          className="tool-output-tool"
+          onClick={() => onWrap(!wrap)}
           aria-pressed={wrap}
-          title="Toggle soft wrap"
-          className={`h-7 shrink-0 rounded-lg border px-2 text-[11.5px] transition-colors ${
-            wrap ? WRAP_BUTTON_CLASS.on : WRAP_BUTTON_CLASS.off
-          }`}
         >
           Wrap
         </button>
         <button
           type="button"
-          onClick={copy}
+          className="tool-output-tool"
+          data-copied={copied ? '' : undefined}
+          onClick={copyOutput}
           aria-label={copied ? 'Output copied' : 'Copy output'}
-          title="Copy output"
-          className={`h-7 shrink-0 rounded-lg border px-2 text-[11.5px] transition-colors ${
-            copied
-              ? 'border-shell-seam text-[light-dark(#15803d,#86efac)]'
-              : 'border-shell-seam text-text-muted hover:text-text-primary'
-          }`}
         >
+          {copied ? <ActionCheckIcon /> : <ActionCopyIcon />}
           {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
       <VirtualLineList
         lines={search.lines}
         activeIndex={search.activeLine === null ? null : search.activeLine - 1}
-        className={`relative max-h-96 overflow-auto rounded-lg border border-shell-seam bg-black/40 py-2 font-mono text-[11.5px] leading-relaxed text-text-muted ${
-          wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap
-        }`}
-        renderLine={(_bounded, index) => {
-          // Two different numbers. The search model tracks POSITION in the
-          // painted body; the gutter shows the file's own line when the
-          // payload carried one.
+        className={wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap}
+        label="Output"
+        renderLine={(bounded, index) => {
           const position = index + 1
-          const lineNumber = source.numbers?.[index] ?? position
           const active = search.activeLine === position
-          // The list hands over a chunk already cut to the character budget,
-          // from the start of the line. This panel holds the full line itself,
-          // so it re-cuts around the active match instead: a match a megabyte
-          // into one logical line has to be reachable, and only the search
-          // model knows where it is.
-          const chunk = selectOutputLineChunk(
-            search.lines[index] ?? '',
-            query,
-            { anchorOffset: active ? search.activeOffset ?? undefined : undefined },
-          )
-          return (
-            <div key={index} className={`flex ${diff ? diffLineClass(search.lines[index] ?? '') : ''} ${active ? 'bg-accent/15' : ''}`}>
-              <span className="sticky left-0 w-[42px] shrink-0 select-none bg-app-bg pr-2.5 text-right text-text-ghost [font-variant-numeric:tabular-nums]">
-                {lineNumber}
-              </span>
-              <span className="flex-1 pl-3 pr-4">
+          const diffRow = diffRows?.[index]
+          let content: ReactNode
+          let themed = diffRow !== undefined
+          if (search.searching) {
+            // The list hands over a chunk cut from the start of the line. This
+            // body holds the full line, so it re-cuts around the active match
+            // instead: a match a megabyte into one logical line has to be
+            // reachable, and only the search model knows where it is.
+            const chunk = selectOutputLineChunk(search.lines[index] ?? '', query, {
+              anchorOffset: active ? search.activeOffset ?? undefined : undefined,
+            })
+            content = (
+              <>
                 {chunk.truncatedStart ? '…' : null}
                 {chunk.segments.map((segment, segmentIndex) =>
                   segment.match ? (
-                    <mark
-                      key={segmentIndex}
-                      className="rounded-sm bg-tone-warn/25 px-px text-[light-dark(#834a00,#fde68a)]"
-                    >
-                      {segment.text}
-                    </mark>
+                    <mark key={segmentIndex} className={MATCH_CLASS}>{segment.text}</mark>
                   ) : (
                     <span key={segmentIndex}>{segment.text}</span>
                   ),
                 )}
                 {chunk.truncatedEnd ? '…' : null}
-              </span>
+              </>
+            )
+          } else {
+            const colour = coloured?.[index]
+            themed = themed || colour !== undefined
+            content = colour ?? bounded
+            const segments = diffRows === null ? null : selectRowWordSegments(diffRows, index)
+            if (diffRow !== undefined && segments !== null) {
+              const side = diffRow.kind === 'del' ? 'del' : 'add'
+              content = highlightedWordSegments([content], segments, WORD_EMPH_CLASS[side], WORD_DIM_CLASS[side])
+            }
+          }
+          return (
+            <div
+              className={`tool-output-row${diffRow ? ` ${DIFF_ROW_CLASS[diffRow.kind]}` : ''}${active ? ' is-active' : ''}`}
+            >
+              <span className="tool-output-gutter">{gutter(index)}</span>
+              {diffRow ? (
+                <span className={`tool-output-sign ${DIFF_SIGN_CLASS[diffRow.kind]}`}>
+                  {diffRow.kind === 'add' ? '+' : diffRow.kind === 'del' ? '−' : ' '}
+                </span>
+              ) : null}
+              <span className={themed ? 'tool-output-code hljs' : 'tool-output-code'}>{content}</span>
             </div>
           )
         }}
@@ -353,34 +601,99 @@ function OutputPanel({
   )
 }
 
+/**
+ * The panel's left edge. Dragging or arrowing it sets the panel's width as a
+ * CSS variable (never an inline style prop), and the stylesheet's `max-width`
+ * keeps whatever is stored from crowding the transcript in a smaller window.
+ * Double-click restores the default.
+ */
+function ResizeHandle() {
+  // The panel is this element's parent, read through the handle's own ref: a
+  // parent's ref is attached only after its children's layout effects run.
+  const handleRef = useRef<HTMLDivElement | null>(null)
+  const panel = (): HTMLElement | null => handleRef.current?.parentElement ?? null
+  const [width, setWidth] = useState(readToolOutputWidth)
+  const widthRef = useRef(width)
+  const drag = useRef<{ startX: number; startWidth: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  useLayoutEffect(() => {
+    widthRef.current = width
+    panel()?.style.setProperty('--tool-output-width', `${width}px`)
+  }, [width])
+
+  // Zero is an unmeasured layout, not a window too narrow for any panel.
+  const layoutWidth = (): number | null =>
+    panel()?.parentElement?.clientWidth || null
+  const commit = (next: number): void => {
+    const clamped = clampToolOutputWidth(next, layoutWidth())
+    setWidth(clamped)
+    writeToolOutputWidth(clamped)
+  }
+
+  return (
+    <div
+      ref={handleRef}
+      className="tool-output-resize"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize output panel"
+      aria-valuenow={width}
+      aria-valuemin={TOOL_OUTPUT_MIN_WIDTH}
+      tabIndex={0}
+      data-dragging={dragging ? '' : undefined}
+      onPointerDown={event => {
+        if (event.button !== 0) return
+        event.preventDefault()
+        event.currentTarget.setPointerCapture(event.pointerId)
+        drag.current = {
+          startX: event.clientX,
+          startWidth: panel()?.getBoundingClientRect().width || widthRef.current,
+        }
+        setDragging(true)
+      }}
+      onPointerMove={event => {
+        const start = drag.current
+        if (start === null) return
+        // The handle is on the LEFT edge, so moving left widens the panel.
+        setWidth(clampToolOutputWidth(start.startWidth + start.startX - event.clientX, layoutWidth()))
+      }}
+      onPointerUp={() => {
+        if (drag.current === null) return
+        drag.current = null
+        setDragging(false)
+        writeToolOutputWidth(widthRef.current)
+      }}
+      onPointerCancel={() => {
+        drag.current = null
+        setDragging(false)
+      }}
+      onDoubleClick={() => commit(TOOL_OUTPUT_DEFAULT_WIDTH)}
+      onKeyDown={event => {
+        if (event.key === 'ArrowLeft') commit(widthRef.current + TOOL_OUTPUT_WIDTH_STEP)
+        else if (event.key === 'ArrowRight') commit(widthRef.current - TOOL_OUTPUT_WIDTH_STEP)
+        else return
+        event.preventDefault()
+      }}
+    />
+  )
+}
+
 function SearchIcon() {
   return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.5"
-      strokeLinecap="round"
-      aria-hidden
-    >
-      <circle cx="11" cy="11" r="8" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.25" strokeLinecap="round" aria-hidden>
+      <circle cx="11" cy="11" r="7.5" />
+      <line x1="20.5" y1="20.5" x2="16.4" y2="16.4" />
     </svg>
   )
 }
 
-function SectionLabel({ children }: { children: ReactNode }) {
+function ChevronGlyph({ direction }: { direction: 'up' | 'down' }) {
   return (
-    <div className="mb-1.5 text-[10px] font-bold uppercase tracking-[0.1em] text-text-subtle">
-      {children}
-    </div>
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points={direction === 'up' ? '6 15 12 9 18 15' : '6 9 12 15 18 9'} />
+    </svg>
   )
-}
-
-function diffLineClass(line: string): string {
-  if (line.startsWith('+')) return 'text-tone-good bg-tone-good/10'
-  if (line.startsWith('-')) return 'text-tone-danger bg-tone-danger/10'
-  return 'text-text-subtle'
 }

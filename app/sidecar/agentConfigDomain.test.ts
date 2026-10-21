@@ -20,7 +20,7 @@ import {
   deriveTaskAgentState,
 } from '../renderer/src/agentIdentity.js'
 import { describeToolForInspector } from '../renderer/src/toolInspectorModel.js'
-import type { ToolUseRow } from '../renderer/src/transcriptProjector.js'
+import type { NestedToolUseRow, ToolFamily } from '../renderer/src/transcriptProjector.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { createStore } from '../../src/state/store.js'
@@ -86,7 +86,11 @@ function customAgent(
   } as AgentDefinition
 }
 
-function mkToolRow(toolName: string, input: Record<string, unknown>): ToolUseRow {
+function mkToolRow(
+  toolName: string,
+  input: Record<string, unknown>,
+  toolFamily: ToolFamily = 'other',
+): NestedToolUseRow {
   return {
     id: `s:m:0:${toolName}`,
     sessionId: 's',
@@ -97,11 +101,12 @@ function mkToolRow(toolName: string, input: Record<string, unknown>): ToolUseRow
     kind: 'tool-use',
     toolUseId: `toolu_${toolName}`,
     toolName,
-    toolFamily: 'other',
+    toolFamily,
     agentCompletion: null,
     input,
     status: 'pending',
     result: null,
+    children: [],
   }
 }
 
@@ -367,15 +372,17 @@ test('agent display state covers every engine task and durable worker status', (
   )).toEqual(['running', 'completed', 'failed', 'stopped'])
 })
 
-test('tool inspector summaries stay coupled to real engine tool summary functions', () => {
-  const cases = [
+test('tool inspector targets stay coupled to real engine tool summary functions', () => {
+  const cases: { toolName: string; family: ToolFamily; input: Record<string, unknown>; expected: string }[] = [
     {
       toolName: 'Read',
+      family: 'read',
       input: { file_path: '/repo/src/main.tsx' },
       expected: getReadToolUseSummary({ file_path: '/repo/src/main.tsx' }) ?? '',
     },
     {
       toolName: 'Edit',
+      family: 'edit',
       input: { file_path: '/repo/src/main.tsx', old_string: 'a', new_string: 'b' },
       expected: getEditToolUseSummary({
         file_path: '/repo/src/main.tsx',
@@ -385,6 +392,7 @@ test('tool inspector summaries stay coupled to real engine tool summary function
     },
     {
       toolName: 'Bash',
+      family: 'bash',
       input: { command: 'bun test app/sidecar/agentConfigDomain.test.ts' },
       expected: BashTool.getToolUseSummary?.({
         command: 'bun test app/sidecar/agentConfigDomain.test.ts',
@@ -392,23 +400,26 @@ test('tool inspector summaries stay coupled to real engine tool summary function
     },
     {
       toolName: 'Grep',
+      family: 'grep',
       input: { pattern: 'PermissionUpdate' },
       expected: getGrepToolUseSummary({ pattern: 'PermissionUpdate' }) ?? '',
     },
     {
       toolName: 'WebFetch',
+      family: 'web',
       input: { url: 'https://example.invalid/spec' },
       expected: getWebFetchToolUseSummary({ url: 'https://example.invalid/spec' }) ?? '',
     },
     {
       toolName: 'WebSearch',
+      family: 'web',
       input: { query: 'Cat Code migration' },
       expected: getWebSearchToolUseSummary({ query: 'Cat Code migration' }) ?? '',
     },
   ]
 
-  for (const { toolName, input, expected } of cases) {
-    expect(describeToolForInspector(mkToolRow(toolName, input)).summary).toBe(
+  for (const { toolName, family, input, expected } of cases) {
+    expect(describeToolForInspector(mkToolRow(toolName, input, family)).target).toBe(
       expected,
     )
   }
@@ -420,7 +431,7 @@ test('documents current GenerateImage summary drift against the real engine summ
     output_path: '/tmp/cat.png',
   }
 
-  expect(describeToolForInspector(mkToolRow('GenerateImage', input)).summary).toBe('draw a cat')
+  expect(describeToolForInspector(mkToolRow('GenerateImage', input, 'imagegen')).target).toBe('draw a cat')
   expect(GenerateImageTool.getToolUseSummary?.(input as never)).toBe('/tmp/cat.png')
 })
 
