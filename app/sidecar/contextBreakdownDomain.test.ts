@@ -175,7 +175,7 @@ mock.module('../../src/commands.js', () => ({
 mock.module('../../src/utils/analyzeContext.js', () => ({
   ...actualAnalyzeContext,
   analyzeContextUsage: async (
-    ..._args: unknown[]
+    ..._args: Parameters<typeof analyzeContextUsageImpl>
   ): Promise<ContextData> => {
     capturedToolUseContext = _args[6]
     return await analyzeContextUsageImpl(..._args)
