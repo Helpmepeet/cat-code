@@ -75,6 +75,15 @@ test('a memory-only post is explicit rather than promising saved scope', async (
   expect(JSON.stringify(result.data)).toContain('could not be saved')
 })
 
+test('a missing announcing session is not described as a missing named peer', async () => {
+  const tool = createAnnounceTool((async () => ({
+    ok: false, error: { code: 'session_not_found', message: 'This conversation is no longer available.' },
+  })) as PeerHostRequester)
+  const result = await tool.call({ doing: 'Editing' }, {} as ToolUseContext)
+  expect(result.data).toEqual({ ok: false, message: 'This session is no longer available to post a notice.' })
+  expect(tool.mapToolResultToToolResultBlockParam(result.data, 'tu').is_error).toBe(true)
+})
+
 test('scope guidance keeps posting optional, replaces only for a new task, and treats omitted notices as unavailable', async () => {
   const doctrine = buildPeerDoctrine({ name: 'Bear', createdByName: null, createdById: null })
   expect(doctrine).toContain('Post a scope notice with Announce when it would save peers asking what you are doing')

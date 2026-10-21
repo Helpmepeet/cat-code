@@ -108,13 +108,13 @@ export const NAME_REPAIR_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 /**
  * How a session ended, from the host's point of view (§3).
  *
- * `'parked'` is the IDLE-PARK (decisions/IDLE-PARK.md §2/§8) in-memory-only
+ * `'parked'` is the IDLE-PARK (decisions/IDLE-PARK.md §2/§8) live-host
  * state: a session whose engine process was reclaimed while its tab stays open.
  * It projects like `'crashed'` to the descriptor (`disconnected` + `restorable`,
  * so the tab is kept and unpark = the existing restore-on-click), but it is
  * EXCLUDED from the `enforceBound` reap (a parked row is an open tab, not a
- * terminal row) and normalises to `'crashed'` on disk read — so it never
- * survives a relaunch as a distinct state. That read-time rule is for the
+ * terminal row) and normalises to `'crashed'` at launch after its owner dies.
+ * Other active hosts and write merges retain it. That launch rule is for the
  * app-crashed-while-parked case only: an ordinary quit marks parked rows
  * `'clean'` first (`markLiveCleanSync`), so a normal relaunch never sees one.
  */
@@ -216,8 +216,10 @@ export type RegistrySession = {
   lastMessageSentAt: number | null
   /** [D] First accepted user input; an interrupted first turn is not an empty Chat. */
   hasAcceptedInput?: boolean
-  /** [D] "clean" | "crashed" | "parked" (IDLE-PARK, in-memory only) | null (=live). */
+  /** [D] "clean" | "crashed" | "parked" (IDLE-PARK, live host only) | null (=live). */
   shutdown: ShutdownState
+  /** [A] The host that spawned this row, not the last writer of the shared file. */
+  ownerHostPid?: number
   /** [A] for the crash sweep only. */
   enginePid?: number
   /** [A] v2 re-attach seed; v1 cleanup + identity hint. */
@@ -469,6 +471,7 @@ export class SessionRegistry {
   private writeFailed = false
 
   private removedEmptySessionIds: string[] = []
+  private readonly ownedSessionIds = new Set<string>()
 
   /** Rows removed by the latest empty-session cleanup, including clean quit. */
   get lastRemovedEmptySessionIds(): string[] {
@@ -626,8 +629,8 @@ export class SessionRegistry {
   }
 
   /**
-   * (2) Liveness sweep. For each row with `shutdown == null` (the host died
-   * without marking it), probe `enginePid`:
+   * (2) Liveness sweep. Leave rows with a living owner alone. For each remaining
+   * row with `shutdown == null`, probe `enginePid`:
    *  - alive AND identity matches (§9-A3) → orphaned sidecar → v1 policy KILL
    *    (SIGTERM, D6 §2).
    *  - dead, recycled pid, or identity mismatch → nothing to kill.
@@ -636,6 +639,13 @@ export class SessionRegistry {
    */
   private sweepOrphans(): void {
     for (const row of this.doc.sessions) {
+      // Dev and packaged apps share the registry. A living owner is not an
+      // orphan, even when its sidecar uses a different command marker.
+      if (row.ownerHostPid !== undefined && this.isProcessAlive(row.ownerHostPid)) continue
+      if (row.shutdown === 'parked') {
+        row.shutdown = 'crashed'
+        continue
+      }
       if (row.shutdown !== null) continue
 
       const pid = row.enginePid
@@ -966,6 +976,7 @@ export class SessionRegistry {
     socketPath?: string
   }): Promise<string[]> {
     const now = Date.now()
+    this.ownedSessionIds.add(input.appSessionId)
     let reaped: string[] = []
     const existing = this.find(input.appSessionId)
     if (existing) {
@@ -1003,6 +1014,7 @@ export class SessionRegistry {
       existing.socketPath = input.socketPath
       existing.lastAttachedAt = now
       existing.shutdown = null
+      existing.ownerHostPid = process.pid
       existing.restartCount = (existing.restartCount ?? 0) + 1
     } else {
       this.doc.sessions.push({
@@ -1026,6 +1038,7 @@ export class SessionRegistry {
         lastMessageSentAt: null,
         hasAcceptedInput: false,
         shutdown: null,
+        ownerHostPid: process.pid,
         enginePid: input.enginePid,
         socketPath: input.socketPath,
         restartCount: 0,
@@ -1268,8 +1281,8 @@ export class SessionRegistry {
    * SAME guard as `markCrashed`: a row already terminal (clean/crashed) keeps its
    * state, so a park can never relabel a genuine close or crash. Advisory runtime
    * fields are retained (an unpark re-spawns via the existing restore machinery).
-   * The `'parked'` state lives only in the in-memory doc; it normalises to
-   * `'crashed'` on the next disk read (`normalizeShutdown`).
+   * The `'parked'` state lasts while its host lives; the launch sweep converts
+   * it to `'crashed'` after that owner dies.
    */
   async markParked(appSessionId: string): Promise<void> {
     await this.mutate('markParked', appSessionId, row => {
@@ -1319,7 +1332,7 @@ export class SessionRegistry {
 
   /**
    * SYNCHRONOUS clean-marking for the exit path (B3 / die-with-window). Marks
-   * every currently-live row (`shutdown == null`) clean, retaining advisory fields
+   * this host's currently-live rows (`shutdown == null`) clean, retaining advisory fields
    * for restore-time prior-writer checks, and writes ONCE atomically under the
    * synchronous advisory lock. This runs on `window-all-closed`/`before-quit`,
    * where the process may exit before an async persist could settle. A write
@@ -1329,7 +1342,7 @@ export class SessionRegistry {
    * IDLE-PARK: `'parked'` rows are marked clean TOO, and that is not a widening
    * of "live". A park is a reclaim the host chose, so an ordinary quit that finds
    * one is an ordinary quit — not the app-crashed-while-parked case that
-   * `normalizeShutdown`'s `'parked'` → `'crashed'` rule (§8) exists for. That
+   * `sweepOrphans`'s `'parked'` → `'crashed'` rule (§8) exists for. That
    * rule stays correct precisely because a real crash never runs this method.
    * Without this, every quit left parked rows `'parked'` on disk and the next
    * launch read them as `crashed`: under a TTL shorter than the gap between
@@ -1344,6 +1357,7 @@ export class SessionRegistry {
     this.removedEmptySessionIds = []
     const marked: string[] = []
     for (const row of this.doc.sessions) {
+      if (!this.ownedSessionIds.has(row.appSessionId) || row.ownerHostPid !== process.pid) continue
       if (row.shutdown !== null && row.shutdown !== 'parked') continue
       row.shutdown = 'clean'
       delete row.peerNotice
@@ -1557,15 +1571,7 @@ function mergeRegistryDocuments(
   for (const [appSessionId, localRow] of localById) {
     const baselineRow = baselineById.get(appSessionId)
     const latestRow = mergedById.get(appSessionId)
-    if (baselineRow && rowsEqual(localRow, baselineRow)) {
-      // `'parked'` is intentionally normalised to `'crashed'` on a NEW
-      // launch, but this read is part of the same live process's write merge.
-      // Preserve its in-memory-only meaning until that process exits.
-      if (baselineRow.shutdown === 'parked' && latestRow) {
-        mergedById.set(appSessionId, { ...latestRow, shutdown: 'parked' })
-      }
-      continue
-    }
+    if (baselineRow && rowsEqual(localRow, baselineRow)) continue
 
     mergedById.set(
       appSessionId,
@@ -1600,6 +1606,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.lastMessageSentAt === right.lastMessageSentAt &&
     left.hasAcceptedInput === right.hasAcceptedInput &&
     left.shutdown === right.shutdown &&
+    left.ownerHostPid === right.ownerHostPid &&
     left.enginePid === right.enginePid &&
     left.socketPath === right.socketPath &&
     left.restartCount === right.restartCount
@@ -1675,6 +1682,7 @@ function mergeRegistryRow(
         ? { hasAcceptedInput: false }
         : {}),
     shutdown: runtime.shutdown,
+    ...(runtime.ownerHostPid !== undefined ? { ownerHostPid: runtime.ownerHostPid } : {}),
     ...(runtime.enginePid !== undefined ? { enginePid: runtime.enginePid } : {}),
     ...(runtime.socketPath !== undefined
       ? { socketPath: runtime.socketPath }
@@ -1769,6 +1777,9 @@ function validateRow(candidate: unknown): RegistrySession | null {
   if (typeof candidate.titleUpdatedAt === 'number') {
     row.titleUpdatedAt = candidate.titleUpdatedAt
   }
+  if (typeof candidate.ownerHostPid === 'number' && Number.isSafeInteger(candidate.ownerHostPid) && candidate.ownerHostPid > 0) {
+    row.ownerHostPid = candidate.ownerHostPid
+  }
   if (typeof candidate.enginePid === 'number') row.enginePid = candidate.enginePid
   if (typeof candidate.socketPath === 'string') row.socketPath = candidate.socketPath
   if (typeof candidate.restartCount === 'number') row.restartCount = candidate.restartCount
@@ -1776,12 +1787,9 @@ function validateRow(candidate: unknown): RegistrySession | null {
 }
 
 function normalizeShutdown(value: unknown): ShutdownState {
-  if (value === 'clean' || value === 'crashed') return value
-  // IDLE-PARK (decisions/IDLE-PARK.md §8): `'parked'` is an in-memory-only state
-  // for a LIVE run. If it ever survives to disk (the app crashed while a session
-  // was parked), treat it next launch as an ordinary crashed restore-offer — a
-  // parked engine has no live process to reattach to, exactly like a crash.
-  if (value === 'parked') return 'crashed'
+  // Launch's orphan sweep converts a park to a crash only after its host dies.
+  // Write merges and other living hosts must retain the parked state.
+  if (value === 'clean' || value === 'crashed' || value === 'parked') return value
   return null
 }
 

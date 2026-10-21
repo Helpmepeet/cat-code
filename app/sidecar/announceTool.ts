@@ -48,7 +48,9 @@ export function createAnnounceTool(requestHost: PeerHostRequester = requestPeerH
               saved: false as const,
               warning: 'Your notice is visible for this run but could not be saved. It may be lost if the app exits.',
             } : {}) }
-        : { ok: false, message: describeHostRequestError(result.error) } }
+        : { ok: false, message: result.error.code === 'session_not_found'
+            ? 'This session is no longer available to post a notice.'
+            : describeHostRequestError(result.error) } }
     },
     mapToolResultToToolResultBlockParam(data, toolUseID) {
       return { type: 'tool_result', tool_use_id: toolUseID, content: JSON.stringify(data), ...(data.ok ? {} : { is_error: true }) }

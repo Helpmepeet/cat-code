@@ -108,6 +108,7 @@ test('scope notice survives park, persisted reload and restore, but not close or
   expect(await restored.setPeerNotice('notice', { doing: 'Too late' })).toBeNull()
   await restored.upsertOnSpawn({ appSessionId: 'notice', cwd: '/workspace' })
   expect(restored.sessions[0]?.peerNotice).toBeUndefined()
+  expect(await restored.setPeerNotice('notice', { doing: 'New scope after reopening' })).not.toBeNull()
 })
 
 test('an unrelated stale registry writer cannot erase a notice or resurrect it after close', async () => {
@@ -160,6 +161,66 @@ test('synchronous quit drops notices from both live and parked rows', async () =
   registry.markLiveCleanSync()
   expect(registry.sessions.every(row => row.peerNotice === undefined)).toBe(true)
   expect(readDoc(registryPath).sessions.every(row => row.peerNotice === undefined)).toBe(true)
+})
+
+test('another app launch and quit cannot close a running host’s live or parked sessions', async () => {
+  const killed: number[] = []
+  const { registry, storageDir, registryPath } = makeRegistry()
+  const socketPath = join(storageDir, 'live.sock')
+  writeFileSync(socketPath, '')
+  await registry.launch()
+  for (const id of ['live', 'parked']) {
+    await registry.upsertOnSpawn({ appSessionId: id, cwd: '/workspace', engineSessionId: id, enginePid: 12345, socketPath })
+    writeTranscript(storageDir, id)
+    await registry.setPeerNotice(id, { doing: `Working on ${id}` })
+  }
+  await registry.markParked('parked')
+  const observer = makeRegistry({
+    storageDir,
+    isProcessAlive: () => true,
+    processCommand: () => 'matching-sidecar',
+    sidecarCommandMarker: 'matching-sidecar',
+    killProcess: pid => { killed.push(pid) },
+  }).registry
+  await observer.launch()
+  expect(observer.findSession('live')?.shutdown).toBeNull()
+  expect(observer.findSession('parked')?.shutdown).toBe('parked')
+  await observer.upsertOnSpawn({ appSessionId: 'other', cwd: '/other' })
+  expect(observer.markLiveCleanSync()).toEqual(['other'])
+  await registry.setTitle('live', 'Still working')
+  expect(registry.findSession('live')?.shutdown).toBeNull()
+  expect(registry.findSession('parked')?.shutdown).toBe('parked')
+  expect(await registry.setPeerNotice('live', { doing: 'Updated scope' })).not.toBeNull()
+  expect(readDoc(registryPath).sessions.find(row => row.appSessionId === 'live')?.peerNotice?.doing).toBe('Updated scope')
+  expect(killed).toEqual([])
+})
+
+test('a dead host still leaves its sessions eligible for crash recovery', async () => {
+  const { registry, storageDir } = makeRegistry()
+  await registry.launch()
+  for (const id of ['live', 'parked']) {
+    await registry.upsertOnSpawn({ appSessionId: id, cwd: '/workspace', engineSessionId: id })
+    writeTranscript(storageDir, id)
+  }
+  await registry.markParked('parked')
+  const relaunched = makeRegistry({ storageDir, isProcessAlive: () => false }).registry
+  await relaunched.launch()
+  expect(relaunched.findSession('live')?.shutdown).toBe('crashed')
+  expect(relaunched.findSession('parked')?.shutdown).toBe('crashed')
+})
+
+test('a stale writer cannot resurrect a park after the owning host closes it', async () => {
+  const { registry, storageDir, registryPath } = makeRegistry()
+  await registry.launch()
+  await registry.upsertOnSpawn({ appSessionId: 'parked', cwd: '/workspace', engineSessionId: 'parked' })
+  writeTranscript(storageDir, 'parked')
+  await registry.markParked('parked')
+  const observer = makeRegistry({ storageDir, isProcessAlive: () => true }).registry
+  await observer.launch()
+  await registry.markClean('parked')
+  await observer.upsertOnSpawn({ appSessionId: 'other', cwd: '/other' })
+  expect(observer.findSession('parked')?.shutdown).toBe('clean')
+  expect(readDoc(registryPath).sessions.find(row => row.appSessionId === 'parked')?.shutdown).toBe('clean')
 })
 
 /** Seed an on-disk registry document directly (pre-launch state). */
