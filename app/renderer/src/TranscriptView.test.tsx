@@ -1699,7 +1699,7 @@ const ADA_COMPLETION: AgentCompletionProjection = {
   usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
 }
 
-test('a background agent card remains a launch record without completion output', () => {
+test('a background agent card shows completed usage without duplicating completion output', () => {
   const html = render(
     agentRow(
       'bg',
@@ -1714,9 +1714,9 @@ test('a background agent card remains a launch record without completion output'
     ),
   )
 
-  // `launched`: an ack, not a run under way. Teal-versus-blue on the face used
-  // to carry that; it is a word now.
-  expect(html).toContain('launched')
+  expect(html).not.toContain('launched')
+  expect(html).toContain('3 tool calls')
+  expect(html).toContain('12.4k tokens')
   expect(html).not.toContain('Result')
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
   expect(html).not.toContain('~12.4k tokens')
@@ -1748,7 +1748,38 @@ test('a foreground agent card WITH children keeps the C4 collapsed default', () 
 /* ── a backgrounded agent's launch ack is not its finish (bug, 2026-08-05) ── */
 
 
-test('a backgrounded agent remains byte-stable in meaning if completion data is present', () => {
+test('a background agent awaiting its first step reads as running after dispatch', () => {
+  const html = render(
+    agentRow(
+      'started',
+      { subagent_type: 'verification', description: 'Verify Exa response handling', run_in_background: true },
+      'success',
+    ),
+  )
+  expect(html).toContain('running')
+  expect(html).not.toContain('launched')
+})
+
+test('a background agent shows its current work after nested steps arrive', () => {
+  const html = render(
+    agentRow(
+      'working',
+      { subagent_type: 'verification', description: 'Verify Exa response handling', run_in_background: true },
+      'success',
+      [toolRow({ toolName: 'Bash', toolFamily: 'bash', input: { command: 'bun test', description: 'Run focused search tests' }, status: 'pending' })],
+    ),
+  )
+  expect(html).toContain('Run focused search tests')
+  expect(html).not.toContain('launched')
+})
+
+test('a background agent awaiting dispatch reads as starting', () => {
+  const html = render(agentRow('starting', { run_in_background: true }, 'pending'))
+  expect(html).toContain('starting')
+  expect(html).not.toContain('launched')
+})
+
+test('a completed background agent no longer claims to be running', () => {
   const html = render(
     agentRow(
       'settled',
@@ -1758,12 +1789,13 @@ test('a backgrounded agent remains byte-stable in meaning if completion data is 
       ADA_COMPLETION,
     ),
   )
-  expect(html).toContain('launched')
+  expect(html).not.toContain('launched')
+  expect(html).not.toContain('running')
   expect(html).not.toContain('>Completed<')
   expect(html).not.toContain('Sidebar lives in app/renderer/src/Sidebar.tsx')
 })
 
-test('background launch records stay independent even if completion facts are present', () => {
+test('background launch outcomes stay independent even if both completion facts are present', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
       rows={[
@@ -1784,9 +1816,26 @@ test('background launch records stay independent even if completion facts are pr
       ]}
     />,
   )
-  expect(html.match(/launched/g)).toHaveLength(2)
+  expect(html).not.toContain('launched')
+  expect(html).not.toContain('still running')
   expect(html).not.toContain('Running 2 Explore agents')
   expect(html).not.toContain('Delegate')
+})
+
+test('a background worker terminal outcome replaces its live activity', () => {
+  for (const [status, word] of [['failed', 'Failed'], ['killed', 'Stopped']] as const) {
+    const html = render(agentRow(
+      `bg-${status}`,
+      { run_in_background: true },
+      'success',
+      [toolRow({ toolName: 'Bash', toolFamily: 'bash', input: { command: 'bun test', description: 'Run focused search tests' }, status: 'success' })],
+      { ...ADA_COMPLETION, status },
+    ))
+    expect(html).toContain(word)
+    expect(html).not.toContain('launched')
+    expect(html).not.toContain('Run focused search tests')
+    expect(html).not.toContain('12.4k tokens')
+  }
 })
 
 test('an unmergeable completion renders one line, never the model-facing banner', () => {

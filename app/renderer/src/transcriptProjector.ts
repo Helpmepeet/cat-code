@@ -122,11 +122,10 @@ export type ToolUseRow = RowSource & {
   status: ToolCardStatus
   result: ToolResultProjection | null
   /**
-   * A RESUMED agent's finish, joined in at read time from
-   * `agentCompletionsByToolUseId`. The ResumeAgent invocation is the resumed
-   * worker's independent second card, so its later task-notification supplies
-   * that card's result. Null for an original background launch: its card is a
-   * past-tense launch record and its completion remains a later transcript row.
+   * A background or resumed agent's finish, joined in at read time from
+   * `agentCompletionsByToolUseId`. It settles this run's lifecycle independently
+   * of the dispatch acknowledgement. Original launches keep their completion
+   * output in the later notification row; resumed runs show it in their card.
    */
   agentCompletion: AgentCompletionProjection | null
 }
@@ -739,9 +738,9 @@ export function selectTranscriptRows(
       // command notices. Keep them in stored state, never in a display view,
       // including revealed and replayed history.
       if (row.summary?.startsWith('Background command ')) return []
-      // A resumed run owns an independent card, including its result. Ordinary
-      // background agent launches remain immutable launch records and their
-      // finish stays here in arrival order.
+      // A resumed run owns an independent card, including its result. Original
+      // background launches use the completion for state only; their result
+      // stays here in arrival order.
       const merged = row.toolUseId !== null && resumedToolUseIds.has(row.toolUseId)
       return merged ? [] : [revealHidden && hidden[row.frameId] ? markHidden(row) : row]
     }
@@ -754,7 +753,7 @@ export function selectTranscriptRows(
         : null
     const resumedIdentity =
       resumedAgentId === null ? undefined : agentIdentityById.get(resumedAgentId)
-    const agentCompletion = resumedToolUseIds.has(row.toolUseId)
+    const agentCompletion = row.toolFamily === 'agent'
       ? (completions[row.toolUseId] ?? null)
       : null
     const views = joinedToolRows.get(row)
@@ -2364,9 +2363,8 @@ function projectUserFrame(
 }
 
 /**
- * Retain structured completion facts by `tool_use_id`. Original background
- * launch cards do not consume them; ResumeAgent uses them to populate the
- * resumed run's independent result card. A duplicate id is overwritten by the
+ * Retain structured completion facts by `tool_use_id` for each run's lifecycle
+ * and the resumed run's independent result card. A duplicate id is overwritten by the
  * later turn (the engine notifies once per task, guarded by the `notified` flag
  * at `src/tasks/LocalAgentTask/LocalAgentTask.tsx:307`).
  */

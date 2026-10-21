@@ -1664,7 +1664,7 @@ function stateWithBackgroundAgent(origin: unknown) {
             type: 'tool_use',
             id: 'toolu_agent_1',
             name: 'Agent',
-            input: { subagent_type: 'Explore', description: 'Find the owner files' },
+            input: { subagent_type: 'Explore', description: 'Find the owner files', run_in_background: true },
           },
         ],
       },
@@ -1712,19 +1712,23 @@ const ADA_ORIGIN = {
   usage: { totalTokens: 12400, toolUses: 3, durationMs: 48000 },
 }
 
-test('a background agent finish stays a later notification row and leaves its launch card unchanged', () => {
-  const rows = selectTranscriptRows(stateWithBackgroundAgent(ADA_ORIGIN), 'session-1')
+test('a background agent finish updates its card lifecycle and keeps the later notification row', () => {
+  const state = stateWithBackgroundAgent(ADA_ORIGIN)
+  const rows = selectTranscriptRows(state, 'session-1')
 
   expect(rows).toHaveLength(2)
   expect(rows[0]).toMatchObject({
     kind: 'tool-use',
     toolUseId: 'toolu_agent_1',
-    agentCompletion: null,
+    agentCompletion: { status: 'completed', usage: ADA_ORIGIN.usage },
   })
   expect(rows[1]).toMatchObject({
     kind: 'task-notification',
     status: 'completed',
     summary: 'Agent @Ada completed',
+  })
+  expect(state.sessions['session-1']!.rows.find(row => row.kind === 'tool-use')).toMatchObject({
+    agentCompletion: null,
   })
 
   // The leak, pinned shut: not one of the banner's internals survives into
@@ -1750,9 +1754,20 @@ test('the nested selector preserves the launch card followed by its completion r
   expect(nested[0]).toMatchObject({
     kind: 'tool-use',
     toolFamily: 'agent',
-    agentCompletion: null,
+    agentCompletion: { status: 'completed' },
   })
   expect(nested[1]).toMatchObject({ kind: 'task-notification' })
+})
+
+test('background terminal facts correlate to their own run for failed and stopped workers', () => {
+  for (const status of ['failed', 'killed']) {
+    const rows = selectTranscriptRows(
+      stateWithBackgroundAgent({ ...ADA_ORIGIN, status }),
+      'session-1',
+    )
+    expect(rows[0]).toMatchObject({ agentCompletion: { status } })
+    expect(rows[1]).toMatchObject({ kind: 'task-notification', status })
+  }
 })
 
 test('a completion whose card never arrived stays a visible row, never vanishes', () => {
@@ -1831,7 +1846,7 @@ test('a partial or malformed completion usage never leaks into the notification 
       stateWithBackgroundAgent({ ...ADA_ORIGIN, usage }),
       'session-1',
     )
-    expect(rows[0]).toMatchObject({ agentCompletion: null })
+    expect(rows[0]).toMatchObject({ agentCompletion: { status: 'completed', usage: null } })
     expect(rows[1]).toMatchObject({
       kind: 'task-notification',
       summary: 'Agent @Ada completed',

@@ -27,9 +27,6 @@ export function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
   const subagentType = str('subagent_type')
   const description = str('description')
   const prompt = str('prompt')
-  const isLaunchRecord =
-    (row.toolName === 'Agent' || row.toolName === 'Task') &&
-    input.run_in_background === true
   // Identity is transcript-owned in either state: the completed result carries
   // it on the parent correlation, while a running worker carries it on its
   // nested progress frames. No live task snapshot joins this card.
@@ -61,7 +58,7 @@ export function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
     ...(subagentType !== undefined ? { subagent_type: subagentType } : {}),
     ...(description !== undefined ? { description } : {}),
     ...(prompt !== undefined ? { prompt } : {}),
-    ...(!isLaunchRecord && row.agentCompletion !== null
+    ...(row.agentCompletion !== null
       ? { hasCompletion: true, completionStatus: row.agentCompletion.status }
       : {}),
   }
@@ -139,27 +136,12 @@ export function agentProgressBadge(
 ): string | null {
   const activity = agentActivityOf(row)
   if (state === 'running') return activity ?? 'starting'
-  // A BACKGROUNDED agent's card says so instead of naming an activity. Its
-  // steps now nest under the card (`runAgent` publishes them out of turn), but
-  // the launch ack settles the tool use at once, so this word is the card's only
-  // statement that the worker left the turn.
-  //
-  // It says so itself now. The redesign took the lifecycle word off the card
-  // (2026-08-19), so with the slot empty and the face turned away this card
-  // carried no statement at all that the worker went to the background.
-  //
-  // A LAUNCH RECORD says `launched`, not `backgrounded`. Both are state
-  // `background` and both used to be told apart by the face alone — teal for the
-  // ack, blue for a run genuinely under way. The face carries identity now
-  // (2026-08-21), so the distinction moved into the word, where it says what it
-  // means instead of relying on a reader knowing two shades of the same stamp.
+  // The launch ack settles the tool call, not the worker. Its nested steps keep
+  // arriving until a run-owned completion supplies the terminal state.
   if (state === 'background') {
-    const isLaunchRecord =
-      (row.toolName === 'Agent' || row.toolName === 'Task') &&
-      row.input.run_in_background === true
-    return isLaunchRecord ? 'launched' : 'backgrounded'
+    return activity ?? (row.status === 'pending' ? 'starting' : 'running')
   }
-  const settledUsage = row.result?.agentUsage ?? null
+  const settledUsage = row.agentCompletion?.usage ?? row.result?.agentUsage ?? null
   const toolCalls = settledUsage?.toolUses ?? agentToolCallCount(row)
   const parts: string[] = []
   if (toolCalls > 0) {

@@ -4375,10 +4375,8 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   const nameToneClass = (
     vocab.type ? AGENT_TYPE_TONE_CLASS[vocab.type.tone] : AGENT_TYPE_TONE_CLASS.neutral
   ).text
-  // NOT gated on `isLaunchRecord`: `agentProgressBadge` already answers
-  // "backgrounded" for `state === 'background'`, and overriding on the record
-  // shape instead of the state made a launch whose `tool_result` errored say
-  // "backgrounded" beside line 2's "Failed".
+  // The worker lifecycle, not the dispatch result, decides whether this slot
+  // shows current work or settled usage.
   const slot = agentProgressBadge(row, state)
   // The two states that need to stop a reader mid-scan keep their word; every
   // other state is told by the face's pulse and the right-hand slot. NOT by its
@@ -4405,7 +4403,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           row.toolName === 'ResumeAgent' ? RESUMED_TYPE_WORD : agentTypeWord(vocab)
         }
         slot={slot}
-        slotLive={!isLaunchRecord && (state === 'running' || state === 'background')}
+        slotLive={state === 'running' || state === 'background'}
         slotYields={backgroundAction !== null}
       />
       <AgentTaskLine
