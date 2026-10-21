@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act } from 'react'
+import { StrictMode, act } from 'react'
 import { App } from './App.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import type { SessionDescriptor, HostEvent } from '../../shared/hostApi.js'
@@ -115,7 +115,7 @@ test.each([
       newChat!.click()
     } else button!.click()
   })
-  expect(managedChats).toBe(entry === 'workspace' || entry === 'folder' ? 0 : 1)
+  expect(managedChats).toBe((context === 'none' ? 1 : 0) + (entry === 'workspace' || entry === 'folder' ? 0 : 1))
   expect(workspaceCreates).toEqual(entry === 'workspace' ? ['existing-chat'] : [])
   expect(folderPicks).toBe(entry === 'folder' ? 1 : 0)
   expect(directoryCreates).toBe(entry === 'folder' ? 1 : 0)
@@ -144,6 +144,96 @@ function deferred<T>() {
 }
 
 type CreateResult = Awaited<ReturnType<CatCodeBridge['createManagedChat']>>
+
+test.each(['empty', 'history', 'existing'] as const)('startup opens a composer after the %s roster resolves', async context => {
+  const roster = deferred<SessionDescriptor[]>()
+  const creates: string[] = []
+  let host!: (event: HostEvent) => void
+  window.catcode = {
+    subscribe: () => () => {},
+    subscribeHost: receive => { host = receive; return () => {} },
+    rendererReady: () => {}, listSessions: () => roster.promise,
+    readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
+    reportVisibleSessions: () => {}, recordRenderCommit: () => {},
+    getSessionFolderState: async () => ({ ok: true, value: 'available' }),
+    createManagedChat: async () => {
+      creates.push('managed')
+      const session = descriptor(`created-${creates.length}`)
+      host({ type: 'session-added', session })
+      return { ok: true, value: session }
+    },
+    closeSession: async id => {
+      host({ type: 'session-removed', appSessionId: id })
+      return { ok: true, value: undefined }
+    },
+  } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
+  const tree = await harness.mount(<StrictMode><App /></StrictMode>)
+  expect(creates).toEqual([])
+  await act(async () => roster.resolve(context === 'empty' ? [] : [
+    context === 'existing' ? descriptor('existing')
+      : { ...descriptor('history'), status: 'exited', restorable: true },
+  ]))
+  expect(tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
+  expect(tree.container.textContent).not.toContain('Open a project')
+  expect(creates).toEqual(context === 'existing' ? [] : ['managed'])
+  if (context === 'empty') {
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', metaKey: true, bubbles: true })))
+    expect(creates).toEqual(['managed', 'managed'])
+    expect(tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
+  }
+})
+
+test('startup preserves roster and sign-in gates and retries failed creation only on request', async () => {
+  let host!: (event: HostEvent) => void
+  let reads = 0
+  let creates = 0
+  const retriedRoster = deferred<SessionDescriptor[]>()
+  const pool = {
+    accounts: [], signedOutProfiles: [], activeAccountId: null, readyCount: 0, poolCount: 0,
+    initialized: true, anthropicAccounts: [], anthropicActiveAccountId: null,
+    anthropicReadyCount: 0, anthropicPoolCount: 0, anthropicInitialized: true,
+    anthropicRouteAvailable: false,
+  }
+  window.catcode = {
+    subscribe: () => () => {},
+    subscribeHost: receive => { host = receive; return () => {} },
+    rendererReady: () => {},
+    listSessions: async () => {
+      if (++reads === 1) throw new Error('Roster unavailable')
+      return retriedRoster.promise
+    },
+    readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
+    reportVisibleSessions: () => {}, recordRenderCommit: () => {},
+    getSessionFolderState: async () => ({ ok: true, value: 'available' }),
+    createManagedChat: async () => {
+      if (++creates === 1) throw new Error('Chat unavailable')
+      const session = descriptor('retried')
+      host({ type: 'session-added', session })
+      return { ok: true, value: session }
+    },
+  } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
+  const tree = await harness.mount(<App />)
+  expect(creates).toBe(0)
+  const retry = [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Retry')!
+  expect(retry).toBeDefined()
+  await act(async () => retry.click())
+  expect(reads).toBe(2)
+  await act(async () => host({ type: 'accounts-pool', pool }))
+  await act(async () => retriedRoster.resolve([]))
+  expect(creates).toBe(0)
+  expect(tree.container.querySelector('[aria-label="Prompt"]')).toBeNull()
+  const signedInPool = { ...pool, anthropicRouteAvailable: true }
+  await act(async () => host({ type: 'accounts-pool', pool: signedInPool }))
+  expect(creates).toBe(1)
+  expect(tree.container.textContent).toContain('Chat unavailable')
+  await act(async () => host({ type: 'accounts-pool', pool: signedInPool }))
+  expect(creates).toBe(1)
+  const newChat = [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'New chat')!
+  expect(newChat).toBeDefined()
+  await act(async () => newChat.click())
+  expect(creates).toBe(2)
+  expect(tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
+})
 
 async function mountCommands({
   sessions = [descriptor('origin')], drafts = {}, delayed = false,

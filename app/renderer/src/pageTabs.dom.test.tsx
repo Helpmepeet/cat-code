@@ -54,7 +54,12 @@ async function mountApp(sessions: SessionDescriptor[] = [], split = false, saved
     readSettingsInventory: async cwd => { inventoryCwds.push(cwd); return { ok: true, inventory: { cwd: cwd ?? '/synthetic-home', extensions: { mcp: [], plugins: [], skills: [], hooks: [] }, agents: { definitions: [], failedFiles: [], availableMcpServers: [] }, settings: null, memory: null } } },
     closeSession: async id => { lifecycle.push(`close:${id}`); return { ok: true, value: undefined } },
     restoreSession: async id => { lifecycle.push(`restore:${id}`); return { ok: true, value: sessionDescriptor(id) } },
-    createManagedChat: async () => { lifecycle.push('create'); return { ok: true, value: sessionDescriptor('created') } },
+    createManagedChat: async () => {
+      lifecycle.push('create')
+      const session = sessionDescriptor('created')
+      hostListener({ type: 'session-added', session })
+      return { ok: true, value: session }
+    },
   }
   window.catcode = bridge as CatCodeBridge
   const tree = await harness.mount(strict ? <StrictMode><App /></StrictMode> : <App />)
@@ -100,7 +105,7 @@ test('StrictMode replay does not send a second Analytics activation', async () =
   expect(app.usageRefreshes).toHaveLength(1)
 })
 
-test('all sidebar pages share a unique strip and empty close restores the credential-ready welcome', async () => {
+test('all sidebar pages share a unique strip and closing pages returns to the chat', async () => {
   const app = await mountApp()
   for (const title of ['Goals', 'Accounts', 'Analytics', 'Settings']) {
     await app.click(title)
@@ -108,7 +113,7 @@ test('all sidebar pages share a unique strip and empty close restores the creden
     expect(app.tree.container.querySelector('main')?.textContent).toContain(title)
   }
   await app.click('Goals')
-  expect(app.tabs().map(t => t.getAttribute('aria-label'))).toEqual(['Goals page', 'Accounts page', 'Analytics page', 'Settings page'])
+  expect(app.tabs().map(t => t.getAttribute('aria-label'))).toEqual(['Session created, live', 'Goals page', 'Accounts page', 'Analytics page', 'Settings page'])
   await app.click('Close Analytics page')
   expect(app.selected()).toEqual(['Goals page'])
   const close = app.tree.container.querySelector<HTMLElement>('[aria-label="Close Goals page"]')!
@@ -116,11 +121,12 @@ test('all sidebar pages share a unique strip and empty close restores the creden
     close.focus()
     close.dispatchEvent(new KeyboardEvent('keydown', { key: 'w', metaKey: true, bubbles: true }))
   })
-  expect(app.tabs()).toHaveLength(2)
-  for (let i = 0; i < 2; i++) await app.key('w')
-  expect(app.tabs()).toHaveLength(0)
-  expect(app.tree.container.textContent).toContain('Welcome back')
-  expect(app.lifecycle).toEqual([])
+  expect(app.tabs()).toHaveLength(3)
+  await app.click('Close Accounts page')
+  await app.click('Close Settings page')
+  expect(app.tabs()).toHaveLength(1)
+  expect(app.tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
+  expect(app.lifecycle).toEqual(['create'])
 })
 
 test('Settings owns Cmd K for search without opening the shell command palette', async () => {
@@ -418,13 +424,13 @@ test.each(['preview', 'restore', 'create', 'history'] as const)('late %s complet
     await app.frames(ready(id))
   }
   expect(app.selected()).toEqual(['Goals page'])
-  expect(app.tabs()).toHaveLength(2)
+  expect(app.tabs()).toHaveLength(3)
   if (operation === 'preview') {
     await app.host({ type: 'session-added', session: sessionDescriptor('dead') })
     await app.frames(ready('dead'))
-    expect(app.tabs()).toHaveLength(2)
+    expect(app.tabs()).toHaveLength(3)
     expect(app.selected()).toEqual(['Goals page'])
-    expect(app.lifecycle).toEqual([])
+    expect(app.lifecycle).toEqual(['create'])
   }
 })
 
@@ -526,9 +532,9 @@ test('catalog exclusions and background park, crash, and restart never replace t
   expect([...app.tree.container.querySelectorAll('button')].some(button => button.textContent?.startsWith('Project:'))).toBe(false)
   await app.key('w')
   await app.key('w')
-  expect(app.tabs()).toHaveLength(0)
-  expect(app.tree.container.textContent).toContain('Welcome back')
-  expect(app.lifecycle).toEqual([])
+  expect(app.tabs()).toHaveLength(1)
+  expect(app.tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
+  expect(app.lifecycle).toEqual(['create'])
 })
 
 test('palette page routes reuse their tabs and hide actions for the retained session', async () => {
@@ -564,7 +570,7 @@ test('a newer restore request keeps its focus claim when an older preview arrive
   await act(async () => { old.resolve(cache('old')) })
   await act(async () => { newer.resolve(cache('new')) })
   expect(app.selected()[0]).toContain('Session new,')
-  expect(app.tabs()).toHaveLength(2)
+  expect(app.tabs()).toHaveLength(3)
 })
 
 test('composer management and account-health action focus the same Accounts tab', async () => {
@@ -763,5 +769,5 @@ test('a cold cached conversation shows its mismatch through the read-only path w
   expect(app.tree.container.textContent).toContain('A conversation from before restart')
   expect(app.tree.container.querySelector('.workspace-branch-changed')?.getAttribute('aria-label')).toBe('Checkout is on external. This chat was on recorded.')
   expect(reads).toEqual([['dead', 'readout']])
-  expect(app.lifecycle).toEqual([])
+  expect(app.lifecycle).toEqual(['create'])
 })

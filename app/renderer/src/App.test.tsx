@@ -215,25 +215,21 @@ test('composer attributes a Claude subscription account only to the active subsc
   ).toBe(false)
 })
 
-test('renders the shell frame (TabBar + empty state) before any session exists', () => {
-  // SSR runs no effects, so the host list never resolves — the shell mounts
-  // with an empty roster. The frame is still whole: the TabBar chrome and a
-  // new-session affordance are present, and the empty state is the P4-17
-  // WelcomeScreen launcher inviting the first session (HC1 — created only via
-  // the picker, never a typed path).
+test('renders the shell frame while the initial roster is pending', () => {
+  // Effects have not loaded the roster or opened the initial chat yet.
   const html = renderToStaticMarkup(<App />)
 
   expect(html).toContain('role="tablist"')
   expect(html).toContain('aria-label="Workspace tabs"')
   expect(html).toContain('aria-label="New session"')
-  expect(html).toContain('Welcome back')
-  expect(html).toContain('Open a project')
+  expect(html).not.toContain('Welcome back')
+  expect(html).not.toContain('Open a project')
   // No active-session pane chrome without a session.
   expect(html).not.toContain('aria-label="Prompt"')
   expect(html).not.toContain('Transcript (projected)')
 })
 
-test('CC-91 wiring tripwire: App owns one presentation state and passes its pending boolean to both Welcome paths', () => {
+test('CC-91 wiring tripwire: App passes account usage presentation state to session panes', () => {
   // LAYER HONESTY: App needs the preload bridge to mount, so this SSR suite
   // cannot execute its timer hook. The accounts-state DOM suite covers that
   // behavior; this source assertion only protects the production joins.
@@ -246,17 +242,10 @@ test('CC-91 wiring tripwire: App owns one presentation state and passes its pend
   expect(normalized).toContain(
     "const accountsUsagePending = accountsPoolPresentationState === 'pending'",
   )
-  expect(normalized).toContain(
-    'const welcomeAccounts = selectWelcomeAccountsSnapshot(accounts, activeSessionId)',
-  )
 
   const pane = source.slice(source.indexOf('<SessionPane'), source.indexOf('<SessionPane') + 2_000)
   expect(pane).toContain('accountsSnapshot={panelAccounts}')
   expect(pane).toContain('accountsUsagePending={accountsUsagePending}')
-
-  const launcher = source.slice(source.indexOf('<WelcomeScreen'), source.indexOf('<WelcomeScreen') + 1_000)
-  expect(launcher).toContain('accounts={welcomeAccounts}')
-  expect(launcher).toContain('accountsUsagePending={accountsUsagePending}')
 })
 
 test('PL-A wiring tripwire: the startup preload and restore call the parts they claim to', () => {
@@ -563,36 +552,6 @@ test('message actions use one stable App dispatcher and correlate targeted resul
   )
   expect(source).not.toContain('BranchDialog')
   expect(source).toContain("sendSessionActionVerb(sessionId, { type: 'session.branch', requestId })")
-})
-
-test('P4-40 wiring tripwire: a Welcome recent with no app id reaches the history route', () => {
-  // The defect this pins: the launcher opened a recent by `appSessionId` alone,
-  // and a project whose sessions were ALL created in the terminal carries none —
-  // so its click hit an early return in this file and vanished. Deleting the
-  // disabled rendering without this wiring produces a row that looks live and
-  // does nothing, which is why the guard and the route land together.
-  //
-  // LAYER HONESTY: SSR-only file, so this asserts the CALL SITE (the P4-29
-  // tripwire's precedent above). The route decision itself is covered
-  // behaviourally in sessionsCatalogState.test.ts.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-
-  // The prop is the shared handler, not an inline id-only branch.
-  expect(source).toContain('onOpenRecent={openRecentWorkspace}')
-  expect(source).not.toContain('if (recent.appSessionId == null) return')
-
-  const recentStart = source.indexOf('const openRecentWorkspace = useCallback(')
-  expect(recentStart).toBeGreaterThan(-1)
-  const recentEnd = source.indexOf('function submitSession(', recentStart)
-  const recentBody = source.slice(recentStart, recentEnd)
-  expect(recentBody).toContain('applyOpenRoute(resolveRecentOpenRoute(recent))')
-
-  // HC1: the history hop passes the engine id only. A recent that handed a cwd
-  // across the boundary would be a baseline violation, not a shortcut.
-  const applyStart = source.indexOf('const applyOpenRoute = useCallback(')
-  const applyEnd = source.indexOf('const openCatalogRow = useCallback(', applyStart)
-  const applyBody = source.slice(applyStart, applyEnd)
-  expect(applyBody).toContain('void openHistorySession(route.engineSessionId)')
 })
 
 test('tool-card expansion memory is shell-owned and reaches every session pane', () => {
@@ -2978,38 +2937,6 @@ test('P4-54: shell lifecycle failures persist until the dismiss control clears t
   const shellErrorBar = source.slice(shellErrorBarStart, shellErrorBarEnd)
   expect(shellErrorBar).toContain('aria-label="Dismiss shell error"')
   expect(shellErrorBar).toContain('onClick={() => setShellError(null)}')
-})
-
-test('P4-55: initial roster reads and launcher retries share one truthful hydrate path', () => {
-  // The async state machine and snapshot/live-event merge are exercised in
-  // rosterBootstrap.test.ts. This SSR-only file pins the App wiring around it:
-  // mount and Retry both call one callback, and only its successful snapshot
-  // marks the bootstrap ready.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const hydrateStart = source.indexOf('  const hydrateHostRoster = useCallback(')
-  const hydrateEnd = source.indexOf(
-    '\n\n  // Host control plane:',
-    hydrateStart,
-  )
-  expect(hydrateStart).toBeGreaterThan(-1)
-  expect(hydrateEnd).toBeGreaterThan(hydrateStart)
-  const hydrateBody = source.slice(hydrateStart, hydrateEnd)
-
-  expect(hydrateBody).toContain(
-    'listSessions: () => getBridge().listSessions()',
-  )
-  expect(hydrateBody).toContain("dispatchRosterBootstrap({ type: 'read-failed' })")
-  expect(hydrateBody.replace(/\s+/g, ' ')).toContain(
-    "dispatchShell({ type: 'hydrate'",
-  )
-  expect(hydrateBody).toContain(
-    "dispatchRosterBootstrap({ type: 'read-succeeded' })",
-  )
-  expect(source).toContain('void hydrateHostRoster()')
-  expect(source).toContain('onRetry: () => void hydrateHostRoster()')
-  expect(source).toContain(
-    "const hostSnapshotReady = rosterBootstrap.status === 'ready'",
-  )
 })
 
 test('clean parking releases live transcript projection and raw log from renderer memory', () => {

@@ -255,7 +255,6 @@ import {
   selectActiveAccount,
   selectActiveAnthropicAccount,
   selectGlobalAccountsSnapshot,
-  selectWelcomeAccountsSnapshot,
   useAccountsPoolPresentationState,
   hasCompleteAccountsUsage,
 } from './accountsState.js'
@@ -308,18 +307,14 @@ import {
   groupByWorkspace,
   reduceSessionsCatalogState,
   resolveCreatedPeerSessionRoute,
-  resolveRecentOpenRoute,
   resolveSessionOpenRoute,
   selectMergedSessionRows,
-  selectRecentWorkspaces,
   selectRowEngineSessionId,
   selectSessionsCatalog,
   withResolvedTitle,
   type MergedSessionRow,
-  type RecentWorkspace,
   type SessionOpenRoute,
 } from './sessionsCatalogState.js'
-import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
 import { useSubagentDockObservation } from './subagentDockObservation.js'
 import {
@@ -671,6 +666,7 @@ export function App() {
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
   const newChatInFlightRef = useRef(false)
   const newManagedChatInFlightRef = useRef(false)
+  const emptyChatAttemptedRef = useRef(false)
   // The window's face registries, one per SESSION, mounted at the shell so every
   // surface that draws a worker shares one. The transcript, the subagent dock,
   // the Workers list and a relayed permission card can all show the same worker
@@ -1770,29 +1766,6 @@ export function App() {
   const settingsProjects = useMemo(
     () => groupByWorkspace(sessionCatalogRows, null).filter(group => group.cwd),
     [sessionCatalogRows],
-  )
-
-  // P4-17 Welcome launcher — derived inputs, read from the SAME domain seams as
-  // the other surfaces (no new feed, D5/WELCOME-LAUNCHER §6). Recents = a
-  // distinct-workspace projection over the shared merged rows; trust = best-
-  // effort per-cwd flags joined from live sessions' `workspace-trust.snapshot`
-  // (only reporting sessions expose trust — a global projects-trust feed is out
-  // of scope). The launcher renders at empty-state (no ACTIVE session), so the
-  // account table reads the first available pool snapshot (the pool is global).
-  const welcomeTrustByCwd = useMemo(() => {
-    const map = new Map<string, boolean>()
-    for (const descriptor of visibleShellDescriptors) {
-      const snap = selectWorkspaceTrustSnapshot(
-        workspaceTrust,
-        descriptor.appSessionId,
-      )
-      if (snap) map.set(descriptor.cwd, snap.trusted)
-    }
-    return map
-  }, [visibleShellDescriptors, workspaceTrust])
-  const welcomeRecents = useMemo(
-    () => selectRecentWorkspaces(sessionCatalogRows, welcomeTrustByCwd),
-    [sessionCatalogRows, welcomeTrustByCwd],
   )
 
   useEffect(() => {
@@ -3360,19 +3333,6 @@ export function App() {
     [applyOpenRoute, hostSnapshotReady, sessionCatalogRows, toast],
   )
 
-  // P4-40 — the Welcome launcher opens a project through that same one decision.
-  // It used to open by app id only, so a project whose sessions were all created
-  // in the terminal had nothing to open with and its click was dropped here.
-  // `resolveRecentOpenRoute` gives it the history route, which passes ONLY the
-  // engine session id: main resolves the workspace from the engine-written
-  // baseline cache (`app/main/openHistorySession.ts`), so HC1 still holds.
-  const openRecentWorkspace = useCallback(
-    (recent: RecentWorkspace) => {
-      applyOpenRoute(resolveRecentOpenRoute(recent))
-    },
-    [applyOpenRoute],
-  )
-
   async function executeDesktopNewChat(
     originSessionId: SessionId,
   ): Promise<DesktopCommandOutcome> {
@@ -4512,7 +4472,6 @@ export function App() {
 
   // Chat startup checks its workspace trust before global account availability.
   // App destinations remain accessible while those chat gates are showing.
-  const welcomeAccounts = selectWelcomeAccountsSnapshot(accounts, activeSessionId)
   const activeTrustSnapshot = selectWorkspaceTrustSnapshot(
     workspaceTrust,
     activeSessionId,
@@ -4525,6 +4484,18 @@ export function App() {
     false,
   )
   const showFirstRunOAuth = activeView === 'chat' && !showTrustGate && firstRunAuthRequired
+
+  useEffect(() => {
+    if (paneSessionIds.length > 0) {
+      emptyChatAttemptedRef.current = false
+      return
+    }
+    if (!hostSnapshotReady || activeView !== 'chat' || firstRunAuthRequired || emptyChatAttemptedRef.current) return
+    // Wait for the roster so a restored pane wins. Attempt once per empty
+    // shell; creation failures stay actionable without a retry loop.
+    emptyChatAttemptedRef.current = true
+    void newChat()
+  }, [hostSnapshotReady, activeView, firstRunAuthRequired, paneSessionKey, newChat])
 
   // First-run and the Accounts overlay render the same app-owned attempt.
   const oauthProgress = appOAuthProgress
@@ -5165,25 +5136,25 @@ export function App() {
               />
             </div>
           ) : workspacePanels.length === 0 || !activeSessionId ? (
-            // P4-17 — the rich launcher replaces the minimal empty shell. Reads
-            // derived recents (D5) + the P4-5 pool, and wires open/restore/
-            // open-from-history (HC1 id-only, P4-40) and the HC1 folder picker
-            // (post-spawn trust gate).
-            <WelcomeScreen
-              recents={welcomeRecents}
-              accounts={welcomeAccounts}
-              accountsUsagePending={accountsUsagePending}
-              onOpenRecent={openRecentWorkspace}
-              onOpenFolder={() => void newSession()}
-              rosterFailure={
-                rosterBootstrap.status === 'failure'
-                  ? {
-                      retrying: rosterBootstrap.retrying,
-                      onRetry: () => void hydrateHostRoster(),
-                    }
-                  : undefined
-              }
-            />
+            <div className="flex flex-1 flex-col items-center justify-center gap-3">
+              {rosterBootstrap.status === 'failure' ? (
+                <>
+                  <p className="text-sm text-text-muted">Chats could not load.</p>
+                  <button
+                    type="button"
+                    className="text-sm text-accent disabled:opacity-50"
+                    disabled={rosterBootstrap.retrying}
+                    onClick={() => void hydrateHostRoster()}
+                  >
+                    Retry
+                  </button>
+                </>
+              ) : hostSnapshotReady && shellError ? (
+                <button type="button" className="text-sm text-accent" onClick={() => void newChat()}>
+                  New chat
+                </button>
+              ) : null}
+            </div>
           ) : (
             /* P4-50 (O2a) — the account-health bar is pinned HERE, above the
              * transcript, rather than left to scroll away inside it. It sits in
