@@ -273,6 +273,11 @@ async function searchKeylessExa(
         { signal, timeout: timeoutMs },
       ),
     )
+    // Exa reports free-tier quota exhaustion as metadata, deliberately without
+    // isError. It is not a successful search or a malformed results payload.
+    if (result._meta?.['ai.exa/rateLimited'] === true) {
+      throw new Error(formatExaStatusError(429))
+    }
     if (result.isError) {
       const message = result.content
         .flatMap(block => (block.type === 'text' ? [block.text] : []))
@@ -301,6 +306,16 @@ async function searchKeylessExa(
       } catch {
         // Only JSON search results are accepted, never arbitrary server text.
       }
+    }
+    // The advanced tool uses this exact plain-text notice for an empty response.
+    // Keep other unstructured text rejected rather than inventing search hits.
+    if (
+      result.content.length === 1 &&
+      result.content[0]?.type === 'text' &&
+      result.content[0].text.trim() ===
+        'No search results found. Please try a different query or adjust your filters.'
+    ) {
+      return { results: [] }
     }
     throw new Error('Exa search returned an unexpected response.')
   } finally {

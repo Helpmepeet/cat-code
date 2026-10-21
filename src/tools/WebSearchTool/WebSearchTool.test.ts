@@ -388,6 +388,49 @@ describe('Exa WebSearch fetch execution', () => {
     })
   })
 
+  test.each(['json', 'sse'] as const)('recognizes Exa quota metadata without an MCP error flag (%s)', async wire => {
+    delete process.env.EXA_API_KEY
+    const requests = mockKeylessExa({
+      content: [{ type: 'text', text: "You've hit Exa's free MCP rate limit. Private provider diagnostic." }],
+      _meta: { 'ai.exa/rateLimited': true },
+    }, wire)
+    const { searchExa } = await import('./exa.js')
+    await expect(searchExa({ query: 'limited' }, new AbortController().signal)).rejects.toThrow(
+      'Exa rate limit exceeded with HTTP 429. Try again later or use fewer searches.',
+    )
+    expect(requests.filter(request => request.body.method === 'tools/call')).toHaveLength(1)
+  })
+
+  test.each(['json', 'sse'] as const)('returns normal empty results for Exa’s no-results notice (%s)', async wire => {
+    delete process.env.EXA_API_KEY
+    mockKeylessExa({
+      content: [{ type: 'text', text: 'No search results found. Please try a different query or adjust your filters.' }],
+    }, wire)
+    const { WebSearchTool } = await import('./WebSearchTool.js')
+    const output = await WebSearchTool.call(
+      { query: 'no matches' },
+      { abortController: new AbortController() } as never,
+      undefined as never,
+      undefined as never,
+      undefined,
+    )
+    expect(output.data.results).toEqual([])
+    expect(WebSearchTool.mapToolResultToToolResultBlockParam(output.data, 'empty').content).toContain(
+      'No results found.',
+    )
+  })
+
+  test('does not mistake source text about rate limits for a quota notice', async () => {
+    delete process.env.EXA_API_KEY
+    mockKeylessExa({
+      content: [{ type: 'text', text: JSON.stringify({
+        results: [{ title: 'HTTP 429', url: 'https://example.com/429', highlights: ['Rate limit exceeded'] }],
+      }) }],
+    })
+    const { searchExa } = await import('./exa.js')
+    expect((await searchExa({ query: 'rate limits' }, new AbortController().signal)).results).toHaveLength(1)
+  })
+
   test.each([
     [
       { isError: true, content: [{ type: 'text', text: '429 Rate limit reached; private diagnostic' }] },
