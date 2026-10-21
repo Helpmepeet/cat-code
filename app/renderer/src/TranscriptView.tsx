@@ -1,23 +1,14 @@
 /**
- * Renders the projector's view models (transcriptProjector.ts — §5 layer 2).
- * P1-3: structure over polish — a markdown text row and a bare tool card
- * styled with the P0-2 tokens only. P2-2 extends the tool card with its
- * derived status, family, and (when the result narrowed to one)
- * DiffView/MultiDiffCard — still structural, not the prototype's pixel
- * design; subagent rows nest via `NestedTranscriptRow.children`, never
- * interleaved at top level (D2/C4).
+ * Renders the projector's view models from transcriptProjector.ts.
  *
- * P4-18a (the functional-fix slice): the row dispatch is now an EXHAUSTIVE
- * switch over `NestedTranscriptRow['kind']`, so every projected non-tool-card
- * kind (user turns, thinking, boundary/lifecycle seams, notices, command
- * echoes, images) draws a visible row instead of the old `return null`
- * fall-through that silently dropped user messages (`TranscriptView.tsx`
- * pre-18a line 61). Display degrades gracefully: an unknown/schema-drifted
- * runtime kind renders a tolerant fallback row, never throws. The `default`
- * branch carries the compile-time `never` tripwire — SDK/projector union
- * growth breaks the build here until the new kind gets a case. Tool-card
- * FAMILIES (18b) and prose/markdown + activity/scroll polish (18c) are later
- * slices; their cases slot into this same switch.
+ * The transcript is line-based, not a stack of boxed cards. `*Card` component
+ * names do not imply card chrome. See toolCardStyle.ts for the design intent
+ * and shared classes that support both line and card presentations.
+ *
+ * Subagent rows nest via `NestedTranscriptRow.children`, never interleaved at
+ * top level. Row dispatch stays exhaustive over `NestedTranscriptRow['kind']`;
+ * unknown runtime variants get a tolerant fallback, while the compile-time
+ * `never` check requires new projected kinds to be handled explicitly.
  */
 
 import {

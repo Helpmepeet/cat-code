@@ -1,12 +1,14 @@
 /**
- * How a tool call is drawn in the transcript — a RENDERER-LOCAL view preference.
+ * How a tool call is drawn in the transcript: a renderer-local view preference.
  *
- * Two styles, and `lines` is not a new visual language: the transcript already
- * draws a tool call that way. A member inside a read run renders as a bare row
- * whose open body is an indented rule (`ToolRunRow`, `TranscriptView.tsx`), with
- * no container of its own. This preference applies that existing treatment to
- * top-level calls, so picking `lines` moves the transcript onto one grammar
- * instead of introducing a second.
+ * DESIGN INTENT: lines are the primary visual language, not boxed cards.
+ * Tool calls read as inline rows, with expanded content connected by indented
+ * rules. New transcript surfaces should follow that grammar rather than add a
+ * rounded, bordered, filled container around each item.
+ *
+ * `ToolCard*` names describe components and shared styling hooks, not a visual
+ * requirement. `cards` is an alternative presentation; keep both styles working
+ * through these shared classes rather than hardcoding card chrome in consumers.
  *
  * NOT an engine setting. Nothing in `app/shared/settingsEditable.ts` decides how
  * a transcript row is drawn, so this persists exactly like `toolsExpanded`, the
@@ -35,7 +37,7 @@ export const TOOL_CARD_STYLES = ['cards', 'lines'] as const
 
 export type ToolCardStyle = (typeof TOOL_CARD_STYLES)[number]
 
-/** Today's drawing, so an existing transcript is unchanged until asked. */
+/** Fallback without a saved preference; not the primary design language. */
 export const DEFAULT_TOOL_CARD_STYLE: ToolCardStyle = 'cards'
 
 export const TOOL_CARD_STYLE_LABELS: Readonly<Record<ToolCardStyle, string>> = {
