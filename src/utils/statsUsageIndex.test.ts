@@ -738,6 +738,40 @@ test('indexed result flags match direct accounting without persisting result con
 });
 
 
+test('pre-fix session identities rebuild from unchanged indexed events and then stay warm', async () => {
+    const { path, file } = await fixture();
+    const engineSessionId = '123e4567-e89b-42d3-a456-426614174000';
+    await writeFile(file, [
+        { ...row('before'), sessionId: engineSessionId, cwd: '/work/original' },
+        { ...row('after'), sessionId: engineSessionId, cwd: '/work/destination' },
+    ].map(value => JSON.stringify(value)).join('\n'));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const stale = structuredClone(original);
+    for (const summary of Object.values(stale.ranges)) {
+        for (const item of summary.rankedSessions.items) item.engineSessionId = null;
+        for (const day of summary.days) for (const item of day.contributors.items) item.engineSessionId = null;
+    }
+    const db = new Database(path);
+    try {
+        db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify({ fittingVersion: 1, snapshot: stale }));
+    } finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    const metrics = emptyUsageIndexMetrics();
+    const options = { ...opts(path), metrics, onReadSource() { throw new Error('Unchanged sources must reuse indexed events'); } };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
+    expect(metrics.reusedAggregate).toBe(false);
+    expect(metrics.rowsReplayed).toBeGreaterThan(0);
+    for (const range of ['7d', '30d', 'all'] as const) {
+        expect(rebuilt.ranges[range].tokens).toEqual(original.ranges[range].tokens);
+        expect(rebuilt.ranges[range].rankedSessions.items[0]).toMatchObject({ engineSessionId, project: null });
+        for (const day of rebuilt.ranges[range].days) for (const item of day.contributors.items)
+            expect(item).toMatchObject({ engineSessionId, project: null });
+    }
+    expect(readSavedUsage(path)).toEqual(rebuilt);
+    await collectIndexedUsage([file], cutoff, options);
+    expect(metrics.reusedAggregate).toBe(true);
+});
+
 test('pre-span saved aggregates rebuild from unchanged indexed events and then stay warm', async () => {
     const { path, file } = await fixture();
     await writeFile(file, [row('first', '2026-09-12T09:00:00.000Z'), row('last', cutoff)].map(value => JSON.stringify(value)).join('\n'));

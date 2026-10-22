@@ -546,6 +546,34 @@ test('day contributors merge subagent work into its owning session and expose on
     expect(day.sessions).toBe(1);
 });
 
+test.each(['main', 'subagent'] as const)('%s cwd changes preserve session identity without guessing its project', async source => {
+    const project = await mkdtemp(join(tmpdir(), 'usage-session-cwd-'));
+    roots.push(project);
+    const engineSessionId = '123e4567-e89b-42d3-a456-426614174000';
+    const main = join(project, `${engineSessionId}.jsonl`);
+    const subagentDir = join(project, engineSessionId, 'subagents');
+    await mkdir(subagentDir, { recursive: true });
+    const before = { ...msg(asOf, 'before', 10, 'before-tool', engineSessionId), cwd: '/work/original' };
+    const after = { ...msg(asOf, 'after', 20, 'after-tool', engineSessionId), cwd: '/work/destination' };
+    const subagent = join(subagentDir, 'agent-a.jsonl');
+    await writeFile(main, (source === 'main' ? [before, after] : [before]).map(row => JSON.stringify(row)).join('\n'));
+    if (source === 'subagent') await writeFile(subagent, JSON.stringify(after));
+    const files = source === 'main' ? [main] : [main, subagent];
+    for (const order of [files, [...files].reverse()]) {
+        const snapshot = await collectRetainedUsage(order, asOf);
+        for (const summary of Object.values(snapshot.ranges)) {
+            expect(summary.sessions).toBe(1);
+            expect(summary.rankedSessions.items).toHaveLength(1);
+            expect(summary.rankedSessions.items[0]).toMatchObject({
+                engineSessionId, project: null, tokens: { fresh: 30, read: 6, write: 8, output: 4 }, requests: 2,
+            });
+            expect(summary.rankedSessions.items[0]!.tokenSources.subagents.fresh).toBe(source === 'subagent' ? 20 : 0);
+            for (const day of summary.days) for (const contributor of day.contributors.items)
+                expect(contributor).toMatchObject({ engineSessionId, project: null });
+        }
+    }
+});
+
 test('model attempts and tool calls produce retry-aware latency and a bounded session timeline', async () => {
     const timestamp = '2026-09-13T10:00:00.000Z';
     const system = (subtype: string, fields: Record<string, unknown>, second: number) => ({ type: 'system', subtype, sessionId: 's', uuid: `${subtype}-${second}-${String(fields.attempt_id ?? fields.tool_use_id)}`, timestamp: `2026-09-13T10:00:${String(second).padStart(2, '0')}.000Z`, ...fields });

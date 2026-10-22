@@ -24,8 +24,8 @@ const DISK_MAX_PAGE_COUNT = 67108864;
 const SCRATCH_IDENTITIES = 'CREATE TABLE identities(kind TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(kind,key)) WITHOUT ROWID;';
 const SCRATCH_TIMINGS = 'CREATE TABLE timings(seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL, started REAL NOT NULL, call TEXT NOT NULL, value TEXT NOT NULL, UNIQUE(kind,key));';
 const writerLockOptions = { realpath: false, stale: 180000, update: 30000, retries: 0 };
-// Fitting changes must replay indexed events, even when source files are unchanged.
-const SAVED_USAGE_FITTING_VERSION = 1;
+// Fitting and contributor metadata changes must replay even unchanged indexed events.
+const SAVED_USAGE_FITTING_VERSION = 2;
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Accounting fields only; Skill identifiers are allowlisted, never arguments or bodies. */

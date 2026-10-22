@@ -22,6 +22,14 @@ test('catalog join requires an unambiguous project match and preserves title', (
     expect(sessionLabel(item(), [row, { ...row }]).row).toBeNull();
     expect(sessionLabel(item(), [other]).label).toBe('Session a');
 });
+test('sessions with changing directories resolve current names only through a unique session identity', () => {
+    const session = { ...item(), project: null };
+    const row = { sessionId: 'a', cwd: '/destination', displayLabel: 'Current session name' } as MergedSessionRow;
+    expect(sessionLabel(session, [row])).toEqual({ row, label: 'Current session name' });
+    const renamed = { ...row, displayLabel: 'Renamed session' };
+    expect(sessionLabel(session, [renamed])).toEqual({ row: renamed, label: 'Renamed session' });
+    expect(sessionLabel(session, [row, { ...row, cwd: '/imported-copy' }])).toEqual({ row: null, label: 'Session a' });
+});
 test('range figures preserve exact collector statistics even when all ranked rows are omitted', async () => {
     const s = await summary(); const a = item(), b = { ...item('b'), errors: 9, tokens: { ...zero, fresh: 2 } };
     s.tokens = { ...zero, fresh: 1000 };

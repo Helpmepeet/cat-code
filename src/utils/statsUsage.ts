@@ -679,7 +679,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const candidateProjectId = rawCwd && cwdLabel ? usageProjectId(rawCwd) : null;
         const metadata = sessionMetadata.get(session);
         if (!metadata) { reserve(session, 384 + (rawCwd?.length ?? 0) * 2); sessionMetadata.set(session, { projectId: candidateProjectId, label: cwdLabel, conflicted: false, engineSessionId: sessionUuid(mainId) }); }
-        else if (candidateProjectId && metadata.projectId && candidateProjectId !== metadata.projectId) { metadata.projectId = null; metadata.label = null; metadata.conflicted = true; metadata.engineSessionId = null; coverage.identityConflicts++; }
+        // Relocation and subagent cwd changes make the project ambiguous, not the owning session UUID.
+        else if (candidateProjectId && metadata.projectId && candidateProjectId !== metadata.projectId) { metadata.projectId = null; metadata.label = null; metadata.conflicted = true; coverage.identityConflicts++; }
         else if (candidateProjectId && !metadata.projectId && !metadata.conflicted) { metadata.projectId = candidateProjectId; metadata.label = cwdLabel; }
         const scope = JSON.stringify([project, mainId, isSubagent ? basename(file, '.jsonl') : null]);
         const recordId = JSON.stringify([scope, nonempty(row.uuid) ? row.uuid : [item.generation, item.offset]]);
@@ -1234,7 +1235,6 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             item.firstActiveAt = firstActivity.get(`${s.summary.range}:${session}`)!;
             const meta = sessionMetadata.get(session);
             if (meta?.projectId && meta.label && !meta.conflicted) item.project = { id: meta.projectId, label: meta.label };
-            if (meta?.conflicted) item.engineSessionId = null;
             item.days.sort((a, b) => a.date.localeCompare(b.date));
             return item;
         });
@@ -1268,7 +1268,6 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const session = contributorSessions.get(contributor.id);
                 const meta = session ? sessionMetadata.get(session) : undefined;
                 if (meta?.projectId && meta.label && !meta.conflicted) contributor.project = { id: meta.projectId, label: meta.label };
-                if (meta?.conflicted) contributor.engineSessionId = null;
                 trimTimeline(contributor);
                 if (contributor.timeline.omitted > 0) contributor.timeline.state = 'truncated';
                 else if (contributor.timeline.items.length > 0) contributor.timeline.state = 'available';
