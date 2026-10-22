@@ -91,7 +91,16 @@ async function typeInput(input: HTMLInputElement, query: string): Promise<void> 
   })
 }
 
-test('a search result opens Appearance and focuses the Code theme control', async () => {
+test.each([
+  ['color scheme', 'scheme'],
+  ['Frosted window', 'glass'],
+  ['Accent color', 'accent'],
+  ['Text arrival', 'arrival'],
+  ['Tool calls', 'toolCardStyle'],
+  ['Tools open by default', 'toolsExpanded'],
+  ['Reasoning layout', 'reasoningLayout'],
+  ['Code theme', 'codeTheme'],
+])('searching %s focuses its Appearance control', async (query, key) => {
   const tree = await harness.mount(createElement(SettingsShell, { initialCategory: 'general' }))
   try {
     expect(tree.container.querySelector('.animate-land')).toBeNull()
@@ -99,22 +108,23 @@ test('a search result opens Appearance and focuses the Code theme control', asyn
       'input[aria-label="Search all settings"]',
     )
     expect(search).not.toBeNull()
-    await typeInput(search!, 'code theme')
+    await typeInput(search!, query)
 
     const result = tree.container.querySelector<HTMLButtonElement>(
       'section[aria-label="Search results"] button',
     )
-    expect(result?.textContent).toContain('Code theme')
+    expect(result).not.toBeNull()
     await act(async () => result!.click())
 
-    const select = tree.container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Code theme"]',
+    const target = tree.container.querySelector<HTMLElement>(`[data-setting-key="${key}"]`)
+    const control = target?.querySelector<HTMLButtonElement>(
+      '[data-setting-control] [role="radio"][aria-checked="true"], [data-setting-control] [role="switch"]',
     )
-    expect(select).not.toBeNull()
-    expect(harness.document.activeElement).toBe(select)
+    expect(control).not.toBeNull()
+    expect(harness.document.activeElement).toBe(control!)
     const landingRows = tree.container.querySelectorAll<HTMLElement>('[data-setting-key].animate-land')
     expect(landingRows).toHaveLength(1)
-    expect(landingRows[0]?.dataset.settingKey).toBe('codeTheme')
+    expect(landingRows[0]?.dataset.settingKey).toBe(key)
     landingRows[0]?.dispatchEvent(new Event('animationend', { bubbles: true }))
     expect(tree.container.querySelector('.animate-land')).toBeNull()
   } finally {

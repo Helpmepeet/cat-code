@@ -127,6 +127,25 @@ const THEMED_SCOPES = [
  */
 const APPEARANCES = ['light', 'dark'] as const
 
+test('picker palette strips match the six syntax colors in both appearances', () => {
+  for (const theme of CODE_THEME_KEYS) {
+    const block = CSS.split('}').find(rule => rule.trim().startsWith(`[data-code-theme="${theme}"] {`))
+    expect(block).toBeDefined()
+    for (const [token, scope] of [
+      ['keyword', '.hljs-keyword'], ['string', '.hljs-string'], ['number', '.hljs-number'],
+      ['function', '.hljs-title'], ['builtin', '.hljs-built_in'], ['comment', '.hljs-comment'],
+    ]) {
+      const pair = new RegExp(`--code-palette-${token}:\\s*light-dark\\((#[0-9a-f]+),\\s*(#[0-9a-f]+)\\)`).exec(block!)
+      expect(pair).not.toBeNull()
+      for (const [index, appearance] of APPEARANCES.entries()) {
+        const syntaxColor = colorFor(theme, scope!, appearance)
+        expect(syntaxColor).not.toBeNull()
+        expect(pair![index + 1]).toBe(syntaxColor!)
+      }
+    }
+  }
+})
+
 type Appearance = (typeof APPEARANCES)[number]
 
 /** `selector { … color: light-dark(#light, #dark) … }` for one scope under one
@@ -207,8 +226,8 @@ describe('theme.css', () => {
     expect(dockMotionRule?.[2]).toContain('transition:none !important')
   })
 
-  test('the default theme is the unscoped block, so it needs no rules of its own', () => {
-    expect(CSS).not.toContain(`[data-code-theme="${DEFAULT_CODE_THEME}"]`)
+  test('the default syntax rules remain unscoped, independently of picker strip tokens', () => {
+    expect(CSS).not.toMatch(new RegExp(`\\[data-code-theme="${DEFAULT_CODE_THEME}"\\]\\s+\\.hljs`))
     expect(Object.keys(paletteOf(DEFAULT_CODE_THEME)).sort()).toEqual(
       [...THEMED_SCOPES].sort(),
     )

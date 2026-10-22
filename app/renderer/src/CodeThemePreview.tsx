@@ -1,5 +1,5 @@
 /**
- * The live code canvas inside the Code theme disclosure in Appearance.
+ * The transcript's own code block, reused in the Appearance conversation sample.
  *
  * IT MUST BE THE TRANSCRIPT'S OWN CODE BLOCK, NOT A LOOKALIKE. A preview that
  * renders its own panel would drift from what a fenced block actually looks
@@ -35,37 +35,31 @@ import { CodeBlock } from './TranscriptView.js'
 import { PREVIEW_CODE, PREVIEW_CODE_LANG } from './codeTheme.js'
 import { REHYPE_PLUGINS } from './markdownPlugins.js'
 
-/** The sample as a one-fence markdown document, so the fence carries the
- * language and `rehype-highlight` tokenizes for that language exactly as it does
- * for a model-authored block. */
-const PREVIEW_MARKDOWN = ['```' + PREVIEW_CODE_LANG, PREVIEW_CODE, '```'].join(
-  '\n',
-)
-
 /**
  * The two-component bridge from react-markdown's `<pre><code>` to `CodeBlock`,
  * mirroring the transcript's own `pre`/`code` renderers: unwrap the `<pre>` so
  * the framed block owns the only one, and hand the `<code>` children over as the
- * colored tree. `code` is the constant rather than a re-flatten of the tree,
- * because here the raw source is already in hand.
+ * colored tree. The caller supplies the raw source, so no re-flatten is needed.
  */
-const PREVIEW_COMPONENTS = {
-  pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
-  code: ({ children }: ComponentPropsWithoutRef<'code'>) => (
-    <CodeBlock
-      code={PREVIEW_CODE}
-      highlighted={children}
-    />
-  ),
-}
-
-export function CodeThemePreview() {
+export function CodeThemePreview({
+  code = PREVIEW_CODE,
+  language = PREVIEW_CODE_LANG,
+}: {
+  code?: string
+  language?: string
+} = {}) {
+  const components = {
+    pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
+    code: ({ children }: ComponentPropsWithoutRef<'code'>) => (
+      <CodeBlock code={code} highlighted={children} />
+    ),
+  }
   return (
     <Markdown
-      components={PREVIEW_COMPONENTS}
+      components={components}
       rehypePlugins={REHYPE_PLUGINS}
     >
-      {PREVIEW_MARKDOWN}
+      {['```' + language, code, '```'].join('\n')}
     </Markdown>
   )
 }

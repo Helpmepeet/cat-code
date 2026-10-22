@@ -30,8 +30,8 @@ import {
 } from './codeTheme.js'
 import {
   ReasoningLayoutContext,
-  REASONING_LAYOUT_LABELS,
 } from './reasoningLayout.js'
+import { ColorSchemeContext } from './colorScheme.js'
 
 function decode(text: string): string {
   return text
@@ -83,11 +83,8 @@ function scopeTabs(html: string): { label: string; on: boolean }[] {
   )
 }
 
-/** One `<select>`'s opening tag, by aria-label. Needed because the shared
- * control's className carries `disabled:` variants, so a bare /disabled/ match
- * is true of every select on the page. */
-function selectTag(html: string, label: string): string {
-  const match = new RegExp(`<select[^>]*aria-label="${label}"[^>]*>`).exec(html)
+function radioTag(html: string, label: string): string {
+  const match = new RegExp(`<button[^>]*aria-label="${label}"[^>]*>`).exec(html)
   expect(match).not.toBeNull()
   return match?.[0] ?? ''
 }
@@ -270,9 +267,9 @@ describe('This app scope', () => {
     )
     const pane = paneMarkup(html)
     expect(pane).toContain('Reasoning layout')
-    expect(pane).toContain(REASONING_LAYOUT_LABELS.trail)
-    expect(pane).toContain(REASONING_LAYOUT_LABELS.blocks)
-    expect(pane).toContain('value="blocks"')
+    expect(pane).toContain('>Trail</button>')
+    expect(pane).toContain('>Blocks</button>')
+    expect(pane).toMatch(/aria-checked="true"[^>]*value="blocks"/)
     // No engine destination is claimed for a preference with no settings layer.
     expect(pane).not.toContain('Edits here write to')
   })
@@ -305,19 +302,19 @@ describe('This app scope', () => {
     // Selected, not merely offered.
     expect(pane).toContain('value="nord"')
     // Off the default, so the prototype's reset affordance is reachable.
-    expect(pane).toContain('Reset to default')
+    expect(pane).toContain('Restore conversation defaults')
   })
 
-  test('the live code canvas is disclosed beside the picker that changes it', () => {
+  test('one live conversation canvas follows all controls without hidden previews', () => {
     const pane = paneMarkup(
       renderToStaticMarkup(<SettingsShell initialScope="app" />),
     )
-    // The sample mounts when the disclosure opens, so closed previews do not
-    // render or animate off screen.
-    expect(pane).not.toContain('Obeys no one, especially not the scheduler')
-    expect(pane).toContain('<details')
-    expect(pane).toContain('Preview code theme')
-    expect(pane.indexOf('Preview code theme')).toBeGreaterThan(pane.indexOf('Code theme'))
+    expect(pane).toContain('Can you simplify the loader?')
+    expect(pane).toContain('aria-label="Copy code"')
+    expect(pane).toContain('hljs-keyword')
+    expect(pane.match(/aria-label="Conversation preview"/g)).toHaveLength(1)
+    expect(pane).not.toContain('<details')
+    expect(pane.indexOf('aria-label="Conversation preview"')).toBeGreaterThan(pane.indexOf('data-setting-key="codeTheme"'))
   })
 
   test('the canvas belongs to Appearance only', () => {
@@ -342,7 +339,7 @@ describe('This app scope', () => {
       renderToStaticMarkup(<SettingsShell initialScope="app" />),
     )
     expect(pane).toContain('Code theme')
-    expect(selectTag(pane, 'Code theme')).not.toContain('disabled=""')
+    expect(radioTag(pane, 'Dracula')).not.toContain('disabled=""')
     expect(decode(pane)).not.toContain('Turn it back on under Interface')
   })
 
@@ -367,9 +364,9 @@ describe('This app scope', () => {
       /aria-checked="true" aria-label="Blue"/.test(pane) ||
         /aria-label="Blue"[^>]*aria-checked="true"/.test(pane),
     ).toBe(true)
-    expect((pane.match(/aria-checked="true"/g) ?? []).length).toBe(1)
+    expect(radioTag(pane, 'Blue')).toContain('aria-checked="true"')
     // App-local, proven by what is NOT claimed rather than by boilerplate.
-    expect(decode(pane)).toContain('Used for active states, the live indicator, and toggles.')
+    expect(decode(pane)).not.toContain('Used for active states, the live indicator, and toggles.')
     expect(pane).not.toContain('Edits here write to')
   })
 
@@ -404,11 +401,8 @@ describe('This app scope', () => {
     expect(decode(pane)).toContain('Frosted window')
     // App-local, and silent about it: no engine destination is claimed.
     expect(pane).not.toContain('Edits here write to')
-    // The platform limit is disclosed rather than left for the user to discover.
-    expect(decode(pane)).toContain('macOS only')
-    // On differs from the shipped default, so the row offers the reset the
-    // accent and tool-card rows offer in the same state.
-    expect(decode(pane)).toContain('Reset')
+    expect(decode(pane)).not.toContain('macOS only')
+    expect(decode(pane)).toContain('Restore window defaults')
   })
 
   test('the accent is above the transcript preferences, as in the prototype', () => {
@@ -419,7 +413,7 @@ describe('This app scope', () => {
       decode(pane).indexOf('Code theme'),
     )
     // The compact preview follows its control instead of occupying the top.
-    expect(pane.indexOf('Preview code theme')).toBeGreaterThan(
+    expect(pane.indexOf('aria-label="Conversation preview"')).toBeGreaterThan(
       decode(pane).indexOf('Code theme'),
     )
   })
@@ -438,7 +432,7 @@ describe('This app scope', () => {
       ),
     )
     // Its neighbour is also at its default, so the pane offers no reset at all.
-    expect(onDefault).not.toContain('Reset to default')
+    expect(onDefault).not.toContain('Restore defaults')
 
     const changed = paneMarkup(
       renderToStaticMarkup(
@@ -450,12 +444,26 @@ describe('This app scope', () => {
       ),
     )
     // Same pane, same neighbour default: the reset can only be the accent's.
-    expect(changed).toContain('Reset to default')
+    expect(changed).toContain('Restore window defaults')
   })
 
   test('unbuilt Notifications is absent from primary navigation', () => {
     const html = renderToStaticMarkup(<SettingsShell />)
     expect(railLabels(html)).not.toContain('Notifications')
+  })
+
+  test('the window picker offers miniature schemes and states the resolved system appearance', () => {
+    const html = renderToStaticMarkup(
+      <ColorSchemeContext.Provider value={{ scheme: 'system', appearance: 'light', setScheme: () => {} }}>
+        <SettingsShell initialScope="app" />
+      </ColorSchemeContext.Provider>,
+    )
+    expect(html).toContain('appearance-mini-light appearance-mini-split')
+    expect(html).toContain('appearance-mini-dark appearance-mini-split')
+    expect(html).toContain('Light now')
+    expect(radioTag(html, 'Match system')).toContain('aria-checked="true"')
+    expect(headMarkup(html)).not.toContain('This app')
+    expect(headMarkup(renderToStaticMarkup(<SettingsShell initialCategory="diagnostics" />))).toContain('This app')
   })
 })
 

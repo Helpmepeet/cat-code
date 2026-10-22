@@ -4,7 +4,7 @@
  * read through the host inventory for the selected project.
  */
 
-import { useContext, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SettingsInventoryReadResult } from '../../shared/hostApi.js'
 import type {
   AgentConfigSnapshot,
@@ -18,63 +18,12 @@ import type {
 } from '../../shared/protocol.js'
 import type { EditableSettingPane } from '../../shared/settingsEditable.js'
 import { EDITABLE_SETTING_KEYS } from '../../shared/settingsEditable.js'
-import {
-  ACCENT_KEYS,
-  ACCENT_LABELS,
-  ACCENT_SWATCH_CLASS,
-  AccentThemeContext,
-  DEFAULT_ACCENT,
-} from './accentTheme.js'
-import {
-  DEFAULT_GLASS_ENABLED,
-  GlassModeContext,
-} from './glassMode.js'
-import {
-  COLOR_SCHEME_KEYS,
-  COLOR_SCHEME_LABELS,
-  ColorSchemeContext,
-  DEFAULT_COLOR_SCHEME,
-  isColorSchemeKey,
-} from './colorScheme.js'
+import { AppearanceSettings } from './AppearanceSettings.js'
 import { AgentsPage } from './AgentsPage.js'
 import { getBridge } from './bridge.js'
-import {
-  CODE_THEME_KEYS,
-  CODE_THEME_LABELS,
-  CodeThemeContext,
-  DEFAULT_CODE_THEME,
-  isCodeThemeKey,
-} from './codeTheme.js'
-import { CodeThemePreview } from './CodeThemePreview.js'
-import { ToolCardStylePreview } from './ToolCardStylePreview.js'
-import { ProseArrivalPreview } from './ProseArrivalPreview.js'
 import { MemoryPage } from './MemoryPage.js'
-import {
-  isReasoningLayoutMode,
-  ReasoningLayoutContext,
-  REASONING_LAYOUT_MODES,
-  REASONING_LAYOUT_LABELS,
-} from './reasoningLayout.js'
-import {
-  DEFAULT_TOOLS_EXPANDED,
-  ToolsExpandedContext,
-} from './toolsExpanded.js'
-import {
-  DEFAULT_PROSE_ARRIVAL,
-  PROSE_ARRIVALS,
-  PROSE_ARRIVAL_LABELS,
-  ProseArrivalContext,
-  isProseArrival,
-} from './proseArrival.js'
-import {
-  DEFAULT_TOOL_CARD_STYLE,
-  TOOL_CARD_STYLES,
-  TOOL_CARD_STYLE_LABELS,
-  ToolCardStyleContext,
-  isToolCardStyle,
-} from './toolCardStyle.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
-import { SelectControl, SettingsPane, ToggleSwitch } from './SettingsEditors.js'
+import { SelectControl, SettingsPane } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type { SettingsProjectBinding } from './settingsProjectBinding.js'
 import {
@@ -514,7 +463,7 @@ export function SettingsShell({
                         </button>
                       ))}
                     </div>
-                  ) : category === 'appearance' || category === 'diagnostics' ? (
+                  ) : category === 'diagnostics' ? (
                     <span className="text-[12px] text-text-subtle">This app</span>
                   ) : category === 'remote' ? (
                     <span className="text-[12px] text-text-subtle">This session</span>
@@ -802,7 +751,7 @@ function ScopeBody({
         </>
       )
     case 'appearance':
-      return <AppScopeBody />
+      return <AppearanceSettings />
     case 'agents':
       return <AgentsPage snapshot={agentsSnapshot} />
     case 'skills':
@@ -936,208 +885,6 @@ function PermissionsPane({
         </p>
       </PaneSection>
     </>
-  )
-}
-
-/** Renderer-owned appearance and transcript preferences. */
-function AppScopeBody() {
-  return (
-    <>
-      <AppearanceSection />
-      <TranscriptDisplaySection />
-    </>
-  )
-}
-
-/** App palette controls use a radiogroup so each swatch has a named choice. */
-function AppearanceSection() {
-  const { accent, setAccent } = useContext(AccentThemeContext)
-  const { glass, setGlass } = useContext(GlassModeContext)
-  const { scheme, appearance, setScheme } = useContext(ColorSchemeContext)
-  return (
-    <PaneSection title="Appearance">
-      <Field
-        desc={
-          // §7 "say only what is surprising": the two forced choices describe
-          // themselves, so only "Match system" gets a second sentence, and only
-          // because the label alone does not say which way it currently lands.
-          scheme === 'system'
-            ? `Light or dark for the whole window, the frosted blur included. Your system is ${appearance} right now.`
-            : 'Light or dark for the whole window, the frosted blur included.'
-        }
-        label="Appearance"
-        settingKey="scheme"
-        modified={scheme !== DEFAULT_COLOR_SCHEME}
-        onReset={() => setScheme(DEFAULT_COLOR_SCHEME)}
-      >
-        <SelectControl
-          label="Appearance"
-          onChange={next => {
-            if (isColorSchemeKey(next)) setScheme(next)
-          }}
-          optionLabels={COLOR_SCHEME_LABELS}
-          options={COLOR_SCHEME_KEYS}
-          value={scheme}
-        />
-      </Field>
-      <Field
-        desc="Let the desktop show through the window as a blur, instead of a solid background. macOS only."
-        label="Frosted window"
-        settingKey="glass"
-        modified={glass !== DEFAULT_GLASS_ENABLED}
-        onReset={() => setGlass(DEFAULT_GLASS_ENABLED)}
-      >
-        <ToggleSwitch label="Frosted window" onChange={setGlass} value={glass} />
-      </Field>
-      <Field
-        desc="Used for active states, the live indicator, and toggles."
-        label="Accent color"
-        settingKey="accent"
-        modified={accent !== DEFAULT_ACCENT}
-        onReset={() => setAccent(DEFAULT_ACCENT)}
-      >
-        <div aria-label="Accent color" className="flex gap-[7px]" role="radiogroup">
-          {ACCENT_KEYS.map(key => (
-            <button
-              aria-checked={accent === key}
-              aria-label={ACCENT_LABELS[key]}
-              className={`h-[22px] w-[22px] rounded-full ${ACCENT_SWATCH_CLASS[key]} ${
-                accent === key
-                  ? 'ring-2 ring-text-primary'
-                  : 'ring-1 ring-white/15'
-              }`}
-              key={key}
-              onClick={() => setAccent(key)}
-              role="radio"
-              title={ACCENT_LABELS[key]}
-              type="button"
-            />
-          ))}
-        </div>
-      </Field>
-    </PaneSection>
-  )
-}
-
-const CODE_THEME_DESC =
-  'Color theme for fenced code blocks in the transcript.'
-
-/**
- * The APP-LOCAL editors: how each tool call is drawn (`toolCardStyle.ts`),
- * whether tool cards start open (`toolsExpanded.ts`), how the transcript
- * renders reasoning summaries (`reasoningLayout.ts`), and which palette colors
- * its code blocks (`codeTheme.ts`). None carries a `SourceBadge` because none
- * has a settings layer — they are renderer view preferences in the renderer's
- * own storage, not `SettingsSchema` keys the sidecar writes.
- *
- * The code theme lives here because it is a renderer preference. The engine's
- * syntax-highlighting option applies to the terminal, not the desktop transcript.
- */
-function TranscriptDisplaySection() {
-  const [arrivalPreviewOpen, setArrivalPreviewOpen] = useState(false)
-  const [toolPreviewOpen, setToolPreviewOpen] = useState(false)
-  const [codePreviewOpen, setCodePreviewOpen] = useState(false)
-  const { mode, setMode } = useContext(ReasoningLayoutContext)
-  const { theme, setTheme } = useContext(CodeThemeContext)
-  const { expanded: toolsExpanded, setExpanded: setToolsExpanded } =
-    useContext(ToolsExpandedContext)
-  const { style: toolCardStyle, setStyle: setToolCardStyle } =
-    useContext(ToolCardStyleContext)
-  const { arrival, setArrival } = useContext(ProseArrivalContext)
-  return (
-    <PaneSection title="Transcript">
-      <Field
-        desc="How a reply appears as it arrives. Every option shows text the moment it is delivered."
-        label="Text arrival"
-        settingKey="arrival"
-        modified={arrival !== DEFAULT_PROSE_ARRIVAL}
-        onReset={() => setArrival(DEFAULT_PROSE_ARRIVAL)}
-      >
-        <SelectControl
-          label="Text arrival"
-          onChange={next => {
-            if (isProseArrival(next)) setArrival(next)
-          }}
-          optionLabels={PROSE_ARRIVAL_LABELS}
-          options={PROSE_ARRIVALS}
-          value={arrival}
-        />
-      </Field>
-      <details className="border-b border-shell-seam py-2.5 text-[12px] text-text-muted" onToggle={event => setArrivalPreviewOpen(event.currentTarget.open)}>
-        <summary className="w-fit cursor-pointer">Preview text arrival</summary>
-        {arrivalPreviewOpen ? <div className="max-w-[520px] pt-3"><ProseArrivalPreview /></div> : null}
-      </details>
-      <Field
-        desc="How each tool call is drawn in the transcript."
-        label="Tool calls"
-        settingKey="toolCardStyle"
-        modified={toolCardStyle !== DEFAULT_TOOL_CARD_STYLE}
-        onReset={() => setToolCardStyle(DEFAULT_TOOL_CARD_STYLE)}
-      >
-        <SelectControl
-          label="Tool calls"
-          onChange={next => {
-            if (isToolCardStyle(next)) setToolCardStyle(next)
-          }}
-          optionLabels={TOOL_CARD_STYLE_LABELS}
-          options={TOOL_CARD_STYLES}
-          value={toolCardStyle}
-        />
-      </Field>
-      <details className="border-b border-shell-seam py-2.5 text-[12px] text-text-muted" onToggle={event => setToolPreviewOpen(event.currentTarget.open)}>
-        <summary className="w-fit cursor-pointer">Preview tool calls</summary>
-        {toolPreviewOpen ? <div className="max-w-[520px] pt-3"><ToolCardStylePreview /></div> : null}
-      </details>
-      <Field
-        desc="Open every tool card as it arrives, instead of showing a preview you click to expand."
-        label="Tools open by default"
-        settingKey="toolsExpanded"
-        modified={toolsExpanded !== DEFAULT_TOOLS_EXPANDED}
-        onReset={() => setToolsExpanded(DEFAULT_TOOLS_EXPANDED)}
-      >
-        <ToggleSwitch
-          label="Tools open by default"
-          onChange={setToolsExpanded}
-          value={toolsExpanded}
-        />
-      </Field>
-      <Field
-        desc="How reasoning summaries are laid out."
-        label="Reasoning layout"
-        settingKey="reasoningLayout"
-      >
-        <SelectControl
-          label="Reasoning layout"
-          onChange={next => {
-            if (isReasoningLayoutMode(next)) setMode(next)
-          }}
-          optionLabels={REASONING_LAYOUT_LABELS}
-          options={REASONING_LAYOUT_MODES}
-          value={mode}
-        />
-      </Field>
-      <Field
-        desc={CODE_THEME_DESC}
-        label="Code theme"
-        settingKey="codeTheme"
-        modified={theme !== DEFAULT_CODE_THEME}
-        onReset={() => setTheme(DEFAULT_CODE_THEME)}
-      >
-        <SelectControl
-          label="Code theme"
-          onChange={next => {
-            if (isCodeThemeKey(next)) setTheme(next)
-          }}
-          optionLabels={CODE_THEME_LABELS}
-          options={CODE_THEME_KEYS}
-          value={theme}
-        />
-      </Field>
-      <details className="border-b border-shell-seam py-2.5 text-[12px] text-text-muted" onToggle={event => setCodePreviewOpen(event.currentTarget.open)}>
-        <summary className="w-fit cursor-pointer">Preview code theme</summary>
-        {codePreviewOpen ? <div className="max-w-[520px] pt-3"><CodeThemePreview /></div> : null}
-      </details>
-    </PaneSection>
   )
 }
 

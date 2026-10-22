@@ -1725,6 +1725,48 @@ html[data-glass='on'] [data-window-overlay] {
  * Written as pairs rather than a parallel `html[data-appearance='light']` block
  * because a duplicated palette drifts: both halves of a token sit on one line,
  * so an edit cannot change one appearance and silently forget the other. */
+/* Picker strips resolve at their own theme boundary, so a nested Dracula tile
+ * does not inherit a non-default palette from CodeThemeProvider above it. */
+[data-code-theme="dracula"] {
+  --code-palette-keyword: light-dark(#a3144d, #ff79c6);
+  --code-palette-string: light-dark(#846e15, #f1fa8c);
+  --code-palette-number: light-dark(#644ac9, #bd93f9);
+  --code-palette-function: light-dark(#14710a, #50fa7b);
+  --code-palette-builtin: light-dark(#036a96, #8be9fd);
+  --code-palette-comment: light-dark(#635d97, #6272a4);
+}
+[data-code-theme="oneDark"] {
+  --code-palette-keyword: light-dark(#a626a4, #c678dd);
+  --code-palette-string: light-dark(#468a45, #98c379);
+  --code-palette-number: light-dark(#986801, #d19a66);
+  --code-palette-function: light-dark(#4078f2, #61afef);
+  --code-palette-builtin: light-dark(#b07d02, #e5c07b);
+  --code-palette-comment: light-dark(#7e7f86, #5c6370);
+}
+[data-code-theme="nord"] {
+  --code-palette-keyword: light-dark(#2e6b8f, #81a1c1);
+  --code-palette-string: light-dark(#4f7a3a, #a3be8c);
+  --code-palette-number: light-dark(#8a5f86, #b48ead);
+  --code-palette-function: light-dark(#2f7d92, #88c0d0);
+  --code-palette-builtin: light-dark(#35786f, #8fbcbb);
+  --code-palette-comment: light-dark(#6b7280, #616e88);
+}
+[data-code-theme="github"] {
+  --code-palette-keyword: light-dark(#cf222e, #ff7b72);
+  --code-palette-string: light-dark(#0a3069, #a5d6ff);
+  --code-palette-number: light-dark(#0550ae, #79c0ff);
+  --code-palette-function: light-dark(#8250df, #d2a8ff);
+  --code-palette-builtin: light-dark(#953800, #ffa657);
+  --code-palette-comment: light-dark(#6e7781, #8b949e);
+}
+[data-code-theme="monokai"] {
+  --code-palette-keyword: light-dark(#c02a5c, #f92672);
+  --code-palette-string: light-dark(#8a7d1f, #e6db74);
+  --code-palette-number: light-dark(#7a4bd1, #ae81ff);
+  --code-palette-function: light-dark(#4f7d0e, #a6e22e);
+  --code-palette-builtin: light-dark(#0f7f92, #66d9ef);
+  --code-palette-comment: light-dark(#726b5c, #88846f);
+}
 .hljs {
   color: light-dark(#1f1f1f, #f8f8f2);
 }
