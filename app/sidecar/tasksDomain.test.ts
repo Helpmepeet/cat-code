@@ -321,6 +321,27 @@ test('hasLiveWork — true for a running FOREGROUNDED local_agent the display sn
   expect(domain.hasLiveWork()).toBe(true)
 })
 
+test('completion facts include the same foreground worker omitted from display items', () => {
+  const worker = agentTask({ id: 'a1', status: 'running', isBackgrounded: false })
+  const domain = createSidecarTasksDomain(storeWith({ a1: worker }, 'a1'))
+  expect(domain.getSnapshot().items).toHaveLength(0)
+  expect(domain.readUnfinishedWork()).toMatchObject({
+    available: true, activeSubagents: 1, backgroundMainTurn: false,
+  })
+})
+
+test('completion facts read nested workers retained in the root task store', () => {
+  const store = storeWith({
+    parent: agentTask({ id: 'parent', agentId: 'agent-parent' }),
+    child: agentTask({ id: 'child', agentId: 'agent-child' }),
+    grandchild: agentTask({ id: 'grandchild', agentId: 'agent-grandchild' }),
+  })
+  expect(Object.keys(store.getState().tasks)).toHaveLength(3)
+  expect(createSidecarTasksDomain(store).readUnfinishedWork()).toMatchObject({
+    available: true, activeSubagents: 3,
+  })
+})
+
 test('the task-mode snapshot turns off once the same worker is backgrounded', () => {
   const worker = agentTask({
     id: 'a1',

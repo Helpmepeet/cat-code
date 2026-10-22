@@ -6,7 +6,7 @@ import type { LidModeCommand, LidModeView } from '../../shared/lidClosed.js'
 import './lidClosed.css'
 
 export function LidClosedProvider({ children }: { children: ReactNode }) {
-  const [view, setView] = useState<LidModeView>({ phase: 'unavailable', allowance: 15, remainingSeconds: 0, installed: false, sleepRequested: false })
+  const [view, setView] = useState<LidModeView>({ phase: 'unavailable', activeSessions: 0, activeSubagents: 0, waitingForApproval: false, installed: false, sleepRequested: false })
   const [inspecting, setInspecting] = useState(false)
   useEffect(() => {
     const bridge = getBridge()?.lidClosed

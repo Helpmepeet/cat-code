@@ -19,6 +19,7 @@ import type {
   TaskSubagentMetadata,
 } from '../shared/protocol.js'
 import { subscribeToProjection } from './projectedSubscription.js'
+import { deriveUnfinishedTaskFacts, type UnfinishedTaskFacts } from './unfinishedWork.js'
 
 export type SidecarTasksDomain = {
   /** Live read-only snapshot over the same app-state store the runtime mutates. */
@@ -33,6 +34,8 @@ export type SidecarTasksDomain = {
    * reads the store directly, never the display snapshot.
    */
   hasLiveWork(): boolean
+  /** Raw-state facts for the explicit keep-awake completion read. */
+  readUnfinishedWork(): UnfinishedTaskFacts
   subscribe(listener: () => void): () => void
 }
 
@@ -52,6 +55,13 @@ export function createSidecarTasksDomain(
   }
   return {
     getSnapshot,
+    readUnfinishedWork() {
+      const state = appStateStore.getState()
+      const pending = controller?.getPendingPermissionRequests() ?? []
+      const actors = new Set(pending.flatMap(({ request }) =>
+        request.agent_id ? [request.agent_id] : []))
+      return deriveUnfinishedTaskFacts(state.tasks, actors)
+    },
     hasLiveWork() {
       // Explicit type (the same `tasksSnapshot` accepts) so `Object.values`
       // infers `TaskState`, not `unknown`, under the sidecar's engine graph.

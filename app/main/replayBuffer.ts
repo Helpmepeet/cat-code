@@ -146,6 +146,7 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
  * should not replay stale; reopening the popover queries the sidecar cache).
  */
 const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
+  'work.status': 'none',
   'lid.work': 'none',
   ready: 'head',
   'history.replay.complete': 'none',

@@ -4,17 +4,10 @@
 .lid-cup:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 .lid-cup:hover { background: var(--color-shell-hover); }
 .lid-cup[aria-disabled=true] { cursor: default; }
-.lid-outline, .lid-tick, .lid-mark, .lid-steam, .lid-crest { stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-.lid-tick { stroke-width: 1; }
-.lid-tick.selected { stroke-width: 2.3; stroke: var(--color-lid-crema); }
+.lid-outline, .lid-mark, .lid-steam, .lid-crest { stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .lid-liquid, .lid-wave-fill { fill: var(--color-lid-coffee); fill-opacity: .9; }
-.lid-liquid { transition: height 1s linear, y 1s linear; }
-.lid-surface { transition: y 1s linear; }
 .lid-crest { stroke: var(--color-lid-crema); stroke-width: 1; fill: none; }
 .lid-wave { animation: lid-wave 3.2s linear infinite; }
-.lid-wave.lid-slosh { animation: lid-wave 3.2s linear infinite, lid-slosh var(--motion-land) var(--ease-enter); transform-box: fill-box; transform-origin: center bottom; }
-.lid-adjust-up .lid-liquid, .lid-adjust-up .lid-surface { transition-duration: var(--motion-land); transition-timing-function: var(--ease-enter); }
-.lid-adjust-down .lid-liquid, .lid-adjust-down .lid-surface { transition-duration: var(--motion-value); transition-timing-function: var(--ease-standard); }
 .lid-active { color: var(--color-lid-active); }
 .lid-lid-open { color: var(--color-lid-open); }
 .lid-ended { color: var(--color-tone-warn); }
@@ -25,35 +18,15 @@
 .lid-steam { stroke: var(--color-lid-crema); stroke-width: 1.3; animation: lid-steam 2.4s ease-out infinite; opacity: 0; }
 .lid-steam-late { animation-delay: 1.2s; }
 .lid-mark { transform-box: fill-box; transform-origin: center; animation: lid-pop var(--motion-arrive) var(--ease-enter); }
-.lid-num { display: grid; grid-template-columns: 0fr; transition: grid-template-columns var(--motion-arrive) var(--ease-enter); }
-.lid-num-on { grid-template-columns: 1fr; }
-.lid-num-clip { min-width: 0; overflow: hidden; height: 18px; }
-.lid-digits { display: inline-grid; margin-left: 3px; color: var(--color-lid-number); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 18px; }
-.lid-digits.warn { color: var(--color-tone-warn); }
-.lid-digits.starting { color: var(--color-text-ghost); animation: lid-pulse 1.4s ease-in-out infinite; }
-.lid-digit { grid-area: 1 / 1; }
-.lid-digits[data-dir=up] .lid-digit-in { animation: lid-in-up var(--motion-arrive) var(--ease-enter); }
-.lid-digits[data-dir=up] .lid-digit-out { animation: lid-out-up var(--motion-arrive) var(--ease-enter) forwards; }
-.lid-digits[data-dir=down] .lid-digit-in { animation: lid-in-down var(--motion-arrive) var(--ease-enter); }
-.lid-digits[data-dir=down] .lid-digit-out { animation: lid-out-down var(--motion-arrive) var(--ease-enter) forwards; }
 .lid-notice { flex-shrink: 0; }
 aside.sidebar-expanded + .lid-content > .lid-notice { margin-left: max(0px, calc(var(--sidebar-expanded-width, 18rem) - 48px)); }
 .lid-notice [role=status] { flex-wrap: wrap; }
 @keyframes lid-wave { to { transform: translateX(-7px); } }
-@keyframes lid-slosh { 0% { transform: scaleY(3); } 40% { transform: scaleY(-2); } 70% { transform: scaleY(1.4); } 100% { transform: scaleY(1); } }
 @keyframes lid-steam { 0% { transform: translateY(1px); opacity: 0; } 25% { opacity: .9; } 100% { transform: translateY(-2px); opacity: 0; } }
-@keyframes lid-pulse { 50% { opacity: .65; } }
 @keyframes lid-draw { from { stroke-dashoffset: 90; } to { stroke-dashoffset: 0; } }
 @keyframes lid-pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-@keyframes lid-in-up { from { transform: translateY(100%); } }
-@keyframes lid-out-up { to { transform: translateY(-100%); } }
-@keyframes lid-in-down { from { transform: translateY(-100%); } }
-@keyframes lid-out-down { to { transform: translateY(100%); } }
 @media (prefers-reduced-motion: reduce) {
-  .lid-wave, .lid-wave.lid-slosh, .lid-mark, .lid-digit, .lid-digits.starting { animation: none; }
-  .lid-surface, .lid-digit-out { display: none; }
-  .lid-liquid { transition: none; }
-  .lid-num { transition: none; }
+  .lid-wave, .lid-mark { animation: none; }
   .lid-steam { animation: none; opacity: .8; }
   .lid-starting .lid-outline { animation: none; stroke-dasharray: 2 2; }
 }

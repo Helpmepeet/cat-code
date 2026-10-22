@@ -1,6 +1,8 @@
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
 import { lidClosedMenu } from './lidClosedMenu.js'
 import { LidNativeClient, inspectLidHardware, installLidHelper, lidHelperCurrent } from './lidClosedNative.js'
+import { LidWorkObserver, type LidWorkSession } from './lidWorkObserver.js'
+import { isWorkStatusRequest, type WorkStatusRequest } from '../shared/workStatus.js'
 import { isLidModeCommand } from '../shared/lidClosed.js'
 import { DesktopPower } from './desktopPower.js'
 import { NativePowerObservation } from './powerObservation.js'
@@ -313,7 +315,7 @@ import {
   type NavigationConfig,
 } from './navigationPolicy.js'
 import { decodeImageDataUrl, planContextMenu } from './contextMenuPolicy.js'
-import { MAX_SUGGESTION_SELECTIONS, MAX_TEXT_FIELD_CHARS } from '../shared/limits.js'
+import { MAX_SUGGESTION_SELECTIONS, MAX_TEXT_FIELD_CHARS, PARKED_EXIT_CODE } from '../shared/limits.js'
 import { createOperationalLogSink } from './operationalLogSink.js'
 import { createOperationalRecord } from '../shared/operationalLog.js'
 import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
@@ -2106,10 +2108,22 @@ function navigationConfig(): NavigationConfig {
  * for the next replay so nothing is lost to a fire-and-forget send.
  */
 function wireRendererBridge(sup: SidecarSupervisor): void {
+  const observer = lidWorkObserver
   const power = ensureDesktopPower()
   sup.subscribe(event => {
+    if (event.type === 'status') observer?.onSessionsChanged()
+    if (event.type === 'exit') {
+      if (event.code === 0 || event.code === PARKED_EXIT_CODE) observer?.onSessionsChanged()
+      else observer?.loseSupervision()
+    }
     const frame = supervisorEventToServerFrame(event)
     if (!frame) return
+    if (frame.kind === 'work.status') {
+      const { deliveryTrace: _trace, ...statusFrame } = frame
+      observer?.onFrame(statusFrame, event.sessionId)
+    } else {
+      observer?.onFrame(frame, event.sessionId)
+    }
     power?.receive(event.sessionId, frame)
     scheduledTasks?.receive(event.sessionId, frame)
     // P4-6 title-rider: the sidecar's one-shot AI title is a sidecar→host signal,
@@ -2141,6 +2155,16 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // (HR2).
     if (frame.kind === 'lid.work') {
       // Retired job observations remain host-only for older sidecars.
+      return
+    }
+    if (frame.kind === 'work.status') {
+      const received = traceFrame(frame, 'supervisor.socket.received')
+      traceFrame(received, 'host.received')
+      return
+    }
+    if (frame.kind === 'error' && observer?.handleError(frame, event.sessionId)) {
+      const received = traceFrame(frame, 'supervisor.socket.received')
+      traceFrame(received, 'host.received')
       return
     }
     if (frame.kind === 'host.request') {
@@ -2258,7 +2282,24 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
  */
 function wireHostEvents(h: Host): void {
   const power = desktopPower
+  const observer = lidWorkObserver
+  const ownerSupervisor = supervisor
   h.subscribe(event => {
+    if (event.type === 'session-added' || event.type === 'session-status') {
+      const session = event.session
+      observer?.onLifecycle({
+        sessionId: session.appSessionId,
+        generation: ownerSupervisor?.getSessionGeneration(session.appSessionId) ?? '',
+        status: session.status,
+        confirmedTerminal: session.status === 'exited',
+      })
+      if (['exited', 'failed', 'parked'].includes(session.status)) {
+        observer?.endPeerWorkspaceTransitions(session.appSessionId)
+      }
+    } else if (event.type === 'session-removed') {
+      observer?.onLifecycle({ sessionId: event.appSessionId, generation: '', status: 'exited', confirmedTerminal: true })
+      observer?.endPeerWorkspaceTransitions(event.appSessionId)
+    }
     power?.receiveHostEvent(event)
     scheduledTasks?.receiveHostEvent(event)
     sendHostEvent(event)
@@ -3003,6 +3044,7 @@ const attachmentFileTokens = createAttachmentFileTokenStore()
  * without re-registering listeners.
  */
 let lidMode: LidClosedMode | undefined
+let lidWorkObserver: LidWorkObserver | undefined
 let desktopPower: DesktopPower | undefined
 function lidAssetsDirectory(): string {
   return app.isPackaged ? join(process.resourcesPath, 'lid-closed') : join(__dirname, '../native/lid-closed/dist')
@@ -3047,6 +3089,7 @@ function ensureLidMode(): void {
     current: () => lidHelperCurrent(assets),
     hardware: () => inspectLidHardware(assets),
     install: recoveryOnly => installLidHelper(assets, recoveryOnly),
+    work: lidWorkObserver!,
     changed: view => {
       if (lidMode !== mode) return
       updateLidMenu(view)
@@ -3516,6 +3559,7 @@ function registerHostControlPlane(): void {
     },
   )
 
+  const branchTransitionObservers = new Map<SessionId, LidWorkObserver>()
   const switchBranch = createWorkspaceBranchSwitcher({
     host: () => host,
     switchingSessionIds,
@@ -3525,6 +3569,18 @@ function registerHostControlPlane(): void {
     validateCwd,
     transferFiles: (from, to) => attachmentFileTokens.transfer(from, to),
     log: message => logLegacyDiagnostic(message, 'host', 'main'),
+    onTransition: (id, active) => {
+      if (active) {
+        const observer = lidWorkObserver
+        if (observer) {
+          branchTransitionObservers.set(id, observer)
+          observer.beginWorkspaceTransition(id, 'branch')
+        }
+      } else {
+        branchTransitionObservers.get(id)?.endWorkspaceTransition(id, 'branch')
+        branchTransitionObservers.delete(id)
+      }
+    },
   })
   ipcMain.handle(CH_HOST_SWITCH_BRANCH,
     (_e, appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> =>
@@ -4214,7 +4270,16 @@ function handOff(
     attachmentGate.viewTruncated(sessionId),
   )
 
+  let admission: string | undefined
+  let admissionFinished = false
+  const finishAdmission = (sent: boolean) => {
+    if (admission === undefined || admissionFinished) return
+    admissionFinished = true
+    lidWorkObserver?.finishAdmission(admission, sent)
+  }
+
   if (!supervisor) {
+    finishAdmission(false)
     if (audience === 'renderer') {
       const frame: ServerFrame = {
         kind: 'error',
@@ -4234,6 +4299,7 @@ function handOff(
   }
   try {
     if (message.type === 'app.submit' && !host?.ensureManagedSubmitIdentity(sessionId)) {
+      finishAdmission(false)
       const messageText = "This chat's storage could not be verified. Check its folder, then retry."
       if (audience === 'renderer') {
         const frame: ServerFrame = {
@@ -4250,11 +4316,17 @@ function handOff(
       process.stderr.write(`[main] forward to ${sessionId} failed: ${messageText}\n`)
       return 'session_not_ready'
     }
+    if (message.type === 'app.submit' || message.type === 'peer.deliver') {
+      admission = lidWorkObserver?.beginAdmission(sessionId)
+      if (admission !== undefined) lidMode?.onAdmissionStarted()
+    }
     supervisor.send(sessionId, message)
+    finishAdmission(true)
     if (message.type === 'app.submit' || message.type === 'peer.deliver') sessionsWithSubmit.add(sessionId)
     if (isUserTurnSubmit(message, audience)) peerPlane?.onUserMessage(sessionId)
     return null
   } catch (error) {
+    finishAdmission(false)
     const messageText = error instanceof Error ? error.message : String(error)
     const code = isSidecarSendError(error) ? error.code : 'bad_request'
     if (audience === 'renderer') {
@@ -4417,6 +4489,20 @@ function generateRequestId(): string {
 function ensureHost(): Host {
   if (host) return host
   supervisor = createSupervisor()
+  const currentSupervisor = supervisor
+  lidWorkObserver?.stop()
+  lidWorkObserver = new LidWorkObserver({
+    listSessions: (): LidWorkSession[] => currentSupervisor.listSessions().map(session => ({
+      sessionId: session.sessionId,
+      generation: currentSupervisor.getSessionGeneration(session.sessionId) ?? '',
+      status: session.status as LidWorkSession['status'],
+    })),
+    send: (sessionId, message: WorkStatusRequest) => {
+      if (!isWorkStatusRequest(message)) return
+      currentSupervisor.send(sessionId, message)
+    },
+  })
+  const currentWorkObserver = lidWorkObserver
   ensureLidMode()
   wireRendererBridge(supervisor)
 
@@ -4588,7 +4674,12 @@ function ensureHost(): Host {
     control: (state, action) => requestWorkspaceControl(state.appSessionId, state.operationId, action),
     waitForControlSlot: (id, operationId, generation) => workspaceControl?.waitForSlot(id, operationId, generation) ?? Promise.resolve(false),
     controlSlotOccupied: (id, operationId) => workspaceControl?.isSlotOccupied(id, operationId) ?? true,
-    onStateChanged: state => { host?.publishWorkspaceJumpDisplay(state) },
+    onStateChanged: state => {
+      const transitionId = `workspace-jump:${state.operationId}`
+      if (state.phase === 'settled') currentWorkObserver?.endWorkspaceTransition(state.appSessionId, transitionId)
+      else currentWorkObserver?.beginWorkspaceTransition(state.appSessionId, transitionId)
+      host?.publishWorkspaceJumpDisplay(state)
+    },
   })
   // Reconcile durable operations before any restored sidecar can start turns.
   for (const appSessionId of recoveredJumps.appSessionIds) {
@@ -4609,8 +4700,16 @@ function ensureHost(): Host {
   const liveRegistry = registry
   peerPlane = createPeerRequestPlane({
     workspaceTransitions: {
-      begin: (id, operationId) => liveHost.beginWorkspaceTransition(id, operationId),
-      finish: (id, operationId, cwd) => liveHost.finishWorkspaceTransition(id, operationId, cwd),
+      begin: (id, operationId) => {
+        const began = liveHost.beginWorkspaceTransition(id, operationId)
+        if (began) currentWorkObserver?.beginWorkspaceTransition(id, `peer:${operationId}`)
+        return began
+      },
+      finish: (id, operationId, cwd) => {
+        const finished = liveHost.finishWorkspaceTransition(id, operationId, cwd)
+        if (finished) currentWorkObserver?.endWorkspaceTransition(id, `peer:${operationId}`)
+        return finished
+      },
     },
     workspaceRequests: {
       // Carry the main frame-receive clock through validation and dispatch.
@@ -4770,6 +4869,8 @@ function shutdownRuntime(): void {
   workspaceStatusTimer = null
   desktopPower?.dispose()
   desktopPower = undefined
+  lidWorkObserver?.stop()
+  lidWorkObserver = undefined
   const endingLidMode = lidMode
   lidMode = undefined
   updateLidMenu()

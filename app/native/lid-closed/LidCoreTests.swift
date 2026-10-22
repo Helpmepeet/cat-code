@@ -34,6 +34,7 @@ import Darwin
         var failRestore = false
         var failStart = false
         var activationDelay: Double = 0
+        var thermalOnRestore = false
         var sleeps = 0
         var mutations = 0
         let journal = LidJournal(root)
@@ -44,6 +45,10 @@ import Darwin
                 precondition(before.needsRestore && ["starting", "restoring"].contains(before.phase), "power change without durable intent")
                 if !value && failRestore { throw LidFailure("test-restoration-failure") }
                 safety.sleepDisabled = value
+                if !value && thermalOnRestore {
+                    thermalOnRestore = false
+                    safety.thermal = "critical"
+                }
                 if value && failStart { throw LidFailure("test-partial-activation") }
                 if value { time += activationDelay }
             }, requestSleep: {
@@ -52,19 +57,158 @@ import Darwin
                 precondition(!settled.needsRestore && settled.sleepRequestAttempted, "sleep requested without durable settlement")
                 sleeps += 1
             })
+        let legacyJournal = root + "/legacy"
+        try FileManager.default.createDirectory(atPath: legacyJournal, withIntermediateDirectories: true)
+        let legacyJSON = """
+        {"version":1,"phase":"active","identity":"\(UUID().uuidString)","boot":"boot-a","began":1,"deadline":20,"allowance":300,"clientPulse":2,"helperPulse":3,"needsRestore":true}
+        """
+        try Data(legacyJSON.utf8).write(to: URL(fileURLWithPath: legacyJournal + "/recovery.json"))
+        let legacy = LidJournal(legacyJournal)
+        let decodedLegacy = try legacy.read(boot: "boot-a")
+        precondition(decodedLegacy.version == 1 && decodedLegacy.mode == "timed" && decodedLegacy.renewalSequence == 0 && decodedLegacy.hardDeadline == nil)
+        var restoredLegacy = decodedLegacy
+        restoredLegacy.needsRestore = false
+        restoredLegacy.phase = "ended"
+        try legacy.write(restoredLegacy)
+        let preservedLegacy = try String(contentsOfFile: legacyJournal + "/recovery.json", encoding: .utf8)
+        precondition(!preservedLegacy.contains("\"mode\"") && !preservedLegacy.contains("\"renewalSequence\""),
+                     "writing recovered v1 changed its serialized shape")
+        let unknownJournal = root + "/unknown-version"
+        try FileManager.default.createDirectory(atPath: unknownJournal, withIntermediateDirectories: true)
+        let unknownJSON = "{\"version\":3,\"phase\":\"active\"}"
+        try Data(unknownJSON.utf8).write(to: URL(fileURLWithPath: unknownJournal + "/recovery.json"))
+        do {
+            _ = try LidJournal(unknownJournal).read(boot: "boot-a")
+            preconditionFailure("unknown journal version was accepted")
+        } catch {}
+        let preservedUnknown = try String(contentsOfFile: unknownJournal + "/recovery.json", encoding: .utf8)
+        precondition(preservedUnknown == unknownJSON,
+                     "unknown journal version was deleted or rewritten")
+        let unresolvedUnknown = LidController(journal: LidJournal(unknownJournal), boot: "boot-a", qualified: true,
+            now: { time }, readSafety: { safety }, setDisabled: { _ in preconditionFailure("unknown journal changed power") },
+            requestSleep: { preconditionFailure("unknown journal requested sleep") }).snapshot()
+        precondition(unresolvedUnknown.record.phase == "unresolved" && unresolvedUnknown.error != nil &&
+                     !unresolvedUnknown.restorationConfirmed,
+                     "unknown journal version did not remain unresolved")
+        let workID = UUID().uuidString
+        func startWork(_ trial: Bool = false) throws {
+            _ = try controller.command(["op": "start-work", "identity": workID], applicationTrial: trial)
+        }
+        func renewWork(_ sequence: Int64) throws {
+            _ = try controller.command(["op": "renew-work", "identity": workID, "sequence": sequence])
+        }
+        try startWork()
+        var work = controller.snapshot().record
+        precondition(work.version == 2 && work.mode == "work" && work.phase == "active" && work.renewalSequence == 0 &&
+                     work.deadline == time + lidWorkLease && work.hardDeadline == nil)
+        let helperPulse = work.helperPulse
+        time += 4; try renewWork(1)
+        work = controller.snapshot().record
+        precondition(work.deadline == time + lidWorkLease && work.clientPulse == time &&
+                     work.helperPulse == helperPulse && work.renewalSequence == 1,
+                     "work renewal failed to extend only client lease")
+        reject(["op": "renew-work", "identity": workID, "sequence": 1])
+        reject(["op": "renew-work", "identity": workID, "sequence": 1.5])
+        reject(["op": "renew-work", "identity": workID, "sequence": true])
+        reject(["op": "renew-work", "identity": workID, "sequence": 9_007_199_254_740_992.0])
+        reject(["op": "renew-work", "identity": workID, "sequence": 2, "deadline": time + 100])
+        reject(["op": "renew-work", "identity": workID, "sequence": 2, "duration": 100])
+        reject(["op": "pulse", "identity": workID])
+        reject(["op": "adjust", "identity": workID, "allowance": 900])
+        time = work.deadline
+        try renewWork(2)
+        precondition(controller.snapshot().record.reason == "work-expired" && safety.sleepDisabled == false,
+                     "late work renewal revived an expired lease")
+        try startWork()
+        time += lidHeartbeatLimit + 1
+        try renewWork(1)
+        precondition(controller.snapshot().record.reason == "supervision-lost" && safety.sleepDisabled == false,
+                     "late work renewal revived lost supervision")
+        try startWork()
+        safety.lidClosed = true
+        let sleepsBeforeClosedRecovery = sleeps
+        _ = try controller.command(["op": "retry"])
+        work = controller.snapshot().record
+        precondition(work.reason == "recovered" && work.sleepRequested &&
+                     work.sleepRequestAttempted && work.sleepRequestSucceeded == true &&
+                     sleeps == sleepsBeforeClosedRecovery + 1 && safety.sleepDisabled == false,
+                     "closed-lid recovery did not restore before requesting sleep")
+        safety.lidClosed = false
+        let longWorkBegan = time
+        try startWork()
+        for sequence in 1...1470 {
+            time += 4.9
+            try renewWork(Int64(sequence))
+        }
+        work = controller.snapshot().record
+        precondition(time - longWorkBegan > 7_200 && work.phase == "active" &&
+                     work.mode == "work" && work.hardDeadline == nil,
+                     "healthy production work stopped at the old two-hour limit")
+        _ = try controller.command(["op": "finish-work", "identity": workID])
+        precondition(controller.snapshot().record.reason == "work-finished" && safety.sleepDisabled == false)
+        let trialAdmission = time
+        activationDelay = 3
+        try startWork(true)
+        activationDelay = 0
+        work = controller.snapshot().record
+        precondition(work.began == trialAdmission && work.hardDeadline == trialAdmission + 60 &&
+                     work.deadline == time + lidWorkLease,
+                     "startup delay shifted the immutable trial hard deadline")
+        let hardDeadline = work.hardDeadline!
+        let trialGuardian = lidGuardianDeadline(observationTime: trialAdmission + 10, activationEnd: hardDeadline)
+        let renewableGuardian = lidGuardianDeadline(observationTime: trialAdmission + 10, activationEnd: work.deadline)
+        precondition(trialGuardian == trialAdmission + 75 && trialGuardian > renewableGuardian,
+                     "trial guardian used the renewable deadline")
+        for sequence in 1...25 {
+            time += 2
+            try renewWork(Int64(sequence))
+        }
+        work = controller.snapshot().record
+        precondition(work.deadline == hardDeadline && work.phase == "active" && work.renewalSequence == 25 &&
+                     time < hardDeadline,
+                     "trial work renewal exceeded hard deadline: \(work)")
+        time = hardDeadline
+        let hardCappedLease = try LidJournal(root).read(boot: "boot-a")
+        precondition(hardCappedLease.deadline == hardDeadline && hardCappedLease.phase == "active")
+        _ = try controller.command(["op": "finish-work", "identity": workID])
+        precondition(controller.snapshot().record.reason == "work-expired" && safety.sleepDisabled == false)
+        do {
+            try startWork(true)
+            preconditionFailure("consumed work trial admitted a second activation")
+        } catch {}
+        try controller.resumeAfterInstall()
+        try startWork()
+        _ = try controller.command(["op": "finish-work", "identity": workID])
+        precondition(controller.snapshot().record.reason == "work-finished" && controller.snapshot().restorationConfirmed)
+        try startWork()
+        time += 6
+        _ = try controller.command(["op": "finish-work", "identity": workID])
+        precondition(controller.snapshot().record.reason == "supervision-lost" && safety.sleepDisabled == false,
+                     "finish-work overwrote prior supervision failure")
+        time += 1
+        try startWork()
+        thermalOnRestore = true
+        let priorThermalSleeps = sleeps
+        _ = try controller.command(["op": "finish-work", "identity": workID])
+        precondition(controller.snapshot().record.reason == "thermal" && sleeps == priorThermalSleeps + 1 &&
+                     safety.sleepDisabled == false, "simultaneous thermal protection lost to work completion")
+        safety.thermal = "nominal"
         let id = UUID().uuidString
         func start(_ seconds: Double = 900) throws { _ = try controller.command(["op": "start", "identity": id, "allowance": seconds]) }
         func reject(_ input: [String: Any]) {
             do { _ = try controller.command(input); preconditionFailure("invalid command accepted") } catch {}
         }
+        let mutationsBeforeInvalidStarts = mutations
         reject(["op": "start", "identity": id, "allowance": 30])
         reject(["op": "start", "identity": id, "allowance": 900, "path": "/tmp/arbitrary"])
+        precondition(mutations == mutationsBeforeInvalidStarts, "refused Start changed power")
         safety.sleepDisabled = true; reject(["op": "start", "identity": id, "allowance": 900])
-        precondition(mutations == 0, "pre-existing override changed")
+        precondition(mutations == mutationsBeforeInvalidStarts && safety.sleepDisabled == true, "pre-existing override changed")
         safety.sleepDisabled = false
         safety.lidClosed = true
         reject(["op": "start", "identity": id, "allowance": 900])
-        precondition(mutations == 0 && !controller.snapshot().record.needsRestore, "closed-lid Start changed power or admitted intent")
+        precondition(mutations == mutationsBeforeInvalidStarts && !controller.snapshot().record.needsRestore,
+                     "closed-lid Start changed power or admitted intent")
         safety.lidClosed = false
         try start(300)
         precondition(controller.snapshot().record.allowance == 300 && controller.snapshot().record.deadline == time + 300, "five-minute Start did not reach native authority")
@@ -109,8 +253,9 @@ import Darwin
         failRestore = false
         _ = try revived.command(["op": "retry"])
         precondition(revived.snapshot().record.phase == "ended" && safety.sleepDisabled == false)
+        let priorThermalSleepCount = sleeps
         try start(); safety.lidClosed = true; safety.thermal = "serious"; time += 1; try controller.tick()
-        precondition(controller.snapshot().record.reason == "thermal" && sleeps == 1 && safety.sleepDisabled == false)
+        precondition(controller.snapshot().record.reason == "thermal" && sleeps == priorThermalSleepCount + 1 && safety.sleepDisabled == false)
         safety.thermal = "fair"; reject(["op": "start", "identity": id, "allowance": 900])
         safety.thermal = "nominal"; safety.lidClosed = false; try start()
         safety.batteryPercent = 20; time += 1; try controller.tick()
@@ -122,8 +267,9 @@ import Darwin
         for _ in 0..<151 { time += 4; _ = try controller.command(["op": "pulse", "identity": id]) }
         _ = try controller.command(["op": "adjust", "identity": id, "allowance": 1800])
         precondition(controller.snapshot().record.deadline == began + 1800, "adjustment reset elapsed time")
+        let committedSleepCount = sleeps
         _ = try controller.command(["op": "sleep", "identity": id])
-        precondition(sleeps == 2 && controller.snapshot().record.needsRestore == false)
+        precondition(sleeps == committedSleepCount + 1 && controller.snapshot().record.needsRestore == false)
         // Interrupted receipt after a committed sleep must not request sleep
         // again on wake. Restoration remains independently retryable.
         var interruptedSleep = try journal.read(boot: "boot-a")
@@ -131,7 +277,7 @@ import Darwin
         interruptedSleep.sleepRequestSucceeded = nil
         try journal.write(interruptedSleep)
         try controller.recoverInterrupted()
-        precondition(sleeps == 2, "recovery repeated committed sleep")
+        precondition(sleeps == committedSleepCount + 1, "recovery repeated committed sleep")
         precondition(!controller.snapshot().record.needsRestore, "interrupted restoration remained pending")
         // Daemon restart must end even a freshly supervised lease.
         try start(); try controller.recoverInterrupted()

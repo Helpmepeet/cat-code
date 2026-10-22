@@ -87,6 +87,7 @@ import type {
 import type { SessionBinding } from './sessionBinding.js'
 import type { PeerNotice, PeerNoticeInput } from './peerNotice.js'
 import type { DebugRendererSnapshot } from './debugState.js'
+import type { WorkStatusRequest, WorkStatusFrame } from './workStatus.js'
 import type {
   EditableSettingSource,
   EditableSettingValue,
@@ -982,6 +983,7 @@ export type WorkspaceHandoffStateFrame = {
  * verb, and the two host-request-plane kinds above.
  */
 export type SidecarClientMessage =
+  | WorkStatusRequest
   | LidWorkControl
   | AppClientMessage
   | PermissionSetModeMessage
@@ -3734,6 +3736,7 @@ export type WorkspaceObservation = {
 }
 
 export type ServerFramePayload =
+  | WorkStatusFrame
   | { kind: 'lid.work'; protocolVersion: typeof PROTOCOL_VERSION; sessionId: SessionId; requestId: string; work: LidWorkSnapshot }
   | ReadyFrame
   | HistoryReplayCompleteFrame
@@ -3796,6 +3799,7 @@ export type ServerFrameKind = ServerFramePayload['kind']
  * a list entry that no payload declares.
  */
 const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
+  'work.status': true,
   'lid.work': true,
   ready: true,
   'history.replay.complete': true,

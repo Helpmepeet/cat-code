@@ -258,7 +258,7 @@ For commands that are harder to parse at a glance (piped commands, obscure flags
 - git reset --hard origin/main → "Discard all local changes and match remote main"
 - curl -s url | jq '.data[]' → "Fetch JSON from URL and extract data array elements"`),
   run_in_background: semanticBoolean(z.boolean().optional()).describe(`Set to true to run this command in the background. Use Read to read the output later.`),
-  work_lifetime: z.enum(['finite', 'service']).optional().describe('Use finite for background builds, tests, and other commands that will finish. Use service for servers and continuous watchers. Commands explicitly started with run_in_background: true need work_lifetime: finite to keep lid-closed mode active.'),
+  work_lifetime: z.enum(['finite', 'service']).optional().describe('Classify work for lid-closed mode. Use finite for commands that will finish, including background builds and tests. Use service for servers and continuous watchers.'),
   dangerouslyDisableSandbox: semanticBoolean(z.boolean().optional()).describe('Set this to true to dangerously override sandbox mode and run commands without sandboxing.'),
 }));
 
@@ -1036,7 +1036,8 @@ async function* runShellCommand({
       description: description || command,
       shellCommand,
       toolUseId,
-      agentId
+      agentId,
+      workLifetime: input.work_lifetime
     }, {
       abortController,
       getAppState: () => {
@@ -1228,7 +1229,8 @@ async function* runShellCommand({
             command,
             description: description || command,
             shellCommand,
-            agentId
+            agentId,
+            workLifetime: input.work_lifetime ?? 'finite'
           }, setAppState, toolUseId);
         }
         if (setToolJSX) {

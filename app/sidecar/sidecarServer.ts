@@ -4,6 +4,12 @@ import { getCwd } from '../../src/utils/cwd.js'
 import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import type { WorkspaceObserver } from './workspaceObservation.js'
 import { isLidWorkControl } from '../shared/lidClosed.js'
+import {
+  isWorkStatusRequest,
+  WORK_STATUS_COUNT_LIMIT,
+  WORK_STATUS_MAX_BYTES,
+  type WorkStatusSummary,
+} from '../shared/workStatus.js'
 import type { LidWorkRuntime } from '../../src/services/lidClosedWork.js'
 import { isPathTrusted } from '../../src/utils/config.js'
 /**
@@ -539,6 +545,7 @@ export class SidecarServer {
   private readonly tasks: SidecarTasksDomain | null
   private readonly lidWork: LidWorkRuntime | null
   private lidWorkSequence = 0
+  private workStatusSequence = 0
   private lidWorkRate = { at: 0, count: 0 }
   private readonly workers: SidecarWorkersDomain | null
   private readonly leases: SidecarLeaseDomain | null
@@ -1541,6 +1548,7 @@ export class SidecarServer {
       // regardless.
       [['app.park'], (server, _connection, message) => server.handlePark(message)],
       [['lid.work'], (server, connection, message) => server.handleLidWork(connection, message)],
+      [['work.status'], (server, connection, message) => server.handleWorkStatus(connection, message)],
       // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds.
       // `host.result` settles one request this sidecar minted an id for;
       // `peer.deliver` is a message another session sent, routed by main. Both
@@ -1734,6 +1742,69 @@ export class SidecarServer {
     }
 
     this.dispatch(connection, parsed.data, frame.message)
+  }
+
+  private handleWorkStatus(connection: Connection, raw: unknown): void {
+    if (!isWorkStatusRequest(raw)) {
+      this.log('[sidecar] rejected invalid work.status request')
+      return
+    }
+    const request = raw
+    let facts: ReturnType<NonNullable<SidecarTasksDomain['readUnfinishedWork']> > | undefined
+    let permissionRequests: ReturnType<AppSessionController['getPendingPermissionRequests']>
+    let queue: ReturnType<typeof getCommandQueueSnapshot>
+    let stateAvailable = request.forGeneration === this.generation
+    try {
+      facts = stateAvailable ? this.tasks?.readUnfinishedWork() : undefined
+      permissionRequests = this.controller.getPendingPermissionRequests()
+      queue = getCommandQueueSnapshot()
+      stateAvailable = stateAvailable && facts?.available === true
+    } catch {
+      stateAvailable = false
+      facts = undefined
+      permissionRequests = []
+      queue = []
+    }
+    const queuedWork = queue.filter(command =>
+      isDeliverableParentPrompt(command) || isDeliverableParentTaskNotification(command)).length
+    const activeTurn = this.activeTurn || this.controller.isTurnActive() ||
+      facts?.backgroundMainTurn === true
+    const pendingContinuation = this.handoffExecutionTask !== null ||
+      this.conversationMutationInFlight || this.inFlightDurableWrites > 0
+    const available = stateAvailable
+    const hasUnfinishedWork = available && (
+      activeTurn || pendingContinuation || (facts?.activeSubagents ?? 0) > 0 ||
+      (facts?.activeBackgroundTasks ?? 0) > 0 || queuedWork > 0 || permissionRequests.length > 0
+    )
+    const cap = (count: number) => Math.min(count, WORK_STATUS_COUNT_LIMIT)
+    const work: WorkStatusSummary = available
+      ? {
+          version: 1,
+          available: true,
+          hasUnfinishedWork,
+          activeTurn: hasUnfinishedWork && activeTurn,
+          pendingContinuation: hasUnfinishedWork && pendingContinuation,
+          activeSubagents: hasUnfinishedWork ? cap(facts?.activeSubagents ?? 0) : 0,
+          activeBackgroundTasks: hasUnfinishedWork ? cap(facts?.activeBackgroundTasks ?? 0) : 0,
+          queuedWork: hasUnfinishedWork ? cap(queuedWork) : 0,
+          waitingForApproval: hasUnfinishedWork &&
+            (facts?.waitingForApproval === true || permissionRequests.length > 0),
+        }
+      : {
+          version: 1, available: false, hasUnfinishedWork: false,
+          activeTurn: false, pendingContinuation: false,
+          activeSubagents: 0, activeBackgroundTasks: 0,
+          queuedWork: 0, waitingForApproval: false,
+        }
+    this.send(connection, {
+      kind: 'work.status',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: request.requestId,
+      generation: this.generation,
+      sequence: ++this.workStatusSequence,
+      work,
+    })
   }
 
   private dispatch(
@@ -5665,6 +5736,12 @@ export class SidecarServer {
       const payload = this.wrapOutboundFrame
         ? this.wrapOutboundFrame(frame, trace!)
         : frame
+      if (frame.kind === 'work.status' &&
+          Buffer.byteLength(JSON.stringify(payload), 'utf8') + 4 > WORK_STATUS_MAX_BYTES) {
+        this.log('[sidecar] dropped oversized work.status reply')
+        this.onFrameDropped?.('oversize', frame.kind)
+        return
+      }
       encoded = encodeFrame(payload)
       // The delivery envelope is metadata-only and optional by contract, so it
       // must never cost a frame its delivery. A raw frame that fits below the
@@ -5820,8 +5897,9 @@ export class SidecarServer {
  * inbound rejection is reported to.
  *
  * `host.result` and `peer.deliver` are HOST-REQUEST-PLANE HR5's two; `app.park`
- * is IDLE-PARK §2's. No preload channel forwards any of them and no renderer
- * can author one, so a rejection of one answers MAIN. `sendError`, though, is
+ * is IDLE-PARK §2's; `work.status` is main's read-only completion query. No
+ * preload channel forwards any of them and no renderer can author one, so a
+ * rejection of one answers MAIN. `sendError`, though, is
  * how the sidecar answers a READER: main forwards every error frame it does not
  * itself consume, through the attachment gate and into `replayBuffer`'s
  * retained class, which replays it on every reattach, and the renderer's
@@ -5848,6 +5926,7 @@ export class SidecarServer {
  */
 const MAIN_ORIGINATED_MESSAGE_TYPES = new Set([
   'lid.work',
+  'work.status',
   'host.result',
   'workspace.handoff',
   'peer.deliver',
@@ -6203,6 +6282,7 @@ function checkStrictKeys(message: unknown): string | null {
   const type = obj.type
 
   const allowedByType = new Map<string, Set<string>>([
+    ['work.status', new Set(['type', 'requestId', 'forGeneration'])],
     ['app.submit', new Set(['type', 'requestId', 'prompt', 'options'])],
     ['app.abort', new Set(['type', 'requestId', 'reason'])],
     ['permission.response', new Set(['type', 'requestId', 'response'])],

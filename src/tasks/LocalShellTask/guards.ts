@@ -23,6 +23,7 @@ export type LocalShellTaskState = TaskStateBase & {
   lastReportedTotalLines: number
   // Whether the task has been backgrounded (false = foreground running, true = backgrounded)
   isBackgrounded: boolean
+  workLifetime?: 'finite' | 'service'
   // Agent that spawned this task. Used to kill orphaned bash tasks when the
   // agent exits (see killShellTasksForAgent). Undefined = main thread.
   agentId?: AgentId

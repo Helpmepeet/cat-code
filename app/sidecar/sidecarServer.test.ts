@@ -58,6 +58,7 @@ import {
   type SettingsVerbMessage,
   type SlashCatalogEntry,
 } from '../shared/protocol.js'
+import { WORK_STATUS_COUNT_LIMIT } from '../shared/workStatus.js'
 import {
   createSidecarPermissionDomain,
   type SidecarPermissionDomain,
@@ -8524,6 +8525,124 @@ test('production app.submit order: the echoed user message, THEN turn.status(tru
     'message(assistant)',
     'turn.status(false)',
   ])
+})
+
+test('work.status is generation-bound, reads raw tasks, and sequences unchanged replies', () => {
+  const generation = '6a4b8c9d-1e2f-4a51-8b3c-4d5e6f708192'
+  const store = createStore({
+    ...getDefaultAppState(),
+    tasks: {
+      hidden: {
+        ...createTaskStateBase('hidden', 'local_agent', 'Hidden worker'),
+        type: 'local_agent' as const, status: 'running' as const, agentId: 'agent-1',
+        prompt: 'private prompt', agentType: 'general-purpose', retrieved: false,
+        lastReportedToolCount: 0, lastReportedTokenCount: 0, isBackgrounded: false,
+        pendingMessages: [], retain: false, diskLoaded: false,
+      },
+    },
+  })
+  const controller = new AppSessionController(probeAdapter())
+  const { server, received, conn } = connect(
+    controller,
+    { generation, tasks: createSidecarTasksDomain(store) },
+  )
+  for (const requestId of [
+    '0b8b8c9d-4e6f-4a51-9e1a-2b3c4d5e6f70',
+    '1b8b8c9d-4e6f-4a51-9e1a-2b3c4d5e6f70',
+  ]) server.handleData(conn, clientFrame({ type: 'work.status', requestId, forGeneration: generation }))
+  const replies = received.filter(frame => frame.kind === 'work.status')
+  expect(replies).toHaveLength(2)
+  expect(replies[0]).toMatchObject({
+    generation, sequence: 1,
+    work: { available: true, hasUnfinishedWork: true, activeSubagents: 1 },
+  })
+  expect(replies[1]).toMatchObject({ sequence: 2 })
+  expect(JSON.stringify(replies)).not.toContain('private prompt')
+  expect(controller.isTurnActive()).toBe(false)
+
+  server.handleData(conn, clientFrame({
+    type: 'work.status',
+    requestId: '2b8b8c9d-4e6f-4a51-9e1a-2b3c4d5e6f70',
+    forGeneration: '7a4b8c9d-1e2f-4a51-8b3c-4d5e6f708192',
+  }))
+  const wrongGeneration = received.filter(frame => frame.kind === 'work.status')[2]
+  expect(wrongGeneration?.kind === 'work.status' ? wrongGeneration.work.available : true).toBe(false)
+})
+
+test('work.status rejects extra fields and invalid UUID values without replies', () => {
+  const generation = '6a4b8c9d-1e2f-4a51-8b3c-4d5e6f708192'
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    {
+      generation,
+      tasks: createSidecarTasksDomain(createStore(getDefaultAppState())),
+    },
+  )
+  server.handleData(conn, rawFrame({
+    type: 'work.status',
+    requestId: '0b8b8c9d-4e6f-4a51-9e1a-2b3c4d5e6f70',
+    forGeneration: generation,
+    counts: {},
+  }))
+  server.handleData(conn, rawFrame({
+    type: 'work.status',
+    requestId: 'not-a-uuid',
+    forGeneration: generation,
+  }))
+  expect(received.filter(frame => frame.kind === 'work.status')).toHaveLength(0)
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(0)
+})
+
+test('work.status saturates display counts without losing unfinished work', () => {
+  const generation = '6a4b8c9d-1e2f-4a51-8b3c-4d5e6f708192'
+  const tasks = Object.fromEntries(Array.from({ length: WORK_STATUS_COUNT_LIMIT + 1 }, (_, index) => {
+    const id = `agent-${index}`
+    return [id, {
+      id, type: 'local_agent', status: 'running', agentId: id,
+      agentType: 'general-purpose', isBackgrounded: true,
+    }]
+  }))
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { generation, tasks: createSidecarTasksDomain(createStore({
+      ...getDefaultAppState(), tasks: tasks as never,
+    })) },
+  )
+  server.handleData(conn, clientFrame({
+    type: 'work.status',
+    requestId: '0b8b8c9d-4e6f-4a51-9e1a-2b3c4d5e6f70',
+    forGeneration: generation,
+  }))
+  const reply = received.find(frame => frame.kind === 'work.status')
+  expect(reply?.kind === 'work.status' ? reply.work : null).toMatchObject({
+    available: true, hasUnfinishedWork: true, activeSubagents: WORK_STATUS_COUNT_LIMIT,
+  })
+})
+
+test('work.status sender enforces its dedicated serialized reply limit', () => {
+  const sessionId = 'session-' + 'x'.repeat(WORK_STATUS_COUNT_LIMIT)
+  const generation = '6a4b8c9d-1e2f-4a51-8b3c-4d5e6f708192'
+  const server = new SidecarServer({
+    sessionId,
+    engineSessionId: ENGINE_SESSION,
+    generation,
+    controller: new AppSessionController(probeAdapter()),
+    tasks: createSidecarTasksDomain(createStore(getDefaultAppState())),
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  server.handleData(connection, encodeFrame({
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    message: {
+      type: 'work.status',
+      requestId: '0b8b8c9d-4e6f-4a51-9e1a-2b3c4d5e6f70',
+      forGeneration: generation,
+    },
+  }))
+  expect(received.some(frame => frame.kind === 'work.status')).toBe(false)
 })
 
 /* ── P4-32b — the Codex lease read seam at the transport boundary ──────────────

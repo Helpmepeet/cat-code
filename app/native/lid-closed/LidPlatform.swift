@@ -295,7 +295,8 @@ func lidGuardExperiment() throws {
         // after the lease has already ended. Never infer admission from polling.
         if !sawLease, snapshot.record.draining {
             sawLease = true
-            deadline = min(lidContinuousTime() + 90, snapshot.record.deadline + 15)
+            let activationEnd = snapshot.record.hardDeadline ?? snapshot.record.deadline
+            deadline = lidGuardianDeadline(observationTime: lidContinuousTime(), activationEnd: activationEnd)
         }
         if sawLease, !snapshot.record.needsRestore,
            (config.applicationTrial ? ["ended", "off"] : ["ended", "lid-open", "off"]).contains(snapshot.record.phase),

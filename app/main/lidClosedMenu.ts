@@ -1,5 +1,5 @@
 import { Menu, MenuItem } from 'electron'
-import { LID_PRESETS, type LidModeCommand, type LidModeView } from '../shared/lidClosed.js'
+import type { LidModeCommand, LidModeView } from '../shared/lidClosed.js'
 
 // Native controls remain available on welcome and Pages without a composer.
 export function lidClosedMenu(read: () => LidModeView | undefined, command: (value: LidModeCommand) => void) {
@@ -9,10 +9,9 @@ export function lidClosedMenu(read: () => LidModeView | undefined, command: (val
     if (!menu || !appMenu) return
     if (!menu.getMenuItemById('lid-mode')) {
       const submenu = Menu.buildFromTemplate([
-        ...LID_PRESETS.map(minutes => ({ id: `lid-${minutes}`, label: `${minutes} minutes`, type: 'checkbox' as const,
-          click: () => command({ action: read()?.phase === 'active' ? 'adjust' : 'start', minutes }) })),
+        { id: 'lid-until-finished', label: 'Keep awake until all work finishes', type: 'checkbox' as const,
+          click: () => command({ action: read()?.phase === 'active' ? 'stop' : 'start' }) },
         { type: 'separator' },
-        { id: 'lid-stop', label: 'Stop', click: () => command({ action: 'stop' }) },
         { id: 'lid-sleep', label: 'End mode and sleep', click: () => command({ action: 'sleep' }) },
         { id: 'lid-retry', label: 'Retry sleep restoration', click: () => command({ action: 'retry' }) },
       ])
@@ -21,12 +20,9 @@ export function lidClosedMenu(read: () => LidModeView | undefined, command: (val
       Menu.setApplicationMenu(menu)
     }
     const busy = !view || ['setup', 'starting', 'restoring', 'unresolved'].includes(view.phase)
-    for (const minutes of LID_PRESETS) {
-      const item = menu.getMenuItemById(`lid-${minutes}`)!
-      item.enabled = !busy
-      item.checked = view?.phase === 'active' && view?.allowance === minutes
-    }
-    menu.getMenuItemById('lid-stop')!.enabled = view?.phase === 'active'
+    const untilFinished = menu.getMenuItemById('lid-until-finished')!
+    untilFinished.enabled = !busy
+    untilFinished.checked = view?.phase === 'active'
     menu.getMenuItemById('lid-sleep')!.enabled = view?.phase === 'active'
     menu.getMenuItemById('lid-retry')!.enabled = view?.phase === 'unresolved' && !view?.recovering
   }

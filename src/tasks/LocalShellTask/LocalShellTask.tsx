@@ -185,7 +185,8 @@ export async function spawnShellTask(input: LocalShellSpawnInput & {
     shellCommand,
     toolUseId,
     agentId,
-    kind
+    kind,
+    workLifetime
   } = input;
   const {
     setAppState
@@ -210,7 +211,8 @@ export async function spawnShellTask(input: LocalShellSpawnInput & {
     lastReportedTotalLines: 0,
     isBackgrounded: true,
     agentId,
-    kind
+    kind,
+    workLifetime
   };
   registerTask(taskState, setAppState);
 
@@ -262,7 +264,8 @@ export function registerForeground(input: LocalShellSpawnInput & {
     command,
     description,
     shellCommand,
-    agentId
+    agentId,
+    workLifetime
   } = input;
   const taskId = shellCommand.taskOutput.taskId;
   const unregisterCleanup = registerCleanup(async () => {
@@ -279,7 +282,8 @@ export function registerForeground(input: LocalShellSpawnInput & {
     lastReportedTotalLines: 0,
     isBackgrounded: false,
     // Not yet backgrounded - running in foreground
-    agentId
+    agentId,
+    workLifetime
   };
   registerTask(taskState, setAppState);
   return taskId;

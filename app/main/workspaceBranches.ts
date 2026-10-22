@@ -169,6 +169,7 @@ export function createWorkspaceBranchSwitcher(options: {
   validateCwd(cwd: string): { ok: boolean }
   transferFiles(from: SessionId, to: SessionId): void
   log(message: string): void
+  onTransition?(id: SessionId, active: boolean): void
 }) {
   const switchingGitRoots = new Set<string>()
   const failure = (message: string): SwitchWorkspaceBranchResult => ({
@@ -187,6 +188,7 @@ export function createWorkspaceBranchSwitcher(options: {
     if (typeof branch !== 'string' || branch.length === 0 || branch.length > 255) return failure('Choose a local branch from the list.')
     options.switchingSessionIds.add(id)
     try {
+      options.onTransition?.(id, true)
       const observation = h.getWorkspaceObservation(id)
       if (!observation) return failure('Wait for this chat to connect.')
       const cwd = observation.cwd
@@ -235,6 +237,7 @@ export function createWorkspaceBranchSwitcher(options: {
       }
     } finally {
       options.switchingSessionIds.delete(id)
+      options.onTransition?.(id, false)
     }
   }
   return async (appSessionId: unknown, branch: unknown): Promise<SwitchWorkspaceBranchResult> => {

@@ -13,7 +13,7 @@ afterAll(async () => { await harness.teardown() })
 
 function BranchRail({ list, enabled = true, recorded = 'main' }: { list: () => Promise<HostResult<WorkspaceBranches>>; enabled?: boolean; recorded?: string }) {
   const branch = useWorkspaceBranch(enabled, list, recorded)
-  const view = { phase: 'off' as const, allowance: 15, remainingSeconds: 0, included: [], currentRuns: {}, canContinue: false, installed: false, sleepRequested: false }
+  const view = { phase: 'off' as const, activeSessions: 0, activeSubagents: 0, waitingForApproval: false, installed: false, sleepRequested: false }
   return <LidClosedContext.Provider value={{ view, command() {}, inspect() {} }}>
     <ComposerActionsBar workspaceBranch={branch} attachDisabled={false} onAttach={() => {}} model={null} reasoningEffort={null} fastMode={null} permissionContext={null} onSetMode={() => {}} account={null} contextUsage={null} />
   </LidClosedContext.Provider>

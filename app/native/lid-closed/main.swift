@@ -33,7 +33,7 @@ final class LidEndpoint: NSObject, LidControl {
             }
             do {
                 guard let object = try JSONSerialization.jsonObject(with: request) as? [String: Any] else { throw LidFailure("invalid-command") }
-                if ["start", "adjust"].contains(object["op"] as? String ?? ""),
+                if ["start", "start-work", "adjust"].contains(object["op"] as? String ?? ""),
                    (self.configuration.access == .experiment && Date().timeIntervalSince1970 >= self.configuration.experimentUntil ||
                     self.configuration.applicationTrialUntil.map({ Date().timeIntervalSince1970 >= $0 }) == true) {
                     throw LidFailure("trial-authorization-expired")

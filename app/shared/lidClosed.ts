@@ -1,7 +1,5 @@
 // Host-owned controls. No renderer method forwards these to an engine.
 // Contract: docs/design/2026-10-15-lid-closed-runtime-contract.md.
-export const LID_PRESETS = [5, 15, 30, 60, 120] as const
-export type LidPreset = typeof LID_PRESETS[number]
 export type LidWorkRun = {
   id: string
   startedAt: number
@@ -23,8 +21,9 @@ export type LidWorkControl = { type: 'lid.work'; requestId: string; window?: Lid
 export type LidModePhase = 'off' | 'setup' | 'starting' | 'active' | 'restoring' | 'ended' | 'unavailable' | 'unresolved'
 export type LidModeView = {
   phase: LidModePhase
-  allowance: number
-  remainingSeconds: number
+  activeSessions: number
+  activeSubagents: number
+  waitingForApproval: boolean
   reason?: string
   error?: string
   installed: boolean
@@ -32,8 +31,9 @@ export type LidModeView = {
   recovering?: boolean
   repairRequired?: boolean
 }
-export type LidModeCommand = { action: 'start' | 'adjust'; minutes: LidPreset } |
-  { action: 'stop' | 'sleep' | 'retry' | 'dismiss' | 'cancel' | 'setup' }
+export type LidModeCommand = {
+  action: 'start' | 'stop' | 'sleep' | 'retry' | 'dismiss' | 'cancel' | 'setup'
+}
 export type LidClosedBridge = {
   read(): Promise<LidModeView>
   command(command: LidModeCommand): Promise<LidModeView>
@@ -46,9 +46,8 @@ function text(value: unknown, max: number): value is string { return typeof valu
 function number(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value >= 0 }
 function uuid(value: unknown): value is string { return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value) }
 export function isLidModeCommand(value: unknown): value is LidModeCommand {
-  if (!record(value) || typeof value.action !== 'string') return false
-  if (value.action === 'start' || value.action === 'adjust') return keys(value, ['action', 'minutes']) && LID_PRESETS.includes(value.minutes as LidPreset)
-  return keys(value, ['action']) && ['stop','sleep','retry','dismiss','cancel','setup'].includes(value.action)
+  return record(value) && keys(value, ['action']) && typeof value.action === 'string' &&
+    ['start','stop','sleep','retry','dismiss','cancel','setup'].includes(value.action)
 }
 export function isLidWorkControl(value: unknown): value is LidWorkControl {
   if (!record(value) || !keys(value, ['type','requestId','window']) || value.type !== 'lid.work' || !uuid(value.requestId)) return false

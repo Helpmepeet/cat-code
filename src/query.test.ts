@@ -35,7 +35,11 @@ import {
   enqueueAgentNotification,
   registerAgentForeground,
 } from './tasks/LocalAgentTask/LocalAgentTask.js'
-import { spawnShellTask } from './tasks/LocalShellTask/LocalShellTask.js'
+import {
+  backgroundExistingForegroundTask,
+  registerForeground,
+  spawnShellTask,
+} from './tasks/LocalShellTask/LocalShellTask.js'
 import type { ExecResult, ShellCommand } from './utils/ShellCommand.js'
 import { TaskOutput } from './utils/task/TaskOutput.js'
 import { getDefaultAppState } from './state/AppStateStore.js'
@@ -550,7 +554,11 @@ describe('background completion delivery during an active turn', () => {
             }
             shellHandle = await spawnShellTask({
               command: 'fixture', description: 'Boundary shell', shellCommand,
+              workLifetime: status === 'failed' ? 'service' : status === 'completed' ? 'finite' : undefined,
             }, context)
+            expect(context.getAppState().tasks[taskId]).toMatchObject({
+              workLifetime: status === 'failed' ? 'service' : status === 'completed' ? 'finite' : undefined,
+            })
           }
           const probe = buildTool({
             name: 'CompletionBoundaryProbe', inputSchema: z.strictObject({}),
@@ -638,6 +646,30 @@ describe('background completion delivery during an active turn', () => {
       }
     }
   }
+
+  test('foreground shell lifetime survives registration when it becomes backgrounded', async () => {
+    const context = createToolUseContext([createUserMessage({ content: 'run fixture' })])
+    Object.assign(context.getAppState(), getDefaultAppState())
+    const taskId = 'foreground-lifetime'
+    const shellCommand: ShellCommand = {
+      status: 'running', background: () => true, kill: () => {}, cleanup: () => {},
+      taskOutput: new TaskOutput(taskId, null),
+      result: new Promise<ExecResult>(() => {}),
+    }
+    registerForeground({
+      command: 'fixture', description: 'Foreground shell', shellCommand,
+      workLifetime: 'service',
+    }, context.setAppState)
+    expect(context.getAppState().tasks[taskId]).toMatchObject({
+      isBackgrounded: false, workLifetime: 'service',
+    })
+    expect(backgroundExistingForegroundTask(
+      taskId, shellCommand, 'Foreground shell', context.setAppState,
+    )).toBe(true)
+    expect(context.getAppState().tasks[taskId]).toMatchObject({
+      isBackgrounded: true, workLifetime: 'service',
+    })
+  })
 })
 
 describe('post-turn stall diagnostics', () => {

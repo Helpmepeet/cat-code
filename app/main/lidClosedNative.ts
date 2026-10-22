@@ -27,7 +27,7 @@ export async function lidHelperCurrent(assets: string, helper = LID_HELPER): Pro
   }
 }
 export type LidNativeSnapshot = {
-  record: { phase: string; identity?: string; began: number; deadline: number; allowance: number;
+  record: { version?: 1 | 2; mode?: 'timed' | 'work'; renewalSequence?: number; hardDeadline?: number; phase: string; identity?: string; began: number; deadline: number; allowance: number;
     reason?: string; error?: string; needsRestore: boolean; sleepRequested: boolean;
     sleepRequestAttempted: boolean; sleepRequestSucceeded?: boolean; thermalRestart?: boolean }
   safety: { sleepDisabled?: boolean; lidClosed?: boolean; batteryPercent?: number; onBattery?: boolean; thermal: string }
@@ -50,7 +50,12 @@ export function parseLidNativeReply(value: unknown): LidNativeReply {
         !object(s.record) || !object(s.safety) || !finite(s.remainingSeconds) || (s.remainingSeconds as number) > 7200 ||
         typeof s.hardwareQualified !== 'boolean' || !optionalText(s.error, 512)) throw new Error('The sleep helper returned unreadable status')
     const record = s.record; const safety = s.safety
-    if (!['off','starting','active','restoring','unresolved','lid-open','ended'].includes(String(record.phase)) ||
+    const recordKeys = ['version','mode','renewalSequence','hardDeadline','phase','draining','identity','boot','began','deadline','allowance',
+      'clientPulse','helperPulse','sawClosed','reason','needsRestore','sleepRequested','sleepRequestAttempted','sleepRequestSucceeded','error','thermalRestart']
+    const safetyKeys = ['sleepDisabled','lidClosed','batteryPercent','onBattery','thermal']
+    if (Object.keys(record).some(key => !recordKeys.includes(key)) ||
+        Object.keys(safety).some(key => !safetyKeys.includes(key)) ||
+        !['off','starting','active','restoring','unresolved','lid-open','ended'].includes(String(record.phase)) ||
         !['began','deadline','allowance'].every(key => finite(record[key])) || (record.allowance as number) > 7200 ||
         !['needsRestore','sleepRequested','sleepRequestAttempted'].every(key => typeof record[key] === 'boolean') ||
         record.sleepRequestSucceeded !== undefined && typeof record.sleepRequestSucceeded !== 'boolean' ||
@@ -60,6 +65,21 @@ export function parseLidNativeReply(value: unknown): LidNativeReply {
         !['sleepDisabled','lidClosed','onBattery'].every(key => safety[key] === undefined || typeof safety[key] === 'boolean') ||
         safety.batteryPercent !== undefined && (!finite(safety.batteryPercent) || (safety.batteryPercent as number) > 100) ||
         typeof safety.thermal !== 'string' || !['nominal','fair','serious','critical','unknown'].includes(safety.thermal)) throw new Error('The sleep helper returned unreadable status')
+    if (record.version !== 1 && record.version !== 2 ||
+        record.mode !== undefined && !['timed', 'work'].includes(String(record.mode)) ||
+        record.renewalSequence !== undefined && (!Number.isSafeInteger(record.renewalSequence) || (record.renewalSequence as number) < 0) ||
+        record.version === 2 && (!['timed', 'work'].includes(String(record.mode)) || record.renewalSequence === undefined) ||
+        record.version === 1 && (record.mode !== undefined || record.renewalSequence !== undefined || record.hardDeadline !== undefined)) {
+      throw new Error('The sleep helper returned unreadable status')
+    }
+    if (record.hardDeadline !== undefined && (!finite(record.hardDeadline) ||
+        (record.hardDeadline as number) < (record.began as number) ||
+        (record.hardDeadline as number) > (record.began as number) + 60 ||
+        (record.deadline as number) > (record.hardDeadline as number)) ||
+        record.version === 2 && record.mode === 'work' && record.allowance !== 10 ||
+        record.version === 2 && record.mode === 'timed' && (record.renewalSequence !== 0 || record.hardDeadline !== undefined)) {
+      throw new Error('The sleep helper returned unreadable status')
+    }
   }
   return r as LidNativeReply
 }
@@ -67,12 +87,23 @@ export function lidRestored(s: LidNativeSnapshot | undefined): boolean {
   return !!s && !s.error && ['off','ended','lid-open'].includes(s.record.phase) && !s.record.needsRestore && s.safety.sleepDisabled === false
 }
 
+export type LidNativeCommand =
+  | { op: 'status' }
+  | { op: 'pulse'; identity: string }
+  | { op: 'start'; identity: string; allowance: number }
+  | { op: 'start-work'; identity: string }
+  | { op: 'renew-work'; identity: string; sequence: number }
+  | { op: 'finish-work'; identity: string }
+  | { op: 'adjust'; identity: string; allowance: number }
+  | { op: 'stop' | 'sleep'; identity: string }
+  | { op: 'retry' | 'dismiss' }
+
 export class LidNativeClient {
   private child: ChildProcessWithoutNullStreams | undefined
   private pending: { resolve(value: LidNativeReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | undefined
   private buffer = ''
   private chain: Promise<unknown> = Promise.resolve()
-  command(value: { op: 'status' | 'pulse' | 'start' | 'adjust' | 'stop' | 'sleep' | 'retry' | 'dismiss'; identity?: string; allowance?: number }): Promise<LidNativeReply> {
+  command(value: LidNativeCommand): Promise<LidNativeReply> {
     const call = this.chain.catch(() => {}).then(() => this.request(value))
     this.chain = call
     return call

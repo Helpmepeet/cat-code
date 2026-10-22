@@ -85,6 +85,28 @@ describe('foreground shell registration', () => {
   })
 })
 
+describe('Bash work lifetime classification', () => {
+  test('passes explicit lifetime through input schema', () => {
+    for (const lifetime of ['finite', 'service'] as const) {
+      expect(
+        BashTool.inputSchema.safeParse({
+          command: 'npm run dev',
+          work_lifetime: lifetime,
+        }),
+      ).toMatchObject({ success: true, data: { work_lifetime: lifetime } })
+    }
+  })
+
+  test('keeps work lifetime optional for legacy background calls', () => {
+    expect(
+      BashTool.inputSchema.safeParse({
+        command: 'npm run dev',
+        run_in_background: true,
+      }),
+    ).toMatchObject({ success: true, data: { command: 'npm run dev', run_in_background: true } })
+  })
+})
+
 describe('Bash prompt commit authority', () => {
   test('honors an explicit repository commit workflow without authorizing push', () => {
     for (const provider of ['firstParty', 'openai'] as const) {
