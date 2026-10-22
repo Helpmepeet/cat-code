@@ -15,14 +15,21 @@ import {
 // append it" fallback compared RAW strings, so the same model was appended a
 // second time with a byte-identical label.
 
-// A first-party Max fixture: these are the only auth reads getModelOptionsBase
-// branches on, and real OAuth tokens are not available in a test process. The
+// Subscription fixtures avoid reading real OAuth tokens in a test process. The
 // mock passes through to the real implementations whenever `tier` is null, so a
 // leaked module registration cannot change behavior for other suites.
 // `'codex'` selects the OTHER arm of getModelOptionsBase — the one a Codex
 // session takes, which offers Anthropic models as cross-provider rows so you can
 // switch before the first query.
-let tier: 'max' | 'codex' | null = null
+type TestTier =
+  | 'max'
+  | 'teamPremium'
+  | 'pro'
+  | 'teamStandard'
+  | 'enterprise'
+  | 'payg'
+  | 'codex'
+let tier: TestTier | null = null
 
 const previous = {
   override: getMainLoopModelOverride(),
@@ -43,7 +50,9 @@ const actual = await import('../auth.js')
 const real = {
   isClaudeAISubscriber: actual.isClaudeAISubscriber,
   isMaxSubscriber: actual.isMaxSubscriber,
+  isProSubscriber: actual.isProSubscriber,
   isTeamPremiumSubscriber: actual.isTeamPremiumSubscriber,
+  getSubscriptionType: actual.getSubscriptionType,
   isCodexSubscriber: actual.isCodexSubscriber,
   hasCodexTokens: actual.hasCodexTokens,
   hasAnthropicCredentials: actual.hasAnthropicCredentials,
@@ -53,11 +62,23 @@ beforeEach(async () => {
   await mock.module('src/utils/auth.js', () => ({
     ...actual,
     isClaudeAISubscriber: () =>
-      tier === null ? real.isClaudeAISubscriber() : tier === 'max',
+      tier === null
+        ? real.isClaudeAISubscriber()
+        : tier !== 'codex' && tier !== 'payg',
     isMaxSubscriber: () =>
       tier === null ? real.isMaxSubscriber() : tier === 'max',
+    isProSubscriber: () =>
+      tier === null ? real.isProSubscriber() : tier === 'pro',
     isTeamPremiumSubscriber: () =>
-      tier === null ? real.isTeamPremiumSubscriber() : false,
+      tier === null ? real.isTeamPremiumSubscriber() : tier === 'teamPremium',
+    getSubscriptionType: () =>
+      tier === null
+        ? real.getSubscriptionType()
+        : tier === 'teamPremium' || tier === 'teamStandard'
+          ? 'team'
+          : tier === 'payg' || tier === 'codex'
+            ? null
+            : tier,
     isCodexSubscriber: () =>
       tier === null ? real.isCodexSubscriber() : tier === 'codex',
     hasCodexTokens: () =>
@@ -69,8 +90,7 @@ beforeEach(async () => {
   delete process.env.USER_TYPE
   delete process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT
   delete process.env.ANTHROPIC_CUSTOM_MODEL_OPTION
-  // Unmocked auth reads (isProSubscriber via isOpus1mMergeEnabled) throw under
-  // NODE_ENV=test without a credential env var; a dummy key satisfies them.
+  // Other auth reads throw under NODE_ENV=test without a credential env var.
   process.env.ANTHROPIC_API_KEY = 'test-anthropic-api-key'
   setSessionProvider('firstParty')
 })
@@ -95,6 +115,137 @@ afterEach(() => {
 function labelCount(options: { label: string }[], label: string): number {
   return options.filter(option => option.label === label).length
 }
+
+describe('stable first-party model roster', () => {
+  for (const currentTier of [
+    'pro',
+    'teamStandard',
+    'enterprise',
+    'payg',
+    'max',
+    'teamPremium',
+  ] as const) {
+    test(`${currentTier} keeps Sonnet and Opus across switches in both directions`, async () => {
+      const { getModelOptions } = await import('./modelOptions.js')
+      const { parseUserSpecifiedModel } = await import('./model.js')
+      const { buildRunControlsSnapshot } = await import(
+        '../../../app/sidecar/runControlsDomain.js'
+      )
+      const { getDefaultAppState } = await import('../../state/AppStateStore.js')
+      tier = currentTier
+      setInitialMainLoopModel(null)
+      setMainLoopModelOverride(null)
+      const roster = getModelOptions(false)
+      const sonnet = roster.find(option => option.label === 'Sonnet 5.5')
+      const opus = roster.find(option => option.label === 'Opus 5.5')
+      expect(sonnet).toBeDefined()
+      expect(opus).toBeDefined()
+
+      for (const selection of [
+        sonnet!.value,
+        opus!.value,
+        sonnet!.value,
+        parseUserSpecifiedModel(sonnet!.value!),
+        parseUserSpecifiedModel(opus!.value!),
+        null,
+      ]) {
+        setMainLoopModelOverride(selection)
+        const options = getModelOptions(false)
+        expect(options).toEqual(roster)
+        expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
+        expect(labelCount(options, 'Opus 5.5')).toBe(1)
+        expect(new Set(options.map(option => option.value)).size).toBe(
+          options.length,
+        )
+
+        const snapshot = buildRunControlsSnapshot(getDefaultAppState())
+        expect(snapshot.model.options.map(option => option.value)).toEqual(
+          roster.map(option => option.value),
+        )
+        const selected = snapshot.model.options.filter(
+          option => option.value === snapshot.model.selected,
+        )
+        expect(selected).toHaveLength(1)
+        expect(snapshot.model.selected).toBe(
+          selection === null
+            ? null
+            : selection === sonnet!.value ||
+                selection === parseUserSpecifiedModel(sonnet!.value!)
+              ? sonnet!.value
+              : opus!.value,
+        )
+      }
+    })
+  }
+
+  test('canonical Sonnet selection uses the standard roster row rather than adding a duplicate', async () => {
+    const { getModelOptions } = await import('./modelOptions.js')
+    tier = 'pro'
+    setMainLoopModelOverride('claude-sonnet-5-5')
+    const sonnetRoster = getModelOptions(false)
+    expect(sonnetRoster.find(option => option.value === 'sonnet')?.label).toBe(
+      'Sonnet 5.5',
+    )
+    expect(labelCount(sonnetRoster, 'Sonnet 5.5')).toBe(1)
+
+    setMainLoopModelOverride('claude-opus-5-5')
+    expect(getModelOptions(false)).toEqual(sonnetRoster)
+  })
+
+  test('a custom pinned model keeps its fallback alongside the standard roster', async () => {
+    const { getModelOptions } = await import('./modelOptions.js')
+    tier = 'pro'
+    setMainLoopModelOverride('custom-pinned-model')
+    const options = getModelOptions(false)
+    expect(options).toContainEqual({
+      value: 'custom-pinned-model',
+      label: 'custom-pinned-model',
+      description: 'Custom model',
+    })
+    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
+    expect(labelCount(options, 'Opus 5.5')).toBe(1)
+  })
+
+  test('third-party PAYG keeps its destination catalog and custom Sonnet row', async () => {
+    const keys = [
+      'CLAUDE_CODE_USE_BEDROCK',
+      'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ] as const
+    const saved = keys.map(key => process.env[key])
+    try {
+      tier = 'payg'
+      setSessionProvider('bedrock')
+      process.env.CLAUDE_CODE_USE_BEDROCK = '1'
+      delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+      delete process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
+      setMainLoopModelOverride(null)
+      setInitialMainLoopModel(null)
+      const { getModelOptions } = await import('./modelOptions.js')
+      const roster = getModelOptions(false)
+      expect(labelCount(roster, 'Sonnet 5.5')).toBe(0)
+      expect(labelCount(roster, 'Opus 5.5')).toBe(0)
+      expect(roster.some(option => option.label === 'Opus 4.1')).toBe(true)
+
+      process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'custom-bedrock-sonnet'
+      const customRoster = getModelOptions(false)
+      expect(customRoster.some(option => option.value === 'sonnet')).toBe(true)
+      for (const selection of ['sonnet', 'opus', 'sonnet']) {
+        setMainLoopModelOverride(selection)
+        const options = getModelOptions(false)
+        expect(options).toEqual(customRoster)
+        expect(new Set(options.map(option => option.value)).size).toBe(
+          options.length,
+        )
+      }
+    } finally {
+      keys.forEach((key, index) => {
+        if (saved[index] === undefined) delete process.env[key]
+        else process.env[key] = saved[index]
+      })
+    }
+  })
+})
 
 describe('Haiku 5.5', () => {
   test('Codex cross-provider Haiku uses the configured destination catalog and custom metadata', async () => {

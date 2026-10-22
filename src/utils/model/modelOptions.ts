@@ -408,7 +408,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       return premiumOptions
     }
 
-    // Pro/Team Standard/Enterprise users: Sonnet is default, show Opus as alternative
+    // Keep Sonnet explicit even when it is also the provider default.
     const standardOptions = [getDefaultOptionForUser(fastMode)]
     standardOptions.push(getFable5Option())
     if (isOpus1mMergeEnabled()) {
@@ -419,11 +419,12 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         standardOptions.push(getMaxOpus46_1MOption(fastMode))
       }
     }
+    standardOptions.push(MaxSonnet55Option)
     standardOptions.push(getHaiku55Option())
     return standardOptions
   }
 
-  // PAYG 1P API: Default (Sonnet) + Fable 5 + Opus 5.5 + Opus 1M + Haiku
+  // PAYG 1P API: Default + Fable 5 + Opus 5.5 + Opus 1M + Sonnet 5.5 + Haiku
   if (getAPIProvider() === 'firstParty') {
     const payg1POptions = [getDefaultOptionForUser(fastMode)]
     payg1POptions.push(getFable5Option())
@@ -435,6 +436,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
         payg1POptions.push(getOpus46_1MOption(fastMode))
       }
     }
+    payg1POptions.push(getSonnet55Option())
     payg1POptions.push(getHaiku55Option())
     return payg1POptions
   }
