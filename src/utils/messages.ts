@@ -123,7 +123,10 @@ import {
   MAX_LINES_TO_READ,
 } from 'src/tools/FileReadTool/prompt.js'
 import { FileWriteTool } from 'src/tools/FileWriteTool/FileWriteTool.js'
-import { isFilePatchToolName } from 'src/tools/FilePatchTool/constants.js'
+import {
+  FILE_PATCH_TOOL_NAME,
+  isFilePatchToolName,
+} from 'src/tools/FilePatchTool/constants.js'
 import { GLOB_TOOL_NAME } from 'src/tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from 'src/tools/GrepTool/prompt.js'
 import type { DeepImmutable } from 'src/types/utils.js'
@@ -3633,6 +3636,14 @@ function getAutoModeInstructions(attachment: {
   return getAutoModeFullInstructions()
 }
 
+// Adapted from Claude Code's auto mode block. The edit tool follows the same
+// session provider the tool registry uses (getProviderFileEditTool in tools.ts).
+function getAutoModeShellWorkInstruction(): string {
+  const editToolName =
+    getAPIProvider() === 'openai' ? FILE_PATCH_TOOL_NAME : FileEditTool.name
+  return `You can do much of your work through the ${BashTool.name} tool when it is the simpler route: read files with cat, head, or sed -n, search with grep and find, and make small, mechanical file changes with sed, heredocs, or short scripts instead of the dedicated ${FileReadTool.name}, ${editToolName}, or ${FileWriteTool.name} tools. The choice is yours: prefer ${editToolName} or ${FileWriteTool.name} when a shell edit would be fragile, such as exact or multi-line replacements, or sed/awk flags that differ between GNU and BSD/macOS.`
+}
+
 function getAutoModeFullInstructions(): UserMessage[] {
   const content = `## Auto Mode Active
 
@@ -3643,7 +3654,9 @@ Auto mode is active. The user chose continuous, autonomous execution. You should
 3. **Prefer action over planning** — Do not enter plan mode unless the user explicitly asks. When in doubt, start coding.
 4. **Expect course corrections** — The user may provide suggestions or course corrections at any point; treat those as normal input.
 5. **Do not take overly destructive actions** — Auto mode is not a license to destroy. Anything that deletes data or modifies shared or production systems still needs explicit user confirmation. If you reach such a decision point, ask and wait, or course correct to a safer method instead.
-6. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.`
+6. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.
+
+${getAutoModeShellWorkInstruction()}`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),

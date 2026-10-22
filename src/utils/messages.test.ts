@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { UUID } from 'crypto'
+import { getSessionProvider, setSessionProvider } from '../bootstrap/state.js'
 import { annotateBoundaryWithPreservedSegment } from '../services/compact/compact.js'
 import {
   createAssistantAPIErrorMessage,
@@ -269,6 +270,34 @@ describe('normalizeMessages preserves errorDetails', () => {
   test('an ordinary assistant message gains no errorDetails key', () => {
     const [normalized] = normalizeMessages([createAssistantMessage({ content: 'hello' })])
     expect('errorDetails' in normalized!).toBe(false)
+  })
+})
+
+describe('auto mode shell-work guidance', () => {
+  const shellLine = 'You can do much of your work through the Bash tool when it is the simpler route'
+
+  for (const [provider, editTool] of [
+    ['firstParty', 'Edit'],
+    ['openai', 'apply_patch'],
+  ] as const) {
+    test(`full reminder names the ${provider} edit tool`, () => {
+      const original = getSessionProvider()
+      setSessionProvider(provider)
+      try {
+        const [message] = normalizeAttachmentForAPI({ type: 'auto_mode', reminderType: 'full' })
+        const content = String(message?.message.content)
+        expect(content).toContain(shellLine)
+        expect(content).toContain(`instead of the dedicated Read, ${editTool}, or Write tools`)
+        expect(content).toContain(`The choice is yours: prefer ${editTool} or Write`)
+      } finally {
+        setSessionProvider(original)
+      }
+    })
+  }
+
+  test('sparse reminder stays one line', () => {
+    const [message] = normalizeAttachmentForAPI({ type: 'auto_mode', reminderType: 'sparse' })
+    expect(String(message?.message.content)).not.toContain(shellLine)
   })
 })
 
