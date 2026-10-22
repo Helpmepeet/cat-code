@@ -31,6 +31,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -99,6 +100,27 @@ const configHome = scratch('catcode-packaged-config-')
 const workDir = scratch('catcode-packaged-cwd-')
 
 console.log('A. compiled sidecar, no bun on PATH, outside the checkout')
+
+// Validate the exact shipped companion, including its relocated native libraries.
+// The compiled loader and model compression pipeline have a separate artifact
+// regression in scripts/buildImageRuntime.test.ts.
+try {
+  const sharp = createRequire(sidecar)(
+    join(dirname(sidecar), 'image-runtime', 'sharp.cjs'),
+  ) as typeof import('sharp')
+  const input = await sharp({
+    create: { width: 3120, height: 1540, channels: 3, background: '#ff9933' },
+  }).png().toBuffer()
+  const output = await sharp(input).resize(2000, 987).png().toBuffer()
+  const metadata = await sharp(output).metadata()
+  assert(
+    metadata.width === 2000 && metadata.height === 987 && !output.equals(input),
+    'bundled image runtime resizes an oversized PNG',
+    JSON.stringify(metadata),
+  )
+} catch (error) {
+  assert(false, 'bundled image runtime resizes an oversized PNG', String(error))
+}
 
 // A0 — the engine's search dependency is a real in-bundle ripgrep, not argv0
 // dispatch back into the sidecar.

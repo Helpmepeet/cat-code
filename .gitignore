@@ -2,6 +2,7 @@ node_modules/
 dist/
 /cli
 /cli-dev
+/image-runtime/
 openclaw/
 .DS_Store
 .worktrees/

@@ -2,6 +2,7 @@ import { chmodSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { readSourceBuildId } from '../src/utils/buildProvenance.js'
+import { buildImageRuntime } from './buildImageRuntime.js'
 
 const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json() as {
   name: string
@@ -211,5 +212,7 @@ if (proc.exitCode !== 0) {
 if (existsSync(outfile)) {
   chmodSync(outfile, 0o755)
 }
+
+await buildImageRuntime(outfile)
 
 console.log(`Built ${outfile}`)

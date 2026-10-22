@@ -38,6 +38,7 @@ import { fileURLToPath } from 'node:url'
 import { SIDECAR_RUNTIME_ARGS, PACKAGED_SIDECAR_BINARY } from '../main/mainDecisions.js'
 import { scanPackagedBundle, formatBundleScanFindings } from './packagedBundleScan.js'
 import { buildPngIcnsFromIconset } from './pngIcns.js'
+import { buildImageRuntime } from '../../scripts/buildImageRuntime.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
@@ -123,7 +124,7 @@ function buildMainAndPreload(stamp: { commitId: string; buildId: string }): void
   })
 }
 
-function buildSidecar(): void {
+async function buildSidecar(): Promise<void> {
   console.log('[package] sidecar (compiled, standalone)')
   mkdirSync(join(RESOURCES, 'sidecar'), { recursive: true })
   const outfile = join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)
@@ -173,6 +174,7 @@ function buildSidecar(): void {
     '--define', 'MACRO.VERSION_CHANGELOG="Local desktop build."',
   ]
   run(cmd[0]!, cmd.slice(1), { cwd: repoRoot })
+  await buildImageRuntime(outfile)
 }
 
 function copyRipgrep(): void {
@@ -390,7 +392,7 @@ async function main(): Promise<void> {
   buildMainAndPreload(info)
   assembleBundle()
   copyPayload()
-  buildSidecar()
+  await buildSidecar()
   copyRipgrep()
   scan()
   await sealApplication()
