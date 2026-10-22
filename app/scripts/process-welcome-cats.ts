@@ -12,8 +12,9 @@ root = pathlib.Path(sys.argv[1])
 check = '--check' in sys.argv[2:]
 module = root / 'app/renderer/src/generatedWelcomeCats.ts'
 names = re.findall(r"generated-welcome-cats/([\w-]+)\.webp'", module.read_text())
-assert len(names) == len(set(names)) == 28, 'Expected 28 explicit display imports'
 folder = module.parent / 'assets/generated-welcome-cats'
+source_names = sorted(path.stem for path in folder.glob('*.png'))
+assert sorted(names) == source_names, 'Expected one explicit display import for every generated PNG'
 source_bytes = display_bytes = 0
 with tempfile.TemporaryDirectory() as temporary:
     for name in names:

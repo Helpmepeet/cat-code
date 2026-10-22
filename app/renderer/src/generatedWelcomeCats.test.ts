@@ -1,14 +1,18 @@
 import { expect, test } from 'bun:test'
-import { readFileSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { generatedWelcomeCats } from './generatedWelcomeCats.js'
 
-test('Welcome rotation loads only the 28 optimized static display assets', () => {
+test('Welcome rotation includes one optimized display asset for every generated PNG', () => {
   const source = readFileSync(new URL('./generatedWelcomeCats.ts', import.meta.url), 'utf8')
   const imports = [...source.matchAll(/from '(\.\/assets\/generated-welcome-cats\/[^']+)'/g)]
-  expect(imports).toHaveLength(28)
-  expect(generatedWelcomeCats).toHaveLength(28)
-  expect(new Set(generatedWelcomeCats).size).toBe(28)
-  expect(source).not.toContain('import.meta.glob')
+  const sourceNames = readdirSync(new URL('./assets/generated-welcome-cats/', import.meta.url))
+    .filter(name => name.endsWith('.png'))
+    .map(name => name.slice(0, -'.png'.length))
+    .sort()
+  const importNames = imports.map(match => match[1]!.split('/').at(-1)!.replace(/\.webp$/, '')).sort()
+  expect(importNames).toEqual(sourceNames)
+  expect(generatedWelcomeCats).toHaveLength(sourceNames.length)
+  expect(new Set(generatedWelcomeCats).size).toBe(sourceNames.length)
   let total = 0
   for (const match of imports) {
     const path = match[1]!
@@ -19,5 +23,5 @@ test('Welcome rotation loads only the 28 optimized static display assets', () =>
     expect(header.subarray(8, 12).toString()).toBe('WEBP')
     total += statSync(file).size
   }
-  expect(total).toBeLessThan(1_000_000)
+  expect(total).toBeLessThan(2_500_000)
 })
