@@ -728,6 +728,9 @@ export class Host implements HostApi {
   private async restoreSessionExclusive(
     appSessionId: SessionId,
   ): Promise<HostResult<SessionDescriptor>> {
+    if (this.hasLiveForeignOwner(appSessionId)) {
+      return hostError('session_unreachable', 'This session belongs to another running app instance. Use it in that app.')
+    }
     const row = this.registry.findSession(appSessionId)
     // §9-A4: fails session_not_found if the row OR its transcript is gone. The
     // registry only offers restorable rows whose transcript exists (launch reap),
@@ -2023,6 +2026,10 @@ export class Host implements HostApi {
     if (!isUuid(appSessionId)) return false
     if (this.moveRecordBlocked(this.registry.findSession(appSessionId)?.engineSessionId)) return false
     return this.registry.hasTranscript(appSessionId) && this.descriptorFor(appSessionId)?.restorable === true
+  }
+
+  hasLiveForeignOwner(appSessionId: SessionId): boolean {
+    return this.registry.hasLiveForeignOwner(appSessionId)
   }
 
   /**

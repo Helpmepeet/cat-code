@@ -89,6 +89,7 @@ function harness(
     live?: Set<string>
     /** Rows whose socket can take a frame right now. Defaults to `live`. */
     ready?: Set<string>
+    foreignOwners?: Set<string>
     /**
      * Rows the host would refuse to restore: no transcript on disk, or a resume
      * it already watched fail. Everything else answers `canResume` true.
@@ -124,6 +125,7 @@ function harness(
     }),
     isLive: id => live.has(id),
     isReady: id => (ready ?? live).has(id),
+    hasLiveForeignOwner: id => options.foreignOwners?.has(id) === true,
     canResume: id => options.unresumable?.has(id) !== true,
     isMoving: id => options.moving?.has(id) === true,
     workspaceRequests: options.workspaceRequests,
@@ -762,6 +764,25 @@ describe('peers.list', () => {
  * ------------------------------------------------------------------------- */
 
 describe('peer.deliver', () => {
+  test.each([null, 'parked'] as const)('a foreign owner with lifecycle %s stays visible but is never restored or sent a local frame', async shutdown => {
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown })],
+      live: new Set([ALEX]),
+      foreignOwners: new Set([BEAR]),
+      unresumable: new Set([BEAR]),
+    })
+    await h.plane.handleRequest(ALEX, request('peers.list', {}))
+    expect(JSON.stringify(h.lastResult())).toContain('Bear')
+    expect(JSON.stringify(h.lastResult())).toContain(shutdown === 'parked' ? 'parked' : 'live')
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'ping' }))
+    expect(h.lastResult()?.error).toMatchObject({
+      code: 'unavailable',
+      message: expect.stringContaining('another running app instance'),
+    })
+    expect(h.restored).toEqual([])
+    expect(h.deliveries()).toEqual([])
+  })
+
   test('a live recipient is queued and the frame carries MAIN-stamped identity', async () => {
     const h = harness()
     await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'ping' }))

@@ -86,6 +86,29 @@ function readDoc(registryPath: string): RegistryDocument {
   return JSON.parse(readFileSync(registryPath, 'utf8')) as RegistryDocument
 }
 
+test.each([null, 'clean', 'crashed', 'parked'] as const)('foreign ownership respects lifecycle %s and permits dead-owner recovery', async shutdown => {
+  const h = makeRegistry()
+  await h.registry.launch()
+  await h.registry.upsertOnSpawn({ appSessionId: 'foreign', cwd: '/workspace', engineSessionId: 'saved' })
+  writeTranscript(h.storageDir, 'saved')
+  const doc = readDoc(h.registryPath)
+  doc.sessions[0]!.ownerHostPid = 424242
+  doc.sessions[0]!.shutdown = shutdown
+  writeFileSync(h.registryPath, JSON.stringify(doc))
+  let ownerAlive = true
+  const restored = makeRegistry({
+    storageDir: h.storageDir,
+    isProcessAlive: pid => pid === 424242 && ownerAlive,
+  }).registry
+  await restored.launch()
+  expect(restored.hasLiveForeignOwner('foreign')).toBe(shutdown === null || shutdown === 'parked')
+  expect(restored.findSession('foreign')?.shutdown).toBe(shutdown)
+  ownerAlive = false
+  expect(restored.hasLiveForeignOwner('foreign')).toBe(false)
+  expect(restored.hasTranscript('foreign')).toBe(true)
+  expect(restored.hasLiveForeignOwner('missing')).toBe(false)
+})
+
 test('scope notice survives park, persisted reload and restore, but not close or reopen', async () => {
   const { registry, storageDir, registryPath } = makeRegistry()
   await registry.launch()

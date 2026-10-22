@@ -4739,6 +4739,7 @@ function ensureHost(): Host {
     // the roster offered it as a peer that no wake could ever reach. Same
     // predicate the sidebar's `restorable` flag is built from, not a second copy.
     canResume: appSessionId => liveHost.canResume(appSessionId),
+    hasLiveForeignOwner: appSessionId => liveHost.hasLiveForeignOwner(appSessionId),
     isMoving: appSessionId => liveHost.isMoving(appSessionId),
     createSessionInWorkspace: (fromAppSessionId, peer) =>
       liveHost.createSessionInWorkspace(fromAppSessionId, peer),

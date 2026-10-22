@@ -276,6 +276,13 @@ function describeError(
         outcome: 'no_such_peer',
         summary: `Not delivered. There is no peer called ${to} here. Use ListPeers for the names.`,
       }
+    case 'unavailable':
+      return {
+        to,
+        delivery: 'not_delivered',
+        outcome: 'send_failed',
+        summary: `Not delivered. ${error.message}`,
+      }
     case 'too_large':
       return {
         to,

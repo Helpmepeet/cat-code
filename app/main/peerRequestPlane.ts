@@ -123,6 +123,8 @@ export type PeerRequestPlaneDeps = {
    * there is no honest default for it to fall back to.
    */
   isReady: (appSessionId: SessionId) => boolean
+  /** Registry owner policy, not this app's local supervisor membership. */
+  hasLiveForeignOwner?: (appSessionId: SessionId) => boolean
   /**
    * F6 — could a NOT-live row be reopened from its transcript? The host's own
    * `canResume` (`app/host/host.ts:978`), which is the single predicate behind
@@ -665,7 +667,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   }
 
   function statusOf(row: PeerRegistryRow): PeerStatus {
-    if (deps.isLive(row.appSessionId)) return 'live'
+    if (deps.isLive(row.appSessionId) ||
+        (row.shutdown === null && deps.hasLiveForeignOwner?.(row.appSessionId))) return 'live'
     return row.shutdown === 'parked' ? 'parked' : 'closed'
   }
 
@@ -698,7 +701,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
           row.binding?.kind !== 'managed' &&
           row.cwd === requesterRow.cwd &&
           isNamed(row) &&
-          (deps.isLive(row.appSessionId) || deps.canResume(row.appSessionId)),
+          (deps.hasLiveForeignOwner?.(row.appSessionId) || deps.isLive(row.appSessionId) || deps.canResume(row.appSessionId)),
       )
   }
 
@@ -1317,6 +1320,13 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       request.expectCreatorId !== target.appSessionId
     ) {
       return refuse('refused:creator_reissued')
+    }
+
+    if (deps.hasLiveForeignOwner?.(target.appSessionId)) {
+      return {
+        ok: false,
+        error: fail('unavailable', `${toName} belongs to another running app instance. Messages cannot be sent between app instances. Ask the user to contact ${toName} in that app, or continue without it.`),
+      }
     }
 
     // §6 — the wake block is about REOPENING, so an existing row ignores it.

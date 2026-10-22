@@ -2173,6 +2173,46 @@ test('restoreSession refuses an already-live session', async () => {
   if (!result.ok) expect(result.error.code).toBe('session_not_found')
 })
 
+test.each([null, 'clean', 'crashed', 'parked'] as const)('restoreSession respects foreign owner lifecycle %s and recovers after owner death', async shutdown => {
+  const h = makeHost()
+  const appSessionId = randomUUID()
+  writeTranscript(h.storageDir, 'foreign-engine')
+  await h.registry.upsertOnSpawn({ appSessionId, cwd: h.cwd })
+  await h.registry.fillEngineSessionId(appSessionId, 'foreign-engine')
+  const doc = JSON.parse(readFileSync(h.registry.filePath, 'utf8'))
+  doc.sessions[0].ownerHostPid = 424242
+  doc.sessions[0].shutdown = shutdown
+  writeFileSync(h.registry.filePath, JSON.stringify(doc))
+  let ownerAlive = true
+  const registry = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+    isProcessAlive: pid => pid === 424242 && ownerAlive,
+  })
+  await registry.launch()
+  const host = new Host({
+    registry,
+    supervisor: h.supervisor as never,
+    validateCwd: candidate => candidate === h.cwd ? { ok: true, realpath: candidate } : { ok: false },
+  })
+  const refused = await host.restoreSession(appSessionId)
+  if (shutdown === 'clean' || shutdown === 'crashed') {
+    expect(refused.ok).toBe(true)
+    expect(h.supervisor.records.get(appSessionId)?.resumeEngineSessionId).toBe('foreign-engine')
+    return
+  }
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) {
+    expect(refused.error.code).toBe('session_unreachable')
+    expect(refused.error.message).toContain('another running app instance')
+  }
+  expect(h.supervisor.records.has(appSessionId)).toBe(false)
+  ownerAlive = false
+  const recovered = await host.restoreSession(appSessionId)
+  expect(recovered.ok).toBe(true)
+  expect(h.supervisor.records.get(appSessionId)?.resumeEngineSessionId).toBe('foreign-engine')
+})
+
 test('restoreSession refuses when advisory pid/socket still identify a live prior sidecar', async () => {
   const storageDir = tempDir()
   const cwd = join(storageDir, 'project')

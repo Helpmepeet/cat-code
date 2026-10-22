@@ -543,6 +543,14 @@ export class SessionRegistry {
     return row ? this.matchesSidecarIdentity(row) : false
   }
 
+  /** Open tabs retain ownership while parked; terminal rows retain only advisory PIDs. */
+  hasLiveForeignOwner(appSessionId: string): boolean {
+    const row = this.find(appSessionId)
+    if (!row || (row.shutdown !== null && row.shutdown !== 'parked')) return false
+    const owner = row.ownerHostPid
+    return owner !== undefined && owner !== process.pid && this.isProcessAlive(owner)
+  }
+
   /* --------------------------------------------------------------------- *
    * §4 — launch sequence (read+validate → sweep → reap → restore data)
    * --------------------------------------------------------------------- */

@@ -78,6 +78,14 @@ function failing(error: HostRequestError) {
   return fakeRequester({ 'peer.deliver': { ok: false, error } })
 }
 
+test('another app owner is reported as not delivered with actionable host wording', async () => {
+  const message = 'Bear belongs to another running app instance. Ask the user to contact Bear in that app.'
+  const client = failing({ code: 'unavailable', message })
+  const result = await send(client.requestHost, { to: 'Bear', text: 'ping' })
+  expect(result.delivery).toBe('not_delivered')
+  expect(result.summary).toBe(`Not delivered. ${message}`)
+})
+
 /**
  * A session with no peer identity of its own, which is what the process env
  * gives every test that does not ask for one. `undefined` here would fall
