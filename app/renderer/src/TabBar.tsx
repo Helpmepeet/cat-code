@@ -384,7 +384,7 @@ function PageTabButton({
       tabIndex={tabbable ? 0 : -1}
       onClick={onSelect}
       onKeyDown={onKeyDown}
-      className={`group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 [-webkit-app-region:no-drag] ${active ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]'}${arriving ? ' animate-tab-in' : ''}`}
+      className={`group relative flex min-w-[90px] max-w-[256px] flex-1 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 [-webkit-app-region:no-drag] ${active ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]'}${arriving ? ' animate-tab-in' : ''}`}
     >
       {active ? <span className="absolute inset-x-0 bottom-0 h-[1.5px] rounded-t-sm bg-accent" aria-hidden="true" /> : null}
       <span className={`min-w-0 flex-1 truncate text-xs ${active ? 'text-text-primary' : 'text-text-subtle'}`}>{label}</span>
@@ -392,7 +392,7 @@ function PageTabButton({
         type="button"
         title={`Close ${label}`}
         aria-label={`Close ${label} page`}
-        className="flex h-[18px] w-0 shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-[opacity,background-color,color] hover:bg-white/10 hover:text-text-primary group-hover:w-[18px] group-hover:opacity-100 focus-visible:w-[18px] focus-visible:opacity-100"
+        className="flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-[opacity,background-color,color] hover:bg-white/10 hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100"
         onKeyDown={event => {
           if (!event.metaKey && !event.ctrlKey) event.stopPropagation()
         }}
@@ -451,14 +451,10 @@ function Tab({
       ref={ref}
       onAnimationEnd={onArrivalAnimationEnd}
       className={
-        // `grow shrink-0`: tabs SHARE leftover bar width up to the 176px cap, so
-        // a handful of sessions read in full instead of every title clipping
-        // against a fixed width with empty bar to the right. `shrink-0` keeps the
-        // crowded case exactly as it was — natural width, then horizontal scroll.
         // The bar is a window drag region, so a tab has to opt out of it or the
         // OS swallows the pointer: no click to select, and no `draggable`
         // drag-to-split (the tab's own `onDragStart` below).
-        'group relative flex min-w-[90px] max-w-[176px] grow shrink-0 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors [-webkit-app-region:no-drag] ' +
+        'group relative flex min-w-[90px] max-w-[256px] flex-1 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors [-webkit-app-region:no-drag] ' +
         (isActive ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]') +
         (arriving ? ' animate-tab-in' : '')
       }
@@ -590,12 +586,9 @@ function Tab({
         </button>
       ) : null}
 
-      {/* `opacity-0` alone does NOT free layout, so the invisible × used to
-          reserve its full 18px on every tab at rest, permanently narrowing the
-          title it was hidden to protect. Collapsing the WIDTH too gives that
-          space back until the tab is hovered or the button is keyboard-focused. */}
+      {/* Reserve the close button's width so hover never reflows the title. */}
       <button
-        className="flex h-[18px] w-0 shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-[opacity,background-color,color] hover:bg-white/10 hover:text-text-primary group-hover:w-[18px] group-hover:opacity-100 focus-visible:w-[18px] focus-visible:opacity-100"
+        className="flex h-[18px] w-[18px] shrink-0 items-center justify-center overflow-hidden rounded text-sm leading-none text-text-subtle/60 opacity-0 transition-[opacity,background-color,color] hover:bg-white/10 hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100"
         onClick={event => {
           event.stopPropagation()
           onClose(id)

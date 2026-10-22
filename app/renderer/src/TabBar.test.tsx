@@ -236,22 +236,40 @@ test('a previewed tab shows its title alone, never the word preview', () => {
   expect(html).toContain('text-text-subtle')
 })
 
-test('the hidden close button reserves no width until the tab is hovered', () => {
-  // `opacity-0` alone does not free layout: the invisible × used to hold 18px on
-  // every tab, narrowing the very title it was hidden to protect.
-  const html = render([tab('a')], 'a')
-
-  expect(html).toContain('w-0')
-  expect(html).toContain('group-hover:w-[18px]')
-  expect(html).toContain('focus-visible:w-[18px]') // still keyboard-reachable
-})
-
-test('tabs grow into spare bar width but never shrink below the crowded case', () => {
-  const html = render([tab('a'), tab('b')], 'a')
-
-  expect(html).toContain('grow')
-  expect(html).toContain('shrink-0') // crowded behaviour unchanged: scroll, not squeeze
-  expect(html).toContain('max-w-[176px]')
+test('session and page tabs share width equally and reserve close-button space', () => {
+  const model = tab('a', {}, { title: 'A long session title beside a short page label' })
+  const html = renderToStaticMarkup(
+    <TabBar
+      tabs={[model]}
+      navigationTabs={[{ kind: 'session', model }, { kind: 'page', page: 'settings' }]}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+    />,
+  )
+  const tabClasses = [...html.matchAll(/<div\b[^>]*\brole="tab"[^>]*>/g)]
+    .map(match => match[0].match(/class="([^"]*)"/)![1]!.split(' '))
+  expect(tabClasses).toHaveLength(2)
+  for (const classes of tabClasses) {
+    expect(classes).toContain('flex-1')
+    expect(classes).toContain('min-w-[90px]')
+    expect(classes).toContain('max-w-[256px]')
+    expect(classes).not.toContain('shrink-0')
+  }
+  const closeClasses = [...html.matchAll(/<button\b[^>]*aria-label="Close [^"]*"[^>]*>/g)]
+    .map(match => match[0].match(/class="([^"]*)"/)![1]!.split(' '))
+  expect(closeClasses).toHaveLength(2)
+  for (const classes of closeClasses) {
+    expect(classes).toContain('w-[18px]')
+    expect(classes).toContain('opacity-0')
+    expect(classes).toContain('group-hover:opacity-100')
+    expect(classes).toContain('focus-visible:opacity-100')
+    expect(classes).not.toContain('w-0')
+    expect(classes).not.toContain('group-hover:w-[18px]')
+    expect(classes).not.toContain('focus-visible:w-[18px]')
+  }
 })
 
 test('the bar is the window drag region and every control opts out of it', () => {
@@ -307,6 +325,5 @@ test('a fullscreen window gets no well, because macOS has hidden the lights', ()
   )
 
   expect(html).not.toContain('w-[84px]')
-  // Specifically the WELL: `w-0` alone would also match the hidden close button.
   expect(html).toContain('<div class="w-0 shrink-0" aria-hidden="true">')
 })
