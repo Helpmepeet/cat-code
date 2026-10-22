@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
 import { MENU_ITEM_SELECTOR } from './overlayFocus.js'
-import { resolveSessionActions, selectSidebarSessionActions } from './sessionActions.js'
+import { resolveSessionActions, selectSessionMenuActions } from './sessionActions.js'
 import {
   SessionActionsMenu,
   SessionRenamePopover,
@@ -10,10 +10,10 @@ import {
 
 const noop = () => {}
 
-test('sidebar menus render the proposed glyphs and only the archive divider, without View or danger styling', () => {
+test('sidebar and tab menus render the same glyphs and archive divider, without View or danger styling', () => {
   for (const archived of [false, true]) {
     const target = row()
-    const items = selectSidebarSessionActions(
+    const items = selectSessionMenuActions(
       resolveSessionActions(target, { isActiveOpen: true }), target, archived,
     )
     const html = renderToStaticMarkup(
@@ -37,7 +37,7 @@ test('sidebar menus render the proposed glyphs and only the archive divider, wit
 
 test('sidebar peer-reopen setting stays accessible and checked on archived rows', () => {
   const target = row({ peerWakeBlocked: true })
-  const items = selectSidebarSessionActions(
+  const items = selectSessionMenuActions(
     resolveSessionActions(target, { isActiveOpen: false }),
     target,
     true,

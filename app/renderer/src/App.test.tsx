@@ -486,6 +486,24 @@ test('close navigation waits for a successful host result and focuses the chosen
   expect(focusIndex).toBeGreaterThan(-1)
 })
 
+test('sidebar and tab actions share the short menu and resolve archive state from the target row', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('<SessionActionsMenu')
+  const end = source.indexOf('anchor={sessionActionsTarget.anchor}', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const body = source.slice(start, end)
+
+  // The selector's rows, ordering, and disabled states are exercised in
+  // sessionActions.test.ts. This pins both entry points to that same selector.
+  expect(body).toContain('sessionActionsTarget.fromSessionsPage')
+  expect(body).toContain('selectSessionsPageActions(items)')
+  expect(body).toContain('selectSessionMenuActions(items, targetRow, archived)')
+  expect(body).toContain('selectArchivedSidebarRows([targetRow], archivedSessions)')
+  expect(body).not.toContain('sessionActionsTarget.origin')
+  expect(body).not.toContain('sessionActionsTarget.archived')
+})
+
 test('archiving a session changes sidebar visibility without closing it', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const start = source.indexOf('const archiveSession = (row:')

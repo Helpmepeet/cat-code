@@ -85,6 +85,7 @@ import {
   reduceArchivedSessionsReconciled,
   reduceSessionArchived,
   reduceSessionUnarchived,
+  selectArchivedSidebarRows,
   writeArchivedSessionsToStorage,
   type ArchivedSessions,
 } from './sidebarArchivedSessions.js'
@@ -360,7 +361,7 @@ import {
 } from './SessionActionsMenu.js'
 import {
   resolveSessionActions,
-  selectSidebarSessionActions,
+  selectSessionMenuActions,
   selectSessionsPageActions,
 } from './sessionActions.js'
 import { ExportDialog } from './SessionActionDialogs.js'
@@ -705,7 +706,6 @@ export function App() {
      * TabBar, so only a sidebar-anchored overlay may pin the rail open.
      */
     origin: SessionActionsOrigin
-    archived?: boolean
   } | null>(null)
   const archiveStorage = useMemo(defaultViewPreferenceStorage, [])
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessions>(
@@ -4658,8 +4658,8 @@ export function App() {
           onSelectLive={selectTab}
           onRestore={sessionId => void performRestore(sessionId)}
           onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
-          onOpenRowActions={(sessionId, anchor, archived) =>
-            setSessionActionsTarget({ sessionId, anchor, archived, origin: 'sidebar' })
+          onOpenRowActions={(sessionId, anchor) =>
+            setSessionActionsTarget({ sessionId, anchor, origin: 'sidebar' })
           }
           /* P4-33 (Sidebar.jsx:80) — the row's ⋮ menu and rename editor are
            * App-level `fixed` overlays, so they float OUTSIDE the rail's hover box:
@@ -4712,9 +4712,6 @@ export function App() {
                 return (
                   <SessionActionsMenu
                     items={(() => {
-                      // The shared menu component stays presentation-only; the
-                      // per-entry-point hide list is a resolver decision
-                      // (`selectSessionsPageActions`, which is where it is tested).
                       const items = resolveSessionActions(targetRow, {
                         isActiveOpen: targetId === activeSessionId,
                         hasEngine: connectionHasEngine(
@@ -4730,11 +4727,11 @@ export function App() {
                         hasHiddenRows: selectHasHiddenRows(transcript, targetId),
                         hiddenRevealed: revealHiddenSessions[targetId] === true,
                       })
-                      return sessionActionsTarget.origin === 'sidebar'
-                        ? selectSidebarSessionActions(items, targetRow, sessionActionsTarget.archived)
-                        : sessionActionsTarget.fromSessionsPage
+                      const archived =
+                        selectArchivedSidebarRows([targetRow], archivedSessions).archived.length > 0
+                      return sessionActionsTarget.fromSessionsPage
                         ? selectSessionsPageActions(items)
-                        : items
+                        : selectSessionMenuActions(items, targetRow, archived)
                     })()}
                     anchor={sessionActionsTarget.anchor}
                     onAction={kind => {

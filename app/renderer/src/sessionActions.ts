@@ -21,9 +21,9 @@
  *    Both run inside the session's OWN live engine, so they are enabled ONLY
  *    for a LIVE row (a running sidecar to receive the verb); a restorable/history
  *    row shows them DISABLED with the reason (open/restore it first).
- *  - Archive is a sidebar-only view preference (`sidebarArchivedSessions.ts`),
- *    not an engine write. `selectSidebarSessionActions` adds it without changing
- *    the tab menu. Delete has no local backing and is not offered.
+ *  - Archive controls sidebar visibility (`sidebarArchivedSessions.ts`), not an
+ *    engine write. `selectSessionMenuActions` offers it in both sidebar and tab
+ *    menus. Delete has no local backing and is not offered.
  *  - **Tag was wrongly listed as cut here** (corrected P4-29). `saveTag`
  *    (`src/utils/sessionStorage.ts:3257`) is a real per-session engine write —
  *    the `/tag` command's own — so tag was a missing SIDECAR verb, not an absent
@@ -150,8 +150,8 @@ const DEFER = {
 } as const
 
 /**
- * Resolve the full tab menu for one row. Sidebar-only verbs are added by its
- * selector. Deferred verbs are returned DISABLED with a reason so the
+ * Resolve the full action set for one row. Entry-point selectors choose its
+ * menu. Deferred verbs are returned DISABLED with a reason so the
  * affordance is discoverable without lying about being functional.
  */
 export function resolveSessionActions(
@@ -326,8 +326,8 @@ export function selectSessionsPageActions(
   return items.filter(item => item.kind !== 'metadata')
 }
 
-/** Sidebar-only verbs and ordering. The tab and Sessions-page menus stay intact. */
-export function selectSidebarSessionActions(
+/** Shared sidebar and tab menu. The Sessions page keeps its full action list. */
+export function selectSessionMenuActions(
   items: readonly SessionActionItem[],
   row: MergedSessionRow,
   archived = false,

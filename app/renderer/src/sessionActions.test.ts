@@ -4,7 +4,7 @@ import {
   estimateSessionActionsMenuHeight,
   placeSessionActionsMenu,
   resolveSessionActions,
-  selectSidebarSessionActions,
+  selectSessionMenuActions,
   selectSessionsPageActions,
   SESSION_ACTION_SECTIONS,
   type SessionActionItem,
@@ -421,9 +421,9 @@ describe('selectSessionsPageActions (P4-35 — the Sessions-page entry point)', 
   })
 })
 
-describe('sidebar session actions', () => {
+describe('shared sidebar and tab session actions', () => {
   function sidebar(r = row(), archived = false, hasEngine = true) {
-    return selectSidebarSessionActions(
+    return selectSessionMenuActions(
       resolveSessionActions(r, { isActiveOpen: true, hasHiddenRows: true, hasEngine }),
       r,
       archived,
@@ -483,7 +483,7 @@ describe('sidebar session actions', () => {
       isActiveOpen: true,
       hasActiveTurn: true,
     })
-    const items = selectSidebarSessionActions(
+    const items = selectSessionMenuActions(
       resolved,
       row(),
     )
@@ -502,10 +502,10 @@ describe('sidebar session actions', () => {
     })
   })
 
-  test('selecting sidebar actions leaves the tab full menu untouched', () => {
+  test('selecting compact actions leaves the full action set untouched', () => {
     const full = resolveSessionActions(row(), { isActiveOpen: true, hasHiddenRows: true })
     const before = structuredClone(full)
-    selectSidebarSessionActions(full, row())
+    selectSessionMenuActions(full, row())
     expect(full).toEqual(before)
     expect(full.map(item => item.kind)).toEqual([
       'open', 'rename', 'peer-wake-blocked', 'reveal-hidden', 'metadata',
