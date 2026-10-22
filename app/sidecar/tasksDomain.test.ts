@@ -390,20 +390,21 @@ test('hasLiveWork — false for an empty task map', () => {
 })
 
 test('task subscription ignores engine progress outside the display projection', () => {
-  const store = storeWith({ b1: bashTask({ status: 'running' }) })
+  const task = bashTask({ status: 'running' })
+  const store = storeWith({ b1: task })
   const domain = createSidecarTasksDomain(store)
   let notifications = 0
   const stop = domain.subscribe(() => notifications++)
 
   store.setState(previous => ({
     ...previous,
-    tasks: { b1: bashTask({ status: 'running', lastReportedTotalLines: 100 }) },
+    tasks: { b1: { ...task, lastReportedTotalLines: 100 } },
   }))
   expect(notifications).toBe(0)
 
   store.setState(previous => ({
     ...previous,
-    tasks: { b1: bashTask({ status: 'completed' }) },
+    tasks: { b1: { ...task, status: 'completed' } },
   }))
   expect(notifications).toBe(1)
   stop()
