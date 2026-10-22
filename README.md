@@ -7,6 +7,41 @@ peers that can talk to each other, and Auto mode to keep work moving with fewer
 approval interruptions. It started as a Claude Code fork and has grown into an
 Electron desktop application with its own interface and workflows.
 
+## What this fork adds
+
+These are features and adaptations in this private fork, not a claim that the
+underlying coding-agent engine was written from scratch:
+
+- **Multi-file editing:** the [`apply_patch` implementation](src/tools/FilePatchTool/FilePatchTool.tsx)
+  preflights add, update, move, and delete operations before writing. Its
+  [planner](src/tools/FilePatchTool/planner.ts) rejects ambiguous complete
+  placement plans. On a write failure, recovery attempts to restore prior
+  contents without overwriting intervening edits; this is not a crash-atomic
+  transaction or a guarantee of complete rollback.
+- **Desktop sessions and analytics:** an [Electron application](app/) runs
+  separate engine processes for live sessions and offers tabs and split views.
+  Its [Analytics view](app/renderer/src/UsagePage.tsx) summarizes retained token,
+  model, tool, and Auto mode activity over 7-day, 30-day, and all-retained-history
+  windows. Cost figures are estimates for priced tokens, not billing records.
+- **Session coordination:** [peer creation](app/sidecar/createPeerTool.ts) and
+  [messaging](app/sidecar/sendToPeerTool.ts) let separate conversations exchange
+  work and findings, with explicit queued, refused, and unconfirmed outcomes.
+- **Account recovery:** the [retry layer](src/services/api/withRetry.ts) supports
+  automatic failover to another eligible configured Codex account on usage caps
+  and selected transient connection failures. Recovery is bounded by account
+  availability and retry limits; it does not remove provider limits.
+- **Adapted action review:** Auto mode integrates an
+  [upstream-derived classifier](src/utils/permissions/yoloClassifier.ts) with
+  provider routing, permission rules, and desktop controls. The
+  [provenance record](src/utils/permissions/yolo-classifier-prompts/upstream/SOURCE.json)
+  identifies the upstream prompt material. The classifier is not an original
+  safety model or a guarantee that actions are safe.
+
+The available history begins with a private snapshot and does not establish the
+original upstream fork point. Changes recorded after that snapshot should not
+be confused with proof of original authorship for every included component.
+This section grants no redistribution rights to upstream material.
+
 ![Cat Code welcome screen with its neon cat, project and branch details, account usage, and session controls](assets/readme/welcome.png)
 
 ## A home for coding sessions
