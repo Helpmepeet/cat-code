@@ -101,35 +101,29 @@ test('renders the menu with a scrim and the Session actions label', () => {
   expect(html).toContain('role="menu"')
 })
 
-test('active-open row: Copy hosts a flyout and Inspect renders as a live menuitem button', () => {
+test('active-open row: transcript copy and Inspect render as direct menuitem buttons', () => {
   const html = render(true)
-  // P4-30 — Copy became the flyout HOST (`SessionActions.jsx:174`): it renders
-  // with a chevron and `aria-haspopup`, and it is NOT a dispatching button. Its
-  // variants live in the submenu, which only opens on hover/focus.
-  expect(html).toContain('aria-haspopup="menu"')
-  expect(html).toContain('aria-expanded="false"')
-  expect(html).not.toContain('Copy transcript for LLM')
+  expect(html).not.toContain('aria-haspopup')
+  expect(html).toContain('Copy transcript for LLM')
   expect(html).toContain('Inspect metadata…')
   expect(html).toContain('<button')
 })
 
-test('P4-30: EVERY rendered row carries a glyph, including inside the flyout', () => {
+test('P4-30: EVERY rendered row carries a glyph', () => {
   // Regression: `SessionActionIcon` fell through to `return null` for
   // `copy-text`, so that row drew an empty span in a `gap-2` flex and its label
   // sat a glyph-width left of its sibling. The union is now exhaustive at
   // compile time; this pins the rendered result.
   for (const item of resolveSessionActions(row(), { isActiveOpen: true })) {
-    for (const each of [item, ...(item.flyout ?? [])]) {
-      const html = renderToStaticMarkup(
-        <SessionActionsMenu
-          items={[each.flyout ? { ...each, flyout: undefined } : each]}
-          anchor={{ top: 0, bottom: 0, left: 0 }}
-          onAction={noop}
-          onClose={noop}
-        />,
-      )
-      expect(html).toContain('<svg')
-    }
+    const html = renderToStaticMarkup(
+      <SessionActionsMenu
+        items={[item]}
+        anchor={{ top: 0, bottom: 0, left: 0 }}
+        onAction={noop}
+        onClose={noop}
+      />,
+    )
+    expect(html).toContain('<svg')
   }
 })
 
@@ -156,15 +150,6 @@ test('P4-36: the hidden-row reveal renders as a live menuitem with its own glyph
   }
   // No hidden tier ⇒ the row is absent, not a disabled "soon" row.
   expect(render(true)).not.toContain('hidden messages')
-})
-
-test('P4-30: the flyout host is Tab-reachable, so folding Copy into it kept it keyboard-usable', () => {
-  // Before the flyout, the copy verb was a plain <button> in the Tab order.
-  // Without tabIndex the host is an unfocusable <div role="menuitem"> and the
-  // onFocus open handler is dead code.
-  const html = render(true)
-  expect(html).toContain('tabindex="0"')
-  expect(html).toContain('aria-haspopup="menu"')
 })
 
 test('P4-30: the menu renders leading icons, the View section label and the sa-pop entrance', () => {

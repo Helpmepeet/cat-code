@@ -43,8 +43,6 @@ export type SessionActionKind =
   | 'open'
   | 'rename'
   | 'metadata'
-  /** The flyout HOST (`SessionActions.jsx:174`). Never dispatched — it only opens its submenu. */
-  | 'copy'
   | 'copy-text'
   /**
    * The two ids that address this session — the app's own and the engine's
@@ -111,13 +109,6 @@ export type SessionActionItem = {
    * persisted state and then cannot show it is a lie about that state.
    */
   checked?: boolean
-  /**
-   * P4-30 — this row HOSTS a side submenu instead of acting (the prototype's
-   * `hasFlyout` Copy row, `SessionActions.jsx:172-182`). A hosting row is never
-   * dispatched; only its children are. `enabled` still gates the host, so the
-   * whole group carries one honest reason when the transcript is unreadable.
-   */
-  flyout?: readonly SessionActionItem[]
 }
 
 export type SessionActionsContext = {
@@ -254,34 +245,19 @@ export function resolveSessionActions(
       ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
     },
     {
-      // P4-30 — the flyout HOST. It carries the group's honest reason and never
-      // dispatches; the variant below is the actionable row. The
-      // plain-text child keeps its own label because the action behind it is the
-      // debug export (`App.tsx` `copyForLlm`), not the prototype's readable
-      // transcript — calling it "Copy as text" would misdescribe what lands on
+      // The label names the debug export (`App.tsx` `copyForLlm`), not a
+      // readable transcript — "Copy as text" would misdescribe what lands on
       // the clipboard.
-      kind: 'copy',
-      label: 'Copy',
+      kind: 'copy-text',
+      label: 'Copy transcript for LLM',
       section: 'transfer',
       enabled: ctx.isActiveOpen,
       ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
-      flyout: [
-        {
-          kind: 'copy-text',
-          label: 'Copy transcript for LLM',
-          section: 'transfer',
-          enabled: ctx.isActiveOpen,
-          ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
-        },
-      ],
     },
     {
-      // A SIBLING of the Copy group, not a child of it: that group's host is
-      // gated on `isActiveOpen` because every child reads the transcript, and
-      // these two ids are held by the catalog row itself. Folding them into the
-      // flyout would have hidden the ids behind the one gate they do not need,
-      // for exactly the rows (a closed or history session) whose ids you most
-      // often want.
+      // Not gated like the transcript copy above: these two ids are held by the
+      // catalog row itself, so they answer for exactly the rows (a closed or
+      // history session) whose ids you most often want.
       //
       // It is also the one unconditionally enabled row in this menu: the merge
       // key guarantees at least one id (`selectRowEngineSessionId`), so there is

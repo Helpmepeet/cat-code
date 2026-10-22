@@ -44,10 +44,8 @@ export function SessionActionIcon({
       return <ActionRenameIcon />
     case 'metadata':
       return <ActionMetadataIcon />
-    case 'copy':
-      return <ActionCopyIcon />
     case 'copy-text':
-      return <ActionFileIcon />
+      return <ActionCopyIcon />
     case 'copy-ids':
     case 'copy-session-id':
       return <ActionHashIcon />

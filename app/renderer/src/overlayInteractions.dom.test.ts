@@ -4,7 +4,6 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { CommandPalette } from './CommandPalette.js'
 import { TasksDialog } from './TasksDialog.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
-import { SessionActionsMenu } from './SessionActionsMenu.js'
 import type { PaletteItem } from './commandPaletteModel.js'
 import type { TasksSnapshot } from '../../shared/protocol.js'
 
@@ -157,18 +156,3 @@ test('file flyout Left returns focus to its host before removing the child', asy
   expect(host.getAttribute('aria-expanded')).toBe('false')
 })
 
-test('a session Copy flyout opens toward available window space', async () => {
-  for (const [left, expectedClass] of [[window.innerWidth - 2, 'right-full'], [40, 'left-full']] as const) {
-    const tree = await harness.mount(createElement(SessionActionsMenu, {
-      items: [{ kind: 'copy', label: 'Copy', enabled: true, section: 'transfer', flyout: [
-        { kind: 'copy-text', label: 'Copy transcript for LLM', enabled: true, section: 'transfer' },
-      ] }],
-      anchor: { top: 100, bottom: 100, left }, onAction: noop, onClose: noop,
-    }))
-    const host = tree.container.querySelector<HTMLElement>('[aria-haspopup="menu"]')!
-    await act(async () => host.focus())
-    const submenu = tree.container.querySelector<HTMLElement>('[role="menu"][aria-label="Copy"]')!
-    expect(submenu.classList.contains(expectedClass)).toBe(true)
-    await tree.unmount()
-  }
-})

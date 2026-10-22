@@ -11,8 +11,7 @@
  *
  * P4-30 restored four prototype elements PARITY-LEDGER §17 recorded as dropped
  * with no §0 flag: the `SA_IC` leading-icon slot (`SessionActionIcons.tsx`), the
- * `SectionLabel` header, the `sa-pop` entrance (menu + rename popover), and the
- * Copy row's side flyout.
+ * `SectionLabel` header, and the `sa-pop` entrance (menu + rename popover).
  *
  * P4-39 moved placement here, the §17 gap this comment used to cede to the call
  * sites. The anchor is now the TRIGGER's rect (or pointer) and this component
@@ -32,9 +31,6 @@ import {
   SESSION_ACTION_SECTIONS,
   SESSION_ACTION_SECTION_LABELS,
   SESSION_RENAME_POPOVER_HEIGHT,
-  SESSION_ACTIONS_MENU_WIDTH,
-  SESSION_ACTIONS_MENU_GAP,
-  SESSION_ACTIONS_VIEWPORT_MARGIN,
   estimateSessionActionsMenuHeight,
   placeSessionActionsMenu,
   type SessionActionItem,
@@ -43,13 +39,10 @@ import {
 } from './sessionActions.js'
 import {
   ActionCheckIcon,
-  ActionChevronIcon,
   SessionActionIcon,
 } from './SessionActionIcons.js'
 
 export type { SessionActionsAnchor }
-
-const SESSION_ACTIONS_FLYOUT_WIDTH = 190
 
 /**
  * The viewport the placement is clamped into. SSR has no window, so it falls
@@ -90,9 +83,6 @@ export function SessionActionsMenu({
     viewport,
     estimateSessionActionsMenuHeight(items),
   )
-  const flipFlyoutLeft =
-    placement.left + SESSION_ACTIONS_MENU_WIDTH + SESSION_ACTIONS_MENU_GAP +
-      SESSION_ACTIONS_FLYOUT_WIDTH > viewport.width - SESSION_ACTIONS_VIEWPORT_MARGIN
 
   return (
     <>
@@ -127,30 +117,17 @@ export function SessionActionsMenu({
             <Fragment key={section}>
               {index > 0 ? <div className="my-1 h-px bg-shell-seam" /> : null}
               {label ? <SectionLabel>{label}</SectionLabel> : null}
-              {rows.map(item =>
-                item.flyout ? (
-                  <MenuFlyoutRow
-                    key={item.kind}
-                    item={item}
-                    flipLeft={flipFlyoutLeft}
-                    onAction={kind => {
-                      restoreTriggerFocus()
-                      onAction(kind)
-                      onClose()
-                    }}
-                  />
-                ) : (
-                  <MenuRow
-                    key={item.kind}
-                    item={item}
-                    onAction={() => {
-                      restoreTriggerFocus()
-                      onAction(item.kind)
-                      onClose()
-                    }}
-                  />
-                ),
-              )}
+              {rows.map(item => (
+                <MenuRow
+                  key={item.kind}
+                  item={item}
+                  onAction={() => {
+                    restoreTriggerFocus()
+                    onAction(item.kind)
+                    onClose()
+                  }}
+                />
+              ))}
             </Fragment>
           )
         })}
@@ -251,79 +228,6 @@ function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <div className="px-2.5 pb-[3px] pt-[7px] text-[9.5px] font-bold uppercase tracking-[0.1em] text-text-ghost">
       {children}
-    </div>
-  )
-}
-
-/**
- * P4-30 — the Copy row's side submenu (`SessionActions.jsx:172-182`): the host
- * row is inert chrome that opens on hover and closes when the pointer leaves the
- * pair. Only the children dispatch.
- *
- * KEYBOARD: the host carries `tabIndex={0}` deliberately. Before the flyout, the
- * copy verb was a plain Tab-reachable `<button>`; folding it into a hover-only
- * group would have made it mouse-only, a regression the prototype's own
- * mouse-only flyout does not excuse. Focus opens the group (focusin bubbles, so
- * moving onto a child keeps it open) and focus leaving the whole subtree closes
- * it, which is what `relatedTarget` containment checks. Without the tabIndex the
- * `onFocus` here would be dead code, because nothing inside is focusable until
- * the group is already open.
- */
-function MenuFlyoutRow({
-  item,
-  flipLeft,
-  onAction,
-}: {
-  item: SessionActionItem
-  flipLeft: boolean
-  onAction: (kind: SessionActionKind) => void
-}) {
-  const [open, setOpen] = useState(false)
-  if (!item.enabled) return <MenuRow item={item} onAction={() => {}} />
-  return (
-    <div
-      className="relative"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-      onFocus={() => setOpen(true)}
-      onBlur={event => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false)
-      }}
-    >
-      <div
-        role="menuitem"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        tabIndex={0}
-        className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-white/[0.05] hover:text-text-primary focus-visible:bg-white/[0.05] focus-visible:text-text-primary focus-visible:outline-none"
-      >
-        <span className="flex shrink-0 text-text-subtle">
-          <SessionActionIcon kind={item.kind} />
-        </span>
-        <span className="flex-1 truncate">{item.label}</span>
-        <span className="flex shrink-0 text-text-ghost">
-          <ActionChevronIcon />
-        </span>
-      </div>
-      {open ? (
-        <div
-          role="menu"
-          aria-label={item.label}
-          onKeyDown={handleMenuRovingKeyDown}
-          className={
-            'animate-sa-pop absolute -top-[5px] z-[72] w-[190px] rounded-[10px] border border-shell-seam bg-shell-chrome p-1.5 shadow-[var(--elev-menu)] ' +
-            (flipLeft ? 'right-full mr-1' : 'left-full ml-1')
-          }
-        >
-          {item.flyout?.map(child => (
-            <MenuRow
-              key={child.kind}
-              item={child}
-              onAction={() => onAction(child.kind)}
-            />
-          ))}
-        </div>
-      ) : null}
     </div>
   )
 }

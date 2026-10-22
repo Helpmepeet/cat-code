@@ -4739,8 +4739,6 @@ export function App() {
                     anchor={sessionActionsTarget.anchor}
                     onAction={kind => {
                       if (kind === 'metadata') setMetadataOpen(true)
-                      // `copy` is the flyout HOST and is never dispatched; P4-30
-                      // split the real action out as `copy-text`.
                       else if (kind === 'copy-text') copyForLlm(targetId)
                       // Reads the catalog row only, so it answers for ANY row —
                       // including a closed or history one the renderer holds no

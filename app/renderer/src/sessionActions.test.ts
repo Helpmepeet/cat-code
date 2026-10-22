@@ -66,33 +66,17 @@ describe('resolveSessionActions', () => {
 
   test('every disabled item carries a source-cited reason; every enabled one does not', () => {
     for (const ctx of [{ isActiveOpen: true }, { isActiveOpen: false }]) {
-      // P4-30 — walks flyout CHILDREN too, so a submenu row can never smuggle in
-      // a dead affordance with no reason.
-      for (const item of resolveSessionActions(row(), ctx).flatMap(i => [
-        i,
-        ...(i.flyout ?? []),
-      ])) {
+      for (const item of resolveSessionActions(row(), ctx)) {
         if (item.enabled) expect(item.reason).toBeUndefined()
         else expect(typeof item.reason).toBe('string')
       }
     }
   })
 
-  test('P4-30: Copy is a non-dispatching flyout host over the copy variant', () => {
-    const copy = byKind(resolveSessionActions(row(), { isActiveOpen: true })).get('copy')!
-    expect(copy.label).toBe('Copy')
-    const children = copy.flyout ?? []
-    expect(children.map(c => c.kind)).toEqual(['copy-text'])
-
-    // The plain-text child is the real, already-wired copy action.
-    expect(children.find(c => c.kind === 'copy-text')!.enabled).toBe(true)
-  })
-
-  test('P4-30: a flyout host that is itself disabled carries the group reason', () => {
-    const copy = byKind(resolveSessionActions(row(), { isActiveOpen: false })).get('copy')!
-    expect(copy.enabled).toBe(false)
-    expect(copy.reason).toContain('Open this session first')
-    expect(copy.flyout?.every(child => !child.enabled)).toBe(true)
+  test('the transcript copy is a direct menu row', () => {
+    const copy = byKind(resolveSessionActions(row(), { isActiveOpen: true })).get('copy-text')!
+    expect(copy.label).toBe('Copy transcript for LLM')
+    expect(copy.section).toBe('transfer')
   })
 
   test('Open is enabled for a registry-backed row, disabled+reason for history-only', () => {
@@ -131,12 +115,12 @@ describe('resolveSessionActions', () => {
 
   test('Copy + Inspect-metadata are live ONLY for the active-open session', () => {
     const active = byKind(resolveSessionActions(row(), { isActiveOpen: true }))
-    expect(active.get('copy')!.enabled).toBe(true)
+    expect(active.get('copy-text')!.enabled).toBe(true)
     expect(active.get('metadata')!.enabled).toBe(true)
 
     const inactive = byKind(resolveSessionActions(row(), { isActiveOpen: false }))
-    expect(inactive.get('copy')!.enabled).toBe(false)
-    expect(inactive.get('copy')!.reason).toContain('Open this session first')
+    expect(inactive.get('copy-text')!.enabled).toBe(false)
+    expect(inactive.get('copy-text')!.reason).toContain('Open this session first')
     expect(inactive.get('metadata')!.enabled).toBe(false)
   })
 
@@ -454,7 +438,7 @@ describe('sidebar session actions', () => {
     expect(items.map(item => item.section)).toEqual([
       'primary', 'primary', 'primary', 'primary', 'primary', 'transfer',
     ])
-    expect(items.every(item => item.enabled && !item.danger && !item.flyout)).toBe(true)
+    expect(items.every(item => item.enabled && !item.danger)).toBe(true)
     expect(items[4]?.label).toBe('Copy session ID')
   })
 
@@ -518,16 +502,14 @@ describe('sidebar session actions', () => {
     })
   })
 
-  test('selecting sidebar actions leaves the tab full menu and its flyout untouched', () => {
+  test('selecting sidebar actions leaves the tab full menu untouched', () => {
     const full = resolveSessionActions(row(), { isActiveOpen: true, hasHiddenRows: true })
     const before = structuredClone(full)
     selectSidebarSessionActions(full, row())
     expect(full).toEqual(before)
     expect(full.map(item => item.kind)).toEqual([
       'open', 'rename', 'peer-wake-blocked', 'reveal-hidden', 'metadata',
-      'copy', 'copy-ids', 'export',
+      'copy-text', 'copy-ids', 'export',
     ])
-    expect(full.find(item => item.kind === 'copy')?.flyout?.map(item => item.kind))
-      .toEqual(['copy-text'])
   })
 })
