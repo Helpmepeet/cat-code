@@ -171,7 +171,11 @@ test('pending single export fails after engine exit while an already-rendered ex
   const app = await mountApp([sessionDescriptor('a')])
   let requestId = ''
   window.catcode.sessionActionVerb = (_sessionId, verb) => { requestId = verb.requestId }
-  await app.click('Session actions for a')
+  await app.host({ type: 'sessions-catalog', catalog: { capturedAtMs: 1, truncated: false, entries: [] } })
+  await app.frames({ kind: 'slash-catalog.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', commands: [{ name: 'resume', description: 'Open history' }] })
+  await app.key('k')
+  await app.click('Navigate with /resume')
+  await app.click('Session actions')
   await app.click('Export…')
   expect(requestId).not.toBe('')
   await app.frames({ kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', status: 'exited' })
@@ -179,7 +183,7 @@ test('pending single export fails after engine exit while an already-rendered ex
   expect(app.tree.container.textContent).toContain('The session ended before its transcript could be exported.')
   await app.click('Close dialog')
   await app.frames(ready('a'))
-  await app.click('Session actions for a')
+  await app.click('Session actions')
   await app.click('Export…')
   await app.frames({ kind: 'session-action.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', requestId, verb: 'export', ok: true, message: 'Exported', exportText: 'completed export' })
   await app.frames({ kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', status: 'exited' })
