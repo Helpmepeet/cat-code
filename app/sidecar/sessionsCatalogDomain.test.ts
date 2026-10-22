@@ -6,6 +6,7 @@ import type { LogOption } from '../../src/types/logs.js'
 import type { SessionLogResult } from '../../src/utils/sessionStorage.js'
 import type { SessionsCatalogSnapshotFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import { MAX_CATALOG_MODEL_CHARS } from '../shared/sessionsCatalogWorker.js'
 import {
   annotateCwdExistence,
   annotateSessionActivity,
@@ -14,6 +15,7 @@ import {
   MAX_CONVERSATION_ACTIVITY_RECORD_BYTES,
   mapLogOptionToCatalogEntry,
   readConversationActivityAtMs,
+  readNewestModelId,
 } from './sessionsCatalogDomain.js'
 
 function makeLog(partial: Partial<LogOption>): LogOption {
@@ -182,6 +184,81 @@ describe('conversation activity evidence', () => {
       )
       expect(annotated.entries[0]?.sessionActivityAtMs).toBe(expected)
     }
+  })
+})
+
+describe('newest transcript model (sidebar model mark)', () => {
+  const sessionId = 'modeled'
+  const assistant = (model: unknown, extra: object = {}) => ({
+    type: 'assistant', sessionId, timestamp: new Date(100).toISOString(),
+    message: { role: 'assistant', model, content: [{ type: 'text', text: 'reply' }] },
+    ...extra,
+  })
+  const user = () => ({
+    type: 'user', sessionId, timestamp: new Date(100).toISOString(),
+    message: { role: 'user', content: 'prompt' },
+  })
+  const runFacts = (model: string, extra: object = {}) => ({
+    type: 'system', subtype: 'run_facts', sessionId, model,
+    permissionMode: 'default', effort: null, contextWindow: 200000, ...extra,
+  })
+  async function modelOf(records: object[], terminator = '\n'): Promise<string | null> {
+    const dir = await mkdtemp(join(tmpdir(), 'catalog-model-'))
+    try {
+      const fullPath = join(dir, 'modeled.jsonl')
+      await writeFile(fullPath, records.map(record => JSON.stringify(record)).join('\n') + terminator)
+      return await readNewestModelId(fullPath, sessionId)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }
+
+  test('the newest assistant response wins over older ones, through a trailing user turn', async () => {
+    expect(await modelOf([
+      assistant('claude-sonnet-5-5'), user(), assistant('gpt-6-sol'), user(),
+    ])).toBe('gpt-6-sol')
+    expect(await modelOf([assistant('gpt-6-sol'), user(), assistant('claude-opus-5-5')], '')).toBe('claude-opus-5-5')
+  })
+
+  test('a run_facts snapshot counts, and the newest of snapshot and response wins', async () => {
+    expect(await modelOf([assistant('claude-opus-5-5'), runFacts('gpt-6-sol')])).toBe('gpt-6-sol')
+    expect(await modelOf([runFacts('gpt-6-sol'), assistant('claude-opus-5-5')])).toBe('claude-opus-5-5')
+  })
+
+  test('synthetic, sidechain, foreign-session and malformed-model records are skipped', async () => {
+    expect(await modelOf([
+      assistant('claude-opus-5-5'),
+      assistant('<synthetic>'),
+      assistant('gpt-6-sol', { isSidechain: true }),
+      assistant('gpt-6-sol', { sessionId: 'other' }),
+      assistant(42),
+      assistant('  '),
+      assistant('m'.repeat(MAX_CATALOG_MODEL_CHARS + 1)),
+      { type: 'user', sessionId, message: { content: 'text mentioning "model": "gpt-6-sol"' } },
+      { type: 'system', subtype: 'other', sessionId, model: 'gpt-6-sol' },
+    ])).toBe('claude-opus-5-5')
+  })
+
+  test('a transcript that recorded no model, or cannot be read, is null', async () => {
+    expect(await modelOf([user()])).toBeNull()
+    expect(await modelOf([])).toBeNull()
+    expect(await readNewestModelId('/nonexistent/modeled.jsonl', sessionId)).toBeNull()
+  })
+
+  test('annotation carries the model onto the entry and leaves it absent when unknown', async () => {
+    const logs = [
+      makeLog({ sessionId: 'with', fullPath: '/t/with.jsonl' }),
+      makeLog({ sessionId: 'without', fullPath: '/t/without.jsonl' }),
+      makeLog({ sessionId: 'nopath' }),
+    ]
+    const annotated = await annotateSessionActivity(
+      buildSessionsCatalogSnapshot(result(logs)), logs,
+      async () => null, async () => null,
+      async (path) => (path === '/t/with.jsonl' ? 'gpt-6-sol' : null),
+    )
+    expect(annotated.entries.map(entry => entry.model)).toEqual(['gpt-6-sol', undefined, undefined])
+    expect('model' in annotated.entries[1]!).toBe(false)
+    expect(scanForSecrets(annotated).ok).toBe(true)
   })
 })
 

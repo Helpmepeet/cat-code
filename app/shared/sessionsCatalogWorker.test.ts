@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { SessionCatalogEntry } from './protocol.js'
 import {
+  MAX_CATALOG_MODEL_CHARS,
   SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
   parseSessionsCatalogSnapshot,
   parseSessionsCatalogWorkerResult,
@@ -182,6 +183,37 @@ describe('sessionActivityAtMs (additive outbound evidence)', () => {
         truncated: false,
       })).toBeNull()
     }
+  })
+})
+
+describe('model field (sidebar model mark — additive, fail-closed)', () => {
+  test('a present model survives the JSON worker boundary', () => {
+    const parsed = parseSessionsCatalogWorkerResult(JSON.parse(JSON.stringify(
+      catalogResult([entry({ sessionId: 'a', model: 'claude-opus-5-5' })]),
+    )))
+    expect(parsed?.type === 'catalog' && parsed.catalog.entries[0]?.model).toBe('claude-opus-5-5')
+  })
+
+  test('older cached rows parse without inventing a model', () => {
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [entry({ sessionId: 'a' })],
+      truncated: false,
+    })
+    expect(parsed?.entries[0]).toBeDefined()
+    expect(parsed?.entries[0]?.model).toBeUndefined()
+  })
+
+  test('a non-string, empty or oversized model fails the whole snapshot', () => {
+    for (const model of [7, null, false, {}, [], '', 'm'.repeat(MAX_CATALOG_MODEL_CHARS + 1)]) {
+      expect(parseSessionsCatalogSnapshot({
+        entries: [{ ...entry({ sessionId: 'a' }), model }],
+        truncated: false,
+      })).toBeNull()
+    }
+    expect(parseSessionsCatalogSnapshot({
+      entries: [entry({ sessionId: 'a', model: 'm'.repeat(MAX_CATALOG_MODEL_CHARS) })],
+      truncated: false,
+    })).not.toBeNull()
   })
 })
 

@@ -108,6 +108,36 @@ test('conversation evidence propagates separately from existing ordering fields'
   expect(catalog.entries[2]?.sessionActivityAtMs).toBeUndefined()
 })
 
+test('the transcript model reaches every row kind, live or not', () => {
+  const catalog = snapshot([
+    entry({ sessionId: 'live-engine', model: 'claude-opus-5-5' }),
+    entry({ sessionId: 'parked-engine', model: 'gpt-6-sol' }),
+    entry({ sessionId: 'closed-engine', model: 'claude-sonnet-5-5' }),
+    entry({ sessionId: 'history-only', model: 'gpt-6-sol' }),
+    entry({ sessionId: 'no-model-yet' }),
+  ])
+  const rows = selectMergedSessionRows([
+    descriptor({ appSessionId: 'live', engineSessionId: 'live-engine' }),
+    descriptor({
+      appSessionId: 'parked', engineSessionId: 'parked-engine',
+      status: 'disconnected', restorable: true, parked: true,
+    }),
+    descriptor({ appSessionId: 'closed', engineSessionId: 'closed-engine', status: 'exited', restorable: true }),
+    descriptor({ appSessionId: 'fresh' }),
+    descriptor({ appSessionId: 'quiet', engineSessionId: 'no-model-yet' }),
+  ], catalog)
+  const modelOf = (sessionId: string) => rows.find(row => row.sessionId === sessionId)?.model
+  expect(modelOf('live-engine')).toBe('claude-opus-5-5')
+  expect(modelOf('parked-engine')).toBe('gpt-6-sol')
+  expect(modelOf('closed-engine')).toBe('claude-sonnet-5-5')
+  expect(modelOf('history-only')).toBe('gpt-6-sol')
+  // Unknown stays null: a registry row with no transcript yet, and an entry that
+  // recorded no model.
+  expect(modelOf('fresh')).toBeNull()
+  expect(modelOf('no-model-yet')).toBeNull()
+  expect(selectMergedSessionRows([descriptor({ appSessionId: 'x' })], null)[0]?.model).toBeNull()
+})
+
 describe('reduce / select (catalog owner decision #4 — single global source)', () => {
   test('a delivered catalog is stored as the latest good and select returns it', () => {
     let state = createSessionsCatalogState()

@@ -3288,6 +3288,16 @@ export type SessionCatalogEntry = {
    * recency ordering. Absent (older cache) or null means unknown.
    */
   sessionActivityAtMs?: number | null
+  /**
+   * The newest model the transcript records (a `run_facts` snapshot or a
+   * main-thread assistant response), read from a bounded tail walk in the catalog
+   * worker (`sessionsCatalogDomain.ts` `readNewestModelId`). Covers every row
+   * kind the sidebar shows, live, parked, closed or history-only, because it
+   * comes from the transcript rather than from a running process. Absent when
+   * the transcript records none yet (a session that has not replied) or the tail
+   * walk gave up. Additive and OUTBOUND-only; older cached entries lack it.
+   */
+  model?: string
   /** Session creation time. */
   createdAtMs: number
   /**

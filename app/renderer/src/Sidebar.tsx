@@ -6,11 +6,12 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  * the active account plus the nav destinations.
  *
  * One-line rows (operator, 2026-09-27, `docs/design-html/2026-09-27-sidebar-one-line-rows.html`):
- * a row is its title and its work mark, nothing else. The recency and the session
- * name left the row; the name moved into the row tooltip. Resting titles use the
- * muted ink and brighten under the pointer. The open rail's footer rests as one
- * strip of icons and grows into the labelled list only while the pointer is
- * inside the band the collapsed rail's icon column occupies.
+ * a row is its title and the mark in its leading lane, nothing else. The recency
+ * and the session name left the row; the name moved into the row tooltip.
+ * Resting titles use the muted ink and brighten under the pointer. The open
+ * rail's footer rests as one strip of icons and grows into the labelled list
+ * only while the pointer is inside the band the collapsed rail's icon column
+ * occupies.
  *
  * Design source (2026-08-01): the operator's Claude Design project "Cat Code
  * Sidebar", `components/sidebar/index.html`. It supersedes the older
@@ -55,6 +56,14 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  *    words ride in the row's `aria-label`. It sits in a fixed leading lane that
  *    EVERY row reserves, centred on the title's line box, so its presence never
  *    reflows the title.
+ *  - ➕ real-added (operator, 2026-10-22,
+ *    `docs/design-html/2026-10-22-sidebar-session-model-icon.html`, variant A):
+ *    a row with NO work mark shows its model provider's logo in that same lane,
+ *    in the brand ink, so the lane is 12px wide on every row. Any work mark wins
+ *    and the logo is not drawn. Its BOUND: decorative (`aria-hidden`), no label,
+ *    no tooltip. The model is `MergedSessionRow.model`, read from the transcript
+ *    catalog, so closed, parked and history-only rows carry it like live ones;
+ *    an unknown model or a provider without a mark leaves the lane empty.
  *  - Every nav destination is wired; none is mocked. The same destination set is
  *    directly visible in both rail states so hover expansion cannot replace the
  *    button a pointer is approaching with an intermediary toggle.
@@ -108,6 +117,8 @@ import {
   SessionWorkMarksContext,
 } from './sessionWorkState.js'
 import { WorkMarkGlyph } from './SessionWorkMarkGlyph.js'
+import { ProviderLogo } from './ProviderLogo.js'
+import { modelMarkProvider } from '../../shared/modelProvider.js'
 import { formatAccountsNeedingSignIn } from './accountsPageModel.js'
 import { usePopoverFocus } from './overlayFocus.js'
 import {
@@ -1780,6 +1791,7 @@ export function SidebarRowItem({
   const appSessionId = row.appSessionId
   const workMarks = useContext(SessionWorkMarksContext)
   const workMark = appSessionId && !archived ? (workMarks.get(appSessionId) ?? null) : null
+  const modelProvider = modelMarkProvider(row.model)
   const openTabs = useContext(OpenTabSessionsContext)
   const openInTab = appSessionId != null && !archived && openTabs.has(appSessionId)
   // The session name (PEER-SESSIONS R4) leads the tooltip: the one-line row
@@ -1958,16 +1970,26 @@ export function SidebarRowItem({
       ) : null}
 
       {/* The work mark (operator, 2026-10-19; `sessionWorkState.ts`). The LANE
-       * renders on every row and only the mark inside it is conditional, so
-       * marked and unmarked rows share one text edge and neither reflows. The
+       * renders on every row and only what is inside it is conditional, so
+       * marked, logo and bare rows share one text edge and none reflows. The
        * lane is exactly as tall as the title's line box, so the mark centres on
-       * the title. Static classes: an interpolated arbitrary value silently
-       * no-ops in this Tailwind v4 setup. */}
+       * the title. With no work mark the lane holds the session's model logo
+       * (operator, 2026-10-22), in the provider's brand ink; a row whose model is
+       * unknown or has no mark leaves it empty. Static classes: an interpolated
+       * arbitrary value silently no-ops in this Tailwind v4 setup. */}
       <span
         aria-hidden="true"
-        className="pointer-events-none flex h-[17px] w-2 shrink-0 items-center justify-center self-start"
+        className="pointer-events-none flex h-[17px] w-3 shrink-0 items-center justify-center self-start"
       >
-        {workMark ? <WorkMarkGlyph mark={workMark} /> : null}
+        {workMark ? (
+          <WorkMarkGlyph mark={workMark} />
+        ) : modelProvider ? (
+          <ProviderLogo
+            provider={modelProvider}
+            size={11}
+            className={modelProvider === 'anthropic' ? 'text-provider-claude' : 'text-provider-openai'}
+          />
+        ) : null}
       </span>
 
       {/* Resting titles take the muted ink so a long roster does not read as one

@@ -124,8 +124,16 @@ async function currentCatalogFingerprint(fileFingerprint: string, catalog: Cache
   return combineFingerprint(fileFingerprint, facts)
 }
 
+/**
+ * Bump when the worker derives a new entry field from transcripts it already
+ * read. The source files did not change, so without this a cache written before
+ * the field existed would match and keep answering "unchanged" without it.
+ * v2: entry `model`.
+ */
+const CATALOG_DERIVATION_VERSION = 2
+
 function combineFingerprint(fileFingerprint: string, facts: ReadonlyArray<[string, boolean]>): string {
-  const hash = createHash('sha256').update(fileFingerprint)
+  const hash = createHash('sha256').update(fileFingerprint).update(`\0v\0${CATALOG_DERIVATION_VERSION}`)
   for (const [cwd, exists] of facts) hash.update(`\0d\0${cwd}\0${exists ? 1 : 0}`)
   return hash.digest('hex')
 }

@@ -303,7 +303,7 @@ test('no row renders a visible status label; status stays in aria-label only', (
 // markup, so it cannot see WHERE the mark lands. The lane's geometry (centred
 // on the title's line box, reserved on every row) is operator-verified only.
 const MARK_LANE_OPEN =
-  '<span aria-hidden="true" class="pointer-events-none flex h-[17px] w-2 shrink-0 items-center justify-center self-start">'
+  '<span aria-hidden="true" class="pointer-events-none flex h-[17px] w-3 shrink-0 items-center justify-center self-start">'
 const EMPTY_MARK_LANE = `${MARK_LANE_OPEN}</span>`
 
 function renderMarkedRow(
@@ -374,6 +374,75 @@ test('history rows carry no mark and keep the reserved lane', () => {
   expect(openable).toContain(EMPTY_MARK_LANE)
   expect(browseOnly).toContain(EMPTY_MARK_LANE)
   expect(openable).not.toContain('rounded-full')
+})
+
+// ── Model logo in the leading lane (operator, 2026-10-22, variant A) ────────
+// With no work mark the lane holds the provider logo of the row's model, in the
+// brand ink. Any work mark wins. The model reaches the row from the transcript
+// catalog, so a closed, parked or history-only row shows it like a live one.
+// Like the marks above, the lane's placement is operator-verified only.
+
+const CLAUDE_LOGO_OPEN = `${MARK_LANE_OPEN}<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="shrink-0 text-provider-claude">`
+const OPENAI_LOGO_OPEN = `${MARK_LANE_OPEN}<svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="shrink-0 text-provider-openai">`
+
+test('an unmarked row shows its model provider logo in the brand ink', () => {
+  const claude = renderRow(registryRow('c', { displayLabel: 'C', model: 'claude-opus-5-5' }))
+  expect(claude).toContain(CLAUDE_LOGO_OPEN)
+  expect(claude).not.toContain('text-provider-openai')
+  expect(claude).toContain('aria-label="session C, live"')
+
+  const gpt = renderRow(registryRow('g', { displayLabel: 'G', model: 'gpt-6-sol' }))
+  expect(gpt).toContain(OPENAI_LOGO_OPEN)
+  expect(gpt).not.toContain('text-provider-claude')
+  expect(gpt).toContain('aria-label="session G, live"')
+})
+
+test('the logo shows on parked, closed and history-only rows, not just live ones', () => {
+  const parked = registryRow('p', {
+    displayLabel: 'P', live: false, restorable: true, parked: true,
+    status: 'disconnected', model: 'gpt-6-sol',
+  })
+  const closed = registryRow('x', {
+    displayLabel: 'X', live: false, restorable: true, status: 'exited', model: 'claude-sonnet-5-5',
+  })
+  const history = historyRow('h', { displayLabel: 'H', model: 'claude-opus-5-5' })
+  const browseOnly = historyRow('o', { displayLabel: 'O', cwd: '', model: 'gpt-6-sol' })
+  expect(renderRow(parked)).toContain(OPENAI_LOGO_OPEN)
+  expect(renderRow(closed)).toContain(CLAUDE_LOGO_OPEN)
+  expect(renderRow(history)).toContain(CLAUDE_LOGO_OPEN)
+  expect(renderRow(browseOnly)).toContain(OPENAI_LOGO_OPEN)
+})
+
+test('every work mark replaces the logo rather than sitting beside it', () => {
+  const row = registryRow('m', { displayLabel: 'M', model: 'claude-opus-5-5' })
+  for (const mark of ['working', 'needs-you', 'failed', 'unseen'] as const) {
+    const html = renderMarkedRow(row, mark)
+    expect(html).not.toContain('text-provider-claude')
+    expect(html).not.toContain('viewBox="0 0 24 24"')
+  }
+  expect(renderMarkedRow(row, 'failed')).toContain(`${MARK_LANE_OPEN}<span class="h-1.5 w-1.5 rounded-full bg-tone-danger"></span></span>`)
+})
+
+test('an archived row ignores its mark, so the logo shows', () => {
+  const html = renderMarkedRow(
+    registryRow('a', { displayLabel: 'A', model: 'gpt-6-sol' }), 'unseen', { archived: true },
+  )
+  expect(html).toContain(OPENAI_LOGO_OPEN)
+  expect(html).not.toContain('bg-tone-good')
+})
+
+test('an unknown, custom or absent model leaves the lane empty', () => {
+  for (const model of [undefined, null, '', 'llama-3', 'sonnet', '<synthetic>']) {
+    const html = renderRow(registryRow('u', { displayLabel: 'U', model }))
+    expect(html).toContain(EMPTY_MARK_LANE)
+    expect(html).not.toContain('viewBox="0 0 24 24"')
+  }
+})
+
+test('the logo adds no label, title or tooltip text', () => {
+  const html = renderRow(registryRow('c', { displayLabel: 'C', model: 'claude-opus-5-5' }))
+  expect(html).toContain('aria-label="session C, live"')
+  expect(html).not.toMatch(/claude-opus|Claude|Anthropic|OpenAI/)
 })
 
 // ── Open-in-a-tab rows (operator, 2026-10-20) ───────────────────────────────

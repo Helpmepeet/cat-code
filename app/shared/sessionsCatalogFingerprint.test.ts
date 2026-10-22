@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -69,4 +70,17 @@ test('lease heartbeats, maintenance targets, temporary and unrelated files do no
   await rm(lock, { recursive: true })
   await rm(target)
   expect(await inspectSessionsCatalogSources()).toEqual({ fingerprint: first, unchanged: true })
+})
+
+test('a cache stamped before the model field existed is not treated as unchanged', async () => {
+  const { fingerprint } = await inspectSessionsCatalogSources()
+  // The pre-field stamp for an empty catalog was the bare hash of the file fingerprint.
+  const legacyStamp = createHash('sha256').update(fingerprint).digest('hex')
+  const dir = join(configHome, 'desktop')
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  await writeFile(join(dir, 'sessions-catalog.json'), JSON.stringify({
+    ...catalog,
+    sourceFingerprint: legacyStamp,
+  }), { mode: 0o600 })
+  expect((await inspectSessionsCatalogSources()).unchanged).toBe(false)
 })

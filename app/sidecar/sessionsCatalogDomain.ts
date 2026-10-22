@@ -52,6 +52,7 @@ import type { LogOption } from '../../src/types/logs.js'
 import { readTranscriptActivationAtMs } from '../../src/utils/transcriptLease.js'
 import type { SessionCatalogEntry, SessionsCatalogSnapshot } from '../shared/protocol.js'
 import { isRecord } from '../shared/narrow.js'
+import { MAX_CATALOG_MODEL_CHARS } from '../shared/sessionsCatalogWorker.js'
 
 /**
  * Per-project stat cap (cheap readdir+stat). Raised for #16 so genuine history
@@ -111,15 +112,17 @@ export async function enumerateSessionsCatalog(): Promise<SessionsCatalogSnapsho
 }
 
 /**
- * Read backwards only to the latest genuine message. Complete JSONL records
- * are parsed locally, never sent across the boundary. Large records can span
- * chunks, but both record memory and total per-file I/O are capped. Unknown,
- * unreadable, or over-limit evidence is null, never an mtime fallback.
+ * Walk a transcript's JSONL lines newest-first under fixed read and record
+ * budgets. `visit` gets each non-blank line and returns `undefined` to keep
+ * walking, or the result (null included) to stop. Complete lines are decoded
+ * locally and never cross the boundary. Large records can span chunks, but both
+ * record memory and total per-file I/O are capped. Any unreadable, over-limit
+ * or exhausted walk is null, never a guess.
  */
-export async function readConversationActivityAtMs(
+async function walkTranscriptLinesBackwards<T>(
   fullPath: string,
-  sessionId: string,
-): Promise<number | null> {
+  visit: (line: string) => T | null | undefined,
+): Promise<T | null> {
   let file: FileHandle | undefined
   try {
     file = await open(fullPath, 'r')
@@ -135,32 +138,12 @@ export async function readConversationActivityAtMs(
       if (fragment.length > 0) fragments.push(fragment)
       return true
     }
-    const finishLine = (): number | null | undefined => {
+    const finishLine = (): T | null | undefined => {
       const line = Buffer.concat(fragments.reverse(), lineBytes).toString('utf8')
       fragments = []
       lineBytes = 0
       if (line.trim().length === 0) return undefined
-      let record: unknown
-      try {
-        record = JSON.parse(line)
-      } catch {
-        return undefined
-      }
-      if (
-        !isRecord(record) ||
-        (record.type !== 'user' && record.type !== 'assistant') ||
-        record.sessionId !== sessionId ||
-        record.isSidechain === true ||
-        record.isMeta === true ||
-        record.isVirtual === true ||
-        record.isCompactSummary === true ||
-        record.isInternalNoResponseSentinel === true ||
-        !isRecord(record.message) ||
-        (typeof record.message.content !== 'string' && !Array.isArray(record.message.content))
-      ) return undefined
-      if (typeof record.timestamp !== 'string') return null
-      const timestamp = Date.parse(record.timestamp)
-      return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null
+      return visit(line)
     }
     while (position > 0 && readBytes < MAX_CONVERSATION_ACTIVITY_READ_BYTES) {
       const length = Math.min(
@@ -178,8 +161,8 @@ export async function readConversationActivityAtMs(
       for (let index = length - 1; index >= 0; index--) {
         if (chunk[index] !== 10) continue
         if (!addFragment(chunk.subarray(index + 1, end))) return null
-        const activity = finishLine()
-        if (activity !== undefined) return activity
+        const found = finishLine()
+        if (found !== undefined) return found
         end = index
       }
       if (!addFragment(chunk.subarray(0, end))) return null
@@ -192,12 +175,84 @@ export async function readConversationActivityAtMs(
   }
 }
 
+function parseJsonRecord(line: string): Record<string, unknown> | null {
+  try {
+    const record: unknown = JSON.parse(line)
+    return isRecord(record) ? record : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Read backwards only to the latest genuine message. Unknown, unreadable, or
+ * over-limit evidence is null, never an mtime fallback.
+ */
+export async function readConversationActivityAtMs(
+  fullPath: string,
+  sessionId: string,
+): Promise<number | null> {
+  return walkTranscriptLinesBackwards(fullPath, line => {
+    const record = parseJsonRecord(line)
+    if (
+      !record ||
+      (record.type !== 'user' && record.type !== 'assistant') ||
+      record.sessionId !== sessionId ||
+      record.isSidechain === true ||
+      record.isMeta === true ||
+      record.isVirtual === true ||
+      record.isCompactSummary === true ||
+      record.isInternalNoResponseSentinel === true ||
+      !isRecord(record.message) ||
+      (typeof record.message.content !== 'string' && !Array.isArray(record.message.content))
+    ) return undefined
+    if (typeof record.timestamp !== 'string') return null
+    const timestamp = Date.parse(record.timestamp)
+    return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : null
+  })
+}
+
+function readModelId(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const model = value.trim()
+  return model.length > 0 && model.length <= MAX_CATALOG_MODEL_CHARS && model !== '<synthetic>'
+    ? model
+    : null
+}
+
+/**
+ * The newest model the transcript records: a `run_facts` snapshot or a main-thread
+ * assistant response, whichever was written last (the same two sources
+ * `transcriptRunFacts.ts` reads). Sidechain records belong to subagents, which
+ * run on their own models, so they never speak for the session. Same walk and
+ * budgets as the activity read; null when the tail holds neither.
+ */
+export async function readNewestModelId(
+  fullPath: string,
+  sessionId: string,
+): Promise<string | null> {
+  return walkTranscriptLinesBackwards(fullPath, line => {
+    // Cheap pre-filter: skip the JSON parse for lines that cannot carry a model.
+    if (!line.includes('"model"')) return undefined
+    const record = parseJsonRecord(line)
+    if (!record || record.sessionId !== sessionId || record.isSidechain === true) return undefined
+    if (record.type === 'system' && record.subtype === 'run_facts') {
+      return readModelId(record.model) ?? undefined
+    }
+    if (record.type === 'assistant' && isRecord(record.message)) {
+      return readModelId(record.message.model) ?? undefined
+    }
+    return undefined
+  })
+}
+
 /** Sequential reads keep transcript buffers bounded across the entire catalog. */
 export async function annotateSessionActivity(
   snapshot: SessionsCatalogSnapshot,
   logs: readonly LogOption[],
   readConversation: typeof readConversationActivityAtMs = readConversationActivityAtMs,
   readActivation: typeof readTranscriptActivationAtMs = readTranscriptActivationAtMs,
+  readModel: typeof readNewestModelId = readNewestModelId,
 ): Promise<SessionsCatalogSnapshot> {
   const paths = new Map(logs.map(log => [log.sessionId, log.fullPath]))
   const entries: SessionCatalogEntry[] = []
@@ -207,10 +262,12 @@ export async function annotateSessionActivity(
       ? await readConversation(fullPath, entry.sessionId)
       : null
     const activatedAt = await readActivation(entry.sessionId)
+    const model = fullPath ? await readModel(fullPath, entry.sessionId) : null
     entries.push({
       ...entry,
       sessionActivityAtMs: conversationAt === null ? activatedAt
         : activatedAt === null ? conversationAt : Math.max(conversationAt, activatedAt),
+      ...(model !== null ? { model } : {}),
     })
   }
   return { ...snapshot, entries }

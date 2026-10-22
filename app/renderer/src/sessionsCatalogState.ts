@@ -176,6 +176,14 @@ export type MergedSessionRow = {
   transcriptActivityAtMs: number | null
   /** Genuine message or active engine lease acquisition; absent/null means unknown. */
   sessionActivityAtMs?: number | null
+  /**
+   * The newest model the transcript records (`SessionCatalogEntry.model`), or
+   * null when unknown. Read from the catalog for EVERY row kind, so a closed,
+   * parked or history-only row carries it exactly as a live one does and no
+   * surface needs an open session to name a row's provider. Optional like
+   * `sessionActivityAtMs`: hand-built fixtures predate it; absent reads as null.
+   */
+  model?: string | null
   gitBranch: string | null
   tag: string | null
   mode: 'coordinator' | 'normal' | null
@@ -267,6 +275,7 @@ export function selectMergedSessionRows(
       lastMessageSentAt: descriptor.lastMessageSentAt,
       transcriptActivityAtMs: entry?.modifiedAtMs ?? null,
       sessionActivityAtMs: entry?.sessionActivityAtMs ?? null,
+      model: entry?.model ?? null,
       gitBranch: entry?.gitBranch ?? null,
       tag: entry?.tag ?? null,
       mode: entry?.mode ?? null,
@@ -309,6 +318,7 @@ export function selectMergedSessionRows(
       lastMessageSentAt: null,
       transcriptActivityAtMs: entry.modifiedAtMs,
       sessionActivityAtMs: entry.sessionActivityAtMs ?? null,
+      model: entry.model ?? null,
       gitBranch: entry.gitBranch,
       tag: entry.tag,
       mode: entry.mode,

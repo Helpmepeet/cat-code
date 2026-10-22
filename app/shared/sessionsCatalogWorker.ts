@@ -36,6 +36,9 @@ import {
 
 export const SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION = 1
 
+/** Longest model id a catalog entry carries; real ids are far shorter. */
+export const MAX_CATALOG_MODEL_CHARS = 128
+
 /**
  * Reject any NDJSON result record larger than this BEFORE parse (parse-DoS
  * defense). The enriched 600-session catalog measured ~100KB
@@ -154,6 +157,12 @@ export function parseSessionCatalogEntry(
       (value): value is number | null =>
         value === null ||
         (typeof value === 'number' && Number.isFinite(value) && value >= 0),
+    ),
+    // Additive (sidebar model mark): absent means unknown. A present value must
+    // be a bounded non-empty string, like every other additive field.
+    model: optional(
+      (value): value is string =>
+        typeof value === 'string' && value.length > 0 && value.length <= MAX_CATALOG_MODEL_CHARS,
     ),
     createdAtMs: isNumber,
     messageCount: isNumber,
