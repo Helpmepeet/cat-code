@@ -505,6 +505,24 @@ export class SessionRegistry {
     return this.doc.sessions.map(row => ({ ...row }))
   }
 
+  readCurrentSessions(): RegistrySession[] {
+    this.refreshSharedState()
+    return this.sessions
+  }
+
+  refreshSharedState(): boolean {
+    if (this.readFailed) return false
+    try {
+      const latest = readDocumentForMerge(this.path, this.readRegistryFile)
+      this.doc = mergeRegistryDocuments(latest, this.persistedDoc, this.doc)
+      this.persistedDoc = cloneDocument(latest)
+      return true
+    } catch (error) {
+      this.log(`[registry] could not refresh shared registry (${errText(error)})`)
+      return false
+    }
+  }
+
   /**
    * True when the most recent write could not be persisted (§5). The in-memory
    * doc is still authoritative for this run; the host surfaces this as a
@@ -545,10 +563,57 @@ export class SessionRegistry {
 
   /** Open tabs retain ownership while parked; terminal rows retain only advisory PIDs. */
   hasLiveForeignOwner(appSessionId: string): boolean {
-    const row = this.find(appSessionId)
+    return this.isLiveForeignOwner(this.find(appSessionId))
+  }
+
+  private isLiveForeignOwner(row: RegistrySession | undefined): boolean {
     if (!row || (row.shutdown !== null && row.shutdown !== 'parked')) return false
     const owner = row.ownerHostPid
     return owner !== undefined && owner !== process.pid && this.isProcessAlive(owner)
+  }
+
+  async claimForRestore(
+    appSessionId: string,
+    expected: Pick<RegistrySession, 'cwd' | 'binding' | 'engineSessionId'>,
+  ): Promise<'claimed' | 'foreign_owner' | 'missing' | 'changed' | 'unavailable'> {
+    if (this.readFailed) return 'unavailable'
+    let release: (() => Promise<void>) | undefined
+    try {
+      ensureDir(this.dir)
+      release = await this.acquireLock(this.path)
+      const latest = readDocumentForMerge(this.path, this.readRegistryFile)
+      const merged = mergeRegistryDocuments(latest, this.persistedDoc, this.doc)
+      this.doc = merged
+      this.persistedDoc = cloneDocument(latest)
+      const latestRow = latest.sessions.find(row => row.appSessionId === appSessionId)
+      if (!latestRow) return 'missing'
+      if (this.isLiveForeignOwner(latestRow)) return 'foreign_owner'
+      if (latestRow.cwd !== expected.cwd ||
+          latestRow.engineSessionId !== expected.engineSessionId ||
+          JSON.stringify(latestRow.binding) !== JSON.stringify(expected.binding)) return 'changed'
+      // A parked tab has no engine lease. Claim its existing owner fields under
+      // the registry lock so another app cannot restore it between check and spawn.
+      const claimed = cloneDocument(merged)
+      const row = claimed.sessions.find(candidate => candidate.appSessionId === appSessionId)
+      if (!row) return 'missing'
+      row.ownerHostPid = process.pid
+      row.shutdown = null
+      row.lastAttachedAt = Math.max(Date.now(), latestRow.lastAttachedAt + 1)
+      claimed.hostPid = process.pid
+      claimed.updatedAt = Date.now()
+      atomicWriteJson(this.path, claimed)
+      this.doc = claimed
+      this.persistedDoc = cloneDocument(claimed)
+      this.ownedSessionIds.add(appSessionId)
+      this.writeFailed = false
+      return 'claimed'
+    } catch (error) {
+      this.writeFailed = true
+      this.log(`[registry] could not claim session ownership (${errText(error)})`)
+      return 'unavailable'
+    } finally {
+      try { await release?.() } catch { /* Best-effort unlock. */ }
+    }
   }
 
   /* --------------------------------------------------------------------- *
@@ -1020,7 +1085,7 @@ export class SessionRegistry {
       }
       existing.enginePid = input.enginePid
       existing.socketPath = input.socketPath
-      existing.lastAttachedAt = now
+      existing.lastAttachedAt = Math.max(now, existing.lastAttachedAt)
       existing.shutdown = null
       existing.ownerHostPid = process.pid
       existing.restartCount = (existing.restartCount ?? 0) + 1

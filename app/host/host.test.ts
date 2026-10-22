@@ -2213,6 +2213,74 @@ test.each([null, 'clean', 'crashed', 'parked'] as const)('restoreSession respect
   expect(h.supervisor.records.get(appSessionId)?.resumeEngineSessionId).toBe('foreign-engine')
 })
 
+test.each([
+  { cached: 'clean', latest: null, blocked: true },
+  { cached: 'clean', latest: 'parked', blocked: true },
+  { cached: 'parked', latest: 'clean', blocked: false },
+] as const)('restoreSession refreshes foreign ownership from $cached to $latest', async ({ cached, latest, blocked }) => {
+  const h = makeHost()
+  const appSessionId = randomUUID()
+  writeTranscript(h.storageDir, 'foreign-engine')
+  await h.registry.upsertOnSpawn({ appSessionId, cwd: h.cwd, engineSessionId: 'foreign-engine', name: 'Fixture' })
+  const doc = JSON.parse(readFileSync(h.registry.filePath, 'utf8'))
+  doc.sessions[0].ownerHostPid = 424242
+  doc.sessions[0].shutdown = cached
+  writeFileSync(h.registry.filePath, JSON.stringify(doc))
+  const registry = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+    isProcessAlive: pid => pid === 424242 || pid === process.pid,
+  })
+  await registry.launch()
+  const host = new Host({
+    registry, supervisor: h.supervisor as never,
+    validateCwd: cwd => ({ ok: true, realpath: cwd }),
+  })
+  await host.restoreSession('malformed-fixture')
+  doc.sessions[0].shutdown = latest
+  writeFileSync(h.registry.filePath, JSON.stringify(doc))
+  const result = await host.restoreSession(appSessionId)
+  expect(result.ok).toBe(!blocked)
+  expect(h.supervisor.records.has(appSessionId)).toBe(!blocked)
+  if (!result.ok) expect(result.error.code).toBe('session_unreachable')
+  if (blocked) expect(JSON.parse(readFileSync(h.registry.filePath, 'utf8')).sessions[0].ownerHostPid).toBe(424242)
+})
+
+test('restoreSession claims ownership after validation and refuses a competing park', async () => {
+  const h = makeHost()
+  const appSessionId = randomUUID()
+  writeTranscript(h.storageDir, 'foreign-engine')
+  await h.registry.upsertOnSpawn({ appSessionId, cwd: h.cwd, engineSessionId: 'foreign-engine', name: 'Fixture' })
+  await h.registry.markClean(appSessionId)
+  const registry = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, id) => join(h.storageDir, 'transcripts', `${id}.jsonl`),
+    isProcessAlive: pid => pid === 424242 || pid === process.pid,
+  })
+  await registry.launch()
+  let competingPark = false
+  const host = new Host({
+    registry, supervisor: h.supervisor as never,
+    validateCwd: cwd => {
+      if (competingPark) {
+        competingPark = false
+        const doc = JSON.parse(readFileSync(registry.filePath, 'utf8'))
+        doc.sessions[0].ownerHostPid = 424242
+        doc.sessions[0].shutdown = 'parked'
+        writeFileSync(registry.filePath, JSON.stringify(doc))
+      }
+      return { ok: true, realpath: cwd }
+    },
+  })
+  await host.restoreSession('malformed-fixture')
+  competingPark = true
+  const result = await host.restoreSession(appSessionId)
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('session_unreachable')
+  expect(h.supervisor.records.has(appSessionId)).toBe(false)
+  expect(JSON.parse(readFileSync(registry.filePath, 'utf8')).sessions[0].ownerHostPid).toBe(424242)
+})
+
 test('restoreSession refuses when advisory pid/socket still identify a live prior sidecar', async () => {
   const storageDir = tempDir()
   const cwd = join(storageDir, 'project')

@@ -728,6 +728,9 @@ export class Host implements HostApi {
   private async restoreSessionExclusive(
     appSessionId: SessionId,
   ): Promise<HostResult<SessionDescriptor>> {
+    if (!this.registry.refreshSharedState()) {
+      return hostError('registry_unavailable', 'Session ownership could not be checked safely. Try again.')
+    }
     if (this.hasLiveForeignOwner(appSessionId)) {
       return hostError('session_unreachable', 'This session belongs to another running app instance. Use it in that app.')
     }
@@ -986,6 +989,14 @@ export class Host implements HostApi {
     // collapsing back into its real place (the visible "jump then settle").
     let rowPersisted = false
     try {
+      if (existingRow) {
+        const claim = await this.claimSessionForSpawn(existingRow)
+        if (!claim.ok) {
+          this.releaseSpawnReservation(reservation)
+          return claim
+        }
+        rowPersisted = true
+      }
       const reaped = await this.registry.upsertOnSpawn({
         appSessionId,
         cwd,
@@ -1067,6 +1078,22 @@ export class Host implements HostApi {
     }
     if (!this.hiddenMoveWarmups.has(appSessionId)) this.emit({ type: 'session-added', session: descriptor })
     return { ok: true, value: descriptor }
+  }
+
+  private async claimSessionForSpawn(row: RegistrySession): Promise<HostResult<void>> {
+    const claim = await this.registry.claimForRestore(row.appSessionId, row)
+    switch (claim) {
+      case 'claimed':
+        return { ok: true, value: undefined }
+      case 'foreign_owner':
+        return hostError('session_unreachable', 'This session belongs to another running app instance. Use it in that app.')
+      case 'missing':
+        return hostError('session_not_found', 'This session is no longer available.')
+      case 'changed':
+        return hostError('session_unreachable', 'This session changed while reopening. Try again.')
+      case 'unavailable':
+        return hostError('registry_unavailable', 'Session ownership could not be checked safely. Try again.')
+    }
   }
 
   /**
@@ -1936,6 +1963,11 @@ export class Host implements HostApi {
     const reservation = this.reserveSpawn(isTerminalStatus(supervisorRecord.status))
     if (!reservation.ok) return reservation.result
 
+    const claim = await this.claimSessionForSpawn(row)
+    if (!claim.ok) {
+      this.releaseSpawnReservation(reservation)
+      return claim
+    }
     // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
     this.evictReplay(appSessionId)
     const creatorName = this.creatorNameFor(row.createdBy, row.createdByName)
@@ -1964,6 +1996,7 @@ export class Host implements HostApi {
       this.commitSpawnReservation(reservation)
     } catch (error) {
       this.releaseSpawnReservation(reservation)
+      if (isTerminalStatus(supervisorRecord.status)) await this.registry.markCrashed(appSessionId)
       return hostError('spawn_failed', `could not restart session: ${errText(error)}`)
     }
     // Refresh advisory fields from the fresh child (new pid + socketPath). The

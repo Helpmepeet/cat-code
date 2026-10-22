@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import {
   existsSync,
   mkdirSync,
@@ -107,6 +108,100 @@ test.each([null, 'clean', 'crashed', 'parked'] as const)('foreign ownership resp
   expect(restored.hasLiveForeignOwner('foreign')).toBe(false)
   expect(restored.hasTranscript('foreign')).toBe(true)
   expect(restored.hasLiveForeignOwner('missing')).toBe(false)
+})
+
+test('peer snapshots refresh foreign park and close transitions without a local write', async () => {
+  const h = makeRegistry({ isProcessAlive: () => true })
+  await h.registry.launch()
+  await h.registry.upsertOnSpawn({ appSessionId: 'foreign', cwd: '/workspace', engineSessionId: 'saved' })
+  writeTranscript(h.storageDir, 'saved')
+  await h.registry.markClean('foreign')
+  const foreign = makeRegistry({ storageDir: h.storageDir, isProcessAlive: () => true }).registry
+  await foreign.launch()
+  await foreign.upsertOnSpawn({ appSessionId: 'foreign', cwd: '/workspace' })
+  await foreign.markParked('foreign')
+  const doc = readDoc(h.registryPath)
+  doc.sessions[0]!.ownerHostPid = 424242
+  writeFileSync(h.registryPath, JSON.stringify(doc))
+  const parked = readFileSync(h.registryPath, 'utf8')
+  expect(h.registry.findSession('foreign')?.shutdown).toBe('clean')
+  expect(h.registry.readCurrentSessions()[0]?.shutdown).toBe('parked')
+  expect(h.registry.hasLiveForeignOwner('foreign')).toBe(true)
+  expect(readFileSync(h.registryPath, 'utf8')).toBe(parked)
+  doc.sessions[0]!.shutdown = 'clean'
+  writeFileSync(h.registryPath, JSON.stringify(doc))
+  expect(h.registry.readCurrentSessions()[0]?.shutdown).toBe('clean')
+  expect(h.registry.hasLiveForeignOwner('foreign')).toBe(false)
+})
+
+test('restore claims serialize competing app processes and retain a parked winner', async () => {
+  const h = makeRegistry()
+  await h.registry.launch()
+  await h.registry.upsertOnSpawn({ appSessionId: 'race', cwd: '/workspace', engineSessionId: 'saved' })
+  writeTranscript(h.storageDir, 'saved')
+  await h.registry.markClean('race')
+  const expected = h.registry.findSession('race')!
+  const child = spawn(process.execPath, ['-e', `
+    const { SessionRegistry } = await import(${JSON.stringify(new URL('./registry.ts', import.meta.url).href)});
+    const registry = new SessionRegistry({
+      storageDir: ${JSON.stringify(h.storageDir)},
+      transcriptPathFor: () => ${JSON.stringify(join(h.storageDir, 'transcripts', 'saved.jsonl'))},
+      log() {},
+    });
+    await registry.launch();
+    const start = new Promise(resolve => process.stdin.once('data', resolve));
+    const stop = new Promise(resolve => process.stdin.once('end', resolve));
+    process.stdin.resume();
+    console.log('ready');
+    await start;
+    const result = await registry.claimForRestore('race', ${JSON.stringify(expected)});
+    if (result === 'claimed') await registry.markParked('race');
+    console.log(result);
+    await stop;
+  `], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+    env: { PATH: process.env.PATH, HOME: h.storageDir, CLAUDE_CONFIG_DIR: join(h.storageDir, 'config') },
+  })
+  if (!child.pid) throw new Error('fixture child did not start')
+  spawnedPids.push(child.pid)
+  const closed = new Promise(resolve => child.once('close', resolve))
+  const reader = createInterface({ input: child.stdout! })
+  const lines = reader[Symbol.asyncIterator]()
+  try {
+    expect((await lines.next()).value).toBe('ready')
+    child.stdin!.write('claim\n')
+    const local = await h.registry.claimForRestore('race', expected)
+    const remote = (await lines.next()).value
+    expect([local, remote].sort()).toEqual(['claimed', 'foreign_owner'])
+    const winner = readDoc(h.registryPath).sessions[0]!
+    expect(winner.ownerHostPid).toBe(local === 'claimed' ? process.pid : child.pid)
+    expect(winner.shutdown).toBe(local === 'claimed' ? null : 'parked')
+  } finally {
+    child.stdin!.end()
+    await closed
+    reader.close()
+    spawnedPids.splice(spawnedPids.indexOf(child.pid), 1)
+  }
+}, 30000)
+
+test('restore claims reject changed identity and unavailable persistence without claiming', async () => {
+  let locked = false
+  const h = makeRegistry({
+    acquireLock: async () => {
+      if (locked) throw new Error('fixture ownership lock unavailable')
+      return async () => {}
+    },
+  })
+  await h.registry.launch()
+  await h.registry.upsertOnSpawn({ appSessionId: 'saved', cwd: '/workspace', engineSessionId: 'saved' })
+  writeTranscript(h.storageDir, 'saved')
+  await h.registry.markClean('saved')
+  const expected = h.registry.findSession('saved')!
+  expect(await h.registry.claimForRestore('saved', { ...expected, cwd: '/different' })).toBe('changed')
+  locked = true
+  expect(await h.registry.claimForRestore('saved', expected)).toBe('unavailable')
+  expect(readDoc(h.registryPath).sessions[0]?.shutdown).toBe('clean')
+  expect(h.registry.findSession('saved')?.shutdown).toBe('clean')
 })
 
 test('scope notice survives park, persisted reload and restore, but not close or reopen', async () => {

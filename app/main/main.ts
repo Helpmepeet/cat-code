@@ -4717,7 +4717,7 @@ function ensureHost(): Host {
       afterResponse: (appSessionId, request, answered) => workspaceJump!.afterResponse(appSessionId, request, answered),
       isPeerAccessBlocked: appSessionId => workspaceJump!.isPeerAccessBlocked(appSessionId),
     },
-    rows: () => liveRegistry.sessions,
+    rows: () => liveRegistry.readCurrentSessions(),
     setPeerNotice: (appSessionId, notice) => liveRegistry.setPeerNotice(appSessionId, notice),
     // Membership in `listSessions()` is NOT liveness: the supervisor keeps a
     // record after the child exits, and an idle park IS an exit. The predicate
