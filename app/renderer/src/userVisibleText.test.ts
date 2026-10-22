@@ -150,13 +150,6 @@ const KNOWN: { text: string; why: string }[] = [
     text: 'sessionId does not address this sidecar',
     why: 'pending: sidecarServer.ts error-frame copy, owned by the host/sidecar copy pass',
   },
-  // PENDING — owner: whoever lands the agent-config write path. This one is the
-  // full §7 house special: a session id, a frame word, and an explanation of why
-  // something is not built, all rendered as the read-only reason.
-  {
-    text: 'P4-7 exposes a read-only snapshot; desktop editing waits for a full-fidelity writer.',
-    why: 'pending: agentConfigDomain.ts readOnlyReason, owned by the agent-config write path',
-  },
 ]
 
 const KNOWN_TEXT = new Set(KNOWN.map(entry => entry.text))

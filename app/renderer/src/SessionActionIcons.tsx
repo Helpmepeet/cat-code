@@ -46,8 +46,6 @@ export function SessionActionIcon({
       return <ActionMetadataIcon />
     case 'copy':
       return <ActionCopyIcon />
-    case 'copy-md':
-      return <ActionMarkdownIcon />
     case 'copy-text':
       return <ActionFileIcon />
     case 'copy-ids':
@@ -159,17 +157,6 @@ export function ActionExportIcon(): ReactNode {
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
       <polyline points="7 10 12 15 17 10" />
       <line x1="12" y1="15" x2="12" y2="3" />
-    </Glyph>
-  )
-}
-
-export function ActionMarkdownIcon(): ReactNode {
-  return (
-    <Glyph strokeWidth="1.7">
-      <rect x="2" y="5" width="20" height="14" rx="2" />
-      <path d="M6 15V9l3 3 3-3v6" />
-      <path d="M17 9v4" />
-      <polyline points="15 12 17 14 19 12" />
     </Glyph>
   )
 }

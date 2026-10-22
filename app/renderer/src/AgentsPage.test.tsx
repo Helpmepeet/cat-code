@@ -27,7 +27,7 @@ const SNAPSHOT: AgentConfigSnapshot = {
       active: true,
       available: true,
       editable: false,
-      readOnlyReason: 'P4-7 exposes a read-only snapshot; desktop editing waits for a full-fidelity writer.',
+      readOnlyReason: 'Read-only here. Edit the agent file to change it.',
       systemPrompt: { available: true, withheldReason: 'secret-boundary' },
     },
     {

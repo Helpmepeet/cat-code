@@ -457,7 +457,7 @@ test('a workspace header is a drag handle only when reordering is wired', () => 
   expect(wired.match(/draggable="true"/g)).toHaveLength(2)
   expect(wired).toContain('cursor-grab')
   expect(wired).toContain('aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"')
-  expect(wired).toContain('title="/tmp/proj. Drag to reorder, or ⌥↑/⌥↓"')
+  expect(wired).toContain('title="/tmp/proj  ⌥↑/⌥↓"')
 
   const unwired = renderGroup([registryRow('a')])
   expect(unwired).not.toContain('draggable')
@@ -630,7 +630,6 @@ test('the expanded sidebar exposes separate collapse and resize controls', () =>
   const html = renderSidebar({ menuActive: true })
   expect(html).toContain('aria-label="Collapse sidebar"')
   expect(html).toContain('aria-label="Resize sidebar"')
-  expect(html).toContain('title="Drag to resize sidebar"')
   expect(html).toContain('sidebar-expanded')
 })
 

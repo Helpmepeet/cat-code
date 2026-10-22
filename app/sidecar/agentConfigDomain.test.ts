@@ -151,7 +151,7 @@ test('builds active, overridden, and MCP availability from the real resolved age
   expect(projectReviewer).toMatchObject({ active: true, available: true })
   expect(projectReviewer).toMatchObject({
     editable: false,
-    readOnlyReason: 'P4-7 exposes a read-only snapshot; desktop editing waits for a full-fidelity writer.',
+    readOnlyReason: 'Read-only here. Edit the agent file to change it.',
   })
   expect(projectReviewer?.tools).toEqual({ mode: 'list', names: ['Grep', 'Read'] })
   expect(projectReviewer?.filePath).toBe('/repo/.cat-code/agents/reviewer.md')

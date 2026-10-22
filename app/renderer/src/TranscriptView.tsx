@@ -2534,7 +2534,7 @@ function ToolCardShell({
           className={`min-w-0 flex-1 truncate text-xs text-text-primary ${
             targetNode === undefined ? 'font-mono' : 'font-sans'
           } ${targetFilePath ? 'hover:text-accent-soft' : ''}`}
-          title={targetFilePath ? 'Right-click for file actions' : undefined}
+          data-file-actions={targetFilePath ? '' : undefined}
           onContextMenu={
             targetFilePath
               ? event => {
@@ -3934,7 +3934,7 @@ function ToolRunRowLabel({
   return (
     <span
       className="flex min-w-0 flex-1 font-mono text-xs text-text-primary hover:text-accent-soft"
-      title="Right-click for file actions"
+      data-file-actions=""
       onContextMenu={onContextMenu}
     >
       <span className="truncate text-text-ghost">{dirname(shown)}</span>
@@ -6057,12 +6057,6 @@ function ThinkingBlock({ content, sourceId }: { content: string; sourceId: strin
  *    fixed phrase, with no affordance suggesting something can be opened.
  */
 
-/** The one-line honesty statement, on hover: these phrases are the model's own
- * summary of its reasoning, not the reasoning itself. Stated once per row/run,
- * never as a per-row badge (the `summary` sub-label was removed, #7). */
-const REASONING_TITLE =
-  'Short summary headings the model exposes about its reasoning, not the reasoning itself.'
-
 /**
  * Render ceiling for one run. The run shows every step it has; this only stops a
  * pathological run from mounting an unbounded list, and no real run reaches it.
@@ -6119,7 +6113,6 @@ function ReasoningRun({ runId, steps }: { runId: string; steps: ReasoningStepMod
         aria-controls={listId}
         aria-expanded={!collapsed}
         onClick={() => setExpanded(collapsed)}
-        title={REASONING_TITLE}
         className="flex w-full items-center gap-2.5 py-px text-left focus-visible:outline focus-visible:outline-1 focus-visible:outline-offset-2 focus-visible:outline-accent/40"
       >
         <span
@@ -6177,7 +6170,6 @@ const ReasoningStep = memo(function ReasoningStep({
       className={`relative py-0.5 text-[12.5px] leading-normal text-text-subtle${arriving ? ' animate-arrive' : ''}`}
       ref={arriving ? stepEntrances.refFor(step.key, 'animate-arrive') : undefined}
       onAnimationEnd={event => stepEntrances.onAnimationEnd(step.key, event)}
-      title={REASONING_TITLE}
     >
       <ReasoningNode placement="rail" />
       {step.kind === 'heading' ? (
@@ -6286,7 +6278,6 @@ function ReasoningLine({ content }: { content: string }) {
   return (
     <div
       className="relative py-0.5 pl-[26px] text-[12.5px] leading-normal text-text-subtle"
-      title={REASONING_TITLE}
     >
       <ReasoningNode placement="inline" />
       <span className="mr-2 text-[10px] font-bold uppercase tracking-[0.08em] text-text-subtle">

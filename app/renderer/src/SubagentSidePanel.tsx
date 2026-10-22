@@ -78,7 +78,7 @@ export function SubagentSidePanel({ worker, workers, agent, steps, incomplete, c
           const stamp = faces.faceFor(row.agentId, row.name)
           return <button key={row.agentId} type="button" className="subagent-side-switch"
             aria-label={`${row.name || row.task}, ${row.state}`} aria-current={row.agentId === worker.agentId ? 'true' : undefined}
-            title={`${row.name || row.task}, ${row.state}`}
+            title={`${row.name || row.task}, ${row.stateWord}`}
             onClick={() => { if (row.agentId !== worker.agentId) onSwitch(row) }}>
             <span className="subagent-dock-face" aria-hidden="true"><AgentFace axes={stamp.axes} fill={stamp.fill} size={15} /><span className={`subagent-dock-badge subagent-dock-badge-${row.state}`} /></span>
           </button>

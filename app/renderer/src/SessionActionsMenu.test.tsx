@@ -184,10 +184,10 @@ test('Rename and Export render live while obsolete Branch and Rewind rows stay a
   expect(html).not.toContain('exportRenderer.tsx:91')
 })
 
-test('non-live row: Rename and Export render disabled with the live-engine reason', () => {
+test('non-live row: Rename and Export render disabled with the restore reason', () => {
   const html = render(false, row({ live: false, restorable: true, status: 'exited' }))
   expect(html).toContain('aria-disabled="true"')
-  expect(html).toContain('live engine')
+  expect(html).toContain('Open or restore this session first.')
 })
 
 test('Move renders as an action for closed and empty Chats; busy moves show a reason without SOON', () => {

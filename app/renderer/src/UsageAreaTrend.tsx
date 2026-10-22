@@ -62,7 +62,6 @@ export function UsageAreaTrend({ summary, metric, partial, selected = '', onSele
                     else if (event.key === 'Escape') setHovered(null);
                     else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); event.currentTarget.ownerSVGElement?.querySelectorAll<SVGGElement>('[role="button"]')[Math.max(0, Math.min(valid.length - 1, i + (event.key === 'ArrowRight' ? 1 : -1)))]?.focus(); }
                 }}>
-                <title>{`${usageBucketLabel(summary, point.date)}: ${exactValue(point.value!)}`}</title>
                 <circle cx={x(point.date)} cy={y(point.value!)} r={shown === point.date ? 4.6 : i === valid.length - 1 ? 3.4 : 2.6} className="usage-area-point"/>
                 <rect x={Math.max(left - 8, i ? (x(valid[i - 1]!.date) + x(point.date)) / 2 : left - 8)} y={top} width={Math.max(8, (i < valid.length - 1 ? (x(point.date) + x(valid[i + 1]!.date)) / 2 : right + 8) - (i ? (x(valid[i - 1]!.date) + x(point.date)) / 2 : left - 8))} height={bottom - top} fill="transparent"/>
             </g>)}

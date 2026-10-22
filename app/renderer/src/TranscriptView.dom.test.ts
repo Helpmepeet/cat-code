@@ -135,7 +135,7 @@ test('right-clicking a Read card path opens the shared file actions menu', async
     }),
   )
   const path = tree.container.querySelector<HTMLElement>(
-    '[title="Right-click for file actions"]',
+    '[data-file-actions]',
   )
   expect(path).not.toBeNull()
 

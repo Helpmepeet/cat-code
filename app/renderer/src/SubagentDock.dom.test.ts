@@ -309,8 +309,8 @@ test('finished-only expanded panel retains disclosure and Clear, but collapsing 
 })
 
 test('a failed-only chip keeps its red badge and tooltip, then disappears when the failure is cleared', async () => {
-  const done = row({ state: 'completed', terminalAt: 20 })
-  const failed = row({ agentId: 'worker-b', name: 'Grace', state: 'failed', terminalAt: 30 })
+  const done = row({ state: 'completed', stateWord: 'done', terminalAt: 20 })
+  const failed = row({ agentId: 'worker-b', name: 'Grace', state: 'failed', stateWord: 'failed', terminalAt: 30 })
   const tree = await mount(fixture(state([], [failed, done]), true))
   const chip = button(tree.container, 'Subagents: Grace, failed')
   expect(chip.querySelectorAll('[data-dock-face]')).toHaveLength(1)
@@ -324,8 +324,8 @@ test('a failed-only chip keeps its red badge and tooltip, then disappears when t
 })
 
 test('a focused live chip does not keep completed details when only a failed face remains', async () => {
-  const failed = row({ agentId: 'worker-b', name: 'Grace', state: 'failed', terminalAt: 20 })
-  const tree = await mount(fixture(state([row()], [failed]), true))
+  const failed = row({ agentId: 'worker-b', name: 'Grace', state: 'failed', stateWord: 'failed', terminalAt: 20 })
+  const tree = await mount(fixture(state([row({ stateWord: 'running' })], [failed]), true))
   await act(async () => button(tree.container, 'Subagents: Ada, running').focus())
   expect(tree.container.querySelector('[role="tooltip"]')?.textContent).toContain('Adarunning')
   await tree.render(fixture(state([], [row({ state: 'completed', terminalAt: 30 }), failed]), true))

@@ -716,7 +716,7 @@ test('no user-visible string on the Accounts panel says "lease"', () => {
   expect(text.toLowerCase()).not.toContain('lease')
 })
 
-test('the hover detail is a text surface too, so no account id survives in it', () => {
+test('the engine selection reason reaches neither text nor hover', () => {
   const rawId = 'ca889574-256c-4f04-8d5f-f80004f1a8e1'
   const html = renderToStaticMarkup(
     <LeaseRosterPanel
@@ -738,7 +738,7 @@ test('the hover detail is a text surface too, so no account id survives in it', 
   // Stripping tags would drop attributes by construction, so assert on the whole
   // document: CLAUDE.md §7 lists `title` alongside JSX text.
   expect(html).not.toContain(rawId)
-  expect(html).toContain('title="Codex account is capped"')
+  expect(html).not.toContain('is capped')
 })
 
 test('the rail brackets the group heading together with its rows', () => {

@@ -926,7 +926,7 @@ test('file tool cards share a workspace-relative path label', () => {
 
   expect(occurrences(html, '>src/shared.ts<')).toBe(3)
   expect(html).not.toContain(path)
-  expect(occurrences(html, 'title="Right-click for file actions"')).toBe(3)
+  expect(occurrences(html, 'data-file-actions=""')).toBe(3)
   expect(html).not.toContain('cursor-context-menu')
 })
 
@@ -6110,7 +6110,7 @@ test('the run hoists the shared directory onto the head and shortens its rows', 
   expect(text).toContain('shared/protocol.ts')
   expect(text).toContain('sidecar/protocol.ts')
   expect(occurrences(text, 'protocol.ts')).toBe(2)
-  expect(occurrences(html, 'title="Right-click for file actions"')).toBe(2)
+  expect(occurrences(html, 'data-file-actions=""')).toBe(2)
   expect(html).not.toContain('cursor-context-menu')
 })
 

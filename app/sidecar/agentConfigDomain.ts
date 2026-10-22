@@ -21,8 +21,7 @@ export type SidecarAgentConfigDomain = {
   subscribe(listener: () => void): () => void
 }
 
-const READ_ONLY_SCOPE_REASON =
-  'P4-7 exposes a read-only snapshot; desktop editing waits for a full-fidelity writer.'
+const READ_ONLY_SCOPE_REASON = 'Read-only here. Edit the agent file to change it.'
 
 export function createSidecarAgentConfigDomain({
   agentDefinitions,

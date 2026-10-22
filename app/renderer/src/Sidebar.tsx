@@ -1333,7 +1333,6 @@ export function Sidebar({
             role="separator"
             aria-label="Resize sidebar"
             aria-orientation="vertical"
-            title="Drag to resize sidebar"
             onPointerDown={event => {
               if (event.button !== 0) return
               event.preventDefault()
@@ -1644,7 +1643,7 @@ export function SessionGroup({
           aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
           title={
             reorderable
-              ? `${group.cwd}. Drag to reorder, or ⌥↑/⌥↓`
+              ? `${group.cwd}  ⌥↑/⌥↓`
               : group.cwd || 'Sessions with no recorded workspace'
           }
           className="flex min-w-0 flex-1 items-center gap-1.5"
@@ -1844,7 +1843,7 @@ export function SidebarRowItem({
                 : visual.kind === 'history'
                   ? ' · open'
                   : ''
-            }${reorderable ? '. Drag to reorder, or ⌥↑/⌥↓' : ''}`
+            }${reorderable ? '  ⌥↑/⌥↓' : ''}`
           : 'This session has no recorded workspace. Open it from the terminal.'
       }
       draggable={reorderable ? true : undefined}
@@ -2089,7 +2088,6 @@ function NavItemExpanded({
         disabled
         aria-disabled="true"
         data-sidebar-nav-id={item.id}
-        title={`${item.label} is not available yet`}
         className="flex w-full cursor-not-allowed items-center gap-1 rounded-[5px] py-[3px] text-text-subtle/55"
       >
         <span className="flex h-[18px] w-[26px] shrink-0 items-center justify-center [&_svg]:size-3.5">
@@ -2163,7 +2161,7 @@ function NavItemRail({
         aria-disabled="true"
         aria-label={item.label}
         data-sidebar-nav-id={item.id}
-        title={`${item.label} is not available yet`}
+        title={item.label}
         className="flex h-8 w-8 items-center justify-center rounded-md text-text-subtle/55"
       >
         {item.icon}

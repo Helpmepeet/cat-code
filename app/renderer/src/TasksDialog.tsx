@@ -663,7 +663,6 @@ export function WorkerDetailPanel({
               <AgentActionButton
                 label="Dismiss"
                 onClick={() => onDismissTask(dismissTargetId)}
-                title="Remove this finished worker from the roster"
               />
             ) : null}
           </div>
@@ -830,7 +829,6 @@ function LeaseAgentRowView({ agent }: { agent: LeaseAgentRow }) {
               'mt-0.5 flex items-center gap-1.5 text-[11px] ' +
               (agent.note.tone === 'stranded' ? 'text-tone-danger' : 'text-text-subtle')
             }
-            title={agent.note.detail}
           >
             {agent.note.tone === 'moved' ? (
               <span

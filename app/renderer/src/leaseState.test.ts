@@ -271,20 +271,16 @@ test('no account id ever reaches display text', () => {
   })
   const [group] = selectLeaseGroups(snap, [], 0)
   const agent = group?.agents[0]
-  // `detail` is included: CLAUDE.md §7 counts a `title` as a text surface too.
   const visible = [
     group?.label,
     agent?.name,
     agent?.task,
     agent?.note?.text,
-    agent?.note?.detail,
   ]
   for (const text of visible) {
     expect(text ?? '').not.toContain(rawId)
   }
   expect(agent?.name).toBe('Unnamed worker')
-  // The reason itself survives redaction, which is the point of keeping it.
-  expect(agent?.note?.detail).toBe('Codex account is capped')
 })
 
 test('an account with no alias heads its group with a short id, not a 36-char one', () => {

@@ -77,7 +77,7 @@ test('managed Chat headers show conversation identity without a storage project'
   )
 
   expect(html).toContain('Chat notes')
-  expect(html).toContain('Project: project')
+  expect(html).toContain('</svg>project</span>')
   expect(html).not.toContain('chat-storage-id')
 })
 

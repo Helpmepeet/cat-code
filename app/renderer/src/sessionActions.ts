@@ -45,7 +45,6 @@ export type SessionActionKind =
   | 'metadata'
   /** The flyout HOST (`SessionActions.jsx:174`). Never dispatched — it only opens its submenu. */
   | 'copy'
-  | 'copy-md'
   | 'copy-text'
   /**
    * The two ids that address this session — the app's own and the engine's
@@ -149,19 +148,14 @@ export type SessionActionsContext = {
 }
 
 const DEFER = {
-  copyMarkdown:
-    'Markdown export is not available yet. Use the plain-text copy below.',
-  notLive:
-    'Open or restore this session first. Rename and Export run in its live engine, which a closed session has stopped.',
-  notOpen:
-    'Open this session first. Its transcript is only readable while it is the attached tab.',
+  notLive: 'Open or restore this session first.',
+  notOpen: 'Open this session first.',
   // PEER-SESSIONS §6 — a transcript the app has never opened has nothing to hold
   // this decision, and no peer can name it either, so there is nothing to block.
   // Says the surprising half (why it is moot here), not the obvious half.
   notTracked:
     'Open this session here first. Peers can only reopen sessions opened in this app.',
-  updatingTranscript:
-    'Wait for this response to finish. The saved transcript is still being updated.',
+  updatingTranscript: 'Wait for this response to finish.',
 } as const
 
 /**
@@ -223,7 +217,7 @@ export function resolveSessionActions(
             reason:
               row.inRegistry
                 ? 'This workspace is no longer available, so this session cannot be restored.'
-                : 'Not restorable from the desktop yet. This session came from terminal history.',
+                : 'This session came from terminal history. Open it from the terminal.',
           }),
     },
     {
@@ -261,7 +255,7 @@ export function resolveSessionActions(
     },
     {
       // P4-30 — the flyout HOST. It carries the group's honest reason and never
-      // dispatches; the two variants below are the actionable rows. The
+      // dispatches; the variant below is the actionable row. The
       // plain-text child keeps its own label because the action behind it is the
       // debug export (`App.tsx` `copyForLlm`), not the prototype's readable
       // transcript — calling it "Copy as text" would misdescribe what lands on
@@ -272,13 +266,6 @@ export function resolveSessionActions(
       enabled: ctx.isActiveOpen,
       ...(ctx.isActiveOpen ? {} : { reason: DEFER.notOpen }),
       flyout: [
-        {
-          kind: 'copy-md',
-          label: 'Copy as Markdown',
-          section: 'transfer',
-          enabled: false,
-          reason: DEFER.copyMarkdown,
-        },
         {
           kind: 'copy-text',
           label: 'Copy transcript for LLM',

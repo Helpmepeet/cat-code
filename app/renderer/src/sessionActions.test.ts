@@ -78,17 +78,11 @@ describe('resolveSessionActions', () => {
     }
   })
 
-  test('P4-30: Copy is a non-dispatching flyout host over the two copy variants', () => {
+  test('P4-30: Copy is a non-dispatching flyout host over the copy variant', () => {
     const copy = byKind(resolveSessionActions(row(), { isActiveOpen: true })).get('copy')!
     expect(copy.label).toBe('Copy')
     const children = copy.flyout ?? []
-    expect(children.map(c => c.kind)).toEqual(['copy-md', 'copy-text'])
-
-    // Markdown stays the owner-flagged §0 defer (no engine markdown renderer):
-    // rendered, disabled, with an honest reason — never a Potemkin button.
-    const markdown = children.find(c => c.kind === 'copy-md')!
-    expect(markdown.enabled).toBe(false)
-    expect(markdown.reason).toContain('not available yet')
+    expect(children.map(c => c.kind)).toEqual(['copy-text'])
 
     // The plain-text child is the real, already-wired copy action.
     expect(children.find(c => c.kind === 'copy-text')!.enabled).toBe(true)
@@ -219,7 +213,7 @@ describe('resolveSessionActions', () => {
     )
     for (const kind of ['rename', 'export'] as const) {
       expect(items.get(kind)!.enabled).toBe(false)
-      expect(items.get(kind)!.reason).toContain('live engine')
+      expect(items.get(kind)!.reason).toBe('Open or restore this session first.')
     }
   })
 
@@ -232,7 +226,7 @@ describe('resolveSessionActions', () => {
     )
     for (const kind of ['rename', 'export'] as const) {
       expect(items.get(kind)!.enabled).toBe(false)
-      expect(items.get(kind)!.reason).toContain('live engine')
+      expect(items.get(kind)!.reason).toBe('Open or restore this session first.')
     }
   })
 
@@ -509,8 +503,7 @@ describe('sidebar session actions', () => {
       resolved,
       row(),
     )
-    const waitingReason =
-      'Wait for this response to finish. The saved transcript is still being updated.'
+    const waitingReason = 'Wait for this response to finish.'
     expect(byKind(items).get('fork')).toMatchObject({
       enabled: false,
       reason: waitingReason,
@@ -535,6 +528,6 @@ describe('sidebar session actions', () => {
       'copy', 'copy-ids', 'export',
     ])
     expect(full.find(item => item.kind === 'copy')?.flyout?.map(item => item.kind))
-      .toEqual(['copy-md', 'copy-text'])
+      .toEqual(['copy-text'])
   })
 })

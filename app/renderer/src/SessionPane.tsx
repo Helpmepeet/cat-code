@@ -2634,9 +2634,7 @@ function ActivityIndicator({
       <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-subtle">
         {fmtElapsed(elapsedMs)}
         {showTokens ? (
-          <span
-            title="Output tokens this turn, with the message still streaming estimated; arrow shows phase, not direction"
-          >
+          <span>
             {' · ↓ '}
             {fmtTok(liveTokens)} tokens
           </span>

@@ -375,11 +375,6 @@ export function SessionsPage({
                   ? 'border-tone-info/40 bg-tone-info/10 text-tone-info'
                   : 'border-white/[0.08] bg-white/[0.02] text-text-subtle hover:text-text-primary')
               }
-              title={
-                allWorkspaces
-                  ? 'Showing all workspaces'
-                  : 'Showing the current workspace only'
-              }
             >
               <HomeIcon /> All workspaces
             </button>

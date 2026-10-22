@@ -240,7 +240,7 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
         </div>
       </div>
       {tip && tipRow ? <div ref={tooltip} id={tipId} role="tooltip" className={`subagent-dock-tip subagent-dock-tip-${tip.mode}${tip.hiding ? ' subagent-dock-tip-hiding' : ''}`} onMouseEnter={() => { clearTipTimer(); setTip(current => current ? { ...current, hiding: false } : null) }} onMouseLeave={() => closeTip()}>
-        {tip.mode === 'chip' ? <div className="subagent-dock-tip-who"><span>{tipRow.name || tipRow.task || 'Subagent'}</span><span>{tipRow.state}</span></div> : null}
+        {tip.mode === 'chip' ? <div className="subagent-dock-tip-who"><span>{tipRow.name || tipRow.task || 'Subagent'}</span><span>{tipRow.stateWord}</span></div> : null}
         <div className="subagent-dock-tip-a">{(tip.mode === 'chip' ? tipRow.chipLines : tipRow.stripLines)[0]}</div>
         <div className="subagent-dock-tip-b">{(tip.mode === 'chip' ? tipRow.chipLines : tipRow.stripLines)[1]}</div>
       </div> : null}

@@ -300,7 +300,6 @@ function PanelHeader({
       {panel.descriptor?.binding?.kind !== 'managed' ? (
         <span
           className="flex shrink-0 items-center gap-1 rounded border border-[#60a5fa]/25 bg-[#60a5fa]/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[light-dark(#1d4ed8,#93c5fd)]"
-          title={`Project: ${workspaceLabel(panel)}`}
         >
           <FolderIcon />
           {workspaceLabel(panel)}

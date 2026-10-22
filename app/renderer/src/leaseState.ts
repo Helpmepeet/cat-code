@@ -330,8 +330,7 @@ export function leaseAccountLabel(row: {
  * string and not display text: it embeds raw account UUIDs twice over
  * (`failover from <uuid>: Codex account <uuid> …`,
  * `codexAccountLeaseManager.ts:333`) and otherwise reads as internal vocabulary
- * ("spread selected least crowded healthy account", `:551`). The engine's own
- * text survives as `detail`, which the panel surfaces only on hover.
+ * ("spread selected least crowded healthy account", `:551`), so it is not shown.
  *
  * The account an agent moved FROM is named when `movedFrom` carries an alias. It
  * cannot be derived here: that account has lost its lease, so it is absent from
@@ -342,8 +341,6 @@ export function leaseAccountLabel(row: {
 export type LeaseAgentNote = {
   text: string
   tone: 'moved' | 'stranded'
-  /** The engine's raw reason, for a title attribute. Never rendered as body text. */
-  detail: string
 }
 
 /** One agent, as it appears under its account. */
@@ -422,14 +419,6 @@ const LEASE_STATE_ROLE: Record<LeaseState, LeaseRole> = {
   released: 'gone',
 }
 
-/** Strips account UUIDs out of engine text bound for a `title`, itself a §7 text surface. */
-const ACCOUNT_ID_PATTERN =
-  /\s*\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
-
-function redactAccountIds(reason: string): string {
-  return reason.replace(ACCOUNT_ID_PATTERN, '').replace(/\s+/g, ' ').trim()
-}
-
 /**
  * Which selection kinds are worth telling the user about. `manual` is the user's
  * own `/switch-account`, so saying it back is the noise the operator rules forbid;
@@ -444,12 +433,11 @@ const SELECTION_KIND_IS_NEWS: Record<LeaseSelectionKind, boolean> = {
 }
 
 function leaseAgentNote(owner: LeaseOwnerRow): LeaseAgentNote | null {
-  const detail = redactAccountIds(owner.lastFailureReason ?? owner.selectionReason)
   if (LEASE_STATE_ROLE[owner.state] === 'stranded') {
-    return { text: NOTE_STRANDED, tone: 'stranded', detail }
+    return { text: NOTE_STRANDED, tone: 'stranded' }
   }
   if (SELECTION_KIND_IS_NEWS[owner.selectionKind]) {
-    return { text: movedNoteText(owner), tone: 'moved', detail }
+    return { text: movedNoteText(owner), tone: 'moved' }
   }
   return null
 }
