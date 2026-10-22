@@ -724,7 +724,7 @@ export const BashTool = buildTool({
     let wasInterrupted = false;
     let result: ExecResult;
     const isMainThread = !toolUseContext.agentId;
-    const preventCwdChanges = !isMainThread;
+    const preventCwdChanges = !isMainThread || Boolean(toolUseContext.inlineCommand);
     try {
       // Use the new async generator version of runShellCommand
       const commandGenerator = runShellCommand({
@@ -736,6 +736,7 @@ export const BashTool = buildTool({
         setToolJSX,
         preventCwdChanges,
         isMainThread,
+        inlineCommand: toolUseContext.inlineCommand,
         toolUseId: toolUseContext.toolUseId,
         agentId: toolUseContext.agentId
       });
@@ -764,6 +765,11 @@ export const BashTool = buildTool({
 
       // Get the final result from the generator's return value
       result = generatorResult.value;
+      toolUseContext.inlineCommand?.onResult({
+        code: result.code,
+        stdout: result.stdout || '',
+        interrupted: result.interrupted,
+      });
       trackGitOperations(input.command, result.code, result.stdout);
       const isInterrupt = result.interrupted && abortController.signal.reason === 'interrupt';
 
@@ -948,6 +954,7 @@ async function* runShellCommand({
   setToolJSX,
   preventCwdChanges,
   isMainThread,
+  inlineCommand,
   toolUseId,
   agentId
 }: {
@@ -957,6 +964,7 @@ async function* runShellCommand({
   setToolJSX?: SetToolJSXFn;
   preventCwdChanges?: boolean;
   isMainThread?: boolean;
+  inlineCommand?: ToolUseContext['inlineCommand'];
   toolUseId?: string;
   agentId?: AgentId;
 }): AsyncGenerator<{
@@ -1001,7 +1009,7 @@ async function* runShellCommand({
   // Determine if auto-backgrounding should be enabled
   // Only enable for commands that are allowed to be auto-backgrounded
   // and when background tasks are not disabled
-  const shouldAutoBackground = !isBackgroundTasksDisabled && isAutobackgroundingAllowed(command);
+  const shouldAutoBackground = !inlineCommand && !isBackgroundTasksDisabled && isAutobackgroundingAllowed(command);
   const shellCommand = await exec(command, abortController.signal, 'bash', {
     timeout: timeoutMs,
     onProgress(lastLines, allLines, totalLines, totalBytes, isIncomplete) {
@@ -1017,6 +1025,9 @@ async function* runShellCommand({
       }
     },
     preventCwdChanges,
+    cwd: inlineCommand?.cwd,
+    requireExactCommand: Boolean(inlineCommand),
+    stdin: inlineCommand ? 'ignore' : undefined,
     shouldUseSandbox: shouldUseSandbox(input),
     shouldAutoBackground,
     // Already carried this far to attribute background tasks to their agent.
@@ -1105,6 +1116,10 @@ async function* runShellCommand({
   }
 
   const backgroundOnInterrupt = () => {
+    if (inlineCommand) {
+      if (shellCommand.status === 'running') shellCommand.kill();
+      return;
+    }
     if (abortController.signal.reason !== 'interrupt') return;
     if (isBackgroundTasksDisabled) {
       if (shellCommand.status === 'running') shellCommand.kill();
@@ -1131,7 +1146,7 @@ async function* runShellCommand({
     // In assistant mode, the main agent should stay responsive. Auto-background
     // blocking commands after ASSISTANT_BLOCKING_BUDGET_MS so the agent can keep
     // coordinating instead of waiting. The command keeps running — no state loss.
-    if (feature('KAIROS') && getKairosActive() && isMainThread && !isBackgroundTasksDisabled && run_in_background !== true) {
+    if (feature('KAIROS') && getKairosActive() && isMainThread && !inlineCommand && !isBackgroundTasksDisabled && run_in_background !== true) {
       setTimeout(() => {
         if (shellCommand.status === 'running' && backgroundShellId === undefined) {
           assistantAutoBackgrounded = true;
@@ -1142,7 +1157,7 @@ async function* runShellCommand({
 
     // Explicit backgrounding must not re-register a process already handed off
     // by an interrupt delivered during exec startup.
-    if (run_in_background === true && !isBackgroundTasksDisabled && !backgrounding && !backgroundShellId) {
+    if (run_in_background === true && !inlineCommand && !isBackgroundTasksDisabled && !backgrounding && !backgroundShellId) {
       const shellId = await spawnBackgroundTask();
       logEvent('tengu_bash_command_explicitly_backgrounded', {
         command_type: getCommandTypeForLogging(command)
@@ -1218,7 +1233,7 @@ async function* runShellCommand({
 
       // Register independently of terminal JSX: desktop and headless runtimes
       // need the same live task record even though they render no Ink hint.
-      if (shouldRegisterForegroundShellTask({
+      if (!inlineCommand && shouldRegisterForegroundShellTask({
         backgroundTasksDisabled: isBackgroundTasksDisabled,
         backgroundShellId,
         elapsedSeconds,

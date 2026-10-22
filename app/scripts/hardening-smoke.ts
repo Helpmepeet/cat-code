@@ -252,6 +252,9 @@ async function runProductionHardeningSmoke(
       'settingsVerb',
       'submit',
       'subscribe',
+      'getInlineCommands',
+      'startInlineCommand',
+      'stopInlineCommand',
       'taskControlVerb',
       'contextBreakdownVerb',
       // Control plane (P3-3 — HC3 fixed per-method senders).

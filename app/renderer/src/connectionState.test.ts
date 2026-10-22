@@ -12,6 +12,31 @@ import {
 import type { ConnectionSnapshot } from './connectionState.js'
 import { resolvePendingSubmit } from './composerState.js'
 import type { ServerFrame } from '../../shared/protocol.js'
+import { inlineCommandRefusalFrame } from '../../main/mainDecisions.js'
+
+test('an aborted move refusal leaves the same live engine ready for composer input', () => {
+  for (const message of [
+    { type: 'inline-command.start', requestId: 'start', generation: 'same-generation',
+      source: { engineSessionId: 'engine-session-1', messageUuid: 'message', contentBlockIndex: 0, fenceOrdinal: 0 } },
+    { type: 'inline-command.stop', requestId: 'stop', generation: 'same-generation', runId: 'run' },
+    { type: 'inline-command.get', requestId: 'get' },
+  ] as const) {
+    let state = reduceConnectionState(createConnectionState(), validReady as ServerFrame)
+    const refusal = inlineCommandRefusalFrame('session-1', message, 'renderer', 'session_not_ready')
+    expect(refusal).not.toBeNull()
+    state = reduceConnectionState(state, refusal!)
+    expect(selectConnection(state, 'session-1')).toEqual({ status: 'ready', inputEnabled: true })
+    state = reduceConnectionState(state, {
+      kind: 'inline-command.snapshot', protocolVersion: 4, sessionId: 'session-1',
+      generation: 'same-generation', runs: [],
+    } as ServerFrame)
+    state = reduceConnectionState(state, {
+      kind: 'event', protocolVersion: 4, sessionId: 'session-1',
+      event: { type: 'turn.status', activeTurn: false },
+    } as ServerFrame)
+    expect(selectConnection(state, 'session-1')).toEqual({ status: 'ready', inputEnabled: true })
+  }
+})
 
 /** Adding a status to the union without listing it here is a compile error, so
  * the two assertions below can never silently stop covering a member. */

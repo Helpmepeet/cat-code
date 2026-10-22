@@ -982,7 +982,37 @@ export type WorkspaceHandoffStateFrame = {
  * the P4-19 settings write verb, the IDLE-PARK frame, the load-earlier read
  * verb, and the two host-request-plane kinds above.
  */
+/** Decision: docs/plans/2026-10-22-inline-command-run.md §4A,B.
+ * Only canonical source identity crosses inbound; execution text is engine-owned.
+ */
+export type InlineCommandStartMessage = {
+  type: 'inline-command.start'
+  requestId: string
+  generation: string
+  source: import('./inlineCommand.js').InlineCommandSource
+}
+export type InlineCommandStopMessage = {
+  type: 'inline-command.stop'
+  requestId: string
+  generation: string
+  runId: string
+}
+export type InlineCommandGetMessage = {
+  type: 'inline-command.get'
+  requestId: string
+}
+export type InlineCommandMessage = InlineCommandStartMessage | InlineCommandStopMessage | InlineCommandGetMessage
+export type InlineCommandSnapshotFrame = {
+  kind: 'inline-command.snapshot'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  generation: string
+  runs: import('./inlineCommand.js').InlineCommandRun[]
+  requests?: import('./inlineCommand.js').InlineCommandRequest[]
+}
+
 export type SidecarClientMessage =
+  | InlineCommandMessage
   | WorkStatusRequest
   | LidWorkControl
   | AppClientMessage
@@ -3746,6 +3776,7 @@ export type WorkspaceObservation = {
 }
 
 export type ServerFramePayload =
+  | InlineCommandSnapshotFrame
   | WorkStatusFrame
   | { kind: 'lid.work'; protocolVersion: typeof PROTOCOL_VERSION; sessionId: SessionId; requestId: string; work: LidWorkSnapshot }
   | ReadyFrame
@@ -3809,6 +3840,7 @@ export type ServerFrameKind = ServerFramePayload['kind']
  * a list entry that no payload declares.
  */
 const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
+  'inline-command.snapshot': true,
   'work.status': true,
   'lid.work': true,
   ready: true,
@@ -4060,6 +4092,9 @@ export type CatCodeBridge = {
    * and `task.background`, which invokes the engine's terminal Ctrl+B operation
    * over the addressed session's live store.
    */
+  startInlineCommand(sessionId: SessionId, input: Omit<InlineCommandStartMessage, 'type'>): boolean
+  stopInlineCommand(sessionId: SessionId, input: Omit<InlineCommandStopMessage, 'type'>): boolean
+  getInlineCommands(sessionId: SessionId): boolean
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void
   /**
    * P4-24c — set one composer run-control (model / reasoning effort / fast) on the

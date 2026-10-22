@@ -109,6 +109,7 @@ export type MarkdownRenderLeaf = {
   text: string
   /** Complete fence source for the group's single copy action. */
   codeSource: string
+  codeStartOffset?: number
   codeLanguage: string
   /**
    * True while this leaf's fence has opened but not closed. The card is up
@@ -137,6 +138,7 @@ export type MountedMarkdownLeaf = {
   content: Root
   text: string
   codeSource: string
+  codeStartOffset?: number
   codeLanguage: string
   codeOpen: boolean
 }
@@ -1014,6 +1016,7 @@ export function mergeMountedMarkdownLeaves(
       content: { type: 'root', children },
       text,
       codeSource: first.codeSource,
+      codeStartOffset: first.codeStartOffset,
       codeLanguage: first.codeLanguage,
       codeOpen: first.codeOpen,
     })
@@ -1272,6 +1275,7 @@ function planCodeBlock(
     const leaf = state.leaves[index]
     leaf.kind = 'code'
     leaf.codeSource = codeSource
+    leaf.codeStartOffset = pre.position?.start.offset
     leaf.codeLanguage = codeLanguage
     if (index === before) leaf.estimatedHeight += 56
   }

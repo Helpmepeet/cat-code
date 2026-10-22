@@ -47,6 +47,7 @@ import {
   type SessionId,
 } from '../../shared/protocol.js'
 import { isAppReadyFrame } from './connectionState.js'
+import { parseInlineCommandResult, type InlineCommandRequest, type InlineCommandRun } from '../../shared/inlineCommand.js'
 import { observeRetryWait } from './retryClock.js'
 
 type FrameRowSource = {
@@ -99,6 +100,7 @@ type RowSource = FrameRowSource & {
 
 export type AssistantTextRow = RowSource & {
   kind: 'assistant-text'
+  inlineCommandOrigin?: { messageUuid: string; contentBlockIndex: number }
   role: 'assistant'
   content: string
   isStreaming?: true
@@ -525,6 +527,8 @@ type StreamingThinkingBlock = {
 
 type TranscriptSessionState = {
   engineSessionId: string | null
+  inlineCommands?: { generation: string; runs: InlineCommandRun[]; requests?: InlineCommandRequest[] }
+  inlineCommandResults?: InlineCommandRun[]
   rows: TranscriptRow[]
   currentStreamMessageId: string | null
   currentStreamBlockIndex: number | null
@@ -675,7 +679,13 @@ export function resetTranscriptSession(
     ...state,
     sessions: {
       ...state.sessions,
-      [sessionId]: createTranscriptSessionState(),
+      [sessionId]: {
+        ...createTranscriptSessionState(),
+        engineSessionId: state.sessions[sessionId]!.engineSessionId,
+        ...(state.sessions[sessionId]!.inlineCommands ? {
+          inlineCommands: { ...state.sessions[sessionId]!.inlineCommands!, runs: [] },
+        } : {}),
+      },
     },
   }
 }
@@ -1467,6 +1477,32 @@ export function projectServerFrames(
     // frame would resurrect one the pane just removed.
     const draft = getSessionDraft(drafts, state, frame.sessionId)
     if (!draft) continue
+    if (frame.kind === 'lifecycle') {
+      draft.session.inlineCommandResults = [
+        ...(draft.session.inlineCommandResults ?? []),
+        ...(draft.session.inlineCommands?.runs ?? []).map(run => run.status === 'running' ? {
+          ...run, status: 'interrupted' as const, exitCode: null,
+          error: 'Outcome unknown. The command may already have had effects.',
+        } : run),
+      ]
+      draft.session.inlineCommands = undefined
+      draft.changed = true
+      continue
+    }
+    if (frame.kind === 'inline-command.snapshot') {
+      if (draft.session.inlineCommands?.generation !== frame.generation) {
+        draft.session.inlineCommandResults = [
+          ...(draft.session.inlineCommandResults ?? []),
+          ...(draft.session.inlineCommands?.runs ?? []).filter(run => run.status === 'running').map(run => ({
+            ...run, status: 'interrupted' as const, exitCode: null,
+            error: 'Outcome unknown. The command may already have had effects.',
+          })),
+        ]
+      }
+      draft.session.inlineCommands = { generation: frame.generation, runs: frame.runs, ...(frame.requests ? { requests: frame.requests } : {}) }
+      draft.changed = true
+      continue
+    }
     if (frame.kind === 'error') {
       // The only error frames this store reads. Every other one is a live
       // failure the error line owns, and projecting it as transcript would put a
@@ -1605,6 +1641,8 @@ function createReadyDraft(
   const session = createTranscriptSessionState()
   session.engineSessionId = engineSessionId
   if (engineSessionId !== null && previous?.engineSessionId === engineSessionId) {
+    session.inlineCommands = previous.inlineCommands
+    session.inlineCommandResults = previous.inlineCommandResults
     const previews = {
       ...previous.generatedImagePreviewsByUseId,
     }
@@ -2113,6 +2151,9 @@ function projectAssistantFrame(
       ...(agentName ? { agentName } : {}),
       ...(model !== null ? { model } : {}),
     })
+    if (row?.kind === 'assistant-text' && frameId && parentToolUseId === null) {
+      row.inlineCommandOrigin = { messageUuid: frameId, contentBlockIndex: localIndex }
+    }
     return row === null ? [] : [row]
   })
   if (rows.length > 0) settleRetries(draft, parentToolUseId, 'success', recoveryInsertAt)
@@ -2281,6 +2322,20 @@ function projectUserFrame(
   // that same frame (`src/utils/messages/mappers.ts:200-206`), so neither shape
   // may lose its result.
   const body: unknown = message.message
+  if (message.isSynthetic === true && isRecord(body)) {
+    const text = typeof body.content === 'string' ? body.content :
+      Array.isArray(body.content) && body.content.length === 1 && isRecord(body.content[0]) &&
+      body.content[0].type === 'text' && typeof body.content[0].text === 'string' ? body.content[0].text : null
+    const result = text === null ? null : parseInlineCommandResult(text)
+    if (result) {
+      draft.session.inlineCommandResults = [
+        ...(draft.session.inlineCommandResults ?? []).filter(run => run.runId !== result.runId),
+        result,
+      ]
+      if (frameId) markFrameSeen(draft, frameId)
+      return true
+    }
+  }
   let changed =
     isRecord(body) && Array.isArray(body.content)
       ? foldToolResultBlocks(

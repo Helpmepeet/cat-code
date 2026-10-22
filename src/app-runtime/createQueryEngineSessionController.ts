@@ -1,4 +1,6 @@
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
+import type { InlineCommandRun } from '../../app/shared/inlineCommand.js'
+import type { InlineCommandOperation } from './inlineCommand.js'
 import type { ConversationRewindResult } from '../QueryEngine.js'
 import type { ConversationForkResult } from '../commands/branch/branch.js'
 import type { MessageOrigin } from '../types/message.js'
@@ -21,6 +23,7 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
   isMeta?: boolean
   origin?: MessageOrigin
   onInputPersisted?: () => void | Promise<void>
+  inlineCommand?: InlineCommandOperation
   handoffContinuation?: { operationId: string }
   /** Internal controller admission requirement, never renderer input. */
   handoffReconciliationAdmission?: true
@@ -31,6 +34,8 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
 }
 
 export type QueryEngineSessionLike = {
+  executeInlineCommand?: (operation: InlineCommandOperation) => AsyncIterable<SDKMessage>
+  getInlineCommandRuns?: () => InlineCommandRun[]
   submitMessage(
     prompt: AppSessionPrompt,
     options?: QueryEngineSessionOptions,
@@ -65,6 +70,7 @@ export function createQueryEngineSessionAdapter(
         onPermissionRequest,
       })
     },
+    getInlineCommandRuns: session.getInlineCommandRuns ? () => session.getInlineCommandRuns!() : undefined,
     readHandoffOutcome: session.readHandoffOutcome ? operationId => session.readHandoffOutcome!(operationId) : undefined,
     recoverHandoffReconciliation: session.recoverHandoffReconciliation ? notice => session.recoverHandoffReconciliation!(notice) : undefined,
     sealResumeCheckpoint: session.sealResumeCheckpoint ? () => session.sealResumeCheckpoint!() : undefined,

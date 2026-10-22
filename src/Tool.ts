@@ -197,6 +197,12 @@ export type McpRuntimeInputs = {
 }
 
 export type ToolUseContext = {
+  /** Controller-owned foreground execution, never populated from tool input. */
+  inlineCommand?: {
+    command: string
+    cwd: string
+    onResult: (result: { code: number; stdout: string; interrupted: boolean }) => void
+  }
   /** Engine-issued, per-input execution preparation. The input reference must
    * match the canonical candidate for which the state was prepared. */
   preparedExecution?: {

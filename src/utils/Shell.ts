@@ -165,6 +165,9 @@ const resolveProvider: Record<ShellType, () => Promise<ShellProvider>> = {
 }
 
 export type ExecOptions = {
+  cwd?: string
+  requireExactCommand?: boolean
+  stdin?: 'ignore'
   timeout?: number
   onProgress?: (
     lastLines: string,
@@ -237,17 +240,19 @@ export async function exec(
     useSandbox: shouldUseSandbox ?? false,
     workerScoped,
     exitSemanticCommands,
+    requireExactCommand: options?.requireExactCommand,
   })
 
   let commandString = builtCommand
 
-  let cwd = pwd()
+  let cwd = options?.cwd ?? pwd()
 
   // Recover if the current working directory no longer exists on disk.
   // This can happen when a command deletes its own CWD (e.g., temp dir cleanup).
   try {
     await realpath(cwd)
   } catch {
+    if (options?.cwd) throw new Error(`Working directory "${cwd}" no longer exists.`)
     const fallback = getOriginalCwd()
     logForDebugging(
       `Shell CWD "${cwd}" no longer exists, recovering to "${fallback}"`,
@@ -359,8 +364,8 @@ export async function exec(
       env: workerScoped ? applyWorkerEnvAllowlist(composedEnv) : composedEnv,
       cwd,
       stdio: usePipeMode
-        ? ['pipe', 'pipe', 'pipe']
-        : ['pipe', outputHandle?.fd, outputHandle?.fd],
+        ? [options?.stdin ?? 'pipe', 'pipe', 'pipe']
+        : [options?.stdin ?? 'pipe', outputHandle?.fd, outputHandle?.fd],
       // Don't pass the signal - we'll handle termination ourselves with tree-kill
       detached: provider.detached,
       // Prevent visible console window on Windows (no-op on other platforms)

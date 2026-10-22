@@ -12,6 +12,7 @@ import {
 } from '../shared/workStatus.js'
 import type { LidWorkRuntime } from '../../src/services/lidClosedWork.js'
 import { isPathTrusted } from '../../src/utils/config.js'
+import { InlineCommandRequests, inlineCommandMessageSchema } from './inlineCommandRequests.js'
 /**
  * The headless Bun engine sidecar's socket server.
  *
@@ -538,6 +539,8 @@ export class SidecarServer {
   private readonly engineSessionId: string
   private readonly generation: string
   private readonly controller: AppSessionController
+  private readonly inlineCommands = new InlineCommandRequests()
+  private inlineCommandActive = false
   private readonly permissions: SidecarPermissionDomain | null
   private readonly settings: SidecarSettingsDomain | null
   private readonly agentConfig: SidecarAgentConfigDomain | null
@@ -1197,6 +1200,7 @@ export class SidecarServer {
     // selectable options + availability). Read-at-call + re-broadcast on change; no
     // renderer-authored state (the value/selection rides the app-owned write verbs).
     this.sendRunControlsSnapshot(connection)
+    this.sendInlineCommands(connection)
     // P4-5 — redacted Codex account pool snapshot (the canonical domain read-seam),
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
@@ -1448,6 +1452,9 @@ export class SidecarServer {
   /** Tear down the controller + permission-context subscriptions. */
   close(): void {
     this.closed = true
+    if (this.inlineCommandActive) {
+      this.controller.abort('Session closed')
+    }
     if (this.diagnosticsStartTimer) clearTimeout(this.diagnosticsStartTimer)
     this.diagnosticsStartTimer = null
     this.unsubscribeDiagnostics?.()
@@ -1549,6 +1556,10 @@ export class SidecarServer {
       [['app.park'], (server, _connection, message) => server.handlePark(message)],
       [['lid.work'], (server, connection, message) => server.handleLidWork(connection, message)],
       [['work.status'], (server, connection, message) => server.handleWorkStatus(connection, message)],
+      [
+        ['inline-command.get', 'inline-command.start', 'inline-command.stop'],
+        (server, connection, message) => server.handleInlineCommand(connection, message),
+      ],
       // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds.
       // `host.result` settles one request this sidecar minted an id for;
       // `peer.deliver` is a message another session sent, routed by main. Both
@@ -1804,6 +1815,106 @@ export class SidecarServer {
       generation: this.generation,
       sequence: ++this.workStatusSequence,
       work,
+    })
+  }
+
+  private sendInlineCommands(connection?: Connection): void {
+    const frame: ServerFrame = {
+      kind: 'inline-command.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      generation: this.generation,
+      runs: this.inlineCommands.getRuns(),
+      requests: this.inlineCommands.getRequests(),
+    }
+    if (connection) this.send(connection, frame)
+    else this.broadcastToConnections(connection => this.send(connection, frame))
+  }
+
+  private handleInlineCommand(connection: Connection, raw: unknown): void {
+    const message = this.parseVerbMessage(
+      connection, raw, inlineCommandMessageSchema, 'Invalid Run request.',
+    )
+    if (!message) return
+    if (message.type === 'inline-command.get') {
+      this.sendInlineCommands(connection)
+      return
+    }
+    if (message.generation !== this.generation) {
+      this.sendError(connection, message.requestId, 'bad_request',
+        'This command belongs to an earlier connection. Check its outcome before running it again.', false)
+      this.sendInlineCommands(connection)
+      return
+    }
+    if (message.type === 'inline-command.stop') {
+      if (!this.controller.stopInlineCommand(message.runId)) {
+        this.sendError(connection, message.requestId, 'bad_request', 'This command is no longer running.', false)
+      }
+      this.sendInlineCommands(connection)
+      return
+    }
+    if (message.source.engineSessionId !== this.engineSessionId) {
+      this.sendError(connection, message.requestId, 'bad_request', 'This code block belongs to another conversation.', false)
+      return
+    }
+    // Accepted retries get state even while busy or after completion. A lost
+    // acknowledgement must not turn into another command launch.
+    if (this.inlineCommands.has(message.requestId)) {
+      try {
+        this.inlineCommands.admit(message.requestId, message.source)
+        this.sendInlineCommands(connection)
+      } catch (error) {
+        this.sendError(connection, message.requestId, 'bad_request',
+          error instanceof Error ? error.message : String(error), false)
+      }
+      return
+    }
+    if (this.closed || this.parking || this.activeTurn || this.controller.isTurnActive() ||
+        this.conversationMutationInFlight || !this.controller.canStartAutomaticTurn() ||
+        this.inFlightDurableWrites > 0 || this.controller.getPendingPermissionRequests().length > 0 ||
+        this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification()) {
+      this.sendError(connection, message.requestId, 'turn_already_running',
+        'Wait for the current operation to finish before running this command.', true)
+      return
+    }
+    if (this.workspaceTrust && this.workspaceTrust.getSnapshot()?.trusted !== true) {
+      this.sendError(connection, message.requestId, 'unauthorized',
+        'Accept the workspace trust prompt before running commands.', false)
+      return
+    }
+    try {
+      this.inlineCommands.admit(message.requestId, message.source)
+    } catch (error) {
+      this.sendError(connection, message.requestId, 'bad_request',
+        error instanceof Error ? error.message : String(error), false)
+      return
+    }
+    this.runControls?.lockProviderSwitches()
+    this.activeTurn = true
+    this.inlineCommandActive = true
+    this.beginTurnObservation()
+    let rejected = false
+    let lastOutput = ''
+    void this.controller.submitInlineCommand(message.source, run => {
+      if (run.output !== lastOutput) {
+        this.turnLastEventAtMs = Date.now()
+        lastOutput = run.output
+      }
+      this.inlineCommands.update(message.requestId, run)
+      this.sendInlineCommands()
+    }).catch(error => {
+      rejected = true
+      this.inlineCommands.reject(message.requestId, error instanceof Error ? error.message : String(error))
+      this.sendError(connection, message.requestId, 'internal_error',
+        error instanceof Error ? error.message : String(error), false)
+    }).finally(() => {
+      this.activeTurn = false
+      this.inlineCommandActive = false
+      this.endTurnObservation(rejected || this.turnResultFailed ? 'failed' : 'ok')
+      this.recalledPrompts.clear()
+      this.publishHandoffReady()
+      this.scheduleBoundaryDrain()
+      this.sendInlineCommands()
     })
   }
 
@@ -4095,6 +4206,7 @@ export class SidecarServer {
   }
 
   private broadcastTranscriptReset(): void {
+    this.inlineCommands.retirePreviews()
     for (const connection of this.connections) {
       this.resetConnectionReplayState(connection)
       this.send(connection, {
@@ -4102,10 +4214,12 @@ export class SidecarServer {
         protocolVersion: PROTOCOL_VERSION,
         sessionId: this.sessionId,
       })
+      this.sendInlineCommands(connection)
     }
   }
 
   private broadcastTranscriptResetAndReplay(): void {
+    this.inlineCommands.retirePreviews()
     for (const connection of this.connections) {
       this.resetConnectionReplayState(connection)
       this.send(connection, {
@@ -4114,6 +4228,7 @@ export class SidecarServer {
         sessionId: this.sessionId,
       })
       this.sendHistoryAvailability(connection, this.sendHistoryReplay(connection))
+      this.sendInlineCommands(connection)
     }
   }
 
@@ -6283,6 +6398,9 @@ function checkStrictKeys(message: unknown): string | null {
 
   const allowedByType = new Map<string, Set<string>>([
     ['work.status', new Set(['type', 'requestId', 'forGeneration'])],
+    ['inline-command.get', new Set(['type', 'requestId'])],
+    ['inline-command.start', new Set(['type', 'requestId', 'generation', 'source'])],
+    ['inline-command.stop', new Set(['type', 'requestId', 'generation', 'runId'])],
     ['app.submit', new Set(['type', 'requestId', 'prompt', 'options'])],
     ['app.abort', new Set(['type', 'requestId', 'reason'])],
     ['permission.response', new Set(['type', 'requestId', 'response'])],

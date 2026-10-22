@@ -101,3 +101,7 @@ export const CH_SCHEDULED_TASKS_COMMAND = 'catcode:scheduled-tasks:command'
 export const CH_LID_READ = 'catcode:lid:read'
 export const CH_LID_COMMAND = 'catcode:lid:command'
 export const CH_LID_CHANGED = 'catcode:lid:changed'
+
+export const CH_INLINE_COMMAND_START = 'catcode:inline-command-start'
+export const CH_INLINE_COMMAND_STOP = 'catcode:inline-command-stop'
+export const CH_INLINE_COMMAND_GET = 'catcode:inline-command-get'

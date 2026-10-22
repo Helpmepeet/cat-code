@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { WorkStatusFrame, WorkStatusRequest } from '../shared/workStatus.js'
 import { LidWorkObserver, WORK_FRESHNESS_MS, WORK_REQUEST_TIMEOUT_MS, type LidWorkSession } from './lidWorkObserver.js'
+import { requiresWorkAdmission } from './mainDecisions.js'
 
 const generation = '6a4b8c9d-1e2f-4a51-8b3c-4d5e6f708192'
 const sessionId = 'session-a'
@@ -339,7 +340,7 @@ test('stop and restart cannot reuse a pending response from the old activation',
   observer.stop()
 })
 
-test('new admission requires an empty query sent after successful send', async () => {
+test('inline Start invalidates final-idle verification and requires post-send evidence', async () => {
   const c = clock()
   const requests: WorkStatusRequest[] = []
   const observer = new LidWorkObserver({
@@ -350,9 +351,12 @@ test('new admission requires an empty query sent after successful send', async (
   const started = observer.start()
   observer.handleFrame(frame(requests[0]!, 1), sessionId)
   await started
-  const token = observer.beginAdmission(sessionId)
-  observer.refresh()
+  const idleRevision = observer.read().revision
+  const verification = observer.verify()
   const preSend = requests.at(-1)!
+  expect(requiresWorkAdmission({ type: 'inline-command.start' })).toBe(true)
+  const token = requiresWorkAdmission({ type: 'inline-command.start' })
+    ? observer.beginAdmission(sessionId) : ''
   observer.finishAdmission(token, true)
   observer.handleFrame(frame(preSend, 2), sessionId)
   expect(observer.read().availability).toBe('unknown')
@@ -360,6 +364,8 @@ test('new admission requires an empty query sent after successful send', async (
   await observer.refresh()
   const postSend = requests.at(-1)!
   observer.handleFrame(frame(postSend, 3), sessionId)
+  const verified = await verification
+  expect(verified.revision).not.toBe(idleRevision)
   expect(observer.read()).toMatchObject({ availability: 'fresh', hasUnfinishedWork: false })
   observer.stop()
 })

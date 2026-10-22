@@ -49,7 +49,10 @@ export function createQueryEngineAppSession(
       engine.refreshAbortController?.()
       // Detached workers still use this session's permission route between turns.
       currentPermissionHandler = options?.onPermissionRequest
-      if (options?.handoffContinuation) {
+      if (options?.inlineCommand) {
+        if (!engine.executeInlineCommand) throw new Error('Inline command execution is unavailable')
+        yield* engine.executeInlineCommand(options.inlineCommand)
+      } else if (options?.handoffContinuation) {
         if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
         yield* engine.continueHandoff(options.handoffContinuation.operationId, options)
       } else yield* engine.submitMessage(prompt, {
@@ -63,6 +66,7 @@ export function createQueryEngineAppSession(
         handoffReconciliationContext: options?.handoffReconciliationContext,
       })
     },
+    getInlineCommandRuns() { return engine.getInlineCommandRuns?.() ?? [] },
     readHandoffOutcome(operationId) { return engine.readHandoffOutcome?.(operationId) ?? Promise.resolve(null) },
     recoverHandoffReconciliation(notice) {
       if (!engine.recoverHandoffReconciliation) return Promise.resolve(null)

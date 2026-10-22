@@ -26,6 +26,8 @@ import type {
   AccountResultFrame,
   AskUserQuestionAnswer,
   CatCodeBridge,
+  InlineCommandStartMessage,
+  InlineCommandStopMessage,
   PermissionResponseInput,
   PermissionSetModeMode,
   RemoteVerbMessage,
@@ -77,6 +79,9 @@ import {
   CH_HOST_MANAGE_ACCOUNT,
   CH_WORKSPACE_TRUST_VERB,
   CH_TASK_CONTROL_VERB,
+  CH_INLINE_COMMAND_START,
+  CH_INLINE_COMMAND_STOP,
+  CH_INLINE_COMMAND_GET,
   CH_RUN_CONTROL_VERB,
   CH_PROMPT_FORCE,
   CH_PROMPT_RECALL,
@@ -346,6 +351,36 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_WORKSPACE_TRUST_VERB, payload)
+  },
+  startInlineCommand(sessionId: SessionId, input: Omit<InlineCommandStartMessage, 'type'>): boolean {
+    const payload = { sessionId, verb: { ...input, type: 'inline-command.start' } }
+    try {
+      sendGuard.assertAllowed(payload)
+      ipcRenderer.send(CH_INLINE_COMMAND_START, payload)
+      return true
+    } catch {
+      return false
+    }
+  },
+  stopInlineCommand(sessionId: SessionId, input: Omit<InlineCommandStopMessage, 'type'>): boolean {
+    const payload = { sessionId, verb: { ...input, type: 'inline-command.stop' } }
+    try {
+      sendGuard.assertAllowed(payload)
+      ipcRenderer.send(CH_INLINE_COMMAND_STOP, payload)
+      return true
+    } catch {
+      return false
+    }
+  },
+  getInlineCommands(sessionId: SessionId): boolean {
+    const payload = { sessionId, verb: { type: 'inline-command.get', requestId: crypto.randomUUID() } }
+    try {
+      sendGuard.assertAllowed(payload)
+      ipcRenderer.send(CH_INLINE_COMMAND_GET, payload)
+      return true
+    } catch {
+      return false
+    }
   },
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void {
     // P4-8b — HC3 fixed sender for the worker Stop/kill action. Same posture as

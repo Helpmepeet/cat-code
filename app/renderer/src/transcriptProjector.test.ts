@@ -599,6 +599,10 @@ test('accumulates text deltas into an in-progress assistant row and reconciles t
       sessionId: 'session-1',
       messageId: 'msg-streaming-text',
       frameId: '00000000-0000-4000-8000-000000000024',
+      inlineCommandOrigin: {
+        messageUuid: '00000000-0000-4000-8000-000000000024',
+        contentBlockIndex: 0,
+      },
       blockIndex: 0,
       parentToolUseId: null,
       kind: 'assistant-text',

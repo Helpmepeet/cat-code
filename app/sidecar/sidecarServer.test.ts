@@ -7838,12 +7838,13 @@ test('message-targeted edit resets, replays retained history, then returns the p
     'transcript.reset',
     'event',
     'history.availability',
+    'inline-command.snapshot',
     'session-action.result',
   ])
   expect(
     first.received[1]?.kind === 'event' && first.received[1].replay,
   ).toBe(true)
-  expect(first.received[3]).toMatchObject({
+  expect(first.received[4]).toMatchObject({
     kind: 'session-action.result',
     requestId: 'edit-1',
     verb: 'editFromMessage',

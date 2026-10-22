@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto'
+import type { InlineCommandRun, InlineCommandSource } from '../../app/shared/inlineCommand.js'
+import type { InlineCommandOperation } from './inlineCommand.js'
 import { queryTimingBoundary } from '../utils/queryProfiler.js'
 import { withLidWorkRun, noteLidWorkApproval, noteLidWorkProgress } from '../services/lidClosedWork.js'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
@@ -48,6 +50,7 @@ export type AppSessionControllerAdapter = {
       isMeta?: boolean
       origin?: MessageOrigin
       onInputPersisted?: () => void | Promise<void>
+      inlineCommand?: InlineCommandOperation
       handoffContinuation?: { operationId: string }
       /** Controller-owned admission barrier; never accepted from app.submit. */
       handoffReconciliationAdmission?: true
@@ -66,6 +69,7 @@ export type AppSessionControllerAdapter = {
   sealResumeCheckpoint?: () => Promise<ResumeCheckpointV1>
   verifyResumeCheckpoint?: (checkpoint: ResumeCheckpointV1) => Promise<void>
   abort?: (intent?: AppSessionAbortIntent) => void
+  getInlineCommandRuns?: () => InlineCommandRun[]
   selectUserMessage?: (targetUuid: string) => UserMessage
   rewindBeforeUserMessage?: (
     targetUuid: string,
@@ -96,6 +100,7 @@ export class AppSessionController {
   private goalSnapshot: AppGoalSnapshot = null
   private abortController: AbortController | null = null
   private activeTurn = false
+  private inlineCommand: { runId: string; controller: AbortController } | null = null
   private handoffExecution: HandoffExecution | null = null
   private handoffSettlement: Promise<void> | null = null
   private initialization: Promise<void> = Promise.resolve()
@@ -406,9 +411,42 @@ export class AppSessionController {
     await this.runSubmit(prompt, options)
   }
 
+  async submitInlineCommand(source: InlineCommandSource, onProgress: (run: InlineCommandRun) => void): Promise<void> {
+    // No await before runSubmit claims the same admission/permission owner as a turn.
+    if (!this.canStartAutomaticTurn() || this.pendingPermissionRequests.size) throw new Error('Session is busy')
+    const operation = { runId: randomUUID(), controller: new AbortController() }
+    this.inlineCommand = operation
+    let latest: InlineCommandRun | undefined
+    try {
+      await this.runSubmit('', { inlineCommand: {
+        source, runId: operation.runId, signal: operation.controller.signal,
+        onProgress: run => {
+          latest = run
+          if (run.status !== 'running' && this.inlineCommand === operation) this.inlineCommand = null
+          onProgress(run)
+        },
+      } })
+    } catch (error) {
+      if (latest) onProgress({ ...latest, error: `Agent response failed: ${error instanceof Error ? error.message : String(error)}` })
+      throw error
+    } finally {
+      if (this.inlineCommand === operation) this.inlineCommand = null
+    }
+  }
+
+  stopInlineCommand(runId: string): boolean {
+    if (!this.inlineCommand || this.inlineCommand.runId !== runId || this.inlineCommand.controller.signal.aborted) return false
+    this.inlineCommand.controller.abort('Inline command stopped')
+    return true
+  }
+
+  getInlineCommandRuns(): InlineCommandRun[] {
+    return this.adapter.getInlineCommandRuns?.() ?? []
+  }
+
   private async runSubmit(
     prompt: AppSessionPrompt,
-    options?: AppSessionSubmitOptions & HandoffTurnLifecycleOptions,
+    options?: AppSessionSubmitOptions & HandoffTurnLifecycleOptions & { inlineCommand?: InlineCommandOperation },
     continuationOperationId?: string,
   ): Promise<void> {
     if (this.activeTurn) {
@@ -444,6 +482,7 @@ export class AppSessionController {
               uuid: options?.uuid,
               isMeta: options?.isMeta,
               origin: options?.origin,
+              inlineCommand: options?.inlineCommand,
               ...(continuationOperationId ? { handoffContinuation: { operationId: continuationOperationId } } : {}),
               ...(reconcileInput ? { handoffReconciliationAdmission: true as const } : {}),
               onExecutionClosed: options?.onExecutionClosed,
@@ -479,6 +518,12 @@ export class AppSessionController {
 
           for await (const message of messages) {
             this.emit(createMessageEvent(message))
+            if (options?.inlineCommand && !this.abortController.signal.aborted &&
+              message.type === 'result' && message.is_error) {
+              const detail = 'errors' in message && Array.isArray(message.errors)
+                ? message.errors.join('; ').slice(0, 2000) : message.subtype
+              throw new Error(detail || 'The agent response did not complete')
+            }
           }
         } finally {
           this.setActiveTurn(false)

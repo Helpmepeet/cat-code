@@ -1315,6 +1315,17 @@ async function checkPermissionsAndCallTool(
     if (finalInput.allowed) {
       toolUseContext = finalInput.context
       trustedSedEdit = finalInput.trustedSedEdit
+      if (toolUseContext.inlineCommand &&
+        (tool.name !== BASH_TOOL_NAME ||
+          trustedSedEdit !== undefined ||
+          processedInput.command !== toolUseContext.inlineCommand.command ||
+          processedInput.run_in_background === true)) {
+        permissionDecision = {
+          behavior: 'deny',
+          message: 'The selected command was changed during authorization and was not executed.',
+          decisionReason: { type: 'other', reason: 'Inline commands must execute unchanged' },
+        }
+      }
     }
   }
 

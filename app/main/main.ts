@@ -1,3 +1,4 @@
+import { parseInlineCommandPayload } from './inlineCommandPayload.js'
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
 import { lidClosedMenu } from './lidClosedMenu.js'
 import { LidNativeClient, inspectLidHardware, installLidHelper, lidHelperCurrent } from './lidClosedNative.js'
@@ -131,6 +132,9 @@ import {
   CH_HOST_MANAGE_ACCOUNT,
   CH_WORKSPACE_TRUST_VERB,
   CH_TASK_CONTROL_VERB,
+  CH_INLINE_COMMAND_START,
+  CH_INLINE_COMMAND_STOP,
+  CH_INLINE_COMMAND_GET,
   CH_RUN_CONTROL_VERB,
   CH_PROMPT_FORCE,
   CH_PROMPT_RECALL,
@@ -226,6 +230,8 @@ import {
   isSessionLive,
   isSessionReadyForFrames,
   isUserTurnSubmit,
+  requiresWorkAdmission,
+  inlineCommandRefusalFrame,
   validateSaveTextRequest,
 } from './mainDecisions.js'
 import {
@@ -2527,6 +2533,19 @@ function registerIpcHandlers(): void {
     })
   }
 
+  // Decision: docs/plans/2026-10-22-inline-command-run.md §4A,B.
+  for (const [channel, type] of [
+    [CH_INLINE_COMMAND_START, 'inline-command.start'],
+    [CH_INLINE_COMMAND_STOP, 'inline-command.stop'],
+    [CH_INLINE_COMMAND_GET, 'inline-command.get'],
+  ] as const) {
+    ipcMain.on(channel, (event, raw: unknown) => {
+      if (!isMainWindowSender(event)) return
+      const payload = parseInlineCommandPayload(raw, type)
+      if (payload) forward(payload.sessionId, payload.verb)
+    })
+  }
+
   ipcMain.on(CH_PING, (_e, arg: { sessionId: SessionId; nonce: string }) => {
     if (typeof arg?.sessionId !== 'string' || typeof arg?.nonce !== 'string') return
     forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
@@ -4252,8 +4271,15 @@ function handOff(
   message: SidecarClientMessage,
   audience: 'renderer' | 'internal',
 ): ErrorFrame['code'] | null {
-  if (!SESSION_ID_RE.test(sessionId)) return 'bad_request'
-  if (host?.isMoving(sessionId) && message.type !== 'host.result' && message.type !== 'app.abort' && message.type !== 'workspace.handoff') return 'session_not_ready'
+  const refuseEarly = (code: ErrorFrame['code']): ErrorFrame['code'] => {
+    if (audience === 'renderer') {
+      const frame = inlineCommandRefusalFrame(sessionId, message, audience, code)
+      if (frame) deliver(attachmentGate.onFrame(sessionId, frame))
+    }
+    return code
+  }
+  if (!SESSION_ID_RE.test(sessionId)) return refuseEarly('bad_request')
+  if (host?.isMoving(sessionId) && message.type !== 'host.result' && message.type !== 'app.abort' && message.type !== 'workspace.handoff') return refuseEarly('session_not_ready')
   if ((message.type === 'app.submit' || message.type === 'peer.deliver') && (workspaceJump?.isReserved(sessionId) || workspaceJump?.requiresReview(sessionId))) {
     workspaceJump?.queryStatus(sessionId)
     let state: WorkspaceJumpStateV2 | null = null
@@ -4298,7 +4324,7 @@ function handOff(
     return 'session_not_found'
   }
   try {
-    if (message.type === 'app.submit' && !host?.ensureManagedSubmitIdentity(sessionId)) {
+    if ((message.type === 'app.submit' || message.type === 'inline-command.start') && !host?.ensureManagedSubmitIdentity(sessionId)) {
       finishAdmission(false)
       const messageText = "This chat's storage could not be verified. Check its folder, then retry."
       if (audience === 'renderer') {
@@ -4316,7 +4342,7 @@ function handOff(
       process.stderr.write(`[main] forward to ${sessionId} failed: ${messageText}\n`)
       return 'session_not_ready'
     }
-    if (message.type === 'app.submit' || message.type === 'peer.deliver') {
+    if (requiresWorkAdmission(message)) {
       admission = lidWorkObserver?.beginAdmission(sessionId)
       if (admission !== undefined) lidMode?.onAdmissionStarted()
     }

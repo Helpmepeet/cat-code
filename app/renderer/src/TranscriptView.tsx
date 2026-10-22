@@ -32,6 +32,8 @@ import {
   type Ref,
 } from 'react'
 import Markdown from 'react-markdown'
+import { extractInlineCommandFences, inlineCommandSourceKey, type InlineCommandSource } from '../../shared/inlineCommand.js'
+import { InlineCommandContext } from './inlineCommandState.js'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, CatCodeBridge, SessionId } from '../../shared/protocol.js'
@@ -1656,6 +1658,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
           content={row.content}
           sourceId={row.id}
           sessionId={row.sessionId}
+          inlineCommandOrigin={row.inlineCommandOrigin}
           streaming={row.isStreaming}
           narration={narration}
         />
@@ -1827,14 +1830,38 @@ function AssistantProse({
   sessionId,
   streaming,
   narration,
+  inlineCommandOrigin,
 }: {
   content: string
   sourceId: string
   sessionId: SessionId
   streaming?: true
   narration: boolean
+  inlineCommandOrigin?: { messageUuid: string; contentBlockIndex: number }
 }) {
   const toast = useToast()
+  const inlineCommands = useContext(InlineCommandContext)
+  const eligibleFences = useMemo(
+    () => inlineCommandOrigin && !streaming ? extractInlineCommandFences(content) : [],
+    [content, inlineCommandOrigin, streaming],
+  )
+  const inlineSourceRef = useRef({
+    engineSessionId: inlineCommands?.engineSessionId,
+    origin: inlineCommandOrigin,
+    fences: eligibleFences,
+  })
+  inlineSourceRef.current = {
+    engineSessionId: inlineCommands?.engineSessionId,
+    origin: inlineCommandOrigin,
+    fences: eligibleFences,
+  }
+  const sourceAtOffset = useCallback((offset: number | undefined): InlineCommandSource | undefined => {
+    const { engineSessionId, origin, fences } = inlineSourceRef.current
+    if (!engineSessionId || !origin || offset === undefined) return
+    const fence = fences.find(fence => fence.startOffset === offset)
+    if (!fence) return
+    return { engineSessionId, ...origin, fenceOrdinal: fence.ordinal }
+  }, [])
   const filePathContext = useContext(FilePathMenuContext)
   const openFile = useCallback(
     (path: string): void => {
@@ -1865,9 +1892,9 @@ function AssistantProse({
     () => ({
       ...MARKDOWN_COMPONENTS,
       a: createPathAwareAnchor(openFile, onContextMenu),
-      code: createPathAwareCode(openFile, onContextMenu),
+      code: createPathAwareCode(openFile, onContextMenu, sourceAtOffset),
     }),
-    [openFile, onContextMenu],
+    [openFile, onContextMenu, sourceAtOffset],
   )
   const { arrival } = useContext(ProseArrivalContext)
   const { freshProse } = useContext(TranscriptMotionContext)
@@ -1934,6 +1961,7 @@ function AssistantProse({
             <MarkdownErrorBoundary fallback={leaf.codeSource}>
               <CodeBlock
                 code={leaf.codeSource}
+                inlineSource={sourceAtOffset(leaf.codeStartOffset)}
                 streaming={leaf.codeOpen}
                 highlighted={
                   <MarkdownTree
@@ -2024,11 +2052,13 @@ function createPathAwareAnchor(
 function createPathAwareCode(
   openFile: (path: string) => void,
   onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
+  sourceAtOffset?: (offset: number | undefined) => InlineCommandSource | undefined,
 ) {
   return function PathAwareCode({
     className,
     children,
-  }: ComponentPropsWithoutRef<'code'>) {
+    node,
+  }: ComponentPropsWithoutRef<'code'> & { node?: HastElement }) {
     const inLabel = useContext(FileLinkLabelContext)
     const text = childrenToText(children)
     if (!inLabel && !className && isInlineFilePath(text)) {
@@ -2053,7 +2083,7 @@ function createPathAwareCode(
         </button>
       )
     }
-    return <MarkdownCode className={className}>{children}</MarkdownCode>
+    return <MarkdownCode className={className} inlineSource={sourceAtOffset?.(node?.position?.start.offset)}>{children}</MarkdownCode>
   }
 }
 
@@ -2179,7 +2209,8 @@ const USER_BUBBLE_LITERAL_CLASSES = [
 function MarkdownCode({
   className,
   children,
-}: ComponentPropsWithoutRef<'code'>) {
+  inlineSource,
+}: ComponentPropsWithoutRef<'code'> & { inlineSource?: InlineCommandSource }) {
   const match = /language-(\w+)/.exec(className ?? '')
   const text = childrenToText(children)
   // Inline code (single backtick, no language, no newline) stays inline.
@@ -2191,6 +2222,7 @@ function MarkdownCode({
   return (
     <CodeBlock
       code={text.replace(/\n$/, '')}
+      inlineSource={inlineSource}
       highlighted={children}
     />
   )
@@ -2263,13 +2295,23 @@ export function CodeBlock({
   code,
   highlighted,
   streaming = false,
+  inlineSource,
 }: {
   code: string
   highlighted: ReactNode
   /** The fence is still arriving, so there is no finished block to copy. */
   streaming?: boolean
+  inlineSource?: InlineCommandSource
 }) {
   const [copied, setCopied] = useState(false)
+  const commands = useContext(InlineCommandContext)
+  const sourceKey = inlineSource ? inlineCommandSourceKey(inlineSource) : undefined
+  const run = sourceKey ? [...(commands?.runs ?? [])].reverse().find(run => inlineCommandSourceKey(run.source) === sourceKey) : undefined
+  const pending = sourceKey ? commands?.pending.has(sourceKey) : false
+  const completedAttempt = sourceKey ? commands?.requests.some(request => inlineCommandSourceKey(request.source) === sourceKey && request.status === 'completed') : false
+  const error = sourceKey ? commands?.errors.get(sourceKey) : undefined
+  const running = run?.status === 'running'
+  const busy = !!commands && (commands.pending.size > 0 || commands.runs.some(run => run.status === 'running'))
   const copy = (): void => {
     if (streaming) return
     const clipboard =
@@ -2296,6 +2338,13 @@ export function CodeBlock({
       className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg"
       data-window-ground
     >
+      {inlineSource && commands ? (
+        <button type="button"
+          className="absolute right-11 top-1 z-[1] rounded-md px-2 py-1 text-xs text-text-subtle hover:bg-white/[0.06] hover:text-text-primary disabled:opacity-50"
+          disabled={!commands.generation || pending || (!running && busy)}
+          onClick={() => running && run ? commands.stop(run) : commands.start(inlineSource)}
+        >{pending ? 'Starting…' : running ? 'Stop' : run || error || completedAttempt ? 'Run again' : 'Run'}</button>
+      ) : null}
       <button
         type="button"
         onClick={copy}
@@ -2331,6 +2380,21 @@ export function CodeBlock({
       <pre className="overflow-x-auto px-3.5 py-3.5 font-mono text-[12.5px] leading-[1.65]">
         <code className="hljs">{highlighted}</code>
       </pre>
+      {!run && completedAttempt ? <p className="border-t border-shell-seam px-3.5 py-3 text-xs text-text-subtle">Command output is no longer retained.</p> : null}
+      {run ? (
+        <section className="border-t border-shell-seam px-3.5 py-3 text-xs" aria-label="Command output">
+          <div className="mb-2 text-text-subtle">
+            {run.status === 'running' ? 'Running' : run.status === 'success' ? 'Completed' : run.status === 'failed' ? 'Failed' : run.status === 'stopped' ? 'Stopped' : 'Interrupted'}
+            {run.exitCode !== null ? ` · Exit ${run.exitCode}` : ''}
+            {run.cwd ? ` · ${run.cwd}` : ''}
+          </div>
+          <pre className="max-h-80 select-text overflow-auto whitespace-pre-wrap break-words font-mono">{run.output.slice(0, 64_000)}</pre>
+          {run.output.length > 64_000 ? <p className="text-text-subtle">Output preview truncated.</p> : null}
+          {run.error ? <p className="mt-2 text-text-muted">{run.error.slice(0, 4_000)}</p> : null}
+          {run.status === 'interrupted' && !run.error ? <p className="mt-2 text-text-muted">The command may already have had effects.</p> : null}
+        </section>
+      ) : null}
+      {error ? <p role="alert" className="border-t border-shell-seam px-3.5 py-2 text-xs text-text-muted">{error}</p> : null}
     </div>
   )
 }

@@ -166,6 +166,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'workers.snapshot': 'sticky',
   'lease.snapshot': 'sticky',
   'run-controls.snapshot': 'sticky',
+  'inline-command.snapshot': 'sticky',
   // On-demand snapshot: forwarded live, not retained in replay buffer.
   'context-breakdown.snapshot': 'none',
   'accounts.snapshot': 'sticky',
@@ -321,6 +322,7 @@ export class FrameReplayBuffer {
     if (frame.kind === 'history.availability' && frame.recovered === true) return
     if (frame.kind === 'transcript.reset') {
       entry.sticky.delete('history.availability')
+      entry.sticky.delete('inline-command.snapshot')
       entry.recent = []
       entry.recentBytes = 0
       entry.openStreamPartials.clear()
@@ -330,6 +332,8 @@ export class FrameReplayBuffer {
       entry.previewTruncated = false
     }
     if (retention === 'head') {
+      // A new attach may belong to a replacement execution generation.
+      entry.sticky.delete('inline-command.snapshot')
       entry.ready = frame
       return
     }

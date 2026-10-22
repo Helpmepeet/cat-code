@@ -139,6 +139,7 @@ export async function createBashShellProvider(
         id: number | string
         sandboxTmpDir?: string
         useSandbox: boolean
+        requireExactCommand?: boolean
         workerScoped?: boolean
         exitSemanticCommands?: ReadonlySet<string>
       },
@@ -190,6 +191,9 @@ export async function createBashShellProvider(
       // literal file named `nul` — a reserved device name that breaks git.
       // See anthropics/claude-code#4928.
       const normalizedCommand = rewriteWindowsNullRedirect(command)
+      if (opts.requireExactCommand && normalizedCommand !== command) {
+        throw new Error('The selected command requires shell normalization and cannot run unchanged.')
+      }
       const addStdinRedirect = shouldAddStdinRedirect(normalizedCommand)
 
       const sessionEnvScript = opts.workerScoped

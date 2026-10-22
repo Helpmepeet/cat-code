@@ -54,9 +54,40 @@ import {
   supervisorEventToServerFrame,
   resolveSidecarLaunch,
   validateSaveTextRequest,
+  requiresWorkAdmission,
+  inlineCommandRefusalFrame,
 } from './mainDecisions.js'
 
 const SID = 'app-session-1'
+
+test('inline Start admits work but Get and Stop do not', () => {
+  for (const type of ['app.submit', 'peer.deliver', 'inline-command.start'] as const) {
+    expect(requiresWorkAdmission({ type })).toBe(true)
+  }
+  for (const type of ['inline-command.get', 'inline-command.stop', 'app.ping'] as const) {
+    expect(requiresWorkAdmission({ type })).toBe(false)
+  }
+})
+
+test('a move refusal answers every inline request without depending on a generation change', () => {
+  const messages = [
+    { type: 'inline-command.start', requestId: 'start', generation: 'same-generation',
+      source: { engineSessionId: 'engine', messageUuid: 'message', contentBlockIndex: 0, fenceOrdinal: 0 } },
+    { type: 'inline-command.stop', requestId: 'stop', generation: 'same-generation', runId: 'run' },
+    { type: 'inline-command.get', requestId: 'get' },
+  ] as const
+  for (const message of messages) {
+    expect(inlineCommandRefusalFrame(SID, message, 'renderer', 'session_not_ready')).toMatchObject({
+      kind: 'error', sessionId: SID, requestId: message.requestId,
+      code: 'bad_request', retryable: true,
+    })
+    expect(inlineCommandRefusalFrame(SID, message, 'renderer', 'bad_request')).toMatchObject({
+      requestId: message.requestId, code: 'bad_request', retryable: false,
+    })
+    expect(inlineCommandRefusalFrame(SID, message, 'internal', 'session_not_ready')).toBeNull()
+  }
+  expect(inlineCommandRefusalFrame(SID, { type: 'app.ping', nonce: 'n' }, 'renderer', 'session_not_ready')).toBeNull()
+})
 
 test('the production sidecar runtime enables the desktop engine features', () => {
   expect(SIDECAR_RUNTIME_ARGS).toEqual([

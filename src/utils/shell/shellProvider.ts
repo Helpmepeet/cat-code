@@ -19,6 +19,7 @@ export type ShellProvider = {
       id: number | string
       sandboxTmpDir?: string
       useSandbox: boolean
+      requireExactCommand?: boolean
       /**
        * This command runs on behalf of a subagent and the worker environment
        * allowlist is on. Providers must not have the shell source anything that

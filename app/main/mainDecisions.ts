@@ -38,9 +38,37 @@ import {
   type ServerFrame,
   type SessionId,
   type SubmitPrompt,
+  type SidecarClientMessage,
+  type ErrorFrame,
 } from '../shared/protocol.js'
 import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
 import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js'
+
+export function requiresWorkAdmission(message: Pick<SidecarClientMessage, 'type'>): boolean {
+  return message.type === 'app.submit' || message.type === 'peer.deliver' ||
+    message.type === 'inline-command.start'
+}
+
+/** Only inline requests need an answer on the historically silent early refusals. */
+export function inlineCommandRefusalFrame(
+  sessionId: SessionId,
+  message: SidecarClientMessage,
+  audience: 'renderer' | 'internal',
+  code: ErrorFrame['code'],
+): ErrorFrame | null {
+  if (audience !== 'renderer' || !(
+    message.type === 'inline-command.start' || message.type === 'inline-command.get' ||
+    message.type === 'inline-command.stop'
+  )) return null
+  return {
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId,
+    requestId: message.requestId,
+    // A refused operation does not mean the live engine lost readiness.
+    code: code === 'session_not_ready' ? 'bad_request' : code,
+    message: code === 'bad_request' ? 'That session is not valid.' : 'That session is not ready. Try again.',
+    retryable: code === 'session_not_ready',
+  }
+}
 
 /**
  * Keep the desktop sidecar on the engine's default runtime features. Without

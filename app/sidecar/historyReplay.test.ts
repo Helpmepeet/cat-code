@@ -102,9 +102,8 @@ test('attach replays history after ready as replay:true event frames in order; l
 
   const connection = server.addConnection(socket)
   // `activity` closes the attach burst, before history replay
-  // (HOST-REQUEST-PLANE §4 step 4a). This server has no snapshot domains, so
-  // the burst is that one frame.
-  expect(received.map(f => f.kind)).toEqual(['ready', 'activity', 'event', 'event', 'history.availability', 'history.replay.complete'])
+  // (HOST-REQUEST-PLANE §4 step 4a), after the command-generation snapshot.
+  expect(received.map(f => f.kind)).toEqual(['ready', 'inline-command.snapshot', 'activity', 'event', 'event', 'history.availability', 'history.replay.complete'])
 
   const replayFrames = received.filter(f => f.kind === 'event')
   for (const frame of replayFrames) {
@@ -132,10 +131,10 @@ test('a fresh session (no history) sends no transcript frames on attach', () => 
   const server = makeServer([])
   const { socket, received } = makeSocket()
   server.addConnection(socket)
-  // Ready plus the attach burst, which for a domain-less server is the single
-  // `activity` presence frame. What matters is what is ABSENT: no `event`, no
+  // Ready plus command-generation and presence snapshots. What matters is
+  // what is ABSENT: no `event`, no
   // truncation boundary. The completion marker closes even an empty replay.
-  expect(received.map(f => f.kind)).toEqual(['ready', 'activity', 'history.availability', 'history.replay.complete'])
+  expect(received.map(f => f.kind)).toEqual(['ready', 'inline-command.snapshot', 'activity', 'history.availability', 'history.replay.complete'])
 })
 
 test('restored GenerateImage history cannot authorize a generated-image file read', () => {
@@ -210,12 +209,13 @@ test('frames cap keeps the NEWEST contiguous tail and announces the loss BEFORE 
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
-  // ready → attach burst (`activity`) → truncation boundary → exactly the cap
+  // ready → command snapshot → activity → truncation boundary → exactly the cap
   // of newest events. The boundary still precedes every retained frame, which
   // is the property this test is about.
   expect(received[0]!.kind).toBe('ready')
-  expect(received[1]!.kind).toBe('activity')
-  const boundary = received[2]!
+  expect(received[1]!.kind).toBe('inline-command.snapshot')
+  expect(received[2]!.kind).toBe('activity')
+  const boundary = received[3]!
   expect(boundary.kind).toBe('error')
   if (boundary.kind === 'error') {
     expect(boundary.requestId).toBe(HISTORY_REPLAY_TRUNCATION_REQUEST_ID)
@@ -245,8 +245,9 @@ test('byte cap: oversized history retains only the newest frames that fit, loss 
 
   expect(received[0]!.kind).toBe('ready')
   // `activity` closes the attach burst before history replay begins.
-  expect(received[1]!.kind).toBe('activity')
-  const boundary = received[2]!
+  expect(received[1]!.kind).toBe('inline-command.snapshot')
+  expect(received[2]!.kind).toBe('activity')
+  const boundary = received[3]!
   expect(boundary.kind).toBe('error')
   if (boundary.kind === 'error') {
     expect(boundary.requestId).toBe(HISTORY_REPLAY_TRUNCATION_REQUEST_ID)
@@ -269,12 +270,13 @@ test('a loader-truncated archival prefix is announced even when retained frames 
   server.addConnection(socket)
 
   expect(received[0]!.kind).toBe('ready')
-  expect(received[1]!.kind).toBe('activity')
-  expect(received[2]).toMatchObject({
+  expect(received[1]!.kind).toBe('inline-command.snapshot')
+  expect(received[2]!.kind).toBe('activity')
+  expect(received[3]).toMatchObject({
     kind: 'error',
     requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   })
-  expect(JSON.stringify(received[3])).toContain(
+  expect(JSON.stringify(received[4])).toContain(
     'newest retained display message',
   )
 })

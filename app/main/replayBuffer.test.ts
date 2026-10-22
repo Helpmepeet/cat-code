@@ -51,6 +51,7 @@ const ATTACH_BURST_KINDS = [
   'workers.snapshot',
   'lease.snapshot',
   'run-controls.snapshot',
+  'inline-command.snapshot',
   'accounts.snapshot',
   'workspace-trust.snapshot',
   'diagnostics.snapshot',
@@ -139,6 +140,26 @@ function slashCatalogFrame(sessionId: SessionId = SID): ServerFrame {
     commands: [{ name: 'help', description: 'Show help' }],
   }
 }
+
+test('inline command snapshots replay only within their current attach generation', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, attachSnapshotFrame('inline-command.snapshot', 'old'))
+  buffer.record(SID, attachSnapshotFrame('inline-command.snapshot', 'latest'))
+  expect<ServerFrame[]>(buffer.snapshot().filter(frame => frame.kind === 'inline-command.snapshot')).toEqual([
+    attachSnapshotFrame('inline-command.snapshot', 'latest'),
+  ])
+  buffer.record(SID, readyFrame())
+  expect(buffer.snapshot().some(frame => frame.kind === 'inline-command.snapshot')).toBe(false)
+})
+
+test('transcript reset drops stale inline output before a replacement snapshot arrives', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, attachSnapshotFrame('inline-command.snapshot', 'removed-output'))
+  buffer.record(SID, { kind: 'transcript.reset', protocolVersion: PROTOCOL_VERSION, sessionId: SID })
+  expect(buffer.snapshot().some(frame => frame.kind === 'inline-command.snapshot')).toBe(false)
+})
 
 test('a frame produced before attach is delivered on the first snapshot (the F2 failure)', () => {
   const buffer = new FrameReplayBuffer()

@@ -26,6 +26,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { getBridge } from './bridge.js'
+import { InlineCommandProvider } from './InlineCommandProvider.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { useEntranceOnChange } from './entranceLatch.js'
 import { selectContextUsage } from './contextUsage.js'
@@ -1696,6 +1697,12 @@ export function SessionPane({
   return (
     /* Wrapped without re-indenting the pane below, the same way the composer
      * dock's own column wrapper is. */
+    <InlineCommandProvider
+      sessionId={activeSessionId}
+      engineSessionId={activeSessionId ? transcript.sessions[activeSessionId]?.engineSessionId ?? null : null}
+      snapshot={activeSessionId ? transcript.sessions[activeSessionId]?.inlineCommands : undefined}
+      results={activeSessionId ? transcript.sessions[activeSessionId]?.inlineCommandResults : undefined}
+    >
     <AgentFaceRegistryContext.Provider value={paneFaces}>
     <SubagentWorkspace key={activeSessionId} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
       onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
@@ -2501,6 +2508,7 @@ export function SessionPane({
     </main>
     </SubagentWorkspace>
     </AgentFaceRegistryContext.Provider>
+    </InlineCommandProvider>
   )
 }
 
