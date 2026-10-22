@@ -4,7 +4,7 @@ import { prependBullets } from '../../constants/prompts.js'
 import { isGPTPromptStyle } from '../../constants/promptStyle.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
-import { getManagedSessionPolicy, isManagedSession } from '../../utils/managedSessionPolicy.js'
+import { getManagedSessionPolicy } from '../../utils/managedSessionPolicy.js'
 import { shouldIncludeGitInstructions } from '../../utils/gitSettings.js'
 import { getClaudeTempDir } from '../../utils/permissions/filesystem.js'
 import { SandboxManager } from '../../utils/sandbox/sandbox-adapter.js'
@@ -17,10 +17,6 @@ import {
   getUndercoverInstructions,
   isUndercover,
 } from '../../utils/undercover.js'
-import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
-import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
-import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
-import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { BASH_TOOL_NAME } from './toolName.js'
 
 export function getDefaultTimeoutMs(): number {
@@ -200,23 +196,9 @@ function getSimpleSandboxSection(): string {
 
 export function getBashPrompt(
   provider: APIProvider = getAPIProvider(),
-  enabledToolNames?: ReadonlySet<string>,
 ): string {
   // Embedded builds use bfs for find, whose regex semantics need guidance.
   const embedded = hasEmbeddedSearchTools()
-
-  // The registry swaps Edit for apply_patch by SESSION provider
-  // (getProviderFileEditTool in ../../tools.ts) while this prompt renders per
-  // REQUEST provider, so a gpt-* worker inside an Anthropic session was told
-  // to use apply_patch while Edit shipped. The tool pool is the truth when the
-  // caller passes it; the provider is only the fallback.
-  const editToolName = enabledToolNames?.has(FILE_PATCH_TOOL_NAME)
-    ? FILE_PATCH_TOOL_NAME
-    : enabledToolNames?.has(FILE_EDIT_TOOL_NAME)
-      ? FILE_EDIT_TOOL_NAME
-      : isGPTPromptStyle(provider)
-        ? FILE_PATCH_TOOL_NAME
-        : FILE_EDIT_TOOL_NAME
 
   const multipleCommandsSubitems = [
     `If the commands are independent and can run in parallel, make multiple ${BASH_TOOL_NAME} tool calls in a single message. Example: if you need to run "git status" and "git diff", send a single message with two ${BASH_TOOL_NAME} tool calls in parallel.`,
@@ -283,12 +265,6 @@ export function getBashPrompt(
       'Executes a given bash command and returns its output.',
       '',
       workingDirectoryNote,
-      '',
-      `Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
-      '',
-      isManagedSession()
-        ? `INSPECT CHANGES: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
-        : `SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
       '',
       'Communication: Output text directly (NOT echo/printf)',
       '',

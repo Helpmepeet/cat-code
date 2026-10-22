@@ -8,12 +8,6 @@ import {
   getDefaultBashTimeoutMs,
   getMaxBashTimeoutMs,
 } from '../../utils/timeouts.js'
-import { isGPTPromptStyle } from '../../constants/promptStyle.js'
-import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
-import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
-import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
-import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
-import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { POWERSHELL_TOOL_NAME } from './toolName.js'
 
 export function getDefaultTimeoutMs(): number {
@@ -71,25 +65,14 @@ function getEditionSection(edition: PowerShellEdition | null): string {
    - To chain commands conditionally: \`A; if ($?) { B }\`. Unconditionally: \`A; B\`.`
 }
 
-export async function getPrompt(
-  provider: APIProvider = getAPIProvider(),
-): Promise<string> {
+export async function getPrompt(): Promise<string> {
   const backgroundNote = getBackgroundUsageNote()
   const sleepGuidance = getSleepGuidance()
   const edition = await getPowerShellEdition()
-  const editToolName = isGPTPromptStyle(provider)
-    ? FILE_PATCH_TOOL_NAME
-    : FILE_EDIT_TOOL_NAME
-
-  const policySection = isGPTPromptStyle(provider)
-    ? `Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.
-
-SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`
-    : ''
 
   return `Executes a given PowerShell command with optional timeout. Working directory persists between commands; shell state (variables, functions) does not.
 
-${policySection ? policySection + '\n\n' : ''}${getEditionSection(edition)}
+${getEditionSection(edition)}
 
 Before executing the command, please follow these steps:
 

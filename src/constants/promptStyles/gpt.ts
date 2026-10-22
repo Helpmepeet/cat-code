@@ -25,7 +25,6 @@ import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
-import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
 import { TODO_WRITE_TOOL_NAME } from '../../tools/TodoWriteTool/constants.js'
 import { TASK_CREATE_TOOL_NAME } from '../../tools/TaskCreateTool/constants.js'
 import type { Tools } from '../../Tool.js'
@@ -231,9 +230,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     return [`# Using Your Tools`, ...prependBullets(items)].join('\n')
   }
 
-  const editToolName = getPreferredEditToolName(enabledTools)
   const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
-  const hasBashTool = enabledTools.has(BASH_TOOL_NAME)
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()
       ? `Calling ${AGENT_TOOL_NAME} without a subagent_type creates a background fork. Use it when research or multi-step implementation would fill your context with output you won't need again. If you are the fork, execute directly; do not re-delegate.`
@@ -241,18 +238,6 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     : null
 
   const items = [
-    ...(editToolName && !hasBashTool
-      ? [
-          `Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
-        ]
-      : []),
-    ...(hasBashTool
-      ? []
-      : [
-          isManagedSession()
-            ? `After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), inspect the changed files before moving on. When working in a Git repository, use git diff, or git diff --stat and git status --short for generated or large changes.`
-            : `After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
-        ]),
     `Read files systematically when the requested coverage requires it. Keep output bounded to what the task needs.`,
     ...(enabledTools.has(GREP_TOOL_NAME)
       ? [`Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match.`]

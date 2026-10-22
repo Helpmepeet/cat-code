@@ -458,35 +458,30 @@ describe('provider and prompt regressions', () => {
     expect(withPatchTool).not.toContain('PATHS:')
   })
 
-  test('GPT retains scripting and diff rules when Bash cannot carry them', () => {
-    const section = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
-
-    expect(section).not.toContain('Use apply_patch for local file edits.')
-    expect(section).not.toContain('Do not create or edit files with cat')
-    expect(section).toContain(
-      'Do not use Python to read or write files when a simple shell command or apply_patch is enough.',
-    )
-    expect(section).toContain(
-      'After any file mutation performed by a command rather than by apply_patch, Write, or NotebookEdit',
-    )
-    expect(section).toContain('show the resulting git diff before moving on')
-    expect(section).toContain(
-      'show git diff --stat and git status --short instead',
-    )
-    expect(section).toContain('Never skip the check.')
-
-    expect(section).not.toContain('no dedicated tool')
-  })
-
-  test('Bash owns scripting and diff rules without a duplicate GPT system block', () => {
-    const section = getGPTUsingToolsSection(new Set(['Bash', FILE_PATCH_TOOL_NAME]))
-    const bash = getBashPrompt('openai')
-    expect(section).not.toContain('RULE — File mutations:')
-    expect(section).not.toContain('show the resulting git diff before moving on')
-    expect(bash).toContain('Do not use Python to read or write files')
-    expect(section).not.toContain('Do not use Python to read or write files')
-    expect(bash).toContain('show the resulting git diff before moving on')
-    expect(bash).toContain('Never skip the check')
+  // GPT and Claude get the same tool-choice strictness: no GPT-only scripting
+  // or command-mutation diff rules in either the system prompt or the shells.
+  test('GPT carries no scripting or command-mutation diff rules beyond Claude', async () => {
+    const forbidden = [
+      'Do not use Python to read or write files',
+      'show the resulting git diff before moving on',
+      'inspect the changed files before moving on',
+      'Never skip the check',
+      'Use apply_patch for local file edits',
+      'Do not create or edit files with cat',
+      'no dedicated tool',
+    ]
+    const surfaces = [
+      getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME])),
+      getGPTUsingToolsSection(new Set(['Bash', FILE_PATCH_TOOL_NAME])),
+      getBashPrompt('openai'),
+      getBashPrompt('firstParty'),
+      await getPowerShellPrompt(),
+    ]
+    for (const surface of surfaces) {
+      for (const text of forbidden) {
+        expect(surface).not.toContain(text)
+      }
+    }
   })
 
   test('search tools do not mandate delegation and enabled Explore guidance is benefit-based', () => {
@@ -574,7 +569,8 @@ describe('provider and prompt regressions', () => {
 
   test('FilePatchTool prompt refers to apply_patch as a tool, not a shell command', () => {
     const desc = getFilePatchToolDescription()
-    expect(desc).toContain('Use the `apply_patch` tool to edit files')
+    expect(desc).toContain('Edits files by applying a patch.')
+    expect(desc).not.toContain('Use the `apply_patch` tool to edit files')
     expect(desc).not.toContain('shell command')
     expect(desc).toContain(
       'Patch paths resolve relative to the current session working directory.',
@@ -584,24 +580,16 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('PowerShell retains command syntax and GPT diff checks without file-tool restrictions', async () => {
-    for (const provider of ['openai', 'firstParty'] as const) {
-      const prompt = await getPowerShellPrompt(provider)
-      expect(prompt).not.toContain('DO NOT use it for file operations')
-      expect(prompt).not.toContain('FILE MUTATIONS:')
-      expect(prompt).not.toContain('stays the default for whole-file reads')
-      expect(prompt).not.toContain('Tool routing:')
-      expect(prompt).not.toContain('\n\n\n')
-      expect(prompt).toContain('PowerShell Syntax Notes:')
-      expect(prompt).toContain('Communication: Output text directly')
-      if (provider === 'openai') {
-        expect(prompt).toContain('rather than by apply_patch, Write, or NotebookEdit')
-        expect(prompt).toContain('Do not use Python to read or write files')
-        expect(prompt).toContain('Never skip the check.')
-      } else {
-        expect(prompt).not.toContain('apply_patch')
-      }
-    }
+  test('PowerShell retains command syntax without file-tool restrictions', async () => {
+    const prompt = await getPowerShellPrompt()
+    expect(prompt).not.toContain('DO NOT use it for file operations')
+    expect(prompt).not.toContain('FILE MUTATIONS:')
+    expect(prompt).not.toContain('stays the default for whole-file reads')
+    expect(prompt).not.toContain('Tool routing:')
+    expect(prompt).not.toContain('\n\n\n')
+    expect(prompt).not.toContain('apply_patch')
+    expect(prompt).toContain('PowerShell Syntax Notes:')
+    expect(prompt).toContain('Communication: Output text directly')
   })
 
   test('Implementor prompt names the session edit tool rather than both aliases simultaneously', () => {

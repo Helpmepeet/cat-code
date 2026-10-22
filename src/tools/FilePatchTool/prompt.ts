@@ -5,7 +5,7 @@ export function getFilePatchToolDescription(): string {
   return [
     `## \`${FILE_PATCH_TOOL_NAME}\``,
     '',
-    `Use the \`${FILE_PATCH_TOOL_NAME}\` tool to edit files.`,
+    'Edits files by applying a patch.',
     '',
     'Apply file edits with this envelope:',
     '',

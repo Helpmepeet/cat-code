@@ -21,7 +21,6 @@ import { truncate } from '../../utils/format.js';
 import { lazySchema } from '../../utils/lazySchema.js';
 import { logError } from '../../utils/log.js';
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
-import type { APIProvider } from '../../utils/model/providers.js';
 import { getPlatform } from '../../utils/platform.js';
 import { maybeRecordPluginHint } from '../../utils/plugins/hintRecommendation.js';
 import { exec } from '../../utils/Shell.js';
@@ -281,8 +280,8 @@ export const PowerShellTool = buildTool({
   }: Partial<PowerShellToolInput>): Promise<string> {
     return description || 'Run PowerShell command';
   },
-  async prompt({ provider }: { provider?: APIProvider } = {}): Promise<string> {
-    return getPrompt(provider);
+  async prompt(): Promise<string> {
+    return getPrompt();
   },
   isConcurrencySafe(input: PowerShellToolInput): boolean {
     return this.isReadOnly?.(input) ?? false;

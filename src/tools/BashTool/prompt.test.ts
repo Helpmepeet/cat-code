@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { shouldRegisterForegroundShellTask } from '../../tasks/LocalShellTask/guards.js'
-import { getEmptyToolPermissionContext } from '../../Tool.js'
-import { FileEditTool } from '../FileEditTool/FileEditTool.js'
 import { BashTool } from './BashTool.js'
 import { getBashPrompt } from './prompt.js'
 import { setManagedSessionPolicy } from '../../utils/managedSessionPolicy.js'
 
-test('managed chat Bash guidance inspects changes without requiring Git', () => {
+test('managed chat Bash guidance adds no GPT-only change-inspection rule', () => {
   setManagedSessionPolicy({
     workingDirectory: '/tmp/managed-bash',
     temporaryDirectory: '/tmp/managed-bash/tmp',
@@ -15,8 +13,7 @@ test('managed chat Bash guidance inspects changes without requiring Git', () => 
   })
   try {
     const prompt = getBashPrompt('openai')
-    expect(prompt).toContain('inspect the changed files before moving on')
-    expect(prompt).toContain('When working in a Git repository, use git diff')
+    expect(prompt).not.toContain('inspect the changed files before moving on')
     expect(prompt).not.toContain('show the resulting git diff before moving on')
     expect(prompt).toContain('Never skip hooks')
   } finally {
@@ -122,77 +119,7 @@ describe('Bash prompt commit authority', () => {
   })
 })
 
-describe('Bash prompt diff-check tool naming', () => {
-  // The registry swaps Edit for apply_patch on the OpenAI path
-  // (getProviderFileEditTool, src/tools.ts), so naming Edit there points GPT at
-  // a tool it was never given.
-  test('names the shipped GPT editor in the diff check', () => {
-    const gpt = getBashPrompt('openai')
-    expect(gpt).toContain('rather than by apply_patch, Write, or NotebookEdit')
-    expect(gpt).not.toContain('rather than by Edit, Write, or NotebookEdit')
-
-    const claude = getBashPrompt('firstParty')
-    expect(claude).toContain('Communication: Output text directly (NOT echo/printf)')
-    expect(claude).not.toContain('apply_patch')
-  })
-
-  test('the shipped tool pool outranks the request provider', () => {
-    // getProviderFileEditTool picks by SESSION provider while this prompt
-    // renders per REQUEST provider, so a gpt-* worker inside an Anthropic
-    // session used to be told to use apply_patch while Edit shipped.
-    const gptRequestWithEditShipped = getBashPrompt(
-      'openai',
-      new Set(['Bash', 'Edit']),
-    )
-    expect(gptRequestWithEditShipped).toContain('rather than by Edit, Write, or NotebookEdit')
-    expect(gptRequestWithEditShipped).not.toContain('rather than by apply_patch, Write, or NotebookEdit')
-
-    const gptRequestWithPatchShipped = getBashPrompt(
-      'openai',
-      new Set(['Bash', 'apply_patch']),
-    )
-    expect(gptRequestWithPatchShipped).toContain(
-      'rather than by apply_patch, Write, or NotebookEdit',
-    )
-
-    // No edit tool in the pool at all: fall back to the provider.
-    expect(getBashPrompt('openai', new Set(['Bash']))).toContain(
-      'rather than by apply_patch, Write, or NotebookEdit',
-    )
-  })
-
-  test('BashTool.prompt hands the real tool pool to getBashPrompt', async () => {
-    const prompt = await BashTool.prompt({
-      getToolPermissionContext: async () => getEmptyToolPermissionContext(),
-      tools: [BashTool, FileEditTool],
-      agents: [],
-      provider: 'openai',
-    })
-
-    expect(prompt).toContain('rather than by Edit, Write, or NotebookEdit')
-  })
-})
-
 describe('Bash prompt file-mutation policy', () => {
-  test('the GPT branch retains scripting discipline and the diff check', () => {
-    const prompt = getBashPrompt('openai')
-
-    expect(prompt).toContain(
-      'Do not use Python to read or write files when a simple shell command or apply_patch is enough.',
-    )
-    expect(prompt).toContain(
-      'After any file mutation performed by a command rather than by apply_patch, Write, or NotebookEdit',
-    )
-    expect(prompt).toContain('show the resulting git diff before moving on')
-    expect(prompt).toContain(
-      'show git diff --stat and git status --short instead',
-    )
-    expect(prompt).toContain('Never skip the check.')
-
-    expect(prompt).not.toContain('TOOL SELECTION CONSTRAINT')
-    expect(prompt).not.toContain('no dedicated tool')
-  })
-
   test('both providers omit dedicated-tool restrictions while retaining command guidance', () => {
     for (const provider of ['openai', 'firstParty'] as const) {
       const prompt = getBashPrompt(provider)
@@ -201,10 +128,15 @@ describe('Bash prompt file-mutation policy', () => {
       expect(prompt).not.toContain('stays the default for whole-file reads')
       expect(prompt).not.toContain('Use apply_patch for local file edits')
       expect(prompt).not.toContain('Do not create or edit files with cat')
+      expect(prompt).not.toContain('TOOL SELECTION CONSTRAINT')
+      expect(prompt).not.toContain('no dedicated tool')
+      expect(prompt).not.toContain('Do not use Python to read or write files')
+      expect(prompt).not.toContain('After any file mutation performed by a command')
+      expect(prompt).not.toContain('Never skip the check.')
+      expect(prompt).not.toContain('apply_patch')
       expect(prompt).toContain('Always quote file paths that contain spaces')
       expect(prompt).toContain('Communication: Output text directly')
     }
-    expect(getBashPrompt('firstParty')).not.toContain('Never skip the check.')
   })
 })
 
