@@ -146,7 +146,11 @@ export class LidClosedMode {
   private enqueue<T>(action: () => Promise<T>): Promise<T> {
     const next = this.chain.catch(() => {}).then(action); this.chain = next; return next
   }
-  private set(patch: Partial<LidModeView>): void { Object.assign(this.view, patch); this.emit() }
+  private set(patch: Partial<LidModeView>): void {
+    if (patch.phase && !['setup', 'starting', 'active'].includes(patch.phase)) this.disarmWork()
+    Object.assign(this.view, patch)
+    this.emit()
+  }
   private emit(): void { this.deps.changed(this.read()) }
   private mark(pending: boolean): void {
     // fsync the local intent before admission, as well as the helper's root
@@ -303,7 +307,7 @@ export class LidClosedMode {
     if (epoch !== this.epoch || this.stopped) { this.deps.work.stop(); return }
     if (initialWork.availability === 'unknown' || initialWork.supervisionLost) {
       this.deps.work.stop()
-      this.set({ phase: 'off', reason: 'work-status-unavailable', error: 'Work status is unavailable. Try again when sessions are connected.' })
+      this.set({ phase: 'unavailable', reason: 'work-status-unavailable', error: 'Work status is unavailable. Try again when sessions are connected.' })
       return
     }
     if (!initialWork.hasUnfinishedWork) {
@@ -374,7 +378,7 @@ export class LidClosedMode {
     const aggregate = this.deps.work.read()
     if (aggregate.availability === 'unknown' || aggregate.supervisionLost) {
       this.deps.work.stop()
-      this.set({ phase: 'off', reason: 'work-status-unavailable', error: 'Work status is unavailable. Try again when sessions are connected.' })
+      this.set({ phase: 'unavailable', reason: 'work-status-unavailable', error: 'Work status is unavailable. Try again when sessions are connected.' })
       return false
     }
     if (!aggregate.hasUnfinishedWork) {

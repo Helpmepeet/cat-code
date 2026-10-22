@@ -136,7 +136,7 @@ struct LidRecord: Codable {
             $0.isFinite && $0 >= began && $0 <= began + 60 && deadline <= $0
         } ?? true
         let modeValid = mode == "work"
-            ? allowance == lidWorkLease && (draining ? hardDeadline != nil : hardDeadline == nil)
+            ? allowance == lidWorkLease && (hardDeadline == nil || draining)
             : mode == "timed" && renewalSequence == 0 && hardDeadline == nil
         return (version == 1 && mode == "timed" && renewalSequence == 0 && hardDeadline == nil ||
          version == 2 && ["timed", "work"].contains(mode) && renewalSequence >= 0 &&

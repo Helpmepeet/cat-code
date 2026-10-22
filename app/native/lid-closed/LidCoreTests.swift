@@ -32,6 +32,7 @@ import Darwin
         var time: Double = 100
         var safety = LidSafety(sleepDisabled: false, lidClosed: false, batteryPercent: 70, onBattery: true, thermal: "nominal")
         var failRestore = false
+        var retiringWork = false
         var failStart = false
         var activationDelay: Double = 0
         var thermalOnRestore = false
@@ -43,6 +44,10 @@ import Darwin
                 mutations += 1
                 let before = try journal.read(boot: "boot-a")
                 precondition(before.needsRestore && ["starting", "restoring"].contains(before.phase), "power change without durable intent")
+                if retiringWork {
+                    precondition(!value && before.draining && before.mode == "work" && before.hardDeadline == nil,
+                                 "normal work restoration lost durable retirement intent")
+                }
                 if !value && failRestore { throw LidFailure("test-restoration-failure") }
                 safety.sleepDisabled = value
                 if !value && thermalOnRestore {
@@ -146,6 +151,55 @@ import Darwin
                      "healthy production work stopped at the old two-hour limit")
         _ = try controller.command(["op": "finish-work", "identity": workID])
         precondition(controller.snapshot().record.reason == "work-finished" && safety.sleepDisabled == false)
+        let endedMutations = mutations
+        try controller.retire()
+        work = try journal.read(boot: "boot-a")
+        precondition(work.draining && work.mode == "work" && work.hardDeadline == nil &&
+                     controller.snapshot().restorationConfirmed && mutations == endedMutations,
+                     "ended normal work retirement changed power or lost settlement")
+        reject(["op": "start-work", "identity": workID])
+        try controller.resumeAfterInstall()
+        try startWork()
+        safety.lidClosed = true
+        let retirementSleeps = sleeps
+        retiringWork = true
+        try controller.retire()
+        retiringWork = false
+        work = try journal.read(boot: "boot-a")
+        precondition(work.draining && work.reason == "retired" && work.hardDeadline == nil &&
+                     controller.snapshot().restorationConfirmed && sleeps == retirementSleeps + 1,
+                     "active normal work retirement did not safely restore and sleep")
+        reject(["op": "start-work", "identity": workID])
+        safety.lidClosed = false
+        try controller.resumeAfterInstall()
+        try startWork()
+        failRestore = true
+        retiringWork = true
+        do {
+            try controller.retire()
+            preconditionFailure("retirement accepted failed restoration")
+        } catch {
+            precondition((error as? LidFailure)?.message == "restoration-unresolved")
+        }
+        work = try journal.read(boot: "boot-a")
+        precondition(work.draining && work.needsRestore && work.phase == "unresolved" &&
+                     !controller.snapshot().restorationConfirmed && safety.sleepDisabled == true,
+                     "failed retirement discarded restoration authority")
+        do {
+            try controller.resumeAfterInstall()
+            preconditionFailure("reinstall resumed unresolved retirement")
+        } catch {
+            precondition((error as? LidFailure)?.message == "restoration-unresolved")
+        }
+        reject(["op": "start-work", "identity": workID])
+        failRestore = false
+        try controller.recoverInterrupted()
+        retiringWork = false
+        precondition(controller.snapshot().record.draining && controller.snapshot().restorationConfirmed,
+                     "interrupted retirement recovery reopened admission")
+        try controller.resumeAfterInstall()
+        try startWork()
+        _ = try controller.command(["op": "finish-work", "identity": workID])
         let trialAdmission = time
         activationDelay = 3
         try startWork(true)
@@ -155,6 +209,15 @@ import Darwin
                      work.deadline == time + lidWorkLease,
                      "startup delay shifted the immutable trial hard deadline")
         let hardDeadline = work.hardDeadline!
+        var invalidTrial = work
+        invalidTrial.draining = false
+        precondition(!invalidTrial.valid, "trial deadline accepted without admission lock")
+        invalidTrial = work
+        invalidTrial.hardDeadline = work.began + 61
+        precondition(!invalidTrial.valid, "trial deadline exceeded admission bound")
+        invalidTrial = work
+        invalidTrial.deadline = hardDeadline + 1
+        precondition(!invalidTrial.valid, "trial lease exceeded hard deadline")
         let trialGuardian = lidGuardianDeadline(observationTime: trialAdmission + 10, activationEnd: hardDeadline)
         let renewableGuardian = lidGuardianDeadline(observationTime: trialAdmission + 10, activationEnd: work.deadline)
         precondition(trialGuardian == trialAdmission + 75 && trialGuardian > renewableGuardian,

@@ -151,10 +151,16 @@ test('a refused start leaves the cup able to try again', async () => {
   const tree = await harness.mount(<LidClosedProvider><LidClosedCup faceProps={{ 'data-composer-face': 'lid', tabIndex: 0, onFocus() {} }} /></LidClosedProvider>)
   const cup = tree.container.querySelector<HTMLButtonElement>('.lid-cup')!
   expect(cup.title).toBe('No work is running.')
-  await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
+  const error = 'Work status is unavailable. Try again when sessions are connected.'
+  await act(async () => { receive({ ...view, phase: 'unavailable', reason: 'work-status-unavailable', error }) })
+  expect(cup.title).toBe(error)
   expect(cup.getAttribute('aria-disabled')).toBe('false')
   await act(async () => { cup.click() })
   expect(commands).toEqual([{ action: 'start' }])
+  await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
+  expect(cup.getAttribute('aria-disabled')).toBe('false')
+  await act(async () => { cup.click() })
+  expect(commands).toEqual([{ action: 'start' }, { action: 'start' }])
 })
 
 test('restored power settings do not imply an unconfirmed Sleep request succeeded', async () => {

@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { LidClosedMode } from './lidClosedMode.js'
 import { LidSetupCancelled, type LidNativeSnapshot, type LidNativeReply } from './lidClosedNative.js'
-import type { LidWorkAggregate } from './lidWorkObserver.js'
+import { WORK_COMPLETION_GRACE_MS, type LidWorkAggregate } from './lidWorkObserver.js'
 
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
 function fixture() {
@@ -28,6 +28,7 @@ function fixture() {
   let workStarted = false
   let verifyGate: ReturnType<typeof deferred> | undefined
   let verificationStarted = false
+  let verificationStartedAt: number | undefined
   let renewalReceipt: 'accepted' | 'rejected' | 'wrong-sequence' = 'accepted'
   let completionSafetyReason: string | undefined
   let snapshot: LidNativeSnapshot = { record: { phase: 'off', began: 0, deadline: 0, allowance: 0, needsRestore: false, sleepRequested: false, sleepRequestAttempted: false },
@@ -54,9 +55,9 @@ function fixture() {
       async start() { workStarted = true; return structuredClone(aggregate) },
       read() { return structuredClone(workStarted ? aggregate : { ...aggregate, availability: 'unknown' as const }) },
       async refresh() { return structuredClone(aggregate) },
-      async verify() { verificationStarted = true; await verifyGate?.promise; return structuredClone(aggregate) },
+      async verify() { verificationStarted = true; verificationStartedAt = performance.now(); await verifyGate?.promise; return structuredClone(aggregate) },
       subscribe(listener: (value: LidWorkAggregate) => void) { workListeners.add(listener); return () => workListeners.delete(listener) },
-      stop() { workStarted = false; workListeners.clear() },
+      stop() { workStarted = false },
     },
     native: { close() {}, async command(input: { op: string; identity?: string; allowance?: number; sequence?: number }): Promise<LidNativeReply> {
       calls.push(input.op)
@@ -99,10 +100,12 @@ function fixture() {
       for (const listener of workListeners) listener(structuredClone(aggregate))
     },
     get workStarted() { return workStarted },
+    get workSubscriptions() { return workListeners.size },
     blockVerify(gate: ReturnType<typeof deferred>) { verifyGate = gate },
     renewalReceipt(value: typeof renewalReceipt) { renewalReceipt = value },
     completionSafety(reason: string) { completionSafetyReason = reason },
     get verificationStarted() { return verificationStarted },
+    get verificationStartedAt() { return verificationStartedAt },
     setupGate() { installGate = deferred(); return installGate },
     nativeStartGate() { startGate = deferred(); return startGate },
     failRestore(value: boolean) { failRestore = value },
@@ -161,10 +164,14 @@ test('fresh empty work ends only after grace and final verification', async () =
   try {
     await f.mode.initialize()
     await f.mode.command({ action: 'start' })
+    const emptyAt = performance.now()
     f.workState({ hasUnfinishedWork: false })
     await until(() => f.calls.includes('finish-work'))
+    expect(f.verificationStartedAt! - emptyAt).toBeGreaterThanOrEqual(WORK_COMPLETION_GRACE_MS - 10)
     expect(f.mode.read()).toMatchObject({ phase: 'ended', reason: 'work-finished' })
     expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+    expect(f.workStarted).toBe(false)
+    expect(f.workSubscriptions).toBe(0)
   } finally { await f.cleanup() }
 })
 
@@ -199,6 +206,27 @@ test('work that finishes during native admission is restored without an active v
     expect(f.phases.slice(phasesAtAdmission)).not.toContain('active')
     expect(f.calls).toContain('finish-work')
     expect(f.mode.read()).toMatchObject({ phase: 'ended', reason: 'work-finished' })
+    expect(f.workStarted).toBe(false)
+    expect(f.workSubscriptions).toBe(0)
+    f.workState({ hasUnfinishedWork: true })
+    await f.mode.command({ action: 'start' })
+    expect(f.mode.read().phase).toBe('active')
+    expect(f.workStarted).toBe(true)
+    expect(f.workSubscriptions).toBe(1)
+  } finally { await f.cleanup() }
+})
+
+test('native supervision loss stops observation and removes its subscription', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'start' })
+    expect(f.workSubscriptions).toBe(1)
+    f.nativeWorkEnded('supervision-lost')
+    await until(() => f.mode.read().phase === 'ended')
+    expect(f.mode.read().reason).toBe('supervision-lost')
+    expect(f.workStarted).toBe(false)
+    expect(f.workSubscriptions).toBe(0)
   } finally { await f.cleanup() }
 })
 
@@ -270,7 +298,31 @@ test('unknown initial work refuses activation before helper setup', async () => 
     f.workState({ availability: 'unknown' })
     await f.mode.command({ action: 'start' })
     expect(f.calls).toEqual([])
-    expect(f.mode.read()).toMatchObject({ phase: 'off', reason: 'work-status-unavailable' })
+    expect(f.mode.read()).toMatchObject({
+      phase: 'unavailable', reason: 'work-status-unavailable',
+      error: 'Work status is unavailable. Try again when sessions are connected.',
+    })
+    expect(f.workStarted).toBe(false)
+  } finally { await f.cleanup() }
+})
+
+test('work status lost during helper setup refuses activation with an explanation', async () => {
+  const f = fixture()
+  try {
+    f.existingHelper(true)
+    await f.mode.initialize()
+    const gate = f.setupGate()
+    const start = f.mode.command({ action: 'start' })
+    await until(() => f.calls.includes('install'))
+    f.workState({ availability: 'unknown' })
+    gate.resolve()
+    await start
+    expect(f.calls).not.toContain('start-work')
+    expect(f.mode.read()).toMatchObject({
+      phase: 'unavailable', reason: 'work-status-unavailable',
+      error: 'Work status is unavailable. Try again when sessions are connected.',
+    })
+    expect(f.workStarted).toBe(false)
   } finally { await f.cleanup() }
 })
 
