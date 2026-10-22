@@ -5819,8 +5819,10 @@ export function stripAdvisorBlocks(
 // The message lands between tool calls so a correction can change the next
 // step. Deferring every message to the end of the task ran the stale plan to
 // completion first; additions still wait so they do not abandon work midway.
+// A question or status request is neither, and deferring it left the user
+// waiting for the whole task; a correction keeps the work it does not touch.
 const HUMAN_INTERRUPT_WRAPPER = (raw: string): string =>
-  `The user sent a new message while you were working:\n${raw}\n\nIMPORTANT: If it corrects, redirects, or stops what you are doing, act on it before your next step. Otherwise finish your current task first, then address it.`
+  `The user sent a new message while you were working:\n${raw}\n\nIf it corrects, redirects, or stops what you are doing, act on it before your next step and keep the work it does not change. If it asks a question or for status, answer briefly, then continue. Otherwise finish your current task first, then address it.`
 
 export function wrapCommandText(
   raw: string,

@@ -151,10 +151,22 @@ work or side effects that already completed.`
 
     expect(wrapped).toContain('stop, wrong file')
     expect(wrapped).toContain(
-      'If it corrects, redirects, or stops what you are doing, act on it before your next step.',
+      'If it corrects, redirects, or stops what you are doing, act on it before your next step',
     )
+    expect(wrapped).toContain('keep the work it does not change')
     expect(wrapped).toContain('Otherwise finish your current task first')
     expect(wrapped).not.toContain('After completing your current task')
+  })
+
+  test('a user question or status request is answered now, not after the task', () => {
+    // A question is neither a correction nor an addition; under the two-way
+    // rule "how far along are you?" waited for the whole task to finish.
+    const wrapped = wrapCommandText('how far along are you?', undefined)
+
+    expect(wrapped).toContain(
+      'If it asks a question or for status, answer briefly, then continue.',
+    )
+    expect(wrapped).not.toContain('IMPORTANT')
   })
 
   test('attributes a peer message to its sender, never to the user', () => {
