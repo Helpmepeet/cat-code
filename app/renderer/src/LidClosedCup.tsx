@@ -73,7 +73,8 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
           step(event.key === 'ArrowUp' ? 'up' : 'down')
         }
       }}>
-      <svg width={14} height={18} viewBox="0 0 24 30" fill="none" aria-hidden="true">
+      {/* The viewBox is centred on the cup body (y 10 to 27), not the steam above it, so the body sits on the text midline in every phase. */}
+      <svg width={14} height={18} viewBox="0 3.5 24 30" fill="none" overflow="visible" aria-hidden="true">
         <defs><clipPath id={clip}><path d="M3 10h14v12a5 5 0 0 1-5 5H8a5 5 0 0 1-5-5z" /></clipPath></defs>
         {active ? <g clipPath={`url(#${clip})`}>
           <rect x="3" y={top} width="14" height={17 * fill} className="lid-liquid" />

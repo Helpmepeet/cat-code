@@ -1615,6 +1615,7 @@ export function ComposerActionsBar({
         type="button"
       >
         <svg
+          className="-translate-y-px"
           width="16"
           height="16"
           viewBox="0 0 24 24"

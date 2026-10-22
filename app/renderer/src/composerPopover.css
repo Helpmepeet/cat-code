@@ -23,6 +23,11 @@
   gap: 6px;
 }
 
+/* The mark fills its 12px box, so centred on the line box it reads about 1px below the cap height of the label beside it. */
+.composer-run-face .composer-provider-logo {
+  transform: translateY(-1px);
+}
+
 .composer-provider-anthropic {
   color: var(--provider-claude);
 }
