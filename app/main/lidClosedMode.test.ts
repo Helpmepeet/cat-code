@@ -16,6 +16,8 @@ function fixture() {
   let installGate: ReturnType<typeof deferred> | undefined
   let startGate: ReturnType<typeof deferred> | undefined
   let hardwareGate: ReturnType<typeof deferred> | undefined
+  let presenceGate: ReturnType<typeof deferred> | undefined
+  let presenceReads = 0
   let refuseAdmission = false
   let failRestore = false
   let transitionPending = false
@@ -54,7 +56,7 @@ function fixture() {
       }
     },
     work: {
-      async probe() { return structuredClone(aggregate) },
+      async probe() { presenceReads++; const work = structuredClone(aggregate); await presenceGate?.promise; return work },
       async start() { workStarted = true; return structuredClone(aggregate) },
       read() { return structuredClone(workStarted ? aggregate : { ...aggregate, availability: 'unknown' as const }) },
       async refresh() { return structuredClone(aggregate) },
@@ -119,6 +121,8 @@ function fixture() {
     setupGate() { installGate = deferred(); return installGate },
     nativeStartGate() { startGate = deferred(); return startGate },
     hardwareGate() { hardwareGate = deferred(); return hardwareGate },
+    presenceGate() { presenceGate = deferred(); return presenceGate },
+    get presenceReads() { return presenceReads },
     refuseNextAdmission() { refuseAdmission = true },
     failRestore(value: boolean) { failRestore = value },
     transitionPending(value: boolean) { transitionPending = value },
@@ -142,7 +146,7 @@ function fixture() {
     },
     thermalEnd() { snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'thermal', thermalRestart: true }, safety: { ...snapshot.safety, sleepDisabled: false, thermal: 'nominal' } } },
     async restart() { await mode.shutdown(); mode = new LidClosedMode(deps); await mode.initialize() },
-    async cleanup() { failRestore = false; transitionPending = false; pulseGate?.resolve(); verifyGate?.resolve(); installGate?.resolve(); startGate?.resolve(); hardwareGate?.resolve(); await mode.shutdown(); rmSync(directory, { recursive: true, force: true }) },
+    async cleanup() { failRestore = false; transitionPending = false; pulseGate?.resolve(); verifyGate?.resolve(); installGate?.resolve(); startGate?.resolve(); hardwareGate?.resolve(); presenceGate?.resolve(); await mode.shutdown(); rmSync(directory, { recursive: true, force: true }) },
   }
 }
 async function until(check: () => boolean) { const end = Date.now() + 4000; while (!check() && Date.now() < end) await Bun.sleep(10); expect(check()).toBe(true) }
@@ -161,6 +165,53 @@ test('timed targets start, pulse, adjust without restarting, and expire', async 
     expect(f.calls).not.toContain('renew-work')
     f.watchdogRestored({ reason: 'expired' })
     await until(() => f.mode.read().phase === 'ended')
+  } finally { await f.cleanup() }
+})
+
+test('concurrent presence reads share one in-flight probe', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    const gate = f.presenceGate()
+    const first = f.mode.readPresence()
+    const second = f.mode.readPresence()
+    await until(() => f.presenceReads === 1)
+    expect(second).toBe(first)
+    gate.resolve()
+    await Promise.all([first, second])
+    expect(f.presenceReads).toBe(1)
+  } finally { await f.cleanup() }
+})
+
+test('a slow presence probe cannot block timed native heartbeats', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 30 })
+    const gate = f.presenceGate()
+    const reads = [f.mode.readPresence(), f.mode.readPresence()]
+    await until(() => f.calls.includes('pulse'))
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'timed' })
+    expect(f.presenceReads).toBe(1)
+    gate.resolve()
+    await Promise.all(reads)
+  } finally { await f.cleanup() }
+})
+
+test('late presence evidence cannot overwrite a newer work activation', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    f.workState({ hasUnfinishedWork: false, activeSessions: 0 })
+    const gate = f.presenceGate()
+    const presence = f.mode.readPresence()
+    await until(() => f.presenceReads === 1)
+    f.workState({ hasUnfinishedWork: true, activeSessions: 1 })
+    const start = f.mode.command({ action: 'set', target: 'work' })
+    await until(() => f.mode.read().phase === 'active')
+    gate.resolve()
+    await Promise.all([presence, start])
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'work', activeSessions: 1, workAvailable: true })
   } finally { await f.cleanup() }
 })
 

@@ -35,7 +35,7 @@ export function LidClosedCup({ faceProps }: { faceProps: ComposerFaceProps }) {
   const next = nextLidTarget(v, 'click')
   const nextText = `Next: ${next === 'off' ? 'turn off' : next === 'work' ? 'until all work finishes' : `${next} minutes`}`
   const counts = `${countLabel(v.activeSessions, 'session')} and ${countLabel(v.activeSubagents, 'subagent')}`
-  const title = !unexpectedEnd && (v.reason === 'no-work' || v.reason === 'work-finished' || v.reason === 'expired') ? lidReason(v.reason)
+  const title = !unexpectedEnd && (v.reason === 'no-work' || v.reason === 'work-finished' || v.reason === 'expired') ? `${lidReason(v.reason)} ${nextText}`
     : v.phase === 'unavailable' && v.error ? v.error
     : unexpectedEnd ? `${lidReason(v.reason)}${v.error && v.reason !== 'sleep-unconfirmed' ? ' Sleep could not be confirmed. Check your Mac.' : ''}`
     : active ? v.mode === 'timed' ? `Keeping awake for ${minute} more minutes. ${nextText}`

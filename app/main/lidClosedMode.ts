@@ -38,18 +38,30 @@ export class LidClosedMode {
   private activationWorkRevision = 0
   private admissionRevision = 0
   private switching = false
+  private presenceRead?: Promise<LidModeView>
 
   constructor(private readonly deps: Dependencies) {}
   read(): LidModeView { return structuredClone(this.view) }
   readPresence(): Promise<LidModeView> {
-    return this.enqueue(async () => {
-      if (!this.stopped) {
-        try { this.updatePresence(await this.deps.work.probe()) }
-        catch { this.view.workAvailable = false }
+    if (this.stopped) return Promise.resolve(this.read())
+    if (this.presenceRead) return this.presenceRead
+    const epoch = this.epoch
+    // A sidecar observation must not hold the native heartbeat queue.
+    const promise = (async () => {
+      let work: LidWorkAggregate | null
+      try { work = await this.deps.work.probe() }
+      catch { work = null }
+      if (!this.stopped && epoch === this.epoch) {
+        if (work) this.updatePresence(work)
+        else this.view.workAvailable = false
         this.emit()
       }
       return this.read()
+    })().finally(() => {
+      if (this.presenceRead === promise) this.presenceRead = undefined
     })
+    this.presenceRead = promise
+    return promise
   }
   private updatePresence(work: LidWorkAggregate): void {
     const fresh = work.availability === 'fresh' && !work.supervisionLost

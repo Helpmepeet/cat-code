@@ -165,7 +165,7 @@ test('the cup tooltip explains work counts, approvals, safety endings, and refus
   expect(title()).toBe('Keep awake until all work finishes')
   expect(tree.container.querySelector('.lid-mark')).toBeNull()
   await act(async () => { receive({ ...view, phase: 'ended', reason: 'work-finished' }) })
-  expect(title()).toBe('All work finished. Normal sleep restored.')
+  expect(title()).toBe('All work finished. Normal sleep restored. Next: until all work finishes')
   expect(tree.container.querySelector('.lid-mark')).toBeNull()
   await act(async () => { receive({ ...view, phase: 'ended', reason: 'thermal' }) })
   expect(title()).toBe('Lid-closed mode ended because your Mac got too hot.')
@@ -177,24 +177,24 @@ test('the cup tooltip explains work counts, approvals, safety endings, and refus
 test('a refused start leaves the cup able to try again', async () => {
   let receive!: (view: LidModeView) => void
   const commands: LidModeCommand[] = []
-  const view: LidModeView = { ...initial(), phase: 'off', reason: 'no-work' }
+  const view: LidModeView = { ...initial(), phase: 'off', reason: 'no-work', workAvailable: false }
   window.catcode = { lidClosed: { read: async () => view, command: async (value: LidModeCommand) => { commands.push(value); return view },
     subscribe: (callback: (view: LidModeView) => void) => { receive = callback; return () => {} } } } as unknown as CatCodeBridge
   const tree = await harness.mount(<LidClosedProvider><LidClosedCup faceProps={{ 'data-composer-face': 'lid', tabIndex: 0, onFocus() {} }} /></LidClosedProvider>)
   const cup = tree.container.querySelector<HTMLButtonElement>('.lid-cup')!
-  expect(cup.title).toBe('No work is running.')
+  expect(cup.title).toBe('No work is running. Next: 15 minutes')
   const error = 'Work status is unavailable. Try again when sessions are connected.'
   await act(async () => { receive({ ...view, phase: 'unavailable', reason: 'work-status-unavailable', error }) })
   expect(cup.title).toBe(error)
   expect(cup.getAttribute('aria-disabled')).toBe('false')
   await act(async () => { cup.click() })
   await act(async () => { await Bun.sleep(1100) })
-  expect(commands).toEqual([{ action: 'set', target: 'work' }])
+  expect(commands).toEqual([{ action: 'set', target: 15 }])
   await act(async () => { receive({ ...view, phase: 'unavailable', error: 'Charge above 20% before starting.' }) })
   expect(cup.getAttribute('aria-disabled')).toBe('false')
   await act(async () => { cup.click() })
   await act(async () => { await Bun.sleep(1100) })
-  expect(commands).toEqual([{ action: 'set', target: 'work' }, { action: 'set', target: 'work' }])
+  expect(commands).toEqual([{ action: 'set', target: 15 }, { action: 'set', target: 15 }])
 })
 
 test('restored power settings do not imply an unconfirmed Sleep request succeeded', async () => {
@@ -254,7 +254,7 @@ test('work-finished looks exactly like off; safety endings and errors keep the a
     await act(async () => { receive({ ...view, phase: 'ended', reason }) })
     expect(face()).toBe(off)
     expect(tree.container.querySelector('.lid-mark')).toBeNull()
-    if (reason === 'work-finished') expect(tree.container.querySelector('.lid-cup')?.getAttribute('title')).toBe('All work finished. Normal sleep restored.')
+    if (reason === 'work-finished') expect(tree.container.querySelector('.lid-cup')?.getAttribute('title')).toBe('All work finished. Normal sleep restored. Next: until all work finishes')
   }
   for (const reason of ['thermal', 'battery-reserve', 'supervision-lost', 'monitoring-unavailable', 'override-conflict', 'sleep-unconfirmed', 'unknown', undefined]) {
     await act(async () => { receive({ ...view, phase: 'ended', reason }) })
@@ -328,7 +328,10 @@ test('timed mode renders remaining minutes, four ticks, draining fill, and a fiv
   expect(tree.container.querySelector('.lid-off')).not.toBeNull()
   expect(tree.container.querySelector('.lid-mark')).toBeNull()
   expect(tree.container.querySelector('.lid-digits')).toBeNull()
-  expect(cup.title).toBe('Timer finished. Normal sleep restored.')
+  expect(cup.title).toBe('Timer finished. Normal sleep restored. Next: until all work finishes')
+  await act(async () => { bridge.publish(initial('ended', { mode: 'timed', allowance: 30, remainingSeconds: 0, reason: 'expired', workAvailable: false })) })
+  expect(cup.title).toBe('Timer finished. Normal sleep restored. Next: 15 minutes')
+  expect(cup.getAttribute('aria-label')).toContain('Next: 15 minutes')
   await act(async () => { bridge.publish(initial('starting', { mode: 'timed', allowance: 15, remainingSeconds: 0 })) })
   await act(async () => { cup.focus() })
   expect(tree.container.querySelector('.sr-only')?.textContent).toBe('15 minutes.')
