@@ -1,0 +1,11 @@
+{
+  "name": "@cat-code/inline-command-experiment",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test ./*.test.ts"
+  },
+  "dependencies": {
+    "@xterm/headless": "6.0.0"
+  }
+}
