@@ -27,6 +27,7 @@ function clock() {
   return {
     timers: api,
     now: () => now,
+    pending: () => timers.size,
     jump(ms: number) { now += ms },
     advance(ms: number) {
       const end = now + ms
@@ -65,6 +66,42 @@ function emptyWork() {
     activeBackgroundTasks: 0, queuedWork: 0, waitingForApproval: false,
   }
 }
+
+test('presence probe returns fresh evidence and removes all timers without polling', async () => {
+  const c = clock()
+  const requests: WorkStatusRequest[] = []
+  const observer = new LidWorkObserver({
+    listSessions: () => [{ sessionId, generation, status: 'ready' }],
+    send: (_session, request) => requests.push(request), now: c.now, timers: c.timers,
+  })
+  const result = observer.probe()
+  observer.handleFrame(frame(requests[0]!, 1), sessionId)
+  expect((await result).availability).toBe('fresh')
+  expect(c.pending()).toBe(0)
+  c.advance(10000)
+  expect(requests).toHaveLength(1)
+})
+
+test('probe timeout cleans requests and concurrent work start retains supervision', async () => {
+  const c = clock()
+  const requests: WorkStatusRequest[] = []
+  const observer = new LidWorkObserver({
+    listSessions: () => [{ sessionId, generation, status: 'ready' }],
+    send: (_session, request) => requests.push(request), now: c.now, timers: c.timers,
+  })
+  const timeout = observer.probe()
+  c.advance(WORK_REQUEST_TIMEOUT_MS * 2)
+  expect((await timeout).availability).toBe('unknown')
+  expect(c.pending()).toBe(0)
+  const probe = observer.probe()
+  const start = observer.start()
+  observer.handleFrame(frame(requests.at(-1)!, 1), sessionId)
+  await Promise.all([probe, start])
+  c.advance(1000)
+  expect(requests.length).toBeGreaterThan(2)
+  observer.stop()
+  expect(c.pending()).toBe(0)
+})
 
 test('start requires fresh response; unchanged sequence updates do not advance revision', async () => {
   const c = clock()

@@ -87,21 +87,48 @@ export class LidWorkObserver {
   private overflowTimer: unknown
   private enumerationUnavailable = false
   private workspaceTransitions = new Set<string>()
+  private supervising = false
+  private probePromise?: Promise<LidWorkAggregate>
 
   constructor(private readonly deps: Partial<Dependencies> & Pick<Dependencies, 'listSessions' | 'send'>) {}
 
   async start(): Promise<LidWorkAggregate> {
-    if (this.active) return this.read()
+    this.supervising = true
+    if (this.active) {
+      this.armPolling()
+      return this.verify()
+    }
+    this.activate()
+    this.armPolling()
+    await this.verify()
+    return this.read()
+  }
+
+  probe(): Promise<LidWorkAggregate> {
+    if (this.probePromise) return this.probePromise
+    const owned = !this.active
+    if (owned) this.activate()
+    const activation = this.activation
+    const promise = this.verify().finally(() => {
+      if (owned && !this.supervising && this.activation === activation) this.stop()
+      if (this.probePromise === promise) this.probePromise = undefined
+    })
+    this.probePromise = promise
+    return promise
+  }
+
+  private armPolling(): void {
+    if (this.poller === undefined) this.poller = this.timers.setInterval(() => { void this.refresh() }, WORK_POLL_MS)
+  }
+
+  private activate(): void {
     this.active = true
     this.activation++
     this.lost = false
     this.records.clear()
     this.admissionTokens.clear()
     this.syncSessions()
-    this.poller = this.timers.setInterval(() => { void this.refresh() }, WORK_POLL_MS)
     this.scheduleExpirations()
-    await this.verify()
-    return this.read()
   }
 
   read(): LidWorkAggregate {
@@ -403,6 +430,7 @@ export class LidWorkObserver {
   }
 
   stop(): void {
+    this.supervising = false
     if (!this.active) return
     this.active = false
     this.activation++

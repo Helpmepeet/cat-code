@@ -1,5 +1,8 @@
 // Host-owned controls. No renderer method forwards these to an engine.
 // Contract: docs/design/2026-10-15-lid-closed-runtime-contract.md.
+export const LID_PRESETS = [15, 30, 60, 120] as const
+export type LidPreset = typeof LID_PRESETS[number]
+export type LidTarget = 'off' | 'work' | LidPreset
 export type LidWorkRun = {
   id: string
   startedAt: number
@@ -21,6 +24,10 @@ export type LidWorkControl = { type: 'lid.work'; requestId: string; window?: Lid
 export type LidModePhase = 'off' | 'setup' | 'starting' | 'active' | 'restoring' | 'ended' | 'unavailable' | 'unresolved'
 export type LidModeView = {
   phase: LidModePhase
+  mode: 'work' | 'timed' | null
+  allowance: number
+  remainingSeconds: number
+  workAvailable: boolean
   activeSessions: number
   activeSubagents: number
   waitingForApproval: boolean
@@ -31,7 +38,7 @@ export type LidModeView = {
   recovering?: boolean
   repairRequired?: boolean
 }
-export type LidModeCommand = {
+export type LidModeCommand = { action: 'set'; target: LidTarget } | {
   action: 'start' | 'stop' | 'sleep' | 'retry' | 'dismiss' | 'cancel' | 'setup'
 }
 export type LidClosedBridge = {
@@ -46,6 +53,8 @@ function text(value: unknown, max: number): value is string { return typeof valu
 function number(value: unknown): value is number { return typeof value === 'number' && Number.isFinite(value) && value >= 0 }
 function uuid(value: unknown): value is string { return typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value) }
 export function isLidModeCommand(value: unknown): value is LidModeCommand {
+  if (record(value) && value.action === 'set') return keys(value, ['action', 'target']) &&
+    (value.target === 'off' || value.target === 'work' || LID_PRESETS.includes(value.target as LidPreset))
   return record(value) && keys(value, ['action']) && typeof value.action === 'string' &&
     ['start','stop','sleep','retry','dismiss','cancel','setup'].includes(value.action)
 }

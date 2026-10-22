@@ -15,6 +15,8 @@ function fixture() {
   let outdated = false
   let installGate: ReturnType<typeof deferred> | undefined
   let startGate: ReturnType<typeof deferred> | undefined
+  let hardwareGate: ReturnType<typeof deferred> | undefined
+  let refuseAdmission = false
   let failRestore = false
   let transitionPending = false
   let sleepResult: Partial<LidNativeSnapshot['record']> = {}
@@ -38,7 +40,7 @@ function fixture() {
   const deps = {
     marker, installed: () => installed,
     current: async () => installed && !outdated,
-    hardware: async () => ({ qualified: true, evidence: 'fixture', model: 'fixture', osBuild: 'fixture', safety: snapshot.safety }),
+    hardware: async () => { await hardwareGate?.promise; return { qualified: true, evidence: 'fixture', model: 'fixture', osBuild: 'fixture', safety: snapshot.safety } },
     install: async () => {
       calls.push('install'); await installGate?.promise
       if (failInstall) throw new Error('Authorization cancelled')
@@ -52,6 +54,7 @@ function fixture() {
       }
     },
     work: {
+      async probe() { return structuredClone(aggregate) },
       async start() { workStarted = true; return structuredClone(aggregate) },
       read() { return structuredClone(workStarted ? aggregate : { ...aggregate, availability: 'unknown' as const }) },
       async refresh() { return structuredClone(aggregate) },
@@ -61,13 +64,20 @@ function fixture() {
     },
     native: { close() {}, async command(input: { op: string; identity?: string; allowance?: number; sequence?: number }): Promise<LidNativeReply> {
       calls.push(input.op)
-      if (input.op === 'renew-work') await pulseGate?.promise
+      if (input.op === 'renew-work' || input.op === 'pulse') await pulseGate?.promise
       if (helperUnavailable) throw new Error('Helper unavailable')
-      if (input.op === 'start-work') {
+      if (input.op === 'start-work' || input.op === 'start') {
         expect(JSON.parse(readFileSync(marker, 'utf8')).pending).toBe(true)
         await startGate?.promise
+        if (refuseAdmission) {
+          refuseAdmission = false
+          snapshot = { ...snapshot, safety: { ...snapshot.safety, batteryPercent: 19 } }
+          return { ok: false, error: 'battery-reserve', snapshot: structuredClone(snapshot) }
+        }
         snapshot = { ...snapshot, record: { ...snapshot.record, version: 2, mode: 'work', renewalSequence: 0, phase: 'active', identity: input.identity, began: 100, deadline: 110, allowance: 0, needsRestore: true, sleepRequested: false, sleepRequestAttempted: false, sleepRequestSucceeded: undefined }, safety: { ...snapshot.safety, sleepDisabled: true }, remainingSeconds: 10 }
+        if (input.op === 'start') snapshot = { ...snapshot, record: { ...snapshot.record, mode: 'timed', allowance: input.allowance!, deadline: 100 + input.allowance! }, remainingSeconds: input.allowance! }
       }
+      if (input.op === 'adjust') snapshot = { ...snapshot, record: { ...snapshot.record, allowance: input.allowance!, deadline: snapshot.record.began + input.allowance! }, remainingSeconds: input.allowance! }
       if (['stop','retry','sleep','finish-work'].includes(input.op)) {
         if (transitionPending) return { ok: false, error: 'transition-pending', snapshot: structuredClone(snapshot) }
         if (failRestore) return { ok: false, snapshot: { ...snapshot, record: { ...snapshot.record, phase: 'unresolved' } } }
@@ -108,6 +118,8 @@ function fixture() {
     get verificationStartedAt() { return verificationStartedAt },
     setupGate() { installGate = deferred(); return installGate },
     nativeStartGate() { startGate = deferred(); return startGate },
+    hardwareGate() { hardwareGate = deferred(); return hardwareGate },
+    refuseNextAdmission() { refuseAdmission = true },
     failRestore(value: boolean) { failRestore = value },
     transitionPending(value: boolean) { transitionPending = value },
     sleepResult(record: Partial<LidNativeSnapshot['record']>) { sleepResult = record },
@@ -130,10 +142,166 @@ function fixture() {
     },
     thermalEnd() { snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'thermal', thermalRestart: true }, safety: { ...snapshot.safety, sleepDisabled: false, thermal: 'nominal' } } },
     async restart() { await mode.shutdown(); mode = new LidClosedMode(deps); await mode.initialize() },
-    async cleanup() { failRestore = false; transitionPending = false; pulseGate?.resolve(); verifyGate?.resolve(); installGate?.resolve(); startGate?.resolve(); await mode.shutdown(); rmSync(directory, { recursive: true, force: true }) },
+    async cleanup() { failRestore = false; transitionPending = false; pulseGate?.resolve(); verifyGate?.resolve(); installGate?.resolve(); startGate?.resolve(); hardwareGate?.resolve(); await mode.shutdown(); rmSync(directory, { recursive: true, force: true }) },
   }
 }
 async function until(check: () => boolean) { const end = Date.now() + 4000; while (!check() && Date.now() < end) await Bun.sleep(10); expect(check()).toBe(true) }
+
+test('timed targets start, pulse, adjust without restarting, and expire', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 30 })
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'timed', allowance: 30, remainingSeconds: 1800 })
+    expect(f.workStarted).toBe(false)
+    await until(() => f.calls.includes('pulse'))
+    await f.mode.command({ action: 'set', target: 60 })
+    expect(f.calls.filter(call => call === 'start')).toHaveLength(1)
+    expect(f.calls).toContain('adjust')
+    expect(f.calls).not.toContain('renew-work')
+    f.watchdogRestored({ reason: 'expired' })
+    await until(() => f.mode.read().phase === 'ended')
+  } finally { await f.cleanup() }
+})
+
+for (const target of [30, 'work'] as const) {
+  test(`${target} remains retryable when native safety refuses admission without changing power`, async () => {
+    const f = fixture()
+    try {
+      await f.mode.initialize()
+      f.refuseNextAdmission()
+      await f.mode.command({ action: 'set', target })
+      expect(f.mode.read()).toMatchObject({ phase: 'unavailable', error: 'Charge above 20% before starting.' })
+      expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+      f.battery(75)
+      await f.mode.command({ action: 'set', target })
+      expect(f.mode.read().phase).toBe('active')
+    } finally { await f.cleanup() }
+  })
+
+  test(`a work target supersedes ${target} before native admission`, async () => {
+    const f = fixture()
+    try {
+      await f.mode.initialize()
+      const gate = f.hardwareGate()
+      const first = f.mode.command({ action: 'set', target })
+      await until(() => f.mode.read().phase === 'starting')
+      const work = f.mode.command({ action: 'set', target: 'work' })
+      gate.resolve()
+      await Promise.all([first, work])
+      expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'work' })
+      expect(f.calls.filter(call => call === 'start-work')).toHaveLength(1)
+      expect(f.calls).not.toContain('start')
+      expect(f.workStarted).toBe(true)
+    } finally { await f.cleanup() }
+  })
+}
+
+test('a timer adjustment queued during a pulse preserves its activation', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 30 })
+    const gate = f.nativePulseGate()
+    await until(() => f.calls.includes('pulse'))
+    const phases = f.phases.length
+    const adjust = f.mode.command({ action: 'set', target: 60 })
+    gate.resolve()
+    await adjust
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'timed', allowance: 60 })
+    expect(f.calls.filter(call => call === 'start')).toHaveLength(1)
+    expect(f.calls).not.toContain('stop')
+    expect(f.calls).toContain('adjust')
+    expect(f.phases.slice(phases)).not.toContain('restoring')
+  } finally { await f.cleanup() }
+})
+
+test('a switch queued during renewal keeps the starting look until replacement', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 'work' })
+    const gate = f.nativePulseGate()
+    await until(() => f.calls.includes('renew-work'))
+    const phases = f.phases.length
+    const switchMode = f.mode.command({ action: 'set', target: 60 })
+    gate.resolve()
+    await switchMode
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'timed', allowance: 60 })
+    expect(f.phases.slice(phases)).not.toContain('restoring')
+    expect(f.calls.filter(call => ['start-work', 'stop', 'start'].includes(call))).toEqual(['start-work', 'stop', 'start'])
+  } finally { await f.cleanup() }
+})
+
+test('mode switches restore before replacement and never show restoring on success', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 15 })
+    const index = f.phases.length
+    await f.mode.command({ action: 'set', target: 'work' })
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'work' })
+    await f.mode.command({ action: 'set', target: 120 })
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'timed', allowance: 120 })
+    expect(f.phases.slice(index)).not.toContain('restoring')
+    expect(f.calls.filter(call => ['start', 'start-work', 'stop'].includes(call))).toEqual(['start', 'stop', 'start-work', 'stop', 'start'])
+  } finally { await f.cleanup() }
+})
+
+test('declarative work falls back only for fresh empty evidence and presence does not supervise', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    expect((await f.mode.readPresence()).workAvailable).toBe(true)
+    expect(f.workStarted).toBe(false)
+    f.workState({ hasUnfinishedWork: false, activeSessions: 0 })
+    await f.mode.command({ action: 'set', target: 'work' })
+    expect(f.mode.read()).toMatchObject({ phase: 'active', mode: 'timed', allowance: 15 })
+    await f.mode.command({ action: 'set', target: 'off' })
+    f.workState({ availability: 'unknown' })
+    await f.mode.command({ action: 'set', target: 'work' })
+    expect(f.mode.read().phase).toBe('unavailable')
+  } finally { await f.cleanup() }
+})
+
+test('an unavailable presence query does not replace active work counts with zero', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 'work' })
+    f.workState({ availability: 'unknown' })
+    expect(await f.mode.readPresence()).toMatchObject({ phase: 'active', mode: 'work', activeSessions: 1, workAvailable: false })
+  } finally { await f.cleanup() }
+})
+
+test('failed switch restoration cannot admit replacement', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 15 })
+    f.failRestore(true)
+    await f.mode.command({ action: 'set', target: 'work' })
+    expect(f.mode.read().phase).toBe('unresolved')
+    expect(f.calls).not.toContain('start-work')
+  } finally { await f.cleanup() }
+})
+
+test('off cancels late timed admission and latest queued target wins', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    const gate = f.nativeStartGate()
+    const start = f.mode.command({ action: 'set', target: 30 })
+    await until(() => f.calls.includes('start'))
+    const next = f.mode.command({ action: 'set', target: 'work' })
+    const off = f.mode.command({ action: 'set', target: 'off' })
+    gate.resolve()
+    await Promise.all([start, next, off])
+    expect(f.mode.read().phase).not.toBe('active')
+    expect(f.calls).not.toContain('start-work')
+    expect(f.calls).toContain('stop')
+  } finally { await f.cleanup() }
+})
 
 test('manual activation without work stays off and does not touch setup or power', async () => {
   const f = fixture()

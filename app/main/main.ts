@@ -3077,7 +3077,7 @@ function ensureDesktopPower(): DesktopPower | undefined {
   return desktopPower
 }
 let lidReady: Promise<void> = Promise.resolve()
-const updateLidMenu = lidClosedMenu(() => lidMode?.read(), command => { void lidReady.then(() => lidMode?.command(command)).catch(() => {}) })
+const updateLidMenu = lidClosedMenu(async () => { await lidReady; return lidMode?.readPresence() }, command => { void lidReady.then(() => lidMode?.command(command)).catch(() => {}) })
 function ensureLidMode(): void {
   if (lidMode) return
   const previous = lidReady
@@ -3105,7 +3105,7 @@ function registerHostControlPlane(): void {
   ipcMain.handle(CH_LID_READ, async event => {
     if (!isMainWindowSender(event)) throw new Error('Unavailable')
     await lidReady
-    return lidMode?.read()
+    return lidMode?.readPresence()
   })
   ipcMain.handle(CH_LID_COMMAND, async (event, raw: unknown) => {
     if (!isMainWindowSender(event) || !isLidModeCommand(raw)) throw new Error('Invalid lid-closed command')

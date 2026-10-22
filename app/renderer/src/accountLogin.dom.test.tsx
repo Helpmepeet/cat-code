@@ -24,7 +24,7 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [],
   let frames: (frames: ServerFrame[]) => void = () => {}
   let lidUpdate: (view: LidModeView) => void = () => {}
   const lidCommands: LidModeCommand[] = []
-  const lidView: LidModeView = { phase: 'unresolved', activeSessions: 0, activeSubagents: 0, waitingForApproval: false, installed: true, sleepRequested: false, error: 'Synthetic restoration failure' }
+  const lidView: LidModeView = { phase: 'unresolved', mode: null, allowance: 0, remainingSeconds: 0, workAvailable: false, activeSessions: 0, activeSubagents: 0, waitingForApproval: false, installed: true, sleepRequested: false, error: 'Synthetic restoration failure' }
   const bridge: Partial<CatCodeBridge> = {
     subscribe: listener => { frames = listener; return () => {} },
     subscribeHost: listener => { hostEvent = listener; return () => {} },

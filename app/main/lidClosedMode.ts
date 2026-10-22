@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync, readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import type { LidModeCommand, LidModeView } from '../shared/lidClosed.js'
-import { LID_HELPER, LidSetupCancelled, lidRestored, type LidNativeClient, type LidNativeSnapshot, type LidHardware } from './lidClosedNative.js'
+import type { LidModeCommand, LidModeView, LidTarget, LidPreset } from '../shared/lidClosed.js'
+import { LID_HELPER, LidSetupCancelled, lidRestored, type LidNativeClient, type LidNativeSnapshot, type LidNativeReply, type LidHardware } from './lidClosedNative.js'
 import { WORK_COMPLETION_GRACE_MS, type LidWorkAggregate } from './lidWorkObserver.js'
 
 type Dependencies = {
@@ -13,9 +13,9 @@ type Dependencies = {
   current(): Promise<boolean>
   marker: string
   changed(view: LidModeView): void
-  work: Pick<import('./lidWorkObserver.js').LidWorkObserver, 'start' | 'read' | 'refresh' | 'verify' | 'subscribe' | 'stop'>
+  work: Pick<import('./lidWorkObserver.js').LidWorkObserver, 'start' | 'read' | 'refresh' | 'verify' | 'subscribe' | 'stop' | 'probe'>
 }
-const empty = (): LidModeView => ({ phase: 'off', activeSessions: 0, activeSubagents: 0, waitingForApproval: false, installed: false, sleepRequested: false })
+const empty = (): LidModeView => ({ phase: 'off', mode: null, allowance: 0, remainingSeconds: 0, workAvailable: false, activeSessions: 0, activeSubagents: 0, waitingForApproval: false, installed: false, sleepRequested: false })
 
 // One owner per Electron process, outside window/session lifetime. The root
 // helper remains the deadline and restoration authority if this owner stalls.
@@ -37,9 +37,29 @@ export class LidClosedMode {
   private finalizing = false
   private activationWorkRevision = 0
   private admissionRevision = 0
+  private switching = false
 
   constructor(private readonly deps: Dependencies) {}
   read(): LidModeView { return structuredClone(this.view) }
+  readPresence(): Promise<LidModeView> {
+    return this.enqueue(async () => {
+      if (!this.stopped) {
+        try { this.updatePresence(await this.deps.work.probe()) }
+        catch { this.view.workAvailable = false }
+        this.emit()
+      }
+      return this.read()
+    })
+  }
+  private updatePresence(work: LidWorkAggregate): void {
+    const fresh = work.availability === 'fresh' && !work.supervisionLost
+    this.view.workAvailable = fresh && work.hasUnfinishedWork
+    if (fresh || this.view.phase !== 'active' || this.view.mode !== 'work') {
+      this.view.activeSessions = fresh ? work.activeSessions : 0
+      this.view.activeSubagents = fresh ? work.activeSubagents : 0
+      this.view.waitingForApproval = fresh && work.waitingForApproval
+    }
+  }
   async initialize(): Promise<void> {
     try {
       if (existsSync(this.deps.marker)) {
@@ -89,6 +109,11 @@ export class LidClosedMode {
     this.emit()
   }
   command(command: LidModeCommand): Promise<LidModeView> {
+    if (command.action === 'set') {
+      this.epoch++
+      this.disarmWork()
+    }
+    const requestedEpoch = this.epoch
     // Cancel can invalidate an administrator dialog or native request before
     // the serialized mutation returns. Its late result must restore, not start.
     if (['cancel', 'stop', 'sleep'].includes(command.action)) {
@@ -101,6 +126,9 @@ export class LidClosedMode {
       this.busy = true
       try {
         switch (command.action) {
+          case 'set':
+            if (requestedEpoch === this.epoch) await this.reconcile(command.target, requestedEpoch)
+            break
           case 'start': await this.start(); break
           case 'setup':
             if (this.view.phase === 'unavailable') {
@@ -171,6 +199,15 @@ export class LidClosedMode {
     if (!['nominal','fair'].includes(h.safety.thermal) || h.safety.onBattery === undefined || h.safety.batteryPercent === undefined) throw new Error('Safety monitoring is unavailable or your Mac needs to cool down.')
     if (h.safety.onBattery && h.safety.batteryPercent <= 20) throw new Error('Charge above 20% before starting.')
   }
+  private checkRefusedAdmission(reply: LidNativeReply, hardware: LidHardware): void {
+    if (reply.ok || !lidRestored(reply.snapshot)) return
+    // A refusal before admission can return the prior activation's restored record.
+    this.snapshot = reply.snapshot
+    this.mark(false)
+    this.identity = undefined
+    this.checkHardware({ ...hardware, safety: reply.snapshot!.safety })
+    throw new Error('Lid-closed mode could not start.')
+  }
   private async install(recoveryOnly: boolean): Promise<void> {
     // Replacement invalidates the old Mach-service connection, even when its
     // bridge process is still alive. Admission must use the new generation.
@@ -193,12 +230,13 @@ export class LidClosedMode {
     }
   }
   private workChanged(aggregate: LidWorkAggregate): void {
+    this.view.workAvailable = aggregate.availability === 'fresh' && !aggregate.supervisionLost && aggregate.hasUnfinishedWork
     if (aggregate.availability === 'fresh' || this.view.phase !== 'active') {
       this.view.activeSessions = aggregate.activeSessions
       this.view.activeSubagents = aggregate.activeSubagents
       this.view.waitingForApproval = aggregate.waitingForApproval
     }
-    if (this.view.phase !== 'active') { this.emit(); return }
+    if (this.view.phase !== 'active' || this.view.mode !== 'work') { this.emit(); return }
     if (aggregate.supervisionLost) {
       this.disarmWork()
       void this.enqueue(async () => {
@@ -244,14 +282,14 @@ export class LidClosedMode {
   private clearGrace(): void { if (this.graceTimer) clearTimeout(this.graceTimer); this.graceTimer = undefined }
   private async verifyEmpty(epoch: number, revision: number): Promise<void> {
     const activation = this.epoch
-    if (epoch !== activation || this.view.phase !== 'active') return
+    if (epoch !== activation || this.view.phase !== 'active' || this.view.mode !== 'work') return
     const admissionRevision = this.admissionRevision
     this.finalizing = true
     try {
       const aggregate = await this.deps.work.verify()
       await this.enqueue(async () => {
         const current = this.deps.work.read()
-        if (this.epoch !== activation || this.view.phase !== 'active') return
+        if (this.epoch !== activation || this.view.phase !== 'active' || this.view.mode !== 'work') return
         if (aggregate.availability !== 'fresh' || aggregate.hasUnfinishedWork ||
             aggregate.revision !== revision || current.availability !== 'fresh' ||
             current.hasUnfinishedWork || current.revision !== revision ||
@@ -299,12 +337,13 @@ export class LidClosedMode {
       await this.end('monitoring-unavailable')
     }
   }
-  private async start(): Promise<void> {
+  private async start(fallback = false): Promise<void> {
     if (this.needsRecovery || ['active','starting','restoring','unresolved'].includes(this.view.phase)) return
     const epoch = this.epoch
-    this.set({ phase: 'starting', error: undefined, reason: undefined })
+    this.set({ phase: 'starting', mode: 'work', allowance: 0, remainingSeconds: 0, error: undefined, reason: undefined })
     const initialWork = await this.deps.work.start()
     if (epoch !== this.epoch || this.stopped) { this.deps.work.stop(); return }
+    this.updatePresence(initialWork)
     if (initialWork.availability === 'unknown' || initialWork.supervisionLost) {
       this.deps.work.stop()
       this.set({ phase: 'unavailable', reason: 'work-status-unavailable', error: 'Work status is unavailable. Try again when sessions are connected.' })
@@ -312,6 +351,7 @@ export class LidClosedMode {
     }
     if (!initialWork.hasUnfinishedWork) {
       this.deps.work.stop()
+      if (fallback) { await this.startTimed(15, epoch); return }
       this.set({ phase: 'off', reason: 'no-work', error: undefined })
       return
     }
@@ -338,6 +378,7 @@ export class LidClosedMode {
     this.activationWorkRevision = initialWork.revision
     this.mark(true)
     const reply = await this.deps.native.command({ op: 'start-work', identity: this.identity })
+    this.checkRefusedAdmission(reply, finalHardware)
     if (epoch !== this.epoch || this.stopped) {
       this.snapshot = reply.snapshot
       if (reply.snapshot?.record.needsRestore) await this.end('stopped')
@@ -373,6 +414,81 @@ export class LidClosedMode {
     this.workUnsubscribe = this.deps.work.subscribe(value => this.workChanged(value))
     this.workChanged(currentWork)
   }
+  private async reconcile(target: LidTarget, epoch: number): Promise<void> {
+    if (target === 'off') {
+      if (this.needsRecovery) await this.end('stopped')
+      else this.set({ phase: 'off', mode: null, allowance: 0, remainingSeconds: 0, error: undefined })
+      return
+    }
+    if (this.view.phase === 'unresolved') return
+    // A superseded pre-admission target can leave a starting view without a lease.
+    if (!this.needsRecovery && ['starting', 'setup'].includes(this.view.phase)) this.view.phase = 'off'
+    if (this.view.phase === 'active' && this.view.mode === 'timed' && typeof target === 'number') {
+      const began = this.snapshot?.record.began
+      const reply = await this.deps.native.command({ op: 'adjust', identity: this.identity!, allowance: target * 60 })
+      if (this.restoredReceipt(reply.snapshot)) { this.accept(reply.snapshot); return }
+      if (reply.snapshot?.record.began !== began) throw new Error('The sleep helper changed the timer start.')
+      if (!reply.ok || !this.timedReceipt(reply.snapshot, target)) throw new Error('The sleep helper could not confirm the timer.')
+      this.snapshot = reply.snapshot
+      if (epoch !== this.epoch) return
+      this.accept(reply.snapshot)
+      return
+    }
+    if (this.view.phase === 'active' && this.view.mode === 'work' && target === 'work') {
+      this.workUnsubscribe = this.deps.work.subscribe(value => this.workChanged(value))
+      this.workChanged(await this.deps.work.start())
+      return
+    }
+    if (this.needsRecovery) {
+      this.switching = true
+      this.set({ phase: 'starting', mode: target === 'work' ? 'work' : 'timed', allowance: typeof target === 'number' ? target : 0 })
+      try { await this.end('stopped') } finally { this.switching = false }
+      if (this.needsRecovery || epoch !== this.epoch || this.stopped) return
+      this.view.phase = 'off'
+    }
+    if (epoch !== this.epoch || this.stopped) return
+    if (target === 'work') {
+      await this.start(true)
+      if (epoch === this.epoch && !this.stopped && !this.needsRecovery &&
+          this.view.phase === 'off' && this.view.reason === 'no-work') await this.startTimed(15, epoch)
+    }
+    else await this.startTimed(target, epoch)
+  }
+  private timedReceipt(snapshot: LidNativeSnapshot | undefined, allowance: number): boolean {
+    return !!snapshot && !snapshot.error && snapshot.record.version === 2 && snapshot.record.mode === 'timed' &&
+      snapshot.record.identity === this.identity && snapshot.record.allowance === allowance * 60 &&
+      snapshot.record.phase === 'active' && snapshot.record.needsRestore && snapshot.safety.sleepDisabled === true
+  }
+  private restoredReceipt(snapshot: LidNativeSnapshot | undefined): boolean {
+    return !!snapshot && lidRestored(snapshot) && snapshot.record.identity === this.identity &&
+      snapshot.record.mode === this.snapshot?.record.mode
+  }
+  private async startTimed(allowance: LidPreset, epoch: number): Promise<void> {
+    this.disarmWork()
+    this.set({ phase: 'starting', mode: 'timed', allowance, remainingSeconds: 0, error: undefined, reason: undefined })
+    const cancelled = () => epoch !== this.epoch || this.stopped
+    const hardware = await this.deps.hardware()
+    if (cancelled()) return
+    this.checkHardware(hardware)
+    const current = await this.deps.current()
+    if (cancelled()) return
+    if (!current) {
+      this.set({ phase: 'setup' }); await this.install(false)
+      if (cancelled()) return
+    }
+    const finalHardware = await this.deps.hardware()
+    if (cancelled()) return
+    this.checkHardware(finalHardware)
+    this.set({ phase: 'starting' })
+    this.identity = randomUUID()
+    this.mark(true)
+    const reply = await this.deps.native.command({ op: 'start', identity: this.identity, allowance: allowance * 60 })
+    this.checkRefusedAdmission(reply, finalHardware)
+    this.snapshot = reply.snapshot
+    if (cancelled()) { await this.end('stopped'); return }
+    if (!reply.ok || !this.timedReceipt(reply.snapshot, allowance)) throw new Error('The sleep helper could not confirm the timer.')
+    this.accept(reply.snapshot)
+  }
   private checkAdmissionWork(epoch: number): boolean {
     if (epoch !== this.epoch || this.stopped) return false
     const aggregate = this.deps.work.read()
@@ -397,6 +513,11 @@ export class LidClosedMode {
   private accept(snapshot: LidNativeSnapshot | undefined): void {
     if (!snapshot || snapshot.error) throw new Error('The sleep helper could not confirm the power state.')
     this.snapshot = snapshot
+    if (!this.switching) {
+      this.view.mode = snapshot.record.mode ?? null
+      this.view.allowance = snapshot.record.mode === 'timed' ? snapshot.record.allowance / 60 : 0
+      this.view.remainingSeconds = snapshot.remainingSeconds
+    }
     const nativeReason = snapshot.record.reason
     const nativeSafetyReason = nativeReason &&
       !['stopped', 'work-finished', 'sleep-requested'].includes(nativeReason)
@@ -405,11 +526,12 @@ export class LidClosedMode {
     if (!this.ending && snapshot.record.phase === 'active' && snapshot.record.identity === this.identity && snapshot.record.needsRestore && snapshot.safety.sleepDisabled === true) {
       this.set({ phase: 'active', error: undefined }); return
     }
-    this.set({ phase: this.view.recovering ? 'unresolved' : 'restoring', reason: terminalReason })
+    if (!this.switching) this.set({ phase: this.view.recovering ? 'unresolved' : 'restoring', reason: terminalReason })
     if (!lidRestored(snapshot)) {
       this.set({ phase: 'unresolved', ...(this.ending ? { error: 'Normal sleep has not been restored. Retry recovery.' } : {}) }); return
     }
     this.mark(false)
+    if (this.switching) { this.ending = undefined; return }
     let reason = terminalReason
     // Restoring the override does not prove the separate Sleep call completed.
     if (reason === 'sleep-requested' && (!snapshot.record.sleepRequestAttempted || snapshot.record.sleepRequestSucceeded !== true)) reason = 'sleep-unconfirmed'
@@ -424,7 +546,7 @@ export class LidClosedMode {
   private async end(reason: string, sleep = false): Promise<void> {
     this.ending ??= { reason, sleep }
     reason = this.ending.reason
-    this.set({ phase: this.view.recovering ? 'unresolved' : 'restoring', reason })
+    if (!this.switching) this.set({ phase: this.view.recovering ? 'unresolved' : 'restoring', reason })
     try {
       const identity = this.identity
       const reply = sleep && identity
@@ -434,6 +556,10 @@ export class LidClosedMode {
           : identity && this.snapshot?.record.phase === 'active'
             ? await this.deps.native.command({ op: 'stop', identity })
             : await this.deps.native.command({ op: 'retry' })
+      if (identity && (reply.snapshot?.record.identity !== identity ||
+          (this.snapshot?.record.mode && reply.snapshot?.record.mode !== this.snapshot.record.mode))) {
+        throw new Error('The sleep helper could not confirm the activation.')
+      }
       this.accept(reply.snapshot)
     } catch { this.set({ phase: 'unresolved', repairRequired: true }) }
   }
@@ -441,6 +567,16 @@ export class LidClosedMode {
     if (!['active','unresolved','restoring'].includes(this.view.phase)) return
     try {
       if (this.view.phase === 'active' && !this.ending) {
+        if (this.view.mode === 'timed') {
+          const epoch = this.epoch
+          const reply = await this.deps.native.command({ op: 'pulse', identity: this.identity! })
+          if (this.restoredReceipt(reply.snapshot)) { this.accept(reply.snapshot); return }
+          this.snapshot = reply.snapshot
+          if (!reply.ok || !this.timedReceipt(reply.snapshot, this.view.allowance)) throw new Error('The sleep helper could not confirm the timer.')
+          if (epoch !== this.epoch) return
+          this.accept(reply.snapshot)
+          return
+        }
         const work = this.deps.work.read()
         if (work.supervisionLost) {
           this.disarmWork()
@@ -451,6 +587,7 @@ export class LidClosedMode {
         const nextSequence = this.renewalSequence + 1
         const identity = this.identity
         if (!identity) throw new Error('The sleep helper identity is unavailable.')
+        const epoch = this.epoch
         const reply = await this.deps.native.command({ op: 'renew-work', identity, sequence: nextSequence })
         this.snapshot = reply.snapshot
         if (reply.snapshot?.record.reason === 'supervision-lost' || reply.snapshot?.record.error === 'supervision-lost') {
@@ -460,6 +597,7 @@ export class LidClosedMode {
         }
         if (!reply.ok || !this.isWorkReceipt(reply.snapshot, 'work', nextSequence, true)) throw new Error(reply.error ?? 'Work supervision could not be renewed.')
         this.renewalSequence = nextSequence
+        if (epoch !== this.epoch || this.ending || this.view.mode !== 'work') return
         this.accept(reply.snapshot)
       } else {
         this.accept((await this.deps.native.command({ op: 'status' })).snapshot)
