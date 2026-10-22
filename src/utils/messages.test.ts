@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import type { UUID } from 'crypto'
-import { getSessionProvider, setSessionProvider } from '../bootstrap/state.js'
+import {
+  getSessionProvider,
+  getStrictToolResultPairing,
+  setSessionProvider,
+  setStrictToolResultPairing,
+} from '../bootstrap/state.js'
 import { annotateBoundaryWithPreservedSegment } from '../services/compact/compact.js'
 import {
   createAssistantAPIErrorMessage,
@@ -8,10 +13,171 @@ import {
   createCompactBoundaryMessage,
   createUserMessage,
   dropPreservedMessageDuplicates,
+  ensureToolResultPairing,
   normalizeMessages,
+  normalizeMessagesForAPI,
   normalizeAttachmentForAPI,
   wrapCommandText,
 } from './messages.js'
+
+describe('tool results separated by context', () => {
+  const assistant = (...ids: string[]) =>
+    createAssistantMessage({
+      content: ids.map(id => ({ type: 'tool_use' as const, id, name: 'Read', input: {} })),
+    })
+  const results = (...ids: string[]) =>
+    createUserMessage({
+      content: ids.map(id => ({
+        type: 'tool_result' as const,
+        tool_use_id: id,
+        content: `successful ${id}`,
+      })),
+    })
+  const context = (text: string, isMeta = true) =>
+    createUserMessage({ content: text, isMeta })
+  const toolResults = (messages: ReturnType<typeof ensureToolResultPairing>) =>
+    messages.flatMap(message =>
+      message.type === 'user' && Array.isArray(message.message.content)
+        ? message.message.content.filter(block => block.type === 'tool_result')
+        : [],
+    )
+
+  test('normalization and pairing preserve successful parallel results after hook context', () => {
+    const normalized = normalizeMessagesForAPI([
+      assistant('one', 'two'),
+      context('hook context'),
+      results('one', 'two'),
+    ], [], 'firstParty')
+    expect(normalized).toHaveLength(3)
+    const paired = ensureToolResultPairing(normalized)
+    expect(toolResults(paired)).toEqual(toolResults(normalized))
+    expect(paired[1]?.isMeta).not.toBe(true)
+    expect(paired[2]?.isMeta).toBe(true)
+    expect(paired[2]?.message.content).toEqual(normalized[1]?.message.content)
+    expect(toolResults(ensureToolResultPairing(paired))).toEqual(toolResults(paired))
+  })
+
+  test('collects split results ahead of context while preserving context order and flags', () => {
+    const before = context('before')
+    const between = context('between', false)
+    const after = context('after')
+    const first = results('one')
+    first.message.content = [
+      ...first.message.content as Exclude<typeof first.message.content, string>,
+      { type: 'text', text: 'result context' },
+    ]
+    const paired = ensureToolResultPairing([
+      assistant('one', 'two'), before, first, between, results('two'), after,
+    ])
+    expect(toolResults(paired).map(block => block.tool_use_id)).toEqual(['one', 'two'])
+    expect(paired.slice(2).map(message => message.message.content)).toEqual([
+      'before', [{ type: 'text', text: 'result context' }], 'between', 'after',
+    ])
+    expect(paired.slice(2).map(message => message.isMeta)).toEqual([
+      true, undefined, false, true,
+    ])
+  })
+
+  test('still repairs duplicates, orphans and missing results across context', () => {
+    const paired = ensureToolResultPairing([
+      assistant('one', 'two'), context('hook'), results('one', 'one'), results('orphan'),
+    ])
+    const blocks = toolResults(paired)
+    expect(blocks.map(block => block.tool_use_id).sort()).toEqual(['one', 'two'])
+    expect(blocks.find(block => block.tool_use_id === 'one')?.content).toBe('successful one')
+    expect(blocks.find(block => block.tool_use_id === 'two')?.is_error).toBe(true)
+  })
+
+  test('does not borrow results across an assistant boundary or lose leading users', () => {
+    const paired = ensureToolResultPairing([
+      context('first'), context('second', false),
+      assistant('one'), context('hook'), assistant('two'), results('one', 'two'),
+    ])
+    expect(paired.slice(0, 2).map(message => message.message.content)).toEqual(['first', 'second'])
+    const blocks = toolResults(paired)
+    expect(blocks.filter(block => block.tool_use_id === 'one')).toHaveLength(1)
+    expect(blocks.find(block => block.tool_use_id === 'one')?.is_error).toBe(true)
+    expect(blocks.find(block => block.tool_use_id === 'two')?.content).toBe('successful two')
+  })
+
+  test('leaves already adjacent results and context unchanged', () => {
+    const input = [assistant('one'), results('one'), context('after')]
+    expect(ensureToolResultPairing(input)).toEqual(input)
+  })
+
+  for (const withResidualContext of [false, true]) {
+    test(`repeated preparation preserves identity and metadata with residual context ${withResidualContext}`, () => {
+      const first = results('one')
+      first.timestamp = '2026-01-01T00:00:00.000Z'
+      first.sourceToolAssistantUUID = assistant('unused').uuid
+      first.toolUseResult = { value: 'original result metadata' }
+      first.mcpMeta = { structuredContent: { value: 'structured result' } }
+      if (withResidualContext && Array.isArray(first.message.content)) {
+        first.message.content.push({
+          type: 'text',
+          text: 'context with an existing stable message tag',
+        })
+      }
+      const original = [
+        assistant('one', 'two'), context('hook'), first, results('two'),
+      ]
+      const snapshot = structuredClone(original)
+      const prepare = () => ensureToolResultPairing(
+        normalizeMessagesForAPI(original, [], 'firstParty'),
+      )
+      const prepared = prepare()
+      expect(prepare()).toEqual(prepared)
+      expect(original).toEqual(snapshot)
+      expect(new Set(prepared.map(message => message.uuid)).size).toBe(prepared.length)
+      const carrier = prepared[1]!
+      expect(carrier.timestamp).toBe(first.timestamp)
+      expect(carrier).toMatchObject({
+        sourceToolAssistantUUID: first.sourceToolAssistantUUID,
+        toolUseResult: first.toolUseResult,
+        mcpMeta: first.mcpMeta,
+      })
+      if (withResidualContext) {
+        const residual = prepared.find(message => message.uuid === first.uuid)
+        expect(residual?.message.content).toEqual([
+          { type: 'text', text: 'context with an existing stable message tag' },
+        ])
+        expect(carrier.uuid).not.toBe(first.uuid)
+      } else {
+        expect(carrier.uuid).toBe(first.uuid)
+      }
+    })
+  }
+
+  test('valid separated results do not trigger strict repair mode', () => {
+    const previous = getStrictToolResultPairing()
+    setStrictToolResultPairing(true)
+    try {
+      const paired = ensureToolResultPairing([
+        assistant('one', 'two'), context('hook'), results('one'), results('two'),
+      ])
+      expect(toolResults(paired).map(block => block.content)).toEqual([
+        'successful one', 'successful two',
+      ])
+    } finally {
+      setStrictToolResultPairing(previous)
+    }
+  })
+
+  test('repairs leading orphan results and repeated assistant call IDs', () => {
+    const paired = ensureToolResultPairing([
+      results('orphan'), context('leading context'),
+      assistant('one'), results('one'),
+      assistant('one', 'two'), context('hook'), results('one'), results('two'),
+    ])
+    expect(paired[0]?.message.content).toEqual([
+      { type: 'text', text: '[Orphaned tool result removed due to conversation resume]' },
+    ])
+    expect(toolResults(paired).map(block => block.tool_use_id)).toEqual(['one', 'two'])
+    expect(paired.filter(message => message.type === 'assistant').flatMap(message =>
+      message.message.content.filter(block => block.type === 'tool_use').map(block => block.id),
+    )).toEqual(['one', 'two'])
+  })
+})
 
 describe('peer roster snapshot rendering', () => {
   for (const omittedCount of [undefined, 0, 3]) {

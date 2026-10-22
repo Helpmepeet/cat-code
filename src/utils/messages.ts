@@ -5469,6 +5469,70 @@ export function createToolUseSummaryMessage(
 export function ensureToolResultPairing(
   messages: (UserMessage | AssistantMessage)[],
 ): (UserMessage | AssistantMessage)[] {
+  // Normalization deliberately keeps meta and nonmeta users separate. Hook
+  // context can therefore separate a tool call from its results, or split the
+  // results across several users. Present those results together before any
+  // context, without merging the context's meta/nonmeta semantics.
+  const usedUUIDs = new Set(messages.map(message => message.uuid))
+  let userRunEnd = 0
+  messages = messages.flatMap((message, index) => {
+    if (index < userRunEnd) return []
+    if (message.type !== 'user' || messages[index - 1]?.type !== 'assistant') {
+      return [message]
+    }
+    const users: UserMessage[] = []
+    for (let j = index; messages[j]?.type === 'user'; j++) {
+      users.push(messages[j] as UserMessage)
+    }
+    userRunEnd = index + users.length
+    const resultUsers = users.filter(
+      user =>
+        Array.isArray(user.message.content) &&
+        user.message.content.some(block => block.type === 'tool_result'),
+    )
+    if (
+      resultUsers.length === 0 ||
+      (resultUsers.length === 1 && resultUsers[0] === users[0])
+    ) {
+      return users
+    }
+    const toolResults = resultUsers.flatMap(user =>
+      Array.isArray(user.message.content)
+        ? user.message.content.filter(block => block.type === 'tool_result')
+        : [],
+    )
+    const firstResultUser = resultUsers[0]!
+    let resultUUID = firstResultUser.uuid
+    if (
+      Array.isArray(firstResultUser.message.content) &&
+      firstResultUser.message.content.some(block => block.type !== 'tool_result')
+    ) {
+      // Keep the original identity on residual context: normalization may
+      // already have appended its UUID-derived [id:] tag.
+      let index = firstResultUser.message.content.length
+      do {
+        resultUUID = deriveUUID(firstResultUser.uuid, index++)
+      } while (usedUUIDs.has(resultUUID))
+      usedUUIDs.add(resultUUID)
+    }
+    return [
+      {
+        ...firstResultUser,
+        uuid: resultUUID,
+        message: { ...firstResultUser.message, content: toolResults },
+      },
+      ...users.flatMap(user => {
+        if (!Array.isArray(user.message.content)) return [user]
+        const content = user.message.content.filter(
+          block => block.type !== 'tool_result',
+        )
+        if (content.length === user.message.content.length) return [user]
+        return content.length > 0
+          ? [{ ...user, message: { ...user.message, content } }]
+          : []
+      }),
+    ]
+  })
   const result: (UserMessage | AssistantMessage)[] = []
   let repaired = false
 
