@@ -1,8 +1,9 @@
 import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ToolUseContext } from '../../Tool.js'
+import type { PreparedFileRead } from '../../utils/fileAuthorization.js'
 
 const scratch = mkdtempSync(join(tmpdir(), 'pdf-read-delivery-'))
 const savedEnv = { ...process.env }
@@ -61,11 +62,12 @@ afterAll(() => {
   rmSync(scratch, { recursive: true, force: true })
 })
 
-function writePDF(pages: number): string {
+function writePDF(pages: number, paddingBytes = 0): string {
   const pageObjects = Array.from({ length: pages }, (_, index) => 3 + index)
   const streamObject = 3 + pages
   const fontObject = streamObject + 1
-  const stream = 'BT /F1 12 Tf 40 740 Td (PDF delivery contract) Tj ET\n'
+  const stream = 'BT /F1 12 Tf 40 740 Td (PDF delivery contract) Tj ET\n' +
+    (paddingBytes ? `%${' '.repeat(paddingBytes)}\n` : '')
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     `<< /Type /Pages /Kids [${pageObjects.map(id => `${id} 0 R`).join(' ')}] /Count ${pages} >>`,
@@ -108,6 +110,65 @@ function contextFor(model: string, provider: 'openai' | 'firstParty'): ToolUseCo
     setInProgressToolUseIDs: () => {}, setResponseLength: () => {},
     updateFileHistoryState: () => {}, updateAttributionState: () => {},
   } as unknown as ToolUseContext
+}
+
+for (const delivery of ['native', 'rendered', 'render-error'] as const) {
+  test.skipIf(delivery === 'rendered' && !hasRenderer)(
+    `a PDF larger than 128 KiB uses the authorized object and cleans its snapshot (${delivery})`,
+    async () => {
+      const path = writePDF(1, 160 * 1024)
+      const authorizedBytes = readFileSync(path)
+      expect(authorizedBytes.length).toBeGreaterThan(128 * 1024)
+      const input = { file_path: path }
+      const prepared = await FileReadTool.prepareExecution!(input)
+      const bound = prepared.state as PreparedFileRead
+      const openFile = bound.openFile.bind(bound)
+      let snapshot: string | undefined
+      bound.openFile = async () => {
+        const capability = await openFile()
+        const copyTo = capability.copyTo.bind(capability)
+        capability.copyTo = async destination => {
+          snapshot = destination
+          await copyTo(destination)
+          expect(readFileSync(destination)).toEqual(authorizedBytes)
+        }
+        return capability
+      }
+      // Replacement after preparation must not change the authorized PDF.
+      const moved = `${path}.authorized`
+      renameSync(path, moved)
+      writeFileSync(path, 'This replacement is not the approved PDF.')
+      const context = contextFor(
+        delivery === 'native' ? 'claude-sonnet-4-6' : 'gpt-6.1-sol',
+        delivery === 'native' ? 'firstParty' : 'openai',
+      )
+      context.preparedExecution = { toolName: FileReadTool.name, input, state: prepared.state }
+      if (delivery === 'render-error') {
+        process.env.PATH = scratch
+        resetPdftoppmCache()
+      }
+      try {
+        const read = runWithCwdOverride(scratch, () => FileReadTool.call(input, context))
+        if (delivery === 'render-error') {
+          await expect(read).rejects.toThrow('pdftoppm is not installed')
+        } else {
+          const result = await read
+          expect(result.data.type).toBe(delivery === 'native' ? 'pdf' : 'parts')
+          if (result.data.type === 'pdf') {
+            expect(Buffer.from(result.data.file.base64, 'base64')).toEqual(authorizedBytes)
+          } else {
+            expect(result.newMessages![0]!.message.content).toHaveLength(1)
+          }
+        }
+        expect(snapshot).toBeDefined()
+        expect(existsSync(snapshot!)).toBe(false)
+        expect(readFileSync(path, 'utf8')).toBe('This replacement is not the approved PDF.')
+      } finally {
+        await prepared.cleanup()
+        rmSync(moved, { force: true })
+      }
+    },
+  )
 }
 
 test.skipIf(!hasRenderer)('a GPT worker full-PDF read delivers rendered page content to the Codex wire', async () => {

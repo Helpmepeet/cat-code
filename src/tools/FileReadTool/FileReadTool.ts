@@ -1,9 +1,5 @@
 import type { Base64ImageSource } from '@anthropic-ai/sdk/resources/index.mjs'
-import {
-  copyFile,
-  readdir,
-  readFile as readFileAsync,
-} from 'fs/promises'
+import { readdir, readFile as readFileAsync } from 'fs/promises'
 import * as path from 'path'
 import { posix, win32 } from 'path'
 import { z } from 'zod/v4'
@@ -962,7 +958,7 @@ export const FileReadTool = buildTool({
         resolvedReadPath = privateReadSnapshot
       } else if (isPDFExtension(ext)) {
         privateReadSnapshot = await createPrivateTempFile('cat-code-read-', '.pdf')
-        await copyFile(readCapability.descriptorPath, privateReadSnapshot)
+        await readCapability.copyTo(privateReadSnapshot)
         resolvedReadPath = privateReadSnapshot
       }
       return await callInner(
