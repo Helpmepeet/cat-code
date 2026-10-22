@@ -1050,7 +1050,8 @@ function Radio({ on }: { on: boolean }) {
     <span
       aria-hidden="true"
       className={
-        'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border ' +
+        // 15px outer minus the 1px border leaves 13px, an odd inner box that centres the 7px dot on whole pixels.
+        'flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-full border ' +
         (on ? 'border-accent' : 'border-text-faint')
       }
     >
