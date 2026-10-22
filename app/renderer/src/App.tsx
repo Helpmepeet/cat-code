@@ -4036,7 +4036,6 @@ export function App() {
 	            reasoningEffort={rail.reasoningEffort}
 	            fastMode={rail.fastMode}
 	            contextWindow={rail.contextWindow}
-	            cacheExpiresAt={rail.cacheExpiresAt}
 	            lastPermissionMode={rail.lastPermissionMode}
 	            runControls={panelRunControls}
 	            readOnlyRunControls={rail.readOnlyRunControls}

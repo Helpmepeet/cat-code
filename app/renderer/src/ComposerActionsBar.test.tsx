@@ -9,11 +9,6 @@ import {
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown } from './composerPopover.js'
 import { toneClasses } from './tone.js'
-import {
-  createRunControlsState,
-  reduceRunControlsState,
-  selectRunControlsSnapshot,
-} from './runControlsState.js'
 import type { ContextUsage } from './contextUsage.js'
 import type {
   AccountStatus,
@@ -1086,74 +1081,22 @@ test('context pressure restores the threshold warning with auto-compact-specific
   expect(belowThreshold).not.toContain('data-composer-face="token-warning"')
 })
 
-test('unknown, warm, and legacy snapshots show no cache-expired indicator', () => {
-  for (const cacheExpired of [null, false, undefined]) {
-    const snapshot = { ...runControls(), cacheExpired }
-    expect(render({ runControls: snapshot })).not.toContain('Cache expired')
-  }
-  expect(render({ runControls: null })).not.toContain('Cache expired')
-})
-
-test('estimated expiry renders the settled clock immediately before the account', () => {
-  const html = render({
-    account: account(),
-    runControls: runControls({ cacheExpired: true }),
-    contextUsage: USAGE,
-  })
-  const clock = html.match(/<span role="status"[\s\S]*?<\/span><\/span>/)?.[0] ?? ''
-  expect(html.indexOf('<span role="status"')).toBeLessThan(html.indexOf('Active account:'))
-  expect(clock).toContain('aria-label="Estimated cache expiry passed"')
-  expect(clock).toContain('h-[22px] w-[22px]')
-  expect(clock).toContain('text-tone-warn')
-  expect(clock).toContain('width="14" height="14"')
-  expect(clock).toContain('stroke-width="2"')
-  expect(clock).toContain('<circle cx="12" cy="12" r="10"')
-  expect(clock).toContain('>Estimated cache expiry passed</span>')
-  expect(clock).not.toContain('button')
-  expect(clock).not.toContain('tabindex')
-  expect(clock).not.toContain('title=')
-  expect(clock).not.toContain('aria-haspopup')
-  expect(html).toContain('Context 21% used')
-})
-
-test('live and preview deadlines render estimate wording without trusting stale snapshot booleans', () => {
+test('cache state never adds an expiry warning to the composer', () => {
   const now = Date.now()
-  const status = 'Estimated cache expiry passed'
-  const live = { ...runControls(), cacheExpiresAt: now - 1, cacheExpired: false }
-  expect(render({ runControls: live })).toContain(status)
-  expect(render({ runControls: { ...live, cacheExpiresAt: now + 60_000, cacheExpired: true } }))
-    .not.toContain(status)
-  expect(render({ runControls: null, cacheExpiresAt: now - 1 })).toContain(status)
-  expect(render({ runControls: null, cacheExpiresAt: now + 60_000 })).not.toContain(status)
-})
-
-test('snapshot delivery isolates expiry by session and clears it on refresh or disconnect', () => {
-  let state = createRunControlsState()
-  const deliver = (sessionId: string, cacheExpired: boolean | null) => {
-    state = reduceRunControlsState(state, {
-      type: 'frame',
-      frame: {
-        kind: 'run-controls.snapshot',
-        protocolVersion: 4,
-        sessionId,
-        runControls: runControls({ cacheExpired }),
-      },
-    })
+  for (const cacheExpired of [true, false, null, undefined]) {
+    for (const cacheExpiresAt of [now - 1, now + 60_000, undefined]) {
+      const html = render({
+        account: account(),
+        runControls: { ...runControls(), cacheExpired, cacheExpiresAt },
+        contextUsage: USAGE,
+      })
+      expect(html).not.toContain('Estimated cache expiry passed')
+      expect(html).not.toContain('composer-cache')
+      expect(html).toContain('Active account:')
+      expect(html).toContain('Context 21% used')
+    }
   }
-  const display = (sessionId: string) =>
-    render({ runControls: selectRunControlsSnapshot(state, sessionId) })
-  deliver('s1', true)
-  deliver('s2', null)
-  expect(display('s1')).toContain('Estimated cache expiry passed')
-  expect(display('s2')).not.toContain('Estimated cache expiry passed')
-  deliver('s1', false)
-  expect(display('s1')).not.toContain('Estimated cache expiry passed')
-  deliver('s1', true)
-  state = reduceRunControlsState(state, {
-    type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 4, sessionId: 's1', status: 'disconnected' },
-  })
-  expect(display('s1')).not.toContain('Estimated cache expiry passed')
+  expect(render({ runControls: null })).not.toContain('Estimated cache expiry passed')
 })
 
 /* --------------------------------------------------------------------- *

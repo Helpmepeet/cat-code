@@ -1236,15 +1236,6 @@ html[data-glass='on'] [data-window-overlay] {
     animation: catcode-sa-pop 0.13s ease both;
   }
 
-  .composer-cache-label {
-    visibility: hidden;
-    pointer-events: none;
-  }
-
-  .composer-cache-indicator:hover > .composer-cache-label {
-    visibility: visible;
-  }
-
   .animate-effort-flow {
     width: var(--effort-flow-width, 0px);
   }

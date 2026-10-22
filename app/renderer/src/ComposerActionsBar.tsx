@@ -39,7 +39,6 @@ import { permissionModeMeta, permissionModeShortLabel } from './permissionLabels
 import { ToggleSwitch } from './SettingsEditors.js'
 import { ActionWarningIcon, Glyph } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
-import { useCacheExpiredEstimate } from './useCacheExpiredEstimate.js'
 import type {
   AccountStatus,
   AnthropicAccountStatus,
@@ -1255,27 +1254,6 @@ function CompactIcon() {
   )
 }
 
-function CacheExpiredIndicator() {
-  return (
-    <span
-      role="status"
-      aria-label="Estimated cache expiry passed"
-      className="composer-cache-indicator relative flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
-    >
-      <Glyph size={14} strokeWidth="2">
-        <circle cx="12" cy="12" r="10" />
-        <polyline points="12 6 12 12 16 14" />
-      </Glyph>
-      <span
-        aria-hidden
-        className="composer-cache-label absolute bottom-full left-1/2 z-40 mb-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-shell-seam bg-surface-raised px-[9px] py-[5px] text-[11.5px] font-medium text-text-primary shadow-lg"
-      >
-        Estimated cache expiry passed
-      </span>
-    </span>
-  )
-}
-
 function TokenWarningChip({
   warning,
   faceProps,
@@ -1424,7 +1402,6 @@ export function ComposerActionsBar({
   fastMode,
   runControls,
   readOnlyRunControls,
-  cacheExpiresAt,
   onSetModel,
   onSetEffort,
   onSetFast,
@@ -1469,8 +1446,6 @@ export function ComposerActionsBar({
   runControls?: RunControlsSnapshot | null
   /** Retained display data only. Unlike runControls, this never arms a setter. */
   readOnlyRunControls?: RunControlsSnapshot | null
-  /** Read-only retained/preview estimate when there is no live snapshot. */
-  cacheExpiresAt?: number | null
   onSetModel?: (model: string | null) => void
   onSetEffort?: (effort: string) => void
   onSetFast?: (active: boolean) => void
@@ -1519,10 +1494,6 @@ export function ComposerActionsBar({
   // Interactive switcher when the active account AND a switch handler are both
   // present; otherwise the read-only alias face.
   const accountInteractive = account != null && onSwitchAccount != null
-  const cacheExpired = useCacheExpiredEstimate(
-    runControls ? runControls.cacheExpiresAt : cacheExpiresAt,
-    runControls?.cacheExpired,
-  )
   const tokenWarning = selectTokenWarning(
     contextUsage ?? null,
     runControls?.autoCompact,
@@ -1679,7 +1650,6 @@ export function ComposerActionsBar({
 
         <div className="composer-account-controls ml-auto flex min-w-0 items-center gap-[7px]">
           <div className="composer-account-identity flex min-w-0 items-center gap-[7px]">
-          {cacheExpired ? <CacheExpiredIndicator /> : null}
           {workspaceBranch ? (
             <span
               {...faceProps('git-branch')}

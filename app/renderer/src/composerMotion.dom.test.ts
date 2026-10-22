@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, setSystemTime, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { RunControlsSnapshot } from '../../shared/protocol.js'
@@ -142,7 +142,7 @@ test('context warning explains whether compaction is automatic or manual', async
   )
 })
 
-test('cache status changes do not add a toolbar action or open a popover', async () => {
+test('cache status changes never show a warning or change toolbar actions', async () => {
   const tree = await harness.mount(rail(167_000))
   const indicator = () => tree.container.querySelector<HTMLElement>('[aria-label="Estimated cache expiry passed"]')
   const faces = () => [...tree.container.querySelectorAll('[data-composer-face]')]
@@ -150,64 +150,20 @@ test('cache status changes do not add a toolbar action or open a popover', async
   const before = faces()
   expect(indicator()).toBeNull()
   await tree.render(rail(167_000, true))
-  expect(indicator()?.tagName).toBe('SPAN')
-  expect(indicator()?.getAttribute('role')).toBe('status')
-  expect(indicator()?.querySelector('.composer-cache-label')?.textContent).toBe('Estimated cache expiry passed')
-  await act(async () => {
-    indicator()?.click()
-  })
+  expect(indicator()).toBeNull()
+  expect(tree.container.querySelector('.composer-cache-indicator')).toBeNull()
   expect(document.querySelector('[role="dialog"]')).toBeNull()
   expect(faces()).toEqual(before)
   expect(faces()).toContain('token-warning')
   await tree.render(rail(167_000, false))
   expect(indicator()).toBeNull()
   await tree.render(rail(167_000, true))
-  expect(indicator()).not.toBeNull()
+  expect(indicator()).toBeNull()
   await tree.render(rail(167_000, null))
   expect(indicator()).toBeNull()
 })
 
-test('an idle deadline shows the clock, a fresh response clears it, and focus catches elapsed time', async () => {
-  const start = Date.now()
-  setSystemTime(start)
-  const pending = new Map<number, () => void>()
-  let nextId = 1
-  const setTimer = spyOn(window, 'setTimeout').mockImplementation(((handler: TimerHandler) => {
-    if (typeof handler !== 'function') throw new Error('Expected timer callback')
-    const id = nextId++
-    pending.set(id, handler as () => void)
-    return id
-  }) as typeof window.setTimeout)
-  const clearTimer = spyOn(window, 'clearTimeout').mockImplementation(id => {
-    if (typeof id === 'number') pending.delete(id)
-  })
-  try {
-    const tree = await harness.mount(rail(40_000, false, start + 1_000))
-    const indicator = () => tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')
-    expect(indicator()).toBeNull()
-    setSystemTime(start + 1_001)
-    await act(async () => {
-      const callbacks = [...pending.values()]
-      pending.clear()
-      for (const callback of callbacks) callback()
-    })
-    expect(indicator()).not.toBeNull()
-    await tree.render(rail(40_000, false, start + 2_000))
-    expect(indicator()).toBeNull()
-    setSystemTime(start + 2_001)
-    await act(async () => { window.dispatchEvent(new Event('focus')) })
-    expect(indicator()).not.toBeNull()
-    await tree.unmount()
-    expect(pending.size).toBe(0)
-  } finally {
-    await harness.unmountAll()
-    setTimer.mockRestore()
-    clearTimer.mockRestore()
-    setSystemTime()
-  }
-})
-
-test('real preview and parked panes pass their deadline to the composer without a live engine', async () => {
+test('preview and parked panes never show a cache warning from retained deadlines', async () => {
   const base = idleSessionPaneProps()
   const facts = {
     model: 'gpt-6.1-sol', contextUsage: null, permissionMode: 'default', effort: 'high',
@@ -216,16 +172,17 @@ test('real preview and parked panes pass their deadline to the composer without 
   const tree = await harness.mount(createElement(SessionPane, {
     ...base, preview: true, previewRunFacts: facts, runControls: null,
   }))
-  expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).not.toBeNull()
+  expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).toBeNull()
   await tree.render(createElement(SessionPane, {
     ...base, preview: true, previewRunFacts: { ...facts, cacheExpiresAt: Date.now() + 60_000 }, runControls: null,
   }))
   expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).toBeNull()
   await tree.render(createElement(SessionPane, {
     ...base, preview: false, activeConnection: { status: 'parked', inputEnabled: false },
-    model: facts.model, runControls: null, cacheExpiresAt: facts.cacheExpiresAt,
+    model: facts.model, runControls: null,
+    readOnlyRunControls: { ...rail(0).props.runControls!, cacheExpiresAt: facts.cacheExpiresAt },
   }))
-  expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).not.toBeNull()
+  expect(tree.container.querySelector('[aria-label="Estimated cache expiry passed"]')).toBeNull()
 })
 
 test('keyboard cursor rows switch without a colour transition', async () => {
