@@ -2517,8 +2517,9 @@ export function SessionPane({
  * waiting here IS the user's own turn, carrying the same uuid the transcript
  * row will carry, so it reads as their message before it is delivered and then
  * simply fills in when the engine takes it. The previous flat gray line said
- * "system text" about a message the user wrote. Clamped to two lines: a queued
- * prompt is a reminder of what is waiting, not a place to re-read it.
+ * "system text" about a message the user wrote. Not clamped: `line-clamp` plus
+ * the bubble's vertical padding showed a sliver of the next line, and the user
+ * wants the whole waiting message visible.
  *
  * The caption and the cold-spawn promise belong to the CALLER, not here: one
  * caption over a stack, not the word `Queued` repeated down the left of every
@@ -2531,7 +2532,7 @@ export function SessionPane({
  */
 function QueuedRow({ text }: { text: string }) {
   return (
-    <div className="line-clamp-2 max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-dashed border-accent/30 bg-accent/[0.035] px-4 py-2.5 text-sm leading-relaxed text-text-subtle">
+    <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-dashed border-accent/30 bg-accent/[0.035] px-4 py-2.5 text-sm leading-relaxed text-text-subtle">
       {text || 'Image attachment'}
     </div>
   )
