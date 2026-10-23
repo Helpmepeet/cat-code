@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,3 +24,37 @@ macTest('native lifecycle persists before effects and recovers interrupted autho
     expect(run.stdout).toContain('PASS: durable activation')
   } finally { rmSync(scratch, { recursive: true, force: true }) }
 }, 70_000)
+
+test.each([0, 1])('installer retires an older helper with the verified replacement (restore exit %i)', restoreStatus => {
+  const scratch = mkdtempSync(join(tmpdir(), 'cat-lid-upgrade-test-'))
+  try {
+    const helper = join(scratch, 'old-helper')
+    const stage = join(scratch, 'verified payload')
+    const events = join(scratch, 'events')
+    mkdirSync(stage)
+    writeFileSync(helper, '#!/bin/bash\necho journal-invalid >&2\nexit 1\n', { mode: 0o700 })
+    writeFileSync(join(stage, 'helper'), `#!/bin/bash
+set -euo pipefail
+[[ $1 = --restore-for-uninstall ]]
+printf 'restored-by-replacement\\n' >> "$events"
+exit "$restore_status"
+`, { mode: 0o700 })
+    const installer = readFileSync(new URL('./install.sh', import.meta.url), 'utf8')
+    // Exercise the upgrade handoff without administrator privileges or system jobs.
+    const upgrade = installer.match(/^if \[\[ -e \$helper \]\]; then\n[\s\S]*?^fi$/m)?.[0]
+    expect(upgrade).toBeDefined()
+    const run = spawnSync('/bin/bash', ['-c', `set -euo pipefail
+helper=$1
+lid_payload_stage=$2
+export events=$3 restore_status=$4
+launchctl() { printf '%s\\n' "$*" >> "$events"; }
+${upgrade!.replaceAll('/bin/launchctl', 'launchctl')}
+`, '--', helper, stage, events, String(restoreStatus)], { encoding: 'utf8', timeout: 5000 })
+    expect(run.error).toBeUndefined()
+    expect(run.status).toBe(restoreStatus)
+    expect(run.stderr).toBe('')
+    expect(readFileSync(events, 'utf8').trim().split('\n')).toEqual(restoreStatus === 0
+      ? ['restored-by-replacement', 'bootout system/com.catcode.lid-closed', 'bootout system/com.catcode.lid-closed.recovery']
+      : ['restored-by-replacement'])
+  } finally { rmSync(scratch, { recursive: true, force: true }) }
+})

@@ -49,7 +49,9 @@ PAYLOAD
 "$lid_payload_stage/helper" --check-configuration "$lid_payload_stage/configuration.json"
 if [[ -e $helper ]]; then
   [[ -f $helper && ! -L $helper ]] || exit 1
-  "$helper" --restore-for-uninstall
+  # Older helpers can reject their own journal when marking work mode draining.
+  # The verified replacement restores and locks admission before jobs stop.
+  "$lid_payload_stage/helper" --restore-for-uninstall
   /bin/launchctl bootout system/com.catcode.lid-closed 2>/dev/null || true
   /bin/launchctl bootout system/com.catcode.lid-closed.recovery 2>/dev/null || true
 fi
