@@ -39,6 +39,8 @@ export type WorkspaceJumpCoordinatorDeps = {
   controlSlotOccupied?: (appSessionId: string, operationId: string) => boolean
   /** Holds source/destination turn admission and user reconciliation gates. */
   onStateChanged?: (state: WorkspaceJumpStateV2) => void
+  /** Retry unacked peer frames rejected while a continuation was closing. */
+  onPeerInputOpen?: (appSessionId: string) => void
   directory?: string
   now?: () => number
   timing?: WorkspaceJumpTimingSink
@@ -491,8 +493,13 @@ export class WorkspaceJumpCoordinator {
     const gateMatches = next.release.authorizedRevision !== null && status.gate.mode === next.release.target && status.gate.reservationOperationId === null && status.gate.requiresUserReconciliation === (next.release.target === 'review')
     if (gateMatches) next = { ...next, release: { ...next.release, confirmed: { generation, mode: status.gate.mode as 'review' | 'open' } } }
     if (JSON.stringify(next) !== JSON.stringify(state)) this.save(next)
-    if (gateMatches) this.deps.host.releaseWorkspaceJump(appSessionId, state.operationId)
-    else if (next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
+    if (gateMatches) {
+      this.deps.host.releaseWorkspaceJump(appSessionId, state.operationId)
+      if (next.release.target === 'open' &&
+          (state.release.confirmed?.generation !== generation || state.release.confirmed.mode !== 'open')) {
+        this.deps.onPeerInputOpen?.(appSessionId)
+      }
+    } else if (next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
     else if (status.execution === 'unconfirmed' && next.continuation.outcome !== 'success' && !next.review.noticeUuid) this.effect(appSessionId, { action: 'settle', outcome: 'uncertain' })
     else if (['idle','terminal'].includes(status.execution) && next.continuation.outcome !== 'success' && !next.review.noticeUuid && (next.cancellation || next.continuation.outcome !== 'pending')) this.settleWarning(appSessionId, next.cancellation?.application === 'prevented_start' || next.cancellation?.application === 'abort_signalled' ? 'cancelled' : next.continuation.dispatch === 'none' ? 'failed' : 'uncertain')
     else this.retryContinuation(appSessionId)
@@ -614,7 +621,8 @@ export class WorkspaceJumpCoordinator {
     this.queryStatus(appSessionId)
     return !state.review.required
   }
-  /** Main restart/process loss: never replay accepted, ready, or admitted work. */
+  /** Recover only after claiming replacement ownership, never by enumerating
+   * shared ledgers at startup. Accepted, ready, or admitted work is not replayed. */
   recover(appSessionId: string): WorkspaceJumpStateV2 | null {
     this.liveMoves.delete(appSessionId)
     this.clearObservationRetry(appSessionId)

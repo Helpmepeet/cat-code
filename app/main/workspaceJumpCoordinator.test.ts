@@ -8,6 +8,7 @@ import type { OperationalRecordInput } from '../shared/operationalLog.js'
 import { WorkspaceHandoffControl } from './workspaceHandoffControl.js'
 import type { WorkspaceHandoffSnapshot, WorkspaceHandoffExecutionRecord } from '../shared/workspaceHandoff.js'
 import { createPeerRequestPlane, type PeerRegistryRow } from './peerRequestPlane.js'
+import { canForwardWorkspaceInput } from './mainDecisions.js'
 import { PROTOCOL_VERSION, type SidecarClientMessage } from '../shared/protocol.js'
 import { readWorkspaceJump, writeWorkspaceJump, workspaceJumpOperationSha256, upgradeWorkspaceJumpState, workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
 import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.js'
@@ -421,6 +422,68 @@ function snapshot(h: ReturnType<typeof harness>, sequence: number, record?: Part
 const checkpoint = () => ({ version: 1 as const, prefixBytes: 10, prefixSha256: 'a'.repeat(64), projectionSha256: 'b'.repeat(64), activeTipUuid: randomUUID(), messageCount: 1 })
 async function arrive(h: ReturnType<typeof harness>) { await h.accept(); await h.coordinator.handleRequest(h.appSessionId, h.ready); h.coordinator.afterResponse(h.appSessionId, h.ready, true); await h.coordinator.waitForSettlement(h.appSessionId) }
 
+test('main admits peer replies only into a verified running destination continuation', async () => {
+  const h = harness()
+  await arrive(h)
+  const peer = { type: 'peer.deliver' as const, messageId: randomUUID(), from: 'Reef',
+    fromSessionId: randomUUID(), text: 'The requested result.' }
+  const user = { type: 'app.submit' as const, requestId: 'user', prompt: 'More context.' }
+  expect(canForwardWorkspaceInput(h.appSessionId, peer, h.coordinator)).toBe(false)
+  h.coordinator.observe(h.appSessionId, { ...snapshot(h, 1, {}), execution: 'running' })
+  expect(canForwardWorkspaceInput(h.appSessionId, peer, h.coordinator)).toBe(true)
+  expect(canForwardWorkspaceInput(h.appSessionId, user, h.coordinator)).toBe(true)
+  expect(canForwardWorkspaceInput(h.appSessionId, { ...user, options: { isMeta: true } }, h.coordinator)).toBe(false)
+  expect(h.coordinator.isReserved(h.appSessionId)).toBe(true)
+  h.coordinator.observe(h.appSessionId, { ...snapshot(h, 2, {}), execution: 'finalizing' })
+  expect(canForwardWorkspaceInput(h.appSessionId, peer, h.coordinator)).toBe(false)
+  const state = h.coordinator.snapshot(h.appSessionId)!
+  writeWorkspaceJump({ ...state, review: { ...state.review, required: true } }, h.directory)
+  expect(canForwardWorkspaceInput(h.appSessionId, peer, h.coordinator)).toBe(false)
+  expect(canForwardWorkspaceInput(h.appSessionId, user, h.coordinator)).toBe(true)
+  await h.coordinator.waitForSettlement(h.appSessionId)
+})
+
+test('peer redelivery is signalled once after confirmed open, not terminal persistence alone', async () => {
+  const h = harness()
+  const opened: string[] = []
+  h.deps.onPeerInputOpen = id => {
+    expect(h.held.has(id)).toBe(false)
+    expect(h.coordinator.isReserved(id)).toBe(false)
+    opened.push(id)
+  }
+  await arrive(h)
+  h.coordinator.observe(h.appSessionId, { ...snapshot(h, 1, {}), execution: 'running' })
+  const terminal = { outcome: 'success' as const, order: 1, checkpoint: checkpoint() }
+  h.coordinator.observe(h.appSessionId, snapshot(h, 2, { terminal }))
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  expect(opened).toEqual([])
+  const gate = { mode: 'open' as const, reservationOperationId: null, requiresUserReconciliation: false }
+  h.coordinator.observe(h.appSessionId, snapshot(h, 3, { terminal }, gate))
+  expect(opened).toEqual([h.appSessionId])
+  h.coordinator.observe(h.appSessionId, snapshot(h, 4, { terminal }, gate))
+  expect(opened).toEqual([h.appSessionId])
+})
+
+test('review release does not redeliver peer input until genuine reconciliation opens it', async () => {
+  const h = harness()
+  const opened: string[] = []
+  h.deps.onPeerInputOpen = id => opened.push(id)
+  await arrive(h)
+  const terminal = { outcome: 'interrupted' as const, order: 1, checkpoint: checkpoint() }
+  const notice = { displayUuid: randomUUID(), contextUuid: randomUUID(), outcome: 'uncertain' as const, checkpoint: checkpoint() }
+  h.coordinator.observe(h.appSessionId, snapshot(h, 1, { terminal, notice }))
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  h.coordinator.observe(h.appSessionId, snapshot(h, 2, { terminal, notice }, {
+    mode: 'review', reservationOperationId: null, requiresUserReconciliation: true,
+  }))
+  expect(opened).toEqual([])
+  const reconciliation = { noticeUuid: notice.displayUuid, inputUuid: randomUUID(), contextUuid: randomUUID(), checkpoint: checkpoint() }
+  h.coordinator.observe(h.appSessionId, snapshot(h, 3, { terminal, notice, reconciliation }, {
+    mode: 'open', reservationOperationId: null, requiresUserReconciliation: false,
+  }))
+  expect(opened).toEqual([h.appSessionId])
+})
+
 test('owned fresh destination ready and concurrent periodic observation do not precede durable admission', async () => {
   const h = harness()
   const actions: string[] = []
@@ -607,7 +670,7 @@ test('arrived continuation lists and announces project peers without releasing i
     requestId: 'list', verb: 'peers.list', args: {},
   })
   await list()
-  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: false, error: { code: 'session_not_found' } })
+  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: false, error: { code: 'unavailable' } })
   const running = { ...snapshot(h, 1, {}), execution: 'running' as const }
   expect(h.coordinator.observe(h.appSessionId, running)).toBe(true)
   await list()
@@ -623,7 +686,7 @@ test('arrived continuation lists and announces project peers without releasing i
   expect(h.continuations()).toBe(1)
   moving = true
   await list()
-  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: false, error: { code: 'session_not_found' } })
+  expect(sent.at(-1)).toMatchObject({ type: 'host.result', ok: false, error: { code: 'unavailable' } })
 })
 
 test.each([
@@ -651,6 +714,9 @@ test.each([
   if (condition === 'unknown outcome') writeWorkspaceJump({ ...state, continuation: { ...state.continuation, outcome: 'unknown' } }, h.directory)
   if (condition === 'unreadable ledger') writeFileSync(join(h.directory, `${h.appSessionId}.json`), '{broken')
   expect(h.coordinator.isPeerAccessBlocked(h.appSessionId)).toBe(true)
+  expect(canForwardWorkspaceInput(h.appSessionId, {
+    type: 'peer.deliver', messageId: randomUUID(), from: 'Reef', fromSessionId: randomUUID(), text: 'Reply.',
+  }, h.coordinator)).toBe(false)
   expect(h.coordinator.isReserved(h.appSessionId)).toBe(true)
   expect(h.held.get(h.appSessionId)).toBe(h.operationId)
   await h.coordinator.waitForSettlement(h.appSessionId)

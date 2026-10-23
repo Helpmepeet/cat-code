@@ -580,6 +580,8 @@ export type PeerRequestPlane = {
   reservationsFor: (sessionId: SessionId) => number
   /** Retry ready recipients after a host move has finished changing its scope. */
   onMoveSettled: (sessionId: SessionId) => void
+  /** Retry frames a closing continuation could not consume before its gate opened. */
+  onPeerInputOpen: (sessionId: SessionId) => void
   /**
    * The user sent this session a message. Gives every pair this session is in a
    * fresh hop budget; see `resetPairHops`.
@@ -1600,7 +1602,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     if (isMoving(sessionId) || deps.workspaceRequests?.isPeerAccessBlocked(sessionId)) {
       answer(sessionId, validated.requestId, {
         ok: false,
-        error: fail('session_not_found', 'this session is changing workspace'),
+        error: fail('unavailable', 'Peer access is waiting for this conversation’s workspace change or recovery to settle.'),
       })
       return
     }
@@ -1752,6 +1754,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       runControls.set(sessionId, controls)
     },
     onReady,
+    onPeerInputOpen: sessionId => {
+      if (isReady(sessionId)) redeliverPending(sessionId)
+    },
     onUserMessage: resetPairHops,
     onMoveSettled: movedSessionId => {
       for (const recipientId of pending.keys()) {

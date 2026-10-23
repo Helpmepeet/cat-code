@@ -15,7 +15,8 @@ import * as engineConfig from '../../src/utils/config.js'
 import * as sessionStorage from '../../src/utils/sessionStorage.js'
 import type { SDKResultMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import { SDKResultSuccessSchema } from '../../src/entrypoints/sdk/coreSchemas.js'
-import { getCommandQueueSnapshot, resetCommandQueue } from '../../src/utils/messageQueueManager.js'
+import { getCommandQueueSnapshot, resetCommandQueue, remove } from '../../src/utils/messageQueueManager.js'
+import { notifyCommandLifecycle } from '../../src/utils/commandLifecycle.js'
 
 test('legacy admitted history and wrong generation controls cannot start continuation', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-legacy-boundary-'))
@@ -271,6 +272,61 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     await active
     if (subtype === 'success') {
       const admitted = readWorkspaceJump(sessionId)! as WorkspaceJumpStateV2
+      const deliver = () => server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'peer.deliver', messageId: 'handoff-peer', from: 'Alex', fromSessionId: 'app-alex', text: 'check the destination' } }))
+      const acks = () => received.filter(frame => frame.kind === 'host.request' && frame.verb === 'peer.ack')
+      const live = controller.getWorkspaceHandoffSnapshot()!
+      const snapshotSpy = spyOn(controller, 'getWorkspaceHandoffSnapshot')
+      try {
+        for (const snapshot of [
+          { ...live, execution: 'finalizing' as const },
+          { ...live, execution: 'unconfirmed' as const },
+          { ...live, observerGeneration: randomUUID() },
+          { ...live, engineSessionId: randomUUID() },
+          { ...live, continuationId: randomUUID() },
+          { ...live, record: { kind: 'absent' as const } },
+          ...(live.record.kind === 'valid' ? [
+            { ...live, record: { kind: 'valid' as const, record: { ...live.record.record, inputCommitted: false } } },
+            { ...live, record: { kind: 'valid' as const, record: { ...live.record.record, cancellation: { cancelId: randomUUID(), application: 'abort_signalled' as const, order: 1 } } } },
+          ] : []),
+        ]) {
+          snapshotSpy.mockReturnValue(snapshot)
+          deliver()
+          expect(getCommandQueueSnapshot()).toHaveLength(0)
+          expect(acks()).toHaveLength(0)
+        }
+      } finally { snapshotSpy.mockRestore() }
+      for (const state of [
+        { ...admitted, location: 'source' as const },
+        { ...admitted, engineSessionId: randomUUID() },
+        { ...admitted, target: { ...admitted.target, cwd: '/wrong-destination' } },
+        { ...admitted, continuation: { ...admitted.continuation, admissionGeneration: randomUUID() } },
+        { ...admitted, review: { ...admitted.review, required: true } },
+        { ...admitted, cancellation: { cancelId: randomUUID(), requestedBy: 'stop' as const, application: 'unknown' as const } },
+      ]) {
+        writeWorkspaceJump(state)
+        deliver()
+        expect(getCommandQueueSnapshot()).toHaveLength(0)
+        expect(acks()).toHaveLength(0)
+      }
+      writeWorkspaceJump(admitted)
+      deliver()
+      deliver()
+      const peerQueue = getCommandQueueSnapshot()
+      expect(peerQueue).toHaveLength(1)
+      expect(peerQueue[0]).toMatchObject({ mode: 'task-notification', priority: 'next',
+        origin: { kind: 'peer', name: 'Alex', appSessionId: 'app-alex' } })
+      expect(peerQueue[0]!.value).toContain('check the destination')
+      expect(peerQueue[0]!.value).not.toBe('check the destination')
+      expect(acks()).toHaveLength(0)
+      expect(prompts).toHaveLength(1)
+      expect(controller.getHandoffReservation()).toBe(operationId)
+      remove([...peerQueue])
+      notifyCommandLifecycle(peerQueue[0]!.uuid!, 'started')
+      expect(acks()).toHaveLength(1)
+      deliver()
+      expect(acks()).toHaveLength(2)
+      expect(getCommandQueueSnapshot()).toHaveLength(0)
       writeWorkspaceJump({ ...admitted, cancellation: { cancelId: randomUUID(), requestedBy: 'stop', application: 'unknown' }, review: { ...admitted.review, required: true } })
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
         message: { type: 'app.submit', requestId: 'cancelled', prompt: 'after cancellation', options: { submitId: 'cancelled' } } }))
@@ -299,6 +355,12 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
         message: { type: 'app.submit', requestId: 'meta', prompt: 'automatic work', options: { submitId: 'meta', isMeta: true } } }))
       expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'meta')).toMatchObject({ accepted: false })
     } else {
+      workspaceTrusted = false
+      server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+        message: { type: 'peer.deliver', messageId: 'untrusted-peer', from: 'Alex', fromSessionId: 'app-alex', text: 'must wait' } }))
+      expect(getCommandQueueSnapshot()).toHaveLength(0)
+      expect(received.filter(frame => frame.kind === 'host.request' && frame.verb === 'peer.ack')).toHaveLength(0)
+      workspaceTrusted = true
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
         message: { type: 'app.submit', requestId: 'during-failed', prompt: 'withdraw this request', options: { submitId: 'during-failed' } } }))
       expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'during-failed')).toMatchObject({ accepted: true })
@@ -347,6 +409,12 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     expect(controller.getHandoffReservation()).toBe(operationId)
     expect(controller.canStartAutomaticTurn()).toBe(false)
     expect(prompts).toHaveLength(1)
+    const heldQueue = getCommandQueueSnapshot()
+    const heldAcks = received.filter(frame => frame.kind === 'host.request' && frame.verb === 'peer.ack').length
+    server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+      message: { type: 'peer.deliver', messageId: 'terminal-peer', from: 'Alex', fromSessionId: 'app-alex', text: 'must wait for release' } }))
+    expect(getCommandQueueSnapshot()).toEqual(heldQueue)
+    expect(received.filter(frame => frame.kind === 'host.request' && frame.verb === 'peer.ack')).toHaveLength(heldAcks)
     if (subtype === 'interrupted') {
       expect(getCommandQueueSnapshot()).toMatchObject([
         { value: 'keep this request', priority: 'next' },
@@ -400,7 +468,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     })
     attach()
     await Bun.sleep(0)
-    expect(received.filter(frame => frame.kind === 'host.request')).toEqual([])
+    expect(received.filter(frame => frame.kind === 'host.request' && frame.verb !== 'peer.ack')).toEqual([])
     if (subtype === 'success') {
       const state = readWorkspaceJump(sessionId)! as WorkspaceJumpStateV2
       writeWorkspaceJump({ ...state, release: { target: 'open', authorizedRevision: 2, confirmed: null } })

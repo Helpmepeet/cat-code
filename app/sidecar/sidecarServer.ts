@@ -37,6 +37,7 @@ import { InlineCommandRequests, inlineCommandMessageSchema } from './inlineComma
 
 import { randomUUID } from 'crypto'
 import type { WorkspaceHandoffDisposition, WorkspaceHandoffReason, WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
+import { isWorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import { open } from 'node:fs/promises'
 import z from 'zod/v4'
 import type {
@@ -5654,6 +5655,34 @@ export class SidecarServer {
    * makes `queued_live` true rather than changing what it says. The cost is
    * at-least-once delivery, paid for by the id recognition below.
    */
+  private canQueuePeerDuringHandoff(reservation: string): boolean {
+    if (this.conversationMutationInFlight || !this.activeTurn || !this.controller.isTurnActive() ||
+        this.destinationHandoffOperation !== reservation) return false
+    try {
+      const state = readWorkspaceJump(this.sessionId)
+      const live = this.controller.getWorkspaceHandoffSnapshot()
+      if (!state || state.version !== 2 || !live || !isWorkspaceHandoffSnapshot(live) ||
+          !workspaceJumpAllowsQueuedInput(state, live) ||
+          state.appSessionId !== this.sessionId || state.engineSessionId !== this.engineSessionId ||
+          state.operationId !== reservation || state.target.cwd !== getCwd() ||
+          !state.consumed || state.continuation.outcome !== 'pending' ||
+          live.appSessionId !== this.sessionId || live.engineSessionId !== this.engineSessionId ||
+          live.operationId !== reservation || live.observerGeneration !== this.generation ||
+          live.admissionGeneration !== this.generation ||
+          live.sourceGeneration !== state.sourceGeneration ||
+          live.continuationId !== state.continuation.id ||
+          live.operationSha256 !== workspaceJumpOperationSha256(state) ||
+          live.gate.mode !== 'held' || live.gate.reservationOperationId !== reservation ||
+          live.gate.requiresUserReconciliation || live.record.kind !== 'valid') return false
+      const record = live.record.record
+      return record.consumed && record.inputCommitted && !record.cancellation &&
+        !record.terminal && !record.notice && !record.reconciliation
+    } catch {
+      // Missing or unreadable durable evidence keeps main's unacked copy held.
+      return false
+    }
+  }
+
   private handlePeerDeliver(message: unknown): void {
     // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — same first line as
     // `handleSubmit`/`handlePromptRecall`/`handleHistoryLoadEarlier`, and here it
@@ -5669,7 +5698,10 @@ export class SidecarServer {
     // for a delivery that arrives one moment later, after the exit. Silence is
     // the refusal — `peer.deliver` carries no requestId to answer, and main's
     // hold is released by the ack alone.
-    if (this.parking || this.controller.getHandoffReservation() || this.controller.requiresHandoffReconciliation()) {
+    const reservation = this.controller.getHandoffReservation()
+    if (this.parking || this.controller.requiresHandoffReconciliation() ||
+        (reservation && (!this.canQueuePeerDuringHandoff(reservation) ||
+          (this.workspaceTrust && this.workspaceTrust.getSnapshot()?.trusted !== true)))) {
       this.log('[sidecar] peer message refused: session parking or workspace settlement')
       return
     }

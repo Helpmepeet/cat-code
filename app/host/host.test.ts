@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { createSessionBranchReader, createWorkspaceBranchSwitcher } from '../main/workspaceBranches.js'
 import { createAttachmentFileTokenStore } from '../main/mainDecisions.js'
+import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
 
 import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
 import { PEER_NAME_POOL } from './peerNames.js'
@@ -396,6 +397,8 @@ function makeHost(
     peerMoveSettled?: HostOptions['peerMoveSettled']
     prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
     cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
+    prepareSessionRecovery?: HostOptions['prepareSessionRecovery']
+    hasPendingSubmit?: HostOptions['hasPendingSubmit']
   } = {},
 ): Harness {
   const storageDir = tempDir()
@@ -431,6 +434,8 @@ function makeHost(
     peerMoveSettled: overrides.peerMoveSettled,
     prepareMoveReplayRecovery: overrides.prepareMoveReplayRecovery,
     cancelMoveReplayCoalescing: overrides.cancelMoveReplayCoalescing,
+    prepareSessionRecovery: overrides.prepareSessionRecovery,
+    hasPendingSubmit: overrides.hasPendingSubmit,
     validateCwd:
       overrides.validateCwd ??
       ((c: string): CwdValidation =>
@@ -717,9 +722,11 @@ test.each(['pending delivery', 'in-flight reservation'] as const)(
   const peerStates = new Map<string, { pending: number; reservations: number }>()
   let childAppSessionId = ''
   let relocationCalls = 0
+  const recoveries: SessionId[] = []
   const h = makeHost({
     managedStorage,
     validateCwd,
+    prepareSessionRecovery: id => recoveries.push(id),
     peerMoveState: id => peerStates.get(id) ?? { pending: 0, reservations: 0 },
     relocate: async () => { relocationCalls += 1 },
     prepareMoveReplayRecovery: id => {
@@ -773,6 +780,7 @@ test.each(['pending delivery', 'in-flight reservation'] as const)(
   expect(delivered.some(frame => (frame as { kind?: string }).kind === 'ready')).toBe(false)
   expect(relocationCalls).toBe(0)
 
+  expect(recoveries).toEqual([])
   expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
   const replay = {
     kind: 'event', protocolVersion: 4, sessionId: appSessionId, replay: true,
@@ -2246,7 +2254,7 @@ test.each([
   if (blocked) expect(JSON.parse(readFileSync(h.registry.filePath, 'utf8')).sessions[0].ownerHostPid).toBe(424242)
 })
 
-test('restoreSession claims ownership after validation and refuses a competing park', async () => {
+test.each(['restore', 'restart'] as const)('%s claims ownership after validation and refuses a competing park without recovery', async operation => {
   const h = makeHost()
   const appSessionId = randomUUID()
   writeTranscript(h.storageDir, 'foreign-engine')
@@ -2259,8 +2267,10 @@ test('restoreSession claims ownership after validation and refuses a competing p
   })
   await registry.launch()
   let competingPark = false
+  const recoveries: SessionId[] = []
   const host = new Host({
     registry, supervisor: h.supervisor as never,
+    prepareSessionRecovery: id => recoveries.push(id),
     validateCwd: cwd => {
       if (competingPark) {
         competingPark = false
@@ -2273,12 +2283,207 @@ test('restoreSession claims ownership after validation and refuses a competing p
     },
   })
   await host.restoreSession('malformed-fixture')
+  if (operation === 'restart') h.supervisor.spawnSession(appSessionId, { cwd: h.cwd })
+  const originalPid = h.supervisor.records.get(appSessionId)?.pid
   competingPark = true
-  const result = await host.restoreSession(appSessionId)
+  const result = operation === 'restore'
+    ? await host.restoreSession(appSessionId)
+    : await host.restartSession(appSessionId)
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.error.code).toBe('session_unreachable')
-  expect(h.supervisor.records.has(appSessionId)).toBe(false)
+  expect(h.supervisor.records.get(appSessionId)?.pid).toBe(originalPid)
+  expect(recoveries).toEqual([])
   expect(JSON.parse(readFileSync(registry.filePath, 'utf8')).sessions[0].ownerHostPid).toBe(424242)
+})
+
+test.each(['restore', 'restart'] as const)('%s prepares recovery after persisted ownership claim and before spawning', async operation => {
+  const calls: SessionId[] = []
+  let originalPid: number | undefined
+  const h = makeHost({
+    prepareSessionRecovery: id => {
+      const row = JSON.parse(readFileSync(h.registry.filePath, 'utf8')).sessions.find((row: { appSessionId: string }) => row.appSessionId === id)
+      expect(row.ownerHostPid).toBe(process.pid)
+      expect(row.shutdown).toBeNull()
+      expect(h.supervisor.records.get(id)?.pid).toBe(originalPid)
+      calls.push(id)
+    },
+  })
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  expect(calls).toEqual([])
+  writeTranscript(h.storageDir, 'recovery-engine')
+  await h.registry.fillEngineSessionId(id, 'recovery-engine')
+  if (operation === 'restore') {
+    await h.host.closeSession(id)
+    // A prior dead owner makes the persisted claim observable inside recovery.
+    const doc = JSON.parse(readFileSync(h.registry.filePath, 'utf8'))
+    doc.sessions[0].ownerHostPid = 424242
+    writeFileSync(h.registry.filePath, JSON.stringify(doc))
+  }
+  originalPid = h.supervisor.records.get(id)?.pid
+  const result = operation === 'restore' ? await h.host.restoreSession(id) : await h.host.restartSession(id)
+  expect(result.ok).toBe(true)
+  expect(calls).toEqual([id])
+  expect(h.supervisor.records.get(id)?.pid).not.toBe(originalPid)
+})
+
+test('empty managed restore prepares recovery after claiming without affecting fresh creates', async () => {
+  const root = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(root, 'user-data'),
+    ownershipDir: join(root, 'config', 'chat-workspaces'),
+  })
+  const recoveries: SessionId[] = []
+  const h = makeHost({
+    managedStorage,
+    hasPendingSubmit: () => true,
+    validateCwd: cwd => ({ ok: true, realpath: cwd }),
+    prepareSessionRecovery: id => {
+      expect(h.registry.findSession(id)?.ownerHostPid).toBe(process.pid)
+      expect(h.supervisor.records.has(id)).toBe(false)
+      recoveries.push(id)
+    },
+  })
+  const created = await h.host.createManagedChat()
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  expect(recoveries).toEqual([])
+  h.supervisor.killSession(id)
+  await h.registry.markClean(id)
+  expect(h.registry.findSession(id)?.engineSessionId).toBeNull()
+  expect((await h.host.restoreSession(id)).ok).toBe(true)
+  expect(recoveries).toEqual([id])
+})
+
+test('a foreign continuation ledger stays unchanged until its dead owner is claimed for restore', async () => {
+  const root = tempDir(), previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = root
+  let ownerAlive = true
+  let coordinator: WorkspaceJumpCoordinator | undefined
+  const recoveries: SessionId[] = []
+  try {
+    const registry = new SessionRegistry({
+      storageDir: root,
+      isProcessAlive: pid => pid === 424242 && ownerAlive,
+      processCommand: () => null,
+      transcriptPathFor: (_cwd, engineId) => join(root, 'transcripts', `${engineId}.jsonl`),
+    })
+    const h = makeHost({ registry, prepareSessionRecovery: id => {
+      expect(registry.findSession(id)?.ownerHostPid).toBe(process.pid)
+      expect(h.supervisor.records.has(id)).toBe(false)
+      recoveries.push(id)
+      coordinator!.recover(id)
+    } })
+    const created = await h.host.createSession({ cwd: h.cwd })
+    if (!created.ok) throw new Error(created.error.message)
+    const id = created.value.appSessionId, engineSessionId = randomUUID(), generation = randomUUID()
+    writeTranscript(root, engineSessionId)
+    await registry.fillEngineSessionId(id, engineSessionId)
+    await h.host.closeSession(id)
+    const state: WorkspaceJumpStateV2 = {
+      version: 2, revision: 8, origin: 'fresh', appSessionId: id, engineSessionId,
+      operationId: randomUUID(), sourceGeneration: randomUUID(),
+      source: { cwd: '/managed', binding: { kind: 'managed', storageId: randomUUID(), storageRootId: randomUUID() } },
+      target: { cwd: h.cwd, binding: { kind: 'project' } },
+      acceptedAt: 1, phase: 'settled', location: 'destination', consumed: true, cancellation: null,
+      continuation: { id: randomUUID(), admissionGeneration: generation, dispatch: 'consumed',
+        outcome: 'pending', receiptRevision: 2, checkpointSha256: null },
+      review: { required: false, noticeUuid: null, reconciledInputUuid: null },
+      release: { target: 'held', authorizedRevision: null, confirmed: null },
+    }
+    writeWorkspaceJump(state)
+    const doc = JSON.parse(readFileSync(registry.filePath, 'utf8'))
+    doc.sessions[0].ownerHostPid = 424242
+    doc.sessions[0].shutdown = null
+    writeFileSync(registry.filePath, JSON.stringify(doc))
+    coordinator = new WorkspaceJumpCoordinator({
+      host: h.host, row: sessionId => registry.findSession(sessionId),
+      knownProjects: () => [], validateCwd: cwd => ({ ok: true, realpath: cwd }),
+      trustedProjectRoots: async paths => paths, verifyReady: () => false,
+      control: async () => ({ kind: 'unavailable' }),
+    })
+    const ledgerPath = join(root, 'workspace-jumps', `${id}.json`)
+    const before = readFileSync(ledgerPath, 'utf8')
+    expect(coordinator.loadRetention().appSessionIds.has(id)).toBe(true)
+    expect(coordinator.snapshot(id)?.continuation.outcome).toBe('pending')
+    expect((await h.host.restoreSession(id)).ok).toBe(false)
+    expect(readFileSync(ledgerPath, 'utf8')).toBe(before)
+    expect(recoveries).toEqual([])
+    ownerAlive = false
+    expect((await h.host.restoreSession(id)).ok).toBe(true)
+    expect(recoveries).toEqual([id])
+    expect(readWorkspaceJump(id)).toMatchObject({
+      revision: 9, continuation: { outcome: 'unknown' },
+    })
+  } finally {
+    coordinator?.dispose()
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  }
+})
+
+test('intentional move replacement does not prepare retained-session recovery', async () => {
+  const root = tempDir()
+  const managedStorage = new ManagedStorage({
+    appDataBase: join(root, 'user-data'),
+    ownershipDir: join(root, 'config', 'chat-workspaces'),
+  })
+  const recoveries: SessionId[] = []
+  const h = makeHost({
+    managedStorage,
+    validateCwd: cwd => ({ ok: true, realpath: cwd }),
+    relocate: async () => {},
+    prepareSessionRecovery: id => recoveries.push(id),
+  })
+  const created = await h.host.createManagedChat()
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  const engineId = randomUUID()
+  writeTranscript(h.storageDir, engineId)
+  h.supervisor.emitReady(id, engineId)
+  emitMoveReadyContext(h.supervisor, id)
+  await settle(() => h.registry.findSession(id)?.engineSessionId === engineId)
+  h.supervisor.onSend = (sessionId, message) => {
+    if ((message as { type?: string }).type === 'app.park') h.supervisor.emitPark(sessionId)
+  }
+  const moving = h.host.moveSession(id, h.cwd)
+  await settle(() => h.supervisor.spawnedIds.length === 2)
+  h.supervisor.emitReady(id, engineId)
+  emitMoveReadyContext(h.supervisor, id)
+  expect((await moving).ok).toBe(true)
+  expect(h.supervisor.records.get(id)?.cwd).toBe(h.cwd)
+  expect(recoveries).toEqual([])
+})
+
+test.each(['restore', 'restart'] as const)('%s refuses recovery errors without spawning or consuming capacity', async operation => {
+  let failRecovery = true
+  let calls = 0
+  const h = makeHost({
+    prepareSessionRecovery: () => {
+      calls++
+      if (failRecovery) throw new Error('recovery fixture failure')
+    },
+  })
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  writeTranscript(h.storageDir, 'recovery-engine')
+  await h.registry.fillEngineSessionId(id, 'recovery-engine')
+  if (operation === 'restore') await h.host.closeSession(id)
+  const originalPid = h.supervisor.records.get(id)?.pid
+  const evictions = h.evicted.length
+  for (let i = 0; i <= MAX_SPAWNS_PER_WINDOW; i++) {
+    const result = operation === 'restore' ? await h.host.restoreSession(id) : await h.host.restartSession(id)
+    expect(result).toMatchObject({ ok: false, error: { code: 'spawn_failed' } })
+    if (!result.ok) expect(result.error.message).toContain('recovery fixture failure')
+    expect(h.supervisor.records.get(id)?.pid).toBe(originalPid)
+  }
+  expect(h.evicted.length).toBe(evictions)
+  expect(calls).toBe(MAX_SPAWNS_PER_WINDOW + 1)
+  failRecovery = false
+  const recovered = operation === 'restore' ? await h.host.restoreSession(id) : await h.host.restartSession(id)
+  expect(recovered.ok).toBe(true)
 })
 
 test('restoreSession refuses when advisory pid/socket still identify a live prior sidecar', async () => {

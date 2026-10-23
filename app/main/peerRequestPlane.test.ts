@@ -441,6 +441,21 @@ test('handoff control remains reachable after model verb allowance is exhausted'
   expect(h.lastResult()?.error?.code).toBe('rate_limited')
 })
 
+test.each(['moving', 'recovery'] as const)('requester %s refusal does not claim the named peer is missing', async reason => {
+  const h = harness({
+    moving: reason === 'moving' ? new Set([ALEX]) : undefined,
+    workspaceRequests: {
+      isPeerAccessBlocked: () => reason === 'recovery',
+      handleRequest: async () => ({ ok: true, value: { eligible: false, workspaces: [] } }),
+    },
+  })
+  await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'Reply.' }))
+  expect(h.lastResult()).toMatchObject({
+    ok: false, error: { code: 'unavailable', message: expect.stringContaining('this conversation') },
+  })
+  expect(h.deliveries()).toEqual([])
+})
+
 /* ------------------------------------------------------------------------- *
  * HR1 — fail closed
  * ------------------------------------------------------------------------- */
@@ -1528,6 +1543,25 @@ describe('ack and durability', () => {
     await h.plane.handleRequest(BEAR, request('peer.ack', { messageId: 'msg-1' }, 'a2'))
     expect(h.logged).toHaveLength(1)
     expect(h.lastResult()?.ok).toBe(true)
+  })
+
+  test('an opened handoff retries an unacked frame without a restart and keeps its identity', async () => {
+    const ready = new Set([ALEX, BEAR])
+    const h = harness({ ready })
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'Closing-turn reply' }))
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+    ready.delete(BEAR)
+    h.plane.onPeerInputOpen(BEAR)
+    expect(h.deliveries()).toHaveLength(1)
+    ready.add(BEAR)
+    h.plane.onPeerInputOpen(BEAR)
+    expect(h.deliveries()).toHaveLength(2)
+    expect(h.deliveries()[1]?.message).toEqual(h.deliveries()[0]!.message)
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+    await h.plane.handleRequest(BEAR, request('peer.ack', { messageId: 'msg-1' }))
+    h.plane.onPeerInputOpen(BEAR)
+    expect(h.deliveries()).toHaveLength(2)
+    expect(h.plane.pendingFor(BEAR)).toEqual([])
   })
 })
 

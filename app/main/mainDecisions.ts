@@ -43,6 +43,29 @@ import {
 } from '../shared/protocol.js'
 import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
 import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js'
+import type { WorkspaceJumpCoordinator } from './workspaceJumpCoordinator.js'
+import { workspaceJumpAllowsQueuedInput } from '../../src/utils/workspaceJumpState.js'
+
+/** Queuing input into the admitted destination turn does not release its recovery hold. */
+export function canForwardWorkspaceInput(
+  sessionId: SessionId,
+  message: SidecarClientMessage,
+  jump: Pick<WorkspaceJumpCoordinator,
+    'isReserved' | 'requiresReview' | 'queryStatus' | 'snapshot' |
+    'liveObservation' | 'isPeerAccessBlocked'> | null,
+): boolean {
+  if (!jump || (message.type !== 'app.submit' && message.type !== 'peer.deliver')) return true
+  if (!jump.isReserved(sessionId) && !jump.requiresReview(sessionId)) return true
+  jump.queryStatus(sessionId)
+  if (message.type === 'peer.deliver') {
+    return !jump.requiresReview(sessionId) && !jump.isPeerAccessBlocked(sessionId)
+  }
+  try {
+    const state = jump.snapshot(sessionId)
+    return !!state && state.phase === 'settled' && !message.options?.isMeta &&
+      (state.review.required || workspaceJumpAllowsQueuedInput(state, jump.liveObservation(sessionId)))
+  } catch { return false }
+}
 
 export function requiresWorkAdmission(message: Pick<SidecarClientMessage, 'type'>): boolean {
   return message.type === 'app.submit' || message.type === 'peer.deliver' ||

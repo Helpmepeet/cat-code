@@ -22,7 +22,7 @@ import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
 import { ProjectRoutingController } from './projectRoutingController.js'
-import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, workspaceJumpAllowsQueuedInput, type WorkspaceJumpStateV2 } from './workspaceJumpCoordinator.js'
+import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention } from './workspaceJumpCoordinator.js'
 import { WorkspaceHandoffControl, type WorkspaceControlAction, type WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
 import {
@@ -231,6 +231,7 @@ import {
   isSessionReadyForFrames,
   isUserTurnSubmit,
   requiresWorkAdmission,
+  canForwardWorkspaceInput,
   inlineCommandRefusalFrame,
   validateSaveTextRequest,
 } from './mainDecisions.js'
@@ -4249,8 +4250,8 @@ function forward(
  * banner and locks the composer of a session whose user did nothing, over a
  * request id that belongs to no renderer request at all.
  *
- * The failure code still comes back, unchanged, because the plane chooses
- * `delivery_failed` versus `wake_failed` from it and counts delivery attempts.
+ * The failure code still comes back unchanged. The plane uses failure versus
+ * success, and chooses `delivery_failed` or `wake_failed` from prior readiness.
  * Only the notification half is skipped.
  */
 function forwardInternal(
@@ -4280,13 +4281,7 @@ function handOff(
   }
   if (!SESSION_ID_RE.test(sessionId)) return refuseEarly('bad_request')
   if (host?.isMoving(sessionId) && message.type !== 'host.result' && message.type !== 'app.abort' && message.type !== 'workspace.handoff') return refuseEarly('session_not_ready')
-  if ((message.type === 'app.submit' || message.type === 'peer.deliver') && (workspaceJump?.isReserved(sessionId) || workspaceJump?.requiresReview(sessionId))) {
-    workspaceJump?.queryStatus(sessionId)
-    let state: WorkspaceJumpStateV2 | null = null
-    try { state = workspaceJump.snapshot(sessionId) } catch { return 'session_not_ready' }
-    if (!state || state.phase !== 'settled' || message.type === 'peer.deliver' || message.options?.isMeta ||
-        (!state.review.required && !workspaceJumpAllowsQueuedInput(state, workspaceJump.liveObservation(sessionId)))) return 'session_not_ready'
-  }
+  if (!canForwardWorkspaceInput(sessionId, message, workspaceJump)) return 'session_not_ready'
   if (switchingSessionIds.has(sessionId) && (message.type === 'app.submit' || message.type === 'peer.deliver')) {
     return 'session_not_ready'
   }
@@ -4572,6 +4567,18 @@ function ensureHost(): Host {
     registry,
     validateCwd,
     managedStorage,
+    prepareSessionRecovery: appSessionId => {
+      if (!workspaceJump) throw new Error('Workspace recovery is unavailable')
+      const previous = workspaceJump.snapshot(appSessionId)
+      workspaceJump.recover(appSessionId)
+      const recovered = workspaceJump.snapshot(appSessionId)
+      if (previous && recovered && previous.revision !== recovered.revision) {
+        logOperational('diagnostic', 'info', {
+          source: 'host', category: 'workspace-recovery',
+          reason: `${previous.continuation.outcome}_to_${recovered.continuation.outcome}`,
+        }, appSessionId)
+      }
+    },
     relocate: request => {
       const invocation = randomUUID()
       return runSessionRelocationWorker({
@@ -4700,6 +4707,7 @@ function ensureHost(): Host {
     control: (state, action) => requestWorkspaceControl(state.appSessionId, state.operationId, action),
     waitForControlSlot: (id, operationId, generation) => workspaceControl?.waitForSlot(id, operationId, generation) ?? Promise.resolve(false),
     controlSlotOccupied: (id, operationId) => workspaceControl?.isSlotOccupied(id, operationId) ?? true,
+    onPeerInputOpen: appSessionId => peerPlane?.onPeerInputOpen(appSessionId),
     onStateChanged: state => {
       const transitionId = `workspace-jump:${state.operationId}`
       if (state.phase === 'settled') currentWorkObserver?.endWorkspaceTransition(state.appSessionId, transitionId)
@@ -4707,10 +4715,10 @@ function ensureHost(): Host {
       host?.publishWorkspaceJumpDisplay(state)
     },
   })
-  // Reconcile durable operations before any restored sidecar can start turns.
+  // Startup may display shared ledgers, but only a claimed restore may recover
+  // one. Another app can still be running its destination continuation.
   for (const appSessionId of recoveredJumps.appSessionIds) {
     try {
-      workspaceJump.recover(appSessionId)
       const displayState = workspaceJump.snapshot(appSessionId)
       if (displayState) host.publishWorkspaceJumpDisplay(displayState)
     } catch { /* unreadable records retain their rows and refuse admission */ }

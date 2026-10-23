@@ -153,6 +153,8 @@ export type HostOptions = {
   /** Clear a failed move's partial bootstrap and arm history replay for recovery. */
   prepareMoveReplayRecovery?: (appSessionId: SessionId, options: { persistSourceCache: boolean }) => void
   cancelMoveReplayCoalescing?: (appSessionId: SessionId) => void
+  /** Recover retained handoffs only after this host has claimed the session. */
+  prepareSessionRecovery?: (appSessionId: SessionId) => void
   /**
    * Called when a session is closed/restarted so main can evict its replay
    * buffer (the P3-0 carry — `AttachmentGate.clearSession`). Kept as an injected
@@ -198,6 +200,7 @@ export class Host implements HostApi {
   private readonly peerMoveSettled?: HostOptions['peerMoveSettled']
   private readonly prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
   private readonly cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
+  private readonly prepareSessionRecovery?: HostOptions['prepareSessionRecovery']
   private readonly moving = new Set<SessionId>()
   private readonly workspaceMoves = new Map<SessionId, WorkspaceMoveDisplay>()
   private readonly workspaceJumpReservations = new Map<SessionId, { operationId: string; generation: string }>()
@@ -283,6 +286,7 @@ export class Host implements HostApi {
     this.peerMoveSettled = options.peerMoveSettled
     this.prepareMoveReplayRecovery = options.prepareMoveReplayRecovery
     this.cancelMoveReplayCoalescing = options.cancelMoveReplayCoalescing
+    this.prepareSessionRecovery = options.prepareSessionRecovery
     this.managedStorage = options.managedStorage
     this.evictReplay = options.evictReplay ?? (() => {})
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
@@ -746,7 +750,7 @@ export class Host implements HostApi {
       const reservation = this.reserveSpawn(true)
       if (!reservation.ok) return reservation.result
       this.supervisor.killSession(appSessionId)
-      return this.spawn({ appSessionId, cwd: row.cwd, binding: row.binding, title: row.title, forked: row.forked }, reservation)
+      return this.spawn({ appSessionId, cwd: row.cwd, binding: row.binding, title: row.title, forked: row.forked, recoverBeforeSpawn: true }, reservation)
     }
     if (!row || row.engineSessionId === null) {
       return hostError(
@@ -849,6 +853,7 @@ export class Host implements HostApi {
     return this.spawn({
       appSessionId,
       cwd: validatedCwd.realpath,
+      recoverBeforeSpawn: true,
       title: row.title,
       ...(this.isEmptySession(row)
         ? { freshEngineSessionId: row.engineSessionId }
@@ -955,6 +960,7 @@ export class Host implements HostApi {
     prePlanMode?: RelocationControls['prePlanMode']
     fastMode?: boolean
     preferSpawnModel?: boolean
+    recoverBeforeSpawn?: boolean
   }, reservation: SpawnReservation): Promise<HostResult<SessionDescriptor>> {
     const { appSessionId, cwd, resumeEngineSessionId, forked } = input
     const title = input.title ?? undefined
@@ -996,6 +1002,7 @@ export class Host implements HostApi {
           return claim
         }
         rowPersisted = true
+        if (input.recoverBeforeSpawn) this.prepareSessionRecovery?.(appSessionId)
       }
       const reaped = await this.registry.upsertOnSpawn({
         appSessionId,
@@ -1968,10 +1975,11 @@ export class Host implements HostApi {
       this.releaseSpawnReservation(reservation)
       return claim
     }
-    // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
-    this.evictReplay(appSessionId)
     const creatorName = this.creatorNameFor(row.createdBy, row.createdByName)
     try {
+      this.prepareSessionRecovery?.(appSessionId)
+      // Evict replay only after recovery succeeds, before replacing the child.
+      this.evictReplay(appSessionId)
       this.supervisor.restartSession(appSessionId, {
         cwd: validatedCwd.realpath,
         binding: row.binding,

@@ -337,6 +337,12 @@ test('the peer plane is composed with the supervisor-backed liveness predicate',
   expect(composition).toContain('canResume: appSessionId => liveHost.canResume(appSessionId)')
 })
 
+test('startup reads shared handoff ledgers without recovering another host’s continuation', () => {
+  const startup = region('// Startup may display shared ledgers', '// HOST-REQUEST-PLANE §5')
+  expect(startup).not.toContain('.recover(')
+  expect(region('host = new Host({', 'wireHostEvents(host)')).toContain('prepareSessionRecovery:')
+})
+
 test('the plane sends through the entry point that raises no renderer error frame', () => {
   // A SOURCE guard, not a behavioural one, for the reason at the top of this
   // file: `forwardInternal` lives in `main.ts`, and importing `main.ts` starts
@@ -370,6 +376,8 @@ test('the plane sends through the entry point that raises no renderer error fram
   // them before the first guard.
   const guard = /if \(audience === 'renderer'\) \{/g
   const body = region('function handOff(', 'function sanitizeSubmitOptions(')
+  expect(body).toContain('canForwardWorkspaceInput(sessionId, message, workspaceJump)')
+  expect(source).toContain('onPeerInputOpen: appSessionId => peerPlane?.onPeerInputOpen(appSessionId)')
   expect(body).toContain("audience: 'renderer' | 'internal'")
   const segments = body.split(guard)
   expect(body.match(/deliver\(/g) ?? []).not.toHaveLength(0)
