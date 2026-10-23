@@ -7,9 +7,8 @@
  * suites had hand-rolled that `Map` and the throwing counterpart that proves the
  * codec swallows a locked-down renderer; these are those two objects.
  *
- * `removeItem` is present on both because `workspaceLayout.ts` clears its key
- * when the layout empties. No other preference calls it, so for every other
- * suite it is an unreached method rather than a behaviour change.
+ * `removeItem` is present on both so a suite can clear a key it seeded, as
+ * the subagent dock persistence suite does between mounts.
  *
  * Import this from a test file only.
  */

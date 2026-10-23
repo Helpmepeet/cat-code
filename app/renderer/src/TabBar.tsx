@@ -24,7 +24,6 @@ import { targetKey, type NavigationTarget, type PageTab } from './pageTabNavigat
 import type { TabVisualState } from './tabStatus.js'
 import { SESSION_WORK_MARK_LABEL, SessionWorkMarksContext } from './sessionWorkState.js'
 import { WorkMarkGlyph } from './SessionWorkMarkGlyph.js'
-import { MAX_WORKSPACE_PANELS } from './workspaceLayout.js'
 import { ActionBranchIcon } from './SessionActionIcons.js'
 import {
   useTrafficLightWell,
@@ -62,10 +61,6 @@ export function TabBar({
   onRestart,
   onNewTab,
   onOpenActions,
-  panelCount = 1,
-  canAddPanel = false,
-  onAddPanel,
-  onRemovePanel,
   fullscreenMedia,
 }: {
   tabs: TabModel[]
@@ -91,20 +86,6 @@ export function TabBar({
     sessionId: SessionId,
     anchor: SessionActionsAnchor,
   ) => void
-  /**
-   * Split-view controls (P4-4 fidelity — the prototype's TabBar.jsx owns the
-   * Split/Unsplit cluster). Optional + additive: the cluster renders only when
-   * `onAddPanel` is wired, so headless TabBar tests (which omit these) are
-   * untouched. They call App's EXISTING split/close-panel layout reducers — no
-   * new host wiring, and the drag-tab-to-edge split path (P3-6) is unchanged.
-   * §0: the prototype's "Split" duplicates the active session into a new panel;
-   * ours opens the next un-panelled live session instead, because the layout
-   * model forbids the same session in two panels (a real-behavior adaptation).
-   */
-  panelCount?: number
-  canAddPanel?: boolean
-  onAddPanel?: () => void
-  onRemovePanel?: () => void
   /** Injectable only so a test can drive the fullscreen subscription
    * (`windowChrome.ts`); the app never passes it. */
   fullscreenMedia?: FullscreenMediaQuery | null
@@ -204,8 +185,8 @@ export function TabBar({
        * (`main.ts` `createWindow`) the OS strip is gone, so without a drag
        * region the window cannot be moved or zoomed by its top edge at all.
        * It is set HERE and cleared per control below, because the draggable
-       * area is everything the controls do not cover — the well, the gap after
-       * the last tab, the strip beside the split cluster. */
+       * area is everything the controls do not cover — the well and the gap
+       * after the last tab. */
       className="flex h-10 shrink-0 items-stretch overflow-hidden border-b border-shell-seam bg-shell-chrome [-webkit-app-region:drag]"
       /* Flow chrome, so glass thins it (`theme.css`). The marker is on the
        * element rather than on `bg-shell-chrome`, because that token also
@@ -278,68 +259,7 @@ export function TabBar({
           +
         </button>
       </div>
-
-      {onAddPanel && selected?.kind === 'session' ? (
-        <div className="flex shrink-0 items-center gap-1 border-l border-shell-seam px-2.5 [-webkit-app-region:no-drag]">
-          {panelCount < MAX_WORKSPACE_PANELS ? (
-            <button
-              type="button"
-              onClick={onAddPanel}
-              disabled={!canAddPanel}
-              title={canAddPanel ? 'Split view' : 'No other session to split'}
-              aria-label="Split view"
-              className="flex items-center gap-1.5 rounded-md border border-white/8 px-2.5 py-[3px] text-[11px] text-text-faint transition-colors hover:border-accent/35 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/8 disabled:hover:text-text-faint"
-            >
-              <SplitIcon panelCount={panelCount} />
-              <span>Split</span>
-            </button>
-          ) : null}
-          {panelCount > 1 ? (
-            <button
-              type="button"
-              onClick={onRemovePanel}
-              title="Close last panel"
-              aria-label="Unsplit"
-              className="flex items-center gap-1.5 rounded-md border border-white/8 px-2.5 py-[3px] text-[11px] text-text-faint transition-colors hover:border-white/18 hover:text-text-primary"
-            >
-              <UnsplitIcon />
-              <span>Unsplit</span>
-            </button>
-          ) : null}
-        </div>
-      ) : null}
     </div>
-  )
-}
-
-/** Split-view icon — one darker column being added (prototype TabBar.jsx). */
-function SplitIcon({ panelCount }: { panelCount: number }) {
-  return (
-    <svg width="15" height="11" viewBox="0 0 15 11" fill="none" aria-hidden="true">
-      {panelCount === 1 ? (
-        <>
-          <rect x="0" y="0" width="6.5" height="11" rx="1.5" fill="currentColor" opacity="0.45" />
-          <rect x="8.5" y="0" width="6.5" height="11" rx="1.5" fill="currentColor" opacity="1" />
-        </>
-      ) : null}
-      {panelCount === 2 ? (
-        <>
-          <rect x="0" y="0" width="3.8" height="11" rx="1.2" fill="currentColor" opacity="0.3" />
-          <rect x="5.6" y="0" width="3.8" height="11" rx="1.2" fill="currentColor" opacity="0.65" />
-          <rect x="11.2" y="0" width="3.8" height="11" rx="1.2" fill="currentColor" opacity="1" />
-        </>
-      ) : null}
-    </svg>
-  )
-}
-
-/** Unsplit icon — a single merged panel (prototype TabBar.jsx). */
-function UnsplitIcon() {
-  return (
-    <svg width="15" height="11" viewBox="0 0 15 11" fill="none" aria-hidden="true">
-      <rect x="0" y="0" width="15" height="11" rx="1.5" fill="currentColor" opacity="0.6" />
-      <line x1="7.5" y1="1.5" x2="7.5" y2="9.5" stroke="var(--app-bg)" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
   )
 }
 
@@ -452,8 +372,7 @@ function Tab({
       onAnimationEnd={onArrivalAnimationEnd}
       className={
         // The bar is a window drag region, so a tab has to opt out of it or the
-        // OS swallows the pointer: no click to select, and no `draggable`
-        // drag-to-split (the tab's own `onDragStart` below).
+        // OS swallows the pointer and a click never selects it.
         'group relative flex min-w-[90px] max-w-[256px] flex-1 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors [-webkit-app-region:no-drag] ' +
         (isActive ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]') +
         (arriving ? ' animate-tab-in' : '')
@@ -466,46 +385,7 @@ function Tab({
       tabIndex={isTabbable ? 0 : -1}
       title={`${descriptor.binding?.kind === 'managed' ? title : descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
       aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${workMark ? `, ${SESSION_WORK_MARK_LABEL[workMark]}` : ''}`}
-      draggable
-      onPointerDown={event => {
-        console.log('[TabBar] pointerdown', title, {
-          x: event.clientX,
-          y: event.clientY,
-          activeElement: document.activeElement,
-        })
-      }}
-      onDragStart={event => {
-        console.log('[TabBar] dragstart', title, {
-          activeElement: document.activeElement,
-        })
-        event.dataTransfer.setData('text/sessionId', id)
-        event.dataTransfer.effectAllowed = 'copyMove'
-      }}
-      onDragEnd={() => {
-        console.log('[TabBar] dragend', title, {
-          activeElement: document.activeElement,
-        })
-      }}
-      onPointerUp={() => {
-        console.log('[TabBar] pointerup', title, {
-          activeElement: document.activeElement,
-        })
-      }}
-      onClick={() => {
-        console.log('[TabBar] click', title, {
-          activeElement: document.activeElement,
-        })
-        onSelect(id)
-      }}
-      onFocus={() =>
-        console.log('[TabBar] focus', title, document.activeElement)
-      }
-      onBlur={event => {
-        console.log('[TabBar] blur', title, {
-          relatedTarget: event.relatedTarget,
-          activeElement: document.activeElement,
-        })
-      }}
+      onClick={() => onSelect(id)}
       onKeyDown={onKeyDown}
     >
       {isActive ? (

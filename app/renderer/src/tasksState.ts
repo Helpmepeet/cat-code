@@ -243,7 +243,7 @@ export type TaskKindMeta = {
  * ported: labels match `TaskType` 1:1 (`src/Task.ts:6-13`), colors are new
  * P0-2-token-era picks (not the prototype's literal oklch values) using the
  * same "arbitrary-value Tailwind class over a data-driven color" idiom P4-2's
- * `agentTypeMeta` establishes (`WorkspacePanels.tsx:283` precedent).
+ * `agentTypeMeta` establishes.
  */
 export const TASK_KIND_META: Record<TaskSnapshotItem['type'], TaskKindMeta> = {
   local_bash: { label: 'Bash', color: '#5eead4' },

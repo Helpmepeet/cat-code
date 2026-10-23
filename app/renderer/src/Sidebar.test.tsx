@@ -903,9 +903,8 @@ test('only pinned session rows join workspace headers as reorder handles', () =>
   expect(withPin).toContain('aria-label="Unpin Alpha"')
 })
 
-test('pinned drag payload is distinct from workspace and tab drags', () => {
+test('pinned drag payload is distinct from the workspace drag', () => {
   expect(PINNED_SESSION_DRAG_MIME).not.toBe(WORKSPACE_ORDER_DRAG_MIME)
-  expect(PINNED_SESSION_DRAG_MIME).not.toBe('text/sessionId')
 })
 
 test('a session row exposes a pin control only when wired', () => {

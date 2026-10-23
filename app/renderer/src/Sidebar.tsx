@@ -1548,9 +1548,8 @@ export function SessionGroup({
       onDragOver={
         reorderable
           ? event => {
-              // Only a workspace drag is accepted — a tab dragged for a split
-              // carries `text/sessionId`, and
-              // both must fall through untouched.
+              // Only a workspace drag is accepted; any other drag (a pinned
+              // session, a file) falls through untouched.
               if (
                 !event.dataTransfer.types.some(
                   type => type.toLowerCase() === WORKSPACE_ORDER_DRAG_MIME,

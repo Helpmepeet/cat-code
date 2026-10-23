@@ -204,27 +204,7 @@ import {
   type TransportErrorState,
 } from './composerState.js'
 import { retrySendBlocked } from './turnFailure.js'
-import {
-  WorkspaceLayout,
-  type WorkspacePanelView,
-} from './WorkspacePanels.js'
-import {
-  assignWorkspacePanelSession,
-  closeWorkspacePanel,
-  createWorkspaceLayout,
-  focusOrAssignWorkspaceSession,
-  focusWorkspacePanel,
-  MAX_WORKSPACE_PANELS,
-  readWorkspaceLayoutFromStorage,
-  readyToRestoreLayout,
-  reconcileWorkspaceLayout,
-  setWorkspaceWidths,
-  splitWorkspacePanel,
-  workspaceLayoutsEqual,
-  writeWorkspaceLayoutToStorage,
-  type WorkspaceLayoutState,
-  type WorkspaceSplitEdge,
-} from './workspaceLayout.js'
+import { reconcileShownSession } from './shownSession.js'
 import {
   connectionHasEngine,
   createConnectionState,
@@ -618,7 +598,7 @@ export function App() {
   const [branchSwitchPendingSessions, setBranchSwitchPendingSessions] = useState<ReadonlySet<SessionId>>(() => new Set())
   // Host close events can precede the switch reply. Keep the source's spatial
   // slot until the reply can replace it, rather than letting roster repair
-  // choose another tab or collapse its split pane in between.
+  // choose another tab or move the shown pane in between.
   const branchSwitchSourcesRef = useRef(new Map<SessionId, SessionDescriptor>())
   const [branchSwitchTargets, setBranchSwitchTargets] = useState<Partial<Record<SessionId, string>>>({})
   const [branchSeeds, setBranchSeeds] = useState<Partial<Record<SessionId, string>>>({})
@@ -662,7 +642,6 @@ export function App() {
     createTransportErrorState,
   )
   const [shellError, setShellError] = useState<string | null>(null)
-  const [layoutNotice, setLayoutNotice] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
   const newChatInFlightRef = useRef(false)
@@ -674,11 +653,10 @@ export function App() {
   // at the same moment; separate registries would dedupe separately and put that
   // worker on screen twice wearing two different faces.
   //
-  // Per session and not per ACTIVE session, because split view renders up to
-  // MAX_WORKSPACE_PANELS panes at once on different sessions. One registry for
-  // all of them spent the ten identity colours across unrelated transcripts, and
-  // focusing a pane re-minted it under panes that never unmounted, re-rolling
-  // faces on rows that were already settled. `SessionPane` therefore re-provides
+  // Per session and not per ACTIVE session: one registry for every session spent
+  // the ten identity colours across unrelated transcripts, and re-minting it on
+  // each switch re-rolled faces on rows that were already settled (the pane can
+  // trail the active session while a new one opens). `SessionPane` therefore re-provides
   // its OWN session's registry to its subtree; what stays on the active session
   // here is the shell's own furniture (the Workers list, the ⌘K palette).
   const faceRegistries = useAgentFaceRegistryStore()
@@ -768,21 +746,9 @@ export function App() {
     createRosterBootstrapState,
   )
   const hostSnapshotReady = rosterBootstrap.status === 'ready'
-  const [workspaceLayout, setWorkspaceLayoutState] =
-    useState<WorkspaceLayoutState>(
-      () =>
-        readWorkspaceLayoutFromStorage(getWorkspaceStorage()) ??
-        createWorkspaceLayout(null),
-    )
-  // A persisted MULTI-panel split loaded at startup that must re-form once its
-  // sessions are restored (P3-6 relaunch). Held here so the active layout can
-  // degrade normally (the live startup session stays visible) while we wait to
-  // snap the split back atomically. `null` for a fresh/single-panel layout.
-  const [pendingRestore, setPendingRestore] =
-    useState<WorkspaceLayoutState | null>(() => {
-      const saved = readWorkspaceLayoutFromStorage(getWorkspaceStorage())
-      return saved && saved.panels.length > 1 ? saved : null
-    })
+  // The session whose pane is on screen. It trails `activeSessionId` only while
+  // the active session has no pane yet (`reconcileShownSession`).
+  const [shownSessionId, setShownSessionId] = useState<SessionId | null>(null)
   const [connection, dispatchConnection] = useReducer(
     reduceConnectionStateBatched,
     undefined,
@@ -1718,10 +1684,7 @@ export function App() {
   useEffect(() => {
     if (!selectedNavigationSessionId) return
     setActiveSessionId(selectedNavigationSessionId)
-    setWorkspaceLayoutState(current => {
-      const next = focusOrAssignWorkspaceSession(current, selectedNavigationSessionId).state
-      return workspaceLayoutsEqual(current, next) ? current : next
-    })
+    setShownSessionId(selectedNavigationSessionId)
   }, [selectedNavigationSessionId])
 
   const tabDescriptorsById = useMemo(
@@ -1791,31 +1754,13 @@ export function App() {
     ) {
       return
     }
-    setWorkspaceLayoutState(current => {
-      const next = reconcileWorkspaceLayout(
-        current,
-        paneSessionIds,
-        activeSessionId,
-      )
-      return workspaceLayoutsEqual(current, next) ? current : next
-    })
+    setShownSessionId(current =>
+      reconcileShownSession(current, paneSessionIds, activeSessionId),
+    )
     // paneSessionKey is the stable content signature of live ∪ preview ids; keying
     // the effect on the key (not the array identity, which churns every tabs
     // recompute) is the whole point of computing it.
   }, [activeSessionId, hostSnapshotReady, paneSessionKey])
-
-  // Re-apply-on-restore (P3-6): the held `pendingRestore` split snaps back once
-  // EVERY session it references owns a live or preview pane — order-independent,
-  // preserving the current visible session's focus. Abandoned if a referenced
-  // session is unrecoverable (neither live nor restorable), which unblocks the
-  // disk write below so the operator's actual layout can persist instead.
-  const restorableIds = useMemo(
-    () =>
-      visibleShellDescriptors
-        .filter(descriptor => descriptor.restorable)
-        .map(descriptor => descriptor.appSessionId),
-    [visibleShellDescriptors],
-  )
 
   // PL-A: roster hydration unlocks a store-only preload after the first paint.
   // A requestAnimationFrame followed by a timer yields one painted renderer
@@ -1841,37 +1786,6 @@ export function App() {
     }
   }, [hostSnapshotReady, queueTranscriptPreload])
 
-  // The two lists are joined with a SEPARATOR, never flattened into one: a bare
-  // concatenation makes pane=[X]/restorable=[Y] and pane=[X,Y]/restorable=[]
-  // produce the identical key, so the restore effect below never re-runs as
-  // sessions move from restorable to live — the saved split never re-forms and
-  // the persist effect stays blocked behind `pendingRestore` for the whole run.
-  const rosterKey = `${paneSessionIds.join(' ')}|${restorableIds.join(' ')}`
-  useEffect(() => {
-    if (!pendingRestore || !hostSnapshotReady) return
-    const ready = readyToRestoreLayout(pendingRestore, paneSessionIds)
-    if (ready) {
-      const selected = tabNavigationRef.current.selected
-      setWorkspaceLayoutState(selected?.kind === 'session'
-        ? focusOrAssignWorkspaceSession(ready, selected.sessionId).state
-        : ready)
-      setPendingRestore(null)
-      return
-    }
-    const known = new Set<SessionId>([...paneSessionIds, ...restorableIds])
-    if (pendingRestore.panels.some(panel => !known.has(panel.sessionId))) {
-      setPendingRestore(null) // a referenced session is gone; stop waiting
-    }
-    // rosterKey is the stable signature of pane ∪ restorable ids.
-  }, [pendingRestore, hostSnapshotReady, rosterKey])
-
-  useEffect(() => {
-    // Don't let a startup-transient degrade overwrite the saved split while it
-    // is still awaiting restore (pendingRestore) — that was the relaunch bug.
-    if (!hostSnapshotReady || pendingRestore) return
-    writeWorkspaceLayoutToStorage(getWorkspaceStorage(), workspaceLayout)
-  }, [hostSnapshotReady, pendingRestore, workspaceLayout])
-
   const focusCreatedSession = useCallback((sessionId: SessionId, claim: number) => {
     applyForegroundSelectionIfCurrent(
       foregroundSelectionClaimRef.current,
@@ -1882,9 +1796,7 @@ export function App() {
           ...current,
           [sessionId]: (current[sessionId] ?? 0) + 1,
         }))
-        setWorkspaceLayoutState(current =>
-          focusOrAssignWorkspaceSession(current, sessionId).state,
-        )
+        setShownSessionId(sessionId)
         setActiveSessionId(sessionId)
         supersedeForegroundSelection(foregroundSelectionClaimRef.current)
         dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
@@ -1922,18 +1834,10 @@ export function App() {
     [],
   )
 
-  const placeCreatedSessionForOrigin = useCallback(
-    (originSessionId: SessionId, createdSessionId: SessionId) => {
+  const showCreatedSession = useCallback(
+    (createdSessionId: SessionId) => {
       pendingExplicitSessionRef.current = createdSessionId
-      setWorkspaceLayoutState(current => {
-        const originIndex = current.panels.findIndex(
-          panel => panel.sessionId === originSessionId,
-        )
-        const next = originIndex >= 0
-          ? assignWorkspacePanelSession(current, originIndex, createdSessionId).state
-          : focusOrAssignWorkspaceSession(current, createdSessionId).state
-        return next
-      })
+      setShownSessionId(createdSessionId)
       setActiveSessionId(createdSessionId)
       supersedeForegroundSelection(foregroundSelectionClaimRef.current)
       dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId: createdSessionId } })
@@ -2028,11 +1932,9 @@ export function App() {
       type: 'select',
       target: { kind: 'session', sessionId },
     })
-    const result = focusOrAssignWorkspaceSession(workspaceLayout, sessionId)
-    setWorkspaceLayoutState(result.state)
-    setLayoutNotice(null)
+    setShownSessionId(sessionId)
     setActiveSessionId(sessionId)
-  }, [workspaceLayout])
+  }, [])
 
   // Account management belongs to the app. Composer switches still address
   // their own pane's sidecar in renderSessionPane.
@@ -2566,124 +2468,15 @@ export function App() {
     if (errorToast) toast(errorToast.message, { tone: errorToast.tone })
   }, [latestVerbAckResult, toast])
 
-  const focusWorkspacePanelSession = useCallback(
-    (index: number, sessionId: SessionId) => {
-      setWorkspaceLayoutState(current => focusWorkspacePanel(current, index))
-      setActiveSessionId(sessionId)
-      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-      dispatchTabNavigation({
-        type: 'select',
-        target: { kind: 'session', sessionId },
-      })
-    },
-    [],
-  )
-
-  const selectWorkspacePanelSession = useCallback(
-    (index: number, sessionId: SessionId) => {
-      const result = assignWorkspacePanelSession(
-        workspaceLayout,
-        index,
-        sessionId,
-      )
-      setWorkspaceLayoutState(result.state)
-      // Deliberately building a layout abandons any awaited saved-split restore
-      // so it can't later clobber what the operator is constructing now.
-      setPendingRestore(null)
-      setActiveSessionId(
-        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
-      )
-      const focusedSessionId =
-        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId
-      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-      dispatchTabNavigation({
-        type: 'select',
-        target: { kind: 'session', sessionId: focusedSessionId },
-      })
-      setLayoutNotice(
-        result.blocked === 'duplicate'
-          ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
-          : null,
-      )
-    },
-    [tabDescriptorsById, workspaceLayout],
-  )
-
-  const splitWorkspacePanelWithSession = useCallback(
-    (index: number, edge: WorkspaceSplitEdge, sessionId: SessionId) => {
-      const result = splitWorkspacePanel(workspaceLayout, index, edge, sessionId)
-      setWorkspaceLayoutState(result.state)
-      setPendingRestore(null)
-      setActiveSessionId(
-        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId,
-      )
-      const focusedSessionId =
-        result.state.panels[result.focusedIndex]?.sessionId ?? sessionId
-      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-      dispatchTabNavigation({
-        type: 'select',
-        target: { kind: 'session', sessionId: focusedSessionId },
-      })
-      setLayoutNotice(
-        result.blocked === 'duplicate'
-          ? `${sessionDisplayName(sessionId, tabDescriptorsById)} is already open in panel ${result.focusedIndex + 1}; focused that panel instead.`
-          : result.blocked === 'max-panels'
-            ? 'Workspace layout supports up to three panels.'
-            : null,
-      )
-    },
-    [tabDescriptorsById, workspaceLayout],
-  )
-
-  const closeWorkspacePanelAt = useCallback(
-    (index: number) => {
-      const next = closeWorkspacePanel(workspaceLayout, index)
-      setWorkspaceLayoutState(next)
-      setPendingRestore(null)
-      setActiveSessionId(
-        next.panels[next.activeIndex]?.sessionId ?? activeSessionId,
-      )
-      const focusedSessionId =
-        next.panels[next.activeIndex]?.sessionId ?? activeSessionId
-      if (focusedSessionId) {
-        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-        dispatchTabNavigation({
-          type: 'select',
-          target: { kind: 'session', sessionId: focusedSessionId },
-        })
-      }
-      setLayoutNotice(null)
-    },
-    [activeSessionId, workspaceLayout],
-  )
-
-  const updateWorkspaceWidths = useCallback((widths: number[]) => {
-    setWorkspaceLayoutState(current => setWorkspaceWidths(current, widths))
+  // Selects a session whose pane is already on screen, e.g. from a pane control.
+  const selectShownSession = useCallback((sessionId: SessionId) => {
+    setActiveSessionId(sessionId)
+    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+    dispatchTabNavigation({
+      type: 'select',
+      target: { kind: 'session', sessionId },
+    })
   }, [])
-
-  // TabBar Split (P4-4): open the next un-panelled pane session as a new panel,
-  // split off the active panel's right edge. Reuses the SAME split reducer the
-  // drag-tab-to-edge path uses (P3-6) — no new wiring. The layout model forbids
-  // the same session in two panels, so "split" adds a DIFFERENT session (the
-  // prototype duplicates the active one; §0 flag on TabBar).
-  const addWorkspacePanel = useCallback(() => {
-    if (workspaceLayout.panels.length >= MAX_WORKSPACE_PANELS) return
-    const shown = new Set(workspaceLayout.panels.map(panel => panel.sessionId))
-    const next = paneSessionIds.find(id => !shown.has(id))
-    if (!next) {
-      setLayoutNotice(
-        'No other session to open in a split. Create or select another session first.',
-      )
-      return
-    }
-    splitWorkspacePanelWithSession(workspaceLayout.activeIndex, 'right', next)
-  }, [paneSessionIds, splitWorkspacePanelWithSession, workspaceLayout])
-
-  // TabBar Unsplit (P4-4): drop the last panel — the existing close-panel path.
-  const removeWorkspacePanel = useCallback(() => {
-    if (workspaceLayout.panels.length <= 1) return
-    closeWorkspacePanelAt(workspaceLayout.panels.length - 1)
-  }, [closeWorkspacePanelAt, workspaceLayout])
 
   // CC-16 — hand a parked prompt back to the composer. Called on every terminal
   // outcome of the spawn the user's keystroke started (a rejected/thrown
@@ -2811,13 +2604,7 @@ export function App() {
         ...currentPaneOrder.filter(candidate => !openedOrder.includes(candidate)),
       ]
       const next = activeAfterPaneChange(sessionId, paneOrder, openOrder)
-      if (next === null) {
-        setWorkspaceLayoutState(createWorkspaceLayout(null))
-      } else {
-        setWorkspaceLayoutState(current =>
-          focusOrAssignWorkspaceSession(current, next).state,
-        )
-      }
+      setShownSessionId(next)
       setActiveSessionId(next)
     },
     [],
@@ -2945,12 +2732,7 @@ export function App() {
         reduceSessionFileAttachmentRestored(reduceFileAttachmentRemoved(current, sessionId), replacementId, file),
       )
       setBranchSeeds(current => ({ ...current, [replacementId]: branch }))
-      setWorkspaceLayoutState(current => ({
-        ...current,
-        panels: current.panels.map(panel =>
-          panel.sessionId === sessionId ? { sessionId: replacementId } : panel,
-        ),
-      }))
+      setShownSessionId(current => current === sessionId ? replacementId : current)
       dispatchTabNavigation({ type: 'replace-session', sessionId, replacementId })
       applyForegroundSelectionIfCurrent(foregroundSelectionClaimRef.current, selectionClaim, () => {
         pendingExplicitSessionRef.current = replacementId
@@ -3099,9 +2881,7 @@ export function App() {
     swappedPreviewsRef.current.delete(sessionId)
     dispatchShell({ type: 'preview-open', sessionId })
     if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
-    setWorkspaceLayoutState(current =>
-      focusOrAssignWorkspaceSession(current, sessionId).state,
-    )
+    setShownSessionId(sessionId)
     setActiveSessionId(sessionId)
     supersedeForegroundSelection(foregroundSelectionClaimRef.current)
     dispatchTabNavigation({
@@ -3394,7 +3174,7 @@ export function App() {
             updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
             setHistoryNavigation(current => ({ ...current, [sessionId]: EMPTY_HISTORY_NAV }))
           }
-          placeCreatedSessionForOrigin(sessionId, result.sessionId)
+          showCreatedSession(result.sessionId)
         }
       })
       return
@@ -3564,15 +3344,13 @@ export function App() {
   }, [connection, pendingSubmits, releasePendingSubmit, restoreParkedSession])
 
   // IDLE-PARK §4(b) — tell main which sessions are on screen so its park policy
-  // leaves them alone. The workspace panels ARE the visible set (one session per
-  // panel, so a split shows several at once); `activeSessionId` rides along for
-  // the window between a focus change and the layout catching up. Latest-wins at
-  // main, so closing a pane un-protects it immediately.
+  // leaves them alone. The shown pane IS the visible set; `activeSessionId` rides
+  // along for the window between a focus change and the pane catching up.
+  // Latest-wins at main, so closing a pane un-protects it immediately.
   //
-  // Sent only when the SET changes, not whenever the layout object does: dragging
-  // a panel divider rewrites `workspaceLayout` on every mouse-move while the
-  // visible sessions stay put, and those sends would burn the preload's shared
-  // rate budget (`rendererIpcGuard`) to re-state a fact main already has.
+  // Sent only when the SET changes, so re-renders that keep the same sessions on
+  // screen do not burn the preload's shared rate budget (`rendererIpcGuard`) to
+  // re-state a fact main already has.
   // `null`, not `''`: the empty set is a real, reportable state (every pane
   // closed, or the user on a non-chat page) and its key IS the empty string, so
   // seeding with `''` would make the one report that un-protects everything the
@@ -3587,11 +3365,11 @@ export function App() {
   const onScreenSessions = useMemo(() => {
     const visible = new Set<SessionId>()
     if (activeView === 'chat') {
-      for (const panel of workspaceLayout.panels) visible.add(panel.sessionId)
+      if (shownSessionId) visible.add(shownSessionId)
       if (activeSessionId) visible.add(activeSessionId)
     }
     return visible
-  }, [activeView, workspaceLayout.panels, activeSessionId])
+  }, [activeView, shownSessionId, activeSessionId])
   useEffect(() => {
     onScreenSessionsRef.current = onScreenSessions
     dispatchSessionWork({ type: 'seen', sessionIds: [...onScreenSessions] })
@@ -3847,9 +3625,8 @@ export function App() {
       .catch(() => toast('Could not write to the clipboard', { tone: 'warn' }))
   }
 
-  const workspacePanels: WorkspacePanelView[] = workspaceLayout.panels
-    .map(panel => {
-	      const sessionId = panel.sessionId
+  const shownPane = (shownSessionId ? [shownSessionId] : [])
+    .map(sessionId => {
 	      const sessionLog = selectRawMessageLog(state, sessionId)
 	      const sessionConnection = selectConnection(connection, sessionId)
 	      const sessionPermissionQueue =
@@ -4169,7 +3946,7 @@ export function App() {
 		              }
 		            }}
 	            onOpenTasks={(agentId, workersTab) => {
-              focusWorkspacePanelSession(workspaceLayout.panels.findIndex(panel => panel.sessionId === sessionId), sessionId)
+              selectShownSession(sessionId)
               openTasksDialog(agentId, workersTab)
             }}
 	            allowPermission={(requestId, applySuggestions = []) => {
@@ -4439,7 +4216,7 @@ export function App() {
 	        ),
 	      }
 	    })
-	    .filter(panel => panel.descriptor)
+	    .find(panel => panel.descriptor) ?? null
 
   // The ⌘K palette inventory — every entry is a real action wired to an existing
   // App handler (no mocked rows). Actions needing an active session / open panel
@@ -4452,7 +4229,6 @@ export function App() {
     ? buildPaletteItems({
         rows: visibleShellDescriptors,
         activeSessionId: selectedNavigationSessionId,
-        hasPanels: activeView === 'chat' && workspacePanels.length > 0,
         slashCatalog: selectSlashCatalog(slashCatalog, activeSessionId) ?? [],
         recentItemIds: recentPaletteItemIds,
         handlers: {
@@ -4467,8 +4243,6 @@ export function App() {
           copyActiveTranscript: () => {
             if (selectedNavigationSessionId) copyForLlm(selectedNavigationSessionId)
           },
-          closeCurrentPanel: () =>
-            closeWorkspacePanelAt(workspaceLayout.activeIndex),
           selectLiveSession: selectTab,
           restoreSession: sessionId => void performRestore(sessionId),
           openTasks: () => openTasksDialog(),
@@ -4629,10 +4403,6 @@ export function App() {
           onOpenActions={(sessionId, anchor) =>
             setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
           }
-          panelCount={workspaceLayout.panels.length}
-          canAddPanel={paneSessionIds.length > workspaceLayout.panels.length}
-          onAddPanel={addWorkspacePanel}
-          onRemovePanel={removeWorkspacePanel}
         />
         </SessionWorkMarksContext.Provider>
 
@@ -5141,7 +4911,7 @@ export function App() {
                 onRetry={() => beginOAuth('first-run', oauthProvider)}
               />
             </div>
-          ) : workspacePanels.length === 0 || !activeSessionId ? (
+          ) : !shownPane || !activeSessionId ? (
             <div className="flex flex-1 flex-col items-center justify-center gap-3">
               {rosterBootstrap.status === 'failure' ? (
                 <>
@@ -5165,8 +4935,7 @@ export function App() {
             /* P4-50 (O2a) — the account-health bar is pinned HERE, above the
              * transcript, rather than left to scroll away inside it. It sits in
              * the chat branch alone, so it never doubles the Accounts page's own
-             * cap row, and OUTSIDE `WorkspaceLayout`, so a split view shows one
-             * bar rather than one per pane. It is a sibling of the transcript and
+             * cap row, and OUTSIDE the session pane. It is a sibling of the transcript and
              * never of the composer: nothing here can gate a send. Shell lifecycle
              * errors keep their own surface (`shellError` above) and are not
              * routed into this plane. */
@@ -5176,17 +4945,25 @@ export function App() {
                 onAction={() => openPage('accounts')}
                 onDismiss={banner => setDismissedAccountHealthId(banner.id)}
               />
-  	          <WorkspaceLayout
-  	            layout={workspaceLayout}
-  	            panels={workspacePanels}
-  	            sessions={tabs.map(tab => tab.descriptor)}
-  	            notice={layoutNotice}
-  	            onClosePanel={closeWorkspacePanelAt}
-  	            onFocusPanel={focusWorkspacePanelSession}
-  	            onSelectSession={selectWorkspacePanelSession}
-  	            onSplitPanel={splitWorkspacePanelWithSession}
-  	            onWidthsChange={updateWorkspaceWidths}
-              />
+              {/* Repeats the page ground `html` already paints, so glass mode
+               * has to clear it (`theme.css`). Without this the shell was
+               * frosted until the first session opened and then went solid,
+               * because this section covers the whole content area. */}
+              {/* Keyed by session: a switch remounts the pane, which its
+               * bind-time reads (transcript scroll restore) rely on. */}
+              <section
+                key={shownPane.sessionId}
+                className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-app-bg"
+                data-window-ground
+              >
+                {/* Must be a flex column: SessionPane's <main> relies on
+                 * `flex-1 min-h-0` to get a bounded height. In a block parent
+                 * those are inert, <main> grows to content height and the
+                 * transcript scroller can never overflow. */}
+                <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                  {shownPane.content}
+                </div>
+              </section>
             </div>
           )}
           </div>
@@ -5233,19 +5010,6 @@ export function App() {
 /** Stable empty inventory for the closed palette — a fresh `[]` each render would
  * bust the palette's `useMemo(filter)` identity check for no reason. */
 const EMPTY_PALETTE_ITEMS: PaletteItem[] = []
-
-function getWorkspaceStorage(): Pick<Storage, 'getItem' | 'removeItem' | 'setItem'> | null {
-  if (typeof window === 'undefined') return null
-  return window.localStorage
-}
-
-function sessionDisplayName(
-  sessionId: SessionId,
-  descriptors: ReadonlyMap<SessionId, SessionDescriptor>,
-): string {
-  const descriptor = descriptors.get(sessionId)
-  return descriptor ? tabLabel(descriptor) : sessionId
-}
 
 /**
  * Local reducer that folds the two shell inputs — the one-shot `listSessions()`

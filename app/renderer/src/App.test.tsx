@@ -326,7 +326,7 @@ test('parked tabs keep their live transcript when a cache is admitted', () => {
   // This file is SSR-only, so the state matrix is exercised in
   // previewTranscriptState.test.ts. This pins App to that behavioral selector.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const start = source.indexOf('const workspacePanels:')
+  const start = source.indexOf('const shownPane = ')
   const end = source.indexOf('\n  const paletteItems = paletteOpen', start)
   expect(start).toBeGreaterThan(-1)
   expect(end).toBeGreaterThan(start)
@@ -400,10 +400,9 @@ test('wiring tripwire: the park policy is told which panes are on screen', () =>
     .filter(line => !line.trim().startsWith('//'))
     .join('\n')
 
-  // The visible set is the workspace panels, not the tab bar: every live session
-  // has a tab, so reporting tabs would exempt every possible park victim.
-  expect(body).toContain('for (const panel of workspaceLayout.panels)')
-  expect(body).toContain('visible.add(panel.sessionId)')
+  // The visible set is the shown pane, not the tab bar: every live session has
+  // a tab, so reporting tabs would exempt every possible park victim.
+  expect(body).toContain('if (shownSessionId) visible.add(shownSessionId)')
   // Panes only exist under the chat view; a non-chat page protects nothing.
   expect(body).toContain("if (activeView === 'chat') {")
   expect(body).toContain('getBridge().reportVisibleSessions(sessionIds)')
@@ -478,7 +477,7 @@ test('close navigation waits for a successful host result and focuses the chosen
 
   expect(navigationBody).toContain('pendingCloseRequestsRef')
   expect(navigationBody).toContain('activeAfterPaneChange')
-  expect(navigationBody).toContain('focusOrAssignWorkspaceSession')
+  expect(navigationBody).toContain('setShownSessionId(next)')
   expect(body).toContain('if (!result.ok)')
   expect(body).toContain('pendingCloseRequestsRef.current.delete(sessionId)')
   expect(resultIndex).toBeGreaterThan(-1)
@@ -2449,9 +2448,8 @@ function faceSquatterId(fill: number): string {
 }
 
 test('two panes on two sessions never spend one face pool, and one session agrees with itself', () => {
-  // Split view renders up to MAX_WORKSPACE_PANELS panes at once, each on its own
-  // session (`workspaceLayout.ts`). The shell used to hand every one of them the
-  // SAME registry, minted from the active session, so the ten identity colours
+  // Each pane draws from its own session's registry. The shell used to hand
+  // every pane the SAME registry, minted from the active session, so the ten identity colours
   // were spent across unrelated transcripts and a worker's face depended on what
   // some other session had drawn first.
   //
@@ -2886,7 +2884,7 @@ test('SettingsShell receives the active session binding from the merged roster',
 test('P4-50: the account-health bar sits above the workspace and cannot gate a send', () => {
   // The ruling's two hard constraints are structural, so they are pinned
   // structurally. (1) ONE bar, mounted as a sibling ABOVE the workspace, not
-  // inside a pane: a split view must not stack one copy per transcript. (2)
+  // inside the pane. (2)
   // SessionPane owns the composer and every disabled state on it, and is never
   // handed the derivation, so no send can be gated on account health.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
@@ -2901,7 +2899,7 @@ test('P4-50: the account-health bar sits above the workspace and cannot gate a s
   // moved to its own file: the bar is mounted in the shell and absent there.
   expect(paneSource).not.toContain('<BannerStack')
   expect(source.indexOf('<BannerStack', mount + 1)).toBe(-1)
-  expect(source.indexOf('<WorkspaceLayout', mount)).toBeGreaterThan(mount)
+  expect(source.indexOf('{shownPane.content}', mount)).toBeGreaterThan(mount)
 
   // The dismissal is in-memory for the run: #12 deleted the persisted keys.
   expect(source).toContain('setDismissedAccountHealthId(banner.id)')
@@ -3105,7 +3103,7 @@ test('D1b wiring tripwire: only a recall this page asked for is acted on, and it
 
   // …and the ungated verb-ack toast must not announce a recall behind its back.
   const toastStart = source.indexOf('const toastedVerbAckRequestsRef =')
-  const toastEnd = source.indexOf('const focusWorkspacePanelSession', toastStart)
+  const toastEnd = source.indexOf('const selectShownSession', toastStart)
   expect(toastStart).toBeGreaterThan(-1)
   expect(toastEnd).toBeGreaterThan(toastStart)
   expect(source.slice(toastStart, toastEnd)).toContain(

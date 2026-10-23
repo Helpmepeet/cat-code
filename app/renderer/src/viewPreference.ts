@@ -16,11 +16,6 @@
  * Writing is best-effort. A storage failure (quota, a private window, a
  * locked-down renderer) is swallowed: view persistence must never be able to
  * affect live session or control-plane state.
- *
- * Preferences with a MULTI-FIELD envelope keep their own codec:
- * `workspaceLayout.ts` writes three fields and clears the key when the layout
- * empties, which is a different contract, not this one with a longer argument
- * list.
  */
 
 import { useCallback, useState } from 'react'

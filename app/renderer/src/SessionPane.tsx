@@ -394,12 +394,10 @@ export function SessionPane({
       ? null
       : images.find(image => image.id === previewImageId) ?? null
   // THIS pane's face registry, keyed on the pane's own session and never the
-  // globally-active one. Split view renders up to MAX_WORKSPACE_PANELS panes
-  // side by side on different sessions, and a single shell registry made them
-  // spend one pool of ten identity colours between them, so a worker's face
-  // depended on what an unrelated session had drawn first. Focusing a pane also
-  // re-minted that registry without unmounting anyone, which re-rolled faces on
-  // rows the reader had already settled on.
+  // globally-active one. A single shell registry made every session spend one
+  // pool of ten identity colours, so a worker's face depended on what an
+  // unrelated session had drawn first, and re-minting it on each switch
+  // re-rolled faces on rows the reader had already settled on.
   //
   // No store above means this pane is standing alone (a test, or any future
   // mount outside the shell). Then it inherits whatever registry it was given,
@@ -1319,8 +1317,8 @@ export function SessionPane({
     const restored = restoreTranscriptScroll(el, { anchor: scrollAnchor })
     previousScrollTopRef.current = el.scrollTop
     applyAtBottom(restored.kind === 'bottom')
-    // Read at bind only: the pane is remounted per session (`WorkspacePanels`
-    // keys each panel by session id), so a later anchor is this pane reporting
+    // Read at bind only: the pane is remounted per session (`App` keys the
+    // shown pane by session id), so a later anchor is this pane reporting
     // its own position, not a new place to jump to.
   }, [activeSessionId])
 

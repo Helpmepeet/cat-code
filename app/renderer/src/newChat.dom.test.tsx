@@ -319,10 +319,6 @@ async function mountCommands({
   let host!: (event: HostEvent) => void
   let frame!: (events: ServerFrame[]) => void
   window.localStorage.setItem('catcode.promptDrafts.v1', JSON.stringify({ version: 1, drafts }))
-  window.localStorage.setItem('catcode.workspaceLayout.v1', JSON.stringify({
-    version: 1, panels: sessions.map(row => row.appSessionId),
-    widths: sessions.map(() => 100 / sessions.length), activeIndex: 0,
-  }))
   const create = async (origin: string | null): Promise<CreateResult> => {
     const result = deferred<CreateResult>()
     creates.push({ origin, result })
@@ -480,35 +476,6 @@ test.each(['unchanged', 'text', 'whitespace', 'failure', 'throw'] as const)('cre
   expect(state.tree.container.querySelector('[aria-label="Remove sketch.png"]')).not.toBeNull()
   expect([...state.tree.container.querySelectorAll('[data-row-key]')].map(row => row.textContent)).toEqual(rowsBefore)
   expect(state.submits).toEqual([])
-  expect(state.otherActions).toEqual([])
-})
-
-test.each([false, true])('split creation follows its origin after focus changes (project=%s)', async leftProject => {
-  const state = await mountCommands({ sessions: [descriptor('left', leftProject), descriptor('right')], delayed: true })
-  const [left, right] = prompts(state.tree.container)
-  expect(left).toBeDefined(); expect(right).toBeDefined()
-  await edit(left!, '/clear'); await key(left!)
-  await act(async () => right!.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })))
-  await edit(right!, '/new'); await key(right!)
-  expect(state.creates).toHaveLength(2)
-  expect(state.creates.map(call => call.origin)).toEqual([leftProject ? 'left' : null, null])
-  await act(async () => state.creates[0]!.result.resolve({ ok: true, value: descriptor('created-left') }))
-  expect(JSON.parse(window.localStorage.getItem('catcode.workspaceLayout.v1')!).panels).toEqual(['created-left', 'right'])
-  await act(async () => state.creates[1]!.result.resolve({ ok: true, value: descriptor('created-right') }))
-  expect(JSON.parse(window.localStorage.getItem('catcode.workspaceLayout.v1')!).panels).toEqual(['created-left', 'created-right'])
-  expect(state.submits).toEqual([])
-})
-
-test('a removed origin panel uses the current focus fallback', async () => {
-  const state = await mountCommands({ sessions: [descriptor('left', true), descriptor('right')], delayed: true })
-  const left = prompts(state.tree.container)[0]!
-  await edit(left, '/new'); await key(left)
-  const close = state.tree.container.querySelector<HTMLButtonElement>('[aria-label^="Close panel 1"]')
-  if (!close) throw new Error('Missing panel close')
-  await act(async () => close.click())
-  await act(async () => state.creates[0]!.result.resolve({ ok: true, value: descriptor('created-1', true) }))
-  expect(state.creates[0]!.origin).toBe('left')
-  expect(JSON.parse(window.localStorage.getItem('catcode.workspaceLayout.v1')!).panels).toEqual(['created-1'])
   expect(state.otherActions).toEqual([])
 })
 

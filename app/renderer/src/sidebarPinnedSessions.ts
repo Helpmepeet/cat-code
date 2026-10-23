@@ -52,8 +52,8 @@ export const MAX_SIDEBAR_PINNED_SESSIONS = 32
 /**
  * The drag payload type for reordering within the Pinned section. Lower-case
  * because `DataTransfer.types` is lower-cased by the browser. Distinct from the
- * workspace drag (`text/workspace-cwd`) and the tab→panel split's
- * `text/sessionId`, so the three drags never light up each other's drop edges.
+ * workspace drag (`text/workspace-cwd`), so the two drags never light up each
+ * other's drop edges.
  */
 export const PINNED_SESSION_DRAG_MIME = 'text/pinned-session-id'
 

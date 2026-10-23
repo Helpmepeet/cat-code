@@ -50,7 +50,6 @@ export type PaletteHandlers = {
   closeActiveSession: () => void
   restartActiveSession: () => void
   copyActiveTranscript: () => void
-  closeCurrentPanel: () => void
   selectLiveSession: (sessionId: SessionId) => void
   restoreSession: (sessionId: SessionId) => void
   openTasks: () => void
@@ -60,8 +59,6 @@ export type PaletteHandlers = {
 export type PaletteInput = {
   rows: SessionDescriptor[]
   activeSessionId: SessionId | null
-  /** True when the workspace has at least one open panel (P3-6). */
-  hasPanels: boolean
   /** Active sidecar's real slash catalog; navigation rows are never mocked. */
   slashCatalog?: readonly SlashCatalogEntry[]
   /** Most-recently invoked real palette item ids, newest first. */
@@ -98,14 +95,12 @@ const PAGE_NAV_BY_COMMAND: Readonly<Record<string, PalettePage>> = {
 /**
  * Build the palette's action + session inventory for the current shell state.
  * Actions that need an active session (close/restart/copy) are omitted when
- * there is none; the panel action is omitted when no panel is open — so a
- * disabled/no-op row can never appear.
+ * there is none, so a disabled/no-op row can never appear.
  */
 export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
   const {
     rows,
     activeSessionId,
-    hasPanels,
     slashCatalog = [],
     recentItemIds = [],
     handlers,
@@ -151,18 +146,6 @@ export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
       ariaLabel: 'Copy active transcript for LLM',
       keywords: 'copy transcript export clipboard llm',
       run: handlers.copyActiveTranscript,
-    })
-  }
-
-  if (hasPanels) {
-    items.push({
-      id: 'action:close-panel',
-      kind: 'action',
-      group: 'Actions',
-      label: 'Close current panel',
-      ariaLabel: 'Close current panel',
-      keywords: 'panel split layout close workspace',
-      run: handlers.closeCurrentPanel,
     })
   }
 

@@ -306,7 +306,6 @@ test('each repaired card and framing strip carries its marker on that element', 
     ['ToolCardStylePreview.tsx', 'data-window-card', 'bg-app-bg', 1],
     ['ProseArrivalPreview.tsx', 'data-window-card', 'bg-app-bg', 1],
     ['ScheduledTasksPage.tsx', 'data-window-chrome', 'md:w-[272px]', 1],
-    ['WorkspacePanels.tsx', 'data-window-chrome', 'bg-shell-chrome', 2],
     ['App.tsx', 'data-window-chrome', 'text-tone-danger', 1],
   ] as const
   for (const [file, marker, classes, count] of surfaces) {
@@ -385,7 +384,7 @@ test('floating surfaces and controls never acquire page-card or chrome markers',
 /**
  * The sweep that would have caught the session panel.
  *
- * Marking the app frame was not enough: `WorkspacePanels`' panel `<section>`
+ * Marking the app frame was not enough: the session pane's `<section>` in `App`
  * also fills the content area with `bg-app-bg`, so the shell was frosted until
  * the first session opened and then went solid (operator, 2026-08-27). Any
  * element that paints the page ground AND fills its container is a repeat of

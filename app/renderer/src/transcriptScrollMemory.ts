@@ -1,8 +1,8 @@
 /**
  * Where the reader was in each session's transcript, and how to put them back.
  *
- * A pane exists only while its session is on screen: `WorkspacePanels` keys each
- * panel by session id, so switching tabs unmounts the pane and mounts a new one.
+ * A pane exists only while its session is on screen: `App` keys the shown pane
+ * by session id, so switching tabs unmounts the pane and mounts a new one.
  * The reading position therefore has to be held above the panes, the same way
  * `turnStarts` is. It lives for the window's lifetime and is deliberately not
  * persisted; this restores a place within one sitting, not across restarts.

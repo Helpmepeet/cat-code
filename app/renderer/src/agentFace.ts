@@ -775,8 +775,8 @@ export function useSessionAgentFaceRegistry(sessionId: string | null): AgentFace
  * wired is an unbounded map in a renderer that has already been OOMed once.
  * A bound cannot be forgotten.
  *
- * It also cannot evict something on screen: one render asks for at most
- * `MAX_WORKSPACE_PANELS` panes plus the shell's active session, and the
+ * It also cannot evict something on screen: one render asks for at most the
+ * shown pane's session plus the shell's active session, and the
  * least-recently-ASKED entry is the one that goes.
  *
  * The cost of an eviction is that a session nobody has drawn a worker for in
@@ -790,12 +790,10 @@ export const MAX_HELD_FACE_REGISTRIES = 12
  * The window's registries, one per session, handed down so a pane can ask for
  * its OWN session's rather than the shell's active one.
  *
- * This exists because up to `MAX_WORKSPACE_PANELS` panes render at once, each on
- * a different session. A single shell registry made those panes share one dedupe
- * pool — one session's silhouettes then depended on what an unrelated session
- * drew first, which is exactly what `UNSCOPED_REGISTRY` below refuses to do —
- * and re-minted on every focus change, re-rolling faces in panes that never
- * unmounted.
+ * A single shell registry made every session share one dedupe pool — one
+ * session's silhouettes then depended on what an unrelated session drew first,
+ * which is exactly what `UNSCOPED_REGISTRY` below refuses to do — and re-minted
+ * on every switch, re-rolling faces on rows a reader had already settled on.
  */
 export type AgentFaceRegistryStore = {
   /**

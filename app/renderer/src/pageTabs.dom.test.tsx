@@ -4,7 +4,6 @@ import { collectRetainedUsage } from '../../../src/utils/statsUsage.js'
 import { App } from './App.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor as fixture } from './sessionDescriptorFixture.js'
-import { WORKSPACE_LAYOUT_STORAGE_KEY } from './workspaceLayout.js'
 import type { HostEvent, SessionDescriptor, SwitchWorkspaceBranchResult } from '../../shared/hostApi.js'
 import { PROTOCOL_VERSION, type CatCodeBridge, type ServerFrame, type TranscriptCache, type SessionCatalogEntry } from '../../shared/protocol.js'
 
@@ -33,9 +32,8 @@ function ready(id: string): ServerFrame {
     payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] } }
 }
 
-async function mountApp(sessions: SessionDescriptor[] = [], split = false, savedActiveIndex = 0, strict = false) {
+async function mountApp(sessions: SessionDescriptor[] = [], strict = false) {
   window.localStorage.clear()
-  if (split) window.localStorage.setItem(WORKSPACE_LAYOUT_STORAGE_KEY, JSON.stringify({ version: 1, panels: ['a', 'b'], widths: [35, 65], activeIndex: savedActiveIndex }))
   let hostListener: (event: HostEvent) => void = () => {}
   let frameListener: (frames: ServerFrame[]) => void = () => {}
   const lifecycle: string[] = []
@@ -100,7 +98,7 @@ test('Analytics activation requests one collection per App document, including w
 })
 
 test('StrictMode replay does not send a second Analytics activation', async () => {
-  const app = await mountApp([], false, 0, true)
+  const app = await mountApp([], true)
   await app.click('Analytics')
   expect(app.usageRefreshes).toHaveLength(1)
 })
@@ -438,21 +436,16 @@ test.each(['preview', 'restore', 'create', 'history'] as const)('late %s complet
   }
 })
 
-test('page navigation preserves saved splits and Settings loses removed session context', async () => {
-  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')], true)
-  const before = JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!)
+test('page navigation hides the pane and Settings loses removed session context', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
   await app.click('Settings')
   await app.click('General')
   await app.click('Project: a')
   expect(app.inventoryCwds.at(-1)).toBe('/tmp/a')
   expect(app.visible.at(-1)).toEqual([])
-  expect(app.tree.container.querySelector('[aria-label="Split view"]')).toBeNull()
   await app.key('2')
-  expect(app.visible.at(-1)).toEqual(['a', 'b'])
-  expect(JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!).widths).toEqual(before.widths)
-  const panel = app.tree.container.querySelector<HTMLElement>('section[aria-label^="Panel 1 session a"]')!
-  await act(async () => { panel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
-  expect(app.selected()[0]).toContain('Session a,')
+  expect(app.selected()[0]).toContain('Session b,')
+  expect(app.visible.at(-1)).toEqual(['b'])
   await app.click('Settings')
   await app.host({ type: 'session-removed', appSessionId: 'a' })
   await app.host({ type: 'session-removed', appSessionId: 'b' })
@@ -460,56 +453,12 @@ test('page navigation preserves saved splits and Settings loses removed session 
   expect(app.inventoryCwds.at(-1)).toBeNull()
 })
 
-test('keyboard focus in a split conversation selects that session before close', async () => {
-  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')], true)
-  const secondPanel = app.tree.container.querySelector<HTMLElement>('section[aria-label^="Panel 2 session b"]')!
-  const composer = secondPanel.querySelector<HTMLElement>('[contenteditable="true"]')!
-  await act(async () => { composer.focus() })
-  const selectionAfterFocus = app.selected()
-  const paneLabelAfterFocus = secondPanel.getAttribute('aria-label')
-  await app.key('w')
-
-  expect(app.lifecycle).toEqual(['close:b'])
-  expect(selectionAfterFocus).toEqual(['Session b, live'])
-  expect(paneLabelAfterFocus).toBe('Panel 2 session b, live, active')
-})
-
-
-test.each(['session', 'page'] as const)('deferred saved split restoration preserves newer %s selection', async selection => {
-  const app = await mountApp([
-    sessionDescriptor('a'),
-    sessionDescriptor('b', { status: 'exited', restorable: true }),
-  ], true, 1)
-  const pending = deferred<TranscriptCache | null>()
-  window.catcode.previewSession = () => pending.promise
-  await app.click('Pin sidebar open')
-  await act(async () => {
-    for (const header of app.tree.container.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"][aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"]')) header.click()
-  })
-  const row = [...app.tree.container.querySelectorAll<HTMLElement>('[role="button"]')]
-    .find(element => element.getAttribute('aria-label')?.startsWith('session b,'))!
-  expect(row).not.toBeUndefined()
-  await act(async () => { row.click() })
-  if (selection === 'session') await app.key('1')
-  else await app.click('Goals')
-  const cache: TranscriptCache = {
-    header: { appSessionId: 'b', engineSessionId: 'engine-b', protocolVersion: PROTOCOL_VERSION, appVersion: 'test', guardVersion: 1, writtenAt: 0 },
-    frames: [],
-  }
-  await act(async () => { pending.resolve(cache) })
-  const saved = JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!)
-  expect(saved.panels).toEqual(['a', 'b'])
-  expect(saved.widths).toEqual([35, 65])
-  if (selection === 'page') {
-    expect(app.selected()).toEqual(['Goals page'])
-    expect(app.visible.at(-1)).toEqual([])
-    await app.key('1')
-  }
+test('the tab bar offers no split view and session tabs are not draggable', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
   expect(app.selected()[0]).toContain('Session a,')
-  const panels = [...app.tree.container.querySelectorAll('section[aria-label^="Panel "]')]
-    .map(element => element.getAttribute('aria-label'))
-  expect(panels).toEqual(['Panel 1 session a, live, active', 'Panel 2 session b, closed, inactive'])
-  expect(JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!).activeIndex).toBe(0)
+  expect(app.tree.container.querySelector('[aria-label="Split view"]')).toBeNull()
+  expect(app.tree.container.querySelector('[aria-label="Unsplit"]')).toBeNull()
+  expect(app.tabs().filter(tab => tab.hasAttribute('draggable'))).toEqual([])
 })
 
 test('catalog exclusions and background park, crash, and restart never replace the selected page', async () => {
@@ -641,8 +590,8 @@ test('a refused recalled prompt survives pagehide and renderer remount', async (
   expect(restored.container.querySelector<HTMLElement>('[role="textbox"]')?.textContent).toBe('previously sent prompt')
 })
 
-async function branchDraft(split = false) {
-  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')], split)
+async function branchDraft() {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
   await app.key('1')
   window.catcode.listWorkspaceBranches = async () => ({
     ok: true, value: { current: 'main', branches: ['main', 'topic'], dirty: false },
@@ -734,18 +683,6 @@ for (const branchChanged of [false, true]) {
     expect(JSON.stringify(submissions)).toContain('large pasted block')
   })
 }
-
-test('branch handoff replaces the focused split pane without moving its neighbors', async () => {
-  const app = await branchDraft(true)
-  await app.host({ type: 'session-added', session: sessionDescriptor('replacement') })
-  await app.host({ type: 'session-removed', appSessionId: 'a' })
-  await act(async () => { app.pending.resolve({ ok: true, value: sessionDescriptor('replacement') }) })
-  expect(app.selected()).toEqual(['Session replacement, live'])
-  const saved = JSON.parse(window.localStorage.getItem(WORKSPACE_LAYOUT_STORAGE_KEY)!)
-  expect(saved.panels).toEqual(['replacement', 'b'])
-  expect(saved.widths).toEqual([35, 65])
-  expect(saved.activeIndex).toBe(0)
-})
 
 test('a cold cached conversation shows its mismatch through the read-only path without restoring an engine', async () => {
   const dead = sessionDescriptor('dead', { status: 'exited', restorable: true })

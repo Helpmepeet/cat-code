@@ -57,7 +57,6 @@ function paletteSessionRow(descriptor: SessionDescriptor) {
   return buildPaletteItems({
     rows: [descriptor],
     activeSessionId: null,
-    hasPanels: false,
     handlers: {
       restoreSession: () => {},
       selectLiveSession: () => {},

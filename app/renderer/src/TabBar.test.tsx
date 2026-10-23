@@ -285,15 +285,12 @@ test('the bar is the window drag region and every control opts out of it', () =>
       onClose={noop}
       onRestart={noop}
       onNewTab={noop}
-      onAddPanel={noop}
-      canAddPanel
     />,
   )
 
   expect(html).toContain('[-webkit-app-region:drag]')
-  // One region declared, then cleared on the tab, the new-session button and
-  // the split cluster.
-  expect(html.match(/\[-webkit-app-region:no-drag\]/g)).toHaveLength(3)
+  // One region declared, then cleared on the tab and the new-session button.
+  expect(html.match(/\[-webkit-app-region:no-drag\]/g)).toHaveLength(2)
 })
 
 test('the bar reserves the well the traffic lights are drawn into', () => {

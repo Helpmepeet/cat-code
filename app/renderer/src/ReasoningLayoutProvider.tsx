@@ -7,7 +7,7 @@
  * neither, and hanging it off the root keeps `App` free of view-preference
  * state. `storage` is injectable so a test can drive the real read/write path
  * without touching globals; it defaults to the renderer's own `localStorage`,
- * the same best-effort store the workspace layout uses (`workspaceLayout.ts`).
+ * the same best-effort store the other view preferences use.
  */
 
 import { useMemo } from 'react'

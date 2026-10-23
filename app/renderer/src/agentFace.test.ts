@@ -564,8 +564,8 @@ describe('the face is identity, not state', () => {
 describe('the window store, one registry per session', () => {
   test('one session is one registry, and two sessions are two', () => {
     // The defect this replaced: the shell minted ONE registry from the active
-    // session while up to MAX_WORKSPACE_PANELS panes rendered side by side, so
-    // unrelated transcripts spent one pool of ten identity colours between them.
+    // session, so unrelated transcripts spent one pool of ten identity colours
+    // between them.
     const store = createAgentFaceRegistryStore()
     const first = store.registryFor('session-a')
 

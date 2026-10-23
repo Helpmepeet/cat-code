@@ -89,7 +89,7 @@ const paneRegistries: AgentFaceRegistry[] = []
 function ShellProbe({ activeSessionId }: { activeSessionId: string | null }) {
   const store = useAgentFaceRegistryStore()
   stores.push(store)
-  // Both panes of a split view ask on every one of the shell's renders.
+  // Two sessions' panes ask on every one of the shell's renders.
   paneRegistries.push(store.registryFor('session-a'))
   paneRegistries.push(store.registryFor('session-b'))
   store.registryFor(activeSessionId)

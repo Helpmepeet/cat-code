@@ -53,8 +53,8 @@ export const MAX_SIDEBAR_WORKSPACE_ORDER_ENTRIES = 64
 /**
  * The drag payload type. Lower-case because `DataTransfer.types` is lower-cased
  * by the browser and the receiving `dragover` compares against it directly.
- * Distinct from the tab→panel split's `text/sessionId` (`TabBar.tsx:265`), so a
- * workspace drag never lights up `WorkspacePanels`' drop edges and vice versa.
+ * Distinct from the pinned-session drag (`PINNED_SESSION_DRAG_MIME`), so neither
+ * drag lights up the other's drop targets.
  */
 export const WORKSPACE_ORDER_DRAG_MIME = 'text/workspace-cwd'
 

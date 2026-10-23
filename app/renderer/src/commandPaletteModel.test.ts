@@ -45,7 +45,6 @@ function noopHandlers(): PaletteHandlers {
     closeActiveSession: () => {},
     restartActiveSession: () => {},
     copyActiveTranscript: () => {},
-    closeCurrentPanel: () => {},
     selectLiveSession: () => {},
     restoreSession: () => {},
     openTasks: () => {},
@@ -53,13 +52,12 @@ function noopHandlers(): PaletteHandlers {
   }
 }
 
-test('buildPaletteItems surfaces active-session + panel actions only when available', () => {
+test('buildPaletteItems surfaces active-session actions only when available', () => {
   const rows = [liveRow({ appSessionId: 'a' as SessionId })]
 
   const full = buildPaletteItems({
     rows,
     activeSessionId: 'a' as SessionId,
-    hasPanels: true,
     handlers: noopHandlers(),
   })
   const ids = full.map(item => item.id)
@@ -67,16 +65,14 @@ test('buildPaletteItems surfaces active-session + panel actions only when availa
   expect(ids).toContain('action:close-active')
   expect(ids).toContain('action:restart-active')
   expect(ids).toContain('action:copy-active')
-  expect(ids).toContain('action:close-panel')
   expect(ids).toContain('action:open-tasks')
   expect(ids).toContain('session:a')
 
-  // No active session → the active-scoped actions and the panel action vanish
+  // No active session → the active-scoped actions vanish
   // (no disabled/no-op rows ever render). New session is always available.
   const minimal = buildPaletteItems({
     rows,
     activeSessionId: null,
-    hasPanels: false,
     handlers: noopHandlers(),
   })
   const minimalIds = minimal.map(item => item.id)
@@ -84,9 +80,8 @@ test('buildPaletteItems surfaces active-session + panel actions only when availa
   expect(minimalIds).not.toContain('action:close-active')
   expect(minimalIds).not.toContain('action:restart-active')
   expect(minimalIds).not.toContain('action:copy-active')
-  expect(minimalIds).not.toContain('action:close-panel')
   // Background tasks is a global action (the real `/tasks` command works with
-  // zero sessions too) — never gated on activeSessionId/hasPanels.
+  // zero sessions too) — never gated on activeSessionId.
   expect(minimalIds).toContain('action:open-tasks')
 })
 
@@ -111,7 +106,6 @@ test('session rows carry an identity+state aria-label and correct run wiring', (
       restorableRow({ appSessionId: 'dead-1' as SessionId, title: 'Bravo' }),
     ],
     activeSessionId: 'live-1' as SessionId,
-    hasPanels: false,
     handlers,
   })
 
@@ -135,7 +129,6 @@ test('filterPaletteItems matches session identity fields and ranks prefixes firs
       liveRow({ appSessionId: 'live-2' as SessionId, title: 'Notes', cwd: '/work/docs' }),
     ],
     activeSessionId: 'live-1' as SessionId,
-    hasPanels: false,
     handlers: noopHandlers(),
   })
 
@@ -159,7 +152,6 @@ test('buildPaletteItems derives real navigation commands and session-local recen
   const items = buildPaletteItems({
     rows: [],
     activeSessionId: null,
-    hasPanels: false,
     slashCatalog: [
       { name: 'accounts', description: 'Manage accounts' },
       { name: 'not-a-page', description: 'Runs in the engine' },

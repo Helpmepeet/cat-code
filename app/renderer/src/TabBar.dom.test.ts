@@ -121,9 +121,6 @@ test('mixed tabs expose one selection and page close intent without session cont
     onSelectTarget: target => selected.push(target),
     onCloseTarget: target => closed.push(target),
     onOpenActions: noop,
-    onAddPanel: noop,
-    panelCount: 2,
-    canAddPanel: true,
     onRestart: noop,
     onNewTab: noop,
   }))
@@ -136,7 +133,6 @@ test('mixed tabs expose one selection and page close intent without session cont
   expect(tabs[1]?.getAttribute('title')).toContain('⌘2')
   expect(tabs[1]?.querySelector('[title="Restart this session"]')).toBeNull()
   expect(tabs[1]?.querySelector('[title="Session actions"]')).toBeNull()
-  expect(tree.container.querySelector('[aria-label="Split view"]')).toBeNull()
 
   await act(async () => {
     tabs[1]?.querySelector<HTMLButtonElement>('[aria-label="Close Accounts page"]')?.click()
