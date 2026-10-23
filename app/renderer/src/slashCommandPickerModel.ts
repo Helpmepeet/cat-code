@@ -15,7 +15,9 @@ export function filterSlashCommands(
   const rest: SlashCatalogEntry[] = []
   for (const entry of entries) {
     const name = entry.name.toLowerCase()
-    if (name.startsWith(q)) prefix.push(entry)
+    // A complete name leads its own prefix group, so `/mode` never resolves to `/model`.
+    if (name === q) prefix.unshift(entry)
+    else if (name.startsWith(q)) prefix.push(entry)
     else if (name.includes(q) || entry.description.toLowerCase().includes(q))
       rest.push(entry)
   }

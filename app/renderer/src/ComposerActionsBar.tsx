@@ -3,6 +3,7 @@ import type { WorkspaceBranchReadout } from './useWorkspaceBranch.js'
 import './workspaceBranch.css'
 import {
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -39,6 +40,10 @@ import { permissionModeMeta, permissionModeShortLabel } from './permissionLabels
 import { ToggleSwitch } from './SettingsEditors.js'
 import { ActionWarningIcon, Glyph } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
+import {
+  nextPlanToggleMode,
+  type DesktopRailCommand,
+} from './desktopChatCommands.js'
 import type {
   AccountStatus,
   AnthropicAccountStatus,
@@ -52,6 +57,35 @@ import type {
 
 /** The run face reads live or retained engine values, never mock model names.
  * Retaining display data must not retain the ability to send a setter. */
+
+/** What a rail slash command asks of the bar. The caller gates availability. */
+export type ComposerRailCommands = {
+  run: (command: DesktopRailCommand) => void
+}
+
+/**
+ * A slash command's request to open one card. `nonce` makes each request an
+ * edge: a card remounted with an old request must not open itself again.
+ */
+type CardOpenRequest = {
+  target: Exclude<DesktopRailCommand, 'fast' | 'plan'>
+  nonce: number
+}
+
+/** Consume each request once, from the mount onward. */
+function useCardOpenRequest(
+  request: CardOpenRequest | null | undefined,
+  onRequest: (target: CardOpenRequest['target']) => void,
+): void {
+  const handled = useRef(request?.nonce ?? 0)
+  const onRequestRef = useRef(onRequest)
+  onRequestRef.current = onRequest
+  useEffect(() => {
+    if (!request || request.nonce === handled.current) return
+    handled.current = request.nonce
+    onRequestRef.current(request.target)
+  }, [request])
+}
 
 /**
  * Feature #4 — roving-tabindex props applied to one action-bar face (its trigger
@@ -120,6 +154,8 @@ function FastGlyph({ active }: { active: boolean }) {
 
 const POPOVER_PANEL =
   'animate-pop-up absolute bottom-full left-0 z-40 mb-2 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg'
+/** Where the run panel's focus lands when it opens from the face. */
+const RUN_PANEL_FOCUS = '[data-run-model], [aria-checked="true"]'
 const POPOVER_HEADING =
   'px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle'
 /**
@@ -177,6 +213,7 @@ function RunControl({
   onSetMode,
   faceProps,
   onFocusComposer,
+  openRequest,
 }: {
   model: string | null
   modelLabel: string | null
@@ -192,12 +229,16 @@ function RunControl({
   onSetMode: (mode: PermissionSetModeMode) => void
   faceProps?: ComposerFaceProps
   onFocusComposer?: () => void
+  openRequest?: CardOpenRequest | null
 }) {
+  // Fixed for the whole time the panel is open: the popover's focus effect
+  // re-registers whenever this changes, which would bounce focus mid-use.
+  const [openFocus, setOpenFocus] = useState(RUN_PANEL_FOCUS)
   const { open, setOpen, close, ref, triggerRef, panelRef } = usePopover(
     onFocusComposer,
     {
       selector: 'button:not([disabled])',
-      prioritySelector: '[data-run-model], [aria-checked="true"]',
+      prioritySelector: openFocus,
     },
   )
   const [step, setStep] = useState<'main' | 'model' | 'mode'>('main')
@@ -284,6 +325,18 @@ function RunControl({
     }
   }, [interactive, modelEnabled, permissionContext, setOpen, step])
 
+  // The click path minus its trigger focus: focus is still in the composer when
+  // the panel opens, so Escape and a pick hand it back to the field.
+  useCardOpenRequest(openRequest, target => {
+    if (!interactive || open) return
+    if (target !== 'model' && target !== 'mode' && target !== 'effort') return
+    focusAfterStep.current = null
+    const level = snapshot?.effort.selected ?? snapshot?.effort.current
+    setOpenFocus(target === 'effort' && level ? `[data-effort-rung="${level}"]` : RUN_PANEL_FOCUS)
+    setStep(target === 'effort' ? 'main' : target)
+    setOpen(true)
+  })
+
   if (!interactive) {
     if (!accessibleLabel) return null
     return (
@@ -305,6 +358,7 @@ function RunControl({
         onClick={() => {
           triggerRef.current?.focus()
           focusAfterStep.current = null
+          setOpenFocus(RUN_PANEL_FOCUS)
           setStep('main')
           setOpen(value => !value)
         }}
@@ -727,6 +781,7 @@ function EffortSlider({
                 key={level}
                 type="button"
                 role="menuitemradio"
+                data-effort-rung={level}
                 aria-checked={index === currentIndex}
                 aria-label={formatEffort(level)}
                 title={formatEffort(level)}
@@ -949,6 +1004,7 @@ function AccountChip({
   onOpen,
   faceProps,
   onFocusComposer,
+  openRequest,
 }: {
   active: AccountStatus
   accounts: AccountStatus[]
@@ -957,8 +1013,12 @@ function AccountChip({
   onOpen?: () => void
   faceProps?: ComposerFaceProps
   onFocusComposer?: () => void
+  openRequest?: CardOpenRequest | null
 }) {
   const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover(onFocusComposer)
+  useCardOpenRequest(openRequest, target => {
+    if (target === 'account' && !open) setOpen(toggleAccountChip(open, onOpen))
+  })
   const pool = accounts.length > 0 ? accounts : [active]
   const alias = active.alias ?? '(unnamed)'
   return (
@@ -1328,6 +1388,7 @@ function ContextChip({
   onCompact,
   faceProps,
   runControls,
+  openRequest,
 }: {
   usage: ContextUsage
   breakdown: ContextBreakdownSnapshot | null
@@ -1335,8 +1396,18 @@ function ContextChip({
   onCompact?: () => void
   faceProps?: ComposerFaceProps
   runControls?: RunControlsSnapshot | null
+  openRequest?: CardOpenRequest | null
 }) {
   const { open, setOpen, close, ref, triggerRef, panelRef: popoverRef } = usePopover()
+  // Exactly the click, trigger focus included. This dialog usually has nothing
+  // to focus, and focus left in the composer would send Escape to the
+  // composer's stop-turn handler before the popover could close.
+  useCardOpenRequest(openRequest, target => {
+    if (target !== 'context' || open) return
+    triggerRef.current?.focus()
+    onRequestBreakdown?.()
+    setOpen(true)
+  })
   // Null on a fallback window, where the face itself shows no percentage: the
   // label must not announce one the donut is deliberately withholding.
   const percent = selectContextPercent(usage)
@@ -1421,6 +1492,7 @@ export function ComposerActionsBar({
   toolbarRef,
   onFocusComposer,
   workspaceBranch = null,
+  commandsRef,
 }: {
   attachDisabled: boolean
   onAttach: () => void
@@ -1486,6 +1558,8 @@ export function ComposerActionsBar({
    * the first face). Owned by App.tsx, which holds the field ref. */
   onFocusComposer?: () => void
   workspaceBranch?: WorkspaceBranchReadout | null
+  /** Rail slash commands, run from the composer field. */
+  commandsRef?: Ref<ComposerRailCommands>
 }) {
   const accountAlias = account?.alias ?? null
   const showAccount = account != null && accountAlias != null
@@ -1510,6 +1584,19 @@ export function ComposerActionsBar({
     onFocus: () => setActiveFace(id),
   })
   const exitToComposer = () => onFocusComposer?.()
+
+  const [openRequest, setOpenRequest] = useState<CardOpenRequest | null>(null)
+  useImperativeHandle(commandsRef, () => ({
+    run: command => {
+      if (command === 'fast') {
+        if (runControls && onSetFast) onSetFast(!runControls.fast.active)
+      } else if (command === 'plan') {
+        if (permissionContext) onSetMode(nextPlanToggleMode(permissionContext))
+      } else {
+        setOpenRequest(previous => ({ target: command, nonce: (previous?.nonce ?? 0) + 1 }))
+      }
+    },
+  }), [onSetFast, onSetMode, permissionContext, runControls])
 
   // Roving navigation among the faces. Runs at the toolbar level, so it also fires
   // for keydowns bubbling out of an open popover — those are guarded out and left to
@@ -1647,6 +1734,7 @@ export function ComposerActionsBar({
           onSetMode={onSetMode}
           faceProps={faceProps('run-controls')}
           onFocusComposer={onFocusComposer}
+          openRequest={openRequest}
         />
 
         <div className="composer-account-controls ml-auto flex min-w-0 items-center gap-[7px]">
@@ -1680,6 +1768,7 @@ export function ComposerActionsBar({
               onOpen={onOpenAccountSwitcher}
               faceProps={faceProps('account')}
               onFocusComposer={onFocusComposer}
+              openRequest={openRequest}
             />
           ) : showAccount ? (
             /* The same status dot the interactive chip shows, for the same
@@ -1724,6 +1813,7 @@ export function ComposerActionsBar({
               onCompact={onCompact}
               faceProps={faceProps('context')}
               runControls={runControls}
+              openRequest={openRequest}
             />
           ) : null}
         </div>

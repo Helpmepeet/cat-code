@@ -43,7 +43,10 @@ import {
   WELCOME_FLIGHT_ECHO_TIMEOUT_MS,
   type ComposerGhostSnapshot,
 } from './composerSendMotion.js'
-import { ComposerActionsBar } from './ComposerActionsBar.js'
+import {
+  ComposerActionsBar,
+  type ComposerRailCommands,
+} from './ComposerActionsBar.js'
 import { useWorkspaceBranch } from './useWorkspaceBranch.js'
 import { ProjectRoutingBar } from './ProjectRoutingBar.js'
 import type { ProjectRouteChoice, ProjectRouteSnapshot } from '../../shared/projectRouting.js'
@@ -105,6 +108,9 @@ import {
   canExecuteDesktopNewChat,
   isDesktopNewChatCommand,
   mergeDesktopSlashCatalog,
+  parseDesktopRailCommand,
+  selectDesktopRailCommands,
+  type DesktopRailCommand,
 } from './desktopChatCommands.js'
 import {
   MENTION_LISTBOX_ID,
@@ -455,6 +461,17 @@ export function SessionPane({
     : null
   const logNotice = activeLog.error ?? imagePreviewNotice
   const showLogError = logNotice !== null && logNotice !== dismissedLogError
+  // Same inputs the action bar's faces use to decide whether they are controls.
+  // A live pane always has context usage; a preview's donut has no command.
+  const railCommands = selectDesktopRailCommands({
+    runControls,
+    canSetModel: onSetModel != null,
+    canSetEffort: onSetEffort != null,
+    canSetFast: onSetFast != null,
+    hasPermissionContext: permissionContext != null,
+    canSwitchAccount: activeAccount != null && onSwitchAccount != null,
+    hasContextUsage: !preview,
+  })
   // The picker renders rich rows (name + arg-hint + description, prototype
   // parity) from the `slash-catalog.snapshot` read seam (the `slashCatalog`
   // prop). It falls back to the names-only `slash_commands` catalog (from the
@@ -464,6 +481,7 @@ export function SessionPane({
     mergeDesktopSlashCatalog(
       slashCatalog,
       selectSlashCommands(transcript, activeSessionId),
+      railCommands,
     )
   const slashQuery = parseSlashDraft(prompt)
   const slashMatches =
@@ -475,6 +493,10 @@ export function SessionPane({
       ? 0
       : Math.min(slashActiveIndex, slashMatches.length - 1)
   const desktopCommand = isDesktopNewChatCommand(prompt)
+  // Rail commands never reach the engine: an unavailable one is held like a
+  // `/clear` that cannot run yet, rather than sent as a prompt.
+  const railCommand = parseDesktopRailCommand(prompt)
+  const railCommandReady = railCommand !== null && railCommands.includes(railCommand)
 
   // Reset selection (and re-open after an Escape) whenever the query text
   // changes — i.e. the user typed. Keyed on the query so an Escape (which does
@@ -619,6 +641,15 @@ export function SessionPane({
   // Feature #4 — the composer action bar's toolbar node, so Tab / ArrowDown-when-
   // empty can move focus from the textarea into the first chip face.
   const actionBarRef = useRef<HTMLDivElement>(null)
+  const railCommandsRef = useRef<ComposerRailCommands>(null)
+  // A card records whatever holds focus as it opens and returns focus there, so
+  // the field takes it first: the Send button may be what ran the command.
+  const runRailCommand = (command: DesktopRailCommand): void => {
+    setPrompt('')
+    setHistoryNav(EMPTY_HISTORY_NAV)
+    composerRef.current?.focus()
+    railCommandsRef.current?.run(command)
+  }
   const isComposingRef = useRef(false)
   const [previewEngaged, setPreviewEngaged] = useState(false)
   const previewEngageRef = useRef(onPreviewEngage)
@@ -1549,7 +1580,13 @@ export function SessionPane({
           event.preventDefault()
           {
             const picked = slashMatches[slashIndex]
-            if (picked) pickSlashCommand(picked.name)
+            // Every rail command in the menu is available, and none takes an
+            // argument, so Enter runs it; Tab still completes.
+            const rail = picked && event.key === 'Enter'
+              ? parseDesktopRailCommand(`/${picked.name}`)
+              : null
+            if (rail) runRailCommand(rail)
+            else if (picked) pickSlashCommand(picked.name)
           }
           return
         case 'Escape':
@@ -2179,6 +2216,11 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
+          if (railCommand) {
+            event.preventDefault()
+            if (railCommandReady) runRailCommand(railCommand)
+            return
+          }
           if (desktopCommand) {
             if (canExecuteDesktopCommand) submit(event)
             else event.preventDefault()
@@ -2387,7 +2429,7 @@ export function SessionPane({
            * composer, and while a permission card holds focus Escape is that
            * card's dismiss instead. A control that is only reachable when the
            * user happens to be in the textarea is not an interrupt. */}
-          {generating && !(desktopCommand && canExecuteDesktopCommand) ? (
+          {generating && !(desktopCommand && canExecuteDesktopCommand) && !railCommandReady ? (
             <button
               aria-label="Stop the turn"
               title="Stop (Esc)"
@@ -2413,7 +2455,9 @@ export function SessionPane({
               title="Send"
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
               disabled={
-                desktopCommand
+                railCommand
+                  ? !railCommandReady
+                  : desktopCommand
                   ? !canExecuteDesktopCommand
                   : projectRoute !== null ||
                     branchSwitchPending ||
@@ -2493,6 +2537,7 @@ export function SessionPane({
               : undefined
           }
           toolbarRef={actionBarRef}
+          commandsRef={railCommandsRef}
           onFocusComposer={() => composerRef.current?.focus()}
         />
       </form>

@@ -1525,7 +1525,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'disabled={ desktopCommand ? !canExecuteDesktopCommand : projectRoute !== null || branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
+    'disabled={ railCommand ? !railCommandReady : desktopCommand ? !canExecuteDesktopCommand : projectRoute !== null || branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
     'attachDisabled={ !composerGate.editable || managedFolderUnavailable || preparingImage || pickingFile }',

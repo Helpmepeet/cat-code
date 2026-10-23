@@ -51,6 +51,16 @@ test('filterSlashCommands ranks prefix matches before substring matches', () => 
   expect(filterSlashCommands(entries, 'zzz')).toEqual([])
 })
 
+test('filterSlashCommands puts a complete name ahead of longer names it prefixes', () => {
+  const entries = entriesOf(['model', 'mode', 'review-impl', 'review'])
+  const names_ = (result: SlashCatalogEntry[]) => result.map(e => e.name)
+  expect(names_(filterSlashCommands(entries, 'mode'))).toEqual(['mode', 'model'])
+  expect(names_(filterSlashCommands(entries, 'MODE'))).toEqual(['mode', 'model'])
+  expect(names_(filterSlashCommands(entries, 'review'))).toEqual(['review', 'review-impl'])
+  // A partial name keeps catalog order.
+  expect(names_(filterSlashCommands(entries, 'mo'))).toEqual(['model', 'mode'])
+})
+
 test('filterSlashCommands matches on description substring, after name prefixes', () => {
   const entries: SlashCatalogEntry[] = [
     { name: 'model', description: 'Switch the model' },
