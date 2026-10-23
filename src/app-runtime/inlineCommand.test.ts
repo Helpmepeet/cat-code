@@ -323,6 +323,7 @@ test('inline output arrives while a short command is running without repeating q
   const early = result.runs.filter((run: any) => run.status === 'running' && run.output === 'EARLY-OUTPUT')
   expect(early).toHaveLength(1)
   expect(result.firstOutputAfterWriteMs).not.toBeNull()
+  expect(result.firstOutputAfterWriteMs).toBeLessThan(750)
   expect(result.restored[0]).toMatchObject({ status: 'success', output: 'EARLY-OUTPUTFINAL-OUTPUT' })
   expect(result.requests).toHaveLength(0)
 }, 30_000)
