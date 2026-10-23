@@ -8,6 +8,10 @@ import { fitUsageDashboardSnapshot, groupUsageSummary } from './usageSummary.js'
 import { parseUsageCollectionLine, parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 import { MAX_USAGE_RECORD_BYTES, mergeUsageToolErrorCategories, mergeUsagePatchMechanisms } from '../shared/usageDashboard.js';
 import { defaultUsageToolSelection, usageToolErrorSeries } from '../renderer/src/usageToolErrorTrendState.js';
+// Fallback-tier fixtures stay small by fitting against the earlier 256 KiB envelope.
+const TIER_TEST_BYTES = 256 * 1024;
+const fitTight = (snapshot: Parameters<typeof fitUsageDashboardSnapshot>[0]) => fitUsageDashboardSnapshot(snapshot, TIER_TEST_BYTES);
+const overflowsTight = (snapshot: Parameters<typeof fitUsageDashboardSnapshot>[0]) => Buffer.byteLength(JSON.stringify({ type: 'usage', version: 1, snapshot })) > TIER_TEST_BYTES;
 test('tool reason counts survive independent overview grouping and repeated fitting', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z', { timezone: 'UTC' });
     const summary = snapshot.ranges['7d'];
@@ -224,6 +228,37 @@ test('multi-year model usage stays named when tool detail exceeds the record bud
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('history whose full detail outgrows 256 KiB keeps named models and first-tier detail in the production envelope', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-production-envelope-'));
+    try {
+        const path = join(dir, 'history.jsonl');
+        const models = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'model-a', 'model-b', 'model-c', 'model-d'];
+        const rows = [];
+        for (let day = 0; day < 30; day++) for (let session = 0; session < 8; session++) for (let tool = 0; tool < 24; tool++) {
+            const id = `${day}-${session}-${tool}`, sessionId = `session-${day}-${session}`;
+            const timestamp = new Date(Date.UTC(2026, 7, 14 + day, 10, tool)).toISOString();
+            rows.push({ type: 'assistant', sessionId, uuid: id, timestamp, message: { id, model: models[(day + session + tool) % models.length], usage: { input_tokens: 10 + session, output_tokens: 1 }, content: [{ type: 'tool_use', id, name: `Tool${tool}` }] } });
+            rows.push({ type: 'user', sessionId, uuid: `${id}-result`, timestamp, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: (day + tool) % 5 === 0 }] } });
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z', { timezone: 'UTC' });
+        const sessions = snapshot.ranges['30d'].rankedSessions.items.length;
+        fitUsageDashboardSnapshot(snapshot);
+        const output = { type: 'usage' as const, version: 1 as const, snapshot };
+        expect(parseUsageCollectionResult(output)).toEqual(output);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeGreaterThan(TIER_TEST_BYTES);
+        for (const range of ['7d', '30d', 'all'] as const) {
+            expect(snapshot.ranges[range].models.filter(model => model.kind === 'named').map(model => model.label).sort()).toEqual([...models].sort());
+            expect(snapshot.ranges[range].models.some(model => model.kind === 'other')).toBe(false);
+        }
+        const recent = snapshot.ranges['30d'];
+        const active = recent.days.filter(day => day.requests > 0);
+        expect(active.length).toBeGreaterThan(20);
+        expect(active.every(day => day.contributors.items.length === 8)).toBe(true);
+        expect(recent.rankedSessions.items).toHaveLength(sessions);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('multi-metric contributor leaders fit through the existing detail fallback tiers', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-contributors-'));
     try {
@@ -237,12 +272,12 @@ test('multi-metric contributor leaders fit through the existing detail fallback 
         const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z');
         const raw = snapshot.ranges;
         snapshot.ranges = { '7d': groupUsageSummary(raw['7d']), '30d': groupUsageSummary(raw['30d']), all: groupUsageSummary(raw.all, 8, 10, 0) };
-        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })).toBeNull();
+        expect(overflowsTight(snapshot)).toBe(true);
         snapshot.ranges = raw;
-        fitUsageDashboardSnapshot(snapshot);
+        fitTight(snapshot);
         const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
         expect(output?.type).toBe('usage');
-        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(TIER_TEST_BYTES);
         expect(snapshot.ranges['30d'].days.every(day => day.contributors.state === 'truncated')).toBe(true);
         for (const day of snapshot.ranges['30d'].days) for (const metric of ['tokens', 'requests', 'errors'] as const)
             expect(day.contributors.items.some(item => item.rank?.[metric] === 1)).toBe(true);
@@ -317,10 +352,10 @@ test('ordinary untimed history keeps named models and tools through the producti
         }
         await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
         const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z');
-        fitUsageDashboardSnapshot(snapshot);
+        fitTight(snapshot);
         const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
         expect(output?.type).toBe('usage');
-        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(TIER_TEST_BYTES);
         const range = snapshot.ranges['30d'];
         expect(range.models.filter(model => model.kind === 'named').map(model => model.label).sort()).toEqual(['model-0', 'model-1', 'model-2', 'model-3']);
         expect(range.models.some(model => model.kind === 'other')).toBe(false);
@@ -359,7 +394,7 @@ test.each([30, 180])('%i days of build markers trade optional detail before tool
             '30d': groupUsageSummary(raw['30d']),
             all: groupUsageSummary(raw.all, 8, 10, 0),
         };
-        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })).toBeNull();
+        expect(overflowsTight(snapshot)).toBe(true);
 
         if (days === 30) {
             const alternative = structuredClone(snapshot);
@@ -367,12 +402,13 @@ test.each([30, 180])('%i days of build markers trade optional detail before tool
                 alternative.ranges[key] = groupUsageSummary(raw[key], 8, 10, 0, 0, 0, 5);
             }
             expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: alternative })?.type).toBe('usage');
+            expect(overflowsTight(alternative)).toBe(false);
         }
         snapshot.ranges = raw;
-        fitUsageDashboardSnapshot(snapshot);
+        fitTight(snapshot);
         const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
         expect(output?.type).toBe('usage');
-        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(TIER_TEST_BYTES);
         expect(snapshot.ranges.all.requests).toBe(days * (days === 180 ? 76 : 100));
         if (days === 180) {
             expect(snapshot.ranges.all.toolBreakdown!.items.filter(tool => tool.kind === 'named')).toHaveLength(38);
@@ -422,11 +458,11 @@ test('large history automatically exposes lower-volume edit errors and recent bu
         await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
         const snapshot = await collectIndexedUsage([path], '2026-09-13T12:00:00.000Z', {
             path: join(dir, 'index.sqlite'), deadline: Date.now() + 60000, timezone: 'UTC',
-            finalize: fitUsageDashboardSnapshot,
+            finalize: fitTight,
         });
         const output = { type: 'usage' as const, version: 1 as const, snapshot };
         expect(parseUsageCollectionResult(output)).toEqual(output);
-        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(MAX_USAGE_RECORD_BYTES);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(TIER_TEST_BYTES);
         for (const range of ['7d', '30d'] as const) {
             const summary = snapshot.ranges[range];
             const selected = defaultUsageToolSelection(summary);
@@ -444,7 +480,7 @@ test('large history automatically exposes lower-volume edit errors and recent bu
         expect(snapshot.ranges.all.days.length).toBeLessThanOrEqual(60);
         const saved = await collectIndexedUsage([path], '2026-09-13T12:00:00.000Z', {
             path: join(dir, 'index.sqlite'), deadline: Date.now() + 60000, timezone: 'UTC',
-            finalize: fitUsageDashboardSnapshot,
+            finalize: fitTight,
             onReadSource() { throw new Error('Warm diagnostics must reuse the redacted index'); },
         });
         expect(saved.ranges).toEqual(snapshot.ranges);
@@ -473,10 +509,10 @@ test('busy measured history keeps bounded session timelines after envelope fallb
         }
         await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
         const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z');
-        fitUsageDashboardSnapshot(snapshot);
+        fitTight(snapshot);
         const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
         expect(output?.type).toBe('usage');
-        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(TIER_TEST_BYTES);
         const measuredDays = snapshot.ranges['30d'].days.filter(day => day.contributors.items.length > 0);
         expect(measuredDays).toHaveLength(30);
         expect(measuredDays.every(day => day.contributors.items.some(item => item.timeline.items.length > 0))).toBe(true);
@@ -502,11 +538,11 @@ test('Tools card error series survive when fitting drops named daily tool detail
         await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
         const snapshot = await collectIndexedUsage([path], '2026-09-13T12:00:00.000Z', {
             path: join(dir, 'index.sqlite'), deadline: Date.now() + 60000, timezone: 'UTC',
-            finalize: fitUsageDashboardSnapshot,
+            finalize: fitTight,
         });
         const output = { type: 'usage' as const, version: 1 as const, snapshot };
         expect(parseUsageCollectionResult(output)).toEqual(output);
-        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(MAX_USAGE_RECORD_BYTES);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(TIER_TEST_BYTES);
         const all = snapshot.ranges.all;
         const detailed = new Set(all.tools.filter(tool => tool.kind === 'named').map(tool => tool.id));
         const undetailed = all.toolBreakdown!.items.filter(tool => tool.kind === 'named' && tool.errors > 0 && !detailed.has(tool.id));

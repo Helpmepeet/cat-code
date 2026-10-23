@@ -2,7 +2,7 @@
 export const USAGE_DASHBOARD_VERSION = 1 as const;
 /** Bump whenever configured rates or retained-history pricing semantics change. */
 export const USAGE_PRICING_VERSION = 3 as const;
-export const MAX_USAGE_RECORD_BYTES = 256 * 1024;
+export const MAX_USAGE_RECORD_BYTES = 4 * 1024 * 1024;
 export const MAX_USAGE_LABEL_BYTES = 160;
 export const MAX_USAGE_MODELS = 8;
 export const MAX_USAGE_TOOLS = 10;

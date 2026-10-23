@@ -1,4 +1,4 @@
-import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
+import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 import { mergeUsageToolCounts, type UsageTool, type UsageBreakdownTool, type UsagePatchModel } from '../shared/usageDashboard.js';
 import { isCurrentSolLunaUsageModel, isCurrentUsageModel, isRetiredUsageModel } from '../shared/usageModelStatus.js';
@@ -238,8 +238,9 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     };
 }
 
-/** Reserve ranked leaders across all ranges before exhausting other detail tiers. */
-export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): UsageDashboardSnapshot {
+/** Reserve ranked leaders across all ranges before exhausting other detail tiers.
+ * `maxBytes` lets tests reach the fallback tiers without multi-megabyte fixtures. */
+export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot, maxBytes = MAX_USAGE_RECORD_BYTES): UsageDashboardSnapshot {
     const raw = {
         '7d': { ...snapshot.ranges['7d'], builds: usageRangeBuilds(snapshot.ranges['7d']) },
         '30d': { ...snapshot.ranges['30d'], builds: usageRangeBuilds(snapshot.ranges['30d']) },
@@ -259,7 +260,8 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
             '30d': groupUsageSummary(raw['30d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills, breakdownLimit, series),
             all: groupUsageSummary(raw.all, all.models, all.tools, 0, all.builds, 0, sessions, skills, breakdownLimit, series),
         };
-        return parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type === 'usage';
+        const result = { type: 'usage', version: 1, snapshot };
+        return Buffer.byteLength(JSON.stringify(result)) <= maxBytes && parseUsageCollectionResult(result)?.type === 'usage';
     };
     const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>, skills = MAX_USAGE_SKILLS, sessionFloor = 5, breakdownLimit = MAX_USAGE_TOOL_BREAKDOWN) => {
         const limit = recent.contributors >= 20 ? 45 : recent.contributors * 2;
