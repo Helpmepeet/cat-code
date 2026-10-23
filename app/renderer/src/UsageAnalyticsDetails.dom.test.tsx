@@ -215,7 +215,7 @@ test('Tools displays every supplied named tool without inventing a grouped row',
 });
 test('Tools shows independent period totals, expands all names, and never invents omitted daily histories', async () => {
     const { summary } = await fixture();
-    const items = Array.from({ length: 38 }, (_, i) => ({ id: `tool-${i}`, label: `Tool ${i}`, kind: 'named' as const, requests: 38 - i, results: 38 - i, errors: i < 2 ? 1 : 0 }));
+    const items = Array.from({ length: 38 }, (_, i) => ({ id: `tool-${i}`, label: `Tool ${i}`, kind: 'named' as const, requests: 38 - i, results: 38 - i, errors: i < 4 ? 1 : 0 }));
     summary.toolBreakdown = { items, omitted: 0 };
     summary.tools = [...items.slice(0, 2), { id: 'other', label: 'Other', kind: 'other', requests: 666, results: 666, errors: 0 }];
     summary.detail = { state: 'grouped', omittedTools: 36, omittedModels: 0 };
@@ -225,8 +225,9 @@ test('Tools shows independent period totals, expands all names, and never invent
     const card = tree.container.querySelector('.uad-tools-card')!;
     expect(card.querySelectorAll('.uad-tools li')).toHaveLength(10);
     expect(card.querySelectorAll('.uad-tools button')).toHaveLength(2);
-    expect(card.querySelectorAll('.uad-tool-history')).toHaveLength(8);
-    expect(card.querySelectorAll('.uad-spark')).toHaveLength(2);
+    // Rows with errors but no retained history stay unavailable; zero-error rows are exact zeros.
+    expect(card.querySelectorAll('.uad-tool-history')).toHaveLength(2);
+    expect(card.querySelectorAll('.uad-spark')).toHaveLength(8);
     expect(card.textContent).not.toContain('Other');
     expect(card.querySelectorAll('.uad-tool-volume')[2]!.textContent).toBe('36');
     const unavailable = card.querySelector('.uad-tool-history')!;
@@ -249,6 +250,28 @@ test('Tools shows independent period totals, expands all names, and never invent
     await act(async () => toggle.click());
     await tree.render(<UsageAnalyticsReliability {...props} summary={{ ...summary, range: '30d' }} />);
     expect(tree.container.querySelectorAll('.uad-tools li')).toHaveLength(10);
+});
+test('Tools draws period error series without daily tool detail and keeps chart selection detailed', async () => {
+    const { summary } = await fixture();
+    const days = summary.days.length;
+    const dayErrors = summary.days.map((_, i) => i === days - 1 ? 3 : i === 0 ? 1 : 0);
+    summary.toolBreakdown = { items: [
+        { id: 'bash', label: 'Bash', kind: 'named', requests: 50, results: 50, errors: 4, dayErrors, errorCategories: { other: 4 } },
+        { id: 'read', label: 'Read', kind: 'named', requests: 40, results: 40, errors: 2, errorCategories: { 'permission-denied': 1, other: 1 } },
+    ], omitted: 0 };
+    summary.tools = [{ id: 'other', label: 'Other', kind: 'other', requests: 90, results: 90, errors: 6 }];
+    summary.detail = { state: 'grouped', omittedTools: 2, omittedModels: 0 };
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => { throw new Error('Series without daily detail must not select a chart'); }} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const card = tree.container.querySelector('.uad-tools-card')!;
+    const [bash, read] = [...card.querySelectorAll('.uad-tools li')];
+    expect(bash!.querySelector('.uad-spark')).not.toBeNull();
+    expect(bash!.querySelector('.uad-tool-history')).toBeNull();
+    expect(bash!.querySelector('button')).toBeNull();
+    expect(read!.querySelector('.uad-tool-history')?.textContent).toBe('Unavailable');
+    expect(card.querySelector('[aria-label="Bash error reasons"]')).toBeNull();
+    const reasons = card.querySelector('[aria-label="Read error reasons"]')!;
+    expect(reasons.textContent).toBe('Permission denied: 1 · Other: 1');
+    expect([...reasons.querySelectorAll('b')].map(b => b.textContent)).toEqual(['1', '1']);
 });
 test('Tools never borrows daily Other history for a different overview grouping', async () => {
     const { summary } = await fixture();

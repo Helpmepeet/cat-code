@@ -125,3 +125,31 @@ test('compact overview retains 38 names independently of two detailed tools and 
     for (const key of ['requests', 'results', 'errors'] as const) expect(capped.toolBreakdown!.items.reduce((n, t) => n + t[key], 0)).toBe(summary.tools.reduce((n, t) => n + t[key], 0));
     expect(groupUsageSummary({ ...summary, tools: [] }).toolBreakdown).toEqual({ items: [], omitted: 0 });
 });
+
+test('tool breakdown carries reconciled per-day error series in card order within its allowance', async () => {
+    const summary = (await collectRetainedUsage([], '2026-09-13T12:00:00.000Z')).ranges['7d'];
+    const daily: Record<string, { results: number; errors: number[] }> = {
+        Bash: { results: 40, errors: [1, 0, 0, 0, 0, 0, 2] },
+        Read: { results: 30, errors: [0, 2, 0, 0, 0, 0, 0] },
+        Grep: { results: 20, errors: [0, 0, 0, 0, 0, 0, 0] },
+        Glob: { results: 10, errors: [0, 0, 0, 1, 0, 0, 0] },
+    };
+    const sum = (values: number[]) => values.reduce((n, x) => n + x, 0);
+    summary.tools = Object.entries(daily).map(([label, { results, errors }]) => ({ ...usageCategory(label), requests: results, results, errors: sum(errors) }));
+    summary.days = summary.days.map((day, i) => ({ ...day, tools: summary.tools.map(tool => ({ id: tool.id, requests: i ? 0 : tool.requests, results: i ? 0 : tool.results, errors: daily[tool.label]!.errors[i]! })) }));
+    const series = (range: UsageRangeSummary) => Object.fromEntries(range.toolBreakdown!.items.map(item => [item.label, item.dayErrors]));
+
+    const grouped = groupUsageSummary(summary, 8, 0, 0, 0, 0, 0, 0, 2);
+    expect(grouped.days.every(day => day.tools.every(tool => tool.id === 'other'))).toBe(true);
+    expect(series(grouped)).toEqual({ Bash: daily.Bash!.errors, Read: daily.Read!.errors, Other: daily.Glob!.errors });
+    expect(groupUsageSummary(grouped, 8, 0, 0, 0, 0, 0, 0, 2).toolBreakdown).toEqual(grouped.toolBreakdown);
+    // Regrouping folds a carried Other series with newly grouped rows.
+    expect(series(groupUsageSummary(grouped, 8, 0, 0, 0, 0, 0, 0, 1)).Other).toEqual([0, 2, 0, 1, 0, 0, 0]);
+
+    const limited = groupUsageSummary(summary, 8, 0, 0, 0, 0, 0, 0, 50, 2);
+    expect(series(limited)).toEqual({ Bash: daily.Bash!.errors, Read: daily.Read!.errors, Grep: undefined, Glob: undefined });
+    expect(series(groupUsageSummary(summary, 8, 0, 0, 0, 0, 0, 0, 50, 0))).toEqual({ Bash: undefined, Read: undefined, Grep: undefined, Glob: undefined });
+
+    summary.days[6]!.tools.find(tool => tool.id === summary.tools[0]!.id)!.errors = 1;
+    expect(series(groupUsageSummary(summary)).Bash).toBeUndefined();
+});

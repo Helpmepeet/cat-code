@@ -1,4 +1,4 @@
-import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, UsageEffort, UsageParallel, } from './usageDashboard.js';
+import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, UsageBreakdownTool, UsageEffort, UsageParallel, } from './usageDashboard.js';
 import { USAGE_TOOL_ERROR_CATEGORIES, USAGE_PATCH_MECHANISMS, USAGE_PATCH_FOLLOWUP_STATES } from './usageDashboard.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
 import { shiftLocalCalendarDays } from '../../src/utils/usageWindow.js';
@@ -272,6 +272,14 @@ function model(v: unknown): v is UsageModel {
     return ownKeys(value, ['id', 'kind', 'label', 'tokens', 'tokenCost']) && tokens(value.tokens) && tokenCost(value.tokenCost, tokenSum(value.tokens as UsageTokens));
 }
 function tool(v: unknown): v is UsageTool { return toolWithModels(v, true); }
+/** Breakdown rows may carry the card's per-day error series, reconciled to their total. */
+function breakdownTool(v: unknown, days: number): v is UsageBreakdownTool {
+    if (!obj(v) || v.dayErrors === undefined) return tool(v);
+    const { dayErrors, ...counts } = v;
+    if (!tool(counts) || counts.errors === 0 || !Array.isArray(dayErrors) || dayErrors.length !== days || !dayErrors.every(n => safe(n))) return false;
+    const sum = (dayErrors as number[]).reduce((n, x) => n + x, 0);
+    return safe(sum) && sum === counts.errors;
+}
 function toolWithModels(v: unknown, allowModels: boolean): v is UsageTool {
     if (!obj(v) || !category(v)) return false;
     const value = v as Record<string, unknown>;
@@ -488,7 +496,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
     }
     if (v.toolBreakdown !== undefined) {
         const breakdown = v.toolBreakdown;
-        if (!obj(breakdown) || !ownKeys(breakdown, ['items', 'omitted']) || !safe(breakdown.omitted) || !Array.isArray(breakdown.items) || !uniqueCategories(breakdown.items, MAX_USAGE_TOOL_BREAKDOWN) || !breakdown.items.every(tool)) return false;
+        if (!obj(breakdown) || !ownKeys(breakdown, ['items', 'omitted']) || !safe(breakdown.omitted) || !Array.isArray(breakdown.items) || !uniqueCategories(breakdown.items, MAX_USAGE_TOOL_BREAKDOWN) || !breakdown.items.every(item => breakdownTool(item, (v.days as unknown[]).length))) return false;
         const items = breakdown.items as UsageTool[];
         const detailed = v.tools as UsageTool[];
         if ((breakdown.omitted > 0) !== items.some(t => t.kind === 'other')) return false;

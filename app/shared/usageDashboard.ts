@@ -123,6 +123,11 @@ export type UsageTool = UsageCategory & {
     /** Request-model attribution, including an explicit unknown model. */
     patchModels?: UsagePatchModel[];
 };
+export type UsageBreakdownTool = UsageTool & {
+    /** Errors per entry of the range's `days`, summing to `errors`. Absent when
+     * the tool had no errors or fitting could not afford the series. */
+    dayErrors?: number[];
+};
 export function mergeUsageToolCounts(items: readonly UsagePatchModel[]): Omit<UsagePatchModel, keyof UsageCategory> {
     const errors = items.reduce((n, item) => n + item.errors, 0);
     const mechanisms = mergeUsagePatchMechanisms(items);
@@ -325,7 +330,7 @@ export type UsageRangeSummary = {
     models: UsageModel[];
     tools: UsageTool[];
     /** Independent period overview, not constrained by daily/build detail fitting. */
-    toolBreakdown?: { items: UsageTool[]; omitted: number };
+    toolBreakdown?: { items: UsageBreakdownTool[]; omitted: number };
     /** Period build totals survive reductions of daily tool detail. */
     builds?: UsageDayTool['builds'];
     timing: UsageTimingSummary;

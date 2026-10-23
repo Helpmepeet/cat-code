@@ -483,3 +483,43 @@ test('busy measured history keeps bounded session timelines after envelope fallb
         expect(measuredDays.every(day => day.contributors.items.every(item => item.timeline.state === 'truncated'))).toBe(true);
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('Tools card error series survive when fitting drops named daily tool detail', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-tool-series-'));
+    try {
+        const path = join(dir, 'history.jsonl');
+        const rows = [];
+        for (let day = 0; day < 180; day++) for (let tool = 0; tool < 38; tool++) for (let build = 0; build < 2; build++) {
+            const id = `${day}-${tool}-${build}`;
+            const timestamp = new Date(Date.UTC(2026, 2, 18 + day, 10, build)).toISOString();
+            rows.push({
+                type: 'assistant', sessionId: 's', uuid: id, timestamp,
+                version: `2.1.87-desktop.sha${build.toString(16).padStart(7, 'a')}`,
+                message: { id, model: 'model', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id, name: `Tool${tool}` }] },
+            });
+            rows.push({ type: 'user', sessionId: 's', uuid: `${id}-result`, timestamp, message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: tool < 20 && build === 0 && (day + tool) % 7 === 0 }] } });
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectIndexedUsage([path], '2026-09-13T12:00:00.000Z', {
+            path: join(dir, 'index.sqlite'), deadline: Date.now() + 60000, timezone: 'UTC',
+            finalize: fitUsageDashboardSnapshot,
+        });
+        const output = { type: 'usage' as const, version: 1 as const, snapshot };
+        expect(parseUsageCollectionResult(output)).toEqual(output);
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThanOrEqual(MAX_USAGE_RECORD_BYTES);
+        const all = snapshot.ranges.all;
+        const detailed = new Set(all.tools.filter(tool => tool.kind === 'named').map(tool => tool.id));
+        const undetailed = all.toolBreakdown!.items.filter(tool => tool.kind === 'named' && tool.errors > 0 && !detailed.has(tool.id));
+        expect(undetailed.length).toBeGreaterThan(10);
+        for (const range of ['7d', '30d', 'all'] as const) {
+            const summary = snapshot.ranges[range];
+            const errored = summary.toolBreakdown!.items.filter(tool => tool.errors > 0);
+            expect(errored.length).toBeGreaterThan(0);
+            for (const tool of errored) {
+                expect(tool.dayErrors).toHaveLength(summary.days.length);
+                expect(tool.dayErrors!.reduce((n, x) => n + x, 0)).toBe(tool.errors);
+            }
+            expect(summary.toolBreakdown!.items.filter(tool => tool.errors === 0).every(tool => tool.dayErrors === undefined)).toBe(true);
+        }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+}, 60000);

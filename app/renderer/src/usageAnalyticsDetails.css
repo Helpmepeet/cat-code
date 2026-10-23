@@ -178,6 +178,7 @@ html[data-appearance=light] .usage-analytics-details { --uad-shadow: 0 1px 2px r
 .usage-analytics-details .uad-tools .uad-hot .uad-tool-rate, .usage-analytics-details .uad-tools .uad-hot .uad-spark { color: var(--uad-error); }
 .usage-analytics-details .uad-tool-history { color: var(--uad-muted); font-size: 11px; }
 .usage-analytics-details .uad-tool-reasons { margin: 0 0 8px; color: var(--uad-muted); font-size: 11px; line-height: 1.5; }
+.usage-analytics-details .uad-tool-reasons b, .usage-analytics-details .uad-patch-dimensions p b { color: var(--color-text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
 .usage-analytics-details .uad-patch-dimensions { margin: 0 0 12px; font-size: 11px; line-height: 1.5; }
 .usage-analytics-details .uad-patch-dimensions summary { cursor: pointer; }
 .usage-analytics-details .uad-patch-dimensions p { margin: 4px 0; color: var(--uad-muted); }

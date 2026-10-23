@@ -176,16 +176,16 @@ export function analyticsSparkGeometry(values: readonly (number | null)[], width
     return { line: valid.length > 1 ? analyticsLinearPath(points) : '', area: valid.length > 1 ? analyticsAreaPath(points, height) : '', last: valid.length > 1 ? points.filter((p): p is AnalyticsPoint => p !== null).at(-1) : undefined };
 }
 
-export function analyticsCalendarValues(summary: UsageRangeSummary, value: (day: UsageRangeSummary['days'][number]) => number): (number | null)[] {
+export function analyticsCalendarValues(summary: UsageRangeSummary, value: (day: UsageRangeSummary['days'][number], index: number) => number): (number | null)[] {
     const result: (number | null)[] = [];
     const step = (summary.bucketDays ?? 1) * 86400000;
     let previous = Date.parse(`${summary.startDate}T00:00:00Z`) - step;
-    for (const day of summary.days) {
+    for (const [index, day] of summary.days.entries()) {
         const time = Date.parse(`${day.date}T00:00:00Z`);
         // Keep the calendar distance without inventing observations in omitted buckets.
         const gap = Math.round((time - previous) / step) - 1;
         for (let i = 0; i < gap; i++) result.push(null);
-        result.push(value(day)); previous = time;
+        result.push(value(day, index)); previous = time;
     }
     const { count } = analyticsBucketAxis(summary);
     while (result.length < count) result.push(null);

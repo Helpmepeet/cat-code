@@ -2,24 +2,30 @@ import type { UsageRangeSummary, UsageTokens, UsageTimingSummary } from '../../s
 import { usageRangeBuilds } from '../../shared/usageBuilds.js';
 import type { AutoModeUsageRoute } from '../../shared/usageAutoMode.js';
 import { isFilePatchToolName } from '../../../src/tools/FilePatchTool/constants.js';
-import { USAGE_TOOL_ERROR_CATEGORIES, USAGE_PATCH_MECHANISMS, USAGE_PATCH_FOLLOWUP_STATES, type UsageTool, type UsageToolErrorCategory, type UsagePatchMechanism, type UsagePatchFollowupState } from '../../shared/usageDashboard.js';
+import { USAGE_TOOL_ERROR_CATEGORIES, USAGE_PATCH_MECHANISMS, USAGE_PATCH_FOLLOWUP_STATES, type UsageTool, type UsageBreakdownTool, type UsageToolErrorCategory, type UsagePatchMechanism, type UsagePatchFollowupState } from '../../shared/usageDashboard.js';
 
 const toolErrorLabels: Record<UsageToolErrorCategory, string> = {
     ambiguity: 'Ambiguous context', 'text-not-found': 'Text not found', 'nonconsecutive-context': 'Nonconsecutive context',
     'order-conflict': 'Order conflict', 'planner-limit': 'Planning limit', 'malformed-patch': 'Malformed patch',
     'permission-denied': 'Permission denied', interrupted: 'Cancelled', other: 'Other',
 };
-export function analyticsToolErrorReasons(tool: UsageTool): string {
-    if (!tool.errorCategories) return '';
-    return USAGE_TOOL_ERROR_CATEGORIES.filter(category => tool.errorCategories![category])
-        .map(category => `${toolErrorLabels[category]}: ${tool.errorCategories![category]!.toLocaleString()}`).join(' · ');
+/** A labelled count rendered as `label: value`, with the value emphasized. */
+export type AnalyticsCount = { label: string; value: string };
+const calls = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'call' : 'calls'}`;
+export function analyticsToolErrorReasons(tool: UsageTool): AnalyticsCount[] {
+    const categories = tool.errorCategories;
+    if (!categories) return [];
+    const present = USAGE_TOOL_ERROR_CATEGORIES.filter(category => categories[category]);
+    // A lone Other restates the error count without explaining it.
+    if (present.every(category => category === 'other')) return [];
+    return present.map(category => ({ label: toolErrorLabels[category], value: categories[category]!.toLocaleString() }));
 }
 const patchMechanismLabels: Record<UsagePatchMechanism, string> = {
     'forward-match': 'Forward match', 'hunk-reorder': 'Hunks reordered', 'indentation-adjustment': 'Indentation adjusted',
 };
-export function analyticsPatchMechanisms(tool: UsageTool): string {
+export function analyticsPatchMechanisms(tool: UsageTool): AnalyticsCount[] {
     return USAGE_PATCH_MECHANISMS.filter(mechanism => tool.patchMechanisms?.[mechanism])
-        .map(mechanism => `${patchMechanismLabels[mechanism]}: ${tool.patchMechanisms![mechanism]!.toLocaleString()} ${tool.patchMechanisms![mechanism] === 1 ? 'call' : 'calls'}`).join(' · ');
+        .map(mechanism => ({ label: patchMechanismLabels[mechanism], value: calls(tool.patchMechanisms![mechanism]!) }));
 }
 
 const followupLabels: Record<UsagePatchFollowupState, string> = {
@@ -27,15 +33,21 @@ const followupLabels: Record<UsagePatchFollowupState, string> = {
     'edit-switch': 'Later Edit call', 'write-switch': 'Later Write call', 'shell-switch-unknown': 'Later shell call, attribution unknown',
     unresolved: 'No later action observed', unknown: 'Overlapping activity, sequence unknown',
 };
-export function analyticsPatchFollowups(tool: UsageTool): string {
+export function analyticsPatchFollowups(tool: UsageTool): AnalyticsCount[] {
     const followups = tool.patchFollowups;
-    if (!followups) return '';
+    if (!followups) return [];
     return [
-        `${followups.episodes.toLocaleString()} failed-call ${followups.episodes === 1 ? 'sequence' : 'sequences'}`,
-        `${followups.retryCalls.toLocaleString()} later patch ${followups.retryCalls === 1 ? 'call' : 'calls'}`,
-        `${followups.repeatErrors.toLocaleString()} repeat ${followups.repeatErrors === 1 ? 'error' : 'errors'}`,
-        ...USAGE_PATCH_FOLLOWUP_STATES.filter(state => followups.states[state]).map(state => `${followupLabels[state]}: ${followups.states[state]!.toLocaleString()}`),
-    ].join(' · ');
+        { label: 'Failed-call sequences', value: followups.episodes.toLocaleString() },
+        ...USAGE_PATCH_FOLLOWUP_STATES.filter(state => followups.states[state]).map(state => ({ label: followupLabels[state], value: followups.states[state]!.toLocaleString() })),
+        { label: 'Later patch calls', value: followups.retryCalls.toLocaleString() },
+        { label: 'Repeat errors', value: followups.repeatErrors.toLocaleString() },
+    ];
+}
+/** Errors per entry of `summary.days`, or null when no reconciled history survived fitting. */
+export function analyticsToolDayErrors(summary: UsageRangeSummary, tool: UsageBreakdownTool, detailed: boolean): readonly number[] | null {
+    if (tool.dayErrors) return tool.dayErrors;
+    if (tool.errors === 0) return summary.days.map(() => 0);
+    return detailed ? summary.days.map(day => day.tools.find(item => item.id === tool.id)?.errors ?? 0) : null;
 }
 export function analyticsPatchCounts(tool: UsageTool): string {
     const missing = tool.requests - tool.results;

@@ -535,6 +535,29 @@ test('independent tool breakdown is optional, closed, bounded and reconciled', (
     expect(parseUsageCollectionResult(value)).toBeNull();
 });
 
+test('breakdown error series are reconciled per day and only accepted on breakdown rows', () => {
+    const value = usage() as any;
+    const range = value.snapshot.ranges['7d'];
+    const errors = range.tools[0].errors;
+    expect(errors).toBeGreaterThan(0);
+    const series = range.days.map((_: unknown, i: number) => i === range.days.length - 1 ? errors : 0);
+    range.toolBreakdown = { items: [{ ...structuredClone(range.tools[0]), dayErrors: series }], omitted: 0 };
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    for (const mutate of [
+        (r: any) => { r.toolBreakdown.items[0].dayErrors = series.slice(1); },
+        (r: any) => { r.toolBreakdown.items[0].dayErrors = [...series, 0]; },
+        (r: any) => { r.toolBreakdown.items[0].dayErrors = series.map((n: number, i: number) => i === 0 ? n + 1 : n); },
+        (r: any) => { r.toolBreakdown.items[0].dayErrors = series.map((n: number, i: number) => i === 0 ? -1 : i === series.length - 1 ? n + 1 : n); },
+        (r: any) => { r.toolBreakdown.items[0].dayErrors = series.map((n: number, i: number) => i === 0 ? 0.5 : i === series.length - 1 ? n - 0.5 : n); },
+        (r: any) => { r.toolBreakdown.items[0].dayErrors = 'private'; },
+        (r: any) => { r.tools[0].dayErrors = series; },
+    ]) {
+        const bad = structuredClone(value);
+        mutate(bad.snapshot.ranges['7d']);
+        expect(parseUsageCollectionResult(bad)).toBeNull();
+    }
+});
+
 test('capped overview totals may group a tool whose daily detail is retained', () => {
     const value = usage() as any;
     value.snapshot.ranges['7d'].toolBreakdown = {
