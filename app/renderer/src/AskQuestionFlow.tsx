@@ -7,8 +7,8 @@
  * question from taking the whole region. A split workspace mounts a card per
  * pane, so only the active pane owns the keyboard. Accent marks picked answers;
  * the keyboard highlight uses a neutral wash. Hovering the single-select Other
- * row previews it as a provisional choice. Arrow and digit shortcuts pick their
- * destination; focus alone does not.
+ * row previews it as a provisional choice until something is picked. Arrow and
+ * digit shortcuts pick their destination; focus alone does not.
  */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
@@ -159,10 +159,14 @@ export function AskQuestionFlow({
   const otherText = draft.other
   /** The freeform row is an ANSWER once it carries text, so it shows as one. */
   const otherFilled = draft.other.trim().length > 0
-  // Hovering or opening Other previews it as the single-select choice. Keep the
-  // previous draft until text replaces it, so leaving restores the old option.
+  // Opening Other previews it as the single-select choice. Keep the previous
+  // draft until text replaces it, so leaving restores the old option. Hover
+  // previews only while nothing is picked: Other sits on the pointer's path to
+  // Submit, so a hover that hid the pick made the pick and Submit blink.
   const otherPending =
-    !q?.multiSelect && !otherFilled && (otherActive || hoverIndex === otherIndex)
+    !q?.multiSelect &&
+    !otherFilled &&
+    (otherActive || (hoverIndex === otherIndex && draft.optionIndices.length === 0))
   // Counts the freeform row too, or the line reads "2 selected" under three
   // rows drawn as chosen.
   const selectedCount = draft.optionIndices.length + (otherFilled ? 1 : 0)

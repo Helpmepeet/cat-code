@@ -487,7 +487,7 @@ test('clicking Other moves the single-select tint before any text is typed', asy
   expect(checkedState(optionRows(card)[2]!)).toBe('true')
 })
 
-test('hovering Other previews its pink row and mark without submitting the old pick', async () => {
+test('hovering Other keeps an existing pick and Submit live', async () => {
   const { card, calls } = await mountFlow()
   await press(card, '3')
   const selected = optionRows(card)[2]!
@@ -497,26 +497,13 @@ test('hovering Other previews its pink row and mark without submitting the old p
   await act(async () => {
     other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
   })
-  expect(otherRow.className).toContain('bg-accent')
-  expect(markerText(otherRow)).toBe('✓')
-  expect(checkedState(selected)).toBe('false')
-  expect(buttonWithText(card, 'Submit').disabled).toBe(true)
-
-  await act(async () => {
-    other.dispatchEvent(
-      new MouseEvent('mouseout', { bubbles: true, relatedTarget: card }),
-    )
-  })
+  expect(otherRow.className).not.toContain('bg-accent')
   expect(markerText(otherRow)).toBe('')
   expect(checkedState(selected)).toBe('true')
   expect(buttonWithText(card, 'Submit').disabled).toBe(false)
 
-  await act(async () => {
-    other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
-  })
   await press(card, 'Enter')
-  expect(card.querySelector('input')).not.toBe(null)
-  expect(calls.answers).toHaveLength(0)
+  expect(calls.answers).toEqual([[{ optionIndices: [2] }]])
 })
 
 test('a digit pick overrides the Other hover preview', async () => {
@@ -525,6 +512,7 @@ test('a digit pick overrides the Other hover preview', async () => {
   await act(async () => {
     other.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
   })
+  expect(markerText(other.parentElement!)).toBe('✓')
 
   await press(card, '2')
   expect(markerText(other.parentElement!)).toBe('')
