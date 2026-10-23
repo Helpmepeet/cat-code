@@ -552,17 +552,6 @@ export function SessionPane({
   // pill; the handle keeps the textarea-shaped selection API these handlers use.
   const composerRef = useRef<ComposerInputHandle>(null)
   const handledComposerFocusRequestRef = useRef<number | undefined>(undefined)
-  useEffect(() => {
-    if (
-      !isActivePane ||
-      composerFocusRequest === undefined ||
-      handledComposerFocusRequestRef.current === composerFocusRequest
-    ) {
-      return
-    }
-    handledComposerFocusRequestRef.current = composerFocusRequest
-    composerRef.current?.focus()
-  }, [composerFocusRequest, isActivePane])
   const imagePreparationInFlightRef = useRef(false)
   const [preparingImage, setPreparingImage] = useState(false)
   const [pickingFile, setPickingFile] = useState(false)
@@ -749,6 +738,22 @@ export function SessionPane({
   })
   const composerReadOnly =
     branchSwitchPending || managedFolderUnavailable || !composerGate.editable
+  useEffect(() => {
+    if (
+      !isActivePane ||
+      !activeSessionId ||
+      composerReadOnly ||
+      composerFocusRequest === undefined ||
+      handledComposerFocusRequestRef.current === composerFocusRequest ||
+      !composerRef.current
+    ) {
+      return
+    }
+    // Focusing a read-only contentEditable does not establish a text caret when
+    // editing becomes available. Keep the request pending until it can.
+    composerRef.current.focus()
+    handledComposerFocusRequestRef.current = composerFocusRequest
+  }, [activeSessionId, composerFocusRequest, composerReadOnly, isActivePane])
   // A named session is addressed by its own name (PEER-SESSIONS §6): the user
   // is talking to Bear, not to "Cat Code" in general, and the name is what its
   // peers use for it too. A row with no name (one that predates the field and

@@ -121,9 +121,7 @@ test.each([
   expect(directoryCreates).toBe(entry === 'folder' ? 1 : 0)
   expect(tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
   expect(tree.container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Normal chat')
-  if (entry === 'shortcut') {
-    expect(document.activeElement).toBe(tree.container.querySelector('[aria-label="Prompt"]'))
-  }
+  expect(document.activeElement).toBe(tree.container.querySelector('[aria-label="Prompt"]'))
 })
 
 function descriptor(id: string, project = false): SessionDescriptor {
@@ -147,6 +145,76 @@ function deferred<T>() {
 }
 
 type CreateResult = Awaited<ReturnType<CatCodeBridge['createManagedChat']>>
+
+test.each(['button', 'shortcut', 'sidebar'] as const)(
+  'new chat via %s waits for an editable composer before focusing',
+  async entry => {
+    const folder = deferred<Awaited<ReturnType<CatCodeBridge['getSessionFolderState']>>>()
+    const created = descriptor('new-chat')
+    let host!: (event: HostEvent) => void
+    window.catcode = {
+      subscribe: () => () => {},
+      subscribeHost: receive => { host = receive; return () => {} },
+      rendererReady: () => {},
+      listSessions: async () => [descriptor('existing-chat', true)],
+      readProjectRoutes: async () => [],
+      readSessionsCatalog: async () => null,
+      reportVisibleSessions: () => {},
+      recordRenderCommit: () => {},
+      getSessionFolderState: () => folder.promise,
+      createManagedChat: async () => {
+        host({ type: 'session-added', session: created })
+        return { ok: true, value: created }
+      },
+    } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
+    const tree = await harness.mount(<App />)
+    const focusedEditableStates: Array<string | null> = []
+    const onFocus = (event: FocusEvent) => {
+      const target = event.target
+      if (target instanceof HTMLElement && target.getAttribute('aria-label') === 'Prompt') {
+        focusedEditableStates.push(target.getAttribute('contenteditable'))
+      }
+    }
+    document.addEventListener('focusin', onFocus)
+    try {
+      if (entry === 'sidebar') {
+        await act(async () => {
+          tree.container.querySelector<HTMLButtonElement>('[aria-label="Pin sidebar open"]')!.click()
+        })
+      }
+      await act(async () => {
+        if (entry === 'shortcut') {
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true, bubbles: true }))
+        } else if (entry === 'sidebar') {
+          const button = [...tree.container.querySelectorAll('button')].find(
+            button => button.textContent?.includes('New chat') && !button.hasAttribute('aria-label'),
+          )
+          expect(button).toBeDefined()
+          button!.click()
+        } else {
+          tree.container.querySelector<HTMLButtonElement>('[aria-label="New session"]')!.click()
+        }
+      })
+      const field = tree.container.querySelector<HTMLElement>('[aria-label="Prompt"]')!
+      expect(field.getAttribute('contenteditable')).toBe('false')
+      expect(focusedEditableStates).toEqual([])
+      expect(document.activeElement).not.toBe(field)
+
+      await act(async () => folder.resolve({ ok: true, value: 'available' }))
+      expect(field.getAttribute('contenteditable')).toBe('true')
+      expect(document.activeElement).toBe(field)
+      expect(focusedEditableStates).toEqual(['true'])
+
+      const newSession = tree.container.querySelector<HTMLButtonElement>('[aria-label="New session"]')!
+      await act(async () => newSession.focus())
+      await tree.render(<App />)
+      expect(document.activeElement).toBe(newSession)
+      expect(focusedEditableStates).toEqual(['true'])
+    } finally {
+      document.removeEventListener('focusin', onFocus)
+    }
+  },
+)
 
 test.each(['empty', 'history', 'existing'] as const)('startup opens a composer after the %s roster resolves', async context => {
   const roster = deferred<SessionDescriptor[]>()
