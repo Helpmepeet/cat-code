@@ -563,12 +563,13 @@ type ToolLookup = ReadonlyMap<string, Tool>
 function classifierData(value: unknown): string {
   return jsonStringify(value)
     .replace(/</g, '\\u003c')
+    .replace(/\u0085/g, '\\u0085')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029')
 }
 
 function classifierText(value: string): string {
-  return /[\r\n\u2028\u2029<]/.test(value) ? classifierData(value) : value
+  return /[\r\n\v\f\u0085\u2028\u2029<]/.test(value) ? classifierData(value) : value
 }
 
 function buildToolLookup(tools: Tools): ToolLookup {
