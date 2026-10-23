@@ -326,6 +326,8 @@ export type UsageRangeSummary = {
     tools: UsageTool[];
     /** Independent period overview, not constrained by daily/build detail fitting. */
     toolBreakdown?: { items: UsageTool[]; omitted: number };
+    /** Period build totals survive reductions of daily tool detail. */
+    builds?: UsageDayTool['builds'];
     timing: UsageTimingSummary;
     /** Prospective auto-mode observations; unavailable never means zero attempts. */
     autoMode: import('./usageAutoMode.js').AutoModeUsageSummary;

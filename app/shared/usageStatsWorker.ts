@@ -2,6 +2,7 @@ import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageMode
 import { USAGE_TOOL_ERROR_CATEGORIES, USAGE_PATCH_MECHANISMS, USAGE_PATCH_FOLLOWUP_STATES } from './usageDashboard.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
 import { shiftLocalCalendarDays } from '../../src/utils/usageWindow.js';
+import { MAX_USAGE_RANGE_BUILDS } from './usageBuilds.js';
 import { MAX_USAGE_RANKED_SESSIONS, MAX_USAGE_SKILLS, USAGE_INTEGRATIONS, type UsageTokenSources, type UsageCallCount } from './usageDashboard.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -313,11 +314,14 @@ function toolWithModels(v: unknown, allowModels: boolean): v is UsageTool {
 function dayTool(v: unknown): v is UsageDayTool {
     if (!obj(v) || !ownKeys(v, ['id', 'requests', 'results', 'errors', ...(v.builds === undefined ? [] : ['builds'])]) || !id(v.id) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests) return false;
     if (v.builds === undefined) return true;
-    if (!obj(v.builds) || !ownKeys(v.builds, ['items', ...(v.builds.omitted === undefined ? [] : ['omitted'])]) || !Array.isArray(v.builds.items) || v.builds.items.length > MAX_USAGE_TOOL_BUILDS_PER_DAY || v.builds.items.length === 0 && v.builds.omitted === undefined) return false;
-    if (v.builds.omitted !== undefined && (!obj(v.builds.omitted) || !ownKeys(v.builds.omitted, ['count', 'requests', 'results', 'errors']) || !positive(v.builds.omitted.count) || !positive(v.builds.omitted.requests) || !safe(v.builds.omitted.results) || !safe(v.builds.omitted.errors) || v.builds.omitted.errors > v.builds.omitted.results || v.builds.omitted.results > v.builds.omitted.requests)) return false;
+    return buildObservations(v.builds, { requests: v.requests, results: v.results, errors: v.errors }, MAX_USAGE_TOOL_BUILDS_PER_DAY, false);
+}
+function buildObservations(builds: unknown, totals: Pick<UsageDayTool, 'requests' | 'results' | 'errors'>, limit: number, allowEmpty: boolean): builds is NonNullable<UsageDayTool['builds']> {
+    if (!obj(builds) || !ownKeys(builds, ['items', ...(builds.omitted === undefined ? [] : ['omitted'])]) || !Array.isArray(builds.items) || builds.items.length > limit || !allowEmpty && builds.items.length === 0 && builds.omitted === undefined) return false;
+    if (builds.omitted !== undefined && (!obj(builds.omitted) || !ownKeys(builds.omitted, ['count', 'requests', 'results', 'errors']) || !positive(builds.omitted.count) || !positive(builds.omitted.requests) || !safe(builds.omitted.results) || !safe(builds.omitted.errors) || builds.omitted.errors > builds.omitted.results || builds.omitted.results > builds.omitted.requests)) return false;
     const seen = new Set<string>();
     let attributedRequests = 0, attributedResults = 0, attributedErrors = 0;
-    for (const item of v.builds.items) {
+    for (const item of builds.items) {
         if (!obj(item) || !ownKeys(item, ['sha', 'dirty', 'requests', 'results', 'errors', 'firstObservedAt']) || typeof item.sha !== 'string' || !/^[0-9a-f]{7,40}$/.test(item.sha) || typeof item.dirty !== 'boolean' || !positive(item.requests) || !safe(item.results) || !safe(item.errors) || item.errors > item.results || item.results > item.requests || !instant(item.firstObservedAt)) return false;
         const key = `${item.sha}:${item.dirty}`;
         if (seen.has(key)) return false;
@@ -327,11 +331,11 @@ function dayTool(v: unknown): v is UsageDayTool {
         attributedErrors += item.errors;
         if (!safe(attributedRequests) || !safe(attributedResults) || !safe(attributedErrors)) return false;
     }
-    const omitted = (v.builds.omitted ?? { requests: 0, results: 0, errors: 0 }) as { requests: number; results: number; errors: number };
+    const omitted = (builds.omitted ?? { requests: 0, results: 0, errors: 0 }) as { requests: number; results: number; errors: number };
     if (!sumsSafe(attributedRequests, omitted.requests) || !sumsSafe(attributedResults, omitted.results) || !sumsSafe(attributedErrors, omitted.errors)) return false;
-    const unknownRequests = v.requests - attributedRequests - omitted.requests;
-    const unknownResults = v.results - attributedResults - omitted.results;
-    const unknownErrors = v.errors - attributedErrors - omitted.errors;
+    const unknownRequests = totals.requests - attributedRequests - omitted.requests;
+    const unknownResults = totals.results - attributedResults - omitted.results;
+    const unknownErrors = totals.errors - attributedErrors - omitted.errors;
     return safe(unknownRequests) && safe(unknownResults) && safe(unknownErrors) && unknownErrors <= unknownResults && unknownResults <= unknownRequests;
 }
 function durationSummary(v: unknown): boolean {
@@ -445,7 +449,7 @@ function previousPeriod(v: unknown, range: '7d' | '30d', rangeStartDate: string,
     return v.cachedInputShare === null ? prompt === 0 : finite(v.cachedInputShare) && prompt > 0 && Math.abs(v.cachedInputShare - v.tokens.read / prompt * 100) <= 1e-9;
 }
 function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSummary {
-    if (!obj(v) || !ownKeys(v, ['rankedSessions', 'skills', 'integrations', 'range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startDate', 'endDateExclusive', 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', ...(v.toolBreakdown === undefined ? [] : ['toolBreakdown']), 'timing', 'autoMode', 'parallel', 'effort', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !date(v.startDate) || !date(v.endDateExclusive) || !instant(v.startInclusive) || !instant(v.endExclusive) || !tokens(v.tokens) || !parallel(v.parallel) || !effort(v.effort) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
+    if (!obj(v) || !ownKeys(v, ['rankedSessions', 'skills', 'integrations', 'range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startDate', 'endDateExclusive', 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', ...(v.toolBreakdown === undefined ? [] : ['toolBreakdown']), ...(v.builds === undefined ? [] : ['builds']), 'timing', 'autoMode', 'parallel', 'effort', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !date(v.startDate) || !date(v.endDateExclusive) || !instant(v.startInclusive) || !instant(v.endExclusive) || !tokens(v.tokens) || !parallel(v.parallel) || !effort(v.effort) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
         return false;
     const all = v.range === 'all';
     if (!callCounts(v.skills, v.requests) || !callCounts(v.integrations, v.requests, true) || !rankedSessions(v.rankedSessions, v, asOf)) return false;
@@ -478,6 +482,10 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
         return false;
     if (!autoMode(v.autoMode, startDate, endDate, all ? MAX_USAGE_ALL_BUCKETS : n, bucketDays))
         return false;
+    if (v.builds !== undefined) {
+        const totals = (v.tools as UsageTool[]).reduce((sum, tool) => ({ requests: sum.requests + tool.requests, results: sum.results + tool.results, errors: sum.errors + tool.errors }), { requests: 0, results: 0, errors: 0 });
+        if (!buildObservations(v.builds, totals, MAX_USAGE_RANGE_BUILDS, true) || v.builds.items.some(build => build.firstObservedAt < start || build.firstObservedAt >= end || build.firstObservedAt > asOf)) return false;
+    }
     if (v.toolBreakdown !== undefined) {
         const breakdown = v.toolBreakdown;
         if (!obj(breakdown) || !ownKeys(breakdown, ['items', 'omitted']) || !safe(breakdown.omitted) || !Array.isArray(breakdown.items) || !uniqueCategories(breakdown.items, MAX_USAGE_TOOL_BREAKDOWN) || !breakdown.items.every(tool)) return false;

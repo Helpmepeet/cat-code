@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
+import { MIN_USAGE_BUILD_RESULTS } from '../../shared/usageBuilds.js';
 import { analyticsBucketAxis, analyticsBuilds, detailRate } from './usageAnalyticsDetailsState.js';
 
 export const analyticsClamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
@@ -219,7 +220,7 @@ export function analyticsCacheRows(summary: UsageRangeSummary, width: number) {
 
 export function analyticsBuildGeometry(summary: UsageRangeSummary, width: number) {
     const builds = analyticsBuilds(summary);
-    const eligible = builds.items.filter(b => b.results >= 200);
+    const eligible = builds.items.filter(b => b.results >= MIN_USAGE_BUILD_RESULTS);
     const rates = eligible.map(b => b.errors / b.results * 100).sort((a, b) => a - b);
     const median = rates.length ? (rates[Math.floor((rates.length - 1) / 2)]! + rates[Math.floor(rates.length / 2)]!) / 2 : null;
     const maxRate = analyticsNiceMax(Math.max(...rates, 0) || 10);

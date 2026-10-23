@@ -22,6 +22,36 @@ function snapshot(label = 'Model'): Record<string, unknown> {
     return { version: 2, metricVersion: 1, countingVersion: 23, pricingVersion: 3, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hours: Array.from({ length: 24 }, (_, hour) => ({ hour, offsetMinutes: 0, startAt: `${day.date}T${String(hour).padStart(2, '0')}:00:00.000Z`, requests: index === 6 && hour === 12 ? 3 : 0, tokens: index === 6 && hour === 12 ? 10 : 0 })) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
 }
 function usage(over: Record<string, unknown> = {}) { return { type: 'usage', version: 1, snapshot: { ...snapshot(), ...over } }; }
+test('period build overview is closed, bounded, dated and reconciled independently of daily build detail', () => {
+    const value = usage() as any;
+    const range = value.snapshot.ranges['7d'];
+    const build = { sha: 'abcdef0', dirty: false, requests: 3, results: 2, errors: 1, firstObservedAt: '2026-09-13T12:00:00.000Z' };
+    range.builds = { items: [build] };
+    expect(parseUsageCollectionResult(value)).not.toBeNull();
+    for (const change of [
+        (b: any) => b.source = 'private',
+        (b: any) => b.items[0].sha = 'not-a-build',
+        (b: any) => b.items[0].dirty = 'yes',
+        (b: any) => b.items[0].command = 'private',
+        (b: any) => b.items[0].results = 1,
+        (b: any) => b.items[0].errors = 3,
+        (b: any) => b.items[0].requests = 4,
+        (b: any) => b.items[0].firstObservedAt = '2026-09-06T12:00:00.000Z',
+        (b: any) => b.items[0].firstObservedAt = '2026-09-13T12:00:01.000Z',
+        (b: any) => b.items.push({ ...b.items[0] }),
+        (b: any) => b.items = Array.from({ length: 31 }, (_, i) => ({ ...build, sha: i.toString(16).padStart(7, '0') })),
+        (b: any) => b.omitted = { count: 1, requests: 1, results: 1, errors: 0 },
+        (b: any) => b.omitted = { count: 0, requests: 0, results: 0, errors: 0 },
+    ]) {
+        const bad = structuredClone(value);
+        change(bad.snapshot.ranges['7d'].builds);
+        expect(parseUsageCollectionResult(bad)).toBeNull();
+    }
+    range.builds = { items: [], omitted: { count: 1, requests: 3, results: 2, errors: 1 } };
+    expect(parseUsageCollectionResult(value)).not.toBeNull();
+    range.builds = { items: [] };
+    expect(parseUsageCollectionResult(value)).not.toBeNull();
+});
 test('tool error categories are optional, closed, bounded and sum to failed calls', () => {
     const value = usage() as any;
     const tool = value.snapshot.ranges['7d'].tools[0];

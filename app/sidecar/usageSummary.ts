@@ -3,6 +3,7 @@ import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 import { mergeUsageToolCounts, type UsageTool, type UsagePatchModel } from '../shared/usageDashboard.js';
 import { isCurrentSolLunaUsageModel, isCurrentUsageModel, isRetiredUsageModel } from '../shared/usageModelStatus.js';
 import { MAX_USAGE_SKILLS, type UsageCallCount, type UsageRankedSession } from '../shared/usageDashboard.js';
+import { usageRangeBuilds } from '../shared/usageBuilds.js';
 export { usageCategory } from '../../src/utils/usageCategory.js';
 export const tokenTotal = (t: UsageTokens): number => t.fresh + t.read + t.write + t.output;
 export const emptyTokens = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
@@ -160,6 +161,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     };
     return {
         ...summary,
+        builds: usageRangeBuilds(summary),
         skills: groupSkills(summary.skills),
         rankedSessions: {
             medianTokens: summary.rankedSessions.medianTokens,
@@ -213,7 +215,11 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
 
 /** Reserve ranked leaders across all ranges before exhausting other detail tiers. */
 export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): UsageDashboardSnapshot {
-    const raw = snapshot.ranges;
+    const raw = {
+        '7d': { ...snapshot.ranges['7d'], builds: usageRangeBuilds(snapshot.ranges['7d']) },
+        '30d': { ...snapshot.ranges['30d'], builds: usageRangeBuilds(snapshot.ranges['30d']) },
+        all: { ...snapshot.ranges.all, builds: usageRangeBuilds(snapshot.ranges.all) },
+    };
     const detailTiers = [
         { models: 8, tools: 10, contributors: 20, builds: 8, timeline: 12 },
         { models: 8, tools: 10, contributors: 10, builds: 4, timeline: 3 },

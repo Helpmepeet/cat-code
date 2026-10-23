@@ -1,4 +1,5 @@
 import type { UsageRangeSummary, UsageTokens, UsageTimingSummary } from '../../shared/usageDashboard.js';
+import { usageRangeBuilds } from '../../shared/usageBuilds.js';
 import type { AutoModeUsageRoute } from '../../shared/usageAutoMode.js';
 import { isFilePatchToolName } from '../../../src/tools/FilePatchTool/constants.js';
 import { USAGE_TOOL_ERROR_CATEGORIES, USAGE_PATCH_MECHANISMS, USAGE_PATCH_FOLLOWUP_STATES, type UsageTool, type UsageToolErrorCategory, type UsagePatchMechanism, type UsagePatchFollowupState } from '../../shared/usageDashboard.js';
@@ -175,19 +176,8 @@ export function detailCalendarLine(summary: UsageRangeSummary, values: readonly 
     return detailLine(points.map(p => p.value), width, height, ceiling, points.map(p => p.x));
 }
 export function analyticsBuilds(summary: UsageRangeSummary) {
-    const rows = new Map<string, { sha: string; dirty: boolean; results: number; errors: number; first: string }>();
-    let omitted = 0, attributed = 0;
-    for (const day of summary.days) for (const tool of day.tools) {
-        omitted += tool.builds?.omitted?.count ?? 0;
-        for (const build of tool.builds?.items ?? []) {
-            const key = `${build.sha}:${build.dirty}`;
-            const row = rows.get(key) ?? { sha: build.sha, dirty: build.dirty, results: 0, errors: 0, first: build.firstObservedAt };
-            row.results += build.results; row.errors += build.errors;
-            if (build.firstObservedAt < row.first) row.first = build.firstObservedAt;
-            rows.set(key, row); attributed += build.results;
-        }
-    }
-    return { items: [...rows.values()].sort((a, b) => a.first.localeCompare(b.first)), omitted, attributed };
+    const builds = usageRangeBuilds(summary);
+    return { items: builds.items.map(build => ({ ...build, first: build.firstObservedAt })), omitted: builds.omitted?.count ?? 0, attributed: builds.items.reduce((sum, build) => sum + build.results, 0) };
 }
 /** Squarified rows retain relative area without turning small routes into slivers. */
 export function analyticsRouteTiles(summary: UsageRangeSummary, width = 600, height = 240) {

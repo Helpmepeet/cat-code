@@ -1,4 +1,5 @@
 import type { UsageDay, UsageRangeSummary } from '../../shared/usageDashboard.js';
+import { MIN_USAGE_BUILD_RESULTS, usageRangeBuilds } from '../../shared/usageBuilds.js';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { usageTotal, useUsageChartWidth } from './usageDashboardState.js';
 import { usageMetricDelta } from './usageMetricDelta.js';
@@ -103,13 +104,8 @@ export function usageDailyMetricDelta(current: number | null, previous: number |
     return delta ? { ...delta, magnitude: Math.abs(unit === 'points' ? current! - previous! : (current! - previous!) / previous! * 100) } : null;
 }
 export function usageLatestBuild(summary: UsageRangeSummary) {
-    const builds = new Map<string, { sha: string; dirty: boolean; results: number; errors: number; firstObservedAt: string }>();
-    for (const day of summary.days) for (const tool of day.tools) for (const build of tool.builds?.items ?? []) {
-        const key = `${build.sha}:${build.dirty}`, previous = builds.get(key);
-        builds.set(key, { ...build, results: (previous?.results ?? 0) + build.results, errors: (previous?.errors ?? 0) + build.errors, firstObservedAt: previous && previous.firstObservedAt < build.firstObservedAt ? previous.firstObservedAt : build.firstObservedAt });
-    }
-    const items = [...builds.values()].filter(build => build.results >= 200).sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt));
-    const rates = items.filter(item => item.results >= 200).map(item => usageToolRate(item)!).sort((a, b) => a - b);
+    const items = [...usageRangeBuilds(summary).items].filter(build => build.results >= MIN_USAGE_BUILD_RESULTS).sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt));
+    const rates = items.map(item => usageToolRate(item)!).sort((a, b) => a - b);
     const middle = Math.floor(rates.length / 2);
     const median = rates.length ? rates.length % 2 ? rates[middle]! : (rates[middle - 1]! + rates[middle]!) / 2 : null;
     return { latest: items.at(-1), items, median };

@@ -281,6 +281,7 @@ function BuildScatter({ summary, onSelectBuild }: { summary: UsageRangeSummary; 
             <rect className="uad-hit uad-build-pick" x={geo.left} y={geo.top} width={geo.right - geo.left} height={geo.bottom - geo.top} onMouseMove={event => setHovered(nearest(event)?.key ?? '')} onMouseLeave={() => setHovered('')} onClick={event => { const point = nearest(event); if (point) pick(point); }} />
             {active && <ChartTip x={active.x} y={active.y} width={width} height={280} title={`${active.sha}${active.dirty ? ' · Uncommitted' : ''}`} lines={[{ label: 'First retained request', value: active.first }, { label: 'Tool results', value: active.results.toLocaleString() }, { label: 'Error rate', value: detailPercent(active.rate) }]} />}
         </svg> : <p>No builds with at least 200 tool results.</p>}</div>
+        {geo.builds.omitted > 0 && <p>Additional build observations are omitted. Median uses shown builds.</p>}
         <div className="uad-readout uad-build-readout" aria-live="off">{active && <><span className="uad-build-sha">{active.sha}</span>{active.dirty ? ' · Uncommitted changes' : ' · Committed'} · {detailPercent(active.rate)} · {active.errors.toLocaleString()} errors / {active.results.toLocaleString()} results · First retained request {active.first}</>}</div>
     </Card>;
 }

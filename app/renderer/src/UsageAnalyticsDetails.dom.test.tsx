@@ -305,6 +305,22 @@ test('build chart states when no build meets the result threshold', async () => 
     expect(tree.container.querySelector('#usage-build-chart')?.textContent).toContain('No builds with at least 200 tool results.');
     expect(tree.container.querySelector('.uad-builds')).toBeNull();
 });
+test('build chart renders and selects period totals when daily build detail has been omitted', async () => {
+    const { summary } = await fixture();
+    summary.builds = { items: [{ sha: 'abcdef0', dirty: true, requests: 400, results: 400, errors: 20, firstObservedAt: '2026-10-12T12:00:00.000Z' }], omitted: { count: 2, requests: 100, results: 90, errors: 5 } };
+    summary.days.forEach(day => day.tools.forEach(tool => { delete tool.builds; }));
+    const calls: string[] = [];
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={sha => calls.push(sha)} />);
+    const article = tree.container.querySelector('#usage-build-chart')!;
+    expect(article.textContent).not.toContain('No builds with');
+    expect(article.textContent).toContain('Median 5.0%');
+    expect(article.textContent).toContain('Additional build observations are omitted.');
+    const point = article.querySelector<SVGGElement>('.uad-builds [role=button]')!;
+    expect(point.getAttribute('aria-label')).toBe('abcdef0 uncommitted: 5.0%');
+    await act(async () => point.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(calls).toEqual(['abcdef0']);
+    expect(article.querySelector('.uad-build-readout')?.textContent).toContain('20 errors / 400 results');
+});
 test('supporting SVG tooltips render complete single text strings', async () => {
     const { summary } = await fixture();
     const cache = renderToStaticMarkup(<CacheOwner summary={summary} />);
