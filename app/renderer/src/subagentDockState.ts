@@ -214,9 +214,14 @@ export function reconcileSubagentDockState(previous: SubagentDockState, input: S
     const freshResume = worker?.status === 'running' && resumeTime !== null &&
       (old?.terminalAt === null || old?.terminalAt === undefined || resumeTime > old.terminalAt)
     const rowBelongsToResume = row?.toolName === 'ResumeAgent'
+    // The card can arrive while the worker still reports its previous terminal
+    // state. The engine's current task binding disambiguates that same card
+    // from a genuinely stale ResumeAgent card when the new snapshot arrives.
+    const rowIsCurrentResume = rowBelongsToResume && resumeTime !== null &&
+      input.tasks?.subagents?.some(agent => agent.agentId === agentId && agent.toolUseId === row.toolUseId)
     const currentRunResumed = resumeTime !== null || old?.resumedAt !== null && old?.resumedAt !== undefined
     const olderTranscript = currentRunResumed && (!rowBelongsToResume ||
-      !!old && row?.toolUseId === old.toolUseId &&
+      !rowIsCurrentResume && !!old && row?.toolUseId === old.toolUseId &&
         (freshResume && isSubagentDockTerminal(old.state) || old.runKey.startsWith('resume:')))
     const evidenceRow = olderTranscript ? undefined : row
     let state: SubagentDockStatus | undefined

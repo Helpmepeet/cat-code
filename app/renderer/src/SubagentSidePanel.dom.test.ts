@@ -278,6 +278,43 @@ test('a resume keeps the open panel and its earlier steps above the resumed run'
   expect(body.querySelector('.subagent-side-availability')).toBeNull()
 })
 
+test('dock opens a repeatedly resumed worker when its card arrives before the task update', async () => {
+  const original = agent()
+  const firstResume: NestedToolUseRow = {
+    ...agent('a', [prose('first-resume-step', 'Earlier resumed reply')]),
+    toolName: 'ResumeAgent', toolUseId: 'resume-old', input: { agentId: 'a' }, status: 'success',
+    agentCompletion: { status: 'completed', summary: 'Done', result: null, usage: null },
+  }
+  const nextResume: NestedToolUseRow = {
+    ...agent('a', [prose('next-resume-step', 'Current resumed reply')]),
+    toolName: 'ResumeAgent', toolUseId: 'resume-new', input: { agentId: 'a' },
+  }
+  let state = createSubagentDockState()
+  const derive = (rows: NestedTranscriptRow[], resumedAt: number, status: 'running' | 'completed', toolUseId: string) => {
+    const input: SubagentDockInput = {
+      workers: [{ agentId: 'a', handle: '@Ada', role: 'explore', description: 'Task a', status, isBackgrounded: true }],
+      tasks: {
+        items: [{ id: 'a', type: 'local_agent', label: 'Task a', status, startTime: resumedAt, resumedAt, isBackgrounded: true, ...(status === 'completed' ? { endTime: 900 } : {}) }],
+        subagents: [{ toolUseId, agentId: 'a', agentName: 'Ada', agentType: 'explore', isSidechain: true, spawnedAt: resumedAt, isBackgrounded: true }],
+      },
+      transcriptRows: rows, leases: null, nowMs: 2100, reducedMotion: true,
+    }
+    state = reconcileSubagentDockState(state, input)
+    const dock = selectSubagentDock(state, input)
+    return workspace({ rows, active: dock.active, finished: dock.finished, fallback: () => { throw new Error('current resume must open its panel') } })
+  }
+  const tree = await harness.mount(derive([original, firstResume], 500, 'completed', 'resume-old'))
+  await tree.render(derive([original, firstResume, nextResume], 500, 'completed', 'resume-old'))
+  await tree.render(derive([original, firstResume, nextResume], 2000, 'running', 'resume-new'))
+  await click(tree.container, '[data-dock-row="a"]')
+  expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('Ada, resumed')
+  const body = tree.container.querySelector('.subagent-side-body')!
+  expect(body.textContent).toContain('Earlier resumed reply')
+  expect(body.textContent).toContain('Current resumed reply')
+  await tree.render(derive([original, firstResume, nextResume], 2000, 'running', 'resume-new'))
+  expect(tree.container.querySelector('.subagent-side-body')).toBe(body)
+})
+
 test('an open panel follows its run into the background but not into a resume without a run of its own', async () => {
   const calls: SubagentDockRow[] = []
   const fallback = (row: SubagentDockRow) => { calls.push(row) }

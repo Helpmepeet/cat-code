@@ -287,6 +287,38 @@ test('alias resumes use canonical task identity and keep their transcript join a
   expect(unresolved.finished).toEqual([])
 })
 
+test('a resume card observed before the new task snapshot keeps its current transcript binding', () => {
+  const original = agentRow({ status: 'success', result: { isError: false, content: 'Done', diff: null, agentId: 'a' } })
+  const resume = agentRow({ toolName: 'ResumeAgent', toolUseId: 'resume-new', input: { agentId: 'a' } })
+  const finishedFacts = {
+    workers: [worker({ status: 'completed' })],
+    tasks: { items: [task({ status: 'completed', endTime: 900 })], subagents: [{
+      toolUseId: 'launch-a', agentId: 'a', agentName: 'Ada', agentType: 'Explore',
+      isSidechain: true as const, spawnedAt: 100, isBackgrounded: true,
+    }] },
+    transcriptRows: [original],
+  }
+  const finished = view(createSubagentDockState(), finishedFacts)
+  const cardFirst = view(finished.state, { ...finishedFacts, transcriptRows: [original, resume] })
+  const resumedFacts = {
+    workers: [worker({ isBackgrounded: true })],
+    tasks: { items: [task({ resumedAt: 2000, isBackgrounded: true })], subagents: [{
+      ...finishedFacts.tasks.subagents[0]!, toolUseId: 'resume-new', spawnedAt: 2000,
+    }] },
+    transcriptRows: [original, resume], nowMs: 2100,
+  }
+  const resumed = view(cardFirst.state, resumedFacts)
+  expect(resumed.active[0]).toMatchObject({ state: 'resumed', runKey: 'resume-new', toolUseId: 'resume-new' })
+  const repeated = view(resumed.state, { ...resumedFacts, nowMs: 2200 })
+  expect(repeated.active[0]).toMatchObject({ state: 'resumed', runKey: 'resume-new', toolUseId: 'resume-new' })
+  const stuck = { ...resumed.state, entries: {
+    ...resumed.state.entries,
+    a: { ...resumed.state.entries.a!, runKey: 'resume:2000' },
+  } }
+  const recovered = view(stuck, { ...resumedFacts, nowMs: 2300 })
+  expect(recovered.active[0]).toMatchObject({ state: 'resumed', runKey: 'resume-new', toolUseId: 'resume-new' })
+})
+
 test('an exhausted account failover never claims a successful move or a held lease', () => {
   const failedLease: LeaseSnapshot = { ...leases, owners: [{ ...leases.owners[0]!, state: 'failed' }] }
   const result = view(createSubagentDockState(), { workers: [worker({ isBackgrounded: true })], leases: failedLease })
