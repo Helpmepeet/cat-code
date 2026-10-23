@@ -41,6 +41,7 @@ html[data-appearance=light] .usage-analytics-details { --uad-shadow: 0 1px 2px r
 .usage-analytics-details .uad-cache-grid > .uad-card:last-child { grid-column: span 4; }
 .usage-analytics-details .uad-reliability-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 14px; }
 .usage-analytics-details .uad-reliability-grid > .uad-card { grid-column: span 6; }
+.usage-analytics-details .uad-reliability-grid > .uad-tools-card { align-self: start; }
 .usage-analytics-details .uad-reliability-grid > .uad-build-card { grid-column: span 7; }
 .usage-analytics-details .uad-reliability-grid > .uad-auto-card { grid-column: span 5; }
 .usage-analytics-details .uad-chart { width: 100%; height: auto; display: block; overflow: visible; }

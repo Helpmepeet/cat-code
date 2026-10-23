@@ -145,6 +145,45 @@ test('reliability routes tool, route and build selections through parent callbac
     expect(tree.container.textContent).toContain('Model latency is unavailable.');
     expect(tree.container.querySelector('.uad-tools-head')?.textContent).toBe('ToolResultsErrors per dayError rate');
 });
+test('Tools fits its rows independently of the model card and identifies grouped tool counts', async () => {
+    const { summary } = await fixture();
+    summary.tools.push({ id: 'other', label: 'Other', kind: 'other', requests: 900, results: 900, errors: 9 });
+    summary.detail = { state: 'grouped', omittedTools: 12, omittedModels: 0 };
+    const styles = document.createElement('style');
+    styles.textContent = readFileSync(new URL('./usageAnalyticsDetails.css', import.meta.url), 'utf8');
+    document.head.append(styles);
+    try {
+        const selected: string[] = [];
+        const props = { summary, onSelectTool: (id: string) => selected.push(id), onSelectRoute: () => {}, onSelectBuild: () => {} };
+        const tree = await harness.mount(<UsageAnalyticsReliability {...props} />);
+        const card = tree.container.querySelector('.uad-tools-card')!;
+        expect(getComputedStyle(card).alignSelf).toBe('start');
+        const names = card.querySelectorAll('.uad-tool-name');
+        expect([...names].map(name => name.textContent)).toEqual(['Bash', 'Other (12 tools)']);
+        expect(names[1]!.getAttribute('title')).toContain('Named tools prioritize errors, then usage.');
+        await act(async () => card.querySelectorAll('button')[1]!.click());
+        expect(selected).toEqual(['other']);
+        summary.detail.omittedTools = 1;
+        await tree.render(<UsageAnalyticsReliability {...props} selectedToolId="other" />);
+        expect(card.querySelectorAll('button')[1]!.getAttribute('aria-pressed')).toBe('true');
+        expect(card.textContent).toContain('Other (1 tool)');
+    } finally {
+        styles.remove();
+    }
+});
+test('Tools displays every supplied named tool without inventing a grouped row', async () => {
+    const { summary } = await fixture();
+    summary.tools = Array.from({ length: 10 }, (_, i) => ({ id: `tool-${i}`, label: `Tool ${i}`, kind: 'named', requests: 10 - i, results: 10 - i, errors: 0 }));
+    const props = { summary, onSelectTool: () => {}, onSelectRoute: () => {}, onSelectBuild: () => {} };
+    const tree = await harness.mount(<UsageAnalyticsReliability {...props} />);
+    const card = tree.container.querySelector('.uad-tools-card')!;
+    expect(card.querySelectorAll('.uad-tools li')).toHaveLength(10);
+    expect(card.textContent).not.toContain('Other');
+    summary.tools = [];
+    await tree.render(<UsageAnalyticsReliability {...props} />);
+    expect(card.querySelectorAll('.uad-tools li')).toHaveLength(0);
+    expect(card.textContent).toContain('No tool observations.');
+});
 test('model outcomes show composition shares and route hover preserves unknown semantics', async () => {
     const { summary } = await fixture();
     summary.timing.models.state = 'available';

@@ -206,6 +206,11 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         return false;
     };
     for (const tier of detailTiers) if (fit(tier, tier)) return snapshot;
+    // Spend optional contributor and build detail before named tool identities.
+    for (const [recentBuilds, allBuilds] of [[1, 1], [1, 0], [0, 1], [0, 0]] as const) {
+        const recent = { models: 8, tools: 10, contributors: 0, builds: recentBuilds, timeline: 0 };
+        if (fit(recent, { models: 8, tools: 10, builds: allBuilds })) return snapshot;
+    }
     const allTiers = [
         { models: 8, tools: 10, builds: 1 },
         { models: 8, tools: 10, builds: 0 },

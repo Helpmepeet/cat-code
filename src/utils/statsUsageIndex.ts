@@ -25,7 +25,7 @@ const SCRATCH_IDENTITIES = 'CREATE TABLE identities(kind TEXT NOT NULL, key TEXT
 const SCRATCH_TIMINGS = 'CREATE TABLE timings(seq INTEGER PRIMARY KEY, kind TEXT NOT NULL, key TEXT NOT NULL, started REAL NOT NULL, call TEXT NOT NULL, value TEXT NOT NULL, UNIQUE(kind,key));';
 const writerLockOptions = { realpath: false, stale: 180000, update: 30000, retries: 0 };
 // Fitting and contributor metadata changes must replay even unchanged indexed events.
-const SAVED_USAGE_FITTING_VERSION = 2;
+const SAVED_USAGE_FITTING_VERSION = 3;
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Accounting fields only; Skill identifiers are allowlisted, never arguments or bodies. */

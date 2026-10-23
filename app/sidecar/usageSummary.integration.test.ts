@@ -319,13 +319,13 @@ test('ordinary untimed history keeps named models and tools through the producti
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
-test('many daily build markers fall back to exact omitted totals within the envelope', async () => {
+test.each([30, 180])('%i days of build markers trade optional detail before tool names within the envelope', async (days) => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-build-fallback-'));
     try {
         const path = join(dir, 'builds.jsonl');
         const rows = [];
-        for (let day = 0; day < 180; day++) for (let tool = 0; tool < 10; tool++) for (let build = 0; build < 10; build++) {
-            const timestamp = new Date(Date.UTC(2026, 2, 18 + day, 10)).toISOString();
+        for (let day = 0; day < days; day++) for (let tool = 0; tool < 10; tool++) for (let build = 0; build < 10; build++) {
+            const timestamp = new Date(Date.UTC(2026, 7, 15 - (days - 30) + day, 10)).toISOString();
             const key = `${day}-${tool}-${build}`;
             rows.push({
                 type: 'assistant', sessionId: 'session', uuid: key, timestamp,
@@ -343,12 +343,26 @@ test('many daily build markers fall back to exact omitted totals within the enve
         };
         expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })).toBeNull();
 
+        if (days === 30) {
+            const alternative = structuredClone(snapshot);
+            for (const key of ['7d', '30d', 'all'] as const) {
+                alternative.ranges[key] = groupUsageSummary(raw[key], 8, 10, 0, 0, 0, 5);
+            }
+            expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: alternative })?.type).toBe('usage');
+        }
         snapshot.ranges = raw;
         fitUsageDashboardSnapshot(snapshot);
         const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
         expect(output?.type).toBe('usage');
         expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
-        expect(snapshot.ranges.all.requests).toBe(18_000);
+        expect(snapshot.ranges.all.requests).toBe(days * 100);
+        for (const key of days === 30 ? ['7d', '30d', 'all'] as const : []) {
+            const range = snapshot.ranges[key];
+            expect(range.tools.filter(tool => tool.kind === 'named')).toHaveLength(10);
+            expect(range.models.filter(model => model.kind === 'named').map(model => model.label)).toEqual(['model']);
+            expect(range.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(range.requests);
+            expect(range.rankedSessions.items).toHaveLength(raw[key].rankedSessions.items.length);
+        }
         for (const day of snapshot.ranges.all.days) {
             expect(day.tools.reduce((sum, tool) => sum + tool.requests, 0)).toBe(day.requests);
             const attributed = day.tools.reduce((sum, tool) => sum + (tool.builds?.items.reduce((count, build) => count + build.requests, 0) ?? 0), 0);
