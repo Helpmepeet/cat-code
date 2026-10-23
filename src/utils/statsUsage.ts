@@ -35,6 +35,7 @@ export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
 // Leave room for named tool outcomes and build observations in all three ranges.
 const ALL_DETAIL_BUCKETS = Math.min(MAX_USAGE_ALL_BUCKETS, 60);
+const isCompactionSource = (file: string) => file.includes(`${sep}subagents${sep}`) && /^agent-acompact-[0-9a-f]{16}\.jsonl$/.test(basename(file));
 /** Collector or index resource guard; storage faults use `UsageFailure` directly. */
 export class UsageResourceError extends UsageFailure {
     constructor(message: string, detail: UsageFailureDetail = {}, phase: UsageFailurePhase = 'replay') {
@@ -662,7 +663,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!record(row) || !['assistant', 'user', 'attachment', 'system'].includes(String(row.type)))
             return;
         const isSubagent = file.includes(`${sep}subagents${sep}`);
-        const tokenSource = !isSubagent ? 'chat' : /^agent-acompact-[0-9a-f]{16}\.jsonl$/.test(basename(file)) ? 'compaction' : 'subagents';
+        const tokenSource = !isSubagent ? 'chat' : isCompactionSource(file) ? 'compaction' : 'subagents';
         if (!isSubagent && row.isSidechain === true)
             return;
         const activityAt = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
@@ -1244,7 +1245,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             daily.total = plus(daily.total, total(delta));
         }
     };
-    for (const file of [...files].sort()) {
+    // Originals own their activity sequences; copied compaction prefixes must
+    // not claim an execution before its later source-local followups are read.
+    const orderedFiles = [...files].sort((a, b) =>
+        Number(isCompactionSource(a)) - Number(isCompactionSource(b)) || (a < b ? -1 : a > b ? 1 : 0));
+    for (const file of orderedFiles) {
         options.signal?.throwIfAborted();
         try {
             const q = await (options.readRecords ?? readStatsRecords)(file, item => readOne(file, item), { signal: options.signal, deadline });

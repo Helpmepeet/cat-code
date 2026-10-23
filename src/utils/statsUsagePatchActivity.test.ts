@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { observedPatchFollowups, type PatchActivityCall } from './statsUsagePatchActivity.js';
 import { collectRetainedUsage } from './statsUsage.js';
-import { collectIndexedUsage } from './statsUsageIndex.js';
+import { collectIndexedUsage, emptyUsageIndexMetrics, readSavedUsage } from './statsUsageIndex.js';
 import { fitUsageDashboardSnapshot, groupUsageSummary } from '../../app/sidecar/usageSummary.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 import { MAX_USAGE_RECORD_BYTES } from '../../app/shared/usageDashboard.js';
@@ -29,6 +29,63 @@ test('switches and unavailable outcomes never imply that the intended edit succe
     expect(observedPatchFollowups([call('missing', 10)])).toEqual([]);
     expect(observedPatchFollowups([call('first', 10, true), call('other-agent', 20, false, 'agent-b')])[0]!.state).toBe('unresolved');
     expect(observedPatchFollowups([call('first', 10, true), call('new-prompt', 20, undefined, 'agent-a', 'boundary'), call('new-task', 30, false)])[0]).toEqual({ origin: 'first', retryCalls: 0, repeatErrors: 0, state: 'unresolved' });
+});
+
+test.each([
+    ['apply_patch', 'retry-result-success', 1],
+    ['Edit', 'edit-switch', 0],
+    ['Write', 'write-switch', 0],
+    ['Bash', 'shell-switch-unknown', 0],
+] as const)('copied compaction context preserves original-agent %s followups', async (name, state, retryCalls) => {
+    const root = await mkdtemp(join(tmpdir(), 'usage-copied-followups-'));
+    try {
+        const agentDir = join(root, 'session', 'subagents');
+        await mkdir(agentDir, { recursive: true });
+        const pair = (id: string, second: number, tool: string, error: boolean) => [
+            { type: 'assistant', sessionId: 'session', uuid: id, timestamp: `2026-09-12T10:00:0${second}.000Z`,
+                message: { model: 'model', content: [{ type: 'tool_use', id, name: tool }] } },
+            { type: 'user', sessionId: 'session', uuid: `${id}-result`, timestamp: `2026-09-12T10:00:0${second + 1}.000Z`,
+                message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: error }] } },
+        ];
+        const failed = pair('failed', 1, 'apply_patch', true);
+        const original = [...failed, ...pair('later', 3, name, false)];
+        const compact = join(agentDir, 'agent-acompact-0123456789abcdef.jsonl');
+        const fullCopy = join(agentDir, 'agent-acompact-fedcba9876543210.jsonl');
+        await writeFile(compact, failed.map(row => JSON.stringify(row)).join('\n'));
+        await writeFile(fullCopy, original.map(row => JSON.stringify(row)).join('\n'));
+        // Exercise original-agent filenames on either side of compaction copies.
+        for (const suffix of ['fedcba9876543210', '0123456789abcdef']) {
+            const agent = join(agentDir, `agent-a${suffix}.jsonl`);
+            await writeFile(agent, original.map(row => JSON.stringify(row)).join('\n'));
+            const asOf = '2026-09-13T12:00:00.000Z';
+            const baseline = await collectRetainedUsage([agent], asOf, { timezone: 'UTC' });
+            const files = [compact, agent, fullCopy];
+            const direct = await collectRetainedUsage(files, asOf, { timezone: 'UTC' });
+            const index = join(root, `${suffix}.sqlite`);
+            const indexed = await collectIndexedUsage(files, asOf, { path: index, timezone: 'UTC', deadline: Date.now() + 60000 });
+            expect(indexed.ranges).toEqual(direct.ranges);
+            for (const range of ['7d', '30d', 'all'] as const) {
+                expect(direct.ranges[range].tools).toEqual(baseline.ranges[range].tools);
+                const patch = direct.ranges[range].tools.find(tool => tool.label === 'apply_patch')!;
+                expect(patch.patchFollowups).toEqual({ episodes: 1, retryCalls, repeatErrors: 0, states: { [state]: 1 } });
+                expect(patch.patchModels![0]!.patchFollowups).toEqual(patch.patchFollowups);
+                expect(direct.ranges[range].rankedSessions.items[0]!.tools.find(tool => tool.label === 'apply_patch')!.patchFollowups).toEqual(patch.patchFollowups);
+            }
+            const db = new (await import('bun:sqlite')).Database(index);
+            try {
+                const saved = JSON.parse((db.query('SELECT value FROM snapshot WHERE id=1').get() as { value: string }).value);
+                saved.patchActivityVersion = 1;
+                db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(saved));
+            } finally { db.close(); }
+            expect(readSavedUsage(index)).toBeNull();
+            const metrics = emptyUsageIndexMetrics();
+            const replayed = await collectIndexedUsage(files, asOf, { path: index, timezone: 'UTC', deadline: Date.now() + 60000, metrics,
+                onReadSource() { throw new Error('unchanged source read'); } });
+            expect(metrics.rowsReplayed).toBeGreaterThan(0);
+            expect(replayed.ranges).toEqual(direct.ranges);
+            expect(readSavedUsage(index)).toEqual(replayed);
+        }
+    } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('many patch models and root sessions fit the bounded envelope with reconciled model totals', async () => {
