@@ -31,6 +31,11 @@ globalThis.fetch = (() => { throw new Error('Network forbidden in inline fixture
 let convert: ((body: Record<string, unknown>) => { codexBody: unknown }) | undefined
 let ordinaryTurn = false
 let ordinaryToolSent = false
+let requestStarted!: () => void
+const firstRequest = new Promise<void>(resolve => { requestStarted = resolve })
+let releaseGeneration!: () => void
+const generationBoundary = new Promise<void>(resolve => { releaseGeneration = resolve })
+const overlap = Boolean((input as typeof input & { overlap?: boolean }).overlap)
 mock.module('../services/api/client.js', () => ({
   CLIENT_REQUEST_ID_HEADER: 'x-client-request-id',
   resolveCodexOAuthTokensForLeaseOwner: async () => { throw new Error('OAuth forbidden') },
@@ -48,8 +53,9 @@ mock.module('../services/api/client.js', () => ({
       })
     }
     const producingSource = input.multiBlock && evidence.requests.length === 0
-    if (evidence.requests.length >= (input.autoOrigin ? 3 : input.multiBlock || input.secondCommand || input.queued ? 2 : 1)) throw new Error('Duplicate model request')
+    if (evidence.requests.length >= (input.autoOrigin ? 3 : overlap || input.multiBlock || input.secondCommand || input.queued ? 2 : 1)) throw new Error('Duplicate model request')
     evidence.requests.push(JSON.parse(JSON.stringify(body)))
+    requestStarted()
     if (convert) evidence.codexRequests.push(convert(body).codexBody)
     const ordinaryTool = input.autoOrigin && ordinaryTurn && !ordinaryToolSent
     if (ordinaryTool) ordinaryToolSent = true
@@ -70,7 +76,10 @@ mock.module('../services/api/client.js', () => ({
       { type: 'message_delta', delta: { stop_reason: ordinaryTool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 12 } },
       { type: 'message_stop' },
     ]
-    const stream = Object.assign((async function* () { yield* events })(), { controller: new AbortController() })
+    const stream = Object.assign((async function* () {
+      if (overlap && evidence.requests.length === 1) await generationBoundary
+      yield* events
+    })(), { controller: new AbortController() })
     return { withResponse: async () => ({ data: stream, request_id: 'inline-request', response: new Response('', { status: 200 }) }) }
   } } } }),
 }))
@@ -160,25 +169,53 @@ try {
       if (!snapshot) throw new Error('Missing inline attach snapshot')
       send({ type: 'inline-command.start', requestId: 'deliberate-run', generation: snapshot.generation, source })
       await waitFor(async () => {
-        try { return await readFile('counter', 'utf8') === 'executed' && controller.isTurnActive() }
+        try { return await readFile('counter', 'utf8') === 'executed' && controller.isInlineCommandActive() }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
       })
       send({ type: 'app.submit', requestId: 'queued-human', prompt: 'QUEUED-HUMAN-PROMPT' })
       ;(evidence as any).queueDuringOperation = JSON.parse(JSON.stringify(getCommandQueueSnapshot()))
       ;(evidence as any).requestsWhenQueued = evidence.requests.length
-      await waitFor(() => evidence.requests.length === 1 && !controller.isTurnActive() && getCommandQueueSnapshot().length === 0)
+      await waitFor(() => evidence.requests.length === 1 && !controller.isTurnActive() && !controller.isInlineCommandActive() && getCommandQueueSnapshot().length === 0)
       ;(evidence as any).serverFrames = received
       ;(evidence as any).queueAfterOperation = getCommandQueueSnapshot()
     } finally { server.close() }
   } else {
-    await controller.submitInlineCommand(source, run => {
+    const generating = overlap ? controller.submit('Continue generating while I run an older block.') : undefined
+    if (overlap) await firstRequest
+    let commandFinished!: () => void
+    const finished = new Promise<void>(resolve => { commandFinished = resolve })
+    const executing = controller.submitInlineCommand(source, run => {
       evidence.runs.push(run)
+      if (run.status !== 'running') commandFinished()
       if (run.status === 'running' && run.output.includes('BEFORE-STOP')) {
         if (input.agentStop) controller.abort('Agent stopped')
         else if (input.stop) controller.stopInlineCommand(run.runId)
       }
     })
-    if (input.secondCommand) await controller.submitInlineCommand({ ...source, fenceOrdinal: 1 }, run => evidence.runs.push(run))
+    if (overlap) {
+      await finished
+      ;(evidence as any).bufferedWhileGenerating = controller.isTurnActive() && controller.isInlineCommandActive()
+      ;(evidence as any).resultsBeforeBoundary = evidence.frames.filter(frame =>
+        frame.type === 'user' && typeof frame.message.content === 'string' &&
+        frame.message.content.startsWith('<cat-code-inline-command-result>')).length
+      ;(evidence as any).persistedBeforeBoundary = JSON.stringify(retainedMessages).includes('<cat-code-inline-command-result>')
+      let secondExecution: Promise<void> | undefined
+      if (input.secondCommand) {
+        let secondFinished!: () => void
+        const completion = new Promise<void>(resolve => { secondFinished = resolve })
+        secondExecution = controller.submitInlineCommand({ ...source, fenceOrdinal: 1 }, run => {
+          evidence.runs.push(run)
+          if (run.status !== 'running') secondFinished()
+        })
+        await completion
+        ;(evidence as any).secondBufferedWhileGenerating = controller.isTurnActive() && controller.isInlineCommandActive()
+      }
+      releaseGeneration()
+      await generating
+      await secondExecution
+    }
+    await executing
+    if (input.secondCommand && !overlap) await controller.submitInlineCommand({ ...source, fenceOrdinal: 1 }, run => evidence.runs.push(run))
     ;(evidence as any).requestsAfterRun = evidence.requests.length
     if (input.explain) {
       const selected = session.getInlineCommandRuns!().at(-1)!

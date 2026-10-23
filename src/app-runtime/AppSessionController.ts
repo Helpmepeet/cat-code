@@ -43,6 +43,10 @@ export type AppSessionSubmitOptions = {
 export type AppSessionPrompt = string | ContentBlockParam[]
 
 export type AppSessionControllerAdapter = {
+  runInlineCommand?: (args: {
+    operation: InlineCommandOperation
+    onPermissionRequest: (request: AppPermissionRequest, signal?: AbortSignal) => Promise<AppPermissionResponse>
+  }) => AsyncIterable<SDKMessage>
   runTurn(args: {
     prompt: AppSessionPrompt
     options?: {
@@ -100,7 +104,8 @@ export class AppSessionController {
   private goalSnapshot: AppGoalSnapshot = null
   private abortController: AbortController | null = null
   private activeTurn = false
-  private inlineCommand: { runId: string; controller: AbortController } | null = null
+  private inlineCommand: { runId: string; controller: AbortController; sessionController: AbortController } | null = null
+  private readonly inlineSettlements = new Set<{ sessionController: AbortController }>()
   private handoffExecution: HandoffExecution | null = null
   private handoffSettlement: Promise<void> | null = null
   private initialization: Promise<void> = Promise.resolve()
@@ -138,6 +143,12 @@ export class AppSessionController {
     return this.activeTurn
   }
 
+  isInlineCommandActive(): boolean { return this.inlineSettlements.size > 0 }
+  canStartInlineCommand(): boolean {
+    return !this.initializing && !this.inlineCommand && this.inlineSettlements.size < 8 && !this.handoffReservation &&
+      !this.requiresUserReconciliation && !this.handoffSettlement
+  }
+
   getHandoffReservation(): string | null { return this.handoffReservation }
   requiresHandoffReconciliation(): boolean { return this.requiresUserReconciliation }
   canStartAutomaticTurn(): boolean { return !this.initializing && !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation }
@@ -154,6 +165,7 @@ export class AppSessionController {
   waitForInitialization(): Promise<void> { return this.initialization }
 
   async configureWorkspaceHandoff(configuration: WorkspaceHandoffConfiguration): Promise<void> {
+    if (this.isInlineCommandActive()) throw new Error('An inline command is still active')
     if (this.activeTurn || (this.handoffReservation && this.handoffReservation !== configuration.identity.operationId)) throw new Error('Workspace handoff ownership changed')
     const previous = this.getWorkspaceHandoffSnapshot()
     if (previous && previous.record.kind !== 'absent' &&
@@ -247,6 +259,7 @@ export class AppSessionController {
   }
 
   reserveHandoff(operationId: string): void {
+    if (this.isInlineCommandActive()) throw new Error('An inline command is still active')
     if (!operationId || !this.activeTurn || this.handoffReservation || this.requiresUserReconciliation || this.pendingPermissionRequests.size) {
       throw new Error('Session cannot reserve a workspace handoff')
     }
@@ -264,6 +277,7 @@ export class AppSessionController {
   }
 
   restoreHandoffReservation(operationId: string): void {
+    if (this.isInlineCommandActive()) throw new Error('An inline command is still active')
     if (!operationId || this.activeTurn || (this.handoffReservation && this.handoffReservation !== operationId)) {
       throw new Error('Session cannot restore a workspace handoff reservation')
     }
@@ -297,6 +311,7 @@ export class AppSessionController {
   }
 
   restoreHandoffReconciliation(): void {
+    if (this.isInlineCommandActive()) throw new Error('An inline command is still active')
     if (this.activeTurn) throw new Error('Cannot reconcile an active turn')
     this.requiresUserReconciliation = true
     this.announceHandoffState()
@@ -305,10 +320,11 @@ export class AppSessionController {
   private announceHandoffState(): void { for (const listener of this.handoffListeners) listener() }
   private assertMutable(): void {
     if (this.handoffReservation || this.requiresUserReconciliation) throw new Error('Conversation is reserved for a workspace handoff')
+    if (this.activeTurn || this.isInlineCommandActive()) throw new Error('Conversation work is still active')
   }
 
   waitUntilIdle(): Promise<void> {
-    if (!this.activeTurn) return Promise.resolve()
+    if (!this.activeTurn && !this.isInlineCommandActive()) return Promise.resolve()
     return new Promise(resolve => {
       this.idleWaiters.add(resolve)
     })
@@ -340,6 +356,9 @@ export class AppSessionController {
     reason = 'Session aborted',
     adapterIntent?: AppSessionAbortIntent,
   ): void {
+    if (adapterIntent === undefined) {
+      for (const operation of this.inlineSettlements) operation.sessionController.abort(reason)
+    }
     if (!this.activeTurn && this.pendingPermissionRequests.size === 0) {
       return
     }
@@ -412,25 +431,36 @@ export class AppSessionController {
   }
 
   async submitInlineCommand(source: InlineCommandSource, onProgress: (run: InlineCommandRun) => void): Promise<void> {
-    // No await before runSubmit claims the same admission/permission owner as a turn.
-    if (!this.canStartAutomaticTurn() || this.pendingPermissionRequests.size) throw new Error('Session is busy')
-    const operation = { runId: randomUUID(), controller: new AbortController() }
+    if (!this.canStartInlineCommand()) throw new Error('Session is busy')
+    if (!this.adapter.runInlineCommand) throw new Error('Inline command execution is unavailable')
+    const operation = { runId: randomUUID(), controller: new AbortController(), sessionController: new AbortController() }
     this.inlineCommand = operation
+    this.inlineSettlements.add(operation)
     let latest: InlineCommandRun | undefined
     try {
-      await this.runSubmit('', { inlineCommand: {
+      await withLidWorkRun(async () => {
+        const messages = this.adapter.runInlineCommand!({ operation: {
         source, runId: operation.runId, signal: operation.controller.signal,
+        sessionSignal: operation.sessionController.signal,
         onProgress: run => {
           latest = run
           if (run.status !== 'running' && this.inlineCommand === operation) this.inlineCommand = null
           onProgress(run)
         },
-      } })
+        }, onPermissionRequest: (request, signal) =>
+          this.waitForPermissionResponse(request, AbortSignal.any([
+            ...(signal ? [signal] : []), operation.controller.signal, operation.sessionController.signal,
+          ])),
+        })
+        for await (const message of messages) this.emit(createMessageEvent(message))
+      })
     } catch (error) {
       if (latest) onProgress({ ...latest, error: `Could not finish command: ${error instanceof Error ? error.message : String(error)}` })
       throw error
     } finally {
       if (this.inlineCommand === operation) this.inlineCommand = null
+      this.inlineSettlements.delete(operation)
+      this.resolveIdleWaiters()
     }
   }
 
@@ -589,7 +619,11 @@ export class AppSessionController {
     if (this.activeTurn === activeTurn) return
     this.activeTurn = activeTurn
     this.emit(createTurnStatusEvent(activeTurn))
-    if (!activeTurn) {
+    this.resolveIdleWaiters()
+  }
+
+  private resolveIdleWaiters(): void {
+    if (!this.activeTurn && !this.isInlineCommandActive()) {
       for (const resolve of this.idleWaiters) resolve()
       this.idleWaiters.clear()
     }

@@ -322,6 +322,17 @@ export class QueryEngine {
   // many turns in SDK mode.
   private discoveredSkillNames = new Set<string>()
   private loadedNestedMemoryPaths = new Set<string>()
+  private transcriptLane: Promise<void> = Promise.resolve()
+  private inlineExecutionOwner: InlineCommandOperation | null = null
+  private inlineSettlements = 0
+
+  private async acquireTranscriptLane(): Promise<() => void> {
+    const previous = this.transcriptLane
+    let release!: () => void
+    this.transcriptLane = new Promise<void>(resolve => { release = resolve })
+    await previous
+    return release
+  }
 
   constructor(config: QueryEngineConfig) {
     this.config = config
@@ -332,8 +343,79 @@ export class QueryEngine {
     this.totalUsage = EMPTY_USAGE
   }
 
-  executeInlineCommand(operation: InlineCommandOperation): AsyncGenerator<SDKMessage, void, unknown> {
-    return this.submitMessage('', { inlineCommand: operation })
+  async *executeInlineCommand(operation: InlineCommandOperation): AsyncGenerator<SDKMessage, void, unknown> {
+    if (this.inlineExecutionOwner || this.inlineSettlements >= 8) throw new Error('An inline command is still active')
+    this.inlineExecutionOwner = operation
+    this.inlineSettlements++
+    let settlementLane: Promise<() => void> | undefined
+    try {
+      const command = resolveInlineCommandSource(this.mutableMessages, getSessionId(), operation.source)
+      const config = this.config
+      const runtime = resolveMcpRuntimeInputs(config)
+      const context: ToolUseContext = {
+        messages: [...this.mutableMessages],
+        options: {
+          commands: runtime.commands, tools: runtime.tools, debug: false,
+          verbose: config.verbose ?? false,
+          mainLoopModel: config.userSpecifiedModel ? parseUserSpecifiedModel(config.userSpecifiedModel) : getMainLoopModel(),
+          thinkingConfig: config.thinkingConfig ?? { type: 'disabled' },
+          mcpClients: runtime.mcpClients, mcpResources: runtime.mcpResources,
+          ...(config.getMcpRuntimeSnapshot ? {
+            refreshMcpRuntime: () => resolveMcpRuntimeInputs(config),
+            getMcpRuntimeSnapshot: config.getMcpRuntimeSnapshot,
+          } : {}),
+          isNonInteractiveSession: true,
+          customSystemPrompt: config.customSystemPrompt, appendSystemPrompt: config.appendSystemPrompt,
+          agentDefinitions: { activeAgents: config.agents ?? [], allAgents: [] },
+          maxBudgetUsd: config.maxBudgetUsd,
+        },
+        getAppState: config.getAppState, setAppState: config.setAppState,
+        // The operation signal is wired by runInlineCommand, never the main turn's signal.
+        abortController: new AbortController(),
+        readFileState: this.readFileState,
+        nestedMemoryAttachmentTriggers: new Set(),
+        loadedNestedMemoryPaths: new Set(this.loadedNestedMemoryPaths),
+        dynamicSkillDirTriggers: new Set(), discoveredSkillNames: new Set(),
+        setInProgressToolUseIDs: () => {}, setResponseLength: () => {},
+        updateFileHistoryState: updater => config.setAppState(previous => ({
+          ...previous, fileHistory: updater(previous.fileHistory),
+        })),
+        updateAttributionState: updater => config.setAppState(previous => ({
+          ...previous, attribution: updater(previous.attribution),
+        })),
+        handleElicitation: config.handleElicitation,
+        publishSubagentFrame: config.publishSubagentFrame,
+      }
+      const execution = await runInlineCommand({
+        ...operation,
+        onProgress: run => {
+          if (run.status !== 'running') {
+            settlementLane ??= this.acquireTranscriptLane()
+            if (this.inlineExecutionOwner === operation) this.inlineExecutionOwner = null
+          }
+          operation.onProgress(run)
+        },
+      }, command, config.cwd, context, operation.canUseTool ?? config.canUseTool)
+      // Reserve the next boundary only once execution has a result. Ordinary
+      // turns remain free to run while the shell and its permission request wait.
+      await (settlementLane ??= this.acquireTranscriptLane())
+      const result = createUserMessage({ content: encodeInlineCommandResult(execution.run), isMeta: true })
+      const messages = [...this.mutableMessages, result, ...execution.attachments]
+      if (!isSessionPersistenceDisabled()) {
+        await (config.recordTranscript ?? recordTranscript)(messages)
+        await (config.flushCurrentTranscriptDurably ?? flushCurrentTranscriptDurably)()
+      }
+      this.mutableMessages = messages
+      yield {
+        type: 'user', message: result.message, session_id: getSessionId(),
+        parent_tool_use_id: null, uuid: result.uuid, timestamp: result.timestamp,
+        isReplay: true, isSynthetic: true,
+      } as SDKUserMessageReplay
+    } finally {
+      if (settlementLane) (await settlementLane)()
+      if (this.inlineExecutionOwner === operation) this.inlineExecutionOwner = null
+      this.inlineSettlements--
+    }
   }
 
   getInlineCommandRuns(): InlineCommandRun[] {
@@ -358,6 +440,13 @@ export class QueryEngine {
       handoffReconciliationAdmission?: true
     } & HandoffTurnLifecycleOptions,
   ): AsyncGenerator<SDKMessage, void, unknown> {
+    if (options?.inlineCommand) {
+      yield* this.executeInlineCommand(options.inlineCommand)
+      return
+    }
+    const releaseTranscriptLane = await this.acquireTranscriptLane()
+    const pendingTranscriptWrites: Promise<unknown>[] = []
+    try {
     if (options?.handoffReconciliationAdmission &&
       (options.isMeta || options.origin || options.handoffContinuation)) {
       throw new Error('Workspace reconciliation requires genuine user input')
@@ -423,7 +512,6 @@ export class QueryEngine {
     const startTime = Date.now()
     const turnHandoff = new TurnHandoff()
     let transcriptWriteFailure: unknown = null
-    const pendingTranscriptWrites: Promise<unknown>[] = []
     const recordTranscriptAsync = (snapshot: Message[]) => {
       // Snapshot the ordering, but keep message objects live until the writer's
       // lazy serialization sees the provider's usage/stop-reason mutations.
@@ -590,19 +678,6 @@ export class QueryEngine {
       getTurnStartRuntimeAttachments,
     }
 
-    let inlineResult: UserMessage | undefined
-    let inlineExecution: Awaited<ReturnType<typeof runInlineCommand>> | undefined
-    if (options?.inlineCommand) {
-      const command = resolveInlineCommandSource(this.mutableMessages, getSessionId(), options.inlineCommand.source)
-      inlineExecution = await runInlineCommand(options.inlineCommand, command, cwd, processUserInputContext, wrappedCanUseTool)
-      if (inlineExecution.context) processUserInputContext = {
-        ...processUserInputContext,
-        ...inlineExecution.context,
-        options: { ...processUserInputContext.options, ...inlineExecution.context.options },
-      }
-      inlineResult = createUserMessage({ content: encodeInlineCommandResult(inlineExecution.run), isMeta: true })
-    }
-
     let systemPrompt = buildEffectiveSystemPrompt({
       mainThreadAgentDefinition: undefined,
       toolUseContext: processUserInputContext,
@@ -648,8 +723,7 @@ export class QueryEngine {
       allowedTools,
       model: modelFromUserInput,
       resultText,
-    } = inlineResult ? { messages: [inlineResult, ...inlineExecution!.attachments], shouldQuery: inlineExecution!.shouldQuery, allowedTools: undefined, model: undefined, resultText: undefined }
-      : savedReconciliationInput ? { messages: [savedReconciliationInput], shouldQuery: true, allowedTools: undefined, model: undefined, resultText: undefined } : await processUserInput({
+    } = savedReconciliationInput ? { messages: [savedReconciliationInput], shouldQuery: true, allowedTools: undefined, model: undefined, resultText: undefined } : await processUserInput({
       input: prompt,
       mode: 'prompt',
       setToolJSX: () => {},
@@ -774,15 +848,6 @@ export class QueryEngine {
       await flushCurrentTranscriptDurablyFn(deferredAttemptUuid)
     }
 
-    if (inlineResult) {
-      await settleTranscriptWrites()
-      yield {
-        type: 'user', message: inlineResult.message, session_id: getSessionId(),
-        parent_tool_use_id: null, uuid: inlineResult.uuid, timestamp: inlineResult.timestamp,
-        isReplay: true, isSynthetic: true,
-      } as SDKUserMessageReplay
-    }
-
     // Filter messages that should be acknowledged after transcript
     const replayableMessages = messagesFromUserInput.filter(
       msg =>
@@ -883,15 +948,6 @@ export class QueryEngine {
       getPostCompactRuntimeAttachments,
       getTurnStartRuntimeAttachments,
     }
-    if (inlineExecution?.context) {
-      processUserInputContext = {
-        ...processUserInputContext,
-        ...inlineExecution.context,
-        options: { ...processUserInputContext.options, ...inlineExecution.context.options },
-        messages,
-      }
-    }
-
     headlessProfilerCheckpoint('before_skills_plugins')
     // Cache-only: headless/SDK/CCR startup must not block on network for
     // ref-tracked plugins. CCR populates the cache via CLAUDE_CODE_SYNC_PLUGIN_INSTALL
@@ -926,7 +982,6 @@ export class QueryEngine {
       for (const msg of messagesFromUserInput) {
         if (
           msg.type === 'user' &&
-          msg !== inlineResult &&
           typeof msg.message.content === 'string' &&
           (msg.message.content.includes(`<${LOCAL_COMMAND_STDOUT_TAG}>`) ||
             msg.message.content.includes(`<${LOCAL_COMMAND_STDERR_TAG}>`) ||
@@ -1726,6 +1781,9 @@ export class QueryEngine {
     } finally {
       if (!executionClosed) closeExecution(providerEntered ? 'failed' : 'not_started')
     }
+    } finally {
+      try { await Promise.all(pendingTranscriptWrites) } finally { releaseTranscriptLane() }
+    }
   }
 
   interrupt(reason?: string): void {
@@ -1733,6 +1791,7 @@ export class QueryEngine {
   }
 
   continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void> } & HandoffTurnLifecycleOptions): AsyncGenerator<SDKMessage, void, unknown> {
+    if (this.inlineSettlements) throw new Error('An inline command is still active')
     if (!operationId) throw new Error('Missing handoff operation identity')
     return this.submitMessage(handoffContinuationPrompt(), {
       ...options, isMeta: true, handoffContinuation: { operationId },
@@ -1740,6 +1799,7 @@ export class QueryEngine {
   }
 
   sealResumeCheckpoint(): Promise<import('../app/shared/workspaceHandoff.js').ResumeCheckpointV1> {
+    if (this.inlineSettlements) throw new Error('An inline command is still active')
     return sealResumeCheckpoint(this.mutableMessages)
   }
 
@@ -1777,6 +1837,7 @@ export class QueryEngine {
   }
 
   async persistHandoffOutcome(operationId: string, outcome: HandoffTerminalOutcome): Promise<SDKMessage[]> {
+    if (this.inlineSettlements) throw new Error('An inline command is still active')
     if (!operationId || operationId.length > 128 || (outcome !== 'failed' && outcome !== 'cancelled' && outcome !== 'uncertain')) throw new Error('Invalid handoff outcome')
     const persisted = await findHandoffOutcomeInActiveTranscript(operationId)
     if (persisted) {
@@ -1841,6 +1902,7 @@ export class QueryEngine {
   async rewindBeforeUserMessage(
     targetUuid: string,
   ): Promise<ConversationRewindResult> {
+    if (this.inlineSettlements) throw new Error('An inline command is still active')
     const { message: prompt, index } =
       resolveSelectableUserMessageByProducerPrefix(
         this.mutableMessages,

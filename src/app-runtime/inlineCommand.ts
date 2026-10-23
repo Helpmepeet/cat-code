@@ -10,9 +10,12 @@ import { ensureToolResultsDir, getToolResultPath } from '../utils/toolResultStor
 import { boundInlineCommandText, INLINE_COMMAND_OUTPUT_LIMIT, retainInlineCommandOutput } from './inlineCommandOutput.js'
 
 export type InlineCommandOperation = {
+  /** Invocation-owned permission route; never replaces the active turn's route. */
+  canUseTool?: CanUseToolFn
   source: InlineCommandSource
   runId: string
   signal: AbortSignal
+  sessionSignal?: AbortSignal
   onProgress: (run: InlineCommandRun) => void
 }
 
@@ -64,12 +67,13 @@ export async function runInlineCommand(
   let run: InlineCommandRun = { runId: operation.runId, source: operation.source, command, cwd, startedAt,
     status: 'running', output: '', exitCode: null }
   const controller = new AbortController()
+  const sessionSignal = operation.sessionSignal ?? context.abortController.signal
   const stop = () => controller.abort(operation.signal.reason ?? 'Inline command stopped')
-  const abort = () => controller.abort(context.abortController.signal.reason ?? 'Session aborted')
+  const abort = () => controller.abort(sessionSignal.reason ?? 'Session aborted')
   operation.signal.addEventListener('abort', stop, { once: true })
-  context.abortController.signal.addEventListener('abort', abort, { once: true })
+  sessionSignal.addEventListener('abort', abort, { once: true })
   if (operation.signal.aborted) stop()
-  if (context.abortController.signal.aborted) abort()
+  if (sessionSignal.aborted) abort()
   const toolUse = { type: 'tool_use' as const, caller: { type: 'direct' as const }, id: operation.runId, name: BASH_TOOL_NAME,
     input: { command, work_lifetime: 'finite', run_in_background: false } }
   const parent = createAssistantMessage({ content: [toolUse] })
@@ -128,10 +132,10 @@ export async function runInlineCommand(
     run = { ...run, status: 'failed', error: bounded(error instanceof Error ? error.message : String(error)) }
   } finally {
     operation.signal.removeEventListener('abort', stop)
-    context.abortController.signal.removeEventListener('abort', abort)
+    sessionSignal.removeEventListener('abort', abort)
   }
   if (operation.signal.aborted) run = { ...run, status: 'stopped' }
-  else if (context.abortController.signal.aborted) run = { ...run, status: 'interrupted' }
+  else if (sessionSignal.aborted) run = { ...run, status: 'interrupted' }
   run = { ...run, durationMs: Math.max(0, Date.now() - startedAt) }
   operation.onProgress({ ...run })
   return { run, attachments, shouldQuery, context: updatedContext === context ? undefined : updatedContext }

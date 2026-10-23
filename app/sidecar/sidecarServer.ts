@@ -541,7 +541,9 @@ export class SidecarServer {
   private readonly generation: string
   private readonly controller: AppSessionController
   private readonly inlineCommands = new InlineCommandRequests()
-  private inlineCommandActive = false
+  private inlineCommandPending = 0
+  private inlineCommandRunningRequest: string | null = null
+  private get inlineCommandActive(): boolean { return this.inlineCommandPending > 0 }
   private readonly permissions: SidecarPermissionDomain | null
   private readonly settings: SidecarSettingsDomain | null
   private readonly agentConfig: SidecarAgentConfigDomain | null
@@ -1781,7 +1783,7 @@ export class SidecarServer {
       isDeliverableParentPrompt(command) || isDeliverableParentTaskNotification(command)).length
     const activeTurn = this.activeTurn || this.controller.isTurnActive() ||
       facts?.backgroundMainTurn === true
-    const pendingContinuation = this.handoffExecutionTask !== null ||
+    const pendingContinuation = this.inlineCommandActive || this.handoffExecutionTask !== null ||
       this.conversationMutationInFlight || this.inFlightDurableWrites > 0
     const available = stateAvailable
     const hasUnfinishedWork = available && (
@@ -1870,10 +1872,9 @@ export class SidecarServer {
       }
       return
     }
-    if (this.closed || this.parking || this.activeTurn || this.controller.isTurnActive() ||
-        this.conversationMutationInFlight || !this.controller.canStartAutomaticTurn() ||
-        this.inFlightDurableWrites > 0 || this.controller.getPendingPermissionRequests().length > 0 ||
-        this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification()) {
+    if (this.closed || this.parking || this.inlineCommandRunningRequest !== null ||
+        this.conversationMutationInFlight || !this.controller.canStartInlineCommand() ||
+        this.inFlightDurableWrites > 0) {
       this.sendError(connection, message.requestId, 'turn_already_running',
         'Wait for the current operation to finish before running this command.', true)
       return
@@ -1891,32 +1892,29 @@ export class SidecarServer {
       return
     }
     this.runControls?.lockProviderSwitches()
-    this.activeTurn = true
-    this.inlineCommandActive = true
-    this.beginTurnObservation()
-    let rejected = false
-    let lastOutput = ''
+    this.inlineCommandPending++
+    this.inlineCommandRunningRequest = message.requestId
     void this.controller.submitInlineCommand(message.source, run => {
-      if (run.output !== lastOutput) {
-        this.turnLastEventAtMs = Date.now()
-        lastOutput = run.output
+      if (run.status !== 'running' && this.inlineCommandRunningRequest === message.requestId) {
+        this.inlineCommandRunningRequest = null
       }
       this.inlineCommands.update(message.requestId, run)
       this.sendInlineCommands()
     }).catch(error => {
-      rejected = true
       this.inlineCommands.reject(message.requestId, error instanceof Error ? error.message : String(error))
       this.sendError(connection, message.requestId, 'internal_error',
         error instanceof Error ? error.message : String(error), false)
     }).finally(() => {
-      this.activeTurn = false
-      this.inlineCommandActive = false
-      this.endTurnObservation(rejected || this.turnResultFailed ? 'failed' : 'ok')
-      this.recalledPrompts.clear()
+      this.inlineCommandPending--
+      if (this.inlineCommandRunningRequest === message.requestId) this.inlineCommandRunningRequest = null
+      this.invalidateContextBreakdown()
+      this.publishActivity()
       this.publishHandoffReady()
       this.scheduleBoundaryDrain()
+      this.scheduleDiagnostics()
       this.sendInlineCommands()
     })
+    this.publishActivity()
   }
 
   private dispatch(
@@ -2031,7 +2029,7 @@ export class SidecarServer {
     this.diagnosticsStartTimer = setTimeout(() => {
       this.diagnosticsStartTimer = null
       if (this.closed || this.parking || this.connections.size === 0 || this.activeTurn ||
-          this.controller.isTurnActive() || this.handoffExecutionTask ||
+          this.controller.isTurnActive() || this.inlineCommandActive || this.handoffExecutionTask ||
           this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification()) return
       const handoff = this.controller.getWorkspaceHandoffSnapshot()
       if (handoff && (handoff.gate.mode === 'held' || handoff.execution !== 'terminal' || handoff.record.kind !== 'valid' ||
@@ -2053,7 +2051,7 @@ export class SidecarServer {
    * a task-notification turn on the same boundary.
    */
   reserveWorkspaceHandoff(operationId: string): boolean {
-    if (!canPersistHandoffTranscript() || !this.controller.isTurnActive() || this.parking || this.conversationMutationInFlight ||
+    if (!canPersistHandoffTranscript() || !this.controller.isTurnActive() || this.parking || this.inlineCommandActive || this.conversationMutationInFlight ||
         this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification() ||
         this.controller.getPendingPermissionRequests().length > 0 || this.tasks?.hasLiveWork() ||
         this.inFlightDurableWrites > 0) return false
@@ -2101,7 +2099,7 @@ export class SidecarServer {
   private publishUserHandoffAdmission(): void { this.publishHandoffState() }
 
   private publishHandoffReady(): void {
-    if (this.closed) return
+    if (this.closed || this.inlineCommandActive) return
     if (this.unacceptedHandoffOperation) {
       if (this.activeTurn || this.controller.isTurnActive() || this.unacceptedHandoffSettlement) return
       const operationId = this.unacceptedHandoffOperation
@@ -3432,7 +3430,7 @@ export class SidecarServer {
    *      auth failure anywhere. A fork's transcript write has the same shape.
    */
   private isParkGateOpen(): boolean {
-    if (this.activeTurn || this.controller.isTurnActive()) return false
+    if (this.activeTurn || this.controller.isTurnActive() || this.inlineCommandActive) return false
     const handoff = this.controller.getHandoffReservation()
     if (handoff) {
       try { if (readWorkspaceJump(this.sessionId)?.operationId !== handoff) return false }
@@ -3931,6 +3929,7 @@ export class SidecarServer {
     if (isWholeConversationFork) {
       if (
         this.parking ||
+        this.inlineCommandActive ||
         this.conversationMutationInFlight ||
         this.controller.getHandoffReservation()
       ) {
@@ -4058,7 +4057,7 @@ export class SidecarServer {
       })
     }
 
-    if (this.parking || this.conversationMutationInFlight || this.controller.getHandoffReservation()) {
+    if (this.parking || this.inlineCommandActive || this.conversationMutationInFlight || this.controller.getHandoffReservation()) {
       refuse('Another conversation update is already in progress.')
       return
     }
@@ -5804,7 +5803,7 @@ export class SidecarServer {
    */
   private currentPresence(): ActivityPresence {
     if (this.controller.getPendingPermissionRequests().length > 0) return 'needs_user'
-    if (this.activeTurn || this.controller.isTurnActive()) return 'running'
+    if (this.activeTurn || this.controller.isTurnActive() || this.inlineCommandActive) return 'running'
     return 'idle'
   }
 

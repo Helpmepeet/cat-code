@@ -34,7 +34,7 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
 }
 
 export type QueryEngineSessionLike = {
-  executeInlineCommand?: (operation: InlineCommandOperation) => AsyncIterable<SDKMessage>
+  executeInlineCommand?: (operation: InlineCommandOperation, options?: Pick<QueryEngineSessionOptions, 'onPermissionRequest'>) => AsyncIterable<SDKMessage>
   getInlineCommandRuns?: () => InlineCommandRun[]
   submitMessage(
     prompt: AppSessionPrompt,
@@ -64,6 +64,9 @@ export function createQueryEngineSessionAdapter(
   session: QueryEngineSessionLike,
 ): AppSessionControllerAdapter {
   return {
+    runInlineCommand: session.executeInlineCommand
+      ? ({ operation, onPermissionRequest }) => session.executeInlineCommand!(operation, { onPermissionRequest })
+      : undefined,
     runTurn({ prompt, options, onPermissionRequest }) {
       return session.submitMessage(prompt, {
         ...options,

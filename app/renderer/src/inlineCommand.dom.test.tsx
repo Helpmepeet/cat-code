@@ -4,6 +4,8 @@ import type { CatCodeBridge, ServerFrame } from '../../shared/protocol.js'
 import type { InlineCommandRequest, InlineCommandRun, InlineCommandSource } from '../../shared/inlineCommand.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { InlineCommandProvider } from './InlineCommandProvider.js'
+import { getInlineCommandAvailability } from './inlineCommandState.js'
+import { selectComposerGate } from './composerState.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { createTranscriptState, projectServerFrame, selectNestedTranscriptRows } from './transcriptProjector.js'
@@ -40,6 +42,39 @@ function view(sessionId: string, rows: NestedTranscriptRow[], runs: InlineComman
   return createElement(InlineCommandProvider, { sessionId, engineSessionId: 'engine', snapshot: { generation, runs, requests }, children: createElement(TranscriptRowsView, { rows }) })
 }
 function buttons(container: HTMLElement, label: string) { return [...container.querySelectorAll('button')].filter(button => button.getAttribute('aria-label') === label) }
+
+test('Run remains available during generation with waiting prompts while Explain waits', async () => {
+  bridge()
+  const gate = selectComposerGate({
+    hasSession: true, preview: false, connectionStatus: 'ready',
+    connectionInputEnabled: false, logInputEnabled: false,
+  })
+  const availability = getInlineCommandAvailability({
+    connected: gate.engineInputEnabled || gate.turnPending, workspaceBusy: false,
+    waitingForPermission: true, generating: true, queuedPrompt: true, attachmentPending: false,
+  })
+  expect(availability.blockedReason).toBeUndefined()
+  expect(availability.explainBlockedReason).toBeDefined()
+  const tree = await harness.mount(createElement(InlineCommandProvider, {
+    sessionId: 'run-while-generating', engineSessionId: 'engine',
+    snapshot: { generation: 'g1', runs: [{ ...run, status: 'success', exitCode: 0 }] },
+    ...availability,
+    children: createElement(TranscriptRowsView, { rows: [row('```sh\necho hi\n```')] }),
+  }))
+  expect(tree.container.querySelector('.inline-command-explain button')?.getAttribute('aria-disabled')).toBe('true')
+  await act(async () => buttons(tree.container, 'Run again')[0]!.click())
+  expect(starts).toHaveLength(1)
+  expect(submissions).toHaveLength(0)
+})
+
+test('Run still requires a connected available workspace', () => {
+  const input = {
+    connected: true, workspaceBusy: false, waitingForPermission: false,
+    generating: true, queuedPrompt: false, attachmentPending: false,
+  }
+  expect(getInlineCommandAvailability({ ...input, connected: false }).blockedReason).toBeDefined()
+  expect(getInlineCommandAvailability({ ...input, workspaceBusy: true }).blockedReason).toBeDefined()
+})
 
 test('transcript-only edit keeps retained and new fences runnable without replaying Start or removed output', async () => {
   bridge()

@@ -10,6 +10,9 @@ import { createTranscriptState, projectServerFrame, selectTranscriptRows } from 
 import { encodeInlineCommandResult } from '../shared/inlineCommand.js'
 import { FrameReplayBuffer } from '../main/replayBuffer.js'
 import type { SDKMessage } from '../shared/engine-types.snapshot.js'
+import { createSidecarTasksDomain } from './tasksDomain.js'
+import { createStore } from '../../src/state/store.js'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 
 const source: InlineCommandSource = {
   engineSessionId: 'engine-inline-test', messageUuid: 'assistant-message',
@@ -24,9 +27,19 @@ class RecordingController extends AppSessionController {
   publishRun = true
   rejectBeforeProgress = false
   rejectAfterCompletion = false
+  deferSettlement = false
+  settlements: (() => void)[] = []
   stopped: string[] = []
   release: (() => void) | null = null
-  constructor() { super({ async *runTurn() {} }) }
+  readonly main: { calls: number; release: (() => void) | null }
+  constructor() {
+    const main = { calls: 0, release: null as (() => void) | null }
+    super({ async *runTurn() {
+      main.calls++
+      await new Promise<void>(resolve => { main.release = resolve })
+    } })
+    this.main = main
+  }
   override async submitInlineCommand(
     selected: InlineCommandSource,
     progress: (run: InlineCommandRun) => void,
@@ -34,12 +47,13 @@ class RecordingController extends AppSessionController {
     this.calls++
     if (this.rejectBeforeProgress) throw new Error('The selected code block is no longer available.')
     const run: InlineCommandRun = {
-      runId: 'owned-run', source: selected, command: 'printf hello', cwd: '/isolated',
+      runId: this.calls === 1 ? 'owned-run' : `owned-run-${this.calls}`, source: selected, command: 'printf hello', cwd: '/isolated',
       status: 'running', output: 'hello', exitCode: null,
     }
     if (this.publishRun) progress(run)
     await new Promise<void>(resolve => { this.release = resolve })
     progress({ ...run, status: 'success', exitCode: 0 })
+    if (this.deferSettlement) await new Promise<void>(resolve => { this.settlements.push(resolve) })
     if (this.rejectAfterCompletion) throw new Error('Agent response failed.')
   }
   override stopInlineCommand(runId: string): boolean {
@@ -92,7 +106,13 @@ async function settle(controller: RecordingController) {
 }
 
 afterEach(() => {
-  for (const { server, controller } of fixtures) { controller.release?.(); server.close() }
+  for (const { server, controller } of fixtures) {
+    controller.deferSettlement = false
+    controller.release?.()
+    for (const settle of controller.settlements) settle()
+    controller.main.release?.()
+    server.close()
+  }
   fixtures.length = 0
   resetCommandQueue()
 })
@@ -198,6 +218,107 @@ test('a live operation refuses different starts without replacing its owner', as
     code: 'turn_already_running',
   })
   await settle(controller)
+})
+
+test('Run executes during an agent turn without taking or releasing its lifecycle', async () => {
+  const { controller, start, send, received } = connect()
+  send({ type: 'app.submit', requestId: 'main-turn', prompt: 'Keep generating' })
+  expect(controller.isTurnActive()).toBe(true)
+  const boundaries = () => received.filter(frame => frame.kind === 'event' && frame.event.type === 'turn.status')
+  const before = boundaries().length
+  start()
+  expect(controller.calls).toBe(1)
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+  await settle(controller)
+  expect(controller.isTurnActive()).toBe(true)
+  expect(boundaries()).toHaveLength(before)
+  send({ type: 'app.submit', requestId: 'queued-turn', prompt: 'Queued behind the agent' })
+  expect(controller.main.calls).toBe(1)
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+})
+
+test('an agent turn can start during Run and command Stop leaves it active', async () => {
+  const { controller, start, send, received, generation } = connect()
+  start()
+  expect(controller.isTurnActive()).toBe(false)
+  send({ type: 'app.submit', requestId: 'main-turn', prompt: 'Start generating' })
+  expect(controller.isTurnActive()).toBe(true)
+  expect(controller.main.calls).toBe(1)
+  send({ type: 'inline-command.stop', requestId: 'stop-inline', generation, runId: 'owned-run' })
+  await settle(controller)
+  expect(controller.stopped).toEqual(['owned-run'])
+  expect(controller.aborts).toBe(0)
+  expect(controller.isTurnActive()).toBe(true)
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+})
+
+test('completed commands can run again while prior output awaits settlement', async () => {
+  let parked = 0
+  const { controller, start, send } = connect({ onPark: () => { parked++ } })
+  controller.deferSettlement = true
+  start()
+  await settle(controller)
+  expect(controller.settlements).toHaveLength(1)
+  start('second-run')
+  expect(controller.calls).toBe(2)
+  controller.settlements.shift()!()
+  for (let index = 0; index < 6; index++) await Promise.resolve()
+  start('overlapping-third-run')
+  expect(controller.calls).toBe(2)
+  send({ type: 'app.park', requestId: 'still-running' })
+  expect(parked).toBe(0)
+  await settle(controller)
+  send({ type: 'app.park', requestId: 'still-settling' })
+  expect(parked).toBe(0)
+  controller.settlements.shift()!()
+  for (let index = 0; index < 6; index++) await Promise.resolve()
+  send({ type: 'app.park', requestId: 'finished' })
+  expect(parked).toBe(1)
+})
+
+test('conversation mutations cannot discard a command or its pending result', async () => {
+  let mutations = 0
+  const mutate = async () => { mutations++; return { ok: true, message: 'Changed.' } }
+  const { controller, start, send, received } = connect({
+    sessionActions: {
+      rename: mutate, export: mutate, tag: mutate, branch: mutate,
+      branchFromMessage: mutate, editFromMessage: mutate,
+      selectUserMessage: () => ({ ok: true, message: 'Selected.', selectedPrompt: { content: 'old prompt' } }),
+    },
+  })
+  controller.deferSettlement = true
+  start()
+  send({ type: 'session.branch', requestId: 'fork-running' })
+  await settle(controller)
+  send({ type: 'session.editFromMessage', requestId: 'edit-settling', userMessageId: '11111111-1111-4111-8111-111111111111' })
+  send({ type: 'session.branchFromMessage', requestId: 'branch-settling', userMessageId: '11111111-1111-4111-8111-111111111111' })
+  expect(mutations).toBe(0)
+  expect(received.filter(frame => frame.kind === 'session-action.result')).toHaveLength(3)
+  expect(received.filter(frame => frame.kind === 'session-action.result').every(frame => !frame.ok)).toBe(true)
+})
+
+test('Run keeps the session running and prevents parking until result settlement', async () => {
+  let parked = 0
+  const { controller, start, send, received, generation } = connect({
+    onPark: () => { parked++ },
+    tasks: createSidecarTasksDomain(createStore(getDefaultAppState())),
+  })
+  start()
+  expect(received.filter(frame => frame.kind === 'activity').at(-1)).toMatchObject({ presence: 'running' })
+  send({ type: 'work.status', requestId: crypto.randomUUID(), forGeneration: generation })
+  expect(received.filter(frame => frame.kind === 'work.status').at(-1)).toMatchObject({
+    work: { available: true, hasUnfinishedWork: true, activeTurn: false, pendingContinuation: true },
+  })
+  send({ type: 'app.park', requestId: 'park-running' })
+  expect(parked).toBe(0)
+  await settle(controller)
+  expect(received.filter(frame => frame.kind === 'activity').at(-1)).toMatchObject({ presence: 'idle' })
+  send({ type: 'work.status', requestId: crypto.randomUUID(), forGeneration: generation })
+  expect(received.filter(frame => frame.kind === 'work.status').at(-1)).toMatchObject({
+    work: { available: true, hasUnfinishedWork: false },
+  })
+  send({ type: 'app.park', requestId: 'park-finished' })
+  expect(parked).toBe(1)
 })
 
 test('Stop is generation-bound and resolves only the owned run', async () => {

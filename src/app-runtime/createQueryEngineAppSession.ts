@@ -13,6 +13,7 @@ import {
   type AppPermissionRequestHandler,
 } from './appRuntimeCanUseTool.js'
 import type { AppSessionAbortIntent } from './AppSessionController.js'
+import type { InlineCommandOperation } from './inlineCommand.js'
 import type {
   QueryEngineSessionLike,
   QueryEngineSessionOptions,
@@ -43,16 +44,29 @@ export function createQueryEngineAppSession(
     }),
   }
   const engine = config.createEngine?.(engineConfig) ?? new QueryEngine(engineConfig)
+  async function* executeInlineCommand(operation: InlineCommandOperation, options?: Pick<QueryEngineSessionOptions, 'onPermissionRequest'>) {
+    if (!engine.executeInlineCommand) throw new Error('Inline command execution is unavailable')
+    yield* engine.executeInlineCommand({
+      ...operation,
+      canUseTool: createAppRuntimeCanUseTool({
+        baseCanUseTool: config.canUseTool,
+        createRequestId: config.createRequestId,
+        getPermissionRequestHandler: () => options?.onPermissionRequest,
+      }),
+    })
+  }
 
   return {
+    executeInlineCommand,
     async *submitMessage(prompt, options?: QueryEngineSessionOptions) {
+      if (options?.inlineCommand) {
+        yield* executeInlineCommand(options.inlineCommand, options)
+        return
+      }
       engine.refreshAbortController?.()
       // Detached workers still use this session's permission route between turns.
       currentPermissionHandler = options?.onPermissionRequest
-      if (options?.inlineCommand) {
-        if (!engine.executeInlineCommand) throw new Error('Inline command execution is unavailable')
-        yield* engine.executeInlineCommand(options.inlineCommand)
-      } else if (options?.handoffContinuation) {
+      if (options?.handoffContinuation) {
         if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
         yield* engine.continueHandoff(options.handoffContinuation.operationId, options)
       } else yield* engine.submitMessage(prompt, {

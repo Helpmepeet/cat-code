@@ -118,17 +118,17 @@ test('actual provider multi-block assembly runs an earlier completed fence witho
     message.message.content.some((block: any) => block.text === 'Here is the command result explanation.'))).toBe(false)
 }, 30_000)
 
-test('controller reserves synchronously, rejects overlap and releases scoped Stop before explanation', async () => {
+test('controller reserves inline work synchronously through persistence without claiming a turn', async () => {
   let release!: () => void
   let finish!: () => void
   let commandSignal!: AbortSignal
   let turnSignal!: AbortSignal
   const source = { engineSessionId: 'session', messageUuid: 'assistant', contentBlockIndex: 0, fenceOrdinal: 0 }
   const controller = new AppSessionController({
-    async *runTurn(args) {
-      const operation = args.options!.inlineCommand!
+    async *runTurn() {},
+    async *runInlineCommand({ operation }) {
       commandSignal = operation.signal
-      turnSignal = args.signal
+      turnSignal = operation.sessionSignal!
       operation.onProgress({ runId: operation.runId, source, command: 'pwd', cwd: '/tmp', status: 'running', output: '', exitCode: null })
       await new Promise<void>(resolve => { release = resolve })
       operation.onProgress({ runId: operation.runId, source, command: 'pwd', cwd: '/tmp', status: 'stopped', output: '', exitCode: null })
@@ -137,7 +137,8 @@ test('controller reserves synchronously, rejects overlap and releases scoped Sto
   })
   let runId = ''
   const pending = controller.submitInlineCommand(source, run => { runId = run.runId })
-  expect(controller.isTurnActive()).toBe(true)
+  expect(controller.isTurnActive()).toBe(false)
+  expect(controller.isInlineCommandActive()).toBe(true)
   await expect(controller.submitInlineCommand(source, () => {})).rejects.toThrow('busy')
   expect(controller.stopInlineCommand('foreign')).toBe(false)
   expect(controller.stopInlineCommand(runId)).toBe(true)
@@ -145,7 +146,7 @@ test('controller reserves synchronously, rejects overlap and releases scoped Sto
   expect(turnSignal.aborted).toBe(false)
   release()
   await Promise.resolve()
-  expect(controller.isTurnActive()).toBe(true)
+  expect(controller.isInlineCommandActive()).toBe(true)
   expect(controller.stopInlineCommand(runId)).toBe(false)
   controller.abort('Agent Stop')
   expect(turnSignal.aborted).toBe(true)
@@ -165,14 +166,14 @@ test('a terminal persistence or lifecycle error updates the originating run', as
   const source = { engineSessionId: 'session', messageUuid: 'assistant', contentBlockIndex: 0, fenceOrdinal: 0 }
   const runs: Array<{ error?: string }> = []
   const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      const operation = options!.inlineCommand!
+    async *runTurn() {},
+    async *runInlineCommand({ operation }) {
       operation.onProgress({ runId: operation.runId, source, command: 'pwd', cwd: '/tmp', status: 'success', output: '/tmp', exitCode: 0 })
-      yield { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['Fixture model failure'] } as never
+      throw new Error('Fixture persistence failure')
     },
   })
-  await expect(controller.submitInlineCommand(source, run => runs.push(run))).rejects.toThrow('Fixture model failure')
-  expect(runs.at(-1)?.error).toContain('Could not finish command: Fixture model failure')
+  await expect(controller.submitInlineCommand(source, run => runs.push(run))).rejects.toThrow('Fixture persistence failure')
+  expect(runs.at(-1)?.error).toContain('Could not finish command: Fixture persistence failure')
 })
 
 for (const provider of ['claude', 'codex']) {
@@ -315,16 +316,15 @@ test('completed inline results emit exactly once even when output resembles loca
   }
 }, 30_000)
 
-test('real sidecar queues a human frame during inline execution and drains without an automatic explanation', async () => {
+test('real sidecar admits a human turn during inline execution without an automatic explanation', async () => {
   const result = await fixture({ queued: true, command: 'printf executed >> counter; printf QUEUE-WINDOW; sleep 1; printf QUEUE-DONE' })
   expect(result.error).toBeUndefined()
   expect(result.counter).toBe('executed')
   expect(result.requestsWhenQueued).toBe(0)
-  expect(result.queueDuringOperation).toHaveLength(1)
-  expect(JSON.stringify(result.queueDuringOperation)).toContain('QUEUED-HUMAN-PROMPT')
+  expect(result.queueDuringOperation).toHaveLength(0)
   expect(result.queueAfterOperation).toEqual([])
   expect(result.requests).toHaveLength(1)
-  expect(JSON.stringify(result.requests[0])).toContain('QUEUE-DONE')
+  expect(JSON.stringify(result.requests[0])).not.toContain('<cat-code-inline-command-result>')
   expect(JSON.stringify(result.requests[0])).not.toContain('Here is the command result explanation.')
   expect(JSON.stringify(result.requests[0]).match(/QUEUED-HUMAN-PROMPT/g)).toHaveLength(1)
   const humans = result.transcript.filter((message: any) => message.type === 'user' && !message.isSynthetic &&
@@ -333,6 +333,23 @@ test('real sidecar queues a human frame during inline execution and drains witho
   expect(JSON.stringify(result.transcript)).toContain('Queued human response.')
   expect(result.restored).toHaveLength(1)
   expect(result.serverFrames.filter((frame: any) => frame.kind === 'error')).toEqual([])
+}, 30_000)
+
+test('a completed older block runs during generation and commits only at the turn boundary', async () => {
+  const result = await fixture({ overlap: true, nextTurn: true, command: 'printf buffered-output; printf executed >> counter', secondCommand: 'printf second-output; printf twice >> counter' })
+  expect(result.error).toBeUndefined()
+  expect(result.counter).toBe('executedtwice')
+  expect(result.bufferedWhileGenerating).toBe(true)
+  expect(result.secondBufferedWhileGenerating).toBe(true)
+  expect(result.resultsBeforeBoundary).toBe(0)
+  expect(result.persistedBeforeBoundary).toBe(false)
+  expect(result.requests).toHaveLength(2)
+  expect(JSON.stringify(result.requests[0])).not.toContain('<cat-code-inline-command-result>')
+  expect(JSON.stringify(result.requests[1])).toContain('<cat-code-inline-command-result>')
+  expect(result.restored).toHaveLength(2)
+  expect(new Set(result.restored.map((run: any) => run.runId)).size).toBe(2)
+  expect(result.restored.map((run: any) => run.output)).toEqual(['buffered-output', 'second-output'])
+  expect(result.frames.filter((frame: any) => frame.type === 'result')).toHaveLength(2)
 }, 30_000)
 
 for (const agentStop of [false, true]) {
