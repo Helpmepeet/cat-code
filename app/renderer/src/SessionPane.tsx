@@ -1578,12 +1578,12 @@ export function SessionPane({
           event.preventDefault()
           {
             const picked = slashMatches[slashIndex]
-            // Every rail command in the menu is available, and none takes an
-            // argument, so Enter runs it; Tab still completes.
+            // Enter runs available rail commands; fallback catalog entries
+            // that cannot act still complete the draft, as Tab does.
             const rail = picked && event.key === 'Enter'
               ? parseDesktopRailCommand(`/${picked.name}`)
               : null
-            if (rail) runRailCommand(rail)
+            if (rail && railCommands.includes(rail)) runRailCommand(rail)
             else if (picked) pickSlashCommand(picked.name)
           }
           return

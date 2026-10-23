@@ -9,6 +9,8 @@ import {
 } from './ComposerActionsBar.js'
 import { SessionPane } from './SessionPane.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
+import { createTranscriptState, projectServerFrame } from './transcriptProjector.js'
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type {
@@ -278,6 +280,32 @@ test('an unavailable rail command is held in the draft, never sent to the engine
   expect(pane.submits()).toBe(0)
   expect(pane.prompts).toEqual([])
   expect(openMenu()).toBeNull()
+})
+
+test('Enter on an unavailable rail command in the fallback picker completes the draft without opening a card', async () => {
+  const transcript = projectServerFrame(createTranscriptState(), {
+    kind: 'ready',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: 'session-1',
+    engineSessionId: 'engine-session-1',
+    payload: {
+      type: 'app.ready',
+      protocolVersion: 1,
+      inputEnabled: true,
+      activeTurn: false,
+      abort: { status: 'idle' },
+      goalSnapshot: null,
+      pendingPermissionRequests: [],
+    },
+  })
+  transcript.sessions['session-1']!.slashCommands = ['model', 'compact']
+  const pane = await mountPane('/mod', { runControls: null, slashCatalog: [], transcript })
+  expect(pane.tree.container.querySelector('[aria-label="Insert slash command /model"]')).not.toBeNull()
+  await pane.key('Enter')
+  expect(pane.prompts).toEqual(['/model '])
+  expect(pane.submits()).toBe(0)
+  expect(openMenu()).toBeNull()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
 })
 
 test('a rail command sent with the Send button still returns focus to the field', async () => {
