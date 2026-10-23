@@ -1707,6 +1707,15 @@ export function SessionPane({
       engineSessionId={activeSessionId ? transcript.sessions[activeSessionId]?.engineSessionId ?? null : null}
       snapshot={activeSessionId ? transcript.sessions[activeSessionId]?.inlineCommands : undefined}
       results={activeSessionId ? transcript.sessions[activeSessionId]?.inlineCommandResults : undefined}
+      blockedReason={
+        permissionQueue.length > 0 ? 'Respond to the pending permission request first.'
+          : generating ? 'Wait for the current turn to finish.'
+            : pendingSubmit !== null || queuedPrompts.length > 0 ? 'Wait for queued prompts to finish.'
+              : !activeSessionId || !composerGate.engineInputEnabled ? 'Connect to a trusted workspace before running a command.'
+                : composerReadOnly || projectRoute !== null ? 'Wait for the workspace to become available.'
+                  : undefined
+      }
+      explainBlockedReason={preparingImage || pickingFile ? 'Wait for the attachment to finish.' : undefined}
     >
     <AgentFaceRegistryContext.Provider value={paneFaces}>
     <SubagentWorkspace key={activeSessionId} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}

@@ -149,6 +149,14 @@ export function ActionCopyIcon(): ReactNode {
   )
 }
 
+export function ActionRunIcon(): ReactNode {
+  return <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 3.5a1 1 0 0 1 1.5-.86l14 8.5a1 1 0 0 1 0 1.72l-14 8.5A1 1 0 0 1 6 20.5z" /></svg>
+}
+
+export function ActionStopIcon(): ReactNode {
+  return <svg width="13" height="13" viewBox="0 0 13 13" fill="currentColor" aria-hidden="true"><rect width="13" height="13" rx="2" /></svg>
+}
+
 export function ActionExportIcon(): ReactNode {
   return (
     <Glyph>

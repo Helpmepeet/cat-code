@@ -6,7 +6,7 @@ import { YOLO_CLASSIFIER_TOOL_NAME } from '../utils/permissions/classifierShared
 
 const root = process.env.INLINE_TEST_ROOT!
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated environment required')
-const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; autoOrigin?: boolean; classifierDeny?: boolean; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
+const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; explain?: boolean; nextTurn?: boolean; autoOrigin?: boolean; classifierDeny?: boolean; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
 const model = input.provider === 'codex' ? 'gpt-5.6-terra' : 'claude-sonnet-4-5'
 const evidence = { requests: [] as unknown[], classifierRequests: [] as any[], codexRequests: [] as unknown[], frames: [] as any[], transcript: [] as any[], runs: [] as any[], restored: [] as any[], permissions: 0, error: undefined as string | undefined, cwd: process.cwd(), counter: '', childAlive: false }
 if (input.sandbox || input.hookEdit || input.hookStop || input.hookContext) {
@@ -60,7 +60,7 @@ mock.module('../services/api/client.js', () => ({
         : { type: 'text', text: '' } },
       { type: 'content_block_delta', index: 0, delta: ordinaryTool
         ? { type: 'input_json_delta', partial_json: JSON.stringify({ command: "bash -c 'printf ordinary >> counter'", work_lifetime: 'finite', run_in_background: false }) }
-        : { type: 'text_delta', text: producingSource ? '```bash\n' + input.command + '\n```' : input.queued && evidence.requests.length === 2 ? 'Queued human response.' : 'Here is the command result explanation.' } },
+        : { type: 'text_delta', text: producingSource ? '```bash\n' + input.command + '\n```' : input.queued ? 'Queued human response.' : 'Here is the command result explanation.' } },
       { type: 'content_block_stop', index: 0 },
       ...(producingSource ? [
         { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
@@ -166,7 +166,7 @@ try {
       send({ type: 'app.submit', requestId: 'queued-human', prompt: 'QUEUED-HUMAN-PROMPT' })
       ;(evidence as any).queueDuringOperation = JSON.parse(JSON.stringify(getCommandQueueSnapshot()))
       ;(evidence as any).requestsWhenQueued = evidence.requests.length
-      await waitFor(() => evidence.requests.length === 2 && !controller.isTurnActive() && getCommandQueueSnapshot().length === 0)
+      await waitFor(() => evidence.requests.length === 1 && !controller.isTurnActive() && getCommandQueueSnapshot().length === 0)
       ;(evidence as any).serverFrames = received
       ;(evidence as any).queueAfterOperation = getCommandQueueSnapshot()
     } finally { server.close() }
@@ -179,6 +179,11 @@ try {
       }
     })
     if (input.secondCommand) await controller.submitInlineCommand({ ...source, fenceOrdinal: 1 }, run => evidence.runs.push(run))
+    ;(evidence as any).requestsAfterRun = evidence.requests.length
+    if (input.explain) {
+      const selected = session.getInlineCommandRuns!().at(-1)!
+      await controller.submit(`Explain the output of inline command run ${selected.runId}.`)
+    } else if (input.nextTurn) await controller.submit('What happened in the previous command?')
     if (input.autoOrigin && !input.classifierDeny) {
       ordinaryTurn = true
       await controller.submit('Run the next ordinary assistant command.')
@@ -208,8 +213,7 @@ if (input.disk) {
   }
 }
 if (input.artifact) {
-  const output = evidence.restored[0]?.output ?? ''
-  const path = /Full output: ([^\n]+)/.exec(output)?.[1]
+  const path = evidence.restored[0]?.fullOutputPath
   if (path) {
     const content = await readFile(path, 'utf8')
     ;(evidence as any).artifact = { path, content, isolated: path.startsWith(root + '/') }

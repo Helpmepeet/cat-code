@@ -16,6 +16,12 @@ export type InlineCommandRun = {
   cwd: string
   status: 'running' | 'success' | 'failed' | 'stopped' | 'interrupted'
   output: string
+  outputTail?: string
+  omittedBytes?: number
+  totalLines?: number
+  fullOutputPath?: string
+  startedAt?: number
+  durationMs?: number
   exitCode: number | null
   error?: string
 }
@@ -82,19 +88,23 @@ const closed = (value: Record<string, unknown>, keys: string[]) => Object.keys(v
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.length > 0
 const identifier = (value: unknown): value is string => nonempty(value) && value.length <= 128
 const index = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= 100_000
+const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 
 export function parseInlineCommandResult(text: string): InlineCommandRun | null {
   if (!text.startsWith(prefix) || !text.endsWith(suffix) || text.length > 262_144) return null
   try {
     const run: unknown = JSON.parse(text.slice(prefix.length, -suffix.length))
-    if (!record(run) || !closed(run, ['runId', 'source', 'command', 'cwd', 'status', 'output', 'exitCode', 'error'])) return null
+    if (!record(run) || !closed(run, ['runId', 'source', 'command', 'cwd', 'status', 'output', 'outputTail', 'omittedBytes', 'totalLines', 'fullOutputPath', 'startedAt', 'durationMs', 'exitCode', 'error'])) return null
     const source = run.source
     if (!record(source) || !closed(source, ['engineSessionId', 'messageUuid', 'contentBlockIndex', 'fenceOrdinal']) ||
       !identifier(source.engineSessionId) || !identifier(source.messageUuid) || !index(source.contentBlockIndex) || !index(source.fenceOrdinal)) return null
     if (!identifier(run.runId) || !nonempty(run.command) || !nonempty(run.cwd) || typeof run.output !== 'string' ||
       typeof run.status !== 'string' || !['success', 'failed', 'stopped', 'interrupted'].includes(run.status) ||
       !(run.exitCode === null || (typeof run.exitCode === 'number' && Number.isSafeInteger(run.exitCode))) ||
-      !(run.error === undefined || typeof run.error === 'string')) return null
+      !(run.error === undefined || typeof run.error === 'string') ||
+      !(run.outputTail === undefined || (typeof run.outputTail === 'string' && run.outputTail.length <= 24_000)) ||
+      !(run.fullOutputPath === undefined || (nonempty(run.fullOutputPath) && run.fullOutputPath.length <= 8192)) ||
+      !['omittedBytes', 'totalLines', 'startedAt', 'durationMs'].every(key => run[key] === undefined || count(run[key]))) return null
     return run as InlineCommandRun
   } catch { return null }
 }
@@ -107,4 +117,46 @@ export function encodeInlineCommandResult(run: InlineCommandRun): string {
 
 export function inlineCommandSourceKey(source: InlineCommandSource): string {
   return JSON.stringify([source.engineSessionId, source.messageUuid, source.contentBlockIndex, source.fenceOrdinal])
+}
+
+/** A deliberately narrow UI hint, not shell parsing or an execution policy. */
+export function isInteractiveShellCommand(command: string): boolean {
+  if (/\$\(|`/.test(command)) return false
+  const words: string[] = []
+  let word = ''
+  let started = false
+  let quote = ''
+  let escaped = false
+  for (const character of command.trim()) {
+    if (escaped) {
+      word += character
+      escaped = false
+      continue
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true
+      started = true
+    } else if (quote) {
+      if (character === quote) quote = ''
+      else word += character
+    } else if (character === "'" || character === '"') {
+      quote = character
+      started = true
+    } else if (/[|;&<>()\r\n#]/.test(character)) {
+      return false
+    } else if (/\s/.test(character)) {
+      if (started) words.push(word)
+      word = ''
+      started = false
+    } else {
+      word += character
+      started = true
+    }
+  }
+  if (quote || escaped) return false
+  if (started) words.push(word)
+  const [program, ...args] = words
+  if (program === 'top') return !args.some(arg => /^-l(?:\d+)?$/.test(arg))
+  if (program === 'tail') return args.some(arg => /^-[^-]*[fF]/.test(arg))
+  return program !== undefined && ['htop', 'btop', 'vim', 'vi', 'nvim', 'nano', 'emacs', 'less', 'more', 'man', 'watch'].includes(program)
 }

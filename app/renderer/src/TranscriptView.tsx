@@ -32,8 +32,9 @@ import {
   type Ref,
 } from 'react'
 import Markdown from 'react-markdown'
-import { extractInlineCommandFences, inlineCommandSourceKey, type InlineCommandSource } from '../../shared/inlineCommand.js'
+import { extractInlineCommandFences, inlineCommandSourceKey, isInteractiveShellCommand, type InlineCommandRun, type InlineCommandSource } from '../../shared/inlineCommand.js'
 import { InlineCommandContext } from './inlineCommandState.js'
+import { shellTokens } from './shellTokens.js'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, CatCodeBridge, SessionId } from '../../shared/protocol.js'
@@ -196,6 +197,8 @@ import {
   ActionCopyIcon,
   ActionFileIcon,
   ActionRewindIcon,
+  ActionRunIcon,
+  ActionStopIcon,
 } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
 import {
@@ -1961,7 +1964,9 @@ function AssistantProse({
             <MarkdownErrorBoundary fallback={leaf.codeSource}>
               <CodeBlock
                 code={leaf.codeSource}
+                windowed
                 inlineSource={sourceAtOffset(leaf.codeStartOffset)}
+                language={eligibleFences.find(fence => fence.startOffset === leaf.codeStartOffset)?.language}
                 streaming={leaf.codeOpen}
                 highlighted={
                   <MarkdownTree
@@ -2222,6 +2227,7 @@ function MarkdownCode({
   return (
     <CodeBlock
       code={text.replace(/\n$/, '')}
+      language={match?.[1]}
       inlineSource={inlineSource}
       highlighted={children}
     />
@@ -2296,7 +2302,11 @@ export function CodeBlock({
   highlighted,
   streaming = false,
   inlineSource,
+  language,
+  windowed = false,
 }: {
+  windowed?: boolean
+  language?: string
   code: string
   highlighted: ReactNode
   /** The fence is still arriving, so there is no finished block to copy. */
@@ -2312,6 +2322,12 @@ export function CodeBlock({
   const error = sourceKey ? commands?.errors.get(sourceKey) : undefined
   const running = run?.status === 'running'
   const busy = !!commands && (commands.pending.size > 0 || commands.runs.some(run => run.status === 'running'))
+  const descriptionId = useId()
+  const unavailable = pending ? 'Wait for the command to start.'
+    : !commands?.generation ? 'Connect to the session before running a command.'
+      : commands.blockedReason ?? (busy ? 'Wait for the current command to finish.'
+        : isInteractiveShellCommand(code) ? 'This command needs an interactive terminal.' : undefined)
+  const action = running ? 'Stop' : pending ? 'Starting' : run || error || completedAttempt ? 'Run again' : 'Run'
   const copy = (): void => {
     if (streaming) return
     const clipboard =
@@ -2339,12 +2355,26 @@ export function CodeBlock({
       data-window-ground
     >
       {inlineSource && commands ? (
-        <button type="button"
-          className="absolute right-11 top-1 z-[1] rounded-md px-2 py-1 text-xs text-text-subtle hover:bg-white/[0.06] hover:text-text-primary disabled:opacity-50"
-          disabled={!commands.generation || pending || (!running && busy)}
-          onClick={() => running && run ? commands.stop(run) : commands.start(inlineSource)}
-        >{pending ? 'Starting…' : running ? 'Stop' : run || error || completedAttempt ? 'Run again' : 'Run'}</button>
+        <div className="inline-command-header">
+          <span className="inline-command-language">{language ?? 'sh'}</span>
+          <div className="inline-command-controls">
+            <button type="button" className={`inline-command-control ${running ? 'text-tone-danger' : action === 'Run' || pending ? 'text-accent' : 'text-text-subtle'}`}
+              aria-label={action} aria-busy={pending || undefined}
+              aria-disabled={!running && !!unavailable}
+              aria-describedby={!running && unavailable ? descriptionId : undefined}
+              title={!running && unavailable ? unavailable : action}
+              onClick={() => {
+                if (running && run) commands.stop(run)
+                else if (!unavailable) commands.start(inlineSource)
+              }}
+            >{running ? <ActionStopIcon /> : action === 'Run again' ? <ActionRewindIcon /> : <ActionRunIcon />}</button>
+            <span id={descriptionId} className="inline-command-tooltip" role="tooltip">{!running && unavailable ? unavailable : action}</span>
+            <button type="button" className="inline-command-control text-text-subtle" onClick={copy} aria-label={copied ? 'Code copied' : 'Copy code'} title={copied ? 'Code copied' : 'Copy code'}><ActionCopyIcon /></button>
+            <span className="inline-command-tooltip inline-command-copy-tooltip" role="tooltip">{copied ? 'Code copied' : 'Copy code'}</span>
+          </div>
+        </div>
       ) : null}
+      {!inlineSource ? (
       <button
         type="button"
         onClick={copy}
@@ -2377,26 +2407,62 @@ export function CodeBlock({
           <ActionCopyIcon />
         )}
       </button>
+      ) : null}
       <pre className="overflow-x-auto px-3.5 py-3.5 font-mono text-[12.5px] leading-[1.65]">
-        <code className="hljs">{highlighted}</code>
+        <code className="hljs">{inlineSource && !windowed && code.length <= 12_000 ? shellTokens(code).map((token, index) => <span key={index} className={`shell-token-${token.kind}`}>{token.text}</span>) : highlighted}</code>
       </pre>
       {!run && completedAttempt ? <p className="border-t border-shell-seam px-3.5 py-3 text-xs text-text-subtle">Command output is no longer retained.</p> : null}
-      {run ? (
-        <section className="border-t border-shell-seam px-3.5 py-3 text-xs" aria-label="Command output">
-          <div className="mb-2 text-text-subtle">
-            {run.status === 'running' ? 'Running' : run.status === 'success' ? 'Completed' : run.status === 'failed' ? 'Failed' : run.status === 'stopped' ? 'Stopped' : 'Interrupted'}
-            {run.exitCode !== null ? ` · Exit ${run.exitCode}` : ''}
-            {run.cwd ? ` · ${run.cwd}` : ''}
-          </div>
-          <pre className="max-h-80 select-text overflow-auto whitespace-pre-wrap break-words font-mono">{run.output.slice(0, 64_000)}</pre>
-          {run.output.length > 64_000 ? <p className="text-text-subtle">Output preview truncated.</p> : null}
-          {run.error ? <p className="mt-2 text-text-muted">{run.error.slice(0, 4_000)}</p> : null}
-          {run.status === 'interrupted' && !run.error ? <p className="mt-2 text-text-muted">The command may already have had effects.</p> : null}
-        </section>
-      ) : null}
+      {run ? <InlineCommandOutput key={run.runId} run={run} /> : null}
       {error ? <p role="alert" className="border-t border-shell-seam px-3.5 py-2 text-xs text-text-muted">{error}</p> : null}
     </div>
   )
+}
+
+function InlineCommandOutput({ run }: { run: InlineCommandRun }) {
+  const commands = useContext(InlineCommandContext)
+  const fileContext = useContext(FilePathMenuContext)
+  const [now, setNow] = useState(Date.now)
+  const [announcement, setAnnouncement] = useState('')
+  const running = run.status === 'running'
+  const outcome = running ? 'Running' : run.status === 'success' ? (run.output || run.outputTail ? '' : 'No output')
+    : run.status === 'failed' ? 'Failed' : run.status === 'stopped' ? 'Stopped' : 'Interrupted'
+  useEffect(() => {
+    if (!running || run.startedAt === undefined) return
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [running, run.startedAt])
+  useEffect(() => {
+    if (!running) setAnnouncement(outcome || 'Command succeeded')
+  }, [running, outcome])
+  const elapsed = running && run.startedAt !== undefined ? Math.max(0, now - run.startedAt) : run.durationMs
+  const duration = elapsed === undefined ? undefined : elapsed < 1000 ? `${Math.round(elapsed)}ms` : `${(elapsed / 1000).toFixed(1)}s`
+  const tone = running ? 'text-accent animate-pulse' : run.status === 'success' ? 'text-tone-good' : run.status === 'failed' ? 'text-tone-danger' : 'text-tone-warn'
+  const explainReason = commands?.explainBlockedReason ?? commands?.blockedReason
+  const descriptionId = useId()
+  return <section className="inline-command-output" aria-label="Command output">
+    <div className="inline-command-status">
+      <span className={`inline-command-dot ${tone}`} role="img" aria-label={outcome || 'Succeeded'} />
+      {outcome ? <span>{outcome}</span> : null}
+      {run.exitCode !== null && run.exitCode !== 0 ? <span>Exit {run.exitCode}</span> : null}
+      {duration ? <span>{duration}</span> : null}
+      {run.cwd && run.cwd !== fileContext?.cwd ? <span className="inline-command-cwd" title={run.cwd}>{run.cwd}</span> : null}
+      {!running && commands?.explain ? <span className="inline-command-explain">
+        <button type="button" aria-disabled={!!explainReason} aria-describedby={explainReason ? descriptionId : undefined}
+          title={explainReason ?? 'Explain output'} onClick={() => { if (!explainReason) commands.explain?.(run) }}>Explain output</button>
+        {explainReason ? <span id={descriptionId} className="inline-command-tooltip" role="tooltip">{explainReason}</span> : null}
+      </span> : null}
+    </div>
+    <div className={TOOL_CARD_BAND_CLASS.cards}>
+      {run.output ? <BashBody content={run.output} onOpenFull={null} toolUseId={run.runId} /> : null}
+      {run.omittedBytes ? <div className="inline-command-gap">{run.omittedBytes >= 1_000_000 ? `${(run.omittedBytes / 1_000_000).toFixed(1)} MB` : `${(run.omittedBytes / 1000).toFixed(1)} KB`} omitted</div> : null}
+      {run.outputTail ? <BashBody content={run.outputTail} onOpenFull={null} toolUseId={`${run.runId}:tail`}
+        startLine={run.totalLines === undefined ? null : Math.max(1, run.totalLines - run.outputTail.split('\n').length + 1)} /> : null}
+      {run.error ? <p className="mt-2 text-text-muted">{run.error.slice(0, 4_000)}</p> : null}
+      {run.status === 'interrupted' && !run.error ? <p className="mt-2 text-text-muted">The command may already have had effects.</p> : null}
+    </div>
+    <span className="sr-only" role="status" aria-live="polite">{announcement}</span>
+  </section>
 }
 
 type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
@@ -4869,7 +4935,7 @@ function stringifyInput(input: Record<string, unknown>): string {
  */
 function renderLogLine(
   line: string,
-  lineNumber: number,
+  lineNumber: number | null,
 ) {
   return (
     <div key={lineNumber} className="flex">
@@ -4885,10 +4951,12 @@ function BashBody({
   content,
   onOpenFull,
   toolUseId,
+  startLine = 1,
 }: {
   content: string
   onOpenFull: (() => void) | null
   toolUseId: string
+  startLine?: number | null
 }) {
   const lines = useMemo(() => content.split('\n'), [content])
   const { window, visibleLines, revealMore } = useInlineOutputWindow(
@@ -4916,9 +4984,9 @@ function BashBody({
       renderLine={(line, index) =>
         renderLogLine(
           line,
-          index < window.head.length
+          startLine === null ? null : startLine - 1 + (index < window.head.length
             ? index + 1
-            : window.tailStartLine + index - window.head.length,
+            : window.tailStartLine + index - window.head.length),
         )
       }
     />

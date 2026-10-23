@@ -765,10 +765,11 @@ export const BashTool = buildTool({
 
       // Get the final result from the generator's return value
       result = generatorResult.value;
-      toolUseContext.inlineCommand?.onResult({
+      await toolUseContext.inlineCommand?.onResult({
         code: result.code,
         stdout: result.stdout || '',
         interrupted: result.interrupted,
+        outputFilePath: result.outputFilePath,
       });
       trackGitOperations(input.command, result.code, result.stdout);
       const isInterrupt = result.interrupted && abortController.signal.reason === 'interrupt';

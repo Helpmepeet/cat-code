@@ -6,6 +6,8 @@ import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import { createAssistantMessage } from '../utils/messages.js'
 import { runToolUse } from '../services/tools/toolExecution.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
+import { ensureToolResultsDir, getToolResultPath } from '../utils/toolResultStorage.js'
+import { boundInlineCommandText, INLINE_COMMAND_OUTPUT_LIMIT, retainInlineCommandOutput } from './inlineCommandOutput.js'
 
 export type InlineCommandOperation = {
   source: InlineCommandSource
@@ -14,10 +16,8 @@ export type InlineCommandOperation = {
   onProgress: (run: InlineCommandRun) => void
 }
 
-export const INLINE_COMMAND_OUTPUT_LIMIT = 24_000
-const bounded = (text: string) => text.length <= INLINE_COMMAND_OUTPUT_LIMIT
-  && JSON.stringify(text).length <= INLINE_COMMAND_OUTPUT_LIMIT
-  ? text : '[Earlier output omitted]\n' + text.slice(-Math.floor(INLINE_COMMAND_OUTPUT_LIMIT / 6))
+export { INLINE_COMMAND_OUTPUT_LIMIT } from './inlineCommandOutput.js'
+const bounded = (text: string) => boundInlineCommandText(text)
 
 export function resolveInlineCommandSource(messages: readonly Message[], sessionId: string, source: InlineCommandSource): string {
   if (source.engineSessionId !== sessionId) throw new Error('The command belongs to another conversation')
@@ -58,9 +58,10 @@ export async function runInlineCommand(
   canUseTool: CanUseToolFn,
 ): Promise<{ run: InlineCommandRun; attachments: AttachmentMessage[]; shouldQuery: boolean; context?: ToolUseContext }> {
   const attachments: AttachmentMessage[] = []
-  let shouldQuery = true
+  const shouldQuery = false
   let updatedContext = context
-  let run: InlineCommandRun = { runId: operation.runId, source: operation.source, command, cwd,
+  const startedAt = Date.now()
+  let run: InlineCommandRun = { runId: operation.runId, source: operation.source, command, cwd, startedAt,
     status: 'running', output: '', exitCode: null }
   const controller = new AbortController()
   const stop = () => controller.abort(operation.signal.reason ?? 'Inline command stopped')
@@ -78,10 +79,20 @@ export async function runInlineCommand(
     for await (const update of runToolUse(toolUse, parent, canUseTool, {
       ...context,
       abortController: controller,
-      inlineCommand: { runId: operation.runId, command, cwd, onResult(result) {
+      inlineCommand: { runId: operation.runId, command, cwd, async onResult(result) {
         observed = true
-        run = { ...run, exitCode: result.code, output: bounded(result.stdout),
+        run = { ...run, exitCode: result.code, output: result.stdout,
           status: result.interrupted ? 'interrupted' : result.code === 0 ? 'success' : 'failed' }
+        if (result.outputFilePath || JSON.stringify(result.stdout).length > INLINE_COMMAND_OUTPUT_LIMIT) {
+          try {
+            await ensureToolResultsDir()
+            const path = getToolResultPath(operation.runId, false)
+            run = { ...run, ...await retainInlineCommandOutput(result.stdout, path, result.outputFilePath) }
+          } catch (error) {
+            run = { ...run, output: bounded(result.stdout),
+              error: bounded(`Could not retain complete output: ${error instanceof Error ? error.message : String(error)}`) }
+          }
+        }
       } },
     })) {
       if (update.contextModifier) {
@@ -94,7 +105,6 @@ export async function runInlineCommand(
         if (typeof attachment === 'object' && attachment !== null &&
           'type' in attachment && attachment.type === 'hook_stopped_continuation' &&
           'message' in attachment && typeof attachment.message === 'string') {
-          shouldQuery = false
           run = { ...run, error: bounded(attachment.message) }
         }
       } else if (message.type === 'progress') {
@@ -108,15 +118,8 @@ export async function runInlineCommand(
         if (Array.isArray(content)) {
           const result = content.find(block => block.type === 'tool_result')
           if (result?.type === 'tool_result' && typeof result.content === 'string') {
-            // Keep the runner's bounded preview and large-output artifact reference.
-            run = { ...run, output: bounded(result.content) }
             if (result.is_error && !observed) run = { ...run, error: bounded(result.content) }
           }
-        }
-        const data = message.toolUseResult
-        if (data && typeof data === 'object' && 'persistedOutputPath' in data &&
-          typeof data.persistedOutputPath === 'string') {
-          run = { ...run, output: bounded(run.output + `\nFull output: ${data.persistedOutputPath}`) }
         }
       }
     }
@@ -129,6 +132,7 @@ export async function runInlineCommand(
   }
   if (operation.signal.aborted) run = { ...run, status: 'stopped' }
   else if (context.abortController.signal.aborted) run = { ...run, status: 'interrupted' }
+  run = { ...run, durationMs: Math.max(0, Date.now() - startedAt) }
   operation.onProgress({ ...run })
   return { run, attachments, shouldQuery, context: updatedContext === context ? undefined : updatedContext }
 }

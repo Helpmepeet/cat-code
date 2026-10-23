@@ -12,11 +12,13 @@ const createState = () => ({
 })
 const retained = new Map<string, ReturnType<typeof createState>>()
 
-export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, results, children }: {
+export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, results, blockedReason, explainBlockedReason, children }: {
   sessionId: string | null
   engineSessionId: string | null
   snapshot?: { generation: string; runs: InlineCommandRun[]; requests?: InlineCommandRequest[] }
   results?: InlineCommandRun[]
+  blockedReason?: string
+  explainBlockedReason?: string
   children: ReactNode
 }) {
   const [, update] = useState(0)
@@ -125,7 +127,7 @@ export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, re
     if (changed) update(value => value + 1)
   }, [snapshot, runs, state])
   const start = (source: InlineCommandSource) => {
-    if (!sessionId || !snapshot || state.pending.size || runs.some(run => run.status === 'running')) return
+    if (!sessionId || !snapshot || blockedReason || state.pending.size || runs.some(run => run.status === 'running')) return
     const key = inlineCommandSourceKey(source)
     const requestId = crypto.randomUUID()
     state.errors.delete(key)
@@ -161,5 +163,9 @@ export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, re
     state.errors.set(key, 'Could not stop command. Check the connection.')
     update(value => value + 1)
   }
-  return <InlineCommandContext.Provider value={{ engineSessionId, generation: snapshot?.generation, runs, requests: snapshot?.requests ?? [], pending: state.pending, errors: state.errors, start, stop }}>{children}</InlineCommandContext.Provider>
+  const explain = (run: InlineCommandRun) => {
+    if (!sessionId || explainBlockedReason || blockedReason || run.status === 'running') return
+    getBridge().submit(sessionId, `Explain the output of inline command run ${run.runId}.`)
+  }
+  return <InlineCommandContext.Provider value={{ engineSessionId, generation: snapshot?.generation, runs, requests: snapshot?.requests ?? [], pending: state.pending, errors: state.errors, blockedReason, explainBlockedReason, explain, start, stop }}>{children}</InlineCommandContext.Provider>
 }

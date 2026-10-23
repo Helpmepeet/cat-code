@@ -427,7 +427,7 @@ export class AppSessionController {
         },
       } })
     } catch (error) {
-      if (latest) onProgress({ ...latest, error: `Agent response failed: ${error instanceof Error ? error.message : String(error)}` })
+      if (latest) onProgress({ ...latest, error: `Could not finish command: ${error instanceof Error ? error.message : String(error)}` })
       throw error
     } finally {
       if (this.inlineCommand === operation) this.inlineCommand = null

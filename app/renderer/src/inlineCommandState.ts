@@ -8,6 +8,9 @@ export type InlineCommandContextValue = {
   requests: InlineCommandRequest[]
   pending: ReadonlyMap<string, { requestId: string; generation: string; previousRunId?: string }>
   errors: ReadonlyMap<string, string>
+  blockedReason?: string
+  explainBlockedReason?: string
+  explain?(run: InlineCommandRun): void
   start(source: InlineCommandSource): void
   stop(run: InlineCommandRun): void
 }

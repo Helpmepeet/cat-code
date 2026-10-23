@@ -202,7 +202,7 @@ export type ToolUseContext = {
     runId: string
     command: string
     cwd: string
-    onResult: (result: { code: number; stdout: string; interrupted: boolean }) => void
+    onResult: (result: { code: number; stdout: string; interrupted: boolean; outputFilePath?: string }) => void | Promise<void>
   }
   /** Engine-issued, per-input execution preparation. The input reference must
    * match the canonical candidate for which the state was prepared. */

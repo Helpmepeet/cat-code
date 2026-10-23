@@ -984,6 +984,8 @@ export type WorkspaceHandoffStateFrame = {
  */
 /** Decision: docs/plans/2026-10-22-inline-command-run.md §4A,B.
  * Only canonical source identity crosses inbound; execution text is engine-owned.
+ * Additive optional run display facts: docs/plans/2026-10-23-inline-command-run-ux.md
+ * §3 slices 1-2. Existing snapshots remain valid; no protocol version bump.
  */
 export type InlineCommandStartMessage = {
   type: 'inline-command.start'

@@ -99,7 +99,7 @@ test('completion cannot cross foreign provider groups, requests or errors', () =
   expect(() => resolveInlineCommandSource([first, last], 'session', source)).toThrow('incomplete')
 })
 
-test('actual provider multi-block assembly runs an earlier completed fence and explains its result', async () => {
+test('actual provider multi-block assembly runs an earlier completed fence without an automatic reply', async () => {
   const command = 'printf executed >> counter; printf multi-block-output'
   const result = await fixture({ command, multiBlock: true })
   expect(result.error).toBeUndefined()
@@ -112,10 +112,9 @@ test('actual provider multi-block assembly runs an earlier completed fence and e
   expect(result.restoredSourceCommand).toBe(command)
   expect(result.counter).toBe('executed')
   expect(result.restored[0]).toMatchObject({ command, status: 'success', exitCode: 0 })
-  expect(result.requests).toHaveLength(2)
-  expect(JSON.stringify(result.requests[1])).toContain('multi-block-output')
+  expect(result.requests).toHaveLength(1)
   expect(result.transcript.some((message: any) => message.type === 'assistant' &&
-    message.message.content.some((block: any) => block.text === 'Here is the command result explanation.'))).toBe(true)
+    message.message.content.some((block: any) => block.text === 'Here is the command result explanation.'))).toBe(false)
 }, 30_000)
 
 test('controller reserves synchronously, rejects overlap and releases scoped Stop before explanation', async () => {
@@ -161,7 +160,7 @@ test('backend normalization refuses changed commands instead of disabling harden
   })).rejects.toThrow('cannot run unchanged')
 })
 
-test('an error result from automatic continuation updates the originating run', async () => {
+test('a terminal persistence or lifecycle error updates the originating run', async () => {
   const source = { engineSessionId: 'session', messageUuid: 'assistant', contentBlockIndex: 0, fenceOrdinal: 0 }
   const runs: Array<{ error?: string }> = []
   const controller = new AppSessionController({
@@ -172,22 +171,26 @@ test('an error result from automatic continuation updates the originating run', 
     },
   })
   await expect(controller.submitInlineCommand(source, run => runs.push(run))).rejects.toThrow('Fixture model failure')
-  expect(runs.at(-1)?.error).toContain('Agent response failed: Fixture model failure')
+  expect(runs.at(-1)?.error).toContain('Could not finish command: Fixture model failure')
 })
 
 for (const provider of ['claude', 'codex']) {
-  test(`${provider}: real runner persists associated result and automatically explains it without tool pair`, async () => {
-    const result = await fixture({ provider, command: "printf executed >> counter; printf 'actual-output'; exit 3" })
+  test(`${provider}: result persists without a model call until an explicit Explain request`, async () => {
+    const result = await fixture({ provider, explain: true, command: "printf executed >> counter; printf 'actual-output'; exit 3" })
     expect(result.error).toBeUndefined()
     expect(result.counter).toBe('executed')
     expect(result.permissions).toBeGreaterThan(0)
     expect(result.requests).toHaveLength(1)
+    expect(result.requestsAfterRun).toBe(0)
     expect(result.restored).toHaveLength(1)
     expect(result.restored[0]).toMatchObject({ status: 'failed', exitCode: 3, command: "printf executed >> counter; printf 'actual-output'; exit 3" })
-    expect(result.restored[0].output).toContain('actual-output')
+    expect(result.restored[0].output).toBe('actual-output')
+    expect(result.restored[0].startedAt).toBeGreaterThan(0)
+    expect(result.restored[0].durationMs).toBeGreaterThanOrEqual(0)
     expect(result.restored[0].cwd).toBe(result.workspace)
     const outgoing = JSON.stringify(provider === 'codex' ? result.codexRequests : result.requests)
     expect(outgoing).toContain('actual-output')
+    expect(outgoing).toContain(`Explain the output of inline command run ${result.restored[0].runId}.`)
     expect(outgoing).not.toContain('"type":"tool_result"')
     expect(result.frames.some((frame: any) => frame.type === 'assistant')).toBe(true)
     expect(result.frames.some((frame: any) => frame.type === 'user' && frame.isSynthetic)).toBe(true)
@@ -200,7 +203,7 @@ test('denied, hook-edited and permission-edited commands cannot execute substitu
     expect(result.error).toBeUndefined()
     expect(result.counter).toBe('')
     expect(result.restored[0].status).toBe('failed')
-    expect(result.requests).toHaveLength(1)
+    expect(result.requests).toHaveLength(0)
   }
 }, 60_000)
 
@@ -217,7 +220,7 @@ test('timeout remains foreground and retains bounded large output', async () => 
   const result = await fixture({ timeout: 500, command: "printf TIMEOUT-START; head -c 50000 /dev/zero | tr '\\0' x; sleep 20; printf after >> counter" })
   expect(result.error).toBeUndefined()
   expect(result.counter).toBe('')
-  expect(result.requests).toHaveLength(1)
+  expect(result.requests).toHaveLength(0)
   expect(result.restored[0].status).not.toBe('success')
   expect(result.restored[0].output.length).toBeLessThan(24_100)
   expect(result.restored[0].exitCode).not.toBe(0)
@@ -237,7 +240,7 @@ test('separate deliberate fences get fresh environments and workspace cwd on the
   const result = await fixture({ command, secondCommand, disk: true })
   expect(result.error).toBeUndefined()
   expect(result.counter).toBe('firstsecond')
-  expect(result.requests).toHaveLength(2)
+  expect(result.requests).toHaveLength(0)
   expect(result.restored).toHaveLength(2)
   const [first, second] = result.restored
   expect(first).toMatchObject({ command, status: 'success', source: { fenceOrdinal: 0 } })
@@ -247,12 +250,10 @@ test('separate deliberate fences get fresh environments and workspace cwd on the
   expect(second.output).toContain('env=unset')
   expect(second.output).toContain(`cwd=${result.workspace}`)
   expect(second.cwd).toBe(result.workspace)
-  expect(JSON.stringify(result.requests[0])).toContain('INLINE_CLICK_LEAK=first')
-  expect(JSON.stringify(result.requests[1])).toContain('env=unset')
   expect(result.diskSourceCommand).toBe(command)
-  expect(result.diskMessages.length).toBeGreaterThan(3)
+  expect(result.diskMessages.length).toBeGreaterThanOrEqual(3)
   expect(result.restoreIdle).toEqual({
-    active: false, requestsBefore: 2, requestsAfter: 2,
+    active: false, requestsBefore: 0, requestsAfter: 0,
     counterBefore: 'firstsecond', counterAfter: 'firstsecond',
   })
 }, 30_000)
@@ -265,11 +266,42 @@ test('successful large output retains a usable readable production artifact befo
   expect(result.artifact).toBeDefined()
   expect(result.artifact.isolated).toBe(true)
   expect(result.artifact.content).toBe('ARTIFACT-BEGIN' + 'x'.repeat(200000) + 'ARTIFACT-END')
-  expect(result.restored[0].output).toContain(`Full output: ${result.artifact.path}`)
-  expect(JSON.stringify(result.requests)).toContain(result.artifact.path)
+  expect(result.restored[0].fullOutputPath).toBe(result.artifact.path)
+  expect(result.restored[0].output).toStartWith('ARTIFACT-BEGIN')
+  expect(result.restored[0].outputTail).toEndWith('ARTIFACT-END')
+  expect(result.restored[0].omittedBytes).toBe(Buffer.byteLength(result.artifact.content) -
+    Buffer.byteLength(result.restored[0].output) - Buffer.byteLength(result.restored[0].outputTail))
+  expect(result.restored[0].output).not.toContain('<persisted-output>')
+  expect(result.requests).toHaveLength(0)
 }, 30_000)
 
-test('real sidecar queues a human frame during inline execution and drains after its explanation', async () => {
+test('a failing large command retains its actual final error and a clean structured head', async () => {
+  const result = await fixture({ artifact: true,
+    command: "printf BUILD-START; head -c 200000 /dev/zero | tr '\\0' x; printf UNIQUE-FINAL-ERROR >&2; exit 7" })
+  expect(result.error).toBeUndefined()
+  const run = result.restored[0]
+  expect(run).toMatchObject({ status: 'failed', exitCode: 7 })
+  expect(run.output).toStartWith('BUILD-START')
+  expect(run.output).not.toContain('Exit code')
+  expect(run.output).not.toContain('<persisted-output>')
+  expect(run.outputTail).toEndWith('UNIQUE-FINAL-ERROR')
+  expect(run.omittedBytes).toBe(Buffer.byteLength(result.artifact.content) -
+    Buffer.byteLength(run.output) - Buffer.byteLength(run.outputTail))
+  expect(result.requests).toHaveLength(0)
+  expect(result.frames.some((frame: any) => frame.type === 'user' && frame.isSynthetic &&
+    JSON.stringify(frame.message.content).includes('UNIQUE-FINAL-ERROR'))).toBe(true)
+}, 30_000)
+
+test('an empty successful run stays empty and reaches the next ordinary turn without an automatic reply', async () => {
+  const result = await fixture({ command: 'true', nextTurn: true })
+  expect(result.error).toBeUndefined()
+  expect(result.restored[0]).toMatchObject({ status: 'success', exitCode: 0, output: '' })
+  expect(result.requestsAfterRun).toBe(0)
+  expect(result.requests).toHaveLength(1)
+  expect(JSON.stringify(result.requests[0])).toContain(result.restored[0].runId)
+}, 30_000)
+
+test('real sidecar queues a human frame during inline execution and drains without an automatic explanation', async () => {
   const result = await fixture({ queued: true, command: 'printf executed >> counter; printf QUEUE-WINDOW; sleep 1; printf QUEUE-DONE' })
   expect(result.error).toBeUndefined()
   expect(result.counter).toBe('executed')
@@ -277,11 +309,10 @@ test('real sidecar queues a human frame during inline execution and drains after
   expect(result.queueDuringOperation).toHaveLength(1)
   expect(JSON.stringify(result.queueDuringOperation)).toContain('QUEUED-HUMAN-PROMPT')
   expect(result.queueAfterOperation).toEqual([])
-  expect(result.requests).toHaveLength(2)
+  expect(result.requests).toHaveLength(1)
   expect(JSON.stringify(result.requests[0])).toContain('QUEUE-DONE')
-  expect(JSON.stringify(result.requests[0])).not.toContain('QUEUED-HUMAN-PROMPT')
-  expect(JSON.stringify(result.requests[1])).toContain('Here is the command result explanation.')
-  expect(JSON.stringify(result.requests[1]).match(/QUEUED-HUMAN-PROMPT/g)).toHaveLength(1)
+  expect(JSON.stringify(result.requests[0])).not.toContain('Here is the command result explanation.')
+  expect(JSON.stringify(result.requests[0]).match(/QUEUED-HUMAN-PROMPT/g)).toHaveLength(1)
   const humans = result.transcript.filter((message: any) => message.type === 'user' && !message.isSynthetic &&
     JSON.stringify(message.message.content).includes('QUEUED-HUMAN-PROMPT'))
   expect(humans).toHaveLength(1)
@@ -291,14 +322,15 @@ test('real sidecar queues a human frame during inline execution and drains after
 }, 30_000)
 
 for (const agentStop of [false, true]) {
-  test(`${agentStop ? 'Agent Stop' : 'inline Stop'} retains partial output and ${agentStop ? 'suppresses' : 'allows'} continuation`, async () => {
+  test(`${agentStop ? 'Agent Stop' : 'inline Stop'} retains partial output without a model turn`, async () => {
     const result = await fixture({ command: 'sleep 20 & child=$!; printf \"%s\" \"$child\" > child-pid; printf BEFORE-STOP; wait \"$child\"; printf after >> counter', stop: !agentStop, agentStop })
     expect(result.error).toBeUndefined()
     expect(result.counter).toBe('')
     expect(result.childAlive).toBe(false)
     expect(result.restored[0].status).toBe(agentStop ? 'interrupted' : 'stopped')
     expect(result.restored[0].output).toContain('BEFORE-STOP')
-    expect(result.requests).toHaveLength(agentStop ? 0 : 1)
+    expect(result.restored[0].output).not.toContain('[Request interrupted')
+    expect(result.requests).toHaveLength(0)
   }, 30_000)
 }
 
@@ -307,7 +339,7 @@ test('persistence failure keeps available output and reports follow-up failure w
   expect(result.error).toContain('Fixture persistence failure')
   expect(result.requests).toHaveLength(0)
   expect(result.runs.at(-1).output).toContain('retained')
-  expect(result.runs.at(-1).error).toContain('Agent response failed')
+  expect(result.runs.at(-1).error).toContain('Could not finish command')
 }, 30_000)
 
 for (const hookStop of ['PreToolUse', 'PostToolUse']) {
@@ -328,7 +360,7 @@ for (const hookStop of ['PreToolUse', 'PostToolUse']) {
 
 for (const provider of ['claude', 'codex']) {
   test(`${provider}: genuine hook context reaches the provider without a synthetic tool pair`, async () => {
-    const result = await fixture({ provider, command: 'printf hook-output', hookContext: true })
+    const result = await fixture({ provider, nextTurn: true, command: 'printf hook-output', hookContext: true })
     expect(result.error).toBeUndefined()
     expect(result.requests).toHaveLength(1)
     const outgoing = JSON.stringify(provider === 'codex' ? result.codexRequests : result.requests)
