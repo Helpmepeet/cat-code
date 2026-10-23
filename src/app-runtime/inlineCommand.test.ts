@@ -52,6 +52,12 @@ test('desktop flags deliver inline origin through real Auto permissions without 
   expect(result.counter).toBe('executedordinary')
   expect(result.restored[0]).toMatchObject({ command, status: 'success', cwd: result.workspace })
   expect(result.classifierRequests).toHaveLength(4)
+  for (const request of result.classifierRequests) {
+    const system = request.system.map((block: { text: string }) => block.text).join('\n')
+    expect(system).toContain('You are a security monitor for autonomous AI coding agents.')
+    expect(system).toContain('**By default, actions are ALLOWED.**')
+    expect(system).toContain('- Data Exfiltration:')
+  }
   for (const request of result.classifierRequests.slice(0, 2)) {
     const action = request.messages.flatMap((message: any) =>
       typeof message.content === 'string' ? [message.content]

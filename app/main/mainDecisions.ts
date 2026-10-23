@@ -102,6 +102,7 @@ export function inlineCommandRefusalFrame(
  */
 export const SIDECAR_RUNTIME_ARGS = [
   '--feature=LID_CLOSED',
+  '--feature=AUTO_MODE_UPSTREAM_PORT',
   '--feature=TRANSCRIPT_CLASSIFIER',
   '--feature=REACTIVE_COMPACT',
   '--feature=COMPACT_TASK_RESTORE',

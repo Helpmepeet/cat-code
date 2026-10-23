@@ -92,6 +92,7 @@ test('a move refusal answers every inline request without depending on a generat
 test('the production sidecar runtime enables the desktop engine features', () => {
   expect(SIDECAR_RUNTIME_ARGS).toEqual([
     '--feature=LID_CLOSED',
+    '--feature=AUTO_MODE_UPSTREAM_PORT',
     '--feature=TRANSCRIPT_CLASSIFIER',
     '--feature=REACTIVE_COMPACT',
     '--feature=COMPACT_TASK_RESTORE',
@@ -112,6 +113,7 @@ describe('sidecar launch resolution (P5-1)', () => {
     expect(plan.command).toBe('bun')
     expect(plan.argsFor('session')).toEqual([
       '--feature=LID_CLOSED',
+      '--feature=AUTO_MODE_UPSTREAM_PORT',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',
@@ -154,6 +156,7 @@ describe('sidecar launch resolution (P5-1)', () => {
   test('debug cleanup keeps the feature flags the session sidecar has', () => {
     expect(resolveSidecarLaunch(DEV).argsFor('debug-cleanup')).toEqual([
       '--feature=LID_CLOSED',
+      '--feature=AUTO_MODE_UPSTREAM_PORT',
       '--feature=TRANSCRIPT_CLASSIFIER',
       '--feature=REACTIVE_COMPACT',
       '--feature=COMPACT_TASK_RESTORE',
