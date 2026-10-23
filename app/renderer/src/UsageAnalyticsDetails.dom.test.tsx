@@ -145,6 +145,35 @@ test('reliability routes tool, route and build selections through parent callbac
     expect(tree.container.textContent).toContain('Model latency is unavailable.');
     expect(tree.container.querySelector('.uad-tools-head')?.textContent).toBe('ToolResultsErrors per dayError rate');
 });
+test('Tools displays closed error reasons with exact counts', async () => {
+    const { summary } = await fixture();
+    summary.tools[0]!.errorCategories = { ambiguity: 1, interrupted: 1 };
+    summary.tools[0]!.patchMechanisms = { 'hunk-reorder': 1, 'indentation-adjustment': 2 };
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    expect(tree.container.querySelector('[aria-label="Bash error reasons"]')?.textContent).toBe('Ambiguous context: 1 · Cancelled: 1');
+    expect(tree.container.querySelector('[aria-label="Bash patch adjustments"]')?.textContent).toBe('Hunks reordered: 1 call · Indentation adjusted: 2 calls');
+});
+test('patch dimensions show model and root totals without claiming edit correctness', async () => {
+    const snapshot = await collectRetainedUsage(['/isolated/root.jsonl'], '2026-09-13T12:00:00.000Z', {
+        timezone: 'UTC',
+        readRecords: async (_path, consume) => {
+            const rows = [
+                { type: 'assistant', sessionId: 'root', uuid: 'request', timestamp: '2026-09-12T10:00:00.000Z', message: { model: 'model-a', content: [{ type: 'tool_use', id: 'patch', name: 'apply_patch' }] } },
+                { type: 'user', sessionId: 'root', uuid: 'result', timestamp: '2026-09-12T10:00:01.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 'patch', is_error: true }] } },
+                { type: 'assistant', sessionId: 'root', uuid: 'next', timestamp: '2026-09-12T10:00:02.000Z', message: { model: 'model-b', content: [{ type: 'tool_use', id: 'bash', name: 'Bash' }] } },
+            ];
+            for (const [offset, value] of rows.entries()) await consume({ value, offset, generation: 'test' });
+            return { bytesRead: 0, parseErrors: 0, oversizedRecords: 0, oversizedToolResults: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0 };
+        },
+    });
+    const tree = await harness.mount(<UsageAnalyticsReliability summary={snapshot.ranges['7d']} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const detail = tree.container.querySelector('.uad-patch-dimensions')!;
+    expect(detail.textContent).toContain('model-a');
+    expect(detail.textContent).toContain('1 call · 1 error / 1 result · 100.0%');
+    expect(detail.textContent).toContain('Retained root sessions');
+    expect(detail.textContent).toContain('Later shell call, attribution unknown: 1');
+    expect(detail.textContent).toContain('not proof of the same target or a correct edit');
+});
 test('Tools fits its rows independently of the model card and identifies grouped tool counts', async () => {
     const { summary } = await fixture();
     summary.tools.push({ id: 'other', label: 'Other', kind: 'other', requests: 900, results: 900, errors: 9 });

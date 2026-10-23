@@ -177,6 +177,13 @@ html[data-appearance=light] .usage-analytics-details { --uad-shadow: 0 1px 2px r
 .usage-analytics-details .uad-tools .uad-spark { color: var(--usage-other, var(--uad-muted)); }
 .usage-analytics-details .uad-tools .uad-hot .uad-tool-rate, .usage-analytics-details .uad-tools .uad-hot .uad-spark { color: var(--uad-error); }
 .usage-analytics-details .uad-tool-history { color: var(--uad-muted); font-size: 11px; }
+.usage-analytics-details .uad-tool-reasons { margin: 0 0 8px; color: var(--uad-muted); font-size: 11px; line-height: 1.5; }
+.usage-analytics-details .uad-patch-dimensions { margin: 0 0 12px; font-size: 11px; line-height: 1.5; }
+.usage-analytics-details .uad-patch-dimensions summary { cursor: pointer; }
+.usage-analytics-details .uad-patch-dimensions p { margin: 4px 0; color: var(--uad-muted); }
+.usage-analytics-details .uad-patch-dimensions h4 { margin: 12px 0 4px; }
+.usage-analytics-details .uad-patch-dimensions ul { padding-left: 16px; }
+.usage-analytics-details .uad-patch-dimensions li { margin-bottom: 10px; }
 .usage-analytics-details .uad-tools-toggle { align-self: flex-start; margin-top: 12px; padding: 5px 0; border: 0; background: transparent; color: var(--uad-muted); font: inherit; font-size: 12px; cursor: pointer; }
 .usage-analytics-details .uad-tools-toggle:hover { color: var(--color-text-primary); }
 .usage-analytics-details .uad-tool-volume { color: var(--uad-muted); }

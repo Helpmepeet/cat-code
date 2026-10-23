@@ -6,8 +6,26 @@ import { collectRetainedUsage } from '../../src/utils/statsUsage.js';
 import { collectIndexedUsage } from '../../src/utils/statsUsageIndex.js';
 import { fitUsageDashboardSnapshot, groupUsageSummary } from './usageSummary.js';
 import { parseUsageCollectionLine, parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
-import { MAX_USAGE_RECORD_BYTES } from '../shared/usageDashboard.js';
+import { MAX_USAGE_RECORD_BYTES, mergeUsageToolErrorCategories, mergeUsagePatchMechanisms } from '../shared/usageDashboard.js';
 import { defaultUsageToolSelection, usageToolErrorSeries } from '../renderer/src/usageToolErrorTrendState.js';
+test('tool reason counts survive independent overview grouping and repeated fitting', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z', { timezone: 'UTC' });
+    const summary = snapshot.ranges['7d'];
+    summary.tools = [
+        { id: 'patch', kind: 'named', label: 'apply_patch', requests: 3, results: 3, errors: 2, errorCategories: { ambiguity: 1, 'order-conflict': 1 }, patchMechanisms: { 'forward-match': 1, 'hunk-reorder': 1 } },
+        { id: 'bash', kind: 'named', label: 'Bash', requests: 2, results: 2, errors: 1 },
+        { id: 'read', kind: 'named', label: 'Read', requests: 1, results: 1, errors: 1, errorCategories: { 'permission-denied': 1 } },
+    ];
+    const expected = { ambiguity: 1, 'order-conflict': 1, other: 1, 'permission-denied': 1 };
+    const grouped = groupUsageSummary(summary, 0, 1, 0, 0, 0, 0, 0, 2);
+    expect(mergeUsageToolErrorCategories(grouped.tools)).toEqual(expected);
+    expect(mergeUsageToolErrorCategories(grouped.toolBreakdown!.items)).toEqual(expected);
+    expect(mergeUsagePatchMechanisms(grouped.tools)).toEqual({ 'forward-match': 1, 'hunk-reorder': 1 });
+    const fittedAgain = groupUsageSummary(grouped, 0, 0, 0, 0, 0, 0, 0, 0);
+    expect(fittedAgain.tools[0]!.errorCategories).toEqual(expected);
+    expect(fittedAgain.toolBreakdown!.items[0]!.errorCategories).toEqual(expected);
+    expect(fittedAgain.toolBreakdown!.items[0]!.patchMechanisms).toEqual({ 'forward-match': 1, 'hunk-reorder': 1 });
+});
 test('analytics detail fits the envelope without changing source tokens or pre-cut skill and integration totals', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-analytics-fit-'));
     try {

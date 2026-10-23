@@ -7,7 +7,12 @@ import { addCalendarDays, calendarDayDistance, localDateKey, localDayHours, loca
 import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod, UsageDayTool, UsageToolBuildObservation, UsageExecutionOutcome, UsageTimelineEvent, UsageEffort, UsageEffortLevel, UsageParallel } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts, ratesForPrompt } from './modelCostRates.js';
-import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate, type UsageToolErrorCategory } from '../../app/shared/usageDashboard.js';
+import { usageToolErrorCategory, usagePatchMechanisms } from './statsUsageErrors.js';
+import type { UsagePatchMechanism } from '../../app/shared/usageDashboard.js';
+import { isFilePatchToolName } from '../tools/FilePatchTool/constants.js';
+import { observedPatchFollowups, type PatchActivityCall } from './statsUsagePatchActivity.js';
+import type { UsageTool, UsagePatchModel } from '../../app/shared/usageDashboard.js';
 import type { UsageTokenSources, UsageCallCount, UsageRankedSession } from '../../app/shared/usageDashboard.js';
 import { createUsageTimingAccumulator, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
@@ -369,7 +374,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         effort: UsageEffortLevel | null;
     };
     type ToolValue = {
+        execution: string | null;
         name: string | null;
+        model: string | null;
         build: Pick<UsageToolBuildObservation, 'sha' | 'dirty'> | null;
         timestamp: number;
         session: string;
@@ -405,7 +412,22 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     };
     const usage = options.identities?.map<UsageValue>('usage') ?? new Map<string, UsageValue>();
     const toolLedger = options.identities?.map<ToolValue>('tools') ?? new Map<string, ToolValue>();
-    const results = options.identities?.map<{ timestamp: number; error: boolean; counted: boolean }>('results') ?? new Map<string, { timestamp: number; error: boolean; counted: boolean }>();
+    type ToolResult = { timestamp: number; error: boolean; category: UsageToolErrorCategory; mechanisms: UsagePatchMechanism[]; counted: boolean };
+    const results = options.identities?.map<ToolResult>('results') ?? new Map<string, ToolResult>();
+    const executions = options.identities?.map<boolean>('executions') ?? new Map<string, boolean>();
+    // Main-file copies already share a scope. Only subagent sources need aliases.
+    const hasSubagentSources = files.some(file => file.includes(`${sep}subagents${sep}`));
+    let patchActivity: PatchActivityCall[] = [], patchActivityBytes = 0;
+    const patchActiveScopes = new Set<string>();
+    const retainPatchActivity = (call: PatchActivityCall) => {
+        if (call.kind === 'patch') patchActiveScopes.add(call.scope);
+        else if (!patchActiveScopes.has(call.scope)) return;
+        if (call.kind === 'boundary') patchActiveScopes.delete(call.scope);
+        const bytes = call.key.length * 2 + call.scope.length * 2 + 256;
+        reserveState(1, bytes);
+        patchActivityBytes += bytes;
+        patchActivity.push(call);
+    };
     // Timing state grows with every logged call, so an injected store keeps it off the heap and out of the state budget.
     const timings = options.identities?.timings ?? createHeapTimingStore();
     const reserveTiming = (key: string, bytes: number) => { if (!options.identities?.timings) reserve(key, bytes); };
@@ -462,6 +484,43 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!tool) { reserve(`session-tool:${item.id}:${cat.id}`, 384); tool = { ...cat, requests: 0, results: 0, errors: 0 }; item.tools.push(tool); }
         return tool;
     };
+    const patchModel = (tool: UsageTool, model: string | null): UsagePatchModel => {
+        const cat = category(model);
+        tool.patchModels ??= [];
+        let item = tool.patchModels.find(item => item.id === cat.id);
+        if (!item) {
+            reserve(`patch-model:${tool.id}:${cat.id}`, 512);
+            item = { ...cat, requests: 0, results: 0, errors: 0 };
+            tool.patchModels.push(item);
+        }
+        return item;
+    };
+    const finalizePatchActivity = () => {
+        for (const call of patchActivity) {
+            const result = results.get(call.key);
+            if (result) call.result = { timestamp: result.timestamp, error: result.error };
+        }
+        for (const episode of observedPatchFollowups(patchActivity)) {
+            const request = toolLedger.get(episode.origin)!;
+            for (const s of states.filter(s => usageTimestampEligible(request.timestamp, s.start, s.end, cutoff))) {
+                const tool = s.tools.get(category(request.name).id)!;
+                const session = sessionTool(rangeContributor(s, request.session, request.date).item, request.name);
+                for (const target of [tool, session, patchModel(tool, request.model)]) {
+                    target.patchFollowups ??= { episodes: 0, retryCalls: 0, repeatErrors: 0, states: {} };
+                    const followups = target.patchFollowups;
+                    followups.episodes = plus(followups.episodes, 1);
+                    followups.retryCalls = plus(followups.retryCalls, episode.retryCalls);
+                    followups.repeatErrors = plus(followups.repeatErrors, episode.repeatErrors);
+                    followups.states[episode.state] = plus(followups.states[episode.state] ?? 0, 1);
+                }
+            }
+        }
+        identities -= patchActivity.length;
+        stateBytes -= patchActivityBytes;
+        patchActivity = [];
+        patchActivityBytes = 0;
+        patchActiveScopes.clear();
+    };
     // Disk-backed identities have a separate storage cap; category/session maps
     // still use the original bounded heap budget.
     const reserveIdentity = (key: string, bytes?: number) => { if (!options.identities) reserve(key, bytes); };
@@ -472,6 +531,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!request || !result || result.counted || result.timestamp < request.timestamp) return;
         result.counted = true;
         results.set(key, result);
+        if (request.execution) {
+            if (executions.get(request.execution)) return;
+            executions.set(request.execution, true);
+        }
         for (const s of eligibleComparisons(request.timestamp)) {
             s.summary.results = plus(s.summary.results, 1);
             if (result.error) s.summary.errors = plus(s.summary.errors, 1);
@@ -485,7 +548,25 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
             const tool = s.tools.get(category(request.name).id)!;
             tool.results = plus(tool.results, 1);
-            if (result.error) tool.errors = plus(tool.errors, 1);
+            const patch = !!request.name && isFilePatchToolName(request.name);
+            const model = patch ? patchModel(tool, request.model) : null;
+            if (model) {
+                model.results = plus(model.results, 1);
+                if (result.error) model.errors = plus(model.errors, 1);
+            }
+            if (result.error) {
+                tool.errors = plus(tool.errors, 1);
+                for (const target of [tool, ...(patch ? [sessionToolCount, model!] : [])]) {
+                    target.errorCategories ??= {};
+                    target.errorCategories[result.category] = plus(target.errorCategories[result.category] ?? 0, 1);
+                }
+            }
+            if (!result.error && patch) {
+                for (const target of [tool, sessionToolCount, model!]) for (const mechanism of result.mechanisms) {
+                    target.patchMechanisms ??= {};
+                    target.patchMechanisms[mechanism] = plus(target.patchMechanisms[mechanism] ?? 0, 1);
+                }
+            }
             const day = ensureDay(s, request.date);
             day.results = plus(day.results, 1);
             if (result.error) day.errors = plus(day.errors, 1);
@@ -830,6 +911,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
             return;
         }
+        if (row.type === 'user' && row.isMeta !== true && row.isCompactSummary !== true && !alreadyRecorded && !(record(row.message) && Array.isArray(row.message.content) && row.message.content.some(block => record(block) && block.type === 'tool_result'))) {
+            retainPatchActivity({ key: recordId, scope, timestamp, kind: 'boundary' });
+        }
         if (row.type === 'user' && record(row.message) && Array.isArray(row.message.content)) {
             for (const [index, block] of row.message.content.entries()) {
                 if (!record(block) || block.type !== 'tool_result' || !nonempty(block.tool_use_id)) continue;
@@ -883,7 +967,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     continue;
                 }
                 reserveIdentity(key);
-                results.set(key, { timestamp, error: block.is_error === true, counted: false });
+                const retained = row.message.content.filter((item: unknown) => record(item) && item.type === 'tool_result').length === 1 ? row.toolUseResult : undefined;
+                results.set(key, { timestamp, error: block.is_error === true,
+                    category: usageToolErrorCategory(block, retained), mechanisms: usagePatchMechanisms(block, retained), counted: false });
                 countResult(key);
             }
         }
@@ -953,7 +1039,21 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 }
                 reserveIdentity(key, 512 + (name?.length ?? 0) * 2 + session.length * 2);
                 const build = buildVersion(row.version);
-                toolLedger.set(key, { name, build, timestamp, session, date });
+                // Copied transcript records retain UUIDs, timestamps and tool IDs.
+                // Keep per-source matching aliases, but count their execution once.
+                // Missing UUIDs and unrelated calls with reused tool IDs stay scoped.
+                const execution = hasSubagentSources && nonempty(row.uuid) ? createHash('sha256').update(JSON.stringify([session, row.uuid, timestamp, index, identified ? block.id : null, name])).digest('hex') : null;
+                const model = nonempty(message.model) && message.model !== '<synthetic>' ? message.model : null;
+                toolLedger.set(key, { execution, name, model, build, timestamp, session, date });
+                if (execution) {
+                    if (executions.get(execution) !== undefined) { countResult(key); continue; }
+                    reserveIdentity(execution, 96);
+                    executions.set(execution, false);
+                }
+                const activityKind = name && isFilePatchToolName(name) ? 'patch' : name === 'Edit' ? 'edit' : name === 'Write' ? 'write' : name === 'Bash' || name === 'Python' ? 'shell' : null;
+                if (activityKind) {
+                    retainPatchActivity({ key, scope, timestamp, kind: activityKind });
+                }
                 const cat = category(name);
                 for (const s of eligibleStates) {
                     const day = ensureDay(s, date);
@@ -994,6 +1094,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                         s.tools.set(cat.id, tool);
                     }
                     tool.requests = plus(tool.requests, 1);
+                    if (activityKind === 'patch') {
+                        const item = patchModel(tool, model);
+                        item.requests = plus(item.requests, 1);
+                    }
                     if (s.summary.range !== 'all') {
                         const contributor = ensureContributor(s, session, date);
                         contributor.requests = plus(contributor.requests, 1);
@@ -1154,6 +1258,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             coverage.readErrors++;
         }
         finally {
+            finalizePatchActivity();
             finalizeHistoricalSource(file);
             for (const state of states) state.autoModeAccumulator.addSource(autoModeRecords);
             releaseAutoModeRecords();
@@ -1440,5 +1545,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         state.summary.startInclusive = new Date(localMidnight(state.summary.startDate, timezone)).toISOString();
         state.summary.endExclusive = new Date(localMidnight(state.summary.endDateExclusive, timezone)).toISOString();
     }
-    return { version: 2, metricVersion: 1, countingVersion: 22, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 2, metricVersion: 1, countingVersion: 23, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone, asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

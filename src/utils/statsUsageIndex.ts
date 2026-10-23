@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import { usageToolErrorCategory, usagePatchMechanisms } from './statsUsageErrors.js';
 import { mkdir, stat, rename, readdir, unlink } from 'node:fs/promises';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,12 +11,12 @@ import { collectRetainedUsage, usageTimingCall, type StoredModelTiming, type Sto
 import { UsageFailure, classifyEscapedError, classifyStorageError, sqliteCodeOf, usageDeadlineFailure, type UsageFailurePhase } from './statsFailure.js';
 import { localDateKey, shiftLocalCalendarDays } from './usageWindow.js';
 import { projectAutoModeCapability, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
-import { USAGE_EFFORT_LEVELS, type UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
+import { MAX_USAGE_RECORD_BYTES, USAGE_EFFORT_LEVELS, type UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 import { logForDebugging } from './debug.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v12.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v14.sqlite');
 // 256 GiB at SQLite's default 4 KiB pages, without preallocating disk space.
 // Applied on every connection, so changing this does not require a rebuild.
 const DISK_MAX_PAGE_COUNT = 67108864;
@@ -26,6 +27,7 @@ const SCRATCH_TIMINGS = 'CREATE TABLE timings(seq INTEGER PRIMARY KEY, kind TEXT
 const writerLockOptions = { realpath: false, stale: 180000, update: 30000, retries: 0 };
 // Fitting and contributor metadata changes must replay even unchanged indexed events.
 const SAVED_USAGE_FITTING_VERSION = 4;
+const SAVED_USAGE_PATCH_ACTIVITY_VERSION = 1;
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Accounting fields only; Skill identifiers are allowlisted, never arguments or bodies. */
@@ -41,6 +43,10 @@ function projectRecord(v: unknown): unknown {
     const row: Record<string, unknown> = {};
     for (const key of ['type', 'sessionId', 'uuid', 'timestamp', 'cwd', 'version']) row[key] = typeof v[key] === 'string' ? v[key] : undefined;
     row.isSidechain = v.isSidechain === true;
+    if (v.type === 'user') {
+        if (v.isMeta === true) row.isMeta = true;
+        if (v.isCompactSummary === true) row.isCompactSummary = true;
+    }
     if (v.type === 'assistant' && object(v.message)) {
         const m = v.message, message: Record<string, unknown> = { id: typeof m.id === 'string' ? m.id : undefined, model: typeof m.model === 'string' ? m.model : undefined };
         if (object(m.usage)) {
@@ -55,9 +61,12 @@ function projectRecord(v: unknown): unknown {
         row.message = message;
     }
     if (v.type === 'user' && object(v.message) && Array.isArray(v.message.content)) {
+        const retained = v.message.content.filter((item: unknown) => object(item) && item.type === 'tool_result').length === 1 ? v.toolUseResult : undefined;
         row.message = { content: v.message.content.map(b => object(b) && b.type === 'tool_result'
             ? { type: b.type, tool_use_id: typeof b.tool_use_id === 'string' ? b.tool_use_id : undefined,
-                is_error: b.is_error === undefined || typeof b.is_error === 'boolean' ? b.is_error : 'invalid' }
+                is_error: b.is_error === undefined || typeof b.is_error === 'boolean' ? b.is_error : 'invalid',
+                ...(b.is_error === true ? { usage_error_category: usageToolErrorCategory(b, retained) }
+                    : { usage_patch_mechanisms: usagePatchMechanisms(b, retained) }) }
             : null) };
     }
     if (v.type === 'system' && typeof v.subtype === 'string') {
@@ -103,9 +112,10 @@ export function readSavedUsage(path = usageIndexPath()): UsageDashboardSnapshot 
     let db: Database | undefined;
     try {
         db = new Database(path, { readonly: true });
-        const row = db.query<{ value: string }, []>('SELECT value FROM snapshot WHERE id=1 AND length(CAST(value AS BLOB)) <= 262144').get();
+        // The private cache header is separate from the validated wire envelope.
+        const row = db.query<{ value: string }, [number]>('SELECT value FROM snapshot WHERE id=1 AND length(CAST(value AS BLOB)) <= ?').get(MAX_USAGE_RECORD_BYTES + 256);
         const saved: unknown = row ? JSON.parse(row.value) : null;
-        if (!object(saved) || saved.fittingVersion !== SAVED_USAGE_FITTING_VERSION) return null;
+        if (!object(saved) || saved.fittingVersion !== SAVED_USAGE_FITTING_VERSION || saved.patchActivityVersion !== SAVED_USAGE_PATCH_ACTIVITY_VERSION) return null;
         const parsed = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: saved.snapshot });
         if (parsed?.type !== 'usage') return null;
         // Wire compatibility does not make pre-span aggregates current. Reuse the indexed events.
@@ -469,7 +479,7 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
         // Cleanup can fail too. Finish it while publication can still roll back.
         cleanupScratch();
         check();
-        db.query('INSERT OR REPLACE INTO snapshot VALUES (1,?)').run(JSON.stringify({ fittingVersion: SAVED_USAGE_FITTING_VERSION, snapshot }));
+        db.query('INSERT OR REPLACE INTO snapshot VALUES (1,?)').run(JSON.stringify({ fittingVersion: SAVED_USAGE_FITTING_VERSION, patchActivityVersion: SAVED_USAGE_PATCH_ACTIVITY_VERSION, snapshot }));
         db.exec('DELETE FROM identities; COMMIT;');
         metrics.finalizeMs = performance.now() - finalizeStartedAt;
         return snapshot;

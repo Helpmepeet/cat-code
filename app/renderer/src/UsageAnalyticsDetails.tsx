@@ -1,10 +1,11 @@
 import { useId, useState, type ReactNode, type KeyboardEvent, type MouseEvent } from 'react';
-import type { UsageRangeSummary, UsageTimingSummary } from '../../shared/usageDashboard.js';
+import type { UsageRangeSummary, UsageTimingSummary, UsageTool } from '../../shared/usageDashboard.js';
 import { analyticsFamilyLabels, analyticsModelFamily, analyticsRouteLabels, analyticsRouteTiles, detailCompact, detailInput, detailPercent, detailRate, detailTotal, analyticsActivityAvailable, analyticsToolClass, analyticsDuration, analyticsModelLatency, type UsageAnalyticsActivityProps, type UsageAnalyticsDateProps, type UsageAnalyticsModelsProps, type UsageAnalyticsReliabilityProps } from './usageAnalyticsDetailsState.js';
 import { analyticsAreaPath, analyticsAxisLabels, analyticsBuildAxisLabels, analyticsBuildGeometry, analyticsCacheRows, analyticsCalendar, analyticsCalendarValues, analyticsClamp, analyticsCompositionSegments, analyticsConcurrencyLevel, analyticsDateTicks, analyticsDayLabel, analyticsLinearPath, analyticsMonotonePath, analyticsNearestPoint, analyticsNiceMax, analyticsPointCalendar, analyticsRateDomain, analyticsRequestFill, analyticsSparkGeometry, analyticsTextWidth, analyticsTicks, analyticsUncachedGroups, useAnalyticsChartWidth } from './usageAnalyticsChartState.js';
 import { usageTenMinuteClock, usageTenMinuteSlotCount } from './usageWorkPatternsState.js';
 import { usageStackedAreaGeometry } from './usageStackedAreaState.js';
 import './usageAnalyticsDetails.css';
+import { analyticsToolErrorReasons, analyticsPatchMechanisms, analyticsPatchFollowups, analyticsPatchCounts } from './usageAnalyticsDetailsState.js';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
     return <section className="usage-analytics-details" aria-label={title}><header className="uad-section-head"><h2>{title}</h2></header>{children}</section>;
@@ -283,6 +284,27 @@ function BuildScatter({ summary, onSelectBuild }: { summary: UsageRangeSummary; 
         <div className="uad-readout uad-build-readout" aria-live="off">{active && <><span className="uad-build-sha">{active.sha}</span>{active.dirty ? ' · Uncommitted changes' : ' · Committed'} · {detailPercent(active.rate)} · {active.errors.toLocaleString()} errors / {active.results.toLocaleString()} results · First retained request {active.first}</>}</div>
     </Card>;
 }
+function PatchDimensions({ tool, summary }: { tool: UsageTool; summary: UsageRangeSummary }) {
+    const sessions = summary.rankedSessions.items.flatMap(session => {
+        const counts = session.tools.find(item => item.id === tool.id && item.kind === 'named');
+        return counts ? [{ session, counts }] : [];
+    });
+    return <details className="uad-patch-dimensions"><summary>Models and root sessions</summary>
+        <p>Rates use returned results. Missing results are not successes. Models identify the request; follow-up sequences belong to the first failed call.</p>
+        <p>Later calls are observations from the same agent, not proof of the same target or a correct edit. Shell activity cannot establish whether an edit occurred.</p>
+        <h4>Models</h4><ul>{tool.patchModels?.map(model => <li key={model.id}><strong>{model.kind === 'unknown' ? 'Unknown model' : model.label}</strong><p>{analyticsPatchCounts(model)}</p>
+            {analyticsToolErrorReasons(model) && <p>{analyticsToolErrorReasons(model)}</p>}
+            {analyticsPatchMechanisms(model) && <p>{analyticsPatchMechanisms(model)}</p>}
+            {analyticsPatchFollowups(model) && <p>{analyticsPatchFollowups(model)}</p>}</li>)}</ul>
+        <h4>Retained root sessions</h4>
+        {summary.rankedSessions.omitted > 0 && <p>{summary.rankedSessions.omitted.toLocaleString()} root sessions omitted.</p>}
+        <ul>{sessions.map(({ session, counts }) => <li key={session.id}><strong>{session.project?.label ? `${session.project.label} · ` : ''}{(session.engineSessionId ?? session.id).slice(0, 8)}</strong><p>{analyticsPatchCounts(counts)}</p>
+            {analyticsToolErrorReasons(counts) && <p>{analyticsToolErrorReasons(counts)}</p>}
+            {analyticsPatchMechanisms(counts) && <p>{analyticsPatchMechanisms(counts)}</p>}
+            {analyticsPatchFollowups(counts) && <p>{analyticsPatchFollowups(counts)}</p>}</li>)}</ul>
+        {!sessions.length && <p>No matching root-session detail retained.</p>}
+    </details>;
+}
 function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalyticsReliabilityProps, 'summary' | 'selectedToolId' | 'onSelectTool'>) {
     const [expanded, setExpanded] = useState(false);
     const listId = useId();
@@ -302,7 +324,10 @@ function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalytic
                 <span className="uad-tool-volume">{detailCompact(tool.results)}</span>
                 {available ? <Spark height={22} values={analyticsCalendarValues(summary, d => d.tools.find(t => t.id === tool.id)?.errors ?? 0)} /> : <span className="uad-tool-history" title="Daily error history unavailable">Unavailable</span>}
                 <span className="uad-tool-rate">{detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}</span>
-            </Row></li>;
+            </Row>{analyticsToolErrorReasons(tool) && <p className="uad-tool-reasons" aria-label={`${tool.label} error reasons`}>{analyticsToolErrorReasons(tool)}</p>}
+                {analyticsPatchMechanisms(tool) && <p className="uad-tool-reasons" aria-label={`${tool.label} patch adjustments`}>{analyticsPatchMechanisms(tool)}</p>}
+                {analyticsPatchFollowups(tool) && <p className="uad-tool-reasons" aria-label={`${tool.label} follow-up activity`}>{analyticsPatchFollowups(tool)}</p>}
+                {tool.patchModels && <PatchDimensions tool={tool} summary={summary} />}</li>;
         })}</ol>
         {rows.length > 10 && <button className="uad-tools-toggle" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer tools' : `Show ${rows.length - 10} more tools`}</button>}
         {!rows.length && <p>No tool observations.</p>}

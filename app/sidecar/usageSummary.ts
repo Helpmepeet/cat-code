@@ -1,11 +1,28 @@
 import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
+import { mergeUsageToolCounts, type UsageTool, type UsagePatchModel } from '../shared/usageDashboard.js';
 import { isCurrentSolLunaUsageModel, isCurrentUsageModel, isRetiredUsageModel } from '../shared/usageModelStatus.js';
 import { MAX_USAGE_SKILLS, type UsageCallCount, type UsageRankedSession } from '../shared/usageDashboard.js';
 export { usageCategory } from '../../src/utils/usageCategory.js';
 export const tokenTotal = (t: UsageTokens): number => t.fresh + t.read + t.write + t.output;
 export const emptyTokens = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
 const emptyCost = (): UsageTokenCostEstimate => ({ usd: 0, pricedTokens: 0 });
+function groupPatchModels(items: readonly UsagePatchModel[], limit: number): UsagePatchModel[] {
+    const models = new Map<string, UsagePatchModel>();
+    for (const item of items) {
+        const old = models.get(item.id);
+        models.set(item.id, old ? { ...item, ...mergeUsageToolCounts([old, item]) } : item);
+    }
+    const sorted = [...models.values()].sort((a, b) => b.errors - a.errors || b.requests - a.requests || a.id.localeCompare(b.id));
+    const ids = new Set(sorted.filter(item => item.kind === 'named').slice(0, limit).map(item => item.id));
+    const kept = sorted.filter(item => item.kind === 'unknown' || ids.has(item.id));
+    const other = sorted.filter(item => !kept.includes(item));
+    return [...kept, ...(other.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', ...mergeUsageToolCounts(other) }] : [])];
+}
+function mergeToolDetails(items: readonly UsageTool[], modelLimit: number) {
+    const models = items.flatMap(item => item.patchModels ?? []);
+    return { ...mergeUsageToolCounts(items), ...(models.length ? { patchModels: groupPatchModels(models, modelLimit) } : {}) };
+}
 const addCost = (target: UsageTokenCostEstimate, value: UsageTokenCostEstimate | undefined) => {
     target.usd += value?.usd ?? 0;
     target.pricedTokens += value?.pricedTokens ?? 0;
@@ -39,7 +56,8 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
         return { state: omitted > 0 ? 'truncated' : items.length > 0 ? 'available' : 'unavailable', omitted, items };
     };
     const models = [...summary.models].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id));
-    const tools = [...summary.tools].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id));
+    const fitTool = (tool: UsageTool): UsageTool => ({ ...tool, ...(tool.patchModels ? { patchModels: groupPatchModels(tool.patchModels, modelLimit) } : {}) });
+    const tools = [...summary.tools].map(fitTool).sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id));
     const namedModels = models.filter(m => m.kind === 'named');
     const priorityModels = namedModels.filter(isCurrentUsageModel);
     const legacySolLunaModels = namedModels.filter(isCurrentSolLunaUsageModel);
@@ -47,14 +65,14 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     const selectedModels = new Set([...new Map([...priorityModels, ...legacySolLunaModels, ...historicalModels, ...namedModels].map(model => [model.id, model])).values()].slice(0, modelLimit).map(model => model.id));
     const errorLeaders = tools.filter(t => t.kind === 'named' && t.errors > 0)
         .sort((a, b) => b.errors - a.errors || b.results - a.results || b.requests - a.requests || a.id.localeCompare(b.id));
-    const overviewSource = summary.toolBreakdown?.items ?? tools;
+    const overviewSource = summary.toolBreakdown?.items.map(fitTool) ?? tools;
     const overviewOrdered = [...overviewSource].filter(t => t.kind === 'named').sort((a, b) =>
         Number(b.errors > 0) - Number(a.errors > 0) || (a.errors > 0 && b.errors > 0 ? b.errors - a.errors || b.results - a.results : 0) || b.requests - a.requests || a.id.localeCompare(b.id));
     const overviewIds = new Set(overviewOrdered.slice(0, breakdownLimit).map(t => t.id));
     const overviewKept = overviewSource.filter(t => t.kind === 'unknown' || overviewIds.has(t.id));
     const overviewOther = overviewSource.filter(t => !overviewKept.includes(t));
     const overviewOmitted = (summary.toolBreakdown?.omitted ?? summary.detail.omittedTools) + overviewOther.filter(t => t.kind === 'named').length;
-    const toolBreakdown = { items: [...overviewKept, ...(overviewOmitted ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: overviewOther.reduce((n, t) => n + t.requests, 0), results: overviewOther.reduce((n, t) => n + t.results, 0), errors: overviewOther.reduce((n, t) => n + t.errors, 0) }] : [])], omitted: overviewOmitted };
+    const toolBreakdown = { items: [...overviewKept, ...(overviewOmitted ? [{ id: 'other', kind: 'other' as const, label: 'Other', ...mergeToolDetails(overviewOther, modelLimit) }] : [])], omitted: overviewOmitted };
     const selectedTools = new Set([...new Map([...errorLeaders, ...tools.filter(t => t.kind === 'named')].map(tool => [tool.id, tool])).values()].slice(0, toolLimit).map(t => t.id));
     const keepModel = (m: UsageCategory) => m.kind === 'unknown' || selectedModels.has(m.id);
     const keepTool = (t: UsageCategory) => t.kind === 'unknown' || selectedTools.has(t.id);
@@ -92,7 +110,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
         const other = item.tools.filter(tool => !kept.includes(tool));
         return { ...item, models: [...retained, ...(omitted.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', tokens, tokenCost }] : [])],
             modelDetail: { state: omittedCount ? 'grouped' : 'full', omitted: omittedCount },
-            tools: [...kept, ...(other.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: other.reduce((sum, tool) => sum + tool.requests, 0), results: other.reduce((sum, tool) => sum + tool.results, 0), errors: other.reduce((sum, tool) => sum + tool.errors, 0) }] : [])] };
+            tools: [...kept, ...(other.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', ...mergeToolDetails(other, modelLimit) }] : [])] };
     };
     const groupDayTools = (items: UsageDayTool[]): UsageDayTool[] => {
         const grouped = new Map<string, UsageDayTool>();
@@ -156,7 +174,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
         },
         toolBreakdown,
         models: [...models.filter(keepModel), ...(omittedModels.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', tokens: otherTokens, tokenCost: otherCost }] : [])].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id)),
-        tools: [...tools.filter(keepTool), ...(omittedTools.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: omittedTools.reduce((n, t) => n + t.requests, 0), results: omittedTools.reduce((n, t) => n + t.results, 0), errors: omittedTools.reduce((n, t) => n + t.errors, 0) }] : [])].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id)),
+        tools: [...tools.filter(keepTool), ...(omittedTools.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', ...mergeToolDetails(omittedTools, modelLimit) }] : [])].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id)),
         days: summary.days.map(day => {
             day = { ...day, skills: groupSkills(day.skills) };
             const kept = day.models.filter(m => keptModelIds.has(m.id));
@@ -248,6 +266,11 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
     for (const tools of [10, 8, 6]) for (const builds of [2, 1]) for (const contributors of [5, 0]) {
         const recent = { models: 8, tools, contributors, builds, timeline: contributors ? 1 : 0 };
         for (const all of allBuildTiers.filter(tier => tier.tools >= allToolFloor)) if (fit(recent, all)) return snapshot;
+    }
+    // Preserve named tool errors and a build marker when added reason counts
+    // push a history over the envelope; group model detail before tool identities.
+    for (const all of allBuildTiers.filter(tier => tier.tools >= allToolFloor)) {
+        if (fit({ models: 4, tools: 10, contributors: 0, builds: 1, timeline: 0 }, all)) return snapshot;
     }
     for (const models of [8, 4]) {
         const recent = { models, tools: 4, contributors: 0, builds: 1, timeline: 0 };

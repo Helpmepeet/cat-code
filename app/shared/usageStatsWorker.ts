@@ -1,4 +1,5 @@
 import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, UsageEffort, UsageParallel, } from './usageDashboard.js';
+import { USAGE_TOOL_ERROR_CATEGORIES, USAGE_PATCH_MECHANISMS, USAGE_PATCH_FOLLOWUP_STATES } from './usageDashboard.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
 import { shiftLocalCalendarDays } from '../../src/utils/usageWindow.js';
 import { MAX_USAGE_RANKED_SESSIONS, MAX_USAGE_SKILLS, USAGE_INTEGRATIONS, type UsageTokenSources, type UsageCallCount } from './usageDashboard.js';
@@ -269,8 +270,45 @@ function model(v: unknown): v is UsageModel {
     const value = v as Record<string, unknown>;
     return ownKeys(value, ['id', 'kind', 'label', 'tokens', 'tokenCost']) && tokens(value.tokens) && tokenCost(value.tokenCost, tokenSum(value.tokens as UsageTokens));
 }
-function tool(v: unknown): v is UsageTool {
-    return obj(v) && category(v) && ownKeys(v, ['id', 'kind', 'label', 'requests', 'results', 'errors']) && safe((v as Record<string, unknown>).requests) && safe((v as Record<string, unknown>).results) && safe((v as Record<string, unknown>).errors) && ((v as Record<string, unknown>).errors as number) <= ((v as Record<string, unknown>).results as number) && ((v as Record<string, unknown>).results as number) <= ((v as Record<string, unknown>).requests as number);
+function tool(v: unknown): v is UsageTool { return toolWithModels(v, true); }
+function toolWithModels(v: unknown, allowModels: boolean): v is UsageTool {
+    if (!obj(v) || !category(v)) return false;
+    const value = v as Record<string, unknown>;
+    if (!ownKeys(value, ['id', 'kind', 'label', 'requests', 'results', 'errors', ...(value.errorCategories === undefined ? [] : ['errorCategories']), ...(value.patchMechanisms === undefined ? [] : ['patchMechanisms']), ...(value.patchFollowups === undefined ? [] : ['patchFollowups']), ...(allowModels && value.patchModels !== undefined ? ['patchModels'] : [])]) || !safe(value.requests) || !safe(value.results) || !safe(value.errors) || value.errors > value.results || value.results > value.requests) return false;
+    if (value.errorCategories !== undefined) {
+        if (!obj(value.errorCategories)) return false;
+        let sum = 0;
+        for (const [key, count] of Object.entries(value.errorCategories)) {
+            if (!(USAGE_TOOL_ERROR_CATEGORIES as readonly string[]).includes(key) || !safe(count)) return false;
+            sum += count;
+        }
+        if (!safe(sum) || sum !== value.errors) return false;
+    }
+    if (value.patchMechanisms !== undefined) {
+        if (!obj(value.patchMechanisms)) return false;
+        for (const [key, count] of Object.entries(value.patchMechanisms)) {
+            if (!(USAGE_PATCH_MECHANISMS as readonly string[]).includes(key) || !safe(count) || count > value.results - value.errors) return false;
+        }
+    }
+    if (value.patchFollowups !== undefined) {
+        const followups = value.patchFollowups;
+        if (!obj(followups) || !ownKeys(followups, ['episodes', 'retryCalls', 'repeatErrors', 'states']) || !safe(followups.episodes) || followups.episodes > value.errors || !safe(followups.retryCalls) || !safe(followups.repeatErrors) || followups.repeatErrors > followups.retryCalls || !obj(followups.states)) return false;
+        let sum = 0;
+        for (const [key, count] of Object.entries(followups.states)) {
+            if (!(USAGE_PATCH_FOLLOWUP_STATES as readonly string[]).includes(key) || !safe(count)) return false;
+            sum += count;
+        }
+        if (!safe(sum) || sum !== followups.episodes) return false;
+    }
+    if (value.patchModels !== undefined) {
+        if (!allowModels || !Array.isArray(value.patchModels) || value.patchModels.length > MAX_USAGE_MODELS + 2 || !uniqueCategories(value.patchModels, MAX_USAGE_MODELS) || !value.patchModels.every(item => toolWithModels(item, false))) return false;
+        for (const field of ['requests', 'results', 'errors'] as const) {
+            const sum = (value.patchModels as UsageTool[]).reduce((n, item) => n + item[field], 0);
+            const total = value[field] as number;
+            if (!safe(sum) || (value.kind === 'other' ? sum > total : sum !== total)) return false;
+        }
+    }
+    return true;
 }
 function dayTool(v: unknown): v is UsageDayTool {
     if (!obj(v) || !ownKeys(v, ['id', 'requests', 'results', 'errors', ...(v.builds === undefined ? [] : ['builds'])]) || !id(v.id) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests) return false;
@@ -536,7 +574,7 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 22 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 2 || v.metricVersion !== 1 || v.countingVersion !== 23 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || !validTimezone(v.timezone) || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'oversizedToolResults', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];

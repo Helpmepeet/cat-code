@@ -9,6 +9,75 @@ const roots: string[] = [];
 afterEach(async () => { for (const path of roots.splice(0))
     await rm(path, { recursive: true, force: true }); });
 const asOf = '2026-09-13T12:00:00.000Z';
+test('copied compaction context counts execution once without merging unrelated subagent IDs or dropping model usage', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'usage-copy-')); roots.push(root);
+    await mkdir(join(root, 's', 'subagents'), { recursive: true });
+    const request = (uuid: string, input: number) => ({ type: 'assistant', sessionId: 's', uuid, timestamp: '2026-09-12T10:00:00.000Z',
+        message: { id: uuid, model: 'model', usage: { input_tokens: input }, content: [{ type: 'tool_use', id: 'reused-tool-id', name: 'apply_patch', input: { patch: 'PRIVATE_PATCH' } }] } });
+    const result = (uuid: string, code: string) => ({ type: 'user', sessionId: 's', uuid, timestamp: '2026-09-12T10:01:00.000Z',
+        toolUseResult: { type: 'file_patch_error', code: 'PATCH_PREFLIGHT_FAILED', details: [{ code, path: 'PRIVATE_PATH' }, { code: 'PATCH_PLANNER_LIMIT' }] },
+        message: { content: [{ type: 'tool_result', tool_use_id: 'reused-tool-id', is_error: true, content: 'PRIVATE_ERROR_BODY' }] } });
+    const parent = [
+        request('parent', 0), result('parent-result', 'PATCH_ANCHOR_AMBIGUOUS'),
+        { type: 'assistant', sessionId: 's', uuid: 'parent-success', timestamp: '2026-09-12T10:00:00.000Z', message: { content: [{ type: 'tool_use', id: 'success', name: 'apply_patch' }] } },
+        { type: 'user', sessionId: 's', uuid: 'parent-success-result', timestamp: '2026-09-12T10:01:00.000Z',
+            toolUseResult: { files: [{ placements: [{ forwardMatchCount: 2 }, { forwardMatchCount: 3 }] }] },
+            message: { content: [{ type: 'tool_result', tool_use_id: 'success' }] } },
+    ];
+    const main = join(root, 's.jsonl'), compact = join(root, 's', 'subagents', 'agent-acompact-0123456789abcdef.jsonl'), agent = join(root, 's', 'subagents', 'agent-a0123456789abcdef.jsonl');
+    await writeFile(main, parent.map(row => JSON.stringify(row)).join('\n'));
+    await writeFile(compact, [...parent, { type: 'assistant', sessionId: 's', uuid: 'compact-model', timestamp: '2026-09-12T10:02:00.000Z', message: { id: 'compact-model', model: 'model', usage: { input_tokens: 40 } } }].map(row => JSON.stringify(row)).join('\n'));
+    await writeFile(agent, [request('genuine-agent', 30), result('agent-result', 'PATCH_ORDER_CONFLICT')].map(row => JSON.stringify(row)).join('\n'));
+    for (const files of [[compact, agent, main], [main, agent, compact]]) {
+        const direct = await collectRetainedUsage(files, asOf, { timezone: 'UTC' });
+        const indexed = await collectIndexedUsage(files, asOf, { path: join(root, 'index.sqlite'), timezone: 'UTC', deadline: Date.now() + 60000 });
+        expect(indexed.ranges).toEqual(direct.ranges);
+        const range = direct.ranges['7d'];
+        expect(range.requests).toBe(3);
+        expect(range.tools[0]).toMatchObject({ requests: 3, results: 3, errors: 2, errorCategories: { ambiguity: 1, 'order-conflict': 1 }, patchMechanisms: { 'forward-match': 1 } });
+        expect(range.days.find(day => day.date === '2026-09-12')!.tokenSources).toMatchObject({ compaction: { fresh: 40 }, subagents: { fresh: 30 } });
+        expect(range.tokens.fresh).toBe(70);
+    }
+    const db = new (await import('bun:sqlite')).Database(join(root, 'index.sqlite'), { readonly: true });
+    try {
+        const projection = JSON.stringify(db.query('SELECT value FROM records').all());
+        expect(projection).toContain('usage_error_category');
+        for (const secret of ['PRIVATE_PATCH', 'PRIVATE_PATH', 'PRIVATE_ERROR_BODY']) expect(projection).not.toContain(secret);
+    } finally { db.close(); }
+});
+test('successful patch adjustment metadata projects to per-call counts, not hunk counts or prefixes', async () => {
+    const rows = [];
+    const placements = [
+        { hunk: 1, oldStart: 0, oldEnd: 1, reason: 'exact', forwardMatchCount: 3 },
+        { hunk: 2, oldStart: 1, oldEnd: 2, reason: 'exact', forwardMatchCount: 2 },
+    ];
+    for (const [id, name, is_error, notes] of [
+        ['forward', 'apply_patch', false, placements],
+        ['reorder', 'apply_patch', false, [{ reordered: true }, { reordered: true }]],
+        ['indent', 'apply_patch', false, [{ indentationAdjustment: { from: '\t', to: '  ' } }]],
+        ['failed', 'apply_patch', true, placements],
+        ['grep', 'Grep', false, placements],
+    ] as const) {
+        rows.push({ type: 'assistant', sessionId: 's', uuid: id, timestamp: '2026-09-12T10:00:00.000Z', message: { content: [{ type: 'tool_use', id, name }] } });
+        rows.push({ type: 'user', sessionId: 's', uuid: `${id}-result`, timestamp: '2026-09-12T10:01:00.000Z',
+            toolUseResult: { files: [{ path: 'PRIVATE_PATH', before: 'PRIVATE_CONTENT', placements: notes }] },
+            message: { content: [{ type: 'tool_result', tool_use_id: id, is_error }] } });
+    }
+    const path = await file(rows), index = join(roots.at(-1)!, 'index.sqlite');
+    const direct = await collectRetainedUsage([path], asOf, { timezone: 'UTC' });
+    const indexed = await collectIndexedUsage([path], asOf, { path: index, timezone: 'UTC', deadline: Date.now() + 60000 });
+    expect(indexed.ranges).toEqual(direct.ranges);
+    expect(direct.ranges['7d'].tools.find(tool => tool.label === 'apply_patch')).toMatchObject({
+        requests: 4, results: 4, errors: 1, patchMechanisms: { 'forward-match': 1, 'hunk-reorder': 1, 'indentation-adjustment': 1 },
+    });
+    expect(direct.ranges['7d'].tools.find(tool => tool.label === 'Grep')!.patchMechanisms).toBeUndefined();
+    const db = new (await import('bun:sqlite')).Database(index, { readonly: true });
+    try {
+        const projection = JSON.stringify(db.query('SELECT value FROM records').all());
+        for (const secret of ['PRIVATE_PATH', 'PRIVATE_CONTENT', 'indentationAdjustment', 'oldStart']) expect(projection).not.toContain(secret);
+        expect(projection).toContain('indentation-adjustment');
+    } finally { db.close(); }
+});
 test('analytics sources, exact prior outcomes and independent named dimensions survive indexed canonical replay', async () => {
     const root = await mkdtemp(join(tmpdir(), 'usage-analytics-')); roots.push(root);
     await mkdir(join(root, 's', 'subagents'), { recursive: true });

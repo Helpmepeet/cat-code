@@ -1,6 +1,45 @@
 import type { UsageRangeSummary, UsageTokens, UsageTimingSummary } from '../../shared/usageDashboard.js';
 import type { AutoModeUsageRoute } from '../../shared/usageAutoMode.js';
 import { isFilePatchToolName } from '../../../src/tools/FilePatchTool/constants.js';
+import { USAGE_TOOL_ERROR_CATEGORIES, USAGE_PATCH_MECHANISMS, USAGE_PATCH_FOLLOWUP_STATES, type UsageTool, type UsageToolErrorCategory, type UsagePatchMechanism, type UsagePatchFollowupState } from '../../shared/usageDashboard.js';
+
+const toolErrorLabels: Record<UsageToolErrorCategory, string> = {
+    ambiguity: 'Ambiguous context', 'text-not-found': 'Text not found', 'nonconsecutive-context': 'Nonconsecutive context',
+    'order-conflict': 'Order conflict', 'planner-limit': 'Planning limit', 'malformed-patch': 'Malformed patch',
+    'permission-denied': 'Permission denied', interrupted: 'Cancelled', other: 'Other',
+};
+export function analyticsToolErrorReasons(tool: UsageTool): string {
+    if (!tool.errorCategories) return '';
+    return USAGE_TOOL_ERROR_CATEGORIES.filter(category => tool.errorCategories![category])
+        .map(category => `${toolErrorLabels[category]}: ${tool.errorCategories![category]!.toLocaleString()}`).join(' · ');
+}
+const patchMechanismLabels: Record<UsagePatchMechanism, string> = {
+    'forward-match': 'Forward match', 'hunk-reorder': 'Hunks reordered', 'indentation-adjustment': 'Indentation adjusted',
+};
+export function analyticsPatchMechanisms(tool: UsageTool): string {
+    return USAGE_PATCH_MECHANISMS.filter(mechanism => tool.patchMechanisms?.[mechanism])
+        .map(mechanism => `${patchMechanismLabels[mechanism]}: ${tool.patchMechanisms![mechanism]!.toLocaleString()} ${tool.patchMechanisms![mechanism] === 1 ? 'call' : 'calls'}`).join(' · ');
+}
+
+const followupLabels: Record<UsagePatchFollowupState, string> = {
+    'retry-result-success': 'Later patch reported success', 'retry-result-missing': 'Later patch result missing',
+    'edit-switch': 'Later Edit call', 'write-switch': 'Later Write call', 'shell-switch-unknown': 'Later shell call, attribution unknown',
+    unresolved: 'No later action observed', unknown: 'Overlapping activity, sequence unknown',
+};
+export function analyticsPatchFollowups(tool: UsageTool): string {
+    const followups = tool.patchFollowups;
+    if (!followups) return '';
+    return [
+        `${followups.episodes.toLocaleString()} failed-call ${followups.episodes === 1 ? 'sequence' : 'sequences'}`,
+        `${followups.retryCalls.toLocaleString()} later patch ${followups.retryCalls === 1 ? 'call' : 'calls'}`,
+        `${followups.repeatErrors.toLocaleString()} repeat ${followups.repeatErrors === 1 ? 'error' : 'errors'}`,
+        ...USAGE_PATCH_FOLLOWUP_STATES.filter(state => followups.states[state]).map(state => `${followupLabels[state]}: ${followups.states[state]!.toLocaleString()}`),
+    ].join(' · ');
+}
+export function analyticsPatchCounts(tool: UsageTool): string {
+    const missing = tool.requests - tool.results;
+    return `${tool.requests.toLocaleString()} ${tool.requests === 1 ? 'call' : 'calls'} · ${tool.errors.toLocaleString()} ${tool.errors === 1 ? 'error' : 'errors'} / ${tool.results.toLocaleString()} ${tool.results === 1 ? 'result' : 'results'} · ${detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}${missing > 0 ? ` · ${missing.toLocaleString()} ${missing === 1 ? 'result' : 'results'} missing` : ''}`;
+}
 
 export type UsageAnalyticsDetailProps = { summary: UsageRangeSummary };
 export type UsageAnalyticsDateProps = UsageAnalyticsDetailProps & { selectedDate: string; onSelectDate: (date: string) => void };

@@ -66,11 +66,75 @@ export type UsageModel = UsageCategory & {
     /** Required on validated snapshots; optional only for pre-grouping callers. */
     tokenCost?: UsageTokenCostEstimate;
 };
+export const USAGE_TOOL_ERROR_CATEGORIES = ['ambiguity', 'text-not-found', 'nonconsecutive-context', 'order-conflict', 'planner-limit', 'malformed-patch', 'permission-denied', 'interrupted', 'other'] as const;
+export type UsageToolErrorCategory = typeof USAGE_TOOL_ERROR_CATEGORIES[number];
+export type UsageToolErrorCategories = Partial<Record<UsageToolErrorCategory, number>>;
+export const USAGE_PATCH_MECHANISMS = ['forward-match', 'hunk-reorder', 'indentation-adjustment'] as const;
+export type UsagePatchMechanism = typeof USAGE_PATCH_MECHANISMS[number];
+export type UsagePatchMechanisms = Partial<Record<UsagePatchMechanism, number>>;
+export const USAGE_PATCH_FOLLOWUP_STATES = ['retry-result-success', 'retry-result-missing', 'edit-switch', 'write-switch', 'shell-switch-unknown', 'unresolved', 'unknown'] as const;
+export type UsagePatchFollowupState = typeof USAGE_PATCH_FOLLOWUP_STATES[number];
+export type UsagePatchFollowups = {
+    episodes: number;
+    retryCalls: number;
+    repeatErrors: number;
+    states: Partial<Record<UsagePatchFollowupState, number>>;
+};
+export type UsagePatchModel = UsageCategory & Pick<UsageTool, 'requests' | 'results' | 'errors' | 'errorCategories' | 'patchMechanisms' | 'patchFollowups'>;
+export function mergeUsagePatchFollowups(tools: readonly { patchFollowups?: UsagePatchFollowups }[]): UsagePatchFollowups | undefined {
+    if (!tools.some(tool => tool.patchFollowups)) return undefined;
+    const result: UsagePatchFollowups = { episodes: 0, retryCalls: 0, repeatErrors: 0, states: {} };
+    for (const tool of tools) {
+        const source = tool.patchFollowups;
+        if (!source) continue;
+        result.episodes += source.episodes;
+        result.retryCalls += source.retryCalls;
+        result.repeatErrors += source.repeatErrors;
+        for (const state of USAGE_PATCH_FOLLOWUP_STATES) if (source.states[state]) result.states[state] = (result.states[state] ?? 0) + source.states[state]!;
+    }
+    return result;
+}
+export function mergeUsagePatchMechanisms(tools: readonly { patchMechanisms?: UsagePatchMechanisms }[]): UsagePatchMechanisms {
+    const result: UsagePatchMechanisms = {};
+    for (const tool of tools) for (const mechanism of USAGE_PATCH_MECHANISMS) {
+        const count = tool.patchMechanisms?.[mechanism] ?? 0;
+        if (count) result[mechanism] = (result[mechanism] ?? 0) + count;
+    }
+    return result;
+}
+export function mergeUsageToolErrorCategories(tools: readonly { errors: number; errorCategories?: UsageToolErrorCategories }[]): UsageToolErrorCategories {
+    const result: UsageToolErrorCategories = {};
+    for (const tool of tools) {
+        for (const category of USAGE_TOOL_ERROR_CATEGORIES) {
+            const count = tool.errorCategories?.[category] ?? (category === 'other' && !tool.errorCategories ? tool.errors : 0);
+            if (count) result[category] = (result[category] ?? 0) + count;
+        }
+    }
+    return result;
+}
 export type UsageTool = UsageCategory & {
     requests: number;
     results: number;
     errors: number;
+    errorCategories?: UsageToolErrorCategories;
+    patchMechanisms?: UsagePatchMechanisms;
+    /** Subsequent activity in the same execution scope, not proof of edit correctness. */
+    patchFollowups?: UsagePatchFollowups;
+    /** Request-model attribution, including an explicit unknown model. */
+    patchModels?: UsagePatchModel[];
 };
+export function mergeUsageToolCounts(items: readonly UsagePatchModel[]): Omit<UsagePatchModel, keyof UsageCategory> {
+    const errors = items.reduce((n, item) => n + item.errors, 0);
+    const mechanisms = mergeUsagePatchMechanisms(items);
+    const followups = mergeUsagePatchFollowups(items);
+    return {
+        requests: items.reduce((n, item) => n + item.requests, 0),
+        results: items.reduce((n, item) => n + item.results, 0), errors,
+        ...(errors && items.some(item => item.errorCategories) ? { errorCategories: mergeUsageToolErrorCategories(items) } : {}),
+        ...(Object.keys(mechanisms).length ? { patchMechanisms: mechanisms } : {}),
+        ...(followups ? { patchFollowups: followups } : {}),
+    };
+}
 export type UsageToolBuildObservation = {
     /** Commit recorded by the Cat Code build that wrote the tool request. */
     sha: string;
@@ -293,7 +357,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 2;
     metricVersion: 1;
-    countingVersion: 22;
+    countingVersion: 23;
     pricingVersion: typeof USAGE_PRICING_VERSION;
     snapshotId: string;
     scope: 'retained-transcripts';
