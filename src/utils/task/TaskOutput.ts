@@ -1,4 +1,5 @@
-import { unlink } from 'fs/promises'
+import { open, unlink } from 'fs/promises'
+import { constants } from 'fs'
 import { CircularBuffer } from '../CircularBuffer.js'
 import { logForDebugging } from '../debug.js'
 import { readFileRange, tailFile } from '../fsOperations.js'
@@ -8,7 +9,45 @@ import { DiskTaskOutput, getTaskOutputPath } from './diskOutput.js'
 
 const DEFAULT_MAX_MEMORY = 8 * 1024 * 1024 // 8MB
 const POLL_INTERVAL_MS = 1000
+const INLINE_POLL_INTERVAL_MS = 100
 const PROGRESS_TAIL_BYTES = 4096
+
+type PollingState = {
+  instance: TaskOutput
+  inline: boolean
+  timer?: ReturnType<typeof setTimeout>
+  lastContent: string
+  lastBytes: number
+}
+
+async function readInlineTail(path: string) {
+  await using file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+  const metadata = await file.stat()
+  if (!metadata.isFile()) throw new Error('Command output is not a regular file')
+  const bytesTotal = metadata.size
+  const offset = Math.max(0, bytesTotal - PROGRESS_TAIL_BYTES)
+  const buffer = Buffer.alloc(Math.min(bytesTotal, PROGRESS_TAIL_BYTES))
+  let bytesRead = 0
+  while (bytesRead < buffer.length) {
+    const result = await file.read(
+      buffer,
+      bytesRead,
+      buffer.length - bytesRead,
+      offset + bytesRead,
+    )
+    if (!result.bytesRead) break
+    bytesRead += result.bytesRead
+  }
+  let start = 0
+  // Skip a code point split by the rolling window; withhold incomplete final bytes.
+  if (offset > 0) {
+    while (start < bytesRead && (buffer[start]! & 0xc0) === 0x80) start++
+  }
+  const content = new TextDecoder().decode(buffer.subarray(start, bytesRead), {
+    stream: true,
+  })
+  return { content, bytesRead, bytesTotal }
+}
 
 type ProgressCallback = (
   lastLines: string,
@@ -51,8 +90,9 @@ export class TaskOutput {
 
   /** Registry of all file-mode TaskOutput instances with onProgress callbacks. */
   static #registry = new Map<string, TaskOutput>()
-  /** Subset of #registry currently being polled (visibility-driven by React). */
-  static #activePolling = new Map<string, TaskOutput>()
+  /** Subscription identity fences results from reads started before unsubscribe. */
+  static #activePolling = new Map<string, PollingState>()
+  static #reading = new Set<string>()
   static #pollInterval: ReturnType<typeof setInterval> | null = null
 
   constructor(
@@ -68,55 +108,92 @@ export class TaskOutput {
     this.#onProgress = onProgress
 
     // Register for polling when stdout goes to a file and progress is needed.
-    // Actual polling is started/stopped by React via startPolling/stopPolling.
+    // Consumers opt into polling via startPolling/stopPolling.
     if (stdoutToFile && onProgress) {
       TaskOutput.#registry.set(taskId, this)
     }
   }
 
   /**
-   * Begin polling the output file for progress. Called from React
-   * useEffect when the progress component mounts.
+   * Begin polling the output file for progress. Inline consumers sample
+   * immediately; ordinary consumers retain their shared tick.
    */
-  static startPolling(taskId: string): void {
+  static startPolling(taskId: string, options?: { inline: true }): void {
     const instance = TaskOutput.#registry.get(taskId)
     if (!instance || !instance.#onProgress) {
       return
     }
-    TaskOutput.#activePolling.set(taskId, instance)
-    if (!TaskOutput.#pollInterval) {
+    const existing = TaskOutput.#activePolling.get(taskId)
+    if (
+      existing?.instance === instance &&
+      existing.inline === !!options?.inline
+    )
+      return
+    TaskOutput.stopPolling(taskId)
+    const state: PollingState = {
+      instance,
+      inline: !!options?.inline,
+      lastContent: '',
+      lastBytes: 0,
+    }
+    TaskOutput.#activePolling.set(taskId, state)
+    if (state.inline) {
+      TaskOutput.#sample(taskId, state)
+    } else if (!TaskOutput.#pollInterval) {
       TaskOutput.#pollInterval = setInterval(TaskOutput.#tick, POLL_INTERVAL_MS)
       TaskOutput.#pollInterval.unref()
     }
   }
 
   /**
-   * Stop polling the output file. Called from React useEffect cleanup
-   * when the progress component unmounts.
+   * Stop polling; an in-flight read cannot publish into a removed subscription.
    */
   static stopPolling(taskId: string): void {
+    const state = TaskOutput.#activePolling.get(taskId)
+    if (state?.timer) clearTimeout(state.timer)
     TaskOutput.#activePolling.delete(taskId)
-    if (TaskOutput.#activePolling.size === 0 && TaskOutput.#pollInterval) {
+    if (
+      ![...TaskOutput.#activePolling.values()].some((state) => !state.inline) &&
+      TaskOutput.#pollInterval
+    ) {
       clearInterval(TaskOutput.#pollInterval)
       TaskOutput.#pollInterval = null
     }
   }
 
   /**
-   * Shared tick: reads the file tail for every actively-polled task.
-   * Non-async body (.then) to avoid stacking if I/O is slow.
+   * Shared tick for ordinary consumers. The per-task read fence prevents
+   * overlapping reads even when a subscription is stopped and restarted.
    */
   static #tick(): void {
-    for (const [, entry] of TaskOutput.#activePolling) {
-      if (!entry.#onProgress) {
-        continue
-      }
-      void tailFile(entry.path, PROGRESS_TAIL_BYTES).then(
+    for (const [taskId, state] of TaskOutput.#activePolling) {
+      if (!state.inline) TaskOutput.#sample(taskId, state)
+    }
+  }
+
+  static #sample(taskId: string, state: PollingState): void {
+    const entry = state.instance
+    if (!entry.#onProgress || TaskOutput.#reading.has(taskId)) return
+    TaskOutput.#reading.add(taskId)
+    const read = state.inline
+      ? readInlineTail(entry.path)
+      : tailFile(entry.path, PROGRESS_TAIL_BYTES)
+    void read
+      .then(
         ({ content, bytesRead, bytesTotal }) => {
-          if (!entry.#onProgress) {
+          if (
+            !entry.#onProgress ||
+            TaskOutput.#activePolling.get(taskId) !== state
+          )
             return
+          if (state.inline) {
+            if (content === state.lastContent && bytesTotal === state.lastBytes)
+              return
+            state.lastContent = content
+            state.lastBytes = bytesTotal
+            if (!content && bytesTotal === 0) return
           }
-          // Always call onProgress even when content is empty, so the
+          // Ordinary polling calls onProgress even when content is empty, so the
           // progress loop wakes up and can check for backgrounding.
           // Commands like `git log -S` produce no output for long periods.
           if (!content) {
@@ -160,7 +237,20 @@ export class TaskOutput {
           // File may not exist yet
         },
       )
-    }
+      .finally(() => {
+        TaskOutput.#reading.delete(taskId)
+        const current = TaskOutput.#activePolling.get(taskId)
+        if (!current?.inline) return
+        if (current !== state) {
+          TaskOutput.#sample(taskId, current)
+          return
+        }
+        current.timer = setTimeout(
+          () => TaskOutput.#sample(taskId, current),
+          INLINE_POLL_INTERVAL_MS,
+        )
+        current.timer.unref()
+      })
   }
 
   /** Write stdout data (pipe mode only — used by hooks). */
@@ -384,7 +474,9 @@ export class TaskOutput {
     this.#recentLines.clear()
     this.#onProgress = null
     this.#disk?.cancel()
-    TaskOutput.stopPolling(this.taskId)
-    TaskOutput.#registry.delete(this.taskId)
+    if (TaskOutput.#activePolling.get(this.taskId)?.instance === this)
+      TaskOutput.stopPolling(this.taskId)
+    if (TaskOutput.#registry.get(this.taskId) === this)
+      TaskOutput.#registry.delete(this.taskId)
   }
 }

@@ -1001,7 +1001,12 @@ async function* runShellCommand({
   // Progress signal: resolved by onProgress callback from the shared poller,
   // waking the generator to yield a progress update.
   let resolveProgress: (() => void) | null = null;
+  let pendingInlineProgress = false;
   function createProgressSignal(): Promise<null> {
+    if (inlineCommand && pendingInlineProgress) {
+      pendingInlineProgress = false;
+      return Promise.resolve(null);
+    }
     return new Promise<null>(resolve => {
       resolveProgress = () => resolve(null);
     });
@@ -1023,6 +1028,8 @@ async function* runShellCommand({
       if (resolve) {
         resolveProgress = null;
         resolve();
+      } else if (inlineCommand) {
+        pendingInlineProgress = true;
       }
     },
     preventCwdChanges,
@@ -1172,9 +1179,9 @@ async function* runShellCommand({
       };
     }
 
-    // Wait for the initial threshold before showing progress.
+    // Ordinary Bash progress retains its delay; inline output is sampled immediately.
     const startTime = Date.now();
-    {
+    if (!inlineCommand) {
       const initialResult = await Promise.race([resultPromise, backgroundSignal, new Promise<null>(resolve => {
         const t = setTimeout((r: (v: null) => void) => r(null), PROGRESS_THRESHOLD_MS, resolve);
         t.unref();
@@ -1192,12 +1199,10 @@ async function* runShellCommand({
       }
     }
 
-    // Start polling the output file for progress. The poller's #tick calls
-    // onProgress every second, which resolves progressSignal below.
-    TaskOutput.startPolling(shellCommand.taskOutput.taskId);
+    let progressSignal = createProgressSignal();
+    TaskOutput.startPolling(shellCommand.taskOutput.taskId, inlineCommand ? { inline: true } : undefined);
 
     while (true) {
-      const progressSignal = createProgressSignal();
       const result = await Promise.race([resultPromise, progressSignal, backgroundSignal]);
       if (result !== null) return foregroundResult(result);
 
@@ -1270,8 +1275,11 @@ async function* runShellCommand({
           timeoutMs
         } : undefined)
       };
+      progressSignal = createProgressSignal();
     }
   } finally {
+    resolveProgress = null;
+    pendingInlineProgress = false;
     abortController.signal.removeEventListener('abort', backgroundOnInterrupt);
     TaskOutput.stopPolling(shellCommand.taskOutput.taskId);
   }

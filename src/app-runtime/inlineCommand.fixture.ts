@@ -1,14 +1,14 @@
 import { mock } from 'bun:test'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { QueryEngineAppSessionConfig } from './createQueryEngineAppSession.js'
 import { YOLO_CLASSIFIER_TOOL_NAME } from '../utils/permissions/classifierShared.js'
 
 const root = process.env.INLINE_TEST_ROOT!
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated environment required')
-const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; explain?: boolean; nextTurn?: boolean; autoOrigin?: boolean; classifierDeny?: boolean; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
+const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; progressProbe?: boolean; ordinaryProgress?: boolean; explain?: boolean; nextTurn?: boolean; autoOrigin?: boolean; classifierDeny?: boolean; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
 const model = input.provider === 'codex' ? 'gpt-5.6-terra' : 'claude-sonnet-4-5'
-const evidence = { requests: [] as unknown[], classifierRequests: [] as any[], codexRequests: [] as unknown[], frames: [] as any[], transcript: [] as any[], runs: [] as any[], restored: [] as any[], permissions: 0, error: undefined as string | undefined, cwd: process.cwd(), counter: '', childAlive: false }
+const evidence = { requests: [] as unknown[], classifierRequests: [] as any[], codexRequests: [] as unknown[], frames: [] as any[], transcript: [] as any[], runs: [] as any[], progressTimes: [] as number[], ordinaryProgress: [] as unknown[], restored: [] as any[], permissions: 0, error: undefined as string | undefined, cwd: process.cwd(), counter: '', childAlive: false }
 if (input.sandbox || input.hookEdit || input.hookStop || input.hookContext) {
   const hooks: Record<string, unknown[]> = {}
   const hook = (event: string, output: unknown) => {
@@ -140,7 +140,16 @@ try {
     ;(evidence as any).restoredSourceCommand = resolveInlineCommandSource(snapshot, getSessionId(), source)
   }
   const source = { engineSessionId: getSessionId(), messageUuid: sourceMessage.uuid, contentBlockIndex: 0, fenceOrdinal: 0 }
-  if (input.queued) {
+  if (input.ordinaryProgress) {
+    const { asAgentId } = await import('../types/ids.js')
+    await BashTool.call({ command: input.command }, {
+      abortController: new AbortController(), getAppState: () => state,
+      setAppState: update => { state = update(state) },
+      agentId: asAgentId('ordinary-progress-test'), toolUseId: 'ordinary-progress',
+    } as import('../Tool.js').ToolUseContext, undefined, undefined, update => {
+      evidence.ordinaryProgress.push(update)
+    })
+  } else if (input.queued) {
     const { SidecarServer } = await import('../../app/sidecar/sidecarServer.js')
     const { FrameDecoder, encodeFrame } = await import('../../app/shared/framing.js')
     const { PROTOCOL_VERSION } = await import('../../app/shared/protocol.js')
@@ -186,6 +195,7 @@ try {
     const finished = new Promise<void>(resolve => { commandFinished = resolve })
     const executing = controller.submitInlineCommand(source, run => {
       evidence.runs.push(run)
+      evidence.progressTimes.push(Date.now())
       if (run.status !== 'running') commandFinished()
       if (run.status === 'running' && run.output.includes('BEFORE-STOP')) {
         if (input.agentStop) controller.abort('Agent stopped')
@@ -205,6 +215,7 @@ try {
         const completion = new Promise<void>(resolve => { secondFinished = resolve })
         secondExecution = controller.submitInlineCommand({ ...source, fenceOrdinal: 1 }, run => {
           evidence.runs.push(run)
+          evidence.progressTimes.push(Date.now())
           if (run.status !== 'running') secondFinished()
         })
         await completion
@@ -227,6 +238,11 @@ try {
     }
   }
 } catch (error) { evidence.error = String(error) }
+if (input.progressProbe) {
+  const first = evidence.runs.findIndex(run => run.status === 'running' && run.output)
+  const writtenAt = (await stat('command-started')).mtimeMs
+  ;(evidence as any).firstOutputAfterWriteMs = first < 0 ? null : Math.max(0, evidence.progressTimes[first]! - writtenAt)
+}
 let restoreMessages = evidence.transcript
 if (input.disk) {
   await storage.flushSessionStorage()

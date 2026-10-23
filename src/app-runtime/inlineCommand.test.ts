@@ -316,6 +316,25 @@ test('completed inline results emit exactly once even when output resembles loca
   }
 }, 30_000)
 
+test('inline output arrives while a short command is running without repeating quiet snapshots', async () => {
+  const result = await fixture({ progressProbe: true,
+    command: 'printf begun > command-started; printf EARLY-OUTPUT; sleep 1.2; printf FINAL-OUTPUT' })
+  expect(result.error).toBeUndefined()
+  const early = result.runs.filter((run: any) => run.status === 'running' && run.output === 'EARLY-OUTPUT')
+  expect(early).toHaveLength(1)
+  expect(result.firstOutputAfterWriteMs).not.toBeNull()
+  expect(result.restored[0]).toMatchObject({ status: 'success', output: 'EARLY-OUTPUTFINAL-OUTPUT' })
+  expect(result.requests).toHaveLength(0)
+}, 30_000)
+
+test('ordinary Bash keeps its delayed progress behavior for short commands', async () => {
+  const result = await fixture({ ordinaryProgress: true,
+    command: 'printf ORDINARY-OUTPUT; sleep 0.2; printf FINAL-OUTPUT' })
+  expect(result.error).toBeUndefined()
+  expect(result.ordinaryProgress).toEqual([])
+  expect(result.requests).toHaveLength(0)
+}, 30_000)
+
 test('real sidecar admits a human turn during inline execution without an automatic explanation', async () => {
   const result = await fixture({ queued: true, command: 'printf executed >> counter; printf QUEUE-WINDOW; sleep 1; printf QUEUE-DONE' })
   expect(result.error).toBeUndefined()

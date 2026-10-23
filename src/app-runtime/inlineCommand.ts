@@ -114,8 +114,11 @@ export async function runInlineCommand(
       } else if (message.type === 'progress') {
         const data = message.data as { type?: string; fullOutput?: string } | undefined
         if (data?.type === 'bash_progress' && typeof data.fullOutput === 'string') {
-          run = { ...run, output: bounded(data.fullOutput) }
-          operation.onProgress({ ...run })
+          const output = bounded(data.fullOutput)
+          if (output !== run.output) {
+            run = { ...run, output }
+            operation.onProgress({ ...run })
+          }
         }
       } else if (message.type === 'user') {
         const content = message.message.content
