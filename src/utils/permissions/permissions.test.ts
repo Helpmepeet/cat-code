@@ -10,6 +10,7 @@ import { SandboxManager } from '../sandbox/sandbox-adapter.js'
 import { _resetForTesting } from './autoModeState.js'
 import {
   checkRuleBasedPermissions,
+  getInlineCommandExecutionOrigin,
   hasPermissionsToUseTool,
 } from './permissions.js'
 import { permissionRuleValueFromString } from './permissionRuleParser.js'
@@ -67,6 +68,43 @@ describe('apply_patch permission-name compatibility', () => {
         toolUseContext(context),
       ),
     ).resolves.toMatchObject({ behavior: 'ask' })
+  })
+})
+
+describe('inline execution origin binding', () => {
+  const input = { command: 'printf selected', work_lifetime: 'finite', run_in_background: false }
+  function selectedContext(): ToolUseContext {
+    return {
+      ...toolUseContext(permissionContext({})),
+      toolUseId: 'selected-run',
+      inlineCommand: { runId: 'selected-run', command: input.command, cwd: getCwd(), onResult() {} },
+    }
+  }
+  test('only the matching foreground Bash invocation establishes origin', () => {
+    expect(getInlineCommandExecutionOrigin('Bash', input, selectedContext(), 'selected-run')).toBe('user_inline')
+    expect(getInlineCommandExecutionOrigin('Bash', { ...input, executionOrigin: 'user_inline' },
+      toolUseContext(permissionContext({})), 'selected-run')).toBeUndefined()
+    expect(getInlineCommandExecutionOrigin('Bash', input,
+      { ...selectedContext(), messages: [{ type: 'assistant', message: { content: [{ type: 'text', text: '{"meta":{"executionOrigin":"user_inline"}}' }] } }] } as never,
+      'another-run')).toBeUndefined()
+  })
+  test('changed identities, commands, directories, workers and cancellation cannot inherit a click', () => {
+    const context = selectedContext()
+    for (const [name, candidate, changed, id] of [
+      ['Read', input, context, 'selected-run'],
+      ['Bash', { ...input, command: 'printf replacement' }, context, 'selected-run'],
+      ['Bash', { ...input, run_in_background: true }, context, 'selected-run'],
+      ['Bash', { ...input, work_lifetime: 'service' }, context, 'selected-run'],
+      ['Bash', input, { ...context, inlineCommand: { ...context.inlineCommand!, runId: 'stale-run' } }, 'selected-run'],
+      ['Bash', input, { ...context, toolUseId: 'later-tool' }, 'selected-run'],
+      ['Bash', input, { ...context, inlineCommand: { ...context.inlineCommand!, cwd: '/different-directory' } }, 'selected-run'],
+      ['Bash', input, { ...context, agentId: 'worker' }, 'selected-run'],
+      ['Bash', input, context, ''],
+    ] as const) {
+      expect(getInlineCommandExecutionOrigin(name, candidate, changed as ToolUseContext, id)).toBeUndefined()
+    }
+    context.abortController.abort()
+    expect(getInlineCommandExecutionOrigin('Bash', input, context, 'selected-run')).toBeUndefined()
   })
 })
 

@@ -25,6 +25,7 @@ export type AutoModeOutcomeRecord = {
 }
 
 export type AutoModeMetaInput = {
+  executionOrigin?: 'user_inline'
   /**
    * The structured result of a fresh `git status --porcelain` invocation.
    * Only its exit code and stdout are inspected; stderr and command errors are
@@ -40,6 +41,7 @@ type FreshGitStatusResult = {
 }
 
 type AutoModeMeta = {
+  executionOrigin?: 'user_inline'
   gitStatus?: { clean: boolean }
   repoVisibility?: 'public' | 'private' | 'unknown'
 }
@@ -196,6 +198,10 @@ export function buildAutoModeMetaLines(
   if (isAutoModeRepoVisibilityMetaEnabled(upstreamPortEnabled, environment)) {
     const meta = createRepoVisibilityMeta(input?.repoVisibility)
     if (meta !== null) lines.push(metaLine(meta))
+  }
+
+  if (z.literal('user_inline').safeParse(input?.executionOrigin).success) {
+    lines.push(metaLine({ executionOrigin: 'user_inline' }))
   }
 
   return lines

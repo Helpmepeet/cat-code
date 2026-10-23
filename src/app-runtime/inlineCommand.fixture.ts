@@ -2,12 +2,13 @@ import { mock } from 'bun:test'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { QueryEngineAppSessionConfig } from './createQueryEngineAppSession.js'
+import { YOLO_CLASSIFIER_TOOL_NAME } from '../utils/permissions/classifierShared.js'
 
 const root = process.env.INLINE_TEST_ROOT!
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated environment required')
-const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
+const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; autoOrigin?: boolean; classifierDeny?: boolean; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
 const model = input.provider === 'codex' ? 'gpt-5.6-terra' : 'claude-sonnet-4-5'
-const evidence = { requests: [] as unknown[], codexRequests: [] as unknown[], frames: [] as any[], transcript: [] as any[], runs: [] as any[], restored: [] as any[], permissions: 0, error: undefined as string | undefined, cwd: process.cwd(), counter: '', childAlive: false }
+const evidence = { requests: [] as unknown[], classifierRequests: [] as any[], codexRequests: [] as unknown[], frames: [] as any[], transcript: [] as any[], runs: [] as any[], restored: [] as any[], permissions: 0, error: undefined as string | undefined, cwd: process.cwd(), counter: '', childAlive: false }
 if (input.sandbox || input.hookEdit || input.hookStop || input.hookContext) {
   const hooks: Record<string, unknown[]> = {}
   const hook = (event: string, output: unknown) => {
@@ -28,25 +29,45 @@ if (input.sandbox || input.hookEdit || input.hookStop || input.hookContext) {
 globalThis.fetch = (() => { throw new Error('Network forbidden in inline fixture') }) as unknown as typeof fetch
 ;(globalThis as any).MACRO = { VERSION: 'inline-test' }
 let convert: ((body: Record<string, unknown>) => { codexBody: unknown }) | undefined
+let ordinaryTurn = false
+let ordinaryToolSent = false
 mock.module('../services/api/client.js', () => ({
   CLIENT_REQUEST_ID_HEADER: 'x-client-request-id',
   resolveCodexOAuthTokensForLeaseOwner: async () => { throw new Error('OAuth forbidden') },
   getAnthropicClient: async () => ({ beta: { messages: { create: (body: Record<string, unknown>) => {
+    const choice = body.tool_choice as { name?: string } | undefined
+    if (choice?.name === YOLO_CLASSIFIER_TOOL_NAME) {
+      evidence.classifierRequests.push(JSON.parse(JSON.stringify(body)))
+      const stage1 = evidence.classifierRequests.length % 2 === 1
+      return Promise.resolve({
+        id: 'classifier-response', type: 'message', role: 'assistant', model,
+        content: [{ type: 'tool_use', id: 'classifier-verdict', name: choice.name,
+          input: stage1 ? { shouldBlock: true } : { thinking: 'Isolated classifier verdict',
+            shouldBlock: Boolean(input.classifierDeny), reason: 'Fixture decision' } }],
+        stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 20, output_tokens: 12 },
+      })
+    }
     const producingSource = input.multiBlock && evidence.requests.length === 0
-    if (evidence.requests.length >= (input.multiBlock || input.secondCommand || input.queued ? 2 : 1)) throw new Error('Duplicate model request')
+    if (evidence.requests.length >= (input.autoOrigin ? 3 : input.multiBlock || input.secondCommand || input.queued ? 2 : 1)) throw new Error('Duplicate model request')
     evidence.requests.push(JSON.parse(JSON.stringify(body)))
     if (convert) evidence.codexRequests.push(convert(body).codexBody)
+    const ordinaryTool = input.autoOrigin && ordinaryTurn && !ordinaryToolSent
+    if (ordinaryTool) ordinaryToolSent = true
     const events = [
       { type: 'message_start', message: { id: producingSource ? 'source-response' : 'inline-response', type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } },
-      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: producingSource ? '```bash\n' + input.command + '\n```' : input.queued && evidence.requests.length === 2 ? 'Queued human response.' : 'Here is the command result explanation.' } },
+      { type: 'content_block_start', index: 0, content_block: ordinaryTool
+        ? { type: 'tool_use', id: 'ordinary-tool', name: 'Bash', input: {} }
+        : { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: ordinaryTool
+        ? { type: 'input_json_delta', partial_json: JSON.stringify({ command: "bash -c 'printf ordinary >> counter'", work_lifetime: 'finite', run_in_background: false }) }
+        : { type: 'text_delta', text: producingSource ? '```bash\n' + input.command + '\n```' : input.queued && evidence.requests.length === 2 ? 'Queued human response.' : 'Here is the command result explanation.' } },
       { type: 'content_block_stop', index: 0 },
       ...(producingSource ? [
         { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
         { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Run this command when ready.' } },
         { type: 'content_block_stop', index: 1 },
       ] : []),
-      { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 12 } },
+      { type: 'message_delta', delta: { stop_reason: ordinaryTool ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 12 } },
       { type: 'message_stop' },
     ]
     const stream = Object.assign((async function* () { yield* events })(), { controller: new AbortController() })
@@ -71,6 +92,7 @@ if (input.sandbox) {
   await SandboxManager.initialize()
 }
 let state = getDefaultAppState()
+if (input.autoOrigin) state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
 let retainedMessages: readonly unknown[] = []
 const initial = createAssistantMessage({ content: '```bash\n' + input.command + '\n```' +
   (input.secondCommand ? '\n```sh\n' + input.secondCommand + '\n```' : '') })
@@ -80,7 +102,7 @@ const configuration: QueryEngineAppSessionConfig = {
   getAppState: () => state, setAppState: update => { state = update(state) },
   readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'Explain command results.',
   userSpecifiedModel: model,
-  canUseTool: async (_tool, toolInput) => {
+  canUseTool: input.autoOrigin ? undefined : async (_tool, toolInput) => {
     evidence.permissions++
     if (input.deny) return { behavior: 'deny', message: 'Fixture denied', decisionReason: { type: 'other', reason: 'Fixture' } }
     return { behavior: 'allow', updatedInput: input.edit ? { ...toolInput, command: 'printf substituted > forbidden' } : toolInput }
@@ -157,6 +179,10 @@ try {
       }
     })
     if (input.secondCommand) await controller.submitInlineCommand({ ...source, fenceOrdinal: 1 }, run => evidence.runs.push(run))
+    if (input.autoOrigin && !input.classifierDeny) {
+      ordinaryTurn = true
+      await controller.submit('Run the next ordinary assistant command.')
+    }
   }
 } catch (error) { evidence.error = String(error) }
 let restoreMessages = evidence.transcript

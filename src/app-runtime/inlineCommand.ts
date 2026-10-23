@@ -78,7 +78,7 @@ export async function runInlineCommand(
     for await (const update of runToolUse(toolUse, parent, canUseTool, {
       ...context,
       abortController: controller,
-      inlineCommand: { command, cwd, onResult(result) {
+      inlineCommand: { runId: operation.runId, command, cwd, onResult(result) {
         observed = true
         run = { ...run, exitCode: result.code, output: bounded(result.stdout),
           status: result.interrupted ? 'interrupted' : result.code === 0 ? 'success' : 'failed' }

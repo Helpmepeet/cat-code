@@ -18,6 +18,7 @@ import { POWERSHELL_TOOL_NAME } from '../../tools/PowerShellTool/toolName.js'
 import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
 import type { AssistantMessage } from '../../types/message.js'
 import { extractOutputRedirections } from '../bash/commands.js'
+import { getCwd } from '../cwd.js'
 import { logForDebugging } from '../debug.js'
 import { AbortError, toError } from '../errors.js'
 import { logError } from '../log.js'
@@ -591,6 +592,29 @@ async function runPermissionRequestHooksForHeadlessAgent(
   return null
 }
 
+/** Only the controller-bound pending call can carry the inline selection fact. */
+export function getInlineCommandExecutionOrigin(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: ToolUseContext,
+  toolUseID: string,
+): 'user_inline' | undefined {
+  const inline = context.inlineCommand
+  return inline !== undefined &&
+    toolName === BASH_TOOL_NAME &&
+    !context.agentId &&
+    !context.abortController.signal.aborted &&
+    toolUseID.length > 0 &&
+    inline.runId === toolUseID &&
+    context.toolUseId === toolUseID &&
+    inline.command === input.command &&
+    inline.cwd === getCwd() &&
+    input.run_in_background === false &&
+    input.work_lifetime === 'finite'
+    ? 'user_inline'
+    : undefined
+}
+
 export const hasPermissionsToUseTool: CanUseToolFn = async (
   tool,
   input,
@@ -825,7 +849,9 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // Run the auto mode classifier
       // Outcomes are no longer passed in here: they render inline, beneath the
       // call each one reports, so the classifier can correlate them by id.
-      const action = formatActionForClassifier(tool.name, input, {})
+      const action = formatActionForClassifier(tool.name, input, {
+        executionOrigin: getInlineCommandExecutionOrigin(tool.name, input, context, toolUseID),
+      })
       setClassifierChecking(toolUseID)
       let classifierResult
       try {

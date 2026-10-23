@@ -17,6 +17,33 @@ const enabledEnvironment = {
 }
 
 describe('auto mode request meta', () => {
+  test('validates inline origin independently of upstream and environment gates', () => {
+    for (const upstreamPortEnabled of [false, true]) {
+      expect(buildAutoModeMetaLines(
+        { executionOrigin: 'user_inline' },
+        { upstreamPortEnabled, environment: {} },
+      )).toEqual(['{"meta":{"executionOrigin":"user_inline"}}\n'])
+      for (const executionOrigin of [undefined, null, 'agent', 'user_inline\n', {}, ['user_inline']]) {
+        expect(buildAutoModeMetaLines(
+          { executionOrigin } as never,
+          { upstreamPortEnabled, environment: {} },
+        )).toEqual([])
+      }
+      expect(buildAutoModeMetaLines(
+        { executionOrigin: 'user_inline', arbitrary: 'not trusted' } as never,
+        { upstreamPortEnabled, environment: {} },
+      )).toEqual(['{"meta":{"executionOrigin":"user_inline"}}\n'])
+    }
+    expect(buildAutoModeMetaLines(
+      { executionOrigin: 'user_inline', gitStatus: { code: 0, stdout: '' }, repoVisibility: 'private' },
+      { upstreamPortEnabled: true, environment: enabledEnvironment },
+    )).toEqual([
+      '{"meta":{"gitStatus":{"clean":true}}}\n',
+      '{"meta":{"repoVisibility":"private"}}\n',
+      '{"meta":{"executionOrigin":"user_inline"}}\n',
+    ])
+  })
+
   test('keeps only bounded enum outcomes in the internal ledger', () => {
     resetRecordedAutoModeOutcomesForTest()
     recordAutoModeOutcome('first', 'automode-unavailable')

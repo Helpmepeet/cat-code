@@ -6,17 +6,20 @@ import { resolveInlineCommandSource } from './inlineCommand.js'
 import { createAssistantMessage } from '../utils/messages.js'
 import { AppSessionController } from './AppSessionController.js'
 import { createBashShellProvider } from '../utils/shell/bashProvider.js'
+import { SIDECAR_RUNTIME_ARGS } from '../../app/main/mainDecisions.js'
 
 async function fixture(input: Record<string, unknown>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'inline-run-')))
   try {
     await mkdir(join(root, 'config'))
     await mkdir(join(root, 'workspace'))
-    const child = Bun.spawn([process.execPath, new URL('./inlineCommand.fixture.ts', import.meta.url).pathname], {
+    const runtimeArgs = input.autoOrigin ? SIDECAR_RUNTIME_ARGS : []
+    const child = Bun.spawn([process.execPath, ...runtimeArgs, new URL('./inlineCommand.fixture.ts', import.meta.url).pathname], {
       cwd: join(root, 'workspace'), stdout: 'pipe', stderr: 'pipe',
       env: { PATH: '/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin', HOME: root, TMPDIR: root, CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
         ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: input.provider === 'codex' ? '1' : '0',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1',
+        ...(input.autoOrigin ? { CLAUDE_CODE_AUTO_MODE_MODEL: 'claude-sonnet-4-5' } : {}),
         ...(input.timeout ? { BASH_DEFAULT_TIMEOUT_MS: String(input.timeout) } : {}),
         INLINE_TEST_ROOT: root, INLINE_TEST_INPUT: JSON.stringify(input) },
     })
@@ -39,6 +42,39 @@ test('authoritative source rejects foreign, removed, unfinished and non-shell co
   message.message.stop_reason = null
   expect(() => resolveInlineCommandSource([message], 'session', source)).toThrow('incomplete')
 })
+
+test('desktop flags deliver inline origin through real Auto permissions without leaking to the next turn', async () => {
+  const command = "bash -c 'printf executed >> counter; printf auto-output'"
+  const result = await fixture({ autoOrigin: true, command })
+  expect(result.error).toBeUndefined()
+  expect(result.permissions).toBe(0)
+  expect(result.counter).toBe('executedordinary')
+  expect(result.restored[0]).toMatchObject({ command, status: 'success', cwd: result.workspace })
+  expect(result.classifierRequests).toHaveLength(4)
+  for (const request of result.classifierRequests.slice(0, 2)) {
+    const action = request.messages.flatMap((message: any) =>
+      typeof message.content === 'string' ? [message.content]
+        : message.content.filter((block: any) => block.type === 'text').map((block: any) => block.text),
+    ).join('')
+    expect(action).toContain(`{"meta":{"executionOrigin":"user_inline"}}\nBash ${command}\n`)
+    expect(JSON.stringify(request.system)).toContain('agent authored')
+  }
+  for (const request of result.classifierRequests.slice(2)) {
+    const content = JSON.stringify(request.messages)
+    expect(content).not.toContain('executionOrigin')
+    expect(content).toContain('printf ordinary')
+  }
+}, 30_000)
+
+test('a genuine inline click can still be denied by the real Auto classifier', async () => {
+  const result = await fixture({ autoOrigin: true, classifierDeny: true,
+    command: "bash -c 'printf executed >> counter'" })
+  expect(result.error).toBeUndefined()
+  expect(result.counter).toBe('')
+  expect(result.restored[0].status).toBe('failed')
+  expect(result.classifierRequests).toHaveLength(2)
+  expect(JSON.stringify(result.classifierRequests[1].messages)).toContain('user_inline')
+}, 30_000)
 
 test('completion cannot cross foreign provider groups, requests or errors', () => {
   const first = createAssistantMessage({ content: '```sh\nprintf exact\n```' })

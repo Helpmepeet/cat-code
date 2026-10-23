@@ -199,6 +199,7 @@ export type McpRuntimeInputs = {
 export type ToolUseContext = {
   /** Controller-owned foreground execution, never populated from tool input. */
   inlineCommand?: {
+    runId: string
     command: string
     cwd: string
     onResult: (result: { code: number; stdout: string; interrupted: boolean }) => void
