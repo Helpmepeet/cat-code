@@ -324,7 +324,7 @@ test.each([30, 180])('%i days of build markers trade optional detail before tool
     try {
         const path = join(dir, 'builds.jsonl');
         const rows = [];
-        for (let day = 0; day < days; day++) for (let tool = 0; tool < 10; tool++) for (let build = 0; build < 10; build++) {
+        for (let day = 0; day < days; day++) for (let tool = 0; tool < (days === 180 ? 38 : 10); tool++) for (let build = 0; build < (days === 180 ? 2 : 10); build++) {
             const timestamp = new Date(Date.UTC(2026, 7, 15 - (days - 30) + day, 10)).toISOString();
             const key = `${day}-${tool}-${build}`;
             rows.push({
@@ -355,7 +355,12 @@ test.each([30, 180])('%i days of build markers trade optional detail before tool
         const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
         expect(output?.type).toBe('usage');
         expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
-        expect(snapshot.ranges.all.requests).toBe(days * 100);
+        expect(snapshot.ranges.all.requests).toBe(days * (days === 180 ? 76 : 100));
+        if (days === 180) {
+            expect(snapshot.ranges.all.toolBreakdown!.items.filter(tool => tool.kind === 'named')).toHaveLength(38);
+            expect(snapshot.ranges.all.toolBreakdown!.omitted).toBe(0);
+            expect(snapshot.ranges.all.tools.filter(tool => tool.kind === 'named').length).toBeLessThanOrEqual(2);
+        }
         for (const key of days === 30 ? ['7d', '30d', 'all'] as const : []) {
             const range = snapshot.ranges[key];
             expect(range.tools.filter(tool => tool.kind === 'named')).toHaveLength(10);

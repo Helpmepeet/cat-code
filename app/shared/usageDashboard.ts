@@ -6,6 +6,7 @@ export const MAX_USAGE_RECORD_BYTES = 256 * 1024;
 export const MAX_USAGE_LABEL_BYTES = 160;
 export const MAX_USAGE_MODELS = 8;
 export const MAX_USAGE_TOOLS = 10;
+export const MAX_USAGE_TOOL_BREAKDOWN = 50;
 export const MAX_USAGE_TOOL_BUILDS_PER_DAY = 8;
 export const MAX_USAGE_DAY_CONTRIBUTORS = 20;
 export const MAX_USAGE_CONTRIBUTOR_MODELS = 4;
@@ -259,6 +260,8 @@ export type UsageRangeSummary = {
     days: UsageDay[];
     models: UsageModel[];
     tools: UsageTool[];
+    /** Independent period overview, not constrained by daily/build detail fitting. */
+    toolBreakdown?: { items: UsageTool[]; omitted: number };
     timing: UsageTimingSummary;
     /** Prospective auto-mode observations; unavailable never means zero attempts. */
     autoMode: import('./usageAutoMode.js').AutoModeUsageSummary;

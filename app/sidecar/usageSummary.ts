@@ -1,4 +1,4 @@
-import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
+import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 import { isCurrentSolLunaUsageModel, isCurrentUsageModel, isRetiredUsageModel } from '../shared/usageModelStatus.js';
 import { MAX_USAGE_SKILLS, type UsageCallCount, type UsageRankedSession } from '../shared/usageDashboard.js';
@@ -31,7 +31,7 @@ function withDayRanks(items: UsageSessionContributor[]): UsageSessionContributor
 /** Group only after complete accounting. The same model selection applies to every day. */
 export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_USAGE_MODELS, toolLimit = MAX_USAGE_TOOLS, contributorLimit = MAX_USAGE_DAY_CONTRIBUTORS, buildLimit = toolLimit >= MAX_USAGE_TOOLS ? MAX_USAGE_TOOL_BUILDS_PER_DAY : toolLimit >= 4 ? 4 : 0, timelineLimit = contributorLimit <= 5
         ? Math.min(1, contributorLimit)
-        : Math.min(MAX_USAGE_TIMELINE_EVENTS, Math.ceil(contributorLimit * 0.6)), sessionLimit = 45, skillLimit = MAX_USAGE_SKILLS): UsageRangeSummary {
+        : Math.min(MAX_USAGE_TIMELINE_EVENTS, Math.ceil(contributorLimit * 0.6)), sessionLimit = 45, skillLimit = MAX_USAGE_SKILLS, breakdownLimit = MAX_USAGE_TOOL_BREAKDOWN): UsageRangeSummary {
     const boundedTimeline = (timeline: UsageSessionTimeline): UsageSessionTimeline => {
         if (timeline.state === 'unavailable') return { ...timeline, items: [] };
         const omitted = timeline.omitted + Math.max(0, timeline.items.length - timelineLimit);
@@ -47,6 +47,14 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
     const selectedModels = new Set([...new Map([...priorityModels, ...legacySolLunaModels, ...historicalModels, ...namedModels].map(model => [model.id, model])).values()].slice(0, modelLimit).map(model => model.id));
     const errorLeaders = tools.filter(t => t.kind === 'named' && t.errors > 0)
         .sort((a, b) => b.errors - a.errors || b.results - a.results || b.requests - a.requests || a.id.localeCompare(b.id));
+    const overviewSource = summary.toolBreakdown?.items ?? tools;
+    const overviewOrdered = [...overviewSource].filter(t => t.kind === 'named').sort((a, b) =>
+        Number(b.errors > 0) - Number(a.errors > 0) || (a.errors > 0 && b.errors > 0 ? b.errors - a.errors || b.results - a.results : 0) || b.requests - a.requests || a.id.localeCompare(b.id));
+    const overviewIds = new Set(overviewOrdered.slice(0, breakdownLimit).map(t => t.id));
+    const overviewKept = overviewSource.filter(t => t.kind === 'unknown' || overviewIds.has(t.id));
+    const overviewOther = overviewSource.filter(t => !overviewKept.includes(t));
+    const overviewOmitted = (summary.toolBreakdown?.omitted ?? summary.detail.omittedTools) + overviewOther.filter(t => t.kind === 'named').length;
+    const toolBreakdown = { items: [...overviewKept, ...(overviewOmitted ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: overviewOther.reduce((n, t) => n + t.requests, 0), results: overviewOther.reduce((n, t) => n + t.results, 0), errors: overviewOther.reduce((n, t) => n + t.errors, 0) }] : [])], omitted: overviewOmitted };
     const selectedTools = new Set([...new Map([...errorLeaders, ...tools.filter(t => t.kind === 'named')].map(tool => [tool.id, tool])).values()].slice(0, toolLimit).map(t => t.id));
     const keepModel = (m: UsageCategory) => m.kind === 'unknown' || selectedModels.has(m.id);
     const keepTool = (t: UsageCategory) => t.kind === 'unknown' || selectedTools.has(t.id);
@@ -146,6 +154,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
                 ...summary.rankedSessions.items,
             ])].slice(0, sessionLimit).map(groupSession),
         },
+        toolBreakdown,
         models: [...models.filter(keepModel), ...(omittedModels.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', tokens: otherTokens, tokenCost: otherCost }] : [])].sort((a, b) => tokenTotal(b.tokens) - tokenTotal(a.tokens) || a.id.localeCompare(b.id)),
         tools: [...tools.filter(keepTool), ...(omittedTools.length ? [{ id: 'other', kind: 'other' as const, label: 'Other', requests: omittedTools.reduce((n, t) => n + t.requests, 0), results: omittedTools.reduce((n, t) => n + t.results, 0), errors: omittedTools.reduce((n, t) => n + t.errors, 0) }] : [])].sort((a, b) => b.requests - a.requests || a.id.localeCompare(b.id)),
         days: summary.days.map(day => {
@@ -180,7 +189,7 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
             const omitted = day.contributors.omitted + ranked.length - contributors.length;
             return { ...day, tools, models: [...kept, ...(other ? [{ id: 'other', total: other }] : [])], contributors: { state: omitted ? 'truncated' as const : 'full' as const, omitted, items: contributors } };
         }),
-        detail: { state: omittedModels.length || omittedTools.length ? (modelLimit || toolLimit ? 'grouped' : 'summary-only') : 'full', omittedModels: omittedModels.length, omittedTools: omittedTools.length },
+        detail: { state: omittedModels.length || omittedTools.length ? (modelLimit || toolLimit ? 'grouped' : 'summary-only') : 'full', omittedModels: omittedModels.length, omittedTools: summary.detail.omittedTools + omittedTools.filter(tool => tool.kind === 'named').length },
     };
 }
 
@@ -193,13 +202,13 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         { models: 8, tools: 10, contributors: 5, builds: 2, timeline: 1 },
     ] as const;
     type Tier = { models: number; tools: number; contributors: number; builds: number; timeline: number };
-    const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>, skills = MAX_USAGE_SKILLS, sessionFloor = 5) => {
+    const fit = (recent: Tier, all: Pick<Tier, 'models' | 'tools' | 'builds'>, skills = MAX_USAGE_SKILLS, sessionFloor = 5, breakdownLimit = MAX_USAGE_TOOL_BREAKDOWN) => {
         const limit = recent.contributors >= 20 ? 45 : recent.contributors * 2;
         for (const sessions of [...new Set([Math.max(limit, sessionFloor), sessionFloor])]) {
             snapshot.ranges = {
-                '7d': groupUsageSummary(raw['7d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills),
-                '30d': groupUsageSummary(raw['30d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills),
-                all: groupUsageSummary(raw.all, all.models, all.tools, 0, all.builds, 0, sessions, skills),
+                '7d': groupUsageSummary(raw['7d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills, breakdownLimit),
+                '30d': groupUsageSummary(raw['30d'], recent.models, recent.tools, recent.contributors, recent.builds, recent.timeline, sessions, skills, breakdownLimit),
+                all: groupUsageSummary(raw.all, all.models, all.tools, 0, all.builds, 0, sessions, skills, breakdownLimit),
             };
             if (parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type === 'usage') return true;
         }
@@ -253,9 +262,12 @@ export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): Usa
         const minimal = { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 };
         if (fit(minimal, minimal, skills)) return snapshot;
     }
+    const minimal = { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 };
+    for (const cap of [25, 10, 0]) if (fit(minimal, minimal, 0, 5, cap)) return snapshot;
     // Only after five leaders per populated range cannot fit with minimal
     // detail may the common allowance shrink. Omitted counts still reconcile.
-    const minimal = { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 };
-    for (const sessions of [3, 1, 0]) if (fit(minimal, minimal, 0, sessions)) return snapshot;
+    for (const sessions of [3, 1, 0]) for (const cap of [MAX_USAGE_TOOL_BREAKDOWN, 25, 10, 0]) {
+        if (fit(minimal, minimal, 0, sessions, cap)) return snapshot;
+    }
     throw new Error('Invalid usage summary');
 }

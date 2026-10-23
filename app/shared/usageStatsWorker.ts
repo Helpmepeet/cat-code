@@ -1,5 +1,5 @@
 import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, UsageEffort, UsageParallel, } from './usageDashboard.js';
-import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BREAKDOWN, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_EFFORT_LEVELS, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
 import { shiftLocalCalendarDays } from '../../src/utils/usageWindow.js';
 import { MAX_USAGE_RANKED_SESSIONS, MAX_USAGE_SKILLS, USAGE_INTEGRATIONS, type UsageTokenSources, type UsageCallCount } from './usageDashboard.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
@@ -407,7 +407,7 @@ function previousPeriod(v: unknown, range: '7d' | '30d', rangeStartDate: string,
     return v.cachedInputShare === null ? prompt === 0 : finite(v.cachedInputShare) && prompt > 0 && Math.abs(v.cachedInputShare - v.tokens.read / prompt * 100) <= 1e-9;
 }
 function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSummary {
-    if (!obj(v) || !ownKeys(v, ['rankedSessions', 'skills', 'integrations', 'range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startDate', 'endDateExclusive', 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'timing', 'autoMode', 'parallel', 'effort', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !date(v.startDate) || !date(v.endDateExclusive) || !instant(v.startInclusive) || !instant(v.endExclusive) || !tokens(v.tokens) || !parallel(v.parallel) || !effort(v.effort) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
+    if (!obj(v) || !ownKeys(v, ['rankedSessions', 'skills', 'integrations', 'range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startDate', 'endDateExclusive', 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', ...(v.toolBreakdown === undefined ? [] : ['toolBreakdown']), 'timing', 'autoMode', 'parallel', 'effort', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !date(v.startDate) || !date(v.endDateExclusive) || !instant(v.startInclusive) || !instant(v.endExclusive) || !tokens(v.tokens) || !parallel(v.parallel) || !effort(v.effort) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
         return false;
     const all = v.range === 'all';
     if (!callCounts(v.skills, v.requests) || !callCounts(v.integrations, v.requests, true) || !rankedSessions(v.rankedSessions, v, asOf)) return false;
@@ -440,6 +440,35 @@ function range(v: unknown, asOf: string, timezone: string): v is UsageRangeSumma
         return false;
     if (!autoMode(v.autoMode, startDate, endDate, all ? MAX_USAGE_ALL_BUCKETS : n, bucketDays))
         return false;
+    if (v.toolBreakdown !== undefined) {
+        const breakdown = v.toolBreakdown;
+        if (!obj(breakdown) || !ownKeys(breakdown, ['items', 'omitted']) || !safe(breakdown.omitted) || !Array.isArray(breakdown.items) || !uniqueCategories(breakdown.items, MAX_USAGE_TOOL_BREAKDOWN) || !breakdown.items.every(tool)) return false;
+        const items = breakdown.items as UsageTool[];
+        const detailed = v.tools as UsageTool[];
+        if ((breakdown.omitted > 0) !== items.some(t => t.kind === 'other')) return false;
+        if (items.filter(t => t.kind === 'named').length + breakdown.omitted !== detailed.filter(t => t.kind === 'named').length + v.detail.omittedTools) return false;
+        for (const row of items) {
+            const match = detailed.find(t => t.id === row.id);
+            if (match && row.kind !== 'other' && (row.kind !== match.kind || row.label !== match.label || row.requests !== match.requests || row.results !== match.results || row.errors !== match.errors)) return false;
+            if (row.kind === 'unknown' && !match) return false;
+        }
+        if (detailed.some(t => t.kind === 'unknown' && !items.some(row => row.id === t.id))) return false;
+        for (const key of ['requests', 'results', 'errors'] as const) {
+            const total = items.reduce((sum, row) => sum + row[key], 0);
+            if (!safe(total) || total !== detailed.reduce((sum, row) => sum + row[key], 0)) return false;
+        }
+        for (const [left, right, omitted] of [[items, detailed, v.detail.omittedTools], [detailed, items, breakdown.omitted]] as const) {
+            const missing = left.filter(row => row.kind === 'named' && !right.some(t => t.id === row.id));
+            if (missing.length > omitted) return false;
+            const other = right.find(row => row.kind === 'other');
+            const residual = { requests: 0, results: 0, errors: 0 };
+            for (const key of ['requests', 'results', 'errors'] as const) {
+                residual[key] = (other?.[key] ?? 0) - missing.reduce((sum, row) => sum + row[key], 0);
+                if (!safe(residual[key]) || missing.length === omitted && residual[key] !== 0) return false;
+            }
+            if (residual.errors > residual.results || residual.results > residual.requests) return false;
+        }
+    }
     const rangeToolIds = new Set((v.tools as UsageTool[]).map(item => item.id));
     const rangeToolsById = new Map((v.tools as UsageTool[]).map(item => [item.id, item]));
     for (let i = 0; i < v.days.length; i++) {

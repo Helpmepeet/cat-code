@@ -283,9 +283,33 @@ function BuildScatter({ summary, onSelectBuild }: { summary: UsageRangeSummary; 
         <div className="uad-readout uad-build-readout" aria-live="off">{active && <><span className="uad-build-sha">{active.sha}</span>{active.dirty ? ' · Uncommitted changes' : ' · Committed'} · {detailPercent(active.rate)} · {active.errors.toLocaleString()} errors / {active.results.toLocaleString()} results · First retained request {active.first}</>}</div>
     </Card>;
 }
+function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalyticsReliabilityProps, 'summary' | 'selectedToolId' | 'onSelectTool'>) {
+    const [expanded, setExpanded] = useState(false);
+    const listId = useId();
+    const tools = summary.toolBreakdown?.items ?? summary.tools;
+    const omitted = summary.toolBreakdown?.omitted ?? summary.detail.omittedTools;
+    const results = tools.reduce((sum, tool) => sum + tool.results, 0), errors = tools.reduce((sum, tool) => sum + tool.errors, 0);
+    const rows = [...tools].sort((a, b) => (a.kind === 'other' ? 1 : 0) - (b.kind === 'other' ? 1 : 0) || b.results - a.results || a.label.localeCompare(b.label));
+    const detailed = new Map(summary.tools.map(tool => [tool.id, tool]));
+    return <Card title="Tools" className="uad-tools-card" note="Red: over 1.5× the overall rate">
+        <div className="uad-tools-head"><span>Tool</span><span>Results</span><span>{(summary.bucketDays ?? 1) > 1 ? 'Errors per bucket' : 'Errors per day'}</span><span>Error rate</span></div>
+        <ol id={listId} className="uad-tools">{(expanded ? rows : rows.slice(0, 10)).map(tool => {
+            const history = detailed.get(tool.id);
+            const available = history?.kind === tool.kind && history.requests === tool.requests && history.results === tool.results && history.errors === tool.errors;
+            const Row = available ? 'button' : 'div';
+            return <li key={tool.id}><Row className={`uad-tool-row ${analyticsToolClass(tool.label)} ${tool.results && results && tool.errors / tool.results > errors / results * 1.5 && tool.errors >= 10 ? 'uad-hot' : ''}`} {...(available ? { 'aria-pressed': selectedToolId === tool.id, onClick: () => onSelectTool(tool.id) } : {})}>
+                <span className="uad-tool-name" title={tool.kind === 'other' ? 'Combined totals for the remaining tools. Named tools prioritize errors, then usage.' : tool.label}><i className="uad-dot" /><span>{tool.label}{tool.kind === 'unknown' ? ' (unknown)' : tool.kind === 'other' ? ` (${omitted.toLocaleString()} ${omitted === 1 ? 'tool' : 'tools'})` : ''}</span></span>
+                <span className="uad-tool-volume">{detailCompact(tool.results)}</span>
+                {available ? <Spark height={22} values={analyticsCalendarValues(summary, d => d.tools.find(t => t.id === tool.id)?.errors ?? 0)} /> : <span className="uad-tool-history" title="Daily error history unavailable">Unavailable</span>}
+                <span className="uad-tool-rate">{detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}</span>
+            </Row></li>;
+        })}</ol>
+        {rows.length > 10 && <button className="uad-tools-toggle" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer tools' : `Show ${rows.length - 10} more tools`}</button>}
+        {!rows.length && <p>No tool observations.</p>}
+    </Card>;
+}
 export function UsageAnalyticsReliability({ summary, selectedToolId, onSelectTool, onSelectRoute, onSelectBuild }: UsageAnalyticsReliabilityProps) {
     const outcomes = summary.timing.models;
-    const results = summary.tools.reduce((sum, t) => sum + t.results, 0), errors = summary.tools.reduce((sum, t) => sum + t.errors, 0);
     const auto = summary.autoMode.allTools;
     const decisions = Object.values(auto.outcomes).reduce((sum, count) => sum + count, 0);
     return <Section title="Reliability"><div className="uad-reliability-grid">
@@ -293,11 +317,7 @@ export function UsageAnalyticsReliability({ summary, selectedToolId, onSelectToo
             {outcomes.state === 'unavailable' ? <p>Model call outcomes are unavailable.</p> : <ModelOutcomes models={outcomes} />}
             <ModelLatency timing={summary.timing} />
         </Card>
-        <Card title="Tools" className="uad-tools-card" note="Red: over 1.5× the overall rate">
-            <div className="uad-tools-head"><span>Tool</span><span>Results</span><span>{(summary.bucketDays ?? 1) > 1 ? 'Errors per bucket' : 'Errors per day'}</span><span>Error rate</span></div>
-            <ol className="uad-tools">{[...summary.tools].sort((a, b) => (a.kind === 'other' ? 1 : 0) - (b.kind === 'other' ? 1 : 0) || b.results - a.results).map(tool => <li key={tool.id}><button aria-pressed={selectedToolId === tool.id} className={`${analyticsToolClass(tool.label)} ${tool.results && results && tool.errors / tool.results > errors / results * 1.5 && tool.errors >= 10 ? 'uad-hot' : ''}`} onClick={() => onSelectTool(tool.id)}><span className="uad-tool-name" title={tool.kind === 'other' ? 'Combined totals for the remaining tools. Named tools prioritize errors, then usage.' : tool.label}><i className="uad-dot" /><span>{tool.label}{tool.kind === 'unknown' ? ' (unknown)' : tool.kind === 'other' ? ` (${summary.detail.omittedTools.toLocaleString()} ${summary.detail.omittedTools === 1 ? 'tool' : 'tools'})` : ''}</span></span><span className="uad-tool-volume">{detailCompact(tool.results)}</span><Spark height={22} values={analyticsCalendarValues(summary, d => d.tools.find(t => t.id === tool.id)?.errors ?? 0)} /><span className="uad-tool-rate">{detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}</span></button></li>)}</ol>
-            {!summary.tools.length && <p>No tool observations.</p>}
-        </Card>
+        <ToolsCard key={summary.range} summary={summary} selectedToolId={selectedToolId} onSelectTool={onSelectTool} />
         <BuildScatter summary={summary} onSelectBuild={onSelectBuild} />
         <Card title="Auto mode" className="uad-auto-card">
             {auto.coverage.state === 'unavailable' ? <p>Auto-mode observations are unavailable.</p> : <>{auto.coverage.state === 'partial' && <p>Partial auto-mode observations.</p>}<dl className="uad-stats uad-trio"><div><dt>Decisions</dt><dd>{detailCompact(decisions)}</dd></div><div><dt>Held for review</dt><dd>{auto.outcomes.review_required.toLocaleString()}</dd></div><div><dt>Blocked</dt><dd>{auto.outcomes.policy_blocked.toLocaleString()}</dd></div></dl>

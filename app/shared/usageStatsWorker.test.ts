@@ -430,3 +430,43 @@ test('rejects All auto-mode buckets outside the published local-day grid', () =>
     all.autoMode.buckets[0].date = '2026-09-11';
     expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: value })).toBeNull();
 });
+
+test('independent tool breakdown is optional, closed, bounded and reconciled', () => {
+    expect(parseUsageCollectionResult(usage())?.type).toBe('usage');
+    const value = usage() as any;
+    const range = value.snapshot.ranges['7d'];
+    range.toolBreakdown = { items: structuredClone(range.tools), omitted: 0 };
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    const invalid = [
+        (r: any) => { r.toolBreakdown.extra = true; },
+        (r: any) => { r.toolBreakdown.items[0].extra = true; },
+        (r: any) => { r.toolBreakdown.items.push(r.toolBreakdown.items[0]); },
+        (r: any) => { r.toolBreakdown.items[0].label = 'Mismatch'; },
+        (r: any) => { r.toolBreakdown.items[0].requests++; },
+        (r: any) => { r.toolBreakdown.omitted = 1; },
+        (r: any) => { r.toolBreakdown.items[0].kind = 'other'; r.toolBreakdown.items[0].id = 'other'; },
+        (r: any) => { r.toolBreakdown.items = Array.from({ length: 51 }, (_, i) => ({ ...r.tools[0], id: `tool-${i}`, requests: 0, results: 0, errors: 0 })); },
+    ];
+    for (const mutate of invalid) {
+        const bad = structuredClone(value);
+        mutate(bad.snapshot.ranges['7d']);
+        expect(parseUsageCollectionResult(bad)).toBeNull();
+    }
+    range.tools = [{ id: 'other', kind: 'other', label: 'Other', requests: 3, results: 2, errors: 1 }];
+    range.detail = { state: 'grouped', omittedModels: 0, omittedTools: 1 };
+    range.days = range.days.map((day: any) => ({ ...day, tools: day.tools.map((tool: any) => ({ ...tool, id: 'other' })) }));
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    range.toolBreakdown.items[0].results = 1;
+    expect(parseUsageCollectionResult(value)).toBeNull();
+});
+
+test('capped overview totals may group a tool whose daily detail is retained', () => {
+    const value = usage() as any;
+    value.snapshot.ranges['7d'].toolBreakdown = {
+        items: [{ id: 'other', kind: 'other', label: 'Other', requests: 3, results: 2, errors: 1 }],
+        omitted: 1,
+    };
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    value.snapshot.ranges['7d'].toolBreakdown.omitted = 2;
+    expect(parseUsageCollectionResult(value)).toBeNull();
+});

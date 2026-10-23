@@ -107,3 +107,21 @@ test('model grouping preserves priced subtotal and token pricing coverage', () =
     expect(other.tokens.fresh).toBe(15);
     expect(other.tokenCost).toEqual({ usd: 10 / 1_000_000, pricedTokens: 10 });
 });
+
+test('compact overview retains 38 names independently of two detailed tools and preserves unknown', async () => {
+    const summary = (await collectRetainedUsage([], '2026-09-13T12:00:00.000Z')).ranges['7d'];
+    summary.tools = Array.from({ length: 38 }, (_, i) => ({ ...usageCategory(`Tool${i}`), requests: 100 + i, results: 90 + i, errors: i % 3 }));
+    summary.tools.push({ id: 'unknown', kind: 'unknown', label: 'Unknown', requests: 5, results: 2, errors: 1 });
+    const grouped = groupUsageSummary(summary, 8, 2, 0, 0);
+    expect(grouped.tools.filter(t => t.kind === 'named')).toHaveLength(2);
+    expect(grouped.toolBreakdown!.items.filter(t => t.kind === 'named')).toHaveLength(38);
+    expect(grouped.toolBreakdown!.omitted).toBe(0);
+    expect(grouped.toolBreakdown!.items).toContainEqual(summary.tools.at(-1)!);
+    const regrouped = groupUsageSummary(grouped, 8, 2, 0, 0);
+    expect(regrouped.toolBreakdown).toEqual(grouped.toolBreakdown);
+    expect(regrouped.detail.omittedTools).toBe(36);
+    const capped = groupUsageSummary(summary, 8, 2, 0, 0, 0, 0, 0, 10);
+    expect(capped.toolBreakdown!.omitted).toBe(28);
+    for (const key of ['requests', 'results', 'errors'] as const) expect(capped.toolBreakdown!.items.reduce((n, t) => n + t[key], 0)).toBe(summary.tools.reduce((n, t) => n + t[key], 0));
+    expect(groupUsageSummary({ ...summary, tools: [] }).toolBreakdown).toEqual({ items: [], omitted: 0 });
+});
