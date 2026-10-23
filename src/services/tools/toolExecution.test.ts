@@ -461,6 +461,8 @@ describe('runToolUse PreToolUse additionalContext', () => {
     expect(model.failures).toHaveLength(1)
     expect(model.failures[0]).toMatchObject({ code: 'PATCH_ANCHOR_AMBIGUOUS', hunk: 2 })
     expect(model).not.toHaveProperty('details')
+    expect(model.mutation).toBe('Nothing from this patch was applied.')
+    expect(model).not.toHaveProperty('mutationOutcome')
     expect(message.toolUseResult).toMatchObject({
       type: 'file_patch_error',
       code: 'PATCH_ANCHOR_AMBIGUOUS',
@@ -474,6 +476,30 @@ describe('runToolUse PreToolUse additionalContext', () => {
       'FilePatchError:PATCH_ANCHOR_AMBIGUOUS',
     )
     expect(classifyToolError(error)).not.toContain(path)
+  })
+
+  test('makes incomplete patch preparation explicitly non-mutating', async () => {
+    let called = false
+    const updates = await drain(makeTool('apply_patch', async () => {
+      called = true
+      return { data: 'unexpected' }
+    }, undefined, async () => ({ result: true }), {
+      async prepareExecution() {
+        throw new FilePatchError('Patch must end with "*** End Patch".', {
+          code: 'INVALID_PATCH_FORMAT',
+        })
+      },
+    }))
+    expect(called).toBe(false)
+    const update = updates.find(item => toolResultIndices([item]).length > 0)!
+    const message = update.message as {
+      message: { content: { content?: string; is_error?: boolean }[] }
+      toolUseResult?: unknown
+    }
+    expect(message.message.content[0]!.content).toContain('Nothing from this patch was applied.')
+    expect(message.toolUseResult).toMatchObject({
+      code: 'INVALID_PATCH_FORMAT', mutationOutcome: 'no-mutation',
+    })
   })
 })
 

@@ -9,6 +9,7 @@ import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
 import type { FileIdentity } from '../../utils/file.js'
 import type { LineEndingType } from '../../utils/fileRead.js'
+import { MAX_LEADING_WHITESPACE_PREFIX_CHARS } from '../../utils/leadingWhitespace.js'
 
 export type FilePatchOperationType = 'update' | 'add' | 'delete'
 
@@ -117,19 +118,25 @@ export type FilePatchPlacement = {
   /** Zero-based exclusive old-source line. */
   oldEnd: number
   reason: 'exact' | 'exact+hint' | 'bof' | 'eof'
+  forwardMatchCount?: number
+  reordered?: true
+  indentationAdjustment?: { from: string; to: string }
 }
 
 export type FilePatchNearMatch = {
   sourceStart: number
   sourceEnd: number
   score: number
+  similarity?: number
   divergence: {
     expectedLine: number
     sourceLine: number
     column: number
   }
   expected: string
-  /** Source text is never persisted or returned across the Read boundary. */
+  /** Only authorized execution may attach a bounded source excerpt. */
+  actual?: string
+  actualTruncated?: boolean
   actualLength: number
 }
 
@@ -153,10 +160,12 @@ export type FilePatchDiagnosticMetadata = {
   completePlanWitnessesOmitted?: number
   witnessReconstructionTruncated?: boolean
   nearMatches: FilePatchNearMatch[]
+  nearMatchSearch?: { complete: boolean; scannedLines: number; totalLines: number }
   diagnosticsTruncated: boolean
 }
 
 export const MAX_FILE_PATCH_PLACEMENTS = 40
+export const MAX_FILE_PATCH_INDENT_PREFIX_CHARS = MAX_LEADING_WHITESPACE_PREFIX_CHARS
 
 export type FilePatchFailureDetail = {
   code: string
@@ -178,6 +187,8 @@ export const MAX_FILE_PATCH_CODE_LENGTH = 120
 export const MAX_FILE_PATCH_DIAGNOSTIC_TEXT_LENGTH = 200
 export const MAX_FILE_PATCH_DIAGNOSTIC_COORDINATES = 40
 export const MAX_FILE_PATCH_NEAR_MATCHES = 4
+export const MAX_FILE_PATCH_SNIPPET_CHARS = 4_000
+export const MAX_FILE_PATCH_RESULT_SNIPPET_CHARS = 12_000
 
 export type ApplyPatchResult = {
   contractVersion?: 2
@@ -383,10 +394,19 @@ export function boundFilePatchDiagnosticMetadata(
         Number.isSafeInteger(match.actualLength) && match.actualLength >= 0
           ? match.actualLength
           : 0
+      const actual = match.actual === undefined ? undefined : boundFilePatchErrorText(
+        match.actual,
+        MAX_FILE_PATCH_DIAGNOSTIC_TEXT_LENGTH,
+      )
       truncated ||= expected !== match.expected || actualLength !== match.actualLength
+      truncated ||= actual !== match.actual
       return {
         ...match,
         expected,
+        ...(actual === undefined ? {} : {
+          actual,
+          actualTruncated: match.actualTruncated === true || actual !== match.actual,
+        }),
         actualLength,
       }
     })
@@ -431,11 +451,19 @@ const diagnosticMetadataSchema = lazySchema(() =>
     completePlanWitnessesOmitted: z.number().int().nonnegative().optional(),
     witnessReconstructionTruncated: z.boolean().optional(),
     diagnosticsTruncated: z.boolean(),
+    nearMatchSearch: z.object({
+      complete: z.boolean(),
+      scannedLines: z.number().int().nonnegative(),
+      totalLines: z.number().int().nonnegative(),
+    }).refine(search => search.scannedLines <= search.totalLines).optional(),
     nearMatches: z.array(z.object({
       sourceStart: z.number().int().nonnegative(),
       sourceEnd: z.number().int().nonnegative(),
       score: z.number(),
+      similarity: z.number().min(0).max(1).optional(),
       expected: z.string(),
+      actual: z.string().max(MAX_FILE_PATCH_DIAGNOSTIC_TEXT_LENGTH).optional(),
+      actualTruncated: z.boolean().optional(),
       actualLength: z.number().int().nonnegative(),
       divergence: z.object({
         expectedLine: z.number().int().nonnegative(),
@@ -555,6 +583,8 @@ const outputFileSchema = lazySchema(() =>
         }),
       )
       .describe('Display diff for the operation'),
+    snippet: z.string().max(MAX_FILE_PATCH_SNIPPET_CHARS).optional(),
+    snippetsOmitted: z.number().int().nonnegative().optional(),
     // Keep accepting placement notes from old transcripts without emitting
     // them from current patch results.
     notes: z.array(z.string()).optional(),
@@ -565,6 +595,12 @@ const outputFileSchema = lazySchema(() =>
           oldStart: z.number().int().nonnegative(),
           oldEnd: z.number().int().nonnegative(),
           reason: z.enum(['exact', 'exact+hint', 'bof', 'eof']),
+          forwardMatchCount: z.number().int().min(2).optional(),
+          reordered: z.literal(true).optional(),
+          indentationAdjustment: z.object({
+            from: z.string().max(MAX_FILE_PATCH_INDENT_PREFIX_CHARS).regex(/^[\t ]*$/),
+            to: z.string().max(MAX_FILE_PATCH_INDENT_PREFIX_CHARS).regex(/^[\t ]*$/),
+          }).optional(),
         }),
       )
       .max(MAX_FILE_PATCH_PLACEMENTS)
@@ -594,6 +630,8 @@ export type FilePatchToolOutput = {
     type: FilePatchOperationType
     firstLine?: string | null
     structuredPatch: StructuredPatchHunk[]
+    snippet?: string
+    snippetsOmitted?: number
     before?: string | null
     after?: string | null
     notes?: string[]

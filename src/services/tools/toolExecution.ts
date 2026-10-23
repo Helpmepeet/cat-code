@@ -841,18 +841,22 @@ async function checkPermissionsAndCallTool(
     )
   } catch (error) {
     await preparation.dispose()
+    const patchError = error instanceof FilePatchError
+      ? buildToolErrorResult(error, '')
+      : undefined
     return [
       {
         message: createUserMessage({
           content: [
             {
               type: 'tool_result',
-              content: `<tool_use_error>Tool input preparation failed: ${formatError(error)}</tool_use_error>`,
+              content: patchError?.modelContent ??
+                `<tool_use_error>Tool input preparation failed: ${formatError(error)}</tool_use_error>`,
               is_error: true,
               tool_use_id: toolUseID,
             },
           ],
-          toolUseResult: 'Tool input preparation failed.',
+          toolUseResult: patchError?.persistedResult ?? 'Tool input preparation failed.',
           sourceToolAssistantUUID: assistantMessage.uuid as UUID,
         }),
       },

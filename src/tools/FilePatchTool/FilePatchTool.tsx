@@ -18,6 +18,7 @@ import {
   type PreparedFileMutation,
 } from '../../utils/fileAuthorization.js'
 import {
+  addLineNumbers,
   fileIdentitiesEqual,
   getFileIdentity,
 } from '../../utils/file.js'
@@ -49,6 +50,7 @@ import {
   writeFileWithSideEffects,
 } from '../FileEditTool/shared.js'
 import { applyPatchToBuffersPlanned } from './applier.js'
+import { getSnippetAtLine } from '../FileEditTool/utils.js'
 import {
   FILE_PATCH_TOOL_NAME,
   LEGACY_FILE_PATCH_TOOL_NAME,
@@ -63,6 +65,8 @@ import {
   type FilePatchOperation,
   type FilePatchToolInput,
   type FilePatchToolOutput,
+  MAX_FILE_PATCH_SNIPPET_CHARS,
+  MAX_FILE_PATCH_RESULT_SNIPPET_CHARS,
   inputSchema,
   outputSchema,
 } from './types.js'
@@ -663,7 +667,9 @@ export const FilePatchTool = buildTool({
       }
     }
 
-    const applied = applyPatchToBuffersPlanned(operations, currentFiles)
+    const applied = applyPatchToBuffersPlanned(operations, currentFiles, {
+      includeSourceText: true,
+    })
 
     for (const file of applied.files) {
       if (file.after === null) continue
@@ -846,22 +852,28 @@ export const FilePatchTool = buildTool({
 
       // Built field by field, never spread from the applier result: `before`/
       // `after` hold the whole file twice and this object is serialized verbatim
-      // onto the transcript. structuredPatch plus a bounded firstLine is
-      // everything any reader uses.
+      // onto the transcript. Only bounded display fields belong here.
+      let remainingSnippetChars = MAX_FILE_PATCH_RESULT_SNIPPET_CHARS
       const output: FilePatchToolOutput = {
         ...(applied.contractVersion === 2 ? { contractVersion: 2 as const } : {}),
         files: applied.files.map(file => {
+          const patch = getPatchFromContents({
+            filePath: file.path,
+            oldContent: file.before ?? '',
+            newContent: file.after ?? '',
+          })
+          const snippet = file.after === null ? {} : patchResultSnippet(
+            file.after,
+            patch,
+            Math.min(MAX_FILE_PATCH_SNIPPET_CHARS, remainingSnippetChars),
+          )
+          remainingSnippetChars -= snippet.snippet?.length ?? 0
           const entry: FilePatchToolOutput['files'][number] = {
             path: file.path,
             type: file.type,
             firstLine: firstLineForLanguageDetection(file.before ?? file.after),
-            structuredPatch: boundPatchLinesForPersistence(
-              getPatchFromContents({
-                filePath: file.path,
-                oldContent: file.before ?? '',
-                newContent: file.after ?? '',
-              }),
-            ),
+            structuredPatch: boundPatchLinesForPersistence(patch),
+            ...snippet,
             ...(file.placements === undefined
               ? {}
               : { placements: file.placements }),
@@ -905,10 +917,6 @@ export const FilePatchTool = buildTool({
   mapToolResultToToolResultBlockParam(output, toolUseID) {
     const count = output.files.length
     const noun = count === 1 ? 'file' : 'files'
-    // Enumerate the resolved path + operation per file so the model can verify
-    // what actually changed — with fuzzy anchor matching a hunk can land at a
-    // slightly different location than intended, and the summary count alone
-    // gave no confirmation of which paths were touched.
     const lines = output.files.map(file => {
       const verb =
         file.type === 'add'
@@ -917,14 +925,27 @@ export const FilePatchTool = buildTool({
             ? 'Deleted'
             : 'Updated'
       const placements = file.placements
-        ?.map(placement =>
-          `hunk ${placement.hunk} at old source coordinates [${placement.oldStart}, ${placement.oldEnd})`,
-        )
+        ?.map(placement => {
+          const repairs = [
+            ...(placement.forwardMatchCount === undefined ? [] : [
+              `brace-only forward placement: first of ${placement.forwardMatchCount} exact matches`,
+            ]),
+            ...(placement.reordered ? ['applied in file order'] : []),
+            ...(placement.indentationAdjustment ? [
+              `indentation adjusted: ${JSON.stringify(placement.indentationAdjustment.from)} to ${JSON.stringify(placement.indentationAdjustment.to)}`,
+            ] : []),
+          ]
+          return `hunk ${placement.hunk} at old source coordinates [${placement.oldStart}, ${placement.oldEnd})${repairs.length ? `; ${repairs.join('; ')}` : ''}`
+        })
         .join(', ')
       const omitted = file.placementOmittedCount
         ? `; ${file.placementOmittedCount} more omitted`
         : ''
-      return `${verb} ${file.path}${placements ? ` (${placements}${omitted})` : ''}`
+      const snippet = file.snippet ? `\n${file.snippet}` : ''
+      const snippetsOmitted = file.snippetsOmitted
+        ? `\n${file.snippetsOmitted} more change snippet${file.snippetsOmitted === 1 ? '' : 's'} omitted.`
+        : ''
+      return `${verb} ${file.path}${placements ? ` (${placements}${omitted})` : ''}${snippet}${snippetsOmitted}`
     })
     const detail = lines.length > 0 ? `:\n${lines.join('\n')}` : '.'
     return {
@@ -934,6 +955,43 @@ export const FilePatchTool = buildTool({
     }
   },
 } satisfies ToolDef<ReturnType<typeof inputSchema>, FilePatchToolOutput>)
+
+function patchResultSnippet(
+  content: string,
+  patch: FilePatchToolOutput['files'][number]['structuredPatch'],
+  maxChars: number,
+): Pick<FilePatchToolOutput['files'][number], 'snippet' | 'snippetsOmitted'> {
+  const fileLines = content.split(/\r?\n/)
+  const parts: string[] = []
+  let remaining = maxChars
+  let shown = 0
+  for (const hunk of patch) {
+    if (remaining < 80) break
+    const snippet = getSnippetAtLine(
+      fileLines,
+      Math.max(0, hunk.newStart - 1),
+      Math.min(hunk.newLines, 16),
+      2,
+    )
+    const text = `${parts.length ? '\n...\n' : ''}${addLineNumbers({
+      content: snippet.snippet.split('\n').map(line =>
+        line.length > 512 ? `${line.slice(0, 490)}… [line truncated]` : line,
+      ).join('\n'),
+      startLine: snippet.startLine,
+    })}${hunk.newLines > 16 ? '\n… [change excerpt]' : ''}`
+    const truncated = '\n… [snippet truncated]'
+    const bounded = text.length > remaining
+      ? text.slice(0, remaining - truncated.length) + truncated
+      : text
+    parts.push(bounded)
+    remaining -= bounded.length
+    shown++
+  }
+  return {
+    ...(parts.length ? { snippet: parts.join('') } : {}),
+    ...(shown < patch.length ? { snippetsOmitted: patch.length - shown } : {}),
+  }
+}
 
 // Resolve the first target path from any shape getPath/preparePermissionMatcher
 // can receive: the structured `{ ops }` arm, the raw `{ input: envelope }` arm

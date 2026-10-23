@@ -67,9 +67,9 @@ import {
 } from './UI.js'
 import {
   areFileEditsInputsEquivalent,
-  findActualString,
+  applyEditToFile,
   getPatchForEdit,
-  preserveQuoteStyle,
+  resolveEditStrings,
 } from './utils.js'
 
 export const FileEditTool = buildTool({
@@ -286,19 +286,19 @@ export const FileEditTool = buildTool({
 
     const file = fileContent
 
-    // Use findActualString to handle quote normalization
-    const actualOldString = findActualString(file, old_string)
-    if (!actualOldString) {
+    const resolved = resolveEditStrings(file, old_string, new_string)
+    if (!resolved) {
       return {
         result: false,
         behavior: 'ask',
-        message: `String to replace not found in file.\nString: ${old_string}`,
+        message: `String to replace not found in file, ambiguous, or cannot be replaced with one consistent indentation adjustment. Use exact source text and preserve relative indentation.\nString: ${old_string}`,
         meta: {
           isFilePathAbsolute: String(isAbsolute(file_path)),
         },
         errorCode: 8,
       }
     }
+    const { actualOldString, actualNewString } = resolved
 
     const matches = file.split(actualOldString).length - 1
 
@@ -322,9 +322,7 @@ export const FileEditTool = buildTool({
       file,
       () => {
         // Simulate the edit to get the final content using the exact same logic as the tool
-        return replace_all
-          ? file.replaceAll(actualOldString, new_string)
-          : file.replace(actualOldString, new_string)
+        return applyEditToFile(file, actualOldString, actualNewString, replace_all)
       },
     )
 
@@ -442,16 +440,17 @@ export const FileEditTool = buildTool({
         identity,
     } = await readFileForEdit(absoluteFilePath, prepared)
 
-    // 3. Use findActualString to handle quote normalization
-    const actualOldString =
-      findActualString(originalFileContents, old_string) || old_string
-
-    // Preserve curly quotes in new_string when the file uses them
-    const actualNewString = preserveQuoteStyle(
-      old_string,
-      actualOldString,
-      new_string,
-    )
+    const resolved = resolveEditStrings(originalFileContents, old_string, new_string)
+    if (!resolved) {
+      throw new Error('String to replace not found in file, ambiguous, or cannot be replaced with one consistent indentation adjustment. Use exact source text and preserve relative indentation.')
+    }
+    const { actualOldString, actualNewString, indentationAdjustment } = resolved
+    if (old_string !== '' && !replace_all) {
+      const matches = originalFileContents.split(actualOldString).length - 1
+      if (matches !== 1) {
+        throw new Error(`Found ${matches} matches of the string to replace. Provide more context to identify one occurrence.`)
+      }
+    }
 
     // 4. Generate patch
     const { patch, updatedFile } = getPatchForEdit({
@@ -515,11 +514,12 @@ export const FileEditTool = buildTool({
     const data = {
       filePath: file_path,
       oldString: actualOldString,
-      newString: new_string,
+      newString: actualNewString,
       firstLine: firstLineForLanguageDetection(originalFileContents),
       structuredPatch: boundPatchLinesForPersistence(patch),
       userModified: userModified ?? false,
       replaceAll: replace_all,
+      ...(indentationAdjustment ? { indentationAdjustment } : {}),
       ...(gitDiff && { gitDiff }),
     }
     return {
@@ -538,19 +538,22 @@ export const FileEditTool = buildTool({
     const modifiedNote = userModified
       ? '.  The user modified your proposed changes before accepting them. '
       : ''
+    const indentationNote = data.indentationAdjustment
+      ? ` Leading indentation was adjusted consistently from ${JSON.stringify(data.indentationAdjustment.from)} to ${JSON.stringify(data.indentationAdjustment.to)} on nonblank replacement lines.`
+      : ''
 
     if (replaceAll) {
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: `The file ${filePath} has been updated${modifiedNote}. All occurrences were successfully replaced.`,
+        content: `The file ${filePath} has been updated${modifiedNote}. All occurrences were successfully replaced.${indentationNote}`,
       }
     }
 
     return {
       tool_use_id: toolUseID,
       type: 'tool_result',
-      content: `The file ${filePath} has been updated successfully${modifiedNote}.`,
+      content: `The file ${filePath} has been updated successfully${modifiedNote}.${indentationNote}`,
     }
   },
 } satisfies ToolDef<ReturnType<typeof inputSchema>, FileEditOutput>)

@@ -176,14 +176,17 @@ describe('compact patch model errors', () => {
       persisted.mutationOutcome = mutationOutcome
       persisted.repair = 'Recovery information: published destination may remain.'
       const view = projectFilePatchErrorForModel(persisted)
-      expect(view.mutationOutcome).toBe(mutationOutcome)
+      expect(view).not.toHaveProperty('mutationOutcome')
       if (mutationOutcome === 'incomplete-recovery') {
+        expect(view.mutation).toBe('Some changes from this patch may remain.')
         expect(view.failures[0]!.repair).toContain('before further mutation')
         expect(view.failures[0]!.repair).not.toContain('retry')
         expect(view.recovery).toContain('published destination may remain')
       } else if (mutationOutcome === 'complete-rollback') {
+        expect(view.mutation).toBe('Patch changes were rolled back completely.')
         expect(view.failures[0]!.repair).toContain('Read the restored files')
       } else {
+        expect(view.mutation).toBe('Nothing from this patch was applied.')
         expect(view.failures[0]!.repair).toContain('retry')
       }
     })
@@ -199,9 +202,81 @@ describe('compact patch model errors', () => {
     delete (parser as Partial<FilePatchModelError>).mutationOutcome
     const view = projectFilePatchErrorForModel(parser)
     expect(view).not.toHaveProperty('mutationOutcome')
+    expect(view).not.toHaveProperty('mutation')
     expect(view.failures[0]).toMatchObject({ code: 'UNKNOWN', message: 'Unexpected patch header.' })
     expect(view.failures[0]).not.toHaveProperty('hunk')
     expect(view.failures[0]).not.toHaveProperty('path')
     expect(view.failures[0]!.repair).toContain('Verify mutation and recovery status')
+  })
+
+  test('returns a bounded source divergence only when source text was authorized', () => {
+    const actual = '\tconst count = 1'
+    const expected = '\t\tconst count = 1'
+    const planned = planUpdateHunks({
+      path: '/tmp/spacing.ts',
+      source: `${actual}\n`,
+      hunks: [{ lines: [
+        { kind: 'delete', text: expected },
+        { kind: 'add', text: 'const count = 2' },
+      ] }],
+    })
+    if (!('failure' in planned)) throw new Error('expected a rejected indentation repair')
+    const render = (includeSourceText: boolean) => renderPlannerFailure({
+      failure: planned.failure,
+      sourceLines: [actual],
+      fingerprint: [expected],
+      includeSourceText,
+    }).error
+    expect(projectFilePatchErrorForModel(serializeFilePatchError(render(false))).failures[0])
+      .not.toHaveProperty('nearMatch')
+    const view = projectFilePatchErrorForModel(serializeFilePatchError(render(true)))
+    expect(view.failures[0]!.nearMatch).toEqual({
+      kind: 'diagnostic-only', sourceLine: 1, column: 2, text: actual, truncated: false,
+    })
+    expect(view.mutation).toBe('Nothing from this patch was applied.')
+  })
+
+  test('bounds a long authorized source excerpt around its divergence', () => {
+    const prefix = 'prefix-'.repeat(100)
+    const actual = `${prefix}actual`
+    const expected = `${prefix}expected`
+    const planned = planUpdateHunks({
+      path: '/tmp/long.ts', source: actual,
+      hunks: [{ lines: [{ kind: 'delete', text: expected }, { kind: 'add', text: 'new' }] }],
+    })
+    if (!('failure' in planned)) throw new Error('expected missing fingerprint')
+    const error = renderPlannerFailure({
+      failure: planned.failure, sourceLines: [actual], fingerprint: [expected], includeSourceText: true,
+    }).error
+    const view = projectFilePatchErrorForModel(serializeFilePatchError(error))
+    expect(view.failures[0]!.nearMatch!.text.length).toBeLessThanOrEqual(200)
+    expect(view.failures[0]!.nearMatch!.text).toContain('actual')
+    expect(view.failures[0]!.nearMatch!.truncated).toBe(true)
+    expect(JSON.stringify(view)).not.toContain(prefix)
+  })
+
+  test('discloses ties and incomplete searches rather than recommending one line', () => {
+    const actual = 'sharedPrefixValueX'
+    const expected = 'sharedPrefixValueY'
+    const source = `${actual}\n${actual}\n`
+    const planned = planUpdateHunks({
+      path: '/tmp/tied.ts', source,
+      hunks: [{ lines: [{ kind: 'delete', text: expected }, { kind: 'add', text: 'new' }] }],
+    })
+    if (!('failure' in planned)) throw new Error('expected failure')
+    const view = projectFilePatchErrorForModel(serializeFilePatchError(renderPlannerFailure({
+      failure: planned.failure, sourceLines: [actual, actual], fingerprint: [expected],
+      includeSourceText: true,
+    }).error))
+    expect(view.failures[0]).not.toHaveProperty('nearMatch')
+    expect(view.failures[0]?.nearMatchSearch?.message).toContain('equally similar')
+    expect(view.failures[0]?.nearMatchSearch?.candidateLines).toEqual([1, 2])
+    const incomplete = projectFilePatchErrorForModel(serializeFilePatchError(renderPlannerFailure({
+      failure: planned.failure, sourceLines: [actual, actual], fingerprint: [expected],
+      includeSourceText: true, limits: { maxSourceLines: 0 },
+    }).error))
+    expect(incomplete.failures[0]).not.toHaveProperty('nearMatch')
+    expect(incomplete.failures[0]?.nearMatchSearch?.message).toContain('No reliable near match')
+    expect(incomplete.failures[0]?.nearMatchSearch?.message).toContain('incomplete')
   })
 })

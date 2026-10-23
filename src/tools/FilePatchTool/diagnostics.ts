@@ -19,6 +19,9 @@ export type FilePatchDiagnosticLimits = {
   maxComparisons: number
   maxNearMatches: number
   maxCandidateCoordinates: number
+  maxSourceLines: number
+  maxSourceCharacters: number
+  maxCandidateWindows: number
   maxLineLength: number
   maxMessageLength: number
 }
@@ -27,6 +30,9 @@ export const DEFAULT_FILE_PATCH_DIAGNOSTIC_LIMITS: FilePatchDiagnosticLimits = {
   maxComparisons: 2_000,
   maxNearMatches: 4,
   maxCandidateCoordinates: 20,
+  maxSourceLines: 100_000,
+  maxSourceCharacters: 2_000_000,
+  maxCandidateWindows: 64,
   maxLineLength: 160,
   maxMessageLength: 1_200,
 }
@@ -48,6 +54,8 @@ export type RenderPlannerFailureInput = {
   /** Alias accepted for callers that call the old-side fingerprint `oldLines`. */
   fingerprint?: readonly string[]
   oldLines?: readonly string[]
+  /** Off for validation, which can run before the mutation permission decision. */
+  includeSourceText?: boolean
   mutationOutcome?: FilePatchMutationOutcome
   limits?: Partial<FilePatchDiagnosticLimits>
 }
@@ -60,6 +68,8 @@ export type RenderedPlannerFailure = {
 type DiagnosticState = {
   comparisons: number
   truncated: boolean
+  scannedLines: number
+  comparedCharacters: number
 }
 
 /**
@@ -105,7 +115,9 @@ export function renderPlannerFailure(
     diagnosticsTruncated: failure.diagnosticsTruncated === true || coordinates.length > candidateCoordinates.length,
   }
 
-  const state: DiagnosticState = { comparisons: 0, truncated: metadata.diagnosticsTruncated }
+  const state: DiagnosticState = {
+    comparisons: 0, truncated: false, scannedLines: 0, comparedCharacters: 0,
+  }
   const sourceLines = input.source?.sourceLines ?? input.sourceLines
   const fingerprint =
     input.source?.fingerprint ?? input.fingerprint ?? input.oldLines
@@ -122,6 +134,19 @@ export function renderPlannerFailure(
       limits,
       state,
     )
+    metadata.nearMatchSearch = {
+      complete: !state.truncated,
+      scannedLines: state.scannedLines,
+      totalLines: sourceLines.length,
+    }
+    const near = metadata.nearMatches[0]
+    if (input.includeSourceText && failure.code === 'PATCH_ANCHOR_NOT_FOUND' && near) {
+      const actual = sourceLines[near.divergence.sourceLine]
+      if (actual !== undefined) {
+        near.actual = centeredSnippet(actual, near.divergence.column, limits.maxLineLength)
+        near.actualTruncated = actual.length > limits.maxLineLength
+      }
+    }
   }
 
   const message = renderMessage(failure, metadata, limits, state)
@@ -170,27 +195,67 @@ function findNearMatches(
   limits: FilePatchDiagnosticLimits,
   state: DiagnosticState,
 ): FilePatchNearMatch[] {
-  const maxStart = Math.max(0, sourceLines.length - 1)
   const matches: FilePatchNearMatch[] = []
-  let bestScore = Number.POSITIVE_INFINITY
-
-  for (let sourceStart = 0; sourceStart <= maxStart; sourceStart += 1) {
-    const comparison = compareWindow(sourceLines, fingerprint, sourceStart, state, limits)
-    if (comparison === undefined) break
-    if (comparison.score < bestScore) {
-      bestScore = comparison.score
+  const anchorOffset = fingerprint.reduce((best, line, index) =>
+    line.trim().length > fingerprint[best]!.trim().length ? index : best, 0)
+  const anchor = fingerprint[anchorOffset]!
+  const preferred = new Set([
+    ...(failure.diagnostics ?? [])
+      .filter(item => item.hunkIndex === failure.hunkIndex)
+      .map(item => item.sourceLine),
+    ...(failure.candidateCoordinates ?? []).map(item => item.start),
+  ])
+  const windows = new Map<number, number>()
+  let remainingCharacters = limits.maxSourceCharacters
+  if (anchor.length > remainingCharacters) state.truncated = true
+  else {
+    remainingCharacters -= anchor.length
+    const anchorText = comparisonText(anchor)
+    const anchorPairs = characterPairs(anchorText)
+    for (let sourceLine = 0; sourceLine < sourceLines.length; sourceLine += 1) {
+      if (sourceLine >= limits.maxSourceLines) {
+        state.truncated = true
+        break
+      }
+      const line = sourceLines[sourceLine]!
+      if (line.length > remainingCharacters) {
+        state.truncated = true
+        continue
+      }
+      remainingCharacters -= line.length
+      state.scannedLines++
+      const start = sourceLine - anchorOffset
+      if (start < 0 || preferred.has(start)) continue
+      const actual = comparisonText(line)
+      const similarity = pairSimilarity(anchorText, actual, anchorPairs)
+      if (similarity < 0.55 || !credibleTextAgreement(anchorText, actual, similarity)) continue
+      windows.set(start, similarity)
+      if (windows.size > limits.maxCandidateWindows) {
+        const worst = [...windows].sort((left, right) => left[1] - right[1] || right[0] - left[0])[0]!
+        windows.delete(worst[0])
+        state.truncated = true
+      }
     }
-    // Keep only credible candidates. A source line that shares no exact line
-    // with the fingerprint is not useful repair guidance and can expose too
-    // much of an unrelated file. A one-line fingerprint is allowed one small
-    // textual divergence; longer fingerprints allow one divergent line.
-    const threshold = Math.max(1, fingerprint.length)
-    if (comparison.score > threshold || !comparison.credible) continue
-    if (comparison.exactLines === 0 && comparison.score > 2) continue
+  }
+  const candidates = [
+    ...preferred,
+    ...[...windows].sort((left, right) => right[1] - left[1] || left[0] - right[0]).map(([start]) => start),
+  ]
+  for (const sourceStart of candidates) {
+    if (sourceStart < 0 || sourceStart >= sourceLines.length) continue
+    const comparison = compareWindow(sourceLines, fingerprint, sourceStart, state, limits)
+    if (comparison === undefined) {
+      if (state.comparisons >= limits.maxComparisons ||
+        state.comparedCharacters > limits.maxSourceCharacters) break
+      continue
+    }
+    const similarity = Math.max(0, 1 - comparison.score / fingerprint.length)
+    if (similarity < 0.55 || !comparison.credible) continue
     matches.push({
       sourceStart,
       sourceEnd: Math.min(sourceLines.length, sourceStart + fingerprint.length),
       score: comparison.score,
+      similarity,
       divergence: {
         expectedLine: comparison.divergence.expectedLine,
         sourceLine: comparison.divergence.sourceLine,
@@ -205,16 +270,7 @@ function findNearMatches(
     })
   }
 
-  if (state.truncated) return selectBestMatches(matches, limits.maxNearMatches)
-
-  // The planner may have supplied exact coordinates for a hint or boundary
-  // failure. Preserve them as the primary evidence; approximate windows are
-  // supplementary and must not replace that evidence.
-  const coordinates = failure.candidateCoordinates ?? []
-  const coordinateSet = new Set(coordinates.map(coordinate => coordinate.start))
-  const ranked = matches.filter(match => !coordinateSet.has(match.sourceStart))
-  const retained = selectBestMatches(ranked, limits.maxNearMatches)
-  return retained.length > 0 ? retained : selectBestMatches(matches, limits.maxNearMatches)
+  return selectBestMatches(matches, limits.maxNearMatches)
 }
 
 type WindowComparison = {
@@ -248,6 +304,11 @@ function compareWindow(
     if (!chargeDiagnosticComparison(state, limits)) return undefined
     const actual = sourceLines[sourceStart + expectedLine]
     const expected = fingerprint[expectedLine]!
+    state.comparedCharacters += expected.length + (actual?.length ?? 0)
+    if (state.comparedCharacters > limits.maxSourceCharacters) {
+      state.truncated = true
+      return undefined
+    }
     if (actual === undefined) {
       score += Math.max(2, Math.min(expected.length + 1, 32))
       divergence ??= {
@@ -261,12 +322,13 @@ function compareWindow(
     }
     if (actual === expected) {
       exactLines += 1
+      credible ||= /[^\s]/.test(expected)
       continue
     }
     const column = firstDivergenceColumn(expected, actual)
-    const suffix = commonSuffixLength(expected.slice(column), actual.slice(column))
-    credible ||= column >= 3 || suffix >= 3
-    score += lineDifferenceScore(expected, actual)
+    const difference = lineDifferenceScore(expected, actual)
+    credible ||= credibleTextAgreement(comparisonText(expected), comparisonText(actual), 1 - difference)
+    score += difference
     divergence ??= { expectedLine, sourceLine: sourceStart + expectedLine, column, expected, actual }
   }
 
@@ -289,24 +351,37 @@ function chargeDiagnosticComparison(
 }
 
 function lineDifferenceScore(expected: string, actual: string): number {
-  // Near-match ranking is line-oriented. A long line with one reflowed token
-  // is one divergent line, not hundreds of divergent characters. Credibility
-  // is checked separately using the shared prefix/suffix around the witness.
-  void expected
-  void actual
-  return 1
+  const left = comparisonText(expected)
+  const right = comparisonText(actual)
+  return 1 - pairSimilarity(left, right, characterPairs(left))
 }
 
-function commonSuffixLength(left: string, right: string): number {
-  let count = 0
-  while (
-    count < left.length &&
-    count < right.length &&
-    left[left.length - count - 1] === right[right.length - count - 1]
-  ) {
-    count += 1
+function comparisonText(value: string): string {
+  return value.replace(/\s/g, '')
+}
+
+function characterPairs(text: string): Map<string, number> {
+  const pairs = new Map<string, number>()
+  for (let index = 1; index < text.length; index++) {
+    const pair = text.slice(index - 1, index + 1)
+    pairs.set(pair, (pairs.get(pair) ?? 0) + 1)
   }
-  return count
+  return pairs
+}
+
+function pairSimilarity(left: string, right: string, leftPairs: ReadonlyMap<string, number>): number {
+  if (!left || !right) return 0
+  if (left === right) return 1
+  if (left.length < 2 || right.length < 2) return 0
+  let shared = 0
+  for (const [pair, count] of characterPairs(right)) shared += Math.min(count, leftPairs.get(pair) ?? 0)
+  return 2 * shared / (left.length + right.length - 2)
+}
+
+function credibleTextAgreement(left: string, right: string, similarity: number): boolean {
+  // Indentation, punctuation and a generic three-character prefix are not
+  // enough to recommend an unrelated line as source evidence.
+  return similarity >= 0.55 && /[\p{L}\p{N}_$]/u.test(left) && /[\p{L}\p{N}_$]/u.test(right)
 }
 
 function firstDivergenceColumn(expected: string, actual: string): number {

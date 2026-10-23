@@ -1,5 +1,74 @@
 import { describe, expect, it } from 'bun:test'
-import { findActualString } from './utils.js'
+import { findActualString, getSnippet, getSnippetAtLine, resolveEditStrings } from './utils.js'
+
+describe('resolveEditStrings indentation safety', () => {
+  it('transforms replacement indentation together with a whitespace match', () => {
+    expect(resolveEditStrings('        first()\n        second()\n', 'first()\nsecond()', 'first()\nchanged()'))
+      .toEqual({
+        actualOldString: '        first()\n        second()',
+        actualNewString: '        first()\n        changed()',
+        indentationAdjustment: { from: '', to: '        ' },
+      })
+  })
+
+  it('rejects inconsistent prefixes and outdented additions', () => {
+    expect(resolveEditStrings('  first()\n    second()\n', 'first()\nsecond()', 'first()\nchanged()')).toBeNull()
+    expect(resolveEditStrings('  first()\n  second()\n', '    first()\n    second()', 'new()\n    changed()')).toBeNull()
+  })
+
+  it.each([['\t\t', '\t'], ['        ', '      ']])(
+    'uses the same old-side prefix rule for %j to %j',
+    (from, to) => {
+      const resolved = resolveEditStrings(
+        `${to}first()\n${to}second()\n`,
+        `${from}first()\n${from}second()`,
+        `${from}first()\n${from}changed()`,
+      )
+      expect(resolved?.indentationAdjustment).toEqual({ from, to })
+      expect(resolved?.actualNewString).toBe(`${to}first()\n${to}changed()`)
+    },
+  )
+
+  it('rejects ambiguous whitespace matches', () => {
+    expect(resolveEditStrings('  first()\n  second()\n    first()\n    second()\n', 'first()\nsecond()', 'changed()')).toBeNull()
+  })
+
+  it('does not combine indentation repair with trailing or punctuation normalization', () => {
+    expect(resolveEditStrings('  first() \n  second()\n', 'first()\nsecond()', 'changed()')).toBeNull()
+    expect(resolveEditStrings('  first—call\n  second()\n', 'first-call\nsecond()', 'changed()')).toBeNull()
+  })
+
+  it('preserves exact, quote-only, and non-indentation trailing-whitespace behavior', () => {
+    expect(resolveEditStrings('    first()\n', 'first()', 'changed()'))
+      .toEqual({ actualOldString: 'first()', actualNewString: 'changed()' })
+    expect(resolveEditStrings('const x = “old”\n', 'const x = "old"', 'const x = "new"'))
+      .toEqual({ actualOldString: 'const x = “old”', actualNewString: 'const x = “new”' })
+    expect(resolveEditStrings('one  \ntwo  \n', 'one\ntwo', 'new'))
+      .toEqual({ actualOldString: 'one  \ntwo  ', actualNewString: 'new' })
+  })
+
+  it('preserves CRLF and blank replacement bytes', () => {
+    expect(resolveEditStrings('  first()\r\n \t\r\n  second()\r\n', 'first()\r\n\r\nsecond()', 'new()\r\n \t\r\nlast()'))
+      .toEqual({
+        actualOldString: '  first()\r\n \t\r\n  second()',
+        actualNewString: '  new()\r\n \t\r\n  last()',
+        indentationAdjustment: { from: '', to: '  ' },
+      })
+  })
+})
+
+describe('edit snippets', () => {
+  it('keeps single-edit snippets unchanged while sharing coordinate-based extraction', () => {
+    expect(getSnippet('before\nold\nafter\n', 'old', 'new\nextra', 1)).toEqual({
+      snippet: 'before\nnew\nextra\nafter', startLine: 1,
+    })
+  })
+
+  it('uses final coordinates to distinguish repeated text and account for earlier insertions', () => {
+    expect(getSnippetAtLine(['first', 'same', 'inserted', 'second', 'changed', 'tail'], 4, 1, 1))
+      .toEqual({ snippet: 'second\nchanged\ntail', startLine: 4 })
+  })
+})
 
 describe('findActualString', () => {
   it('returns exact match unchanged', () => {

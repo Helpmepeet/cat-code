@@ -7,7 +7,6 @@ import {
   boundFilePatchErrorText,
   type FilePatchDiagnosticMetadata,
   type FilePatchModelError,
-  type FilePatchMutationOutcome,
   type FilePatchOperationType,
   type PatchSourceSpan,
 } from './types.js'
@@ -33,6 +32,20 @@ type ModelFailure = {
   patchSourceSpan?: PatchSourceSpan & { kind: 'patch-envelope-lines' }
   message: string
   repair: string
+  nearMatch?: {
+    kind: 'diagnostic-only'
+    sourceLine: number
+    column: number
+    text: string
+    truncated: boolean
+  }
+  nearMatchSearch?: {
+    message: string
+    complete: boolean
+    scannedLines: number
+    totalLines: number
+    candidateLines: number[]
+  }
   witnesses?: Array<{
     kind: 'complete-plan-witness' | 'complete-plan-witness-excerpt'
     lineConvention: 'one-based-inclusive'
@@ -52,7 +65,7 @@ type ModelFailure = {
 
 export type FilePatchModelErrorView = {
   type: 'file_patch_error'
-  mutationOutcome?: FilePatchMutationOutcome
+  mutation?: string
   failures: ModelFailure[]
   omittedFailureCount?: number
   recovery?: string
@@ -153,7 +166,17 @@ export function projectFilePatchErrorForModel(error: FilePatchModelError): FileP
   const sourceFailures = error.details?.length ? error.details : [{ ...error, message: error.repair }]
   const outcome = error.mutationOutcome
   const failures = sourceFailures.slice(0, MAX_MODEL_PATCH_FAILURES).map(detail => {
-    const known = plannerGuidance[detail.code]
+    const known = detail.code === 'PATCH_ORDER_CONFLICT' && detail.diagnostics?.kind === 'overlap'
+      ? ['The changes overlap in the current file.', 'Merge overlapping changes into one hunk, read the current source, and retry.'] as const
+      : plannerGuidance[detail.code]
+    const nearMatches = detail.code === 'PATCH_ANCHOR_NOT_FOUND'
+      ? detail.diagnostics?.nearMatches ?? [] : []
+    const near = nearMatches[0]
+    const tied = nearMatches.length > 1 &&
+      Math.abs(nearMatches[0]!.score - nearMatches[1]!.score) < 1e-9
+    const confident = near?.similarity !== undefined && near.similarity >= 0.8
+    const search = detail.code === 'PATCH_ANCHOR_NOT_FOUND'
+      ? detail.diagnostics?.nearMatchSearch : undefined
     let repair = known?.[1] ?? 'Inspect the patch and affected files, resolve the reported error, and verify the current state before further mutation.'
     if (outcome === 'incomplete-recovery') {
       repair = 'Inspect affected files and recovery information before further mutation. Some published changes may remain; reconcile the current state before preparing a new patch.'
@@ -174,6 +197,29 @@ export function projectFilePatchErrorForModel(error: FilePatchModelError): FileP
       }),
       message: known?.[0] ?? boundFilePatchErrorText(detail.message ?? error.repair ?? 'Patch failed.', 400),
       repair,
+      ...(near?.actual === undefined || tied || !confident ? {} : {
+        nearMatch: {
+          kind: 'diagnostic-only' as const,
+          sourceLine: near.divergence.sourceLine + 1,
+          column: near.divergence.column + 1,
+          text: boundFilePatchErrorText(near.actual, 200),
+          truncated: near.actualTruncated === true || near.actual.length > 200,
+        },
+      }),
+      ...(search === undefined ? {} : {
+        nearMatchSearch: {
+          message: (near === undefined
+            ? 'No reliable near match was found.'
+            : tied
+              ? 'Several equally similar locations; none was selected.'
+              : !confident
+                ? 'Low-confidence similarity; no source line is recommended.'
+                : 'Possible near match only; not used for placement.') +
+            (search.complete ? '' : ' Diagnostic search was incomplete.'),
+          ...search,
+          candidateLines: nearMatches.map(match => match.divergence.sourceLine + 1),
+        },
+      }),
       ...(detail.diagnostics === undefined ? {} : {
         evidence: projectEvidence(detail.diagnostics), ...projectWitnesses(detail.diagnostics),
       }),
@@ -181,7 +227,13 @@ export function projectFilePatchErrorForModel(error: FilePatchModelError): FileP
   })
   const view: FilePatchModelErrorView = {
     type: 'file_patch_error',
-    ...(outcome === undefined ? {} : { mutationOutcome: outcome }),
+    ...(outcome === undefined ? {} : {
+      mutation: outcome === 'no-mutation'
+        ? 'Nothing from this patch was applied.'
+        : outcome === 'complete-rollback'
+          ? 'Patch changes were rolled back completely.'
+          : 'Some changes from this patch may remain.',
+    }),
     failures,
     ...(error.omittedFailureCount === undefined && error.code === 'PATCH_PREFLIGHT_FAILED'
       ? {} : { omittedFailureCount: (error.omittedFailureCount ?? 0) + sourceFailures.length - failures.length }),

@@ -18,6 +18,7 @@ import {
   MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
   MAX_FILE_PATCH_FAILURE_DETAILS,
   MAX_FILE_PATCH_PLACEMENTS,
+  MAX_FILE_PATCH_INDENT_PREFIX_CHARS,
 } from './types.js'
 
 /** Legacy sequential matcher retained for replay and regression comparison. */
@@ -32,11 +33,12 @@ export function applyPatchToBuffers(
 export function applyPatchToBuffersPlanned(
   operations: FilePatchOperation[],
   currentFiles: Map<string, ApplyPatchFileState>,
+  options?: { includeSourceText?: boolean },
 ): ApplyPatchResult {
   const result = applyPatchToBuffersWith(
     operations,
     currentFiles,
-    applyUpdateHunksPlanned,
+    (buffer, hunks, path) => applyUpdateHunksPlanned(buffer, hunks, path, options),
   )
   return { contractVersion: 2, files: result.files }
 }
@@ -249,12 +251,17 @@ function applyOperation(
 function boundedPlacementEvidence(
   plan: UpdatePlacementPlan,
 ): { placements: FilePatchPlacement[]; placementOmittedCount?: number } {
-  const placements = plan.hunks
-    .slice(0, MAX_FILE_PATCH_PLACEMENTS)
-    .map(candidate => ({
+  const all = plan.hunks.map((candidate, index) => ({
       hunk: candidate.hunkIndex + 1,
       oldStart: candidate.sourceStart,
       oldEnd: candidate.sourceEnd,
+      ...(candidate.forwardMatchCount === undefined ? {} : {
+        forwardMatchCount: candidate.forwardMatchCount,
+      }),
+      ...(plan.reordered && candidate.hunkIndex !== index ? { reordered: true as const } : {}),
+      ...(candidate.indentationAdjustment === undefined ? {} : {
+        indentationAdjustment: candidate.indentationAdjustment,
+      }),
       reason:
         candidate.boundary === 'bof'
           ? 'bof'
@@ -264,6 +271,28 @@ function boundedPlacementEvidence(
               ? 'exact+hint'
               : 'exact',
     }) satisfies FilePatchPlacement)
+  const repaired = all.filter(placement =>
+    placement.forwardMatchCount !== undefined || placement.reordered || placement.indentationAdjustment,
+  )
+  if (
+    repaired.length > MAX_FILE_PATCH_PLACEMENTS ||
+    repaired.some(placement =>
+      placement.indentationAdjustment &&
+      (placement.indentationAdjustment.from.length > MAX_FILE_PATCH_INDENT_PREFIX_CHARS ||
+        placement.indentationAdjustment.to.length > MAX_FILE_PATCH_INDENT_PREFIX_CHARS),
+    )
+  ) {
+    throw new FilePatchError('Placement repair details exceed the result limit. Split the update into smaller patches.', {
+      code: 'PATCH_REPAIR_REPORT_LIMIT', path: plan.path, operation: 'update', hunkCount: plan.hunks.length,
+    })
+  }
+  // Every accepted repair must survive the transcript's placement cap.
+  const retained = new Set(repaired)
+  for (const placement of all) {
+    if (retained.size >= MAX_FILE_PATCH_PLACEMENTS) break
+    retained.add(placement)
+  }
+  const placements = all.filter(placement => retained.has(placement))
   const omitted = plan.hunks.length - placements.length
   return {
     placements,
@@ -380,6 +409,7 @@ export function applyUpdateHunksPlanned(
   buffer: FilePatchBuffer,
   hunks: FilePatchHunk[],
   path: string,
+  options?: { includeSourceText?: boolean },
 ): { buffer: FilePatchBuffer; plan: UpdatePlacementPlan } {
   const planned = planUpdateHunks({
     path,
@@ -395,6 +425,7 @@ export function applyUpdateHunksPlanned(
     throw plannerFailureAsFilePatchError({
       failure: planned.failure,
       operation: 'update',
+      includeSourceText: options?.includeSourceText,
       source: {
         sourceLines: splitPreservingTerminalNewline(buffer.content),
         fingerprint: failedHunk?.lines
@@ -418,6 +449,7 @@ export function applyUpdatePlan(
   const sourceLines = splitPreservingTerminalNewline(buffer.content)
   const outputLines: string[] = []
   let sourceCursor = 0
+  const appliedHunks = new Set<number>()
 
   if (plan.path !== path || plan.hunks.length !== hunks.length) {
     throw new FilePatchError(
@@ -433,18 +465,37 @@ export function applyUpdatePlan(
 
   for (let planIndex = 0; planIndex < plan.hunks.length; planIndex += 1) {
     const candidate = plan.hunks[planIndex]!
-    const hunk = hunks[planIndex]!
-    const expectedSourceLines = hunk.lines
+    const hunk = hunks[candidate.hunkIndex]
+    const adjustment = candidate.indentationAdjustment
+    if (
+      !hunk ||
+      appliedHunks.has(candidate.hunkIndex) ||
+      (!plan.reordered && candidate.hunkIndex !== planIndex) ||
+      (adjustment && (!/^[\t ]*$/.test(adjustment.from) || !/^[\t ]*$/.test(adjustment.to) ||
+        hunk.lines.some(line => !/^[\t ]*$/.test(line.text) && !line.text.startsWith(adjustment.from))))
+    ) {
+      throw new FilePatchError(`Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`, {
+        code: 'PATCH_PLAN_INVALID', path, operation: 'update', hunkCount: hunks.length,
+      })
+    }
+    appliedHunks.add(candidate.hunkIndex)
+    const lines = adjustment ? hunk.lines.map(line =>
+      /^[\t ]*$/.test(line.text) ? line : {
+        ...line, text: adjustment.to + line.text.slice(adjustment.from.length),
+      },
+    ) : hunk.lines
+    const expectedSourceLines = lines
       .filter(line => line.kind !== 'add')
       .map(line => line.text)
     if (
-      candidate.hunkIndex !== planIndex ||
       candidate.sourceStart < sourceCursor ||
       candidate.sourceEnd < candidate.sourceStart ||
       candidate.sourceEnd > sourceLines.length ||
       candidate.sourceEnd - candidate.sourceStart !== expectedSourceLines.length ||
       expectedSourceLines.some(
-        (line, offset) => sourceLines[candidate.sourceStart + offset] !== line,
+        (line, offset) => adjustment && /^[\t ]*$/.test(line)
+          ? !/^[\t ]*$/.test(sourceLines[candidate.sourceStart + offset]!)
+          : sourceLines[candidate.sourceStart + offset] !== line,
       )
     ) {
       throw new FilePatchError(
@@ -460,7 +511,7 @@ export function applyUpdatePlan(
     }
     outputLines.push(...sourceLines.slice(sourceCursor, candidate.sourceStart))
     let hunkSourceCursor = candidate.sourceStart
-    for (const line of hunk.lines) {
+    for (const line of lines) {
       if (line.kind === 'add') {
         outputLines.push(line.text)
         continue

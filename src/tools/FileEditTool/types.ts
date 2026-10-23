@@ -1,6 +1,7 @@
 import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { semanticBoolean } from '../../utils/semanticBoolean.js'
+import { MAX_LEADING_WHITESPACE_PREFIX_CHARS } from '../../utils/leadingWhitespace.js'
 
 // The input schema with optional replace_all
 const inputSchema = lazySchema(() =>
@@ -85,6 +86,10 @@ const outputSchema = lazySchema(() =>
       .boolean()
       .describe('Whether the user modified the proposed changes'),
     replaceAll: z.boolean().describe('Whether all occurrences were replaced'),
+    indentationAdjustment: z.object({
+      from: z.string().max(MAX_LEADING_WHITESPACE_PREFIX_CHARS).regex(/^[\t ]*$/),
+      to: z.string().max(MAX_LEADING_WHITESPACE_PREFIX_CHARS).regex(/^[\t ]*$/),
+    }).optional(),
     gitDiff: gitDiffSchema().optional(),
   }),
 )

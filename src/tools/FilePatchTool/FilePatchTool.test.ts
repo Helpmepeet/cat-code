@@ -24,7 +24,12 @@ import {
   getFilePatchToolDescription,
   getPlannedFilePatchToolDescription,
 } from './prompt.js'
-import { FilePatchError, type FilePatchOperation } from './types.js'
+import {
+  FilePatchError,
+  MAX_FILE_PATCH_RESULT_SNIPPET_CHARS,
+  MAX_FILE_PATCH_SNIPPET_CHARS,
+  type FilePatchOperation,
+} from './types.js'
 
 const tempDirs: string[] = []
 const realBeforeFileEdited = diagnosticTracker.beforeFileEdited
@@ -861,6 +866,46 @@ describe('FilePatchTool concurrent write safety', () => {
     expect(readFileSync(filePath, 'utf8')).toBe('{}\n')
   })
 
+  test('does not reveal source text during pre-permission settings validation', async () => {
+    const dir = makeTempDir()
+    const settingsDir = join(dir, '.claude')
+    mkdirSync(settingsDir)
+    const filePath = join(settingsDir, 'settings.json')
+    const source = '{"model":"private-source-value"}'
+    writeFileSync(filePath, `${source}\n`)
+    const patch = `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-{"model":"private-source-other"}\n+{}\n*** End Patch\n`
+    const validation = await validatePreparedPatch({ input: patch }, validationContext())
+    expect(validation.result).toBe(false)
+    expect(JSON.stringify(validation)).not.toContain(source)
+    let error: unknown
+    try {
+      await callPatch(patch)
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as FilePatchError).details?.[0]?.diagnostics?.nearMatches[0]?.actual).toBe(source)
+    expect(readFileSync(filePath, 'utf8')).toBe(`${source}\n`)
+  })
+
+  test('bounds snippets across a multi-file patch and makes omissions explicit', async () => {
+    const dir = makeTempDir()
+    const sections = Array.from({ length: 4 }, (_, i) => {
+      const path = join(dir, `file-${i}.txt`)
+      writeFileSync(path, 'old\n')
+      const added = Array.from({ length: 16 }, (_, j) => `+${i}-${j}-${'x'.repeat(500)}`).join('\n')
+      return `*** Update File: ${path}\n@@\n-old\n${added}\n`
+    })
+    const result = await callPatch(`*** Begin Patch\n${sections.join('')}*** End Patch\n`)
+    const files = result.data.files
+    expect(files.every(file => (file.snippet?.length ?? 0) <= MAX_FILE_PATCH_SNIPPET_CHARS)).toBe(true)
+    expect(files.reduce((sum, file) => sum + (file.snippet?.length ?? 0), 0))
+      .toBeLessThanOrEqual(MAX_FILE_PATCH_RESULT_SNIPPET_CHARS)
+    expect(files.at(-1)?.snippetsOmitted).toBe(1)
+    expect(FilePatchTool.mapToolResultToToolResultBlockParam(result.data, 'snippet-test').content)
+      .toContain('more change snippet omitted')
+  })
+
   test('validates settings content at a new move destination', async () => {
     const dir = makeTempDir()
     const settingsDir = join(dir, '.claude')
@@ -1198,6 +1243,9 @@ describe('FilePatchTool model contract', () => {
     expect(description).toContain('not a substring or containment rule')
     expect(description).toContain('complete ordered hunk set')
     expect(description).toContain('later hunk may disambiguate')
+    expect(description).toContain('Ambiguous code statements remain errors')
+    expect(description).toContain('Unique, non-overlapping exact hunks')
+    expect(description).toContain('without forward placement or reordering')
     expect(description).toContain('immediately after the affected line')
     expect(description).toContain('preflights every independent operation in memory')
     expect(description).toContain('Never force or fuzzy-apply a rejected patch')

@@ -20,7 +20,7 @@ import { readEditContext } from '../../utils/readEditContext.js';
 import { firstLineOf } from '../../utils/stringUtils.js';
 import type { ThemeName } from '../../utils/theme.js';
 import type { FileEditOutput } from './types.js';
-import { findActualString, getPatchForEdit, preserveQuoteStyle } from './utils.js';
+import { getPatchForEdit, resolveEditStrings } from './utils.js';
 export function userFacingName(input: Partial<{
   file_path: string;
   old_string: string;
@@ -280,15 +280,15 @@ async function loadRejectionDiff(filePath: string, oldString: string, newString:
         fileContent: undefined
       };
     }
-    const actualOld = findActualString(ctx.content, oldString) || oldString;
-    const actualNew = preserveQuoteStyle(oldString, actualOld, newString);
+    const resolved = resolveEditStrings(ctx.content, oldString, newString);
+    if (!resolved) return { patch: [], firstLine: null, fileContent: undefined };
     const {
       patch
     } = getPatchForEdit({
       filePath,
       fileContents: ctx.content,
-      oldString: actualOld,
-      newString: actualNew,
+      oldString: resolved.actualOldString,
+      newString: resolved.actualNewString,
       replaceAll
     });
     return {

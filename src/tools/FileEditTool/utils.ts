@@ -14,6 +14,16 @@ import {
   readFileSyncCached,
 } from '../../utils/file.js'
 import type { EditInput, FileEdit } from './types.js'
+import {
+  commonLeadingWhitespace,
+  isBlankIndentationLine,
+  leadingWhitespace,
+  leadingWhitespaceAdjustment,
+  matchesAdjustedIndentationLine,
+  MAX_LEADING_WHITESPACE_PREFIX_CHARS,
+  replaceLeadingWhitespace,
+  type LeadingWhitespaceAdjustment,
+} from '../../utils/leadingWhitespace.js'
 
 // Claude can't output curly quotes, so we define them as constants here for Claude to use
 // in the code. We do this because we normalize curly quotes to straight quotes
@@ -235,14 +245,69 @@ export function findActualString(
   return null
 }
 
+/** Resolve both sides together so a whitespace match cannot discard source indentation. */
+export function resolveEditStrings(
+  fileContent: string,
+  oldString: string,
+  newString: string,
+): {
+  actualOldString: string
+  actualNewString: string
+  indentationAdjustment?: LeadingWhitespaceAdjustment
+} | null {
+  const actualOldString = findActualString(fileContent, oldString)
+  if (actualOldString === null) return null
+  if (actualOldString === oldString) {
+    return { actualOldString, actualNewString: newString }
+  }
+
+  const withoutEnding = (line: string) => line.replace(/\r\n$|\n$|\r$/, '')
+  const oldLines = splitLinesKeepEndings(oldString).map(withoutEnding)
+  const actualLines = splitLinesKeepEndings(actualOldString).map(withoutEnding)
+  if (oldLines.length !== actualLines.length) return null
+  const changesIndentation = oldLines.some((line, index) =>
+    !isBlankIndentationLine(line) &&
+    leadingWhitespace(line) !== leadingWhitespace(actualLines[index]!),
+  )
+  if (!changesIndentation) {
+    return {
+      actualOldString,
+      actualNewString: preserveQuoteStyle(oldString, actualOldString, newString),
+    }
+  }
+
+  const from = commonLeadingWhitespace(oldLines)
+  if (from === undefined) return null
+  const anchorIndex = oldLines.findIndex(line => !isBlankIndentationLine(line))
+  const adjustment = leadingWhitespaceAdjustment(
+    oldLines[anchorIndex]!, actualLines[anchorIndex]!, from,
+  )
+  if (!adjustment) return null
+  if (adjustment.from.length > MAX_LEADING_WHITESPACE_PREFIX_CHARS ||
+    adjustment.to.length > MAX_LEADING_WHITESPACE_PREFIX_CHARS) return null
+  for (let index = 0; index < oldLines.length; index += 1) {
+    const adjusted = replaceLeadingWhitespace(oldLines[index]!, adjustment)
+    if (adjusted === undefined || !matchesAdjustedIndentationLine(adjusted, actualLines[index]!)) {
+      return null
+    }
+  }
+  const replacement: string[] = []
+  for (const line of splitLinesKeepEndings(newString)) {
+    const text = withoutEnding(line)
+    const adjusted = replaceLeadingWhitespace(text, adjustment)
+    if (adjusted === undefined) return null
+    replacement.push(adjusted + line.slice(text.length))
+  }
+  return {
+    actualOldString,
+    actualNewString: preserveQuoteStyle(oldString, actualOldString, replacement.join('')),
+    indentationAdjustment: adjustment,
+  }
+}
+
 /**
- * When old_string matched via quote normalization (curly quotes in file,
- * straight quotes from model), apply the same curly quote style to new_string
- * so the edit preserves the file's typography.
- *
- * Uses a simple open/close heuristic: a quote character preceded by whitespace,
- * start of string, or opening punctuation is treated as an opening quote;
- * otherwise it's a closing quote.
+ * Preserve curly quote style after quote normalization. Whitespace, start of
+ * string, and opening punctuation distinguish opening from closing quotes.
  */
 export function preserveQuoteStyle(
   oldString: string,
@@ -572,13 +637,25 @@ export function getSnippet(
     newString,
   ).split(/\r?\n/)
 
-  // Calculate the start and end line numbers for the snippet
-  const startLine = Math.max(0, replacementLine - contextLines)
-  const endLine =
-    replacementLine + contextLines + newString.split(/\r?\n/).length
+  return getSnippetAtLine(
+    newFileLines,
+    replacementLine,
+    newString.split(/\r?\n/).length,
+    contextLines,
+  )
+}
 
-  // Get snippet
-  const snippetLines = newFileLines.slice(startLine, endLine)
+/** Uses the chosen edit coordinates rather than searching repeated text again. */
+export function getSnippetAtLine(
+  fileLines: readonly string[],
+  replacementLine: number,
+  replacementLines: number,
+  contextLines: number = 4,
+): { snippet: string; startLine: number } {
+  const startLine = Math.max(0, replacementLine - contextLines)
+  const endLine = replacementLine + contextLines + replacementLines
+
+  const snippetLines = fileLines.slice(startLine, endLine)
   const snippet = snippetLines.join('\n')
 
   return { snippet, startLine: startLine + 1 }

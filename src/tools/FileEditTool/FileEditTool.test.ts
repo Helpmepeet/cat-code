@@ -63,6 +63,69 @@ function callEdit(
   )
 }
 
+describe('Edit indentation repair', () => {
+  test.each(['\n', '\r\n'])('preserves Python block indentation with %j endings', async ending => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-indent-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'target.py')
+    writeFileSync(filePath, ['def f():', '    if enabled:', '        first()', '        second()', ''].join(ending))
+    const result = await callEdit({
+      file_path: filePath,
+      old_string: 'first()\nsecond()',
+      new_string: 'first()\nchanged()',
+    })
+    expect(readFileSync(filePath, 'utf8')).toBe(
+      ['def f():', '    if enabled:', '        first()', '        changed()', ''].join(ending),
+    )
+    expect(result.data.indentationAdjustment).toEqual({ from: '', to: '        ' })
+    expect(result.data.newString).toBe('        first()\n        changed()')
+    const persisted = outputSchema().parse(result.data)
+    const message = FileEditTool.mapToolResultToToolResultBlockParam(persisted, 'edit-indent')
+    expect(message.content).toContain('Leading indentation was adjusted consistently')
+    expect(message.content).toContain('"" to "        "')
+  })
+
+  test.each([
+    { source: '  first()\n    second()\n', old: 'first()\nsecond()', replacement: 'changed()' },
+    { source: '  first()\n  second()\n', old: '    first()\n    second()', replacement: 'new()\n    changed()' },
+    { source: '  first()\n  second()\n    first()\n    second()\n', old: 'first()\nsecond()', replacement: 'changed()' },
+  ])('rejects unsafe or ambiguous indentation without writing: $source', async ({ source, old, replacement }) => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-indent-reject-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'target.py')
+    writeFileSync(filePath, source)
+    await expect(callEdit({
+      file_path: filePath, old_string: old, new_string: replacement,
+    })).rejects.toThrow('consistent indentation adjustment')
+    expect(readFileSync(filePath, 'utf8')).toBe(source)
+  })
+
+  test('does not persist adjustment metadata for exact edits', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-indent-exact-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'target.py')
+    writeFileSync(filePath, '    first()\n')
+    const result = await callEdit({ file_path: filePath, old_string: 'first()', new_string: 'changed()' })
+    expect(readFileSync(filePath, 'utf8')).toBe('    changed()\n')
+    expect(result.data.indentationAdjustment).toBeUndefined()
+    expect(FileEditTool.mapToolResultToToolResultBlockParam(result.data, 'edit-exact').content)
+      .not.toContain('indentation')
+  })
+
+  test('revalidates an indentation edit against the execution snapshot', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-indent-race-'))
+    tempDirs.push(tempDir)
+    const filePath = join(tempDir, 'target.py')
+    writeFileSync(filePath, '  first()\n  second()\n')
+    await expect(callEdit({
+      file_path: filePath, old_string: 'first()\nsecond()', new_string: 'changed()',
+    }, undefined, () => {
+      writeFileSync(filePath, '  first()\n    second()\n')
+    })).rejects.toThrow()
+    expect(readFileSync(filePath, 'utf8')).toBe('  first()\n    second()\n')
+  })
+})
+
 describe('Edit execution snapshots', () => {
   test.each(['absent', 'partial', 'stale'])('edits with %s read history', async history => {
     const tempDir = mkdtempSync(join(tmpdir(), 'file-edit-history-'))

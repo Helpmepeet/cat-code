@@ -1578,6 +1578,106 @@ describe('FilePatchTool.validateInput move destination', () => {
   })
 })
 
+describe('logged placement repairs', () => {
+  const apply = (source: string, hunks: FilePatchHunk[]) => applyPatchToBuffersPlanned(
+    [{ type: 'update', path: '/tmp/repair.txt', hunks }],
+    new Map([['/tmp/repair.txt', fileState('/tmp/repair.txt', source)]]),
+  ).files[0]!
+  const replace = (before: string, after: string) => hunk({
+    lines: [{ kind: 'delete', text: before }, { kind: 'add', text: after }],
+  })
+
+  test('applies unique reordered hunks to the correct source lines and records original ordinals', () => {
+    const file = apply('alpha\nbeta\ngamma\n', [
+      replace('gamma', 'GAMMA'), replace('alpha', 'ALPHA'), replace('beta', 'BETA'),
+    ])
+    expect(file.after).toBe('ALPHA\nBETA\nGAMMA\n')
+    expect(file.placements?.map(p => [p.hunk, p.oldStart, p.reordered]))
+      .toEqual([[2, 0, true], [3, 1, true], [1, 2, true]])
+  })
+
+  // Source snapshots were not retained. These preserve the three eligible
+  // historical order permutations, not the complete historical file contents.
+  test.each([
+    ['2055efb3c', [3, 1, 2, 4, 5]],
+    ['61fb70f7', [1, 2, 3, 7, 4, 5, 6]],
+    ['014e85df4', [3, 1, 2]],
+  ] as const)('applies the qualifying historical order shape %s', (_id, sourceOrder) => {
+    const source = sourceOrder.map(id => `old-${id}`).join('\n') + '\n'
+    const file = apply(source, Array.from({ length: sourceOrder.length }, (_, i) =>
+      replace(`old-${i + 1}`, `new-${i + 1}`),
+    ))
+    expect(file.after).toBe(sourceOrder.map(id => `new-${id}`).join('\n') + '\n')
+    expect(file.placements?.map(p => p.hunk)).toEqual([...sourceOrder])
+  })
+
+  test.each([
+    ['af77b2e7', '\t\t            ', '\t            ', 'onCancelQuestions={() => {'],
+    ['1dc56d13', '\t\t            ', '\t            ', 'fastMode={rail.fastMode}'],
+    ['1a26633b', '        ', '      ', 'const current = this.deps.work.read()'],
+    ['88e69935', '                    ', '                ', 'guard !record.draining else { throw LidFailure("start-refused") }'],
+  ])('applies a synthetic indentation equivalent of %s', (_id, from, to, text) => {
+    const file = apply(`${to}${text}\n`, [hunk({ lines: [
+      { kind: 'context', text: `${from}${text}` },
+      { kind: 'add', text: `${from}  added()` },
+    ] })])
+    expect(file.after).toBe(`${to}${text}\n${to}  added()\n`)
+    expect(file.placements?.[0]?.indentationAdjustment).toEqual({ from, to })
+  })
+
+  test('applies and records a later brace-only forward choice', () => {
+    const file = apply('anchor\n}\n}\n', [
+      replace('anchor', 'updated'), hunk({ lines: [
+        { kind: 'context', text: '}' }, { kind: 'add', text: 'new block' },
+      ] }),
+    ])
+    expect(file.after).toBe('updated\n}\nnew block\n}\n')
+    expect(file.placements?.[1]).toMatchObject({ hunk: 2, oldStart: 1, forwardMatchCount: 2 })
+  })
+
+  test('adjusts both context and additions while retaining Python relative indentation', () => {
+    const file = apply('def run():\n      if ready:\n          work()\n', [hunk({ lines: [
+      { kind: 'context', text: '        if ready:' },
+      { kind: 'delete', text: '            work()' },
+      { kind: 'add', text: '            process()' },
+      { kind: 'add', text: '        finish()' },
+    ] })])
+    expect(file.after).toBe('def run():\n      if ready:\n          process()\n      finish()\n')
+    expect(file.placements?.[0]?.indentationAdjustment).toEqual({ from: '        ', to: '      ' })
+  })
+
+  test('keeps actual blank context bytes when repairing surrounding indentation', () => {
+    const file = apply('  first\n \t\n  second\n', [hunk({ lines: [
+      { kind: 'context', text: '    first' },
+      { kind: 'context', text: '' },
+      { kind: 'delete', text: '    second' },
+      { kind: 'add', text: '    changed' },
+      { kind: 'add', text: '' },
+    ] })])
+    expect(file.after).toBe('  first\n \t\n  changed\n\n')
+  })
+
+  test('preserves forward metadata beyond the ordinary placement display cap', () => {
+    const anchors = Array.from({ length: MAX_FILE_PATCH_PLACEMENTS + 1 }, (_, i) => `anchor-${i}`)
+    const file = apply(`${anchors.join('\n')}\n}\n}\n`, [
+      ...anchors.map(line => replace(line, `${line}-updated`)),
+      replace('}', '};'),
+    ])
+    expect(file.placements).toHaveLength(MAX_FILE_PATCH_PLACEMENTS)
+    expect(file.placements?.at(-1)).toMatchObject({
+      hunk: anchors.length + 1, forwardMatchCount: 2,
+    })
+    expect(file.placementOmittedCount).toBe(2)
+  })
+
+  test('rejects rather than silently dropping repair logs beyond the bound', () => {
+    const anchors = Array.from({ length: MAX_FILE_PATCH_PLACEMENTS + 2 }, (_, i) => `anchor-${i}`)
+    expect(() => apply(`${anchors.join('\n')}\n`,
+      anchors.toReversed().map(line => replace(line, `${line}-updated`)),
+    )).toThrow('Placement repair details exceed the result limit')
+  })
+})
+
 describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
   test('enumerates each affected file with its operation', () => {
     const result = FilePatchTool.mapToolResultToToolResultBlockParam(
@@ -1640,6 +1740,27 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
     expect(result.content).toContain(
       'Updated /x/a.ts (hunk 1 at old source coordinates [4, 7); 2 more omitted)',
     )
+  })
+
+  test('reports each repair mechanism and its actual source coordinates', () => {
+    const output = {
+      contractVersion: 2 as const,
+      files: [{
+        path: '/x/a.ts', type: 'update' as const, structuredPatch: [],
+        placements: [
+          { hunk: 2, oldStart: 4, oldEnd: 5, reason: 'exact' as const, forwardMatchCount: 3 },
+          { hunk: 1, oldStart: 9, oldEnd: 10, reason: 'exact' as const, reordered: true as const },
+          { hunk: 3, oldStart: 12, oldEnd: 13, reason: 'exact' as const,
+            indentationAdjustment: { from: '\t\t', to: '\t' } },
+        ],
+      }],
+    }
+    expect(outputSchema().safeParse(output).success).toBe(true)
+    const content = FilePatchTool.mapToolResultToToolResultBlockParam(output, 'repair-test').content
+    expect(content).toContain('first of 3 exact matches')
+    expect(content).toContain('applied in file order')
+    expect(content).toContain('indentation adjusted: "\\t\\t" to "\\t"')
+    expect(content).toContain('hunk 3 at old source coordinates [12, 13)')
   })
 })
 
@@ -1738,6 +1859,7 @@ describe('FilePatchTool.call transcript payload', () => {
         ...(file.path === updatePath || file.path === moveDest
           ? ['placements']
           : []),
+        ...(file.type === 'delete' ? [] : ['snippet']),
       ].sort()
       expect(Object.keys(file).sort()).toEqual(expectedKeys)
       expect(file.structuredPatch.length).toBeGreaterThan(0)
@@ -1759,6 +1881,10 @@ describe('FilePatchTool.call transcript payload', () => {
     ])
 
     expect(JSON.stringify(result.data)).not.toContain('UNTOUCHED_SENTINEL')
+    expect(files.find(file => file.path === updatePath)?.snippet).toContain('body updated')
+    const modelResult = FilePatchTool.mapToolResultToToolResultBlockParam(result.data, 'tool-1')
+    expect(modelResult.content).toContain('body updated')
+    expect(modelResult.content).not.toContain('UNTOUCHED_SENTINEL')
   })
 
   test('bounds firstLine so a one-line file cannot land whole on the transcript', async () => {

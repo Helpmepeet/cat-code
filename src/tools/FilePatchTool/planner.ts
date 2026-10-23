@@ -1,4 +1,10 @@
 import {
+  commonLeadingWhitespace,
+  leadingWhitespaceAdjustment,
+  matchesAdjustedIndentationLine,
+  replaceLeadingWhitespace,
+} from '../../utils/leadingWhitespace.js'
+import {
   MAX_FILE_PATCH_COMPLETE_WITNESSES,
   MAX_FILE_PATCH_WITNESS_PLACEMENTS,
   sampleHunkCoordinates,
@@ -69,6 +75,14 @@ export type HunkCandidate = {
   matchTier: PlannerMatchTier
   /** One deterministic witness line per effective hint, when hints exist. */
   diagnosticHintLines?: number[]
+  /** Viable exact placements at this forward tie-break, including the chosen one. */
+  forwardMatchCount?: number
+  /**
+   * Replace this leading prefix on every nonblank old and added line.
+   * `from` is the common old-side prefix. Added blank lines stay unchanged;
+   * blank context keeps the source bytes.
+   */
+  indentationAdjustment?: { from: string; to: string }
 }
 
 export type PlannerOutputEvidence = {
@@ -82,6 +96,8 @@ export type UpdatePlacementPlan = {
   path: string
   hunks: HunkCandidate[]
   output: PlannerOutputEvidence
+  /** Hunks are source-ordered; each candidate retains its original hunkIndex. */
+  reordered?: true
 }
 
 export type PlannerFailureCode =
@@ -102,6 +118,7 @@ export type PlannerFailureKind =
   | 'invalid-insertion'
   | 'hard-eof'
   | 'ordering'
+  | 'overlap'
   | 'ambiguity'
   | 'newline'
   | 'limit'
@@ -1284,6 +1301,103 @@ function reconstructAmbiguityWitnesses(
   }
 }
 
+function adjustedHunk(
+  hunk: EffectiveHunk,
+  from: string,
+  to: string,
+): EffectiveHunk | undefined {
+  const lines: PlannerLine[] = []
+  for (const line of hunk.lines) {
+    const text = replaceLeadingWhitespace(line.text, { from, to })
+    if (text === undefined) return undefined
+    lines.push(text === line.text ? line : { ...line, text })
+  }
+  return { ...hunk, lines }
+}
+
+function discoverIndentedCandidates(
+  hunk: EffectiveHunk,
+  hunkIndex: number,
+  source: PlannerSource,
+  counters: PlannerCounters,
+  totalCandidates: { value: number },
+): HunkCandidate[] {
+  const fp = fingerprint(hunk)
+  const anchorOffset = fp.findIndex(line => !/^[\t ]*$/.test(line))
+  if (anchorOffset < 0) return []
+  const anchor = fp[anchorOffset]!
+  const from = commonLeadingWhitespace(fp, () => charge(counters, 'sourcePositionsScanned'))!
+  const candidates: HunkCandidate[] = []
+  for (let start = 0; start <= source.lines.length - fp.length; start += 1) {
+    charge(counters, 'sourcePositionsScanned')
+    if (hunk.isEndOfFile && start + fp.length !== source.lines.length) continue
+    const actual = source.lines[start + anchorOffset]!
+    const adjustment = leadingWhitespaceAdjustment(anchor, actual, from)
+    if (!adjustment) continue
+    const { to } = adjustment
+    charge(counters, 'sourcePositionsScanned', hunk.lines.length)
+    const adjusted = adjustedHunk(hunk, from, to)
+    if (!adjusted) continue
+    const adjustedFp = fingerprint(adjusted)
+    if (!adjustedFp.every((line, offset) =>
+      matchesAdjustedIndentationLine(line, source.lines[start + offset]!))) continue
+    const candidate = makeCandidate(
+      hunkIndex, hunk, start, start + fp.length, source.lines, counters, totalCandidates,
+    )
+    if (!candidate) continue
+    candidates.push({ ...candidate, indentationAdjustment: { from, to } })
+    if (candidates.length > counters.limits.maxCandidatesPerHunk) {
+      throw new PlannerLimitError('candidatesRetained')
+    }
+  }
+  return candidates
+}
+
+function closingDelimiterFingerprint(set: CandidateSet): boolean {
+  const text = set.fingerprint.join('\n')
+  return /^[\s}\]),;]+$/.test(text) && /[}\])]/.test(text)
+}
+
+function resolveForwardPlan(
+  sets: readonly CandidateSet[],
+  source: PlannerSource,
+  hunks: readonly EffectiveHunk[],
+  counters: PlannerCounters,
+): HunkCandidate[] | undefined {
+  // Use exhaustive discovery, never bounded diagnostic coordinates or witnesses.
+  // A context-free BOF insertion is not a unique exact source anchor.
+  if (sets[0]!.fingerprintLength === 0 || sets[0]!.candidates.length !== 1) return undefined
+
+  const restricted = sets.slice()
+  const viableCandidates = (index: number): HunkCandidate[] =>
+    restricted[index]!.candidates.filter(candidate => {
+      const trial = restricted.slice()
+      trial[index] = { ...trial[index]!, candidates: [candidate] }
+      return countPlans(trial, source, hunks, counters).continuation.count > 0
+    })
+
+  // Reject real-code ambiguity across all complete plans before punctuation
+  // choices can conceal it. Later constraints may still make raw matches unique.
+  for (let index = 1; index < sets.length; index += 1) {
+    if (!closingDelimiterFingerprint(sets[index]!) && viableCandidates(index).length > 1) {
+      return undefined
+    }
+  }
+
+  const chosen: HunkCandidate[] = [sets[0]!.candidates[0]!]
+  for (let index = 1; index < sets.length; index += 1) {
+    const viable = viableCandidates(index)
+    if (viable.length === 0) return undefined
+    const first = viable[0]!
+    const candidate = viable.length > 1
+      ? { ...first, forwardMatchCount: viable.length }
+      : first
+    chosen.push(candidate)
+    restricted[index] = { ...restricted[index]!, candidates: [candidate] }
+  }
+  return chosen
+}
+
 function candidateEvidence(sets: CandidateSet[]): Partial<PlannerFailure> {
   const coordinates = sets.flatMap(set => set.candidates.map(candidate => ({
     hunkIndex: candidate.hunkIndex,
@@ -1378,6 +1492,7 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
 
   try {
     const candidateSets: CandidateSet[] = []
+    let indentationAdjusted = false
     for (let hunkIndex = 0; hunkIndex < hunks.length; hunkIndex += 1) {
       const set = discoverCandidates(
         hunks[hunkIndex]!,
@@ -1387,6 +1502,14 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
         counters,
         totalCandidates,
       )
+      // Existing exact matches, including ones blocked by hints/EOF, are not
+      // permission to substitute indentation elsewhere.
+      if (set.candidates.length === 0 && set.exactCoordinates.length === 0 && !set.invalidInsertion) {
+        set.candidates = discoverIndentedCandidates(
+          hunks[hunkIndex]!, hunkIndex, source, counters, totalCandidates,
+        )
+        if (set.candidates.length > 0) indentationAdjusted = true
+      }
       const candidateFailure = failureFromCandidateSet(
         set,
         source.lines,
@@ -1408,7 +1531,28 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
     }
 
     const counted = countPlans(candidateSets, source, hunks, counters)
-    const continuation = counted.continuation
+    let continuation = counted.continuation
+    let reordered = false
+    let overlapping = false
+    if (
+      continuation.count === 0 &&
+      counted.firstNewlineFailure === undefined &&
+      !indentationAdjusted &&
+      candidateSets.every(set => set.candidates.length === 1)
+    ) {
+      const sorted = candidateSets.slice().sort(
+        (left, right) => left.candidates[0]!.sourceStart - right.candidates[0]!.sourceStart,
+      )
+      overlapping = sorted.some((set, index) => index > 0 &&
+        set.candidates[0]!.sourceStart < sorted[index - 1]!.candidates[0]!.sourceEnd)
+      if (!overlapping) {
+        const sourceOrdered = countPlans(sorted, source, hunks, counters)
+        if (sourceOrdered.continuation.count === 1) {
+          continuation = sourceOrdered.continuation
+          reordered = true
+        }
+      }
+    }
     if (continuation.count === 0) {
       if (counted.firstNewlineFailure !== undefined) {
         const failure = withPath(counted.firstNewlineFailure, input.path)
@@ -1422,8 +1566,10 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
       const failure = withPath(
         failureBase(
           'PATCH_ORDER_CONFLICT',
-          'ordering',
-          'The exact hunk candidates cannot form one ordered, non-overlapping plan in the immutable source snapshot.',
+          overlapping ? 'overlap' : 'ordering',
+          overlapping
+            ? 'The uniquely matched hunks contain overlapping source ranges.'
+            : 'The exact hunk candidates cannot form one ordered, non-overlapping plan in the immutable source snapshot.',
           undefined,
           hunks.length,
           counters,
@@ -1435,6 +1581,10 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
         ok: false,
         failure: input.diagnostics ? addDiagnostics(failure, source.lines, hunks, counters) : failure,
       }
+    }
+    if (continuation.count === 2 && !indentationAdjusted) {
+      const forwardPath = resolveForwardPlan(candidateSets, source, hunks, counters)
+      if (forwardPath) continuation = { count: 1, path: forwardPath }
     }
     if (continuation.count === 2 || !continuation.path) {
       const failure = withPath(
@@ -1465,7 +1615,16 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
     }
 
     const planHunks = continuation.path
-    const newlineResult = validateNewlines(source, hunks, planHunks, counters)
+    const effectiveHunks = hunks.slice()
+    for (const candidate of planHunks) {
+      const adjustment = candidate.indentationAdjustment
+      if (adjustment) {
+        effectiveHunks[candidate.hunkIndex] = adjustedHunk(
+          hunks[candidate.hunkIndex]!, adjustment.from, adjustment.to,
+        )!
+      }
+    }
+    const newlineResult = validateNewlines(source, effectiveHunks, planHunks, counters)
     if ('code' in newlineResult) {
       const failure = withPath(newlineResult, input.path)
       return {
@@ -1476,7 +1635,10 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
 
     return {
       ok: true,
-      plan: { path: input.path, hunks: planHunks, output: newlineResult.output },
+      plan: {
+        path: input.path, hunks: planHunks, output: newlineResult.output,
+        ...(reordered ? { reordered: true as const } : {}),
+      },
       usage: snapshotUsage(counters),
     }
   } catch (error) {

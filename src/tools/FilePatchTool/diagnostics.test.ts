@@ -15,6 +15,54 @@ function failureFor(source: string, expected: string) {
 }
 
 describe('bounded planner failure diagnostics', () => {
+  test('ranks actual text similarity across a file beyond the old prefix scan budget', () => {
+    const expected = '        onCancelQuestion={() => {'
+    const actual = '        onCancelQuestions={() => {'
+    const lines = Array.from({ length: 5_000 }, (_, i) => `        unrelated_${i}()`)
+    lines[536] = '        if (ready) {'
+    lines[4_259] = actual
+    const rendered = renderPlannerFailure({
+      failure: failureFor(lines.join('\n'), expected),
+      sourceLines: lines, fingerprint: [expected], includeSourceText: true,
+    })
+    expect(rendered.metadata.nearMatches[0]?.divergence.sourceLine).toBe(4_259)
+    expect(rendered.metadata.nearMatches[0]?.actual).toBe(actual)
+    expect(rendered.metadata.nearMatchSearch).toEqual({
+      complete: true, scannedLines: 5_000, totalLines: 5_000,
+    })
+  })
+
+  test('uses retained planner witnesses even when whole-file screening is incomplete', () => {
+    const lines = Array.from({ length: 4_100 }, () => 'unrelated')
+    lines[4_036] = '\tactualCall()'
+    const expected = '\t\tactualCall()'
+    const planned = planUpdateHunks({
+      path: '/tmp/late.ts', source: lines.join('\n'), diagnostics: true,
+      hunks: [{ lines: [
+        { kind: 'delete', text: expected }, { kind: 'add', text: 'unindentedReplacement()' },
+      ] }],
+    })
+    if (!('failure' in planned)) throw new Error('expected failure')
+    const rendered = renderPlannerFailure({
+      failure: planned.failure, sourceLines: lines, fingerprint: [expected],
+      includeSourceText: true, limits: { maxSourceLines: 2 },
+    })
+    expect(rendered.metadata.nearMatches[0]?.divergence.sourceLine).toBe(4_036)
+    expect(rendered.metadata.nearMatchSearch?.complete).toBe(false)
+    expect(rendered.metadata.nearMatchSearch?.scannedLines).toBe(2)
+  })
+
+  test('does not use indentation alone as credible source evidence', () => {
+    const expected = '            abcdefghijkl'
+    const actual = '            ZYXWVUTSRQ'
+    const rendered = renderPlannerFailure({
+      failure: failureFor(actual, expected), sourceLines: [actual], fingerprint: [expected],
+      includeSourceText: true,
+    })
+    expect(rendered.metadata.nearMatches).toEqual([])
+    expect(rendered.metadata.nearMatchSearch?.complete).toBe(true)
+  })
+
   test('keeps primary metadata and original candidate coordinates stable', () => {
     const failure: PlannerFailure = {
       code: 'PATCH_ANCHOR_AMBIGUOUS',
@@ -103,26 +151,26 @@ describe('bounded planner failure diagnostics', () => {
   })
 
   test('reports uncertainty when multiple approximate candidates are credible', () => {
-    const failure = failureFor('target-alpha\ntarget-beta\n', 'target-gamma')
+    const failure = failureFor('shared-target-aa\nshared-target-bb\n', 'shared-target-cc')
     const rendered = renderPlannerFailure({
       failure,
-      sourceLines: ['target-alpha', 'target-beta'],
-      fingerprint: ['target-gamma'],
+      sourceLines: ['shared-target-aa', 'shared-target-bb'],
+      fingerprint: ['shared-target-cc'],
     })
 
     expect(rendered.metadata.nearMatches.map(match => match.sourceStart)).toEqual([0, 1])
     expect(rendered.error.message).toContain('Several non-authoritative near matches remain (2)')
     expect(rendered.error.message).toContain('source lines 1-1')
     expect(rendered.error.message).toContain('source lines 2-2')
-    expect(rendered.error.message).not.toContain('target-alpha\ntarget-beta')
+    expect(rendered.error.message).not.toContain('shared-target-aa\nshared-target-bb')
   })
 
   test('diagnostic budget truncation preserves the primary failure', () => {
-    const failure = failureFor('actual\n', 'expected')
+    const failure = failureFor('shared-prefix-actual\n', 'shared-prefix-expected')
     const rendered = renderPlannerFailure({
       failure,
-      sourceLines: ['actual'],
-      fingerprint: ['expected'],
+      sourceLines: ['shared-prefix-actual'],
+      fingerprint: ['shared-prefix-expected'],
       limits: { maxComparisons: 0 },
     })
 

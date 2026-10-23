@@ -37,6 +37,285 @@ function failure(result: PlannerResult) {
   return result.failure
 }
 
+describe('strict indentation repair and source reordering', () => {
+  test.each([['\t\t', '\t'], ['        ', '      ']])(
+    'repairs %j to %j with explicit added-line metadata',
+    (from, to) => {
+      const result = success(plan(`${to}old\n`, [
+        hunk([deleted(`${from}old`), added(`${from}new`)]),
+      ]))
+      expect(result.plan.hunks[0].indentationAdjustment).toEqual({ from, to })
+      expect(result.plan.reordered).toBeUndefined()
+      expect(result.plan.hunks[0].forwardMatchCount).toBeUndefined()
+    },
+  )
+
+  test('rejects an added line shorter than the old-side prefix', () => {
+    expect(failure(plan('      old\n', [
+      hunk([deleted('        old'), added('    new')]),
+    ])).code).toBe('PATCH_ANCHOR_NOT_FOUND')
+  })
+
+  test('rejects inconsistent old-side indentation changes', () => {
+    expect(failure(plan('  one\n   two\n', [
+      hunk([deleted('    one'), deleted('    two'), added('    new')]),
+    ])).code).toBe('PATCH_ANCHOR_NOT_FOUND')
+  })
+
+  test('rejects multiple adjusted ranges even with different replacement prefixes', () => {
+    expect(failure(plan('  old\n    old\n', [
+      hunk([deleted('      old'), added('      new')]),
+    ])).code).toBe('PATCH_ANCHOR_AMBIGUOUS')
+  })
+
+  test('later exact constraints can make adjusted placement strictly unique', () => {
+    const result = success(plan('  old\nfence\n    old\n', [
+      hunk([deleted('      old'), added('      new')]),
+      hunk([context('fence')]),
+    ]))
+    expect(result.plan.hunks.map(candidate => candidate.sourceStart)).toEqual([0, 1])
+    expect(result.plan.hunks[0].indentationAdjustment).toEqual({ from: '      ', to: '  ' })
+  })
+
+  test('a raw exact match blocked by hints does not authorize indentation repair', () => {
+    expect(failure(plan('    old\nscope\n  old\n', [
+      hunk([deleted('    old'), added('    new')], { hints: ['scope'] }),
+    ])).code).toBe('PATCH_HINT_NOT_FOUND')
+  })
+
+  test('keeps relative Python indentation including the block end', () => {
+    const lines = [
+      context('        if ready:'),
+      deleted('            old()'),
+      added('            new()'),
+      context('        after()'),
+    ]
+    const result = success(plan('    if ready:\n        old()\n    after()\n', [hunk(lines)]))
+    const adjustment = result.plan.hunks[0].indentationAdjustment!
+    expect(adjustment).toEqual({ from: '        ', to: '    ' })
+    expect(lines.filter(line => line.kind !== 'delete').map(line =>
+      adjustment.to + line.text.slice(adjustment.from.length),
+    )).toEqual(['    if ready:', '        new()', '    after()'])
+  })
+
+  test('preserves exact candidates instead of including indentation alternatives', () => {
+    const result = success(plan('    old\n  old\n', [
+      hunk([deleted('    old'), added('    new')]),
+    ]))
+    expect(result.plan.hunks[0].sourceStart).toBe(0)
+    expect(result.plan.hunks[0].indentationAdjustment).toBeUndefined()
+  })
+
+  test('indentation cannot authorize a closing-delimiter forward choice', () => {
+    expect(failure(plan('  anchor\n}\n}\n', [
+      hunk([deleted('    anchor'), added('    updated')]),
+      hunk([deleted('}'), added('};')]),
+    ])).code).toBe('PATCH_ANCHOR_AMBIGUOUS')
+  })
+
+  test('indentation cannot combine with reordering', () => {
+    expect(failure(plan('first\n  second\n', [
+      hunk([deleted('    second'), added('    new')]),
+      hunk([context('first')]),
+    ])).code).toBe('PATCH_ORDER_CONFLICT')
+  })
+
+  test('ambiguous candidates cannot authorize source reordering', () => {
+    expect(failure(plan('first\nfirst\nsecond\n', [
+      hunk([context('second')]), hunk([context('first')]),
+    ])).code).toBe('PATCH_ORDER_CONFLICT')
+  })
+
+  test('reordering still validates final-output newline claims', () => {
+    expect(failure(plan('first\nsecond\n', [
+      hunk([deleted('second'), added('new second')]),
+      hunk([deleted('first'), added('new first')], {
+        newlineMarkers: [{ afterHunkLine: 1, appliesTo: 'new' }],
+      }),
+    ])).code).toBe('PATCH_ORDER_CONFLICT')
+  })
+
+  test('adjusted candidates honor hints and old-side newline markers', () => {
+    const result = success(plan('scope\n  old', [
+      hunk([deleted('    old'), added('    new')], {
+        hints: ['scope'], newlineMarkers: [{ afterHunkLine: 0, appliesTo: 'old' }],
+      }),
+    ]))
+    expect(result.plan.hunks[0].diagnosticHintLines).toEqual([0])
+    expect(result.plan.output.hasFinalNewline).toBe(true)
+    expect(failure(plan('scope\n  old\n', [
+      hunk([deleted('    old'), added('    new')], {
+        newlineMarkers: [{ afterHunkLine: 0, appliesTo: 'old' }],
+      }),
+    ])).code).toBe('PATCH_NEWLINE_CONFLICT')
+  })
+
+  test('blank old lines match blank source lines and added blank bytes are unchanged', () => {
+    const result = success(plan('  old\n\n', [
+      hunk([deleted('    old'), context(''), added('    new'), added(' \t')]),
+    ]))
+    expect(result.plan.hunks[0].indentationAdjustment).toEqual({ from: '    ', to: '  ' })
+    const whitespaceBlank = success(plan('  old\n \n', [
+      hunk([deleted('    old'), context(''), added('    new')]),
+    ]))
+    expect(whitespaceBlank.plan.hunks[0].indentationAdjustment).toEqual({ from: '    ', to: '  ' })
+  })
+
+  test('does not normalize trailing whitespace, punctuation, or tab widths', () => {
+    for (const source of ['  old \n', '  old;\n']) {
+      expect(failure(plan(source, [
+        hunk([deleted('    old'), added('    new')]),
+      ])).code).toBe('PATCH_ANCHOR_NOT_FOUND')
+    }
+    expect(failure(plan('  old\n  \ttail\n', [
+      hunk([deleted('    old'), context('        tail'), added('    new')]),
+    ])).code).toBe('PATCH_ANCHOR_NOT_FOUND')
+  })
+
+  test('repair discovery fails closed on its shared scan budget', () => {
+    const source = '  old\n'
+    const hunks = [hunk([deleted('    old'), added('    new')])]
+    const result = success(plan(source, hunks))
+    expect(failure(plan(source, hunks, {
+      limits: { maxSourcePositionsScanned: result.usage.sourcePositionsScanned - 1 },
+    })).code).toBe('PATCH_PLANNER_LIMIT')
+  })
+})
+
+describe('closing-delimiter forward placement', () => {
+  const anchor = () => hunk([deleted('anchor'), added('updated')])
+  const closing = (text = '}') => hunk([deleted(text), added(`${text} // changed`)])
+
+  test('selects the first exact closing update and annotates every tie-break', () => {
+    const result = success(plan('anchor\n}\n}\n}\n}\n', [anchor(), closing(), closing()]))
+    expect(result.plan.hunks.map(candidate => [candidate.sourceStart, candidate.forwardMatchCount]))
+      .toEqual([[0, undefined], [1, 3], [2, 3]])
+  })
+
+  test('keeps indentation exact and admits whole multiline closing fingerprints', () => {
+    const result = success(plan('anchor\n}\n  }\n  });\n  }\n  });\n', [
+      anchor(),
+      hunk([context('  }'), deleted('  });'), added('  }); // changed')]),
+    ]))
+    expect(result.plan.hunks[1]).toMatchObject({ sourceStart: 2, forwardMatchCount: 2 })
+  })
+
+  test.each(['', '   ', '{', '}, 1000)', 'this.syncSessions()', 'code();\n}'])(
+    'rejects ambiguous noneligible fingerprint %j',
+    text => {
+      const lines = text.split('\n')
+      expect(failure(plan(`anchor\n${text}\n${text}\n`, [
+        anchor(), hunk([...lines.map(deleted), added('replacement')]),
+      ])).code).toBe('PATCH_ANCHOR_AMBIGUOUS')
+    },
+  )
+
+  test('rejects ambiguous first anchors even when only one can reach the closings', () => {
+    expect(failure(plan('anchor\n}\n}\nanchor\n', [anchor(), closing()])).code)
+      .toBe('PATCH_ANCHOR_AMBIGUOUS')
+  })
+
+  test('does not treat an insertion as a unique first source anchor', () => {
+    expect(failure(plan('}\n}\n', [hunk([added('anchor')]), closing()])).code)
+      .toBe('PATCH_ANCHOR_AMBIGUOUS')
+  })
+
+  test('rejects syncSessions ambiguity between verify and onSessionsChanged', () => {
+    expect(failure(plan('anchor\nverify() {\n  this.syncSessions()\n}\nonSessionsChanged() {\n  this.syncSessions()\n}\n', [
+      anchor(), hunk([deleted('  this.syncSessions()'), added('  this.refreshSessions()')]),
+    ])).code).toBe('PATCH_ANCHOR_AMBIGUOUS')
+  })
+
+  test('punctuation choices cannot hide a later real-code ambiguity', () => {
+    expect(failure(plan('anchor\n}\ncode\n}\ncode\n', [
+      anchor(), closing(), hunk([deleted('code'), added('new code')]),
+    ])).code).toBe('PATCH_ANCHOR_AMBIGUOUS')
+  })
+
+  test('honors whole-line hints without treating them as scope boundaries', () => {
+    const result = success(plan('anchor\n}\nscope\n}\n}\n', [
+      anchor(), hunk([deleted('}'), added('};')], { hints: [' scope '] }),
+    ]))
+    expect(result.plan.hunks[1]).toMatchObject({
+      sourceStart: 3, forwardMatchCount: 2, diagnosticHintLines: [2],
+    })
+  })
+
+  test('preserves unique complete plans despite ambiguous raw first candidates', () => {
+    const result = success(plan('anchor\n}\nfence\nanchor\n}\n', [
+      anchor(), closing(), hunk([context('fence')]),
+    ]))
+    expect(result.plan.hunks.map(candidate => candidate.sourceStart)).toEqual([0, 1, 2])
+    expect(result.plan.hunks.every(candidate => candidate.forwardMatchCount === undefined)).toBe(true)
+  })
+
+  test('counts only placements that can precede the remaining hunks', () => {
+    const result = success(plan('anchor\n}\n}\nfence\n}\n', [
+      anchor(), closing(), hunk([context('fence')]),
+    ]))
+    expect(result.plan.hunks[1]).toMatchObject({ sourceStart: 1, forwardMatchCount: 2 })
+  })
+
+  test('newline constraints resolve closings before fallback and remain unannotated', () => {
+    const result = success(plan('anchor\n}\n}', [
+      anchor(), hunk([deleted('}'), added('};')], {
+        newlineMarkers: [{ afterHunkLine: 0, appliesTo: 'old' }],
+      }),
+    ]))
+    expect(result.plan.hunks[1].sourceStart).toBe(2)
+    expect(result.plan.hunks[1].forwardMatchCount).toBeUndefined()
+  })
+
+  test('allows raw real-code duplicates when full-plan ordering makes them unique', () => {
+    const result = success(plan('anchor\n}\n}\ncode\nfence\ncode\n', [
+      anchor(), closing(), hunk([context('code')]), hunk([context('fence')]),
+    ]))
+    expect(result.plan.hunks.map(candidate => candidate.sourceStart)).toEqual([0, 1, 3, 4])
+    expect(result.plan.hunks[1].forwardMatchCount).toBe(2)
+    expect(result.plan.hunks[2].forwardMatchCount).toBeUndefined()
+  })
+
+  test('fallback preserves a later source-EOF newline constraint', () => {
+    const result = success(plan('anchor\n}\n}\n}', [
+      anchor(), closing(), hunk([deleted('}'), added('];')], {
+        newlineMarkers: [{ afterHunkLine: 0, appliesTo: 'old' }],
+      }),
+    ]))
+    expect(result.plan.hunks.map(candidate => candidate.sourceStart)).toEqual([0, 1, 3])
+    expect(result.plan.hunks[1].forwardMatchCount).toBe(2)
+    expect(result.plan.hunks[2].forwardMatchCount).toBeUndefined()
+    expect(result.plan.output.hasFinalNewline).toBe(true)
+  })
+
+  test('missing and invalid later insertion anchors still fail', () => {
+    expect(failure(plan('anchor\n}\n}\n', [
+      anchor(), closing(), hunk([context('missing')]),
+    ])).code).toBe('PATCH_ANCHOR_NOT_FOUND')
+    expect(failure(plan('anchor\n}\n}\n', [
+      anchor(), closing(), hunk([added('insert')]),
+    ])).code).toBe('PATCH_INVALID_INSERTION')
+  })
+
+  test('does not depend on diagnostic witness budgets', () => {
+    const result = success(plan('anchor\n}\n}\n}\n', [anchor(), closing()], {
+      diagnostics: true, limits: { maxWitnessTransitions: 0, maxWitnessNodes: 0 },
+    }))
+    expect(result.plan.hunks[1].forwardMatchCount).toBe(3)
+  })
+
+  test('fails closed when fallback exhausts the shared planning budget', () => {
+    const source = 'anchor\n}\n}\n}\n'
+    const hunks = [anchor(), closing()]
+    const complete = success(plan(source, hunks))
+    expect(failure(plan(source, hunks, {
+      limits: { maxDpTransitions: complete.usage.dpTransitions - 1 },
+    })).code).toBe('PATCH_PLANNER_LIMIT')
+    expect(failure(plan(source, hunks, {
+      limits: { maxCandidatesPerHunk: 2 },
+    })).code).toBe('PATCH_PLANNER_LIMIT')
+  })
+})
+
 describe('immutable source-coordinate placement', () => {
   test('returns one exact candidate with original source coordinates', () => {
     const result = success(
@@ -78,14 +357,15 @@ describe('immutable source-coordinate placement', () => {
     expect(error.usage.approximateComparisons).toBe(0)
   })
 
-  test('rejects candidates that are only before the previous hunk', () => {
-    const error = failure(
+  test('reorders uniquely anchored nonoverlapping hunks with original identity', () => {
+    const result = success(
       plan('first\nsecond\n', [
         hunk([context('second')]),
         hunk([context('first')]),
       ]),
     )
-    expect(error.code).toBe('PATCH_ORDER_CONFLICT')
+    expect(result.plan.reordered).toBe(true)
+    expect(result.plan.hunks.map(candidate => candidate.hunkIndex)).toEqual([1, 0])
   })
 
   test('rejects overlapping consumed ranges', () => {
@@ -95,6 +375,7 @@ describe('immutable source-coordinate placement', () => {
         hunk([context('b'), context('c')]),
       ]),
     )
+    expect(error.kind).toBe('overlap')
     expect(error.code).toBe('PATCH_ORDER_CONFLICT')
   })
 
