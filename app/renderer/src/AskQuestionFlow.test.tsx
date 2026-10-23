@@ -126,7 +126,7 @@ test('the card body is a bounded scroller', () => {
   expect(html).toContain('overflow-y-auto')
   expect(html).toContain('pt-2.5')
   expect(html).toContain('pb-2')
-  expect(html).toContain('gap-px')
+  expect(html).toContain('gap-0.5')
   expect(html).not.toContain('bg-[#0d0d0f]')
 })
 
@@ -280,7 +280,7 @@ test('every option row can be clicked, and says so', () => {
   const html = render(SINGLE)
   // Both the option rows and the "Other…" row, each named exactly: measured as
   // a computed `cursor: default` on every row before this change.
-  expect(html).toContain('flex w-full cursor-pointer items-center')
+  expect(html).toContain('flex w-full cursor-pointer items-start')
   expect(html).toContain('flex-1 cursor-pointer bg-transparent')
 })
 

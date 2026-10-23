@@ -84,7 +84,7 @@ function markerClass(
 function KeyCap({ children, active }: { children: ReactNode; active: boolean }) {
   return (
     <span
-      className={`min-w-[10px] shrink-0 text-right font-mono text-[10.5px] leading-[17px] ${active ? 'text-text-muted' : 'text-text-ghost'}`}
+      className={`min-w-[10px] shrink-0 text-right font-mono text-[11.5px] leading-5 ${active ? 'text-text-muted' : 'text-text-ghost'}`}
     >
       {children}
     </span>
@@ -627,7 +627,7 @@ export function AskQuestionFlow({
       </div>
 
       <h2
-        className="mt-1 text-sm font-semibold leading-[18px] text-text-primary"
+        className="mt-1.5 text-[15px] font-semibold leading-[22px] text-text-primary"
         id={titleId}
       >
         {q.question}
@@ -638,7 +638,7 @@ export function AskQuestionFlow({
        * doubles as the running confirmation that a pick registered, which is
        * the second channel the checkboxes alone did not give the operator. */}
       {q.multiSelect && !freeText ? (
-        <p className="mt-0.5 text-xs leading-4 text-text-subtle">
+        <p className="mt-0.5 text-[13px] leading-[19px] text-text-subtle">
           {selectedCount > 0
             ? `${selectedCount} selected`
             : 'Pick as many as you like'}
@@ -662,7 +662,7 @@ export function AskQuestionFlow({
         />
       ) : <div
         aria-labelledby={q.multiSelect ? undefined : titleId}
-        className="-mx-2 mt-1.5 flex flex-col gap-px"
+        className="-mx-2 mt-2 flex flex-col gap-0.5"
         role={q.multiSelect ? undefined : 'radiogroup'}
       >
         {q.options.map((option, i) => {
@@ -673,7 +673,7 @@ export function AskQuestionFlow({
             <div className={`ask-option-wrap ${showNote ? 'ask-option-with-note' : ''} ${keysAdvertised && i < 9 ? 'ask-option-with-key' : ''}`} key={i}>
             <button
               aria-checked={checked}
-              className={`ask-option-choice flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
+              className={`ask-option-choice flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-2 py-[7px] text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default ${rowTone(checked, active)}`}
               data-ask-active={active ? 'true' : undefined}
               data-ask-option
               disabled={submitted}
@@ -692,23 +692,23 @@ export function AskQuestionFlow({
               type="button"
             >
               <span
-                className={markerClass(q.multiSelect, checked, active)}
+                className={`${markerClass(q.multiSelect, checked, active)} mt-[2px]`}
                 data-ask-marker
               >
                 {checked ? '✓' : ''}
               </span>
               <span className="ask-option-text min-w-0 flex-1">
-                <span className="ask-option-label text-[13px] font-medium leading-[17px] text-text-primary">
+                <span className="ask-option-label text-sm font-medium leading-5 text-text-primary">
                   {option.label}
                 </span>
                 {option.description ? (
-                  <span className="ask-option-description text-xs leading-4 text-text-subtle">
+                  <span className="ask-option-description text-[13px] leading-[19px] text-text-subtle">
                     {option.description}
                   </span>
                 ) : null}
               </span>
               {option.preview ? (
-                <span className="mt-[1.5px] shrink-0 rounded bg-tone-info/10 px-1.5 text-[10px] font-semibold leading-[14px] text-tone-info">
+                <span className="mt-[3px] shrink-0 rounded bg-tone-info/10 px-1.5 text-[10px] font-semibold leading-[14px] text-tone-info">
                   preview
                 </span>
               ) : null}
@@ -760,7 +760,7 @@ export function AskQuestionFlow({
 
         {/* Built-in "Other…" freeform row — always appended by this UI */}
         <div
-          className={`flex items-center gap-2.5 rounded-lg px-2 py-1 ${rowTone(
+          className={`flex items-center gap-2.5 rounded-lg px-2 py-[7px] ${rowTone(
             otherFilled || otherPending,
             cursor === otherIndex,
           )}`}
@@ -782,7 +782,7 @@ export function AskQuestionFlow({
           {otherActive ? (
             <input
               aria-label="Other answer"
-              className="-my-[3px] min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-0.5 text-[13px] leading-[17px] text-text-primary outline-none placeholder:text-text-subtle"
+              className="-my-[3px] min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 py-0.5 text-sm leading-5 text-text-primary outline-none placeholder:text-text-subtle"
               disabled={submitted}
               onBlur={() => {
                 isComposingRef.current = false
@@ -800,7 +800,7 @@ export function AskQuestionFlow({
             />
           ) : (
             <button
-              className="flex-1 cursor-pointer bg-transparent text-left text-[13px] leading-[17px] text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default"
+              className="flex-1 cursor-pointer bg-transparent text-left text-sm leading-5 text-text-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-default"
               data-ask-other
               disabled={submitted}
               onClick={() => setOtherActive(true)}
@@ -832,7 +832,7 @@ export function AskQuestionFlow({
       ) : null}
 
       {/* Footer actions end with the primary action. */}
-      <div className="ask-question-footer mt-1.5 flex items-center gap-1.5">
+      <div className="ask-question-footer mt-2 flex items-center gap-1.5">
         {qi > 0 ? (
           <button className="ask-question-ghost" disabled={submitted} onClick={() => goToQuestion(qi - 1)} type="button">
             Back
@@ -847,27 +847,27 @@ export function AskQuestionFlow({
         >Chat about this</button>
         <span className="flex-1" />
         <button
-          className="inline-flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-xs leading-4 text-text-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-[13px] leading-[18px] text-text-subtle focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:opacity-50"
           disabled={submitted}
           onClick={onCancel}
           type="button"
         >
           Cancel
           {keysAdvertised ? (
-            <span className="rounded border border-text-ghost px-1 font-mono text-[9.5px] leading-[14px] text-text-faint">
+            <span className="rounded border border-text-ghost px-1 font-mono text-[10px] leading-[15px] text-text-faint">
               esc
             </span>
           ) : null}
         </button>
         <button
-          className="inline-flex items-center gap-[7px] rounded-md bg-accent px-3 py-1 text-xs font-semibold leading-4 text-on-fill focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:bg-text-primary/[0.06] disabled:text-text-faint"
+          className="inline-flex items-center gap-[7px] rounded-md bg-accent px-3 py-1 text-[13px] font-semibold leading-[18px] text-on-fill focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:bg-text-primary/[0.06] disabled:text-text-faint"
           disabled={!canAdvance || submitted}
           onClick={advance}
           type="button"
         >
           {isLast ? 'Submit' : 'Next question'}
           {keysAdvertised ? (
-            <span className={`rounded border px-1 font-mono text-[9.5px] leading-[14px] ${canAdvance && !submitted ? 'border-on-fill/35' : 'border-text-primary/15'}`}>
+            <span className={`rounded border px-1 font-mono text-[10px] leading-[15px] ${canAdvance && !submitted ? 'border-on-fill/35' : 'border-text-primary/15'}`}>
               ↵
             </span>
           ) : null}
