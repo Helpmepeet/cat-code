@@ -59,7 +59,7 @@ test('interactive hint matches only narrow standalone invocations', () => {
   for (const command of ['top', 'top -o cpu', 'htop', 'btop', 'vim file', 'vi file', 'nvim', 'nano', 'emacs',
     'less file', 'more file', 'man ls', 'watch date', 'tail -f log', 'tail -F log', 'tail -nf log',
     'vim "file with spaces"']) expect(isInteractiveShellCommand(command)).toBe(true)
-  for (const command of ['top -l 2 -s 1', 'top -l2', 'tail -n 20 log', 'tail -f log | head -n 20',
+  for (const command of ['top -l 2 -s 1', 'top -l2', 'tail -n 20 log', 'tail -n 20 -- -f', 'tail -- -F', 'tail -f log | head -n 20',
     'ps aux | less', 'git log | head', 'FOO=1 top', 'ssh host uptime', 'echo hi; top', '(top)',
     'top && echo done', 'top || echo done', 'top > file', 'top &', 'top\npwd', 'top $(echo -o cpu)',
     'top `echo -o cpu`', 'vim "unfinished', '']) expect(isInteractiveShellCommand(command)).toBe(false)

@@ -926,11 +926,11 @@ export class QueryEngine {
       for (const msg of messagesFromUserInput) {
         if (
           msg.type === 'user' &&
+          msg !== inlineResult &&
           typeof msg.message.content === 'string' &&
           (msg.message.content.includes(`<${LOCAL_COMMAND_STDOUT_TAG}>`) ||
             msg.message.content.includes(`<${LOCAL_COMMAND_STDERR_TAG}>`) ||
-            msg.isCompactSummary ||
-            msg === inlineResult)
+            msg.isCompactSummary)
         ) {
           yield {
             type: 'user',

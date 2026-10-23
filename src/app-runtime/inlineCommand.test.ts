@@ -7,6 +7,7 @@ import { createAssistantMessage } from '../utils/messages.js'
 import { AppSessionController } from './AppSessionController.js'
 import { createBashShellProvider } from '../utils/shell/bashProvider.js'
 import { SIDECAR_RUNTIME_ARGS } from '../../app/main/mainDecisions.js'
+import { parseInlineCommandResult } from '../../app/shared/inlineCommand.js'
 
 async function fixture(input: Record<string, unknown>) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'inline-run-')))
@@ -299,6 +300,19 @@ test('an empty successful run stays empty and reaches the next ordinary turn wit
   expect(result.requestsAfterRun).toBe(0)
   expect(result.requests).toHaveLength(1)
   expect(JSON.stringify(result.requests[0])).toContain(result.restored[0].runId)
+}, 30_000)
+
+test('completed inline results emit exactly once even when output resembles local command tags', async () => {
+  for (const output of ['live-result', '<local-command-stdout>live-result</local-command-stdout>']) {
+    const result = await fixture({ command: `printf '${output}'` })
+    expect(result.error).toBeUndefined()
+    const frames = result.frames.filter((frame: any) => frame.type === 'user' &&
+      typeof frame.message.content === 'string' &&
+      parseInlineCommandResult(frame.message.content)?.runId === result.restored[0].runId)
+    expect(frames).toHaveLength(1)
+    expect(frames[0].isSynthetic).toBe(true)
+    expect(result.requests).toHaveLength(0)
+  }
 }, 30_000)
 
 test('real sidecar queues a human frame during inline execution and drains without an automatic explanation', async () => {

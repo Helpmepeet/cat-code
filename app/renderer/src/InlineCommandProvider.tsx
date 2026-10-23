@@ -9,6 +9,7 @@ const createState = () => ({
   latest: new Map<string, Pending>(),
   uncertain: new Map<string, Pending>(),
   errors: new Map<string, string>(),
+  explainPending: null as { submitId: string; sourceKey: string } | null,
 })
 const retained = new Map<string, ReturnType<typeof createState>>()
 
@@ -40,6 +41,11 @@ export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, re
   }, [snapshot, results])
   useEffect(() => {
     if (!sessionId || !engineSessionId || !snapshot?.generation) return
+    if (state.explainPending) {
+      state.errors.set(state.explainPending.sourceKey, 'Outcome unknown. Check the conversation before requesting another explanation.')
+      state.explainPending = null
+      update(value => value + 1)
+    }
     if (state.pending.size) {
       for (const [key, pending] of state.pending) {
         state.uncertain.set(key, pending)
@@ -53,6 +59,12 @@ export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, re
     return getBridge().subscribe(frames => {
       for (const frame of frames) {
         if (frame.sessionId !== sessionId) continue
+        if (frame.kind === 'submit.result' && state.explainPending?.submitId === frame.submitId) {
+          const pending = state.explainPending
+          state.explainPending = null
+          if (!frame.accepted) state.errors.set(pending.sourceKey, 'Could not request an explanation. Try again.')
+          update(value => value + 1)
+        }
         if (frame.kind === 'transcript.reset') {
           stopRequests.current.clear()
           for (const key of state.latest.keys()) {
@@ -65,6 +77,10 @@ export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, re
         }
         if (frame.kind === 'ready') getBridge().getInlineCommands(sessionId)
         if (frame.kind === 'lifecycle') {
+          if (state.explainPending) {
+            state.errors.set(state.explainPending.sourceKey, 'Outcome unknown. Check the conversation before requesting another explanation.')
+            state.explainPending = null
+          }
           for (const [key, pending] of state.pending) {
             state.uncertain.set(key, pending)
             state.errors.set(key, 'Outcome unknown. The command may already have had effects.')
@@ -127,7 +143,7 @@ export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, re
     if (changed) update(value => value + 1)
   }, [snapshot, runs, state])
   const start = (source: InlineCommandSource) => {
-    if (!sessionId || !snapshot || blockedReason || state.pending.size || runs.some(run => run.status === 'running')) return
+    if (!sessionId || !snapshot || blockedReason || state.explainPending || state.pending.size || runs.some(run => run.status === 'running')) return
     const key = inlineCommandSourceKey(source)
     const requestId = crypto.randomUUID()
     state.errors.delete(key)
@@ -164,8 +180,23 @@ export function InlineCommandProvider({ sessionId, engineSessionId, snapshot, re
     update(value => value + 1)
   }
   const explain = (run: InlineCommandRun) => {
-    if (!sessionId || explainBlockedReason || blockedReason || run.status === 'running') return
-    getBridge().submit(sessionId, `Explain the output of inline command run ${run.runId}.`)
+    if (!sessionId || explainBlockedReason || blockedReason || state.explainPending ||
+      state.pending.size || runs.some(value => value.status === 'running') || run.status === 'running') return
+    const sourceKey = inlineCommandSourceKey(run.source)
+    const submitId = crypto.randomUUID()
+    state.errors.delete(sourceKey)
+    state.explainPending = { submitId, sourceKey }
+    update(value => value + 1)
+    try {
+      getBridge().submit(sessionId, `Explain the output of inline command run ${run.runId}.`, { submitId })
+    } catch {
+      state.explainPending = null
+      state.errors.set(sourceKey, 'Could not request an explanation. Check the connection.')
+      update(value => value + 1)
+    }
   }
-  return <InlineCommandContext.Provider value={{ engineSessionId, generation: snapshot?.generation, runs, requests: snapshot?.requests ?? [], pending: state.pending, errors: state.errors, blockedReason, explainBlockedReason, explain, start, stop }}>{children}</InlineCommandContext.Provider>
+  const runBlockedReason = blockedReason ?? (state.explainPending ? 'Wait for the current request to finish.' : undefined)
+  const explanationBlockedReason = explainBlockedReason ?? runBlockedReason ??
+    (state.pending.size || runs.some(run => run.status === 'running') ? 'Wait for the current command to finish.' : undefined)
+  return <InlineCommandContext.Provider value={{ engineSessionId, generation: snapshot?.generation, runs, requests: snapshot?.requests ?? [], pending: state.pending, errors: state.errors, blockedReason: runBlockedReason, explainBlockedReason: explanationBlockedReason, explain, start, stop }}>{children}</InlineCommandContext.Provider>
 }

@@ -157,6 +157,9 @@ export function isInteractiveShellCommand(command: string): boolean {
   if (started) words.push(word)
   const [program, ...args] = words
   if (program === 'top') return !args.some(arg => /^-l(?:\d+)?$/.test(arg))
-  if (program === 'tail') return args.some(arg => /^-[^-]*[fF]/.test(arg))
+  if (program === 'tail') {
+    const end = args.indexOf('--')
+    return (end < 0 ? args : args.slice(0, end)).some(arg => /^-[^-]*[fF]/.test(arg))
+  }
   return program !== undefined && ['htop', 'btop', 'vim', 'vi', 'nvim', 'nano', 'emacs', 'less', 'more', 'man', 'watch'].includes(program)
 }

@@ -17,13 +17,14 @@ let starts: { sessionId: string; source: InlineCommandSource; requestId: string;
 let stops: string[] = []
 let queries = 0
 let submissions: { sessionId: string; prompt: unknown }[] = []
+let submissionIds: string[] = []
 beforeAll(async () => { harness = await createDomTestHarness() })
-afterEach(async () => { await harness.unmountAll(); starts = []; stops = []; queries = 0; submissions = [] })
+afterEach(async () => { await harness.unmountAll(); starts = []; stops = []; queries = 0; submissions = []; submissionIds = [] })
 afterAll(async () => { await harness.teardown() })
 
 function bridge() {
   const stub: Pick<CatCodeBridge, 'getInlineCommands' | 'subscribe' | 'startInlineCommand' | 'stopInlineCommand' | 'submit'> = {
-    submit: (sessionId, prompt) => { submissions.push({ sessionId, prompt }) },
+    submit: (sessionId, prompt, options) => { submissions.push({ sessionId, prompt }); submissionIds.push(options?.submitId ?? '') },
     getInlineCommands: () => { queries++; return true },
     subscribe: fn => { listener = fn; return () => { listener = () => {} } },
     startInlineCommand: (sessionId, input) => { starts.push({ sessionId, ...input }); return true },
@@ -405,4 +406,85 @@ test('running elapsed time and output updates do not enter the completion live r
   expect(tree.container.querySelector('.inline-command-status')?.textContent).toContain('2.5s')
   await tree.render(view('live-outcome', rows, [{ ...active, status: 'success', durationMs: 2500, output: 'last chunk plus retained text' }]))
   expect(live().textContent).toBe('Command succeeded')
+})
+
+test('Explain synchronously shares admission with Run and settles only its own submit receipt', async () => {
+  bridge()
+  const rows = [row('```sh\necho hi\n```')]
+  const render = (blockedReason?: string) => createElement(InlineCommandProvider, {
+    sessionId: 'explain-admission', engineSessionId: 'engine', blockedReason,
+    snapshot: { generation: 'g1', runs: [{ ...run, status: 'success' }] },
+    children: createElement(TranscriptRowsView, { rows }),
+  })
+  const tree = await harness.mount(render())
+  const explain = () => tree.container.querySelector<HTMLButtonElement>('.inline-command-explain button')!
+  await act(async () => {
+    explain().click()
+    explain().click()
+    buttons(tree.container, 'Run again')[0]!.click()
+  })
+  expect(submissions).toHaveLength(1)
+  expect(submissionIds[0]).not.toBe('')
+  expect(starts).toEqual([])
+  expect(explain().getAttribute('aria-disabled')).toBe('true')
+  expect(buttons(tree.container, 'Run again')[0]!.getAttribute('aria-disabled')).toBe('true')
+  const receipt = (submitId: string, accepted: boolean): ServerFrame => ({
+    kind: 'submit.result', protocolVersion: 4, sessionId: 'explain-admission', submitId, accepted,
+  })
+  await act(async () => listener([receipt('another-submit', true)]))
+  expect(explain().getAttribute('aria-disabled')).toBe('true')
+  await act(async () => listener([receipt(submissionIds[0]!, false)]))
+  expect(tree.container.querySelector('[role="alert"]')?.textContent).toContain('Could not request an explanation')
+  await act(async () => explain().click())
+  expect(submissions).toHaveLength(2)
+  expect(submissionIds[1]).not.toBe(submissionIds[0])
+  await act(async () => {
+    listener([receipt(submissionIds[1]!, true)])
+    explain().click()
+    expect(submissions).toHaveLength(2)
+    await tree.render(render('Wait for the current turn to finish.'))
+  })
+  expect(explain().getAttribute('aria-disabled')).toBe('true')
+  await tree.render(render())
+  expect(explain().getAttribute('aria-disabled')).toBe('false')
+})
+
+test('a locally pending Run again prevents Explain before the running snapshot arrives', async () => {
+  bridge()
+  const tree = await harness.mount(view('run-explain-race', [row('```sh\necho hi\n```')], [{ ...run, status: 'success' }]))
+  const explain = tree.container.querySelector<HTMLButtonElement>('.inline-command-explain button')!
+  await act(async () => {
+    buttons(tree.container, 'Run again')[0]!.click()
+    explain.click()
+  })
+  expect(starts).toHaveLength(1)
+  expect(submissions).toEqual([])
+  expect(explain.getAttribute('aria-disabled')).toBe('true')
+})
+
+test('a synchronous Explain send failure releases admission and stays visible', async () => {
+  bridge()
+  const submit = window.catcode.submit
+  window.catcode.submit = () => { throw new Error('Fixture disconnected') }
+  const tree = await harness.mount(view('explain-send-failure', [row('```sh\necho hi\n```')], [{ ...run, status: 'success' }]))
+  const explain = tree.container.querySelector<HTMLButtonElement>('.inline-command-explain button')!
+  await act(async () => explain.click())
+  expect(tree.container.querySelector('[role="alert"]')?.textContent).toContain('Check the connection')
+  expect(explain.getAttribute('aria-disabled')).toBe('false')
+  window.catcode.submit = submit
+  await act(async () => explain.click())
+  expect(submissions).toHaveLength(1)
+})
+
+test('remounting an unconfirmed Explain never resubmits and reports its uncertain outcome', async () => {
+  bridge()
+  const rows = [row('```sh\necho hi\n```')]
+  const finished = [{ ...run, status: 'success' as const }]
+  const tree = await harness.mount(view('explain-remount', rows, finished))
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('.inline-command-explain button')!.click())
+  await tree.unmount()
+  const restored = await harness.mount(view('explain-remount', rows, finished))
+  expect(submissions).toHaveLength(1)
+  expect(restored.container.querySelector('[role="alert"]')?.textContent).toContain('Outcome unknown')
+  expect(starts).toEqual([])
 })
