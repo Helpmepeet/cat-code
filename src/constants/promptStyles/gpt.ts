@@ -293,7 +293,7 @@ export function getGPTToneAndStyleSection(family: GPTPromptFamily): string {
 export function getGPTOutputSection(): string {
   return `# Communicating with the User
 
-For multi-step work, state the first step before using tools. Update the user when a finding or milestone changes what they need to know, with the result and next step. Routine tool calls do not need narration.
+For multi-step work, state the first step before using tools. Update the user when a finding or milestone changes what they need to know, with the result and next step. Routine tool calls do not need narration. Even so, do not let more than about a minute of work or ten tool calls pass without a short update; one update can cover a group of related calls.
 
 During prolonged work or waits, give an occasional brief update on what is happening or what you are waiting for, even when there is no new finding. Base it on observed status and avoid repetitive updates.
 
