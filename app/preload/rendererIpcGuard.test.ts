@@ -12,7 +12,33 @@ test('rejects renderer IPC payloads over the shared frame byte limit', () => {
   const guard = createRendererIpcGuard()
 
   expect(() => guard.assertAllowed('x'.repeat(MAX_FRAME_BYTES + 1))).toThrow(
-    `renderer IPC payload exceeds ${MAX_FRAME_BYTES} bytes`,
+    'This request is too large. Try sending less text or fewer attachments.',
+  )
+})
+
+test('two image attachments get actionable text without exposing transport internals', () => {
+  const guard = createRendererIpcGuard()
+  const payload = {
+    sessionId: 'chat',
+    prompt: [
+      ...Array.from({ length: 2 }, () => ({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(90_000) },
+      })),
+      { type: 'text', text: 'Compare these images.' },
+    ],
+  }
+
+  let rejection: unknown
+  try {
+    guard.assertAllowed(payload)
+  } catch (error) {
+    rejection = error
+  }
+  expect(rejection).toBeInstanceOf(RendererIpcRejection)
+  expect((rejection as RendererIpcRejection).reason).toBe('size')
+  expect((rejection as Error).message).toBe(
+    'This request is too large. Try sending less text or fewer attachments.',
   )
 })
 
@@ -24,7 +50,7 @@ test('counts all fixed-channel sends in one shared rate window', () => {
     guard.assertAllowed({ index })
   }
   expect(() => guard.assertAllowed({ overflow: true })).toThrow(
-    `renderer IPC rate exceeds ${MAX_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+    'Too many requests at once. Wait a moment and try again.',
   )
 
   now += RATE_WINDOW_MS
@@ -37,7 +63,7 @@ test('rejects values that cannot be serialized without reaching Electron IPC', (
   cyclic.self = cyclic
 
   expect(() => guard.assertAllowed(cyclic)).toThrow(
-    'renderer IPC payload is not serializable',
+    'Could not send this request. Try again.',
   )
 })
 
@@ -53,7 +79,7 @@ test('saturated diagnostics still leaves the window open to control traffic', ()
     guard.assertAllowed({ index }, 'diagnostics')
   }
   expect(() => guard.assertAllowed({ overflow: true }, 'diagnostics')).toThrow(
-    `renderer IPC diagnostics rate exceeds ${MAX_DIAGNOSTIC_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+    'Too many requests at once. Wait a moment and try again.',
   )
 
   for (let index = 0; index < MAX_FRAMES_PER_WINDOW - MAX_DIAGNOSTIC_FRAMES_PER_WINDOW; index++) {
@@ -71,7 +97,7 @@ test('the sub-cap sits inside the total rather than beside it', () => {
     guard.assertAllowed({ index })
   }
   expect(() => guard.assertAllowed({ overflow: true }, 'diagnostics')).toThrow(
-    `renderer IPC rate exceeds ${MAX_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+    'Too many requests at once. Wait a moment and try again.',
   )
 
   now += RATE_WINDOW_MS
@@ -98,7 +124,7 @@ test('the diagnostics sub-cap resets with the window, not once per process', () 
     guard.assertAllowed({ index }, 'diagnostics')
   }
   expect(() => guard.assertAllowed({ overflow: true }, 'diagnostics')).toThrow(
-    `renderer IPC diagnostics rate exceeds ${MAX_DIAGNOSTIC_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+    'Too many requests at once. Wait a moment and try again.',
   )
 
   now += RATE_WINDOW_MS

@@ -51,13 +51,16 @@ export function createRendererIpcGuard({
       try {
         serialized = JSON.stringify(payload)
       } catch {
-        throw new RendererIpcRejection('renderer IPC payload is not serializable', 'serialization')
+        throw new RendererIpcRejection('Could not send this request. Try again.', 'serialization')
       }
       if (serialized === undefined) {
-        throw new RendererIpcRejection('renderer IPC payload is not serializable', 'serialization')
+        throw new RendererIpcRejection('Could not send this request. Try again.', 'serialization')
       }
       if (new TextEncoder().encode(serialized).byteLength > MAX_FRAME_BYTES) {
-        throw new RendererIpcRejection(`renderer IPC payload exceeds ${MAX_FRAME_BYTES} bytes`, 'size')
+        throw new RendererIpcRejection(
+          'This request is too large. Try sending less text or fewer attachments.',
+          'size',
+        )
       }
 
       const currentTime = now()
@@ -71,13 +74,13 @@ export function createRendererIpcGuard({
       // away first once the window fills.
       if (frameCount >= MAX_FRAMES_PER_WINDOW) {
         throw new RendererIpcRejection(
-          `renderer IPC rate exceeds ${MAX_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+          'Too many requests at once. Wait a moment and try again.',
           'rate',
         )
       }
       if (kind === 'diagnostics' && diagnosticFrameCount >= MAX_DIAGNOSTIC_FRAMES_PER_WINDOW) {
         throw new RendererIpcRejection(
-          `renderer IPC diagnostics rate exceeds ${MAX_DIAGNOSTIC_FRAMES_PER_WINDOW} frames per ${RATE_WINDOW_MS}ms`,
+          'Too many requests at once. Wait a moment and try again.',
           'rate',
         )
       }
