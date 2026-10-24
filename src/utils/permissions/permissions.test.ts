@@ -106,6 +106,29 @@ describe('inline execution origin binding', () => {
     context.abortController.abort()
     expect(getInlineCommandExecutionOrigin('Bash', input, context, 'selected-run')).toBeUndefined()
   })
+  test('inline selection does not approve a non-classifier-approvable safety check', async () => {
+    const safetyCheck = {
+      behavior: 'ask' as const,
+      message: 'Explicit safety approval required',
+      decisionReason: {
+        type: 'safetyCheck' as const,
+        reason: 'Fixture safety check',
+        classifierApprovable: false,
+      },
+    }
+    const permissions = spyOn(BashTool, 'checkPermissions').mockResolvedValue(safetyCheck)
+    try {
+      const context = selectedContext()
+      context.getAppState = () => ({
+        toolPermissionContext: permissionContext({ mode: 'auto' }),
+      }) as never
+      expect(await hasPermissionsToUseTool(
+        BashTool as never, input, context, {} as never, 'selected-run',
+      )).toMatchObject(safetyCheck)
+    } finally {
+      permissions.mockRestore()
+    }
+  })
 })
 
 async function decide(

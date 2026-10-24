@@ -747,6 +747,25 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         return result
       }
 
+      // The controller-bound click authorizes only the unchanged selected command.
+      // Base deny rules and non-classifier-approvable safety checks ran above.
+      if (
+        getInlineCommandExecutionOrigin(tool.name, input, context, toolUseID) === 'user_inline'
+      ) {
+        persistDenialState(context, recordSuccess(denialState))
+        logForDebugging(
+          `Skipping auto mode classifier for ${tool.name}: user selected the exact inline command`,
+        )
+        return {
+          behavior: 'allow',
+          updatedInput: input,
+          decisionReason: {
+            type: 'other',
+            reason: 'User selected this exact command with Run',
+          },
+        }
+      }
+
       // Before running the auto mode classifier, check if acceptEdits mode would
       // allow this action. This avoids expensive classifier API calls for safe
       // operations like file edits in the working directory.

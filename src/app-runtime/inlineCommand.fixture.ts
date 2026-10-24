@@ -6,7 +6,7 @@ import { YOLO_CLASSIFIER_TOOL_NAME } from '../utils/permissions/classifierShared
 
 const root = process.env.INLINE_TEST_ROOT!
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated environment required')
-const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; progressProbe?: boolean; ordinaryProgress?: boolean; explain?: boolean; nextTurn?: boolean; autoOrigin?: boolean; classifierDeny?: boolean; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
+const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; progressProbe?: boolean; ordinaryProgress?: boolean; explain?: boolean; nextTurn?: boolean; autoOrigin?: boolean; inlineOnly?: boolean; classifierDeny?: boolean; denyRule?: string; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
 const model = input.provider === 'codex' ? 'gpt-5.6-terra' : 'claude-sonnet-4-5'
 const evidence = { requests: [] as unknown[], classifierRequests: [] as any[], codexRequests: [] as unknown[], frames: [] as any[], transcript: [] as any[], runs: [] as any[], progressTimes: [] as number[], ordinaryProgress: [] as unknown[], restored: [] as any[], permissions: 0, error: undefined as string | undefined, cwd: process.cwd(), counter: '', childAlive: false }
 if (input.sandbox || input.hookEdit || input.hookStop || input.hookContext) {
@@ -101,7 +101,10 @@ if (input.sandbox) {
   await SandboxManager.initialize()
 }
 let state = getDefaultAppState()
-if (input.autoOrigin) state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
+if (input.autoOrigin) state = { ...state, toolPermissionContext: {
+  ...state.toolPermissionContext, mode: 'auto',
+  ...(input.denyRule ? { alwaysDenyRules: { session: [input.denyRule] } } : {}),
+} }
 let retainedMessages: readonly unknown[] = []
 const initial = createAssistantMessage({ content: '```bash\n' + input.command + '\n```' +
   (input.secondCommand ? '\n```sh\n' + input.secondCommand + '\n```' : '') })
@@ -228,11 +231,12 @@ try {
     await executing
     if (input.secondCommand && !overlap) await controller.submitInlineCommand({ ...source, fenceOrdinal: 1 }, run => evidence.runs.push(run))
     ;(evidence as any).requestsAfterRun = evidence.requests.length
+    ;(evidence as any).classifierRequestsAfterRun = evidence.classifierRequests.length
     if (input.explain) {
       const selected = session.getInlineCommandRuns!().at(-1)!
       await controller.submit(`Explain the output of inline command run ${selected.runId}.`)
     } else if (input.nextTurn) await controller.submit('What happened in the previous command?')
-    if (input.autoOrigin && !input.classifierDeny) {
+    if (input.autoOrigin && !input.inlineOnly) {
       ordinaryTurn = true
       await controller.submit('Run the next ordinary assistant command.')
     }

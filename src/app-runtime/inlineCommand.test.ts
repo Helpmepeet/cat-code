@@ -44,43 +44,55 @@ test('authoritative source rejects foreign, removed, unfinished and non-shell co
   expect(() => resolveInlineCommandSource([message], 'session', source)).toThrow('incomplete')
 })
 
-test('desktop flags deliver inline origin through real Auto permissions without leaking to the next turn', async () => {
+test('desktop Run skips Auto classification without granting approval to the next agent turn', async () => {
   const command = "bash -c 'printf executed >> counter; printf auto-output'"
   const result = await fixture({ autoOrigin: true, command })
   expect(result.error).toBeUndefined()
   expect(result.permissions).toBe(0)
   expect(result.counter).toBe('executedordinary')
   expect(result.restored[0]).toMatchObject({ command, status: 'success', cwd: result.workspace })
-  expect(result.classifierRequests).toHaveLength(4)
+  expect(result.classifierRequestsAfterRun).toBe(0)
+  expect(result.classifierRequests).toHaveLength(2)
   for (const request of result.classifierRequests) {
     const system = request.system.map((block: { text: string }) => block.text).join('\n')
     expect(system).toContain('You are a security monitor for autonomous AI coding agents.')
     expect(system).toContain('**By default, actions are ALLOWED.**')
     expect(system).toContain('- Data Exfiltration:')
   }
-  for (const request of result.classifierRequests.slice(0, 2)) {
-    const action = request.messages.flatMap((message: any) =>
-      typeof message.content === 'string' ? [message.content]
-        : message.content.filter((block: any) => block.type === 'text').map((block: any) => block.text),
-    ).join('')
-    expect(action).toContain(`{"meta":{"executionOrigin":"user_inline"}}\nBash ${command}\n`)
-    expect(JSON.stringify(request.system)).toContain('agent authored')
-  }
-  for (const request of result.classifierRequests.slice(2)) {
+  for (const request of result.classifierRequests) {
     const content = JSON.stringify(request.messages)
     expect(content).not.toContain('executionOrigin')
     expect(content).toContain('printf ordinary')
   }
 }, 30_000)
 
-test('a genuine inline click can still be denied by the real Auto classifier', async () => {
+test('a rejecting Auto classifier cannot deny Run but still denies the next agent command', async () => {
   const result = await fixture({ autoOrigin: true, classifierDeny: true,
+    command: "bash -c 'printf executed >> counter'" })
+  expect(result.error).toBeUndefined()
+  expect(result.counter).toBe('executed')
+  expect(result.restored[0].status).toBe('success')
+  expect(result.classifierRequestsAfterRun).toBe(0)
+  expect(result.classifierRequests).toHaveLength(2)
+  expect(JSON.stringify(result.classifierRequests[1].messages)).not.toContain('executionOrigin')
+  expect(JSON.stringify(result.classifierRequests[1].messages)).toContain('printf ordinary')
+}, 30_000)
+
+test('Auto Run retains explicit deny rules without consulting the classifier', async () => {
+  const result = await fixture({ autoOrigin: true, inlineOnly: true,
+    denyRule: 'Bash(bash:*)', command: "bash -c 'printf executed >> counter'" })
+  expect(result.error).toBeUndefined()
+  expect(result.counter).toBe('')
+  expect(result.restored[0].status).toBe('failed')
+  expect(result.classifierRequests).toHaveLength(0)
+}, 30_000)
+
+test('Auto Run retains hook command-integrity checks', async () => {
+  const result = await fixture({ autoOrigin: true, inlineOnly: true, hookEdit: true,
     command: "bash -c 'printf executed >> counter'" })
   expect(result.error).toBeUndefined()
   expect(result.counter).toBe('')
   expect(result.restored[0].status).toBe('failed')
-  expect(result.classifierRequests).toHaveLength(2)
-  expect(JSON.stringify(result.classifierRequests[1].messages)).toContain('user_inline')
 }, 30_000)
 
 test('completion cannot cross foreign provider groups, requests or errors', () => {
@@ -215,13 +227,15 @@ test('denied, hook-edited and permission-edited commands cannot execute substitu
   }
 }, 60_000)
 
-test('normal sandbox allows workspace writes and denies configured sibling access', async () => {
-  const result = await fixture({ sandbox: true, command: 'printf executed >> counter; cat \"$HOME/secret\"; printf denied > \"$HOME/forbidden\"' })
+test('Auto Run retains sandbox workspace writes and configured sibling denials', async () => {
+  const result = await fixture({ autoOrigin: true, inlineOnly: true, sandbox: true,
+    command: 'printf executed >> counter; cat \"$HOME/secret\"; printf denied > \"$HOME/forbidden\"' })
   expect(result.error).toBeUndefined()
   expect(result.counter).toBe('executed')
   expect(result.restored[0].status).toBe('failed')
   expect(result.restored[0].output).not.toContain('private-sandbox-fixture')
   expect(result.restored[0].output).toContain('Operation not permitted')
+  expect(result.classifierRequests).toHaveLength(0)
 }, 30_000)
 
 test('timeout remains foreground and retains bounded large output', async () => {
