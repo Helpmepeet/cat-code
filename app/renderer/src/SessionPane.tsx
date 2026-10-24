@@ -198,6 +198,7 @@ import {
   selectLiveTokenEstimate,
 } from './appModel.js'
 import { errorMessage } from './appModel.js'
+import { retryComposerBlocked, type NotificationRetryBlocker } from './turnFailure.js'
 
 /** Stable empty list so a session with nothing waiting keeps one identity. */
 const EMPTY_QUEUED_PROMPTS: readonly QueuedPromptItem[] = []
@@ -315,6 +316,7 @@ export function SessionPane({
   setPrompt,
   submit,
   retryTurn,
+  onRetryBlockChange,
   transcript,
   transportError,
 }: SessionPaneProps) {
@@ -585,6 +587,7 @@ export function SessionPane({
     }
     imagePreparationInFlightRef.current = true
     setPreparingImage(true)
+    if (activeSessionId) onRetryBlockChange?.(activeSessionId, 'attachment', true)
     try {
       onAttachImage(await prepareImageAttachment(file))
       setTransportErrorFromImage(null)
@@ -593,6 +596,7 @@ export function SessionPane({
     } finally {
       imagePreparationInFlightRef.current = false
       setPreparingImage(false)
+      if (activeSessionId) onRetryBlockChange?.(activeSessionId, 'attachment', false)
     }
   }
   const [transportErrorFromImage, setTransportErrorFromImage] = useState<
@@ -601,6 +605,7 @@ export function SessionPane({
   const attachFile = async (): Promise<void> => {
     if (!activeSessionId || pickingFile) return
     setPickingFile(true)
+    onRetryBlockChange?.(activeSessionId, 'attachment', true)
     try {
       const selection = await getBridge().pickAttachmentFile(activeSessionId)
       if (!selection) return
@@ -624,6 +629,7 @@ export function SessionPane({
       setTransportErrorFromImage(errorMessage(error))
     } finally {
       setPickingFile(false)
+      onRetryBlockChange?.(activeSessionId, 'attachment', false)
     }
   }
   // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (slash
@@ -751,6 +757,9 @@ export function SessionPane({
     logInputEnabled: activeLog.inputEnabled,
   })
   const managedFolderUnavailable = isManagedChat && managedFolderState !== 'available'
+  useEffect(() => {
+    if (activeSessionId) onRetryBlockChange?.(activeSessionId, 'folder', managedFolderUnavailable)
+  }, [activeSessionId, managedFolderUnavailable, onRetryBlockChange])
   // One decision drives both the textarea attribute and its copy. Ready,
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
@@ -1876,11 +1885,14 @@ export function SessionPane({
             onLoadEarlier={activeDescriptor?.moving ? undefined : onLoadEarlierHistory}
             onOpenAccounts={onManageAccounts}
             onSaveDiagnostics={() => void requestDiagnosticsSave(toast)}
-            onRetryTurn={!generating && !prompt.trim() && images.length === 0 && !fileAttachment &&
-              !preparingImage && !pickingFile && !activeDescriptor?.moving &&
+            onRetryTurn={!generating && !retryComposerBlocked({
+              draft: prompt, imageCount: images.length, hasFile: !!fileAttachment,
+              attachmentPending: preparingImage || pickingFile,
+              workspaceBusy: !!activeDescriptor?.moving || branchSwitchPending,
+              folderUnavailable: managedFolderUnavailable, hasProjectRoute: projectRoute !== null,
+            }) &&
               (composerGate.engineInputEnabled || (composerGate.connectPending && pendingSubmit === null)) &&
-              !branchSwitchPending && !managedFolderUnavailable &&
-              projectRoute === null ? retryTurn : undefined}
+              retryTurn ? retryTurn : undefined}
             onMessageAction={activeDescriptor?.moving ? undefined : onMessageAction}
             createdPeerNavigation={createdPeerNavigation}
             toolCardExpansionStore={toolCardExpansionStore}
@@ -2973,6 +2985,7 @@ type SessionPaneProps = {
   setPrompt: (value: string, reason?: DraftWriteReason) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
   retryTurn?: (text: string, resultId: string) => void
+  onRetryBlockChange?: (sessionId: SessionId, blocker: NotificationRetryBlocker, blocked: boolean) => void
   /** Real @-mention sources for this session (agents; files need a read-seam). */
   mentionItems: MentionItem[]
   /** Collapsed pastes held aside for this session, oldest first. */

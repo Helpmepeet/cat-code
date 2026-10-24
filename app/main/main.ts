@@ -242,7 +242,7 @@ import {
 } from './peerRequestPlane.js'
 import { readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import { readNotificationPreference, writeNotificationPreference } from './notificationPreference.js'
-import { registerNotificationPreferenceIpc, registerNotificationRetryIpc } from './notificationPreferenceIpc.js'
+import { registerNotificationPreferenceIpc, registerNotificationRetryIpc, registerNotificationRetryBlockedIpc } from './notificationPreferenceIpc.js'
 import { createDesktopNotifications } from './desktopNotifications.js'
 import type { NotificationPreferences } from '../shared/notificationPreferences.js'
 import {
@@ -695,6 +695,7 @@ let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null
 let mainWindow: BrowserWindow | null = null
 let desktopNotifications: ReturnType<typeof createDesktopNotifications> | null = null
 let notificationPreferences: NotificationPreferences | null = null
+let notificationRetryBlocked = new Set<SessionId>()
 let pendingNotificationOpen: Extract<HostEvent, { type: 'notification-open' }> | null = null
 
 function openNotificationSession(sessionId: SessionId, accounts = false): void {
@@ -2825,6 +2826,14 @@ function registerIpcHandlers(): void {
     isTrustedSender: isMainWindowSender,
     retry: (id, resultId) => desktopNotifications?.retry(id, resultId) ?? false,
   })
+  registerNotificationRetryBlockedIpc<IpcMainEvent>({
+    on: (channel, listener) => ipcMain.on(channel, listener),
+    isTrustedSender: isMainWindowSender,
+    changed: sessionIds => {
+      notificationRetryBlocked = new Set(sessionIds)
+      desktopNotifications?.retryBlockedChanged()
+    },
+  })
 
   /**
    * THERE IS DELIBERATELY NO RE-MINT HERE, and the assignment above is the whole
@@ -4560,6 +4569,8 @@ function ensureHost(): Host {
   desktopNotifications = createDesktopNotifications({
     getSession: id => host?.listSessions().find(row => row.appSessionId === id),
     isVisible: id => mainWindow?.isFocused() === true && visibleSessions.has(id),
+    isRetryBlocked: id => notificationRetryBlocked.has(id) || host?.isMoving(id) === true ||
+      switchingSessionIds.has(id) || projectRouting?.hasPending(id) === true,
     getPreferences: () => notificationPreferences!,
     createNotification: options => Notification.isSupported() ? new Notification(options) : null,
     setBadge: text => app.dock?.setBadge(text),

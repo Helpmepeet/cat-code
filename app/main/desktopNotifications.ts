@@ -23,6 +23,7 @@ export interface DesktopNotificationHandle {
 export type DesktopNotificationDependencies = {
   getSession(id: string): SessionDescriptor | undefined
   isVisible(id: string): boolean
+  isRetryBlocked?(id: string): boolean
   getPreferences(): NotificationPreferences
   createNotification(options: NotificationConstructorOptions): DesktopNotificationHandle | null
   setBadge(text: string): void
@@ -31,8 +32,8 @@ export type DesktopNotificationDependencies = {
   onError?(error: unknown): void
 }
 type Prompt = Extract<ClientMessage, { type: 'app.submit' }>['prompt']
-type Notice = { options: NotificationConstructorOptions; waiting: boolean; requestId?: string; actions?: (() => void)[]; reply?: (text: string) => void }
-type State = { pending: Map<string, PermissionRequest>; stopped: boolean; active: boolean; inputEnabled: boolean; aborted: boolean; retryFacts: ReturnType<typeof createDesktopNotificationRetry>; assistant: string; providerCode?: string; providerMessage?: string; errorStatus?: number; notice?: Notice; terminalNotice?: Notice; handle?: DesktopNotificationHandle }
+type Notice = { options: NotificationConstructorOptions; waiting: boolean; requestId?: string; retryResultId?: string; actions?: (() => void)[]; reply?: (text: string) => void }
+type State = { pending: Map<string, PermissionRequest>; stopped: boolean; active: boolean; inputEnabled: boolean; aborted: boolean; retryFacts: ReturnType<typeof createDesktopNotificationRetry>; retryBlocked?: boolean; assistant: string; providerCode?: string; providerMessage?: string; errorStatus?: number; notice?: Notice; terminalNotice?: Notice; handle?: DesktopNotificationHandle }
 
 const BANNER_TEXT_LIMIT = 1000
 function record(value: unknown): value is Record<string, unknown> {
@@ -64,30 +65,32 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
   function retry(id: string, resultId: string): boolean {
     const s = sessions.get(id)
     const session = deps.getSession(id)
-    if (disposed || !s || !session || s.aborted || retrySendBlocked({ status: session.status, inputEnabled: s.inputEnabled }, !s.active) || s.active) return false
+    if (disposed || !s || !session || s.aborted || deps.isRetryBlocked?.(id) || retrySendBlocked({ status: session.status, inputEnabled: s.inputEnabled }, !s.active) || s.active) return false
     const candidate = s.retryFacts.claim(resultId)
     if (!candidate) return false
     clear(s)
     try { return submit(id, candidate.text) !== false }
     catch (error) { deps.onError?.(error); return false }
   }
-  function show(id: string, s: State, notice: Notice) {
+  function show(id: string, s: State, notice: Notice, quiet = false) {
     clear(s)
     s.notice = notice
+    s.retryBlocked = !!notice.retryResultId && deps.isRetryBlocked?.(id) === true
+    const actions = s.retryBlocked ? [] : notice.actions
     const prefs = deps.getPreferences()
     if (disposed || !deps.getSession(id) || deps.isVisible(id) || prefs.notify === 'off' || (prefs.notify === 'waiting' && !notice.waiting)) return
     let handle: DesktopNotificationHandle | null
     try {
       const session = deps.getSession(id)!
       const project = session.binding?.kind === 'managed' ? 'Chats' : basename(session.cwd)
-      handle = deps.createNotification({ ...notice.options, body: bannerText(notice.options.body), subtitle: `${project} · ${session.title ?? session.name ?? 'Cat Code'}`, silent: !notice.waiting })
+      handle = deps.createNotification({ ...notice.options, ...(s.retryBlocked ? { actions: [] } : {}), body: bannerText(notice.options.body), subtitle: `${project} · ${session.title ?? session.name ?? 'Cat Code'}`, silent: quiet || !notice.waiting })
     } catch (error) { deps.onError?.(error); return }
     if (!handle) return
     s.handle = handle
     const valid = () => !disposed && sessions.get(id) === s && s.handle === handle && s.notice === notice && !!deps.getSession(id) && (!notice.requestId || s.pending.has(notice.requestId))
     const consume = (action: () => void) => { if (!valid()) return; clear(s); action() }
     handle.on('click', () => consume(() => deps.openSession(id)))
-    handle.on('action', (_event, index) => { if (typeof index === 'number' && Number.isInteger(index) && index >= 0 && notice.actions?.[index]) consume(notice.actions[index]!) })
+    handle.on('action', (_event, index) => { if (typeof index === 'number' && Number.isInteger(index) && index >= 0 && actions?.[index]) consume(actions[index]!) })
     handle.on('reply', (_event, text) => { if (typeof text === 'string' && text.trim() && notice.reply) consume(() => notice.reply!(text.trim())) })
     handle.on('close', () => { if (s.handle === handle) s.handle = undefined })
     handle.on('failed', (_event, error) => { if (s.handle === handle) close(s); deps.onError?.(error) })
@@ -165,7 +168,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
         const freshTurn = event.activeTurn && !s.active
         s.active = event.activeTurn
         s.inputEnabled = !event.activeTurn
-        if (freshTurn) { clear(s); s.stopped = false; s.aborted = false; s.retryFacts.reset(); s.assistant = ''; s.providerCode = undefined; s.providerMessage = undefined; s.errorStatus = undefined }
+        if (freshTurn) { clear(s); s.stopped = false; s.aborted = false; s.retryFacts.startTurn(); s.assistant = ''; s.providerCode = undefined; s.providerMessage = undefined; s.errorStatus = undefined }
         else if (!event.activeTurn && s.terminalNotice) {
           const notice = s.terminalNotice
           show(id, s, notice)
@@ -175,23 +178,26 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
         const m: unknown = event.message
         if (!record(m) || m.parent_tool_use_id || m.isReplay) return
         const content = record(m.message) ? m.message.content : undefined
-        s.retryFacts.observe(frame)
+        const projected = s.retryFacts.observe(frame, s.active)
         if (m.type === 'assistant') {
           const text = textBlocks(content)
           if (text) s.assistant = text
           if (typeof m.error === 'string') { s.providerCode = bannerText(m.error); s.providerMessage = text }
+          else if (projected?.length) s.errorStatus = undefined
         }
+        if (m.type === 'stream_event' && record(m.event) && m.event.type === 'content_block_delta' &&
+          record(m.event.delta) && m.event.delta.type === 'text_delta' &&
+          typeof m.event.delta.text === 'string' && m.event.delta.text.length > 0) s.errorStatus = undefined
         if (m.type === 'system' && m.subtype === 'api_retry' && typeof m.error_status === 'number') s.errorStatus = m.error_status
         if (m.type === 'result' && typeof m.subtype === 'string' && typeof m.is_error === 'boolean') {
           clear(s)
           if (s.aborted || ['interrupted', 'handoff', 'aborted'].includes(m.subtype)) { s.stopped = false; badge(); return }
           if (m.is_error || m.subtype !== 'success') {
             s.stopped = true
-            const errors = Array.isArray(m.errors) ? textBlocks(m.errors.map(text => ({ type: 'text', text }))) : ''
-            const copy = turnResultFailureCopy({ subtype: m.subtype, providerCode: s.providerCode, providerMessage: s.providerMessage ?? errors, errorStatus: s.errorStatus, durationMs: typeof m.duration_ms === 'number' ? m.duration_ms : undefined, totalCostUsd: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : undefined })
+            const copy = turnResultFailureCopy({ subtype: m.subtype, providerCode: s.providerCode, providerMessage: s.providerMessage, errorStatus: s.errorStatus, durationMs: typeof m.duration_ms === 'number' ? m.duration_ms : undefined, totalCostUsd: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : undefined })
             const candidate = s.retryFacts.candidate()
             const accounts = copy.title === USAGE_LIMIT_TITLE
-            terminal(id, s, { waiting: true, options: { title: copy.title, body: copy.detail, actions: accounts || candidate ? [{ type: 'button', text: accounts ? OPEN_ACCOUNTS_LABEL : RETRY_LABEL }] : [] }, actions: accounts ? [() => deps.openSession(id, true)] : candidate ? [() => { retry(id, candidate.resultId) }] : [] })
+            terminal(id, s, { waiting: true, ...(candidate && !accounts ? { retryResultId: candidate.resultId } : {}), options: { title: copy.title, body: copy.detail, actions: accounts || candidate ? [{ type: 'button', text: accounts ? OPEN_ACCOUNTS_LABEL : RETRY_LABEL }] : [] }, actions: accounts ? [() => deps.openSession(id, true)] : candidate ? [() => { if (!retry(id, candidate.resultId)) deps.openSession(id) }] : [] })
           } else {
             s.stopped = false
             const duration = typeof m.duration_ms === 'number' && Number.isFinite(m.duration_ms) && m.duration_ms >= 0 ? `${Math.round(m.duration_ms / 1000)}s · ` : ''
@@ -205,6 +211,13 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
   return {
     receive,
     retry,
+    retryBlockedChanged() {
+      for (const [id, s] of sessions) {
+        if (s.handle && s.notice?.retryResultId && s.retryBlocked !== (deps.isRetryBlocked?.(id) === true)) {
+          show(id, s, s.notice, true)
+        }
+      }
+    },
     receiveHostEvent(event: HostEvent) {
       if (event.type === 'session-removed' || (event.type === 'session-status' && (event.session.parked || event.session.status === 'spawning' || event.session.status === 'exited' || event.session.status === 'disconnected'))) {
         const id = event.type === 'session-removed' ? event.appSessionId : event.session.appSessionId

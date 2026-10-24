@@ -2,6 +2,14 @@ import type { HostEvent } from './hostApi.js'
 
 type NotificationOpenEvent = Extract<HostEvent, { type: 'notification-open' }>
 
+export function parseNotificationRetryBlocked(raw: unknown): string[] | null {
+  if (!Array.isArray(raw) || raw.length > 512 || Object.keys(raw).length !== raw.length) return null
+  const ids = [...raw]
+  if (ids.some(id => typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) ||
+    new Set(ids).size !== ids.length) return null
+  return ids
+}
+
 export function parseNotificationOpenEvent(raw: unknown): NotificationOpenEvent | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const value = raw as Record<string, unknown>

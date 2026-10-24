@@ -4244,6 +4244,7 @@ export type CatCodeBridge = {
   setNotificationPreferences(value: NotificationPreferences): Promise<NotificationPreferences>
   /** Retry a currently eligible failed turn, selected by its projected result ID. */
   retryTurn(sessionId: SessionId, resultId: string): Promise<boolean>
+  reportNotificationRetryBlocked(sessionIds: readonly SessionId[]): void
   /**
    * Ask main's existing account-pool driver for one fresh global snapshot. This
    * has no payload, starts no session, and never becomes sidecar vocabulary.

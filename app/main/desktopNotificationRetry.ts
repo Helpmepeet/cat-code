@@ -9,6 +9,7 @@ export function createDesktopNotificationRetry() {
   const claimed = new Set<string>()
   let overflow = false
   let live = false
+  let awaitingTurn = false
   const candidate = () => {
     const result = [...rows].reverse().find(row => row.kind === 'result')
     if (result?.kind !== 'result' || (result.subtype !== 'error_during_execution' && result.subtype !== 'error_auth_required')) return null
@@ -16,8 +17,15 @@ export function createDesktopNotificationRetry() {
     return value && !claimed.has(value.resultId) ? value : null
   }
   return {
-    reset(liveTurn = true) { rows = []; overflow = false; live = liveTurn },
-    observe(frame: ServerFrame) {
+    reset(liveTurn = true) { rows = []; overflow = false; live = liveTurn; awaitingTurn = false },
+    startTurn() {
+      // SidecarServer announces the new prompt before the controller starts.
+      // Automatic turns have no announcement and must not reuse older input.
+      if (!awaitingTurn) { rows = []; overflow = false }
+      live = true
+      awaitingTurn = false
+    },
+    observe(frame: ServerFrame, activeTurn = false) {
       if (frame.kind !== 'event' || frame.event.type !== 'message' || frame.recovered || (frame.replay && live)) return
       const message = frame.event.message
       if (message.parent_tool_use_id || (!frame.replay && 'isReplay' in message && message.isReplay)) return
@@ -39,14 +47,16 @@ export function createDesktopNotificationRetry() {
         const content: unknown = message.message?.content
         const toolResult = Array.isArray(content) && content.some(block => typeof block === 'object' && block !== null && 'type' in block && block.type === 'tool_result')
         if (toolResult) return
+        awaitingTurn = !frame.replay && !activeTurn
         rows = []; overflow = facts.length > 32
       }
-      if (overflow) return
+      if (message.type === 'result') awaitingTurn = false
+      if (overflow) return message.type === 'assistant' ? projected : undefined
       // Images and injected turns are barriers only. Never retain their payload.
       if (facts.some(row => row.kind === 'user-image' || row.kind === 'injected-turn' || row.kind === 'command-echo' || row.kind === 'turn-stopped')) { rows = []; overflow = true; return }
       if (message.type === 'assistant') {
         if (rows.some(row => row.kind === 'result') && facts.some(row => row.kind === 'assistant-text')) rows = []
-        return
+        return projected
       }
       if (message.type === 'result') rows = rows.filter(row => row.kind !== 'result')
       rows.push(...facts)

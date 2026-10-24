@@ -54,10 +54,13 @@ test.each([false, true])('notification activation opens an offscreen session and
 test('the live card selects the same projected result through the shared Retry gate', async () => {
   const sessionId = '00000000-0000-4000-8000-000000000001'
   let receive!: (frames: ServerFrame[]) => void
+  let receiveHost!: (event: HostEvent) => void
   const retries: string[][] = []
+  const blocked: string[][] = []
+  let finishAttachment!: (value: null) => void
   window.catcode = {
     subscribe: listener => { receive = listener; return () => {} },
-    subscribeHost: () => () => {},
+    subscribeHost: listener => { receiveHost = listener; return () => {} },
     rendererReady: () => {},
     listSessions: async () => [{ ...descriptor('Retry target'), appSessionId: sessionId }],
     readProjectRoutes: async () => [],
@@ -67,6 +70,8 @@ test('the live card selects the same projected result through the shared Retry g
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
     retryTurn: async (id, resultId) => { retries.push([id, resultId]); return true },
+    reportNotificationRetryBlocked: ids => { blocked.push([...ids]) },
+    pickAttachmentFile: () => new Promise<null>(resolve => { finishAttachment = resolve }),
     submit: () => { throw new Error('Retry must not bypass its claim gate') },
   } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
   const tree = await harness.mount(<App />)
@@ -81,6 +86,31 @@ test('the live card selects the same projected result through the shared Retry g
   ]
   const candidate = retryableTurn(selectNestedTranscriptRows(projectServerFrames(createTranscriptState(), frames), sessionId))!
   await act(async () => { receive(frames) })
+  expect(blocked.at(-1)).toEqual([])
+  const composer = () => tree.container.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]')!
+  await act(async () => {
+    composer().textContent = 'Unsent draft'
+    composer().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(blocked.at(-1)).toEqual([sessionId])
+  expect([...tree.container.querySelectorAll('button')].some(button => button.textContent === 'Retry')).toBe(false)
+  await act(async () => { receiveHost({ type: 'notification-open', appSessionId: sessionId, accounts: true }) })
+  expect(tree.container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Accounts')
+  expect(blocked.at(-1)).toEqual([sessionId])
+  await act(async () => { receiveHost({ type: 'notification-open', appSessionId: sessionId, accounts: false }) })
+  expect(composer().textContent).toBe('Unsent draft')
+  await act(async () => {
+    composer().textContent = ''
+    composer().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(blocked.at(-1)).toEqual([])
+  await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Add attachment"]')!.click() })
+  expect(blocked.at(-1)).toEqual([sessionId])
+  await act(async () => { receiveHost({ type: 'notification-open', appSessionId: sessionId, accounts: true }) })
+  expect(blocked.at(-1)).toEqual([sessionId])
+  await act(async () => { finishAttachment(null) })
+  expect(blocked.at(-1)).toEqual([])
+  await act(async () => { receiveHost({ type: 'notification-open', appSessionId: sessionId, accounts: false }) })
   const retry = [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Retry')
   expect(retry).toBeDefined()
   await act(async () => { retry!.click(); retry!.click() })

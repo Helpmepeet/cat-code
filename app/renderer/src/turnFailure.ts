@@ -3,6 +3,21 @@ import type { NestedTranscriptRow, ResultRow } from './transcriptProjector.js'
 export const OPEN_ACCOUNTS_LABEL = 'Open Accounts'
 export const RETRY_LABEL = 'Retry'
 export const USAGE_LIMIT_TITLE = 'Usage limit reached'
+export type NotificationRetryBlocker = 'attachment' | 'folder'
+
+export function retryComposerBlocked(input: {
+  draft: string
+  imageCount: number
+  hasFile: boolean
+  attachmentPending: boolean
+  workspaceBusy: boolean
+  folderUnavailable: boolean
+  hasProjectRoute: boolean
+}): boolean {
+  return !!input.draft.trim() || input.imageCount > 0 || input.hasFile ||
+    input.attachmentPending || input.workspaceBusy || input.folderUnavailable || input.hasProjectRoute
+}
+
 export const RESULT_ERROR_LABELS = new Map([
   ['error_max_turns', 'Stopped · max turns reached'],
   ['error_max_budget_usd', 'Stopped · budget limit reached'],

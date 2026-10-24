@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
-import { CH_GET_NOTIFICATION_PREFERENCES, CH_SET_NOTIFICATION_PREFERENCES, CH_RETRY_TURN } from '../shared/ipcChannels.js'
-import { registerNotificationPreferenceIpc, registerNotificationRetryIpc } from './notificationPreferenceIpc.js'
+import { CH_GET_NOTIFICATION_PREFERENCES, CH_SET_NOTIFICATION_PREFERENCES, CH_RETRY_TURN, CH_NOTIFICATION_RETRY_BLOCKED } from '../shared/ipcChannels.js'
+import { registerNotificationPreferenceIpc, registerNotificationRetryIpc, registerNotificationRetryBlockedIpc } from './notificationPreferenceIpc.js'
 
 test('notification preference IPC accepts only the window sender and closed payloads', () => {
   const handlers = new Map<string, (event: boolean, ...args: unknown[]) => unknown>()
@@ -46,4 +46,23 @@ test('Retry IPC accepts only a validated result selection from the window', () =
   expect(() => handler(false, valid)).toThrow()
   expect(() => handler(true, valid, {})).toThrow()
   expect(calls).toEqual([[valid.sessionId, 'result:failed'], [valid.sessionId, 'stale']])
+})
+
+test('retry-blocking hints accept only bounded session IDs from the window', () => {
+  let handler!: (event: boolean, ...args: unknown[]) => void
+  const reports: string[][] = []
+  registerNotificationRetryBlockedIpc({
+    on: (channel, listener) => { expect(channel).toBe(CH_NOTIFICATION_RETRY_BLOCKED); handler = listener },
+    isTrustedSender: (event: boolean) => event,
+    changed: ids => { reports.push(ids) },
+  })
+  const id = '00000000-0000-4000-8000-000000000001'
+  handler(true, [id])
+  handler(true, [])
+  for (const invalid of [null, {}, ['../bad'], [id, id], [1], Array(1), Object.assign([id], { prompt: 'not accepted' }), Array(513).fill(id), { sessionIds: [id], prompt: 'not accepted' }]) {
+    handler(true, invalid)
+  }
+  handler(false, [id])
+  handler(true, [id], {})
+  expect(reports).toEqual([[id], []])
 })

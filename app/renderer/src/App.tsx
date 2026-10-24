@@ -204,7 +204,7 @@ import {
   type RetainedSubmitState,
   type TransportErrorState,
 } from './composerState.js'
-import { retrySendBlocked } from './turnFailure.js'
+import { retrySendBlocked, retryComposerBlocked, type NotificationRetryBlocker } from './turnFailure.js'
 import { reconcileShownSession } from './shownSession.js'
 import {
   connectionHasEngine,
@@ -597,6 +597,24 @@ export function App() {
   const [fileAttachmentState, setFileAttachmentState] =
     useState<FileAttachmentState>(createFileAttachmentState)
   const [branchSwitchPendingSessions, setBranchSwitchPendingSessions] = useState<ReadonlySet<SessionId>>(() => new Set())
+  const [notificationRetryLocalBlocks, setNotificationRetryLocalBlocks] = useState<
+    Partial<Record<SessionId, { attachments: number; folder: boolean }>>
+  >({})
+  const changeNotificationRetryBlock = useCallback((sessionId: SessionId, blocker: NotificationRetryBlocker, blocked: boolean) => {
+    setNotificationRetryLocalBlocks(current => {
+      const previous = current[sessionId] ?? { attachments: 0, folder: false }
+      const next = blocker === 'attachment'
+        ? { ...previous, attachments: Math.max(0, previous.attachments + (blocked ? 1 : -1)) }
+        : { ...previous, folder: blocked }
+      if (next.attachments === previous.attachments && next.folder === previous.folder) return current
+      if (!next.attachments && !next.folder) {
+        const cleared = { ...current }
+        delete cleared[sessionId]
+        return cleared
+      }
+      return { ...current, [sessionId]: next }
+    })
+  }, [])
   // Host close events can precede the switch reply. Keep the source's spatial
   // slot until the reply can replace it, rather than letting roster repair
   // choose another tab or move the shown pane in between.
@@ -1431,6 +1449,12 @@ export function App() {
         }
       }
       if (event.type === 'session-removed') {
+        setNotificationRetryLocalBlocks(current => {
+          if (!current[event.appSessionId]) return current
+          const next = { ...current }
+          delete next[event.appSessionId]
+          return next
+        })
         routeEventsSeen.add(event.appSessionId)
         setProjectRoutes(current => {
           const next = { ...current }
@@ -3376,6 +3400,33 @@ export function App() {
   // seeding with `''` would make the one report that un-protects everything the
   // one report that can never be sent.
   const reportedVisibleRef = useRef<string | null>(null)
+  const notificationRetryBlockedIds = useMemo(() => new Set(
+    selectShellDescriptors(shell).filter(descriptor => {
+      const id = descriptor.appSessionId
+      const local = notificationRetryLocalBlocks[id]
+      return connectionHasEngine(selectConnection(connection, id).status) && retryComposerBlocked({
+        draft: selectPromptDraft(promptDrafts, id),
+        imageCount: selectImageAttachments(imageAttachmentState, id).length,
+        hasFile: selectFileAttachment(fileAttachmentState, id) !== null,
+        attachmentPending: (local?.attachments ?? 0) > 0,
+        workspaceBusy: descriptor.moving === true || branchSwitchPendingSessions.has(id),
+        folderUnavailable: local?.folder === true,
+        hasProjectRoute: !!projectRoutes[id],
+      })
+    }).map(descriptor => descriptor.appSessionId),
+  ), [shell, connection, promptDrafts, imageAttachmentState, fileAttachmentState, branchSwitchPendingSessions, projectRoutes, notificationRetryLocalBlocks])
+  const reportedNotificationRetryRef = useRef<string | null>(null)
+  useEffect(() => {
+    const ids = [...notificationRetryBlockedIds].sort()
+    const key = ids.join(' ')
+    if (reportedNotificationRetryRef.current === key) return
+    try {
+      getBridge().reportNotificationRetryBlocked?.(ids)
+      reportedNotificationRetryRef.current = key
+    } catch (error) {
+      console.warn('Notification retry state could not be delivered', error)
+    }
+  }, [notificationRetryBlockedIds])
   // Panes render only under the chat view (`activeView === 'chat'` below), so
   // while the user is on Settings/Sessions/Accounts nothing is on screen and
   // nothing is protected. Without this, leaving the app parked on a non-chat
@@ -4166,7 +4217,8 @@ export function App() {
 	              setSessionPrompt(sessionId, value, reason)
 	            }
 	            submit={event => submitSession(sessionId, event)}
-	            retryTurn={(text, resultId) => submitSession(sessionId, null, text, resultId)}
+	            retryTurn={notificationRetryBlockedIds.has(sessionId) ? undefined : (text, resultId) => submitSession(sessionId, null, text, resultId)}
+                onRetryBlockChange={changeNotificationRetryBlock}
 	            mentionItems={selectAgentMentionItems(
 	              selectAgentConfigSnapshot(agentConfig, sessionId),
 	            )}

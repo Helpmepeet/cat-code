@@ -346,6 +346,7 @@ async function runProductionHardeningSmoke(
       'getNotificationPreferences',
       'setNotificationPreferences',
       'retryTurn',
+      'reportNotificationRetryBlocked',
       // Freeze telemetry — the renderer reports that React committed a render.
       // Argument-free and IPC-free: it only increments a preload-local counter
       // (with an overflow guard) that the health probe reads at sample time, so

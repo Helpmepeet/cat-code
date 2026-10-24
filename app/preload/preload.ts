@@ -102,6 +102,7 @@ import {
   CH_GET_NOTIFICATION_PREFERENCES,
   CH_SET_NOTIFICATION_PREFERENCES,
   CH_RETRY_TURN,
+  CH_NOTIFICATION_RETRY_BLOCKED,
   CH_OPEN_LOGS,
   CH_SAVE_DIAGNOSTICS,
   CH_DELIVERY_HEALTH_PROBE,
@@ -577,6 +578,10 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, resultId }
     sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_RETRY_TURN, payload)
+  },
+  reportNotificationRetryBlocked(sessionIds: readonly SessionId[]): void {
+    sendGuard.assertAllowed(sessionIds)
+    ipcRenderer.send(CH_NOTIFICATION_RETRY_BLOCKED, sessionIds)
   },
   refreshAccountsPool(): void {
     sendGuard.assertAllowed({ refreshAccountsPool: true })

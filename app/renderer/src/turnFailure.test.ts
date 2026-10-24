@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { turnFailureCopy, retryableTurn, retrySendBlocked } from './turnFailure.js'
+import { turnFailureCopy, retryableTurn, retrySendBlocked, retryComposerBlocked } from './turnFailure.js'
 import { observeRetryWait, retryWaitSeconds } from './retryClock.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
@@ -49,4 +49,13 @@ test('a resend waits only on a running attached turn; parked and spawning sessio
   expect(retrySendBlocked({ status: 'ready', inputEnabled: true }, false)).toBe(true)
   expect(retrySendBlocked({ status: 'parked', inputEnabled: false }, false)).toBe(false)
   expect(retrySendBlocked({ status: 'starting', inputEnabled: false }, false)).toBe(false)
+})
+
+test('card and native retry share each composer blocker without consuming its draft', () => {
+  const ready = { draft: '', imageCount: 0, hasFile: false, attachmentPending: false, workspaceBusy: false, folderUnavailable: false, hasProjectRoute: false }
+  expect(retryComposerBlocked(ready)).toBe(false)
+  for (const change of [
+    { draft: 'Unsent draft' }, { imageCount: 1 }, { hasFile: true }, { attachmentPending: true },
+    { workspaceBusy: true }, { folderUnavailable: true }, { hasProjectRoute: true },
+  ]) expect(retryComposerBlocked({ ...ready, ...change })).toBe(true)
 })

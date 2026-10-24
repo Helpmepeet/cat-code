@@ -7,15 +7,25 @@ import { createTranscriptState, projectServerFrames, selectNestedTranscriptRows 
 import { retryableTurn } from '../renderer/src/turnFailure.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { buildPermissionOptions } from '../renderer/src/permissionPromptModel.js'
+import { turnFailureCopy } from '../renderer/src/turnFailure.js'
+
+function cardRows(frames: ServerFrame[]) {
+  const ready: ServerFrame = {
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', engineSessionId: 'engine-a',
+    payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
+  }
+  return selectNestedTranscriptRows(projectServerFrames(createTranscriptState(), [ready, ...frames]), 'a')
+}
 
 function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true) {
   const handles: Array<{ options: any; closed: boolean; emit: (event: string, ...args: any[]) => void }> = []
   const sent: any[] = [], opened: any[] = []
-  let badge = '', visible = false
+  let badge = '', visible = false, retryBlocked = false
   const prefs = { notify: 'all' as 'all' | 'waiting' | 'off', dockBadge: true }
   const coordinator = createDesktopNotifications({
     getSession: id => sessionDescriptorFixture({ appSessionId: id, cwd: '/projects/cat-code', title: 'Fix tests', ...descriptor }),
     isVisible: () => visible, getPreferences: () => prefs,
+    isRetryBlocked: () => retryBlocked,
     createNotification: options => {
       const listeners = new Map<string, (...args: any[]) => void>()
       const h = { options, closed: false, emit: (event: string, ...args: any[]) => listeners.get(event)?.({}, ...args) }
@@ -30,10 +40,74 @@ function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true
   const permission = (id = 'r', tool = 'Bash', input?: any) => event({ type: 'permission.requested', request: request(id, tool, input) })
   let serial = 0
   const message = (message: any, replay = false) => event({ type: 'message', message: message && { uuid: `frame-${++serial}`, ...(message.type === 'result' ? { is_error: false } : {}), ...message } }, replay)
-  return { coordinator, frame, event, request, permission, message, handles, sent, opened, prefs, badge: () => badge, visible: (value: boolean) => { visible = value } }
+  return { coordinator, frame, event, request, permission, message, handles, sent, opened, prefs, badge: () => badge, visible: (value: boolean) => { visible = value }, blockRetry: (value: boolean) => { retryBlocked = value } }
 }
 
 describe('desktop notifications', () => {
+  test('composer-blocked retries are absent, rechecked, and refreshed without another sound', () => {
+    const h = harness()
+    h.blockRetry(true)
+    h.message({ type: 'user', message: { content: 'Original input' } })
+    h.message({ type: 'result', uuid: 'blocked-result', subtype: 'error_during_execution', is_error: true })
+    expect(h.handles.at(-1)!.options.actions).toEqual([])
+    expect(h.coordinator.retry('a', 'a:blocked-result:result')).toBe(false)
+    h.blockRetry(false)
+    h.coordinator.retryBlockedChanged()
+    const allowed = h.handles.at(-1)!
+    expect(allowed.options.actions).toEqual([{ type: 'button', text: 'Retry' }])
+    expect(allowed.options.silent).toBe(true)
+    h.blockRetry(true)
+    h.coordinator.retryBlockedChanged()
+    expect(allowed.closed).toBe(true)
+    allowed.emit('action', 0)
+    expect(h.handles.at(-1)!.options.actions).toEqual([])
+    expect(h.sent).toHaveLength(0)
+    h.blockRetry(false)
+    expect(h.coordinator.retry('a', 'a:blocked-result:result')).toBe(true)
+    expect(h.sent).toHaveLength(1)
+  })
+  test.each(['assistant', 'stream'] as const)('recovered overload does not mask a later usage failure after %s output', output => {
+    const h = harness()
+    const frames: ServerFrame[] = []
+    const receive = (message: unknown) => {
+      const frame = { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'message', message } } as ServerFrame
+      frames.push(frame)
+      h.frame(frame)
+    }
+    receive({ type: 'system', subtype: 'api_retry', uuid: 'retry', error: { message: 'Overloaded' }, error_status: 529, attempt: 1, retry_delay_ms: 1 })
+    if (output === 'assistant') {
+      receive({ type: 'assistant', uuid: 'recovered', message: { id: 'response', role: 'assistant', content: [{ type: 'text', text: 'Recovered' }] } })
+    } else {
+      receive({ type: 'stream_event', uuid: 'start', event: { type: 'message_start', message: { id: 'response' } } })
+      receive({ type: 'stream_event', uuid: 'block', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
+      receive({ type: 'stream_event', uuid: 'delta', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Recovered' } } })
+    }
+    receive({ type: 'assistant', uuid: 'limit', error: 'rate_limit', message: { id: 'failure', role: 'assistant', content: [{ type: 'text', text: 'Usage limit reached' }] } })
+    receive({ type: 'result', uuid: 'failed', subtype: 'error_during_execution', is_error: true, errors: [] })
+    const result = cardRows(frames).reverse().find(row => row.kind === 'result')!
+    expect(result.kind).toBe('result')
+    if (result.kind !== 'result') throw new Error('Missing projected result')
+    const card = turnFailureCopy(result)
+    expect(card.title).toBe('Usage limit reached')
+    expect(h.handles.at(-1)!.options.title).toBe(card.title)
+    expect(h.handles.at(-1)!.options.body).toBe(card.detail)
+    expect(h.handles.at(-1)!.options.actions).toEqual([{ type: 'button', text: 'Open Accounts' }])
+  })
+  test('result-only failure details classify identically on the card and native banner', () => {
+    const h = harness()
+    const frame = {
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a',
+      event: { type: 'message', message: { type: 'result', uuid: 'limit', subtype: 'error_during_execution', is_error: true, errors: ['Usage limit reached'] } },
+    } as ServerFrame
+    h.frame(frame)
+    const result = cardRows([frame]).find(row => row.kind === 'result')!
+    if (result.kind !== 'result') throw new Error('Missing projected result')
+    const card = turnFailureCopy(result)
+    expect(card.title).toBe('This turn could not finish')
+    expect(h.handles.at(-1)!.options.title).toBe(card.title)
+    expect(h.handles.at(-1)!.options.body).toBe(card.detail)
+    expect(h.handles.at(-1)!.options.actions).toEqual([])
+  })
   test('a result does not enable Retry or Finished reply before authoritative turn closure', () => {
     for (const subtype of ['success', 'error_during_execution']) {
       const h = harness()
@@ -161,6 +235,7 @@ describe('desktop notifications', () => {
     h.message({ type: 'user', message: { content: 'Fix it' } })
     h.message({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['Connection reset'] })
     expect(controls()).toEqual({ title: 'This turn could not finish', actions: [{ type: 'button', text: 'Retry' }], reply: false, placeholder: undefined })
+    h.message({ type: 'assistant', error: 'rate_limit', message: { content: [{ type: 'text', text: 'Usage limit reached' }] } })
     h.message({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['Usage limit reached'] })
     expect(controls()).toEqual({ title: 'Usage limit reached', actions: [{ type: 'button', text: 'Open Accounts' }], reply: false, placeholder: undefined })
     const managed = harness({ binding: { kind: 'managed', storageId: 'x', storageRootId: 'y' } })

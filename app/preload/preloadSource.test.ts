@@ -130,7 +130,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(70)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(71)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -178,11 +178,12 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const main = mainEntry + notificationIpc
   expect(mainEntry).toContain('registerNotificationPreferenceIpc<IpcMainInvokeEvent>({')
   expect(mainEntry).toContain('registerNotificationRetryIpc<IpcMainInvokeEvent>({')
+  expect(mainEntry).toContain('registerNotificationRetryBlockedIpc<IpcMainEvent>({')
 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(75)
+  expect(names.length).toBe(76)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
