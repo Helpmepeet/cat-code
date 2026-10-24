@@ -208,9 +208,17 @@ export function formatRunTime(at: number, now: number, timeZone?: string): strin
   const zone = timeZone ? { timeZone } : {}
   const day = new Intl.DateTimeFormat('en-CA', { ...zone, year: 'numeric', month: '2-digit', day: '2-digit' })
   const time = new Intl.DateTimeFormat('en-GB', { ...zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(at)
-  const target = day.format(at)
-  const offsets: Array<[number, string]> = [[0, 'Today'], [86400_000, 'Tomorrow'], [-86400_000, 'Yesterday']]
-  for (const [offset, label] of offsets) if (day.format(now + offset) === target) return `${label} ${time}`
+  const calendarDay = (timestamp: number): number => {
+    const parts = day.formatToParts(timestamp)
+    const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find(part => part.type === type)?.value)
+    // UTC encodes the viewer's calendar date only, so DST cannot change its length.
+    const date = new Date(0)
+    date.setUTCFullYear(value('year'), value('month') - 1, value('day'))
+    return date.getTime() / 86400_000
+  }
+  const dayDifference = calendarDay(at) - calendarDay(now)
+  const label = dayDifference === 0 ? 'Today' : dayDifference === 1 ? 'Tomorrow' : dayDifference === -1 ? 'Yesterday' : null
+  if (label) return `${label} ${time}`
   if (Math.abs(at - now) < 6 * 86400_000) return `${new Intl.DateTimeFormat('en-US', { ...zone, weekday: 'short' }).format(at)} ${time}`
   const date = new Intl.DateTimeFormat('en-US', { ...zone, month: 'short', day: 'numeric', ...(Math.abs(at - now) > 300 * 86400_000 ? { year: 'numeric' as const } : {}) }).format(at)
   return `${date} ${time}`

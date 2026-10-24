@@ -103,6 +103,19 @@ describe('presentation', () => {
     expect(formatRunTime(NOW + 10 * 86400_000, NOW, 'UTC')).toBe('Oct 23 05:00')
   })
 
+  test.each([
+    ['2026-03-07T23:30:00-05:00', '2026-03-09T09:00:00-04:00', 'Mon 09:00'],
+    ['2026-03-07T23:30:00-05:00', '2026-03-08T09:00:00-04:00', 'Tomorrow 09:00'],
+    ['2026-03-09T00:30:00-04:00', '2026-03-07T09:00:00-05:00', 'Sat 09:00'],
+    ['2026-03-09T00:30:00-04:00', '2026-03-08T09:00:00-04:00', 'Yesterday 09:00'],
+    ['2026-11-01T00:30:00-04:00', '2026-11-02T09:00:00-05:00', 'Tomorrow 09:00'],
+    ['2026-11-01T23:30:00-05:00', '2026-10-31T09:00:00-04:00', 'Yesterday 09:00'],
+    ['2026-02-28T23:30:00-05:00', '2026-03-01T09:00:00-05:00', 'Tomorrow 09:00'],
+    ['2026-01-01T00:30:00-05:00', '2025-12-31T09:00:00-05:00', 'Yesterday 09:00'],
+  ])('run time from %s to %s uses calendar dates: %s', (now, at, expected) => {
+    expect(formatRunTime(Date.parse(at), Date.parse(now), 'America/New_York')).toBe(expected)
+  })
+
   test('the next run reflects pause and the one-unfinished-run rule', () => {
     expect(nextRunText(task({ enabled: false }), [], NOW)).toBe('Paused')
     expect(nextRunText(task({ nextRunAt: NOW - 1 }), [], NOW)).toBe('Due now')
