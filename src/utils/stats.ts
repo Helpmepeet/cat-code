@@ -882,7 +882,7 @@ export async function aggregateClaudeCodeStatsForRanges<
   const today = new Date()
   const options = uniqueRanges.map(range => {
     const fromDate = new Date(today)
-    fromDate.setDate(today.getDate() - (range === '7d' ? 7 : 30) + 1)
+    fromDate.setUTCDate(today.getUTCDate() - (range === '7d' ? 7 : 30) + 1)
     return { fromDate: toDateString(fromDate) }
   })
   const processed = await processSessionFilesForRanges(allSessionFiles, options)
@@ -1000,7 +1000,7 @@ function processedStatsToClaudeCodeStats(
  */
 function getNextDay(dateStr: string): string {
   const date = new Date(dateStr)
-  date.setDate(date.getDate() + 1)
+  date.setUTCDate(date.getUTCDate() + 1)
   return toDateString(date)
 }
 
@@ -1016,7 +1016,7 @@ function calculateStreaks(dailyActivity: DailyActivity[]): StreakInfo {
   }
 
   const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  today.setUTCHours(0, 0, 0, 0)
 
   // Calculate current streak (working backwards from today)
   let currentStreak = 0
@@ -1033,7 +1033,7 @@ function calculateStreaks(dailyActivity: DailyActivity[]): StreakInfo {
     }
     currentStreak++
     currentStreakStart = dateStr
-    checkDate.setDate(checkDate.getDate() - 1)
+    checkDate.setUTCDate(checkDate.getUTCDate() - 1)
   }
 
   // Calculate longest streak

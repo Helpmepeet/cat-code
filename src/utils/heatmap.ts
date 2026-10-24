@@ -57,17 +57,17 @@ export function generateHeatmap(
   // Pre-calculate percentiles once for all intensity lookups
   const percentiles = calculatePercentiles(dailyActivity)
 
-  // Calculate date range - end at today, go back N weeks
+  // Match the UTC date keys produced by terminal stats.
   const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  today.setUTCHours(0, 0, 0, 0)
 
   // Find the Sunday of the current week (start of the week containing today)
   const currentWeekStart = new Date(today)
-  currentWeekStart.setDate(today.getDate() - today.getDay())
+  currentWeekStart.setUTCDate(today.getUTCDate() - today.getUTCDay())
 
   // Go back (width - 1) weeks from the current week start
   const startDate = new Date(currentWeekStart)
-  startDate.setDate(startDate.getDate() - (width - 1) * 7)
+  startDate.setUTCDate(startDate.getUTCDate() - (width - 1) * 7)
 
   // Generate grid (7 rows for days of week, width columns for weeks)
   // Also track which week each month starts for labels
@@ -83,7 +83,7 @@ export function generateHeatmap(
       // Don't show future dates
       if (currentDate > today) {
         grid[day]![week] = ' '
-        currentDate.setDate(currentDate.getDate() + 1)
+        currentDate.setUTCDate(currentDate.getUTCDate() + 1)
         continue
       }
 
@@ -92,7 +92,7 @@ export function generateHeatmap(
 
       // Track month changes (on day 0 = Sunday of each week)
       if (day === 0) {
-        const month = currentDate.getMonth()
+        const month = currentDate.getUTCMonth()
         if (month !== lastMonth) {
           monthStarts.push({ month, week })
           lastMonth = month
@@ -103,7 +103,7 @@ export function generateHeatmap(
       const intensity = getIntensity(activity?.messageCount || 0, percentiles)
       grid[day]![week] = getHeatmapChar(intensity)
 
-      currentDate.setDate(currentDate.getDate() + 1)
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1)
     }
   }
 

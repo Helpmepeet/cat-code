@@ -465,7 +465,7 @@ export function mergeCacheWithNewStats(
 }
 
 /**
- * Extract the date portion (YYYY-MM-DD) from a Date object.
+ * Extract the UTC date portion (YYYY-MM-DD) used by terminal stats buckets.
  */
 export function toDateString(date: Date): string {
   const parts = date.toISOString().split('T')
@@ -477,18 +477,18 @@ export function toDateString(date: Date): string {
 }
 
 /**
- * Get today's date in YYYY-MM-DD format.
+ * Get today's UTC date in YYYY-MM-DD format.
  */
 export function getTodayDateString(): string {
   return toDateString(new Date())
 }
 
 /**
- * Get yesterday's date in YYYY-MM-DD format.
+ * Get yesterday's UTC date in YYYY-MM-DD format.
  */
 export function getYesterdayDateString(): string {
   const yesterday = new Date()
-  yesterday.setDate(yesterday.getDate() - 1)
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1)
   return toDateString(yesterday)
 }
 
