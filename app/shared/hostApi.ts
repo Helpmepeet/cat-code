@@ -418,6 +418,7 @@ export type SettingsWriteReadResult =
  * the id) so a subscriber can update without a follow-up read.
  */
 export type HostEvent =
+  | { type: 'notification-open'; appSessionId: SessionId; accounts: boolean }
   | { type: 'session-added'; session: SessionDescriptor }
   | { type: 'session-status'; session: SessionDescriptor }
   | { type: 'session-removed'; appSessionId: SessionId }

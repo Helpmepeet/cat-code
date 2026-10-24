@@ -112,7 +112,7 @@ import {
   type ToolResultProjection,
   type UserImageSource,
 } from './transcriptProjector.js'
-import { retryableTurn, turnFailureCopy } from './turnFailure.js'
+import { OPEN_ACCOUNTS_LABEL, RETRY_LABEL, claimTurnRetry, retryableTurn, turnFailureCopy, turnResultFailureCopy } from './turnFailure.js'
 import { retryWaitSeconds } from './retryClock.js'
 import { selectBashCardText } from './bashCommandLabel.js'
 import { withoutTodoRows } from './todoPlan.js'
@@ -427,7 +427,7 @@ export const TranscriptView = memo(function TranscriptView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
-  onRetryTurn?: (text: string) => void
+  onRetryTurn?: (text: string, resultId: string) => void
   /** Present only for an ordinary live pane. */
   onMessageAction?: MessageActionHandler
   /**
@@ -645,7 +645,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
-  onRetryTurn?: (text: string) => void
+  onRetryTurn?: (text: string, resultId: string) => void
   onMessageAction?: MessageActionHandler
   createdPeerNavigation?: CreatedPeerNavigation | null
   toolCardExpansionStore?: ToolCardExpansionStore | null
@@ -667,10 +667,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   const retryTarget = candidate && !retried.has(candidate.resultId) ? candidate : null
   const sendRetry = retryTarget && onRetryTurn
     ? () => {
-      if (retriedRef.current.has(retryTarget.resultId)) return
-      retriedRef.current.add(retryTarget.resultId)
+      if (!claimTurnRetry(retriedRef.current, retryTarget.resultId)) return
       setRetried(new Set(retriedRef.current))
-      onRetryTurn(retryTarget.text)
+      onRetryTurn(retryTarget.text, retryTarget.resultId)
     }
     : undefined
   const [filePathMenuState, setFilePathMenuState] = useState<{
@@ -6801,15 +6800,6 @@ const INJECTED_TURN_FALLBACK: InjectedTurnStyle = {
  * ResultRow: the turn/session-end seam. Tone + label encode completed vs
  * errored; duration and cost ride as middot-separated detail.
  */
-const RESULT_ERROR_LABELS = new Map([
-  ['error_max_turns', 'Stopped · max turns reached'],
-  ['error_max_budget_usd', 'Stopped · budget limit reached'],
-  [
-    'error_max_structured_output_retries',
-    'Stopped · max output retries',
-  ],
-])
-
 function ResultSeam({
   row,
   isError,
@@ -6838,19 +6828,13 @@ function ResultSeam({
       <TurnErrorCard
         title={copy.title}
         detail={copy.detail}
-        actionLabel={copy.action === 'accounts' ? 'Open Accounts' : 'Save diagnostics bundle'}
+        actionLabel={copy.action === 'accounts' ? OPEN_ACCOUNTS_LABEL : 'Save diagnostics bundle'}
         onAction={copy.action === 'accounts' ? openAccounts : copy.action === 'diagnostics' ? saveDiagnostics : undefined}
         onRetry={retryResultId === row.id ? retry : undefined}
       />
     )
   }
-  const label = RESULT_ERROR_LABELS.get(subtype) ?? 'Turn failed'
-  const detail = [
-    durationMs === undefined ? null : `${(durationMs / 1000).toFixed(1)}s`,
-    totalCostUsd === undefined ? null : `$${totalCostUsd.toFixed(4)}`,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(' · ')
+  const { title: label, detail } = turnResultFailureCopy({ ...row, durationMs, totalCostUsd })
   return (
     <Seam
       tone={isError ? 'danger' : 'success'}
@@ -6882,13 +6866,13 @@ function TurnErrorCard({
       </div>
       {onRetry || onAction ? (
         <div className="flex gap-1.5">
-          {onRetry && actionLabel !== 'Open Accounts' ? (
+          {onRetry && actionLabel !== OPEN_ACCOUNTS_LABEL ? (
             <button
               type="button"
               onClick={onRetry}
               className="rounded-md border border-shell-seam px-2 py-1 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent"
             >
-              Retry
+              {RETRY_LABEL}
             </button>
           ) : null}
           {onAction ? (
@@ -6900,13 +6884,13 @@ function TurnErrorCard({
               {actionLabel}
             </button>
           ) : null}
-          {onRetry && actionLabel === 'Open Accounts' ? (
+          {onRetry && actionLabel === OPEN_ACCOUNTS_LABEL ? (
             <button
               type="button"
               onClick={onRetry}
               className="rounded-md border border-shell-seam px-2 py-1 text-[11px] text-text-muted transition-colors hover:border-accent/50 hover:text-accent"
             >
-              Retry
+              {RETRY_LABEL}
             </button>
           ) : null}
         </div>

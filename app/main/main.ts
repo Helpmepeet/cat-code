@@ -56,6 +56,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  Notification,
   nativeImage,
   nativeTheme,
   screen,
@@ -240,6 +241,10 @@ import {
   type PeerRequestPlane,
 } from './peerRequestPlane.js'
 import { readGlassPreference, writeGlassPreference } from './glassPreference.js'
+import { readNotificationPreference, writeNotificationPreference } from './notificationPreference.js'
+import { registerNotificationPreferenceIpc, registerNotificationRetryIpc } from './notificationPreferenceIpc.js'
+import { createDesktopNotifications } from './desktopNotifications.js'
+import type { NotificationPreferences } from '../shared/notificationPreferences.js'
 import {
   clampWindowBounds,
   readWindowBounds,
@@ -688,6 +693,26 @@ const observedWorkspaceHandoffs = new Map<string, { generation: string; operatio
 let workspaceControl: WorkspaceHandoffControl | null = null
 let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null
 let mainWindow: BrowserWindow | null = null
+let desktopNotifications: ReturnType<typeof createDesktopNotifications> | null = null
+let notificationPreferences: NotificationPreferences | null = null
+let pendingNotificationOpen: Extract<HostEvent, { type: 'notification-open' }> | null = null
+
+function openNotificationSession(sessionId: SessionId, accounts = false): void {
+  const session = host?.listSessions().find(row => row.appSessionId === sessionId)
+  if (!session || !mainWindow || mainWindow.isDestroyed()) return
+  pendingNotificationOpen = { type: 'notification-open', appSessionId: sessionId, accounts }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  flushNotificationOpen()
+}
+
+function flushNotificationOpen(): void {
+  if (!pendingNotificationOpen || !attachmentGate.isAttached || !deliverableContents()) return
+  const session = host?.listSessions().find(row => row.appSessionId === pendingNotificationOpen!.appSessionId)
+  if (!session || (sendHostEvent({ type: 'session-status', session }) && sendHostEvent(pendingNotificationOpen))) pendingNotificationOpen = null
+}
+
 let registryForDebug: SessionRegistry | null = null
 /**
  * HOST-REQUEST-PLANE — the consumer of `host.request` (`peerRequestPlane.ts`).
@@ -1715,6 +1740,8 @@ function createWindow(): void {
     if (usageActivityGate?.takeSkippedInterval()) usageDriver?.refreshNow()
   }
   window.on('focus', catchUpSkippedRefreshes)
+  window.on('focus', () => desktopNotifications?.visibilityChanged())
+  window.on('blur', () => desktopNotifications?.visibilityChanged())
 
   // The pid a macOS crash report names. The renderer process does not exist
   // until a document loads, and it is already gone by `render-process-gone`, so
@@ -2133,6 +2160,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     }
     power?.receive(event.sessionId, frame)
     scheduledTasks?.receive(event.sessionId, frame)
+    desktopNotifications?.receive(event.sessionId, frame)
     // P4-6 title-rider: the sidecar's one-shot AI title is a sidecar→host signal,
     // not a renderer frame. Relay it to the durable registry (host is engine-free,
     // so it cannot pull the engine's title) and DO NOT forward it — the title
@@ -2309,6 +2337,7 @@ function wireHostEvents(h: Host): void {
     }
     power?.receiveHostEvent(event)
     scheduledTasks?.receiveHostEvent(event)
+    desktopNotifications?.receiveHostEvent(event)
     sendHostEvent(event)
     // The durable row now carries the completed turn; the in-memory pre-result
     // marker is needed only while that row still reads null.
@@ -2331,16 +2360,18 @@ function wireHostEvents(h: Host): void {
   })
 }
 
-function sendHostEvent(event: HostEvent): void {
+function sendHostEvent(event: HostEvent): boolean {
   // Host rows can remove/replace session state, so they are ordered barriers:
   // all earlier server deltas reach the document before the host transition.
   liveFrameDelivery?.flush()
   const contents = deliverableContents()
-  if (!contents) return
+  if (!contents) return false
   try {
     contents.send(CH_HOST_EVENT, event)
+    return true
   } catch (error) {
     handleRendererDeliveryFailure?.(error)
+    return false
   }
 }
 
@@ -2614,6 +2645,7 @@ function registerIpcHandlers(): void {
     if (usagePending) sendHostEvent({ type: 'usage-dashboard-loading' })
     const oauth = accountControl?.replay()
     if (oauth) sendHostEvent({ type: 'account-oauth', provider: oauth.provider, progress: oauth.progress })
+    flushNotificationOpen()
   })
 
   ipcMain.on(CH_DELIVERY_ACK, (_e, payload: unknown) => {
@@ -2780,6 +2812,18 @@ function registerIpcHandlers(): void {
     if (!isMainWindowSender(event) || typeof enabled !== 'boolean') return
     writeGlassPreference(app.getPath('userData'), enabled)
     mainWindow?.setBackgroundColor(enabled ? '#00000000' : '#09090b')
+  })
+  registerNotificationPreferenceIpc<IpcMainInvokeEvent>({
+    handle: (channel, listener) => ipcMain.handle(channel, listener),
+    isTrustedSender: isMainWindowSender,
+    read: () => notificationPreferences ??= readNotificationPreference(app.getPath('userData')),
+    write: value => notificationPreferences = writeNotificationPreference(app.getPath('userData'), value),
+    changed: () => desktopNotifications?.preferencesChanged(),
+  })
+  registerNotificationRetryIpc<IpcMainInvokeEvent>({
+    handle: (channel, listener) => ipcMain.handle(channel, listener),
+    isTrustedSender: isMainWindowSender,
+    retry: (id, resultId) => desktopNotifications?.retry(id, resultId) ?? false,
   })
 
   /**
@@ -3039,8 +3083,10 @@ function registerIpcHandlers(): void {
   // malformed payload yields an empty set, which protects nothing and parks
   // normally: this hint may only ever SUPPRESS a park, never cause one, and never
   // reaches a sidecar.
-  ipcMain.on(CH_HOST_VISIBLE_SESSIONS, (_e, payload: unknown) => {
+  ipcMain.on(CH_HOST_VISIBLE_SESSIONS, (event, payload: unknown) => {
+    if (!isMainWindowSender(event)) return
     visibleSessions = parseVisibleSessions(payload)
+    desktopNotifications?.visibilityChanged()
   })
 
   registerHostControlPlane()
@@ -4509,6 +4555,19 @@ function generateRequestId(): string {
  */
 function ensureHost(): Host {
   if (host) return host
+  notificationPreferences ??= readNotificationPreference(app.getPath('userData'))
+  desktopNotifications?.dispose()
+  desktopNotifications = createDesktopNotifications({
+    getSession: id => host?.listSessions().find(row => row.appSessionId === id),
+    isVisible: id => mainWindow?.isFocused() === true && visibleSessions.has(id),
+    getPreferences: () => notificationPreferences!,
+    createNotification: options => Notification.isSupported() ? new Notification(options) : null,
+    setBadge: text => app.dock?.setBadge(text),
+    openSession: openNotificationSession,
+    send: (id, message) => forward(id, message) === null,
+    onError: () => logOperational('diagnostic', 'warn', { source: 'notifications', reason: 'delivery_failed' }),
+  })
+  desktopNotifications.preferencesChanged()
   supervisor = createSupervisor()
   const currentSupervisor = supervisor
   lidWorkObserver?.stop()
@@ -4929,6 +4988,9 @@ function shutdownRuntime(): void {
  * covers the window where a driver has not been armed yet.
  */
 function stopBackgroundDrivers(): void {
+  desktopNotifications?.dispose()
+  desktopNotifications = null
+  pendingNotificationOpen = null
   accountControl?.dispose()
   accountControl = null
   startupTimers.cancelAll()

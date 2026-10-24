@@ -124,28 +124,8 @@ export function parsePlanSteps(plan: string | null): string[] {
   return steps
 }
 
-/**
- * The two plan-approval modes intentionally offered by this menu. The general
- * permission-mode picker also supports `bypassPermissions`, but this approval
- * menu keeps its smaller two-choice flow.
- */
-export type PlanApprovalMode = 'default' | 'acceptEdits'
-
-export type PlanApprovalOption = {
-  mode: PlanApprovalMode
-  label: string
-  description: string
-}
-
-export const PLAN_APPROVE_OPTIONS: PlanApprovalOption[] = [
-  {
-    mode: 'acceptEdits',
-    label: 'Approve & auto-accept edits',
-    description: 'Run the plan, applying edits automatically.',
-  },
-  {
-    mode: 'default',
-    label: 'Approve & ask per edit',
-    description: 'Run, but confirm each edit/command.',
-  },
-]
+export {
+  PLAN_APPROVE_OPTIONS,
+  type PlanApprovalMode,
+  type PlanApprovalOption,
+} from '../../shared/planApproval.js'

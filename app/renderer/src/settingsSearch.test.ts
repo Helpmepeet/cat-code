@@ -2,6 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import { selectSettingsSearchResults } from './settingsSearch.js'
 
 describe('settings search', () => {
+  test('notification controls route to Appearance with app scope', () => {
+    expect(selectSettingsSearchResults('notifications', 'project').map(result => [result.key, result.category, result.scope]))
+      .toEqual([['notify', 'appearance', 'app'], ['dockBadge', 'appearance', 'app']])
+  })
   test('finds a control outside the current scope and routes to its owner', () => {
     expect(selectSettingsSearchResults('code theme', 'project')).toEqual([
       expect.objectContaining({

@@ -266,6 +266,7 @@ function assembleBundle(): void {
   plistSet(plist, 'CFBundleName', APP_NAME)
   plistSet(plist, 'CFBundleDisplayName', APP_NAME)
   plistSet(plist, 'CFBundleIdentifier', BUNDLE_ID)
+  plistSet(plist, 'NSUserNotificationAlertStyle', 'alert')
   // 0.0.0 per LOCAL-USE-CONTRACT §3: the commit id is the identity of record,
   // and these keys must not be dressed up to look like a release.
   plistSet(plist, 'CFBundleShortVersionString', '0.0.0')

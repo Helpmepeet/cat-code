@@ -13,6 +13,7 @@ import {
   type FormEvent,
 } from 'react'
 import { getBridge } from './bridge.js'
+import { parseNotificationOpenEvent } from '../../shared/notificationNavigation.js'
 import { requestSessionMove } from './sessionMoveAction.js'
 import type { ProjectRouteSnapshot } from '../../shared/projectRouting.js'
 import { buildDebugShellStateSnapshot } from './debugStateReport.js'
@@ -1346,6 +1347,18 @@ export function App() {
     // read and the subscription. The snapshot is then folded as a BASELINE that
     // never clobbers a newer live event already applied (reduceShell hydrate).
     const unsubscribe = bridge.subscribeHost(event => {
+      if (event.type === 'notification-open') {
+        const navigation = parseNotificationOpenEvent(event)
+        if (!navigation) return
+        const sessionId = navigation.appSessionId
+        pendingExplicitSessionRef.current = null
+        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+        setShownSessionId(sessionId)
+        setActiveSessionId(sessionId)
+        dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
+        if (navigation.accounts) dispatchTabNavigation({ type: 'open-page', page: 'accounts' })
+        return
+      }
       if (event.type === 'project-routing') {
         routeEventsSeen.add(event.appSessionId)
         const next = { ...projectRoutesRef.current }
@@ -3164,6 +3177,7 @@ export function App() {
     sessionId: SessionId,
     event: FormEvent<HTMLFormElement> | null,
     retryText?: string,
+    retryResultId?: string,
   ): void {
     event?.preventDefault()
     const submittedDraft = selectPromptDraft(promptDraftsRef.current, sessionId)
@@ -3191,6 +3205,12 @@ export function App() {
       submittedDraft.trim() || images.length > 0 || file !== null ||
       retrySendBlocked(sessionConnection, sessionLog.inputEnabled)
     )) return
+    if (retryResultId !== undefined && sessionConnection.status === 'ready') {
+      void getBridge().retryTurn(sessionId, retryResultId).catch(error => {
+        toast(errorMessage(error), { tone: 'danger' })
+      })
+      return
+    }
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
@@ -4146,7 +4166,7 @@ export function App() {
 	              setSessionPrompt(sessionId, value, reason)
 	            }
 	            submit={event => submitSession(sessionId, event)}
-	            retryTurn={text => submitSession(sessionId, null, text)}
+	            retryTurn={(text, resultId) => submitSession(sessionId, null, text, resultId)}
 	            mentionItems={selectAgentMentionItems(
 	              selectAgentConfigSnapshot(agentConfig, sessionId),
 	            )}

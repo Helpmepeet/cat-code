@@ -17,6 +17,7 @@ import type { LidModeView } from '../shared/lidClosed.js'
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import { parseNotificationPreferences, type NotificationPreferences } from '../shared/notificationPreferences.js'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import type { ProjectRouteCommand, ProjectRouteSnapshot } from '../shared/projectRouting.js'
 import type {
@@ -98,6 +99,9 @@ import {
   CH_RENDERER_FAULT,
   CH_SET_APPEARANCE,
   CH_SET_GLASS_MODE,
+  CH_GET_NOTIFICATION_PREFERENCES,
+  CH_SET_NOTIFICATION_PREFERENCES,
+  CH_RETRY_TURN,
   CH_OPEN_LOGS,
   CH_SAVE_DIAGNOSTICS,
   CH_DELIVERY_HEALTH_PROBE,
@@ -558,6 +562,21 @@ const bridge: CatCodeBridge = {
     if (typeof enabled !== 'boolean') return
     sendGuard.assertAllowed({ enabled })
     ipcRenderer.send(CH_SET_GLASS_MODE, enabled)
+  },
+  getNotificationPreferences(): Promise<NotificationPreferences> {
+    sendGuard.assertAllowed({})
+    return ipcRenderer.invoke(CH_GET_NOTIFICATION_PREFERENCES)
+  },
+  setNotificationPreferences(value: NotificationPreferences): Promise<NotificationPreferences> {
+    const preferences = parseNotificationPreferences(value)
+    if (!preferences) return Promise.reject(new TypeError('Invalid notification preferences'))
+    sendGuard.assertAllowed(preferences)
+    return ipcRenderer.invoke(CH_SET_NOTIFICATION_PREFERENCES, preferences)
+  },
+  retryTurn(sessionId: SessionId, resultId: string): Promise<boolean> {
+    const payload = { sessionId, resultId }
+    sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_RETRY_TURN, payload)
   },
   refreshAccountsPool(): void {
     sendGuard.assertAllowed({ refreshAccountsPool: true })

@@ -130,7 +130,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(67)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(70)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -173,12 +173,16 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
 test('preload and main ride one shared channel list, not two hand-copied ones', () => {
   const channels = readChannelNames()
   const preload = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
-  const main = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+  const mainEntry = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+  const notificationIpc = readFileSync(new URL('../main/notificationPreferenceIpc.ts', import.meta.url), 'utf8')
+  const main = mainEntry + notificationIpc
+  expect(mainEntry).toContain('registerNotificationPreferenceIpc<IpcMainInvokeEvent>({')
+  expect(mainEntry).toContain('registerNotificationRetryIpc<IpcMainInvokeEvent>({')
 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(72)
+  expect(names.length).toBe(75)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -274,8 +278,11 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(38)
+  expect(invokeChannels.length).toBe(41)
   const allowed = new Set([
+    'CH_GET_NOTIFICATION_PREFERENCES',
+    'CH_SET_NOTIFICATION_PREFERENCES',
+    'CH_RETRY_TURN',
     'CH_LID_READ',
     'CH_LID_COMMAND',
     'CH_SCHEDULED_TASKS_READ',

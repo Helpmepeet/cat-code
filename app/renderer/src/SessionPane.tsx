@@ -2972,7 +2972,7 @@ type SessionPaneProps = {
   setPermissionMode: (mode: PermissionSetModeMode) => void
   setPrompt: (value: string, reason?: DraftWriteReason) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
-  retryTurn?: (text: string) => void
+  retryTurn?: (text: string, resultId: string) => void
   /** Real @-mention sources for this session (agents; files need a read-seam). */
   mentionItems: MentionItem[]
   /** Collapsed pastes held aside for this session, oldest first. */

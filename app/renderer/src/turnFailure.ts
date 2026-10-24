@@ -1,5 +1,33 @@
 import type { NestedTranscriptRow, ResultRow } from './transcriptProjector.js'
 
+export const OPEN_ACCOUNTS_LABEL = 'Open Accounts'
+export const RETRY_LABEL = 'Retry'
+export const USAGE_LIMIT_TITLE = 'Usage limit reached'
+export const RESULT_ERROR_LABELS = new Map([
+  ['error_max_turns', 'Stopped · max turns reached'],
+  ['error_max_budget_usd', 'Stopped · budget limit reached'],
+  ['error_max_structured_output_retries', 'Stopped · max output retries'],
+])
+
+export function turnResultFailureCopy(row: Pick<ResultRow, 'subtype' | 'providerCode' | 'providerMessage' | 'errorStatus' | 'durationMs' | 'totalCostUsd'>) {
+  if (row.subtype === 'error_auth_required' || row.subtype === 'error_during_execution') return turnFailureCopy(row)
+  return {
+    title: RESULT_ERROR_LABELS.get(row.subtype) ?? 'Turn failed',
+    detail: [
+      row.durationMs === undefined ? null : `${(row.durationMs / 1000).toFixed(1)}s`,
+      row.totalCostUsd === undefined ? null : `$${row.totalCostUsd.toFixed(4)}`,
+    ].filter((part): part is string => part !== null).join(' · '),
+    action: null,
+  }
+}
+
+/** Claim before sending: failed transport must not permit a second resend. */
+export function claimTurnRetry(claimed: Set<string>, resultId: string): boolean {
+  if (claimed.has(resultId)) return false
+  claimed.add(resultId)
+  return true
+}
+
 export function turnFailureCopy(row: Pick<ResultRow, 'subtype' | 'providerCode' | 'providerMessage' | 'errorStatus'>) {
   const message = row.providerMessage ?? ''
   if (row.subtype === 'error_auth_required' || row.providerCode === 'authentication_failed') {
@@ -9,7 +37,7 @@ export function turnFailureCopy(row: Pick<ResultRow, 'subtype' | 'providerCode' 
     return { title: 'The service is overloaded', detail: '', action: null }
   }
   if (/^(?:Codex (?:account )?)?usage limit reached\b/i.test(message) || /\busage_limit_reached\b/.test(message)) {
-    return { title: 'Usage limit reached', detail: 'Switch to another account to continue.', action: 'accounts' as const }
+    return { title: USAGE_LIMIT_TITLE, detail: 'Switch to another account to continue.', action: 'accounts' as const }
   }
   const detail = message
     .replace(/(?:[.·]\s*)?(?:Please\s+)?(?:run|use)\s+\/(?:login|switch-account|accounts)\b[^\n]*/gi, '')

@@ -4,6 +4,7 @@ import { getCwd } from '../../src/utils/cwd.js'
 import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import type { WorkspaceObserver } from './workspaceObservation.js'
 import { isLidWorkControl } from '../shared/lidClosed.js'
+import { PLAN_APPROVE_OPTIONS } from '../shared/planApproval.js'
 import {
   isWorkStatusRequest,
   WORK_STATUS_COUNT_LIMIT,
@@ -1549,6 +1550,10 @@ export class SidecarServer {
       [
         ['permission.setMode'],
         (server, connection, message) => server.handleSetMode(connection, message),
+      ],
+      [
+        ['notification.planApprove'],
+        (server, connection, message) => server.handleNotificationPlanApprove(connection, message),
       ],
       // IDLE-PARK (decisions/IDLE-PARK.md §2/§3). The gate + latch live in the
       // handler because only the sidecar knows the true turn/permission/task
@@ -4376,6 +4381,47 @@ export class SidecarServer {
     }
   }
 
+  private handleNotificationPlanApprove(
+    connection: Connection,
+    rawMessage: unknown,
+  ): void {
+    const requestId = (rawMessage as { requestId?: unknown }).requestId
+    const parsed = notificationPlanApproveMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(connection, typeof requestId === 'string' ? requestId : undefined,
+        'bad_request', parsed.error.issues[0]?.message ?? 'invalid notification.planApprove', false)
+      return
+    }
+    const message = parsed.data
+    const pending = this.controller.getPendingPermissionRequests()
+      .find(request => request.requestId === message.requestId)
+    if (!pending) {
+      this.sendError(connection, message.requestId, 'permission_not_found',
+        'Permission request is no longer pending', false)
+      return
+    }
+    if (pending.request.tool_name !== 'ExitPlanMode') {
+      this.sendError(connection, message.requestId, 'bad_request',
+        'notification.planApprove is only valid for an ExitPlanMode request', false)
+      return
+    }
+    const permissions = this.requireDomain(connection, message.requestId, this.permissions, 'permission')
+    if (!permissions) return
+    const option = PLAN_APPROVE_OPTIONS[message.optionIndex]!
+    const response = this.sanitizePermissionResponse(connection, message.requestId,
+      pending.request, { behavior: 'allow', updatedInput: {} })
+    if (!response) return
+    // No await between the exact pending lookup, mode transition and resolution:
+    // an expired banner must never change mode or answer a replacement request.
+    try {
+      permissions.setMode(option.mode)
+      this.controller.respondToPermissionRequest(message.requestId, response)
+    } catch (error) {
+      this.sendError(connection, message.requestId, 'internal_error',
+        error instanceof Error ? error.message : String(error), false)
+    }
+  }
+
   private handlePermissionResponse(
     connection: Connection,
     message: PermissionResponseMessage,
@@ -6444,6 +6490,7 @@ function checkStrictKeys(message: unknown): string | null {
     // inner `{optionIndices, other}` shape is closed by the sidecar-local Zod
     // schema below (checkStrictKeys guards only top-level keys).
     ['askUserQuestion.answer', new Set(['type', 'requestId', 'answers'])],
+    ['notification.planApprove', new Set(['type', 'requestId', 'optionIndex'])],
     // Account lifecycle verbs are app-owned; see
     // `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md` and
     // `docs/migration/decisions/SECURITY-MINIMUM.md`. Each key set is the exact
@@ -6832,6 +6879,12 @@ const askUserQuestionAnswerSchema = z
       .optional(),
   })
   .strict()
+
+const notificationPlanApproveMessageSchema = z.object({
+  type: z.literal('notification.planApprove'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  optionIndex: z.number().int().min(0).max(PLAN_APPROVE_OPTIONS.length - 1),
+}).strict()
 
 const askUserQuestionAnswerMessageSchema = z.object({
   type: z.literal('askUserQuestion.answer'),

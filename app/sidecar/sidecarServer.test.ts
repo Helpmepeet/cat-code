@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { PLAN_APPROVE_OPTIONS } from '../shared/planApproval.js'
 import { observeQueryTiming, queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import { installLidWorkRuntime } from '../../src/services/lidClosedWork.js'
 /**
@@ -4722,6 +4723,107 @@ test('C1 — a selection resolves against ITS OWN request, not another pending o
 /* ------------------------------------------------------------------------- *
  * C5 — askUserQuestion.answer (decisions/ASK-USER-QUESTION-ANSWER.md, P4-20)
  * ------------------------------------------------------------------------- */
+
+function notificationPlanAdapter(
+  toolName: string,
+  onResolved: (response: AppPermissionResponse) => void,
+): AppSessionControllerAdapter {
+  return {
+    async *runTurn({ onPermissionRequest }) {
+      onResolved(await onPermissionRequest({
+        requestId: 'plan-1',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: toolName,
+          input: { plan: 'Engine plan', allowedPrompts: [] },
+          tool_use_id: 'toolu_plan',
+        },
+      }))
+    },
+  }
+}
+
+for (const [optionIndex, option] of PLAN_APPROVE_OPTIONS.entries()) {
+  test(`notification plan approval resolves real pending request with ${option.mode}`, async () => {
+    let resolved: AppPermissionResponse | null = null
+    const controller = new AppSessionController(notificationPlanAdapter('ExitPlanMode', r => { resolved = r }))
+    const store = makePermissionStore({ mode: 'plan' })
+    const domain = createSidecarPermissionDomain(store)
+    const modes: string[] = []
+    const { server, conn, received } = connect(controller, {
+      permissions: { ...domain, setMode(mode) { modes.push(mode); domain.setMode(mode) } },
+    })
+    void controller.submit('go')
+    await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+    const frame = clientFrame({ type: 'notification.planApprove', requestId: 'plan-1', optionIndex } as never)
+    server.handleData(conn, frame)
+    expect(controller.getPendingPermissionRequests()).toHaveLength(0)
+    expect(domain.getToolPermissionContext().mode).toBe(option.mode)
+    await waitFor(() => resolved !== null)
+    expect(resolved as AppPermissionResponse | null).toEqual({
+      behavior: 'allow', updatedInput: { plan: 'Engine plan', allowedPrompts: [] },
+    })
+    // A second callback must not change mode after another surface has won.
+    domain.setMode('plan')
+    server.handleData(conn, frame)
+    expect(domain.getToolPermissionContext().mode).toBe('plan')
+    expect(modes).toEqual([option.mode])
+    expect(received.some(f => f.kind === 'error' && f.code === 'permission_not_found')).toBe(true)
+  })
+}
+
+test('notification plan approval rejects malformed and replaced requests without mode changes', async () => {
+  const controller = new AppSessionController(notificationPlanAdapter('ExitPlanMode', () => {}))
+  const store = makePermissionStore({ mode: 'plan' })
+  const domain = createSidecarPermissionDomain(store)
+  const modes: string[] = []
+  const { server, conn, received } = connect(controller, {
+    permissions: { ...domain, setMode(mode) { modes.push(mode); domain.setMode(mode) } },
+  })
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  const pending = controller.getPendingPermissionRequests()
+  const base = { type: 'notification.planApprove', requestId: 'plan-1', optionIndex: 0 }
+  for (const message of [
+    ...[-1, 2, 0.5, '0', null].map(optionIndex => ({ ...base, optionIndex })),
+    { ...base, optionIndex: undefined },
+    { ...base, mode: 'bypassPermissions' },
+    { ...base, updatedPermissions: [] },
+    { ...base, requestId: 'old-plan' },
+    { ...base, requestId: '' },
+    { ...base, requestId: 'x'.repeat(MAX_TEXT_FIELD_CHARS + 1) },
+  ]) {
+    const before = received.filter(f => f.kind === 'error').length
+    server.handleData(conn, clientFrame(message as never))
+    expect(received.filter(f => f.kind === 'error')).toHaveLength(before + 1)
+    expect(controller.getPendingPermissionRequests()).toEqual(pending)
+    expect(domain.getToolPermissionContext().mode).toBe('plan')
+    expect(modes).toEqual([])
+  }
+  controller.abort()
+})
+
+for (const toolName of ['Bash', 'ExitPlanMode']) {
+  test(`notification plan approval fails closed for ${toolName} without an available domain or valid tool`, async () => {
+    const controller = new AppSessionController(notificationPlanAdapter(toolName, () => {}))
+    const domain = createSidecarPermissionDomain(makePermissionStore({ mode: 'plan' }))
+    const modes: string[] = []
+    const { server, conn, received } = connect(controller, toolName === 'Bash' ? {
+      permissions: { ...domain, setMode(mode) { modes.push(mode) } },
+    } : {})
+    void controller.submit('go')
+    await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+    server.handleData(conn, clientFrame({
+      type: 'notification.planApprove', requestId: 'plan-1', optionIndex: 0,
+    } as never))
+    expect(controller.getPendingPermissionRequests()).toHaveLength(1)
+    expect(modes).toEqual([])
+    expect(domain.getToolPermissionContext().mode).toBe('plan')
+    expect(received.some(f => f.kind === 'error' &&
+      f.code === (toolName === 'Bash' ? 'bad_request' : 'internal_error'))).toBe(true)
+    controller.abort()
+  })
+}
 
 const ASK_QUESTIONS = [
   {

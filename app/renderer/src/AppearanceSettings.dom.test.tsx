@@ -12,6 +12,8 @@ import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { memoryStorage } from './viewPreferenceStorageFixture.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { PROSE_PREVIEW_CHUNKS } from './proseArrivalPreviewModel.js'
+import { NotificationPreferencesProvider } from './NotificationPreferencesProvider.js'
+import type { NotificationPreferences } from '../../shared/notificationPreferences.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -106,6 +108,41 @@ test('radio groups support arrows, wrapping, Home and End with one keyboard stop
     expect(harness.document.activeElement).toBe(current())
     expect(tree.container.querySelectorAll('[aria-label="Code theme"] [tabindex="0"]')).toHaveLength(1)
   }
+})
+
+test('notifications use main preferences, persist controls, and restore only their section', async () => {
+  let saved: NotificationPreferences = { notify: 'all', dockBadge: true }
+  const writes: NotificationPreferences[] = []
+  const bridge = {
+    getNotificationPreferences: async () => saved,
+    setNotificationPreferences: async (value: NotificationPreferences) => {
+      saved = value
+      writes.push(value)
+      return value
+    },
+  }
+  const tree = await harness.mount(<NotificationPreferencesProvider bridge={bridge}>{preferences()}</NotificationPreferencesProvider>)
+  expect(Array.from(tree.container.querySelectorAll('.appearance-section > .appearance-section-heading h3')).map(node => node.textContent)).toEqual(['Window', 'Notifications', 'Conversation'])
+  expect(choice(tree.container, 'Notify', 'all').getAttribute('aria-checked')).toBe('true')
+  await click(choice(tree.container, 'Notify', 'waiting'))
+  await click(tree.container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Dock badge"]')!)
+  expect(saved).toEqual({ notify: 'waiting', dockBadge: false })
+  await click(choice(tree.container, 'Accent color', 'blue'))
+  await click(tree.container.querySelector<HTMLButtonElement>('[aria-label="Restore notifications defaults"]')!)
+  expect(saved).toEqual({ notify: 'all', dockBadge: true })
+  expect(choice(tree.container, 'Accent color', 'blue').getAttribute('aria-checked')).toBe('true')
+  expect(writes).toHaveLength(3)
+})
+
+test('notification read failure preserves defaults and write failure restores confirmed preferences', async () => {
+  const bridge = {
+    getNotificationPreferences: async (): Promise<NotificationPreferences> => { throw new Error('unavailable') },
+    setNotificationPreferences: async (): Promise<NotificationPreferences> => { throw new Error('unavailable') },
+  }
+  const tree = await harness.mount(<NotificationPreferencesProvider bridge={bridge}><AppearanceSettings /></NotificationPreferencesProvider>)
+  expect(choice(tree.container, 'Notify', 'all').getAttribute('aria-checked')).toBe('true')
+  await click(choice(tree.container, 'Notify', 'off'))
+  expect(choice(tree.container, 'Notify', 'all').getAttribute('aria-checked')).toBe('true')
 })
 
 test('Replay and a new arrival choice restart delivery through the real word marker', async () => {

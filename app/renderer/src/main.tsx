@@ -5,6 +5,7 @@ import { App } from './App.js'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { ColorSchemeProvider } from './ColorSchemeProvider.js'
 import { GlassModeProvider } from './GlassModeProvider.js'
+import { NotificationPreferencesProvider } from './NotificationPreferencesProvider.js'
 import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { ToastHost } from './ToastHost.js'
 import { ProseArrivalProvider } from './ProseArrivalProvider.js'
@@ -61,7 +62,9 @@ createRoot(root).render(
                   <ToolsExpandedProvider>
                     <ToolCardStyleProvider>
                       <ProseArrivalProvider>
-                        <App />
+                        <NotificationPreferencesProvider>
+                          <App />
+                        </NotificationPreferencesProvider>
                       </ProseArrivalProvider>
                     </ToolCardStyleProvider>
                   </ToolsExpandedProvider>

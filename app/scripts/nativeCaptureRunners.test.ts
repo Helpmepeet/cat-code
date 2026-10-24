@@ -3,6 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdir
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
+import { REBRAND_RECIPE } from './prepare-dev-electron.js'
 
 const outcomes = ['prepare-failure', 'no-launch', 'running-timeout', 'start-failure', 'reused-success', 'forged-exit'] as const
 const cases = ['visual-acceptance', 'run-hardening-smoke'].flatMap(runner => outcomes.map(outcome => ({ runner, outcome })))
@@ -14,7 +15,7 @@ test.each(cases)('$runner native lifecycle on $outcome ignores stale output and 
   for (const dir of [scripts, temp, output, bin, join(root, 'node_modules', '.bin'), join(root, 'node_modules', 'electron', 'dist', 'Electron.app'), join(root, '.dev-electron', 'Cat Code Dev.app')]) mkdirSync(dir, { recursive: true })
   for (const file of [`${runner}.ts`, 'devLauncher.ts', 'prepare-dev-electron.ts', 'visualAcceptanceFixture.ts', 'nativeCaptureLifetime.ts']) copyFileSync(new URL(`./${file}`, import.meta.url), join(scripts, file))
   writeFileSync(join(root, 'node_modules', 'electron', 'package.json'), JSON.stringify({ version: '0.0.0' }))
-  writeFileSync(join(root, '.dev-electron', '.electron-version'), '0.0.0 r2')
+  writeFileSync(join(root, '.dev-electron', '.electron-version'), `0.0.0 r${REBRAND_RECIPE}`)
   writeFileSync(join(root, 'node_modules', '.bin', 'electron'), '#!/bin/sh\nexit 99\n', { mode: 0o755 })
   writeFileSync(join(scripts, 'visual-acceptance-driver.ts'), 'export {}\n')
   writeFileSync(join(scripts, 'hardening-smoke.ts'), 'export {}\n')

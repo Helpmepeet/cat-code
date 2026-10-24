@@ -7,6 +7,8 @@ import { DEFAULT_PROSE_ARRIVAL, PROSE_ARRIVALS, PROSE_ARRIVAL_LABELS, ProseArriv
 import { DEFAULT_REASONING_LAYOUT, REASONING_LAYOUT_MODES, ReasoningLayoutContext } from './reasoningLayout.js'
 import { DEFAULT_TOOL_CARD_STYLE, TOOL_CARD_STYLES, TOOL_CARD_STYLE_LABELS, ToolCardStyleContext } from './toolCardStyle.js'
 import { DEFAULT_TOOLS_EXPANDED, ToolsExpandedContext } from './toolsExpanded.js'
+import { DEFAULT_NOTIFICATION_PREFERENCES } from '../../shared/notificationPreferences.js'
+import { NotificationPreferencesContext } from './notificationPreferences.js'
 import { ToggleSwitch } from './SettingsEditors.js'
 import { ConversationAppearancePreview } from './ConversationAppearancePreview.js'
 import './appearanceSettings.css'
@@ -90,6 +92,7 @@ export function AppearanceSettings() {
   const { expanded, setExpanded } = useContext(ToolsExpandedContext)
   const { mode, setMode } = useContext(ReasoningLayoutContext)
   const { theme, setTheme } = useContext(CodeThemeContext)
+  const { preferences, setPreferences } = useContext(NotificationPreferencesContext)
   const [replay, setReplay] = useState(0)
 
   return (
@@ -119,6 +122,20 @@ export function AppearanceSettings() {
           <div className="appearance-row" data-setting-key="glass" tabIndex={-1}>
             <span className="appearance-row-label">Frosted window</span>
             <div data-setting-control><ToggleSwitch label="Frosted window" value={glass} onChange={setGlass} /></div>
+          </div>
+        </div>
+      </Section>
+      <Section title="Notifications" modified={preferences.notify !== DEFAULT_NOTIFICATION_PREFERENCES.notify || preferences.dockBadge !== DEFAULT_NOTIFICATION_PREFERENCES.dockBadge} onReset={() => setPreferences({ ...DEFAULT_NOTIFICATION_PREFERENCES })}>
+        <div className="appearance-controls">
+          <div className="appearance-row" data-setting-key="notify" tabIndex={-1}>
+            <span className="appearance-row-label">Notify</span>
+            <ChoiceGroup label="Notify" options={['off', 'waiting', 'all'] as const} value={preferences.notify} onChange={notify => setPreferences({ ...preferences, notify })}>
+              {key => key === 'off' ? 'Off' : key === 'waiting' ? 'Waiting' : 'All'}
+            </ChoiceGroup>
+          </div>
+          <div className="appearance-row" data-setting-key="dockBadge" tabIndex={-1}>
+            <span className="appearance-row-label">Dock badge</span>
+            <div data-setting-control><ToggleSwitch label="Dock badge" value={preferences.dockBadge} onChange={dockBadge => setPreferences({ ...preferences, dockBadge })} /></div>
           </div>
         </div>
       </Section>

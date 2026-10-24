@@ -17,6 +17,7 @@ import type { HostEvent } from '../shared/hostApi.js'
 const CH_SERVER_FRAME = 'catcode:server-frame'
 const CH_HOST_EVENT = 'catcode:host:event'
 const HARDENING_SESSION_ID = 'hardening-smoke-session'
+const HARDENING_SESSION_TITLE = 'Hardening test'
 const HARDENING_MARKER = 'catcode-production-hardening-marker'
 
 // The source-tree Electron launch is normally "development". Override the
@@ -122,7 +123,7 @@ const hostSessionAdded: HostEvent = {
     appSessionId: HARDENING_SESSION_ID,
     engineSessionId: 'hardening-engine-session',
     cwd: '/tmp/catcode-hardening',
-    title: null,
+    title: HARDENING_SESSION_TITLE,
     forked: false,
     titleUpdatedAt: null,
     status: 'ready',
@@ -174,6 +175,12 @@ async function runProductionHardeningSmoke(
 
     const deadline = Date.now() + 5_000
     while (Date.now() < deadline) {
+      // Roster additions do not select a pane, and startup may still select its
+      // own fresh chat. Exercise the probe through the ordinary tab click.
+      await window.webContents.executeJavaScript(`(() => {
+        const tab = document.querySelector(${JSON.stringify(`[role="tab"][aria-label^="Session ${HARDENING_SESSION_TITLE},"]`)})
+        if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click()
+      })()`)
       // Re-assert the trusted/non-first-run state each iteration so it reliably
       // post-dates the real attach snapshots (last-write-wins), clearing the
       // P4-15 startup gate so the crafted-Markdown transcript can render.
@@ -336,6 +343,9 @@ async function runProductionHardeningSmoke(
       // Glass mode is a fixed main-only preference sender. Its bounded boolean
       // preserves a solid native background during renderer paint gaps when off.
       'setGlassMode',
+      'getNotificationPreferences',
+      'setNotificationPreferences',
+      'retryTurn',
       // Freeze telemetry — the renderer reports that React committed a render.
       // Argument-free and IPC-free: it only increments a preload-local counter
       // (with an overflow guard) that the health probe reads at sample time, so

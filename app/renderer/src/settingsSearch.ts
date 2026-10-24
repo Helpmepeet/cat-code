@@ -72,6 +72,8 @@ const appEntries: readonly SearchEntry[] = [
   { category: 'appearance', key: 'scheme', label: 'Appearance', description: 'Light or dark for the whole window.', aliases: 'color scheme theme' },
   { category: 'appearance', key: 'glass', label: 'Frosted window', description: 'Show the desktop through the window as a blur on macOS.' },
   { category: 'appearance', key: 'accent', label: 'Accent color', description: 'Color for active navigation, selections, and switches.' },
+  { category: 'appearance', key: 'notify', label: 'Notify', description: 'OS notifications: Off, Waiting, or All.', aliases: 'notifications alerts' },
+  { category: 'appearance', key: 'dockBadge', label: 'Dock badge', description: 'Show a badge on the Dock icon.', aliases: 'notifications' },
   { category: 'appearance', key: 'arrival', label: 'Text arrival', description: 'How a reply appears as it arrives.' },
   { category: 'appearance', key: 'toolCardStyle', label: 'Tool calls', description: 'How each tool call is drawn in the transcript.' },
   { category: 'appearance', key: 'toolsExpanded', label: 'Tools open by default', description: 'Open every tool card as it arrives.' },

@@ -28,7 +28,7 @@ const DEV_APP_NAME = 'Cat Code Dev'
  * the Electron version alone, so editing this recipe left every existing
  * `.dev-electron` bundle stale and the change silently did nothing.
  */
-const REBRAND_RECIPE = 2
+export const REBRAND_RECIPE = 3
 const sourceApp = join(appRoot, 'node_modules', 'electron', 'dist', 'Electron.app')
 const cacheDir = join(appRoot, '.dev-electron')
 const targetApp = join(cacheDir, `${DEV_APP_NAME}.app`)
@@ -95,6 +95,7 @@ export function prepareDevElectron(): string | null {
     for (const key of REBRANDED_PLIST_KEYS) {
       run('/usr/libexec/PlistBuddy', ['-c', `Set :${key} ${DEV_APP_NAME}`, plist])
     }
+    run('/usr/libexec/PlistBuddy', ['-c', 'Add :NSUserNotificationAlertStyle string alert', plist])
     // Editing Info.plist invalidates the ad-hoc signature Electron ships with
     // (it was ad-hoc/unsigned already — see codesign -dv on the stock bundle —
     // so re-signing ad-hoc doesn't change its trust level).

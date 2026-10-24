@@ -59,6 +59,7 @@
 // isolation without dragging in the engine's Bun runtime graph. The sidecar,
 // which genuinely runs engine code, imports the real modules directly.
 import type { AppSessionEvent } from '@cat-code/engine/session-events'
+import type { NotificationPreferences } from './notificationPreferences.js'
 import type { LidWorkControl, LidWorkSnapshot, LidClosedBridge } from './lidClosed.js'
 import type { ProjectRouteCommand, ProjectRouteSnapshot } from './projectRouting.js'
 import type {
@@ -1013,12 +1014,20 @@ export type InlineCommandSnapshotFrame = {
   requests?: import('./inlineCommand.js').InlineCommandRequest[]
 }
 
+/** Host-originated plan selection, revalidated against the exact pending request. */
+export type NotificationPlanApproveMessage = {
+  type: 'notification.planApprove'
+  requestId: string
+  optionIndex: number
+}
+
 export type SidecarClientMessage =
   | InlineCommandMessage
   | WorkStatusRequest
   | LidWorkControl
   | AppClientMessage
   | PermissionSetModeMessage
+  | NotificationPlanApproveMessage
   | AskUserQuestionAnswerMessage
   | AccountSwitchMessage
   | AccountProfileDeletedMessage
@@ -4231,6 +4240,10 @@ export type CatCodeBridge = {
   setAppearance(scheme: 'system' | 'light' | 'dark'): void
   /** Persist the bounded glass preference so main can paint renderer-free gaps. */
   setGlassMode(enabled: boolean): void
+  getNotificationPreferences(): Promise<NotificationPreferences>
+  setNotificationPreferences(value: NotificationPreferences): Promise<NotificationPreferences>
+  /** Retry a currently eligible failed turn, selected by its projected result ID. */
+  retryTurn(sessionId: SessionId, resultId: string): Promise<boolean>
   /**
    * Ask main's existing account-pool driver for one fresh global snapshot. This
    * has no payload, starts no session, and never becomes sidecar vocabulary.
