@@ -73,9 +73,13 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
     reportPaneLayoutChange(scroller)
   }
   const reserve = () => {
+    // React can replace Welcome with a new column after this controller mounts.
+    // Keep the imperative reservation after that column before measuring it.
+    if (scroller.lastElementChild !== spacer) scroller.append(spacer)
     const top = readUserOffset()
     if (!state.generating || top === null) return
-    const contentEnd = scroller.scrollHeight - space
+    // scrollHeight is at least clientHeight, even for a short first turn.
+    const contentEnd = offset(spacer)
     setSpace(scroller.clientHeight - (contentEnd - top))
   }
   const target = () => {

@@ -19,9 +19,9 @@ const tool: NestedTranscriptRow = { ...source('tool'), kind: 'tool-use', toolUse
 const result: NestedTranscriptRow = { ...source('result'), kind: 'result', subtype: 'success', isError: false, errors: [], result: 'Fixed.', durationMs: 104000 }
 const work = [user, text('update-1', 'I will trace the loader.'), thinking, tool, text('update-2', 'The tests pass. I will check the edge case.')]
 const complete = [...work, text('answer', 'The loader is fixed.'), result]
-function view(rows: NestedTranscriptRow[], live = false, expanded = false, mode: TranscriptMode = 'focused', store = createToolCardExpansionStore()) {
+function view(rows: NestedTranscriptRow[], live = false, expanded = false, mode: TranscriptMode = 'focused', store = createToolCardExpansionStore(), revealAgent?: { toolUseId: string; sequence: number }) {
   return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><ToolsExpandedContext.Provider value={{ expanded, setExpanded() {} }}>
-    <TranscriptRowsView rows={rows} turnLive={live} toolCardExpansionStore={store} />
+    <TranscriptRowsView rows={rows} turnLive={live} toolCardExpansionStore={store} revealAgent={revealAgent} />
   </ToolsExpandedContext.Provider></TranscriptModeContext.Provider>
 }
 async function click(button: Element | null) {
@@ -103,6 +103,38 @@ test('an explicit worker reveal opens the containing work and command line', asy
   await act(async () => { await harness.nextFrame() })
   expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('true')
   expect(tree.container.querySelector('.focused-step-head')?.getAttribute('aria-expanded')).toBe('true')
+})
+
+test('opening a long tool stretch bounds mounted rows while its summary counts all work', async () => {
+  const tools: NestedTranscriptRow[] = Array.from({ length: 300 }, (_, index) => ({
+    ...tool, id: `tool-${index}`, toolUseId: `call-${index}`, input: { command: `printf check-${index}` },
+  }))
+  const rows = [user, text('update', 'Checking commands.'), ...tools]
+  const store = createToolCardExpansionStore()
+  const sheet = document.createElement('style')
+  sheet.textContent = '.focused-test-scroll { overflow-y: auto; }'
+  document.head.append(sheet)
+  const render = (reveal?: { toolUseId: string; sequence: number }) => <div className="focused-test-scroll">{view(rows, true, false, 'focused', store, reveal)}</div>
+  const tree = await harness.mount(render())
+  try {
+    const step = tree.container.querySelector('.focused-step-head')!
+    expect(step.textContent).toContain('Ran 300 commands')
+    expect(tree.container.querySelectorAll('[data-tool-row]').length).toBe(0)
+    await click(step)
+    const mounted = tree.container.querySelectorAll('[data-tool-row]').length
+    expect(mounted).toBeGreaterThan(0)
+    expect(mounted).toBeLessThanOrEqual(80)
+    const scroller = tree.container.querySelector<HTMLElement>('.focused-test-scroll')!
+    const list = tree.container.querySelector<HTMLElement>('.focused-step-rows')!
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+    scroller.getBoundingClientRect = () => new DOMRect(0, 0, 800, 500)
+    list.getBoundingClientRect = () => new DOMRect(0, -scroller.scrollTop, 800, 14400)
+    await tree.render(render({ toolUseId: 'call-299', sequence: 1 }))
+    await act(async () => { await harness.nextFrame() })
+    await act(async () => { await harness.nextFrame() })
+    expect(tree.container.textContent).toContain('printf check-299')
+    expect(tree.container.querySelectorAll('[data-tool-row]').length).toBeLessThanOrEqual(80)
+  } finally { sheet.remove() }
 })
 
 test('new update and command blocks open their height without replaying restored or growing segments', async () => {

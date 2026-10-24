@@ -118,7 +118,7 @@ export function deriveFocusedSegments(rows: readonly NestedTranscriptRow[]): rea
 const cache = new WeakMap<readonly NestedTranscriptRow[], Map<boolean, readonly FocusedTranscriptItem[]>>()
 const isWork = (row: NestedTranscriptRow) => !row.isHidden &&
   (row.kind === 'assistant-text' || row.kind === 'thinking' || row.kind === 'redacted-thinking' || row.kind === 'tool-use') &&
-  !row.parentToolUseId && !(row.kind === 'assistant-text' && row.inlineCommandOrigin)
+  !row.parentToolUseId
 
 const isOperator = (row: NestedTranscriptRow) =>
   (row.kind === 'user-text' || row.kind === 'user-image') && !row.isHidden && !row.parentToolUseId
@@ -127,7 +127,7 @@ const isControlPoint = (row: NestedTranscriptRow) =>
   (row.isHidden && (row.kind === 'assistant-text' || row.kind === 'thinking' ||
     row.kind === 'redacted-thinking' || row.kind === 'tool-use'))
 
-/** Control points split folds; history/context boundaries end attribution to the operator. */
+/** Partial history and context chunks still group work, without attributing a whole-turn duration. */
 export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], turnLive: boolean): readonly FocusedTranscriptItem[] {
   const cached = cache.get(rows)?.get(turnLive)
   if (cached) return cached
@@ -136,17 +136,27 @@ export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], tu
   const pass = (row: NestedTranscriptRow) => { passthrough.push(row) }
   const flush = () => { if (passthrough.length) { items.push({ kind: 'rows', rows: passthrough }); passthrough = [] } }
   for (let i = 0; i < rows.length;) {
-    const user = rows[i++]!
-    pass(user)
-    if (!isOperator(user)) continue
-    // A submission may project images before or after its text.
-    while (rows[i] && isOperator(rows[i]!) && rows[i]!.frameId === user.frameId) pass(rows[i++]!)
+    const anchor = rows[i]!
+    const hasOperator = isOperator(anchor)
+    if (hasOperator) {
+      pass(rows[i++]!)
+      // A submission may project images before or after its text.
+      while (rows[i] && isOperator(rows[i]!) && rows[i]!.frameId === anchor.frameId) pass(rows[i++]!)
+    } else if (!isWork(anchor)) {
+      pass(rows[i++]!)
+      continue
+    }
     const start = i
     while (i < rows.length && (isWork(rows[i]!) || isControlPoint(rows[i]!))) i++
     const end = rows[i]
     const result = end?.kind === 'result' ? end : null
     const live = i === rows.length && turnLive
-    const successful = result?.subtype === 'success' && !result.isError && !result.errors.length
+    const last = rows[i - 1]
+    // Backfilled previews omit result frames, but retain the stored message's
+    // stop reason. Do not apply this fallback to live, stopped or failed turns.
+    const replayCompleted = !live && (!end || isOperator(end)) &&
+      last?.kind === 'assistant-text' && last.replayEndTurn === true
+    const successful = result ? result.subtype === 'success' && !result.isError && !result.errors.length : replayCompleted
     let answer = -1
     if (successful) for (let j = i - 1; j >= start; j--) {
       if (!isWork(rows[j]!)) continue
@@ -172,9 +182,9 @@ export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], tu
       flush()
       const work = rows.slice(fragment.start, fragment.end)
       // A result measures the whole turn, not an individual control-point fragment.
-      const duration = fragments.length === 1 ? result?.durationMs : undefined
+      const duration = hasOperator && fragments.length === 1 ? result?.durationMs : undefined
       const summary = summarizeFocusedWork(work)
-      const id = fragmentIndex === 0 ? `focused-turn:${user.id}` : `focused-turn:${user.id}:after:${rows[fragment.start - 1]!.id}`
+      const id = fragmentIndex === 0 ? `focused-turn:${anchor.id}` : `focused-turn:${anchor.id}:after:${rows[fragment.start - 1]!.id}`
       items.push({ kind: 'focused-turn', id, rows: work,
         segments: deriveFocusedSegments(work), live, completed: answer >= 0,
         durationMs: typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 ? duration : null,

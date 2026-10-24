@@ -101,6 +101,8 @@ type RowSource = FrameRowSource & {
 export type AssistantTextRow = RowSource & {
   kind: 'assistant-text'
   inlineCommandOrigin?: { messageUuid: string; contentBlockIndex: number }
+  /** Stored assistant completion; live turns still wait for their result frame. */
+  replayEndTurn?: true
   role: 'assistant'
   content: string
   isStreaming?: true
@@ -1913,7 +1915,7 @@ function projectMessage(
 ): boolean {
   switch (message.type) {
     case 'assistant':
-      return projectAssistantFrame(draft, message, recoveryInsertAt)
+      return projectAssistantFrame(draft, message, recoveryInsertAt, replay)
 
     case 'stream_event':
       // Droppable garnish (S1 spec §3): deltas may project live preview rows,
@@ -2062,6 +2064,7 @@ function projectAssistantFrame(
   draft: SessionDraft,
   message: Extract<SDKMessage, { type: 'assistant' }>,
   recoveryInsertAt: number | null,
+  replay: boolean,
 ): boolean {
   // The type claims `message.message.content` exists, but that claim is about
   // a process on the far side of a socket — harden before dereferencing.
@@ -2153,6 +2156,9 @@ function projectAssistantFrame(
     })
     if (row?.kind === 'assistant-text' && frameId && parentToolUseId === null) {
       row.inlineCommandOrigin = { messageUuid: frameId, contentBlockIndex: localIndex }
+    }
+    if (row?.kind === 'assistant-text' && replay && body.stop_reason === 'end_turn' && parentToolUseId === null) {
+      row.replayEndTurn = true
     }
     return row === null ? [] : [row]
   })

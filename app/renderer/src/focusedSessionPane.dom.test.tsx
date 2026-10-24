@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { SessionPane } from './SessionPane.js'
@@ -12,7 +12,7 @@ beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await harness.unmountAll() })
 afterAll(async () => { await harness.teardown() })
 let serial = 0
-function project(content: unknown[], prior?: TranscriptState) {
+function project(content: unknown[], prior?: TranscriptState, options: { replay?: boolean; stopReason?: string } = {}) {
   const sessionId = 'session-1'
   let state = prior ?? projectServerFrame(createTranscriptState(), {
     kind: 'ready', protocolVersion: 4, sessionId, engineSessionId: 'engine-1', payload: {
@@ -21,10 +21,10 @@ function project(content: unknown[], prior?: TranscriptState) {
     },
   } as never)
   const id = ++serial
-  const event = (message: unknown) => ({ kind: 'event', protocolVersion: 4, sessionId, event: { type: 'message', message } }) as never
+  const event = (message: unknown) => ({ kind: 'event', protocolVersion: 4, sessionId, replay: options.replay, event: { type: 'message', message } }) as never
   if (!prior) state = projectServerFrame(state, event({ type: 'user', uuid: `user-${id}`, session_id: 'engine-1', parent_tool_use_id: null, message: { role: 'user', content: 'Check the loader' } }))
   return projectServerFrame(state, event({ type: 'assistant', uuid: `assistant-${id}`, session_id: 'engine-1', parent_tool_use_id: null, message: {
-    id: `message-${id}`, role: 'assistant', type: 'message', model: 'gpt-6.1-sol', stop_reason: null, stop_sequence: null,
+    id: `message-${id}`, role: 'assistant', type: 'message', model: 'gpt-6.1-sol', stop_reason: options.stopReason ?? null, stop_sequence: null,
     usage: { input_tokens: 10, output_tokens: 5, service_tier: null }, content,
   } }))
 }
@@ -59,6 +59,46 @@ test('only Focused adds the current reasoning step to the working line, keeping 
   expect(activity?.textContent).toContain('Bash')
   expect(activity?.textContent).not.toContain('bun test src/loader')
   expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Running bun test src/loader')
+})
+
+test('producer assistant messages accumulate under Working and fold only when their result arrives', async () => {
+  let state = project([{ type: 'text', text: 'I will trace the loader.' }])
+  state = project([{ type: 'tool_use', id: 'read-loader', name: 'Read', input: { file_path: '/repo/loader.ts' } }], state)
+  state = project([{ type: 'text', text: 'The loader is fixed.' }], state, { stopReason: 'end_turn' })
+  const tree = await harness.mount(pane(state, 'focused'))
+  expect([...tree.container.querySelectorAll('[data-focused-update]')].map(node => node.textContent))
+    .toEqual(['I will trace the loader.', 'The loader is fixed.'])
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Reading')
+  state = projectServerFrame(state, {
+    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+      type: 'result', subtype: 'success', is_error: false, errors: [], duration_ms: 104000,
+      uuid: 'completed-result', session_id: 'engine-1', result: 'The loader is fixed.',
+    } },
+  } as never)
+  await tree.render(pane(state, 'focused'))
+  expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('false')
+  expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('1m 44s')
+  expect(tree.container.querySelector('.focused-turn')?.textContent).not.toContain('The loader is fixed.')
+  expect(tree.container.textContent).toContain('The loader is fixed.')
+})
+
+test('saved previews use recorded end_turn for the answer, never missing or failed completion evidence', async () => {
+  for (const ending of ['end_turn', 'max_tokens', 'unknown', 'interrupted']) {
+    let state = project([{ type: 'text', text: 'Checking the saved conversation.' }], undefined, { replay: true })
+    state = project([{ type: 'text', text: 'Saved answer.' }], state, { replay: true, stopReason: ending === 'unknown' ? undefined : 'end_turn' })
+    if (ending === 'max_tokens') state = project([{ type: 'text', text: 'Cut off.' }], state, { replay: true, stopReason: 'max_tokens' })
+    if (ending === 'interrupted') state = projectServerFrame(state, {
+      kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+        type: 'result', subtype: 'interrupted', is_error: true, errors: [], uuid: 'stop', session_id: 'engine-1',
+      } },
+    } as never)
+    const tree = await harness.mount(<TranscriptModeContext.Provider value={{ mode: 'focused', setMode() {} }}>
+      <SessionPane {...idleSessionPaneProps()} transcript={state} />
+    </TranscriptModeContext.Provider>)
+    expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe(ending === 'end_turn' ? 'false' : 'true')
+    expect(tree.container.textContent).toContain('Saved answer.')
+    await tree.unmount()
+  }
 })
 
 test('a tiny upward wheel releases Focused before a subsequent transcript commit', async () => {
@@ -132,6 +172,13 @@ test('a text-and-image submission anchors its first row rather than the last att
   const imageElement = column.querySelector<HTMLElement>(`[data-row-key="${imageRow.id}"]`)!
   textElement.getBoundingClientRect = () => new DOMRect(0, 1080 - scroller.scrollTop, 800, 60)
   imageElement.getBoundingClientRect = () => new DOMRect(0, 1180 - scroller.scrollTop, 800, 100)
-  await tree.render(pane(state, 'focused'))
-  expect(scroller.scrollTop).toBe(1000)
+  const original = HTMLElement.prototype.getBoundingClientRect
+  const geometry = spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains('focused-transcript-space')
+      ? new DOMRect(0, 1280 - scroller.scrollTop, 800, 0) : original.call(this)
+  })
+  try {
+    await tree.render(pane(state, 'focused'))
+    expect(scroller.scrollTop).toBe(1000)
+  } finally { geometry.mockRestore() }
 })

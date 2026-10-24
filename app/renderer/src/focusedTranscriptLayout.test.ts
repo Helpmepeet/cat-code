@@ -45,7 +45,11 @@ describe('focused transcript layout', () => {
       expect(items.flatMap(x => x.rows)).toEqual(rows)
       expect(groups(rows)[0]!.completed).toBe(boundary.kind !== 'history-boundary')
     }
-    expect(groups([tool(), text('answer'), result()])).toEqual([])
+    const continuation = groups([tool(), text('answer'), result()])
+    expect(continuation).toHaveLength(1)
+    expect(continuation[0]!.rows.map(row => row.id)).toEqual(['t'])
+    expect(continuation[0]!.completed).toBe(true)
+    expect(continuation[0]!.durationMs).toBeNull()
     expect(groups([user(), tool(), text('a'), result(), user('u2'), tool('t2'), text('b'), result()])).toHaveLength(2)
   })
   test('image-only and mixed submissions create a single working row immediately', () => {

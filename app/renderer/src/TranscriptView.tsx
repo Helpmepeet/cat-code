@@ -754,10 +754,17 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   )
   const renderFocusedRows = useCallback((focusedRows: readonly NestedTranscriptRow[], isNarration: boolean) => {
     const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(focusedRows), reasoningMode))
-    return items.map(item => <div key={displayItemKey(item)} data-tool-row={isContainerlessToolItem(item) ? '' : undefined}>
+    const renderItem = (item: TranscriptLayoutItem) => <div key={displayItemKey(item)} data-tool-row={isContainerlessToolItem(item) ? '' : undefined}>
       <DisplayItemView item={item} narration={isNarration} onMessageAction={onMessageAction} />
-    </div>)
-  }, [reasoningMode, onMessageAction])
+    </div>
+    if (isNarration) return items.map(renderItem)
+    const revealItem = revealAgent ? items.find(item => item.kind === 'single'
+      ? containsAgentTool([item.row], revealAgent.toolUseId)
+      : item.kind === 'agent-group' && containsAgentTool(item.members, revealAgent.toolUseId)) : null
+    return <BoundedChildList keys={items.map(displayItemKey)} estimatedChildHeight={48} childGap={6}
+      className="focused-step-rows" renderChild={index => renderItem(items[index]!)}
+      revealRequest={revealAgent && revealItem ? { key: displayItemKey(revealItem), sequence: revealAgent.sequence } : null} />
+  }, [reasoningMode, onMessageAction, revealAgent])
 
   const renderTransition = (transition: ContextTransition, entryKey?: string) => {
     const currentMove = workspaceMove?.id === transition.id ? workspaceMove : null
@@ -1450,15 +1457,25 @@ function BoundedChildList({
     if (index < 0 || !root) return
     const scroller = findPaneScroller(root)
     const offset = entriesRef.current.slice(0, index).reduce((sum, entry) => sum + entry.height + childGap, 0)
-    scroller.scrollTop += root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + offset
-    setChildWindow(selectCompositeChildWindow(entriesRef.current, offset,
-      scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT, undefined, undefined, childGap))
-    const frame = requestAnimationFrame(() => {
-      const element = [...root.children].find(child => child.getAttribute('data-transcript-entry') === revealRequest.key)
-      element?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
-    })
+    const navigate = () => {
+      scroller.scrollTop += root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + offset
+      setChildWindow(selectCompositeChildWindow(entriesRef.current, offset,
+        scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT, undefined, undefined, childGap))
+    }
+    let frame: number
+    if (transcriptEntries) {
+      navigate()
+      frame = requestAnimationFrame(() => {
+        const element = [...root.children].find(child => child.getAttribute('data-transcript-entry') === revealRequest.key)
+        element?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+      })
+    } else {
+      // Let the outer turn land first; its navigation would otherwise undo
+      // the nested command window's reveal in the same commit.
+      frame = requestAnimationFrame(() => { frame = requestAnimationFrame(navigate) })
+    }
     return () => cancelAnimationFrame(frame)
-  }, [revealRequest?.key, revealRequest?.sequence, childGap])
+  }, [revealRequest?.key, revealRequest?.sequence, childGap, transcriptEntries])
 
   const mounted = useMemo(
     () => entries.slice(childWindow.start, childWindow.end),

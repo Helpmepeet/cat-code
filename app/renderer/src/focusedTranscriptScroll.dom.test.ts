@@ -17,7 +17,7 @@ function fixture(initialFollowing = true, reducedMotion = true) {
   let end = 1100
   Object.defineProperties(scroller, {
     clientHeight: { value: 500 }, clientWidth: { value: 300 },
-    scrollHeight: { get: () => end + Number.parseFloat(scroller.lastElementChild?.getAttribute('style')?.match(/: ([\d.]+)px/)?.[1] ?? '0') },
+    scrollHeight: { get: () => Math.max(500, end + Number.parseFloat(scroller.lastElementChild?.getAttribute('style')?.match(/: ([\d.]+)px/)?.[1] ?? '0')) },
   })
   scroller.getBoundingClientRect = () => ({ top: 80, left: 20 } as DOMRect)
   const addRow = (id: string, top: number) => {
@@ -29,6 +29,7 @@ function fixture(initialFollowing = true, reducedMotion = true) {
   addRow('user', 1000)
   addRow('answer', 1050)
   const controller = createFocusedTranscriptScroll(scroller, { initialFollowing, reducedMotion: () => reducedMotion })
+  scroller.lastElementChild!.getBoundingClientRect = () => ({ top: 80 + end - scroller.scrollTop } as DOMRect)
   return { scroller, controller, addRow, setEnd: (value: number) => { end = value },
     space: () => (scroller.lastElementChild as HTMLElement).style.getPropertyValue('--focused-transcript-space-height') || '0px',
     cleanup: () => { controller.dispose(); scroller.remove() } }
@@ -60,6 +61,30 @@ test('initial binding preserves retained position; new send resumes', () => {
   f.controller.update({ generating: true, userRowId: 'new' })
   expect(f.controller.isFollowing()).toBe(true)
   expect(f.scroller.scrollTop).toBe(1100)
+  f.cleanup()
+})
+
+test('replacing Welcome with the transcript keeps the reservation below the conversation', () => {
+  const f = fixture()
+  // React replaces the Welcome sibling after the controller has attached.
+  const column = f.scroller.firstElementChild!
+  column.remove()
+  f.scroller.append(column)
+  f.controller.update({ generating: true, userRowId: 'user' })
+  expect(f.scroller.firstElementChild === column).toBe(true)
+  expect(f.scroller.lastElementChild?.className).toBe('focused-transcript-space')
+  expect(f.space()).toBe('400px')
+  f.cleanup()
+})
+
+test('a short first turn reserves from content height, not the viewport-sized scrollHeight', () => {
+  const f = fixture()
+  f.addRow('first-user', 0)
+  f.setEnd(100)
+  f.controller.update({ generating: true, userRowId: 'first-user' })
+  expect(f.space()).toBe('400px')
+  f.controller.update({ generating: true, userRowId: 'first-user' })
+  expect(f.space()).toBe('400px')
   f.cleanup()
 })
 
