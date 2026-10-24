@@ -15,6 +15,13 @@ export type FocusedTranscriptScrollOptions = {
   reducedMotion?: () => boolean
 }
 
+/**
+ * How far below the viewport top a sent message rests, so the end of the
+ * previous output stays in view (operator, 2026-10-25: a flush message hid the
+ * answer being replied to). About three lines of conversation prose.
+ */
+export const FOCUSED_PREVIOUS_OUTPUT_PEEK_PX = 72
+
 /** Owns only Focused-mode navigation. The pooled coordinator still owns reflow correction. */
 export function createFocusedTranscriptScroll(scroller: HTMLElement, options: FocusedTranscriptScrollOptions) {
   const spacer = scroller.ownerDocument.createElement('div')
@@ -80,11 +87,11 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
     if (!state.generating || top === null) return
     // scrollHeight is at least clientHeight, even for a short first turn.
     const contentEnd = offset(spacer)
-    setSpace(scroller.clientHeight - (contentEnd - top))
+    setSpace(scroller.clientHeight - FOCUSED_PREVIOUS_OUTPUT_PEEK_PX - (contentEnd - top))
   }
   const target = () => {
     const top = landing ? readUserOffset() : null
-    if (top !== null) return top
+    if (top !== null) return top - FOCUSED_PREVIOUS_OUTPUT_PEEK_PX
     return max()
   }
   const settleLanding = () => {

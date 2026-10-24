@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
+import { FOCUSED_PREVIOUS_OUTPUT_PEEK_PX } from './focusedTranscriptScroll.js'
 import { SessionPane } from './SessionPane.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
@@ -221,6 +222,6 @@ test('a text-and-image submission anchors its first row rather than the last att
   })
   try {
     await tree.render(pane(state, 'focused'))
-    expect(scroller.scrollTop).toBe(1000)
+    expect(scroller.scrollTop).toBe(1000 - FOCUSED_PREVIOUS_OUTPUT_PEEK_PX)
   } finally { geometry.mockRestore() }
 })

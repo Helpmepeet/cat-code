@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
-import { createFocusedTranscriptScroll } from './focusedTranscriptScroll.js'
+import { createFocusedTranscriptScroll, FOCUSED_PREVIOUS_OUTPUT_PEEK_PX as PEEK } from './focusedTranscriptScroll.js'
 import { _forTest, compensatePanePrefix } from './markdownScrollCoordinator.js'
 import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
 import { selectCompositeChildWindow } from './compositeChildWindow.js'
@@ -38,15 +38,26 @@ function fixture(initialFollowing = true, reducedMotion = true) {
 test('reserves a viewport with scroller-relative row geometry, follows overflow and returns to message for answer', () => {
   const f = fixture()
   f.controller.update({ generating: true, userRowId: 'user' })
-  expect(f.space()).toBe('400px')
-  expect(f.scroller.scrollTop).toBe(1000)
+  expect(f.space()).toBe(`${400 - PEEK}px`)
+  expect(f.scroller.scrollTop).toBe(1000 - PEEK)
   f.setEnd(1800)
   f.controller.update({ generating: true, userRowId: 'user' })
   expect(f.space()).toBe('0px')
   expect(f.scroller.scrollTop).toBe(1300)
   f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
-  expect(f.scroller.scrollTop).toBe(1000)
+  expect(f.scroller.scrollTop).toBe(1000 - PEEK)
   expect(f.space()).toBe('0px')
+  f.cleanup()
+})
+
+test('a sent message rests below the top so the end of the previous output stays visible', () => {
+  const f = fixture()
+  f.addRow('previous-answer-end', 1000 - 30)
+  f.controller.update({ generating: true, userRowId: 'user' })
+  const userTop = f.scroller.querySelector<HTMLElement>('[data-row-key="user"]')!.getBoundingClientRect().top - 80
+  const previousTop = f.scroller.querySelector<HTMLElement>('[data-row-key="previous-answer-end"]')!.getBoundingClientRect().top - 80
+  expect(userTop).toBe(PEEK)
+  expect(previousTop).toBeGreaterThanOrEqual(0)
   f.cleanup()
 })
 
@@ -60,7 +71,7 @@ test('initial binding preserves retained position; new send resumes', () => {
   f.setEnd(1200)
   f.controller.update({ generating: true, userRowId: 'new' })
   expect(f.controller.isFollowing()).toBe(true)
-  expect(f.scroller.scrollTop).toBe(1100)
+  expect(f.scroller.scrollTop).toBe(1100 - PEEK)
   f.cleanup()
 })
 
@@ -73,7 +84,7 @@ test('replacing Welcome with the transcript keeps the reservation below the conv
   f.controller.update({ generating: true, userRowId: 'user' })
   expect(f.scroller.firstElementChild === column).toBe(true)
   expect(f.scroller.lastElementChild?.className).toBe('focused-transcript-space')
-  expect(f.space()).toBe('400px')
+  expect(f.space()).toBe(`${400 - PEEK}px`)
   f.cleanup()
 })
 
@@ -82,9 +93,9 @@ test('a short first turn reserves from content height, not the viewport-sized sc
   f.addRow('first-user', 0)
   f.setEnd(100)
   f.controller.update({ generating: true, userRowId: 'first-user' })
-  expect(f.space()).toBe('400px')
+  expect(f.space()).toBe(`${400 - PEEK}px`)
   f.controller.update({ generating: true, userRowId: 'first-user' })
-  expect(f.space()).toBe('400px')
+  expect(f.space()).toBe(`${400 - PEEK}px`)
   f.cleanup()
 })
 
@@ -208,7 +219,7 @@ for (const input of ['wheel', 'PageDown']) {
       f.setEnd(2400)
       f.controller.update({ generating: true, userRowId: 'user' })
       f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
-      expect(f.scroller.scrollTop).toBe(1000)
+      expect(f.scroller.scrollTop).toBe(1000 - PEEK)
       f.scroller.dispatchEvent(input === 'wheel' ? new WheelEvent('wheel', { deltaY: 100 }) : new KeyboardEvent('keydown', { key: input }))
       f.scroller.scrollTop = 1200
       f.scroller.dispatchEvent(new Event('scroll'))
@@ -224,7 +235,7 @@ test('resume during completion clears reserved space instead of cancelling its c
   const f = fixture(true, false)
   try {
     f.controller.update({ generating: true, userRowId: 'user' })
-    expect(f.space()).toBe('400px')
+    expect(f.space()).toBe(`${400 - PEEK}px`)
     f.controller.release()
     f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
     f.controller.resume()
@@ -245,6 +256,6 @@ test('completion uses virtual offsets when a long answer has unmounted both mess
     f.scroller.querySelector('[data-row-key="answer"]')!.remove()
     f.controller.update({ generating: true, userRowId: 'user' })
     f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
-    expect(f.scroller.scrollTop).toBe(1000)
+    expect(f.scroller.scrollTop).toBe(1000 - PEEK)
   } finally { unregister(); f.cleanup() }
 })
