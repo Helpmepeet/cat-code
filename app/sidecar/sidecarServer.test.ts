@@ -12,6 +12,7 @@ import { installLidWorkRuntime } from '../../src/services/lidClosedWork.js'
 
 import { afterEach, expect, test } from 'bun:test'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import { MAX_SUBMIT_IMAGE_BYTES } from '../../src/app-runtime/appSubmitLimits.js'
 import type { AppSessionControllerAdapter } from '../../src/app-runtime/AppSessionController.js'
 import type {
   AppPermissionRequest,
@@ -45,6 +46,8 @@ import {
   MAX_PROMPT_BYTES,
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
+  MAX_QUEUED_PROMPT_BYTES,
+  MAX_SUBMIT_FRAME_BYTES,
   MAX_PEER_TEXT_BYTES,
   MAX_TEXT_FIELD_CHARS,
   RATE_WINDOW_MS,
@@ -139,7 +142,7 @@ const ENGINE_SESSION = 'engine-test-session'
 
 /** In-memory socket that decodes what the server writes back to it. */
 function makeSocket() {
-  const decoder = new FrameDecoder(MAX_FRAME_BYTES)
+  const decoder = new FrameDecoder(MAX_OUTBOUND_FRAME_BYTES)
   const received: ServerFrame[] = []
   const socket: SidecarSocketLike = {
     write(data) {
@@ -648,7 +651,7 @@ test('rate-limit rejection echoes the rejected verb request id', () => {
     clientFrame({ type: 'app.submit', requestId: 'rate-limited', prompt: 'x' }),
   )
   const error = received.find(
-    frame => frame.kind === 'error' && frame.message === 'rate limit exceeded',
+    frame => frame.kind === 'error' && frame.message === 'Messages are arriving too quickly. Wait a moment and try again.',
   )
   expect(error?.kind).toBe('error')
   if (error?.kind === 'error') expect(error.requestId).toBe('rate-limited')
@@ -667,7 +670,7 @@ test('a backward wall-clock jump resets the sidecar rate window', () => {
       conn,
       clientFrame({ type: 'app.submit', requestId: 'limited', prompt: 'x' }),
     )
-    expect(received.some(frame => frame.kind === 'error' && frame.message === 'rate limit exceeded')).toBe(true)
+    expect(received.some(frame => frame.kind === 'error' && frame.message === 'Messages are arriving too quickly. Wait a moment and try again.')).toBe(true)
 
     now -= RATE_WINDOW_MS + 1
     server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'after-rollback' }))
@@ -2010,6 +2013,148 @@ async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
   )
   return { server, conn, received, end: release }
 }
+
+function largeImagePrompt(imageCount = 2): SubmitPromptValue {
+  return [
+    ...Array.from({ length: imageCount }, () => ({
+      type: 'image' as const,
+      source: {
+        type: 'base64' as const, media_type: 'image/png' as const,
+        data: 'A'.repeat(MAX_SUBMIT_IMAGE_BYTES),
+      },
+    })),
+    { type: 'text', text: 'Compare the details.' },
+  ]
+}
+
+test('large image submits stay intact through queue admission, byte refusal and recall', async () => {
+  const originalNow = Date.now
+  let now = originalNow()
+  Date.now = () => now
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
+  try {
+    server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'start', prompt: 'start' }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const prompt = largeImagePrompt()
+    const bytes = Buffer.byteLength(JSON.stringify(prompt))
+    expect(2 * bytes).toBeLessThan(MAX_QUEUED_PROMPT_BYTES)
+    expect(3 * bytes).toBeGreaterThan(MAX_QUEUED_PROMPT_BYTES)
+    for (let index = 0; index < 3; index++) {
+      now += RATE_WINDOW_MS
+      server.handleData(conn, clientFrame({
+        type: 'app.submit', requestId: `large-${index}`, prompt,
+        options: { submitId: `large-${index}` },
+      }))
+    }
+    const answers = submitAnswers(received)
+    expect(answers).toHaveLength(3)
+    expect(answers.map(answer => answer.accepted)).toEqual([true, true, false])
+    expect(queuedPromptSnapshots(received).at(-1)).toHaveLength(2)
+
+    server.handleData(conn, clientFrame({ type: 'prompt.recall', requestId: 'large-recall' }))
+    const recalled = recallResults(received).at(-1)
+    expect(recalled?.recalled).toHaveLength(2)
+    expect(Buffer.byteLength(JSON.stringify(recalled))).toBeLessThan(MAX_OUTBOUND_FRAME_BYTES)
+    expect(recalled?.recalled.map(item => item.prompt)).toEqual([prompt, prompt])
+    expect(queuedPromptSnapshots(received).at(-1)).toHaveLength(0)
+
+    // Recall retains late-delivery evidence, so resending cannot duplicate
+    // those large prompts indefinitely while this turn remains open.
+    now += RATE_WINDOW_MS
+    server.handleData(conn, clientFrame({
+      type: 'app.submit', requestId: 'resend', prompt: largeImagePrompt(1),
+      options: { submitId: 'resend' },
+    }))
+    expect(submitAnswers(received).at(-1))
+      .toMatchObject({ submitId: 'resend', accepted: false })
+    server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'still-usable' }))
+    expect(received.some(frame => frame.kind === 'pong' && frame.nonce === 'still-usable')).toBe(true)
+
+    release()
+    await waitFor(() => !controller.isTurnActive())
+    now += RATE_WINDOW_MS
+    server.handleData(conn, clientFrame({
+      type: 'app.submit', requestId: 'after-turn', prompt,
+      options: { submitId: 'after-turn' },
+    }))
+    expect(submitAnswers(received).at(-1))
+      .toMatchObject({ submitId: 'after-turn', accepted: true })
+  } finally {
+    release()
+    Date.now = originalNow
+  }
+})
+
+test('large-frame byte rate leaves control traffic usable and resets', async () => {
+  const originalNow = Date.now
+  let now = originalNow()
+  Date.now = () => now
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
+  try {
+    server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'start', prompt: 'start' }))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const frame = clientFrame({ type: 'app.submit', requestId: 'large', prompt: largeImagePrompt() })
+    server.handleData(conn, frame)
+    server.handleData(conn, frame)
+    server.handleData(conn, frame)
+    expect(received.some(value => value.kind === 'error' && value.retryable &&
+      value.message.includes('too quickly'))).toBe(true)
+    server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'control' }))
+    expect(received.some(value => value.kind === 'pong' && value.nonce === 'control')).toBe(true)
+    server.handleData(conn, clientFrame({ type: 'prompt.recall', requestId: 'recall' }))
+    expect(recallResults(received).at(-1)?.recalled).toHaveLength(2)
+    now += RATE_WINDOW_MS
+    server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'next-window' }))
+    expect(received.some(value => value.kind === 'pong' && value.nonce === 'next-window')).toBe(true)
+  } finally {
+    release()
+    Date.now = originalNow
+  }
+})
+
+test('larger decoder still rejects oversized controls, metadata and raw whitespace', () => {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+  server.handleData(conn, clientFrame({
+    type: 'app.ping', nonce: 'x'.repeat(MAX_FRAME_BYTES),
+  }))
+  server.handleData(conn, rawFrame({
+    type: 'app.submit', requestId: 'metadata', prompt: IMAGE_PROMPT,
+    options: { uuid: 'x'.repeat(MAX_FRAME_BYTES) },
+  }))
+  const body = Buffer.from(' '.repeat(MAX_FRAME_BYTES) + JSON.stringify({
+    protocolVersion: PROTOCOL_VERSION, sessionId: SESSION,
+    message: { type: 'app.submit', requestId: 'whitespace', prompt: IMAGE_PROMPT },
+  }))
+  const header = Buffer.alloc(4)
+  header.writeUInt32BE(body.byteLength)
+  server.handleData(conn, Buffer.concat([header, body]))
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(3)
+  expect(received.some(frame => frame.kind === 'event' && frame.event.type === 'message')).toBe(false)
+  server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'usable' }))
+  expect(received.some(frame => frame.kind === 'pong' && frame.nonce === 'usable')).toBe(true)
+})
+
+test('large-frame flood is stopped at the header before another body is buffered', () => {
+  const originalNow = Date.now
+  const now = originalNow()
+  Date.now = () => now
+  try {
+    const { server, conn } = connect(new AppSessionController(probeAdapter()))
+    const invalid = clientFrame({
+      type: 'app.ping', nonce: 'x'.repeat(MAX_SUBMIT_FRAME_BYTES - 1024),
+    })
+    for (let index = 0; index < 4; index++) server.handleData(conn, invalid)
+    const header = Buffer.alloc(4)
+    header.writeUInt32BE(MAX_SUBMIT_FRAME_BYTES)
+    server.handleData(conn, header)
+    expect(conn.closed).toBe(true)
+    expect((conn.decoder as unknown as { buffer: Buffer }).buffer.byteLength).toBe(0)
+  } finally {
+    Date.now = originalNow
+  }
+})
 
 test('prompt.force aborts only while the displayed queue head is still waiting', async () => {
   const prompts: string[] = []

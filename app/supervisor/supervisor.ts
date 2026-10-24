@@ -29,10 +29,15 @@ import { join } from 'node:path'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
+  MAX_LARGE_SUBMIT_BYTES_PER_WINDOW,
   MAX_OUTBOUND_FRAME_BYTES,
-  MAX_PROMPT_BYTES,
+  MAX_PENDING_HOST_INPUT_BYTES,
+  MAX_PENDING_SESSION_INPUT_BYTES,
+  MAX_SUBMIT_FRAME_BYTES,
   PARKED_EXIT_CODE,
+  RATE_WINDOW_MS,
 } from '../shared/limits.js'
+import { isImageSubmitPrompt, validateSubmitPromptBudget } from '../shared/submitBudget.js'
 import {
   isServerFrameKind,
   PROTOCOL_VERSION,
@@ -221,6 +226,8 @@ export function isSidecarSendError(error: unknown): error is SidecarSendError {
 
 export class SidecarSupervisor {
   private readonly registry = new Map<SessionId, SidecarRecord>()
+  private largeSendWindowStart = 0
+  private largeSendBytes = 0
   private readonly listeners = new Set<(event: SupervisorEvent) => void>()
   private readonly options: Required<Pick<SupervisorOptions, 'sidecarCommand'>> &
     SupervisorOptions
@@ -554,21 +561,38 @@ export class SidecarSupervisor {
       sessionId,
       message,
     }
-    if (
-      message.type === 'app.submit' &&
-      Buffer.byteLength(
-        typeof message.prompt === 'string'
-          ? message.prompt
-          : JSON.stringify(message.prompt),
-        'utf8',
-      ) > MAX_PROMPT_BYTES
-    ) {
-      throw new Error('That message is too long to send. Shorten it and try again.')
+    const imageSubmit = message.type === 'app.submit' && isImageSubmitPrompt(message.prompt)
+    if (message.type === 'app.submit') {
+      const problem = validateSubmitPromptBudget(message.prompt)
+      if (problem) throw new Error(problem)
+      if (Buffer.byteLength(JSON.stringify({ ...frame, message: { ...message, prompt: '' } })) > MAX_FRAME_BYTES) {
+        throw new Error('This request is too large to send.')
+      }
     }
     const encoded = encodeFrame(frame)
     const payloadBytes = encoded.byteLength - 4
-    if (payloadBytes > MAX_FRAME_BYTES) {
+    if (payloadBytes > (imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
       throw new Error('That message is too large to send. Shorten it and try again.')
+    }
+    // write(false) already accepted the bytes. Admission must happen BEFORE
+    // writing, and must include all sessions sharing this host.
+    const pending = [...this.registry.values()].reduce(
+      (total, session) => total + (session.socket?.writableLength ?? 0), 0,
+    )
+    if (record.socket.writableLength + encoded.byteLength > MAX_PENDING_SESSION_INPUT_BYTES ||
+        pending + encoded.byteLength > MAX_PENDING_HOST_INPUT_BYTES) {
+      throw new Error('Messages are still being sent. Wait a moment and try again.')
+    }
+    if (payloadBytes > MAX_FRAME_BYTES) {
+      const now = Date.now()
+      if (now < this.largeSendWindowStart || now - this.largeSendWindowStart >= RATE_WINDOW_MS) {
+        this.largeSendWindowStart = now
+        this.largeSendBytes = 0
+      }
+      if (this.largeSendBytes + payloadBytes > MAX_LARGE_SUBMIT_BYTES_PER_WINDOW) {
+        throw new Error('Images are being sent too quickly. Wait a moment and try again.')
+      }
+      this.largeSendBytes += payloadBytes
     }
     record.socket.write(encoded)
   }

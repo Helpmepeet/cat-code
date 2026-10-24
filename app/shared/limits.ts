@@ -1,10 +1,13 @@
+import { MAX_SUBMIT_TEXT_BYTES, MAX_SUBMIT_TOTAL_IMAGE_BYTES } from '../../src/app-runtime/appSubmitLimits.js'
+
 /**
  * IPC boundary limits (SECURITY-MINIMUM §2 R4 / T7, review findings F3/F4).
  *
  * Two DIRECTIONS with different trust and therefore different caps:
  *
  *  - INBOUND (renderer → sidecar) is hostile: a compromised renderer can flood
- *    or oversize frames. `MAX_FRAME_BYTES` bounds it (T7). The prompt cap is
+ *    or oversize frames. `MAX_FRAME_BYTES` bounds controls (T7); inline submits
+ *    use `MAX_SUBMIT_FRAME_BYTES`. The text prompt cap is
  *    expressed in BYTES (not JS chars) so it is consistent with the frame cap —
  *    a multibyte prompt cannot advertise a size the frame cannot carry (F4).
  *
@@ -15,8 +18,21 @@
  *    only as a sanity bound against a runaway, never to reject normal output.
  */
 
-/** Max serialized INBOUND frame size (hostile renderer traffic). */
+/** Max serialized ordinary INBOUND control frame size. */
 export const MAX_FRAME_BYTES = 128 * 1024
+
+/** Inline images, worst-case escaped text, and a control/options envelope. */
+export const MAX_SUBMIT_FRAME_BYTES = MAX_SUBMIT_TOTAL_IMAGE_BYTES + 6 * MAX_SUBMIT_TEXT_BYTES + MAX_FRAME_BYTES
+
+/** Large submits share a byte-rate budget; ordinary controls retain their own allowance. */
+export const MAX_LARGE_SUBMIT_BYTES_PER_WINDOW = 2 * MAX_SUBMIT_FRAME_BYTES
+
+/** Socket buffering is bounded per session and across the desktop host. */
+export const MAX_PENDING_SESSION_INPUT_BYTES = 2 * MAX_SUBMIT_FRAME_BYTES
+export const MAX_PENDING_HOST_INPUT_BYTES = 4 * MAX_SUBMIT_FRAME_BYTES
+
+/** Combined serialized prompts retained for staging and recall. */
+export const MAX_QUEUED_PROMPT_BYTES = 24 * 1024 * 1024
 
 /** Whole peers.list value, leaving room for the host.result envelope. */
 export const MAX_PEER_ROSTER_BYTES = MAX_FRAME_BYTES - 8 * 1024
@@ -66,11 +82,9 @@ export const MAX_DIAGNOSTIC_FRAMES_PER_WINDOW = 80
 export const RATE_WINDOW_MS = 1_000
 
 /**
- * Max prompt size accepted by `app.submit`, in UTF-8 BYTES. Kept well under
- * MAX_FRAME_BYTES so a valid prompt always fits one inbound frame (F4). Measured
- * in bytes, not JS chars, so multibyte input cannot exceed the frame cap.
+ * Combined text accepted by `app.submit`, in UTF-8 bytes, separate from images.
  */
-export const MAX_PROMPT_BYTES = 96 * 1024
+export const MAX_PROMPT_BYTES = MAX_SUBMIT_TEXT_BYTES
 
 /**
  * Max prompts that may be waiting for the RUNNING turn at once (T7).
@@ -80,9 +94,8 @@ export const MAX_PROMPT_BYTES = 96 * 1024
  * ACCUMULATES: they bound arrival rate, and the refusal used to bound depth. A
  * flooding renderer could otherwise pile unbounded prompt text into a queue the
  * next tool round injects into the turn's context wholesale. This is the depth
- * bound. Well above anything a person types during one response (the terminal's
- * own queue is unbounded because its only writer is a keyboard), and combined
- * with `MAX_PROMPT_BYTES` it caps the accumulation at ~3 MiB.
+ * bound. `MAX_QUEUED_PROMPT_BYTES` separately bounds retained serialized data,
+ * including images.
  */
 export const MAX_QUEUED_PROMPTS = 32
 
@@ -103,14 +116,13 @@ export const MAX_TEXT_FIELD_CHARS = 4_096
 /**
  * P4-35 — the `saveTextToFile` control-plane channel's own two bounds.
  *
- * This channel is the one place where renderer→main traffic legitimately carries
- * a large body: the payload is a transcript the ENGINE rendered, handed straight
+ * This channel carries a large body: a transcript the ENGINE rendered, handed straight
  * back so main can write it to a file the user names in a native dialog. It
  * therefore gets its OWN cap rather than riding either existing one, and neither
  * existing cap moves:
  *
- *  - `MAX_FRAME_BYTES` (128 KiB) stays exactly what it is and still bounds every
- *    other inbound payload. A long session's transcript exceeds it routinely, so
+ *  - `MAX_FRAME_BYTES` (128 KiB) still bounds ordinary controls; image submits
+ *    have `MAX_SUBMIT_FRAME_BYTES`. A long transcript exceeds the control cap, so
  *    reusing it here would mean the feature silently fails on the sessions most
  *    worth saving.
  *  - `MAX_OUTBOUND_FRAME_BYTES` (32 MiB) is the TRUSTED direction's sanity bound

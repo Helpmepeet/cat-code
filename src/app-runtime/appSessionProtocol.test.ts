@@ -2,6 +2,37 @@ import { describe, expect, test } from 'bun:test'
 import { appClientMessageSchema } from './appSessionProtocol.js'
 
 describe('app session protocol', () => {
+  test('rejects oversized image, aggregate, count and UTF-8 text budgets', () => {
+    const image = (length = 4) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(length) },
+    })
+    for (const prompt of [
+      [image(5 * 1024 * 1024 + 4)],
+      [image(5 * 1024 * 1024), image(5 * 1024 * 1024), image()],
+      Array.from({ length: 6 }, () => image()),
+      '界'.repeat(32 * 1024 + 1),
+      [image(), { type: 'text', text: '界'.repeat(32 * 1024) }, { type: 'text', text: 'x' }],
+      [{ ...image(), extra: 'x'.repeat(1024 * 1024) }],
+    ]) {
+      expect(appClientMessageSchema.safeParse({
+        type: 'app.submit', requestId: 'budget', prompt,
+      }).success).toBe(false)
+    }
+  })
+
+  test('accepts two large inline images without spending the text budget', () => {
+    const image = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(2 * 1024 * 1024) },
+    }
+    expect(appClientMessageSchema.safeParse({
+      type: 'app.submit',
+      requestId: 'large-images',
+      prompt: [image, image, { type: 'text', text: 'a'.repeat(96 * 1024) }],
+    }).success).toBe(true)
+  })
+
   test('accepts submit, abort, ping, and permission response messages', () => {
     expect(
       appClientMessageSchema.parse({

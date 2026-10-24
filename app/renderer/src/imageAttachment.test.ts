@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { MAX_SUBMIT_IMAGE_BYTES } from '../../../src/app-runtime/appSubmitLimits.js'
 import {
   prepareImageAttachment,
   selectAttachableImageFiles,
@@ -53,35 +54,37 @@ test('rejects an oversized source file before FileReader allocates it', async ()
   expect(reads).toBe(0)
 })
 
-test('keeps a small accepted image without decoding or recompressing it', async () => {
-  installFileReader('data:image/png;base64,AAAA')
-  let decoded = false
+test('keeps a detailed eligible image byte-identical without recompressing it', async () => {
+  const data = 'A'.repeat(500_000)
+  installFileReader(`data:image/png;base64,${data}`)
+  let closed = false
   Object.defineProperty(globalThis, 'createImageBitmap', {
     configurable: true,
-    value: async () => {
-      decoded = true
-      throw new Error('small images should not be decoded')
-    },
+    value: async () => ({
+      width: 2_000,
+      height: 1_500,
+      close: () => { closed = true },
+    }),
   })
-  const file = new File(['small'], 'cat.png', { type: 'image/png' })
+  const file = new File(['x'.repeat(375_000)], 'cat.png', { type: 'image/png' })
 
   await expect(prepareImageAttachment(file)).resolves.toEqual({
     mediaType: 'image/png',
-    data: 'AAAA',
+    data,
     name: 'cat.png',
   })
-  expect(decoded).toBe(false)
+  expect(closed).toBe(true)
 })
 
-test('compresses an accepted image whose original base64 exceeds the submit budget', async () => {
+test('resizes an oversized screenshot and preserves PNG encoding', async () => {
   let reads = 0
   installFileReader(`data:image/png;base64,${'A'.repeat(90_001)}`, () => reads++)
   let closed = false
   Object.defineProperty(globalThis, 'createImageBitmap', {
     configurable: true,
     value: async () => ({
-      width: 2_000,
-      height: 1_000,
+      width: 4_000,
+      height: 2_000,
       close: () => {
         closed = true
       },
@@ -91,7 +94,7 @@ test('compresses an accepted image whose original base64 exceeds the submit budg
     width: 0,
     height: 0,
     getContext: () => ({ drawImage: () => {} }),
-    toDataURL: () => 'data:image/jpeg;base64,BBBB',
+    toDataURL: () => 'data:image/png;base64,BBBB',
   }
   Object.defineProperty(globalThis, 'document', {
     configurable: true,
@@ -101,14 +104,110 @@ test('compresses an accepted image whose original base64 exceeds the submit budg
   Object.defineProperty(file, 'size', { value: 100_000 })
 
   await expect(prepareImageAttachment(file)).resolves.toEqual({
-    mediaType: 'image/jpeg',
+    mediaType: 'image/png',
     data: 'BBBB',
     name: 'cat.png',
   })
-  expect(canvas.width).toBe(1_600)
-  expect(canvas.height).toBe(800)
+  expect(canvas.width).toBe(2_000)
+  expect(canvas.height).toBe(1_000)
   expect(closed).toBe(true)
   expect(reads).toBe(0)
+})
+
+test('uses WebP only when PNG exceeds the encoded ceiling', async () => {
+  let closed = false
+  Object.defineProperty(globalThis, 'createImageBitmap', {
+    configurable: true,
+    value: async () => ({
+      width: 2_000, height: 2_000,
+      close: () => { closed = true },
+    }),
+  })
+  const encodings: string[] = []
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { createElement: () => ({
+      getContext: () => ({ drawImage: () => {} }),
+      toDataURL: (type: string) => {
+        encodings.push(type)
+        return `data:${type};base64,${'A'.repeat(
+          type === 'image/png' ? MAX_SUBMIT_IMAGE_BYTES + 4 : MAX_SUBMIT_IMAGE_BYTES,
+        )}`
+      },
+    }) },
+  })
+  const file = new File(['x'], 'large.png', { type: 'image/png' })
+  Object.defineProperty(file, 'size', { value: 4 * 1024 * 1024 })
+  const result = await prepareImageAttachment(file)
+  expect(result.mediaType).toBe('image/webp')
+  expect(result.data.length).toBe(MAX_SUBMIT_IMAGE_BYTES)
+  expect(encodings).toEqual(['image/png', 'image/webp'])
+  expect(closed).toBe(true)
+})
+
+test('closes the bitmap when canvas preparation fails', async () => {
+  let closed = false
+  Object.defineProperty(globalThis, 'createImageBitmap', {
+    configurable: true,
+    value: async () => ({
+      width: 3_000, height: 2_000,
+      close: () => { closed = true },
+    }),
+  })
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { createElement: () => ({ getContext: () => null }) },
+  })
+  await expect(prepareImageAttachment(
+    new File(['x'], 'shot.png', { type: 'image/png' }),
+  )).rejects.toThrow('Could not prepare this image.')
+  expect(closed).toBe(true)
+})
+
+test('refuses output that never fits and bounds encoding attempts', async () => {
+  let closed = false
+  let attempts = 0
+  Object.defineProperty(globalThis, 'createImageBitmap', {
+    configurable: true,
+    value: async () => ({
+      width: 2_000, height: 2_000,
+      close: () => { closed = true },
+    }),
+  })
+  const oversized = `data:image/jpeg;base64,${'A'.repeat(MAX_SUBMIT_IMAGE_BYTES + 4)}`
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: { createElement: () => ({
+      getContext: () => ({ drawImage: () => {} }),
+      toDataURL: () => { attempts++; return oversized },
+    }) },
+  })
+  const file = new File(['x'], 'large.jpg', { type: 'image/jpeg' })
+  Object.defineProperty(file, 'size', { value: 4 * 1024 * 1024 })
+  await expect(prepareImageAttachment(file)).rejects.toThrow('This image is too large to attach.')
+  expect(attempts).toBe(20)
+  expect(closed).toBe(true)
+})
+
+test('rejects extreme decoded dimensions before allocating a canvas', async () => {
+  let closed = false
+  Object.defineProperty(globalThis, 'createImageBitmap', {
+    configurable: true,
+    value: async () => ({
+      width: 10_000, height: 10_000,
+      close: () => { closed = true },
+    }),
+  })
+  await expect(prepareImageAttachment(
+    new File(['x'], 'shot.png', { type: 'image/png' }),
+  )).rejects.toThrow('This image is too large to attach.')
+  expect(closed).toBe(true)
+})
+
+test('rejects unsupported sources before decoding', async () => {
+  await expect(prepareImageAttachment(
+    new File(['x'], 'shot.heic', { type: 'image/heic' }),
+  )).rejects.toThrow('Choose a PNG, JPEG, GIF, or WebP image.')
 })
 
 // CC-84 — a Finder drag exposes its payload on `dataTransfer.files`, never on

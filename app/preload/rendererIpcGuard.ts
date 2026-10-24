@@ -2,8 +2,11 @@ import {
   MAX_DIAGNOSTIC_FRAMES_PER_WINDOW,
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
+  MAX_LARGE_SUBMIT_BYTES_PER_WINDOW,
+  MAX_SUBMIT_FRAME_BYTES,
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
+import { isImageSubmitPrompt, validateSubmitPromptBudget } from '../shared/submitBudget.js'
 
 /**
  * `diagnostics` is automatic, high-volume traffic whose rate follows engine
@@ -11,10 +14,11 @@ import {
  * bounded below the total so it can never consume the whole window.
  * `control` is anything a user is waiting on. Default, and deliberately NOT
  * sub-capped: with a quiet window it may use the full allowance.
+ * `submit` additionally admits validated inline images under their own byte budget.
  * See `docs/migration/decisions/IPC-RATE-BUDGET.md` §4 for why the fault
  * reporter and the health response are control rather than diagnostics.
  */
-export type RendererIpcClass = 'control' | 'diagnostics'
+export type RendererIpcClass = 'control' | 'diagnostics' | 'submit'
 
 /**
  * Why a payload was refused. `rate` clears on its own when the window rolls;
@@ -44,6 +48,7 @@ export function createRendererIpcGuard({
   let windowStart = now()
   let frameCount = 0
   let diagnosticFrameCount = 0
+  let largeSubmitBytes = 0
 
   return {
     assertAllowed(payload: unknown, kind: RendererIpcClass = 'control'): void {
@@ -56,7 +61,21 @@ export function createRendererIpcGuard({
       if (serialized === undefined) {
         throw new RendererIpcRejection('Could not send this request. Try again.', 'serialization')
       }
-      if (new TextEncoder().encode(serialized).byteLength > MAX_FRAME_BYTES) {
+      const bytes = new TextEncoder().encode(serialized).byteLength
+      let maxBytes = MAX_FRAME_BYTES
+      if (kind === 'submit') {
+        const request = payload as { prompt?: unknown }
+        const problem = validateSubmitPromptBudget(request?.prompt)
+        if (problem) throw new RendererIpcRejection(problem, 'size')
+        if (isImageSubmitPrompt(request.prompt)) {
+          maxBytes = MAX_SUBMIT_FRAME_BYTES
+          const metadata = { ...request, prompt: '' }
+          if (new TextEncoder().encode(JSON.stringify(metadata)).byteLength > MAX_FRAME_BYTES) {
+            throw new RendererIpcRejection('This request is too large to send.', 'size')
+          }
+        }
+      }
+      if (bytes > maxBytes) {
         throw new RendererIpcRejection(
           'This request is too large. Try sending less text or fewer attachments.',
           'size',
@@ -68,6 +87,7 @@ export function createRendererIpcGuard({
         windowStart = currentTime
         frameCount = 0
         diagnosticFrameCount = 0
+        largeSubmitBytes = 0
       }
       // The total is checked for BOTH classes and never rises, so the flood
       // bound is exactly what it was. The sub-cap only decides who is turned
@@ -83,6 +103,15 @@ export function createRendererIpcGuard({
           'Too many requests at once. Wait a moment and try again.',
           'rate',
         )
+      }
+      if (bytes > MAX_FRAME_BYTES) {
+        if (largeSubmitBytes + bytes > MAX_LARGE_SUBMIT_BYTES_PER_WINDOW) {
+          throw new RendererIpcRejection(
+            'Images are being sent too quickly. Wait a moment and try again.',
+            'rate',
+          )
+        }
+        largeSubmitBytes += bytes
       }
       if (kind === 'diagnostics') diagnosticFrameCount++
       frameCount++

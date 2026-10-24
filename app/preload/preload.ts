@@ -290,7 +290,7 @@ const bridge: CatCodeBridge = {
   },
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void {
     const payload = { sessionId, prompt, options }
-    sendGuard.assertAllowed(payload)
+    sendGuard.assertAllowed(payload, 'submit')
     ipcRenderer.send(CH_SUBMIT, payload)
   },
   abort(sessionId: SessionId, requestId: string, reason?: string): void {

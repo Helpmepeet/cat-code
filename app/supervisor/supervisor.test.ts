@@ -10,7 +10,13 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { MAX_PROMPT_BYTES, PARKED_EXIT_CODE } from '../shared/limits.js'
+import {
+  MAX_FRAME_BYTES,
+  MAX_PENDING_HOST_INPUT_BYTES,
+  MAX_PENDING_SESSION_INPUT_BYTES,
+  MAX_PROMPT_BYTES,
+  PARKED_EXIT_CODE,
+} from '../shared/limits.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { OperationalFields, OperationalLogLevel } from '../shared/operationalLog.js'
 import {
@@ -247,6 +253,137 @@ test('rejects an oversized prompt before writing it and keeps the session usable
     sessionId,
     status: 'ready',
   })
+})
+
+// A valid ancillary private PNG chunk adds realistic transport volume without
+// changing the tiny image's pixels or asking the probe to decode image data.
+function paddedPng(fill: number): string {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64')
+  const body = Buffer.concat([Buffer.from('raNd'), Buffer.alloc(1024 * 1024, fill)])
+  let crc = 0xffffffff
+  for (const byte of body) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0)
+  }
+  const length = Buffer.alloc(4)
+  length.writeUInt32BE(body.length - 4)
+  const checksum = Buffer.alloc(4)
+  checksum.writeUInt32BE((crc ^ 0xffffffff) >>> 0)
+  return Buffer.concat([png.subarray(0, -12), length, body, checksum, png.subarray(-12)]).toString('base64')
+}
+
+test('real sidecar accepts two MiB-scale PNGs and remains usable', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-images-')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['run', join(import.meta.dir, '..', 'sidecar', 'index.ts')],
+    sidecarEnv: {
+      CATCODE_SIDECAR_PROBE: '1',
+      CLAUDE_CONFIG_DIR: makeTempDir('catcode-supervisor-image-config-'),
+    },
+    sidecarCwd: makeTempDir('catcode-supervisor-image-cwd-'),
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  const events: SupervisorEvent[] = []
+  supervisor.subscribe(event => events.push(event))
+  const sessionId = supervisor.spawnSession('image-submit-session')
+  await waitFor(() => events.some(e => e.type === 'status' && e.status === 'ready'), 'image sidecar did not become ready')
+  const prompt = [1, 2].map(fill => ({
+    type: 'image' as const,
+    source: { type: 'base64' as const, media_type: 'image/png' as const, data: paddedPng(fill) },
+  }))
+  expect(prompt.every(image => image.source.data.length > 1024 * 1024)).toBe(true)
+  // The transport correlation field is consumed before engine options parsing.
+  const options = { submitId: 'two-pngs', isMeta: false }
+  supervisor.send(sessionId, { type: 'app.submit', requestId: 'two-pngs', options, prompt })
+  await waitFor(() => events.some(e => e.type === 'frame'
+    && (e.frame.kind === 'submit.result' || e.frame.kind === 'error')), 'sidecar did not answer image submit')
+  expect(events.filter(e => e.type === 'frame'
+    && (e.frame.kind === 'submit.result' || e.frame.kind === 'error'))).toEqual(
+    expect.arrayContaining([expect.objectContaining({
+      type: 'frame', frame: expect.objectContaining({ kind: 'submit.result', submitId: 'two-pngs', accepted: true }),
+    })]),
+  )
+  await waitFor(() => events.some(e => e.type === 'frame' && e.frame.kind === 'submit.result'
+    && e.frame.submitId === 'two-pngs' && e.frame.accepted), 'two-image submit was not accepted')
+  await waitFor(() => events.some(e => e.type === 'frame' && e.frame.kind === 'event'
+    && JSON.stringify(e.frame).includes('probe-uuid-1')), 'probe did not produce its assistant output')
+  expect(events).toEqual(expect.arrayContaining([expect.objectContaining({
+    type: 'frame',
+    frame: expect.objectContaining({
+      kind: 'event',
+      event: expect.objectContaining({
+        type: 'message',
+        message: expect.objectContaining({
+          type: 'user',
+          message: expect.objectContaining({ content: prompt }),
+        }),
+      }),
+    }),
+  })]))
+  const output = events.find(e => e.type === 'frame' && e.frame.kind === 'event'
+    && JSON.stringify(e.frame).includes('probe-uuid-1'))
+  expect(JSON.stringify(output)).toContain('"name":"Read"')
+  expect(JSON.stringify(output)).toContain('"file_path":"/etc/hosts"')
+  supervisor.send(sessionId, { type: 'app.ping', nonce: 'after-images' })
+  await waitFor(() => events.some(e => e.type === 'frame' && e.frame.kind === 'pong'
+    && e.frame.nonce === 'after-images'), 'session stopped answering after images')
+  expect(events.some(e => e.type === 'frame' && e.frame.kind === 'error')).toBe(false)
+}, 30_000)
+
+function sendTestHarness() {
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    socketDir: makeTempDir('catcode-supervisor-admission-'),
+  })
+  // No processes or sockets are started: expose only the registry fields send
+  // reads, so buffer admission can be tested deterministically before write.
+  const registry = (supervisor as unknown as {
+    registry: Map<string, { status: string; socket: { writableLength: number; write: (data: Uint8Array) => boolean } }>
+  }).registry
+  let writes = 0
+  const socket = { writableLength: 0, write: () => { writes++; return false } }
+  registry.set('target', { status: 'ready', socket })
+  return { supervisor, registry, socket, writes: () => writes }
+}
+
+test('socket backpressure refuses before write and allows sends after draining', () => {
+  const h = sendTestHarness()
+  h.socket.writableLength = MAX_PENDING_SESSION_INPUT_BYTES
+  expect(() => h.supervisor.send('target', { type: 'app.ping', nonce: 'blocked' })).toThrow('Messages are still being sent.')
+  expect(h.writes()).toBe(0)
+  h.socket.writableLength = 0
+  h.supervisor.send('target', { type: 'app.ping', nonce: 'drained' })
+  expect(h.writes()).toBe(1)
+})
+
+test('pending bytes across other sessions count toward host admission', () => {
+  const h = sendTestHarness()
+  for (const id of ['other-a', 'other-b']) {
+    h.registry.set(id, {
+      status: 'ready',
+      socket: { writableLength: MAX_PENDING_HOST_INPUT_BYTES / 2, write: () => { throw new Error('unexpected write') } },
+    })
+  }
+  expect(() => h.supervisor.send('target', { type: 'app.ping', nonce: 'blocked' })).toThrow('Messages are still being sent.')
+  expect(h.writes()).toBe(0)
+  h.registry.delete('other-a')
+  h.supervisor.send('target', { type: 'app.ping', nonce: 'room' })
+  expect(h.writes()).toBe(1)
+})
+
+test('ordinary oversized controls and image submit metadata are refused before write', () => {
+  const h = sendTestHarness()
+  expect(() => h.supervisor.send('target', {
+    type: 'app.ping', nonce: 'x'.repeat(MAX_FRAME_BYTES),
+  })).toThrow('That message is too large to send.')
+  expect(() => h.supervisor.send('target', {
+    type: 'app.submit',
+    requestId: 'x'.repeat(MAX_FRAME_BYTES),
+    prompt: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: paddedPng(1) } }],
+  })).toThrow('This request is too large to send.')
+  expect(h.writes()).toBe(0)
 })
 
 test('default socket allocation uses a private random directory', () => {

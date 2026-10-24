@@ -7,8 +7,15 @@ import type {
 } from './sessionEvents.js'
 import { outputSchema as permissionResponseSchema } from '../utils/permissions/PermissionPromptToolResultSchema.js'
 
+import {
+  MAX_SUBMIT_IMAGE_BYTES,
+  MAX_SUBMIT_IMAGES,
+  MAX_SUBMIT_TEXT_BYTES,
+  isSubmitImageBase64,
+  validateAppSubmitPromptBudget,
+} from './appSubmitLimits.js'
+
 const requestIdSchema = z.string().min(1)
-const appSubmitImageBase64Chars = 90_000
 
 const appSubmitImageBlockSchema = z.strictObject({
   type: z.literal('image'),
@@ -18,38 +25,30 @@ const appSubmitImageBlockSchema = z.strictObject({
     data: z
       .string()
       .min(1)
-      .max(appSubmitImageBase64Chars)
-      .regex(
-        /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
-      ),
+      .max(MAX_SUBMIT_IMAGE_BYTES)
+      .refine(isSubmitImageBase64),
   }),
 })
 
 const appSubmitTextBlockSchema = z.strictObject({
   type: z.literal('text'),
-  text: z.string().min(1),
+  text: z.string().min(1).max(MAX_SUBMIT_TEXT_BYTES),
 })
 
 const appSubmitPromptSchema = z.union([
-  z.string().min(1),
+  z.string().min(1).max(MAX_SUBMIT_TEXT_BYTES),
   z
     .array(z.union([appSubmitImageBlockSchema, appSubmitTextBlockSchema]))
     .min(1)
-    .max(5)
+    .max(MAX_SUBMIT_IMAGES + 1)
     .refine(
       blocks => blocks.some(block => block.type === 'image'),
       'content-block prompts must include an image',
     )
-    .refine(
-      blocks =>
-        blocks.reduce(
-          (total, block) =>
-            total + (block.type === 'image' ? block.source.data.length : 0),
-          0,
-        ) <= appSubmitImageBase64Chars,
-      'image data exceeds the submit budget',
-    ),
-])
+]).superRefine((prompt, ctx) => {
+  const error = validateAppSubmitPromptBudget(prompt)
+  if (error) ctx.addIssue({ code: 'custom', message: error })
+})
 
 const appSubmitMessageSchema = z.object({
   type: z.literal('app.submit'),

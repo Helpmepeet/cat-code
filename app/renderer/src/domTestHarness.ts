@@ -65,7 +65,30 @@ export async function createDomTestHarness(): Promise<DomTestHarness> {
     throw new Error('A DOM test harness is already registered; tear the previous one down first.')
   }
 
+  const previousCreateImageBitmap = Object.getOwnPropertyDescriptor(globalThis, 'createImageBitmap')
   GlobalRegistrator.register({ url: 'http://localhost/' })
+
+  // Happy DOM advertises Blob/File decoding but does not implement it.
+  // Composer suites use tiny image File fixtures to test attachment state, not
+  // native decoding or visual fidelity. Keep other bitmap sources on its real
+  // implementation; imageAttachment.test.ts owns preparation decision coverage.
+  const createBitmap = globalThis.createImageBitmap
+  Object.defineProperty(globalThis, 'createImageBitmap', {
+    configurable: true,
+    writable: true,
+    value: (...args: Parameters<typeof createImageBitmap>): Promise<ImageBitmap> => {
+      const [source] = args
+      if (source instanceof File && source.type.startsWith('image/')) {
+        const bitmap = {
+          width: 1,
+          height: 1,
+          close() { this.width = 0; this.height = 0 },
+        }
+        return Promise.resolve(bitmap)
+      }
+      return createBitmap(...args)
+    },
+  })
 
   // Without this React logs "The current testing environment is not configured
   // to support act(...)" and effects do not flush deterministically.
@@ -118,7 +141,15 @@ export async function createDomTestHarness(): Promise<DomTestHarness> {
     await unmountAll()
     if (previousActEnvironment === undefined) delete actGlobal.IS_REACT_ACT_ENVIRONMENT
     else actGlobal.IS_REACT_ACT_ENVIRONMENT = previousActEnvironment
-    await GlobalRegistrator.unregister()
+    try {
+      await GlobalRegistrator.unregister()
+    } finally {
+      if (previousCreateImageBitmap) {
+        Object.defineProperty(globalThis, 'createImageBitmap', previousCreateImageBitmap)
+      } else {
+        Reflect.deleteProperty(globalThis, 'createImageBitmap')
+      }
+    }
   }
 
   return { document: globalThis.document, mount, nextFrame, unmountAll, teardown }

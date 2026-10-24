@@ -3587,7 +3587,7 @@ export type RecalledPrompt = {
    * carries: the composer has to be able to restore it whole, images included
    * (an image-bearing mid-turn prompt is a content-block array, and losing the
    * image is the failure the terminal's `pastedContents` restore exists to
-   * avoid). Bounded by `MAX_QUEUED_PROMPTS` × `MAX_PROMPT_BYTES`, well inside
+   * avoid). Combined recalled prompt data is bounded by `MAX_QUEUED_PROMPT_BYTES`, inside
    * `MAX_OUTBOUND_FRAME_BYTES`, and it only ever rides an explicit user action.
    */
   prompt: AppSubmitPrompt

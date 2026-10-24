@@ -26,7 +26,7 @@ export function encodeFrame(payload: unknown): Buffer {
 }
 
 export type FrameDecodeResult =
-  | { kind: 'frame'; payload: unknown }
+  | { kind: 'frame'; payload: unknown; byteLength: number }
   | { kind: 'error'; reason: string }
 
 /**
@@ -39,8 +39,12 @@ export class FrameDecoder {
   private buffer: Buffer = Buffer.alloc(0)
   private readOffset = 0
   private writeOffset = 0
+  private frameAdmitted = false
 
-  constructor(private readonly maxFrameBytes: number) {}
+  constructor(
+    private readonly maxFrameBytes: number,
+    private readonly admitFrame?: (byteLength: number) => boolean,
+  ) {}
 
   reset(): void {
     this.releaseBuffer()
@@ -66,11 +70,13 @@ export class FrameDecoder {
           results.push(this.oversizedFrameError(declaredLength))
           return results
         }
+        if (!this.checkAdmission(declaredLength, results)) return results
 
         const totalLength = LENGTH_PREFIX_BYTES + declaredLength
         if (availableBytes >= totalLength) {
           const bodyStart = cursor + LENGTH_PREFIX_BYTES
           if (!this.decodeBody(chunk.subarray(bodyStart, cursor + totalLength), results)) return results
+          this.releaseBuffer()
           cursor += totalLength
           continue
         }
@@ -97,6 +103,7 @@ export class FrameDecoder {
         results.push(this.oversizedFrameError(declaredLength))
         return results
       }
+      if (!this.checkAdmission(declaredLength, results)) return results
       const totalLength = LENGTH_PREFIX_BYTES + declaredLength
       const bytesNeeded = totalLength - pendingBytes
       const bodyBytes = Math.min(bytesNeeded, chunk.length - cursor)
@@ -113,6 +120,20 @@ export class FrameDecoder {
     }
 
     return results
+  }
+
+  private checkAdmission(byteLength: number, results: FrameDecodeResult[]): boolean {
+    if (this.frameAdmitted) return true
+    if (this.admitFrame && !this.admitFrame(byteLength)) {
+      results.push({
+        kind: 'error',
+        reason: 'Messages are arriving too quickly. Wait a moment and try again.',
+      })
+      this.releaseBuffer()
+      return false
+    }
+    this.frameAdmitted = true
+    return true
   }
 
   private append(source: Buffer, start: number, end: number): void {
@@ -153,7 +174,7 @@ export class FrameDecoder {
     try {
       // F14 — fatal UTF-8 rejects malformed bytes instead of replacing them.
       const text = FATAL_UTF8.decode(body)
-      results.push({ kind: 'frame', payload: JSON.parse(text) })
+      results.push({ kind: 'frame', payload: JSON.parse(text), byteLength: body.byteLength })
       return true
     } catch {
       results.push({ kind: 'error', reason: 'frame body is not valid UTF-8 JSON' })
@@ -171,6 +192,7 @@ export class FrameDecoder {
   }
 
   private releaseBuffer(): void {
+    this.frameAdmitted = false
     this.buffer = Buffer.alloc(0)
     this.readOffset = 0
     this.writeOffset = 0

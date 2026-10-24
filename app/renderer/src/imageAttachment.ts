@@ -2,6 +2,8 @@ import {
   MAX_ATTACHMENT_SOURCE_IMAGE_BYTES,
   type AttachmentImageMediaType,
 } from '../../shared/hostApi.js'
+import { IMAGE_MAX_HEIGHT, IMAGE_MAX_WIDTH } from '../../../src/constants/apiLimits.js'
+import { MAX_SUBMIT_IMAGE_BYTES } from '../../../src/app-runtime/appSubmitLimits.js'
 
 export const ACCEPTED_IMAGE_TYPES = [
   'image/jpeg',
@@ -18,8 +20,10 @@ export type PreparedImageAttachment = {
   name: string
 }
 
-const MAX_IMAGE_BASE64_CHARS = 90_000
-const MAX_IMAGE_EDGE = 1_600
+// Browser decoding happens before these dimensions are available. These guards
+// bound subsequent canvas work, not the browser decoder's internal allocations.
+const MAX_DECODED_PIXELS = 64 * 1024 * 1024
+const MAX_DECODED_EDGE = 32_768
 
 export async function prepareImageAttachment(
   file: File,
@@ -31,17 +35,23 @@ export async function prepareImageAttachment(
     throw new Error('This image is too large to attach.')
   }
 
-  if (Math.ceil(file.size / 3) * 4 <= MAX_IMAGE_BASE64_CHARS) {
-    const original = await readDataUrl(file)
-    const originalData = dataFromUrl(original)
-    if (originalData.length <= MAX_IMAGE_BASE64_CHARS) {
-      return { mediaType: file.type, data: originalData, name: file.name || 'Image' }
-    }
-  }
-
   const bitmap = await createImageBitmap(file)
   try {
-    let scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(bitmap.width, bitmap.height))
+    if (
+      !Number.isSafeInteger(bitmap.width) || !Number.isSafeInteger(bitmap.height)
+      || bitmap.width <= 0 || bitmap.height <= 0
+      || bitmap.width > MAX_DECODED_EDGE || bitmap.height > MAX_DECODED_EDGE
+      || bitmap.width * bitmap.height > MAX_DECODED_PIXELS
+    ) {
+      throw new Error('This image is too large to attach.')
+    }
+    let scale = Math.min(1, IMAGE_MAX_WIDTH / bitmap.width, IMAGE_MAX_HEIGHT / bitmap.height)
+    if (scale === 1 && Math.ceil(file.size / 3) * 4 <= MAX_SUBMIT_IMAGE_BYTES) {
+      const originalData = dataFromUrl(await readDataUrl(file))
+      if (originalData.length <= MAX_SUBMIT_IMAGE_BYTES) {
+        return { mediaType: file.type, data: originalData, name: file.name || 'Image' }
+      }
+    }
     for (let pass = 0; pass < 5; pass++) {
       const width = Math.max(1, Math.round(bitmap.width * scale))
       const height = Math.max(1, Math.round(bitmap.height * scale))
@@ -52,11 +62,22 @@ export async function prepareImageAttachment(
       if (!context) throw new Error('Could not prepare this image.')
       context.drawImage(bitmap, 0, 0, width, height)
 
-      for (const quality of [0.82, 0.68, 0.54, 0.4]) {
-        const data = dataFromUrl(canvas.toDataURL('image/jpeg', quality))
-        if (data.length <= MAX_IMAGE_BASE64_CHARS) {
+      // Try lossless PNG first for screenshots and alpha-bearing formats.
+      const encodings: [AcceptedImageType, number | undefined][] = file.type === 'image/jpeg'
+        ? []
+        : [['image/png', undefined]]
+      const compressedType = file.type === 'image/jpeg' ? 'image/jpeg' : 'image/webp'
+      for (const quality of [0.95, 0.85, 0.7, 0.5]) {
+        encodings.push([compressedType, quality])
+      }
+      for (const [mediaType, quality] of encodings) {
+        const url = canvas.toDataURL(mediaType, quality)
+        // A browser can fall back to PNG when an encoder is unavailable.
+        if (!url.startsWith(`data:${mediaType};base64,`)) continue
+        const data = dataFromUrl(url)
+        if (data.length <= MAX_SUBMIT_IMAGE_BYTES) {
           return {
-            mediaType: 'image/jpeg',
+            mediaType,
             data,
             name: file.name || 'Image',
           }

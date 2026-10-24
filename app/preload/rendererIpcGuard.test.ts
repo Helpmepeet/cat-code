@@ -4,9 +4,28 @@ import {
   MAX_DIAGNOSTIC_FRAMES_PER_WINDOW,
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
+  MAX_LARGE_SUBMIT_BYTES_PER_WINDOW,
+  MAX_SUBMIT_FRAME_BYTES,
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
+import { MAX_SUBMIT_IMAGE_BYTES, MAX_SUBMIT_TEXT_BYTES } from '../../src/app-runtime/appSubmitLimits.js'
 import { createRendererIpcGuard, RendererIpcRejection } from './rendererIpcGuard.js'
+
+const image = (data = 'AAAA') => ({
+  type: 'image',
+  source: { type: 'base64', media_type: 'image/png', data },
+})
+
+function expectRejection(action: () => void, reason: 'size' | 'rate'): void {
+  let rejection: unknown
+  try {
+    action()
+  } catch (error) {
+    rejection = error
+  }
+  expect(rejection).toBeInstanceOf(RendererIpcRejection)
+  expect((rejection as RendererIpcRejection).reason).toBe(reason)
+}
 
 test('rejects renderer IPC payloads over the shared frame byte limit', () => {
   const guard = createRendererIpcGuard()
@@ -16,7 +35,7 @@ test('rejects renderer IPC payloads over the shared frame byte limit', () => {
   )
 })
 
-test('two image attachments get actionable text without exposing transport internals', () => {
+test('two image attachments are accepted only on the submit channel', () => {
   const guard = createRendererIpcGuard()
   const payload = {
     sessionId: 'chat',
@@ -29,17 +48,77 @@ test('two image attachments get actionable text without exposing transport inter
     ],
   }
 
-  let rejection: unknown
-  try {
-    guard.assertAllowed(payload)
-  } catch (error) {
-    rejection = error
+  expect(() => guard.assertAllowed(payload, 'submit')).not.toThrow()
+  expectRejection(() => guard.assertAllowed(payload), 'size')
+  expectRejection(() => guard.assertAllowed(payload, 'diagnostics'), 'size')
+})
+
+test('accepts two maximum-sized encoded images and the full separate text allowance', () => {
+  const payload = {
+    sessionId: 'chat',
+    prompt: [
+      image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES)),
+      image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES)),
+      { type: 'text', text: '界'.repeat(MAX_SUBMIT_TEXT_BYTES / 3) },
+    ],
   }
-  expect(rejection).toBeInstanceOf(RendererIpcRejection)
-  expect((rejection as RendererIpcRejection).reason).toBe('size')
-  expect((rejection as Error).message).toBe(
-    'This request is too large. Try sending less text or fewer attachments.',
-  )
+  expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThan(MAX_SUBMIT_FRAME_BYTES)
+  expect(() => createRendererIpcGuard().assertAllowed(payload, 'submit')).not.toThrow()
+})
+
+test('rejects malformed and over-budget submit prompts with a size reason', () => {
+  const guard = createRendererIpcGuard()
+  for (const prompt of [
+    [image('not base64!')],
+    [image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES - 1) + '!')],
+    [image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES + 4))],
+    [image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES)), image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES)), image()],
+    [image(), { type: 'text', text: '界'.repeat(MAX_SUBMIT_TEXT_BYTES / 3 + 1) }],
+    'x'.repeat(MAX_SUBMIT_TEXT_BYTES + 1),
+    [{ ...image(), extra: 'x'.repeat(MAX_FRAME_BYTES) }],
+    [{ type: 'image', source: { ...image().source, media_type: 'x'.repeat(MAX_FRAME_BYTES) } }],
+  ]) {
+    expectRejection(() => guard.assertAllowed({ sessionId: 'chat', prompt }, 'submit'), 'size')
+  }
+})
+
+test('image allowance cannot carry oversized metadata, non-image bodies or controls', () => {
+  const guard = createRendererIpcGuard()
+  expectRejection(() => guard.assertAllowed({
+    prompt: [image()],
+    options: { uuid: 'x'.repeat(MAX_FRAME_BYTES) },
+  }, 'submit'), 'size')
+  expectRejection(() => guard.assertAllowed({
+    prompt: 'hello', metadata: 'x'.repeat(MAX_FRAME_BYTES),
+  }, 'submit'), 'size')
+  for (const kind of ['control', 'diagnostics'] as const) {
+    expectRejection(() => guard.assertAllowed({ data: 'x'.repeat(MAX_FRAME_BYTES) }, kind), 'size')
+  }
+})
+
+test('large submit byte budget exhausts independently, leaves control room and resets', () => {
+  let now = 1_000
+  const guard = createRendererIpcGuard({ now: () => now })
+  const payload = {
+    prompt: [image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES)), image('A'.repeat(MAX_SUBMIT_IMAGE_BYTES))],
+  }
+  const bytes = Buffer.byteLength(JSON.stringify(payload))
+  const accepted = Math.floor(MAX_LARGE_SUBMIT_BYTES_PER_WINDOW / bytes)
+  expect(MAX_LARGE_SUBMIT_BYTES_PER_WINDOW).toBe(2 * MAX_SUBMIT_FRAME_BYTES)
+  expect(accepted).toBe(2)
+  for (let index = 0; index < accepted; index++) {
+    expect(() => guard.assertAllowed(payload, 'submit')).not.toThrow()
+  }
+  expectRejection(() => guard.assertAllowed(payload, 'submit'), 'rate')
+  for (let index = accepted; index < MAX_FRAMES_PER_WINDOW; index++) {
+    expect(() => guard.assertAllowed({ type: 'app.abort', requestId: String(index) })).not.toThrow()
+  }
+  expectRejection(() => guard.assertAllowed({ overflow: true }), 'rate')
+  now += RATE_WINDOW_MS
+  expect(() => guard.assertAllowed(payload, 'submit')).not.toThrow()
+  expect(() => guard.assertAllowed(payload, 'submit')).not.toThrow()
+  expectRejection(() => guard.assertAllowed(payload, 'submit'), 'rate')
+  expect(() => guard.assertAllowed({ type: 'app.abort', requestId: 'after-reset' })).not.toThrow()
 })
 
 test('counts all fixed-channel sends in one shared rate window', () => {

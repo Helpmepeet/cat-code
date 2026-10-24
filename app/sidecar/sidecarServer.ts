@@ -103,6 +103,7 @@ import {
   HANDOFF_STATE_WINDOW_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
+  MAX_LARGE_SUBMIT_BYTES_PER_WINDOW,
   MAX_HANDOFF_STATE_BYTES,
   MAX_HANDOFF_STATES_PER_WINDOW,
   MAX_FRAMES_PER_WINDOW,
@@ -114,11 +115,18 @@ import {
   MAX_PROMPT_BYTES,
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
+  MAX_QUEUED_PROMPT_BYTES,
+  MAX_SUBMIT_FRAME_BYTES,
   MAX_QUESTION_ANSWER_CHARS,
   MAX_SUGGESTION_SELECTIONS,
   MAX_TEXT_FIELD_CHARS,
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
+import {
+  isImageSubmitPrompt,
+  submitPromptSerializedBytes,
+  validateSubmitPromptBudget,
+} from '../shared/submitBudget.js'
 import {
   SESSION_ACCOUNT_VERB_TYPES,
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
@@ -714,8 +722,12 @@ export class SidecarServer {
    */
   private readonly stagedPrompts = new Map<
     string,
-    { prompt: AppSubmitPrompt; isMeta?: boolean }
+    { prompt: AppSubmitPrompt; serializedBytes: number; isMeta?: boolean }
   >()
+  private largeReceiveWindowStart = 0
+  private largeReceiveBytes = 0
+  private bufferedReceiveWindowStart = 0
+  private bufferedReceiveBytes = 0
   /** Last staged list actually published, for `broadcastQueuedPrompts`. */
   private lastQueuedPromptsKey: string = EMPTY_QUEUED_PROMPTS_KEY
   /**
@@ -740,7 +752,7 @@ export class SidecarServer {
    */
   private readonly recalledPrompts = new Map<
     string,
-    { prompt: AppSubmitPrompt; isMeta?: boolean; requestId: string }
+    { prompt: AppSubmitPrompt; serializedBytes: number; isMeta?: boolean; requestId: string }
   >()
   /**
    * D1b — how many of ONE recall's messages turned out to have been delivered,
@@ -1139,7 +1151,7 @@ export class SidecarServer {
     this.clearIdleTimer()
     const connection: Connection = {
       socket,
-      decoder: new FrameDecoder(MAX_FRAME_BYTES),
+      decoder: new FrameDecoder(MAX_SUBMIT_FRAME_BYTES, bytes => this.admitFrameBytes(bytes)),
       rateWindowStart: Date.now(),
       rateCount: 0,
       closed: false,
@@ -1425,19 +1437,19 @@ export class SidecarServer {
         return
       }
 
-      if (!this.checkRate(connection)) {
+      if (!this.checkRate(connection, result.byteLength)) {
         this.rejectFrameWithSubmitAnswer(
           connection,
           result.payload,
           requestIdForRejectedFrame(result.payload),
           'bad_request',
-          'rate limit exceeded',
+          'Messages are arriving too quickly. Wait a moment and try again.',
           true,
         )
         continue
       }
 
-      this.handleFrame(connection, result.payload)
+      this.handleFrame(connection, result.payload, result.byteLength)
       // Parking/closure may happen synchronously inside dispatch. Stop only
       // the already-decoded tail of this batch; a separately delivered frame
       // still reaches the ordinary handler so correlated refusal semantics are
@@ -1669,7 +1681,7 @@ export class SidecarServer {
       ],
     ])
 
-  private handleFrame(connection: Connection, payload: unknown): void {
+  private handleFrame(connection: Connection, payload: unknown, byteLength: number): void {
     // A renderer-minted request id is safe to echo back on a boundary refusal,
     // but only when it is already a bounded string. It never authorizes work;
     // it lets the renderer retire the pending click instead of leaving it stuck.
@@ -1703,6 +1715,30 @@ export class SidecarServer {
         false,
       )
       return
+    }
+
+    const inbound = frame.message
+    const imageSubmit = inbound?.type === 'app.submit' && isImageSubmitPrompt(inbound.prompt)
+    if (byteLength > MAX_FRAME_BYTES && !imageSubmit) {
+      this.rejectFrameWithSubmitAnswer(
+        connection, payload, requestId, 'bad_request',
+        'This request is too large to send.', false,
+      )
+      return
+    }
+    if (inbound?.type === 'app.submit') {
+      // Keep non-prompt fields at the control bound. Use the original wire
+      // length so whitespace and escaped image bytes cannot bypass accounting.
+      const metadataBytes = byteLength - submitPromptSerializedBytes(inbound.prompt) + 2
+      const problem = metadataBytes > MAX_FRAME_BYTES
+        ? 'This request is too large to send.'
+        : validateSubmitPromptBudget(inbound.prompt)
+      if (problem) {
+        this.rejectFrameWithSubmitAnswer(
+          connection, payload, requestId, 'bad_request', problem, false,
+        )
+        return
+      }
     }
 
     // F10 — strict allowlist. The reused Zod objects STRIP unknown keys rather
@@ -2692,7 +2728,10 @@ export class SidecarServer {
    */
   private enqueueMidTurnPrompt(prompt: AppSubmitPrompt, isMeta?: boolean): void {
     const uuid = randomUUID()
-    this.stagedPrompts.set(uuid, { prompt, ...(isMeta ? { isMeta } : {}) })
+    this.stagedPrompts.set(uuid, {
+      prompt, serializedBytes: submitPromptSerializedBytes(prompt),
+      ...(isMeta ? { isMeta } : {}),
+    })
     enqueue({
       value: prompt,
       mode: 'prompt',
@@ -3066,7 +3105,7 @@ export class SidecarServer {
   /** D1b — remember a recalled message, oldest out past the queue depth cap. */
   private rememberRecalledPrompt(
     uuid: string,
-    entry: { prompt: AppSubmitPrompt; isMeta?: boolean; requestId: string },
+    entry: { prompt: AppSubmitPrompt; serializedBytes: number; isMeta?: boolean; requestId: string },
   ): void {
     this.recalledPrompts.set(uuid, entry)
     while (this.recalledPrompts.size > MAX_QUEUED_PROMPTS) {
@@ -3240,17 +3279,9 @@ export class SidecarServer {
       return
     }
 
-    // T7 (F4) — prompt cap in UTF-8 BYTES (not JS chars), consistent with the
-    // frame byte cap so a multibyte prompt cannot advertise a size the frame
-    // cannot carry.
-    const promptBytes = Buffer.byteLength(
-      typeof message.prompt === 'string'
-        ? message.prompt
-        : JSON.stringify(message.prompt),
-      'utf8',
-    )
-    if (promptBytes > MAX_PROMPT_BYTES) {
-      refuseSubmit('bad_request', `prompt exceeds ${MAX_PROMPT_BYTES} bytes`, false)
+    const problem = validateSubmitPromptBudget(message.prompt)
+    if (problem) {
+      refuseSubmit('bad_request', problem, false)
       return
     }
 
@@ -3304,6 +3335,18 @@ export class SidecarServer {
         refuseSubmit(
           'bad_request',
           'Too many messages are already waiting for this response.',
+          false,
+        )
+        return
+      }
+      // Recalled prompts still owe late-delivery reconciliation. Account for
+      // both maps so repeatedly recalling/resending cannot multiply retention.
+      const retainedBytes = [...this.stagedPrompts.values(), ...this.recalledPrompts.values()]
+        .reduce((total, entry) => total + entry.serializedBytes, 0)
+      if (retainedBytes + submitPromptSerializedBytes(message.prompt) > MAX_QUEUED_PROMPT_BYTES) {
+        refuseSubmit(
+          'bad_request',
+          'Waiting messages contain too much data. Wait for this response before sending more.',
           false,
         )
         return
@@ -6073,14 +6116,37 @@ export class SidecarServer {
     })
   }
 
-  private checkRate(connection: Connection): boolean {
+  private admitFrameBytes(byteLength: number): boolean {
+    if (byteLength <= MAX_FRAME_BYTES) return true
+    const now = Date.now()
+    if (now < this.bufferedReceiveWindowStart || now - this.bufferedReceiveWindowStart >= RATE_WINDOW_MS) {
+      this.bufferedReceiveWindowStart = now
+      this.bufferedReceiveBytes = 0
+    }
+    // Allow adjacent sender windows to straddle this receiver's window, but
+    // bound hostile bytes before buffering/parsing, not just after JSON decode.
+    if (this.bufferedReceiveBytes + byteLength > 2 * MAX_LARGE_SUBMIT_BYTES_PER_WINDOW) return false
+    this.bufferedReceiveBytes += byteLength
+    return true
+  }
+
+  private checkRate(connection: Connection, byteLength: number): boolean {
     const now = Date.now()
     if (now < connection.rateWindowStart || now - connection.rateWindowStart >= RATE_WINDOW_MS) {
       connection.rateWindowStart = now
       connection.rateCount = 0
     }
     connection.rateCount += 1
-    return connection.rateCount <= MAX_FRAMES_PER_WINDOW
+    if (connection.rateCount > MAX_FRAMES_PER_WINDOW) return false
+    if (byteLength > MAX_FRAME_BYTES) {
+      if (now < this.largeReceiveWindowStart || now - this.largeReceiveWindowStart >= RATE_WINDOW_MS) {
+        this.largeReceiveWindowStart = now
+        this.largeReceiveBytes = 0
+      }
+      if (this.largeReceiveBytes + byteLength > MAX_LARGE_SUBMIT_BYTES_PER_WINDOW) return false
+      this.largeReceiveBytes += byteLength
+    }
+    return true
   }
 }
 

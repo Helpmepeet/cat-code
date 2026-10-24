@@ -6,7 +6,7 @@ test('round-trips a single frame', () => {
   const decoder = new FrameDecoder(MAX_FRAME_BYTES)
   const results = decoder.push(encodeFrame({ hello: 'world' }))
   expect(results).toHaveLength(1)
-  expect(results[0]).toEqual({ kind: 'frame', payload: { hello: 'world' } })
+  expect(results[0]).toEqual({ kind: 'frame', payload: { hello: 'world' }, byteLength: Buffer.byteLength('{"hello":"world"}') })
 })
 
 test('reassembles a frame split across chunks', () => {
@@ -15,7 +15,7 @@ test('reassembles a frame split across chunks', () => {
   const mid = Math.floor(frame.length / 2)
   expect(decoder.push(frame.subarray(0, mid))).toHaveLength(0)
   const results = decoder.push(frame.subarray(mid))
-  expect(results).toEqual([{ kind: 'frame', payload: { a: 1, b: [1, 2, 3] } }])
+  expect(results).toEqual([{ kind: 'frame', payload: { a: 1, b: [1, 2, 3] }, byteLength: frame.length - 4 }])
 })
 
 test('releases fully consumed input chunks instead of retaining their backing storage', () => {
@@ -24,7 +24,7 @@ test('releases fully consumed input chunks instead of retaining their backing st
   const frame = encodeFrame({ value: 'ok' })
   frame.copy(largeBackingBuffer)
   expect(decoder.push(largeBackingBuffer.subarray(0, frame.length))).toEqual([
-    { kind: 'frame', payload: { value: 'ok' } },
+    { kind: 'frame', payload: { value: 'ok' }, byteLength: frame.length - 4 },
   ])
   // A zero-length subarray still retains its parent allocation. The decoder's
   // pending state must be empty after consuming the only frame.
@@ -39,7 +39,7 @@ test('assembles a large frame delivered in small chunks', () => {
   for (let offset = 0; offset < frame.length; offset += 64 * 1024) {
     output = decoder.push(frame.subarray(offset, Math.min(offset + 64 * 1024, frame.length)))
   }
-  expect(output).toEqual([{ kind: 'frame', payload: { value } }])
+  expect(output).toEqual([{ kind: 'frame', payload: { value }, byteLength: frame.length - 4 }])
 })
 
 test('geometric growth stays within the configured frame allocation ceiling', () => {
@@ -49,7 +49,7 @@ test('geometric growth stays within the configured frame allocation ceiling', ()
   expect(decoder.push(frame.subarray(0, frame.length - 1))).toEqual([])
   // Header overhead must not round a maximum-sized frame up to twice its cap.
   expect((decoder as unknown as { buffer: Buffer }).buffer.length).toBeLessThanOrEqual(frame.length)
-  expect(decoder.push(frame.subarray(-1))).toEqual([{ kind: 'frame', payload: { value } }])
+  expect(decoder.push(frame.subarray(-1))).toEqual([{ kind: 'frame', payload: { value }, byteLength: frame.length - 4 }])
 })
 
 test('validates the declared cap before buffering a hostile body chunk', () => {
@@ -76,9 +76,22 @@ test('splits two frames coalesced in one chunk', () => {
   const chunk = Buffer.concat([encodeFrame({ n: 1 }), encodeFrame({ n: 2 })])
   const results = decoder.push(chunk)
   expect(results).toEqual([
-    { kind: 'frame', payload: { n: 1 } },
-    { kind: 'frame', payload: { n: 2 } },
+    { kind: 'frame', payload: { n: 1 }, byteLength: Buffer.byteLength('{"n":1}') },
+    { kind: 'frame', payload: { n: 2 }, byteLength: Buffer.byteLength('{"n":2}') },
   ])
+})
+
+test('reports original UTF-8 wire bytes before whitespace and escapes are canonicalized', () => {
+  const body = Buffer.from('  { "value": "\\u0061\\/界" } \n', 'utf8')
+  const header = Buffer.alloc(4)
+  header.writeUInt32BE(body.byteLength)
+  const frame = Buffer.concat([header, body])
+  const expected: FrameDecodeResult[] = [{ kind: 'frame', payload: { value: 'a/界' }, byteLength: body.byteLength }]
+  expect(body.byteLength).toBeGreaterThan(Buffer.byteLength(JSON.stringify({ value: 'a/界' })))
+  expect(new FrameDecoder(MAX_FRAME_BYTES).push(frame)).toEqual(expected)
+  const fragmented = new FrameDecoder(MAX_FRAME_BYTES)
+  expect(fragmented.push(frame.subarray(0, 7))).toEqual([])
+  expect(fragmented.push(frame.subarray(7))).toEqual(expected)
 })
 
 test('rejects an oversized declared length before buffering the body (T7)', () => {
@@ -114,4 +127,88 @@ test('reset releases a partial frame when the connection closes', () => {
   const pending = decoder as unknown as { buffer: Buffer }
   expect(pending.buffer.length).toBe(0)
   expect(pending.buffer.buffer.byteLength).toBe(0)
+})
+
+test('oversized headers never reach admission, contiguous or fragmented', () => {
+  const calls: number[] = []
+  for (const fragmented of [false, true]) {
+    const decoder = new FrameDecoder(16, bytes => { calls.push(bytes); return true })
+    const frame = encodeFrame({ value: 'x'.repeat(100) })
+    if (fragmented) expect(decoder.push(frame.subarray(0, 2))).toEqual([])
+    const results = decoder.push(fragmented ? frame.subarray(2) : frame)
+    expect(results).toEqual([{ kind: 'error', reason: `frame length ${frame.length - 4} exceeds max 16` }])
+  }
+  expect(calls).toEqual([])
+})
+
+test('refuses large bodies before buffering or parsing and releases partial headers', () => {
+  const bodyLength = 2 * 1024 * 1024
+  const frame = Buffer.alloc(bodyLength + 4, 0xff)
+  frame.writeUInt32BE(bodyLength)
+  for (const fragmented of [false, true]) {
+    const calls: number[] = []
+    const decoder = new FrameDecoder(bodyLength, bytes => {
+      calls.push(bytes)
+      // At admission only a fragmented header may have been retained.
+      expect((decoder as unknown as { writeOffset: number }).writeOffset).toBe(fragmented ? 4 : 0)
+      return false
+    })
+    if (fragmented) expect(decoder.push(frame.subarray(0, 2))).toEqual([])
+    expect(decoder.push(fragmented ? frame.subarray(2) : frame)).toEqual([{
+      kind: 'error',
+      reason: 'Messages are arriving too quickly. Wait a moment and try again.',
+    }])
+    expect(calls).toEqual([bodyLength])
+    expect((decoder as unknown as { buffer: Buffer }).buffer.buffer.byteLength).toBe(0)
+  }
+})
+
+test('admits once when a header and body arrive in many fragments', () => {
+  const calls: number[] = []
+  const decoder = new FrameDecoder(MAX_FRAME_BYTES, bytes => { calls.push(bytes); return true })
+  const frame = encodeFrame({ value: 'fragmented' })
+  for (let offset = 0; offset < frame.length - 1; offset++) {
+    expect(decoder.push(frame.subarray(offset, offset + 1))).toEqual([])
+    expect(calls).toEqual(offset < 3 ? [] : [frame.length - 4])
+  }
+  expect(decoder.push(frame.subarray(-1))).toEqual([{
+    kind: 'frame', payload: { value: 'fragmented' }, byteLength: frame.length - 4,
+  }])
+  expect(calls).toEqual([frame.length - 4])
+})
+
+test('admits each coalesced frame and stops before a refused frame is parsed', () => {
+  const calls: number[] = []
+  const first = encodeFrame({ first: true })
+  const second = encodeFrame({ second: true })
+  const third = encodeFrame({ third: true })
+  const decoder = new FrameDecoder(MAX_FRAME_BYTES, bytes => {
+    calls.push(bytes)
+    return calls.length < 3
+  })
+  expect(decoder.push(Buffer.concat([first, second, third]))).toEqual([
+    { kind: 'frame', payload: { first: true }, byteLength: first.length - 4 },
+    { kind: 'frame', payload: { second: true }, byteLength: second.length - 4 },
+    { kind: 'error', reason: 'Messages are arriving too quickly. Wait a moment and try again.' },
+  ])
+  expect(calls).toEqual([first.length - 4, second.length - 4, third.length - 4])
+})
+
+test('reset and errors clear admission state for the next frame', () => {
+  const calls: number[] = []
+  let allow = true
+  const decoder = new FrameDecoder(MAX_FRAME_BYTES, bytes => { calls.push(bytes); return allow })
+  const frame = encodeFrame({ next: true })
+  expect(decoder.push(frame.subarray(0, 5))).toEqual([])
+  decoder.reset()
+  expect(decoder.push(frame)).toEqual([{
+    kind: 'frame', payload: { next: true }, byteLength: frame.length - 4,
+  }])
+  allow = false
+  expect(decoder.push(frame)[0].kind).toBe('error')
+  allow = true
+  const invalid = Buffer.from([0, 0, 0, 1, 0xff])
+  expect(decoder.push(invalid)[0].kind).toBe('error')
+  expect(decoder.push(frame)[0].kind).toBe('frame')
+  expect(calls).toEqual([frame.length - 4, frame.length - 4, frame.length - 4, 1, frame.length - 4])
 })
