@@ -881,6 +881,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
           appState.toolPermissionContext,
           context.abortController.signal,
           createYoloClassifierStageObserver(observation),
+          { priorAssistantContext: context.agentId === undefined },
         )
       } finally {
         clearClassifierChecking(toolUseID)
