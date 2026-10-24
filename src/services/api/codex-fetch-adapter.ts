@@ -927,6 +927,10 @@ function canonicalizeCustomToolInputForRecord(
     : rawInput
 }
 
+function messagePhase(value: unknown): 'commentary' | 'final_answer' | undefined {
+  return value === 'commentary' || value === 'final_answer' ? value : undefined
+}
+
 /**
  * Produces the one canonical shape for a Codex response output item, dropping
  * volatile/unknown fields (e.g. `logprobs` on output_text parts — codex-rs
@@ -952,6 +956,7 @@ export function canonicalizeCodexItem(
         }
       }),
       status: 'completed',
+      ...(messagePhase(item.phase) ? { phase: messagePhase(item.phase) } : {}),
     }
   }
 
@@ -1315,6 +1320,8 @@ function translateMessages(
               role: 'assistant',
               content: [{ type: 'output_text', text: block.text, annotations: [] }],
               status: 'completed',
+              ...(messagePhase((block as { phase?: unknown }).phase)
+                ? { phase: messagePhase((block as { phase?: unknown }).phase) } : {}),
             })
           }
         } else if (block.type === 'tool_use') {
@@ -2216,6 +2223,8 @@ async function processCodexEvents(
   // recovers an identity for an event that has only item_id. Mirrors the
   // dual-lookup resolveOpenToolCall already uses for tool calls below.
   const outputIndexByItemId = new Map<string, number>()
+  const messagePhases = new Map<string | number, 'commentary' | 'final_answer' | undefined>()
+  let currentMessagePhase: 'commentary' | 'final_answer' | undefined
   const resolveItemRef = (
     itemId: string | undefined,
     outputIndex: number | undefined,
@@ -2233,10 +2242,21 @@ async function processCodexEvents(
       readNumber(event.content_index),
     )
 
+  const rememberMessagePhase = (item: Record<string, unknown>, event: Record<string, unknown>) => {
+    const ref = resolveItemRef(readString(item.id), readNumber(event.output_index))
+    const phase = messagePhase(item.phase) ?? (ref === undefined ? undefined : messagePhases.get(ref))
+    if (ref !== undefined) messagePhases.set(ref, phase)
+    currentMessagePhase = phase
+  }
+  const phaseForEvent = (event: Record<string, unknown>) => {
+    const ref = resolveItemRef(readString(event.item_id), readNumber(event.output_index))
+    return ref === undefined ? currentMessagePhase : messagePhases.get(ref)
+  }
+
   // Appends into the open text block when one exists so recovered text merges
   // with streamed text exactly as consecutive deltas would. The block is closed
   // by the same paths that close a delta-fed one.
-  const emitAssistantText = (text: string) => {
+  const emitAssistantText = (text: string, phase: 'commentary' | 'final_answer' | undefined) => {
     closeAllOpenReasoningBlocks()
     if (!currentTextBlockStarted) {
       noteVisibleOutput()
@@ -2245,7 +2265,7 @@ async function processCodexEvents(
           formatSSE('content_block_start', JSON.stringify({
             type: 'content_block_start',
             index: contentBlockIndex,
-            content_block: { type: 'text', text: '' },
+            content_block: { type: 'text', text: '', ...(phase ? { phase } : {}) },
           })),
         ),
       )
@@ -2287,6 +2307,10 @@ async function processCodexEvents(
                 // Reasoning items are tracked via reasoning_summary_*.delta
                 // and reasoning_text.delta events; nothing to do on add.
               } else if (item?.type === 'message') {
+                // Each provider message has its own phase from its first delta.
+                // Never merge an update and an answer into one text block.
+                closeOpenTextBlock()
+                rememberMessagePhase(item, event)
                 // Close any open reasoning blocks so message text slots in
                 // at the correct ordinal position.
                 closeAllOpenReasoningBlocks()
@@ -2354,7 +2378,7 @@ async function processCodexEvents(
               const text = event.delta as string
               if (typeof text === 'string' && text.length > 0) {
                 textPartsEmitted.add(eventTextPartKey(event))
-                emitAssistantText(text)
+                emitAssistantText(text, phaseForEvent(event))
                 outputTokens += 1
               }
             }
@@ -2372,7 +2396,7 @@ async function processCodexEvents(
                   `part=${partKey} chars=${text.length}`,
                   { level: 'warn' },
                 )
-                emitAssistantText(text)
+                emitAssistantText(text, phaseForEvent(event))
               }
             }
 
@@ -2391,7 +2415,7 @@ async function processCodexEvents(
                   `part=${partKey} chars=${text.length}`,
                   { level: 'warn' },
                 )
-                emitAssistantText(text)
+                emitAssistantText(text, phaseForEvent(event))
               }
             }
 
@@ -2520,6 +2544,7 @@ async function processCodexEvents(
                   item,
                 )
               } else if (item?.type === 'message') {
+                rememberMessagePhase(item, event)
                 // Last chance to recover text: the completed item carries the
                 // authoritative content, and some responses deliver a populated
                 // message here without ever emitting output_text.done for it.
@@ -2539,7 +2564,7 @@ async function processCodexEvents(
                     `part=${partKey} chars=${text.length}`,
                     { level: 'warn' },
                   )
-                  emitAssistantText(text)
+                  emitAssistantText(text, currentMessagePhase)
                 }
                 // A message whose parts carry no renderable text still ends the
                 // turn with an empty assistant message and completed:true, which

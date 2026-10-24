@@ -1081,6 +1081,9 @@ function layoutWithContextTransitions(
       }
       const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(part.rows), mode))
       for (const id of narrationRowIds(items)) narration.add(id)
+      if (transcriptMode === 'focused') for (const row of part.rows) {
+        if (row.kind === 'assistant-text' && row.phase === 'final_answer') narration.delete(row.id)
+      }
       for (const item of items) entries.push({ kind: 'item', item })
     }
     return { entries, narration }

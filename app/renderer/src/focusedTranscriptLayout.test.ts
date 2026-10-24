@@ -29,6 +29,23 @@ describe('focused transcript layout', () => {
     expect(done.at(-1)?.rows.map(x => x.id)).toEqual(['answer', 'r'])
     expect(group.id).toBe(live.id)
   })
+  test('explicit commentary is never an answer and a partial tagged answer does not hide stopped work', () => {
+    const update = { ...text('update'), phase: 'commentary' as const } as NestedTranscriptRow
+    const answer = { ...text('answer'), phase: 'final_answer' as const } as NestedTranscriptRow
+    const commentaryOnly = groups([user(), tool(), update, result()])[0]!
+    expect(commentaryOnly.rows.map(row => row.id)).toEqual(['t', 'update'])
+    expect(commentaryOnly.completed).toBe(false)
+    for (const end of [result(true), { ...base('stop'), kind: 'turn-stopped' } as NestedTranscriptRow]) {
+      const items = deriveFocusedTranscript([user(), update, tool(), answer, end], false)
+      const work = items.find(item => item.kind === 'focused-turn')!
+      expect(work.rows.map(row => row.id)).toEqual(['update', 't'])
+      expect(work.kind === 'focused-turn' && work.completed).toBe(false)
+      expect(items.at(-1)?.rows.map(row => row.id)).toEqual(['answer', end.id])
+    }
+    const finalOnly = deriveFocusedTranscript([user(), answer], true)
+    expect(finalOnly.flatMap(item => item.rows).map(row => row.id)).toEqual(['u', 'answer'])
+    expect(finalOnly.every(item => item.kind === 'rows')).toBe(true)
+  })
   test('stopped, failed and no-answer turns never collapse', () => {
     for (const end of [result(true), { ...base('stop'), kind: 'turn-stopped' } as NestedTranscriptRow, result()]) {
       const group = groups([user(), text('update'), tool(), end])[0]!

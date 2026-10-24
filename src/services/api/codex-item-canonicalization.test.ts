@@ -111,10 +111,11 @@ describe('canonicalizeCodexItem: message round-trip', () => {
     expect(JSON.stringify(canonical)).not.toContain('logprobs')
   })
 
-  test('record shape byte-matches the translateMessages replay shape', () => {
+  for (const phase of [undefined, 'commentary', 'final_answer', 'unknown']) test(`record and replay preserve recognized message phase: ${phase}`, () => {
     const rawServerMessage = {
       type: 'message',
       role: 'assistant',
+      phase,
       status: 'completed',
       content: [
         { type: 'output_text', text: 'answer', annotations: [], logprobs: [] },
@@ -136,7 +137,7 @@ describe('canonicalizeCodexItem: message round-trip', () => {
               id: 'msg_a1',
               type: 'message',
               role: 'assistant',
-              content: [{ type: 'text', text: 'answer' }],
+              content: [{ type: 'text', text: 'answer', phase }],
             },
           },
         ],
@@ -145,6 +146,7 @@ describe('canonicalizeCodexItem: message round-trip', () => {
     const replayed = (codexBody.input as Array<Record<string, unknown>>).find(
       it => it.type === 'message',
     )
+    expect(canonical.phase).toBe(phase === 'commentary' || phase === 'final_answer' ? phase : undefined)
     expect(JSON.stringify(canonical)).toBe(JSON.stringify(replayed))
   })
 })

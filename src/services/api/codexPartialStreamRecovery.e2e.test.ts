@@ -63,7 +63,8 @@ async function* interruptedCodexTurn(): AsyncGenerator<Record<string, unknown>> 
 /** The continuation turn, which completes. */
 async function* completedCodexTurn(): AsyncGenerator<Record<string, unknown>> {
   yield { type: 'response.created', response: { id: 'resp_continuation' } }
-  yield { type: 'response.output_text.delta', delta: FINAL_TEXT }
+  yield { type: 'response.output_item.added', output_index: 0, item: { id: 'final_message', type: 'message', phase: 'final_answer' } }
+  yield { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: FINAL_TEXT }
   yield {
     type: 'response.completed',
     response: {
@@ -284,5 +285,15 @@ describe('Codex partial-stream recovery, adapter through query loop', () => {
     const texts = assistantTextOf(yielded)
     expect(texts).toContain(PARTIAL_TEXT)
     expect(texts).toContain(FINAL_TEXT)
+    const final = yielded.filter(message => message.type === 'assistant')
+      .flatMap(message => (message as AssistantMessage).message.content)
+      .find(block => block.type === 'text' && block.text === FINAL_TEXT)
+    expect((final as { phase?: unknown })?.phase).toBe('final_answer')
+    const start = yielded.find(message => {
+      const { type, event } = message as unknown as { type: string; event?: { type?: string; content_block?: { phase?: unknown } } }
+      return type === 'stream_event' && event?.type === 'content_block_start' &&
+        event.content_block?.phase === 'final_answer'
+    })
+    expect(start).toBeDefined()
   })
 })

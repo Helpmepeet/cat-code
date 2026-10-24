@@ -162,20 +162,27 @@ export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], tu
     const replayCompleted = !live && (!end || isOperator(end)) &&
       last?.kind === 'assistant-text' && last.replayEndTurn === true
     const successful = result ? result.subtype === 'success' && !result.isError && !result.errors.length : replayCompleted
-    let answer = -1
-    if (successful) for (let j = i - 1; j >= start; j--) {
-      if (!isWork(rows[j]!)) continue
-      if (rows[j]!.kind === 'assistant-text') answer = j
+    const answers = new Set<number>()
+    for (let j = start; j < i; j++) {
+      const row = rows[j]!
+      if (isWork(row) && row.kind === 'assistant-text' && row.phase === 'final_answer') answers.add(j)
+    }
+    // Old transcripts and providers without phases retain the turn-end fallback.
+    // Explicit commentary can never be promoted just because it was last.
+    if (!answers.size && successful) for (let j = i - 1; j >= start; j--) {
+      const row = rows[j]!
+      if (!isWork(row)) continue
+      if (row.kind === 'assistant-text' && row.phase === undefined) answers.add(j)
       break
     }
     const fragments: { start: number; end: number }[] = []
     for (let j = start; j < i;) {
-      if (!isWork(rows[j]!) || j === answer) { j++; continue }
+      if (!isWork(rows[j]!) || answers.has(j)) { j++; continue }
       const from = j++
-      while (j < i && isWork(rows[j]!) && j !== answer) j++
+      while (j < i && isWork(rows[j]!) && !answers.has(j)) j++
       fragments.push({ start: from, end: j })
     }
-    if (!fragments.length && live) fragments.push({ start: i, end: i })
+    if (!fragments.length && live && !answers.size) fragments.push({ start: i, end: i })
     let fragmentIndex = 0
     for (let j = start; j <= i;) {
       const fragment = fragments[fragmentIndex]
@@ -191,7 +198,7 @@ export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], tu
       const summary = summarizeFocusedWork(work)
       const id = fragmentIndex === 0 ? `focused-turn:${anchor.id}` : `focused-turn:${anchor.id}:after:${rows[fragment.start - 1]!.id}`
       items.push({ kind: 'focused-turn', id, rows: work,
-        segments: deriveFocusedSegments(work), live, completed: answer >= 0,
+        segments: deriveFocusedSegments(work), live, completed: successful && answers.size > 0,
         durationMs: typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 ? duration : null,
         ...summary, hasErrors: summary.hasErrors || result?.isError === true })
       fragmentIndex++

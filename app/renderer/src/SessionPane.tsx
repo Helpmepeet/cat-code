@@ -871,6 +871,7 @@ export function SessionPane({
     let userFrameId: string | null = null
     let answerRowId: string | null = null
     let lastText: string | null = null
+    let phaseAnswer: string | null = null
     for (const row of nestedRows) {
       if ((row.kind === 'user-text' || row.kind === 'user-image') && !row.isHidden) {
         if (row.frameId === userFrameId) continue
@@ -878,10 +879,13 @@ export function SessionPane({
         userRowId = row.id
         answerRowId = null
         lastText = null
-      } else if (row.kind === 'assistant-text') lastText = row.id
-      else if (row.kind === 'tool-use') lastText = null
+        phaseAnswer = null
+      } else if (row.kind === 'assistant-text') {
+        if (row.phase === 'final_answer') phaseAnswer ??= row.id
+        lastText = row.phase === 'commentary' ? null : row.id
+      } else if (row.kind === 'tool-use') lastText = null
       else if (row.kind === 'result') {
-        answerRowId = row.subtype === 'success' && !row.isError && row.errors.length === 0 ? lastText : null
+        answerRowId = row.subtype === 'success' && !row.isError && row.errors.length === 0 ? phaseAnswer ?? lastText : null
       }
     }
     return { generating, userRowId, answerRowId }

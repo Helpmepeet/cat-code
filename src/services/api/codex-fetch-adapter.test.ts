@@ -2034,6 +2034,25 @@ describe('codex-fetch-adapter', () => {
     }
   }
 
+  test('message phases survive streaming and terminal-only text without merging commentary into the answer', async () => {
+    const body = await runTerminalTextFetch('conv_message_phases', [
+      { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'update', phase: 'commentary' } },
+      { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Checking.' },
+      { type: 'response.output_item.added', output_index: 1, item: { type: 'message', id: 'answer', phase: 'final_answer' } },
+      { type: 'response.output_text.delta', output_index: 1, content_index: 0, delta: 'Answer.' },
+      { type: 'response.output_item.done', output_index: 1, item: { type: 'message', id: 'answer', phase: 'final_answer', content: [] } },
+      { type: 'response.output_item.done', output_index: 2, item: { type: 'message', id: 'terminal', phase: 'final_answer', content: [{ type: 'output_text', text: 'More answer.' }] } },
+      { type: 'response.output_item.added', output_index: 3, item: { type: 'message', phase: 'unknown' } },
+      { type: 'response.output_text.delta', output_index: 3, content_index: 0, delta: 'Untagged.' },
+    ])
+    expect(body.content).toEqual([
+      { type: 'text', text: 'Checking.', phase: 'commentary' },
+      { type: 'text', text: 'Answer.', phase: 'final_answer' },
+      { type: 'text', text: 'More answer.', phase: 'final_answer' },
+      { type: 'text', text: 'Untagged.' },
+    ])
+  })
+
   // Deliberately carries NO response.output_item.done: with one, the item-level
   // fallback covers for this branch and the test passes even when the
   // output_text.done handler is deleted outright.

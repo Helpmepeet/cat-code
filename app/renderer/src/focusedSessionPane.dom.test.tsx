@@ -12,7 +12,7 @@ beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await harness.unmountAll() })
 afterAll(async () => { await harness.teardown() })
 let serial = 0
-function project(content: unknown[], prior?: TranscriptState, options: { replay?: boolean; stopReason?: string } = {}) {
+function project(content: unknown[], prior?: TranscriptState, options: { replay?: boolean; stopReason?: string; messageId?: string } = {}) {
   const sessionId = 'session-1'
   let state = prior ?? projectServerFrame(createTranscriptState(), {
     kind: 'ready', protocolVersion: 4, sessionId, engineSessionId: 'engine-1', payload: {
@@ -24,7 +24,7 @@ function project(content: unknown[], prior?: TranscriptState, options: { replay?
   const event = (message: unknown) => ({ kind: 'event', protocolVersion: 4, sessionId, replay: options.replay, event: { type: 'message', message } }) as never
   if (!prior) state = projectServerFrame(state, event({ type: 'user', uuid: `user-${id}`, session_id: 'engine-1', parent_tool_use_id: null, message: { role: 'user', content: 'Check the loader' } }))
   return projectServerFrame(state, event({ type: 'assistant', uuid: `assistant-${id}`, session_id: 'engine-1', parent_tool_use_id: null, message: {
-    id: `message-${id}`, role: 'assistant', type: 'message', model: 'gpt-6.1-sol', stop_reason: options.stopReason ?? null, stop_sequence: null,
+    id: options.messageId ?? `message-${id}`, role: 'assistant', type: 'message', model: 'gpt-6.1-sol', stop_reason: options.stopReason ?? null, stop_sequence: null,
     usage: { input_tokens: 10, output_tokens: 5, service_tier: null }, content,
   } }))
 }
@@ -92,6 +92,36 @@ test('producer assistant messages accumulate under Working and fold only when th
   expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('1m 44s')
   expect(tree.container.querySelector('.focused-turn')?.textContent).not.toContain('The loader is fixed.')
   expect(tree.container.textContent).toContain('The loader is fixed.')
+})
+
+test('provider phase places the streamed answer outside Working before completion and keeps commentary inside', async () => {
+  let state = project([{ type: 'text', text: 'An update, not the answer.', phase: 'commentary' }])
+  const event = (value: unknown) => ({ kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: {
+    type: 'message', message: { type: 'stream_event', event: value, parent_tool_use_id: null },
+  } }) as never
+  state = projectServerFrame(state, event({ type: 'message_start', message: { id: 'final-stream' } }))
+  state = projectServerFrame(state, event({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '', phase: 'final_answer' } }))
+  state = projectServerFrame(state, event({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'The actual answer' } }))
+  const tree = await harness.mount(pane(state, 'focused'))
+  expect(tree.container.querySelector('.focused-turn')?.textContent).toContain('An update, not the answer.')
+  expect(tree.container.querySelector('.focused-turn')?.textContent).not.toContain('The actual answer')
+  expect(tree.container.textContent).toContain('The actual answer')
+  expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('true')
+  const liveAnswer = [...tree.container.querySelectorAll('[data-row-key]')].find(node => node.textContent?.includes('The actual answer'))
+  expect(liveAnswer?.closest('.focused-turn')).toBeNull()
+  state = project([{ type: 'text', text: 'The actual answer, complete.', phase: 'final_answer' }], state, { messageId: 'final-stream' })
+  expect(selectNestedTranscriptRows(state, 'session-1').filter(row => row.kind === 'assistant-text' && row.phase === 'final_answer')
+    .map(row => row.kind === 'assistant-text' ? row.content : '')).toEqual(['The actual answer, complete.'])
+  state = projectServerFrame(state, {
+    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+      type: 'result', subtype: 'success', is_error: false, errors: [], duration_ms: 1000,
+      uuid: 'phase-result', session_id: 'engine-1', result: 'The actual answer, complete.',
+    } },
+  } as never)
+  await tree.render(pane(state, 'focused'))
+  expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('false')
+  expect(tree.container.querySelector('.focused-turn')?.textContent).not.toContain('The actual answer')
+  expect(tree.container.textContent).toContain('The actual answer, complete.')
 })
 
 test('saved previews use recorded end_turn for the answer, never missing or failed completion evidence', async () => {

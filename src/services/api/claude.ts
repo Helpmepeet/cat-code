@@ -764,14 +764,23 @@ export function assistantMessageToMessageParam(
   enablePromptCaching: boolean,
   querySource?: QuerySource,
 ): MessageParam {
+  // Phase belongs to Codex history and the UI, not Anthropic's text schema.
+  // The Codex request uses the separate instruction assembly with stored blocks.
+  const content = Array.isArray(message.message.content)
+    ? message.message.content.map(block => {
+        if (block.type !== 'text' || !('phase' in block)) return block
+        const { phase: _phase, ...text } = block as typeof block & { phase?: unknown }
+        return text
+      })
+    : message.message.content
   if (addCache) {
-    if (typeof message.message.content === 'string') {
+    if (typeof content === 'string') {
       return {
         role: 'assistant',
         content: [
           {
             type: 'text',
-            text: message.message.content,
+            text: content,
             ...(enablePromptCaching && {
               cache_control: getCacheControl({ querySource }),
             }),
@@ -781,9 +790,9 @@ export function assistantMessageToMessageParam(
     } else {
       return {
         role: 'assistant',
-        content: message.message.content.map((_, i) => ({
+        content: content.map((_, i) => ({
           ..._,
-          ...(i === message.message.content.length - 1 &&
+          ...(i === content.length - 1 &&
           _.type !== 'thinking' &&
           _.type !== 'redacted_thinking' &&
           (feature('CONNECTOR_TEXT') ? !isConnectorTextBlock(_) : true)
@@ -797,7 +806,7 @@ export function assistantMessageToMessageParam(
   }
   return {
     role: 'assistant',
-    content: message.message.content,
+    content,
   }
 }
 

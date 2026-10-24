@@ -100,6 +100,7 @@ type RowSource = FrameRowSource & {
 
 export type AssistantTextRow = RowSource & {
   kind: 'assistant-text'
+  phase?: 'commentary' | 'final_answer'
   inlineCommandOrigin?: { messageUuid: string; contentBlockIndex: number }
   /** Stored assistant completion; live turns still wait for their result frame. */
   replayEndTurn?: true
@@ -515,6 +516,7 @@ export type TranscriptRow =
   | TombstoneRow
 
 type StreamingTextBlock = {
+  phase?: 'commentary' | 'final_answer'
   messageId: string
   blockIndex: number
   content: string
@@ -2225,6 +2227,7 @@ function projectStreamEvent(
           messageId: draft.session.currentStreamMessageId,
           blockIndex: event.index,
           content: '',
+          ...(block.phase === 'commentary' || block.phase === 'final_answer' ? { phase: block.phase } : {}),
         }
       }
       return true
@@ -3342,6 +3345,7 @@ function createStreamingTextRow(
     kind: 'assistant-text',
     role: 'assistant',
     content: block.content,
+    ...(block.phase ? { phase: block.phase } : {}),
     isStreaming: true,
   }
 }
@@ -3488,6 +3492,7 @@ function projectAssistantContentBlock(
         kind: 'assistant-text',
         role: 'assistant',
         content: block.text,
+        ...(block.phase === 'commentary' || block.phase === 'final_answer' ? { phase: block.phase } : {}),
       }
 
     case 'tool_use':
