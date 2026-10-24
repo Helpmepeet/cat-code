@@ -876,10 +876,13 @@ export function SessionPane({
   const focusedScrollState = useMemo(() => {
     if (!focusedMode) return { generating: false, userRowId: null, answerRowId: null }
     let userRowId: string | null = null
+    let userFrameId: string | null = null
     let answerRowId: string | null = null
     let lastText: string | null = null
     for (const row of nestedRows) {
       if ((row.kind === 'user-text' || row.kind === 'user-image') && !row.isHidden) {
+        if (row.frameId === userFrameId) continue
+        userFrameId = row.frameId
         userRowId = row.id
         answerRowId = null
         lastText = null

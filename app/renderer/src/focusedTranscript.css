@@ -20,8 +20,8 @@
 .focused-fold-chevron[data-open] { transform: rotate(90deg); }
 .focused-fold-label { flex-shrink: 0; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
 .focused-fold-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; color: var(--text-faint); }
-.focused-disclosure { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 260ms var(--ease-standard), opacity 260ms var(--ease-standard); }
-.focused-disclosure[data-open] { grid-template-rows: 1fr; opacity: 1; transition-duration: 200ms; }
+.focused-disclosure { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 260ms var(--ease-standard), opacity 140ms linear; }
+.focused-disclosure[data-open] { grid-template-rows: 1fr; opacity: 1; transition: grid-template-rows 200ms var(--ease-standard), opacity 180ms var(--ease-enter); }
 .focused-disclosure-clip { min-height: 0; overflow: hidden; }
 .focused-turn-body { margin: 2px 0 0 8px; border-left: 1px solid var(--shell-seam); padding-left: 17px; }
 .focused-step { padding: 2px 0; }
@@ -41,7 +41,7 @@
 .focused-status-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; background: var(--text-ghost); }
 .focused-status-dot[data-failed] { background: var(--tone-danger); }
 .focused-status-dot[data-running] { animation: focused-pulse 1.6s ease-in-out infinite; }
-.focused-text-arrival { animation: focused-text-in 180ms ease-out both; }
+.focused-text-arrival { animation: focused-text-in 180ms var(--ease-enter) both; }
 .focused-transcript-space { height: var(--focused-transcript-space-height, 0px); flex-shrink: 0; pointer-events: none; }
 .focused-reasoning-target { font-family: var(--font-sans); font-size: 12px; }
 .appearance-preview-focused { padding-inline: 32px; }

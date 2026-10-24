@@ -134,6 +134,7 @@ import { ToolsExpandedContext } from './toolsExpanded.js'
 import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
 import { deriveFocusedTranscript, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { FocusedTranscript } from './FocusedTranscript.js'
+import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
 import {
   DIFF_ROW_CLASS,
   DIFF_SIGN_CLASS,
@@ -1349,6 +1350,13 @@ function BoundedChildList({
     if (root === null || typeof window === 'undefined') return
     const scroller = findPaneScroller(root)
     paneScrollerRef.current = scroller
+    const releaseRowOffsets = transcriptEntries ? registerTranscriptRowOffsets(scroller, key => {
+      const index = entriesRef.current.findIndex(entry => entry.key === key)
+      if (index < 0) return null
+      const prefix = entriesRef.current.slice(0, index).reduce((sum, entry) => sum + entry.height + childGap, 0)
+      return root.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+        - scroller.clientTop + scroller.scrollTop + (Number.parseFloat(getComputedStyle(root).paddingTop) || 0) + prefix
+    }) : () => {}
     let frame = 0
     let hasObservedScroll = false
     const update = () => {
@@ -1387,6 +1395,7 @@ function BoundedChildList({
       if (frame !== 0) window.cancelAnimationFrame(frame)
       rootObserver?.disconnect()
       releasePane()
+      releaseRowOffsets()
     }
   }, [])
 

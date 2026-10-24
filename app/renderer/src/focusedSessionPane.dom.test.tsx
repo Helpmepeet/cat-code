@@ -5,6 +5,7 @@ import { SessionPane } from './SessionPane.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
 import { createTranscriptState, projectServerFrame, selectNestedTranscriptRows, type TranscriptState } from './transcriptProjector.js'
+import { readTranscriptRowOffset } from './transcriptRowNavigation.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -71,4 +72,66 @@ test('a tiny upward wheel releases Focused before a subsequent transcript commit
   await tree.render(pane(next, 'focused'))
   await act(async () => { await harness.nextFrame() })
   expect(scroller.scrollTop).toBe(800)
+})
+
+test('the real transcript virtual list publishes offsets for unmounted entries and unregisters on disposal', async () => {
+  const stylesheet = document.createElement('style')
+  stylesheet.textContent = '.overflow-auto { overflow-y: auto; }'
+  document.head.append(stylesheet)
+  try {
+    let state = project([{ type: 'text', text: 'First update' }])
+    for (let index = 0; index < 100; index++) state = project([{ type: 'text', text: `Update ${index}` }], state)
+    const firstId = selectNestedTranscriptRows(state, 'session-1')[0]!.id
+    const tree = await harness.mount(pane(state, 'full'))
+    const column = tree.container.querySelector('.transcript-virtual-column')!
+    const scroller = column.parentElement!
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 10000 },
+    })
+    scroller.getBoundingClientRect = () => new DOMRect(0, 0, 800, 500)
+    column.getBoundingClientRect = () => new DOMRect(0, -scroller.scrollTop, 800, 8500)
+    await act(async () => {
+      scroller.scrollTop = 7000
+      scroller.dispatchEvent(new Event('scroll'))
+      await harness.nextFrame()
+      await harness.nextFrame()
+    })
+    expect(column.querySelector(`[data-row-key="${firstId}"]`) !== null).toBe(false)
+    expect(readTranscriptRowOffset(scroller, firstId)).not.toBeNull()
+    expect(readTranscriptRowOffset(scroller, 'unknown-row')).toBeNull()
+    await tree.unmount()
+    expect(readTranscriptRowOffset(scroller, firstId)).toBeNull()
+  } finally { stylesheet.remove() }
+})
+
+test('a text-and-image submission anchors its first row rather than the last attachment', async () => {
+  let state = project([{ type: 'thinking', thinking: 'Checking the request' }])
+  state = projectServerFrame(state, {
+    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+      type: 'user', uuid: 'multimodal-turn', session_id: 'engine-1', parent_tool_use_id: null,
+      message: { role: 'user', content: [
+        { type: 'text', text: 'What is in this screenshot?' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAAANSUhEUg' } },
+      ] },
+    } },
+  } as never)
+  const rows = selectNestedTranscriptRows(state, 'session-1')
+  const textRow = rows.find(row => row.kind === 'user-text' && row.content === 'What is in this screenshot?')!
+  const imageRow = rows.find(row => row.kind === 'user-image' && row.frameId === textRow.frameId)!
+  expect(imageRow).toBeDefined()
+  const tree = await harness.mount(pane(state, 'full'))
+  const column = tree.container.querySelector('.transcript-virtual-column')!
+  const scroller = column.parentElement!
+  Object.defineProperties(scroller, {
+    clientHeight: { configurable: true, value: 500 },
+    scrollHeight: { configurable: true, get: () => 1200 + Number.parseFloat(scroller.querySelector<HTMLElement>('.focused-transcript-space')?.style.getPropertyValue('--focused-transcript-space-height') || '0') },
+  })
+  scroller.getBoundingClientRect = () => new DOMRect(0, 80, 800, 500)
+  const textElement = column.querySelector<HTMLElement>(`[data-row-key="${textRow.id}"]`)!
+  const imageElement = column.querySelector<HTMLElement>(`[data-row-key="${imageRow.id}"]`)!
+  textElement.getBoundingClientRect = () => new DOMRect(0, 1080 - scroller.scrollTop, 800, 60)
+  imageElement.getBoundingClientRect = () => new DOMRect(0, 1180 - scroller.scrollTop, 800, 100)
+  await tree.render(pane(state, 'focused'))
+  expect(scroller.scrollTop).toBe(1000)
 })

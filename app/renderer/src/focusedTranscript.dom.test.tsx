@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { TranscriptRowsView } from './TranscriptView.js'
@@ -13,7 +13,7 @@ afterEach(async () => { await harness.unmountAll() })
 afterAll(async () => { await harness.teardown() })
 const source = (id: string) => ({ id, sessionId: 'focused-test', messageId: id, frameId: id, blockIndex: 0, parentToolUseId: null, children: [] })
 const user: NestedTranscriptRow = { ...source('user'), kind: 'user-text', role: 'user', content: 'Check the loader', isReplay: false }
-const text = (id: string, content: string): NestedTranscriptRow => ({ ...source(id), kind: 'assistant-text', role: 'assistant', content })
+const text = (id: string, content: string): Extract<NestedTranscriptRow, { kind: 'assistant-text' }> => ({ ...source(id), kind: 'assistant-text', role: 'assistant', content })
 const thinking: NestedTranscriptRow = { ...source('thought'), kind: 'thinking', reasoningKind: 'summary', content: 'Tracing the loader' }
 const tool: NestedTranscriptRow = { ...source('tool'), kind: 'tool-use', toolUseId: 'call-1', toolName: 'Bash', toolFamily: 'bash', input: { command: 'bun test src/loader' }, status: 'success', agentCompletion: null, result: { content: '12 pass\n0 fail', isError: false, diff: null } }
 const result: NestedTranscriptRow = { ...source('result'), kind: 'result', subtype: 'success', isError: false, errors: [], result: 'Fixed.', durationMs: 104000 }
@@ -103,4 +103,41 @@ test('an explicit worker reveal opens the containing work and command line', asy
   await act(async () => { await harness.nextFrame() })
   expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('true')
   expect(tree.container.querySelector('.focused-step-head')?.getAttribute('aria-expanded')).toBe('true')
+})
+
+test('new update and command blocks open their height without replaying restored or growing segments', async () => {
+  const store = createToolCardExpansionStore()
+  const tree = await harness.mount(view(work, true, false, 'focused', store))
+  expect([...tree.container.querySelectorAll('.focused-segment')].every(element => element.hasAttribute('data-open'))).toBe(true)
+  const frames = new Map<number, FrameRequestCallback>()
+  let sequence = 0
+  const request = spyOn(globalThis, 'requestAnimationFrame').mockImplementation(callback => {
+    frames.set(++sequence, callback)
+    return sequence
+  })
+  const cancel = spyOn(globalThis, 'cancelAnimationFrame').mockImplementation(id => { frames.delete(id) })
+  try {
+    const update = text('new-update', 'I will check the other entry point.')
+    const pending: NestedTranscriptRow = { ...tool, id: 'new-tool', toolUseId: 'new-call', status: 'pending', result: null }
+    await tree.render(view([...work, update, pending], true, false, 'focused', store))
+    const updateBlock = [...tree.container.querySelectorAll('[data-focused-update]')]
+      .find(element => element.textContent === update.content)!.closest('.focused-segment')!
+    const commandBlock = [...tree.container.querySelectorAll('.focused-step-head')]
+      .find(element => element.textContent?.includes('Running bun test'))!.closest('.focused-segment')!
+    expect(updateBlock.hasAttribute('data-open')).toBe(false)
+    expect(commandBlock.hasAttribute('data-open')).toBe(false)
+    await act(async () => {
+      const batch = [...frames.values()]
+      frames.clear()
+      for (const callback of batch) callback(performance.now())
+    })
+    expect(updateBlock.hasAttribute('data-open')).toBe(true)
+    expect(commandBlock.hasAttribute('data-open')).toBe(true)
+    await tree.render(view([...work, { ...update, content: `${update.content} It shares the same loader.` }, pending], true, false, 'focused', store))
+    expect(tree.container.contains(updateBlock)).toBe(true)
+    expect(updateBlock.hasAttribute('data-open')).toBe(true)
+  } finally {
+    request.mockRestore()
+    cancel.mockRestore()
+  }
 })

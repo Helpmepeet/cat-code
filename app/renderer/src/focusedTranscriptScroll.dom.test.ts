@@ -2,6 +2,8 @@ import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { createFocusedTranscriptScroll } from './focusedTranscriptScroll.js'
 import { _forTest, compensatePanePrefix } from './markdownScrollCoordinator.js'
+import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
+import { selectCompositeChildWindow } from './compositeChildWindow.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -28,22 +30,22 @@ function fixture(initialFollowing = true, reducedMotion = true) {
   addRow('answer', 1050)
   const controller = createFocusedTranscriptScroll(scroller, { initialFollowing, reducedMotion: () => reducedMotion })
   return { scroller, controller, addRow, setEnd: (value: number) => { end = value },
-    space: () => scroller.lastElementChild?.getAttribute('style'),
+    space: () => (scroller.lastElementChild as HTMLElement).style.getPropertyValue('--focused-transcript-space-height') || '0px',
     cleanup: () => { controller.dispose(); scroller.remove() } }
 }
 
 test('reserves a viewport with scroller-relative row geometry, follows overflow and returns to message for answer', () => {
   const f = fixture()
   f.controller.update({ generating: true, userRowId: 'user' })
-  expect(f.space()).toContain('400px')
+  expect(f.space()).toBe('400px')
   expect(f.scroller.scrollTop).toBe(1000)
   f.setEnd(1800)
   f.controller.update({ generating: true, userRowId: 'user' })
-  expect(f.space()).toContain('0px')
+  expect(f.space()).toBe('0px')
   expect(f.scroller.scrollTop).toBe(1300)
   f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
   expect(f.scroller.scrollTop).toBe(1000)
-  expect(f.space()).toContain('0px')
+  expect(f.space()).toBe('0px')
   f.cleanup()
 })
 
@@ -93,7 +95,7 @@ test('programmatic scroll stays following; completion has exactly zero reserved 
   f.scroller.dispatchEvent(new Event('scroll'))
   expect(f.controller.isFollowing()).toBe(true)
   f.controller.update({ generating: false, userRowId: 'user' })
-  expect(f.space()).toContain('0px')
+  expect(f.space()).toBe('0px')
   expect(f.scroller.scrollHeight).toBe(1100)
   f.cleanup()
   expect(_forTest.isPaneAttached(f.scroller)).toBe(false)
@@ -143,8 +145,8 @@ test('animated collapse ends at zero and dispose cancels outstanding motion', as
   const f = fixture(true, false)
   f.controller.update({ generating: true, userRowId: 'user' })
   f.controller.update({ generating: false, userRowId: 'user' })
-  await new Promise(resolve => setTimeout(resolve, 310))
-  expect(f.space()).toContain('0px')
+  await new Promise(resolve => setTimeout(resolve, 370))
+  expect(f.space()).toBe('0px')
   f.controller.update({ generating: true, userRowId: 'user' })
   f.addRow('new', 1100)
   f.controller.update({ generating: true, userRowId: 'new' })
@@ -153,4 +155,52 @@ test('animated collapse ends at zero and dispose cancels outstanding motion', as
   await harness.nextFrame()
   expect(f.scroller.scrollTop).toBe(top)
   expect(_forTest.isPaneAttached(f.scroller)).toBe(false)
+})
+
+for (const input of ['wheel', 'PageDown']) {
+  test(`completed answers permit downward reading with ${input}`, async () => {
+    const f = fixture()
+    try {
+      f.setEnd(2400)
+      f.controller.update({ generating: true, userRowId: 'user' })
+      f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+      expect(f.scroller.scrollTop).toBe(1000)
+      f.scroller.dispatchEvent(input === 'wheel' ? new WheelEvent('wheel', { deltaY: 100 }) : new KeyboardEvent('keydown', { key: input }))
+      f.scroller.scrollTop = 1200
+      f.scroller.dispatchEvent(new Event('scroll'))
+      await harness.nextFrame()
+      await harness.nextFrame()
+      expect(f.scroller.scrollTop).toBe(1200)
+      expect(f.controller.isFollowing()).toBe(false)
+    } finally { f.cleanup() }
+  })
+}
+
+test('resume during completion clears reserved space instead of cancelling its cleanup', async () => {
+  const f = fixture(true, false)
+  try {
+    f.controller.update({ generating: true, userRowId: 'user' })
+    expect(f.space()).toBe('400px')
+    f.controller.release()
+    f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+    f.controller.resume()
+    expect(f.space()).toBe('0px')
+    await new Promise(resolve => setTimeout(resolve, 370))
+    expect(f.space()).toBe('0px')
+  } finally { f.cleanup() }
+})
+
+test('completion uses virtual offsets when a long answer has unmounted both message roots', () => {
+  const f = fixture()
+  const entries = [{ key: 'user', height: 60 }, { key: 'work', height: 1800 }, { key: 'answer', height: 2200 }, { key: 'result', height: 30 }]
+  expect(selectCompositeChildWindow(entries, 3590, 500).start).toBe(2)
+  const unregister = registerTranscriptRowOffsets(f.scroller, key => key === 'user' ? 1000 : null)
+  try {
+    f.setEnd(5090)
+    f.scroller.querySelector('[data-row-key="user"]')!.remove()
+    f.scroller.querySelector('[data-row-key="answer"]')!.remove()
+    f.controller.update({ generating: true, userRowId: 'user' })
+    f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+    expect(f.scroller.scrollTop).toBe(1000)
+  } finally { unregister(); f.cleanup() }
 })

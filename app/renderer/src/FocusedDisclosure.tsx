@@ -1,18 +1,23 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 /** Keep the closing body mounted until its height transition has finished. */
-export function FocusedDisclosure({ open, id, children, className = '' }: {
+export function FocusedDisclosure({ open, id, children, className = '', animateArrival = false }: {
   open: boolean
   id: string
   children: ReactNode
   className?: string
+  animateArrival?: boolean
 }) {
   const [mounted, setMounted] = useState(open)
-  const [visible, setVisible] = useState(open)
+  const [visible, setVisible] = useState(open && !animateArrival)
   const frame = useRef(0)
   useLayoutEffect(() => {
     if (open) {
       setMounted(true)
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        setVisible(true)
+        return
+      }
       frame.current = requestAnimationFrame(() => setVisible(true))
       return () => cancelAnimationFrame(frame.current)
     }

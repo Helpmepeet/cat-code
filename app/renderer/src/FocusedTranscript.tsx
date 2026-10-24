@@ -4,6 +4,7 @@ import type { FocusedSegment, FocusedSummary, FocusedTurnItem } from './focusedT
 import { useToolCardExpanded } from './toolCardExpansion.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { AgentRevealContext, containsAgentTool } from './transcriptAgentReveal.js'
+import { TranscriptMotionContext } from './transcriptMotion.js'
 import './focusedTranscript.css'
 
 type RowRenderer = (rows: readonly NestedTranscriptRow[], narration: boolean) => ReactNode
@@ -34,14 +35,24 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
       </button>
       <FocusedDisclosure open={open} id={bodyId}>
         <div className="focused-turn-body">
-          {turn.segments.map(segment => segment.kind === 'update'
-            ? <div key={segment.id} data-focused-update>{renderRows(segment.rows, true)}</div>
-            : <FocusedStep key={segment.id} segment={segment} live={turn.live} renderRows={renderRows} />)}
+          {turn.segments.filter(segment => segment.kind === 'update' || !turn.live || segment.toolCalls > 0)
+            .map(segment => <FocusedSegmentBlock key={segment.id} segment={segment} live={turn.live}>
+              {segment.kind === 'update'
+                ? <div data-focused-update>{renderRows(segment.rows, true)}</div>
+                : <FocusedStep segment={segment} live={turn.live} renderRows={renderRows} />}
+            </FocusedSegmentBlock>)}
         </div>
       </FocusedDisclosure>
     </section>
   )
 })
+
+function FocusedSegmentBlock({ segment, live, children }: { segment: FocusedSegment; live: boolean; children: ReactNode }) {
+  const id = useId()
+  const motion = useContext(TranscriptMotionContext)
+  const arriving = live && segment.rows.some(row => motion.rows.active.has(row.id) || motion.freshProse.has(row.id))
+  return <FocusedDisclosure open id={id} animateArrival={arriving} className="focused-segment">{children}</FocusedDisclosure>
+}
 
 function FocusedStep({ segment, live, renderRows }: { segment: FocusedSegment; live: boolean; renderRows: RowRenderer }) {
   const bodyId = useId()
