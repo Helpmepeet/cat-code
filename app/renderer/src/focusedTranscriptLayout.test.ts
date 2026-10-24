@@ -103,12 +103,12 @@ describe('focused transcript layout', () => {
     const agent = tool('agent', 'agent')
     agent.children.push(tool('child'))
     const thinking: NestedTranscriptRow = { ...base('think'), kind: 'thinking', content: 'consider' }
-    const rows = [text('update'), thinking, agent, tool(), text('next'), tool('last')]
+    const rows = [text('update'), thinking, agent, { ...thinking, id: 'empty', content: '' }, tool(), text('next'), tool('last')]
     const segments = deriveFocusedSegments(rows)
-    expect(segments.map(x => x.kind)).toEqual(['update', 'stretch', 'update', 'stretch'])
+    expect(segments.map(x => x.kind)).toEqual(['update', 'reasoning', 'stretch', 'update', 'stretch'])
     expect(segments.flatMap(x => x.rows)).toEqual(rows)
-    expect(segments[1]!.toolCalls).toBe(2)
-    expect(segments[1]!.otherFamilies.agent).toBe(1)
+    expect(segments[2]!.toolCalls).toBe(2)
+    expect(segments[2]!.otherFamilies.agent).toBe(1)
     expect(deriveFocusedSegments(rows)).toBe(segments)
     expect(deriveFocusedSegments([...rows])[1]!.id).toBe(segments[1]!.id)
   })

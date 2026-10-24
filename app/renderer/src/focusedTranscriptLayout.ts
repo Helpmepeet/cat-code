@@ -16,7 +16,7 @@ export type FocusedSummary = {
   activeLabel: string | null
 }
 export type FocusedSegment = {
-  kind: 'update' | 'stretch'
+  kind: 'update' | 'reasoning' | 'stretch'
   id: string
   rows: readonly NestedTranscriptRow[]
 } & FocusedSummary
@@ -108,6 +108,11 @@ export function deriveFocusedSegments(rows: readonly NestedTranscriptRow[]): rea
     if (row.kind === 'assistant-text') {
       flush()
       segments.push({ kind: 'update', id: `focused-update:${row.id}`, rows: [row], ...summarizeFocusedWork([row]) })
+    } else if (row.kind === 'thinking' && row.content.trim().length > 0) {
+      flush()
+      const previous = segments.at(-1)
+      if (previous?.kind === 'reasoning') previous.rows = [...previous.rows, row]
+      else segments.push({ kind: 'reasoning', id: `focused-reasoning:${row.id}`, rows: [row], ...summarizeFocusedWork([row]) })
     } else stretch.push(row)
   }
   flush()

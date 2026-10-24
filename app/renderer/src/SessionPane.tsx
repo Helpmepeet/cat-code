@@ -97,7 +97,6 @@ import type { ToolCardExpansionStore } from './toolCardExpansion.js'
 import { observePaneBottomLock, observePaneScroll } from './markdownScrollCoordinator.js'
 import { TranscriptModeContext } from './transcriptMode.js'
 import { createFocusedTranscriptScroll } from './focusedTranscriptScroll.js'
-import { reasoningStepsForRow } from './reasoningLayout.js'
 import { selectPaneFollowIntent } from './paneAnchorModel.js'
 import {
   captureTranscriptScrollAnchor,
@@ -866,13 +865,6 @@ export function SessionPane({
     : jumpHeld && !generating
       ? { verb: 'Working', target: null }
       : deriveActivity(nestedRows, compacting)
-  const reasoningStep = useMemo(() => {
-    if (!focusedMode || activity.verb !== 'Thinking') return null
-    const last = nestedRows.at(-1)
-    if (!last || last.kind !== 'thinking') return null
-    const step = reasoningStepsForRow(last).at(-1)
-    return step && step.kind !== 'withheld' ? step.text : null
-  }, [focusedMode, activity.verb, nestedRows])
   const focusedScrollState = useMemo(() => {
     if (!focusedMode) return { generating: false, userRowId: null, answerRowId: null }
     let userRowId: string | null = null
@@ -2250,8 +2242,7 @@ export function SessionPane({
         >
           <ActivityIndicator
             verb={activity.verb}
-            target={activity.target ?? reasoningStep}
-            targetProse={reasoningStep !== null}
+            target={activity.target}
             elapsedMs={elapsedMs}
             liveTokens={liveTokens}
             paused={paused}
@@ -2721,7 +2712,6 @@ const SHOW_TOKENS_AFTER_MS = 30_000
 function ActivityIndicator({
   verb,
   target,
-  targetProse = false,
   elapsedMs,
   liveTokens,
   paused,
@@ -2731,7 +2721,6 @@ function ActivityIndicator({
 }: {
   verb: string
   target: string | null
-  targetProse?: boolean
   elapsedMs: number
   liveTokens: number
   paused: boolean
@@ -2764,7 +2753,7 @@ function ActivityIndicator({
         {paused ? 'Waiting for approval' : verb}
       </span>
       {target ? (
-        <span className={`min-w-0 truncate text-[11.5px] text-text-subtle ${targetProse ? 'focused-reasoning-target' : 'font-mono'}`}>
+        <span className="min-w-0 truncate font-mono text-[11.5px] text-text-subtle">
           {target}
         </span>
       ) : null}

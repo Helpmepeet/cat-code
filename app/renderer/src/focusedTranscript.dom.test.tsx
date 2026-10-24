@@ -30,7 +30,7 @@ async function click(button: Element | null) {
   await act(async () => { await harness.nextFrame() })
 }
 
-test('Working keeps every update and one command stretch, revealing original reasoning and tool rows', async () => {
+test('Working keeps updates and reasoning in order, with tool rows behind their command summary', async () => {
   const tree = await harness.mount(view(work, true, true))
   const head = tree.container.querySelector('.focused-fold-head')!
   expect(head.textContent).toContain('Working')
@@ -39,7 +39,7 @@ test('Working keeps every update and one command stretch, revealing original rea
   const step = tree.container.querySelector('.focused-step-head')!
   expect(step.textContent).toContain('Ran 1 command')
   expect(step.getAttribute('aria-expanded')).toBe('false')
-  expect(tree.container.textContent).not.toContain('Tracing the loader')
+  expect(tree.container.querySelector('.focused-turn-body')?.textContent).toContain('Tracing the loader')
   await click(step)
   expect(tree.container.textContent).toContain('Tracing the loader')
   expect(tree.container.textContent).toContain('bun test src/loader')

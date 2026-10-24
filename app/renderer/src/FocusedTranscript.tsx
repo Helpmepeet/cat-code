@@ -1,6 +1,6 @@
-import { memo, useContext, useEffect, useId, type ReactNode } from 'react'
+import { memo, useContext, useEffect, useId, useMemo, type ReactNode } from 'react'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
-import type { FocusedSegment, FocusedSummary, FocusedTurnItem } from './focusedTranscriptLayout.js'
+import { summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { useToolCardExpanded } from './toolCardExpansion.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { AgentRevealContext, containsAgentTool } from './transcriptAgentReveal.js'
@@ -23,22 +23,26 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   }, [reveal?.sequence, revealMatch])
   const label = turn.live ? 'Working' : 'Worked'
   const time = turn.durationMs === null ? '' : formatDuration(turn.durationMs)
-  const detail = [time, turn.live && turn.toolCalls === 0 ? '' : turn.summary].filter(Boolean).join(' · ')
+  const settled = useMemo(() => turn.live
+    ? summarizeFocusedWork(turn.rows.filter(row => row.kind === 'tool-use' && row.status !== 'pending'))
+    : turn, [turn])
+  const detail = [time, settled.toolCalls === 0 ? '' : settled.summary].filter(Boolean).join(' · ')
   return (
     <section className="focused-turn" data-focused-turn={turn.id} data-focused-completed={turn.completed ? '' : undefined}>
       <button type="button" className="focused-fold-head" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
         <span className="focused-fold-chevron" data-open={open ? '' : undefined} aria-hidden>▸</span>
         <span key={label} className="focused-fold-label focused-text-arrival">{label}</span>
         <span key={detail} className="focused-fold-detail focused-text-arrival">{detail}</span>
-        <DiffTotals summary={turn} />
+        <DiffTotals summary={settled} />
         {turn.hasErrors ? <span className="focused-status-dot" data-failed role="img" aria-label="A tool failed" /> : null}
       </button>
       <FocusedDisclosure open={open} id={bodyId}>
         <div className="focused-turn-body">
-          {turn.segments.filter(segment => segment.kind === 'update' || !turn.live || segment.toolCalls > 0)
+          {turn.segments.filter(segment => segment.kind !== 'stretch' || segment.toolCalls > 0)
             .map(segment => <FocusedSegmentBlock key={segment.id} segment={segment} live={turn.live}>
               {segment.kind === 'update'
                 ? <div data-focused-update>{renderRows(segment.rows, true)}</div>
+                : segment.kind === 'reasoning' ? renderRows(segment.rows, false)
                 : <FocusedStep segment={segment} live={turn.live} renderRows={renderRows} />}
             </FocusedSegmentBlock>)}
         </div>
@@ -72,9 +76,6 @@ function FocusedStep({ segment, live, renderRows }: { segment: FocusedSegment; l
     ? mainTool.toolFamily === 'bash' ? '›_' : mainTool.toolFamily === 'grep' ? '⌕'
       : mainTool.toolFamily === 'edit' || mainTool.toolFamily === 'write' ? '±' : '≡'
     : '·'
-  // Live reasoning is carried by the working line until a tool joins it.
-  // Afterward it remains retrievable even if the turn ends before any tool.
-  if (live && segment.toolCalls === 0) return null
   return (
     <div className="focused-step">
       <button type="button" className="focused-step-head" data-open={open ? '' : undefined} aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>

@@ -47,18 +47,30 @@ test('Focused pane installs its scroll owner and removes its reserved spacer whe
   expect(tree.container.querySelector('.focused-turn')).toBeNull()
 })
 
-test('only Focused adds the current reasoning step to the working line, keeping the real tool name when running', async () => {
+test('Focused keeps reasoning in the transcript and the running command visible until it settles', async () => {
   const state = project([{ type: 'thinking', thinking: 'Checking the module graph', reasoningKind: 'summary' }])
   const tree = await harness.mount(pane(state, 'focused'))
-  expect(tree.container.querySelector('.focused-reasoning-target')?.textContent).toBe('Checking the module graph')
+  expect(tree.container.querySelector('.focused-turn-body')?.textContent).toContain('Checking the module graph')
+  expect([...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Thinking')?.parentElement?.textContent).not.toContain('Checking the module graph')
   await tree.render(pane(state, 'full'))
-  expect(tree.container.querySelector('.focused-reasoning-target')).toBeNull()
+  expect([...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Thinking')?.parentElement?.textContent).not.toContain('Checking the module graph')
   const running = project([{ type: 'tool_use', id: 'pending-bash', name: 'Bash', input: { command: 'bun test src/loader' } }], state)
   await tree.render(pane(running, 'focused'))
   const activity = [...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Running')?.parentElement
   expect(activity?.textContent).toContain('Bash')
   expect(activity?.textContent).not.toContain('bun test src/loader')
   expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Running bun test src/loader')
+  expect(tree.container.querySelector('.focused-fold-head')?.textContent).not.toContain('ran 1 command')
+  expect(tree.container.querySelector('.focused-turn-body')?.textContent).toContain('Checking the module graph')
+  const settled = projectServerFrame(running, {
+    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+      type: 'user', uuid: 'tool-result', session_id: 'engine-1', parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'pending-bash', content: 'passed' }] },
+    } },
+  } as never)
+  await tree.render(pane(settled, 'focused'))
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Ran 1 command')
+  expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('ran 1 command')
 })
 
 test('producer assistant messages accumulate under Working and fold only when their result arrives', async () => {

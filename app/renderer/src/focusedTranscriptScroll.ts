@@ -161,15 +161,21 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
     // position. Only reader input toward the end may resume following.
     if (!following && mayResume && max() - scroller.scrollTop <= 1) resume()
   }
+  const towardEnd = () => {
+    mayResume = true
+    // At the end a downward input produces no browser scroll event. It still
+    // expresses intent to follow again after reading an expanded disclosure.
+    if (!following && state.generating && max() - scroller.scrollTop <= 1) resume()
+  }
   const onWheel = (event: WheelEvent) => {
     if (event.deltaY < 0 || (!state.generating && event.deltaY > 0)) release()
-    if (event.deltaY > 0) mayResume = true
+    if (event.deltaY > 0) towardEnd()
   }
   const onTouch = () => { release(); mayResume = true }
   const onKey = (event: KeyboardEvent) => {
     if (['ArrowUp', 'PageUp', 'Home'].includes(event.key) ||
       (!state.generating && ['ArrowDown', 'PageDown', 'End'].includes(event.key))) release()
-    if (['ArrowDown', 'PageDown', 'End'].includes(event.key)) mayResume = true
+    if (['ArrowDown', 'PageDown', 'End'].includes(event.key)) towardEnd()
   }
   const onPointer = (event: PointerEvent) => {
     const bounds = scroller.getBoundingClientRect()

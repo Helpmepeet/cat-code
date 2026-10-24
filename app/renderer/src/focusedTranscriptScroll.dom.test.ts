@@ -166,6 +166,25 @@ test('opening a work disclosure preserves the reader position through its layout
   f.cleanup()
 })
 
+for (const input of ['wheel', 'PageDown']) test(`${input} at the live end resumes after a disclosure without a scroll event`, () => {
+  const f = fixture()
+  f.setEnd(1800)
+  f.controller.update({ generating: true, userRowId: 'user' })
+  const head = document.createElement('button')
+  head.className = 'focused-step-head'
+  f.scroller.firstElementChild!.append(head)
+  head.click()
+  expect(f.controller.isFollowing()).toBe(false)
+  // Already at the end: the browser has no distance to move and emits no scroll.
+  f.scroller.dispatchEvent(input === 'wheel' ? new WheelEvent('wheel', { deltaY: 1 })
+    : new KeyboardEvent('keydown', { key: input }))
+  f.setEnd(2000)
+  f.controller.update({ generating: true, userRowId: 'user' })
+  expect(f.scroller.scrollTop).toBe(1500)
+  expect(f.controller.isFollowing()).toBe(true)
+  f.cleanup()
+})
+
 test('animated collapse ends at zero and dispose cancels outstanding motion', async () => {
   const f = fixture(true, false)
   f.controller.update({ generating: true, userRowId: 'user' })

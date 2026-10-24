@@ -45,7 +45,6 @@
 .focused-status-dot[data-running] { animation: focused-pulse 1.6s ease-in-out infinite; }
 .focused-text-arrival { animation: focused-text-in 180ms var(--ease-enter) both; }
 .focused-transcript-space { height: var(--focused-transcript-space-height, 0px); flex-shrink: 0; pointer-events: none; }
-.focused-reasoning-target { font-family: var(--font-sans); font-size: 12px; }
 .appearance-preview-focused { padding-inline: 32px; }
 .appearance-preview-focused .workspace-transcript-column { padding: 0; }
 @media (max-width: 800px) {
