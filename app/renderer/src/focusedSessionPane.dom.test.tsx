@@ -70,8 +70,8 @@ test('Focused keeps reasoning in the transcript and the running command visible 
     } },
   } as never)
   await tree.render(pane(settled, 'focused'))
-  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Ran 1 command')
-  expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('ran 1 command')
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Ran bun test src/loader')
+  expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('ran 1')
 })
 
 test('producer assistant messages accumulate under Working and fold only when their result arrives', async () => {
@@ -90,6 +90,8 @@ test('producer assistant messages accumulate under Working and fold only when th
   } as never)
   await tree.render(pane(state, 'focused'))
   expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('false')
+  // The head keeps its live wording while the finished work settles.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 340)) })
   expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('1m 44s')
   expect(tree.container.querySelector('.focused-turn')?.textContent).not.toContain('The loader is fixed.')
   expect(tree.container.textContent).toContain('The loader is fixed.')

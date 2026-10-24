@@ -765,6 +765,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       className="focused-step-rows" renderChild={index => renderItem(items[index]!)}
       revealRequest={revealAgent && revealItem ? { key: displayItemKey(revealItem), sequence: revealAgent.sequence } : null} />
   }, [reasoningMode, onMessageAction, revealAgent])
+  const renderFocusedReasoning = useCallback((reasoningRows: readonly NestedTranscriptRow[], live: boolean) =>
+    <FocusedReasoning rows={reasoningRows} live={live} />, [])
 
   const renderTransition = (transition: ContextTransition, entryKey?: string) => {
     const currentMove = workspaceMove?.id === transition.id ? workspaceMove : null
@@ -788,7 +790,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     if (entry.kind === 'transition') return renderTransition(entry.transition, entryKeys[index])
     if (entry.kind === 'focused') return (
       <div data-row-key={entry.turn.id} data-transcript-entry={entryKeys[index]} key={entry.turn.id}>
-        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} />
+        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} renderReasoning={renderFocusedReasoning} />
       </div>
     )
     const item = entry.item
@@ -6474,6 +6476,40 @@ function ReasoningLine({ content }: { content: string }) {
     </div>
   )
 }
+
+/**
+ * Focused mode's reasoning: one quiet block per run with every step in full.
+ * No head, rail or step boxes; a single node in the step gutter marks it, and
+ * the run that is still being written carries the live tone.
+ */
+export const FocusedReasoning = memo(function FocusedReasoning({ rows, live }: {
+  rows: readonly NestedTranscriptRow[]
+  live: boolean
+}) {
+  const steps = rows.flatMap(row => row.kind === 'thinking' || row.kind === 'redacted-thinking'
+    ? reasoningStepsForRow(row) : []).filter(isVisibleStep)
+  if (steps.length === 0) return null
+  return (
+    <div className="focused-reasoning" data-live={live ? '' : undefined}>
+      <span className="focused-reasoning-gutter" aria-hidden><span className="focused-reasoning-node" /></span>
+      <div className="focused-reasoning-text md-prose">
+        {steps.map(step => step.kind === 'heading'
+          ? <p key={step.key}><ReasoningHeading content={step.text} /></p>
+          : <div key={step.key} className="md-prose">
+            <BoundedMarkdown
+              sourceId={step.key}
+              source={step.text}
+              renderLeaf={leaf => (
+                <MarkdownErrorBoundary fallback={step.text}>
+                  <MarkdownTree tree={leaf.tree} />
+                </MarkdownErrorBoundary>
+              )}
+            />
+          </div>)}
+      </div>
+    </div>
+  )
+})
 
 /** A lone encrypted-only block: one row, no label — the phrase names itself.
  * The signature/`data` payload is never rendered, here or anywhere. */

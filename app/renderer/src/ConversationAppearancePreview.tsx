@@ -1,6 +1,6 @@
 import { useContext, useEffect, useState } from 'react'
 import type { Root as HastRoot } from 'hast'
-import { TranscriptRowsView } from './TranscriptView.js'
+import { FocusedReasoning, TranscriptRowsView } from './TranscriptView.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { renderMarkdownTree } from './markdownRenderPlan.js'
 import { MAX_PROSE_ARRIVAL_STAGGER_MS, PROSE_ARRIVAL_WORD_CLASS, PROSE_ARRIVAL_WORD_STAGGER_MS, ProseArrivalContext } from './proseArrival.js'
@@ -30,7 +30,7 @@ export function ConversationAppearancePreview({ replay }: { replay: number }) {
           <div className="appearance-preview-focused">
             <FocusedTranscript turn={APPEARANCE_PREVIEW_FOCUSED_TURN} renderRows={rows => (
               <TranscriptRowsView key={String(expanded)} rows={[...rows]} />
-            )} />
+            )} renderReasoning={(rows, live) => <FocusedReasoning rows={rows} live={live} />} />
           </div>
         </TranscriptModeContext.Provider>
       )}

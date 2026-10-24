@@ -37,7 +37,7 @@ test('Working keeps updates and reasoning in order, with tool rows behind their 
   expect(head.getAttribute('aria-expanded')).toBe('true')
   expect([...tree.container.querySelectorAll('[data-focused-update]')].map(node => node.textContent)).toEqual(['I will trace the loader.', 'The tests pass. I will check the edge case.'])
   const step = tree.container.querySelector('.focused-step-head')!
-  expect(step.textContent).toContain('Ran 1 command')
+  expect(step.textContent).toContain('Ran bun test src/loader')
   expect(step.getAttribute('aria-expanded')).toBe('false')
   expect(tree.container.querySelector('.focused-turn-body')?.textContent).toContain('Tracing the loader')
   await click(step)
@@ -66,7 +66,8 @@ test('a live Working row closes automatically on successful finish without losin
   expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('false')
   expect(tree.container.querySelector('[aria-hidden="true"][inert]')).not.toBeNull()
   expect(tree.container.textContent).toContain('The loader is fixed.')
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 280)) })
+  // The settle fades the work before its height closes.
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 500)) })
   expect(tree.container.querySelectorAll('[data-focused-update]').length).toBe(0)
   await click(tree.container.querySelector('.focused-fold-head'))
   expect(tree.container.querySelectorAll('[data-focused-update]').length).toBe(2)
@@ -172,4 +173,60 @@ test('new update and command blocks open their height without replaying restored
     request.mockRestore()
     cancel.mockRestore()
   }
+})
+
+test('reasoning is one quiet block with every step shown, live only while it is the newest work', async () => {
+  const tree = await harness.mount(view([...work, { ...thinking, id: 'thought-2', content: 'Checking the edge case' }], true))
+  const blocks = [...tree.container.querySelectorAll('.focused-reasoning')]
+  expect(blocks.map(block => block.textContent)).toEqual(['Tracing the loader', 'Checking the edge case'])
+  expect(tree.container.querySelector('.focused-turn-body')?.textContent).not.toContain('Reasoning')
+  expect(blocks.map(block => block.hasAttribute('data-live'))).toEqual([false, true])
+})
+
+test('a failed call is named in the step and head, and its step opens when the finished turn is reopened', async () => {
+  const failed = { ...tool, status: 'error', result: { content: '1 fail', isError: true, diff: null } } as NestedTranscriptRow
+  const tree = await harness.mount(view([user, text('update-1', 'I will trace the loader.'), failed, text('answer', 'The loader is fixed.'), result]))
+  const head = tree.container.querySelector('.focused-fold-head')!
+  expect(head.querySelector('.focused-fail-note')?.textContent).toBe('1 failed')
+  await click(head)
+  const step = tree.container.querySelector('.focused-step-head')!
+  expect(step.querySelector('.focused-fail-note')?.textContent).toBe('1 failed')
+  expect(step.getAttribute('aria-expanded')).toBe('true')
+})
+
+test('only the newest update is marked latest while working, and none once finished', async () => {
+  const tree = await harness.mount(view(work, true))
+  expect([...tree.container.querySelectorAll('[data-focused-update]')].map(node => node.hasAttribute('data-latest'))).toEqual([false, true])
+  await tree.render(view(complete, false))
+  expect(tree.container.querySelector('[data-latest]')).toBeNull()
+})
+
+test('changed step text keeps the outgoing line hidden from assistive tech while it leaves', async () => {
+  const running = { ...tool, status: 'pending', result: null } as NestedTranscriptRow
+  const tree = await harness.mount(view([user, running], true))
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Running bun test src/loader')
+  await tree.render(view([user, tool], true))
+  const outgoing = tree.container.querySelector('.focused-step-text .focused-tick-out')
+  expect(outgoing?.getAttribute('aria-hidden')).toBe('true')
+  expect(outgoing?.textContent).toContain('Running')
+  expect(tree.container.querySelector('.focused-step-text .focused-tick-in')?.textContent).toBe('Ran bun test src/loader')
+})
+
+test('the head holds its live wording briefly when the turn finishes, then shows the duration', async () => {
+  const store = createToolCardExpansionStore()
+  const tree = await harness.mount(view(work, true, false, 'focused', store))
+  await tree.render(view(complete, false, false, 'focused', store))
+  expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('Working')
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 340)) })
+  const head = tree.container.querySelector('.focused-fold-head')!
+  expect(head.textContent).toContain('Worked')
+  expect(head.textContent).toContain('1m 44s')
+})
+
+test('diff totals omit a side with nothing to count', async () => {
+  const edit = { ...source('edit'), kind: 'tool-use', toolUseId: 'call-edit', toolName: 'Edit', toolFamily: 'edit', input: { file_path: '/repo/loader.ts' }, status: 'success', agentCompletion: null,
+    result: { content: 'ok', isError: false, diff: { filePath: '/repo/loader.ts', hunks: [{ oldStart: 1, oldLines: 0, newStart: 1, newLines: 2, lines: ['+a', '+b'] }] } } } as unknown as NestedTranscriptRow
+  const tree = await harness.mount(view([user, edit], true))
+  const diff = tree.container.querySelector('.focused-step-head .focused-diff')
+  expect(diff?.textContent).toBe('+2')
 })

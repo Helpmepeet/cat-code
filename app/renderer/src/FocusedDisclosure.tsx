@@ -1,12 +1,14 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 
 /** Keep the closing body mounted until its height transition has finished. */
-export function FocusedDisclosure({ open, id, children, className = '', animateArrival = false }: {
+export function FocusedDisclosure({ open, id, children, className = '', animateArrival = false, exitMs = 260 }: {
   open: boolean
   id: string
   children: ReactNode
   className?: string
   animateArrival?: boolean
+  /** Must cover the stylesheet's closing transition, including any delay. */
+  exitMs?: number
 }) {
   const [mounted, setMounted] = useState(open)
   const [visible, setVisible] = useState(open && !animateArrival)
@@ -24,7 +26,7 @@ export function FocusedDisclosure({ open, id, children, className = '', animateA
     setVisible(false)
     if (!mounted) return
     const timer = setTimeout(() => setMounted(false),
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 260)
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : exitMs)
     return () => clearTimeout(timer)
   }, [open])
   return (

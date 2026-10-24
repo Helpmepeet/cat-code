@@ -26,7 +26,7 @@ test('Focused preview folds completed work, keeps real tools and reasoning reach
   const fold = container.querySelector<HTMLButtonElement>('.focused-fold-head')!
   expect(fold.textContent).toContain('Worked')
   expect(fold.textContent).toContain('1m 44s')
-  expect(fold.textContent).toContain('read 1 file, searched 1 pattern, ran 1 command')
+  expect(fold.textContent).toContain('1m 44s · read 1 · searched 1 · ran 1')
   expect(fold.getAttribute('aria-expanded')).toBe('false')
   expect(container.querySelectorAll('[data-tool-row]')).toHaveLength(0)
   expect(container.querySelector('.appearance-preview-reply')?.textContent).toContain(PROSE_PREVIEW_CHUNKS.join(''))

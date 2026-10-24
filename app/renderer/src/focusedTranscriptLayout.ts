@@ -12,7 +12,11 @@ export type FocusedSummary = {
   additions: number
   deletions: number
   hasErrors: boolean
+  /** Top-level rows that failed; zero when only the turn's result reported an error. */
+  errorCount: number
   summary: string
+  /** The same counts as `summary` in a short `verb n · verb n` form for the turn head. */
+  compact: string
   activeLabel: string | null
 }
 export type FocusedSegment = {
@@ -35,6 +39,18 @@ const verbs: Partial<Record<ToolFamily, string>> = {
   read: 'Reading', edit: 'Editing', write: 'Writing', grep: 'Searching', bash: 'Running',
   agent: 'Delegating', web: 'Fetching', notebook: 'Editing',
 }
+const pastVerbs: Partial<Record<ToolFamily, string>> = {
+  read: 'Read', edit: 'Edited', write: 'Wrote', grep: 'Searched', bash: 'Ran',
+  agent: 'Delegated', web: 'Fetched', notebook: 'Edited',
+}
+
+/** A settled stretch of exactly one call is named by its target instead of counted. */
+export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: string; target: string } | null {
+  const calls = rows.filter(row => row.kind === 'tool-use')
+  const call = calls[0]
+  if (calls.length !== 1 || call?.kind !== 'tool-use' || call.status === 'pending') return null
+  return { verb: pastVerbs[call.toolFamily] ?? 'Used', target: deriveTarget(call) }
+}
 
 function rowHasError(row: NestedTranscriptRow): boolean {
   return (row.kind === 'tool-use' && (row.status === 'error' || row.result?.isError === true)) ||
@@ -47,10 +63,10 @@ function rowHasError(row: NestedTranscriptRow): boolean {
 export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): FocusedSummary {
   const reads = new Set<string>(), edits = new Set<string>(), searches = new Set<string>()
   const other: Partial<Record<ToolFamily, number>> = {}
-  let commands = 0, toolCalls = 0, additions = 0, deletions = 0, hasErrors = false
+  let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0
   let activeLabel: string | null = null
   for (const row of rows) {
-    hasErrors ||= rowHasError(row)
+    if (rowHasError(row)) errorCount++
     if (row.kind !== 'tool-use') continue
     toolCalls++
     if (row.status === 'pending' && activeLabel === null) activeLabel = `${verbs[row.toolFamily] ?? 'Using'} ${deriveTarget(row)}`
@@ -75,7 +91,12 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     }
   }
   const parts: string[] = []
-  const count = (verb: string, n: number, noun: string) => { if (n) parts.push(`${verb} ${n} ${noun}${n === 1 ? '' : 's'}`) }
+  const compact = new Map<string, number>()
+  const count = (verb: string, n: number, noun: string) => {
+    if (!n) return
+    parts.push(`${verb} ${n} ${noun}${n === 1 ? '' : 's'}`)
+    compact.set(verb, (compact.get(verb) ?? 0) + n)
+  }
   count('read', reads.size, 'file'); count('edited', edits.size, 'file')
   count('searched', searches.size, 'pattern'); count('ran', commands, 'command')
   const actions: Partial<Record<ToolFamily, readonly [string, string]>> = {
@@ -88,9 +109,10 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     const [verb, noun] = actions[family] ?? ['made', 'tool call']
     count(verb, other[family]!, noun)
   }
+  const summary = parts.join(', ') || (toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned')
   return { readPaths: [...reads], editedPaths: [...edits], searchedPatterns: [...searches], commands,
-    otherFamilies: other, toolCalls, additions, deletions, hasErrors,
-    summary: parts.join(', ') || (toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned'), activeLabel }
+    otherFamilies: other, toolCalls, additions, deletions, hasErrors: errorCount > 0, errorCount, summary,
+    compact: compact.size ? [...compact].map(([verb, n]) => `${verb} ${n}`).join(' · ') : summary, activeLabel }
 }
 
 const segmentCache = new WeakMap<readonly NestedTranscriptRow[], readonly FocusedSegment[]>()
