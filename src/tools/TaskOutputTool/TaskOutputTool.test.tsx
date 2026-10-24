@@ -4,15 +4,20 @@ import type { AppState } from '../../state/AppStateStore.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import {
   claimPendingMessagesForRequest,
+  completeAgentTask,
+  enqueueAgentNotification,
   queuePendingMessageIfRunning,
+  registerAsyncAgent,
   settleAgentMessageDeliveries,
   submitPreparedAgentMessages,
   type LocalAgentTaskState,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
+import { dequeue, resetCommandQueue } from '../../utils/messageQueueManager.js'
 import {
   appendTaskOutput,
   cleanupTaskOutput,
   flushTaskOutput,
+  _clearOutputsForTest,
 } from '../../utils/task/diskOutput.js'
 import { TaskOutputTool } from './TaskOutputTool.js'
 
@@ -106,7 +111,7 @@ describe('TaskOutputTool', () => {
     )
   })
 
-  test('local agent output returns the clean final answer instead of raw disk transcript output', async () => {
+  test.each([false, true])('local agent output returns the clean final answer instead of raw disk transcript output (block=%s)', async block => {
     const taskId = 'agent-clean-result'
     const rawTranscript =
       JSON.stringify({
@@ -138,7 +143,7 @@ describe('TaskOutputTool', () => {
       const result = await TaskOutputTool.call(
         {
           task_id: taskId,
-          block: false,
+          block,
           timeout: 0,
         },
         makeContext(appStateRef) as never,
@@ -164,6 +169,54 @@ describe('TaskOutputTool', () => {
       await cleanupTaskOutput(taskId)
     }
   })
+
+  for (const priorRunId of ['prior-run', undefined]) {
+    for (const completeBeforeRead of [false, true]) {
+      test(`reading ${priorRunId ?? 'legacy'} output preserves a resumed worker's ${completeBeforeRead ? 'completed' : 'running'} notification`, async () => {
+        resetCommandQueue()
+        const prior = { ...makeCompletedLocalAgentTask(), runId: priorRunId }
+        const state = { current: { ...getDefaultAppState(), tasks: { [prior.id]: prior } } }
+        const context = makeContext(state)
+        const reading = TaskOutputTool.call(
+          { task_id: prior.id, block: true, timeout: 0 },
+          context as never, undefined as never, undefined as never,
+        )
+        // Resume replaces the logical task while the old output read is
+        // suspended at its completion await, before it acknowledges that run.
+        const resumed = registerAsyncAgent({
+          agentId: prior.id, description: prior.description, prompt: 'Continue the work',
+          selectedAgent: {
+            agentType: 'general-purpose', source: 'built-in', baseDir: 'built-in',
+            whenToUse: 'fixture', tools: [], getSystemPrompt: () => 'fixture',
+          },
+          setAppState: context.setAppState,
+        })
+        const result = { ...prior.result!, content: [{ type: 'text' as const, text: 'Resumed worker result' }] }
+        const complete = () => completeAgentTask(result, context.setAppState, resumed.runId)
+        try {
+          if (completeBeforeRead) complete()
+          const read = await reading
+          expect(read.data.task?.output).toBe('Clean final answer from the subagent.')
+          expect(state.current.tasks[prior.id].notified).toBe(false)
+          if (!completeBeforeRead) complete()
+          enqueueAgentNotification({
+            taskId: prior.id, description: prior.description, status: 'completed',
+            finalMessage: 'Resumed worker result', runId: resumed.runId,
+            setAppState: context.setAppState,
+          })
+          const notification = dequeue()
+          expect(notification?.taskRunId).toBe(resumed.runId)
+          expect(notification?.value).toContain('Resumed worker result')
+          expect(dequeue()).toBeUndefined()
+        } finally {
+          complete()
+          resetCommandQueue()
+          await _clearOutputsForTest()
+          await cleanupTaskOutput(prior.id)
+        }
+      })
+    }
+  }
 
   test('running local agent non-blocking output does not expose raw transcript content', async () => {
     const taskId = 'agent-running-result'

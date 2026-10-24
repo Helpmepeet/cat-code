@@ -6,7 +6,7 @@ import { FallbackToolUseRejectedMessage } from '../../components/FallbackToolUse
 import { MessageResponse } from '../../components/MessageResponse.js';
 import { Box, Text } from '../../ink.js';
 import { useShortcutDisplay } from '../../keybindings/useShortcutDisplay.js';
-import type { TaskType } from '../../Task.js';
+import { isTerminalTaskStatus, type TaskType } from '../../Task.js';
 import type { Tool } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
 import { getCurrentRunParentMessageDeliveries, type LocalAgentMessageDeliveryStatus, type LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
@@ -303,11 +303,16 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
       };
     }
 
-    // Mark as notified
-    updateTaskState(task_id, toolUseContext.setAppState, t => ({
-      ...t,
-      notified: true
-    }));
+    // The completion await can outlive a resume; acknowledge only the run read.
+    updateTaskState(task_id, toolUseContext.setAppState, current => {
+      if (
+        current.type !== completedTask.type ||
+        !isTerminalTaskStatus(current.status) ||
+        (current.type === 'local_agent' && completedTask.type === 'local_agent' &&
+          current.runId !== completedTask.runId)
+      ) return current;
+      return { ...current, notified: true };
+    });
     return {
       data: {
         retrieval_status: 'success' as const,
