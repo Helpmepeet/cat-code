@@ -2,6 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import { selectSettingsSearchResults } from './settingsSearch.js'
 
 describe('settings search', () => {
+  test('transcript mode is searchable by transcript, collapse and updates', () => {
+    for (const query of ['transcript', 'collapse', 'updates', 'focused']) {
+      expect(selectSettingsSearchResults(query, 'project')).toContainEqual(
+        expect.objectContaining({ key: 'transcriptMode', category: 'appearance', scope: 'app', label: 'Transcript' }),
+      )
+    }
+  })
   test('notification controls route to Appearance with app scope', () => {
     expect(selectSettingsSearchResults('notifications', 'project').map(result => [result.key, result.category, result.scope]))
       .toEqual([['notify', 'appearance', 'app'], ['dockBadge', 'appearance', 'app']])

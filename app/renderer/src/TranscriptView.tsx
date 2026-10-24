@@ -131,6 +131,9 @@ import {
   type ToolCardStyle,
 } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
+import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
+import { deriveFocusedTranscript, type FocusedTurnItem } from './focusedTranscriptLayout.js'
+import { FocusedTranscript } from './FocusedTranscript.js'
 import {
   DIFF_ROW_CLASS,
   DIFF_SIGN_CLASS,
@@ -696,6 +699,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [cwd, openFilePathMenu],
   )
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
+  const { mode: transcriptMode } = useContext(TranscriptModeContext)
   const motion = useTranscriptMotion(
     rows, restorePhase === null && !loadEarlierPending, turnLive,
   )
@@ -744,9 +748,15 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     ? [...contextTransitions.filter(transition => transition.id !== workspaceMove.transitionId), moveTransition]
     : contextTransitions, [contextTransitions, workspaceMove, moveTransition])
   const { entries, narration } = useMemo(
-    () => layoutWithContextTransitions(displayRows, boundaryRows, reasoningMode, displayTransitions),
-    [displayRows, boundaryRows, reasoningMode, displayTransitions],
+    () => layoutWithContextTransitions(displayRows, boundaryRows, reasoningMode, displayTransitions, transcriptMode, turnLive),
+    [displayRows, boundaryRows, reasoningMode, displayTransitions, transcriptMode, turnLive],
   )
+  const renderFocusedRows = useCallback((focusedRows: readonly NestedTranscriptRow[], isNarration: boolean) => {
+    const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(focusedRows), reasoningMode))
+    return items.map(item => <div key={displayItemKey(item)} data-tool-row={isContainerlessToolItem(item) ? '' : undefined}>
+      <DisplayItemView item={item} narration={isNarration} onMessageAction={onMessageAction} />
+    </div>)
+  }, [reasoningMode, onMessageAction])
 
   const renderTransition = (transition: ContextTransition, entryKey?: string) => {
     const currentMove = workspaceMove?.id === transition.id ? workspaceMove : null
@@ -768,6 +778,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     const entry = entries[index]
     if (!entry) return null
     if (entry.kind === 'transition') return renderTransition(entry.transition, entryKeys[index])
+    if (entry.kind === 'focused') return (
+      <div data-row-key={entry.turn.id} data-transcript-entry={entryKeys[index]} key={entry.turn.id}>
+        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} />
+      </div>
+    )
     const item = entry.item
     const key = displayItemKey(item)
     const firstRowId = displayItemFirstRowId(item)
@@ -800,9 +815,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   }
   const entryKeys = entries.map(entry => entry.kind === 'transition'
     ? `context-transition:${entry.transition.id}`
-    : displayItemKey(entry.item))
+    : entry.kind === 'focused' ? entry.turn.id : displayItemKey(entry.item))
 
-  const revealIndex = revealAgent ? entries.findIndex(entry => entry.kind !== 'transition' && (
+  const revealIndex = revealAgent ? entries.findIndex(entry => entry.kind === 'focused'
+    ? containsAgentTool(entry.turn.rows, revealAgent.toolUseId) : entry.kind !== 'transition' && (
     entry.item.kind === 'single' ? containsAgentTool([entry.item.row], revealAgent.toolUseId) :
     entry.item.kind === 'agent-group' ? containsAgentTool(entry.item.members, revealAgent.toolUseId) : false
   )) : -1
@@ -1034,6 +1050,7 @@ type ContextTransition = Omit<PersistedContextTransition, 'binding'> & { binding
 const EMPTY_CONTEXT_TRANSITIONS: PersistedContextTransition[] = []
 type TranscriptLaneEntry =
   | { kind: 'item'; item: TranscriptLayoutItem }
+  | { kind: 'focused'; turn: FocusedTurnItem }
   | { kind: 'transition'; transition: ContextTransition }
 
 /** A move belongs between producer frames, before display-only row grouping. */
@@ -1042,13 +1059,26 @@ function layoutWithContextTransitions(
   boundaryRows: readonly NestedTranscriptRow[],
   mode: ReasoningLayoutMode,
   transitions: readonly ContextTransition[],
+  transcriptMode: TranscriptMode,
+  turnLive: boolean,
 ): { entries: TranscriptLaneEntry[]; narration: Set<string> } {
-  if (transitions.length === 0) {
-    const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(rows), mode))
-    return {
-      entries: items.map(item => ({ kind: 'item', item })),
-      narration: new Set(narrationRowIds(items)),
+  const layout = (chunk: readonly NestedTranscriptRow[], live: boolean): { entries: TranscriptLaneEntry[]; narration: Set<string> } => {
+    const entries: TranscriptLaneEntry[] = []
+    const narration = new Set<string>()
+    const parts = transcriptMode === 'focused' ? deriveFocusedTranscript(chunk, live) : [{ kind: 'rows' as const, rows: chunk }]
+    for (const part of parts) {
+      if (part.kind === 'focused-turn') {
+        entries.push({ kind: 'focused', turn: part })
+        continue
+      }
+      const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(part.rows), mode))
+      for (const id of narrationRowIds(items)) narration.add(id)
+      for (const item of items) entries.push({ kind: 'item', item })
     }
+    return { entries, narration }
+  }
+  if (transitions.length === 0) {
+    return layout(rows, turnLive)
   }
   const visibleIndexById = new Map(rows.map((row, index) => [row.id, index]))
   const lastRowByFrame = new Map<string, number>()
@@ -1075,9 +1105,9 @@ function layoutWithContextTransitions(
   let chunk: NestedTranscriptRow[] = []
   const flush = () => {
     if (chunk.length === 0) return
-    const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(chunk), mode))
-    for (const id of narrationRowIds(items)) narration.add(id)
-    for (const item of items) entries.push({ kind: 'item', item })
+    const grouped = layout(chunk, turnLive && chunk.at(-1) === rows.at(-1))
+    for (const id of grouped.narration) narration.add(id)
+    entries.push(...grouped.entries)
     chunk = []
   }
   const mark = (index: number) => {

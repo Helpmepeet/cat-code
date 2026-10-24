@@ -1,4 +1,5 @@
 import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
+import { deriveFocusedTranscript } from './focusedTranscriptLayout.js'
 
 function source(id: string) {
   return { id, sessionId: 'appearance-preview', messageId: `${id}-message`, frameId: `${id}-frame`, blockIndex: 0, parentToolUseId: null, children: [] }
@@ -17,6 +18,17 @@ export const APPEARANCE_PREVIEW_ROWS: NestedTranscriptRow[] = [
   tool('preview-read', 'Read', 'read', { file_path: 'src/loader/index.ts' }, 'const dependencies = resolveGraph(entry)\nreturn load(resolveGraph(entry), dependencies)'),
   tool('preview-bash', 'Bash', 'bash', { command: 'bun test src/loader' }, '12 pass\n0 fail'),
 ]
+
+// The final prose is rendered by ArrivingReply so replay uses the real arrival
+// path in either mode. These completion rows only establish the worked fold.
+const completedPreviewRows: NestedTranscriptRow[] = [
+  ...APPEARANCE_PREVIEW_ROWS,
+  { ...source('preview-answer'), kind: 'assistant-text', role: 'assistant', content: 'The loader now traverses the graph once.' },
+  { ...source('preview-result'), kind: 'result', subtype: 'success', isError: false, errors: [], durationMs: 104000 },
+]
+export const APPEARANCE_PREVIEW_FOCUSED_TURN = deriveFocusedTranscript(completedPreviewRows, false)
+  .find(item => item.kind === 'focused-turn')!
+export const APPEARANCE_PREVIEW_USER_ROWS = APPEARANCE_PREVIEW_ROWS.slice(0, 1)
 
 export const APPEARANCE_PREVIEW_CODE = `// One traversal builds and consumes the graph.
 export function load(entry: string) {

@@ -1,0 +1,192 @@
+import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
+import { deriveTarget, toolCardFilePath } from './transcriptToolTarget.js'
+import { selectToolDiffs } from './toolDiffs.js'
+
+export type FocusedSummary = {
+  readPaths: readonly string[]
+  editedPaths: readonly string[]
+  searchedPatterns: readonly string[]
+  commands: number
+  otherFamilies: Readonly<Partial<Record<ToolFamily, number>>>
+  toolCalls: number
+  additions: number
+  deletions: number
+  hasErrors: boolean
+  summary: string
+  activeLabel: string | null
+}
+export type FocusedSegment = {
+  kind: 'update' | 'stretch'
+  id: string
+  rows: readonly NestedTranscriptRow[]
+} & FocusedSummary
+export type FocusedTurnItem = {
+  kind: 'focused-turn'
+  id: string
+  rows: readonly NestedTranscriptRow[]
+  segments: readonly FocusedSegment[]
+  live: boolean
+  completed: boolean
+  durationMs: number | null
+} & FocusedSummary
+export type FocusedTranscriptItem = { kind: 'rows'; rows: readonly NestedTranscriptRow[] } | FocusedTurnItem
+
+const verbs: Partial<Record<ToolFamily, string>> = {
+  read: 'Reading', edit: 'Editing', write: 'Writing', grep: 'Searching', bash: 'Running',
+  agent: 'Delegating', web: 'Fetching', notebook: 'Editing',
+}
+
+function rowHasError(row: NestedTranscriptRow): boolean {
+  return (row.kind === 'tool-use' && (row.status === 'error' || row.result?.isError === true)) ||
+    (row.kind === 'result' && row.isError) ||
+    (row.kind === 'system-notice' && row.noticeType === 'provider_error') ||
+    row.children.some(rowHasError)
+}
+
+/** Only top-level calls contribute counts; their original nested rows remain reachable. */
+export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): FocusedSummary {
+  const reads = new Set<string>(), edits = new Set<string>(), searches = new Set<string>()
+  const other: Partial<Record<ToolFamily, number>> = {}
+  let commands = 0, toolCalls = 0, additions = 0, deletions = 0, hasErrors = false
+  let activeLabel: string | null = null
+  for (const row of rows) {
+    hasErrors ||= rowHasError(row)
+    if (row.kind !== 'tool-use') continue
+    toolCalls++
+    if (row.status === 'pending' && activeLabel === null) activeLabel = `${verbs[row.toolFamily] ?? 'Using'} ${deriveTarget(row)}`
+    const path = toolCardFilePath(row)
+    switch (row.toolFamily) {
+      case 'read': if (path) reads.add(path); break
+      case 'edit': case 'write': if (path) edits.add(path); break
+      case 'grep': {
+        const pattern = row.input.pattern
+        if (typeof pattern === 'string' && pattern) searches.add(pattern)
+        break
+      }
+      case 'bash': commands++; break
+      default: other[row.toolFamily] = (other[row.toolFamily] ?? 0) + 1
+    }
+    for (const diff of selectToolDiffs(row.result)) {
+      edits.add(diff.filePath)
+      for (const hunk of diff.hunks) for (const line of hunk.lines) {
+        if (line.startsWith('+')) additions++
+        else if (line.startsWith('-')) deletions++
+      }
+    }
+  }
+  const parts: string[] = []
+  const count = (verb: string, n: number, noun: string) => { if (n) parts.push(`${verb} ${n} ${noun}${n === 1 ? '' : 's'}`) }
+  count('read', reads.size, 'file'); count('edited', edits.size, 'file')
+  count('searched', searches.size, 'pattern'); count('ran', commands, 'command')
+  const actions: Partial<Record<ToolFamily, readonly [string, string]>> = {
+    agent: ['delegated', 'task'], 'agent-control': ['sent', 'agent request'],
+    web: ['made', 'web request'], mcp: ['made', 'MCP call'], skill: ['used', 'skill'],
+    imagegen: ['requested', 'image'], notebook: ['edited', 'notebook'],
+    lsp: ['made', 'code intelligence request'],
+  }
+  for (const family of Object.keys(other) as ToolFamily[]) {
+    const [verb, noun] = actions[family] ?? ['made', 'tool call']
+    count(verb, other[family]!, noun)
+  }
+  return { readPaths: [...reads], editedPaths: [...edits], searchedPatterns: [...searches], commands,
+    otherFamilies: other, toolCalls, additions, deletions, hasErrors,
+    summary: parts.join(', ') || (toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned'), activeLabel }
+}
+
+const segmentCache = new WeakMap<readonly NestedTranscriptRow[], readonly FocusedSegment[]>()
+export function deriveFocusedSegments(rows: readonly NestedTranscriptRow[]): readonly FocusedSegment[] {
+  const cached = segmentCache.get(rows)
+  if (cached) return cached
+  const segments: FocusedSegment[] = []
+  let stretch: NestedTranscriptRow[] = []
+  const flush = () => {
+    if (!stretch.length) return
+    segments.push({ kind: 'stretch', id: `focused-stretch:${stretch[0]!.id}`, rows: stretch, ...summarizeFocusedWork(stretch) })
+    stretch = []
+  }
+  for (const row of rows) {
+    if (row.kind === 'assistant-text') {
+      flush()
+      segments.push({ kind: 'update', id: `focused-update:${row.id}`, rows: [row], ...summarizeFocusedWork([row]) })
+    } else stretch.push(row)
+  }
+  flush()
+  segmentCache.set(rows, segments)
+  return segments
+}
+
+const cache = new WeakMap<readonly NestedTranscriptRow[], Map<boolean, readonly FocusedTranscriptItem[]>>()
+const isWork = (row: NestedTranscriptRow) => !row.isHidden &&
+  (row.kind === 'assistant-text' || row.kind === 'thinking' || row.kind === 'redacted-thinking' || row.kind === 'tool-use') &&
+  !row.parentToolUseId && !(row.kind === 'assistant-text' && row.inlineCommandOrigin)
+
+const isOperator = (row: NestedTranscriptRow) =>
+  (row.kind === 'user-text' || row.kind === 'user-image') && !row.isHidden && !row.parentToolUseId
+const isControlPoint = (row: NestedTranscriptRow) =>
+  row.kind === 'system-notice' || row.kind === 'injected-turn' || row.kind === 'task-notification' ||
+  (row.isHidden && (row.kind === 'assistant-text' || row.kind === 'thinking' ||
+    row.kind === 'redacted-thinking' || row.kind === 'tool-use'))
+
+/** Control points split folds; history/context boundaries end attribution to the operator. */
+export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], turnLive: boolean): readonly FocusedTranscriptItem[] {
+  const cached = cache.get(rows)?.get(turnLive)
+  if (cached) return cached
+  const items: FocusedTranscriptItem[] = []
+  let passthrough: NestedTranscriptRow[] = []
+  const pass = (row: NestedTranscriptRow) => { passthrough.push(row) }
+  const flush = () => { if (passthrough.length) { items.push({ kind: 'rows', rows: passthrough }); passthrough = [] } }
+  for (let i = 0; i < rows.length;) {
+    const user = rows[i++]!
+    pass(user)
+    if (!isOperator(user)) continue
+    // A submission may project images before or after its text.
+    while (rows[i] && isOperator(rows[i]!) && rows[i]!.frameId === user.frameId) pass(rows[i++]!)
+    const start = i
+    while (i < rows.length && (isWork(rows[i]!) || isControlPoint(rows[i]!))) i++
+    const end = rows[i]
+    const result = end?.kind === 'result' ? end : null
+    const live = i === rows.length && turnLive
+    const successful = result?.subtype === 'success' && !result.isError && !result.errors.length
+    let answer = -1
+    if (successful) for (let j = i - 1; j >= start; j--) {
+      if (!isWork(rows[j]!)) continue
+      if (rows[j]!.kind === 'assistant-text') answer = j
+      break
+    }
+    const fragments: { start: number; end: number }[] = []
+    for (let j = start; j < i;) {
+      if (!isWork(rows[j]!) || j === answer) { j++; continue }
+      const from = j++
+      while (j < i && isWork(rows[j]!) && j !== answer) j++
+      fragments.push({ start: from, end: j })
+    }
+    if (!fragments.length && live) fragments.push({ start: i, end: i })
+    let fragmentIndex = 0
+    for (let j = start; j <= i;) {
+      const fragment = fragments[fragmentIndex]
+      if (!fragment || fragment.start !== j) {
+        if (j < i) pass(rows[j]!)
+        j++
+        continue
+      }
+      flush()
+      const work = rows.slice(fragment.start, fragment.end)
+      // A result measures the whole turn, not an individual control-point fragment.
+      const duration = fragments.length === 1 ? result?.durationMs : undefined
+      const summary = summarizeFocusedWork(work)
+      const id = fragmentIndex === 0 ? `focused-turn:${user.id}` : `focused-turn:${user.id}:after:${rows[fragment.start - 1]!.id}`
+      items.push({ kind: 'focused-turn', id, rows: work,
+        segments: deriveFocusedSegments(work), live, completed: answer >= 0,
+        durationMs: typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 ? duration : null,
+        ...summary, hasErrors: summary.hasErrors || result?.isError === true })
+      fragmentIndex++
+      j = fragment.end > j ? fragment.end : j + 1
+    }
+    // The result and all non-work boundaries remain visible through the normal renderer.
+  }
+  flush()
+  const variants = cache.get(rows) ?? new Map()
+  variants.set(turnLive, items)
+  cache.set(rows, variants)
+  return items
+}

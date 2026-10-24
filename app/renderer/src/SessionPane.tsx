@@ -95,6 +95,9 @@ import {
 } from './TranscriptView.js'
 import type { ToolCardExpansionStore } from './toolCardExpansion.js'
 import { observePaneBottomLock, observePaneScroll } from './markdownScrollCoordinator.js'
+import { TranscriptModeContext } from './transcriptMode.js'
+import { createFocusedTranscriptScroll } from './focusedTranscriptScroll.js'
+import { reasoningStepsForRow } from './reasoningLayout.js'
 import { selectPaneFollowIntent } from './paneAnchorModel.js'
 import {
   captureTranscriptScrollAnchor,
@@ -707,6 +710,9 @@ export function SessionPane({
   // (the same gate the composer uses). `paused` = a generic permission request;
   // AskQuestionFlow is already the complete visible waiting state for questions.
   const transcriptScrollRef = useRef<HTMLDivElement>(null)
+  const { mode: transcriptMode } = useContext(TranscriptModeContext)
+  const focusedMode = transcriptMode === 'focused'
+  const focusedScrollRef = useRef<ReturnType<typeof createFocusedTranscriptScroll> | null>(null)
   const [atBottom, setAtBottom] = useState(true)
   const [showLatest, setShowLatest] = useState(false)
   // Mirrored into a ref because the pane coordinator asks for this answer from
@@ -824,6 +830,7 @@ export function SessionPane({
   const [revealAgent, setRevealAgent] = useState<AgentRevealRequest | null>(null)
   const openDockWorker = (row: SubagentDockRow) => {
     if (row.toolUseId) {
+      focusedScrollRef.current?.release()
       applyAtBottom(false)
       setRevealAgent(previous => ({ toolUseId: row.toolUseId!, sequence: (previous?.sequence ?? 0) + 1 }))
       if (!nestedRows.some(candidate => candidate.kind === 'tool-use' && candidate.toolUseId === row.toolUseId) &&
@@ -859,6 +866,31 @@ export function SessionPane({
     : jumpHeld && !generating
       ? { verb: 'Working', target: null }
       : deriveActivity(nestedRows, compacting)
+  const reasoningStep = useMemo(() => {
+    if (!focusedMode || activity.verb !== 'Thinking') return null
+    const last = nestedRows.at(-1)
+    if (!last || last.kind !== 'thinking') return null
+    const step = reasoningStepsForRow(last).at(-1)
+    return step && step.kind !== 'withheld' ? step.text : null
+  }, [focusedMode, activity.verb, nestedRows])
+  const focusedScrollState = useMemo(() => {
+    if (!focusedMode) return { generating: false, userRowId: null, answerRowId: null }
+    let userRowId: string | null = null
+    let answerRowId: string | null = null
+    let lastText: string | null = null
+    for (const row of nestedRows) {
+      if ((row.kind === 'user-text' || row.kind === 'user-image') && !row.isHidden) {
+        userRowId = row.id
+        answerRowId = null
+        lastText = null
+      } else if (row.kind === 'assistant-text') lastText = row.id
+      else if (row.kind === 'tool-use') lastText = null
+      else if (row.kind === 'result') {
+        answerRowId = row.subtype === 'success' && !row.isError && row.errors.length === 0 ? lastText : null
+      }
+    }
+    return { generating, userRowId, answerRowId }
+  }, [focusedMode, nestedRows, generating])
   // Same slice-cached projection `deriveActivity` reads, so the plan cannot
   // disagree with the verb beside it (`todoPlan.ts`).
   const todoPlan = selectTodoPlan(nestedRows)
@@ -1037,7 +1069,7 @@ export function SessionPane({
   // for readability, not correctness.
   const beginSendMotion = (): void => {
     if (prefersReducedMotion()) return
-    if (nestedRows.length > 0 && atBottomRef.current && restorePhase === null &&
+    if (!focusedMode && nestedRows.length > 0 && atBottomRef.current && restorePhase === null &&
       !historyLoadEarlierPending && transcriptScrollRef.current) {
       pendingTurnSlideRef.current = {
         scrollTopBefore: transcriptScrollRef.current.scrollTop,
@@ -1048,7 +1080,7 @@ export function SessionPane({
     liftAwaitingTurnRef.current = true
     setArrowFading(true)
     if (!ghost) return
-    if (!emptyChat) {
+    if (!emptyChat || focusedMode) {
       beginComposerLift(ghost)
       return
     }
@@ -1170,7 +1202,7 @@ export function SessionPane({
 
     if (
       previousLast && currentLast && currentLast.id !== previousLast.id &&
-      currentLast.kind === 'user-text' &&
+      currentLast.kind === 'user-text' && !focusedMode &&
       generating && atBottomRef.current &&
       restorePhase === null && !historyLoadEarlierPending &&
       !prefersReducedMotion()
@@ -1331,6 +1363,24 @@ export function SessionPane({
     // its own position, not a new place to jump to.
   }, [activeSessionId])
 
+  useEffect(() => {
+    const el = transcriptScrollRef.current
+    if (!el || !focusedMode) return
+    const controller = createFocusedTranscriptScroll(el, {
+      initialFollowing: atBottomRef.current,
+      onFollowingChange: applyAtBottom,
+    })
+    focusedScrollRef.current = controller
+    controller.update(focusedScrollState)
+    return () => {
+      controller.dispose()
+      focusedScrollRef.current = null
+    }
+  }, [focusedMode, activeSessionId])
+  useLayoutEffect(() => {
+    focusedScrollRef.current?.update(focusedScrollState)
+  }, [focusedScrollState])
+
   // The pane's stick-to-bottom owner. A restored transcript binds with every
   // off-window body still an estimate, and a streaming one commits with an
   // estimate for the body being written, so the height worth following changes
@@ -1340,7 +1390,7 @@ export function SessionPane({
   // body still only move the height at commit time.
   useEffect(() => {
     const el = transcriptScrollRef.current
-    if (!el) return
+    if (!el || focusedMode) return
     const releaseBottomLock = observePaneBottomLock(el, () => atBottomRef.current, scrollTop => {
       previousScrollTopRef.current = scrollTop
     })
@@ -1364,7 +1414,7 @@ export function SessionPane({
       releaseGeometry()
       releaseBottomLock()
     }
-  }, [])
+  }, [focusedMode])
 
   // Unbinding is the one moment the anchor is READ, so a capture still waiting
   // on a frame has to happen first, or the last stretch of a drag is the part
@@ -1445,16 +1495,16 @@ export function SessionPane({
   // immediate write in addition to the observer's next geometry frame.
   useEffect(() => {
     const el = transcriptScrollRef.current
-    if (!el || !atBottomRef.current) return
+    if (!el || focusedMode || !atBottomRef.current) return
     el.scrollTop = el.scrollHeight
     previousScrollTopRef.current = el.scrollTop
-  }, [atBottom])
+  }, [atBottom, focusedMode])
 
   const onTranscriptScroll = (): void => {
     const el = transcriptScrollRef.current
     if (!el) return
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight
-    const nextAtBottom = selectPaneFollowIntent({
+    const nextAtBottom = focusedMode ? focusedScrollRef.current?.isFollowing() ?? atBottomRef.current : selectPaneFollowIntent({
       following: atBottomRef.current,
       previousScrollTop: previousScrollTopRef.current,
       scrollTop: el.scrollTop,
@@ -1482,6 +1532,10 @@ export function SessionPane({
   const jumpToBottom = (): void => {
     const el = transcriptScrollRef.current
     if (!el) return
+    if (focusedMode && focusedScrollRef.current) {
+      focusedScrollRef.current.resume()
+      return
+    }
     el.scrollTo({ top: el.scrollHeight, behavior: 'instant' })
     previousScrollTopRef.current = el.scrollTop
     applyAtBottom(true)
@@ -1853,6 +1907,7 @@ export function SessionPane({
         <div
           ref={transcriptScrollRef}
           onScroll={onTranscriptScroll}
+          tabIndex={focusedMode ? 0 : undefined}
           className="relative min-h-0 flex-1 overflow-auto"
         >
           <TranscriptView
@@ -2192,7 +2247,8 @@ export function SessionPane({
         >
           <ActivityIndicator
             verb={activity.verb}
-            target={activity.target}
+            target={activity.target ?? reasoningStep}
+            targetProse={reasoningStep !== null}
             elapsedMs={elapsedMs}
             liveTokens={liveTokens}
             paused={paused}
@@ -2662,6 +2718,7 @@ const SHOW_TOKENS_AFTER_MS = 30_000
 function ActivityIndicator({
   verb,
   target,
+  targetProse = false,
   elapsedMs,
   liveTokens,
   paused,
@@ -2671,6 +2728,7 @@ function ActivityIndicator({
 }: {
   verb: string
   target: string | null
+  targetProse?: boolean
   elapsedMs: number
   liveTokens: number
   paused: boolean
@@ -2703,7 +2761,7 @@ function ActivityIndicator({
         {paused ? 'Waiting for approval' : verb}
       </span>
       {target ? (
-        <span className="min-w-0 truncate font-mono text-[11.5px] text-text-subtle">
+        <span className={`min-w-0 truncate text-[11.5px] text-text-subtle ${targetProse ? 'focused-reasoning-target' : 'font-mono'}`}>
           {target}
         </span>
       ) : null}

@@ -11,6 +11,7 @@ import { ToastHost } from './ToastHost.js'
 import { ProseArrivalProvider } from './ProseArrivalProvider.js'
 import { ToolCardStyleProvider } from './ToolCardStyleProvider.js'
 import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
+import { TranscriptModeProvider } from './TranscriptModeProvider.js'
 import { RendererErrorBoundary } from './RendererErrorBoundary.js'
 import { getBridge } from './bridge.js'
 import { installReactDevPerformanceTrackFilter } from './reactDevPerformanceTrack.js'
@@ -63,7 +64,9 @@ createRoot(root).render(
                     <ToolCardStyleProvider>
                       <ProseArrivalProvider>
                         <NotificationPreferencesProvider>
-                          <App />
+                          <TranscriptModeProvider>
+                            <App />
+                          </TranscriptModeProvider>
                         </NotificationPreferencesProvider>
                       </ProseArrivalProvider>
                     </ToolCardStyleProvider>

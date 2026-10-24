@@ -7,6 +7,7 @@ import { DEFAULT_PROSE_ARRIVAL, PROSE_ARRIVALS, PROSE_ARRIVAL_LABELS, ProseArriv
 import { DEFAULT_REASONING_LAYOUT, REASONING_LAYOUT_MODES, ReasoningLayoutContext } from './reasoningLayout.js'
 import { DEFAULT_TOOL_CARD_STYLE, TOOL_CARD_STYLES, TOOL_CARD_STYLE_LABELS, ToolCardStyleContext } from './toolCardStyle.js'
 import { DEFAULT_TOOLS_EXPANDED, ToolsExpandedContext } from './toolsExpanded.js'
+import { DEFAULT_TRANSCRIPT_MODE, TRANSCRIPT_MODES, TRANSCRIPT_MODE_LABELS, TranscriptModeContext } from './transcriptMode.js'
 import { DEFAULT_NOTIFICATION_PREFERENCES } from '../../shared/notificationPreferences.js'
 import { NotificationPreferencesContext } from './notificationPreferences.js'
 import { ToggleSwitch } from './SettingsEditors.js'
@@ -91,6 +92,7 @@ export function AppearanceSettings() {
   const { style, setStyle } = useContext(ToolCardStyleContext)
   const { expanded, setExpanded } = useContext(ToolsExpandedContext)
   const { mode, setMode } = useContext(ReasoningLayoutContext)
+  const { mode: transcriptMode, setMode: setTranscriptMode } = useContext(TranscriptModeContext)
   const { theme, setTheme } = useContext(CodeThemeContext)
   const { preferences, setPreferences } = useContext(NotificationPreferencesContext)
   const [replay, setReplay] = useState(0)
@@ -139,7 +141,8 @@ export function AppearanceSettings() {
           </div>
         </div>
       </Section>
-      <Section title="Conversation" modified={arrival !== DEFAULT_PROSE_ARRIVAL || style !== DEFAULT_TOOL_CARD_STYLE || expanded !== DEFAULT_TOOLS_EXPANDED || mode !== DEFAULT_REASONING_LAYOUT || theme !== DEFAULT_CODE_THEME} onReset={() => {
+      <Section title="Conversation" modified={transcriptMode !== DEFAULT_TRANSCRIPT_MODE || arrival !== DEFAULT_PROSE_ARRIVAL || style !== DEFAULT_TOOL_CARD_STYLE || expanded !== DEFAULT_TOOLS_EXPANDED || mode !== DEFAULT_REASONING_LAYOUT || theme !== DEFAULT_CODE_THEME} onReset={() => {
+        setTranscriptMode(DEFAULT_TRANSCRIPT_MODE)
         setArrival(DEFAULT_PROSE_ARRIVAL)
         setStyle(DEFAULT_TOOL_CARD_STYLE)
         setExpanded(DEFAULT_TOOLS_EXPANDED)
@@ -148,6 +151,10 @@ export function AppearanceSettings() {
         setReplay(value => value + 1)
       }}>
         <div className="appearance-controls">
+          <div className="appearance-row" data-setting-key="transcriptMode" tabIndex={-1}>
+            <span className="appearance-row-label">Transcript</span>
+            <ChoiceGroup label="Transcript" options={TRANSCRIPT_MODES} value={transcriptMode} onChange={setTranscriptMode}>{key => TRANSCRIPT_MODE_LABELS[key]}</ChoiceGroup>
+          </div>
           <div className="appearance-row" data-setting-key="arrival" tabIndex={-1}>
             <span className="appearance-row-label">Text arrival</span>
             <div className="appearance-row-controls">

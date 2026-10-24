@@ -7,8 +7,12 @@ import { MAX_PROSE_ARRIVAL_STAGGER_MS, PROSE_ARRIVAL_WORD_CLASS, PROSE_ARRIVAL_W
 import { markArrivedText } from './proseArrivalMark.js'
 import { PROSE_PREVIEW_CHUNKS, PROSE_PREVIEW_CHUNK_MS, prosePreviewFrame } from './proseArrivalPreviewModel.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
-import { APPEARANCE_PREVIEW_CODE, APPEARANCE_PREVIEW_ROWS } from './appearancePreviewModel.js'
+import { APPEARANCE_PREVIEW_CODE, APPEARANCE_PREVIEW_ROWS, APPEARANCE_PREVIEW_USER_ROWS, APPEARANCE_PREVIEW_FOCUSED_TURN } from './appearancePreviewModel.js'
 import { CodeThemePreview } from './CodeThemePreview.js'
+import { TranscriptModeContext } from './transcriptMode.js'
+import { FocusedTranscript } from './FocusedTranscript.js'
+
+const FULL_TRANSCRIPT_CONTEXT = { mode: 'full' as const, setMode: () => {} }
 
 const COMPLETE_REPLY = PROSE_PREVIEW_CHUNKS.join('')
 
@@ -17,9 +21,19 @@ const COMPLETE_REPLY = PROSE_PREVIEW_CHUNKS.join('')
 export function ConversationAppearancePreview({ replay }: { replay: number }) {
   const { arrival } = useContext(ProseArrivalContext)
   const { expanded } = useContext(ToolsExpandedContext)
+  const { mode } = useContext(TranscriptModeContext)
   return (
     <div aria-label="Conversation preview" className="appearance-preview" data-window-card role="region">
-      <TranscriptRowsView key={String(expanded)} rows={APPEARANCE_PREVIEW_ROWS} />
+      {mode === 'full' ? <TranscriptRowsView key={String(expanded)} rows={APPEARANCE_PREVIEW_ROWS} /> : (
+        <TranscriptModeContext.Provider value={FULL_TRANSCRIPT_CONTEXT}>
+          <TranscriptRowsView rows={APPEARANCE_PREVIEW_USER_ROWS} />
+          <div className="appearance-preview-focused">
+            <FocusedTranscript turn={APPEARANCE_PREVIEW_FOCUSED_TURN} renderRows={rows => (
+              <TranscriptRowsView key={String(expanded)} rows={[...rows]} />
+            )} />
+          </div>
+        </TranscriptModeContext.Provider>
+      )}
       <div className="appearance-preview-reply">
         <ArrivingReply key={`${arrival}:${replay}`} play={replay > 0} />
         <div className="md-prose"><CodeThemePreview code={APPEARANCE_PREVIEW_CODE} language="typescript" /></div>
