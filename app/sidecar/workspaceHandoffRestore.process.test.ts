@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readWorkspaceJump, writeWorkspaceJump, type WorkspaceJumpStateV2 } from '../../src/utils/workspaceJumpState.js'
@@ -10,10 +10,14 @@ import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.j
 import { SIDECAR_RUNTIME_ARGS } from '../main/mainDecisions.js'
 import { WorkspaceHandoffControl } from '../main/workspaceHandoffControl.js'
 import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
+import { loadDisplayTranscriptFromJsonlPath } from '../../src/utils/sessionStorage.js'
 
-for (const historical of [false, true]) test(historical
+for (const scenario of ['success', 'historical', 'pending-question'] as const) test(scenario === 'pending-question'
+  ? 'replacement releases uncertain review after a real unanswered question sharing the narration response id'
+  : scenario === 'historical'
   ? 'normal replacement startup preserves converged open history after rewind without repeating continuation'
   : 'real execution survives process replacement and confirms main-authorized release without replay', async () => {
+  const historical = scenario === 'historical', pendingQuestion = scenario === 'pending-question'
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'handoff-restore-')))
   const config = join(root, 'config'), cwd = join(root, 'project'), socket = join('/tmp', `hr-${randomUUID().slice(0, 8)}.sock`)
   mkdirSync(config); mkdirSync(cwd)
@@ -31,13 +35,20 @@ for (const historical of [false, true]) test(historical
   writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } }))
   const blocker = join(root, 'block-network.ts')
   writeFileSync(blocker, 'globalThis.fetch = async () => { throw new Error("Network disabled") }\n')
+  const providerGuard = join(root, 'guard-provider.ts'), providerReplay = join(root, 'provider-replay')
+  writeFileSync(providerGuard, `import { spyOn } from 'bun:test'; import { writeFileSync } from 'node:fs';
+import * as claude from ${JSON.stringify(resolve('src/services/api/claude.ts'))};
+spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+  writeFileSync(${JSON.stringify(providerReplay)}, 'unexpected provider request');
+  throw new Error('Replacement must not request a provider');
+});\n`)
   const inheritedLaunchKeys = Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith('CATCODE_')).map(key => [key, undefined]))
   const env = { ...process.env, ...inheritedLaunchKeys, CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'sk-ant-local-probe', NODE_ENV: 'development', TEST_ENABLE_SESSION_PERSISTENCE: '1' }
   const children: Array<ReturnType<typeof Bun.spawn>> = []
   let supervisor: SidecarSupervisor | undefined
   let control: WorkspaceHandoffControl | undefined
   try {
-    const minter = Bun.spawn(['bun', `--preload=${blocker}`, `--preload=${resolve('src/QueryEngine.ts')}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/mintHandoffReceipt.fixture.ts'), appSessionId, ...(historical ? ['--new-conversation'] : [])], { cwd, env: { ...env, CLAUDE_CODE_SIMPLE: '1' }, stdout: 'pipe', stderr: 'pipe' })
+    const minter = Bun.spawn(['bun', `--preload=${blocker}`, `--preload=${resolve('src/QueryEngine.ts')}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/mintHandoffReceipt.fixture.ts'), appSessionId, ...(historical ? ['--new-conversation'] : []), ...(pendingQuestion ? ['--pending-question'] : [])], { cwd, env: { ...env, CLAUDE_CODE_SIMPLE: '1' }, stdout: 'pipe', stderr: 'pipe' })
     children.push(minter)
     const [mintCode, mintError, mintOutput] = await Promise.all([minter.exited, new Response(minter.stderr).text(), new Response(minter.stdout).text()])
     expect(mintCode, mintError).toBe(0)
@@ -50,7 +61,7 @@ for (const historical of [false, true]) test(historical
         controls: { mode: 'default' }, backup: join(root, 'backup'), movedAt: 2 })
     }
     const frames: ServerFrame[] = []
-    supervisor = new SidecarSupervisor({ sidecarCommand: 'bun', sidecarArgs: [`--preload=${blocker}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/index.ts')], sidecarEnv: env, socketDir: root })
+    supervisor = new SidecarSupervisor({ sidecarCommand: 'bun', sidecarArgs: [`--preload=${blocker}`, `--preload=${resolve('src/QueryEngine.ts')}`, `--preload=${providerGuard}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/index.ts')], sidecarEnv: env, socketDir: root })
     supervisor.subscribe(event => { if (event.type === 'frame') {
       frames.push(event.frame)
       const { deliveryTrace: _deliveryTrace, ...controlFrame } = event.frame
@@ -64,7 +75,7 @@ for (const historical of [false, true]) test(historical
     supervisor.send(appSessionId, { type: 'workspace.handoff', requestId: 'status', operationId: state.operationId, forGeneration: generation, action: 'status' })
     for (let i = 0; i < 100 && !frames.some(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'status'); i++) await Bun.sleep(20)
     expect(frames.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'status')).toMatchObject({ disposition: 'accepted',
-      status: { observerGeneration: generation, admissionGeneration, execution: 'terminal', record: { kind: 'valid', record: { consumed: true, terminal: { outcome: 'success' } } }, gate: { mode: historical ? 'open' : 'held' } } })
+      status: { observerGeneration: generation, admissionGeneration, execution: pendingQuestion ? 'unconfirmed' : 'terminal', record: { kind: 'valid', record: { consumed: true, ...(pendingQuestion ? { inputCommitted: true } : { terminal: { outcome: 'success' } }) } }, gate: { mode: historical ? 'open' : 'held' } } })
     if (!historical) {
       let held = true
       const coordinator = new WorkspaceJumpCoordinator({ row: id => id === appSessionId ? {
@@ -82,10 +93,15 @@ for (const historical of [false, true]) test(historical
       coordinator.queryStatus(appSessionId, true)
       for (let i = 0; i < 200 && readWorkspaceJump(appSessionId)?.version === 2 &&
           (readWorkspaceJump(appSessionId) as WorkspaceJumpStateV2).release.confirmed?.generation !== generation; i++) await Bun.sleep(20)
-      expect(readWorkspaceJump(appSessionId)).toMatchObject({ continuation: { dispatch: 'consumed', outcome: 'success',
-        receiptRevision: receipt.receiptRevision, checkpointSha256: receipt.checkpointSha256 },
-        release: { target: 'open', confirmed: { generation, mode: 'open' } } })
-      expect(frames.find(frame => frame.kind === 'workspace.handoff.result' && frame.action === 'release')).toMatchObject({ disposition: 'accepted', status: { gate: { mode: 'open', reservationOperationId: null } } })
+      const releaseAction = pendingQuestion ? 'settle' : 'release'
+      for (let i = 0; i < 100 && !frames.some(frame => frame.kind === 'workspace.handoff.result' && frame.action === releaseAction); i++) await Bun.sleep(20)
+      expect(readWorkspaceJump(appSessionId)).toMatchObject(pendingQuestion
+        ? { continuation: { dispatch: 'consumed', outcome: 'unknown' }, review: { required: true, noticeUuid: expect.any(String) },
+          release: { target: 'review', confirmed: { generation, mode: 'review' } } }
+        : { continuation: { dispatch: 'consumed', outcome: 'success',
+          receiptRevision: receipt.receiptRevision, checkpointSha256: receipt.checkpointSha256 },
+          release: { target: 'open', confirmed: { generation, mode: 'open' } } })
+      expect(frames.find(frame => frame.kind === 'workspace.handoff.result' && frame.action === releaseAction)).toMatchObject({ disposition: 'accepted', status: { gate: { mode: pendingQuestion ? 'review' : 'open', reservationOperationId: null } } })
       expect(held).toBe(false)
       expect(coordinator.isReserved(appSessionId)).toBe(false)
     }
@@ -98,6 +114,16 @@ for (const historical of [false, true]) test(historical
       expect(frames.find(frame => frame.kind === 'workspace.handoff.result' && frame.requestId === 'repeat')).toMatchObject({ disposition: 'refused' })
     }
     expect(frames.some(frame => frame.kind === 'event' && frame.event.type === 'turn.status' && frame.event.activeTurn)).toBe(false)
+    if (pendingQuestion) {
+      const transcripts = await Array.fromAsync(new Bun.Glob(`**/${engineSessionId}.jsonl`).scan({ cwd: config, absolute: true }))
+      expect(transcripts).toHaveLength(1)
+      const displayed = await loadDisplayTranscriptFromJsonlPath(transcripts[0]!, { maxMessages: 100, maxBytes: 1024 * 1024 })
+      expect(JSON.stringify(displayed.messages)).toContain('Which workspace recovery option should I use?')
+      expect(frames.find(frame => frame.kind === 'workspace.handoff.result' && frame.action === 'settle')).toMatchObject({
+        status: { record: { kind: 'valid', record: { notice: { outcome: 'uncertain', displayUuid: expect.any(String) } } } },
+      })
+    }
+    expect(existsSync(providerReplay)).toBe(false)
     supervisor.shutdown()
   } finally {
     control?.dispose()

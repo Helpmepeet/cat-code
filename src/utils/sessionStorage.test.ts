@@ -2609,6 +2609,38 @@ describe('large transcript resume preserves selection and recoverable content', 
     return resumed
   }
 
+  test.each([false, true])('a continued response recovers only answered tool siblings while display retains both (answered=%s)', async answered => {
+    const prompt = row('user', null, 0, { message: { role: 'user', content: 'Check the notification' } })
+    const narration = row('assistant', prompt.uuid, 1, {
+      message: { id: 'split-response', role: 'assistant', content: [{ type: 'text', text: 'Checking the notification.' }] },
+    })
+    const question = call(narration.uuid, 2, 'question', 'split-response')
+    question.message.content.push({
+      type: 'tool_use', id: 'unanswered-companion', name: 'Read', input: { file_path: 'unanswered-companion' },
+    })
+    const answer = result(question.uuid, 3, 'question', 'The notification is visible')
+    const initial = [prompt, narration, question, ...(answered ? [answer] : [])]
+    const { path } = await write(initial)
+    expect((await readWithReference(path)).messages.map(message => message.uuid)).toEqual(initial.map(message => message.uuid))
+
+    const notice = row('system', narration.uuid, 4, {
+      subtype: 'workspace_handoff_outcome', level: 'warning', content: 'Completion could not be confirmed.',
+      data: { operationId: randomUUID(), outcome: 'uncertain' },
+    })
+    const context = row('user', notice.uuid, 5, {
+      isMeta: true, message: { role: 'user', content: 'Wait for the user to review the interrupted work.' },
+    })
+    const archived = [...initial, notice, context]
+    await write(archived)
+    const resumed = await readWithReference(path)
+    expect(resumed.messages.map(message => message.uuid)).toEqual([
+      prompt.uuid, narration.uuid, ...(answered ? [question.uuid, answer.uuid] : []), notice.uuid, context.uuid,
+    ])
+    const display = await loadDisplayTranscriptFromJsonlPath(path, { maxMessages: 100, maxBytes: 1024 * 1024 })
+    expect(display.truncated).toBe(false)
+    expect(display.messages.map(message => message.uuid)).toEqual(archived.map(message => message.uuid))
+  })
+
   function shapedResults(messages: Parameters<typeof normalizeMessagesForAPI>[0]) {
     return ensureToolResultPairing(normalizeMessagesForAPI(messages)).flatMap(message =>
       message.type === 'user' && Array.isArray(message.message.content)

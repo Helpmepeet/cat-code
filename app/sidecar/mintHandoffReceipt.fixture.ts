@@ -15,6 +15,7 @@ import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { createFileStateCacheWithSizeLimit } from '../../src/utils/fileStateCache.js'
 import * as claude from '../../src/services/api/claude.js'
 import * as growthbook from '../../src/services/analytics/growthbook.js'
+import { AskUserQuestionTool } from '../../src/tools/AskUserQuestionTool/AskUserQuestionTool.js'
 
 const saved = readWorkspaceJump(process.argv[2]!)
 if (!saved) throw new Error('Missing fixture operation')
@@ -25,13 +26,22 @@ await activateTranscriptLease(state.engineSessionId)
 switchSession(asSessionId(state.engineSessionId))
 setSessionProvider('openai')
 let providerCalls = 0
+const pendingQuestion = process.argv.includes('--pending-question')
 const completedAssistantUuid = randomUUID()
 const providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
   providerCalls++
+  const responseId = randomUUID()
   yield { type: 'assistant', uuid: completedAssistantUuid, timestamp: new Date().toISOString(), message: {
-    id: randomUUID(), role: 'assistant', model: 'gpt-5.6-terra', content: [{ type: 'text', text: 'The saved task is complete.' }],
+    id: responseId, role: 'assistant', model: 'gpt-5.6-terra', content: [{ type: 'text', text: pendingQuestion ? 'I need your decision before continuing.' : 'The saved task is complete.' }],
     usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     stop_reason: 'end_turn', stop_sequence: null,
+  } } as AssistantMessage
+  if (pendingQuestion) yield { type: 'assistant', uuid: randomUUID(), timestamp: new Date().toISOString(), message: {
+    id: responseId, role: 'assistant', model: 'gpt-5.6-terra', content: [{ type: 'tool_use', id: 'pending-handoff-question',
+      name: 'AskUserQuestion', input: { questions: [{ question: 'Which workspace recovery option should I use?', header: 'Recovery',
+        options: [{ label: 'Keep', description: 'Keep the current workspace.' }, { label: 'Replace', description: 'Replace the workspace.' }], multiSelect: false }] } }],
+    usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+    stop_reason: 'tool_use', stop_sequence: null,
   } } as AssistantMessage
 })
 const featureSpy = spyOn(growthbook, 'checkStatsigFeatureGate_CACHED_MAY_BE_STALE').mockReturnValue(false)
@@ -46,8 +56,10 @@ try {
     operationSha256: workspaceJumpOperationSha256(state) }
   let appState = getDefaultAppState()
   const controller = createRuntimeBackedAppSession({ queryEngineConfig: {
-    cwd: state.target.cwd, initialMessages: [seed], tools: [], commands: [], mcpClients: [], agents: [],
-    canUseTool: async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
+    cwd: state.target.cwd, initialMessages: [seed], tools: pendingQuestion ? [AskUserQuestionTool] : [], commands: [], mcpClients: [], agents: [],
+    canUseTool: async (_tool, input) => pendingQuestion
+      ? { behavior: 'ask', message: 'Choose a recovery option.', updatedInput: input }
+      : { behavior: 'allow', updatedInput: input },
     getAppState: () => appState, setAppState: update => { appState = update(appState) },
     readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'isolated handoff process fixture',
     userSpecifiedModel: 'gpt-5.6-terra', thinkingConfig: { type: 'disabled' },
@@ -55,6 +67,21 @@ try {
     observerGeneration: state.continuation.admissionGeneration!, origin: 'fresh', recover: false }) })
   await controller.waitForInitialization()
   const claim = await controller.startHandoffContinuation()
+  if (pendingQuestion) {
+    for (let i = 0; i < 500 && !controller.getPendingPermissionRequests().length; i++) await Bun.sleep(20)
+    const requests = controller.getPendingPermissionRequests()
+    const result = controller.getWorkspaceHandoffSnapshot()
+    if (requests.length !== 1 || requests[0]?.request.tool_name !== 'AskUserQuestion' ||
+        providerCalls !== 1 || result?.record.kind !== 'valid' || !result.record.record.consumed ||
+        !result.record.record.inputCommitted || result.record.record.terminal) {
+      throw new Error('Real continuation did not persist an unsettled question execution')
+    }
+    await flushCurrentTranscriptDurably()
+    process.stdout.write(`${JSON.stringify({ receiptRevision: result.record.record.revision, providerCalls })}\n`)
+    // Exit without settling the permission or aborting the execution.
+    await releaseActiveTranscriptLease()
+    process.exit(0)
+  }
   await claim.completion
   const result = controller.getWorkspaceHandoffSnapshot()
   if (providerCalls !== 1 || result?.record.kind !== 'valid' || !result.record.record.consumed ||

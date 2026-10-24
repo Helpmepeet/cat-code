@@ -3449,7 +3449,7 @@ function findLatestMessage<T extends { timestamp: string }>(
 export function buildConversationChain(
   messages: Map<UUID, TranscriptMessage>,
   leafMessage: TranscriptMessage,
-  options?: { followCompactLogicalParents?: boolean },
+  options?: { followCompactLogicalParents?: boolean; recoverUnresolvedToolSiblings?: boolean },
 ): TranscriptMessage[] {
   const transcript: TranscriptMessage[] = []
   const seen = new Set<UUID>()
@@ -3475,7 +3475,7 @@ export function buildConversationChain(
     currentMsg = parentUuid ? messages.get(parentUuid) : undefined
   }
   transcript.reverse()
-  const recovered = recoverOrphanedParallelToolResults(messages, transcript, seen)
+  const recovered = recoverOrphanedParallelToolResults(messages, transcript, seen, options?.recoverUnresolvedToolSiblings)
   const recoveredIds = new Set(recovered.map(row => row.uuid))
   // A restart immediately after compaction has no newer conversation message
   // parenting the task snapshot. Retain that snapshot along the selected
@@ -3584,6 +3584,7 @@ export function buildDisplayConversationChain(
 ): TranscriptMessage[] {
   return buildConversationChain(messages, leafMessage, {
     followCompactLogicalParents: true,
+    recoverUnresolvedToolSiblings: true,
   })
 }
 
@@ -3614,6 +3615,7 @@ function recoverOrphanedParallelToolResults(
   messages: Map<UUID, TranscriptMessage>,
   chain: TranscriptMessage[],
   seen: Set<string>,
+  recoverUnresolvedToolSiblings = false,
 ): TranscriptMessage[] {
   type ChainAssistant = Extract<TranscriptMessage, { type: 'assistant' }>
   const chainAssistants = chain.filter(
@@ -3734,11 +3736,26 @@ function recoverOrphanedParallelToolResults(
     processedGroups.add(key)
 
     const group = siblingsByGroup.get(key) ?? [anchorAssistant]
+    const resolvedToolUseIds = new Set<string>()
+    for (const member of group) {
+      for (const result of toolResultsByAsst.get(member.uuid) ?? []) {
+        if (!sameRecoveryIdentity(result, anchorAssistant) || result.type !== 'user' ||
+            !Array.isArray(result.message.content)) continue
+        for (const block of result.message.content) {
+          if (block.type === 'tool_result') resolvedToolUseIds.add(block.tool_use_id)
+        }
+      }
+    }
     const related = new Map<string, TranscriptMessage>()
     const roots: TranscriptMessage[] = []
     const toolResults: TranscriptMessage[] = []
     for (const member of group) {
       if (!sameRecoveryIdentity(member, anchorAssistant)) continue
+      const calls = member.message.content.filter(block => block.type === 'tool_use')
+      // Resume can drop an unanswered sibling while retaining this response's
+      // narration. Reintroducing it changes the checkpoint's runtime history.
+      if (!recoverUnresolvedToolSiblings && !seen.has(member.uuid) && calls.length > 0 &&
+          calls.every(call => !resolvedToolUseIds.has(call.id))) continue
       related.set(member.uuid, member)
       roots.push(member)
       for (const result of toolResultsByAsst.get(member.uuid) ?? []) {
