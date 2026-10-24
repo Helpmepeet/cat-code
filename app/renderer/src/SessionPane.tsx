@@ -1787,7 +1787,7 @@ export function SessionPane({
         ? createPortal(
             <div
               ref={flightElRef}
-              className="send-flight max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary"
+              className="send-flight conversation-prose max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5"
               dangerouslySetInnerHTML={{ __html: flight.html }}
             />,
             document.body,
@@ -2609,7 +2609,7 @@ export function SessionPane({
  */
 function QueuedRow({ text }: { text: string }) {
   return (
-    <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-dashed border-accent/30 bg-accent/[0.035] px-4 py-2.5 text-sm leading-relaxed text-text-subtle">
+    <div className="conversation-prose max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-dashed border-accent/30 bg-accent/[0.035] px-4 py-2.5 text-text-subtle">
       {text || 'Image attachment'}
     </div>
   )

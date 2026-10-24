@@ -111,3 +111,15 @@ test('every docked surface that can grow without limit sits inside the scroller'
   expect(closeAt).toBeLessThan(activityAt)
   expect(activityAt).toBeLessThan(composerAt)
 })
+
+test('queued messages and the send flight keep the landed bubble reading metrics', () => {
+  const flight = /className="([^"]*\bsend-flight\b[^"]*)"/.exec(SOURCE)?.[1]
+  const queued = SOURCE.slice(SOURCE.indexOf('function QueuedRow('))
+    .match(/className="([^"]*)"/)?.[1]
+  for (const classes of [flight, queued]) {
+    expect(classes).toBeDefined()
+    expect(classes).toContain('conversation-prose')
+    expect(classes).not.toContain('text-sm')
+    expect(classes).not.toContain('leading-relaxed')
+  }
+})

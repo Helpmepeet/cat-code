@@ -1976,7 +1976,7 @@ function AssistantProse({
               />
             </MarkdownErrorBoundary>
           ) : (
-            <div className="md-prose font-sans font-medium text-sm leading-relaxed">
+            <div className="md-prose conversation-prose">
               <MarkdownErrorBoundary fallback={content}>
                 <MarkdownTree tree={markArrival(leaf.tree)} components={components} />
               </MarkdownErrorBoundary>
@@ -2205,9 +2205,6 @@ const USER_BUBBLE_MARKDOWN_COMPONENTS = {
 const USER_BUBBLE_LITERAL_CLASSES = [
   'whitespace-pre-wrap',
   'break-words',
-  'font-sans',
-  'text-sm',
-  'text-text-primary',
 ]
 
 function MarkdownCode({
@@ -5894,7 +5891,7 @@ function UserBubble({
   const bubble = (
     <div
       data-user-bubble
-      className="max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary"
+      className="conversation-prose max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5"
     >
       <BoundedMarkdown
         sourceId={sourceId}
@@ -5919,7 +5916,7 @@ function UserBubble({
               />
             </MarkdownErrorBoundary>
           ) : (
-            <div className="md-prose font-sans text-sm leading-relaxed">
+            <div className="md-prose">
               <MarkdownErrorBoundary fallback={content}>
                 <MarkdownTree
                   tree={leaf.tree}

@@ -136,6 +136,8 @@
    * relationships with the steps pointing the other way, which is why the light
    * `--surface-raised` is pure white and its `--shell-chrome` is grey. */
   --app-bg: #09090b;
+  --conversation-bg: #191919;
+  --conversation-ink: #dedede;
   --shell-chrome: #070709;
   --surface-raised: #111113;
   --surface-panel: #0a0a0c;
@@ -228,11 +230,8 @@
    * The accounts page keeps its own literal on purpose; it is a different
    * surface, not part of this alignment.
    *
-   * Tunable by eye, like the text tones. What it trades: at 6.73px per average
-   * character in 14px DM Sans, the content width is this value minus the 64px of
-   * side padding, so 900px is ~124 characters a line and 1000px was ~139. Going
-   * lower keeps buying readability until tool-row paths and diffs start
-   * truncating, which is the wall the original 740px hit.
+   * This measure includes the column's 64px of side padding. Narrowing it also
+   * takes room from tool-row paths and diffs, not only conversation prose.
    */
   --transcript-width: 900px;
 }
@@ -307,6 +306,8 @@ html[data-appearance='light'] {
    * that, and a floating surface goes UP, which on a light shell means pure
    * white lifted off the page by its shadow rather than a lighter grey. */
   --app-bg: #fcfcfd;
+  --conversation-bg: #ffffff;
+  --conversation-ink: #303034;
   --shell-chrome: #f1f1f4;
   --surface-raised: #ffffff;
   --surface-panel: #f7f7f9;
@@ -1427,6 +1428,24 @@ html[data-glass='on'] [data-window-overlay] {
       );
   }
 
+  .session-pane {
+    --app-bg: var(--conversation-bg);
+    --text-primary: var(--conversation-ink);
+  }
+
+  /* Glass keeps its native ground rather than acquiring an opaque pane. */
+  html:not([data-glass='on']) .session-pane {
+    background: var(--app-bg);
+  }
+
+  .conversation-prose {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    line-height: 1.6;
+    color: var(--conversation-ink);
+  }
+
   /* ── Model-prose typography ────────────────────────────────────────────────
    * One grammar for every body of model-authored Markdown: assistant answers,
    * long-form reasoning, thinking blocks. Written as CSS rather than the
@@ -1435,7 +1454,7 @@ html[data-glass='on'] [data-window-overlay] {
    * `:is()` groups, per-level heading spacing — and a utility string can only
    * reach descendants by tag name. Still zero inline style, still static.
    *
-   * EVERY length is `em`, so the same class serves the 14px assistant column and
+   * EVERY length is `em`, so the same class serves the 15px assistant column and
    * the 13px reasoning bodies without a second scale.
    *
    * NO READING MEASURE HERE, deliberately. Prose runs the full transcript

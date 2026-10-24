@@ -3508,7 +3508,8 @@ test('renders indented user text exactly as submitted instead of normalizing it 
     isReplay: false,
   })
 
-  expect(html).toContain('whitespace-pre-wrap break-words font-sans text-sm text-text-primary')
+  expect(html).toContain('whitespace-pre-wrap break-words')
+  expect(html).toContain('data-user-bubble="true" class="conversation-prose')
   expect(html).toContain('def findFirstOccurrence(nums, target):\n    l = 0\n\twhile l &lt; r:\n        return m  ')
 })
 
@@ -4942,6 +4943,7 @@ test('every model-authored prose body carries the shared typography class', () =
   const html = render(proseRow('An ordinary answer.', 'plain'))
 
   expect(html).toContain('md-prose')
+  expect(html).toContain('md-prose conversation-prose')
   // Typography moved OUT of the className; the old per-tag utility string must
   // not come back alongside it and win by layer order.
   expect(html).not.toContain('[&>*+*]:mt-2')

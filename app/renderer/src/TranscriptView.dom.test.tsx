@@ -43,6 +43,36 @@ const row: NestedTranscriptRow = {
   children: [],
 }
 
+test('assistant and user reading styles reach Markdown and literal text without replacing code styles', async () => {
+  const assistant: NestedTranscriptRow = {
+    ...row, id: 'assistant-reading', kind: 'assistant-text', role: 'assistant', content,
+  }
+  const literal: NestedTranscriptRow = {
+    ...row, id: 'literal-reading', content: 'Indented text:\n    unchanged spacing',
+  }
+  const tree = await harness.mount(
+    <TranscriptRowsView rows={[assistant, row, literal]} />,
+  )
+  const prose = tree.container.querySelector('.md-prose.conversation-prose')
+  expect(prose).not.toBeNull()
+  for (const body of tree.container.querySelectorAll('.md-prose')) {
+    expect(body.closest('.conversation-prose')).not.toBeNull()
+    expect(body.classList.contains('font-sans')).toBe(false)
+    expect(body.classList.contains('text-sm')).toBe(false)
+    expect(body.classList.contains('font-medium')).toBe(false)
+  }
+  const bubbles = tree.container.querySelectorAll('[data-user-bubble]')
+  expect(bubbles.length).toBe(2)
+  for (const bubble of bubbles) {
+    expect(bubble.classList.contains('conversation-prose')).toBe(true)
+  }
+  const literalText = bubbles[1]!.querySelector('.whitespace-pre-wrap.break-words')
+  expect(literalText?.textContent).toBe(literal.content)
+  expect(literalText?.classList.contains('font-sans')).toBe(false)
+  expect(literalText?.classList.contains('text-sm')).toBe(false)
+  expect(tree.container.querySelector('code.hljs')?.closest('.font-mono')).not.toBeNull()
+})
+
 test('Copy message writes the original raw Markdown source', async () => {
   const writes: string[] = []
   const descriptor = Object.getOwnPropertyDescriptor(

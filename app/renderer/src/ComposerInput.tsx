@@ -387,16 +387,9 @@ export function ComposerInput({
        * the textarea measured, so the send arrow does not float in dead space.
        * Content is built by the layout effect above, never by React.
        *
-       * 15px, not the prototype's 16 (`Chat.jsx:1407`). That 16 was drawn at
-       * `fontWeight: 300`, and this field went to `font-medium` on a live tuner
-       * (f9f9f0f) for legibility on the near-black dock — 500 carries far more
-       * visual mass at the same size, and the size was never re-examined after.
-       * The result was the only 16px body text in an app whose transcript reads
-       * at 14, which is what made it look oversized (operator, 2026-08-09). One
-       * step above the transcript keeps the field reading as the active surface;
-       * matching 14 exactly would let it recede into its own dock. Keep this in
-       * sync with the placeholder overlay above, which must measure identically
-       * or the text jumps as you start typing. */}
+       * The composer keeps its DM Sans face and medium weight independently of
+       * conversation prose. Keep these metrics in sync with the placeholder
+       * overlay above so the text does not jump as you start typing. */}
       <div
         ref={rootRef}
         aria-disabled={disabled ? true : undefined}
