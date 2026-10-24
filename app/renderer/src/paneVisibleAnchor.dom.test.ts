@@ -302,3 +302,31 @@ test('bottom following wins over the visible anchor, then reader movement releas
   expect(f.pane.scrollTop).toBe(110)
   release()
 })
+
+test('a pinned control is never the reading anchor, so content moving under it is still measured', () => {
+  const pane = document.createElement('div')
+  const head = document.createElement('button')
+  head.setAttribute('data-pane-anchor-exclude', '')
+  head.textContent = 'Working'
+  const paragraph = document.createElement('p')
+  paragraph.textContent = 'reading content'
+  pane.append(head, paragraph)
+  document.body.append(pane)
+  Object.defineProperties(pane, {
+    scrollTop: { configurable: true, value: 0 },
+    clientHeight: { configurable: true, get: () => 80 },
+    getBoundingClientRect: { value: () => ({ top: 0, bottom: 80, left: 0, right: 500, width: 500, height: 80 }) },
+  })
+  const originalRange = document.createRange.bind(document)
+  restore = () => { document.createRange = originalRange }
+  document.createRange = () => {
+    const range = originalRange()
+    range.getBoundingClientRect = () => {
+      const top = range.startContainer.parentElement === head ? 0 : 20
+      return { top, bottom: top + 16, height: 16, left: 0, right: 500, width: 500 } as DOMRect
+    }
+    return range
+  }
+  const anchor = capturePaneVisibleAnchor(pane)
+  expect(anchor?.points.map(point => point.node.data)).toEqual(['reading content'])
+})

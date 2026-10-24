@@ -31,6 +31,8 @@ export type FocusedTurnItem = {
   segments: readonly FocusedSegment[]
   live: boolean
   completed: boolean
+  /** An answer for this turn has begun outside the work, so nothing inside it is still the newest output. */
+  answering: boolean
   durationMs: number | null
 } & FocusedSummary
 export type FocusedTranscriptItem = { kind: 'rows'; rows: readonly NestedTranscriptRow[] } | FocusedTurnItem
@@ -90,12 +92,11 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
       }
     }
   }
-  const parts: string[] = []
-  const compact = new Map<string, number>()
+  const parts: string[] = [], compact: string[] = []
   const count = (verb: string, n: number, noun: string) => {
     if (!n) return
     parts.push(`${verb} ${n} ${noun}${n === 1 ? '' : 's'}`)
-    compact.set(verb, (compact.get(verb) ?? 0) + n)
+    compact.push(`${verb} ${n}`)
   }
   count('read', reads.size, 'file'); count('edited', edits.size, 'file')
   count('searched', searches.size, 'pattern'); count('ran', commands, 'command')
@@ -112,7 +113,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   const summary = parts.join(', ') || (toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned')
   return { readPaths: [...reads], editedPaths: [...edits], searchedPatterns: [...searches], commands,
     otherFamilies: other, toolCalls, additions, deletions, hasErrors: errorCount > 0, errorCount, summary,
-    compact: compact.size ? [...compact].map(([verb, n]) => `${verb} ${n}`).join(' · ') : summary, activeLabel }
+    compact: compact.join(' · ') || summary, activeLabel }
 }
 
 const segmentCache = new WeakMap<readonly NestedTranscriptRow[], readonly FocusedSegment[]>()
@@ -220,7 +221,7 @@ export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], tu
       const summary = summarizeFocusedWork(work)
       const id = fragmentIndex === 0 ? `focused-turn:${anchor.id}` : `focused-turn:${anchor.id}:after:${rows[fragment.start - 1]!.id}`
       items.push({ kind: 'focused-turn', id, rows: work,
-        segments: deriveFocusedSegments(work), live, completed: successful && answers.size > 0,
+        segments: deriveFocusedSegments(work), live, completed: successful && answers.size > 0, answering: answers.size > 0,
         durationMs: typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 ? duration : null,
         ...summary, hasErrors: summary.hasErrors || result?.isError === true })
       fragmentIndex++

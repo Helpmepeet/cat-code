@@ -45,6 +45,9 @@ export function capturePaneVisibleAnchor(scroller: HTMLElement): PaneVisibleAnch
     const box = range.getBoundingClientRect()
     if (box.height <= 0 || box.bottom <= paneRect.top || box.top >= paneRect.top + scroller.clientHeight) continue
     if (isNestedScroller(text.parentElement, scroller)) continue
+    // A pinned control stays put while content moves beneath it, so it can
+    // never measure how far the reading position moved.
+    if (text.parentElement?.closest('[data-pane-anchor-exclude]')) continue
     // Find the first character whose line intersects the pane's leading edge.
     // This is logarithmic in text length even for a single very long paragraph.
     let low = 0

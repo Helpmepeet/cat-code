@@ -3,7 +3,7 @@ import { FocusedDisclosure } from './FocusedDisclosure.js'
 import { focusedNamedCall, summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { FAMILY_STYLE } from './toolCardPalette.js'
 import { useToolCardExpanded } from './toolCardExpansion.js'
-import type { NestedTranscriptRow } from './transcriptProjector.js'
+import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { AgentRevealContext, containsAgentTool } from './transcriptAgentReveal.js'
 import { TranscriptMotionContext } from './transcriptMotion.js'
 import './focusedTranscript.css'
@@ -15,7 +15,9 @@ type ReasoningRenderer = (rows: readonly NestedTranscriptRow[], live: boolean) =
 const TURN_BODY_EXIT_MS = 480
 /** The head keeps its live wording until the body has started to settle. */
 const HEAD_SETTLE_MS = 320
-const CASCADE_MS = 900
+const CASCADE_MS = 1200
+/** The stylesheet's `.focused-tick-out` duration. */
+const TICK_OUT_MS = 180
 
 export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderRows, renderReasoning }: {
   turn: FocusedTurnItem
@@ -45,7 +47,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   const latestUpdate = turn.live ? [...segments].reverse().find(segment => segment.kind === 'update')?.id : undefined
   const toggle = () => {
     setOpen(!open)
-    if (open) return
+    if (open || prefersReducedMotion()) return
     if (cascadeTimer.current) clearTimeout(cascadeTimer.current)
     setCascading(true)
     cascadeTimer.current = setTimeout(() => setCascading(false), CASCADE_MS)
@@ -53,19 +55,19 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   return (
     <section className="focused-turn" data-focused-turn={turn.id} data-focused-completed={turn.completed ? '' : undefined}
       data-focused-live={turn.live ? '' : undefined}>
-      <button type="button" className="focused-fold-head" aria-expanded={open} aria-controls={bodyId} onClick={toggle}>
+      <button type="button" className="focused-fold-head" aria-expanded={open} aria-controls={bodyId} onClick={toggle} data-pane-anchor-exclude="">
         <span className="focused-fold-chevron" data-open={open ? '' : undefined} aria-hidden><FocusedChevron /></span>
         <FocusedTicker tickKey={label} className="focused-fold-label"><span className="focused-shimmer">{label}</span></FocusedTicker>
         <FocusedTicker tickKey={detail} className="focused-fold-detail">{detail}</FocusedTicker>
         <DiffTotals summary={settled} />
-        <FailureMark summary={headLive ? settled : turn} />
+        <FailureMark summary={turn} />
       </button>
       <FocusedDisclosure open={open} id={bodyId} exitMs={TURN_BODY_EXIT_MS} className="focused-turn-disclosure">
         <div className="focused-turn-body" data-cascade={cascading ? '' : undefined}>
           {segments.map(segment => <FocusedSegmentBlock key={segment.id} segment={segment} live={turn.live}>
             {segment.kind === 'update'
               ? <div data-focused-update data-latest={segment.id === latestUpdate ? '' : undefined}>{renderRows(segment.rows, true)}</div>
-              : segment.kind === 'reasoning' ? renderReasoning(segment.rows, turn.live && segment === last)
+              : segment.kind === 'reasoning' ? renderReasoning(segment.rows, turn.live && !turn.answering && segment === last)
               : <FocusedStep segment={segment} live={turn.live} renderRows={renderRows} />}
           </FocusedSegmentBlock>)}
         </div>
@@ -102,13 +104,13 @@ function FocusedStep({ segment, live, renderRows }: { segment: FocusedSegment; l
         : [`sum:${segment.summary}`, capitalize(segment.summary)]
   const mainTool = (live ? segment.rows.find(row => row.kind === 'tool-use' && row.status === 'pending') : null)
     ?? segment.rows.find(row => row.kind === 'tool-use')
-  const family = mainTool?.kind === 'tool-use' ? FAMILY_STYLE[mainTool.toolFamily] ?? FAMILY_STYLE.other : null
+  const family = mainTool?.kind === 'tool-use' ? mainTool.toolFamily : null
   return (
     <div className="focused-step">
       <button type="button" className="focused-step-head" data-open={open ? '' : undefined} data-running={active ? '' : undefined}
         aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
         <span className="focused-step-gutter" aria-hidden>
-          <span className={`focused-step-mark ${family?.color ?? ''}`}>{family?.mark ?? '·'}</span>
+          <span className={`focused-step-mark ${family !== null && STEP_MARK_COLORED.has(family) ? FAMILY_STYLE[family].color : ''}`}>{family === null ? '·' : stepMark(family)}</span>
           <span className="focused-step-chevron"><FocusedChevron /></span>
         </span>
         <FocusedTicker tickKey={key} className="focused-step-text">{text}</FocusedTicker>
@@ -122,6 +124,12 @@ function FocusedStep({ segment, live, renderRows }: { segment: FocusedSegment; l
   )
 }
 
+/** Step marks keep Focused's compact set; the families named here take their tool colour. */
+const STEP_MARK_COLORED: ReadonlySet<ToolFamily> = new Set(['bash', 'read', 'grep', 'edit', 'write', 'web', 'skill', 'agent'])
+function stepMark(family: ToolFamily): string {
+  return family === 'bash' ? '$' : family === 'grep' ? '⌕' : family === 'edit' || family === 'write' ? '±' : '≡'
+}
+
 /** Text that changes in place leaves upward while its replacement rises in. */
 function FocusedTicker({ tickKey, className, children }: { tickKey: string; className: string; children: ReactNode }) {
   const [shown, setShown] = useState(tickKey)
@@ -132,6 +140,13 @@ function FocusedTicker({ tickKey, className, children }: { tickKey: string; clas
     setOutgoing(prefersReducedMotion() ? null : { key: shown, node: previous.current })
   }
   useEffect(() => { previous.current = children })
+  // `animationend` is not guaranteed (a hidden window, a cancelled animation),
+  // so the leaving copy is also cleared once its animation would have finished.
+  useEffect(() => {
+    if (!outgoing) return
+    const timer = setTimeout(() => setOutgoing(null), TICK_OUT_MS + 40)
+    return () => clearTimeout(timer)
+  }, [outgoing])
   return (
     <span className={`focused-ticker ${className}`}>
       {outgoing ? <span key={`out:${outgoing.key}`} className="focused-tick-out" aria-hidden onAnimationEnd={() => setOutgoing(null)}>{outgoing.node}</span> : null}

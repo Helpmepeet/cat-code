@@ -45,7 +45,7 @@
 
 .focused-step { padding: 2px 0; }
 .focused-step-head { font-size: 12px; }
-.focused-step-gutter { position: relative; width: 16px; height: 16px; flex-shrink: 0; text-align: center; font-size: 12px; line-height: 16px; color: var(--text-ghost); }
+.focused-step-gutter { position: relative; width: 16px; height: 16px; flex-shrink: 0; text-align: center; font-size: 11px; line-height: 16px; color: var(--text-ghost); }
 .focused-step-chevron {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity 100ms ease-out, transform 200ms var(--ease-standard);
@@ -85,11 +85,11 @@
   animation: focused-shimmer 1.8s linear infinite;
 }
 
-/* Commentary tone: the newest update leads while working; a finished turn's
- * updates step back so the answer below them reads as the result. */
+/* Commentary tone: the newest update leads while working; once the turn has
+ * ended its updates step back. */
 [data-focused-update] .conversation-prose { transition: color 500ms var(--ease-standard); }
 .focused-turn[data-focused-live] [data-focused-update]:not([data-latest]) .conversation-prose { color: var(--text-muted); }
-.focused-turn[data-focused-completed] [data-focused-update] .conversation-prose { color: var(--text-muted); font-size: 14px; }
+.focused-turn:not([data-focused-live]) [data-focused-update] .conversation-prose { color: var(--text-muted); font-size: 14px; }
 
 /* The live head stays in view while its work scrolls. Glass panes have no
  * opaque ground for it to sit on, so it scrolls normally there. */
@@ -100,7 +100,8 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
   background: linear-gradient(var(--shell-hover), var(--shell-hover)) var(--app-bg);
 }
 
-/* Opening a finished turn brings its parts in from the top, one after another. */
+/* Opening a finished turn brings its parts in from the top, one after another
+ * (`CASCADE_MS` covers the last step). */
 .focused-turn-body[data-cascade] > .focused-segment > .focused-disclosure-clip > * { animation: focused-cascade 280ms var(--ease-enter) both; }
 .focused-turn-body[data-cascade] > .focused-segment:nth-child(2) > .focused-disclosure-clip > * { animation-delay: 40ms; }
 .focused-turn-body[data-cascade] > .focused-segment:nth-child(3) > .focused-disclosure-clip > * { animation-delay: 80ms; }
@@ -109,7 +110,22 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
 .focused-turn-body[data-cascade] > .focused-segment:nth-child(6) > .focused-disclosure-clip > * { animation-delay: 200ms; }
 .focused-turn-body[data-cascade] > .focused-segment:nth-child(7) > .focused-disclosure-clip > * { animation-delay: 240ms; }
 .focused-turn-body[data-cascade] > .focused-segment:nth-child(8) > .focused-disclosure-clip > * { animation-delay: 280ms; }
-.focused-turn-body[data-cascade] > .focused-segment:nth-child(n+9) > .focused-disclosure-clip > * { animation-delay: 320ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(9) > .focused-disclosure-clip > * { animation-delay: 320ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(10) > .focused-disclosure-clip > * { animation-delay: 360ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(11) > .focused-disclosure-clip > * { animation-delay: 400ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(12) > .focused-disclosure-clip > * { animation-delay: 440ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(13) > .focused-disclosure-clip > * { animation-delay: 480ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(14) > .focused-disclosure-clip > * { animation-delay: 520ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(15) > .focused-disclosure-clip > * { animation-delay: 560ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(16) > .focused-disclosure-clip > * { animation-delay: 600ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(17) > .focused-disclosure-clip > * { animation-delay: 640ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(18) > .focused-disclosure-clip > * { animation-delay: 680ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(19) > .focused-disclosure-clip > * { animation-delay: 720ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(20) > .focused-disclosure-clip > * { animation-delay: 760ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(21) > .focused-disclosure-clip > * { animation-delay: 800ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(22) > .focused-disclosure-clip > * { animation-delay: 840ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(23) > .focused-disclosure-clip > * { animation-delay: 880ms; }
+.focused-turn-body[data-cascade] > .focused-segment:nth-child(n+24) > .focused-disclosure-clip > * { animation-delay: 920ms; }
 
 /* Reasoning: one quiet block with its node in the step gutter. */
 .focused-reasoning { display: flex; align-items: flex-start; gap: 10px; margin-left: calc(-1 * var(--focused-hang)); }
@@ -127,6 +143,7 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
 .focused-reasoning-text strong { font-weight: 600; color: var(--text-muted); }
 .focused-reasoning[data-live] .focused-reasoning-text { color: var(--text-muted); }
 .focused-reasoning[data-live] .focused-reasoning-text strong { color: var(--text-primary); }
+.focused-reasoning[data-title-only]:not([data-live]) .focused-reasoning-text { color: var(--text-faint); }
 
 .focused-text-arrival { animation: focused-text-in 180ms var(--ease-enter) both; }
 .focused-transcript-space { height: var(--focused-transcript-space-height, 0px); flex-shrink: 0; pointer-events: none; }
@@ -143,8 +160,10 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
 @keyframes focused-running-pulse { 50% { opacity: .5; } }
 @media (prefers-reduced-motion: reduce) {
   .focused-disclosure, .focused-turn-disclosure:not([data-open]), .focused-fold-chevron, .focused-step-chevron, .focused-step-mark { transition: none; }
-  .focused-text-arrival, .focused-tick-in, .focused-tick-out, .focused-turn-body[data-cascade] .focused-disclosure-clip > *,
-  .focused-reasoning[data-live] .focused-reasoning-node { animation: none; }
+  .focused-text-arrival, .focused-tick-in, .focused-reasoning[data-live] .focused-reasoning-node { animation: none; }
+  .focused-tick-out { display: none; }
+  /* Same specificity as the cascade rule above, which it must override. */
+  .focused-turn-body[data-cascade] > .focused-segment > .focused-disclosure-clip > * { animation: none; }
   .focused-turn[data-focused-live] .focused-shimmer, .focused-step-head[data-running] .focused-step-verb {
     animation: none; background: none; color: inherit;
   }

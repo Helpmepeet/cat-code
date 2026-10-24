@@ -6490,25 +6490,32 @@ export const FocusedReasoning = memo(function FocusedReasoning({ rows, live }: {
     ? reasoningStepsForRow(row) : []).filter(isVisibleStep)
   if (steps.length === 0) return null
   return (
-    <div className="focused-reasoning" data-live={live ? '' : undefined}>
+    <div className="focused-reasoning" data-live={live ? '' : undefined}
+      data-title-only={steps.every(step => step.kind === 'heading') ? '' : undefined}>
       <span className="focused-reasoning-gutter" aria-hidden><span className="focused-reasoning-node" /></span>
       <div className="focused-reasoning-text md-prose">
-        {steps.map(step => step.kind === 'heading'
-          ? <p key={step.key}><ReasoningHeading content={step.text} /></p>
-          : <div key={step.key} className="md-prose">
-            <BoundedMarkdown
-              sourceId={step.key}
-              source={step.text}
-              renderLeaf={leaf => (
-                <MarkdownErrorBoundary fallback={step.text}>
-                  <MarkdownTree tree={leaf.tree} />
-                </MarkdownErrorBoundary>
-              )}
-            />
-          </div>)}
+        {steps.map(step => <FocusedReasoningStep key={step.key} step={step} />)}
       </div>
     </div>
   )
+})
+
+/** Memoized on the step model, which `reasoningStepsForRow` caches per row, so
+ * streamed frames elsewhere in the turn do not re-parse settled steps. */
+const FocusedReasoningStep = memo(function FocusedReasoningStep({ step }: { step: VisibleReasoningStep }) {
+  return step.kind === 'heading'
+    ? <p><ReasoningHeading content={step.text} /></p>
+    : <div className="md-prose">
+      <BoundedMarkdown
+        sourceId={step.key}
+        source={step.text}
+        renderLeaf={leaf => (
+          <MarkdownErrorBoundary fallback={step.text}>
+            <MarkdownTree tree={leaf.tree} />
+          </MarkdownErrorBoundary>
+        )}
+      />
+    </div>
 })
 
 /** A lone encrypted-only block: one row, no label — the phrase names itself.
