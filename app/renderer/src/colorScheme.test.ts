@@ -159,6 +159,16 @@ test('every Tailwind palette shade the renderer names is redeclared for light', 
   expect(missing).toEqual([])
 })
 
+test('the frame seam is its own token in both appearances and leaves the shell seam alone', () => {
+  const css = themeCss()
+  const dark = css.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  const light = css.match(/html\[data-appearance='light'\]\s*\{([^}]*(?:\([^)]*\)[^}]*)*)\}/)?.[1] ?? ''
+  expect(dark).toContain('--frame-seam: rgba(255, 255, 255, 0.08);')
+  expect(dark).toContain('--shell-seam: rgba(255, 255, 255, 0.06);')
+  expect(light).toContain('--frame-seam: rgba(9, 9, 11, 0.1);')
+  expect(light).toContain('--shell-seam: rgba(9, 9, 11, 0.1);')
+})
+
 /**
  * `color-scheme` is load-bearing twice: Chromium's own form controls, focus
  * rings and default scrollbars, AND every `light-dark()` pair in this
@@ -184,6 +194,7 @@ test('the theme routes each appearance-dependent token through an overridable va
     ['--color-app-bg', '--app-bg'],
     ['--color-shell-chrome', '--shell-chrome'],
     ['--color-shell-seam', '--shell-seam'],
+    ['--color-frame-seam', '--frame-seam'],
     ['--color-shell-hover', '--shell-hover'],
     ['--color-shell-active', '--shell-active'],
     ['--color-surface-raised', '--surface-raised'],

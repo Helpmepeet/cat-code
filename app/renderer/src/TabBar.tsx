@@ -187,7 +187,7 @@ export function TabBar({
        * It is set HERE and cleared per control below, because the draggable
        * area is everything the controls do not cover — the well and the gap
        * after the last tab. */
-      className="flex h-10 shrink-0 items-stretch overflow-hidden border-b border-shell-seam bg-shell-chrome [-webkit-app-region:drag]"
+      className="relative z-10 flex h-10 shrink-0 items-stretch bg-shell-chrome [-webkit-app-region:drag]"
       /* Flow chrome, so glass thins it (`theme.css`). The marker is on the
        * element rather than on `bg-shell-chrome`, because that token also
        * grounds nine floating menus that must stay opaque over the
@@ -208,7 +208,11 @@ export function TabBar({
         aria-hidden="true"
       />
 
-      <div className="flex flex-1 items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* `-mb-px pb-px` extends the scroller one pixel past the bar. The active
+       * tab's cover shadow paints that row over the content panel's top border
+       * (`tabClass`); the scroller clips at its padding edge, so the row has to
+       * be inside it, and the bar must not clip either (no `overflow-hidden`). */}
+      <div className="-mb-px flex flex-1 items-stretch overflow-x-auto overflow-y-hidden pb-px [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {entries.map((entry, index) => entry.kind === 'page' ? (
           <PageTabButton
             key={targetKey(entryTarget(entry))}
@@ -221,6 +225,7 @@ export function TabBar({
             arriving={entrance.active.has(targetKey(entryTarget(entry)))}
             onArrivalAnimationEnd={event => entrance.onAnimationEnd(targetKey(entryTarget(entry)), event)}
             active={selected?.kind === 'page' && selected.page === entry.page}
+            beforeActive={index === activeIndex - 1}
             tabbable={index === tabbableIndex}
             onSelect={() => selectTarget(entryTarget(entry))}
             onClose={() => closeTarget(entryTarget(entry))}
@@ -240,6 +245,7 @@ export function TabBar({
             onArrivalAnimationEnd={event =>
               entrance.onAnimationEnd(targetKey(entryTarget(entry)), event)
             }
+            beforeActive={index === activeIndex - 1}
             isTabbable={index === tabbableIndex}
             onSelect={sessionId => selectTarget({ kind: 'session', sessionId })}
             onClose={sessionId => closeTarget({ kind: 'session', sessionId })}
@@ -269,6 +275,28 @@ function entryTarget(entry: TabBarEntry): NavigationTarget {
     : { kind: 'page', page: entry.page }
 }
 
+/**
+ * A tab's frame treatment, shared by both renderers. Every tab keeps the same
+ * top margin, radius and (transparent) border, so a label does not move when its
+ * tab becomes active. The active tab is filled with the content panel's ground,
+ * edged on top and sides by the frame seam, and covers the panel's top border
+ * beneath it with a 1px shadow so the two read as one surface. An inactive tab
+ * ends in a short divider instead, dropped on the tab just before the active one
+ * because the active tab's edge already marks that boundary.
+ * Static literals: an interpolated arbitrary class never emits.
+ */
+function tabClass(active: boolean, beforeActive: boolean): string {
+  const base =
+    'group relative mt-1.5 flex min-w-[90px] max-w-[256px] flex-1 cursor-pointer select-none items-center gap-1.5 rounded-t-lg border border-b-0 pl-3 pr-1.5 [-webkit-app-region:no-drag]'
+  if (active) {
+    return `${base} border-frame-seam bg-[var(--conversation-bg)] shadow-[0_1px_0_var(--conversation-bg)]`
+  }
+  const divider = beforeActive
+    ? ''
+    : " after:absolute after:right-0 after:top-1/2 after:-mt-[7px] after:h-[14px] after:w-px after:bg-frame-seam after:content-['']"
+  return `${base} border-transparent hover:bg-white/[0.025]${divider}`
+}
+
 function PageTabButton({
   ref,
   page,
@@ -276,6 +304,7 @@ function PageTabButton({
   arriving,
   onArrivalAnimationEnd,
   active,
+  beforeActive,
   tabbable,
   onSelect,
   onClose,
@@ -287,6 +316,7 @@ function PageTabButton({
   arriving: boolean
   onArrivalAnimationEnd: AnimationEventHandler<HTMLDivElement>
   active: boolean
+  beforeActive: boolean
   tabbable: boolean
   onSelect: () => void
   onClose: () => void
@@ -304,9 +334,9 @@ function PageTabButton({
       tabIndex={tabbable ? 0 : -1}
       onClick={onSelect}
       onKeyDown={onKeyDown}
-      className={`group relative flex min-w-[90px] max-w-[256px] flex-1 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 [-webkit-app-region:no-drag] ${active ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]'}${arriving ? ' animate-tab-in' : ''}`}
+      className={`${tabClass(active, beforeActive)}${arriving ? ' animate-tab-in' : ''}`}
+      data-window-active-tab={active ? '' : undefined}
     >
-      {active ? <span className="absolute inset-x-0 bottom-0 h-[1.5px] rounded-t-sm bg-accent" aria-hidden="true" /> : null}
       <span className={`min-w-0 flex-1 truncate text-xs ${active ? 'text-text-primary' : 'text-text-subtle'}`}>{label}</span>
       <button
         type="button"
@@ -335,6 +365,7 @@ function Tab({
   arriving,
   onArrivalAnimationEnd,
   isTabbable,
+  beforeActive,
   onSelect,
   onClose,
   onRestart,
@@ -348,6 +379,7 @@ function Tab({
   arriving: boolean
   onArrivalAnimationEnd: AnimationEventHandler<HTMLDivElement>
   isTabbable: boolean
+  beforeActive: boolean
   onSelect: (sessionId: SessionId) => void
   onClose: (sessionId: SessionId) => void
   onRestart: (sessionId: SessionId) => void
@@ -373,10 +405,11 @@ function Tab({
       className={
         // The bar is a window drag region, so a tab has to opt out of it or the
         // OS swallows the pointer and a click never selects it.
-        'group relative flex min-w-[90px] max-w-[256px] flex-1 cursor-pointer select-none items-center gap-1.5 border-r border-white/[0.05] pl-3 pr-1.5 transition-colors [-webkit-app-region:no-drag] ' +
-        (isActive ? 'bg-white/[0.05]' : 'hover:bg-white/[0.025]') +
+        tabClass(isActive, beforeActive) +
+        ' transition-colors' +
         (arriving ? ' animate-tab-in' : '')
       }
+      data-window-active-tab={isActive ? '' : undefined}
       role="tab"
       aria-selected={isActive}
       // Roving tabindex: exactly one tab is in the tab order (the active one, or
@@ -388,13 +421,6 @@ function Tab({
       onClick={() => onSelect(id)}
       onKeyDown={onKeyDown}
     >
-      {isActive ? (
-        <span
-          className="absolute inset-x-0 bottom-0 h-[1.5px] rounded-t-sm bg-accent"
-          aria-hidden="true"
-        />
-      ) : null}
-
       {/* The same work mark as the session's sidebar row (`sessionWorkState.ts`
        * picks it), in a lane every tab reserves so a mark appearing never shifts
        * the title. Decorative: its words ride in the tab's `aria-label`. */}

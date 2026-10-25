@@ -90,11 +90,85 @@ test('ordinary tabs have no fork split glyph or fork identity qualifier', () => 
   expect(html).not.toContain('forked session')
 })
 
-test('the active tab is marked selected and carries the accent underline', () => {
+function tabClassLists(html: string): string[][] {
+  return [...html.matchAll(/<div\b[^>]*\brole="tab"[^>]*>/g)]
+    .map(match => match[0].match(/class="([^"]*)"/)![1]!.split(' '))
+}
+
+test('the active tab is marked selected and joins the content panel instead of an underline', () => {
   const html = render([tab('a'), tab('b')], 'b')
   // Two tabs; the active one is aria-selected true.
   expect(html.match(/aria-selected="true"/g)).toHaveLength(1)
-  expect(html).toContain('bg-accent')
+  expect(html).not.toContain('bg-accent')
+  expect(html).not.toContain('h-[1.5px]')
+  const [inactive, active] = tabClassLists(html)
+  expect(active).toContain('bg-[var(--conversation-bg)]')
+  expect(active).toContain('shadow-[0_1px_0_var(--conversation-bg)]')
+  expect(active).toContain('border-frame-seam')
+  expect(active).not.toContain('border-transparent')
+  expect(active.some(name => name.startsWith('after:'))).toBe(false)
+  expect(inactive).not.toContain('bg-[var(--conversation-bg)]')
+})
+
+test('every tab keeps the same top margin, radius and border box so labels do not move', () => {
+  for (const html of [render([tab('a'), tab('b')], 'b'), render([tab('a'), tab('b')], null)]) {
+    for (const classes of tabClassLists(html)) {
+      for (const name of ['mt-1.5', 'rounded-t-lg', 'border', 'border-b-0']) {
+        expect(classes).toContain(name)
+      }
+      expect(classes).not.toContain('border-r')
+      expect(classes.some(name => name.startsWith('border-white'))).toBe(false)
+    }
+  }
+})
+
+test('inactive tabs end in a short centred divider, except the one before the active tab', () => {
+  const html = render([tab('a'), tab('b'), tab('c'), tab('d')], 'c')
+  const [first, beforeActive, active, last] = tabClassLists(html)
+  for (const classes of [first, last]) {
+    expect(classes).toContain('after:h-[14px]')
+    expect(classes).toContain('after:w-px')
+    expect(classes).toContain('after:top-1/2')
+    expect(classes).toContain('after:bg-frame-seam')
+  }
+  expect(beforeActive.some(name => name.startsWith('after:'))).toBe(false)
+  expect(active.some(name => name.startsWith('after:'))).toBe(false)
+})
+
+test('page tabs get the same active treatment and divider as session tabs', () => {
+  const model = tab('a')
+  const html = renderToStaticMarkup(
+    <TabBar
+      tabs={[model]}
+      navigationTabs={[
+        { kind: 'session', model },
+        { kind: 'page', page: 'settings' },
+        { kind: 'page', page: 'usage' },
+      ]}
+      selectedTarget={{ kind: 'page', page: 'settings' }}
+      activeSessionId="a"
+      onSelect={noop}
+      onClose={noop}
+      onRestart={noop}
+      onNewTab={noop}
+    />,
+  )
+  expect(html).not.toContain('bg-accent')
+  const [session, settings, usage] = tabClassLists(html)
+  expect(session.some(name => name.startsWith('after:'))).toBe(false)
+  expect(settings).toContain('bg-[var(--conversation-bg)]')
+  expect(settings).toContain('border-frame-seam')
+  expect(usage).toContain('after:bg-frame-seam')
+  expect(usage).toContain('border-transparent')
+})
+
+test('the bar has no bottom border or clip, so the active tab can cover the panel edge', () => {
+  const html = render([tab('a')], 'a')
+  const bar = html.match(/<div\b[^>]*role="tablist"[^>]*>/)![0]
+  const classes = bar.match(/class="([^"]*)"/)![1]!.split(' ')
+  expect(classes).toContain('bg-shell-chrome')
+  expect(classes).not.toContain('overflow-hidden')
+  expect(classes.some(name => name.startsWith('border'))).toBe(false)
 })
 
 test('roving tabindex: only the active tab is in the tab order', () => {

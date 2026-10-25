@@ -922,10 +922,14 @@ export function Sidebar({
            * (`App.tsx`), and the traffic lights macOS draws into it are painted
            * ABOVE the page. An expanded rail reaching y=0 would slide under
            * them, putting three OS buttons on top of its own header. */
-          'fixed bottom-0 left-0 top-10 z-50 flex flex-col overflow-hidden border-r border-white/[0.05] bg-surface-panel transition-[width,box-shadow] duration-200 ease-out ' +
+          'fixed bottom-0 left-0 top-10 z-50 flex flex-col overflow-hidden border-r transition-[width,box-shadow] duration-200 ease-out ' +
+          /* Collapsed, the rail is the tab bar's ground with no edge of its own
+           * (`theme.css` `--shell-chrome`); the border stays, transparent, so the
+           * 48px footprint does not change. Expanded, it floats over the panel
+           * as a drawer. */
           (open
-            ? 'sidebar-expanded shadow-[var(--elev-rail)]'
-            : 'w-12') +
+            ? 'sidebar-expanded border-shell-seam bg-surface-panel shadow-[var(--elev-rail)]'
+            : 'w-12 border-transparent bg-shell-chrome') +
           (resizing ? ' transition-none' : '')
         }
       >

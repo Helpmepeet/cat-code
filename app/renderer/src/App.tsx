@@ -4454,11 +4454,12 @@ export function App() {
     <LidClosedProvider>
     <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>
     <AgentFaceRegistryContext.Provider value={faceRegistry}>
-      {/* `data-window-ground`: this frame repeats the page ground that `html`
-       * and `body` already paint. Harmless while they are opaque, and marked so
-       * glass mode can stop the three from compounding (`theme.css`). */}
+      {/* `data-window-ground`: this frame repeats the ground that `html` and
+       * `body` already paint, in the chrome colour the tab bar and rail share.
+       * Harmless while they are opaque, and marked so glass mode can stop the
+       * three from compounding (`theme.css`). */}
       <div
-        className="flex h-screen flex-col bg-app-bg font-sans text-text-primary"
+        className="flex h-screen flex-col bg-shell-chrome font-sans text-text-primary"
         data-window-ground
       >
         {/* The window's top row, and the app's title bar: `hiddenInset`
@@ -4546,7 +4547,12 @@ export function App() {
         </OpenTabSessionsContext.Provider>
         </SessionWorkMarksContext.Provider>
 
-        <div className="lid-content relative flex min-w-0 flex-1 flex-col">
+        {/* `shell-frame` insets the panel from the window's right and bottom
+         * edges; `shell-panel` is the surface every page and session renders in
+         * (`theme.css`). The lid notice stays inside it so the active tab joins
+         * the panel's top edge whether or not the notice is showing. */}
+        <div className="lid-frame shell-frame flex min-h-0 min-w-0 flex-1" data-window-frame>
+        <div className="lid-content shell-panel relative flex min-h-0 min-w-0 flex-1 flex-col" data-window-panel>
           <LidClosedNotice />
           {/* Startup overlays must not cover machine-wide recovery actions. */}
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -5052,6 +5058,7 @@ export function App() {
             </div>
           )}
           </div>
+        </div>
         </div>
         </div>
 

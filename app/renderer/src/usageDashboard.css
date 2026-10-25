@@ -266,7 +266,7 @@ html[data-glass='on'] .usage-page { background:transparent; }
 
 .usage-section-heading { margin:26px 2px 10px; color:var(--usage-secondary); font:600 11px/1 var(--font-sans); letter-spacing:.06em; text-transform:uppercase; }
 .usage-section-heading:first-of-type { margin-top:16px; }
-.usage-sticky-top { position:sticky; top:-24px; z-index:5; margin:0 -28px; padding:24px 28px 12px; background:var(--color-app-bg); }
+.usage-sticky-top { position:sticky; top:-24px; z-index:5; margin:0 -28px; padding:24px 28px 12px; background:var(--app-bg); }
 .usage-sticky-scrolled { box-shadow:0 1px 0 var(--color-shell-seam); }
 .usage-metric-sub { display:block; margin-top:4px; color:var(--usage-secondary); font:400 11px var(--font-mono); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .usage-metric strong { display:block; }

@@ -75,7 +75,7 @@ test('frame has content-width breakpoints, reduced motion and page-owned surface
     expect(track * 4 + 3 * 14).toBeCloseTo(354.666667);
     const content = daily.match(/\.usage-content \{([\s\S]*?)\n\}/)![1]!;
     expect(content).not.toContain('background:');
-    expect(daily).toContain('background:light-dark(var(--color-shell-chrome),var(--color-app-bg))');
+    expect(daily).toContain('.usage-page { padding:24px 28px 52px; background:var(--app-bg); }');
     expect(frame).toContain("html[data-glass='on'] .usage-page { background:transparent; }");
     expect(frame).toContain("html[data-glass='on'] .usage-sticky-top { background:transparent; }");
 });

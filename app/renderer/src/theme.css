@@ -146,6 +146,11 @@
    * one a white hairline is invisible, so light inverts them rather than
    * lightening them further. 198 `border-shell-seam` call sites depend on it. */
   --shell-seam: rgba(255, 255, 255, 0.06);
+  /* The window frame's own hairline (content panel edge, active tab edge, tab
+   * dividers). One step stronger than `--shell-seam` because it separates two
+   * grounds rather than dividing content, and kept off `--shell-seam` so its
+   * call sites keep their weight. */
+  --frame-seam: rgba(255, 255, 255, 0.08);
   --shell-hover: rgba(255, 255, 255, 0.045);
   --shell-active: rgba(255, 255, 255, 0.06);
 
@@ -315,6 +320,7 @@ html[data-appearance='light'] {
   /* Inverted, not lightened further. A white hairline on a white ground is
    * nothing; these are the same washes turned around. */
   --shell-seam: rgba(9, 9, 11, 0.1);
+  --frame-seam: rgba(9, 9, 11, 0.1);
   --shell-hover: rgba(9, 9, 11, 0.04);
   --shell-active: rgba(9, 9, 11, 0.065);
 
@@ -783,6 +789,28 @@ html[data-glass='on'] [data-window-overlay] {
   backdrop-filter: blur(22px);
 }
 
+/*
+ * The content panel keeps the native ground, as `.session-pane` does, and its
+ * frame edge takes the chrome wash so the strips right of and below it match the
+ * tab bar and rail. Written on the border because a wash on the frame's
+ * background would also tint the panel it sits under.
+ */
+html[data-glass='on'] [data-window-panel] {
+  background: transparent;
+}
+
+/* The active tab cannot be opaque against a translucent panel. It takes the
+ * page coat instead; the 1px cover shadow that hides the panel's top edge has
+ * nothing opaque to cover with, so that edge stays visible under the tab. */
+html[data-glass='on'] [data-window-active-tab] {
+  background: light-dark(rgba(252, 252, 253, 0.2), rgba(9, 9, 11, 0.2));
+  box-shadow: none;
+}
+
+html[data-glass='on'] [data-window-frame] {
+  border-color: light-dark(rgba(9, 9, 11, 0.045), rgba(7, 7, 9, 0.12));
+}
+
 @theme inline {
   /*
    * EVERY VALUE BELOW THAT DIFFERS BETWEEN APPEARANCES IS `var(...)`, NOT A HEX.
@@ -799,6 +827,7 @@ html[data-glass='on'] [data-window-overlay] {
    * these so the two panels read as one frame. */
   --color-shell-chrome: var(--shell-chrome);
   --color-shell-seam: var(--shell-seam);
+  --color-frame-seam: var(--frame-seam);
   --color-shell-hover: var(--shell-hover);
   --color-shell-active: var(--shell-active);
   /* Raised floating surfaces (P4-1 shared primitives): a toast/popover sits one
@@ -1436,6 +1465,27 @@ html[data-glass='on'] [data-window-overlay] {
   /* Glass keeps its native ground rather than acquiring an opaque pane. */
   html:not([data-glass='on']) .session-pane {
     background: var(--app-bg);
+  }
+
+  /* The window frame's content panel (`App.tsx`): every page and session sits in
+   * it, inset from the right and bottom edges by `.shell-frame`. Its ground is
+   * `--conversation-bg` because the active tab is filled with the same value and
+   * must read as part of it. `--app-bg` follows, so a page that paints the page
+   * ground (`bg-app-bg`) matches the panel instead of sitting a step darker. */
+  .shell-panel {
+    --app-bg: var(--conversation-bg);
+    background: var(--conversation-bg);
+    border: 1px solid var(--frame-seam);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  /* The 6px of chrome ground right of and below the panel. A border rather than
+   * a background so glass can wash it without tinting the panel. */
+  .shell-frame {
+    border-style: solid;
+    border-color: var(--shell-chrome);
+    border-width: 0 6px 6px 0;
   }
 
   .conversation-prose {

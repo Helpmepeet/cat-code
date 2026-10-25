@@ -225,6 +225,27 @@ test('the repeated page ground is cleared in both appearances', () => {
   expect(rule?.[1]).not.toContain('light-dark')
 })
 
+/**
+ * The window frame's content panel is inset, so the chrome ground around it is
+ * painted as a border of the frame, not a background under the panel.
+ */
+test('the content panel stays translucent and its frame edge takes the chrome wash', () => {
+  const css = themeCss()
+  const panel = css.match(/html\[data-glass='on'\] \[data-window-panel\]\s*\{([^}]*)\}/)
+  expect(panel?.[1]).toMatch(/background:\s*transparent;/)
+  const frame = css.match(/html\[data-glass='on'\] \[data-window-frame\]\s*\{([^}]*)\}/)
+  expect(frame?.[1]).toMatch(/border-color:\s*light-dark\(/)
+  const tab = css.match(/html\[data-glass='on'\] \[data-window-active-tab\]\s*\{([^}]*)\}/)
+  expect(translucentPair(tab?.[1] ?? '')).toEqual({ light: true, dark: true })
+  expect(tab?.[1]).toMatch(/box-shadow:\s*none;/)
+
+  const app = rendererTags('App.tsx')
+  expect(app.some(tag => tag.attributes.has('data-window-frame'))).toBe(true)
+  expect(app.some(tag => tag.attributes.has('data-window-panel'))).toBe(true)
+  const tabBar = rendererTags('TabBar.tsx')
+  expect(tabBar.filter(tag => tag.attributes.has('data-window-active-tab'))).toHaveLength(2)
+})
+
 test('the usage dashboard clears its page surface but keeps its cards in glass mode', () => {
   const css = usageCss()
   const page = css.match(/html\[data-glass='on'\] \.usage-page\s*\{([^}]*)\}/)

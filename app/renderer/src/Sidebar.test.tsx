@@ -612,6 +612,24 @@ test('P4-33 — the rail stays collapsed when no row menu is open', () => {
   expect(html).not.toContain(ASIDE_EXPANDED)
 })
 
+function asideClasses(html: string): string[] {
+  return html.match(/<aside\b[^>]*class="([^"]*)"/)![1]!.split(' ')
+}
+
+test('the collapsed rail is the tab bar ground with no visible edge, and the drawer keeps its own', () => {
+  const collapsed = asideClasses(renderSidebar())
+  expect(collapsed).toContain('bg-shell-chrome')
+  expect(collapsed).toContain('border-transparent')
+  expect(collapsed).not.toContain('bg-surface-panel')
+  expect(collapsed.some(name => name.startsWith('border-white'))).toBe(false)
+  const expanded = asideClasses(renderSidebar({ menuActive: true }))
+  expect(expanded).toContain('bg-surface-panel')
+  expect(expanded).toContain('border-shell-seam')
+  expect(expanded).toContain('shadow-[var(--elev-rail)]')
+  expect(expanded).not.toContain('bg-shell-chrome')
+  expect(expanded.some(name => name.startsWith('border-white'))).toBe(false)
+})
+
 test('managed sessions appear in Chats before Projects and hide their storage path', () => {
   const managed = registryRow('managed', {
     cwd: '/managed/storage-id',

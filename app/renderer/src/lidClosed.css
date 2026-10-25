@@ -34,7 +34,7 @@
 .lid-digits[data-dir=down] .lid-digit-in { animation: lid-in-down var(--motion-arrive) var(--ease-enter); }
 .lid-digits[data-dir=down] .lid-digit-out { animation: lid-out-down var(--motion-arrive) var(--ease-enter) forwards; }
 .lid-notice { flex-shrink: 0; }
-aside.sidebar-expanded + .lid-content > .lid-notice { margin-left: max(0px, calc(var(--sidebar-expanded-width, 18rem) - 48px)); }
+aside.sidebar-expanded + .lid-frame > .lid-content > .lid-notice { margin-left: max(0px, calc(var(--sidebar-expanded-width, 18rem) - 48px)); }
 .lid-notice [role=status] { flex-wrap: wrap; }
 @keyframes lid-wave { to { transform: translateX(-7px); } }
 @keyframes lid-steam { 0% { transform: translateY(1px); opacity: 0; } 25% { opacity: .9; } 100% { transform: translateY(-2px); opacity: 0; } }
