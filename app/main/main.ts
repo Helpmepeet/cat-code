@@ -4427,17 +4427,22 @@ function handOff(
 }
 
 function sanitizeSubmitOptions(options: unknown): {
+  observedProposal?: import('../shared/protocol.js').SubmitOptions['observedProposal']
   isMeta?: boolean
   goalSnapshot?: unknown
   submitId?: string
 } | undefined {
   if (typeof options !== 'object' || options === null) return undefined
   const o = options as {
+    observedProposal?: unknown
     isMeta?: unknown
     goalSnapshot?: unknown
     submitId?: unknown
   }
-  const result: { isMeta?: boolean; goalSnapshot?: unknown; submitId?: string } = {}
+  const result: { isMeta?: boolean; goalSnapshot?: unknown; submitId?: string; observedProposal?: import('../shared/protocol.js').SubmitOptions['observedProposal'] } = {}
+  // Preserve malformed input too: the receiving schema must reject it, not
+  // silently turn it into a different context selection.
+  if ('observedProposal' in o) result.observedProposal = o.observedProposal as import('../shared/protocol.js').SubmitOptions['observedProposal']
   if (typeof o.isMeta === 'boolean') result.isMeta = o.isMeta
   // goalSnapshot passed through as-is; the SIDECAR validates it (T4).
   if ('goalSnapshot' in o) result.goalSnapshot = o.goalSnapshot

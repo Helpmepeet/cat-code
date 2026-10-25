@@ -140,7 +140,8 @@ import { handlePromptSubmit, type PromptInputHelpers } from '../utils/handleProm
 import { useQueueProcessor } from '../hooks/useQueueProcessor.js';
 import { useMailboxBridge } from '../hooks/useMailboxBridge.js';
 import { queryCheckpoint, logQueryProfileReport } from '../utils/queryProfiler.js';
-import type { Message as MessageType, MessageOrigin, UserMessage, ProgressMessage, HookResultMessage, PartialCompactDirection } from '../types/message.js';
+import type { Message as MessageType, MessageOrigin, UserMessage, ProgressMessage, HookResultMessage, PartialCompactDirection, PriorAssistantContext } from '../types/message.js';
+import { capturePriorAssistantContext } from '../utils/permissions/priorAssistantContext.js';
 import { query } from '../query.js';
 import { mergeClients, useMergedClients } from '../hooks/useMergedClients.js';
 import { getQuerySourceForREPL } from '../utils/promptCategory.js';
@@ -1571,6 +1572,7 @@ export function REPL({
   // Guard on showStreamingText so toggling reducedMotion mid-stream
   // immediately hides the streaming preview.
   const visibleStreamingText = streamingText && showStreamingText ? streamingText.substring(0, streamingText.lastIndexOf('\n') + 1) || null : null;
+  const visiblePriorAssistantContextRef = useRef<PriorAssistantContext | null>(null);
   const liveStreamingTokenEstimate = useMemo(() => {
     const textTokens = streamingText
       ? roughTokenCountEstimation(streamingText)
@@ -3648,6 +3650,9 @@ export function REPL({
   }, options?: {
     fromKeybinding?: boolean;
   }) => {
+    // Freeze the committed visible proposal before hooks, commands, or any
+    // other await can let a newer assistant response replace the referent.
+    const visiblePriorAssistantContext = visiblePriorAssistantContextRef.current;
     logForDebugging(`[REPL:onSubmit] start inputLength=${input.length} speculation=${Boolean(speculationAccept)} fromKeybinding=${Boolean(options?.fromKeybinding)} isLoading=${isLoading} externalLoading=${isExternalLoading}`);
     // Re-pin scroll to bottom on submit so the user always sees the new
     // exchange (matches OpenCode's auto-scroll behavior).
@@ -4064,6 +4069,7 @@ export function REPL({
     logForDebugging(`[REPL:onSubmit] handlePromptSubmit start mode=${inputMode} commands=${commands.length} externalLoading=${isExternalLoading}`);
     await handlePromptSubmit({
       input,
+      visiblePriorAssistantContext,
       helpers,
       queryGuard,
       isExternalLoading,
@@ -5036,6 +5042,26 @@ export function REPL({
   });
   // Auto-exit viewing mode when teammate completes or errors
   useTeammateViewAutoExit();
+  const viewedTask = viewingAgentTaskId ? tasks[viewingAgentTaskId] : undefined;
+  const viewedTeammateTask = viewedTask && isInProcessTeammateTask(viewedTask) ? viewedTask : undefined;
+  const viewedAgentTask = viewedTeammateTask ?? (viewedTask && isLocalAgentTask(viewedTask) ? viewedTask : undefined);
+
+  // Bypass deferral while streaming previews are enabled so the final message
+  // appears in the same frame the preview clears. Also bypass after loading
+  // ends, avoiding a gap between the spinner disappearing and the answer.
+  const usesSyncMessages = showStreamingText || !isLoading;
+  // When viewing an agent, never fall through to leader messages, even while
+  // the viewed task is still waiting for its first transcript.
+  const displayedMessages = viewedAgentTask ? viewedAgentTask.messages ?? [] : usesSyncMessages ? messages : deferredMessages;
+  useLayoutEffect(() => {
+    // Publish only committed renders, not speculative React renders. A partial
+    // visible response or a different agent's view cannot authorize leader work.
+    visiblePriorAssistantContextRef.current =
+      screen !== 'prompt' || viewingAgentTaskId || (isLoading && visibleStreamingText)
+        ? null
+        : capturePriorAssistantContext(displayedMessages);
+  }, [displayedMessages, screen, viewingAgentTaskId, isLoading, visibleStreamingText]);
+
   if (screen === 'transcript') {
     // Virtual scroll replaces the 30-message cap: everything is scrollable
     // and memory is bounded by the viewport. Without it, wrapping transcript
@@ -5136,24 +5162,6 @@ export function REPL({
     return transcriptReturn;
   }
 
-  // Get viewed agent task (inlined from selectors for explicit data flow).
-  // viewedAgentTask: teammate OR local_agent — drives the boolean checks
-  // below. viewedTeammateTask: teammate-only narrowed, for teammate-specific
-  // field access (inProgressToolUseIDs).
-  const viewedTask = viewingAgentTaskId ? tasks[viewingAgentTaskId] : undefined;
-  const viewedTeammateTask = viewedTask && isInProcessTeammateTask(viewedTask) ? viewedTask : undefined;
-  const viewedAgentTask = viewedTeammateTask ?? (viewedTask && isLocalAgentTask(viewedTask) ? viewedTask : undefined);
-
-  // Bypass useDeferredValue when streaming text is showing so Messages renders
-  // the final message in the same frame streaming text clears. Also bypass when
-  // not loading — deferredMessages only matters during streaming (keeps input
-  // responsive); after the turn ends, showing messages immediately prevents a
-  // jitter gap where the spinner is gone but the answer hasn't appeared yet.
-  // Only reducedMotion users keep the deferred path during loading.
-  const usesSyncMessages = showStreamingText || !isLoading;
-  // When viewing an agent, never fall through to leader — empty until
-  // bootstrap/stream fills. Closes the see-leader-type-agent footgun.
-  const displayedMessages = viewedAgentTask ? viewedAgentTask.messages ?? [] : usesSyncMessages ? messages : deferredMessages;
   // Show the placeholder until the real user message appears in
   // displayedMessages. userInputOnProcessing stays set for the whole turn
   // (cleared in resetLoadingState); this length check hides it once

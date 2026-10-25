@@ -8,6 +8,7 @@ import {
   type ConversationForkResult,
 } from '../commands/branch/branch.js'
 import { createAbortController } from '../utils/abortController.js'
+import { capturePriorAssistantContext } from '../utils/permissions/priorAssistantContext.js'
 import {
   createAppRuntimeCanUseTool,
   type AppPermissionRequestHandler,
@@ -57,28 +58,34 @@ export function createQueryEngineAppSession(
   }
 
   return {
+    getMessages: () => engine.getMessages?.() ?? [],
     executeInlineCommand,
-    async *submitMessage(prompt, options?: QueryEngineSessionOptions) {
-      if (options?.inlineCommand) {
-        yield* executeInlineCommand(options.inlineCommand, options)
-        return
-      }
-      engine.refreshAbortController?.()
-      // Detached workers still use this session's permission route between turns.
-      currentPermissionHandler = options?.onPermissionRequest
-      if (options?.handoffContinuation) {
-        if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
-        yield* engine.continueHandoff(options.handoffContinuation.operationId, options)
-      } else yield* engine.submitMessage(prompt, {
-        uuid: options?.uuid,
-        isMeta: options?.isMeta,
-        origin: options?.origin,
-        onInputPersisted: options?.onInputPersisted,
-        handoffReconciliationAdmission: options?.handoffReconciliationAdmission,
-        onHandoffInputCommitted: options?.onHandoffInputCommitted,
-        onExecutionClosed: options?.onExecutionClosed,
-        handoffReconciliationContext: options?.handoffReconciliationContext,
-      })
+    submitMessage(prompt, options?: QueryEngineSessionOptions) {
+      options = { ...options, priorAssistantContext: options?.priorAssistantContext === undefined
+        ? capturePriorAssistantContext(engine.getMessages?.() ?? []) : options.priorAssistantContext }
+      return (async function* () {
+        if (options?.inlineCommand) {
+          yield* executeInlineCommand(options.inlineCommand, options)
+          return
+        }
+        engine.refreshAbortController?.()
+        // Detached workers still use this session's permission route between turns.
+        currentPermissionHandler = options?.onPermissionRequest
+        if (options?.handoffContinuation) {
+          if (!engine.continueHandoff) throw new Error('Workspace continuation is unavailable')
+          yield* engine.continueHandoff(options.handoffContinuation.operationId, options)
+        } else yield* engine.submitMessage(prompt, {
+          uuid: options?.uuid,
+          isMeta: options?.isMeta,
+          origin: options?.origin,
+          priorAssistantContext: options?.priorAssistantContext,
+          onInputPersisted: options?.onInputPersisted,
+          handoffReconciliationAdmission: options?.handoffReconciliationAdmission,
+          onHandoffInputCommitted: options?.onHandoffInputCommitted,
+          onExecutionClosed: options?.onExecutionClosed,
+          handoffReconciliationContext: options?.handoffReconciliationContext,
+        })
+      })()
     },
     getInlineCommandRuns() { return engine.getInlineCommandRuns?.() ?? [] },
     readHandoffOutcome(operationId) { return engine.readHandoffOutcome?.(operationId) ?? Promise.resolve(null) },

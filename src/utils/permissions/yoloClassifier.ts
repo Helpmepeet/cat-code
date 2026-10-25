@@ -33,7 +33,7 @@ import {
 } from '../envUtils.js'
 import { errorMessage } from '../errors.js'
 import { lazySchema } from '../lazySchema.js'
-import { extractTextContent, SYNTHETIC_MODEL } from '../messages.js'
+import { extractTextContent } from '../messages.js'
 import { resolveAntModel } from '../model/antModels.js'
 import { getAutoModeConfig } from '../settings/settings.js'
 import { sideQuery } from '../sideQuery.js'
@@ -71,6 +71,10 @@ import {
 } from './classifierShared.js'
 export { YOLO_CLASSIFIER_TOOL_NAME } from './classifierShared.js'
 import { getClaudeTempDir } from './filesystem.js'
+import {
+  parsePriorAssistantContext,
+  readAssistantProposal,
+} from './priorAssistantContext.js'
 
 // Dead code elimination: conditional imports for auto mode classifier prompts.
 // At build time, the bundler inlines .txt files as string literals. At test
@@ -454,8 +458,6 @@ type ClassifierTranscriptOptions = {
   priorAssistantContext?: boolean
 }
 
-const PRIOR_ASSISTANT_CONTEXT_CHARS = 2000
-
 function isHumanQueuedReply(attachment: unknown): boolean {
   if (typeof attachment !== 'object' || attachment === null) return false
   if ('isMeta' in attachment && attachment.isMeta) return false
@@ -468,8 +470,8 @@ function isHumanQueuedReply(attachment: unknown): boolean {
 }
 
 /**
- * User text and tool calls, plus bounded proposal context when the main loop
- * opts in. The current unanswered assistant narration is never emitted.
+ * User text and tool calls, plus submission-bound proposal context when the
+ * main loop opts in. Delivery order never supplies an approval association.
  */
 export function buildTranscriptEntries(
   messages: Message[],
@@ -483,15 +485,16 @@ export function buildTranscriptEntries(
   options: ClassifierTranscriptOptions = {},
 ): TranscriptEntry[] {
   const transcript: TranscriptEntry[] = []
-  let priorAssistantText: string | undefined
-  const consumeProposal = (humanReply: boolean) => {
-    if (humanReply && priorAssistantText !== undefined) {
+  const proposals = new Map<string, ReturnType<typeof readAssistantProposal>>()
+  const appendProposal = (humanReply: boolean, rawBinding: unknown) => {
+    const binding = humanReply ? parsePriorAssistantContext(rawBinding) : null
+    const proposal = binding ? proposals.get(binding.messageUuid) : undefined
+    if (proposal && binding && proposal.binding.textHash === binding.textHash) {
       transcript.push({
         role: 'assistant',
-        content: [{ type: 'text', text: priorAssistantText }],
+        content: [{ type: 'text', text: proposal.text }],
       })
     }
-    priorAssistantText = undefined
   }
   // Which tool_use ids were AskUserQuestion calls. Built as we walk forward, so
   // a result is only credited to a question the agent actually asked earlier.
@@ -513,13 +516,17 @@ export function buildTranscriptEntries(
             .join('\n') || null
       }
       if (text !== null) {
-        consumeProposal(isHumanQueuedReply(msg.attachment))
+        appendProposal(
+          isHumanQueuedReply(msg.attachment),
+          typeof msg.attachment === 'object' && msg.attachment !== null &&
+          'priorAssistantContext' in msg.attachment
+            ? msg.attachment.priorAssistantContext
+            : undefined,
+        )
         transcript.push({
           role: 'user',
           content: [{ type: 'text', text }],
         })
-      } else {
-        consumeProposal(false)
       }
     } else if (msg.type === 'user') {
       const content = msg.message.content
@@ -554,47 +561,34 @@ export function buildTranscriptEntries(
         // relays, and injected context must not borrow that legacy convention.
         const hasToolResult = Array.isArray(content) &&
           content.some(block => block.type === 'tool_result')
-        consumeProposal(
+        appendProposal(
           (msg.origin === undefined || msg.origin.kind === 'human') &&
           !msg.isMeta && !msg.isVirtual && !msg.isVisibleInTranscriptOnly &&
           !msg.isCompactSummary && msg.toolUseResult === undefined &&
           msg.sourceToolAssistantUUID === undefined && !hasToolResult,
+          msg.priorAssistantContext,
         )
         transcript.push({ role: 'user', content: textBlocks })
-      } else if (
-        msg.origin !== undefined || msg.isMeta || msg.isVirtual ||
-        msg.isCompactSummary || msg.isVisibleInTranscriptOnly ||
-        !Array.isArray(content) || content.length === 0 ||
-        !content.every(block => block.type === 'tool_result')
-      ) {
-        consumeProposal(false)
+        if (msg.isCompactSummary) proposals.clear()
       }
     } else if (msg.type === 'assistant') {
       if (options.priorAssistantContext) {
-        if (
-          msg.isApiErrorMessage || msg.isInternalNoResponseSentinel ||
-          msg.message.model === SYNTHETIC_MODEL
-        ) {
-          consumeProposal(false)
-        } else {
-          const text = msg.message.content
-            .filter(block => block.type === 'text')
-            .map(block => block.text)
-            .join('\n')
-          if (text.trim()) {
-            // Keep the end, where the proposal/question usually sits. Avoid
-            // starting halfway through a UTF-16 surrogate pair.
-            const tail = text.slice(-PRIOR_ASSISTANT_CONTEXT_CHARS)
-            const first = tail.charCodeAt(0)
-            priorAssistantText = first >= 0xdc00 && first <= 0xdfff
-              ? tail.slice(1)
-              : tail
-          }
+        const proposal = readAssistantProposal(msg)
+        const previous = proposals.get(msg.uuid)
+        // Conflicting retained records for one UUID must not turn a stale
+        // snapshot into a match later in the same replay.
+        if (proposals.has(msg.uuid) && (
+          !proposal || !previous ||
+          previous.binding.textHash !== proposal.binding.textHash
+        )) {
+          proposals.set(msg.uuid, null)
+        } else if (proposal) {
+          proposals.set(msg.uuid, proposal)
         }
       }
       const blocks: TranscriptBlock[] = []
       for (const block of msg.message.content) {
-        // Prose is held separately until a human reply supplies its referent.
+        // Prose is emitted only through the human reply's captured binding.
         if (block.type === 'tool_use') {
           if (
             block.name === ASK_USER_QUESTION_TOOL_NAME &&
@@ -621,7 +615,7 @@ export function buildTranscriptEntries(
         transcript.push({ role: 'assistant', content: blocks })
       }
     } else if (msg.type === 'system' && msg.subtype === 'compact_boundary') {
-      consumeProposal(false)
+      proposals.clear()
     }
   }
   return transcript

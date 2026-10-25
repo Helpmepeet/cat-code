@@ -28,6 +28,7 @@ import {
   _attachmentsForTest,
   createAttachmentMessage,
   getAttachments,
+  getQueuedCommandAttachments,
   getSkillListingAttachments,
   getTaskReminderAttachments,
   getTodoReminderAttachments,
@@ -46,6 +47,31 @@ import { translateToCodexBody } from '../services/api/codex-fetch-adapter.js'
 import { createTask, getTaskListId, updateTask } from './tasks.js'
 import { TodoWriteTool } from '../tools/TodoWriteTool/TodoWriteTool.js'
 import { TaskUpdateTool } from '../tools/TaskUpdateTool/TaskUpdateTool.js'
+import { capturePriorAssistantContext } from './permissions/priorAssistantContext.js'
+
+test('mid-turn attachment retains submission proposal A after proposal B arrives', async () => {
+  const a = createAssistantMessage({ content: 'May I read the file?' })
+  a.message.model = 'test-model'
+  const binding = capturePriorAssistantContext([a])
+  expect(binding).not.toBeNull()
+  const command = { value: 'Sure', mode: 'prompt' as const, priorAssistantContext: binding }
+  const b = createAssistantMessage({ content: 'May I also delete the directory?' })
+  b.message.model = 'test-model'
+  expect(capturePriorAssistantContext([a, b])).not.toEqual(binding)
+  const [attachment] = await getQueuedCommandAttachments([command])
+  const [message] = normalizeAttachmentForAPI(attachment!)
+  expect(message!.priorAssistantContext).toEqual(binding)
+  expect(JSON.stringify(message!.message.content)).not.toContain(binding!.textHash)
+})
+
+test('queued attachment missing or explicitly null binding never recaptures', async () => {
+  for (const priorAssistantContext of [undefined, null]) {
+    const [attachment] = await getQueuedCommandAttachments([
+      { value: 'Sure', mode: 'prompt', priorAssistantContext },
+    ])
+    expect(normalizeAttachmentForAPI(attachment!)[0]!.priorAssistantContext).toBeNull()
+  }
+})
 
 type FakeAppState = {
   teamContext?: {

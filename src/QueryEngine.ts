@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { capturePriorAssistantContext } from './utils/permissions/priorAssistantContext.js'
 import { encodeInlineCommandResult, parseInlineCommandResult, type InlineCommandRun } from '../app/shared/inlineCommand.js'
 import { resolveInlineCommandSource, runInlineCommand, type InlineCommandOperation } from './app-runtime/inlineCommand.js'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
@@ -426,12 +427,13 @@ export class QueryEngine {
     })
   }
 
-  async *submitMessage(
+  submitMessage(
     prompt: string | ContentBlockParam[],
     options?: {
       uuid?: string
       isMeta?: boolean
       origin?: MessageOrigin
+      priorAssistantContext?: import('./types/message.js').PriorAssistantContext | null
       onInputPersisted?: () => void | Promise<void>
       inlineCommand?: InlineCommandOperation
       /** Only used by continueHandoff; never populated from app.submit. */
@@ -439,6 +441,21 @@ export class QueryEngine {
       /** Only the controller can request durable genuine-user reconciliation. */
       handoffReconciliationAdmission?: true
     } & HandoffTurnLifecycleOptions,
+  ): AsyncGenerator<SDKMessage, void, unknown> {
+    // This wrapper runs at acceptance, not at the generator's first next().
+    // Queue delivery must supply its original binding, including explicit null.
+    return this.submitAcceptedMessage(prompt, {
+      ...options,
+      uuid: options?.uuid ?? randomUUID(),
+      priorAssistantContext: options?.priorAssistantContext === undefined
+        ? capturePriorAssistantContext(this.mutableMessages)
+        : options.priorAssistantContext,
+    })
+  }
+
+  private async *submitAcceptedMessage(
+    prompt: string | ContentBlockParam[],
+    options: NonNullable<Parameters<QueryEngine['submitMessage']>[1]>,
   ): AsyncGenerator<SDKMessage, void, unknown> {
     if (options?.inlineCommand) {
       yield* this.executeInlineCommand(options.inlineCommand)
@@ -739,6 +756,12 @@ export class QueryEngine {
       querySource: 'sdk',
     })
 
+    if (!savedReconciliationInput) {
+      const primary = messagesFromUserInput.find(message =>
+        message.type === 'user' && message.uuid === options.uuid && !message.isMeta,
+      )
+      if (primary?.type === 'user') primary.priorAssistantContext = options.priorAssistantContext ?? null
+    }
     if (options?.handoffReconciliationContext) {
       messagesFromUserInput.push((savedReconciliationContext as UserMessage | undefined) ?? createUserMessage({
         content: handoffReconciliationPrompt(), isMeta: true,

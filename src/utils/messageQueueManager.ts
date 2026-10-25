@@ -68,6 +68,9 @@ function logOperation(operation: QueueOperation, command?: QueuedCommand): void 
     ...(!isRetraction && command?.mode !== undefined && { mode: command.mode }),
     ...(!isRetraction &&
       command?.value !== undefined && { content: command.value }),
+    ...(!isRetraction && {
+      priorAssistantContext: command?.priorAssistantContext ?? null,
+    }),
   }
   const recorded = recordQueueOperation(queueOp)
   if (!isRetraction) {

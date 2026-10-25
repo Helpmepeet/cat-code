@@ -7,6 +7,12 @@ import type {
 import type { UUID } from 'crypto'
 import type { TeammateMessageContract } from '../utils/teammateMessage.js'
 
+/** Engine-captured proposal identity at human input acceptance, not delivery. */
+export type PriorAssistantContext = {
+  messageUuid: string
+  textHash: string
+}
+
 export type MessageOrigin =
   | { kind: 'human' }
   /** A user-initiated cancellation marker, kept for transcript replay. */
@@ -121,6 +127,8 @@ export type UserMessage = {
   sourceToolAssistantUUID?: UUID
   permissionMode?: string
   origin?: MessageOrigin
+  /** Missing or null means no proven submission-time proposal association. */
+  priorAssistantContext?: PriorAssistantContext | null
   planContent?: string
 }
 

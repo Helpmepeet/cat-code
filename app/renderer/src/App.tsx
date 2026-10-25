@@ -1,4 +1,5 @@
 import { LidClosedProvider, LidClosedNotice } from './LidClosedMode.js'
+import { selectObservedProposal } from './observedProposal.js'
 import { ScheduledTasksPage } from './ScheduledTasksPage.js'
 import { UsagePage } from './UsagePage.js'
 import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard } from './usageDashboardState.js'
@@ -3266,6 +3267,8 @@ export function App() {
       return
     }
     const text = action.text
+    const observedProposal = retryText !== undefined || hasPreviewTranscript(previewTranscript, sessionId) ? null
+      : selectObservedProposal(sessionLog.messages, selectTranscriptRows(transcript, sessionId))
     const submitPrompt = buildSubmitPrompt(text, images)
     // Both paths retire the draft the same way: the prompt has left the
     // composer, so the pastes it expanded are spent and it joins ↑/↓ history.
@@ -3288,6 +3291,7 @@ export function App() {
           images,
           file,
           showQueuedRow: action.showQueuedRow,
+          observedProposal,
         }),
       )
       retireDraft()
@@ -3305,6 +3309,7 @@ export function App() {
     try {
       getBridge().submit(sessionId, submitPrompt, {
         submitId,
+        observedProposal,
         ...(file ? { fileAttachmentToken: file.token } : {}),
       })
       // D5 — the clear below is OPTIMISTIC: the sidecar can still refuse this
@@ -3358,6 +3363,7 @@ export function App() {
           buildSubmitPrompt(pending.text, pending.images ?? []),
           {
             submitId,
+            observedProposal: pending.observedProposal ?? null,
             ...(pending.file
               ? { fileAttachmentToken: pending.file.token }
               : {}),

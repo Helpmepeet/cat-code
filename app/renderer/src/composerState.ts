@@ -896,6 +896,7 @@ export function planSessionSubmit(input: {
  * restore machinery as a queue.
  */
 export type PendingSubmit = {
+  observedProposal?: import('../../shared/protocol.js').SubmitOptions['observedProposal']
   text: string
   images?: ImageAttachment[]
   file?: FileAttachment | null

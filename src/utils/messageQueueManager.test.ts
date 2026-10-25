@@ -49,6 +49,29 @@ import {
 
 const cleanup: string[] = []
 
+test('queued consent binding survives persistence and re-enqueue without recapture', async () => {
+  const binding = { messageUuid: randomUUID(), textHash: 'a'.repeat(64) }
+  const uuid = randomUUID()
+  const log = await withDurableSession(() => {
+    enqueue({ value: 'Sure', mode: 'prompt', uuid, priorAssistantContext: binding })
+    const [command] = dequeueAll()
+    enqueue(command!)
+  })
+  expect(log.operations.filter(op => op.operation === 'enqueue').map(op => op.priorAssistantContext))
+    .toEqual([binding, binding])
+})
+
+test('legacy and malformed queue bindings restore fail-closed', async () => {
+  const log = await withDurableSession(() => {
+    enqueue({ value: 'Sure', mode: 'prompt', uuid: randomUUID() })
+    enqueue({
+      value: 'Sure', mode: 'prompt', uuid: randomUUID(),
+      priorAssistantContext: { messageUuid: 'a', textHash: 'a'.repeat(64), extra: true } as never,
+    })
+  })
+  expect(log.operations.map(op => op.priorAssistantContext)).toEqual([null, null])
+})
+
 afterEach(async () => {
   resetCommandQueue()
   for (const dir of cleanup.splice(0)) {

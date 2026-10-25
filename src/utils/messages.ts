@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { parsePriorAssistantContext } from './permissions/priorAssistantContext.js'
 import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import type {
   ContentBlock,
@@ -513,6 +514,7 @@ export function createUserMessage({
   sourceToolAssistantUUID,
   permissionMode,
   origin,
+  priorAssistantContext,
 }: {
   content: string | ContentBlockParam[]
   isMeta?: true
@@ -542,6 +544,7 @@ export function createUserMessage({
   }
   // Provenance of this message. undefined = human (keyboard).
   origin?: MessageOrigin
+  priorAssistantContext?: import('../types/message.js').PriorAssistantContext | null
 }): UserMessage {
   const m: UserMessage = {
     type: 'user',
@@ -564,6 +567,7 @@ export function createUserMessage({
     sourceToolAssistantUUID,
     permissionMode,
     origin,
+    priorAssistantContext,
   }
   return m
 }
@@ -3973,6 +3977,10 @@ Read the team config to discover your teammates' names. Check the task list peri
       // Shared with QueryEngine's SDK user-frame yield so the TUI and every SDK/app
       // consumer provenance the SAME drained command identically.
       const origin: MessageOrigin | undefined = queuedCommandOrigin(attachment)
+      const priorAssistantContext =
+        (origin && origin.kind !== 'human') || attachment.isMeta
+          ? null
+          : parsePriorAssistantContext(attachment.priorAssistantContext)
 
       // Only hide from the transcript if the queued command was itself
       // system-generated. Human input drained mid-turn has no origin and no
@@ -4009,6 +4017,7 @@ Read the team config to discover your teammates' names. Check the task list peri
             ...metaProp,
             origin,
             uuid: attachment.source_uuid,
+            priorAssistantContext,
           }),
         ])
       }
@@ -4020,6 +4029,7 @@ Read the team config to discover your teammates' names. Check the task list peri
           ...metaProp,
           origin,
           uuid: attachment.source_uuid,
+          priorAssistantContext,
         }),
       ])
     }

@@ -7,7 +7,7 @@ import type { PastedContent } from '../utils/config.js'
 import type { ImageDimensions } from '../utils/imageResizer.js'
 import type { TextHighlight } from '../utils/textHighlighting.js'
 import type { AgentId } from './ids.js'
-import type { AssistantMessage, MessageOrigin } from './message.js'
+import type { AssistantMessage, MessageOrigin, PriorAssistantContext } from './message.js'
 
 /**
  * Inline ghost text for mid-input command autocomplete
@@ -297,6 +297,7 @@ export type QueuePriority = 'now' | 'next' | 'later'
  * Queued command type
  */
 export type QueuedCommand = {
+  priorAssistantContext?: PriorAssistantContext | null
   value: string | Array<ContentBlockParam>
   mode: PromptInputMode
   /** Defaults to the priority implied by `mode` when enqueued. */

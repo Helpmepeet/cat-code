@@ -4443,6 +4443,8 @@ export type CatCodeBridge = {
  * (SECURITY-MINIMUM T4).
  */
 export type SubmitOptions = {
+  /** Context selection only; the receiver validates against engine history. */
+  observedProposal?: { messageUuid: string; text: string } | null
   isMeta?: boolean
   goalSnapshot?: unknown
   /**

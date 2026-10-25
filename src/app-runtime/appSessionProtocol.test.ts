@@ -2,6 +2,16 @@ import { describe, expect, test } from 'bun:test'
 import { appClientMessageSchema } from './appSessionProtocol.js'
 
 describe('app session protocol', () => {
+  test('validates bounded context selection without accepting authority', () => {
+    const parse = (observedProposal: unknown) => appClientMessageSchema.safeParse({
+      type: 'app.submit', requestId: 'binding', prompt: 'Sure', options: { observedProposal },
+    })
+    expect(parse(null).success).toBe(true)
+    expect(parse({ messageUuid: 'a', text: 'proposal A' }).success).toBe(true)
+    for (const value of [{}, 'a', { messageUuid: '', text: 'x' },
+      { messageUuid: 'a'.repeat(201), text: 'x' }, { messageUuid: 'a', text: 'x'.repeat(2001) },
+      { messageUuid: 'a', text: 'x', textHash: 'forged' }]) expect(parse(value).success).toBe(false)
+  })
   test('rejects oversized image, aggregate, count and UTF-8 text budgets', () => {
     const image = (length = 4) => ({
       type: 'image',

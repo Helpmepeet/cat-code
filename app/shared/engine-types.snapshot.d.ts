@@ -246,6 +246,7 @@ export type AppSubmitMessage = {
     uuid?: string
     isMeta?: boolean
     goalSnapshot?: unknown
+    observedProposal?: { messageUuid: string; text: string; } | null
   }
 }
 

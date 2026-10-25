@@ -5,6 +5,7 @@ import type { ConversationRewindResult } from '../QueryEngine.js'
 import type { ConversationForkResult } from '../commands/branch/branch.js'
 import type { MessageOrigin } from '../types/message.js'
 import type { UserMessage } from '../types/message.js'
+import type { Message, PriorAssistantContext } from '../types/message.js'
 import type { ResumeCheckpointV1 } from '../../app/shared/workspaceHandoff.js'
 import type { HandoffTerminalOutcome, HandoffTurnLifecycleOptions } from './handoff.js'
 import {
@@ -19,6 +20,7 @@ import type {
 } from './sessionEvents.js'
 
 export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
+  priorAssistantContext?: PriorAssistantContext | null
   uuid?: string
   isMeta?: boolean
   origin?: MessageOrigin
@@ -34,6 +36,7 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
 }
 
 export type QueryEngineSessionLike = {
+  getMessages?: () => readonly Message[]
   executeInlineCommand?: (operation: InlineCommandOperation, options?: Pick<QueryEngineSessionOptions, 'onPermissionRequest'>) => AsyncIterable<SDKMessage>
   getInlineCommandRuns?: () => InlineCommandRun[]
   submitMessage(
@@ -64,6 +67,7 @@ export function createQueryEngineSessionAdapter(
   session: QueryEngineSessionLike,
 ): AppSessionControllerAdapter {
   return {
+    getMessages: session.getMessages ? () => session.getMessages!() : undefined,
     runInlineCommand: session.executeInlineCommand
       ? ({ operation, onPermissionRequest }) => session.executeInlineCommand!(operation, { onPermissionRequest })
       : undefined,

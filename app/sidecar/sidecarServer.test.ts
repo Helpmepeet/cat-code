@@ -1433,6 +1433,72 @@ test('queued parent task notification prevents idle park before the drain runs',
   expect(parkCount()).toBe(0)
 })
 
+test('submission-time proposal survives later output and between-turn drain', async () => {
+  const proposal = (uuid: string, text: string) => ({
+    type: 'assistant', uuid, message: { model: 'claude', content: [{ type: 'text', text }] },
+  }) as unknown as import('../../src/types/message.js').Message
+  const history = [proposal('proposal-a', 'Do A?')]
+  let release: (() => void) | undefined
+  const bindings: unknown[] = []
+  const controller = new AppSessionController({
+    getMessages: () => history,
+    async *runTurn({ options }) {
+      bindings.push(options?.priorAssistantContext)
+      if (bindings.length === 1) await new Promise<void>(resolve => { release = resolve })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const { server, conn, received } = connect(controller)
+  server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'start', prompt: 'Start' }))
+  await waitFor(() => bindings.length === 1)
+  history.push(proposal('proposal-b', 'Do B?'))
+  server.handleData(conn, clientFrame({
+    type: 'app.submit', requestId: 'answer', prompt: 'Sure',
+    options: { observedProposal: { messageUuid: 'proposal-a', text: 'Do A?' } },
+  }))
+  const binding = controller.bindObservedProposal({ messageUuid: 'proposal-a', text: 'Do A?' })
+  expect(binding).not.toBeNull()
+  expect(getCommandQueueSnapshot()[0]?.priorAssistantContext).toEqual(binding)
+  history.push(proposal('proposal-c', 'Do C?'))
+  release?.()
+  await waitFor(() => bindings.length === 2)
+  expect(bindings).toEqual([null, binding])
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(0)
+})
+
+test('idle submit validates selected history and rejects malformed selection', async () => {
+  const history = [{
+    type: 'assistant', uuid: 'a', message: { model: 'claude', content: [{ type: 'text', text: 'Do A?' }] },
+  }] as unknown as import('../../src/types/message.js').Message[]
+  const bindings: unknown[] = []
+  const controller = new AppSessionController({
+    getMessages: () => history,
+    async *runTurn({ options }) { bindings.push(options?.priorAssistantContext) },
+  })
+  const { server, conn, received } = connect(controller)
+  server.handleData(conn, clientFrame({
+    type: 'app.submit', requestId: 'malformed', prompt: 'Sure',
+    options: { observedProposal: { messageUuid: 'a', text: 'x'.repeat(2001) } },
+  }))
+  expect(bindings).toHaveLength(0)
+  expect(received.some(frame => frame.kind === 'error' && frame.code === 'bad_request')).toBe(true)
+  const selections = [
+    { messageUuid: 'a', text: 'Do A?' },
+    { messageUuid: 'a', text: 'forged' },
+    null, undefined,
+  ]
+  for (const [index, observedProposal] of selections.entries()) {
+    server.handleData(conn, clientFrame({
+      type: 'app.submit', requestId: `idle-${index}`, prompt: 'Sure', options: { observedProposal },
+    }))
+    await waitFor(() => bindings.length === index + 1 && !controller.isTurnActive())
+    // The controller settles before the server's turn finalizer.
+    await new Promise<void>(resolve => queueMicrotask(resolve))
+  }
+  expect(bindings[0]).toMatchObject({ messageUuid: 'a' })
+  expect(bindings.slice(1)).toEqual([null, null, null])
+})
+
 test('a mid-turn submit is queued INTO the running turn, not refused', async () => {
   // The desktop used to answer `turn_already_running` and make the renderer sit
   // on the prompt until the turn ended. The terminal never did: the query loop

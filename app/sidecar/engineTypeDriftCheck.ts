@@ -38,4 +38,8 @@ export type EngineSnapshotDriftChecks = [
     IsMutuallyAssignable<SnapshotAppClientMessage, CanonicalAppClientMessage>
   >,
   Assert<IsMutuallyAssignable<SnapshotAppReadyPayload, CanonicalAppReadyPayload>>,
+  Assert<SameKeys<
+    NonNullable<Extract<SnapshotAppClientMessage, { type: 'app.submit' }>['options']>,
+    NonNullable<Extract<CanonicalAppClientMessage, { type: 'app.submit' }>['options']>
+  >>,
 ]

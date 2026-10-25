@@ -43,6 +43,25 @@ function createResultMessage(result: string): SDKMessage {
 }
 
 describe('AppSessionController', () => {
+  test('validates selected engine prose and preserves explicit null', async () => {
+    const history = [{
+      type: 'assistant', uuid: 'a', message: { model: 'claude', content: [{ type: 'text', text: 'Do A?' }] },
+    }] as unknown as import('../types/message.js').Message[]
+    const bindings: unknown[] = []
+    const controller = new AppSessionController({
+      getMessages: () => history,
+      async *runTurn({ options }) { bindings.push(options?.priorAssistantContext) },
+    })
+    const selected = { messageUuid: 'a', text: 'Do A?' }
+    expect(controller.bindObservedProposal(selected)?.messageUuid).toBe('a')
+    expect(controller.bindObservedProposal({ ...selected, text: 'forged' })).toBeNull()
+    expect(controller.bindObservedProposal(undefined)).toBeNull()
+    history.push(history[0]!)
+    expect(controller.bindObservedProposal(selected)).toBeNull()
+    history.pop()
+    await controller.submit('Sure', { priorAssistantContext: null })
+    expect(bindings).toEqual([null])
+  })
   afterEach(() => {
     _resetAccountDiagnosticStreamJsonHookForTesting()
   })

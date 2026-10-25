@@ -2334,6 +2334,7 @@ export class SidecarServer {
       prompt: command.value,
       ...(command.uuid !== undefined ? { uuid: command.uuid } : {}),
       ...(command.isMeta !== undefined ? { isMeta: command.isMeta } : {}),
+      priorAssistantContext: command.priorAssistantContext ?? null,
       generateTitle: true,
       announcePrompt: stagedUuid !== null,
       onInputPersisted: () => {
@@ -2490,6 +2491,7 @@ export class SidecarServer {
     isMeta,
     goalSnapshot,
     origin,
+    priorAssistantContext = null,
     onInputPersisted,
     generateTitle,
     announcePrompt = true,
@@ -2502,6 +2504,7 @@ export class SidecarServer {
     isMeta?: boolean
     goalSnapshot?: ReturnType<typeof parseThreadGoal>
     origin?: MessageOrigin
+    priorAssistantContext?: import('../../src/types/message.js').PriorAssistantContext | null
     onInputPersisted?: () => void
     generateTitle: boolean
     /**
@@ -2533,6 +2536,7 @@ export class SidecarServer {
       submitPromise = this.controller.submit(prompt, {
         uuid,
         isMeta,
+        priorAssistantContext,
         ...(goalSnapshot !== undefined ? { goalSnapshot } : {}),
         ...(origin !== undefined ? { origin } : {}),
         onInputPersisted: () => {
@@ -2726,7 +2730,7 @@ export class SidecarServer {
    * own. Staging BEFORE the enqueue matters: the queue's change signal is
    * synchronous, so the snapshot it publishes must already know about this one.
    */
-  private enqueueMidTurnPrompt(prompt: AppSubmitPrompt, isMeta?: boolean): void {
+  private enqueueMidTurnPrompt(prompt: AppSubmitPrompt, isMeta?: boolean, priorAssistantContext: import('../../src/types/message.js').PriorAssistantContext | null = null): void {
     const uuid = randomUUID()
     this.stagedPrompts.set(uuid, {
       prompt, serializedBytes: submitPromptSerializedBytes(prompt),
@@ -2736,6 +2740,7 @@ export class SidecarServer {
       value: prompt,
       mode: 'prompt',
       uuid,
+      priorAssistantContext,
       ...(isMeta ? { isMeta: true } : {}),
     })
   }
@@ -3368,7 +3373,8 @@ export class SidecarServer {
         )
         return
       }
-      this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta)
+      this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta,
+        this.controller.bindObservedProposal(message.options?.observedProposal))
       queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId })
       // Staged, so the prompt is taken: the running turn's next tool round
       // drains it. Answered HERE rather than off the staged snapshot the enqueue
@@ -3380,6 +3386,7 @@ export class SidecarServer {
 
     const started = this.startTurn({
       prompt: message.prompt,
+      priorAssistantContext: this.controller.bindObservedProposal(message.options?.observedProposal),
       onAccepted: () => queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId }),
       isMeta: message.options?.isMeta,
       goalSnapshot,
@@ -6667,7 +6674,7 @@ function checkStrictKeys(message: unknown): string | null {
   // renderer-authored, so it is bounded and type-checked by
   // `submitCorrelationSchema` below, and it authorizes nothing — unlike
   // `options.uuid`, which is engine identity and stays rejected.
-  const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot', 'submitId'])
+  const allowedOptionKeys = new Set(['isMeta', 'goalSnapshot', 'submitId', 'observedProposal'])
   // The renderer-facing permission contract (protocol.ts PermissionResponseInput)
   // exposes ONLY these keys. The reused Zod schema additionally accepts host-only
   // escalations (allow.updatedPermissions, deny.interrupt) that the renderer must

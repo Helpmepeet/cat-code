@@ -1,5 +1,7 @@
 import type * as React from 'react'
 import type { UUID } from 'crypto'
+import { randomUUID } from 'crypto'
+import { capturePriorAssistantContext, parsePriorAssistantContext } from './permissions/priorAssistantContext.js'
 import { getSessionId } from '../bootstrap/state.js'
 import { prepareHumanPromptAgainstDeferredContinuation, takeDeferredContinuationNotice } from '../services/deferredContinuation.js'
 import { logEvent } from 'src/services/analytics/index.js'
@@ -14,7 +16,7 @@ import type { IDESelection } from '../hooks/useIdeSelection.js'
 import type { AppState } from '../state/AppState.js'
 import type { SetToolJSXFn } from '../Tool.js'
 import type { LocalJSXCommandOnDone } from '../types/command.js'
-import type { Message } from '../types/message.js'
+import type { Message, PriorAssistantContext } from '../types/message.js'
 import {
   isValidImagePaste,
   type PromptInputMode,
@@ -125,6 +127,8 @@ export function invalidatesDeferredContinuation(
 }
 
 export type HandlePromptSubmitParams = BaseExecutionParams & {
+  /** Internal UI snapshot taken at acceptance, never supplied by inbound protocol input. */
+  visiblePriorAssistantContext?: PriorAssistantContext | null
   // Direct user input path (set when called from onSubmit, absent for queue processor)
   input?: string
   mode?: PromptInputMode
@@ -207,6 +211,14 @@ export async function handlePromptSubmit(
   }
 
   const input = params.input ?? ''
+  // Partial streamed prose is not necessarily present in messages. Without a
+  // complete submission-time snapshot, never bind to an older visible proposal.
+  const priorAssistantContext =
+    params.visiblePriorAssistantContext !== undefined
+      ? parsePriorAssistantContext(params.visiblePriorAssistantContext)
+      : queryGuard.isActive || isExternalLoading
+        ? null
+        : capturePriorAssistantContext(messages)
   const mode = params.mode ?? 'prompt'
   const rawPastedContents = params.pastedContents ?? {}
 
@@ -414,6 +426,7 @@ export async function handlePromptSubmit(
     // at execution time when processUserInput runs (not baked in here).
     enqueue({
       value: finalInput.trim(),
+      priorAssistantContext,
       preExpansionValue: input.trim(),
       mode,
       pastedContents: hasImages ? pastedContents : undefined,
@@ -437,6 +450,7 @@ export async function handlePromptSubmit(
   // resized via processUserInput regardless of how the command arrives.
   const cmd: QueuedCommand = {
     value: finalInput,
+    priorAssistantContext,
     preExpansionValue: input,
     mode,
     pastedContents: hasImages ? pastedContents : undefined,
@@ -553,6 +567,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
       for (let i = 0; i < commands.length; i++) {
         const cmd = commands[i]!
         const isFirst = i === 0
+        const primaryUuid = cmd.uuid ?? randomUUID()
         logForDebugging(
           `[handlePromptSubmit] processUserInput start index=${i} mode=${cmd.mode}`,
         )
@@ -570,7 +585,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
           isAlreadyProcessing: !isFirst,
           querySource,
           canUseTool,
-          uuid: cmd.uuid,
+          uuid: primaryUuid,
           ideSelection: isFirst ? ideSelection : undefined,
           skipSlashCommands: cmd.skipSlashCommands,
           bridgeOrigin: cmd.bridgeOrigin,
@@ -592,6 +607,17 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
             ? taskNotificationOriginFromText(cmd.value) ??
               ({ kind: 'task-notification' } as const)
             : undefined)
+        if (cmd.mode === 'prompt' && (!origin || origin.kind === 'human') && !cmd.isMeta) {
+          const primary = result.messages.find(
+            m => m.type === 'user' && m.uuid === primaryUuid,
+          )
+          if (
+            primary?.type === 'user' && !primary.isMeta &&
+            (!primary.origin || primary.origin.kind === 'human')
+          ) {
+            primary.priorAssistantContext = parsePriorAssistantContext(cmd.priorAssistantContext)
+          }
+        }
         if (origin) {
           for (const m of result.messages) {
             if (m.type === 'user') m.origin = origin

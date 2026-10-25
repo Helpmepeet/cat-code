@@ -559,6 +559,7 @@ export type Attachment =
     }
   | {
       type: 'queued_command'
+      priorAssistantContext?: import('../types/message.js').PriorAssistantContext | null
       prompt: string | Array<ContentBlockParam>
       source_uuid?: UUID
       imagePasteIds?: number[]
@@ -1147,6 +1148,7 @@ export async function getQueuedCommandAttachments(
         type: 'queued_command' as const,
         prompt,
         source_uuid: _.uuid,
+        priorAssistantContext: _.priorAssistantContext ?? null,
         imagePasteIds: getImagePasteIds(_.pastedContents),
         commandMode: _.mode,
         origin: _.origin,
@@ -2870,7 +2872,7 @@ export function extractAtMentionedFiles(content: string): string[] {
   }
 
   // Extract regular mentions
-  const regularMatchArray = content.match(regularAtMentionRegex) || []
+  const regularMatchArray: string[] = content.match(regularAtMentionRegex) || []
   regularMatchArray.forEach(match => {
     const filename = match.slice(match.indexOf('@') + 1)
     // Don't include if it starts with a quote (already handled as quoted)

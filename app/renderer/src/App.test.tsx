@@ -1486,7 +1486,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // Park, and retire the draft exactly like a real send (so nothing is left
   // half-submitted), then return WITHOUT touching the bridge.
   expect(flatSubmit).toContain(
-    "if (action.type === 'hold') { setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, { text, images, file, showQueuedRow: action.showQueuedRow, }), ) retireDraft()",
+    "if (action.type === 'hold') { setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, { text, images, file, showQueuedRow: action.showQueuedRow, observedProposal, }), ) retireDraft()",
   )
   // The drain rides the EXISTING app.submit — no new frame kind or channel.
   expect(submitBody).toContain(
@@ -1497,6 +1497,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   expect(submitBody).toContain(
     'buildSubmitPrompt(pending.text, pending.images ?? [])',
   )
+  expect(submitBody).toContain('observedProposal: pending.observedProposal ?? null')
   // IDLE-PARK (CC-28) — the arm that makes a reclaimed engine invisible. Nothing
   // is spawning and no turn will end for a parked session, so without this the
   // held prompt would wait forever. It is pinned here for the same reason as its

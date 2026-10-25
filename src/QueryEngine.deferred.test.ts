@@ -82,14 +82,56 @@ mock.module('./query.js', () => ({
 
 const { QueryEngine } = await import('./QueryEngine.js')
 
+let originalApiKey: string | undefined
+const macroState = globalThis as typeof globalThis & { MACRO?: { VERSION: string } }
+let originalMacro: { VERSION: string } | undefined
 beforeEach(() => {
   stubsActive = true
+  originalApiKey = process.env.ANTHROPIC_API_KEY
+  // Init reports a credential source before the stubbed provider loop runs.
+  process.env.ANTHROPIC_API_KEY = 'test-only-query-engine-no-network'
+  originalMacro = macroState.MACRO
+  macroState.MACRO = { VERSION: 'test-version' }
 })
 
 afterEach(() => {
   stubsActive = false
   calls.length = 0
   queryMessages = []
+  if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+  else process.env.ANTHROPIC_API_KEY = originalApiKey
+  if (originalMacro === undefined) delete macroState.MACRO
+  else macroState.MACRO = originalMacro
+})
+
+test('acceptance captures proposal before iteration and persists it before acknowledgement', async () => {
+  const proposal = (text: string) => ({
+    type: 'assistant', uuid: randomUUID(), message: { model: 'claude', content: [{ type: 'text', text }] },
+  }) as AssistantMessage
+  const a = proposal('Do A?')
+  let state = getDefaultAppState()
+  let persisted: Message[] = []
+  const engine = new QueryEngine({
+    cwd: process.cwd(), tools: [], commands: [], mcpClients: [], agents: [],
+    canUseTool: async () => ({ behavior: 'allow', updatedInput: {} }),
+    getAppState: () => state, setAppState: update => { state = update(state) },
+    initialMessages: [a], readFileCache: createFileStateCacheWithSizeLimit(20),
+    customSystemPrompt: '',
+    recordTranscript: async messages => { persisted = [...messages]; return null },
+  })
+  const submitted = engine.submitMessage('Sure', {
+    onInputPersisted: () => {
+      const user = persisted.find(message => message.type === 'user')
+      expect(user?.type === 'user' && user.priorAssistantContext?.messageUuid).toBe(a.uuid)
+    },
+  })
+  ;(engine.getMessages() as Message[]).push(proposal('Do B?'))
+  for await (const _ of submitted) { /* drain the isolated provider stub */ }
+  const user = persisted.find(message => message.type === 'user')
+  expect(user?.type === 'user' && user.priorAssistantContext?.messageUuid).toBe(a.uuid)
+  for await (const _ of engine.submitMessage('Legacy queued input', { priorAssistantContext: null })) { /* drain */ }
+  const lastUser = persisted.filter(message => message.type === 'user').at(-1)
+  expect(lastUser?.type === 'user' && lastUser.priorAssistantContext).toBeNull()
 })
 
 test('a public deferred submit cannot enter the provider before UUID durability succeeds', async () => {

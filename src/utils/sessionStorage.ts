@@ -1,4 +1,5 @@
 import { assertSessionNotMoving, readSessionRelocation } from './sessionRelocationState.js'
+import { parsePriorAssistantContext } from './permissions/priorAssistantContext.js'
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { randomUUID, createHash } from 'crypto'
@@ -5266,6 +5267,9 @@ export async function loadTranscriptFile(
           ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
           ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
           ...(entry.content !== undefined ? { content: entry.content } : {}),
+          ...(entry.operation === 'enqueue' ? {
+            priorAssistantContext: parsePriorAssistantContext(entry.priorAssistantContext),
+          } : {}),
         })
       }
     }
@@ -5484,6 +5488,7 @@ async function loadSessionFile(
 }
 
 export type SessionQueueOperation = {
+  priorAssistantContext?: import('../types/message.js').PriorAssistantContext | null
   /**
    * Anything other than `enqueue` is a retraction: the command left the queue.
    * `popAll` (the terminal's UP-arrow pull-back) is written by

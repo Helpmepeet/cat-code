@@ -7,6 +7,8 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { MessageOrigin } from '../types/message.js'
 import type { UserMessage } from '../types/message.js'
+import type { Message, PriorAssistantContext } from '../types/message.js'
+import { capturePriorAssistantContext, readAssistantProposal } from '../utils/permissions/priorAssistantContext.js'
 import type { ConversationRewindResult } from '../QueryEngine.js'
 import type { ConversationForkResult } from '../commands/branch/branch.js'
 import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
@@ -31,6 +33,7 @@ import {
 export type AppSessionAbortIntent = 'interrupt'
 
 export type AppSessionSubmitOptions = {
+  priorAssistantContext?: PriorAssistantContext | null
   uuid?: string
   isMeta?: boolean
   goalSnapshot?: AppGoalSnapshot
@@ -43,6 +46,7 @@ export type AppSessionSubmitOptions = {
 export type AppSessionPrompt = string | ContentBlockParam[]
 
 export type AppSessionControllerAdapter = {
+  getMessages?: () => readonly Message[]
   runInlineCommand?: (args: {
     operation: InlineCommandOperation
     onPermissionRequest: (request: AppPermissionRequest, signal?: AbortSignal) => Promise<AppPermissionResponse>
@@ -50,6 +54,7 @@ export type AppSessionControllerAdapter = {
   runTurn(args: {
     prompt: AppSessionPrompt
     options?: {
+      priorAssistantContext?: PriorAssistantContext | null
       uuid?: string
       isMeta?: boolean
       origin?: MessageOrigin
@@ -420,10 +425,22 @@ export class AppSessionController {
     return this.adapter.forkBeforeUserMessage(targetUuid, customTitle)
   }
 
+  bindObservedProposal(reference: { messageUuid: string; text: string } | null | undefined): PriorAssistantContext | null {
+    if (!reference) return null
+    const matches = (this.adapter.getMessages?.() ?? []).filter(message => message.uuid === reference.messageUuid)
+    if (matches.length !== 1) return null
+    const proposal = readAssistantProposal(matches[0]!)
+    // The view chooses a candidate; only engine-owned text supplies evidence.
+    return proposal?.text === reference.text ? proposal.binding : null
+  }
+
   async submit(
     prompt: AppSessionPrompt,
     options?: AppSessionSubmitOptions,
   ): Promise<void> {
+    options = { ...options, priorAssistantContext: options?.priorAssistantContext === undefined
+      ? capturePriorAssistantContext(this.adapter.getMessages?.() ?? [])
+      : options.priorAssistantContext }
     if (this.initializing) await this.waitForInitialization()
     if (this.handoffReservation) throw new Error('Conversation is reserved for a workspace handoff')
     if (this.requiresUserReconciliation && (options?.isMeta || options?.origin)) throw new Error('Workspace handoff requires user reconciliation')
@@ -512,6 +529,7 @@ export class AppSessionController {
               uuid: options?.uuid,
               isMeta: options?.isMeta,
               origin: options?.origin,
+              priorAssistantContext: options?.priorAssistantContext ?? null,
               inlineCommand: options?.inlineCommand,
               ...(continuationOperationId ? { handoffContinuation: { operationId: continuationOperationId } } : {}),
               ...(reconcileInput ? { handoffReconciliationAdmission: true as const } : {}),
