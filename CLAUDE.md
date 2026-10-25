@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Cat Code is a private Claude Code fork for one person, with a terminal engine
+Cat Code is a Claude Code fork for one person, with a terminal engine
 and a production Electron desktop app. Multiple agent sessions share this tree.
 
 These are repository constraints and useful defaults. Choose an approach suited
