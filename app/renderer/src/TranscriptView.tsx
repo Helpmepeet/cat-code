@@ -74,6 +74,7 @@ import {
 import { VirtualLineList } from './VirtualLineList.js'
 import {
   observePaneScroll,
+  flushPaneScrollCorrections,
   compensatePanePrefix,
   reportPaneHeightCorrection,
   reportPaneLayoutChange,
@@ -1384,11 +1385,29 @@ function BoundedChildList({
     const update = () => {
       frame = 0
       if (!hasObservedScroll && initialAnchorKey === null && scroller.clientHeight <= 0 && !entriesChangedRef.current) return
+      flushPaneScrollCorrections(scroller)
       const rootRect = root.getBoundingClientRect()
       const scrollerRect = scroller.getBoundingClientRect()
+      // A remounted row can replace its retained estimate before ResizeObserver
+      // commits its measurement. Window against the current boxes, otherwise a
+      // shorter prefix can evict the visible answer using the old row heights.
+      let windowEntries = entriesRef.current
+      if (transcriptEntries) {
+        const measurements: CompositeChildMeasurement[] = []
+        for (const child of root.children) {
+          const key = child.getAttribute('data-transcript-entry')
+          if (key === null) continue
+          const height = child.getBoundingClientRect().height +
+            (Number.parseFloat(getComputedStyle(child).marginBlockEnd) || 0)
+          if (height > 0) measurements.push({ key, height })
+        }
+        const heights = new Map(measurements.map(measurement => [measurement.key, measurement.height]))
+        windowEntries = windowEntries.map(entry => ({ ...entry, height: heights.get(entry.key) ?? entry.height }))
+        if (measurements.length) dispatch({ kind: 'measured', measurements })
+      }
       setChildWindow(current => {
         const next = selectCompositeChildWindow(
-          entriesRef.current,
+          windowEntries,
           scrollerRect.top - rootRect.top,
           scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT,
           undefined,
@@ -1424,8 +1443,10 @@ function BoundedChildList({
   // Reports this container's own height change to the pane, on EVERY commit and
   // with no dependency list, for the same reason `BoundedMarkdown` does: a
   // measured child height replaces an estimate frames after the commit that used
-  // it, so only the rendered box marks where the document actually moved.
-  useEffect(() => {
+  // it, so only the rendered box marks where the document actually moved. Outer
+  // row replacements correct before paint so remounting a prefix cannot flash a
+  // different part of the answer while the shared frame is still pending.
+  useLayoutEffect(() => {
     const root = rootRef.current
     const scroller = paneScrollerRef.current
     if (root === null || scroller === null) return
@@ -1444,7 +1465,10 @@ function BoundedChildList({
       previous.nestedHeights,
       nestedHeights,
     ) - compensatedPrefixDelta
-    if (delta === 0) return
+    if (delta === 0) {
+      if (transcriptEntries) flushPaneScrollCorrections(scroller)
+      return
+    }
     let commonPrefix = 0
     while (
       commonPrefix < previous.entries.length && commonPrefix < entries.length &&
@@ -1463,6 +1487,7 @@ function BoundedChildList({
           scroller.scrollTop + unchangedPrefix
         : null,
     })
+    if (transcriptEntries) flushPaneScrollCorrections(scroller)
   })
 
   useLayoutEffect(() => {

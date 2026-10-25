@@ -116,6 +116,16 @@ export function reportPaneLayoutChange(scroller: HTMLElement): void {
   pane.schedule()
 }
 
+/** Window selectors must consume pending reflow before reading viewport offsets. */
+export function flushPaneScrollCorrections(scroller: HTMLElement): void {
+  const pane = panes.get(scroller)
+  if (!pane || (!pane.geometryDirty && pane.corrections.length === 0)) return
+  // Keyed prefix edits can remount the reading row in a follow-up layout
+  // commit. Leave its anchor and reports intact until that row exists again.
+  if (pane.anchor && readPaneVisibleAnchorAdjustment(scroller, pane.anchor) === null) return
+  applyPendingCorrections(scroller, pane)
+}
+
 /** Compensate a keyed prefix edit without replacing the interior reading goal. */
 export function compensatePanePrefix(scroller: HTMLElement, delta: number): void {
   if (delta === 0) return
@@ -243,8 +253,11 @@ function createPane(scroller: HTMLElement): PaneRecord {
       return
     }
     pane.selfScrollTop = null
-    // User scrolling and explicit navigation choose a new reading position.
-    pane.anchor = capturePaneVisibleAnchor(scroller)
+    // A shorter virtualized prefix can clamp scrollTop before this frame's
+    // correction. That browser movement must not replace the reader's anchor.
+    if (!isDocumentClamp(readPaneMetrics(scroller), pane)) {
+      pane.anchor = capturePaneVisibleAnchor(scroller)
+    }
     schedule()
   }
   pane.schedule = schedule
@@ -272,6 +285,7 @@ function createPane(scroller: HTMLElement): PaneRecord {
 function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void {
   if (pane.corrections.length === 0 && !pane.geometryDirty) return
   const metrics = readPaneMetrics(scroller)
+  const clamped = isDocumentClamp(metrics, pane)
   const layoutDirty = pane.geometryDirty
   const geometryChanged =
     pane.geometryDirty &&
@@ -309,7 +323,7 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
   })
   // A scroll written by restoration, navigation or prepend compensation must
   // not be undone, even when its scroll event has not been delivered yet.
-  if (pane.anchor && metrics.scrollTop !== pane.anchor.scrollTop) {
+  if (pane.anchor && metrics.scrollTop !== pane.anchor.scrollTop && !clamped) {
     pane.anchor = capturePaneVisibleAnchor(scroller)
   }
   const visibleAdjustment = pane.anchor === null ? null
@@ -335,6 +349,13 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
     const remainder = visibleAdjustment - (scroller.scrollTop - metrics.scrollTop)
     for (const point of pane.anchor.points) point.top -= remainder
   }
+}
+
+function isDocumentClamp(metrics: PaneScrollMetrics, pane: PaneRecord): boolean {
+  const max = Math.max(0, metrics.contentHeight - metrics.viewportHeight)
+  return pane.anchor !== null &&
+    metrics.contentHeight < pane.lastGeometry.contentHeight &&
+    pane.anchor.scrollTop > max && Math.abs(metrics.scrollTop - max) < 1
 }
 
 function readPaneMetrics(scroller: HTMLElement): PaneScrollMetrics {

@@ -9,3 +9,4 @@
 .scroll-fixture-prose { padding: var(--scroll-fixture-top-padding, 24px) 24px 24px; }
 .scroll-fixture-narrow { width: 650px; }
 .scroll-fixture-native[data-pane-scroll-owner] { overflow-anchor: auto; }
+.scroll-fixture-session { height: 900px; display: flex; flex-direction: column; }

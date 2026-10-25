@@ -2,10 +2,13 @@ import { createElement } from 'react'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { TranscriptRowsView } from '../renderer/src/TranscriptView.js'
+import { SessionPane } from '../renderer/src/SessionPane.js'
+import { idleSessionPaneProps } from '../renderer/src/sessionPaneTestProps.js'
+import { TranscriptModeContext } from '../renderer/src/transcriptMode.js'
 import { observePaneBottomLock } from '../renderer/src/markdownScrollCoordinator.js'
 import { ToolsExpandedContext } from '../renderer/src/toolsExpanded.js'
 import { captureTranscriptScrollAnchor, restoreTranscriptScroll } from '../renderer/src/transcriptScrollMemory.js'
-import type { NestedTranscriptRow } from '../renderer/src/transcriptProjector.js'
+import { createTranscriptState, projectServerFrame, type NestedTranscriptRow } from '../renderer/src/transcriptProjector.js'
 import type { SyntheticWheelRequest } from './transcriptScrollWheelInput.js'
 import './transcript-scroll-fixture.css'
 
@@ -228,6 +231,73 @@ function assertClose(actual: number, expected: number, label: string) {
   if (Math.abs(actual - expected) > 1) throw new Error(`${label}: expected ${expected}, got ${actual}`)
 }
 
+async function focusedAnswerBoundary() {
+  scenario = 'Focused answer above a virtualized structured query'
+  flushSync(() => root.render(null))
+  let state = projectServerFrame(createTranscriptState(), {
+    kind: 'ready', protocolVersion: 4, sessionId: 'session-1', engineSessionId: 'synthetic-engine',
+    payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
+      abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
+  } as never)
+  const message = (message: unknown) => {
+    state = projectServerFrame(state, {
+      kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message },
+    } as never)
+  }
+  for (const turn of [1, 2]) {
+    message({ type: 'user', uuid: `user-${turn}`, session_id: 'synthetic-engine', parent_tool_use_id: null,
+      message: { role: 'user', content: turn === 1 ? 'Compare the applications.' : 'Review this research\n\n' +
+        Array.from({ length: 40 }, (_, index) => `## Research application ${index}\n\n` +
+          '- HTML rendering across applications and sandbox boundaries.\n- Security permissions for scripts.\n- Where the preview runs.\n\n' +
+          '| Case | Result |\n|---|---|\n| Inline content | Supported |\n| Embedded content | Blocked |').join('\n\n') } })
+    const assistant = (id: string, content: unknown[], stopReason: string | null) => message({
+      type: 'assistant', uuid: id, session_id: 'synthetic-engine', parent_tool_use_id: null,
+      message: { id, role: 'assistant', type: 'message', model: 'synthetic', stop_reason: stopReason,
+        content, usage: { input_tokens: 10, output_tokens: 10 } },
+    })
+    assistant(`work-${turn}`, [
+      { type: 'thinking', thinking: 'Let me examine the source.'.repeat(100), reasoningKind: 'summary' },
+      { type: 'tool_use', id: `read-${turn}`, name: 'Read', input: { file_path: '/synthetic/file.ts' } },
+    ], null)
+    message({ type: 'user', uuid: `tool-${turn}`, session_id: 'synthetic-engine', parent_tool_use_id: null,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `read-${turn}`, content: 'Synthetic source' }] } })
+    assistant(`answer-${turn}`, [{ type: 'text', text: Array.from({ length: turn === 1 ? 30 : 28 }, (_, index) =>
+      `Paragraph ${turn}-${index}: This is a research answer with several paragraphs explaining how applications render HTML securely. `.repeat(2)).join('\n\n') }], 'end_turn')
+    message({ type: 'result', uuid: `result-${turn}`, session_id: 'synthetic-engine', subtype: 'success',
+      is_error: false, errors: [], duration_ms: 1000, result: 'Complete' })
+  }
+  flushSync(() => root.render(createElement('div', { className: 'scroll-fixture-session' },
+    createElement(TranscriptModeContext.Provider, { value: { mode: 'focused', setMode() {} } },
+      createElement(SessionPane, { ...idleSessionPaneProps(), transcript: state })))))
+  const pane = document.querySelector<HTMLElement>('.focused-transcript-space')!.parentElement!
+  await settle(pane)
+  // Visit the answer so the outer list retains the query's measured height,
+  // then leave it just outside the leading overscan before scrolling back.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    pane.scrollTop = pane.scrollHeight
+    await settle(pane)
+  }
+  const query = () => pane.querySelector('[data-row-key="session-1:user-2:0:user-text"]')
+  const answer = pane.querySelector('[data-row-key="session-1:answer-2:0:text"]')
+  if (!answer) throw new Error('Focused answer did not mount')
+  pane.scrollTop += answer.getBoundingClientRect().top - pane.getBoundingClientRect().top + 365
+  await settle(pane)
+  if (query()) throw new Error('Structured query must start outside the mounted window')
+  const start = writes.length
+  for (let step = 0; step < 50; step++) {
+    const tracked = track(pane)
+    const wheelCount = wheelEvents.length
+    await movePane(pane, -2)
+    await settle(pane, 12, tracked, tracked.top + 2)
+    assertClose(readTracked(pane, tracked), tracked.top + 2, scenario)
+    if (inputMode === 'wheel' && !wheelEvents.slice(wheelCount).some(event => event.isTrusted && event.deltaY === -2)) {
+      throw new Error('Focused boundary did not receive trusted upward wheel input')
+    }
+  }
+  if (!query()) throw new Error('Upward scrolling did not remount the structured query')
+  return { scenario, anchorError: 0, writes: writes.length - start }
+}
+
 async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 'wheel' } = {}) {
   const { nativeAnchoring = false } = options
   if (pendingWheel) throw new Error('The previous wheel run is still active')
@@ -401,6 +471,7 @@ async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 
   await settle(pane, 12, tracked)
   assertClose(readTracked(pane, tracked), tracked.top, 'released follow')
   release()
+  results.push(await focusedAnswerBoundary())
   flushSync(() => root.render(null))
   if (observed.size !== 0) throw new Error(`Observers retained after unmount: ${observed.size}`)
   const peakAnchorError = samples.reduce((peak, sample) => Math.max(peak, Math.abs(sample.anchorError ?? 0)), 0)

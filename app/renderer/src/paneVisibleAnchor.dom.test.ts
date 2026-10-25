@@ -3,6 +3,7 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import {
   observePaneBottomLock, observePaneScroll,
   compensatePanePrefix,
+  flushPaneScrollCorrections,
   reportPaneHeightCorrection as reportLivePaneHeightCorrection, type PaneHeightCorrection,
 } from './markdownScrollCoordinator.js'
 import { capturePaneVisibleAnchor, readPaneVisibleAnchorAdjustment } from './paneVisibleAnchor.js'
@@ -97,6 +98,54 @@ test('intentional scrolling supersedes an uncorrected fractional reading goal', 
   reportPaneHeightCorrection(f.pane, { offset: 0, delta: 24 })
   f.flush()
   expect(f.pane.scrollTop).toBe(600)
+})
+
+for (const scrollEvent of [false, true]) {
+  test(`document shrink preserves the reading anchor across browser clamping, scroll event ${scrollEvent}`, () => {
+    const f = fixture()
+    f.grow(0, -2_800)
+    reportPaneHeightCorrection(f.pane, { offset: 200, delta: -2_800 })
+    f.flush()
+    const intended = capturePaneVisibleAnchor(f.pane)!
+    // A remounted prefix is shorter than its retained estimate. The browser
+    // clamps before the coordinator can restore the character being read.
+    f.grow(-50, 0)
+    f.pane.scrollTop = 70
+    reportPaneHeightCorrection(f.pane, { offset: 0, delta: -50 })
+    if (scrollEvent) f.pane.dispatchEvent(new Event('scroll'))
+    f.flush()
+    expect(f.pane.scrollTop).toBe(60)
+    expect(readPaneVisibleAnchorAdjustment(f.pane, intended)).toBe(0)
+  })
+}
+
+test('reader navigation away from the clamped end still chooses a new reading position', () => {
+  const f = fixture()
+  f.grow(0, -2_800)
+  reportPaneHeightCorrection(f.pane, { offset: 200, delta: -2_800 })
+  f.flush()
+  f.grow(-50, 0)
+  f.pane.scrollTop = 20
+  reportPaneHeightCorrection(f.pane, { offset: 0, delta: -50 })
+  f.pane.dispatchEvent(new Event('scroll'))
+  flushPaneScrollCorrections(f.pane)
+  expect(f.pane.scrollTop).toBe(20)
+})
+
+test('pre-paint correction waits for a temporarily unmounted reading row and runs only once', () => {
+  const f = fixture()
+  const intended = capturePaneVisibleAnchor(f.pane)!
+  f.row.remove()
+  f.grow(30, 0)
+  reportPaneHeightCorrection(f.pane, { offset: 0, delta: 30 })
+  flushPaneScrollCorrections(f.pane)
+  expect(f.pane.scrollTop).toBe(110)
+  f.pane.append(f.row)
+  flushPaneScrollCorrections(f.pane)
+  expect(f.pane.scrollTop).toBe(140)
+  expect(readPaneVisibleAnchorAdjustment(f.pane, intended)).toBe(0)
+  f.flush()
+  expect(f.writes).toEqual([140])
 })
 
 for (const delta of [-24, 0, 24]) {
