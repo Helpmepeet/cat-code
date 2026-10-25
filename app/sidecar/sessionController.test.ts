@@ -170,9 +170,14 @@ test('a settings-file GPT model still selects OpenAI on desktop startup', () => 
 
 test('desktop resume restores the transcript model instead of today’s provider default', async () => {
   const previousOpenAI = process.env.CLAUDE_CODE_USE_OPENAI
+  const previousSpawnModel = process.env.CATCODE_SIDECAR_MODEL
+  const previousPreferSpawnModel = process.env.CATCODE_SIDECAR_PREFER_SPAWN_MODEL
   const previousProvider = getSessionProvider()
   const previousOverride = getMainLoopModelOverride()
   try {
+    // Exercise ordinary resume, not an inherited host-selected relocation model.
+    delete process.env.CATCODE_SIDECAR_MODEL
+    delete process.env.CATCODE_SIDECAR_PREFER_SPAWN_MODEL
     process.env.CLAUDE_CODE_USE_OPENAI = '1'
     setSessionProvider(null)
     setMainLoopModelOverride(null)
@@ -200,6 +205,10 @@ test('desktop resume restores the transcript model instead of today’s provider
   } finally {
     if (previousOpenAI === undefined) delete process.env.CLAUDE_CODE_USE_OPENAI
     else process.env.CLAUDE_CODE_USE_OPENAI = previousOpenAI
+    if (previousSpawnModel === undefined) delete process.env.CATCODE_SIDECAR_MODEL
+    else process.env.CATCODE_SIDECAR_MODEL = previousSpawnModel
+    if (previousPreferSpawnModel === undefined) delete process.env.CATCODE_SIDECAR_PREFER_SPAWN_MODEL
+    else process.env.CATCODE_SIDECAR_PREFER_SPAWN_MODEL = previousPreferSpawnModel
     setMainLoopModelOverride(previousOverride)
     setSessionProvider(previousProvider)
   }
