@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { compactResumeFixture } from '../../src/utils/conversationRecovery.fixture.js'
 import { deserializeMessagesWithInterruptDetection } from '../../src/utils/conversationRecovery.js'
-import { createAttachmentMessage } from '../../src/utils/attachments.js'
+import { createAttachmentMessage, getQueuedCommandAttachments } from '../../src/utils/attachments.js'
+import type { QueuedCommand } from '../../src/types/textInputTypes.js'
 import {
   createAssistantAPIErrorMessage,
   createAssistantMessage,
@@ -180,6 +181,83 @@ describe('restored history projection', () => {
       },
     }
   }
+
+  test('restores drained human text and images verbatim, between the surrounding assistant messages', async () => {
+    const image = { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'aW1hZ2U=' } }
+    const urlImage = { type: 'image' as const, source: { type: 'url' as const, url: 'https://example.test/image.png' } }
+    const prompts: QueuedCommand['value'][] = [
+      'Oh, work in cat-code workspace. use peer sesion feature',
+      'Task notification\nSummary: text the human typed',
+      [{ type: 'text', text: 'First' }, image, { type: 'text', text: 'Second' }, urlImage],
+      [image],
+    ]
+    for (const prompt of prompts) for (const origin of [undefined, { kind: 'human' as const }]) {
+      const [attachment] = await getQueuedCommandAttachments([{
+        mode: 'prompt', value: prompt, origin,
+        uuid: '4bbd7120-3ac3-4b66-ac60-726fed3507df',
+      }])
+      const drained = { ...createAttachmentMessage(attachment!),
+        uuid: '8b5abac5-1514-4d8a-a8d2-d638978f7c3d', timestamp: '2026-10-25T05:19:56.243Z' }
+      // Both the retained engine seed and archival history have passed through
+      // JSONL. The projection must not mutate either into a model user entry.
+      const archived = JSON.parse(JSON.stringify([
+        createAssistantMessage({ content: 'Before queue drain' }), drained,
+        createAssistantMessage({ content: [{ type: 'tool_use', id: 'jump-queued', name: 'JumpWorkspace', input: {} }] }),
+        createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'jump-queued', content: 'Workspace change accepted.' }] }),
+      ]))
+      const recovered = deserializeMessagesWithInterruptDetection(archived)
+      const seed = projectResumedHistory(recovered.messages)
+      const merged = mergeDisplayHistoryWithSeed(archived, seed)
+      const restored = merged.history.filter(message => message.type === 'user' && message.uuid === '4bbd7120-3ac3-4b66-ac60-726fed3507df')
+      expect(restored).toHaveLength(1)
+      expect(restored[0]).toMatchObject({
+        type: 'user', uuid: '4bbd7120-3ac3-4b66-ac60-726fed3507df', timestamp: drained.timestamp,
+        message: { role: 'user', content: prompt },
+        ...(origin ? { origin } : {}),
+      })
+      expect(restored[0]?.type === 'user' && restored[0].origin).toEqual(origin)
+      expect(restored[0]?.type === 'user' && restored[0].isSynthetic).toBeFalsy()
+      expect(merged.history.slice(0, 3).map(message => message.uuid)).toEqual([
+        archived[0].uuid, '4bbd7120-3ac3-4b66-ac60-726fed3507df', archived[2].uuid,
+      ])
+      expect(merged.truncated).toBe(false)
+      expect(archived[1]).toEqual(drained)
+    }
+  })
+
+  test('restores legacy human attachments without queue identity or mode and avoids duplicate saved rows', () => {
+    const legacy = peerAttachment({ prompt: 'Legacy human input', commandMode: undefined })
+    expect(projectResumedHistory([legacy])).toMatchObject([{
+      type: 'user', uuid: legacy.uuid, timestamp: legacy.timestamp,
+      message: { content: 'Legacy human input' },
+    }])
+    const user = createUserMessage({ content: 'Already persisted', uuid: 'saved-human' })
+    const duplicate = peerAttachment({ prompt: 'Already persisted', commandMode: 'prompt', source_uuid: user.uuid })
+    expect(projectResumedHistory([user, duplicate, duplicate])).toEqual(projectResumedHistory([user]))
+    expect(projectResumedHistory([duplicate, duplicate])).toHaveLength(1)
+  })
+
+  test('does not promote internal, meta, or unsupported queued content into human rows', () => {
+    const hidden = [
+      { origin: { kind: 'task-notification', taskId: 'w-1' } },
+      { origin: { kind: 'coordinator' } },
+      { origin: { kind: 'interruption' } },
+      { origin: { kind: 'deferred-continuation', jobId: 'j', attemptUuid: 'a' } },
+      { origin: { kind: 'channel', server: 'mcp' } },
+      { origin: { kind: 'teammate', messages: [] } },
+      { origin: { kind: 'future-internal-origin' } },
+      { origin: {} }, { origin: 'human' },
+      { isMeta: true }, { origin: { kind: 'human' }, isMeta: true },
+      { commandMode: 'task-notification' }, { commandMode: 'unknown-mode' },
+      { prompt: [{ type: 'tool_result', tool_use_id: 'internal', content: 'output' }] },
+      { prompt: [{ type: 'text', text: 7 }] }, { prompt: [{ type: 'image', source: null }] },
+      { prompt: [{ type: 'image', source: {} }] }, { prompt: [null] }, { prompt: [] }, { prompt: 7 },
+      { origin: { kind: 'peer', name: 'Pestle' }, prompt: [{ type: 'text', text: 'Not a peer string' }] },
+    ]
+    for (const fields of hidden) {
+      expect(projectResumedHistory([peerAttachment({ prompt: 'Internal content', commandMode: 'prompt', ...fields })])).toEqual([])
+    }
+  })
 
   test('rebuilds the row of a peer message a busy session received', () => {
     const projected = projectResumedHistory([

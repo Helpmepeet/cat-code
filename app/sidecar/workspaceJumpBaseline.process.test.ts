@@ -17,6 +17,13 @@ import { validateHostRequest, type WorkspaceHostRequest } from '../main/peerRequ
 import type { OperationalRecordInput } from '../shared/operationalLog.js'
 import type { WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import type { WorkerTiming } from '../shared/workerTiming.js'
+import type { ServerFrame } from '../shared/protocol.js'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { TranscriptRowsView } from '../renderer/src/TranscriptView.js'
+import { TranscriptModeContext } from '../renderer/src/transcriptMode.js'
+import { createTranscriptState, projectServerFrame, selectNestedTranscriptRows } from '../renderer/src/transcriptProjector.js'
+import { sanitizePath } from '../../src/utils/sessionStoragePortable.js'
 
 const launch = resolveSidecarLaunch({ packaged: false, mainDir: resolve('app/main') })
 function launchArgs(blocker: string, mode: SidecarMode, fixture?: string) {
@@ -44,12 +51,14 @@ async function until(read: () => boolean, timeout = 60_000) {
     await Bun.sleep(10)
   }
 }
-function sse(toolHandle?: string) {
-  const content = toolHandle ? { type: 'tool_use', id: 'baseline-jump', name: 'JumpWorkspace', input: {} } : { type: 'text', text: '' }
+function sse(toolHandle?: string, readPath?: string) {
+  const content = readPath ? { type: 'tool_use', id: 'baseline-read', name: 'Read', input: {} }
+    : toolHandle ? { type: 'tool_use', id: 'baseline-jump', name: 'JumpWorkspace', input: {} } : { type: 'text', text: '' }
   const events = [
     { type: 'message_start', message: { id: 'baseline-message', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
     { type: 'content_block_start', index: 0, content_block: content },
-    { type: 'content_block_delta', index: 0, delta: toolHandle ? { type: 'input_json_delta', partial_json: JSON.stringify({ destination: toolHandle }) } : { type: 'text_delta', text: 'Fixture complete.' } },
+    { type: 'content_block_delta', index: 0, delta: readPath ? { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: readPath }) }
+      : toolHandle ? { type: 'input_json_delta', partial_json: JSON.stringify({ destination: toolHandle }) } : { type: 'text_delta', text: 'Fixture complete.' } },
     { type: 'content_block_stop', index: 0 },
     { type: 'message_delta', delta: { stop_reason: toolHandle ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } },
     { type: 'message_stop' },
@@ -62,9 +71,10 @@ const samples = Number(process.env.CATCODE_JUMP_BASELINE_SAMPLES ?? 1)
 function withoutInheritedLaunchKeys() {
   return Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith('CATCODE_')).map(key => [key, undefined])) as unknown as Record<string, string>
 }
-for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installation', 'lost_continue_command', 'lost_continue_ack', 'exhausted_snapshot_window']) for (let sample = 0; sample < (fixture.startsWith('lost_') || fixture === 'exhausted_snapshot_window' ? 1 : samples); sample++) test(`isolated real workspace jump baseline ${fixture} sample ${sample + 1}`, async () => {
+for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unresolved_installation', 'lost_continue_command', 'lost_continue_ack', 'exhausted_snapshot_window']) for (let sample = 0; sample < (fixture.startsWith('lost_') || fixture === 'exhausted_snapshot_window' ? 1 : samples); sample++) test(`isolated real workspace jump baseline ${fixture} sample ${sample + 1}`, async () => {
   const unresolved = fixture === 'unresolved_installation'
   const retained = fixture === 'retained'
+  const queuedHuman = fixture === 'queued_human'
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'jump-baseline-')))
   const config = join(root, 'config'), cwd = join(root, 'project')
   mkdirSync(config); mkdirSync(cwd); mkdirSync(join(root, 'home'))
@@ -75,8 +85,9 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
   for (const path of roots.slice(1)) mkdirSync(path)
   const savedRows = Array.from({ length: fixture === 'many_rows' ? 20_000 : 4 }, (_, i) => ({ path: roots[i % roots.length]!, lastUsedAt: 20_000 - i }))
   writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: Object.fromEntries(roots.map(path => [path, { hasTrustDialogAccepted: true }])) }))
-  writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpWorkspace'] } }))
+  writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: queuedHuman ? ['JumpWorkspace', 'Read'] : ['JumpWorkspace'] } }))
   writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n')
+  if (queuedHuman) writeFileSync(join(root, 'queued-read.txt'), 'Read completed before the queued workspace request.\n')
   const hookLog = join(root, 'instructions.jsonl')
   const probeLog = join(root, 'probes.txt')
   const include = join(cwd, 'included.md')
@@ -93,6 +104,11 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
   const peerRosterHolds: boolean[] = []
   let dropped = false, sawNullAdmission = false, destinationPermission = false, destinationReady = false
   let initialSnapshot: WorkspaceHandoffSnapshot | undefined
+  const queuedText = 'Oh, work in cat-code workspace. use peer sesion feature'
+  let queuedUuid: string | undefined
+  let releaseSource: (() => void) | undefined
+  const sourceHeld = new Promise<void>(resolve => { releaseSource = resolve })
+  const frames: ServerFrame[] = []
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     if (!new URL(request.url).pathname.endsWith('/messages')) return new Response('{}', { status: 503 })
     const body = await request.text()
@@ -105,6 +121,13 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     }
     const handle = body.match(/\\"handle\\":\\"([a-f0-9-]+)\\"/)?.[1] ?? body.match(/"handle":"([a-f0-9-]+)"/)?.[1]
     if (destination) destinationRequests++; else if (handle) sourceRequests++
+    if (queuedHuman && !destination && handle && sourceRequests === 1) {
+      // A tool round drains the busy prompt into an attachment. Ending this
+      // response would instead exercise an ordinary between-turn submission.
+      await sourceHeld
+      return new Response(sse(handle, join(root, 'queued-read.txt')), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline-read' } })
+    }
+    if (queuedHuman && !destination && handle) expect(body).toContain(queuedText)
     await Bun.sleep(30)
     return new Response(sse(destination ? undefined : handle), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline' } })
   } })
@@ -206,6 +229,10 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     supervisor.subscribe(event => {
       if (event.type !== 'frame') return
       const { deliveryTrace: _trace, ...frame } = event.frame
+      if (queuedHuman) {
+        frames.push(frame)
+        if (frame.kind === 'queued-prompts.snapshot') queuedUuid ??= frame.prompts.find(prompt => prompt.text === queuedText)?.id
+      }
       if (registry.findSession(event.sessionId)?.cwd === cwd) {
         if (frame.kind === 'ready') destinationReady = true
         if (frame.kind === 'permission.context') destinationPermission = true
@@ -265,6 +292,12 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
       await until(() => supervisor.listSessions().some(row => row.sessionId === id && row.status === 'ready'))
     }
     supervisor.send(id, { type: 'app.submit', requestId: randomUUID(), prompt: 'Run the isolated jump fixture.' })
+    if (queuedHuman) {
+      await until(() => sourceRequests === 1)
+      supervisor.send(id, { type: 'app.submit', requestId: randomUUID(), prompt: queuedText })
+      await until(() => queuedUuid !== undefined)
+      releaseSource!()
+    }
     await until(() => destinationRequests === 1)
     await until(() => coordinator!.snapshot(id)?.continuation.outcome === 'success')
     expect(supervisor.getSessionSocketPath(id)?.startsWith(`${join(root, 's')}/`)).toBe(true)
@@ -280,7 +313,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
       expect(hooks.find(input => input.file_path === join(cwd, 'CLAUDE.md'))).toMatchObject({ load_reason: 'session_start', memory_type: 'Project' })
       expect(hooks.find(input => input.file_path === include)).toMatchObject({ load_reason: 'include', parent_file_path: join(cwd, 'CLAUDE.md') })
     }
-    expect(sourceRequests).toBe(1)
+    expect(sourceRequests).toBe(queuedHuman ? 2 : 1)
     expect(destinationRequests).toBe(1)
     expect(peerRosterHolds).toEqual([true])
     expect(sawNullAdmission).toBe(true)
@@ -291,7 +324,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     expect(registry.findSession(id)?.cwd).toBe(cwd)
     const completed = timings.filter(record => record.fields?.outcome === 'completed')
     const providerResponses = completed.filter(record => record.fields?.phase === 'provider_request_to_response')
-    expect(providerResponses).toHaveLength(2)
+    expect(providerResponses).toHaveLength(queuedHuman ? 3 : 2)
     expect(Number(providerResponses.at(-1)?.fields?.durationMs)).toBeGreaterThanOrEqual(25)
     for (const phase of ['first_submit_to_catalog', 'first_submit_to_provider_response', 'accepted_to_source_boundary', 'park_to_clean_exit', 'relocation_worker', 'resume', 'controller', 'display_history', 'subagent_history', 'listening_to_ready_frame', 'ready_to_controls', 'admission_to_continuation', 'continuation_to_provider_request', 'provider_request_to_response', 'accepted_to_provider_request_observed', 'request_received_to_acceptance', 'request_received_to_provider_request_observed', 'startup_validation', 'runtime_initialize_body', 'replacement_to_runtime_init', 'listing_worker', 'worker_bootstrap_imports', 'build_metadata', 'build_provenance_git', 'configuration_prepare', 'trust_evaluation', 'relocation_module_load', 'relocation_work']) {
       // This stage observes the acknowledgement, deliberately absent in this fault case.
@@ -330,6 +363,60 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     // No child timestamps or enclosing/overlapping spans are subtracted.
     expect(Number(requestedProvider.fields?.durationMs)).toBeGreaterThanOrEqual(Number(acceptedProvider.fields?.durationMs))
     expect(Number(requestedProvider.fields?.durationMs)).toBeGreaterThanOrEqual(Number(acceptance.fields?.durationMs))
+    if (queuedHuman) {
+      const live = frames.find(frame => frame.kind === 'event' && !frame.replay && frame.event.type === 'message' &&
+        frame.event.message.type === 'user' && frame.event.message.uuid === queuedUuid)
+      if (live?.kind !== 'event' || live.event.type !== 'message' || live.event.message.type !== 'user') throw new Error('Missing live queued prompt')
+      const timestamp = live.event.message.timestamp
+      expect(typeof timestamp).toBe('string')
+      expect(live).toMatchObject({ event: { message: { uuid: queuedUuid, timestamp, message: { content: queuedText } } } })
+      const transcriptPath = join(config, 'projects', sanitizePath(cwd), `${registry.findSession(id)!.engineSessionId}.jsonl`)
+      const saved = readFileSync(transcriptPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+      expect(saved.filter(entry => entry.type === 'attachment' && entry.attachment?.source_uuid === queuedUuid))
+        .toMatchObject([{ timestamp, attachment: { type: 'queued_command', prompt: queuedText, commandMode: 'prompt' } }])
+      expect(saved.filter(entry => entry.type === 'user' && entry.uuid === queuedUuid)).toHaveLength(0)
+      const checkRestored = (replayed: ServerFrame[], repeated = false) => {
+        const messages = replayed.filter(frame => frame.kind === 'event' && frame.replay && frame.event.type === 'message')
+        expect(messages.filter(frame => frame.kind === 'event' && frame.event.type === 'message' && frame.event.message.uuid === queuedUuid)).toHaveLength(repeated ? 2 : 1)
+        expect(messages.find(frame => frame.kind === 'event' && frame.event.type === 'message' && frame.event.message.uuid === queuedUuid))
+          .toMatchObject({ event: { message: { uuid: queuedUuid, timestamp, message: { role: 'user', content: queuedText } } } })
+        let projected = createTranscriptState()
+        for (const frame of replayed) projected = projectServerFrame(projected, frame)
+        const rows = selectNestedTranscriptRows(projected, id)
+        const promptIndex = rows.findIndex(row => row.kind === 'user-text' && row.content === queuedText)
+        const readIndex = rows.findIndex(row => row.kind === 'tool-use' && row.toolUseId === 'baseline-read')
+        const jumpIndex = rows.findIndex(row => row.kind === 'tool-use' && row.toolName === 'JumpWorkspace')
+        expect(readIndex).toBeGreaterThan(0)
+        expect(promptIndex).toBeGreaterThan(readIndex)
+        expect(jumpIndex).toBeGreaterThan(promptIndex)
+        expect(rows.filter(row => row.kind === 'user-text' && row.content === queuedText)).toHaveLength(1)
+        expect(rows[promptIndex]).toMatchObject({ messageId: queuedUuid, frameId: queuedUuid, timestamp })
+        for (const mode of ['full', 'focused'] as const) {
+          const html = renderToStaticMarkup(createElement(TranscriptModeContext.Provider, { value: { mode, setMode() {} } },
+            createElement(TranscriptRowsView, { rows })))
+          expect(html.split(queuedText)).toHaveLength(2)
+        }
+      }
+      const replacementStart = frames.findLastIndex(frame => frame.kind === 'ready')
+      checkRestored(frames.slice(replacementStart))
+      // A second process reads the relocated transcript again, rather than
+      // retaining the live producer's in-memory replay frames.
+      supervisor.send(id, { type: 'app.park', requestId: randomUUID() })
+      await until(() => registry.findSession(id)?.shutdown === 'parked')
+      const coldStart = frames.length
+      expect((await host.restoreSession(id)).ok).toBe(true)
+      await until(() => frames.slice(coldStart).some(frame => frame.kind === 'ready'))
+      await until(() => supervisor.listSessions().some(row => row.sessionId === id && row.status === 'ready'))
+      await until(() => frames.slice(coldStart).some(frame => frame.kind === 'history.replay.complete'))
+      checkRestored(frames.slice(coldStart))
+      const earlierStart = frames.length, earlierId = randomUUID()
+      supervisor.send(id, { type: 'history.loadEarlier', requestId: earlierId, viewTruncated: true })
+      await until(() => frames.slice(earlierStart).some(frame => frame.kind === 'history.loadEarlier.result' && frame.requestId === earlierId))
+      expect(frames.find(frame => frame.kind === 'history.loadEarlier.result' && frame.requestId === earlierId)).toMatchObject({ ok: true, complete: true })
+      expect(frames.slice(earlierStart).find(frame => frame.kind === 'event' && frame.recovered && frame.event.type === 'message' && frame.event.message.uuid === queuedUuid))
+        .toMatchObject({ recovered: true, event: { message: { uuid: queuedUuid, timestamp, message: { content: queuedText } } } })
+      checkRestored(frames.slice(coldStart), true)
+    }
     process.stdout.write(JSON.stringify({ fixture, savedRows: savedRows.length, folders: roots.length, validationCalls, pairs: retained ? 200 : 0, subagentMessages: retained ? 100 : 0, sample: sample + 1,
       workerInvocations,
       stages: completed.map(record => ({ stage: record.fields!.phase, ms: Math.round(Number(record.fields!.durationMs) * 100) / 100,
@@ -344,6 +431,7 @@ for (const fixture of ['short', 'many_rows', 'retained', 'unresolved_installatio
     coordinator?.dispose()
     control?.dispose()
     supervisor.shutdown()
+    releaseSource?.()
     server.stop(true)
     if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousConfig
     if (previousLaunch === undefined) delete process.env.CATCODE_OPERATIONAL_LAUNCH_ID; else process.env.CATCODE_OPERATIONAL_LAUNCH_ID = previousLaunch

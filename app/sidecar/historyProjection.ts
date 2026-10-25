@@ -1,3 +1,4 @@
+import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import type {
   SDKMessage,
   SDKUserMessage,
@@ -17,30 +18,34 @@ import type { UndeliveredPrompt } from './sessionResume.js'
  * `isQueuedCommandAttachment` (src/utils/taskNotification.ts), which is what
  * `queuedCommandOrigin` narrows with before reading provenance.
  */
-function isRecord(value: unknown): value is {
-  type?: unknown
-  prompt?: unknown
-  source_uuid?: unknown
-} {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+function isHumanPrompt(content: unknown): content is string | ContentBlockParam[] {
+  if (typeof content === 'string') return content.length > 0
+  if (!Array.isArray(content) || content.length === 0) return false
+  return content.every(block => {
+    if (!isRecord(block)) return false
+    if (block.type === 'text') return typeof block.text === 'string'
+    if (block.type !== 'image' || !isRecord(block.source)) return false
+    const source = block.source
+    if (source.type === 'url') return typeof source.url === 'string'
+    return (
+      source.type === 'base64' &&
+      typeof source.data === 'string' &&
+      typeof source.media_type === 'string' &&
+      ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(source.media_type)
+    )
+  })
+}
+
 /**
- * Rebuild the transcript row of a peer message a BUSY session received.
- *
- * A busy recipient's running turn drains the message itself and folds it into a
- * `queued_command` attachment, which is the ONLY thing that persists: the
- * engine writes no user entry for it, and `toSDKMessages` maps user, assistant
- * and system and drops everything else. So the row a live window showed had
- * nothing behind it after a reload. Everything needed is on the attachment
- * (the delivered text, the peer origin, and the queue uuid the live frame used),
- * so the row is rebuilt from it here, identical to the one the live session
- * broadcast and to the one an idle recipient persists as a real user entry.
- *
- * Peer only, deliberately: worker results and coordinator hand-offs are the
- * other queued_command origins, and the transcript has never shown them.
+ * Busy turns persist drained input only as attachments, which the SDK mapper
+ * drops. Rebuild human and peer display rows here without changing model state.
+ * Internal notifications and meta prompts must remain model-only.
  */
-function restorePeerMessageRow(message: Message): Message {
+function restoreQueuedMessageRow(message: Message): Message {
   if (message.type !== 'attachment') return message
   const attachment = message.attachment
   if (!isRecord(attachment) || attachment.type !== 'queued_command') {
@@ -49,10 +54,19 @@ function restorePeerMessageRow(message: Message): Message {
   // Same resolver the engine and QueryEngine use, so one drained command reads
   // as one provenance everywhere rather than three lookalike derivations.
   const origin = queuedCommandOrigin(attachment)
-  if (origin?.kind !== 'peer') return message
-  // A peer message is enqueued as a string; a block array would be someone
-  // else's shape, so leave it as the attachment it is rather than guess.
-  if (typeof attachment.prompt !== 'string') return message
+  if (origin?.kind === 'peer') {
+    // Preserve the existing peer contract: peer sends carry strings, including
+    // meta-marked task-notification commands, rather than composer blocks.
+    if (typeof attachment.prompt !== 'string') return message
+  } else if (
+    (origin !== undefined && origin.kind !== 'human') ||
+    (attachment.origin !== undefined && origin === undefined) ||
+    attachment.isMeta ||
+    (attachment.commandMode !== undefined && attachment.commandMode !== 'prompt') ||
+    !isHumanPrompt(attachment.prompt)
+  ) {
+    return message
+  }
   return createUserMessage({
     content: attachment.prompt,
     origin,
@@ -60,7 +74,7 @@ function restorePeerMessageRow(message: Message): Message {
     // same identity rather than a second one. Attachments written before the
     // uuid existed fall back to the attachment's own.
     uuid:
-      typeof attachment.source_uuid === 'string'
+      typeof attachment.source_uuid === 'string' && attachment.source_uuid.length > 0
         ? attachment.source_uuid
         : message.uuid,
     ...(message.timestamp !== undefined ? { timestamp: message.timestamp } : {}),
@@ -75,10 +89,21 @@ function restorePeerMessageRow(message: Message): Message {
  * API-error shape keeps genuine assistant text with identical words visible.
  */
 export function projectResumedHistory(messages: Message[]): SDKMessage[] {
+  // A saved user entry wins if a historical transcript contains both forms.
+  // Only reconstructed rows are deduplicated; ordinary SDK mapping is intact.
+  const userUuids = new Set(
+    messages.filter(message => message.type === 'user').map(message => message.uuid),
+  )
   return toSDKMessages(
     messages
       .filter(message => !isInternalNoResponseSentinel(message))
-      .map(restorePeerMessageRow),
+      .flatMap(message => {
+        const restored = restoreQueuedMessageRow(message)
+        if (restored === message) return [message]
+        if (userUuids.has(restored.uuid)) return []
+        userUuids.add(restored.uuid)
+        return [restored]
+      }),
   )
 }
 
