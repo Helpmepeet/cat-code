@@ -24,7 +24,7 @@ test.each([false, true])('real submit ordering retains the shared Retry candidat
   })
   const coordinator = createDesktopNotifications({
     getSession: () => sessionDescriptorFixture({ appSessionId: sessionId, cwd: '/isolated/project', status: 'ready' }),
-    isVisible: () => false,
+    isAppFocused: () => false,
     getPreferences: () => ({ notify: 'all', dockBadge: true }),
     createNotification: options => {
       notices.push(options)

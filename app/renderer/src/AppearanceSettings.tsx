@@ -128,11 +128,12 @@ export function AppearanceSettings() {
         </div>
       </Section>
       <Section title="Notifications" modified={preferences.notify !== DEFAULT_NOTIFICATION_PREFERENCES.notify || preferences.dockBadge !== DEFAULT_NOTIFICATION_PREFERENCES.dockBadge} onReset={() => setPreferences({ ...DEFAULT_NOTIFICATION_PREFERENCES })}>
+        <p className="appearance-section-description">Banners appear only while Cat Code is in the background.</p>
         <div className="appearance-controls">
           <div className="appearance-row" data-setting-key="notify" tabIndex={-1}>
             <span className="appearance-row-label">Notify</span>
             <ChoiceGroup label="Notify" options={['off', 'waiting', 'all'] as const} value={preferences.notify} onChange={notify => setPreferences({ ...preferences, notify })}>
-              {key => key === 'off' ? 'Off' : key === 'waiting' ? 'Waiting' : 'All'}
+              {key => key === 'off' ? 'Off' : key === 'waiting' ? 'Needs input' : 'All'}
             </ChoiceGroup>
           </div>
           <div className="appearance-row" data-setting-key="dockBadge" tabIndex={-1}>

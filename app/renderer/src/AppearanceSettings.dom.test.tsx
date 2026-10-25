@@ -124,6 +124,8 @@ test('notifications use main preferences, persist controls, and restore only the
   const tree = await harness.mount(<NotificationPreferencesProvider bridge={bridge}>{preferences()}</NotificationPreferencesProvider>)
   expect(Array.from(tree.container.querySelectorAll('.appearance-section > .appearance-section-heading h3')).map(node => node.textContent)).toEqual(['Window', 'Notifications', 'Conversation'])
   expect(choice(tree.container, 'Notify', 'all').getAttribute('aria-checked')).toBe('true')
+  expect(tree.container.querySelector('[aria-label="Notifications"] .appearance-section-description')?.textContent).toBe('Banners appear only while Cat Code is in the background.')
+  expect(choice(tree.container, 'Notify', 'waiting').textContent).toBe('Needs input')
   await click(choice(tree.container, 'Notify', 'waiting'))
   await click(tree.container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Dock badge"]')!)
   expect(saved).toEqual({ notify: 'waiting', dockBadge: false })

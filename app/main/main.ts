@@ -1741,8 +1741,8 @@ function createWindow(): void {
     if (usageActivityGate?.takeSkippedInterval()) usageDriver?.refreshNow()
   }
   window.on('focus', catchUpSkippedRefreshes)
-  window.on('focus', () => desktopNotifications?.visibilityChanged())
-  window.on('blur', () => desktopNotifications?.visibilityChanged())
+  window.on('focus', () => desktopNotifications?.focusChanged())
+  window.on('blur', () => desktopNotifications?.focusChanged())
 
   // The pid a macOS crash report names. The renderer process does not exist
   // until a document loads, and it is already gone by `render-process-gone`, so
@@ -3095,7 +3095,6 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_HOST_VISIBLE_SESSIONS, (event, payload: unknown) => {
     if (!isMainWindowSender(event)) return
     visibleSessions = parseVisibleSessions(payload)
-    desktopNotifications?.visibilityChanged()
   })
 
   registerHostControlPlane()
@@ -4579,7 +4578,7 @@ function ensureHost(): Host {
       return session && (session.restorable || supervisor?.listSessions().some(row => row.sessionId === id))
         ? session : undefined
     },
-    isVisible: id => mainWindow?.isFocused() === true && visibleSessions.has(id),
+    isAppFocused: () => mainWindow?.isFocused() === true,
     isRetryBlocked: id => notificationRetryBlocked.has(id) || host?.isMoving(id) === true ||
       switchingSessionIds.has(id) || projectRouting?.hasPending(id) === true,
     getPreferences: () => notificationPreferences!,

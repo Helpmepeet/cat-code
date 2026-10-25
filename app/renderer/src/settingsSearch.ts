@@ -72,7 +72,7 @@ const appEntries: readonly SearchEntry[] = [
   { category: 'appearance', key: 'scheme', label: 'Appearance', description: 'Light or dark for the whole window.', aliases: 'color scheme theme' },
   { category: 'appearance', key: 'glass', label: 'Frosted window', description: 'Show the desktop through the window as a blur on macOS.' },
   { category: 'appearance', key: 'accent', label: 'Accent color', description: 'Color for active navigation, selections, and switches.' },
-  { category: 'appearance', key: 'notify', label: 'Notify', description: 'OS notifications: Off, Waiting, or All.', aliases: 'notifications alerts' },
+  { category: 'appearance', key: 'notify', label: 'Notify', description: 'Background notifications: Off, Needs input, or All.', aliases: 'notifications alerts waiting' },
   { category: 'appearance', key: 'dockBadge', label: 'Dock badge', description: 'Show a badge on the Dock icon.', aliases: 'notifications' },
   { category: 'appearance', key: 'transcriptMode', label: 'Transcript', description: 'Full detail or focused updates with completed work collapsed.', aliases: 'collapse updates full focused' },
   { category: 'appearance', key: 'arrival', label: 'Text arrival', description: 'How a reply appears as it arrives.' },

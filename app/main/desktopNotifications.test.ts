@@ -22,14 +22,14 @@ function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true
   const sent: any[] = [], opened: any[] = []
   const sessionReads: string[] = [], badgeWrites: string[] = []
   const descriptors = new Map<string, SessionDescriptor | undefined>()
-  let badge = '', visible = false, retryBlocked = false
+  let badge = '', focused = false, retryBlocked = false
   const prefs = { notify: 'all' as 'all' | 'waiting' | 'off', dockBadge: true }
   const coordinator = createDesktopNotifications({
     getSession: id => {
       sessionReads.push(id)
       return descriptors.has(id) ? descriptors.get(id) : sessionDescriptorFixture({ appSessionId: id, cwd: '/projects/cat-code', title: 'Fix tests', ...descriptor })
     },
-    isVisible: () => visible, getPreferences: () => prefs,
+    isAppFocused: () => focused, getPreferences: () => prefs,
     isRetryBlocked: () => retryBlocked,
     createNotification: options => {
       const listeners = new Map<string, (...args: any[]) => void>()
@@ -45,7 +45,7 @@ function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true
   const permission = (id = 'r', tool = 'Bash', input?: any) => event({ type: 'permission.requested', request: request(id, tool, input) })
   let serial = 0
   const message = (message: any, replay = false) => event({ type: 'message', message: message && { uuid: `frame-${++serial}`, ...(message.type === 'result' ? { is_error: false } : {}), ...message } }, replay)
-  return { coordinator, frame, event, request, permission, message, handles, sent, opened, prefs, sessionReads, badgeWrites, descriptors, badge: () => badge, visible: (value: boolean) => { visible = value }, blockRetry: (value: boolean) => { retryBlocked = value } }
+  return { coordinator, frame, event, request, permission, message, handles, sent, opened, prefs, sessionReads, badgeWrites, descriptors, badge: () => badge, focus: (value: boolean) => { focused = value }, blockRetry: (value: boolean) => { retryBlocked = value } }
 }
 
 describe('desktop notifications', () => {
@@ -64,7 +64,7 @@ describe('desktop notifications', () => {
     for (let i = 0; i < 12; i++) stream('b')
     expect(h.sessionReads).toEqual(Array.from({ length: 12 }, () => ['b', 'a']).flat())
     expect(h.badgeWrites).toEqual(['', '1'])
-    h.coordinator.visibilityChanged()
+    h.coordinator.focusChanged()
     h.coordinator.preferencesChanged()
     expect(h.badgeWrites).toEqual(['', '1'])
     h.event({ type: 'permission.resolved', request: h.request() })
@@ -100,7 +100,7 @@ describe('desktop notifications', () => {
     expect(h.coordinator.retry('a', 'a:failed:result')).toBe(false)
     expect(h.sent).toHaveLength(0)
     expect(h.opened).toHaveLength(0)
-    h.coordinator.visibilityChanged()
+    h.coordinator.focusChanged()
     expect(h.badge()).toBe('')
   })
   test('composer-blocked retries are absent, rechecked, and refreshed without another sound', () => {
@@ -190,14 +190,63 @@ describe('desktop notifications', () => {
       expect(h.sent).toHaveLength(1)
     }
   })
-  test('counts off-tab sessions, not requests, including visible waiting; prefs are independent', () => {
+  test('counts waiting sessions, not requests, even while focused; prefs are independent', () => {
     const h = harness(); h.permission(); h.permission('s')
     expect(h.badge()).toBe('1'); expect(h.handles[0]!.closed).toBe(true)
     h.event({ type: 'permission.requested', request: h.request() }, false, 'b')
     expect(h.badge()).toBe('2')
-    h.visible(true); h.coordinator.visibilityChanged(); expect(h.handles.at(-1)!.closed).toBe(true)
+    h.focus(true); h.coordinator.focusChanged(); expect(h.handles.at(-1)!.closed).toBe(true)
     h.prefs.notify = 'off'; h.permission('t'); expect(h.handles.length).toBe(3); expect(h.badge()).toBe('2')
     h.prefs.dockBadge = false; h.coordinator.preferencesChanged(); expect(h.badge()).toBe('')
+  })
+  test('foreground suppresses every session and notice kind without suppressing pending input', () => {
+    const h = harness()
+    h.focus(true)
+    h.permission()
+    h.event({ type: 'permission.requested', request: h.request('other') }, false, 'b')
+    h.permission('question', 'AskUserQuestion', { questions: [{ question: 'Which?', options: [], multiSelect: false }] })
+    h.permission('plan', 'ExitPlanMode', { plan: 'Do it' })
+    h.message({ type: 'result', subtype: 'success' })
+    h.message({ type: 'user', message: { content: 'Task' } })
+    h.message({ type: 'result', subtype: 'error_during_execution', is_error: true })
+    h.message({ type: 'assistant', error: 'rate_limit', message: { content: [{ type: 'text', text: 'Usage limit reached' }] } })
+    h.message({ type: 'result', subtype: 'error_during_execution', is_error: true })
+    expect(h.handles).toHaveLength(0)
+    expect(h.badge()).toBe('2')
+
+    h.focus(false)
+    h.coordinator.focusChanged()
+    h.coordinator.retryBlockedChanged()
+    h.coordinator.preferencesChanged()
+    expect(h.handles).toHaveLength(0)
+    h.permission('new-background-request')
+    expect(h.handles).toHaveLength(1)
+    expect(h.handles[0]!.options.silent).toBe(false)
+  })
+  test('returning to the app closes all banners and fences their actions without a blur replay', () => {
+    const h = harness()
+    h.permission()
+    h.event({ type: 'permission.requested', request: h.request('other') }, false, 'b')
+    expect(h.handles).toHaveLength(2)
+    h.focus(true)
+    h.coordinator.focusChanged()
+    for (const handle of h.handles) {
+      expect(handle.closed).toBe(true)
+      handle.emit('action', 0)
+      handle.emit('click')
+    }
+    expect(h.sent).toHaveLength(0)
+    expect(h.opened).toHaveLength(0)
+    expect(h.badge()).toBe('2')
+    h.focus(false)
+    h.coordinator.focusChanged()
+    expect(h.handles).toHaveLength(2)
+    h.event({ type: 'permission.resolved', request: h.request() })
+    h.event({ type: 'permission.resolved', request: h.request('other') }, false, 'b')
+    expect(h.badge()).toBe('')
+    h.message({ type: 'result', subtype: 'success' })
+    expect(h.handles).toHaveLength(3)
+    expect(h.handles[2]!.options.silent).toBe(true)
   })
   test('ready is authoritative without banners and replay cannot overwrite live status', () => {
     const h = harness(); h.frame({ kind: 'ready', payload: { pendingPermissionRequests: [h.request()], activeTurn: false, abort: { status: 'idle' } } })

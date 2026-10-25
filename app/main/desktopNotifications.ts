@@ -22,7 +22,7 @@ export interface DesktopNotificationHandle {
 }
 export type DesktopNotificationDependencies = {
   getSession(id: string): SessionDescriptor | undefined
-  isVisible(id: string): boolean
+  isAppFocused(): boolean
   isRetryBlocked?(id: string): boolean
   getPreferences(): NotificationPreferences
   createNotification(options: NotificationConstructorOptions): DesktopNotificationHandle | null
@@ -88,7 +88,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
     s.retryBlocked = !!notice.retryResultId && deps.isRetryBlocked?.(id) === true
     const actions = s.retryBlocked ? [] : notice.actions
     const prefs = deps.getPreferences()
-    if (disposed || deps.isVisible(id) || prefs.notify === 'off' || (prefs.notify === 'waiting' && !notice.waiting)) return
+    if (disposed || deps.isAppFocused() || prefs.notify === 'off' || (prefs.notify === 'waiting' && !notice.waiting)) return
     const session = deps.getSession(id)
     if (!session) return
     let handle: DesktopNotificationHandle | null
@@ -235,7 +235,12 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
         const s = sessions.get(id); if (s) clear(s); sessions.delete(id); badge()
       }
     },
-    visibilityChanged() { for (const [id, s] of sessions) if (deps.isVisible(id)) close(s); badge() },
+    focusChanged() {
+      // Focus is app-wide, not tied to the selected session or page. Leaving
+      // the app does not replay notices the operator could already see inside.
+      if (deps.isAppFocused()) for (const s of sessions.values()) close(s)
+      badge()
+    },
     preferencesChanged() { for (const s of sessions.values()) if (deps.getPreferences().notify === 'off' || (deps.getPreferences().notify === 'waiting' && !s.notice?.waiting)) close(s); badge() },
     dispose() { disposed = true; for (const s of sessions.values()) clear(s); sessions.clear(); badge() },
   }
