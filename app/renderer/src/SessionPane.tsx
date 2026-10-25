@@ -1907,7 +1907,7 @@ export function SessionPane({
           ref={transcriptScrollRef}
           onScroll={onTranscriptScroll}
           tabIndex={focusedMode ? 0 : undefined}
-          className="relative min-h-0 flex-1 overflow-auto"
+          className="relative min-h-0 flex-1 overflow-auto outline-none"
         >
           <TranscriptView
             turnLive={generating}

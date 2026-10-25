@@ -42,10 +42,16 @@ test('Focused pane installs its scroll owner and removes its reserved spacer whe
   const spacer = tree.container.querySelector('.focused-transcript-space')
   expect(spacer).not.toBeNull()
   expect(spacer?.getAttribute('aria-hidden')).toBe('true')
-  expect(spacer?.parentElement?.tabIndex).toBe(0)
+  const scroller = spacer?.parentElement!
+  expect(scroller.tabIndex).toBe(0)
+  expect(scroller.classList.contains('outline-none')).toBe(true)
+  scroller.focus()
+  expect(harness.document.activeElement).toBe(scroller)
   await tree.render(pane(state, 'full'))
   expect(tree.container.querySelector('.focused-transcript-space')).toBeNull()
   expect(tree.container.querySelector('.focused-turn')).toBeNull()
+  expect(scroller.isConnected).toBe(true)
+  expect(scroller.classList.contains('outline-none')).toBe(true)
 })
 
 test('Focused keeps reasoning in the transcript and the running command visible until it settles', async () => {
