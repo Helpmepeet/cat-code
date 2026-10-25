@@ -1504,6 +1504,9 @@ test('a completed GenerateImage card shows the generated image by default', () =
   expect(html).toContain('data:image/png;base64,AAAA')
   expect(html).toContain('title="a cat"')
   expect(html).toContain('title="/tmp/cat.png"')
+  // The image stands alone: no family header or status dot frames it.
+  expect(html).not.toContain('>Image<')
+  expect(html).not.toContain('aria-label="done"')
   expect(html).toContain('Copy path')
   expect(html).toContain('aria-label="Expand generated image"')
   expect(html).not.toContain('Generate Image')

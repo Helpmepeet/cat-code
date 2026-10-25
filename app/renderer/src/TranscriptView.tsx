@@ -5615,7 +5615,6 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
     image.revisedPrompt ??
     (typeof row.input['prompt'] === 'string' ? row.input['prompt'] : null)
   const src = `data:${preview.mediaType};base64,${preview.data}`
-  const success = STATE_STYLE.success
   const copyPath = (): void => {
     const clipboard =
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
@@ -5651,32 +5650,11 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
       })
   }
   return (
-    // The card hugs the image: `w-fit` sizes it from the picture, and the
-    // header's `w-0 min-w-full` keeps a long prompt from widening it.
-    <div className="w-fit max-w-full overflow-hidden rounded-md border border-shell-seam bg-white/[0.025]">
-      <div className="flex w-0 min-w-full items-center gap-2.5 px-3 py-2">
-        <span className={`w-4 shrink-0 text-center text-[13px] ${FAMILY_STYLE.imagegen.color}`} aria-hidden>
-          {FAMILY_STYLE.imagegen.mark}
-        </span>
-        <span
-          className={`shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] ${FAMILY_STYLE.imagegen.color}`}
-        >
-          {FAMILY_STYLE.imagegen.word}
-        </span>
-        <span
-          className="min-w-0 flex-1 truncate text-xs text-text-primary"
-          title={prompt ?? undefined}
-        >
-          {prompt}
-        </span>
-        <span
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${success.dot}`}
-          role="img"
-          aria-label={success.word}
-        />
-      </div>
+    // The image is the result, so it stands alone with no frame or header
+    // around it; the prompt is its tooltip.
+    <div className="w-fit max-w-full">
       <div
-        className={`px-3 pb-3${resolving ? ' animate-arrive' : ''}`}
+        className={resolving ? 'animate-arrive' : undefined}
         ref={resolving ? resultEntrance.refFor(row.id, 'animate-arrive') : undefined}
         onAnimationEnd={event => resultEntrance.onAnimationEnd(row.id, event)}
       >
@@ -5707,12 +5685,13 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
           <button
             type="button"
             aria-label="Expand generated image"
+            title={prompt ?? undefined}
             onClick={() => setPreviewOpen(true)}
             className="block max-w-full cursor-zoom-in rounded-[10px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             <img
               alt="Generated image"
-              className="block max-h-[520px] w-auto max-w-full rounded-[10px] border border-shell-seam object-contain"
+              className="block max-h-[520px] w-auto max-w-full rounded-[10px] object-contain"
               src={src}
             />
           </button>
@@ -5728,7 +5707,7 @@ function CompletedGeneratedImageCard({ row }: { row: ToolUseNestedRow }) {
         </div>
       </div>
       {row.children.length > 0 ? (
-        <div className="border-l border-accent/20 px-3 pb-3">
+        <div className="mt-2 border-l border-accent/20 pl-3">
           <NestedRowList rows={row.children} />
         </div>
       ) : null}
