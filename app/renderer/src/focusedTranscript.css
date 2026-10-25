@@ -86,12 +86,6 @@
   animation: focused-shimmer 1.8s linear infinite;
 }
 
-/* Commentary tone: the newest update leads while working; once the turn has
- * ended its updates step back. */
-[data-focused-update] .conversation-prose { transition: color 500ms var(--ease-standard); }
-.focused-turn[data-focused-live] [data-focused-update]:not([data-latest]) .conversation-prose { color: var(--text-muted); }
-.focused-turn:not([data-focused-live]) [data-focused-update] .conversation-prose { color: var(--text-muted); font-size: 14px; }
-
 /* The live head stays in view while its work scrolls. Glass panes have no
  * opaque ground for it to sit on, so it scrolls normally there. */
 html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-head {
