@@ -13,7 +13,7 @@
 .uas button { color: inherit; font: inherit; cursor: pointer; }
 .uas-switch { display: inline-flex; flex-wrap: wrap; padding: 3px; background: var(--uas-wash); border-radius: 11px; gap: 2px; }
 .uas-switch button { border: 0; background: transparent; padding: 5px 10px; border-radius: 8px; font-size: 11.5px; color: var(--text-secondary); white-space: nowrap; }
-.uas-switch button[aria-pressed="true"] { color: var(--text-primary); background: light-dark(var(--usage-panel), #1c1c1f); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px var(--shell-seam); }
+.uas-switch button[aria-pressed="true"] { color: var(--text-primary); background: light-dark(var(--usage-panel), #2c2c2f); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px var(--shell-seam); }
 .uas-figures { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 0 0 12px; margin: 0 0 12px; border-bottom: 1px solid var(--shell-seam); }
 .uas-figures dd { margin: 2px 0 0; font-size: 21px; font-weight: 680; letter-spacing: -.03em; min-height: 1.2em; white-space: nowrap; }
 .uas-table-scroll { overflow: auto; max-height: 420px; margin: 0 -8px; }

@@ -4,7 +4,7 @@ html[data-glass='on'] .usage-page { background:transparent; }
 .usage-content {
   max-width:1180px; margin:auto; container:usage / inline-size;
   --provider-claude:light-dark(#d97757,#ce6c4b);
-  --usage-panel:var(--color-surface-raised);
+  --usage-panel:light-dark(var(--color-surface-raised),#212123);
   --usage-muted:var(--color-text-subtle);
   --usage-grid:var(--color-shell-seam);
   --usage-secondary:var(--color-text-muted);

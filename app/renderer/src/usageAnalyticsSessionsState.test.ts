@@ -128,7 +128,7 @@ test('Sessions stylesheet uses final source ink, chart text and shared surfaces'
     expect(css).toContain('.uas-family-luna { color: var(--uas-c1); }');
     expect(css).toContain('.uas-chart text { font-size: 11px;');
     expect(css).toContain('box-shadow: var(--usage-card-shadow);');
-    expect(css).toContain('background: light-dark(var(--usage-panel), #1c1c1f);');
+    expect(css).toContain('background: light-dark(var(--usage-panel), #2c2c2f);');
     expect(css).not.toContain('.uas-composition rect { stroke:');
     expect(css).toContain('.uas-session-number { font-weight: 600; }');
     expect(css).toContain('.uas-card > .uas-integration-header { display: flow-root; margin-bottom: 16px; }');
