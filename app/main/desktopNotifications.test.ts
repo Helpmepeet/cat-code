@@ -20,10 +20,15 @@ function cardRows(frames: ServerFrame[]) {
 function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true) {
   const handles: Array<{ options: any; closed: boolean; emit: (event: string, ...args: any[]) => void }> = []
   const sent: any[] = [], opened: any[] = []
+  const sessionReads: string[] = [], badgeWrites: string[] = []
+  const descriptors = new Map<string, SessionDescriptor | undefined>()
   let badge = '', visible = false, retryBlocked = false
   const prefs = { notify: 'all' as 'all' | 'waiting' | 'off', dockBadge: true }
   const coordinator = createDesktopNotifications({
-    getSession: id => sessionDescriptorFixture({ appSessionId: id, cwd: '/projects/cat-code', title: 'Fix tests', ...descriptor }),
+    getSession: id => {
+      sessionReads.push(id)
+      return descriptors.has(id) ? descriptors.get(id) : sessionDescriptorFixture({ appSessionId: id, cwd: '/projects/cat-code', title: 'Fix tests', ...descriptor })
+    },
     isVisible: () => visible, getPreferences: () => prefs,
     isRetryBlocked: () => retryBlocked,
     createNotification: options => {
@@ -32,7 +37,7 @@ function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true
       handles.push(h)
       return { on(event, cb) { listeners.set(event, cb); return this }, show() {}, close() { h.closed = true; h.emit('close') } } as DesktopNotificationHandle
     },
-    setBadge: text => { badge = text }, openSession: (...args) => { opened.push(args) }, send: (...args) => { sent.push(args); return sendSuccess },
+    setBadge: text => { badge = text; badgeWrites.push(text) }, openSession: (...args) => { opened.push(args) }, send: (...args) => { sent.push(args); return sendSuccess },
   })
   const frame = (value: any, id = 'a') => coordinator.receive(id, { sessionId: id, ...value } as ServerFrame)
   const event = (value: any, replay = false, id = 'a') => frame({ kind: 'event', event: value, ...(replay ? { replay: true } : {}) }, id)
@@ -40,10 +45,64 @@ function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true
   const permission = (id = 'r', tool = 'Bash', input?: any) => event({ type: 'permission.requested', request: request(id, tool, input) })
   let serial = 0
   const message = (message: any, replay = false) => event({ type: 'message', message: message && { uuid: `frame-${++serial}`, ...(message.type === 'result' ? { is_error: false } : {}), ...message } }, replay)
-  return { coordinator, frame, event, request, permission, message, handles, sent, opened, prefs, badge: () => badge, visible: (value: boolean) => { visible = value }, blockRetry: (value: boolean) => { retryBlocked = value } }
+  return { coordinator, frame, event, request, permission, message, handles, sent, opened, prefs, sessionReads, badgeWrites, descriptors, badge: () => badge, visible: (value: boolean) => { visible = value }, blockRetry: (value: boolean) => { retryBlocked = value } }
 }
 
 describe('desktop notifications', () => {
+  test('streaming reads only its session and waiting sessions without rewriting the native badge', () => {
+    const h = harness()
+    const stream = (id: string) => h.event({ type: 'message', message: { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'next' } } } }, false, id)
+    for (const id of ['a', 'b', 'c', 'd']) stream(id)
+    h.sessionReads.length = 0
+    for (let i = 0; i < 12; i++) stream(['a', 'b', 'c', 'd'][i % 4]!)
+    expect(h.sessionReads).toHaveLength(12)
+    expect(h.badgeWrites).toEqual([''])
+
+    h.permission()
+    expect(h.badgeWrites).toEqual(['', '1'])
+    h.sessionReads.length = 0
+    for (let i = 0; i < 12; i++) stream('b')
+    expect(h.sessionReads).toEqual(Array.from({ length: 12 }, () => ['b', 'a']).flat())
+    expect(h.badgeWrites).toEqual(['', '1'])
+    h.coordinator.visibilityChanged()
+    h.coordinator.preferencesChanged()
+    expect(h.badgeWrites).toEqual(['', '1'])
+    h.event({ type: 'permission.resolved', request: h.request() })
+    expect(h.badgeWrites).toEqual(['', '1', ''])
+  })
+  test.each(['removed', 'parked', 'spawning', 'exited', 'disconnected'] as const)('host %s retires waiting state and old actions before a fresh session notice', status => {
+    const h = harness()
+    h.permission()
+    const old = h.handles.at(-1)!
+    if (status === 'removed') h.coordinator.receiveHostEvent({ type: 'session-removed', appSessionId: 'a' })
+    else h.coordinator.receiveHostEvent({ type: 'session-status', session: sessionDescriptorFixture({ appSessionId: 'a', cwd: '/projects/cat-code', status: status === 'parked' ? 'disconnected' : status, parked: status === 'parked' }) })
+    expect(old.closed).toBe(true)
+    expect(h.badge()).toBe('')
+    old.emit('action', 0)
+    expect(h.sent).toHaveLength(0)
+
+    h.descriptors.set('a', sessionDescriptorFixture({ appSessionId: 'a', status: 'ready', cwd: '/projects/moved', title: 'New title' }))
+    h.permission('new-request')
+    expect(h.handles.at(-1)!.options.subtitle).toBe('moved · New title')
+    expect(h.badgeWrites).toEqual(['1', '', '1'])
+    h.handles.at(-1)!.emit('action', 0)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0][1].requestId).toBe('new-request')
+  })
+  test('current session absence prevents stale banner actions and Retry', () => {
+    const h = harness()
+    h.message({ type: 'user', message: { content: 'Task' } })
+    h.message({ type: 'result', uuid: 'failed', subtype: 'error_during_execution', is_error: true })
+    const old = h.handles.at(-1)!
+    h.descriptors.set('a', undefined)
+    old.emit('action', 0)
+    old.emit('click')
+    expect(h.coordinator.retry('a', 'a:failed:result')).toBe(false)
+    expect(h.sent).toHaveLength(0)
+    expect(h.opened).toHaveLength(0)
+    h.coordinator.visibilityChanged()
+    expect(h.badge()).toBe('')
+  })
   test('composer-blocked retries are absent, rechecked, and refreshed without another sound', () => {
     const h = harness()
     h.blockRetry(true)

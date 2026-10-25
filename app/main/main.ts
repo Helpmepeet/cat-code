@@ -4567,7 +4567,13 @@ function ensureHost(): Host {
   notificationPreferences ??= readNotificationPreference(app.getPath('userData'))
   desktopNotifications?.dispose()
   desktopNotifications = createDesktopNotifications({
-    getSession: id => host?.listSessions().find(row => row.appSessionId === id),
+    getSession: id => {
+      const session = host?.getSessionDescriptor(id)
+      // Match the live ∪ restorable list without rebuilding the saved registry
+      // for every streaming frame. Supervisor tombstones are still listed.
+      return session && (session.restorable || supervisor?.listSessions().some(row => row.sessionId === id))
+        ? session : undefined
+    },
     isVisible: id => mainWindow?.isFocused() === true && visibleSessions.has(id),
     isRetryBlocked: id => notificationRetryBlocked.has(id) || host?.isMoving(id) === true ||
       switchingSessionIds.has(id) || projectRouting?.hasPending(id) === true,

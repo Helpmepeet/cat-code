@@ -58,8 +58,18 @@ function textBlocks(value: unknown): string {
 export function createDesktopNotifications(deps: DesktopNotificationDependencies) {
   const sessions = new Map<string, State>()
   let disposed = false
+  let lastBadge: string | undefined
   const close = (s: State) => { const handle = s.handle; s.handle = undefined; handle?.close() }
-  const badge = () => deps.setBadge(!disposed && deps.getPreferences().dockBadge ? String([...sessions].filter(([id, s]) => deps.getSession(id) && (s.pending.size || s.stopped)).length || '') : '')
+  const badge = () => {
+    let waiting = 0
+    if (!disposed && deps.getPreferences().dockBadge) {
+      for (const [id, s] of sessions) if ((s.pending.size || s.stopped) && deps.getSession(id)) waiting++
+    }
+    const text = waiting ? String(waiting) : ''
+    if (text === lastBadge) return
+    deps.setBadge(text)
+    lastBadge = text
+  }
   const clear = (s: State) => { close(s); s.notice = undefined; s.terminalNotice = undefined }
   const submit = (id: string, prompt: Prompt) => deps.send(id, { type: 'app.submit', requestId: randomUUID(), prompt })
   function retry(id: string, resultId: string): boolean {
@@ -78,10 +88,11 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
     s.retryBlocked = !!notice.retryResultId && deps.isRetryBlocked?.(id) === true
     const actions = s.retryBlocked ? [] : notice.actions
     const prefs = deps.getPreferences()
-    if (disposed || !deps.getSession(id) || deps.isVisible(id) || prefs.notify === 'off' || (prefs.notify === 'waiting' && !notice.waiting)) return
+    if (disposed || deps.isVisible(id) || prefs.notify === 'off' || (prefs.notify === 'waiting' && !notice.waiting)) return
+    const session = deps.getSession(id)
+    if (!session) return
     let handle: DesktopNotificationHandle | null
     try {
-      const session = deps.getSession(id)!
       const project = session.binding?.kind === 'managed' ? 'Chats' : basename(session.cwd)
       handle = deps.createNotification({ ...notice.options, ...(s.retryBlocked ? { actions: [] } : {}), body: bannerText(notice.options.body), subtitle: `${project} · ${session.title ?? session.name ?? 'Cat Code'}`, silent: quiet || !notice.waiting })
     } catch (error) { deps.onError?.(error); return }
