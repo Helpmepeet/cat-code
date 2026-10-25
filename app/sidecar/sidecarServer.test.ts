@@ -1849,7 +1849,7 @@ test('D1a — a mid-turn message stages as queued and stays out of the transcrip
 
   server.handleData(
     conn,
-    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs' }),
+    clientFrame({ type: 'app.submit', requestId: 'mid', prompt: 'and the logs', options: { submitId: 'instant-submit' } }),
   )
 
   // The turn's own prompt is in the transcript; the queued one is not.
@@ -1857,6 +1857,7 @@ test('D1a — a mid-turn message stages as queued and stays out of the transcrip
   const staged = queuedPromptSnapshots(received).at(-1)
   expect(staged).toHaveLength(1)
   expect(staged?.[0]?.text).toBe('and the logs')
+  expect(staged?.[0]?.submitId).toBe('instant-submit')
   // The id is the uuid the message will carry when it is delivered.
   const queued = getCommandQueueSnapshot()
   expect(staged?.[0]?.id).toBe(queued[0]?.uuid)
@@ -2254,6 +2255,7 @@ test('prompt.force aborts only while the displayed queue head is still waiting',
       type: 'app.submit',
       requestId: 'mid',
       prompt: 'and the logs',
+      options: { submitId: 'instant-submit' },
     }),
   )
   const promptId = queuedPromptSnapshots(received).at(-1)?.[0]?.id
@@ -2264,7 +2266,7 @@ test('prompt.force aborts only while the displayed queue head is still waiting',
     clientFrame({
       type: 'prompt.force',
       requestId: 'force-1',
-      promptId: promptId!,
+      promptId: 'instant-submit',
     }),
   )
   for (let i = 0; i < 50 && prompts.length < 2; i += 1) {
@@ -2700,6 +2702,7 @@ test('D5 — an idle submit is answered accepted, once, with its own id', async 
       sessionId: SESSION,
       submitId: 'sub-idle',
       accepted: true,
+      queued: false,
     },
   ])
 })
@@ -2720,6 +2723,7 @@ test('D5 — a mid-turn submit is answered accepted from the staging dispatch', 
       sessionId: SESSION,
       submitId: 'sub-turn',
       accepted: true,
+      queued: false,
     },
     {
       kind: 'submit.result',
@@ -2727,6 +2731,7 @@ test('D5 — a mid-turn submit is answered accepted from the staging dispatch', 
       sessionId: SESSION,
       submitId: 'sub-mid',
       accepted: true,
+      queued: true,
     },
   ])
 

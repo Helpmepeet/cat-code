@@ -1911,6 +1911,7 @@ export function SessionPane({
         >
           <TranscriptView
             turnLive={generating}
+            focusedTasks={tasksSnapshot}
             columnRef={transcriptColumnRef}
             welcomeExiting={welcomePhase === 'exiting'}
             accounts={accountsSnapshot}

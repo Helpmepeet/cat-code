@@ -90,3 +90,20 @@ describe('messages waiting for the running response', () => {
     ])
   })
 })
+
+
+test('instant Focused queue reconciles by submit identity, never text, and refusal preserves later submits', () => {
+  let state = createQueuedPromptsState()
+  state = reduceQueuedPromptsState(state, { type: 'submitted', sessionId: SESSION, submitId: 'first', text: 'same text' })
+  state = reduceQueuedPromptsState(state, { type: 'submitted', sessionId: SESSION, submitId: 'second', text: 'same text' })
+  expect(selectQueuedPrompts(state, SESSION, true).map(item => item.id)).toEqual(['first', 'second'])
+  expect(selectQueuedPrompts(state, SESSION)).toEqual([])
+  state = reduceQueuedPromptsState(state, { type: 'frame', frame: { kind: 'submit.result', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION, submitId: 'first', accepted: true, queued: true } })
+  expect(selectQueuedPrompts(state, SESSION, true)).toHaveLength(2)
+  state = reduceQueuedPromptsState(state, { type: 'frame', frame: { ...snapshot([]), prompts: [{ id: 'engine-first', submitId: 'first', text: 'same text' }] } as ServerFrame })
+  expect(selectQueuedPrompts(state, SESSION, true).map(item => item.id)).toEqual(['engine-first', 'second'])
+  state = reduceQueuedPromptsState(state, { type: 'frame', frame: { kind: 'submit.result', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION, submitId: 'second', accepted: false, code: 'bad_request' } })
+  expect(selectQueuedPrompts(state, SESSION, true).map(item => item.id)).toEqual(['engine-first'])
+  state = reduceQueuedPromptsState(state, { type: 'frame', frame: snapshot([]) })
+  expect(selectQueuedPrompts(state, SESSION, true)).toEqual([])
+})

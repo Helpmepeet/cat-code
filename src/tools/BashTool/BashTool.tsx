@@ -1,3 +1,4 @@
+import { recordToolTimeout } from '../../app-runtime/toolActivity.js'
 import { randomUUID } from 'crypto';
 import { registerLidShellTool } from '../../services/lidClosedWork.js'
 import type { UUID } from 'crypto'
@@ -985,6 +986,7 @@ async function* runShellCommand({
     run_in_background
   } = input;
   const timeoutMs = timeout || getDefaultTimeoutMs();
+  recordToolTimeout(toolUseId, timeoutMs);
   let fullOutput = '';
   let lastProgressOutput = '';
   let lastTotalLines = 0;

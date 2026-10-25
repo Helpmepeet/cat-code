@@ -1,3 +1,4 @@
+import { recordToolActivity } from '../../app-runtime/toolActivity.js'
 import { feature } from 'bun:bundle'
 import { assertLidWorkAdmission } from '../lidClosedWork.js'
 import { isHandoffExecutionFenced } from '../../app-runtime/handoff.js'
@@ -1583,6 +1584,7 @@ async function checkPermissionsAndCallTool(
   catch (error) { await preparation.dispose(); throw error }
   startSessionActivity('tool_exec')
   toolUseContext.onToolExecutionStart?.()
+  if (!toolUseContext.agentId) recordToolActivity(toolUseID, 'executing')
   callInput = processedInput
   // Everything accumulated so far is pre-call: PreToolUse hook output,
   // hookSpecificOutput.additionalContext, and the PermissionRequest-hook

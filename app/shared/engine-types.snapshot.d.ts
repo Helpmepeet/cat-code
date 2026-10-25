@@ -194,6 +194,15 @@ type AppSessionAbortState =
 
 export type AppSessionEvent =
   | {
+      type: 'tool.activity'
+      toolUseId: string
+      phase: 'reviewing' | 'executing'
+      startedAt: number
+      output?: string
+      totalLines?: number
+      timeoutMs?: number
+    }
+  | {
       type: 'message'
       message: SDKMessage
     }

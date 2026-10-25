@@ -1,3 +1,4 @@
+import type { FocusedBashJob } from './focusedBashJobs.js'
 /**
  * CatCode desktop IPC protocol — v4.
  *
@@ -96,6 +97,7 @@ import type {
 } from './settingsEditable.js'
 
 /** v4 retires session metadata/stats/OAuth; see decisions/SESSION-PROTOCOL-V4.md. */
+/** Additive tool.activity v1 and queue submitId: decisions/FOCUSED-LIVE-ACTIVITY.md. */
 export const PROTOCOL_VERSION = 4 as const
 
 /**
@@ -1808,6 +1810,8 @@ export type TaskSubagentMetadata = {
 }
 
 export type TasksSnapshot = {
+  /** Foreground-independent Bash lifecycle for Focused; items keeps its task-list filter. */
+  focusedBashJobs?: FocusedBashJob[]
   items: TaskSnapshotItem[]
   /** Includes foregrounded workers too; `items` remains display-filtered. */
   subagents?: TaskSubagentMetadata[]
@@ -3496,6 +3500,8 @@ export type GeneratedImagePreviewFrame = {
  * class `sticky`, `app/main/replayBuffer.ts`) — never an append.
  */
 export type QueuedPromptItem = {
+  /** Additive v4 correlation for instant Focused queue rows. See decisions/FOCUSED-LIVE-ACTIVITY.md. */
+  submitId?: string
   /**
    * The engine-minted uuid of the queued command. It is the SAME uuid the user
    * message will carry once the message is delivered, so a reader can match a
@@ -3668,6 +3674,8 @@ export type SubmitResultFrame = {
   submitId: string
   /** True when the prompt was taken: a turn started, or it was staged into the running turn. */
   accepted: boolean
+  /** Accepted directly versus staged; additive v4, FOCUSED-LIVE-ACTIVITY. */
+  queued?: boolean
   /** The refusal's code. Absent when `accepted`. */
   code?: ErrorFrame['code']
 }

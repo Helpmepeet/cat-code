@@ -1,3 +1,4 @@
+import { feature } from 'bun:bundle'
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import z from 'zod/v4'
 import { buildTool, type ToolUseContext, type ValidationResult } from '../../Tool.js'
@@ -24,6 +25,8 @@ import {
 import { createPermissionContext } from '../../hooks/toolPermission/PermissionContext.js'
 import { createAppRuntimeCanUseTool } from '../../app-runtime/appRuntimeCanUseTool.js'
 import { AskUserQuestionTool } from '../../tools/AskUserQuestionTool/AskUserQuestionTool.js'
+import { withToolActivity } from '../../app-runtime/toolActivity.js'
+import type { ToolActivity } from '../../app-runtime/toolActivityContract.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
 // mock.module is installed during the import phase of every file in the
@@ -278,6 +281,24 @@ afterEach(() => {
   injectedContext = null
   injectedPreToolResult = null
   postToolUseHooksThrow = false
+})
+
+test('Auto emits review before execution while an ordinary permission check emits only execution', async () => {
+  for (const mode of ['auto', 'default'] as const) {
+    const events: ToolActivity[] = []
+    const tool = makeTool('ActivityCheck', async () => ({ data: 'ok' }))
+    const context = createToolUseContext([tool])
+    context.getAppState().toolPermissionContext.mode = mode
+    const canUseTool = createAppRuntimeCanUseTool({
+      getPermissionRequestHandler: () => undefined,
+      baseCanUseTool: async () => ({ behavior: 'allow', decisionReason: { type: 'other', reason: 'test' } }),
+    })
+    await withToolActivity(event => events.push(event), async () => {
+      for await (const _ of runToolUse({ type: 'tool_use', id: 'activity-call', name: tool.name, input: { value: 'x' } }, createAssistantMessage(), canUseTool, context)) { /* Drain the real tool pipeline. */ }
+    })
+    expect(events.map(event => event.phase)).toEqual(mode === 'auto' && feature('TRANSCRIPT_CLASSIFIER') ? ['reviewing', 'executing'] : ['executing'])
+    expect(events.every(event => event.toolUseId === 'activity-call')).toBe(true)
+  }
 })
 
 test('desktop question answers execute after one prompt without losing the answer', async () => {

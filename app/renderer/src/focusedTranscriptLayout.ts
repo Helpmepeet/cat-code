@@ -1,3 +1,4 @@
+import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { deriveTarget, toolCardFilePath } from './transcriptToolTarget.js'
 import { selectToolDiffs } from './toolDiffs.js'
@@ -20,7 +21,7 @@ export type FocusedSummary = {
   activeLabel: string | null
 }
 export type FocusedSegment = {
-  kind: 'update' | 'reasoning' | 'stretch'
+  kind: 'update' | 'reasoning' | 'stretch' | 'speech'
   id: string
   rows: readonly NestedTranscriptRow[]
 } & FocusedSummary
@@ -55,6 +56,7 @@ export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: 
 }
 
 function rowHasError(row: NestedTranscriptRow): boolean {
+  if (row.kind === 'tool-use' && isPeerSpeechCall(row.toolName)) return false
   return (row.kind === 'tool-use' && (row.status === 'error' || row.result?.isError === true)) ||
     (row.kind === 'result' && row.isError) ||
     (row.kind === 'system-notice' && row.noticeType === 'provider_error') ||
@@ -69,7 +71,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   let activeLabel: string | null = null
   for (const row of rows) {
     if (rowHasError(row)) errorCount++
-    if (row.kind !== 'tool-use') continue
+    if (row.kind !== 'tool-use' || isPeerSpeechCall(row.toolName)) continue
     toolCalls++
     if (row.status === 'pending' && activeLabel === null) activeLabel = `${verbs[row.toolFamily] ?? 'Using'} ${deriveTarget(row)}`
     const path = toolCardFilePath(row)
@@ -128,7 +130,10 @@ export function deriveFocusedSegments(rows: readonly NestedTranscriptRow[]): rea
     stretch = []
   }
   for (const row of rows) {
-    if (row.kind === 'assistant-text') {
+    if (row.kind === 'tool-use' && isPeerSpeechCall(row.toolName)) {
+      flush()
+      segments.push({ kind: 'speech', id: `focused-speech:${row.id}`, rows: [row], ...summarizeFocusedWork([row]) })
+    } else if (row.kind === 'assistant-text') {
       flush()
       segments.push({ kind: 'update', id: `focused-update:${row.id}`, rows: [row], ...summarizeFocusedWork([row]) })
     } else if (row.kind === 'thinking' && row.content.trim().length > 0) {

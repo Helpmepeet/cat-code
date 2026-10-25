@@ -1,3 +1,4 @@
+import { MAX_FOCUSED_BASH_JOBS, MAX_FOCUSED_BASH_LABEL_CHARS, type FocusedBashJob } from '../shared/focusedBashJobs.js'
 /**
  * Tasks read-seam (P4-9) — the domain recipe (`docs/migration/backlog/phase4.md`
  * Standing rules) applied to the background-task model: a domain service that
@@ -126,9 +127,20 @@ export function tasksSnapshot(
     .filter(task => !(task.type === 'local_agent' && task.id === foregroundedTaskId))
     .map(toTaskSnapshotItem)
   const subagents = Object.values(tasks ?? {}).flatMap(toSubagentMetadata)
+  const focusedBashJobs: FocusedBashJob[] = Object.values(tasks ?? {})
+    .filter((task): task is Extract<TaskState, { type: 'local_bash' }> => task.type === 'local_bash' && task.isBackgrounded === true && task.status !== 'pending')
+    .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || (b.endTime ?? b.startTime) - (a.endTime ?? a.startTime))
+    .slice(0, MAX_FOCUSED_BASH_JOBS)
+    .flatMap(task => {
+      if (task.status === 'pending' || (task.status !== 'running' && task.endTime === undefined)) return []
+      return [{ id: task.id, ...(task.toolUseId ? { toolUseId: task.toolUseId } : {}),
+        label: task.description.slice(0, MAX_FOCUSED_BASH_LABEL_CHARS), status: task.status,
+        startTime: task.startTime, ...(task.endTime !== undefined ? { endTime: task.endTime } : {}) }]
+    })
   return {
     items,
     subagents,
+    ...(focusedBashJobs.length ? { focusedBashJobs } : {}),
     ...(foregroundedTaskId ? { foregroundedTaskId } : {}),
   }
 }

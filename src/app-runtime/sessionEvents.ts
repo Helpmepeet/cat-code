@@ -1,3 +1,4 @@
+import type { ToolActivity } from './toolActivityContract.js'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type { SDKControlPermissionRequest } from '../entrypoints/sdk/coreTypes.generated.js'
 import type { Output as PermissionToolOutput } from '../utils/permissions/PermissionPromptToolResultSchema.js'
@@ -55,6 +56,7 @@ export type AppSessionTurnStatusEvent = {
 }
 
 export type AppSessionEvent =
+  | ToolActivity
   | AppSessionMessageEvent
   | AppSessionGoalSnapshotEvent
   | AppSessionPermissionRequestedEvent

@@ -722,7 +722,7 @@ export class SidecarServer {
    */
   private readonly stagedPrompts = new Map<
     string,
-    { prompt: AppSubmitPrompt; serializedBytes: number; isMeta?: boolean }
+    { prompt: AppSubmitPrompt; serializedBytes: number; isMeta?: boolean; submitId?: string }
   >()
   private largeReceiveWindowStart = 0
   private largeReceiveBytes = 0
@@ -2730,10 +2730,11 @@ export class SidecarServer {
    * own. Staging BEFORE the enqueue matters: the queue's change signal is
    * synchronous, so the snapshot it publishes must already know about this one.
    */
-  private enqueueMidTurnPrompt(prompt: AppSubmitPrompt, isMeta?: boolean, priorAssistantContext: import('../../src/types/message.js').PriorAssistantContext | null = null): void {
+  private enqueueMidTurnPrompt(prompt: AppSubmitPrompt, isMeta?: boolean, priorAssistantContext: import('../../src/types/message.js').PriorAssistantContext | null = null, submitId?: string): void {
     const uuid = randomUUID()
     this.stagedPrompts.set(uuid, {
       prompt, serializedBytes: submitPromptSerializedBytes(prompt),
+      ...(submitId ? { submitId } : {}),
       ...(isMeta ? { isMeta } : {}),
     })
     enqueue({
@@ -2906,6 +2907,7 @@ export class SidecarServer {
       items.push({
         id: uuid,
         text: promptPreviewText(command.value, MAX_QUEUED_PROMPT_PREVIEW_CHARS),
+        ...(this.stagedPrompts.get(uuid)?.submitId ? { submitId: this.stagedPrompts.get(uuid)!.submitId } : {}),
       })
     }
     return items
@@ -3142,7 +3144,8 @@ export class SidecarServer {
       return
     }
 
-    const { promptId } = parsed.data
+    const requestedPromptId = parsed.data.promptId
+    const promptId = [...this.stagedPrompts].find(([, staged]) => staged.submitId === requestedPromptId)?.[0] ?? requestedPromptId
     if (this.parking) {
       this.send(connection, {
         kind: 'prompt-force.result',
@@ -3374,13 +3377,13 @@ export class SidecarServer {
         return
       }
       this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta,
-        this.controller.bindObservedProposal(message.options?.observedProposal))
+        this.controller.bindObservedProposal(message.options?.observedProposal), submitId)
       queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId })
       // Staged, so the prompt is taken: the running turn's next tool round
       // drains it. Answered HERE rather than off the staged snapshot the enqueue
       // publishes, because that snapshot is republished on every queue change and
       // says nothing about which submit caused this one.
-      this.answerSubmit(connection, submitId, { accepted: true })
+      this.answerSubmit(connection, submitId, { accepted: true, queued: true })
       return
     }
 
@@ -3409,7 +3412,7 @@ export class SidecarServer {
     }
     // The turn is running and the user message has been broadcast. Nothing later
     // can un-accept this submit (see the method doc on `onRejected`).
-    this.answerSubmit(connection, submitId, { accepted: true })
+    this.answerSubmit(connection, submitId, { accepted: true, queued: false })
   }
 
   /**
@@ -6067,7 +6070,7 @@ export class SidecarServer {
   private answerSubmit(
     connection: Connection,
     submitId: string | undefined,
-    outcome: { accepted: true } | { accepted: false; code: ErrorFrame['code'] },
+    outcome: { accepted: true; queued: boolean } | { accepted: false; code: ErrorFrame['code'] },
   ): void {
     if (submitId === undefined) return
     this.send(connection, {
@@ -6076,7 +6079,7 @@ export class SidecarServer {
       sessionId: this.sessionId,
       submitId,
       accepted: outcome.accepted,
-      ...(outcome.accepted ? {} : { code: outcome.code }),
+      ...(outcome.accepted ? { queued: outcome.queued } : { code: outcome.code }),
     })
   }
 

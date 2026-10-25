@@ -1,3 +1,4 @@
+import { recordToolActivity } from '../../app-runtime/toolActivity.js'
 import { feature } from 'bun:bundle'
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
@@ -140,7 +141,10 @@ export function createInitialAutoModePermissionObservation(
 ): AutoModePermissionObservationContext | null {
   if (typeof context.getAppState !== 'function') return null
   return createAutoModePermissionObservationContext({
-    writer: event => recordAutoModeObservation(event, context.agentId),
+    writer: event => {
+      if (!context.agentId && event.subtype === 'auto_permission_start') recordToolActivity(toolUseId, 'reviewing')
+      recordAutoModeObservation(event, context.agentId)
+    },
     toolUseId,
     toolKind:
       tool.name === BASH_TOOL_NAME

@@ -1,3 +1,5 @@
+import { isFocusedBashJobs } from '../shared/focusedBashJobs.js'
+import { isToolActivity } from '../../src/app-runtime/toolActivityContract.js'
 /**
  * Sidecar supervisor — the window-independent host module (D6 pin 2 /
  * DIRECTION-REVIEW DR-1).
@@ -29,6 +31,9 @@ import { join } from 'node:path'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
+  MAX_QUEUED_PROMPTS,
+  MAX_QUEUED_PROMPT_PREVIEW_CHARS,
+  MAX_TEXT_FIELD_CHARS,
   MAX_LARGE_SUBMIT_BYTES_PER_WINDOW,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PENDING_HOST_INPUT_BYTES,
@@ -895,6 +900,19 @@ export function createPrivateSocketDir(): string {
  */
 function unwrapServerFrame(payload: unknown): ServerFrame | null {
   if (!isObjectRecord(payload)) return null
+  const candidate = payload.kind === 'sidecar.delivery-envelope' ? payload.frame : payload
+  if (isObjectRecord(candidate) && candidate.kind === 'event' && isObjectRecord(candidate.event) && candidate.event.type === 'tool.activity' && !isToolActivity(candidate.event)) return null
+  if (isObjectRecord(candidate) && candidate.kind === 'tasks.snapshot' && isObjectRecord(candidate.tasks) &&
+    candidate.tasks.focusedBashJobs !== undefined && !isFocusedBashJobs(candidate.tasks.focusedBashJobs)) return null
+  if (isObjectRecord(candidate) && candidate.kind === 'submit.result' && candidate.queued !== undefined &&
+    (candidate.accepted !== true || typeof candidate.queued !== 'boolean')) return null
+  if (isObjectRecord(candidate) && candidate.kind === 'queued-prompts.snapshot') {
+    if (!Array.isArray(candidate.prompts) || candidate.prompts.length > MAX_QUEUED_PROMPTS || candidate.prompts.some(item =>
+      !isObjectRecord(item) || typeof item.id !== 'string' || !item.id.length || item.id.length > 200 ||
+      typeof item.text !== 'string' || item.text.length > MAX_QUEUED_PROMPT_PREVIEW_CHARS ||
+      (item.submitId !== undefined && (typeof item.submitId !== 'string' || !item.submitId.length || item.submitId.length > MAX_TEXT_FIELD_CHARS)) ||
+      Object.keys(item).some(key => !['id', 'text', 'submitId'].includes(key)))) return null
+  }
   if (payload.kind !== 'sidecar.delivery-envelope') return payload as ServerFrame
   if (Object.keys(payload).length !== 3 || !isObjectRecord(payload.frame) || !isDeliveryTrace(payload.deliveryTrace)) {
     return null

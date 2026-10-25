@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { afterEach, expect, test, spyOn } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../../shared/protocol.js'
 import {
@@ -6184,7 +6184,11 @@ function deepFreeze<T>(value: T): T {
  * truncation latch, an open recovery batch and its closing result, a second
  * session, and a frame for a session that was never opened.
  */
+let projectionClock: ReturnType<typeof spyOn> | null = null
+afterEach(() => { projectionClock?.mockRestore(); projectionClock = null })
+
 test('transcript projection is invariant across replay delivery partitions', () => {
+  projectionClock = spyOn(Date, 'now').mockReturnValue(100000)
   const sessionId = 'session-1'
   const secondSessionId = 'session-2'
   const fixtureFrames = allSdkMessageSamples().map(sample =>
@@ -6256,6 +6260,7 @@ test('transcript projection is invariant across replay delivery partitions', () 
 })
 
 test('one-delivery projection matches per-frame delivery at every streaming reasoning prefix', () => {
+  projectionClock = spyOn(Date, 'now').mockReturnValue(100000)
   for (const fixture of [
     S1_STREAMING_REASONING_TURN,
     S1_CONCURRENT_REASONING_TURN,
@@ -6274,6 +6279,7 @@ test('one-delivery projection matches per-frame delivery at every streaming reas
 })
 
 test('delivery partitioning is preserved for interleaved sessions and adversarial frames', () => {
+  projectionClock = spyOn(Date, 'now').mockReturnValue(100000)
   const primary = 'batch-primary'
   const secondary = 'batch-secondary'
   const streamedFinal = messageFrame(primary, {

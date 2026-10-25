@@ -1,3 +1,6 @@
+import { useContext } from 'react'
+import { isTurnRunning } from './appModel.js'
+import { TranscriptModeContext } from './transcriptMode.js'
 import { LidClosedProvider, LidClosedNotice } from './LidClosedMode.js'
 import { selectObservedProposal } from './observedProposal.js'
 import { ScheduledTasksPage } from './ScheduledTasksPage.js'
@@ -489,6 +492,7 @@ function defaultPromptDraftStorage(): Pick<Storage, 'getItem' | 'setItem'> | nul
 }
 
 export function App() {
+  const { mode: transcriptMode } = useContext(TranscriptModeContext)
   const [usageDashboard, dispatchUsageDashboard] = useReducer(reduceUsageDashboard, initialUsageDashboardState)
   const [usageSelection, setUsageSelection] = useState(initialUsageSelection)
   const pendingDeliveryStateAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
@@ -3306,6 +3310,8 @@ export function App() {
     // carried back on the one answer this submit gets, which is what lets the
     // retained copy below be paired exactly rather than by position.
     const submitId = newRequestId()
+    const instantQueue = isTurnRunning(sessionConnection)
+    if (instantQueue) dispatchQueuedPrompts({ type: 'submitted', sessionId, submitId, text })
     try {
       getBridge().submit(sessionId, submitPrompt, {
         submitId,
@@ -3325,6 +3331,7 @@ export function App() {
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
     } catch (error) {
+      if (instantQueue) dispatchQueuedPrompts({ type: 'submit-failed', sessionId, submitId })
       setTransportErrors(prev =>
         reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
       )
@@ -4245,7 +4252,7 @@ export function App() {
 	                if (!result.ok) toast(result.error.message, { tone: 'warn' })
 	              }).catch(error => toast(errorMessage(error), { tone: 'warn' }))
 	            }}
-	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId)}
+	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId, transcriptMode === 'focused')}
 	            onRecallQueuedPrompts={() => recallQueuedPrompts(sessionId)}
 	            history={selectHistory(historyState, sessionId)}
                 historyNav={historyNavigation[sessionId] ?? EMPTY_HISTORY_NAV}

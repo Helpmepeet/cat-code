@@ -152,6 +152,21 @@ test('excludes a terminal, non-backgrounded task (the base isBackgroundTask rule
   expect(snapshot.items).toHaveLength(0)
 })
 
+test('Focused receives the real background Bash lifecycle and description without changing the task list', () => {
+  const task = bashTask({ description: 'Run the suite', command: 'bun test', toolUseId: 'bash-call', startTime: 10000 })
+  const store = createStore({ ...getDefaultAppState(), tasks: { b1: task } })
+  const domain = createSidecarTasksDomain(store)
+  const snapshots: ReturnType<typeof domain.getSnapshot>[] = []
+  const stop = domain.subscribe(() => snapshots.push(domain.getSnapshot()))
+  try {
+    expect(domain.getSnapshot().items[0]?.label).toBe('bun test')
+    expect(domain.getSnapshot().focusedBashJobs).toEqual([{ id: 'b1', toolUseId: 'bash-call', label: 'Run the suite', status: 'running', startTime: 10000 }])
+    store.setState(state => ({ ...state, tasks: { b1: { ...task, status: 'failed', endTime: 12000 } } }))
+    expect(snapshots.at(-1)?.focusedBashJobs).toEqual([{ id: 'b1', toolUseId: 'bash-call', label: 'Run the suite', status: 'failed', startTime: 10000, endTime: 12000 }])
+    expect(snapshots.at(-1)?.items).toEqual([])
+  } finally { stop() }
+})
+
 test('keeps a terminal backgrounded local_agent visible (blocked/completed handoff stays openable)', () => {
   const snapshot = tasksSnapshot(
     { a1: agentTask({ status: 'completed', isBackgrounded: true, handoffStatus: 'blocked' }) },

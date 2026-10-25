@@ -1,3 +1,4 @@
+import { isToolActivity, type ToolActivity } from '../../../src/app-runtime/toolActivityContract.js'
 /**
  * Transcript projector — anti-corruption boundary LAYER 2 (PROGRAM-PLAN §5).
  *
@@ -529,7 +530,20 @@ type StreamingThinkingBlock = {
   reasoningKind?: string
 }
 
+export type PreparingTool = { toolUseId: string; toolName: string; json: string; messageId: string; blockIndex: number }
+export type FocusedLiveState = {
+  activities: Record<string, ToolActivity>
+  awaitingApproval: Record<string, true>
+  preparing: Record<string, PreparingTool>
+  lastVisibleChangeAt: number
+  streaming: boolean
+}
+
 type TranscriptSessionState = {
+  activities: Record<string, ToolActivity>
+  awaitingApproval: Record<string, true>
+  preparing: Record<string, PreparingTool>
+  lastVisibleChangeAt: number
   engineSessionId: string | null
   inlineCommands?: { generation: string; runs: InlineCommandRun[]; requests?: InlineCommandRequest[] }
   inlineCommandResults?: InlineCommandRun[]
@@ -642,6 +656,10 @@ function createTranscriptSessionState(): TranscriptSessionState {
     rows: [],
     currentStreamMessageId: null,
     currentStreamBlockIndex: null,
+    activities: {},
+    awaitingApproval: {},
+    preparing: {},
+    lastVisibleChangeAt: Date.now(),
     streamingTextBlocks: {},
     streamingThinkingBlocks: {},
     nextBlockIndexByMessageId: {},
@@ -1564,6 +1582,35 @@ export function projectServerFrames(
       }
       continue
     }
+    if (frame.kind === 'event' && frame.event.type === 'permission.requested') {
+      const request = frame.event.request.request
+      if (!request.agent_id && typeof request.tool_use_id === 'string') {
+        draft.session.awaitingApproval = { ...draft.session.awaitingApproval, [request.tool_use_id]: true }
+        const { [request.tool_use_id]: _review, ...activities } = draft.session.activities
+        draft.session.activities = activities
+        draft.changed = true
+      }
+      continue
+    }
+    if (frame.kind === 'event' && frame.event.type === 'tool.activity') {
+      if (isToolActivity(frame.event)) {
+        draft.session.activities = { ...draft.session.activities, [frame.event.toolUseId]: frame.event }
+        if (frame.event.phase === 'executing') {
+          const { [frame.event.toolUseId]: _waiting, ...waiting } = draft.session.awaitingApproval
+          draft.session.awaitingApproval = waiting
+        }
+        draft.changed = true
+      }
+      continue
+    }
+    if (frame.kind === 'event' && frame.event.type === 'turn.status' && frame.event.activeTurn) {
+      draft.session.activities = {}
+      draft.session.awaitingApproval = {}
+      draft.session.preparing = {}
+      draft.session.lastVisibleChangeAt = Date.now()
+      draft.changed = true
+      continue
+    }
     if (frame.kind !== 'event' || frame.event.type !== 'message') continue
 
     // B1: the head-insertion cursor is derived from THIS frame, every time. An
@@ -1596,7 +1643,10 @@ export function projectServerFrames(
   const changedDrafts = [...drafts.values()].filter(draft => draft.changed)
   if (changedDrafts.length === 0) return state
   const sessions = { ...state.sessions }
-  for (const draft of changedDrafts) sessions[draft.sessionId] = draft.session
+  for (const draft of changedDrafts) {
+    if (visibleWorkChanged(state.sessions[draft.sessionId], draft.session)) draft.session.lastVisibleChangeAt = Date.now()
+    sessions[draft.sessionId] = draft.session
+  }
   return { ...state, sessions }
 }
 
@@ -1645,6 +1695,9 @@ function createReadyDraft(
   const session = createTranscriptSessionState()
   session.engineSessionId = engineSessionId
   if (engineSessionId !== null && previous?.engineSessionId === engineSessionId) {
+    session.activities = previous.activities
+    session.awaitingApproval = previous.awaitingApproval
+    session.lastVisibleChangeAt = previous.lastVisibleChangeAt
     session.inlineCommands = previous.inlineCommands
     session.inlineCommandResults = previous.inlineCommandResults
     const previews = {
@@ -2168,6 +2221,9 @@ function projectAssistantFrame(
   for (const row of rows) {
     if (!('messageId' in row) || !('blockIndex' in row)) continue
     const key = streamBlockKey(row.messageId, row.blockIndex)
+    if (row.kind === 'tool-use') {
+      draft.session.preparing = Object.fromEntries(Object.entries(draft.session.preparing).filter(([, tool]) => tool.toolUseId !== row.toolUseId))
+    }
     if (draft.session.streamingTextBlocks[key]) {
       ensureOwnedStreamingBlocks(draft)
       delete draft.session.streamingTextBlocks[key]
@@ -2208,6 +2264,7 @@ function projectStreamEvent(
   if (event.type === 'message_start') {
     const started = isRecord(event.message) ? event.message : null
     if (!started || typeof started.id !== 'string') return false
+    if (draft.session.currentStreamMessageId !== started.id && Object.keys(draft.session.preparing).length) draft.session.preparing = {}
     draft.session.currentStreamMessageId = started.id
     draft.session.currentStreamBlockIndex = null
     return true
@@ -2220,6 +2277,12 @@ function projectStreamEvent(
     const key = streamBlockKey(draft.session.currentStreamMessageId, event.index)
     const block = isRecord(event.content_block) ? event.content_block : null
     draft.session.currentStreamBlockIndex = event.index
+    if (block?.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string') {
+      draft.session.preparing = { ...draft.session.preparing, [key]: {
+        toolUseId: block.id, toolName: block.name, json: '', messageId: draft.session.currentStreamMessageId, blockIndex: event.index,
+      } }
+      return true
+    }
     if (block?.type === 'text') {
       if (!draft.session.streamingTextBlocks[key]) {
         ensureOwnedStreamingBlocks(draft)
@@ -2266,7 +2329,13 @@ function projectStreamEvent(
   ) {
     const delta = isRecord(event.delta) ? event.delta : null
     const key = streamBlockKey(draft.session.currentStreamMessageId, event.index)
-    if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+    if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+      const forming = draft.session.preparing[key]
+      if (!forming) return false
+      draft.session.preparing = { ...draft.session.preparing, [key]: { ...forming, json: (forming.json + delta.partial_json).slice(0, 256 * 1024) } }
+      return true
+    }
+    if (delta?.type === 'text_delta'  && typeof delta.text === 'string') {
       if (delta.text.length > 0) settleRetries(draft, nonEmptyString(message.parent_tool_use_id), 'success', null)
       const existing = draft.session.streamingTextBlocks[key] ?? {
         messageId: draft.session.currentStreamMessageId,
@@ -2451,7 +2520,8 @@ function finalizeStreamingTurn(draft: SessionDraft): boolean {
     draft.session.currentStreamMessageId !== null ||
     draft.session.currentStreamBlockIndex !== null ||
     Object.keys(draft.session.streamingTextBlocks).length > 0 ||
-    Object.keys(draft.session.streamingThinkingBlocks).length > 0
+    Object.keys(draft.session.streamingThinkingBlocks).length > 0 ||
+    Object.keys(draft.session.preparing).length > 0
   if (!hasStreamingRows && !hasStreamingState) return false
   // A terminal result can arrive before a stopped assistant block's full frame.
   // Keep its finalized projected content rather than deleting the only
@@ -2469,6 +2539,7 @@ function finalizeStreamingTurn(draft: SessionDraft): boolean {
   }
   draft.session.currentStreamMessageId = null
   draft.session.currentStreamBlockIndex = null
+  draft.session.preparing = {}
   ensureOwnedStreamingBlocks(draft)
   draft.session.streamingTextBlocks = {}
   ensureOwnedStreamingThinkingBlocks(draft)
@@ -3280,7 +3351,7 @@ function narrowStructuredPatch(structuredPatch: unknown): ToolDiffHunk[] {
  * anything else unrecognized (a future built-in or server tool) is
  * `'other'` — a real family, not a crash.
  */
-function deriveToolFamily(toolName: string): ToolFamily {
+export function deriveToolFamily(toolName: string): ToolFamily {
   if (isFilePatchToolName(toolName)) return 'edit'
 
   switch (toolName) {
@@ -4029,4 +4100,23 @@ function stringArray(value: unknown): string[] | null {
 
 function optionalStringArray(value: unknown): string[] | null | undefined {
   return value === undefined ? undefined : stringArray(value)
+}
+
+/** Empty reasoning frames carry no visible work and must not restart the quiet clock. */
+function visibleWorkChanged(previous: TranscriptSessionState | undefined, next: TranscriptSessionState): boolean {
+  if (!previous) return true
+  if (previous.activities !== next.activities || previous.preparing !== next.preparing || previous.toolResultsByUseId !== next.toolResultsByUseId) return true
+  if (previous.rows === next.rows) return false
+  const visible = (session: TranscriptSessionState) => session.rows.filter(row => !session.hiddenFrameIds[row.frameId] &&
+    !('parentToolUseId' in row && row.parentToolUseId) && row.kind !== 'redacted-thinking' &&
+    !(('content' in row) && typeof row.content === 'string' && !row.content.trim()))
+  const before = visible(previous), after = visible(next)
+  return before.length !== after.length || after.some((row, index) => row !== before[index])
+}
+
+export function selectFocusedLiveState(state: TranscriptState, sessionId: SessionId | null): FocusedLiveState | null {
+  const session = sessionId ? state.sessions[sessionId] : undefined
+  if (!session) return null
+  return { activities: session.activities, awaitingApproval: session.awaitingApproval, preparing: session.preparing, lastVisibleChangeAt: session.lastVisibleChangeAt,
+    streaming: Object.values(session.streamingTextBlocks).some(block => !!block.content.trim()) || Object.values(session.streamingThinkingBlocks).some(block => !!block.content.trim()) }
 }

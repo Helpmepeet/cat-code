@@ -1,3 +1,4 @@
+import { withToolActivity } from './toolActivity.js'
 import { randomUUID } from 'crypto'
 import type { InlineCommandRun, InlineCommandSource } from '../../app/shared/inlineCommand.js'
 import type { InlineCommandOperation } from './inlineCommand.js'
@@ -514,7 +515,7 @@ export class AppSessionController {
       this.updateGoalSnapshot(options.goalSnapshot ?? null)
     }
 
-    await withLidWorkRun(() => withStreamJsonAccountDiagnosticHook(
+    await withToolActivity(activity => this.emit(activity), () => withLidWorkRun(() => withStreamJsonAccountDiagnosticHook(
       {
         emit: message => {
           this.emit(createMessageEvent(message))
@@ -590,7 +591,7 @@ export class AppSessionController {
           }
         }
       }
-    ))
+    )))
   }
 
   private getDiagnosticSessionId(): string {

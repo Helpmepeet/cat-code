@@ -1,3 +1,4 @@
+import { selectFocusedLiveState, type FocusedLiveState } from './transcriptProjector.js'
 /**
  * Renders the projector's view models from transcriptProjector.ts.
  *
@@ -357,6 +358,7 @@ export const TranscriptView = memo(function TranscriptView({
   state,
   compacting,
   turnLive = false,
+  focusedTasks = null,
   activeSessionId,
   accounts,
   accountsUsagePending = false,
@@ -395,6 +397,7 @@ export const TranscriptView = memo(function TranscriptView({
   compacting?: boolean
   /** SessionPane's current turn liveness, never inferred from historical rows. */
   turnLive?: boolean
+  focusedTasks?: import('../../shared/protocol.js').TasksSnapshot | null
   activeSessionId: SessionId | null
   /** In-session empty-state Welcome context (Chat.jsx:1272). */
   accounts?: AccountsSnapshot | null
@@ -474,6 +477,8 @@ export const TranscriptView = memo(function TranscriptView({
       boundaryRows={projectedRows}
       compacting={compacting ?? false}
       turnLive={turnLive}
+      focusedLiveState={selectFocusedLiveState(state, activeSessionId)}
+      focusedTasks={focusedTasks}
       accounts={accounts ?? null}
       accountsUsagePending={accountsUsagePending}
       cwd={cwd ?? null}
@@ -589,9 +594,11 @@ function ContextTransitionRow({
 
 export const TranscriptRowsView = memo(function TranscriptRowsView({
   rows,
+  focusedLiveState = null,
   boundaryRows = rows,
   compacting = false,
   turnLive = false,
+  focusedTasks = null,
   leases = null,
   accounts = null,
   accountsUsagePending = false,
@@ -624,11 +631,13 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   moveBackDisabled = false,
 }: {
   rows: NestedTranscriptRow[]
+  focusedLiveState?: FocusedLiveState | null
   /** Pre-display row order, including tool rows hidden by the Todo panel. */
   boundaryRows?: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
   compacting?: boolean
   turnLive?: boolean
+  focusedTasks?: import('../../shared/protocol.js').TasksSnapshot | null
   /** This session's Codex leases; null on an Anthropic path and after a restore. */
   leases?: LeaseSnapshot | null
   /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
@@ -784,13 +793,14 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     />
   }
 
+  const liveFocusedEntry = [...entries].reverse().find(entry => entry.kind === 'focused' && entry.turn.live)
   const renderEntry = (index: number) => {
     const entry = entries[index]
     if (!entry) return null
     if (entry.kind === 'transition') return renderTransition(entry.transition, entryKeys[index])
     if (entry.kind === 'focused') return (
       <div data-row-key={entry.turn.id} data-transcript-entry={entryKeys[index]} key={entry.turn.id}>
-        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} renderReasoning={renderFocusedReasoning} />
+        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} renderReasoning={renderFocusedReasoning} liveState={focusedLiveState} latestLive={liveFocusedEntry?.kind === 'focused' && liveFocusedEntry.turn.id === entry.turn.id} tasks={focusedTasks} />
       </div>
     )
     const item = entry.item
@@ -2630,10 +2640,12 @@ function ToolCardShell({
   targetHover,
   targetFilePath,
   collapsedExtra,
+  failureOutput,
   animateCollapsedExtra = false,
   animateExpandedBody = false,
   entranceKey,
   defaultExpanded,
+  callGroup = false,
   expansionKey,
   presentation,
   tone,
@@ -2654,10 +2666,13 @@ function ToolCardShell({
   targetHover?: string
   targetFilePath?: { rawPath: string; sessionId: SessionId }
   collapsedExtra?: ReactNode
+  failureOutput?: string
   animateCollapsedExtra?: boolean
   animateExpandedBody?: boolean
   entranceKey?: string
   defaultExpanded?: boolean
+  /** A run discloses calls rather than their output. */
+  callGroup?: boolean
   /**
    * The engine's `toolUseId`, so the user's expansion outlives this component.
    * A card can be re-keyed and re-typed underneath them when rows regroup
@@ -2685,9 +2700,11 @@ function ToolCardShell({
   targetNode?: ReactNode
   children?: ReactNode
 }) {
+  const focused = useContext(TranscriptModeContext).mode === 'focused'
+  const toolsExpanded = useContext(ToolsExpandedContext).expanded
   const [expanded, setExpanded] = useToolCardExpanded(
     expansionKey ?? null,
-    defaultExpanded ?? false,
+    focused && status === 'error' && !callGroup ? toolsExpanded : defaultExpanded ?? false,
   )
   const base = FAMILY_STYLE[family]
   const fam = {
@@ -2701,6 +2718,8 @@ function ToolCardShell({
   const { style } = useContext(ToolCardStyleContext)
   const { results } = useContext(TranscriptMotionContext)
   const filePathContext = useContext(FilePathMenuContext)
+  const peek = focused && status === 'error' && !callGroup && failureOutput
+    ? <BashTailPeek tail={selectPeekLines(failureOutput.split('\n'))} /> : collapsedExtra
   return (
     <div className={TOOL_CARD_SHELL_CLASS[style]}>
       <button
@@ -2763,13 +2782,13 @@ function ToolCardShell({
           aria-label={st.word}
         />
       </button>
-      {!expanded && collapsedExtra ? (
+      {!expanded && peek ? (
         <div
           className={animateCollapsedExtra ? 'animate-arrive' : undefined}
           ref={animateCollapsedExtra && entranceKey ? results.refFor(entranceKey, 'animate-arrive') : undefined}
           onAnimationEnd={entranceKey ? event => results.onAnimationEnd(entranceKey, event) : undefined}
         >
-          {collapsedExtra}
+          {peek}
         </div>
       ) : null}
       {expanded && hasBody ? (
@@ -2978,6 +2997,7 @@ function AnnounceCard({ row }: { row: ToolUseNestedRow }) {
         // Primary ink, not the muted detail of other peer headers: the scope
         // line is the whole of what this call says.
         targetNode={<span>{parts?.detail ?? deriveTarget(row)}</span>}
+        failureOutput={row.result?.content}
         status={row.status}
         expansionKey={row.toolUseId}
         defaultExpanded={toolsExpanded || row.status === 'error'}
@@ -3183,6 +3203,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
   // itself, for reasons this preference knows nothing about.
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const focused = useContext(TranscriptModeContext).mode === 'focused'
   const filePathContext = useContext(FilePathMenuContext)
   const filePath = toolCardFilePath(row)
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
@@ -3222,6 +3243,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
+        failureOutput={row.result?.content}
         status={row.status}
         targetHover={deriveTargetHover(row)}
         expansionKey={row.toolUseId}
@@ -3275,7 +3297,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   const hasResultImages = (row.result?.images?.length ?? 0) > 0
   const ack = toolAckForResult(row.result)
   const bashTail =
-    row.toolFamily === 'bash' && ack === null ? bashTailForResult(row.result) : []
+    (row.toolFamily === 'bash' && ack === null) || (focused && row.status === 'error') ? bashTailForResult(row.result) : []
   const headerBadge =
     row.toolFamily === 'edit' || row.toolFamily === 'write'
       ? diffCountBadge(row)
@@ -3289,6 +3311,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
+        failureOutput={row.result?.content}
         status={row.status}
         sub={deriveSub(row)}
         headerBadge={headerBadge}
@@ -3301,9 +3324,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         animateExpandedBody={resolving && (row.status === 'error' || isImageDone || hasResultImages)}
         entranceKey={row.id}
         collapsedExtra={
-          ack !== null ? (
+          focused && row.status === 'error' && bashTail.length > 0 ? <BashTailPeek tail={bashTail} /> : focused && row.toolFamily === 'bash' && row.status === 'success' ? null : ack !== null ? (
             <AckPeek ack={ack} />
-          ) : row.toolFamily === 'bash' && bashTail.length > 0 ? (
+          ) : row.toolFamily === 'bash' && bashTail.length > 0 && (!focused || row.status === 'error') ? (
             <BashTailPeek tail={bashTail} />
           ) : null
         }
@@ -3365,6 +3388,7 @@ function PatchFileCard({
       family="edit"
       target={displayFilePath(diff.filePath, filePathContext?.cwd ?? null)}
       targetFilePath={{ rawPath: diff.filePath, sessionId: row.sessionId }}
+      failureOutput={row.result?.content}
       status={row.status}
       headerBadge={diffCountsBadge(countDiff(diff))}
       expansionKey={`${row.toolUseId}:file:${fileIndex}:${diff.filePath}`}
@@ -3623,6 +3647,7 @@ function ToolSearchCard({ row }: { row: ToolUseNestedRow }) {
       presentation={TOOL_SEARCH_PRESENTATION}
       tone={FAMILY_STYLE.grep.color}
       target={view.target}
+      failureOutput={row.result?.content}
       status={row.status}
       expansionKey={row.toolUseId}
       defaultExpanded={
@@ -3681,6 +3706,7 @@ function TaskOutputCard({ row }: { row: ToolUseNestedRow }) {
       tone={family.color}
       target={task.description}
       targetNode={<span className="text-text-primary">{task.description}</span>}
+      failureOutput={task.output ?? task.error ?? row.result?.content}
       status={status}
       expansionKey={row.toolUseId}
       defaultExpanded={toolsExpanded || status === 'error' || isAgentAnswer}
@@ -3761,6 +3787,7 @@ function ToolRunCard({
   const memberKeys = useMemo(() => members.map(member => member.id), [members])
   return (
     <ToolCardShell
+      callGroup
       family={family}
       target={head.target}
       targetFilePath={
@@ -3966,9 +3993,8 @@ const ToolRunRow = memo(function ToolRunRow({
   hoistedPrefix: string
   runKey: string
 }) {
-  // Same three-input rule as the card, over the SAME three inputs: a failed member
-  // opens itself, a live pending→error flip is reflected immediately, and the
-  // user's own click beats both. The choice is kept by `toolUseId`, so a read the
+  // Full opens a failed member automatically; Focused keeps its tail collapsed.
+  // The user's own click beats either default. The choice is kept by `toolUseId`, so a read the
   // user opened as a LONE card is still open once it folds into a run.
   //
   // `toolsExpanded` is threaded down deliberately. "Tools open by default" has to
@@ -3977,9 +4003,10 @@ const ToolRunRow = memo(function ToolRunRow({
   // whether a search run is useful — the counts are on the member rows, but the
   // RESULTS only exist inside them.
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const focused = useContext(TranscriptModeContext).mode === 'focused'
   const [open, setOpen] = useToolCardExpanded(
     row.toolUseId,
-    toolsExpanded || row.status === 'error',
+    toolsExpanded || (!focused && row.status === 'error'),
   )
   const store = useToolCardExpansionStore()
   // Touching a member pins its RUN open. You can only reach a member row while the
@@ -4035,6 +4062,7 @@ const ToolRunRow = memo(function ToolRunRow({
           </span>
         ) : null}
       </button>
+      {!open && focused && row.status === 'error' ? <BashTailPeek tail={bashTailForResult(row.result)} /> : null}
       {open ? (
         <div
           className={`mb-1.5 ml-6 mt-0.5 border-l border-shell-seam pl-3${
@@ -4486,6 +4514,7 @@ function RejectedResumeCard({
  * frame, and is never fabricated here.
  */
 function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
+  const focused = useContext(TranscriptModeContext).mode === 'focused'
   const { turnLive } = useContext(TranscriptMotionContext)
   const { style: cardStyle } = useContext(ToolCardStyleContext)
   const faces = useAgentFaceRegistry()
@@ -4526,7 +4555,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   // resume below is handed this pair rather than claiming the same key twice.
   const [expanded, setExpanded] = useToolCardExpanded(
     row.toolUseId,
-    completion !== null || row.status === 'error',
+    focused && row.status === 'error' ? false : completion !== null || row.status === 'error',
   )
 
   const revealAgent = useContext(AgentRevealContext)
@@ -4628,6 +4657,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           {lines}
         </button>
       )}
+      {focused && row.status === 'error' && !expanded ? <BashTailPeek tail={bashTailForResult(row.result)} /> : null}
       {/* The card ran and answered; only its steps are gone. Said in the same
           quiet register as the orphan placeholder's band and the retention
           boundary, because nothing here failed and there is nothing to fix. */}

@@ -46,11 +46,28 @@ function readyScript({
   return `
     const socketPath = process.env.CATCODE_SIDECAR_SOCKET
     try { require('node:fs').unlinkSync(socketPath) } catch {}
+    const outgoing = new WeakMap()
+    function flushFrames(socket) {
+      const state = outgoing.get(socket)
+      if (!state) return
+      while (state.frames.length) {
+        const frame = state.frames[0]
+        const written = socket.write(frame.subarray(state.offset))
+        if (written <= 0) return
+        state.offset += written
+        if (state.offset < frame.length) return
+        state.frames.shift()
+        state.offset = 0
+      }
+    }
     function writeFrame(socket, payload) {
       const json = Buffer.from(JSON.stringify(payload), 'utf8')
       const prefix = Buffer.allocUnsafe(4)
       prefix.writeUInt32BE(json.byteLength, 0)
-      socket.write(Buffer.concat([prefix, json]))
+      let state = outgoing.get(socket)
+      if (!state) { state = { frames: [], offset: 0 }; outgoing.set(socket, state) }
+      state.frames.push(Buffer.concat([prefix, json]))
+      flushFrames(socket)
     }
     Bun.listen({
       unix: socketPath,
@@ -66,12 +83,49 @@ function readyScript({
           })
           ${afterOpen}
         },
+        drain(socket) { flushFrames(socket) },
         data() {}
       }
     })
     setInterval(() => {}, 1000)
   `
 }
+
+test('the socket boundary admits activity v1 and correlated queue snapshots and rejects invalid fields', async () => {
+  const activity = { type: 'tool.activity', toolUseId: 'command', phase: 'executing', startedAt: 10000, output: 'raw tail', totalLines: 412000, timeoutMs: 120000 }
+  const frames = [
+    { kind: 'event', event: activity },
+    { kind: 'event', event: { ...activity, phase: 'invented' } },
+    { kind: 'event', event: { ...activity, output: 'x'.repeat(2049) } },
+    { kind: 'event', event: { ...activity, injected: true } },
+    { kind: 'queued-prompts.snapshot', prompts: [{ id: 'engine-id', submitId: 'submit-id', text: 'queued' }] },
+    { kind: 'queued-prompts.snapshot', prompts: [{ id: 'engine-id', submitId: 5, text: 'queued' }] },
+    { kind: 'queued-prompts.snapshot', prompts: [{ id: 'engine-id', submitId: 'x'.repeat(4097), text: 'queued' }] },
+    { kind: 'submit.result', submitId: 'direct', accepted: true, queued: false },
+    { kind: 'submit.result', submitId: 'staged', accepted: true, queued: true },
+    { kind: 'submit.result', submitId: 'invalid', accepted: true, queued: 'false' },
+    { kind: 'submit.result', submitId: 'invalid', accepted: false, queued: true },
+    { kind: 'tasks.snapshot', tasks: { items: [], focusedBashJobs: [{ id: 'job', toolUseId: 'command', label: 'Run the suite', status: 'completed', startTime: 10000, endTime: 12000 }] } },
+    { kind: 'tasks.snapshot', tasks: { items: [], focusedBashJobs: [{ id: 'job', label: 'job', status: 'failed', startTime: 10000 }] } },
+    { kind: 'tasks.snapshot', tasks: { items: [], focusedBashJobs: [{ id: 'job', label: 'x'.repeat(501), status: 'running', startTime: 10000 }] } },
+    { kind: 'pong', nonce: 'end' },
+  ]
+  const events: SupervisorEvent[] = []
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', readyScript({ afterOpen: `for (const frame of ${JSON.stringify(frames)}) writeFrame(socket, { ...frame, protocolVersion: ${PROTOCOL_VERSION}, sessionId: process.env.CATCODE_SIDECAR_SESSION_ID })` })],
+    socketDir: makeTempDir('catcode-activity-boundary-'), killGraceMs: 100,
+  })
+  supervisors.push(supervisor)
+  supervisor.subscribe(event => events.push(event))
+  supervisor.spawnSession('activity-boundary')
+  await waitFor(() => events.some(event => event.type === 'frame' && event.frame.kind === 'pong'), 'socket did not finish delivery')
+  const delivered = events.flatMap(event => event.type === 'frame' ? [event.frame] : [])
+  expect(delivered.filter(frame => frame.kind === 'event')).toEqual([expect.objectContaining({ event: activity })])
+  expect(delivered.filter(frame => frame.kind === 'queued-prompts.snapshot')).toHaveLength(1)
+  expect(delivered.filter(frame => frame.kind === 'submit.result')).toHaveLength(2)
+  expect(delivered.filter(frame => frame.kind === 'tasks.snapshot')).toHaveLength(1)
+})
 
 afterEach(() => {
   for (const supervisor of supervisors.splice(0)) supervisor.shutdown()

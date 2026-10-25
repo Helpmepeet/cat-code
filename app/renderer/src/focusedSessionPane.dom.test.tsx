@@ -55,7 +55,8 @@ test('Focused keeps reasoning in the transcript and the running command visible 
   expect([...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Thinking')?.parentElement?.textContent).not.toContain('Checking the module graph')
   await tree.render(pane(state, 'full'))
   expect([...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Thinking')?.parentElement?.textContent).not.toContain('Checking the module graph')
-  const running = project([{ type: 'tool_use', id: 'pending-bash', name: 'Bash', input: { command: 'bun test src/loader' } }], state)
+  let running = project([{ type: 'tool_use', id: 'pending-bash', name: 'Bash', input: { command: 'bun test src/loader' } }], state)
+  running = projectServerFrame(running, { kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'tool.activity', toolUseId: 'pending-bash', phase: 'executing', startedAt: Date.now() } })
   await tree.render(pane(running, 'focused'))
   const activity = [...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Running')?.parentElement
   expect(activity?.textContent).toContain('Bash')
@@ -77,6 +78,7 @@ test('Focused keeps reasoning in the transcript and the running command visible 
 test('producer assistant messages accumulate under Working and fold only when their result arrives', async () => {
   let state = project([{ type: 'text', text: 'I will trace the loader.' }])
   state = project([{ type: 'tool_use', id: 'read-loader', name: 'Read', input: { file_path: '/repo/loader.ts' } }], state)
+  state = projectServerFrame(state, { kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'tool.activity', toolUseId: 'read-loader', phase: 'executing', startedAt: Date.now() } })
   state = project([{ type: 'text', text: 'The loader is fixed.' }], state, { stopReason: 'end_turn' })
   const tree = await harness.mount(pane(state, 'focused'))
   expect([...tree.container.querySelectorAll('[data-focused-update]')].map(node => node.textContent))

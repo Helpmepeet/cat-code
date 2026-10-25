@@ -1,3 +1,4 @@
+import { recordToolOutput } from '../app-runtime/toolActivity.js'
 import type { ToolUseBlock } from '@anthropic-ai/sdk/resources/index.mjs'
 import last from 'lodash-es/last.js'
 import {
@@ -184,6 +185,9 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
         message.data.type === 'bash_progress' ||
         message.data.type === 'powershell_progress'
       ) {
+        if (message.data.type === 'bash_progress') {
+          recordToolOutput(message.parentToolUseID, message.data.fullOutput || message.data.output, message.data.totalLines, message.data.timeoutMs)
+        }
         // Filter bash progress to send only one per minute
         // Only emit for Cat Code Remote for now
         if (

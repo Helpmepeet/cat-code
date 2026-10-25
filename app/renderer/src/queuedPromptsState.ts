@@ -1,3 +1,4 @@
+import { MAX_QUEUED_PROMPT_PREVIEW_CHARS } from '../../shared/limits.js'
 /**
  * Messages waiting for the running response — the renderer half of the
  * `queued-prompts.snapshot` read seam (D1a). A reducer over the read-only frame
@@ -24,9 +25,12 @@ import type {
 
 export type QueuedPromptsState = {
   sessions: Record<SessionId, readonly QueuedPromptItem[]>
+  optimistic: Record<SessionId, readonly QueuedPromptItem[]>
 }
 
 export type QueuedPromptsAction =
+  | { type: 'submitted'; sessionId: SessionId; submitId: string; text: string }
+  | { type: 'submit-failed'; sessionId: SessionId; submitId: string }
   | { type: 'frame'; frame: ServerFrame }
   /**
    * The session left the roster. A `lifecycle` frame empties the list but keeps
@@ -38,25 +42,30 @@ export type QueuedPromptsAction =
 const EMPTY: readonly QueuedPromptItem[] = []
 
 export function createQueuedPromptsState(): QueuedPromptsState {
-  return { sessions: {} }
+  return { sessions: {}, optimistic: {} }
 }
 
 export function reduceQueuedPromptsState(
   state: QueuedPromptsState,
   action: QueuedPromptsAction,
 ): QueuedPromptsState {
+  if (action.type === 'submitted') return { ...state, optimistic: { ...state.optimistic, [action.sessionId]: [...(state.optimistic[action.sessionId] ?? []), { id: action.submitId, submitId: action.submitId, text: action.text.slice(0, MAX_QUEUED_PROMPT_PREVIEW_CHARS) }] } }
+  if (action.type === 'submit-failed') return { ...state, optimistic: { ...state.optimistic, [action.sessionId]: (state.optimistic[action.sessionId] ?? []).filter(item => item.submitId !== action.submitId) } }
   if (action.type === 'session-removed') {
-    if (!(action.sessionId in state.sessions)) return state
+    if (!(action.sessionId in state.sessions) && !(action.sessionId in state.optimistic)) return state
     const { [action.sessionId]: _removed, ...rest } = state.sessions
-    return { ...state, sessions: rest }
+    const { [action.sessionId]: _pending, ...optimistic } = state.optimistic
+    return { ...state, sessions: rest, optimistic }
   }
 
   const { frame } = action
+  if (frame.kind === 'submit.result' && (!frame.accepted || frame.queued === false)) return reduceQueuedPromptsState(state, { type: 'submit-failed', sessionId: frame.sessionId, submitId: frame.submitId })
 
   if (frame.kind === 'queued-prompts.snapshot') {
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: frame.prompts },
+      optimistic: { ...state.optimistic, [frame.sessionId]: (state.optimistic[frame.sessionId] ?? []).filter(item => !frame.prompts.some(prompt => prompt.submitId === item.submitId)) },
     }
   }
 
@@ -64,10 +73,11 @@ export function reduceQueuedPromptsState(
   // it; a fresh one publishes its own list. Untracked sessions are left alone
   // (mirrors slashCatalogState / runControlsState).
   if (frame.kind === 'lifecycle') {
-    if (!(frame.sessionId in state.sessions)) return state
+    if (!(frame.sessionId in state.sessions) && !(frame.sessionId in state.optimistic)) return state
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: EMPTY },
+      optimistic: { ...state.optimistic, [frame.sessionId]: EMPTY },
     }
   }
 
@@ -78,7 +88,9 @@ export function reduceQueuedPromptsState(
 export function selectQueuedPrompts(
   state: QueuedPromptsState,
   sessionId: SessionId | null,
+  instant = false,
 ): readonly QueuedPromptItem[] {
   const prompts = sessionId ? state.sessions[sessionId] : undefined
-  return prompts ?? EMPTY
+  const pending = instant && sessionId ? state.optimistic[sessionId] ?? EMPTY : EMPTY
+  return pending.length ? [...(prompts ?? EMPTY), ...pending] : prompts ?? EMPTY
 }
