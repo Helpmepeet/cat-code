@@ -225,11 +225,11 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   const chipLabel = `Subagents: ${visibleFaces.map(row => `${row.name || row.task || 'Subagent'}, ${row.state}`).join('; ')}${more > 0 ? `; ${more} more` : ''}`
   return (
     <div ref={root} hidden={hidden} inert={hidden} className={`subagent-dock${flat ? ' subagent-dock-flat' : ''}${reducedMotion ? ' subagent-dock-reduced' : ''}`} data-layout={expanded ? flat ? 'panel' : 'floating' : 'chip'}>
-      {hasChip ? <button ref={chip} type="button" className={`subagent-dock-chip${panelShown ? ' subagent-dock-hidden' : ''}`} aria-label={chipLabel} aria-expanded={expanded} aria-controls={fits ? panelId : undefined} aria-hidden={panelShown || undefined} tabIndex={panelShown ? -1 : 0} aria-describedby={tip?.mode === 'chip' ? tipId : undefined} onClick={() => changeExpanded(true)} onFocus={event => { const first = visibleFaces[0]; if (first) showTip(first, event.currentTarget, 'chip') }} onBlur={() => closeTip()} onMouseLeave={() => closeTip()}>
+      {hasChip ? <button ref={chip} type="button" data-window-overlay className={`subagent-dock-chip${panelShown ? ' subagent-dock-hidden' : ''}`} aria-label={chipLabel} aria-expanded={expanded} aria-controls={fits ? panelId : undefined} aria-hidden={panelShown || undefined} tabIndex={panelShown ? -1 : 0} aria-describedby={tip?.mode === 'chip' ? tipId : undefined} onClick={() => changeExpanded(true)} onFocus={event => { const first = visibleFaces[0]; if (first) showTip(first, event.currentTarget, 'chip') }} onBlur={() => closeTip()} onMouseLeave={() => closeTip()}>
         {visibleFaces.map(row => <span key={row.agentId} className="subagent-dock-chip-slot" onMouseEnter={event => showTip(row, event.currentTarget, 'chip')}><DockFace row={row} /></span>)}
         {more > 0 ? <span className="subagent-dock-more">+{more}</span> : null}
       </button> : null}
-      <div ref={panel} id={panelId} role="region" aria-label="Subagents" aria-hidden={!panelShown || undefined} inert={!expanded} className={`subagent-dock-panel${panelShown ? '' : ' subagent-dock-hidden'}${flat ? '' : ' subagent-dock-floating'}`}>
+      <div ref={panel} id={panelId} data-window-overlay role="region" aria-label="Subagents" aria-hidden={!panelShown || undefined} inert={!expanded} className={`subagent-dock-panel${panelShown ? '' : ' subagent-dock-hidden'}${flat ? '' : ' subagent-dock-floating'}`}>
         <div className="subagent-dock-header"><span>SUBAGENTS</span><button type="button" aria-label="Collapse subagents" onClick={() => changeExpanded(false)}>⌃</button></div>
         <div className="subagent-dock-list">
           {[

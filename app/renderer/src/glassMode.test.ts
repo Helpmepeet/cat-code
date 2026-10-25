@@ -385,8 +385,10 @@ test('floating surfaces and controls never acquire page-card or chrome markers',
       if (marked && (tag.floating || /^(input|select|textarea)$/.test(tag.tag))) {
         leaking.push(`${file}:${tag.line}`)
       }
+      // The dock frosts like the rail: it floats over the transcript, and the
+      // blur keeps what is under it unreadable.
       if (tag.attributes.has('data-window-overlay')) {
-        expect(file).toBe('Sidebar.tsx')
+        expect(['Sidebar.tsx', 'SubagentDock.tsx']).toContain(file)
       }
     }
   }
