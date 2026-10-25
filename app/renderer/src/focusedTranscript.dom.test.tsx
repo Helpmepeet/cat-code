@@ -275,3 +275,31 @@ test('opening a finished turn cascades its parts, except under reduced motion', 
     expect(reduced.container.querySelector('.focused-turn-body')?.hasAttribute('data-cascade')).toBe(false)
   } finally { globalThis.matchMedia = original }
 })
+
+const image = (status: 'pending' | 'success'): NestedTranscriptRow => ({ ...source('image'), kind: 'tool-use', toolUseId: 'image-1', toolName: 'GenerateImage', toolFamily: 'imagegen',
+  input: { prompt: 'A neon city portrait' }, status, agentCompletion: null,
+  result: status === 'pending' ? null : { content: 'Saved image', isError: false, diff: null,
+    generatedImage: { filePath: '/tmp/portrait.png', model: 'gpt-image-1', size: '1024x1024', outputFormat: 'png', bytes: 4, preview: { mediaType: 'image/png', data: 'AAAA' } } } })
+
+test('a finished generated image stays outside the fold, shown once, while its step still counts it', async () => {
+  const done = [user, text('update-1', 'I will make the image.'), image('success'), text('answer', 'Here is the portrait.'), result]
+  const tree = await harness.mount(view(done))
+  expect(tree.container.querySelector('.focused-fold-head')?.getAttribute('aria-expanded')).toBe('false')
+  const outside = () => [...tree.container.querySelectorAll('.focused-deliverables img[alt="Generated image"]')]
+  expect(outside().length).toBe(1)
+  expect(tree.container.querySelector('.focused-turn')?.contains(outside()[0]!)).toBe(false)
+  await click(tree.container.querySelector('.focused-fold-head'))
+  const step = tree.container.querySelector('.focused-step-head')!
+  expect(step.textContent).toContain('A neon city portrait')
+  await click(step)
+  expect(tree.container.querySelectorAll('img[alt="Generated image"]').length).toBe(1)
+})
+
+test('a generated image leaves the closed live step as soon as it finishes', async () => {
+  const store = createToolCardExpansionStore()
+  const tree = await harness.mount(view([user, text('update-1', 'I will make the image.'), image('pending')], true, false, 'focused', store))
+  expect(tree.container.querySelector('.focused-deliverables')).toBeNull()
+  await tree.render(view([user, text('update-1', 'I will make the image.'), image('success')], true, false, 'focused', store))
+  expect(tree.container.querySelector('.focused-step-head')?.getAttribute('aria-expanded')).toBe('false')
+  expect(tree.container.querySelectorAll('.focused-deliverables img[alt="Generated image"]').length).toBe(1)
+})

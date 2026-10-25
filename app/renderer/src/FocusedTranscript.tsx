@@ -3,7 +3,7 @@ import type { FocusedLiveState } from './transcriptProjector.js'
 import type { TasksSnapshot } from '../../shared/protocol.js'
 import { memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
-import { focusedNamedCall, summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
+import { focusedNamedCall, isFocusedDeliverable, summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { FAMILY_STYLE } from './toolCardPalette.js'
 import { useToolCardExpanded } from './toolCardExpansion.js'
 import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
@@ -63,6 +63,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
     (issuedCalls.has(job.toolUseId) || !!liveState?.activities[job.toolUseId]) &&
     (job.status === 'running' || (job.endTime !== undefined && now - job.endTime < 4000))) ?? [] : []
   const last = segments.at(-1)
+  const deliverables = useMemo(() => turn.rows.filter(isFocusedDeliverable), [turn.rows])
   const latestUpdate = turn.live ? [...segments].reverse().find(segment => segment.kind === 'update')?.id : undefined
   const toggle = () => {
     setOpen(!open)
@@ -71,7 +72,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
     setCascading(true)
     cascadeTimer.current = setTimeout(() => setCascading(false), CASCADE_MS)
   }
-  return (
+  return (<>
     <section className="focused-turn" data-focused-turn={turn.id} data-focused-completed={turn.completed ? '' : undefined}
       data-focused-live={turn.live ? '' : undefined}>
       <button type="button" className="focused-fold-head" aria-expanded={open} aria-controls={bodyId} onClick={toggle} data-pane-anchor-exclude="">
@@ -101,7 +102,8 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
         </div>
       </FocusedDisclosure>
     </section>
-  )
+    {deliverables.length ? <div className="focused-deliverables">{renderRows(deliverables, false)}</div> : null}
+  </>)
 })
 
 function FocusedSegmentBlock({ segment, live, children }: { segment: FocusedSegment; live: boolean; children: ReactNode }) {
@@ -160,7 +162,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
       {live && headCall ? <LiveOutput call={headCall} now={now} className="focused-head-out" /> : null}
       <RollingCalls calls={rollingNow ? rollingCalls(calls.filter(call => call !== headCall)) : []} now={now} signalled={liveState !== null} />
       <FocusedDisclosure open={open} id={bodyId}>
-        <div className="focused-step-body">{renderRows(segment.rows, false)}</div>
+        <div className="focused-step-body">{renderRows(segment.rows.filter(row => !isFocusedDeliverable(row)), false)}</div>
       </FocusedDisclosure>
     </div>
   )

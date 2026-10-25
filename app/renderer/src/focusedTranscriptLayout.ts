@@ -47,6 +47,15 @@ const pastVerbs: Partial<Record<ToolFamily, string>> = {
   agent: 'Delegated', web: 'Fetched', notebook: 'Edited',
 }
 
+/**
+ * A finished generated image is a result for the reader, like the answer, so it
+ * stays outside the fold. It still counts toward its step's summary.
+ */
+export function isFocusedDeliverable(row: NestedTranscriptRow): boolean {
+  return row.kind === 'tool-use' && row.toolFamily === 'imagegen' && row.status === 'success' &&
+    row.result?.generatedImage !== undefined
+}
+
 /** A settled stretch of exactly one call is named by its target instead of counted. */
 export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: string; target: string } | null {
   const calls = rows.filter(row => row.kind === 'tool-use')
