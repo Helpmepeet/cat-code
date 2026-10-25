@@ -184,22 +184,28 @@ test('setModel via the executor mutates the store, reports changed, and notifies
 })
 
 test('setEffort and setFast route through the executor and reflect in the snapshot', () => {
-  const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
-  const { executor, calls } = fakeExecutor(store)
-  const domain = createSidecarRunControlsDomain(store, {
-    executor,
-    buildSnapshot: snapshotWithTerraAndFast,
-  })
+  const previousOverride = getMainLoopModelOverride()
+  try {
+    setMainLoopModelOverride('gpt-5.6-terra')
+    const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
+    const { executor, calls } = fakeExecutor(store)
+    const domain = createSidecarRunControlsDomain(store, {
+      executor,
+      buildSnapshot: snapshotWithTerraAndFast,
+    })
 
-  const effortResult = domain.setEffort('high')
-  expect(effortResult).toMatchObject({ ok: true, changed: true })
-  expect(store.getState().effortValue).toBe('high')
+    const effortResult = domain.setEffort('high')
+    expect(effortResult).toMatchObject({ ok: true, changed: true })
+    expect(store.getState().effortValue).toBe('high')
 
-  const fastResult = domain.setFast(true)
-  expect(fastResult).toMatchObject({ ok: true, changed: true })
-  expect(store.getState().fastMode).toBe(true)
+    const fastResult = domain.setFast(true)
+    expect(fastResult).toMatchObject({ ok: true, changed: true })
+    expect(store.getState().fastMode).toBe(true)
 
-  expect(calls).toEqual(['effort:high', 'fast:true'])
+    expect(calls).toEqual(['effort:high', 'fast:true'])
+  } finally {
+    setMainLoopModelOverride(previousOverride)
+  }
 })
 
 test('provider-local Default clears an explicit model override', () => {
@@ -324,22 +330,28 @@ test('rejects enabling fast mode when the live model/account gates do not allow 
 })
 
 test('buildRunControlsSnapshot degrades gracefully and reports effective plus selected effort', () => {
-  const snap = buildRunControlsSnapshot({
-    ...getDefaultAppState(),
-    effortValue: 'high',
-    fastMode: true,
-  })
-  expect(snap.effort.current).toBe('high')
-  expect(snap.effort.selected).toBe('high')
-  expect(snap.fast.active).toBe(true)
-  // getModelOptions is engine-tier-dependent; the builder is throw-free so options
-  // is always an array (degrades to [] on any failure), never a crash.
-  expect(Array.isArray(snap.model.options)).toBe(true)
-  expect(
-    snap.model.options.every(
-      option => option.provider === 'openai' || option.provider === 'anthropic',
-    ),
-  ).toBe(true)
+  const previousOverride = getMainLoopModelOverride()
+  try {
+    setMainLoopModelOverride('gpt-5.6-terra')
+    const snap = buildRunControlsSnapshot({
+      ...getDefaultAppState(),
+      effortValue: 'high',
+      fastMode: true,
+    })
+    expect(snap.effort.current).toBe('high')
+    expect(snap.effort.selected).toBe('high')
+    expect(snap.fast.active).toBe(true)
+    // getModelOptions is engine-tier-dependent; the builder is throw-free so options
+    // is always an array (degrades to [] on any failure), never a crash.
+    expect(Array.isArray(snap.model.options)).toBe(true)
+    expect(
+      snap.model.options.every(
+        option => option.provider === 'openai' || option.provider === 'anthropic',
+      ),
+    ).toBe(true)
+  } finally {
+    setMainLoopModelOverride(previousOverride)
+  }
 })
 
 test('LIVE: no desktop provider route claims prompt-cache expiry from local session state', () => {

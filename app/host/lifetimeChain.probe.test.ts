@@ -77,6 +77,7 @@ async function mintTranscript(opts: {
       cwd: opts.cwd,
       env: {
         ...process.env,
+        ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
         CLAUDE_CONFIG_DIR: opts.configHome,
         TEST_ENABLE_SESSION_PERSISTENCE: '1',
       },
@@ -174,7 +175,10 @@ test('LR-7 chain: one real registry file → upsert → fill → markClean → f
   const sup = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { CLAUDE_CONFIG_DIR: configHome },
+    sidecarEnv: {
+      ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
+      CLAUDE_CONFIG_DIR: configHome,
+    },
   })
   supervisors.push(sup)
   // A silent fresh session (the Potemkin failure) would emit a ready frame with a

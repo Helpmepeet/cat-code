@@ -28,7 +28,9 @@ for (const mode of ['unresolved jump', 'later manual location', 'manual move', '
   mkdirSync(join(project, '.cat-code'))
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
   writeFileSync(join(project, '.cat-code', 'settings.json'), JSON.stringify({ hooks: { SessionStart: [{ matcher: empty ? '' : 'resume', hooks: [{ type: 'command', command: `touch ${quote(marker)}` }] }] } }))
-  const env = { ...process.env, CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'sk-ant-local-probe', NODE_ENV: 'development', TEST_ENABLE_SESSION_PERSISTENCE: '1' }
+  // Test children must not inherit the desktop session's identity or log descriptors.
+  const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('CATCODE_')))
+  const env = { ...inheritedEnv, CLAUDE_CONFIG_DIR: config, ANTHROPIC_API_KEY: 'sk-ant-local-probe', NODE_ENV: 'development', TEST_ENABLE_SESSION_PERSISTENCE: '1' }
   const trust = (trusted: boolean) => writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: trusted ? { [cwd]: { hasTrustDialogAccepted: true } } : {} }))
   const processes: Array<ReturnType<typeof Bun.spawn>> = []
   try {

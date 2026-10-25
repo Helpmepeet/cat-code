@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, test } from 'bun:test'
 import {
   getMainLoopModelOverride,
   setMainLoopModelOverride,
@@ -90,6 +90,9 @@ function contextWithEffort(effortValue: AppState['effortValue']): ToolUseContext
 }
 
 const previousOverride = getMainLoopModelOverride()
+beforeEach(() => {
+  setMainLoopModelOverride('claude-haiku-4-5-20251001')
+})
 afterEach(() => {
   setMainLoopModelOverride(previousOverride)
 })

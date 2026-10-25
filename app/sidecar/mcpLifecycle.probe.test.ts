@@ -186,6 +186,7 @@ test(
       sidecarArgs: ['run', sidecarEntry],
       sidecarCwd: project,
       sidecarEnv: {
+        ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
         CLAUDE_CONFIG_DIR: configHome,
         CATCODE_SIDECAR_RESUME_SESSION_ID: '',
         // The sidecar must exercise the production trust store. Under the Bun

@@ -68,6 +68,7 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
     // root (P3-1: cwd is caller-supplied, no P1_1_CWD hardcode).
     sidecarCwd: process.cwd(),
     sidecarEnv: {
+      ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
       CLAUDE_CONFIG_DIR: freshConfigHome(),
       CATCODE_SIDECAR_RESUME_SESSION_ID: '',
     },
@@ -114,6 +115,7 @@ test('hand-injected tool_use SDKMessage round-trips sidecar→supervisor INTACT'
     sidecarArgs: ['run', sidecarEntry],
     sidecarEnv: {
       CATCODE_SIDECAR_PROBE: '1',
+      ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
       CLAUDE_CONFIG_DIR: freshConfigHome(),
     },
   })
@@ -158,6 +160,7 @@ test('a connected session responds to a valid ping (happy-path liveness)', async
     sidecarArgs: ['run', sidecarEntry],
     sidecarEnv: {
       CATCODE_SIDECAR_PROBE: '0',
+      ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
       CLAUDE_CONFIG_DIR: freshConfigHome(),
       CATCODE_SIDECAR_RESUME_SESSION_ID: '',
     },
@@ -241,6 +244,7 @@ test('turn.status crosses the real socket and brackets the turn', async () => {
     sidecarArgs: ['run', sidecarEntry],
     sidecarEnv: {
       CATCODE_SIDECAR_PROBE: '1',
+      ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
       CLAUDE_CONFIG_DIR: freshConfigHome(),
     },
   })

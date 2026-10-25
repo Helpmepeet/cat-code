@@ -109,6 +109,7 @@ async function mintTranscript(opts: {
       cwd: opts.cwd,
       env: {
         ...process.env,
+        ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
         CLAUDE_CONFIG_DIR: opts.configHome,
         // The bun-test runner sets NODE_ENV=test, which makes the engine's
         // transcript persistence a no-op (shouldSkipPersistence). Opt the mint
@@ -174,7 +175,10 @@ function makeSupervisor(configHome: string): SidecarSupervisor {
   const sup = new SidecarSupervisor({
     sidecarCommand: 'bun',
     sidecarArgs: ['run', sidecarEntry],
-    sidecarEnv: { CLAUDE_CONFIG_DIR: configHome },
+    sidecarEnv: {
+      ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
+      CLAUDE_CONFIG_DIR: configHome,
+    },
   })
   supervisors.push(sup)
   return sup
@@ -328,7 +332,11 @@ test('(b) compacted resume replays archival prefix plus seam while the model see
     ['bun', 'run', resumeProbe, engineSessionId, marker],
     {
       cwd,
-      env: { ...process.env, CLAUDE_CONFIG_DIR: configHome },
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
+        CLAUDE_CONFIG_DIR: configHome,
+      },
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -365,7 +373,11 @@ test('(b) the resumed session state actually contains the prior messages (engine
     ['bun', 'run', resumeProbe, engineSessionId, marker],
     {
       cwd,
-      env: { ...process.env, CLAUDE_CONFIG_DIR: configHome },
+      env: {
+        ...process.env,
+        ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
+        CLAUDE_CONFIG_DIR: configHome,
+      },
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -512,6 +524,7 @@ test('(c) a bogus resume id fails loudly — non-zero exit + distinguishable std
     cwd,
     env: {
       ...process.env,
+      ANTHROPIC_API_KEY: 'sk-ant-isolated-test',
       CLAUDE_CONFIG_DIR: configHome,
       CATCODE_SIDECAR_SOCKET: socketPath,
       CATCODE_SIDECAR_SESSION_ID: 'p31-bogus-app',

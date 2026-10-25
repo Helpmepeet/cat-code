@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { axisMetricsScript, designMetricsScript, profileMetricsScript, startPrototypeServer, typographyDeltas, evaluateAxisCollisions, evaluateDesign } from './visualAcceptanceMatrix.js'
 
 /**
@@ -100,9 +101,31 @@ test('legacy native capture preserves the requested scene and completes through 
   expect(driver).toContain('app.quit()')
 })
 test('prototype server exposes only known read-only assets and closes its loopback listener', async () => {
-  const server = await startPrototypeServer(fileURLToPath(new URL('../../', import.meta.url)))
+  const repository = mkdtempSync(join(tmpdir(), 'catcode-prototype-server-'))
+  let server: Awaited<ReturnType<typeof startPrototypeServer>> | undefined
   try {
+    const root = join(repository, 'docs/analytics/2026-10-18-analytics-prototype')
+    for (const directory of ['preview', 'page', 'data']) mkdirSync(join(root, directory), { recursive: true })
+    const fixtures = new Map([
+      ['preview/harness.html', '<!doctype html><script>window.__ready = true</script>'],
+      ['page/index.html', '<!doctype html><title>Synthetic prototype</title>'],
+      ['page/cc.css', 'body { color: black; }'],
+      ['page/cc.js', 'window.__fixture = true;'],
+      ...['summary', 'daily', 'models', 'daily_models', 'tools', 'daily_tools', 'builds', 'hours', 'concurrency', 'permissions', 'auto_daily', 'effort', 'daily_effort', 'sessions', 'session_totals', 'daily_sources', 'session_detail', 'daily_skills', 'daily_integrations']
+        .map(id => [`data/catcode-${id}.json`, JSON.stringify({ fixture: id })] as const),
+    ])
+    for (const [path, body] of fixtures) writeFileSync(join(root, path), body)
+    writeFileSync(join(repository, 'package.json'), '{"private":true}')
+    writeFileSync(join(repository, 'CLAUDE.md'), 'Synthetic private file')
+    writeFileSync(join(root, 'data/catcode-credentials.json'), '{"fixture":"not public"}')
+    writeFileSync(join(root, 'preview/no.html'), '<title>Not allowlisted</title>')
+    server = await startPrototypeServer(repository)
     expect(server.origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+    for (const [path, body] of fixtures) {
+      const response = await fetch(`${server.origin}/${path}`)
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe(body)
+    }
     const page = await fetch(`${server.origin}/preview/harness.html?app=1&side=288&range=7d`)
     expect(page.status).toBe(200)
     expect(await page.text()).toContain('window.__ready = true')
@@ -117,9 +140,13 @@ test('prototype server exposes only known read-only assets and closes its loopba
     }
     expect((await fetch(`${server.origin}/preview/harness.html`, { method: 'POST', body: 'not written' })).status).toBe(404)
   } finally {
-    await server.close()
+    try {
+      await server?.close()
+    } finally {
+      rmSync(repository, { recursive: true, force: true })
+    }
   }
-  expect(await fetch(server.origin).then(() => false, () => true)).toBe(true)
+  expect(await fetch(server!.origin).then(() => false, () => true)).toBe(true)
 })
 test('matrix keeps app scene and lifecycle while adding isolated prototype comparisons', () => {
   const source = code(new URL('./visualAcceptanceMatrix.ts', import.meta.url))

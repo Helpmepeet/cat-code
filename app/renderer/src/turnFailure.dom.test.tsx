@@ -49,11 +49,12 @@ test('live retry metadata is a countdown for the next call; settlement removes g
 
 test('the live countdown ticks down while the wait runs', async () => {
   const start = Date.now()
-  const state = projectServerFrame(readyState(), frame({ ...retry, uuid: 'ticking-retry' }))
-  const tree = await harness.mount(<TranscriptView state={state} activeSessionId="session" turnLive />)
-  expect(tree.container.textContent).toContain('try 4 in 12s')
-  const clock = spyOn(Date, 'now').mockImplementation(() => start + 5000)
+  const clock = spyOn(Date, 'now').mockReturnValue(start)
   try {
+    const state = projectServerFrame(readyState(), frame({ ...retry, uuid: 'ticking-retry' }))
+    const tree = await harness.mount(<TranscriptView state={state} activeSessionId="session" turnLive />)
+    expect(tree.container.textContent).toContain('try 4 in 12s')
+    clock.mockReturnValue(start + 5000)
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
     expect(tree.container.textContent).toContain('try 4 in 7s')
   } finally {

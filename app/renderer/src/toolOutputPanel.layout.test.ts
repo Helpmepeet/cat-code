@@ -54,8 +54,9 @@ test.skipIf(!chrome)('the output panel docks at its chosen width, gives its body
       const narrow = snapshot();
       document.querySelector('#result').textContent = JSON.stringify({ wide, crowded, narrow });
     </script>`)
-    const run = spawnSync(chrome!, ['--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check', `--user-data-dir=${join(scratch, 'profile')}`, '--window-size=1500,900', '--dump-dom', `file://${file}`], { encoding: 'utf8', timeout: 20_000 })
-    expect(run.error).toBeUndefined()
+    // A fresh macOS profile must not wait for a system keychain prompt.
+    const run = spawnSync(chrome!, ['--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--password-store=basic', '--use-mock-keychain', '--disable-background-networking', `--user-data-dir=${join(scratch, 'profile')}`, '--window-size=1500,900', '--dump-dom', `file://${file}`], { encoding: 'utf8', timeout: 20_000 })
+    expect(run.error, run.stderr).toBeUndefined()
     expect(run.status, run.stderr).toBe(0)
     const output = run.stdout.match(/<pre id="result">(.*?)<\/pre>/)?.[1]
     expect(output).toBeDefined()

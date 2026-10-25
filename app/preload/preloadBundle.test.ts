@@ -6,7 +6,10 @@ test('packaged preload strips debug-state sender while dev preload contains it',
   const build = spawnSync('bun', ['run', 'scripts/build-electron.ts'], {
     cwd: new URL('..', import.meta.url),
     encoding: 'utf8',
+    timeout: 90_000,
   })
+  if (build.error) throw build.error
+  if (build.status !== 0) throw new Error(`Electron build failed (${build.status}): ${build.stderr || build.stdout}`)
   expect(build.status).toBe(0)
 
   const packaged = new URL('./preload.cjs', import.meta.url)
@@ -15,4 +18,4 @@ test('packaged preload strips debug-state sender while dev preload contains it',
   expect(existsSync(dev)).toBe(true)
   expect(readFileSync(packaged, 'utf8')).not.toContain('catcode:debug:')
   expect(readFileSync(dev, 'utf8')).toContain('catcode:debug:shell-state')
-})
+}, 120_000)

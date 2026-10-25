@@ -69,9 +69,12 @@ function shortSocketDir(): string {
 
 function spawnSidecar(idleTtlMs: number): Spawned {
   const socketPath = join(shortSocketDir(), 's.sock')
+  // Test children must not inherit the desktop session's identity or log descriptors.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('CATCODE_')))
   const proc = Bun.spawn(['bun', 'run', sidecarEntry], {
     env: {
-      ...process.env,
+      ...env,
+      CLAUDE_CONFIG_DIR: join(dirname(socketPath), 'config'),
       CATCODE_SIDECAR_SOCKET: socketPath,
       CATCODE_SIDECAR_SESSION_ID: `cc3-${randomUUID()}`,
       CATCODE_SIDECAR_GENERATION: randomUUID(),
