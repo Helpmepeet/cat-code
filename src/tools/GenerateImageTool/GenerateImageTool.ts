@@ -771,38 +771,193 @@ function extractCodexImageModel(text: string): string | undefined {
   return undefined
 }
 
-function parseCodexImageGenerationResponse(text: string): string {
-  let image: CollectedImage = {}
-
+function parseCodexImageResponseValues(text: string): unknown[] {
+  const values: unknown[] = []
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed.startsWith('data: ')) continue
     const data = trimmed.slice(6)
     if (!data || data === '[DONE]') continue
     try {
-      const parsed = JSON.parse(data) as unknown
-      const found = collectImageBase64(parsed)
-      image = {
-        final: found.final ?? image.final,
-        partial: found.partial ?? image.partial,
-      }
+      values.push(JSON.parse(data) as unknown)
     } catch {
       // Ignore non-JSON SSE frames.
     }
   }
 
-  if (!image.final && !image.partial) {
+  if (values.length === 0) {
     try {
-      image = collectImageBase64(JSON.parse(text) as unknown)
+      values.push(JSON.parse(text) as unknown)
     } catch {
-      // Fall through to the error below.
+      // The caller reports missing output when neither JSON nor SSE is usable.
+    }
+  }
+  return values
+}
+
+type ImageGenerationFailureCode =
+  | 'image_generation_moderation_blocked'
+  | 'image_generation_refused'
+  | 'image_generation_failed'
+  | 'image_generation_missing_output'
+
+class ImageGenerationError extends Error {
+  constructor(
+    readonly code: ImageGenerationFailureCode,
+    message: string,
+    details: {
+      source:
+        | 'provider_error'
+        | 'provider_refusal'
+        | 'provider_text'
+        | 'response_status'
+        | 'missing_output'
+      provider_code?: string
+      provider_message?: string
+      http_status?: number
+      response_summary: string
+    },
+  ) {
+    // Tool execution forwards Error.message, so keep the classification in that
+    // payload as well as on the error rather than losing it at the tool boundary.
+    super(JSON.stringify({ error: { code, message, ...details } }))
+    this.name = 'ImageGenerationError'
+  }
+}
+
+function getCodexImageFailure(
+  values: unknown[],
+  text: string,
+  httpStatus?: number,
+): ImageGenerationError | undefined {
+  let failed = false
+  let providerCode: string | undefined
+  let providerMessage: string | undefined
+  let refusal: string | undefined
+  const outputText = new Set<string>()
+
+  function visit(value: unknown): void {
+    if (!value || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child)
+      return
+    }
+    const record = value as Record<string, unknown>
+    const type = record.type
+    if (
+      ['failed', 'incomplete', 'cancelled'].includes(String(record.status)) ||
+      type === 'response.failed' ||
+      type === 'response.incomplete' ||
+      type === 'response.image_generation_call.failed'
+    ) {
+      failed = true
+    }
+    const error = type === 'error' ? record : record.error
+    if (error && typeof error === 'object' && !Array.isArray(error)) {
+      failed = true
+      const detail = error as Record<string, unknown>
+      if (typeof detail.code === 'string') {
+        providerCode = detail.code.slice(0, 128)
+      }
+      if (typeof detail.message === 'string') {
+        providerMessage = detail.message.slice(0, 2000)
+      }
+    }
+    if (
+      (type === 'refusal' || type === 'response.refusal.done') &&
+      typeof record.refusal === 'string' &&
+      record.refusal.trim()
+    ) {
+      refusal = record.refusal.slice(0, 2000)
+    }
+    if (
+      (type === 'output_text' || type === 'response.output_text.done') &&
+      typeof record.text === 'string' &&
+      record.text.trim()
+    ) {
+      outputText.add(record.text.slice(0, 2000))
+    }
+    // Only response/output envelopes carry evidence. Request echoes and tool
+    // definitions can contain policy words without representing a refusal.
+    for (const key of ['response', 'output', 'item', 'content']) visit(record[key])
+  }
+  for (const value of values) visit(value)
+
+  if (!failed && !refusal) return undefined
+  const details = {
+    provider_code: providerCode,
+    provider_message: providerMessage,
+    http_status: httpStatus,
+    response_summary: summarizeCodexImageResponse(text),
+  }
+  if (
+    providerCode &&
+    [
+      'content_policy_violation',
+      'moderation_blocked',
+      'moderation_rejected',
+      'safety_violation',
+    ].includes(providerCode)
+  ) {
+    return new ImageGenerationError(
+      'image_generation_moderation_blocked',
+      'The image provider blocked this request under its content policy.',
+      { ...details, source: 'provider_error' },
+    )
+  }
+  if (refusal) {
+    return new ImageGenerationError(
+      'image_generation_refused',
+      'The image provider refused this request. No moderation reason code was supplied.',
+      { ...details, provider_message: refusal, source: 'provider_refusal' },
+    )
+  }
+  const reportedBlock = [...outputText].find(message =>
+    /image (?:tool|system) (?:blocked|flagged)|(?:request|image|edit|generation) (?:was|is|has been) (?:blocked|flagged|refused|rejected)/i.test(message),
+  )
+  if (failed && reportedBlock) {
+    return new ImageGenerationError(
+      'image_generation_refused',
+      'The image provider reported a blocked request. No moderation reason code was supplied.',
+      { ...details, provider_message: reportedBlock, source: 'provider_text' },
+    )
+  }
+  if (failed) {
+    return new ImageGenerationError(
+      'image_generation_failed',
+      'The image provider failed to complete this request.',
+      {
+        ...details,
+        source: providerMessage || providerCode ? 'provider_error' : 'response_status',
+      },
+    )
+  }
+  return undefined
+}
+
+function parseCodexImageGenerationResponse(text: string): string {
+  const values = parseCodexImageResponseValues(text)
+  const failure = getCodexImageFailure(values, text)
+  if (failure) throw failure
+
+  let image: CollectedImage = {}
+  for (const value of values) {
+    const found = collectImageBase64(value)
+    image = {
+      final: found.final ?? image.final,
+      partial: found.partial ?? image.partial,
     }
   }
 
   const b64 = image.final ?? image.partial
   if (!b64) {
-    throw new Error(
-      `Codex image generation did not return base64 image data (${summarizeCodexImageResponse(text)}).`,
+    throw new ImageGenerationError(
+      'image_generation_missing_output',
+      'Codex image generation did not return base64 image data.',
+      {
+        source: 'missing_output',
+        response_summary: summarizeCodexImageResponse(text),
+      },
     )
   }
   return b64
@@ -859,6 +1014,12 @@ async function generateWithCodexBackend(
     if (response.status === 401) {
       throw new CodexAccountAuthError(auth.accountId, 401)
     }
+    const failure = getCodexImageFailure(
+      parseCodexImageResponseValues(responseText),
+      responseText,
+      response.status,
+    )
+    if (failure) throw failure
     throw new Error(
       `Codex image generation failed (${response.status}): ${getOpenAIErrorMessage(response.status, responseText)}`,
     )

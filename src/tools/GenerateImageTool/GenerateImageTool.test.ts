@@ -1398,7 +1398,7 @@ describe('GenerateImageTool', () => {
     expect(() =>
       _generateImageToolInternalsForTest.parseCodexImageGenerationResponse(sse),
     ).toThrow(
-      'Codex image generation did not return base64 image data (bytes=',
+      'Codex image generation did not return base64 image data.',
     )
     expect(() =>
       _generateImageToolInternalsForTest.parseCodexImageGenerationResponse(sse),
@@ -1406,6 +1406,186 @@ describe('GenerateImageTool', () => {
     expect(() =>
       _generateImageToolInternalsForTest.parseCodexImageGenerationResponse(sse),
     ).toThrow('items=message')
+  })
+
+  function parseImageFailure(text: string): Record<string, unknown> {
+    try {
+      _generateImageToolInternalsForTest.parseCodexImageGenerationResponse(text)
+    } catch (error) {
+      if (!(error instanceof Error)) throw error
+      return JSON.parse(error.message).error
+    }
+    throw new Error('Expected image generation to fail')
+  }
+
+  function imageSse(...events: unknown[]): string {
+    return events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')
+  }
+
+  test('distinguishes the reported failed outfit edit from missing image data', () => {
+    // Reconstruct the event shape from the retained status/text evidence, not
+    // from a raw provider response (which the original session did not retain).
+    const providerText =
+      'I couldn’t complete the edit because the image tool blocked the outfit change. I can try a more covered adaptation of Lucy’s look.'
+    const failure = parseImageFailure(imageSse(
+      { type: 'response.in_progress', response: { status: 'in_progress' } },
+      {
+        type: 'response.output_item.done',
+        item: { type: 'image_generation_call', status: 'failed' },
+      },
+      {
+        type: 'response.completed',
+        response: {
+          status: 'completed',
+          output: [{
+            type: 'message',
+            content: [{ type: 'output_text', text: providerText }],
+          }],
+        },
+      },
+    ))
+
+    expect(failure).toMatchObject({
+      code: 'image_generation_refused',
+      source: 'provider_text',
+      provider_message: providerText,
+    })
+    expect(failure.message).toContain('No moderation reason code was supplied')
+    expect(failure).not.toHaveProperty('provider_code')
+  })
+
+  test('classifies explicit policy errors in SSE and JSON responses', () => {
+    const response = {
+      status: 'failed',
+      error: {
+        code: 'content_policy_violation',
+        message: 'The request was rejected by the safety system.',
+      },
+    }
+    for (const text of [
+      imageSse({ type: 'response.failed', response }),
+      JSON.stringify(response),
+    ]) {
+      expect(parseImageFailure(text)).toMatchObject({
+        code: 'image_generation_moderation_blocked',
+        source: 'provider_error',
+        provider_code: 'content_policy_violation',
+        provider_message: 'The request was rejected by the safety system.',
+      })
+    }
+  })
+
+  test('preserves explicit refusals without guessing a moderation category', () => {
+    const refusal = 'I cannot help with this image request.'
+    expect(parseImageFailure(imageSse({
+      type: 'response.output_item.done',
+      item: {
+        type: 'message',
+        content: [{ type: 'refusal', refusal }],
+      },
+    }))).toMatchObject({
+      code: 'image_generation_refused',
+      source: 'provider_refusal',
+      provider_message: refusal,
+    })
+  })
+
+  test('does not turn non-policy generation failures into moderation refusals', () => {
+    expect(parseImageFailure(imageSse({
+      type: 'response.failed',
+      response: {
+        status: 'failed',
+        error: { code: 'server_error', message: 'Image renderer unavailable.' },
+      },
+    }))).toMatchObject({
+      code: 'image_generation_failed',
+      provider_code: 'server_error',
+      provider_message: 'Image renderer unavailable.',
+    })
+  })
+
+  test('keeps missing and malformed output distinct from refusal', () => {
+    for (const text of ['', 'data: {not json}\n\n', JSON.stringify({
+      status: 'completed',
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: 'No image was generated.' }],
+      }],
+    })]) {
+      expect(parseImageFailure(text)).toMatchObject({
+        code: 'image_generation_missing_output',
+        source: 'missing_output',
+      })
+    }
+  })
+
+  test('does not save partial previews as successful images after terminal failure', () => {
+    for (const status of ['failed', 'incomplete', 'cancelled']) {
+      expect(parseImageFailure(imageSse(
+        {
+          type: 'response.image_generation_call.partial_image',
+          partial_image_b64: Buffer.from('partial preview').toString('base64'),
+        },
+        { type: `response.${status}`, response: { status } },
+      ))).toMatchObject({
+        code: 'image_generation_failed',
+        source: 'response_status',
+      })
+    }
+  })
+
+  test('does not interpret policy words in request echoes as a refusal', () => {
+    const b64 = Buffer.from('generated image').toString('base64')
+    const sse = imageSse({
+      type: 'response.completed',
+      response: {
+        status: 'completed',
+        input: [{ type: 'refusal', refusal: 'Quoted refusal in request' }],
+        instructions: { error: { code: 'content_policy_violation' } },
+        output: [{ type: 'image_generation_call', result: b64 }],
+      },
+    })
+    expect(
+      _generateImageToolInternalsForTest.parseCodexImageGenerationResponse(sse),
+    ).toBe(b64)
+  })
+
+  test('returns a structured policy error without retrying or writing an output', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount('main-account')],
+    })
+    const outputPath = join(tempDir!, 'refused.png')
+    for (const status of [200, 400]) {
+      let requests = 0
+      globalThis.fetch = (async () => {
+        requests++
+        return new Response(JSON.stringify({
+          error: { code: 'moderation_blocked', message: 'Request blocked.' },
+        }), { status })
+      }) as typeof fetch
+
+      let failure: Record<string, unknown> | undefined
+      try {
+        await GenerateImageTool.call(
+          { prompt: 'an adult character in a costume', output_path: outputPath },
+          imageToolContext({ abortController: new AbortController() }),
+        )
+      } catch (error) {
+        if (!(error instanceof Error)) throw error
+        failure = JSON.parse(error.message).error
+      }
+      expect(failure).toMatchObject({
+        code: 'image_generation_moderation_blocked',
+        provider_code: 'moderation_blocked',
+        ...(status !== 200 ? { http_status: status } : {}),
+      })
+      expect(requests).toBe(1)
+      expect(await Bun.file(outputPath).exists()).toBe(false)
+      const pool = getPoolStatus()
+      expect(pool.accounts[pool.activeIndex]?.accountId).toBe('main-account')
+      expect(pool.accounts[pool.activeIndex]?.status).toBe('healthy')
+    }
   })
 
   test('builds an ANSI terminal preview for generated images', async () => {
