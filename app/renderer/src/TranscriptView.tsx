@@ -134,7 +134,7 @@ import {
 } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
-import { deriveFocusedTranscript, type FocusedTurnItem } from './focusedTranscriptLayout.js'
+import { deriveFocusedTranscript, type FocusedTranscriptItem, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { FocusedTranscript } from './FocusedTranscript.js'
 import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
 import {
@@ -1083,10 +1083,9 @@ function layoutWithContextTransitions(
   transcriptMode: TranscriptMode,
   turnLive: boolean,
 ): { entries: TranscriptLaneEntry[]; narration: Set<string> } {
-  const layout = (chunk: readonly NestedTranscriptRow[], live: boolean): { entries: TranscriptLaneEntry[]; narration: Set<string> } => {
+  const layout = (parts: readonly FocusedTranscriptItem[]): { entries: TranscriptLaneEntry[]; narration: Set<string> } => {
     const entries: TranscriptLaneEntry[] = []
     const narration = new Set<string>()
-    const parts = transcriptMode === 'focused' ? deriveFocusedTranscript(chunk, live) : [{ kind: 'rows' as const, rows: chunk }]
     for (const part of parts) {
       if (part.kind === 'focused-turn') {
         entries.push({ kind: 'focused', turn: part })
@@ -1102,7 +1101,7 @@ function layoutWithContextTransitions(
     return { entries, narration }
   }
   if (transitions.length === 0) {
-    return layout(rows, turnLive)
+    return layout(transcriptMode === 'focused' ? deriveFocusedTranscript(rows, turnLive) : [{ kind: 'rows', rows }])
   }
   const visibleIndexById = new Map(rows.map((row, index) => [row.id, index]))
   const lastRowByFrame = new Map<string, number>()
@@ -1129,7 +1128,7 @@ function layoutWithContextTransitions(
   let chunk: NestedTranscriptRow[] = []
   const flush = () => {
     if (chunk.length === 0) return
-    const grouped = layout(chunk, turnLive && chunk.at(-1) === rows.at(-1))
+    const grouped = layout([{ kind: 'rows', rows: chunk }])
     for (const id of grouped.narration) narration.add(id)
     entries.push(...grouped.entries)
     chunk = []
@@ -1141,7 +1140,22 @@ function layoutWithContextTransitions(
     for (const transition of matching) entries.push({ kind: 'transition', transition })
   }
   mark(-1)
-  rows.forEach((row, index) => { chunk.push(row); mark(index) })
+  const parts = transcriptMode === 'focused'
+    ? deriveFocusedTranscript(rows, turnLive, new Set([...atRow.keys()].flatMap(index => rows[index] ? [rows[index]!.id] : [])))
+    : [{ kind: 'rows' as const, rows }]
+  for (const part of parts) {
+    if (part.kind === 'focused-turn') {
+      flush()
+      entries.push({ kind: 'focused', turn: part })
+      const last = part.rows.at(-1)
+      if (last) mark(visibleIndexById.get(last.id)!)
+    } else {
+      for (const row of part.rows) {
+        chunk.push(row)
+        mark(visibleIndexById.get(row.id)!)
+      }
+    }
+  }
   flush()
   return { entries, narration }
 }

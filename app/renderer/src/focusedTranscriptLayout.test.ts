@@ -4,7 +4,7 @@ import { deriveFocusedSegments, deriveFocusedTranscript, summarizeFocusedWork } 
 
 const base = (id: string) => ({ id, frameId: id, sessionId: 's', messageId: id, blockIndex: 0, parentToolUseId: null, children: [] })
 const user = (id = 'u'): NestedTranscriptRow => ({ ...base(id), kind: 'user-text', role: 'user', content: 'Go', isReplay: false })
-const text = (id: string): NestedTranscriptRow => ({ ...base(id), kind: 'assistant-text', role: 'assistant', content: id })
+const text = (id: string): Extract<NestedTranscriptRow, { kind: 'assistant-text' }> => ({ ...base(id), kind: 'assistant-text', role: 'assistant', content: id })
 const tool = (id = 't', family: ToolFamily = 'read'): NestedTranscriptRow => ({
   ...base(id), kind: 'tool-use', toolUseId: id, toolName: family, toolFamily: family,
   input: { file_path: '/a', command: 'bun test', pattern: 'needle' }, status: 'success', result: null, agentCompletion: null,
@@ -107,6 +107,31 @@ describe('focused transcript layout', () => {
       expect(failed.every(x => !x.completed)).toBe(true)
       expect(failed.at(-1)!.rows.at(-1)!.id).toBe('answer')
     }
+  })
+  test('display dividers split work while sharing completion evidence across the whole turn', () => {
+    const rows = [user(), text('update'), tool(), text('continued'), tool('t2'), text('answer')]
+    const fragmentAfter = new Set(['update', 'continued'])
+    const derive = (input: NestedTranscriptRow[], live = false) => deriveFocusedTranscript(input, live, fragmentAfter)
+    const focused = (input: NestedTranscriptRow[], live = false) => derive(input, live).filter(item => item.kind === 'focused-turn')
+    const live = focused(rows, true)
+    expect(live.map(item => item.rows.map(row => row.id))).toEqual([['update'], ['t', 'continued'], ['t2', 'answer']])
+    expect(live.every(item => item.live && !item.completed)).toBe(true)
+    const doneRows = [...rows, result()]
+    const done = focused(doneRows)
+    expect(done.map(item => item.id)).toEqual(live.map(item => item.id))
+    expect(done.map(item => item.rows.map(row => row.id))).toEqual([['update'], ['t', 'continued'], ['t2']])
+    expect(done.every(item => !item.live && item.completed && item.answering && item.durationMs === null)).toBe(true)
+    expect(derive(doneRows).flatMap(item => item.rows)).toEqual(doneRows)
+    // Calls without divider positions still use the unsplit cached layout.
+    expect(groups(doneRows)).toHaveLength(1)
+    expect(groups(doneRows)[0]!.durationMs).toBe(1234)
+    const replay = [...rows.slice(0, -1), { ...text('answer'), replayEndTurn: true as const }]
+    expect(focused(replay).every(item => item.completed)).toBe(true)
+    for (const end of [result(true), { ...base('stop'), kind: 'turn-stopped' } as NestedTranscriptRow]) {
+      expect(focused([...rows, end]).every(item => !item.completed)).toBe(true)
+    }
+    expect(focused([...rows.slice(0, -1), { ...text('answer'), phase: 'commentary' as const }, result()])
+      .every(item => !item.completed)).toBe(true)
   })
   test('other actions use human-readable labels and parallel pending label uses first call', () => {
     const summary = summarizeFocusedWork(['agent', 'agent-control', 'web', 'mcp', 'skill', 'imagegen', 'other'].map((family, i) => tool(`${i}`, family as ToolFamily)))

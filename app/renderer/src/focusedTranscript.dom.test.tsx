@@ -6,6 +6,7 @@ import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { createToolCardExpansionStore } from './toolCardExpansion.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
+import type { SessionDescriptor } from '../../shared/hostApi.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -19,9 +20,9 @@ const tool: NestedTranscriptRow = { ...source('tool'), kind: 'tool-use', toolUse
 const result: NestedTranscriptRow = { ...source('result'), kind: 'result', subtype: 'success', isError: false, errors: [], result: 'Fixed.', durationMs: 104000 }
 const work = [user, text('update-1', 'I will trace the loader.'), thinking, tool, text('update-2', 'The tests pass. I will check the edge case.')]
 const complete = [...work, text('answer', 'The loader is fixed.'), result]
-function view(rows: NestedTranscriptRow[], live = false, expanded = false, mode: TranscriptMode = 'focused', store = createToolCardExpansionStore(), revealAgent?: { toolUseId: string; sequence: number }) {
+function view(rows: NestedTranscriptRow[], live = false, expanded = false, mode: TranscriptMode = 'focused', store = createToolCardExpansionStore(), revealAgent?: { toolUseId: string; sequence: number }, contextTransitions?: SessionDescriptor['contextTransitions']) {
   return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><ToolsExpandedContext.Provider value={{ expanded, setExpanded() {} }}>
-    <TranscriptRowsView rows={rows} turnLive={live} toolCardExpansionStore={store} revealAgent={revealAgent} />
+    <TranscriptRowsView rows={rows} turnLive={live} toolCardExpansionStore={store} revealAgent={revealAgent} contextTransitions={contextTransitions} />
   </ToolsExpandedContext.Provider></TranscriptModeContext.Provider>
 }
 async function click(button: Element | null) {
@@ -73,6 +74,52 @@ test('a live Working row closes automatically on successful finish without losin
   expect(tree.container.querySelectorAll('[data-focused-update]').length).toBe(0)
   await click(tree.container.querySelector('.focused-fold-head'))
   expect(tree.container.querySelectorAll('[data-focused-update]').length).toBe(2)
+})
+
+test('workspace dividers preserve whole-turn auto-collapse and manual disclosure on both sides', async () => {
+  const transitions: SessionDescriptor['contextTransitions'] = [{
+    id: 'move', afterFrameId: 'jump', cwd: '/repo', binding: { kind: 'project' },
+  }]
+  const jump: NestedTranscriptRow = { ...tool, ...source('jump'), toolUseId: 'jump-call', toolName: 'JumpWorkspace' }
+  const withJump = (rows: NestedTranscriptRow[]) => [...rows.slice(0, 2), jump, ...rows.slice(2)]
+  const store = createToolCardExpansionStore()
+  const render = (rows: NestedTranscriptRow[], live: boolean) =>
+    view(withJump(rows), live, false, 'focused', store, undefined, transitions)
+  const tree = await harness.mount(render(work, true))
+  const heads = () => [...tree.container.querySelectorAll('.focused-fold-head')]
+  const ids = () => [...tree.container.querySelectorAll('[data-focused-turn]')].map(node => node.getAttribute('data-focused-turn'))
+  expect(heads().map(head => head.getAttribute('aria-expanded'))).toEqual(['true', 'true'])
+  const liveIds = ids()
+  await tree.render(render(complete, false))
+  expect(ids()).toEqual(liveIds)
+  expect(heads().map(head => head.getAttribute('aria-expanded'))).toEqual(['false', 'false'])
+  expect(tree.container.querySelectorAll('[data-focused-completed]')).toHaveLength(2)
+  expect(tree.container.querySelector('[data-context-transition="move"]')).not.toBeNull()
+  expect(tree.container.textContent).toContain('The loader is fixed.')
+  expect([...tree.container.querySelectorAll('.focused-turn')].some(node => node.textContent?.includes('The loader is fixed.'))).toBe(false)
+  expect(tree.container.querySelector('.focused-fold-detail')?.textContent).not.toContain('1m 44s')
+  await click(heads()[0]!)
+  await click(heads()[1]!)
+  expect([...tree.container.querySelectorAll('[data-focused-update]')].map(node => node.textContent))
+    .toEqual(['I will trace the loader.', 'The tests pass. I will check the edge case.'])
+  const order = [...tree.container.querySelectorAll('[data-focused-turn], [data-context-transition]')]
+  expect(order.map(node => node.hasAttribute('data-context-transition') ? 'move' : 'work')).toEqual(['work', 'move', 'work'])
+  await click(heads()[0]!)
+  await click(heads()[1]!)
+  expect(heads().map(head => head.getAttribute('aria-expanded'))).toEqual(['false', 'false'])
+})
+
+test('workspace divider fragments preserve explicit disclosure choices when the turn finishes', async () => {
+  const transitions: SessionDescriptor['contextTransitions'] = [{
+    id: 'move', afterFrameId: 'update-1', cwd: '/repo', binding: { kind: 'project' },
+  }]
+  const store = createToolCardExpansionStore()
+  const render = (rows: NestedTranscriptRow[], live: boolean) => view(rows, live, false, 'focused', store, undefined, transitions)
+  const tree = await harness.mount(render(work, true))
+  await click(tree.container.querySelector('.focused-fold-head'))
+  await click(tree.container.querySelector('.focused-fold-head'))
+  await tree.render(render(complete, false))
+  expect([...tree.container.querySelectorAll('.focused-fold-head')].map(head => head.getAttribute('aria-expanded'))).toEqual(['true', 'false'])
 })
 
 test('failed and stopped turns do not hide their updates behind a completed fold', async () => {

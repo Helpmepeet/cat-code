@@ -170,8 +170,12 @@ const isControlPoint = (row: NestedTranscriptRow) =>
     row.kind === 'redacted-thinking' || row.kind === 'tool-use'))
 
 /** Partial history and context chunks still group work, without attributing a whole-turn duration. */
-export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], turnLive: boolean): readonly FocusedTranscriptItem[] {
-  const cached = cache.get(rows)?.get(turnLive)
+export function deriveFocusedTranscript(
+  rows: readonly NestedTranscriptRow[],
+  turnLive: boolean,
+  fragmentAfter?: ReadonlySet<string>,
+): readonly FocusedTranscriptItem[] {
+  const cached = fragmentAfter ? undefined : cache.get(rows)?.get(turnLive)
   if (cached) return cached
   const items: FocusedTranscriptItem[] = []
   let passthrough: NestedTranscriptRow[] = []
@@ -216,7 +220,8 @@ export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], tu
     for (let j = start; j < i;) {
       if (!isWork(rows[j]!) || answers.has(j)) { j++; continue }
       const from = j++
-      while (j < i && isWork(rows[j]!) && !answers.has(j)) j++
+      // Display dividers split the work, not the producer turn or its completion evidence.
+      while (j < i && isWork(rows[j]!) && !answers.has(j) && !fragmentAfter?.has(rows[j - 1]!.id)) j++
       fragments.push({ start: from, end: j })
     }
     if (!fragments.length && live && !answers.size) fragments.push({ start: i, end: i })
@@ -244,8 +249,10 @@ export function deriveFocusedTranscript(rows: readonly NestedTranscriptRow[], tu
     // The result and all non-work boundaries remain visible through the normal renderer.
   }
   flush()
-  const variants = cache.get(rows) ?? new Map()
-  variants.set(turnLive, items)
-  cache.set(rows, variants)
+  if (!fragmentAfter) {
+    const variants = cache.get(rows) ?? new Map()
+    variants.set(turnLive, items)
+    cache.set(rows, variants)
+  }
   return items
 }
