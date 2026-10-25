@@ -167,6 +167,33 @@ test('Focused receives the real background Bash lifecycle and description withou
   } finally { stop() }
 })
 
+test('Focused keeps finite and unclassified work visible without following running services', () => {
+  const snapshot = tasksSnapshot({
+    service: bashTask({ id: 'service', workLifetime: 'service', toolUseId: 'server-call', command: 'bun run dev' }),
+    finite: bashTask({ id: 'finite', workLifetime: 'finite', toolUseId: 'test-call' }),
+    unclassified: bashTask({ id: 'unclassified', toolUseId: 'legacy-call' }),
+  }, undefined)
+  expect(snapshot.focusedBashJobs?.map(job => job.id).sort()).toEqual(['finite', 'unclassified'])
+  expect(snapshot.items.find(item => item.id === 'service')).toMatchObject({ status: 'running', label: 'bun run dev' })
+})
+
+test.each(['completed', 'failed', 'killed'] as const)('Focused still publishes a service that %s', status => {
+  const task = bashTask({ workLifetime: 'service', description: 'Start fixture server', toolUseId: 'server-call', startTime: 10000 })
+  const store = createStore({ ...getDefaultAppState(), tasks: { b1: task } })
+  const domain = createSidecarTasksDomain(store)
+  const snapshots: ReturnType<typeof domain.getSnapshot>[] = []
+  const stop = domain.subscribe(() => snapshots.push(domain.getSnapshot()))
+  try {
+    expect(domain.getSnapshot().focusedBashJobs).toBeUndefined()
+    expect(domain.hasLiveWork()).toBe(true)
+    store.setState(state => ({ ...state, tasks: { b1: { ...task, status, endTime: 12000 } } }))
+    expect(snapshots.at(-1)?.focusedBashJobs).toEqual([{
+      id: 'b1', toolUseId: 'server-call', label: 'Start fixture server', status, startTime: 10000, endTime: 12000,
+    }])
+    expect(domain.hasLiveWork()).toBe(false)
+  } finally { stop() }
+})
+
 test('keeps a terminal backgrounded local_agent visible (blocked/completed handoff stays openable)', () => {
   const snapshot = tasksSnapshot(
     { a1: agentTask({ status: 'completed', isBackgrounded: true, handoffStatus: 'blocked' }) },

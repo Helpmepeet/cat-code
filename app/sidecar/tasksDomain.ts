@@ -129,6 +129,8 @@ export function tasksSnapshot(
   const subagents = Object.values(tasks ?? {}).flatMap(toSubagentMetadata)
   const focusedBashJobs: FocusedBashJob[] = Object.values(tasks ?? {})
     .filter((task): task is Extract<TaskState, { type: 'local_bash' }> => task.type === 'local_bash' && task.isBackgrounded === true && task.status !== 'pending')
+    // A healthy service is background state, not progress that should follow new updates.
+    .filter(task => task.workLifetime !== 'service' || task.status !== 'running')
     .sort((a, b) => Number(b.status === 'running') - Number(a.status === 'running') || (b.endTime ?? b.startTime) - (a.endTime ?? a.startTime))
     .slice(0, MAX_FOCUSED_BASH_JOBS)
     .flatMap(task => {
