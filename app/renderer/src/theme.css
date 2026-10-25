@@ -959,11 +959,17 @@ html[data-glass='on'] [data-window-frame] {
    * chrome. Hairline-thin with a transparent track, so a scroller reads as the
    * content moving rather than as a widget with a gutter.
    *
+   * Custom scrollbar styles switch off macOS overlay scrollbars, so the thumb is
+   * transparent at rest and painted only while `scrollbarVisibility.ts` marks
+   * the scroller as scrolling or pointed at. The bar is 12px so it is easy to
+   * grab, and the thumb's transparent border insets the painted pill to 4px,
+   * widening to 8px under the pointer or while dragged.
+   *
    * In `@layer base` on purpose: the per-surface hide
    * (`[&::-webkit-scrollbar]:hidden`, and `.no-scrollbar` below) must still win. */
   ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: 12px;
+    height: 12px;
   }
 
   ::-webkit-scrollbar-track {
@@ -971,12 +977,20 @@ html[data-glass='on'] [data-window-frame] {
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--scrollbar-thumb);
-    border-radius: 2px;
+    background-color: transparent;
+    background-clip: padding-box;
+    border: 4px solid transparent;
+    border-radius: 999px;
   }
 
-  ::-webkit-scrollbar-thumb:hover {
-    background: var(--scrollbar-thumb-hover);
+  [data-scrollbar-visible]::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+  }
+
+  ::-webkit-scrollbar-thumb:hover,
+  ::-webkit-scrollbar-thumb:active {
+    background-color: var(--scrollbar-thumb-hover);
+    border-width: 2px;
   }
 
   /* The square where a vertical and a horizontal bar meet. Left alone it is the

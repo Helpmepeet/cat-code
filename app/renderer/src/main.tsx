@@ -15,6 +15,7 @@ import { TranscriptModeProvider } from './TranscriptModeProvider.js'
 import { RendererErrorBoundary } from './RendererErrorBoundary.js'
 import { getBridge } from './bridge.js'
 import { installReactDevPerformanceTrackFilter } from './reactDevPerformanceTrack.js'
+import { installScrollbarVisibility } from './scrollbarVisibility.js'
 import 'katex/dist/katex.min.css'
 import './theme.css'
 
@@ -24,6 +25,8 @@ import './theme.css'
 if (import.meta.env?.DEV) {
   installReactDevPerformanceTrackFilter()
 }
+
+installScrollbarVisibility()
 
 const root = document.getElementById('root')
 if (!root) {
