@@ -1,0 +1,115 @@
+name: Desktop delivery
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-delivery-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Verify and deliver macOS app
+    # workflow_run also fires for PR checks. Never execute their code here.
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository != null &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        (github.event.workflow_run.event == 'push' ||
+         github.event.workflow_run.event == 'workflow_dispatch')
+      }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      DELIVERY_COMMIT: ${{ github.event.workflow_run.head_sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the passing commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Isolate build state
+        run: printf 'CLAUDE_CONFIG_DIR=%s/cat-code-delivery-state\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: package.json
+
+      - name: Install engine dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install desktop dependencies
+        run: bun install --frozen-lockfile
+        working-directory: app
+
+      - name: Verify build source
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD)" = "$DELIVERY_COMMIT"
+          test -z "$(git status --porcelain)"
+
+      - name: Package and verify the app
+        run: bun run --cwd app package
+
+      - name: Exercise the packaged engine
+        run: bun run --cwd app smoke:packaged:headless
+
+      - name: Archive and verify the download
+        id: archive
+        run: |
+          delivery_dir="$RUNNER_TEMP/cat-code-delivery"
+          check_dir="$RUNNER_TEMP/cat-code-delivery-check"
+          archive_name="Cat-Code-macos-arm64-$DELIVERY_COMMIT.zip"
+          mkdir -p "$delivery_dir" "$check_dir"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "app/dist-app/Cat Code.app" "$delivery_dir/$archive_name"
+          ditto -x -k "$delivery_dir/$archive_name" "$check_dir"
+          codesign --verify --deep --strict "$check_dir/Cat Code.app"
+          diff -qr "app/dist-app/Cat Code.app" "$check_dir/Cat Code.app"
+          (
+            cd "$delivery_dir"
+            shasum -a 256 "$archive_name" > "$archive_name.sha256"
+          )
+
+      - name: Upload the verified download
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cat-code-macos-arm64-${{ env.DELIVERY_COMMIT }}
+          path: |
+            ${{ runner.temp }}/cat-code-delivery/Cat-Code-macos-arm64-${{ env.DELIVERY_COMMIT }}.zip
+            ${{ runner.temp }}/cat-code-delivery/Cat-Code-macos-arm64-${{ env.DELIVERY_COMMIT }}.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Summarize the download
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          printf '%s\n' \
+            '## Cat Code for macOS (Apple Silicon)' \
+            "Commit: \`$DELIVERY_COMMIT\`" \
+            '' \
+            "[Download the verified build]($ARTIFACT_URL) (retained for 14 days)." \
+            '' \
+            'Unzip the artifact download, then the app archive inside it. The SHA-256 file checks the inner archive.' \
+            'Packaging, signature checks, packaged engine smoke tests, and archive round-trip checks passed.' \
+            '' \
+            'Manual installation only. This build is ad-hoc signed, not Developer ID signed or notarized.' \
+            'Gatekeeper acceptance, GUI interaction, and live account behavior still need operator verification on the target Mac.' \
+            >> "$GITHUB_STEP_SUMMARY"
