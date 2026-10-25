@@ -132,13 +132,12 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
 .focused-reasoning[data-live] .focused-reasoning-node { background: var(--accent); animation: focused-running-pulse 2s cubic-bezier(.4, 0, .6, 1) infinite; }
 .focused-reasoning-text {
   min-width: 0; flex: 1;
-  font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13.5px; line-height: 1.55;
-  color: var(--text-subtle); transition: color 300ms var(--ease-standard);
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; font-style: italic; line-height: 1.55;
+  color: var(--text-faint); transition: color 300ms var(--ease-standard);
 }
-.focused-reasoning-text strong { font-weight: 600; color: var(--text-muted); }
+.focused-reasoning-text strong { font-weight: 600; color: var(--text-subtle); }
 .focused-reasoning[data-live] .focused-reasoning-text { color: var(--text-muted); }
 .focused-reasoning[data-live] .focused-reasoning-text strong { color: var(--text-primary); }
-.focused-reasoning[data-title-only]:not([data-live]) .focused-reasoning-text { color: var(--text-faint); }
 
 .focused-text-arrival { animation: focused-text-in 180ms var(--ease-enter) both; }
 .focused-transcript-space { height: var(--focused-transcript-space-height, 0px); flex-shrink: 0; pointer-events: none; }
