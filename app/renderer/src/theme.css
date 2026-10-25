@@ -2253,12 +2253,17 @@ html[data-glass='on'] [data-window-frame] {
 
 /* One pane owns the dock and bounds its measuring and motion layers. */
 :root {
-  --subagent-row-attached: color-mix(in srgb, var(--surface-raised) 65%, var(--surface-panel));
-  --subagent-chip-hover: color-mix(in srgb, var(--surface-raised) 75%, var(--shell-hover));
+  /* Dark sits one step above `--conversation-bg`, as `--usage-panel` does, so
+   * the dock reads as raised over the transcript; hover and the attached tip go
+   * one step further. Light keeps the panel grey under its popover shadow. */
+  --subagent-dock-fill: #212123;
+  --subagent-row-attached: #2a2a2d;
+  --subagent-chip-hover: #2a2a2d;
   --subagent-resume-wash: color-mix(in srgb, var(--source-project) 16%, transparent);
   --subagent-resume-border: color-mix(in srgb, var(--source-project) 38%, transparent);
 }
 :root[data-appearance='light'] {
+  --subagent-dock-fill: var(--surface-panel);
   --subagent-row-attached: color-mix(in srgb, var(--surface-raised) 80%, var(--surface-panel));
   --subagent-chip-hover: color-mix(in srgb, var(--surface-raised) 60%, var(--shell-hover));
   --subagent-resume-wash: color-mix(in srgb, var(--source-project) 12%, transparent);
@@ -2266,21 +2271,21 @@ html[data-glass='on'] [data-window-frame] {
 }
 .subagent-dock { position:absolute; top:12px; right:24px; width:min(288px, calc(100% - 48px)); z-index:20; }
 .subagent-dock-hidden { visibility:hidden; pointer-events:none; }
-.subagent-dock-chip { position:absolute; top:0; right:0; display:flex; align-items:center; height:27px; max-width:100%; padding:0 7px; border:1px solid var(--shell-seam); border-radius:10px; background:var(--surface-panel); }
+.subagent-dock-chip { position:absolute; top:0; right:0; display:flex; align-items:center; height:27px; max-width:100%; padding:0 7px; border:1px solid var(--shell-seam); border-radius:10px; background:var(--subagent-dock-fill); }
 .subagent-dock-chip:hover { background:var(--subagent-chip-hover); }
 .subagent-dock-chip-slot { display:block; flex:none; width:19px; }
 .subagent-dock-chip-slot:last-of-type { width:15px; }
 .subagent-dock-more { margin-left:5px; font:500 11px var(--font-mono); color:var(--text-faint); }
 .subagent-dock-face { position:relative; display:block; width:15px; height:15px; flex:none; }
 .subagent-dock-face svg { display:block; }
-.subagent-dock-badge { position:absolute; right:-3px; bottom:-3px; width:7px; height:7px; border-radius:50%; box-shadow:0 0 0 1.5px var(--surface-panel); }
+.subagent-dock-badge { position:absolute; right:-3px; bottom:-3px; width:7px; height:7px; border-radius:50%; box-shadow:0 0 0 1.5px var(--subagent-dock-fill); }
 .subagent-dock-badge-running { background:var(--source-project); animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
-.subagent-dock-badge-background, .subagent-dock-badge-resumed { background:var(--surface-panel); border:1.6px solid var(--source-project); }
-.subagent-dock-badge-waiting { background:var(--surface-panel); border:1.6px solid var(--peer); }
+.subagent-dock-badge-background, .subagent-dock-badge-resumed { background:var(--subagent-dock-fill); border:1.6px solid var(--source-project); }
+.subagent-dock-badge-waiting { background:var(--subagent-dock-fill); border:1.6px solid var(--peer); }
 .subagent-dock-badge-completed { background:var(--tone-good); }
 .subagent-dock-badge-failed { background:var(--tone-danger); }
-.subagent-dock-badge-stopped { background:var(--surface-panel); border:1.6px solid var(--tone-warn); }
-.subagent-dock-panel { display:flex; flex-direction:column; width:100%; max-height:var(--subagent-dock-height, calc(100vh - 24px)); padding:4px; background:var(--surface-panel); border:1px solid var(--shell-seam); border-radius:10px; }
+.subagent-dock-badge-stopped { background:var(--subagent-dock-fill); border:1.6px solid var(--tone-warn); }
+.subagent-dock-panel { display:flex; flex-direction:column; width:100%; max-height:var(--subagent-dock-height, calc(100vh - 24px)); padding:4px; background:var(--subagent-dock-fill); border:1px solid var(--shell-seam); border-radius:10px; }
 .subagent-dock-floating { box-shadow:var(--elev-popover); }
 .subagent-dock-header { display:flex; align-items:center; justify-content:space-between; height:22px; flex:none; padding:0 4px 0 8px; font:500 9px var(--font-mono); letter-spacing:.1em; color:var(--text-faint); }
 .subagent-dock-header button { display:flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:5px; font-size:13px; }
