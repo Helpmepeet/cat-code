@@ -1666,6 +1666,38 @@ describe('CuaDriver proxy daemon reacquisition', () => {
     return updates
   }
 
+  test('uses the configured executable and environment for startup and cleanup', async () => {
+    await withDaemonFixture(async ({ home, binary, request, waitFor }) => {
+      const configuredBinary = join(home, 'configured', 'cua-driver')
+      const wrongDefault = join(home, 'wrong-default')
+      mkdirSync(join(home, 'configured'), { recursive: true })
+      writeFileSync(configuredBinary, `#!${process.execPath}\nif (process.env.CUA_CONFIGURED_TEST !== 'configured') process.exit(31)\nawait import(${JSON.stringify(join(import.meta.dir, '../../utils/cuaDriver/daemonFixture.ts'))})\n`)
+      chmodSync(configuredBinary, 0o755)
+      writeFileSync(binary, `#!${process.execPath}\nimport { writeFileSync } from 'fs'\nwriteFileSync(${JSON.stringify(wrongDefault)}, process.argv[2] ?? '')\n`)
+      const tool = proxyTool(request)
+      const run = createCuaDriverRun()
+      const context = proxyContext(tool, configuredBinary, run)
+      context.options.mcpClients = context.options.mcpClients.map(client => ({
+        ...client,
+        config: { type: 'stdio', command: configuredBinary, args: ['mcp'],
+          env: { CUA_CONFIGURED_TEST: 'configured' }, scope: 'local' },
+      }))
+      const dispatch = dispatchProxy(tool, context, 'configured')
+      try {
+        await waitFor(() => existsSync(wrongDefault) || existsSync(join(home, 'starts')))
+        expect(existsSync(wrongDefault)).toBe(false)
+        await dispatch
+        expect(readFileSync(join(home, 'effects'), 'utf8')).toBe('configured\n')
+      } finally {
+        context.abortController.abort()
+        await dispatch
+        await run.end()
+      }
+      expect(existsSync(wrongDefault)).toBe(false)
+      expect(existsSync(join(home, 'Library', 'Caches', 'cua-driver', 'cua-driver.sock'))).toBe(false)
+    })
+  })
+
   test.each(['run end', 'idle stop', 'another run ends'])(
     'reacquires the daemon after %s without replaying an error after effects',
     async release => withDaemonFixture(async ({ home, binary, request, waitFor }) => {

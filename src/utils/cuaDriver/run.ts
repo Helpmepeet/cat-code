@@ -3,7 +3,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { logForDebugging } from '../debug.js'
 import { execFileNoThrow } from '../execFileNoThrow.js'
-import { acquireCuaDriverDaemon } from './daemon.js'
+import { acquireCuaDriverDaemon, type CuaDriverDaemonCommand } from './daemon.js'
 
 /**
  * Per-`query()` record of whether this run drove cua-driver. The `serve`
@@ -22,7 +22,7 @@ export type CuaDriverRun = {
    * independent promises, so one still waiting on permission can reach the
    * guard after the query's `finally` has already stopped the daemon.
    */
-  markUsed(): boolean
+  markUsed(command?: CuaDriverDaemonCommand): boolean
   /** Called from `query()`'s `finally`; stops the daemon if this run used it. */
   end(): Promise<void>
 }
@@ -46,20 +46,22 @@ function findCuaDriverBinary(): string | undefined {
 
 async function stopCuaDriverDaemon(
   timeoutMs: number = STOP_TIMEOUT_MS,
+  command?: CuaDriverDaemonCommand,
 ): Promise<void> {
-  const binary = findCuaDriverBinary()
+  const binary = command?.file ?? findCuaDriverBinary()
   if (!binary) return
   const result = await execFileNoThrow(binary, ['stop'], {
     timeout: timeoutMs,
     preserveOutputOnError: true,
     useCwd: false,
+    env: command?.env,
   })
   logForDebugging(
     `[cua-driver] stop exited ${result.code}${result.error ? `: ${result.error}` : ''}`,
   )
 }
 
-let stopDaemon: () => Promise<void> = stopCuaDriverDaemon
+let stopDaemon: typeof stopCuaDriverDaemon = stopCuaDriverDaemon
 
 // Ordering starts and stops prevents a run ending during startup from leaving
 // a daemon behind. This deliberately does not lease it across GUI operations:
@@ -71,11 +73,13 @@ function transitionDaemon(operation: () => Promise<void>): Promise<void> {
   return next
 }
 
-export function ensureCuaDriverDaemon(signal: AbortSignal): Promise<void> {
+export function ensureCuaDriverDaemon(
+  signal: AbortSignal,
+  command?: CuaDriverDaemonCommand,
+): Promise<void> {
   return transitionDaemon(async () => {
-    const binary = findCuaDriverBinary()
-    if (!binary) throw new Error('CuaDriver is not installed. Install it before using computer use.')
-    await acquireCuaDriverDaemon(binary, signal)
+    const binary = command ? undefined : findCuaDriverBinary()
+    await acquireCuaDriverDaemon(command ?? (binary ? { file: binary } : undefined), signal)
   })
 }
 
@@ -84,6 +88,7 @@ export function createCuaDriverRun(
 ): CuaDriverRun {
   let used = false
   let ended = false
+  let daemonCommand: CuaDriverDaemonCommand | undefined
   let idleTimer: ReturnType<typeof setTimeout> | undefined
 
   const clearIdleTimer = (): void => {
@@ -93,15 +98,16 @@ export function createCuaDriverRun(
   }
 
   const stop = (): Promise<void> =>
-    transitionDaemon(stopDaemon).catch(error => {
+    transitionDaemon(() => stopDaemon(STOP_TIMEOUT_MS, daemonCommand)).catch(error => {
       logForDebugging(`[cua-driver] stop failed: ${String(error)}`, {
         level: 'warn',
       })
     })
 
   return {
-    markUsed() {
+    markUsed(command) {
       if (ended) return false
+      if (command) daemonCommand = command
       used = true
       clearIdleTimer()
       idleTimer = setTimeout(() => {

@@ -3,6 +3,11 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { createConnection } from 'net'
 
+export type CuaDriverDaemonCommand = {
+  file: string
+  env?: NodeJS.ProcessEnv
+}
+
 const START_TIMEOUT_MS = 8000
 const PROBE_TIMEOUT_MS = 250
 
@@ -40,7 +45,7 @@ async function isReady(socketPath: string): Promise<boolean> {
  * rather than retrying a tool whose effects may already have happened.
  */
 export async function acquireCuaDriverDaemon(
-  binary: string,
+  command: CuaDriverDaemonCommand | undefined,
   signal: AbortSignal,
 ): Promise<void> {
   const socketPath = join(
@@ -50,7 +55,11 @@ export async function acquireCuaDriverDaemon(
   signal.throwIfAborted()
   if (await isReady(socketPath)) return
   signal.throwIfAborted()
-  const child = spawn(binary, ['serve'], { stdio: 'ignore' })
+  if (!command) throw new Error('CuaDriver is not installed. Install it before using computer use.')
+  const child = spawn(command.file, ['serve'], {
+    stdio: 'ignore',
+    ...(command.env ? { env: { ...process.env, ...command.env } } : {}),
+  })
   let startError: Error | undefined
   child.once('error', error => { startError = error })
   child.unref()

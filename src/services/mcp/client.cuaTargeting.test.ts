@@ -48,6 +48,7 @@ async function fixture(options: {
   snapshot?: CallToolResult
   native?: CallToolResult
   windowPid?: number
+  pendingScreenshot?: { started: boolean; aborted: boolean; signal?: AbortSignal }
 } = {}) {
   let compatibility = options.compatibility ?? false
   const calls: Array<{ name: string; arguments: Record<string, unknown> }> = []
@@ -67,9 +68,20 @@ async function fixture(options: {
             ...(compatibility ? { pid: { type: 'integer' } } : { format: { type: 'string' } }) },
           required: compatibility ? ['pid', 'window_id'] : ['window_id'] },
       }] }),
-      callTool: async (request: { name: string; arguments: Record<string, unknown> }) => {
+      callTool: async (request: { name: string; arguments: Record<string, unknown> }, _schema: unknown, requestOptions?: { signal?: AbortSignal }) => {
         calls.push({ name: request.name, arguments: request.arguments })
         if (request.name === 'get_window_state') return options.snapshot ?? image(100, 80)
+        if (request.name === 'screenshot' && options.pendingScreenshot) {
+          const pending = options.pendingScreenshot
+          pending.started = true
+          pending.signal = requestOptions?.signal
+          return new Promise<CallToolResult>((_resolve, reject) => {
+            pending.signal?.addEventListener('abort', () => {
+              pending.aborted = true
+              reject(new DOMException('Aborted', 'AbortError'))
+            }, { once: true })
+          })
+        }
         if (request.name === 'screenshot') return options.native ?? image(200, 160)
         if (request.name === 'list_windows') return {
           content: [], structuredContent: { windows: [{
@@ -97,7 +109,7 @@ async function fixture(options: {
       abortController, cuaDriverRun: run, setAppState: () => {},
     } as never, (() => {}) as never, { message: { content: [] } } as never)
   }
-  return { tools, calls, invoke }
+  return { tools, calls, invoke, abort: () => abortController.abort() }
 }
 
 describe('window-scoped CuaDriver MCP zoom', () => {
@@ -196,6 +208,25 @@ describe('window-scoped CuaDriver MCP zoom', () => {
     await expect(invoke('zoom', { pid: 41, window_id: 72, x1: 1, y1: 1, x2: 20, y2: 20 }))
       .rejects.toThrow('not owned')
     expect(calls.map(call => call.name)).toEqual(['screenshot', 'list_windows'])
+  })
+
+  test('aborts a pending native capture at the overall tool deadline', async () => {
+    const previousTimeout = process.env.MCP_TOOL_TIMEOUT
+    const pending = { started: false, aborted: false, signal: undefined as AbortSignal | undefined }
+    const { invoke, abort } = await fixture({ pendingScreenshot: pending })
+    try {
+      await invoke('get_window_state', { pid: 41, window_id: 72 })
+      process.env.MCP_TOOL_TIMEOUT = '40'
+      await expect(invoke('zoom', { pid: 41, window_id: 72, x1: 1, y1: 1, x2: 20, y2: 20 }))
+        .rejects.toThrow('timed out')
+      expect(pending.started).toBe(true)
+      expect(pending.signal?.aborted).toBe(true)
+      expect(pending.aborted).toBe(true)
+    } finally {
+      abort()
+      if (previousTimeout === undefined) delete process.env.MCP_TOOL_TIMEOUT
+      else process.env.MCP_TOOL_TIMEOUT = previousTimeout
+    }
   })
 
   test('keeps another MCP server’s same-named tools unchanged', async () => {

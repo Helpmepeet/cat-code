@@ -1,3 +1,4 @@
+import { createCombinedAbortSignal } from '../../utils/combinedAbortSignal.js'
 import { feature } from 'bun:bundle'
 import { isCuaDriverMcpServer } from '../../utils/cuaDriver/guard.js'
 import { callCuaDriverWindowTool, hasCuaDriverWindowTools, prepareCuaDriverWindowTools, recordCuaDriverWindowImage } from '../../utils/cuaDriver/windowTargeting.js'
@@ -3268,6 +3269,8 @@ async function callMCPTool({
   const { client, name, config } = connection
   const toolStartTime = Date.now()
   let progressInterval: NodeJS.Timeout | undefined
+  const deadline = new AbortController()
+  const requestAbort = createCombinedAbortSignal(signal, { signalB: deadline.signal })
 
   try {
     logMCPDebug(name, `Calling MCP tool: ${tool}`)
@@ -3294,12 +3297,12 @@ async function callMCPTool({
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutId = setTimeout(
         (reject, name, tool, timeoutMs) => {
-          reject(
-            new TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS(
-              `MCP server "${name}" tool "${tool}" timed out after ${Math.floor(timeoutMs / 1000)}s`,
-              'MCP tool timeout',
-            ),
+          const error = new TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS(
+            `MCP server "${name}" tool "${tool}" timed out after ${Math.floor(timeoutMs / 1000)}s`,
+            'MCP tool timeout',
           )
+          reject(error)
+          deadline.abort(error)
         },
         timeoutMs,
         reject,
@@ -3309,8 +3312,9 @@ async function callMCPTool({
       )
     })
 
-    const dispatch = (nativeTool: string, nativeArgs: Record<string, unknown>) =>
-      client.callTool(
+    const dispatch = (nativeTool: string, nativeArgs: Record<string, unknown>) => {
+      requestAbort.signal.throwIfAborted()
+      return client.callTool(
         {
           name: nativeTool,
           arguments: nativeArgs,
@@ -3318,7 +3322,7 @@ async function callMCPTool({
         },
         CallToolResultSchema,
         {
-          signal,
+          signal: requestAbort.signal,
           timeout: timeoutMs,
           onprogress: onProgress
             ? sdkProgress => {
@@ -3335,6 +3339,7 @@ async function callMCPTool({
             : undefined,
         },
       )
+    }
     const execute = async () => {
       if (!isCuaDriverMcpServer(connection)) return dispatch(tool, args)
       if (tool === 'zoom' && !hasCuaDriverWindowTools(client)) {
@@ -3344,6 +3349,7 @@ async function callMCPTool({
         fetchToolsForClient.cache.delete(connection.name)
         await fetchToolsForClient(connection)
       }
+      requestAbort.signal.throwIfAborted()
       return callCuaDriverWindowTool(client, tool, args, async (nativeTool, nativeArgs) =>
         CallToolResultSchema.parse(await dispatch(nativeTool, nativeArgs)), cuaFrameScope)
     }
@@ -3475,6 +3481,7 @@ async function callMCPTool({
     }
     return { content: undefined }
   } finally {
+    requestAbort.cleanup()
     // Always clear intervals
     if (progressInterval !== undefined) {
       clearInterval(progressInterval)

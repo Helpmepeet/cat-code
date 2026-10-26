@@ -1,3 +1,4 @@
+import { basename } from 'path'
 import { recordToolActivity } from '../../app-runtime/toolActivity.js'
 import { feature } from 'bun:bundle'
 import { assertLidWorkAdmission } from '../lidClosedWork.js'
@@ -1515,8 +1516,12 @@ async function checkPermissionsAndCallTool(
     !cuaDriverConfig.args.some(arg => arg === '--socket' || arg.startsWith('--socket=') || arg === '--no-daemon-relaunch') &&
     (cuaDriverConfig.env?.CUA_DRIVER_MCP_NO_RELAUNCH ?? process.env.CUA_DRIVER_MCP_NO_RELAUNCH) !== '1' &&
     (!cuaDriverConfig.env?.HOME || cuaDriverConfig.env.HOME === process.env.HOME)) {
+    const command = basename(cuaDriverConfig.command) === 'cua-driver'
+      ? { file: cuaDriverConfig.command, env: cuaDriverConfig.env }
+      : undefined
+    if (command) toolUseContext.cuaDriverRun?.markUsed(command)
     try {
-      await ensureCuaDriverDaemon(toolUseContext.abortController.signal)
+      await ensureCuaDriverDaemon(toolUseContext.abortController.signal, command)
     } catch (error) {
       cuaDriverRefusal = error instanceof Error ? error.message : String(error)
     }
