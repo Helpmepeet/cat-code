@@ -443,10 +443,17 @@ test.each(['unchanged', 'text', 'whitespace', 'failure', 'throw'] as const)('cre
   const attach = [...field.closest('form')!.querySelectorAll<HTMLButtonElement>('button')].find(button => button.getAttribute('aria-label') === 'Add attachment')
   if (!attach) throw new Error('Missing attachment control')
   await act(async () => attach.click())
-  await act(async () => {
-    attach.click()
-    await new Promise<void>(resolve => setTimeout(resolve, 10))
-  })
+  await act(async () => attach.click())
+  // Each act must finish so React can commit FileReader's asynchronous result.
+  const imageReadyDeadline = performance.now() + 2000
+  while (
+    !state.tree.container.querySelector('[aria-label="Remove sketch.png"]') &&
+    performance.now() < imageReadyDeadline
+  ) {
+    await act(async () => {
+      await new Promise<void>(resolve => setTimeout(resolve, 5))
+    })
+  }
   expect(state.tree.container.querySelector('[aria-label="Remove sketch.png"]')).not.toBeNull()
   await act(async () => state.frame([{
     kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'origin',
