@@ -431,7 +431,7 @@ export function SessionPane({
   }, [accountsLastResult, activeSessionId, toast])
   const handleSwitchAccount = onSwitchAccount
     ? (accountId: string) => {
-        const verb = switchVerb(accountId)
+        const verb = switchVerb(accountId, activeAnthropicAccount ? 'anthropic' : 'openai')
         pendingAccountSwitchRef.current = verb.requestId
         onSwitchAccount(verb)
       }
@@ -471,7 +471,7 @@ export function SessionPane({
     canSetEffort: onSetEffort != null,
     canSetFast: onSetFast != null,
     hasPermissionContext: permissionContext != null,
-    canSwitchAccount: activeAccount != null && onSwitchAccount != null,
+    canSwitchAccount: (activeAccount != null || activeAnthropicAccount != null) && onSwitchAccount != null,
     hasContextUsage: !preview,
   })
   // The picker renders rich rows (name + arg-hint + description, prototype
@@ -2588,6 +2588,7 @@ export function SessionPane({
           account={activeAccount}
           anthropicAccount={activeAnthropicAccount}
           accounts={accountsSnapshot?.accounts ?? []}
+          anthropicAccounts={accountsSnapshot?.anthropicAccounts ?? []}
           onSwitchAccount={handleSwitchAccount}
           onManageAccounts={onManageAccounts}
           onOpenAccountSwitcher={onOpenAccountSwitcher}

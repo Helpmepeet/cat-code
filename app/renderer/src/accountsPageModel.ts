@@ -10,6 +10,7 @@ import type {
   AccountStatus,
   AccountSwitchMessage,
   AccountTouchAllMessage,
+  AnthropicAccountStatus,
 } from '../../shared/protocol.js'
 import type { ToastTone } from './toastModel.js'
 import type { Tone } from './tone.js'
@@ -116,6 +117,15 @@ export function statusDotTone(account: AccountStatus): Tone {
   if (account.status === 'capped') return 'danger'
   if (account.status === 'dead') return 'warn'
   return 'default'
+}
+
+export function anthropicAccountCapped(account: AnthropicAccountStatus): boolean {
+  return (account.usageFiveHour ?? 0) >= 100 || (account.usageWeekly ?? 0) >= 100
+}
+
+export function anthropicStatusDotTone(account: AnthropicAccountStatus): Tone {
+  if (account.status === 'dead' || anthropicAccountCapped(account)) return 'warn'
+  return account.isDefault ? 'accent' : 'good'
 }
 
 export function statusLabelTone(account: AccountStatus): Tone {

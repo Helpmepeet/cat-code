@@ -245,7 +245,7 @@ test('the account switch stays disarmed while a restore is still spawning', () =
   }
 })
 
-test('an Anthropic session never offers the Codex switcher', () => {
+test('an Anthropic session arms account switching only for a ready subscription route', () => {
   const runControls = reduceRunControlsState(
     createRunControlsState(),
     frame({
@@ -261,6 +261,17 @@ test('an Anthropic session never offers the Codex switcher', () => {
   const rail = selectComposerRail(sources({ runControls, connectionStatus: 'ready' }))
   expect(rail.canSwitchAccount).toBe(false)
   expect(rail.provider).toBe('anthropic')
+  for (const status of ['ready', 'starting', 'parked', 'disconnected'] as const) {
+    const subscription = selectComposerRail(sources({
+      runControls,
+      connectionStatus: status,
+      accounts: {
+        ...createAccountsState(),
+        pool: accountsSnapshot({ anthropicSubscriptionActive: true }),
+      },
+    }))
+    expect(subscription.canSwitchAccount).toBe(status === 'ready')
+  }
 })
 
 /* --------------------------------------------------------------------- *

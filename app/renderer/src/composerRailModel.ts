@@ -144,6 +144,7 @@ export function selectComposerRail(
   const ready = engineReady(connectionStatus)
   const last = selectLastRunControlsSnapshot(runControls, sessionId)
   const live = selectRunControlsSnapshot(runControls, sessionId)
+  const accountsSnapshot = railAccounts(accounts, sessionId, ready)
   return {
     model: last?.model.current ?? null,
     modelLabel: last?.model.currentLabel ?? null,
@@ -151,10 +152,14 @@ export function selectComposerRail(
     fastMode: last && last.fast.supportedByModel ? last.fast.active : null,
     contextWindow: last?.model.contextWindow ?? null,
     lastPermissionMode: selectLastPermissionMode(permissions, sessionId),
-    accountsSnapshot: railAccounts(accounts, sessionId, ready),
+    accountsSnapshot,
     provider: last?.model.provider ?? null,
     liveRunControls: live,
     readOnlyRunControls: last,
-    canSwitchAccount: ready && last?.model.provider === 'openai',
+    canSwitchAccount: ready && (
+      last?.model.provider === 'openai' ||
+      (last?.model.provider === 'anthropic' &&
+        accountsSnapshot?.anthropicSubscriptionActive === true)
+    ),
   }
 }

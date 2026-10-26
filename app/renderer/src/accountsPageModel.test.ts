@@ -1,11 +1,24 @@
 import { describe, expect, test } from 'bun:test'
-import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+import type { AccountsSnapshot, AccountStatus, AnthropicAccountStatus } from '../../shared/protocol.js'
 import {
+  anthropicStatusDotTone,
   formatAccountsNeedingSignIn,
   logoutVerb,
   selectAccountMenuItems,
   selectAccountsNeedingSignIn,
 } from './accountsPageModel.js'
+
+test('Claude account dots prioritize dead and capped windows over the default marker', () => {
+  const account: AnthropicAccountStatus = {
+    id: 'claude', alias: null, email: 'test@example.com', status: 'healthy',
+    isDefault: false, hasVaultProfile: true, subscriptionType: 'max',
+  }
+  expect(anthropicStatusDotTone(account)).toBe('good')
+  expect(anthropicStatusDotTone({ ...account, isDefault: true })).toBe('accent')
+  expect(anthropicStatusDotTone({ ...account, isDefault: true, status: 'dead' })).toBe('warn')
+  expect(anthropicStatusDotTone({ ...account, isDefault: true, usageFiveHour: 100 })).toBe('warn')
+  expect(anthropicStatusDotTone({ ...account, isDefault: true, usageWeekly: 110 })).toBe('warn')
+})
 
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
   return {

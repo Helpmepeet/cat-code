@@ -15,6 +15,8 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type {
   AccountStatus,
+  AnthropicAccountStatus,
+  AccountSwitchMessage,
   PermissionContextSnapshot,
   PermissionSetModeMode,
   RunControlsSnapshot,
@@ -329,4 +331,46 @@ test('the picker offers only rail commands that can act', async () => {
   expect(offered('mode')).toBe(true)
   expect(offered('fast')).toBe(false)
   expect(offered('account')).toBe(false)
+})
+
+test('/account in a Claude pane opens both pools and sends a Claude switch verb', async () => {
+  const active: AnthropicAccountStatus = {
+    id: 'claude-main', alias: 'work', email: 'work@example.com', status: 'healthy',
+    isDefault: true, hasVaultProfile: true, subscriptionType: 'max',
+    usageFiveHour: 35, usageWeekly: 18,
+  }
+  const alternate = { ...active, id: 'claude-alt', alias: 'personal', isDefault: false }
+  const switches: AccountSwitchMessage[] = []
+  let refreshes = 0
+  const pane = await mountPane('/account ', {
+    activeAccount: null,
+    activeAnthropicAccount: active,
+    accountsSnapshot: {
+      ...idleSessionPaneProps().accountsSnapshot!,
+      accounts: [account({ switchable: true })],
+      anthropicAccounts: [active, alternate],
+    },
+    onSwitchAccount: verb => switches.push(verb),
+    onOpenAccountSwitcher: () => { refreshes++ },
+  })
+  await pane.key('Enter')
+  expect(pane.prompts).toEqual([''])
+  expect(pane.submits()).toBe(0)
+  expect(refreshes).toBe(1)
+  expect(openMenu()?.textContent).toContain('35%')
+  const codexRow = Array.from(openMenu()!.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .find(row => row.textContent?.includes('main'))!
+  expect(codexRow.getAttribute('aria-disabled')).toBe('true')
+  await act(async () => { codexRow.click() })
+  expect(switches).toEqual([])
+  await act(async () => {
+    openMenu()!.querySelector<HTMLButtonElement>('[title="Switch to personal"]')!.click()
+  })
+  await harness.nextFrame()
+  expect(switches).toEqual([expect.objectContaining({
+    type: 'account.switch', provider: 'anthropic', accountId: 'claude-alt',
+    requestId: expect.any(String),
+  })])
+  expect(openMenu()).toBeNull()
+  expect(document.activeElement === pane.field).toBe(true)
 })

@@ -1,12 +1,16 @@
 import { expect, test } from 'bun:test'
-import type { ReactElement, ReactNode } from 'react'
+import { Children, isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
   AccountSwitcherPanel,
   ComposerActionsBar,
   ContextUsagePanel,
 } from './ComposerActionsBar.js'
-import { toggleAccountChip } from './composerAccountChip.js'
+import {
+  canSwitchAnthropicAccount,
+  listComposerAnthropicAccounts,
+  toggleAccountChip,
+} from './composerAccountChip.js'
 import { handleMenuRovingKeyDown } from './composerPopover.js'
 import { toneClasses } from './tone.js'
 import type { ContextUsage } from './contextUsage.js'
@@ -204,7 +208,7 @@ test('an Anthropic-routed session renders its Claude account instead of a Codex 
   })
   expect(html).toContain('claude-main')
   // A named state, not the raw `healthy`/`dead` enum the wire carries.
-  expect(html).toContain('Active Anthropic account: claude-main · Ready')
+  expect(html).toContain('Active account: claude-main · Ready')
   expect(html).not.toContain('· healthy')
   expect(html).not.toContain('Active account: hiby')
 
@@ -212,7 +216,7 @@ test('an Anthropic-routed session renders its Claude account instead of a Codex 
     account: null,
     anthropicAccount: anthropicAccount({ status: 'dead' }),
   })
-  expect(dead).toContain('Active Anthropic account: claude-main · Needs re-login')
+  expect(dead).toContain('Active account: claude-main · Needs re-login')
   expect(dead).not.toContain('· dead')
 })
 
@@ -480,6 +484,70 @@ function pool(): AccountStatus[] {
   ]
 }
 
+test('both account pools show usage, with only the routing provider switchable', () => {
+  const rows = pool()
+  const claude = [
+    anthropicAccount({ usageFiveHour: 35, usageWeekly: 18 }),
+    anthropicAccount({ id: 'claude-alt', alias: null, email: 'alt@example.com', isDefault: false, usageFiveHour: 4, usageWeekly: 9 }),
+    anthropicAccount({ id: 'claude-stale', alias: 'stale', isDefault: false, loginStale: true }),
+    anthropicAccount({ id: 'claude-dead', alias: 'dead', isDefault: false, status: 'dead' }),
+    anthropicAccount({ id: 'claude-capped', alias: 'capped', isDefault: false, usageFiveHour: 100, usageFiveHourResetAt: 1 }),
+  ]
+  const codexHtml = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} anthropicPool={claude} onSwitch={() => {}} />,
+  )
+  expect(codexHtml.indexOf('Codex<')).toBeLessThan(codexHtml.indexOf('Anthropic<'))
+  expect(codexHtml).toContain('35%')
+  expect(codexHtml).toContain('18%')
+  expect(codexHtml).toContain('4%')
+  expect(codexHtml).not.toContain('>stale<')
+  expect(codexHtml).toContain('Needs re-login')
+  expect(codexHtml).toContain('Capped')
+  expect(codexHtml).toContain('· ↺ now')
+  expect(codexHtml).toContain('border-l-text-faint')
+  expect(countOccurrences(codexHtml, 'rounded-full bg-accent')).toBe(1)
+  expect(countOccurrences(codexHtml, 'aria-current="true"')).toBe(1)
+  expect(codexHtml).not.toContain('Switch to alt@example.com')
+
+  const claudeHtml = renderToStaticMarkup(
+    <AccountSwitcherPanel provider="anthropic" active={claude[0]!} pool={rows} anthropicPool={claude} onSwitch={() => {}} />,
+  )
+  expect(claudeHtml.indexOf('Anthropic<')).toBeLessThan(claudeHtml.indexOf('Codex<'))
+  expect(claudeHtml).toContain('Switch to alt@example.com')
+  expect(claudeHtml).not.toContain('Switch to yoxrent')
+  expect(claudeHtml).not.toContain('Switch to capped')
+  expect(claudeHtml).not.toContain('Switch to dead')
+})
+
+test('Claude faces share the account trigger and retain a health dot when read-only', () => {
+  const claude = anthropicAccount({ alias: null, usageWeekly: 100 })
+  const detached = render({ anthropicAccount: claude })
+  expect(detached).toContain('Active account: user@example.com · Capped')
+  expect(detached).toContain('bg-tone-warn')
+  expect(detached).not.toContain('data-composer-face="account"')
+  const interactive = render({ anthropicAccount: claude, onSwitchAccount: () => {} })
+  expect(interactive).toContain('data-composer-face="account"')
+  expect(interactive).toContain('aria-haspopup="menu"')
+})
+
+test('Claude row switching and stale filtering preserve only usable switch targets', () => {
+  const alternate = anthropicAccount({ id: 'alt', isDefault: false })
+  expect(canSwitchAnthropicAccount(alternate, 'main')).toBe(true)
+  for (const row of [
+    { ...alternate, status: 'dead' as const },
+    { ...alternate, loginStale: true },
+    { ...alternate, usageFiveHour: 100 },
+    { ...alternate, usageWeekly: 100 },
+  ]) {
+    expect(canSwitchAnthropicAccount(row, 'main')).toBe(false)
+  }
+  expect(canSwitchAnthropicAccount(alternate, 'alt')).toBe(false)
+  const stale = { ...alternate, loginStale: true }
+  expect(listComposerAnthropicAccounts([stale])).toEqual([])
+  expect(listComposerAnthropicAccounts([stale], 'alt')).toEqual([stale])
+  expect(listComposerAnthropicAccounts([{ ...stale, isDefault: true }])).toHaveLength(1)
+})
+
 test('AccountSwitcherPanel lists the real pool under the column headers, with no title row', () => {
   const rows = pool()
   const html = renderToStaticMarkup(
@@ -489,10 +557,9 @@ test('AccountSwitcherPanel lists the real pool under the column headers, with no
   expect(html).toContain('yoxrent')
   expect(html).toContain('oldcap')
   // The panel opens straight on the column headers; the old title row (an
-  // "Accounts" label plus an "N/M healthy" tally) is gone, and "Account" as a
-  // column header carries the naming on its own.
+  // "Accounts" label plus an "N/M healthy" tally) is gone.
   expect(html).not.toContain('healthy')
-  expect(html).toContain('Account<')
+  expect(html).toContain('Codex<')
   expect(html).toContain('5h<')
   expect(html).toContain('Weekly<')
 })
@@ -640,12 +707,7 @@ test('AccountSwitcherPanel: dead and quarantined rows show their real label, nev
 })
 
 test('AccountSwitcherPanel: clicking a switchable row invokes onSwitch with its real id (ACCT-9)', () => {
-  // This package has no DOM/click-simulation harness (see AccountsPage.test.tsx's
-  // header comment) — the sibling convention is to exercise the EXACT handler a
-  // click would fire, not a re-implementation, by calling the component function
-  // directly and invoking the onClick prop off the returned element tree. Static
-  // markup alone (the prior coverage) never proves the wiring is correct — it
-  // can't fire a click, so a broken id or a dropped handler still renders fine.
+  // Exercise the real handlers through the sectioned element tree.
   type ButtonEl = ReactElement<{ onClick?: () => void; children?: ReactNode }>
   type DivEl = ReactElement<{ className?: string; children?: ReactNode }>
 
@@ -662,7 +724,15 @@ test('AccountSwitcherPanel: clicking a switchable row invokes onSwitch with its 
   const rowsContainer = (element.props.children as DivEl[]).find(child =>
     child?.props?.className?.includes('max-h-[300px]'),
   )!
-  const buttons = rowsContainer.props.children as ButtonEl[]
+  const buttons: ButtonEl[] = []
+  function collectButtons(children: ReactNode): void {
+    Children.forEach(children, child => {
+      if (!isValidElement<{ children?: ReactNode }>(child)) return
+      if (child.type === 'button') buttons.push(child as ButtonEl)
+      else collectButtons(child.props.children)
+    })
+  }
+  collectButtons(rowsContainer.props.children)
 
   const yoxRow = buttons.find(b => b.key === 'a-yox')!
   expect(typeof yoxRow.props.onClick).toBe('function')

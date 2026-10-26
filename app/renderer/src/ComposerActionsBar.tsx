@@ -13,12 +13,18 @@ import {
   type Ref,
 } from 'react'
 import {
+  anthropicAccountCapped,
+  anthropicStatusDotTone,
   formatResetLabel,
   statusDotTone,
   usageTone,
 } from './accountsPageModel.js'
 import { selectWelcomeUsageWindows } from './welcomeUsage.js'
-import { toggleAccountChip } from './composerAccountChip.js'
+import {
+  canSwitchAnthropicAccount,
+  listComposerAnthropicAccounts,
+  toggleAccountChip,
+} from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ComposerPopoverPanel } from './ComposerPopoverPanel.js'
 import { ContextGauge } from './ContextGauge.js'
@@ -877,14 +883,25 @@ function AccountUsageBar({
 export function AccountSwitcherPanel({
   active,
   pool,
+  anthropicPool = [],
+  provider = 'openai',
   onSwitch,
   onManage,
 }: {
-  active: AccountStatus
+  active: AccountStatus | AnthropicAccountStatus
   pool: AccountStatus[]
+  anthropicPool?: AnthropicAccountStatus[]
+  provider?: 'openai' | 'anthropic'
   onSwitch: (accountId: string) => void
   onManage?: () => void
 }) {
+  const sections = [
+    { provider: 'openai' as const, rows: pool },
+    {
+      provider: 'anthropic' as const,
+      rows: listComposerAnthropicAccounts(anthropicPool, provider === 'anthropic' ? active.id : undefined),
+    },
+  ].sort((a, b) => Number(b.provider === provider) - Number(a.provider === provider))
   return (
     <div
       role="menu"
@@ -892,90 +909,109 @@ export function AccountSwitcherPanel({
       onKeyDown={handleMenuRovingKeyDown}
       className={`${POPOVER_PANEL_RIGHT} w-[336px]`}
     >
-      <div className="flex items-center gap-3 px-3.5 pb-1.5 pt-2.5">
-        <span className="flex-1 text-[9px] font-bold uppercase tracking-[0.1em] text-text-subtle">
-          Account
-        </span>
-        <span className="w-[72px] text-[9px] font-bold uppercase tracking-[0.1em] text-text-subtle">
-          5h
-        </span>
-        <span className="w-[72px] text-[9px] font-bold uppercase tracking-[0.1em] text-text-subtle">
-          Weekly
-        </span>
-      </div>
       <div className="max-h-[300px] overflow-y-auto">
-        {pool.map(acct => {
-          const isActive = acct.id === active.id
-          const unavailable = acct.status !== 'healthy'
-          const clickable = !isActive && acct.switchable
-          const rowAlias = acct.alias ?? '(unnamed)'
-          const { fiveHour, weekly } = selectWelcomeUsageWindows(acct)
-          const hasBoth = fiveHour !== null && weekly !== null
-          const singleWindow = hasBoth ? null : (weekly ?? fiveHour)
-          return (
-            <button
-              key={acct.id}
-              type="button"
-              role="menuitem"
-              aria-current={isActive ? 'true' : undefined}
-              // ACCT-6: a visible unavailable/active row stays focusable and
-              // announced via aria-disabled — native `disabled` would drop it
-              // from the tab order, hiding its state from keyboard users.
-              aria-disabled={!clickable}
-              onClick={clickable ? () => onSwitch(acct.id) : undefined}
-              title={clickable ? `Switch to ${rowAlias}` : undefined}
-              className={`flex w-full items-center gap-3 border-l-2 border-t border-t-shell-seam px-3.5 py-2 text-left transition-colors ${
-                isActive ? 'border-l-accent bg-accent/[0.06]' : 'border-l-transparent'
-              } ${clickable ? 'cursor-pointer hover:bg-white/[0.035]' : 'cursor-default'} ${
-                unavailable && !isActive ? 'opacity-60' : ''
-              }`}
-            >
-              <span className="flex min-w-0 flex-1 items-center gap-2">
-                <span
-                  className={`h-[7px] w-[7px] shrink-0 rounded-full ${toneClasses(statusDotTone(acct)).dot}`}
-                  aria-hidden
-                />
-                <span
-                  className={`truncate text-[12.5px] ${
-                    isActive
-                      ? 'font-semibold text-text-primary'
-                      : 'font-medium text-text-muted'
+        {sections.filter(section => section.rows.length > 0).map(section => (
+          <div key={section.provider} className="not-first:border-t not-first:border-shell-seam">
+            <div className="flex items-center gap-3 px-3.5 pb-1.5 pt-2.5 text-[9px] font-bold uppercase tracking-[0.1em] text-text-subtle">
+              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                <ProviderLogo provider={section.provider} size={11} className={`composer-provider-logo composer-provider-${section.provider}`} />
+                {section.provider === 'openai' ? 'Codex' : 'Anthropic'}
+              </span>
+              <span className="w-[72px]">5h</span>
+              <span className="w-[72px]">Weekly</span>
+            </div>
+            {section.rows.map(acct => {
+              const codex = 'availabilityLabel' in acct ? acct : null
+              const claude = 'email' in acct ? acct : null
+              const routing = section.provider === provider
+              const isActive = routing && acct.id === active.id
+              const poolDefault = !routing && acct.isDefault
+              const capped = claude ? anthropicAccountCapped(claude) : false
+              const unavailable = acct.status !== 'healthy' || capped
+              const clickable = routing && !isActive && (
+                codex ? codex.switchable : claude ? canSwitchAnthropicAccount(claude, active.id) : false
+              )
+              const rowAlias = acct.alias ?? claude?.email ?? '(unnamed)'
+              const dotTone = codex
+                ? statusDotTone({ ...codex, isDefault: routing && codex.isDefault })
+                : anthropicStatusDotTone({ ...claude!, isDefault: routing && acct.isDefault })
+              const availabilityLabel = codex?.availabilityLabel ??
+                (claude?.status === 'dead' ? ANTHROPIC_STATUS_LABEL.dead : 'Capped')
+              const showReset = codex ? codex.status === 'capped' : capped && claude?.status !== 'dead'
+              const resetAt = codex ? codex.usageResetAt :
+                (claude?.usageFiveHour ?? 0) >= 100 ? claude?.usageFiveHourResetAt : claude?.usageWeeklyResetAt
+              const { fiveHour, weekly } = codex ? selectWelcomeUsageWindows(codex) : {
+                fiveHour: claude?.usageFiveHour == null ? null : { percent: claude.usageFiveHour },
+                weekly: claude?.usageWeekly == null ? null : { percent: claude.usageWeekly },
+              }
+              const hasBoth = fiveHour !== null && weekly !== null
+              const singleWindow = hasBoth ? null : (weekly ?? fiveHour)
+              return (
+                <button
+                  key={acct.id}
+                  type="button"
+                  role="menuitem"
+                  aria-current={isActive ? 'true' : undefined}
+                  // ACCT-6: a visible unavailable/active row stays focusable and
+                  // announced via aria-disabled — native `disabled` would drop it
+                  // from the tab order, hiding its state from keyboard users.
+                  aria-disabled={!clickable}
+                  onClick={clickable ? () => onSwitch(acct.id) : undefined}
+                  title={clickable ? `Switch to ${rowAlias}` : undefined}
+                  className={`flex w-full items-center gap-3 border-l-2 border-t border-t-shell-seam px-3.5 py-2 text-left transition-colors ${
+                    isActive ? 'border-l-accent bg-accent/[0.06]' : poolDefault ? 'border-l-text-faint' : 'border-l-transparent'
+                  } ${clickable ? 'cursor-pointer hover:bg-white/[0.035]' : 'cursor-default'} ${
+                    unavailable && !isActive ? 'opacity-60' : ''
                   }`}
                 >
-                  {rowAlias}
-                </span>
-              </span>
-              {unavailable ? (
-                // ACCT-1: the real per-status label (dead/quarantined never
-                // read as "Capped") — only a genuinely capped row implies
-                // reset timing.
-                <span
-                  className={`w-[156px] text-[11px] ${toneClasses(statusDotTone(acct)).text}`}
-                >
-                  {acct.availabilityLabel}
-                  {acct.status === 'capped' ? (
-                    <span className="text-text-subtle">
-                      {' '}
-                      · ↺ {formatResetLabel(acct.usageResetAt)}
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span
+                      className={`h-[7px] w-[7px] shrink-0 rounded-full ${toneClasses(dotTone).dot}`}
+                      aria-hidden
+                    />
+                    <span
+                      className={`truncate text-[12.5px] ${
+                        isActive
+                          ? 'font-semibold text-text-primary'
+                          : 'font-medium text-text-muted'
+                      }`}
+                    >
+                      {rowAlias}
                     </span>
-                  ) : null}
-                </span>
-              ) : hasBoth ? (
-                <>
-                  <AccountUsageBar pct={fiveHour.percent} />
-                  <AccountUsageBar pct={weekly.percent} />
-                </>
-              ) : singleWindow ? (
-                <AccountUsageBar
-                  pct={singleWindow.percent}
-                  className="w-[156px]"
-                />
-              ) : (
-                <span className="w-[156px]" aria-hidden="true" />
-              )}
-            </button>
-          )
-        })}
+                  </span>
+                  {unavailable ? (
+                    // ACCT-1: the real per-status label (dead/quarantined never
+                    // read as "Capped") — only a genuinely capped row implies
+                    // reset timing.
+                    <span
+                      className={`w-[156px] text-[11px] ${toneClasses(dotTone).text}`}
+                    >
+                      {availabilityLabel}
+                      {showReset ? (
+                        <span className="text-text-subtle">
+                          {' '}
+                          · ↺ {formatResetLabel(resetAt ?? null)}
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : hasBoth ? (
+                    <>
+                      <AccountUsageBar pct={fiveHour.percent} />
+                      <AccountUsageBar pct={weekly.percent} />
+                    </>
+                  ) : singleWindow ? (
+                    <AccountUsageBar
+                      pct={singleWindow.percent}
+                      className="w-[156px]"
+                    />
+                  ) : (
+                    <span className="w-[156px]" aria-hidden="true" />
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        ))}
       </div>
       {onManage ? (
         <button
@@ -991,14 +1027,11 @@ export function AccountSwitcherPanel({
   )
 }
 
-/** Interactive PROFILE face → the account-switcher popover (the prototype's
- * `AccountChip`, Surfaces.jsx:584). The quiet active-alias face opens
- * {@link AccountSwitcherPanel} over the REAL Codex pool. Falls back to the P4-24
- * read-only face when no switch handler is wired (mirrors the run control's
- * interactive-vs-face pattern). */
+/** Both providers use the same face and pool popover. */
 function AccountChip({
   active,
   accounts,
+  anthropicAccounts,
   onSwitch,
   onManage,
   onOpen,
@@ -1006,8 +1039,9 @@ function AccountChip({
   onFocusComposer,
   openRequest,
 }: {
-  active: AccountStatus
+  active: AccountStatus | AnthropicAccountStatus
   accounts: AccountStatus[]
+  anthropicAccounts: AnthropicAccountStatus[]
   onSwitch: (accountId: string) => void
   onManage?: () => void
   onOpen?: () => void
@@ -1019,8 +1053,17 @@ function AccountChip({
   useCardOpenRequest(openRequest, target => {
     if (target === 'account' && !open) setOpen(toggleAccountChip(open, onOpen))
   })
-  const pool = accounts.length > 0 ? accounts : [active]
-  const alias = active.alias ?? '(unnamed)'
+  const codex = 'availabilityLabel' in active ? active : null
+  const claude = 'email' in active ? active : null
+  const provider = codex ? 'openai' : 'anthropic'
+  const pool = accounts.length > 0 ? accounts : codex ? [codex] : []
+  const anthropicPool = anthropicAccounts.length > 0 ? anthropicAccounts : claude ? [claude] : []
+  const alias = active.alias ?? claude?.email ?? '(unnamed)'
+  const label = codex?.availabilityLabel ?? (
+    claude?.status === 'dead' ? ANTHROPIC_STATUS_LABEL.dead :
+    anthropicAccountCapped(claude!) ? 'Capped' : ANTHROPIC_STATUS_LABEL.healthy
+  )
+  const dotTone = codex ? statusDotTone(codex) : anthropicStatusDotTone(claude!)
   return (
     <div ref={ref} className="composer-account-face relative shrink-0">
       <button
@@ -1029,12 +1072,12 @@ function AccountChip({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        title={`Active account: ${alias} · ${active.availabilityLabel}`}
+        title={`Active account: ${alias} · ${label}`}
         onClick={() => setOpen(toggleAccountChip(open, onOpen))}
         className={`${RAIL_FACE} gap-1.5 text-text-muted hover:text-text-primary`}
       >
         <span
-          className={`h-[7px] w-[7px] shrink-0 rounded-full ${toneClasses(statusDotTone(active)).dot}`}
+          className={`h-[7px] w-[7px] shrink-0 rounded-full ${toneClasses(dotTone).dot}`}
           aria-hidden
         />
         {alias}
@@ -1044,6 +1087,8 @@ function AccountChip({
         <AccountSwitcherPanel
           active={active}
           pool={pool}
+          anthropicPool={anthropicPool}
+          provider={provider}
           onSwitch={accountId => {
             onSwitch(accountId)
             close()
@@ -1482,6 +1527,7 @@ export function ComposerActionsBar({
   account,
   anthropicAccount,
   accounts,
+  anthropicAccounts = [],
   onSwitchAccount,
   onManageAccounts,
   onOpenAccountSwitcher,
@@ -1534,6 +1580,8 @@ export function ComposerActionsBar({
    * empty before the snapshot. With `onSwitchAccount` present, the account face becomes
    * the interactive switcher; absent, it falls back to the P4-24 read-only face. */
   accounts?: AccountStatus[]
+  /** Global Claude pool rows include the usage omitted by session snapshots. */
+  anthropicAccounts?: AnthropicAccountStatus[]
   /** Switch the active session to `accountId` (the engine's `account.switch` verb). */
   onSwitchAccount?: (accountId: string) => void
   /** Open the full Accounts page (the popover's "Manage accounts →"). */
@@ -1567,7 +1615,8 @@ export function ComposerActionsBar({
     anthropicAccount?.alias ?? anthropicAccount?.email ?? null
   // Interactive switcher when the active account AND a switch handler are both
   // present; otherwise the read-only alias face.
-  const accountInteractive = account != null && onSwitchAccount != null
+  const activeAccount = account ?? anthropicAccount
+  const accountInteractive = activeAccount != null && onSwitchAccount != null
   const tokenWarning = selectTokenWarning(
     contextUsage ?? null,
     runControls?.autoCompact,
@@ -1759,10 +1808,12 @@ export function ComposerActionsBar({
             </span>
           ) : null}
           <LidClosedCup faceProps={faceProps('lid-closed')} />
-          {accountInteractive && account && onSwitchAccount ? (
+          {accountInteractive && activeAccount && onSwitchAccount ? (
             <AccountChip
-              active={account}
+              key={'availabilityLabel' in activeAccount ? 'openai' : 'anthropic'}
+              active={activeAccount}
               accounts={accounts ?? []}
+              anthropicAccounts={anthropicAccounts}
               onSwitch={onSwitchAccount}
               onManage={onManageAccounts}
               onOpen={onOpenAccountSwitcher}
@@ -1789,9 +1840,13 @@ export function ComposerActionsBar({
             </span>
           ) : anthropicAccount && anthropicAccountLabel ? (
             <span
-              className={`composer-account-face ${RAIL_FACE} text-text-muted`}
-              title={`Active Anthropic account: ${anthropicAccountLabel} · ${ANTHROPIC_STATUS_LABEL[anthropicAccount.status]}`}
+              className={`composer-account-face ${RAIL_FACE} gap-1.5 text-text-muted`}
+              title={`Active account: ${anthropicAccountLabel} · ${anthropicAccount.status === 'dead' ? ANTHROPIC_STATUS_LABEL.dead : anthropicAccountCapped(anthropicAccount) ? 'Capped' : ANTHROPIC_STATUS_LABEL.healthy}`}
             >
+              <span
+                className={`h-[7px] w-[7px] shrink-0 rounded-full ${toneClasses(anthropicStatusDotTone(anthropicAccount)).dot}`}
+                aria-hidden
+              />
               {anthropicAccountLabel}
             </span>
           ) : null}
