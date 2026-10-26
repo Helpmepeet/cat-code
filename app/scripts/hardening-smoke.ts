@@ -315,6 +315,7 @@ async function runProductionHardeningSmoke(
       // nothing and reach no sidecar, and main re-validates shape + bounds
       // (`parseVisibleSessions`) because the preload is not the boundary.
       'reportVisibleSessions',
+      'reportNotificationVisibility',
       'subscribeHost',
       // Private desktop diagnostics (2026-08-06). All four terminate in Electron
       // main and appear in neither the supervisor nor the sidecar, so they add no

@@ -17,6 +17,7 @@ import {
   type FormEvent,
 } from 'react'
 import { getBridge } from './bridge.js'
+import { useNotificationVisibility } from './notificationVisibility.js'
 import { parseNotificationOpenEvent } from '../../shared/notificationNavigation.js'
 import { requestSessionMove } from './sessionMoveAction.js'
 import type { ProjectRouteSnapshot } from '../../shared/projectRouting.js'
@@ -4408,6 +4409,14 @@ export function App() {
     !showFirstRunOAuthSurface &&
     oauthContext === 'add-account' &&
     (oauthStarting || oauthProgress != null)
+
+  // Use the committed pane, not the requested tab: shownSession can lag while
+  // the selected session loads. Startup gates replace or cover that transcript.
+  useNotificationVisibility(
+    activeView === 'chat' && activeSessionId && shownPane &&
+      !showTrustGate && !showFirstRunOAuthSurface && !adoptOrphanOAuth && !showAddAccountOAuthSurface
+      ? shownPane.sessionId : null,
+  )
 
   // Reset flow-local framing once the first-run surface should no longer show and
   // its progress has cleared (e.g. an account was added out of band), so a later

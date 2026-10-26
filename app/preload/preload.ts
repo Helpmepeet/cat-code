@@ -18,6 +18,7 @@ import type { LidModeView } from '../shared/lidClosed.js'
 
 import { contextBridge, ipcRenderer } from 'electron'
 import { parseNotificationPreferences, type NotificationPreferences } from '../shared/notificationPreferences.js'
+import type { NotificationVisibilityBridge, NotificationVisibility } from '../shared/notificationVisibility.js'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import type { ProjectRouteCommand, ProjectRouteSnapshot } from '../shared/projectRouting.js'
 import type {
@@ -103,6 +104,7 @@ import {
   CH_SET_NOTIFICATION_PREFERENCES,
   CH_RETRY_TURN,
   CH_NOTIFICATION_RETRY_BLOCKED,
+  CH_NOTIFICATION_VISIBILITY,
   CH_OPEN_LOGS,
   CH_SAVE_DIAGNOSTICS,
   CH_DELIVERY_HEALTH_PROBE,
@@ -266,7 +268,7 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
   }
 })
 
-const bridge: CatCodeBridge = {
+const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   lidClosed: {
     read: () => ipcRenderer.invoke(CH_LID_READ),
     command: command => ipcRenderer.invoke(CH_LID_COMMAND, command),
@@ -650,6 +652,10 @@ const bridge: CatCodeBridge = {
     const payload = { sessionIds }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_HOST_VISIBLE_SESSIONS, payload)
+  },
+  reportNotificationVisibility(value: NotificationVisibility): void {
+    sendGuard.assertAllowed(value)
+    ipcRenderer.send(CH_NOTIFICATION_VISIBILITY, value)
   },
 
   // --- Control plane (HC3 — fixed per-method senders; no generic invoke, no

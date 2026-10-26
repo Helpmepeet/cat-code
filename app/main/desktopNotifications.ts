@@ -58,12 +58,13 @@ function textBlocks(value: unknown): string {
 export function createDesktopNotifications(deps: DesktopNotificationDependencies) {
   const sessions = new Map<string, State>()
   let disposed = false
+  let onScreenSessionId: string | null = null
   let lastBadge: string | undefined
   const close = (s: State) => { const handle = s.handle; s.handle = undefined; handle?.close() }
   const badge = () => {
     let waiting = 0
     if (!disposed && deps.getPreferences().dockBadge) {
-      for (const [id, s] of sessions) if ((s.pending.size || s.stopped) && deps.getSession(id)) waiting++
+      for (const [id, s] of sessions) if (id !== onScreenSessionId && (s.pending.size || s.stopped) && deps.getSession(id)) waiting++
     }
     const text = waiting ? String(waiting) : ''
     if (text === lastBadge) return
@@ -88,7 +89,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
     s.retryBlocked = !!notice.retryResultId && deps.isRetryBlocked?.(id) === true
     const actions = s.retryBlocked ? [] : notice.actions
     const prefs = deps.getPreferences()
-    if (disposed || deps.isAppFocused() || prefs.notify === 'off' || (prefs.notify === 'waiting' && !notice.waiting)) return
+    if (disposed || id === onScreenSessionId || deps.isAppFocused() || prefs.notify === 'off' || (prefs.notify === 'waiting' && !notice.waiting)) return
     const session = deps.getSession(id)
     if (!session) return
     let handle: DesktopNotificationHandle | null
@@ -142,7 +143,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
   function terminal(id: string, s: State, notice: Notice) {
     // Result precedes turn closure. Do not make Retry or follow-up submission
     // available while the controller would still queue it into the old turn.
-    if (s.active) s.terminalNotice = notice
+    if (s.active && id !== onScreenSessionId) s.terminalNotice = notice
     else show(id, s, notice)
   }
   function receive(id: string, frame: ServerFrame) {
@@ -204,7 +205,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
           clear(s)
           if (s.aborted || ['interrupted', 'handoff', 'aborted'].includes(m.subtype)) { s.stopped = false; badge(); return }
           if (m.is_error || m.subtype !== 'success') {
-            s.stopped = true
+            s.stopped = id !== onScreenSessionId
             const copy = turnResultFailureCopy({ subtype: m.subtype, providerCode: s.providerCode, providerMessage: s.providerMessage, errorStatus: s.errorStatus, durationMs: typeof m.duration_ms === 'number' ? m.duration_ms : undefined, totalCostUsd: typeof m.total_cost_usd === 'number' ? m.total_cost_usd : undefined })
             const candidate = s.retryFacts.candidate()
             const accounts = copy.title === USAGE_LIMIT_TITLE
@@ -222,6 +223,13 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
   return {
     receive,
     retry,
+    onScreenChanged(sessionId: string | null) {
+      if (disposed || (sessionId !== null && !deps.getSession(sessionId))) return
+      onScreenSessionId = sessionId
+      const s = sessionId === null ? undefined : sessions.get(sessionId)
+      if (s) { close(s); s.stopped = false; s.terminalNotice = undefined }
+      badge()
+    },
     retryBlockedChanged() {
       for (const [id, s] of sessions) {
         if (s.handle && s.notice?.retryResultId && s.retryBlocked !== (deps.isRetryBlocked?.(id) === true)) {

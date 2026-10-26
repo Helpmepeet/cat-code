@@ -59,6 +59,7 @@ import {
   Notification,
   nativeImage,
   nativeTheme,
+  powerMonitor,
   screen,
   session,
   shell,
@@ -244,6 +245,7 @@ import { readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import { readNotificationPreference, writeNotificationPreference } from './notificationPreference.js'
 import { registerNotificationPreferenceIpc, registerNotificationRetryIpc, registerNotificationRetryBlockedIpc } from './notificationPreferenceIpc.js'
 import { createDesktopNotifications } from './desktopNotifications.js'
+import { createNotificationVisibility, registerNotificationVisibilityIpc } from './notificationVisibility.js'
 import type { NotificationPreferences } from '../shared/notificationPreferences.js'
 import {
   clampWindowBounds,
@@ -697,6 +699,15 @@ let desktopNotifications: ReturnType<typeof createDesktopNotifications> | null =
 let notificationPreferences: NotificationPreferences | null = null
 let notificationRetryBlocked = new Set<SessionId>()
 let pendingNotificationOpen: Extract<HostEvent, { type: 'notification-open' }> | null = null
+let notificationScreenSuspended = false
+let notificationScreenLocked = false
+let notificationUserInactive = false
+const notificationVisibility = createNotificationVisibility({
+  hasSession: id => host?.getSessionDescriptor(id) !== undefined,
+  screenAvailable: () => !notificationScreenSuspended && !notificationScreenLocked &&
+    !notificationUserInactive && powerMonitor.getSystemIdleState(1) !== 'locked',
+  changed: id => desktopNotifications?.onScreenChanged(id),
+})
 
 function openNotificationSession(sessionId: SessionId, accounts = false): void {
   const session = host?.listSessions().find(row => row.appSessionId === sessionId)
@@ -1743,6 +1754,14 @@ function createWindow(): void {
   window.on('focus', catchUpSkippedRefreshes)
   window.on('focus', () => desktopNotifications?.focusChanged())
   window.on('blur', () => desktopNotifications?.focusChanged())
+  let notificationWindowShown = false
+  const updateNotificationWindow = () => notificationVisibility.windowChanged(
+    notificationWindowShown && !window.isMinimized(),
+  )
+  window.on('show', () => { notificationWindowShown = true; updateNotificationWindow() })
+  window.on('hide', () => { notificationWindowShown = false; updateNotificationWindow() })
+  window.on('minimize', updateNotificationWindow)
+  window.on('restore', updateNotificationWindow)
 
   // The pid a macOS crash report names. The renderer process does not exist
   // until a document loads, and it is already gone by `render-process-gone`, so
@@ -1811,6 +1830,8 @@ function createWindow(): void {
   // and `sendHostEvent` keep addressing a destroyed `webContents` for anything
   // still in flight during teardown.
   window.on('closed', () => {
+    notificationVisibility.windowChanged(false)
+    notificationVisibility.reset()
     cancelWindowBoundsSave()
     // Preserve AttachmentGate until window-all-closed runs shutdownRuntime:
     // Host.shutdownAll snapshots each session before its evictReplay callback
@@ -1838,6 +1859,7 @@ function createWindow(): void {
   // replay. `did-start-navigation` fires on the initial load and on reloads.
   window.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      notificationVisibility.reset()
       rendererDocumentId = randomUUID()
       rendererSubscriptionEpoch = 0
       logOperational('renderer.navigation.started', 'info', { navigation: 'document' })
@@ -2075,6 +2097,7 @@ function createWindow(): void {
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
+    notificationVisibility.reset()
     // A crashed renderer leaves the window open and `isDestroyed()` false, so
     // without this flag every scheduled send (probe, host event, frame) throws
     // "Render frame was disposed" forever. Flag first, then stop probing a
@@ -2339,6 +2362,7 @@ function wireHostEvents(h: Host): void {
     power?.receiveHostEvent(event)
     scheduledTasks?.receiveHostEvent(event)
     desktopNotifications?.receiveHostEvent(event)
+    notificationVisibility.refresh()
     sendHostEvent(event)
     // The durable row now carries the completed turn; the in-memory pre-result
     // marker is needed only while that row still reads null.
@@ -3095,6 +3119,12 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_HOST_VISIBLE_SESSIONS, (event, payload: unknown) => {
     if (!isMainWindowSender(event)) return
     visibleSessions = parseVisibleSessions(payload)
+  })
+  registerNotificationVisibilityIpc<IpcMainEvent>({
+    on: (channel, listener) => ipcMain.on(channel, listener),
+    isTrustedSender: event => isMainWindowSender(event) &&
+      event.senderFrame === mainWindow?.webContents.mainFrame,
+    receive: raw => notificationVisibility.receive(raw),
   })
 
   registerHostControlPlane()
@@ -4948,6 +4978,12 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(() => {
     logOperational('app.ready', 'info')
+    powerMonitor.on('suspend', () => { notificationScreenSuspended = true; notificationVisibility.refresh() })
+    powerMonitor.on('resume', () => { notificationScreenSuspended = false; notificationVisibility.refresh() })
+    powerMonitor.on('lock-screen', () => { notificationScreenLocked = true; notificationVisibility.refresh() })
+    powerMonitor.on('unlock-screen', () => { notificationScreenLocked = false; notificationVisibility.refresh() })
+    powerMonitor.on('user-did-resign-active', () => { notificationUserInactive = true; notificationVisibility.refresh() })
+    powerMonitor.on('user-did-become-active', () => { notificationUserInactive = false; notificationVisibility.refresh() })
     // BrowserWindow's `icon` option doesn't reach the Dock tile (SECURITY-MINIMUM
     // is silent on this — it's cosmetic, not a trust boundary); the Dock image
     // comes from the running bundle's own Info.plist/icns unless overridden here.

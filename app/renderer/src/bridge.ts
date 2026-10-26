@@ -5,13 +5,14 @@
  */
 
 import type { CatCodeBridge } from '../../shared/protocol.js'
+import type { NotificationVisibilityBridge } from '../../shared/notificationVisibility.js'
 
 declare global {
   interface Window {
-    catcode: CatCodeBridge
+    catcode: CatCodeBridge & NotificationVisibilityBridge
   }
 }
 
-export function getBridge(): CatCodeBridge {
+export function getBridge(): CatCodeBridge & NotificationVisibilityBridge {
   return window.catcode
 }

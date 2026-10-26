@@ -49,6 +49,7 @@ export const CH_GET_NOTIFICATION_PREFERENCES = 'catcode:get-notification-prefere
 export const CH_SET_NOTIFICATION_PREFERENCES = 'catcode:set-notification-preferences'
 export const CH_RETRY_TURN = 'catcode:retry-turn'
 export const CH_NOTIFICATION_RETRY_BLOCKED = 'catcode:notification-retry-blocked'
+export const CH_NOTIFICATION_VISIBILITY = 'catcode:notification-visibility'
 export const CH_OPEN_LOGS = 'catcode:open-logs'
 export const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
 export const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'

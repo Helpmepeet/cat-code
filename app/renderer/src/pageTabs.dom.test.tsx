@@ -6,6 +6,7 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor as fixture } from './sessionDescriptorFixture.js'
 import type { HostEvent, SessionDescriptor, SwitchWorkspaceBranchResult } from '../../shared/hostApi.js'
 import { PROTOCOL_VERSION, type CatCodeBridge, type ServerFrame, type TranscriptCache, type SessionCatalogEntry } from '../../shared/protocol.js'
+import type { NotificationVisibility, NotificationVisibilityBridge } from '../../shared/notificationVisibility.js'
 
 let harness: DomTestHarness
 let previousBridge: CatCodeBridge
@@ -38,15 +39,17 @@ async function mountApp(sessions: SessionDescriptor[] = [], strict = false) {
   let frameListener: (frames: ServerFrame[]) => void = () => {}
   const lifecycle: string[] = []
   const visible: string[][] = []
+  const notificationVisibility: NotificationVisibility[] = []
   const inventoryCwds: (string | null)[] = []
   const usageRefreshes: string[] = []
-  const bridge: Partial<CatCodeBridge> = {
+  const bridge: Partial<CatCodeBridge> & NotificationVisibilityBridge = {
     subscribe: listener => { frameListener = listener; return () => {} },
     subscribeHost: listener => { hostListener = listener; return () => {} },
     listSessions: async () => sessions, readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
     rendererReady: () => {}, recordRenderCommit: () => {},
     refreshUsageDashboard: () => { usageRefreshes.push('refresh') },
     reportVisibleSessions: ids => { visible.push([...ids]) },
+    reportNotificationVisibility: value => { notificationVisibility.push(value) },
     previewSession: async () => null,
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
     readSettingsInventory: async cwd => { inventoryCwds.push(cwd); return { ok: true, inventory: { cwd: cwd ?? '/synthetic-home', extensions: { mcp: [], plugins: [], skills: [], hooks: [] }, agents: { definitions: [], failedFiles: [], availableMcpServers: [] }, settings: null, memory: null } } },
@@ -75,8 +78,26 @@ async function mountApp(sessions: SessionDescriptor[] = [], strict = false) {
   const key = async (key: string) => { await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true })) }) }
   const tabs = () => [...tree.container.querySelectorAll<HTMLElement>('[role="tab"]')]
   const selected = () => tabs().filter(t => t.getAttribute('aria-selected') === 'true').map(t => t.getAttribute('aria-label'))
-  return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, inventoryCwds, usageRefreshes }
+  return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, notificationVisibility, inventoryCwds, usageRefreshes }
 }
+
+test('notification attention follows only the rendered transcript, never page tabs or startup gates', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
+  expect(app.notificationVisibility.at(-1)?.sessionId).toBe('a')
+  await app.click('Session b, live')
+  expect(app.notificationVisibility.at(-1)?.sessionId).toBe('b')
+  for (const page of ['Settings', 'Analytics', 'Accounts', 'Goals']) {
+    await app.click(page)
+    expect(app.notificationVisibility.at(-1)?.sessionId).toBeNull()
+  }
+  await app.click('Session a, live')
+  expect(app.notificationVisibility.at(-1)?.sessionId).toBe('a')
+  await app.frames({
+    kind: 'workspace-trust.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'a',
+    workspaceTrust: { trusted: false, trustRoot: '/tmp/a', detectedRepo: null },
+  })
+  expect(app.notificationVisibility.at(-1)?.sessionId).toBeNull()
+})
 
 test('Analytics activation requests one collection per App document, including with retained results', async () => {
   const app = await mountApp()

@@ -130,7 +130,9 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(71)
+  expect(channels).toContain("export const CH_NOTIFICATION_VISIBILITY = 'catcode:notification-visibility'")
+  expect(source).toContain('reportNotificationVisibility(value: NotificationVisibility): void')
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(72)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -175,7 +177,8 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const preload = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
   const mainEntry = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
   const notificationIpc = readFileSync(new URL('../main/notificationPreferenceIpc.ts', import.meta.url), 'utf8')
-  const main = mainEntry + notificationIpc
+  const notificationVisibilityIpc = readFileSync(new URL('../main/notificationVisibility.ts', import.meta.url), 'utf8')
+  const main = mainEntry + notificationIpc + notificationVisibilityIpc
   expect(mainEntry).toContain('registerNotificationPreferenceIpc<IpcMainInvokeEvent>({')
   expect(mainEntry).toContain('registerNotificationRetryIpc<IpcMainInvokeEvent>({')
   expect(mainEntry).toContain('registerNotificationRetryBlockedIpc<IpcMainEvent>({')
@@ -183,7 +186,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(76)
+  expect(names.length).toBe(77)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -559,7 +562,7 @@ test('acknowledgement flushing batches across tasks rather than per delivered fr
 // plain `bun test app/`, wherever it runs.
 test('the hardening allowlist matches the bridge preload actually exposes', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
-  const start = source.indexOf('const bridge: CatCodeBridge = {')
+  const start = source.indexOf('const bridge: CatCodeBridge & NotificationVisibilityBridge = {')
   const end = source.indexOf("contextBridge.exposeInMainWorld('catcode', bridge)")
   if (start < 0 || end < 0) {
     throw new Error('preload.ts no longer declares the bridge the way this test locates it')
