@@ -1,17 +1,11 @@
 import { expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawnSync } from 'node:child_process'
-
-const chrome = process.env.CHROME_BIN ?? [
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/chromium',
-  '/usr/bin/google-chrome',
-].find(path => existsSync(path))
+import { layoutBrowser, runLayoutBrowser } from './layoutBrowser.testSupport.js'
 
 // Happy DOM does not lay out flexboxes or evaluate container queries.
-test.skipIf(!chrome)('panel stays reachable when opened in a narrow pane and when an open pane shrinks', () => {
+test.skipIf(!layoutBrowser)('panel stays reachable when opened in a narrow pane and when an open pane shrinks', () => {
   const scratch = mkdtempSync(join(tmpdir(), 'subagent-panel-layout-'))
   try {
     const css = readFileSync(new URL('./subagentSidePanel.css', import.meta.url), 'utf8')
@@ -53,12 +47,9 @@ test.skipIf(!chrome)('panel stays reachable when opened in a narrow pane and whe
       const closedParent = document.querySelector('.subagent-parent').getBoundingClientRect();
       document.querySelector('#result').textContent = JSON.stringify({ broken, openedNarrow, wide, resizedNarrow, closedHeight:closedParent.height });
     </script>`)
-    // A fresh macOS profile must not wait for a system keychain prompt.
-    const run = spawnSync(chrome!, ['--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--password-store=basic', '--use-mock-keychain', '--disable-background-networking', `--user-data-dir=${join(scratch, 'profile')}`, '--window-size=1400,900', '--dump-dom', `file://${file}`], { encoding: 'utf8', timeout: 20_000 })
-    expect(run.error, run.stderr).toBeUndefined()
-    expect(run.status, run.stderr).toBe(0)
+    const run = runLayoutBrowser(file, join(scratch, 'profile'), 1400)
     const output = run.stdout.match(/<pre id="result">(.*?)<\/pre>/)?.[1]
-    expect(output).toBeDefined()
+    expect(output, run.diagnostics).toBeDefined()
     const result = JSON.parse(output!)
     expect(result.broken.parent.width).toBe(0)
     expect(result.broken.close.x).toBe(434)

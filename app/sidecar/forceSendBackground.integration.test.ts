@@ -213,6 +213,10 @@ test.each([false, true])('force-send preserves three foreground agents and their
     }
     gate.resolve()
     await waitFor(() => before.every(task => h.getAppState().tasks[task.id]?.status === 'completed'), 'Workers did not complete')
+    // Completion deliberately precedes asynchronous handoff persistence.
+    await waitFor(() => before.every(task => getCommandQueueSnapshot().some(command =>
+      command.mode === 'task-notification' && command.origin?.kind === 'task-notification' && command.origin.taskId === task.id,
+    )), 'Worker notifications did not arrive')
     const notifications = getCommandQueueSnapshot().filter(command => command.mode === 'task-notification')
     expect(notifications).toHaveLength(3)
     for (const task of before) expect(JSON.stringify(notifications)).toContain(`finished ${task.id}`)

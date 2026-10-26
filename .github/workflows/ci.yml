@@ -57,5 +57,23 @@ jobs:
       - name: Build the renderer
         run: bun run --cwd app renderer:build
 
+      - name: Install the pinned layout browser
+        env:
+          CHROME_VERSION: '156.0.8078.47'
+        run: |
+          browser_dir="$RUNNER_TEMP/layout-browser"
+          archive="$RUNNER_TEMP/layout-browser.zip"
+          curl --fail --silent --show-error --location --retry 3 \
+            "https://storage.googleapis.com/chrome-for-testing-public/$CHROME_VERSION/mac-arm64/chrome-mac-arm64.zip" \
+            --output "$archive"
+          mkdir -p "$browser_dir"
+          ditto -x -k "$archive" "$browser_dir"
+          chrome="$browser_dir/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+          test -x "$chrome"
+          browser_version=$("$chrome" --version)
+          [[ "$browser_version" == *"$CHROME_VERSION"* ]]
+          printf '%s\n' "$browser_version"
+          printf 'CHROME_BIN=%s\n' "$chrome" >> "$GITHUB_ENV"
+
       - name: Run all desktop tests
         run: bun run --cwd app test:all
