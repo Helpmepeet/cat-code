@@ -145,10 +145,8 @@ export function statusLabelTone(account: AccountStatus): Tone {
  * behavior. This drives a passive count on the Accounts destination instead, so
  * the state is discoverable without being raised.
  *
- * Codex only, and the label says so. `anthropicAccounts` also carries a `dead`
- * status, but those rows offer no repair at all (their only control is Switch,
- * gated on healthy), so counting them would advertise an action that does not
- * exist. Giving that pool the same treatment is a separate change.
+ * Codex only, and the label says so. Anthropic recovery stays on its account
+ * rows rather than contributing to this provider-specific count.
  *
  * `initialized` is the same guard the health bar uses: an unfinished or failed
  * pool read can still carry rows (`initAccountPool` resets the flag in its catch

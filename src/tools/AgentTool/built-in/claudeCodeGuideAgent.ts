@@ -6,11 +6,12 @@ import { RESUME_AGENT_TOOL_NAME } from 'src/tools/ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from 'src/tools/SendMessageTool/constants.js'
 import { WEB_FETCH_TOOL_NAME } from 'src/tools/WebFetchTool/prompt.js'
 import { WEB_SEARCH_TOOL_NAME } from 'src/tools/WebSearchTool/prompt.js'
-import { isUsing3PServices } from 'src/utils/auth.js'
+import { hasCodexTokens, isUsing3PServices } from 'src/utils/auth.js'
 import { hasEmbeddedSearchTools } from 'src/utils/embeddedTools.js'
 import { getSettings_DEPRECATED } from 'src/utils/settings/settings.js'
 import { jsonStringify } from '../../../utils/slowOperations.js'
 import { resolveRequestProvider, type APIProvider } from '../../../utils/model/providers.js'
+import { getDefaultSonnetModel } from '../../../utils/model/model.js'
 import type {
   AgentDefinition,
   BuiltInAgentDefinition,
@@ -121,7 +122,7 @@ function getFeedbackGuideline(): string {
 
 export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
   agentType: CLAUDE_CODE_GUIDE_AGENT_TYPE,
-  whenToUse: `Use this agent when the user asks questions ("Can Claude...", "Does Claude...", "How do I...") about: (1) Cat Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. **IMPORTANT:** Before spawning a new agent, check for an existing claude-code-guide agent. Continue a recently completed one via ${RESUME_AGENT_TOOL_NAME}. Send follow-ups to a running one via ${SEND_MESSAGE_TOOL_NAME}.`,
+  whenToUse: `Use this agent when the user asks questions ("Can Claude...", "Does Claude...", "How do I...") about: (1) Cat Code (the CLI tool) - features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts; (2) Claude Agent SDK - building custom agents; (3) Claude API (formerly Anthropic API) - API usage, tool use, Anthropic SDK usage. Before spawning a new agent, check for an existing claude-code-guide agent. Reuse it only if its model is still available and matches the user's requested model. ${RESUME_AGENT_TOOL_NAME} preserves the previous model and provider; start a new agent when either must change. Otherwise continue a recently completed one via ${RESUME_AGENT_TOOL_NAME}, or send follow-ups to a running one via ${SEND_MESSAGE_TOOL_NAME}.`,
   // Ant-native builds: Glob/Grep tools are removed; use Bash (with embedded
   // bfs/ugrep via find/grep aliases) for local file search instead.
   tools: hasEmbeddedSearchTools()
@@ -140,7 +141,9 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
       ],
   source: 'built-in',
   baseDir: 'built-in',
-  model: 'gpt-6-luna',
+  get model() {
+    return hasCodexTokens() ? 'gpt-6-luna' : getDefaultSonnetModel()
+  },
   permissionMode: 'dontAsk',
   getSystemPrompt({ toolUseContext }) {
     const commands = toolUseContext.options.commands
@@ -205,7 +208,7 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
 
     // Add the feedback guideline (conditional based on whether user is using 3P services)
     const provider = resolveRequestProvider(
-      'gpt-6-luna',
+      toolUseContext.options.mainLoopModel,
       toolUseContext.options.mainLoopProvider,
     )
     const feedbackGuideline = getFeedbackGuideline()

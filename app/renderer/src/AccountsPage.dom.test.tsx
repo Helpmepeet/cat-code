@@ -24,6 +24,62 @@ const emptySnapshot: AccountsSnapshot = {
   anthropicInitialized: true, anthropicRouteAvailable: false,
 }
 
+test('Claude-only accounts stay optional for Codex and recover through Anthropic sign-in', async () => {
+  const sent: AccountVerbMessage[] = []
+  const snapshot: AccountsSnapshot = {
+    ...emptySnapshot,
+    anthropicAccounts: [{
+      id: 'claude', alias: 'Personal', email: 'claude@example.com',
+      status: 'dead', isDefault: true, hasVaultProfile: true,
+      subscriptionType: 'pro', loginStale: false,
+    }],
+    anthropicPoolCount: 1, anthropicActiveAccountId: 'claude',
+  }
+  const tree = await harness.mount(
+    <AccountsPage snapshot={snapshot} lastResult={null} onVerb={verb => sent.push(verb)} />,
+  )
+  expect(tree.container.textContent).toContain('No Codex accounts are signed in.')
+  expect(tree.container.textContent).not.toContain('Add one to continue')
+  expect(tree.container.textContent).toContain('Choose claude@example.com in the browser')
+  const recovery = [...tree.container.querySelectorAll('button')]
+    .find(button => button.textContent === 'Sign in again')!
+  await act(async () => { recovery.click() })
+  expect(sent).toHaveLength(1)
+  expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic' })
+  expect(sent[0]).not.toHaveProperty('accountId')
+
+  await tree.render(<AccountsPage snapshot={{
+    ...snapshot,
+    anthropicAccounts: [{ ...snapshot.anthropicAccounts[0]!, status: 'healthy', isDefault: false, loginStale: true }],
+  }} lastResult={null} onVerb={verb => sent.push(verb)} />)
+  expect([...tree.container.querySelectorAll('button')].some(button => button.textContent === 'Sign in again')).toBe(true)
+})
+
+test('healthy Anthropic rows keep switching and both provider add actions', async () => {
+  const sent: AccountVerbMessage[] = []
+  const snapshot: AccountsSnapshot = {
+    ...emptySnapshot,
+    anthropicAccounts: [{
+      id: 'claude', alias: null, email: 'claude@example.com',
+      status: 'healthy', isDefault: false, hasVaultProfile: true,
+      subscriptionType: 'pro', loginStale: false,
+    }],
+    anthropicPoolCount: 1, anthropicReadyCount: 1,
+  }
+  const tree = await harness.mount(
+    <AccountsPage snapshot={snapshot} lastResult={null} onVerb={verb => sent.push(verb)} />,
+  )
+  const button = (label: string) => [...tree.container.querySelectorAll('button')]
+    .find(item => item.textContent === label)!
+  expect(button('Sign in again')).toBeUndefined()
+  await act(async () => { button('Switch').click() })
+  expect(sent[0]).toMatchObject({ type: 'account.switch', accountId: 'claude', provider: 'anthropic' })
+  await act(async () => { button('+ Add Anthropic').click() })
+  await act(async () => { button('+ Add account').click() })
+  expect(sent[1]).toMatchObject({ type: 'account.login', provider: 'anthropic' })
+  expect(sent[2]).toMatchObject({ type: 'account.login', provider: 'openai' })
+})
+
 test('Refresh all shows the matched failure and retries before displaying new results', async () => {
   const sent: AccountVerbMessage[] = []
   const onVerb = (verb: AccountVerbMessage) => { sent.push(verb) }

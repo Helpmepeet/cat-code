@@ -13,6 +13,7 @@ import {
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import { logEvent } from '../../services/analytics/index.js'
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js'
+import { CannotRetryError } from '../../services/api/withRetry.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/metadata.js'
 import { getCacheControl } from '../../services/api/claude.js'
 import { parsePromptTooLongTokenCounts } from '../../services/api/errors.js'
@@ -32,6 +33,7 @@ import {
   isEnvTruthy,
 } from '../envUtils.js'
 import { errorMessage } from '../errors.js'
+import { hasCodexTokens } from '../auth.js'
 import { lazySchema } from '../lazySchema.js'
 import { extractTextContent } from '../messages.js'
 import { resolveAntModel } from '../model/antModels.js'
@@ -1703,6 +1705,7 @@ async function classifyYoloActionWithOverrides(
 }
 
 export const _forTest = {
+  getClassifierModel,
   classifyYoloAction: classifyYoloActionWithOverrides,
   classifyYoloActionWithSideQuery(
     messages: Message[],
@@ -1743,19 +1746,9 @@ type AutoModeConfig = {
 function getClassifierModel(): string {
   const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
   if (envModel) return envModel
-  // Codex-first, deliberately. Upstream defaults to a Sonnet-class classifier
-  // because Anthropic access is its reliable path; here it is the opposite —
-  // Codex is always available and Anthropic access is intermittent. Defaulting
-  // to sonnet puts an unreachable provider first on the ladder, so every
-  // permission decision would open by failing an attempt it cannot complete.
-  // Bedrock and Vertex are not deployment targets for this fork.
-  //
-  // Luna specifically, per the operator: at maximum reasoning effort it is the
-  // Sonnet-class equivalent upstream uses for this job. Sol/Terra/Luna is an
-  // availability chain for routing past transient rate limits (see the
-  // fallback-status comment below), NOT a capability ladder — the head of it
-  // carries no implication of being the strongest.
-  return getAutoModeConfig()?.model ?? 'gpt-6-luna'
+  // Keep Luna for Codex accounts, including temporarily capped accounts.
+  // Claude-only installs should not spend an attempt on missing Codex auth.
+  return getAutoModeConfig()?.model ?? (hasCodexTokens() ? 'gpt-6-luna' : 'sonnet')
 }
 
 function getClassifierMaxRetries(): number {
@@ -1766,6 +1759,9 @@ export function isProviderAuthenticationErrorForTest(
   error: unknown,
   provider?: string,
 ): boolean {
+  // sideQuery's retry boundary wraps terminal errors once. Only unwrap that
+  // concrete wrapper here, not arbitrary causes or transient/policy failures.
+  if (error instanceof CannotRetryError) error = error.originalError
   if (typeof error !== 'object' || error === null) return false
   const name = 'name' in error ? error.name : undefined
   if (

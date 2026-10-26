@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import type { ScheduledTaskOptions } from '../shared/scheduledTasks.js'
 import { SCHEDULED_OPTIONS_CACHE_MS, type ScheduledTaskOptionsResult } from '../shared/scheduledTaskOptions.js'
+import { supportsWorkspaceMapSchedule } from './workspaceMapSchedule.js'
 
 export class ScheduledTaskOptionsService {
   private readonly handles = new Map<string, string>()
@@ -58,7 +59,12 @@ export class ScheduledTaskOptionsService {
           this.paths.set(checked.realpath, workspaceId)
           this.handles.set(workspaceId, checked.realpath)
         }
-        projects.push({ workspaceId, cwd: checked.realpath, label: basename(checked.realpath) || checked.realpath })
+        projects.push({
+          workspaceId,
+          cwd: checked.realpath,
+          label: basename(checked.realpath) || checked.realpath,
+          supportsWorkspaceMaps: supportsWorkspaceMapSchedule(checked.realpath),
+        })
       }
       this.cached = { models: catalog.models, defaultEffortOptions: catalog.defaultEffortOptions, projects, updatedAt: this.now() }
       this.expiresAt = this.now() + SCHEDULED_OPTIONS_CACHE_MS

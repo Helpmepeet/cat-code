@@ -2,9 +2,24 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { supportsWorkspaceMapSchedule, workspaceMapSchedule } from './workspaceMapSchedule.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+test('workspace-map eligibility requires a helper file and creation rechecks it', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-map-eligibility-')); dirs.push(dir)
+  const helper = join(dir, 'scripts/workspaceMapRefreshState.ts')
+  expect(supportsWorkspaceMapSchedule(dir)).toBe(false)
+  expect(() => workspaceMapSchedule(dir, join(dir, 'state'))).toThrow('does not contain')
+  mkdirSync(helper, { recursive: true })
+  expect(supportsWorkspaceMapSchedule(dir)).toBe(false)
+  rmSync(helper, { recursive: true })
+  writeFileSync(helper, '')
+  expect(supportsWorkspaceMapSchedule(dir)).toBe(true)
+  rmSync(helper)
+  expect(() => workspaceMapSchedule(dir, join(dir, 'state'))).toThrow('does not contain')
+})
 
 // Builtin redirection stays in a child: other suites keep the real filesystem/home modules.
 for (const scenario of ['partial-copy', 'shell-path']) test(`workspace-map preset preserves native state identity (${scenario})`, () => {
@@ -15,7 +30,7 @@ for (const scenario of ['partial-copy', 'shell-path']) test(`workspace-map prese
     if (url === 'node:os') return { format:'module', shortCircuit:true, source:'export function homedir() { return ' + JSON.stringify(process.env.CATCODE_PRESET_TEST_ROOT + '/home') + ' }' };
     if (url === 'node:fs') return { format:'module', shortCircuit:true, source:\`
       import { createRequire } from 'node:module'; const fs = createRequire(process.env.CATCODE_PRESET_TEST_ROOT + '/probe.mjs')('node:fs');
-      export const existsSync=fs.existsSync, mkdirSync=fs.mkdirSync, readFileSync=fs.readFileSync,
+      export const existsSync=fs.existsSync, statSync=fs.statSync, mkdirSync=fs.mkdirSync, readFileSync=fs.readFileSync,
         closeSync=fs.closeSync, fsyncSync=fs.fsyncSync, linkSync=fs.linkSync, unlinkSync=fs.unlinkSync;
       const opened = new Map();
       export function openSync(path,...args) { const fd=fs.openSync(path,...args); opened.set(fd,path); return fd; }

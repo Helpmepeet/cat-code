@@ -14,10 +14,11 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { logForDebugging } from '../../utils/debug.js'
-import { getSecureStorage } from '../../utils/secureStorage/index.js'
+import { getSecureStorage, removeMatchingClaudeOAuthCredentials } from '../../utils/secureStorage/index.js'
 import { saveGlobalConfig, getGlobalConfig } from '../../utils/config.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
 import { acquireMutationLockSync } from '../../utils/lockfile.js'
+import { clearOAuthTokenCache } from '../../utils/auth.js'
 // storeOAuthAccountInfo is intentionally NOT used here because it drops
 // organizationName/organizationRole/workspaceRole. syncClaudeAccountToStorage
 // writes oauthAccount directly to GlobalConfig instead.
@@ -96,9 +97,9 @@ const pool: ClaudePoolState = {
  *
  * A config-only account is indistinguishable, from data alone, between the
  * legacy pre-vault single-account case this exists to migrate, and a
- * lingering keychain/`config.oauthAccount` remnant of an account whose vault
- * file `/delete-account` just removed (`removeClaudeAccount`, below, only
- * deletes the vault file — it does not clear config or keychain). Both
+ * lingering keychain/`config.oauthAccount` remnant of a removed vault
+ * file. Explicit deletion through `removeClaudeAccount` clears matching
+ * fallback state before removing the vault file. Both
  * initClaudeAccountPool and this observation path show it either way; the
  * guarantee this extraction adds is narrower and disk-only: the observation
  * path never re-creates the vault file, so a deletion is never undone on
@@ -577,6 +578,44 @@ export function removeClaudeAccount(accountUuid: string): boolean {
 
   const acct = pool.accounts[idx]!
 
+  // Match tokens independently of profile metadata: the shared fallback may
+  // already belong to a replacement account. UUID alone cannot identify tokens.
+  try {
+    if (!removeMatchingClaudeOAuthCredentials(acct)) {
+      logForDebugging('[claude-pool] Failed to persist deleted account credential cleanup', { level: 'warn' })
+      return false
+    }
+    clearOAuthTokenCache()
+  } catch (error) {
+    logForDebugging(`[claude-pool] Failed to clear deleted account credentials: ${error}`, { level: 'warn' })
+    return false
+  }
+
+  const remaining = pool.accounts.filter((_, index) => index !== idx)
+  let nextActiveIndex = pool.activeIndex
+  if (remaining.length === 0) {
+    nextActiveIndex = -1
+  } else if (idx === pool.activeIndex) {
+    nextActiveIndex = remaining.findIndex(a => a.status === 'healthy')
+  } else if (idx < pool.activeIndex) {
+    nextActiveIndex--
+    if (remaining[nextActiveIndex]?.status !== 'healthy') {
+      nextActiveIndex = remaining.findIndex(a => a.status === 'healthy')
+    }
+  }
+
+  // Do this before deleting the vault so failed durable cleanup remains retryable.
+  if (!saveGlobalConfig(current => ({
+    ...current,
+    oauthAccount: current.oauthAccount?.accountUuid === accountUuid
+      ? undefined
+      : current.oauthAccount,
+    activeClaudeAccountUuid: remaining[nextActiveIndex]?.accountUuid,
+  }))) {
+    logForDebugging('[claude-pool] Failed to persist deleted account profile cleanup', { level: 'warn' })
+    return false
+  }
+
   // Delete vault file
   if (acct.vaultFilePath && existsSync(acct.vaultFilePath)) {
     if (!deleteClaudeVaultFile(acct.vaultFilePath)) return false
@@ -585,25 +624,7 @@ export function removeClaudeAccount(accountUuid: string): boolean {
   // Remove from pool
   pool.accounts.splice(idx, 1)
 
-  // Fix active index — always verify the pointed-to account is healthy
-  if (pool.accounts.length === 0) {
-    pool.activeIndex = -1
-  } else if (idx === pool.activeIndex) {
-    pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
-  } else if (idx < pool.activeIndex) {
-    pool.activeIndex--
-    // After shift, verify the account is still healthy
-    if (pool.accounts[pool.activeIndex]?.status !== 'healthy') {
-      pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
-    }
-  }
-
-  // Persist new active pointer
-  const active = pool.accounts[pool.activeIndex]
-  saveGlobalConfig(current => ({
-    ...current,
-    activeClaudeAccountUuid: active?.accountUuid,
-  }))
+  pool.activeIndex = nextActiveIndex
 
   logForDebugging(`[claude-pool] Removed account ${acct.emailAddress}`)
   return true

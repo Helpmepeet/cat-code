@@ -430,6 +430,29 @@ describe('P4-5 read-seam — projection semantics', () => {
     expect(JSON.stringify(snapshot)).not.toContain('SECRET-claude')
   })
 
+  test('Anthropic readiness respects current capacity, reset windows and stale logins', () => {
+    const now = Date.UTC(2026, 9, 26)
+    const account = (accountUuid: string): ClaudePoolAccount => ({
+      accountUuid, emailAddress: `${accountUuid}@example.com`,
+      accessToken: 'fixture', refreshToken: 'fixture',
+      expiresAt: now + 60_000, status: 'healthy',
+    })
+    const accounts = ['five', 'weekly', 'reset', 'unknown', 'stale', 'dead'].map(account)
+    accounts[4]!.expiresAt = now - 8 * 24 * 60 * 60_000
+    accounts[5]!.status = 'dead'
+    const snapshot = buildAccountsSnapshot(
+      { accounts: [], activeIndex: -1, initialized: true }, now,
+      { accounts, activeIndex: 0, initialized: true }, true, true, undefined,
+      new Map([
+        ['five', { fiveHour: { percent: 100, resetAt: now / 1000 + 60 }, weekly: null }],
+        ['weekly', { fiveHour: null, weekly: { percent: 101, resetAt: now / 1000 + 60 } }],
+        ['reset', { fiveHour: { percent: 100, resetAt: now / 1000 }, weekly: { percent: 100, resetAt: now / 1000 - 1 } }],
+      ]),
+    )
+    expect(snapshot.anthropicPoolCount).toBe(6)
+    expect(snapshot.anthropicReadyCount).toBe(2)
+  })
+
   test('snapshot derives readyCount / activeAccountId / switchable', () => {
     const snapshot = buildAccountsSnapshot({
       accounts: [

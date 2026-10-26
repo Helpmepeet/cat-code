@@ -609,8 +609,20 @@ export function buildAccountsSnapshot(
     initialized: poolStatus.initialized,
     anthropicAccounts,
     anthropicActiveAccountId: anthropicActive?.accountUuid ?? null,
-    anthropicReadyCount: anthropicPoolStatus.accounts.filter(
-      account => account.status === 'healthy',
+    anthropicReadyCount: anthropicAccounts.filter(
+      account =>
+        account.status === 'healthy' &&
+        !account.loginStale &&
+        !(
+          (account.usageFiveHour ?? 0) >= 100 &&
+          (account.usageFiveHourResetAt == null ||
+            account.usageFiveHourResetAt * 1000 > now)
+        ) &&
+        !(
+          (account.usageWeekly ?? 0) >= 100 &&
+          (account.usageWeeklyResetAt == null ||
+            account.usageWeeklyResetAt * 1000 > now)
+        ),
     ).length,
     anthropicPoolCount: anthropicPoolStatus.accounts.length,
     anthropicInitialized: anthropicPoolStatus.initialized,

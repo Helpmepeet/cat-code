@@ -77,6 +77,44 @@ function acquireStorageLock(): () => void {
   })
 }
 
+/**
+ * Check every credential copy under the same lock used by ordinary writers.
+ * Never use the fallback wrapper here: its update can migrate or delete stores.
+ */
+export function removeMatchingClaudeOAuthFromStores(
+  stores: readonly FreshReadableStorage[],
+  tokens: { accessToken: string; refreshToken: string },
+): boolean {
+  const release = acquireStorageLock()
+  try {
+    clearKeychainCache()
+    const snapshots = stores.map(storage => ({
+      storage,
+      result: storage.readFresh?.() ?? { status: 'unavailable' as const, data: null },
+    }))
+    if (snapshots.some(({ result }) => result.status === 'unavailable')) return false
+    for (const { storage, result } of snapshots) {
+      if (result.status === 'missing') continue
+      const data = result.data
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return false
+      const oauth = data.claudeAiOauth
+      if (!tokens.accessToken || !tokens.refreshToken ||
+          oauth?.accessToken !== tokens.accessToken ||
+          oauth.refreshToken !== tokens.refreshToken) continue
+      const next = clone(data)
+      delete next.claudeAiOauth
+      if (!storage.update(next).success) return false
+    }
+    return true
+  } catch (error) {
+    logForDebugging(`Failed to remove matching Claude credentials: ${error}`, { level: 'warn' })
+    return false
+  } finally {
+    clearKeychainCache()
+    release()
+  }
+}
+
 export function createCrossProcessSafeStorage(
   storage: SecureStorage,
 ): SecureStorage {

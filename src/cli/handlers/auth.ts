@@ -507,7 +507,9 @@ export async function authLogout(): Promise<void> {
     if (claudeHealthy > 1) {
       const active = claudePool.accounts[claudePool.activeIndex]
       if (active) {
-        removeClaudeAccount(active.accountUuid)
+        if (!removeClaudeAccount(active.accountUuid)) {
+          throw new Error('Failed to remove Claude account')
+        }
         syncClaudeAccountToStorage()
         await clearAuthRelatedCaches()
         process.stdout.write(

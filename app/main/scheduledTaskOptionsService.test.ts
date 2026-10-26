@@ -1,8 +1,37 @@
 import { expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ScheduledTaskOptionsService } from './scheduledTaskOptionsService.js'
 import type { ScheduledTaskOptionsResult } from '../shared/scheduledTaskOptions.js'
 const catalog: ScheduledTaskOptionsResult = { type: 'scheduled-options-result', version: 1,
   models: [], defaultEffortOptions: ['high'], projectPaths: ['/project', '/alias', '/missing'] }
+
+test('project eligibility comes from the canonical helper file and refresh observes removal', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'scheduled-map-eligibility-')))
+  try {
+    const supported = join(root, 'supported')
+    const ordinary = join(root, 'ordinary')
+    mkdirSync(join(supported, 'scripts'), { recursive: true })
+    mkdirSync(ordinary)
+    const helper = join(supported, 'scripts/workspaceMapRefreshState.ts')
+    writeFileSync(helper, '')
+    const service = new ScheduledTaskOptionsService(
+      async () => ({ ...catalog, projectPaths: [ordinary, supported] }),
+      path => ({ ok: true, realpath: realpathSync(path) }),
+    )
+    const first = await service.read()
+    expect(first.projects.map(project => [project.cwd, project.supportsWorkspaceMaps])).toEqual([
+      [ordinary, false], [supported, true],
+    ])
+    const supportedId = first.projects[1]!.workspaceId
+    rmSync(helper)
+    const refreshed = await service.read({ refresh: true })
+    expect(refreshed.projects[1]).toMatchObject({ workspaceId: supportedId, supportsWorkspaceMaps: false })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('saved project options deduplicate canonical directories and retain handles without any chats', async () => {
   let existing = true

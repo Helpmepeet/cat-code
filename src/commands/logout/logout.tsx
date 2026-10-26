@@ -111,7 +111,9 @@ export async function call(): Promise<React.ReactNode> {
   if (claudeHealthy > 1) {
     const active = claudePool.accounts[claudePool.activeIndex];
     if (active) {
-      removeClaudeAccount(active.accountUuid);
+      if (!removeClaudeAccount(active.accountUuid)) {
+        return <Text>Failed to remove Claude account. Check logs for details.</Text>;
+      }
       syncClaudeAccountToStorage();
       await clearAuthRelatedCaches();
       const remaining = getClaudePoolStatus();

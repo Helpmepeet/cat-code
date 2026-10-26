@@ -1,12 +1,20 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ScheduledTaskInput } from '../shared/scheduledTasks.js'
 
+export function supportsWorkspaceMapSchedule(cwd: string): boolean {
+  try {
+    return statSync(join(cwd, 'scripts/workspaceMapRefreshState.ts')).isFile()
+  } catch {
+    return false
+  }
+}
+
 /** Explicit preset creation imports a completed legacy cursor once. Subsequent runs use only Cat Code state. */
 export function workspaceMapSchedule(cwd: string, storageDir: string): ScheduledTaskInput {
-  if (!existsSync(join(cwd, 'scripts/workspaceMapRefreshState.ts'))) throw new Error('This project does not contain the workspace-map refresh helper')
+  if (!supportsWorkspaceMapSchedule(cwd)) throw new Error('This project does not contain the workspace-map refresh helper')
   const stateDir = join(storageDir, 'workspace-map-refresh', createHash('sha256').update(cwd).digest('hex').slice(0, 16))
   const stateFile = join(stateDir, 'state.json')
   const legacy = join(homedir(), '.codex/automations/refresh-workspace-routing-map/state.json')

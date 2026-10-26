@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -7,6 +7,7 @@ import * as codexFetchAdapterModule from '../../services/api/codex-fetch-adapter
 import * as claudePoolModule from '../../services/api/claudeAccountPool.js'
 import * as codexPoolModule from '../../services/api/codexAccountPool.js'
 import * as deletionModule from '../../services/api/codexAccountSignOut.js'
+import * as secureStorageModule from '../../utils/secureStorage/index.js'
 import {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
@@ -57,6 +58,17 @@ function createClaudeAccount(
 
 describe('/delete-account', () => {
   const tempDirs: string[] = []
+
+  beforeEach(() => {
+    spyOn(secureStorageModule, 'removeMatchingClaudeOAuthCredentials').mockReturnValue(true)
+    spyOn(secureStorageModule, 'getSecureStorage').mockReturnValue({
+      name: 'test',
+      read: () => ({}),
+      readAsync: async () => ({}),
+      update: () => ({ success: true }),
+      delete: () => false,
+    })
+  })
 
   afterEach(() => {
     mock.restore()

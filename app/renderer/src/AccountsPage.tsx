@@ -1142,7 +1142,20 @@ export function AccountsPage({
                         ? account.subscriptionType ?? account.status
                         : account.status}
                     </span>
-                    {!account.isDefault && account.status === 'healthy' ? (
+                    {account.status !== 'healthy' || account.loginStale ? (
+                      <div className="text-right">
+                        <button
+                          type="button"
+                          onClick={() => beginSignIn('anthropic')}
+                          className="rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary"
+                        >
+                          Sign in again
+                        </button>
+                        <div className="mt-1 text-[11px] text-text-subtle">
+                          Choose {account.email} in the browser to reconnect this account.
+                        </div>
+                      </div>
+                    ) : !account.isDefault && account.status === 'healthy' ? (
                       <button
                         type="button"
                         onClick={() =>
@@ -1193,7 +1206,7 @@ export function AccountsPage({
               <div className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-10 text-center text-[12.5px] text-text-subtle">
                 {snapshot.signedOutProfiles.length > 0
                   ? 'No Codex accounts are signed in. Sign in again or add another account.'
-                  : 'No Codex accounts are signed in. Add one to continue.'}
+                  : 'No Codex accounts are signed in.'}
               </div>
             ) : (
               <>

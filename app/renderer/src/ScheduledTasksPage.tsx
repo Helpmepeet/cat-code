@@ -156,7 +156,6 @@ export function ScheduledTasksPage({
 
   const choicesVisible = (editing && draft !== null) || selection?.kind === 'preset'
   useEffect(() => {
-    if (!choicesVisible) return
     void refreshOptions()
     const onVisible = () => { if (!document.hidden) void refreshOptions() }
     document.addEventListener('visibilitychange', onVisible)
@@ -165,7 +164,7 @@ export function ScheduledTasksPage({
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [choicesVisible, refreshOptions])
+  }, [refreshOptions])
 
   const command = useCallback(async (scope: string, value: ScheduledTaskCommand, success: string): Promise<ScheduledTasksSnapshot | null> => {
     setPending(current => ({ ...current, [scope]: true }))
@@ -198,6 +197,8 @@ export function ScheduledTasksPage({
   const loaded = snapshot !== null
   const editingTask = draft?.taskId ? taskById.get(draft.taskId) ?? null : null
   const hasPreset = tasks.some(isWorkspaceMapTask)
+  const presetProjects = projects.filter(project => project.supportsWorkspaceMaps === true)
+  const offerPreset = !hasPreset && presetProjects.length > 0
   const selectedTask = selection?.kind === 'task' ? taskById.get(selection.id) ?? null : null
 
   // One draft at a time: New task and Edit return to an open draft rather than replacing it.
@@ -290,7 +291,7 @@ export function ScheduledTasksPage({
   } else if (selection?.kind === 'preset') {
     pane = (
       <PresetPane
-        projects={projects}
+        projects={presetProjects}
         tasks={tasks}
         busy={!!pending[PRESET]}
         error={errors[PRESET] ?? null}
@@ -300,7 +301,7 @@ export function ScheduledTasksPage({
       />
     )
   } else if (tasks.length === 0) {
-    pane = <PromptPane disabled={!!unavailable} offerPreset={!hasPreset} onNew={() => openEditor(() => newTaskDraft())} onPreset={() => select({ kind: 'preset' })} />
+    pane = <PromptPane disabled={!!unavailable} offerPreset={offerPreset} onNew={() => openEditor(() => newTaskDraft())} onPreset={() => select({ kind: 'preset' })} />
   } else {
     pane = <ActivityPane runs={runs} taskById={taskById} now={now} onOpenChat={onOpenChat} onSelectTask={id => select({ kind: 'task', id })} onHistory={() => select({ kind: 'history' })} />
   }
@@ -327,7 +328,7 @@ export function ScheduledTasksPage({
         </ListRow>
         <TaskGroup label="Upcoming" tasks={tasks.filter(task => task.enabled)} runs={runs} now={now} draftTaskId={draft?.taskId ?? null} selection={editing ? null : selection} onSelect={id => select({ kind: 'task', id })} />
         <TaskGroup label="Paused" tasks={tasks.filter(task => !task.enabled)} runs={runs} now={now} draftTaskId={draft?.taskId ?? null} selection={editing ? null : selection} onSelect={id => select({ kind: 'task', id })} />
-        {!hasPreset && loaded && !unavailable ? (
+        {offerPreset && loaded && !unavailable ? (
           <>
             <div className="mx-2.5 mb-1 mt-[18px] text-[11.5px] font-medium text-text-subtle">Suggested</div>
             <ListRow selected={!editing && selection?.kind === 'preset'} onClick={() => select({ kind: 'preset' })}>

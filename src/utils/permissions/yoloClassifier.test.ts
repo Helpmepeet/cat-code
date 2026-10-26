@@ -21,6 +21,7 @@ import {
 } from './yoloClassifier.js'
 import { translateToCodexBody } from '../../services/api/codex-fetch-adapter.js'
 import type { sideQuery } from '../sideQuery.js'
+import { CannotRetryError } from '../../services/api/withRetry.js'
 import { capturePriorAssistantContext } from './priorAssistantContext.js'
 
 describe('auto mode provider ladder', () => {
@@ -119,6 +120,27 @@ describe('classifier fallback errors', () => {
     expect(isProviderAuthenticationErrorForTest({ status: 403 }, 'openai')).toBe(
       false,
     )
+  })
+
+  test('unwraps only the concrete retry boundary for provider auth failures', () => {
+    const auth = { name: 'CodexAccountUnavailableError' }
+    const retryContext = {} as ConstructorParameters<typeof CannotRetryError>[1]
+    expect(isProviderAuthenticationErrorForTest(
+      new CannotRetryError(auth, retryContext), 'openai',
+    )).toBe(true)
+    for (const status of [400, 403, 404, 422, 503]) {
+      expect(isProviderAuthenticationErrorForTest(
+        new CannotRetryError({ status, message: 'policy forbidden' }, retryContext),
+        'openai',
+      )).toBe(false)
+    }
+    expect(isProviderAuthenticationErrorForTest({
+      name: 'RetryError', originalError: auth,
+    }, 'openai')).toBe(false)
+    expect(isProviderAuthenticationErrorForTest(
+      new CannotRetryError(new CannotRetryError(auth, retryContext), retryContext),
+      'openai',
+    )).toBe(false)
   })
 
   test('translates the GPT classifier fallback to medium reasoning', () => {
@@ -604,10 +626,7 @@ describe('harness key collisions in the transcript', () => {
 
 describe('auto mode default classifier ladder', () => {
   test('opens on Codex and keeps Anthropic as the final fallback', () => {
-    // The environment this fork runs in: Codex is always available, Anthropic
-    // access is intermittent, Bedrock and Vertex are not targets. A ladder that
-    // opened on Anthropic would spend the first attempt of every permission
-    // decision on a provider it may not be able to reach.
+    // Credentialed Codex installs retain the Luna-first ladder.
     const attempts = getAutoModeClassifierAttempts('gpt-6-luna', 4, 'firstParty')
     expect(attempts[0]).toEqual({ provider: 'openai', model: 'gpt-6-luna' })
     expect(attempts.at(-1)).toEqual({ provider: 'firstParty', model: 'sonnet' })

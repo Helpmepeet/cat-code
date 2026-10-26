@@ -28,7 +28,7 @@ const MODELS = [
   { value: 'gpt-6-sol', label: 'GPT-6 Sol', provider: 'openai' as const, effortOptions: ['low', 'medium', 'high', 'ultra'] },
   { value: 'haiku', label: 'Haiku', provider: 'anthropic' as const, effortOptions: [] },
 ]
-const PROJECT = { workspaceId: '33333333-3333-4333-8333-333333333333', cwd: '/repo/cat-code', label: 'cat-code' }
+const PROJECT = { workspaceId: '33333333-3333-4333-8333-333333333333', cwd: '/repo/cat-code', label: 'cat-code', supportsWorkspaceMaps: true }
 
 function task(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
   return {
@@ -333,6 +333,38 @@ test('with no chats the workspace-map preset uses a catalog project and opens pa
   expect(() => listRow(tree, 'Workspace-map refresh')).toThrow()
 })
 
+test.each([false, undefined])('ordinary projects do not advertise the workspace-map preset (eligibility %s)', async eligibility => {
+  installBridge({
+    snapshot: { tasks: [], runs: [] }, commands: [],
+    options: { models: MODELS, defaultEffortOptions: [], projects: [{ ...PROJECT, supportsWorkspaceMaps: eligibility }] },
+    respond: () => ({ ok: false, error: 'unused' }),
+  })
+  const tree = await mount()
+  expect(() => listRow(tree, 'Workspace-map refresh')).toThrow()
+  expect(buttons(tree, 'Add workspace-map refresh')).toHaveLength(0)
+  expect(buttons(tree, 'New task').length).toBeGreaterThan(0)
+})
+
+test('the preset offers only projects with a refresh helper while ordinary task projects remain available', async () => {
+  const ordinary = { workspaceId: '55555555-5555-4555-8555-555555555555', cwd: '/repo/ordinary', label: 'ordinary', supportsWorkspaceMaps: false }
+  installBridge({
+    snapshot: { tasks: [], runs: [] }, commands: [],
+    options: { models: MODELS, defaultEffortOptions: [], projects: [PROJECT, ordinary] },
+    respond: () => ({ ok: false, error: 'unused' }),
+  })
+  const tree = await mount()
+  await click(listRow(tree, 'Workspace-map refresh'))
+  await click(field(tree, 'Project'))
+  expect(menuOptions(tree).some(option => option?.startsWith('cat-code'))).toBe(true)
+  expect(menuOptions(tree).some(option => option?.startsWith('ordinary'))).toBe(false)
+  const supported = [...tree.container.ownerDocument.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')]
+    .find(option => option.textContent?.startsWith('cat-code'))!
+  await click(supported)
+  await click(listRow(tree, 'New task'))
+  await choose(tree, 'Project', 'ordinary')
+  expect(field(tree, 'Project').textContent).toContain('/repo/ordinary')
+})
+
 test('unavailable scheduling is explained and blocks changes', async () => {
   installBridge({ snapshot: { tasks: [task()], runs: [], error: 'Scheduled tasks are already running in another Cat Code app, or their storage is unavailable.' }, commands: [], respond: () => ({ ok: false, error: 'unused' }) })
   const tree = await mount()
@@ -355,15 +387,16 @@ test('default effort is engine-derived and model changes reconcile unsupported e
   expect(text(tree)).not.toContain('once a chat is open')
 })
 
-test('the preset accepts a native folder without any known projects and retries spent tokens', async () => {
+test('a retained preset selection accepts a native folder without known projects and retries spent tokens', async () => {
   const state: Bridge = {
     snapshot: { tasks: [], runs: [] }, commands: [], pickToken: 'preset-folder-1',
     options: { models: MODELS, defaultEffortOptions: [], projects: [] },
     respond: () => ({ ok: false, error: 'The project needs a refresh helper' }),
   }
+  storeScheduledSelection({ kind: 'preset' })
   installBridge(state)
   const tree = await mount()
-  await click(listRow(tree, 'Workspace-map refresh'))
+  expect(heading(tree)).toBe('Workspace-map refresh')
   expect(button(tree, 'Create paused task').disabled).toBe(true)
   expect(text(tree)).not.toContain('Open the project')
   await click(field(tree, 'Project'))
@@ -501,7 +534,7 @@ test('a cached last-good catalog is usable on a new mount and explicit refresh b
   expect(alerts(tree)).toEqual([])
 })
 
-test('choices load only when needed and overlapping window signals share one read', async () => {
+test('preset eligibility loads on page entry and overlapping editor/window signals share one read', async () => {
   let reads = 0
   let release!: (options: ScheduledTaskOptions) => void
   const state: Bridge = {
@@ -514,7 +547,7 @@ test('choices load only when needed and overlapping window signals share one rea
   await click(listRow(tree, 'Nightly review'))
   await act(async () => { window.dispatchEvent(new Event('focus')) })
   await flush()
-  expect(reads).toBe(0)
+  expect(reads).toBe(1)
   await click(button(tree, 'Edit'))
   expect(reads).toBe(1)
   await act(async () => {

@@ -23,6 +23,7 @@ import {
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js'
 import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
+import { hasCodexTokens } from '../../utils/auth.js'
 import { PNG } from 'pngjs'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { expandPath } from '../../utils/path.js'
@@ -1068,6 +1069,9 @@ async function generateWithCodexRetries(
 
 export const GenerateImageTool = buildTool({
   name: GENERATE_IMAGE_TOOL_NAME,
+  isEnabled() {
+    return hasCodexTokens()
+  },
   searchHint: 'generate images with GPT',
   shouldDefer: true,
   maxResultSizeChars: 20_000,
