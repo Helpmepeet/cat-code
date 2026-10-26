@@ -88,6 +88,10 @@ export type UserMessage = {
     content: string | ContentBlockParam[]
   }
   isMeta?: true
+  /** Latest engine date correction carried by this message, including after
+   * attachment normalization and user-message merging. Never inferred from
+   * user-authored text or sent as provider content. */
+  dateChange?: string
   isVisibleInTranscriptOnly?: true
   isVirtual?: true
   isCompactSummary?: true

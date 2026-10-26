@@ -3,10 +3,7 @@
  * This module is imported at startup by main.tsx, so keep imports minimal.
  */
 import { feature } from 'bun:bundle'
-import {
-  clearInvokedSkills,
-  setLastEmittedDate,
-} from '../../bootstrap/state.js'
+import { clearInvokedSkills } from '../../bootstrap/state.js'
 import { clearCommandsCache } from '../../commands.js'
 import { getSessionStartDate } from '../../constants/common.js'
 import {
@@ -64,9 +61,6 @@ export function clearSessionCaches(
 
   // Clear system prompt injection (cache breaker)
   setSystemPromptInjection(null)
-
-  // Clear last emitted date so it's re-detected on next turn
-  setLastEmittedDate(null)
 
   // Run post-compaction cleanup (clears system prompt sections, classifier
   // approvals, speculative checks, and — for main-thread compacts, which the

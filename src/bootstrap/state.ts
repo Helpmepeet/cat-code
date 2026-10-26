@@ -213,8 +213,6 @@ type State = {
   directConnectServerUrl: string | undefined
   // System prompt section cache state
   systemPromptSectionCache: Map<string, string | null>
-  // Last date emitted to the model (for detecting midnight date changes)
-  lastEmittedDate: string | null
   // Additional directories from --add-dir flag (for CLAUDE.md loading)
   additionalDirectoriesForClaudeMd: string[]
   // Channel server allowlist from --channels flag (servers whose channel
@@ -413,8 +411,6 @@ function getInitialState(): State {
     directConnectServerUrl: undefined,
     // System prompt section cache state
     systemPromptSectionCache: new Map(),
-    // Last date emitted to the model
-    lastEmittedDate: null,
     // Additional directories from --add-dir flag (for CLAUDE.md loading)
     additionalDirectoriesForClaudeMd: [],
     // Channel server allowlist from --channels flag
@@ -1717,16 +1713,6 @@ export function setSystemPromptSectionCacheEntry(
 
 export function clearSystemPromptSectionState(): void {
   STATE.systemPromptSectionCache.clear()
-}
-
-// Last emitted date accessors (for detecting midnight date changes)
-
-export function getLastEmittedDate(): string | null {
-  return STATE.lastEmittedDate
-}
-
-export function setLastEmittedDate(date: string | null): void {
-  STATE.lastEmittedDate = date
 }
 
 export function getAdditionalDirectoriesForClaudeMd(): string[] {

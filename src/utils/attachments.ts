@@ -85,6 +85,7 @@ import { getSkillToolCommands, getMcpSkillCommands } from '../commands.js'
 import type { Command } from '../types/command.js'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { getProjectRoot } from '../bootstrap/state.js'
+import { getUserContext } from '../context.js'
 import { formatCommandsWithinBudget } from '../tools/SkillTool/prompt.js'
 import { getContextWindowForModel } from './context.js'
 import type { DiscoverySignal } from '../services/skillSearch/signals.js'
@@ -157,8 +158,6 @@ import {
   setNeedsPlanModeExitAttachment,
   needsAutoModeExitAttachment,
   setNeedsAutoModeExitAttachment,
-  getLastEmittedDate,
-  setLastEmittedDate,
   getKairosActive,
 } from '../bootstrap/state.js'
 import type { QuerySource } from '../constants/querySource.js'
@@ -869,9 +868,7 @@ export async function getAttachments(
     // Must run for all threads or subagent notifications drain into the void
     // (removed from queue by removeFromQueue but never attached).
     maybe('queued_commands', () => getQueuedCommandAttachments(queuedCommands)),
-    maybe('date_change', () =>
-      Promise.resolve(getDateChangeAttachments(messages)),
-    ),
+    maybe('date_change', () => getDateChangeAttachments(messages)),
     maybe('ultrathink_effort', () =>
       Promise.resolve(getUltrathinkEffortAttachment(input)),
     ),
@@ -1500,40 +1497,57 @@ async function getAutoModeExitAttachment(
 }
 
 /**
- * Detects when the local date has changed since the last turn (user coding
- * past midnight) and emits an attachment to notify the model.
- *
- * The date_change attachment is appended at the tail of the conversation,
- * so the model learns the new date without mutating the cached prefix.
- * messages[0] (from getUserContext → prependUserContext) intentionally
- * keeps the stale date — clearing that cache would regenerate the prefix
- * and turn the entire conversation into cache_creation on the next turn
- * (~920K effective tokens per midnight crossing per overnight session).
- *
- * Exported for testing — regression guard for the cache-clear removal.
+ * Append a date correction to this conversation without changing its cached
+ * instruction prefix. A prepared attachment is not a delivery receipt: only
+ * a correction retained in the supplied transcript suppresses another one.
  */
-export function getDateChangeAttachments(
+export async function getDateChangeAttachments(
   messages: Message[] | undefined,
-): Attachment[] {
+  userContext?: { [k: string]: string },
+): Promise<Attachment[]> {
+  if (
+    isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ATTACHMENTS) ||
+    isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
+  ) {
+    return []
+  }
+
+  let lastDate: string | undefined
+  const transcript = messages ?? []
+  for (let index = transcript.length - 1; index >= 0; index--) {
+    const message = transcript[index]!
+    if (message.type === 'attachment') {
+      const attachment = message.attachment
+      if (
+        typeof attachment === 'object' && attachment !== null &&
+        'type' in attachment && attachment.type === 'date_change' &&
+        'newDate' in attachment && typeof attachment.newDate === 'string'
+      ) {
+        lastDate = attachment.newDate
+        break
+      }
+    }
+    if (message.type === 'user' && typeof message.dateChange === 'string') {
+      lastDate = message.dateChange
+      break
+    }
+  }
+
+  // Fresh workers share the memoized user context, but do not necessarily
+  // inherit their parent's transcript or its prior corrections.
+  const prefixDate = lastDate === undefined
+    ? (userContext ?? await getUserContext()).currentDate
+    : undefined
   const currentDate = getLocalISODate()
-  const lastDate = getLastEmittedDate()
-
-  if (lastDate === null) {
-    // First turn — just record, no attachment needed
-    setLastEmittedDate(currentDate)
+  if (lastDate === currentDate || (
+    lastDate === undefined &&
+    (!prefixDate || prefixDate === `Today's date is ${currentDate}.`)
+  )) {
     return []
   }
-
-  if (currentDate === lastDate) {
-    return []
-  }
-
-  setLastEmittedDate(currentDate)
 
   // Assistant mode: flush yesterday's transcript to the per-day file so
-  // the /dream skill (1–5am local) finds it even if no compaction fires
-  // today. Fire-and-forget; writeSessionTranscriptSegment buckets by
-  // message timestamp so a multi-day gap flushes each day correctly.
+  // /dream can find it even when compaction has not run.
   if (feature('KAIROS')) {
     if (getKairosActive() && messages !== undefined) {
       sessionTranscriptModule?.flushOnDateChange(messages, currentDate)

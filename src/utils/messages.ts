@@ -2493,6 +2493,7 @@ export function mergeUserMessagesAndToolResults(
   const currentContent = normalizeUserTextContent(b.message.content)
   return {
     ...a,
+    ...(b.dateChange === undefined ? {} : { dateChange: b.dateChange }),
     message: {
       ...a.message,
       content: hoistToolResults(
@@ -2541,6 +2542,7 @@ export function mergeUserMessages(a: UserMessage, b: UserMessage): UserMessage {
     if (isSnipRuntimeEnabled()) {
       return {
         ...a,
+        ...(b.dateChange === undefined ? {} : { dateChange: b.dateChange }),
         isMeta: a.isMeta && b.isMeta ? (true as const) : undefined,
         uuid: a.isMeta ? b.uuid : a.uuid,
         message: {
@@ -2554,6 +2556,7 @@ export function mergeUserMessages(a: UserMessage, b: UserMessage): UserMessage {
   }
   return {
     ...a,
+    ...(b.dateChange === undefined ? {} : { dateChange: b.dateChange }),
     // Preserve the non-meta message's uuid so [id:] tags (derived from uuid)
     // stay stable across API calls (meta messages like system context get fresh uuids each call)
     uuid: a.isMeta ? b.uuid : a.uuid,
@@ -4439,12 +4442,12 @@ You have exited auto mode. The user may now want to interact more directly. You 
       return []
     }
     case 'date_change': {
-      return wrapMessagesInSystemReminder([
-        createUserMessage({
-          content: `The date has changed. Today's date is now ${attachment.newDate}. DO NOT mention this to the user explicitly because they are already aware.`,
-          isMeta: true,
-        }),
-      ])
+      const message = createUserMessage({
+        content: `The date has changed. Today's date is now ${attachment.newDate}. DO NOT mention this to the user explicitly because they are already aware.`,
+        isMeta: true,
+      })
+      message.dateChange = attachment.newDate
+      return wrapMessagesInSystemReminder([message])
     }
     case 'ultrathink_effort': {
       return wrapMessagesInSystemReminder([

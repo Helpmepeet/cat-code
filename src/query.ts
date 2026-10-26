@@ -82,6 +82,7 @@ import {
   createAttachmentMessage,
   filterDuplicateMemoryAttachments,
   getAttachmentMessages,
+  getDateChangeAttachments,
   startRelevantMemoryPrefetch,
   type Attachment,
 } from './utils/attachments.js'
@@ -934,6 +935,14 @@ async function* queryLoop(
               presentIds.add(message.id)
               yield attachment
             }
+          }
+          // Check the actual request transcript after compaction and message
+          // admission. A fresh worker or compacted history may lack the date
+          // correction even when another conversation already received it.
+          for (const correction of await getDateChangeAttachments(messagesForQuery, userContext)) {
+            const attachment = createAttachmentMessage(correction)
+            messagesForQuery.push(attachment)
+            yield attachment
           }
           instructionAssembly = buildProviderInstructionAssembly({
             provider: currentProvider,
