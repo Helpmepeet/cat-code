@@ -150,10 +150,18 @@ test('Tools displays closed error reasons with exact counts', async () => {
     summary.tools[0]!.errorCategories = { ambiguity: 1, interrupted: 1 };
     summary.tools[0]!.patchMechanisms = { 'hunk-reorder': 1, 'indentation-adjustment': 2 };
     const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    const row = tree.container.querySelector<HTMLButtonElement>('.uad-tools button')!;
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(tree.container.querySelector('.uad-tools li')!.textContent).not.toContain('Ambiguous context');
+    expect(tree.container.querySelector('.uad-patch-dimensions')).toBeNull();
+    await act(async () => row.click());
+    expect(row.getAttribute('aria-expanded')).toBe('true');
     expect(tree.container.querySelector('[aria-label="Bash error reasons"]')?.textContent).toBe('Ambiguous context: 1 · Cancelled: 1');
     expect(tree.container.querySelector('[aria-label="Bash patch adjustments"]')?.textContent).toBe('Hunks reordered: 1 call · Indentation adjusted: 2 calls');
     expect(tree.container.querySelector('[aria-label="Bash patch adjustments"]')?.closest('details')?.querySelector('summary')?.textContent).toBe('Patch details');
     expect([...tree.container.querySelectorAll('.uad-tools > li > .uad-tool-reasons')].map(line => line.getAttribute('aria-label'))).toEqual(['Bash error reasons']);
+    await act(async () => row.click());
+    expect(tree.container.querySelector('[aria-label="Bash error reasons"]')).toBeNull();
 });
 test('patch dimensions show model and root totals without claiming edit correctness', async () => {
     const snapshot = await collectRetainedUsage(['/isolated/root.jsonl'], '2026-09-13T12:00:00.000Z', {
@@ -169,6 +177,7 @@ test('patch dimensions show model and root totals without claiming edit correctn
         },
     });
     const tree = await harness.mount(<UsageAnalyticsReliability summary={snapshot.ranges['7d']} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
+    await act(async () => [...tree.container.querySelectorAll<HTMLButtonElement>('.uad-tools button')].find(row => row.textContent?.includes('apply_patch'))!.click());
     const detail = tree.container.querySelector('.uad-patch-dimensions')!;
     expect(detail.textContent).toContain('model-a');
     expect(detail.textContent).toContain('1 call · 1 error / 1 result · 100.0%');
@@ -270,6 +279,8 @@ test('Tools draws period error series without daily tool detail and keeps chart 
     expect(bash!.querySelector('.uad-tool-history')).toBeNull();
     expect(bash!.querySelector('button')).toBeNull();
     expect(read!.querySelector('.uad-tool-history')?.textContent).toBe('Unavailable');
+    expect(card.querySelector('[aria-label="Read error reasons"]')).toBeNull();
+    await act(async () => read!.querySelector('button')!.click());
     expect(card.querySelector('[aria-label="Bash error reasons"]')).toBeNull();
     const reasons = card.querySelector('[aria-label="Read error reasons"]')!;
     expect(reasons.textContent).toBe('Permission denied: 1 · Other: 1');

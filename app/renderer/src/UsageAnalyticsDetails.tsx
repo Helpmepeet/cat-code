@@ -309,6 +309,7 @@ function PatchDimensions({ tool, summary }: { tool: UsageTool; summary: UsageRan
 }
 function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalyticsReliabilityProps, 'summary' | 'selectedToolId' | 'onSelectTool'>) {
     const [expanded, setExpanded] = useState(false);
+    const [openToolId, setOpenToolId] = useState<string>();
     const listId = useId();
     const tools = summary.toolBreakdown?.items ?? summary.tools;
     const omitted = summary.toolBreakdown?.omitted ?? summary.detail.omittedTools;
@@ -321,14 +322,18 @@ function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalytic
             const history = detailed.get(tool.id);
             const available = history?.kind === tool.kind && history.requests === tool.requests && history.results === tool.results && history.errors === tool.errors;
             const errorsByDay = analyticsToolDayErrors(summary, tool, available);
-            const Row = available ? 'button' : 'div';
-            return <li key={tool.id}><Row className={`uad-tool-row ${analyticsToolClass(tool.label)} ${tool.results && results && tool.errors / tool.results > errors / results * 1.5 && tool.errors >= 10 ? 'uad-hot' : ''}`} {...(available ? { 'aria-pressed': selectedToolId === tool.id, onClick: () => onSelectTool(tool.id) } : {})}>
+            const reasons = analyticsToolErrorReasons(tool);
+            const patch = Boolean(tool.patchModels || tool.patchFollowups || analyticsPatchMechanisms(tool).length);
+            const hasDetail = reasons.length > 0 || patch, open = hasDetail && openToolId === tool.id;
+            const Row = available || hasDetail ? 'button' : 'div';
+            const select = () => { if (hasDetail) setOpenToolId(open ? undefined : tool.id); if (available) onSelectTool(tool.id); };
+            return <li key={tool.id}><Row className={`uad-tool-row ${analyticsToolClass(tool.label)} ${tool.results && results && tool.errors / tool.results > errors / results * 1.5 && tool.errors >= 10 ? 'uad-hot' : ''}`} {...(Row === 'button' ? { onClick: select } : {})} {...(available ? { 'aria-pressed': selectedToolId === tool.id } : {})} {...(hasDetail ? { 'aria-expanded': open } : {})}>
                 <span className="uad-tool-name" title={tool.kind === 'other' ? 'Combined totals for the remaining tools. Named tools prioritize errors, then usage.' : tool.label}><i className="uad-dot" /><span>{tool.label}{tool.kind === 'unknown' ? ' (unknown)' : tool.kind === 'other' ? ` (${omitted.toLocaleString()} ${omitted === 1 ? 'tool' : 'tools'})` : ''}</span></span>
                 <span className="uad-tool-volume">{detailCompact(tool.results)}</span>
                 {errorsByDay ? <Spark height={22} values={analyticsCalendarValues(summary, (_, i) => errorsByDay[i] ?? 0)} /> : <span className="uad-tool-history" title="Daily error history unavailable">Unavailable</span>}
                 <span className="uad-tool-rate">{detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}</span>
-            </Row><Counts className="uad-tool-reasons" label={`${tool.label} error reasons`} items={analyticsToolErrorReasons(tool)} />
-                {(tool.patchModels || tool.patchFollowups || analyticsPatchMechanisms(tool).length > 0) && <PatchDimensions tool={tool} summary={summary} />}</li>;
+            </Row>{open && <><Counts className="uad-tool-reasons" label={`${tool.label} error reasons`} items={reasons} />
+                {patch && <PatchDimensions tool={tool} summary={summary} />}</>}</li>;
         })}</ol>
         {rows.length > 10 && <button className="uad-tools-toggle" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer tools' : `Show ${rows.length - 10} more tools`}</button>}
         {!rows.length && <p>No tool observations.</p>}
