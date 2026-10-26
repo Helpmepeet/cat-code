@@ -35,7 +35,7 @@ function fixture(initialFollowing = true, reducedMotion = true) {
     cleanup: () => { controller.dispose(); scroller.remove() } }
 }
 
-test('reserves a viewport with scroller-relative row geometry, follows overflow and returns to message for answer', () => {
+test('reserves a viewport with scroller-relative row geometry, follows overflow and keeps the reader at the end of a followed answer', () => {
   const f = fixture()
   f.controller.update({ generating: true, userRowId: 'user' })
   expect(f.space()).toBe(`${400 - PEEK}px`)
@@ -45,8 +45,36 @@ test('reserves a viewport with scroller-relative row geometry, follows overflow 
   expect(f.space()).toBe('0px')
   expect(f.scroller.scrollTop).toBe(1300)
   f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+  expect(f.scroller.scrollTop).toBe(1300)
+  expect(f.space()).toBe('0px')
+  f.cleanup()
+})
+
+test('an answer that overflows only at completion returns to the message', () => {
+  const f = fixture()
+  f.controller.update({ generating: true, userRowId: 'user' })
+  expect(f.scroller.scrollTop).toBe(1000 - PEEK)
+  f.setEnd(1800)
+  f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
   expect(f.scroller.scrollTop).toBe(1000 - PEEK)
   expect(f.space()).toBe('0px')
+  f.cleanup()
+})
+
+test('a new send after a followed answer lands its own answer again', () => {
+  const f = fixture()
+  f.controller.update({ generating: true, userRowId: 'user' })
+  f.setEnd(1800)
+  f.controller.update({ generating: true, userRowId: 'user' })
+  f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+  f.addRow('next', 1800)
+  f.addRow('next-answer', 1850)
+  f.setEnd(1900)
+  f.controller.update({ generating: true, userRowId: 'next' })
+  expect(f.scroller.scrollTop).toBe(1800 - PEEK)
+  f.setEnd(2600)
+  f.controller.update({ generating: false, userRowId: 'next', answerRowId: 'next-answer' })
+  expect(f.scroller.scrollTop).toBe(1800 - PEEK)
   f.cleanup()
 })
 
@@ -216,8 +244,8 @@ for (const input of ['wheel', 'PageDown']) {
   test(`completed answers permit downward reading with ${input}`, async () => {
     const f = fixture()
     try {
-      f.setEnd(2400)
       f.controller.update({ generating: true, userRowId: 'user' })
+      f.setEnd(2400)
       f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
       expect(f.scroller.scrollTop).toBe(1000 - PEEK)
       f.scroller.dispatchEvent(input === 'wheel' ? new WheelEvent('wheel', { deltaY: 100 }) : new KeyboardEvent('keydown', { key: input }))
@@ -251,10 +279,10 @@ test('completion uses virtual offsets when a long answer has unmounted both mess
   expect(selectCompositeChildWindow(entries, 3590, 500).start).toBe(2)
   const unregister = registerTranscriptRowOffsets(f.scroller, key => key === 'user' ? 1000 : null)
   try {
+    f.controller.update({ generating: true, userRowId: 'user' })
     f.setEnd(5090)
     f.scroller.querySelector('[data-row-key="user"]')!.remove()
     f.scroller.querySelector('[data-row-key="answer"]')!.remove()
-    f.controller.update({ generating: true, userRowId: 'user' })
     f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
     expect(f.scroller.scrollTop).toBe(1000 - PEEK)
   } finally { unregister(); f.cleanup() }

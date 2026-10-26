@@ -38,6 +38,10 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
   let ownScrollTop: number | null = null
   let mayResume = false
   let landing = false
+  // Following carried the view past the sent message, so the reader is already
+  // reading the output. Landing back on the message at turn end would lose
+  // their place in a long answer (operator, 2026-10-26).
+  let carried = false
   let userOffset: { id: string; top: number } | null = null
   const reducedMotion = options.reducedMotion ?? (() => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false)
   const setFollowing = (next: boolean) => {
@@ -76,6 +80,10 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
     if (Math.abs(scroller.scrollTop - next) < 0.5) return
     scroller.scrollTop = next
     ownScrollTop = scroller.scrollTop
+    if (state.generating && !carried) {
+      const top = readUserOffset()
+      if (top !== null && scroller.scrollTop > top - FOCUSED_PREVIOUS_OUTPUT_PEEK_PX + 1) carried = true
+    }
     // The coordinator recognizes explicit writes before their scroll event arrives.
     reportPaneLayoutChange(scroller)
   }
@@ -211,8 +219,8 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
       const answered = !next.generating && next.answerRowId != null && next.answerRowId !== state.answerRowId
       state = next
       initialized = true
-      if (sent) { landing = false; setFollowing(true) }
-      if ((ended || answered) && following && next.answerRowId) landing = true
+      if (sent) { landing = false; carried = false; setFollowing(true) }
+      if ((ended || answered) && following && next.answerRowId && !carried) landing = true
       reserve()
       if (ended) animate(true)
       else if (sent && following) animate(false)
