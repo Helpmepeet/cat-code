@@ -555,7 +555,12 @@ export function selectPermissionPreview(
  */
 export function formatPermissionInput(input: unknown): string {
   try {
-    return JSON.stringify(input, null, 2) ?? String(input)
+    // Bun's indented serializer can take seconds to reject cycles. Compact
+    // serialization rejects them first and evaluates caller-owned values once.
+    const serialized = JSON.stringify(input)
+    return serialized === undefined
+      ? String(input)
+      : JSON.stringify(JSON.parse(serialized), null, 2)
   } catch {
     return String(input)
   }

@@ -796,8 +796,16 @@ test('buildChangeLines keeps blank lines the user wrote and drops the split arti
   expect(buildChangeLines('', '')).toBeNull()
 })
 
-test('formatPermissionInput survives a value JSON.stringify refuses', () => {
-  expect(formatPermissionInput({ a: 1 })).toBe('{\n  "a": 1\n}')
+test('formatPermissionInput preserves JSON formatting and survives unsupported values', () => {
+  let serializations = 0
+  const input = {
+    toJSON() {
+      serializations++
+      return { a: 1 }
+    },
+  }
+  expect(formatPermissionInput(input)).toBe('{\n  "a": 1\n}')
+  expect(serializations).toBe(1)
   const circular: Record<string, unknown> = {}
   circular.self = circular
   expect(() => formatPermissionInput(circular)).not.toThrow()

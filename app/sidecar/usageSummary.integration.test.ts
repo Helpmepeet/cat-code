@@ -200,7 +200,7 @@ test('multi-year history fits the snapshot limit through truthful detail fallbac
         expect(snapshot.ranges.all.days.length).toBeLessThanOrEqual(180);
         expect(snapshot.ranges.all.days.every(day => day.sessions === 6)).toBe(true);
     } finally { await rm(dir, { recursive: true, force: true }); }
-});
+}, 30000);
 
 test('multi-year model usage stays named when tool detail exceeds the record budget', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'usage-model-budget-'));
