@@ -15,6 +15,20 @@ export function duration(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000))
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`
 }
+const firstWaitPhrases = [
+  [1000, 'Reading your message'],
+  [3000, 'Thinking it over'],
+  [7000, 'Weighing it up'],
+  [12000, 'Thinking it through'],
+] as const
+export function firstWaitPhrase(quietMs: number): string | null {
+  let phrase: string | null = null
+  for (const [from, text] of firstWaitPhrases) {
+    if (quietMs < from) break
+    phrase = text
+  }
+  return phrase
+}
 export function callTarget(call: FocusedCall): string { return deriveTarget(call) }
 export function rollingCalls(calls: readonly FocusedCall[]): FocusedCall[] {
   const rank = (c: FocusedCall) => c.status === 'pending' && c.activity ? 0 : c.preparing ? 1 : c.status !== 'pending' ? 2 : 3

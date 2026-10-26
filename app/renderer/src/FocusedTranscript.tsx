@@ -1,4 +1,4 @@
-import { callVerb, callTarget, duration, preparingCalls, rollingCalls, type FocusedCall } from './focusedLive.js'
+import { callVerb, callTarget, duration, firstWaitPhrase, preparingCalls, rollingCalls, type FocusedCall } from './focusedLive.js'
 import type { FocusedLiveState } from './transcriptProjector.js'
 import type { TasksSnapshot } from '../../shared/protocol.js'
 import { memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -56,8 +56,14 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   }
   const latestStretch = [...segments].reverse().find(segment => segment.kind === 'stretch')
   const pending = turn.rows.some(row => row.kind === 'tool-use' && row.status === 'pending') || preparing.length > 0
+  const visibleOutput = segments.length > 0 || pending || turn.answering
+  // Preparing calls can disappear on a replacement stream without leaving a stored row.
+  const [hadVisibleOutput, setHadVisibleOutput] = useState(visibleOutput)
+  if (visibleOutput && !hadVisibleOutput) setHadVisibleOutput(true)
+  const firstWait = !visibleOutput && !hadVisibleOutput
   const quietMs = liveState ? now - liveState.lastVisibleChangeAt : 0
   const thinking = turn.live && latestLive && !turn.answering && !pending && !liveState?.streaming && quietMs >= 1000
+  const waitPhrase = firstWait ? firstWaitPhrase(quietMs) : null
   const issuedCalls = new Set(turn.rows.flatMap(row => row.kind === 'tool-use' ? [row.toolUseId] : []))
   const background = turn.live && latestLive ? tasks?.focusedBashJobs?.filter(job => job.toolUseId &&
     (issuedCalls.has(job.toolUseId) || !!liveState?.activities[job.toolUseId]) &&
@@ -97,7 +103,9 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
           </div>)}
           {thinking ? <div className="focused-thinking">
             <span className="focused-reasoning-gutter" aria-hidden><span className="focused-reasoning-node" /></span>
-            <span className="focused-live-verb">Thinking</span><span className="focused-meta">{quietMs >= 2000 ? duration(quietMs) : ''}</span>
+            {waitPhrase !== null
+              ? <FocusedTicker tickKey={waitPhrase} className=""><span className="focused-live-verb">{waitPhrase}</span></FocusedTicker>
+              : <><span className="focused-live-verb">Thinking</span><span className="focused-meta">{quietMs >= 2000 ? duration(quietMs) : ''}</span></>}
           </div> : null}
         </div>
       </FocusedDisclosure>

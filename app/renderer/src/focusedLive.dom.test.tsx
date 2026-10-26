@@ -116,6 +116,102 @@ test('preparing arguments grow as streaming state and the real call replaces the
   expect(tree.container.querySelector('.focused-caret')).toBeNull()
 })
 
+test('the first wait follows the phrase ladder without seconds and slides whole phrases', async () => {
+  const state = start()
+  const tree = await harness.mount(view(state))
+  expect(tree.container.querySelector('.focused-thinking')).toBeNull()
+  now = 10999
+  await tick()
+  expect(tree.container.querySelector('.focused-thinking')).toBeNull()
+  let previous: string | null = null
+  for (const [elapsed, phrase] of [
+    [1000, 'Reading your message'], [2999, 'Reading your message'],
+    [3000, 'Thinking it over'], [6999, 'Thinking it over'],
+    [7000, 'Weighing it up'], [11999, 'Weighing it up'],
+    [12000, 'Thinking it through'], [60000, 'Thinking it through'],
+  ] as const) {
+    now = 10000 + elapsed
+    await tick()
+    const row = tree.container.querySelector('.focused-thinking')!
+    expect(row).not.toBeNull()
+    if (!previous) expect(row.querySelector('.focused-live-verb')?.textContent).toBe(phrase)
+    expect(row.querySelector('.focused-meta')).toBeNull()
+    expect(row.querySelector('.focused-reasoning-node')).not.toBeNull()
+    const ticker = row.querySelector('.focused-ticker')!
+    expect(visibleText(ticker)).toBe(phrase)
+    expect(ticker.querySelector(':scope > span:not([aria-hidden="true"]) > .focused-live-verb')?.textContent).toBe(phrase)
+    if (previous && phrase !== previous) {
+      expect(ticker.querySelector('.focused-tick-out[aria-hidden="true"]')?.textContent).toBe(previous)
+      expect(ticker.querySelector('.focused-tick-in')?.textContent).toBe(phrase)
+    }
+    previous = phrase
+  }
+})
+
+test('hidden context and empty or redacted reasoning keep the first wait on the turn quiet clock', async () => {
+  let state = start()
+  now = 12000
+  state = projectServerFrame(state, { kind: 'event', protocolVersion: 4, sessionId: 'live', event: { type: 'turn.status', activeTurn: true } })
+  now = 12500
+  state = message(state, { type: 'user', uuid: 'hidden-first', isSynthetic: true, parent_tool_use_id: null, message: { role: 'user', content: 'Hidden internal context' } })
+  state = message(state, { type: 'assistant', uuid: 'redacted-first', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'redacted_thinking', data: 'opaque' }] } })
+  state = message(state, { type: 'stream_event', event: { type: 'message_start', message: { id: 'empty-first' } } })
+  state = message(state, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } })
+  state = message(state, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '' } } })
+  expect(selectFocusedLiveState(state, 'live')!.lastVisibleChangeAt).toBe(12000)
+  now = 12999
+  const tree = await harness.mount(view(state))
+  expect(tree.container.querySelector('.focused-thinking')).toBeNull()
+  now = 13000
+  await tick()
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Reading your message')
+  expect(tree.container.querySelector('.focused-thinking .focused-meta')).toBeNull()
+  now = 15000
+  await tick()
+  expect(visibleText(tree.container.querySelector('.focused-thinking .focused-ticker'))).toBe('Thinking it over')
+})
+
+test('a later quiet gap after a finished call keeps Thinking and seconds, even after remount', async () => {
+  let state = start()
+  let tree = await harness.mount(view(state))
+  now = 11000
+  await tick()
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Reading your message')
+  now = 12000
+  state = calls(state, ['first-output'])
+  await tree.render(view(state))
+  expect(tree.container.querySelector('.focused-thinking')).toBeNull()
+  now = 13000
+  state = finish(state, 'first-output')
+  await tree.render(view(state))
+  now = 13999
+  await tick()
+  expect(tree.container.querySelector('.focused-thinking')).toBeNull()
+  now = 14000
+  await tick()
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking')
+  now = 15000
+  await tick()
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking2s')
+  await tree.unmount()
+  tree = await harness.mount(view(state))
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking2s')
+})
+
+test('a Preparing call ends the first wait even if a replacement stream abandons it', async () => {
+  let state = start()
+  const tree = await harness.mount(view(state))
+  state = message(state, { type: 'stream_event', event: { type: 'message_start', message: { id: 'preparing-first' } } })
+  state = message(state, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'abandoned-first', name: 'Bash', input: {} } } })
+  await tree.render(view(state))
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Preparing')
+  state = message(state, { type: 'stream_event', event: { type: 'message_start', message: { id: 'replacement-first' } } })
+  await tree.render(view(state))
+  now = 13000
+  await tick()
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking3s')
+})
+
 test('empty reasoning does not reset the quiet clock; text streaming and final answers hide Thinking', async () => {
   let state = finish(calls(start(), ['check']), 'check')
   now = 10999
