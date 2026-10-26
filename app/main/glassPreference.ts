@@ -4,6 +4,19 @@ const GLASS_PREFERENCE_FILE = 'glass-preference.json'
 
 type GlassPreference = { version: 1; enabled: boolean }
 
+type GlassWindow = {
+  setBackgroundColor(color: string): void
+  webContents: { invalidate(): void }
+}
+
+export function applyGlassWindowBackground(window: GlassWindow | null, enabled: boolean): void {
+  if (!window) return
+  window.setBackgroundColor(enabled ? '#00000000' : '#09090b')
+  // A native background change can leave the old composited surface visible
+  // until resize. Repaint without resizing or reloading the running renderer.
+  window.webContents.invalidate()
+}
+
 export function readGlassPreference(userDataDir: string): boolean {
   return (
     readPreferenceFile(userDataDir, GLASS_PREFERENCE_FILE, raw => {

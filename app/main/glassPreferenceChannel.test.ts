@@ -33,7 +33,7 @@ test('main accepts glass preferences only from the main window with a boolean pa
   expect(body).toContain('event, enabled: unknown')
   expect(body).toContain('if (!isMainWindowSender(event) || typeof enabled !== \'boolean\') return')
   expect(body).toContain("writeGlassPreference(app.getPath('userData'), enabled)")
-  expect(body).toContain("mainWindow?.setBackgroundColor(enabled ? '#00000000' : '#09090b')")
+  expect(body).toContain('applyGlassWindowBackground(mainWindow, enabled)')
 })
 
 test('window creation uses the persisted preference for the native background', () => {

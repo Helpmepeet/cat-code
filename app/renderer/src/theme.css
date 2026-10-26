@@ -575,7 +575,8 @@ html[data-appearance='light'] [data-accent='amber'] {
  * The window carries macOS vibrancy from the moment it is created
  * (`app/main/main.ts`), so the blurred backdrop is behind the page whether or not
  * this is on. All this decides is whether the app's own ground is opaque enough
- * to hide it, which is why flipping it needs no IPC.
+ * to hide it. The fixed preference channel also updates the native background
+ * and requests a repaint so the new surface is visible without a window resize.
  *
  * EXACTLY ONE ground goes translucent, and it is the page ground `body::before`
  * paints (`@layer base` below — the reason the ground lives there and not on

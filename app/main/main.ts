@@ -241,7 +241,7 @@ import {
   createPeerRequestPlane,
   type PeerRequestPlane,
 } from './peerRequestPlane.js'
-import { readGlassPreference, writeGlassPreference } from './glassPreference.js'
+import { applyGlassWindowBackground, readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import { readNotificationPreference, writeNotificationPreference } from './notificationPreference.js'
 import { registerNotificationPreferenceIpc, registerNotificationRetryIpc, registerNotificationRetryBlockedIpc } from './notificationPreferenceIpc.js'
 import { createDesktopNotifications } from './desktopNotifications.js'
@@ -2836,7 +2836,7 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_SET_GLASS_MODE, (event, enabled: unknown) => {
     if (!isMainWindowSender(event) || typeof enabled !== 'boolean') return
     writeGlassPreference(app.getPath('userData'), enabled)
-    mainWindow?.setBackgroundColor(enabled ? '#00000000' : '#09090b')
+    applyGlassWindowBackground(mainWindow, enabled)
   })
   registerNotificationPreferenceIpc<IpcMainInvokeEvent>({
     handle: (channel, listener) => ipcMain.handle(channel, listener),
