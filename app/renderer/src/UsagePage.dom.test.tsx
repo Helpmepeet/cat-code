@@ -250,11 +250,14 @@ test('summary metric and tool rows change the shared daily chart', async () => {
     expect(button(tree.container, 'Error rate', '.usage-daily-metrics button').getAttribute('aria-selected')).toBe('true');
     const tool = [...tree.container.querySelectorAll('button')].find(node => node.textContent?.includes('Bash') && !node.closest('.usage-daily-chips'))!;
     await click(tool);
+    expect(tool.getAttribute('aria-expanded')).toBe('true');
+    expect(button(tree.container, 'Error rate', '.usage-daily-metrics button').getAttribute('aria-selected')).toBe('true');
+    await click(button(tree.container, 'Show in daily chart'));
     expect(button(tree.container, 'Tool errors', '.usage-daily-metrics button').getAttribute('aria-selected')).toBe('true');
     expect(button(tree.container.querySelector<HTMLElement>('.usage-daily-chips')!, 'Read').getAttribute('aria-pressed')).toBe('false');
-    expect([...tree.container.querySelectorAll('.uad-tools button')].find(node => node.textContent?.includes('Bash'))?.getAttribute('aria-pressed')).toBe('true');
+    expect(tool.classList.contains('uad-selected')).toBe(true);
     await click(button(tree.container.querySelector<HTMLElement>('.usage-daily-chips')!, 'Show all'));
-    expect(tree.container.querySelector('.uad-tools button[aria-pressed="true"]')).toBeNull();
+    expect(tree.container.querySelector('.uad-tool-row.uad-selected')).toBeNull();
 });
 
 test('daily source controls expose only approved groups and hidden swatches become hollow', async () => {

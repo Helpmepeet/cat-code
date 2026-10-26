@@ -138,6 +138,8 @@ test('reliability routes tool, route and build selections through parent callbac
     const calls: string[] = [];
     const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={id => calls.push(`tool:${id}`)} onSelectRoute={route => calls.push(`route:${route}`)} onSelectBuild={sha => calls.push(`build:${sha}`)} />);
     await act(async () => tree.container.querySelector<HTMLButtonElement>('.uad-tools button')!.click());
+    expect(calls).toEqual([]);
+    await act(async () => tree.container.querySelector<HTMLButtonElement>('.uad-tool-chart')!.click());
     await act(async () => tree.container.querySelector<SVGGElement>('.uad-routes [role=button]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     await act(async () => tree.container.querySelector<SVGGElement>('.uad-builds [role=button]')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true })));
     expect(calls).toEqual(['tool:bash', 'route:guard', 'build:abc123']);
@@ -202,10 +204,12 @@ test('Tools fits its rows independently of the model card and identifies grouped
         expect([...names].map(name => name.textContent)).toEqual(['Bash', 'Other (12 tools)']);
         expect(names[1]!.getAttribute('title')).toContain('Named tools prioritize errors, then usage.');
         await act(async () => card.querySelectorAll('button')[1]!.click());
+        expect(selected).toEqual([]);
+        await act(async () => card.querySelector<HTMLButtonElement>('.uad-tool-chart')!.click());
         expect(selected).toEqual(['other']);
         summary.detail.omittedTools = 1;
         await tree.render(<UsageAnalyticsReliability {...props} selectedToolId="other" />);
-        expect(card.querySelectorAll('button')[1]!.getAttribute('aria-pressed')).toBe('true');
+        expect(card.querySelectorAll('.uad-tool-row')[1]!.classList.contains('uad-selected')).toBe(true);
         expect(card.textContent).toContain('Other (1 tool)');
     } finally {
         styles.remove();
@@ -246,6 +250,8 @@ test('Tools shows independent period totals, expands all names, and never invent
     await act(async () => unavailable.parentElement!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(selected).toEqual([]);
     await act(async () => card.querySelector<HTMLButtonElement>('.uad-tools button')!.click());
+    expect(selected).toEqual([]);
+    await act(async () => card.querySelector<HTMLButtonElement>('.uad-tool-chart')!.click());
     expect(selected).toEqual(['tool-0']);
     const toggle = card.querySelector<HTMLButtonElement>('.uad-tools-toggle')!;
     expect(toggle.textContent).toBe('Show 28 more tools');
@@ -543,9 +549,9 @@ test('outcome strip uses exact composition and selected tool rows reflect contro
     expect(Number(succeeded.getAttribute('width')) / Number(failed.getAttribute('width'))).toBeCloseTo(3);
     expect(Number(failed.getAttribute('x')) - Number(succeeded.getAttribute('width'))).toBe(2);
     expect(strip.nextElementSibling?.classList.contains('uad-outcomes')).toBe(true);
-    expect(tree.container.querySelector('.uad-tools button')?.getAttribute('aria-pressed')).toBe('true');
+    expect(tree.container.querySelector('.uad-tool-row')?.classList.contains('uad-selected')).toBe(true);
     await tree.render(<UsageAnalyticsReliability {...props} />);
-    expect(tree.container.querySelector('.uad-tools button')?.getAttribute('aria-pressed')).toBe('false');
+    expect(tree.container.querySelector('.uad-tool-row')?.classList.contains('uad-selected')).toBe(false);
 });
 
 test('build scatter provides grid, flagged labels, legends and nearest-point hover away from the dot', async () => {

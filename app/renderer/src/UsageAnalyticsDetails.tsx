@@ -324,15 +324,15 @@ function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalytic
             const errorsByDay = analyticsToolDayErrors(summary, tool, available);
             const reasons = analyticsToolErrorReasons(tool);
             const patch = Boolean(tool.patchModels || tool.patchFollowups || analyticsPatchMechanisms(tool).length);
-            const hasDetail = reasons.length > 0 || patch, open = hasDetail && openToolId === tool.id;
-            const Row = available || hasDetail ? 'button' : 'div';
-            const select = () => { if (hasDetail) setOpenToolId(open ? undefined : tool.id); if (available) onSelectTool(tool.id); };
-            return <li key={tool.id}><Row className={`uad-tool-row ${analyticsToolClass(tool.label)} ${tool.results && results && tool.errors / tool.results > errors / results * 1.5 && tool.errors >= 10 ? 'uad-hot' : ''}`} {...(Row === 'button' ? { onClick: select } : {})} {...(available ? { 'aria-pressed': selectedToolId === tool.id } : {})} {...(hasDetail ? { 'aria-expanded': open } : {})}>
+            const hasDetail = available || reasons.length > 0 || patch, open = hasDetail && openToolId === tool.id;
+            const Row = hasDetail ? 'button' : 'div';
+            return <li key={tool.id}><Row className={`uad-tool-row ${analyticsToolClass(tool.label)} ${tool.results && results && tool.errors / tool.results > errors / results * 1.5 && tool.errors >= 10 ? 'uad-hot' : ''} ${selectedToolId === tool.id ? 'uad-selected' : ''}`} {...(Row === 'button' ? { 'aria-expanded': open, onClick: () => setOpenToolId(open ? undefined : tool.id) } : {})}>
                 <span className="uad-tool-name" title={tool.kind === 'other' ? 'Combined totals for the remaining tools. Named tools prioritize errors, then usage.' : tool.label}><i className="uad-dot" /><span>{tool.label}{tool.kind === 'unknown' ? ' (unknown)' : tool.kind === 'other' ? ` (${omitted.toLocaleString()} ${omitted === 1 ? 'tool' : 'tools'})` : ''}</span></span>
                 <span className="uad-tool-volume">{detailCompact(tool.results)}</span>
                 {errorsByDay ? <Spark height={22} values={analyticsCalendarValues(summary, (_, i) => errorsByDay[i] ?? 0)} /> : <span className="uad-tool-history" title="Daily error history unavailable">Unavailable</span>}
                 <span className="uad-tool-rate">{detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}</span>
             </Row>{open && <><Counts className="uad-tool-reasons" label={`${tool.label} error reasons`} items={reasons} />
+                {available && <button type="button" className="uad-tool-chart" onClick={() => onSelectTool(tool.id)}>Show in daily chart</button>}
                 {patch && <PatchDimensions tool={tool} summary={summary} />}</>}</li>;
         })}</ol>
         {rows.length > 10 && <button className="uad-tools-toggle" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer tools' : `Show ${rows.length - 10} more tools`}</button>}
