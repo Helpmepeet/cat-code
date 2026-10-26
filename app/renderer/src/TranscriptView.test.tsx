@@ -345,6 +345,21 @@ test('P4-18c: a fenced code block renders framed + copyable with syntax highligh
   expect(html).not.toContain('&lt;/&gt;') // no language/type label
 })
 
+test('a fenced code block wraps long lines instead of scrolling sideways', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:code-wrap',
+    kind: 'assistant-text',
+    role: 'assistant',
+    content: 'Here:\n\n```text\nA very long prose line that would run past the card edge\n```\n',
+  })
+
+  const pre = /<pre class="([^"]*)"/.exec(html)?.[1] ?? ''
+  expect(pre).toContain('whitespace-pre-wrap')
+  expect(pre).toContain('break-words')
+  expect(pre).not.toContain('overflow-x-auto')
+})
+
 test('bounds a giant assistant response before react-markdown creates its full tree', () => {
   const content = Array.from(
     { length: 1_000 },

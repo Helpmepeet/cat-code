@@ -2514,7 +2514,7 @@ export function CodeBlock({
         )}
       </button>
       ) : null}
-      <pre className="overflow-x-auto px-3.5 py-3.5 font-mono text-[12.5px] leading-[1.65]">
+      <pre className={`whitespace-pre-wrap break-words py-3.5 pl-3.5 font-mono text-[12.5px] leading-[1.65] ${inlineSource ? 'pr-3.5' : 'pr-10'}`}>
         <code className="hljs">{inlineSource && !windowed && code.length <= 12_000 ? shellTokens(code).map((token, index) => <span key={index} className={`shell-token-${token.kind}`}>{token.text}</span>) : highlighted}</code>
       </pre>
       {!run && completedAttempt ? <p className="border-t border-shell-seam px-3.5 py-3 text-xs text-text-subtle">Command output is no longer retained.</p> : null}
