@@ -293,16 +293,18 @@ function PatchDimensions({ tool, summary }: { tool: UsageTool; summary: UsageRan
         const counts = session.tools.find(item => item.id === tool.id && item.kind === 'named');
         return counts ? [{ session, counts }] : [];
     });
-    return <details className="uad-patch-dimensions"><summary>Models and root sessions</summary>
+    return <details className="uad-patch-dimensions"><summary>Patch details</summary>
         <p>Rates use returned results. Missing results are not successes. Models identify the request; follow-up sequences belong to the first failed call.</p>
         <p>Later calls are observations from the same agent, not proof of the same target or a correct edit. Shell activity cannot establish whether an edit occurred.</p>
-        <h4>Models</h4><ul>{tool.patchModels?.map(model => <li key={model.id}><strong>{model.kind === 'unknown' ? 'Unknown model' : model.label}</strong><p>{analyticsPatchCounts(model)}</p>
+        <Counts label={`${tool.label} patch adjustments`} items={analyticsPatchMechanisms(tool)} />
+        <Counts label={`${tool.label} follow-up activity`} items={analyticsPatchFollowups(tool)} />
+        {tool.patchModels && <><h4>Models</h4><ul>{tool.patchModels?.map(model => <li key={model.id}><strong>{model.kind === 'unknown' ? 'Unknown model' : model.label}</strong><p>{analyticsPatchCounts(model)}</p>
             <Counts items={analyticsToolErrorReasons(model)} /><Counts items={analyticsPatchMechanisms(model)} /><Counts items={analyticsPatchFollowups(model)} /></li>)}</ul>
         <h4>Retained root sessions</h4>
         {summary.rankedSessions.omitted > 0 && <p>{summary.rankedSessions.omitted.toLocaleString()} root sessions omitted.</p>}
         <ul>{sessions.map(({ session, counts }) => <li key={session.id}><strong>{session.project?.label ? `${session.project.label} · ` : ''}{(session.engineSessionId ?? session.id).slice(0, 8)}</strong><p>{analyticsPatchCounts(counts)}</p>
             <Counts items={analyticsToolErrorReasons(counts)} /><Counts items={analyticsPatchMechanisms(counts)} /><Counts items={analyticsPatchFollowups(counts)} /></li>)}</ul>
-        {!sessions.length && <p>No matching root-session detail retained.</p>}
+        {!sessions.length && <p>No matching root-session detail retained.</p>}</>}
     </details>;
 }
 function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalyticsReliabilityProps, 'summary' | 'selectedToolId' | 'onSelectTool'>) {
@@ -326,9 +328,7 @@ function ToolsCard({ summary, selectedToolId, onSelectTool }: Pick<UsageAnalytic
                 {errorsByDay ? <Spark height={22} values={analyticsCalendarValues(summary, (_, i) => errorsByDay[i] ?? 0)} /> : <span className="uad-tool-history" title="Daily error history unavailable">Unavailable</span>}
                 <span className="uad-tool-rate">{detailPercent(tool.results ? tool.errors / tool.results * 100 : null)}</span>
             </Row><Counts className="uad-tool-reasons" label={`${tool.label} error reasons`} items={analyticsToolErrorReasons(tool)} />
-                <Counts className="uad-tool-reasons" label={`${tool.label} patch adjustments`} items={analyticsPatchMechanisms(tool)} />
-                <Counts className="uad-tool-reasons" label={`${tool.label} follow-up activity`} items={analyticsPatchFollowups(tool)} />
-                {tool.patchModels && <PatchDimensions tool={tool} summary={summary} />}</li>;
+                {(tool.patchModels || tool.patchFollowups || analyticsPatchMechanisms(tool).length > 0) && <PatchDimensions tool={tool} summary={summary} />}</li>;
         })}</ol>
         {rows.length > 10 && <button className="uad-tools-toggle" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(!expanded)}>{expanded ? 'Show fewer tools' : `Show ${rows.length - 10} more tools`}</button>}
         {!rows.length && <p>No tool observations.</p>}

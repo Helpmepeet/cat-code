@@ -152,6 +152,8 @@ test('Tools displays closed error reasons with exact counts', async () => {
     const tree = await harness.mount(<UsageAnalyticsReliability summary={summary} onSelectTool={() => {}} onSelectRoute={() => {}} onSelectBuild={() => {}} />);
     expect(tree.container.querySelector('[aria-label="Bash error reasons"]')?.textContent).toBe('Ambiguous context: 1 · Cancelled: 1');
     expect(tree.container.querySelector('[aria-label="Bash patch adjustments"]')?.textContent).toBe('Hunks reordered: 1 call · Indentation adjusted: 2 calls');
+    expect(tree.container.querySelector('[aria-label="Bash patch adjustments"]')?.closest('details')?.querySelector('summary')?.textContent).toBe('Patch details');
+    expect([...tree.container.querySelectorAll('.uad-tools > li > .uad-tool-reasons')].map(line => line.getAttribute('aria-label'))).toEqual(['Bash error reasons']);
 });
 test('patch dimensions show model and root totals without claiming edit correctness', async () => {
     const snapshot = await collectRetainedUsage(['/isolated/root.jsonl'], '2026-09-13T12:00:00.000Z', {
