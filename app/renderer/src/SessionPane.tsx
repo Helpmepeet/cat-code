@@ -2741,7 +2741,7 @@ function ActivityIndicator({
   const showTokens = liveTokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
   const todoReadout = selectTodoReadout(todoPlan)
   return (
-    <div className="flex items-center gap-2.5 bg-transparent px-1 py-1.5 text-xs">
+    <div className="flex items-center gap-2.5 bg-transparent px-1 pb-1.5 pt-0 text-xs">
       {compacting && !paused ? (
         <CompactingGlyph />
       ) : (

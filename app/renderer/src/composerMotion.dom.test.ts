@@ -447,7 +447,7 @@ test('the in-turn activity row arrives for a fresh live send pinned to bottom, n
   // `animate-arrive`) is the one directly above it.
   const activityWrap = (tree: { container: HTMLElement }) =>
     [...tree.container.querySelectorAll('div')]
-      .find(node => node.className === 'flex items-center gap-2.5 bg-transparent px-1 py-1.5 text-xs')
+      .find(node => node.className === 'flex items-center gap-2.5 bg-transparent px-1 pb-1.5 pt-0 text-xs')
       ?.parentElement
 
   const base = seededTranscript()
