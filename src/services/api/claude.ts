@@ -1220,10 +1220,7 @@ async function* queryModel(
   tools: Tools,
   signal: AbortSignal,
   options: Options,
-  openAIInstructionAssembly?: {
-    instructions: string
-    inputMessages: Message[]
-  },
+  openAIInstructionAssembly?: OpenAIInstructionAssembly,
 ): AsyncGenerator<
   StreamEvent | AssistantMessage | SystemAPIErrorMessage,
   void
@@ -1498,7 +1495,17 @@ async function* queryModel(
   })
 
   queryCheckpoint('query_message_normalization_start')
-  let messagesForAPI = normalizeMessagesForAPI(messages, filteredTools, requestProvider)
+  // The native assembly owns OpenAI history. Run the same repair/discovery
+  // pipeline once, then deliver its result to both request representations.
+  const providerMessages =
+    requestProvider === 'openai' && openAIInstructionAssembly
+      ? openAIInstructionAssembly.inputMessages
+      : messages
+  let messagesForAPI = normalizeMessagesForAPI(
+    providerMessages,
+    filteredTools,
+    requestProvider,
+  )
   queryCheckpoint('query_message_normalization_end')
 
   // Model-specific post-processing: strip tool-search-specific fields if the
@@ -1540,14 +1547,14 @@ async function* queryModel(
     messagesForAPI = stripAdvisorBlocks(messagesForAPI)
   }
 
-  // Strip excess media items before making the API call.
-  // The API rejects requests with >100 media items but returns a confusing error.
-  // Rather than erroring (which is hard to recover from in Cowork/CCD), we
-  // silently drop the oldest media items to stay within the limit.
-  messagesForAPI = stripExcessMediaItems(
-    messagesForAPI,
-    API_MAX_MEDIA_PER_REQUEST,
-  )
+  // Anthropic rejects requests with >100 media items. OpenAI owns its media
+  // policy at the native adapter boundary; do not impose this provider's cap.
+  if (requestProvider !== 'openai') {
+    messagesForAPI = stripExcessMediaItems(
+      messagesForAPI,
+      API_MAX_MEDIA_PER_REQUEST,
+    )
+  }
 
   // Instrumentation: Track message count after normalization
   logEvent('tengu_api_after_normalize', {
@@ -1808,14 +1815,14 @@ async function* queryModel(
         ? {
             _openaiInstructionAssembly: {
               instructions: openAIInstructionAssembly.instructions,
-              inputMessages: projectProviderFacingMessages(
-                normalizeMessagesForAPI(
-                  openAIInstructionAssembly.inputMessages,
-                  filteredTools,
-                  requestProvider,
-                ),
-              ),
-              developerContext: openAIInstructionAssembly.developerContext,
+              inputMessages: projectProviderFacingMessages(messagesForAPI),
+              // Late connection guidance belongs with volatile control context,
+              // leaving the stable native instructions and their cache intact.
+              developerContext:
+                [
+                  openAIInstructionAssembly.developerContext,
+                  injectChromeHere ? CHROME_TOOL_SEARCH_INSTRUCTIONS : undefined,
+                ].filter(Boolean).join('\n\n') || undefined,
             },
           }
         : {}
