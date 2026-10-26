@@ -1886,6 +1886,12 @@ export function mcpToolInputToAutoClassifierInput(
   toolName: string,
 ): string {
   const keys = Object.keys(input)
+  // Composite arguments carry operation, destination, and option details that
+  // String(value) discards. Encode the whole input to preserve their boundaries
+  // and JSON types alongside any primitive arguments.
+  if (keys.some(k => input[k] !== null && typeof input[k] === 'object')) {
+    return jsonStringify(input)
+  }
   return keys.length > 0
     ? keys.map(k => `${k}=${String(input[k])}`).join(' ')
     : toolName
