@@ -23,5 +23,6 @@ test('Welcome rotation includes one optimized display asset for every generated 
     expect(header.subarray(8, 12).toString()).toBe('WEBP')
     total += statSync(file).size
   }
-  expect(total).toBeLessThan(2_500_000)
+  // Keep the full rotation at 2x display resolution with lossless transparency.
+  expect(total).toBeLessThan(4_500_000)
 })
