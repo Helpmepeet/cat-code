@@ -1,4 +1,6 @@
 import { feature } from 'bun:bundle'
+import { isCuaDriverMcpServer } from '../../utils/cuaDriver/guard.js'
+import { callCuaDriverWindowTool, hasCuaDriverWindowTools, prepareCuaDriverWindowTools, recordCuaDriverWindowImage } from '../../utils/cuaDriver/windowTargeting.js'
 import type {
   Base64ImageSource,
   ContentBlockParam,
@@ -1925,7 +1927,10 @@ export const fetchToolsForClient = memoizeWithLRU(
       }
 
       // Sanitize tool data from MCP server
-      const toolsToProcess = recursivelySanitizeUnicode(listedTools)
+      const sanitizedTools = recursivelySanitizeUnicode(listedTools)
+      const toolsToProcess = isCuaDriverMcpServer(client)
+        ? prepareCuaDriverWindowTools(client.client, sanitizedTools)
+        : sanitizedTools
 
       // Check if we should skip the mcp__ prefix for SDK MCP servers
       const skipPrefix =
@@ -2039,6 +2044,7 @@ export const fetchToolsForClient = memoizeWithLRU(
                     tool: tool.name,
                     args,
                     meta,
+                    cuaFrameScope: context.cuaDriverRun ?? context.abortController,
                     signal: context.abortController.signal,
                     setAppState: context.setAppState,
                     onProgress:
@@ -3024,6 +3030,7 @@ export async function callMCPToolWithUrlElicitationRetry({
   tool,
   args,
   meta,
+  cuaFrameScope,
   signal,
   setAppState,
   onProgress,
@@ -3035,6 +3042,7 @@ export async function callMCPToolWithUrlElicitationRetry({
   tool: string
   args: Record<string, unknown>
   meta?: Record<string, unknown>
+  cuaFrameScope?: object
   signal: AbortSignal
   setAppState: (f: (prev: AppState) => AppState) => void
   onProgress?: (data: MCPProgress) => void
@@ -3044,6 +3052,7 @@ export async function callMCPToolWithUrlElicitationRetry({
     tool: string
     args: Record<string, unknown>
     meta?: Record<string, unknown>
+    cuaFrameScope?: object
     signal: AbortSignal
     onProgress?: (data: MCPProgress) => void
   }) => Promise<MCPToolCallResult>
@@ -3063,6 +3072,7 @@ export async function callMCPToolWithUrlElicitationRetry({
         tool,
         args,
         meta,
+        ...(cuaFrameScope ? { cuaFrameScope } : {}),
         signal,
         onProgress,
       })
@@ -3235,10 +3245,11 @@ export async function callMCPToolWithUrlElicitationRetry({
 }
 
 async function callMCPTool({
-  client: { client, name, config },
+  client: connection,
   tool,
   args,
   meta,
+  cuaFrameScope,
   signal,
   onProgress,
 }: {
@@ -3246,6 +3257,7 @@ async function callMCPTool({
   tool: string
   args: Record<string, unknown>
   meta?: Record<string, unknown>
+  cuaFrameScope?: object
   signal: AbortSignal
   onProgress?: (data: MCPProgress) => void
 }): Promise<{
@@ -3253,6 +3265,7 @@ async function callMCPTool({
   _meta?: Record<string, unknown>
   structuredContent?: Record<string, unknown>
 }> {
+  const { client, name, config } = connection
   const toolStartTime = Date.now()
   let progressInterval: NodeJS.Timeout | undefined
 
@@ -3296,11 +3309,11 @@ async function callMCPTool({
       )
     })
 
-    const result = await Promise.race([
+    const dispatch = (nativeTool: string, nativeArgs: Record<string, unknown>) =>
       client.callTool(
         {
-          name: tool,
-          arguments: args,
+          name: nativeTool,
+          arguments: nativeArgs,
           _meta: meta,
         },
         CallToolResultSchema,
@@ -3321,7 +3334,21 @@ async function callMCPTool({
             }
             : undefined,
         },
-      ),
+      )
+    const execute = async () => {
+      if (!isCuaDriverMcpServer(connection)) return dispatch(tool, args)
+      if (tool === 'zoom' && !hasCuaDriverWindowTools(client)) {
+        // A retained tool may be using a replacement SDK connection. Discover
+        // that connection's own screenshot contract, including compatibility
+        // mode, instead of carrying capabilities across transport identities.
+        fetchToolsForClient.cache.delete(connection.name)
+        await fetchToolsForClient(connection)
+      }
+      return callCuaDriverWindowTool(client, tool, args, async (nativeTool, nativeArgs) =>
+        CallToolResultSchema.parse(await dispatch(nativeTool, nativeArgs)), cuaFrameScope)
+    }
+    const result = await Promise.race([
+      execute(),
       timeoutPromise,
     ]).finally(() => {
       if (timeoutId) {
@@ -3377,6 +3404,9 @@ async function callMCPTool({
     }
 
     const content = await processMCPResult(result, tool, name)
+    if (isCuaDriverMcpServer(connection)) {
+      await recordCuaDriverWindowImage(client, cuaFrameScope, tool, args, content)
+    }
     return {
       content,
       _meta: result._meta as Record<string, unknown> | undefined,

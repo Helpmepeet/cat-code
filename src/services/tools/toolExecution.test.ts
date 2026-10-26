@@ -1,3 +1,11 @@
+import { spawn } from 'child_process'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { createConnection } from 'net'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { createCuaDriverRun, type CuaDriverRun } from '../../utils/cuaDriver/run.js'
+import { CUA_DRIVER_OFF_MESSAGE, CUA_DRIVER_RUN_ENDED_MESSAGE, getCuaDriverOffPath } from '../../utils/cuaDriver/guard.js'
+import { CUA_DRIVER_FROM_ZOOM_MESSAGE } from '../../utils/cuaDriver/windowTargeting.js'
 import { feature } from 'bun:bundle'
 import { afterEach, describe, expect, mock, test } from 'bun:test'
 import z from 'zod/v4'
@@ -1551,4 +1559,205 @@ describe('toolExecution modelResultContent handling', () => {
     })
     expect(userMsg.toolUseResult).toEqual(data)
   })
+})
+
+describe('CuaDriver proxy daemon reacquisition', () => {
+  async function withDaemonFixture(
+    body: (fixture: {
+      home: string
+      binary: string
+      request(input: unknown): Promise<unknown>
+      waitFor(predicate: () => boolean | Promise<boolean>): Promise<void>
+    }) => Promise<void>,
+  ): Promise<void> {
+    const home = mkdtempSync(join(tmpdir(), 'cua-proxy-lifecycle-'))
+    const previousHome = process.env.HOME
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR
+    const previousGate = process.env.CUA_TEST_START_GATE
+    const binary = join(home, '.local', 'bin', 'cua-driver')
+    mkdirSync(join(home, '.local', 'bin'), { recursive: true })
+    writeFileSync(binary, `#!${process.execPath}\nawait import(${JSON.stringify(join(import.meta.dir, '../../utils/cuaDriver/daemonFixture.ts'))})\n`)
+    chmodSync(binary, 0o755)
+    process.env.HOME = home
+    process.env.CLAUDE_CONFIG_DIR = home
+    delete process.env.CUA_TEST_START_GATE
+    const socketPath = join(home, 'Library', 'Caches', 'cua-driver', 'cua-driver.sock')
+    const request = (input: unknown): Promise<unknown> => new Promise((resolve, reject) => {
+      const socket = createConnection(socketPath)
+      let response = ''
+      const timeout = setTimeout(() => { socket.destroy(); reject(new Error('Fixture socket timed out')) }, 1000)
+      socket.once('error', error => { clearTimeout(timeout); reject(error) })
+      socket.once('connect', () => socket.write(JSON.stringify(input) + '\n'))
+      socket.on('data', chunk => {
+        response += chunk.toString()
+        if (!response.includes('\n')) return
+        clearTimeout(timeout)
+        socket.destroy()
+        const result = JSON.parse(response.split('\n')[0]!)
+        if (result.ok) resolve(result.result)
+        else reject(new Error(result.error))
+      })
+    })
+    const waitFor = async (predicate: () => boolean | Promise<boolean>): Promise<void> => {
+      const deadline = Date.now() + 3000
+      while (Date.now() < deadline) {
+        if (await predicate()) return
+        await Bun.sleep(10)
+      }
+      throw new Error('Fixture did not reach the expected state')
+    }
+    try {
+      await body({ home, binary, request, waitFor })
+    } finally {
+      // Only fixture children launched by this test write this isolated file.
+      if (existsSync(join(home, 'starts'))) {
+        for (const pid of readFileSync(join(home, 'starts'), 'utf8').trim().split('\n')) {
+          try { process.kill(Number(pid), 'SIGKILL') } catch { /* Already stopped. */ }
+        }
+      }
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig
+      if (previousGate === undefined) delete process.env.CUA_TEST_START_GATE
+      else process.env.CUA_TEST_START_GATE = previousGate
+      rmSync(home, { recursive: true, force: true })
+    }
+  }
+
+  function proxyTool(request: (input: unknown) => Promise<unknown>, alias = 'cua-driver') {
+    return {
+      ...makeTool(`mcp__${alias}__click`, async input => {
+        await request({ method: 'call', name: 'click', args: input })
+        return { data: 'ok' }
+      }),
+      mcpInfo: { serverName: alias, toolName: 'click' },
+      inputSchema: z.strictObject({ value: z.string(), from_zoom: z.boolean().optional() }),
+    }
+  }
+
+  function proxyContext(tool: ReturnType<typeof proxyTool>, binary: string, run: CuaDriverRun) {
+    const context = createToolUseContext([tool])
+    context.cuaDriverRun = run
+    context.options.mcpClients = [{
+      name: tool.mcpInfo.serverName, type: 'connected',
+      config: { type: 'stdio', command: binary, args: ['mcp'], scope: 'local' },
+      capabilities: {}, client: {} as never, cleanup: async () => {},
+    }]
+    return context
+  }
+
+  async function dispatchProxy(
+    tool: ReturnType<typeof proxyTool>,
+    context: ToolUseContext,
+    value = 'click',
+    allow = true,
+    extraInput: Record<string, unknown> = {},
+  ): Promise<MessageUpdateLazy[]> {
+    const updates: MessageUpdateLazy[] = []
+    for await (const update of runToolUse(
+      { type: 'tool_use', id: 'proxy-call', name: tool.name, input: { value, ...extraInput }, caller: { type: 'direct' } },
+      createAssistantMessage(),
+      async () => allow
+        ? { behavior: 'allow', updatedInput: { value, ...extraInput } }
+        : { behavior: 'deny', message: 'Operator denied this operation', decisionReason: { type: 'other', reason: 'Operator denied this operation' } },
+      context,
+    )) updates.push(update)
+    return updates
+  }
+
+  test.each(['run end', 'idle stop', 'another run ends'])(
+    'reacquires the daemon after %s without replaying an error after effects',
+    async release => withDaemonFixture(async ({ home, binary, request, waitFor }) => {
+      const initialDaemon = spawn(binary, ['serve'], { stdio: 'ignore' })
+      initialDaemon.unref()
+      await waitFor(() => existsSync(join(home, 'Library', 'Caches', 'cua-driver', 'cua-driver.sock')))
+      const tool = proxyTool(request)
+      const firstRun = createCuaDriverRun(release === 'idle stop' ? 40 : 60_000)
+      let nextRun = firstRun
+      try {
+        await dispatchProxy(tool, proxyContext(tool, binary, firstRun))
+        expect(readFileSync(join(home, 'effects'), 'utf8')).toBe('click\n')
+        if (release === 'run end') {
+          await firstRun.end()
+          nextRun = createCuaDriverRun()
+        } else if (release === 'idle stop') {
+          await waitFor(() => !existsSync(join(home, 'Library', 'Caches', 'cua-driver', 'cua-driver.sock')))
+        } else {
+          const otherRun = createCuaDriverRun()
+          otherRun.markUsed()
+          await otherRun.end()
+        }
+        const context = proxyContext(tool, binary, nextRun)
+        await dispatchProxy(tool, context)
+        expect(readFileSync(join(home, 'effects'), 'utf8')).toBe('click\nclick\n')
+        await dispatchProxy(tool, context, 'fail-after-effect')
+        expect(readFileSync(join(home, 'effects'), 'utf8')).toBe('click\nclick\nfail-after-effect\n')
+      } finally {
+        await firstRun.end()
+        await nextRun.end()
+      }
+    }),
+  )
+
+  test.each(['off', 'permission denied'])(
+    'does not start the aliased driver when %s',
+    async refusal => withDaemonFixture(async ({ home, binary, request }) => {
+      if (refusal === 'off') writeFileSync(getCuaDriverOffPath(), '')
+      const tool = proxyTool(request, 'desktop')
+      const run = createCuaDriverRun()
+      try {
+        const updates = await dispatchProxy(tool, proxyContext(tool, binary, run), 'click', refusal !== 'permission denied')
+        expect(JSON.stringify(updates)).toContain(refusal === 'off' ? CUA_DRIVER_OFF_MESSAGE : 'Operator denied this operation')
+        expect(existsSync(join(home, 'starts'))).toBe(false)
+        expect(existsSync(join(home, 'effects'))).toBe(false)
+      } finally { await run.end() }
+    }),
+  )
+
+  test('refuses ambiguous from_zoom actions on an aliased driver before startup', async () => {
+    await withDaemonFixture(async ({ home, binary, request }) => {
+      const tool = proxyTool(request, 'desktop')
+      const run = createCuaDriverRun()
+      try {
+        const updates = await dispatchProxy(tool, proxyContext(tool, binary, run), 'click', true, { from_zoom: true })
+        expect(JSON.stringify(updates)).toContain(CUA_DRIVER_FROM_ZOOM_MESSAGE)
+        expect(existsSync(join(home, 'starts'))).toBe(false)
+        expect(existsSync(join(home, 'effects'))).toBe(false)
+      } finally { await run.end() }
+    })
+  })
+
+  test.each(['off', 'run ended', 'cancelled'])(
+    'refuses dispatch if %s while daemon startup is pending',
+    async refusal => withDaemonFixture(async ({ home, binary, request, waitFor }) => {
+      process.env.CUA_TEST_START_GATE = join(home, 'allow-start')
+      const tool = proxyTool(request)
+      const run = createCuaDriverRun()
+      const context = proxyContext(tool, binary, run)
+      const dispatch = dispatchProxy(tool, context)
+      let ended: Promise<void> | undefined
+      try {
+        await waitFor(() => existsSync(join(home, 'starts')))
+        if (refusal === 'off') writeFileSync(getCuaDriverOffPath(), '')
+        else if (refusal === 'run ended') ended = run.end()
+        else context.abortController.abort()
+        writeFileSync(process.env.CUA_TEST_START_GATE, '')
+        const updates = await dispatch
+        expect(JSON.stringify(updates)).toContain(refusal === 'off'
+          ? CUA_DRIVER_OFF_MESSAGE
+          : refusal === 'run ended' ? CUA_DRIVER_RUN_ENDED_MESSAGE : 'cancelled')
+        expect(existsSync(join(home, 'effects'))).toBe(false)
+      } finally {
+        // Even an assertion/startup failure must end the run before HOME is
+        // restored, so an idle timer can never stop the operator's service.
+        context.abortController.abort()
+        writeFileSync(process.env.CUA_TEST_START_GATE, '')
+        await dispatch
+        await ended
+        await run.end()
+      }
+      expect(existsSync(join(home, 'Library', 'Caches', 'cua-driver', 'cua-driver.sock'))).toBe(false)
+    }),
+  )
 })

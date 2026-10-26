@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import type { ConnectedMCPServer } from '../../services/mcp/types.js'
+import type { CuaDriverToolContext } from './guard.js'
 import {
   CUA_DRIVER_OFF_MESSAGE,
   CUA_DRIVER_RUN_ENDED_MESSAGE,
@@ -51,9 +53,12 @@ describe('isCuaDriverCommand', () => {
 })
 
 describe('isCuaDriverToolCall', () => {
-  test('any cua-driver MCP tool counts', () => {
-    expect(isCuaDriverToolCall('mcp__cua-driver__click', {})).toBe(true)
-  })
+  test.each(['cua-driver', 'cua-computer-use'])(
+    'any %s MCP tool counts',
+    serverName => {
+      expect(isCuaDriverToolCall(`mcp__${serverName}__click`, {})).toBe(true)
+    },
+  )
 
   test('a Bash call counts only when its command runs cua-driver', () => {
     expect(
@@ -99,34 +104,135 @@ describe('checkCuaDriverToolCall', () => {
     rmSync(configDir, { recursive: true, force: true })
   })
 
-  test('lets a cua-driver call run and marks the run', () => {
-    expect(
-      checkCuaDriverToolCall('mcp__cua-driver__list_apps', {}, run),
-    ).toBeNull()
-    expect(marks).toBe(1)
-  })
+  const driverServer = {
+    name: 'desktop automation',
+    type: 'connected',
+    config: {
+      command: '/Applications/CuaDriver.app/Contents/MacOS/cua-driver',
+      args: ['mcp', '--claude-code-computer-use-compat'],
+      scope: 'user',
+    },
+  } as ConnectedMCPServer
+  const genericServer = {
+    ...driverServer,
+    name: 'desktop?automation',
+    serverInfo: { name: 'unrelated', version: '1' },
+    config: {
+      type: 'stdio',
+      command: '/bin/echo',
+      args: ['cua-driver', 'mcp'],
+      scope: 'user',
+    },
+  } as ConnectedMCPServer
+  const guardedCalls: Array<{
+    label: string
+    name: string
+    input?: unknown
+    identity?: CuaDriverToolContext
+  }> = [
+    { label: 'standard MCP name', name: 'mcp__cua-driver__list_apps' },
+    { label: 'compatibility MCP name', name: 'mcp__cua-computer-use__list_apps' },
+    { label: 'CLI command', name: 'Bash', input: { command: 'cua-driver serve' } },
+    {
+      label: 'configured alias with colliding normalized display names',
+      name: 'mcp__desktop_automation__list_apps',
+      identity: {
+        tool: {
+          name: 'mcp__desktop_automation__list_apps',
+          mcpInfo: { serverName: driverServer.name, toolName: 'list_apps' },
+        },
+        clients: [genericServer, driverServer],
+      },
+    },
+    {
+      label: 'retained aliased tool while its connection is retrying',
+      name: 'mcp__desktop_automation__list_apps',
+      identity: {
+        tool: {
+          name: 'mcp__desktop_automation__list_apps',
+          mcpInfo: { serverName: driverServer.name, toolName: 'list_apps' },
+        },
+        clients: [
+          {
+            name: driverServer.name,
+            type: 'failed',
+            config: driverServer.config,
+          },
+        ],
+      },
+    },
+    {
+      label: 'unprefixed tool with negotiated CuaDriver identity',
+      name: 'list_apps',
+      identity: {
+        tool: {
+          name: 'list_apps',
+          mcpInfo: { serverName: 'wrapped driver', toolName: 'list_apps' },
+        },
+        clients: [
+          {
+            ...driverServer,
+            name: 'wrapped driver',
+            config: { type: 'sdk', name: 'wrapper', scope: 'user' },
+            serverInfo: { name: 'cua-driver', version: '0.1.9' },
+          },
+        ],
+      },
+    },
+  ]
 
-  test('refuses a cua-driver call once the run has ended', () => {
-    runEnded = true
-    expect(checkCuaDriverToolCall('mcp__cua-driver__list_apps', {}, run)).toBe(
-      CUA_DRIVER_RUN_ENDED_MESSAGE,
-    )
-  })
+  test.each(guardedCalls)(
+    'marks permitted use for $label',
+    ({ name, input, identity }) => {
+      expect(checkCuaDriverToolCall(name, input ?? {}, run, identity)).toBeNull()
+      expect(marks).toBe(1)
+    },
+  )
 
-  test('refuses every cua-driver call while the off switch exists', () => {
-    writeFileSync(getCuaDriverOffPath(), '')
-    expect(checkCuaDriverToolCall('mcp__cua-driver__list_apps', {}, run)).toBe(
-      CUA_DRIVER_OFF_MESSAGE,
-    )
-    expect(
-      checkCuaDriverToolCall('Bash', { command: 'cua-driver serve' }, run),
-    ).toBe(CUA_DRIVER_OFF_MESSAGE)
-    expect(marks).toBe(0)
-  })
+  test.each(guardedCalls)(
+    'refuses ended run for $label',
+    ({ name, input, identity }) => {
+      runEnded = true
+      expect(checkCuaDriverToolCall(name, input ?? {}, run, identity)).toBe(
+        CUA_DRIVER_RUN_ENDED_MESSAGE,
+      )
+      expect(marks).toBe(0)
+    },
+  )
+
+  test.each(guardedCalls)(
+    'refuses emergency stop for $label',
+    ({ name, input, identity }) => {
+      writeFileSync(getCuaDriverOffPath(), '')
+      expect(checkCuaDriverToolCall(name, input ?? {}, run, identity)).toBe(
+        CUA_DRIVER_OFF_MESSAGE,
+      )
+      expect(marks).toBe(0)
+    },
+  )
 
   test('ignores unrelated calls even while the off switch exists', () => {
     writeFileSync(getCuaDriverOffPath(), '')
+    runEnded = true
     expect(checkCuaDriverToolCall('Bash', { command: 'ls' }, run)).toBeNull()
+    expect(
+      checkCuaDriverToolCall('mcp__desktop_automation__click', {}, run, {
+        tool: {
+          name: 'mcp__desktop_automation__click',
+          mcpInfo: { serverName: genericServer.name, toolName: 'click' },
+        },
+        clients: [driverServer, genericServer],
+      }),
+    ).toBeNull()
+    expect(
+      checkCuaDriverToolCall('mcp__cua-driver__other__click', {}, run, {
+        tool: {
+          name: 'mcp__cua-driver__other__click',
+          mcpInfo: { serverName: 'cua-driver__other', toolName: 'click' },
+        },
+        clients: [{ ...genericServer, name: 'cua-driver__other' }],
+      }),
+    ).toBeNull()
     expect(marks).toBe(0)
   })
 })

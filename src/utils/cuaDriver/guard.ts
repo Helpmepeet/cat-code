@@ -1,10 +1,50 @@
 import { existsSync } from 'fs'
-import { join } from 'path'
+import { basename, join } from 'path'
+import type { Tool } from '../../Tool.js'
+import type { MCPServerConnection } from '../../services/mcp/types.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
 import type { CuaDriverRun } from './run.js'
+import { getCuaDriverWindowTargetRefusal } from './windowTargeting.js'
 
-const MCP_TOOL_PREFIX = 'mcp__cua-driver__'
+const MCP_SERVER_NAMES = ['cua-driver', 'cua-computer-use']
+const MCP_TOOL_PREFIXES = MCP_SERVER_NAMES.map(name => `mcp__${name}__`)
+
+export type CuaDriverToolIdentity = Pick<Tool, 'name' | 'mcpInfo'>
+
+export type CuaDriverToolContext = {
+  tool: CuaDriverToolIdentity
+  clients: readonly MCPServerConnection[]
+}
+
+/** Resolve actual server identity; model-facing names can be renamed or collide. */
+export function getCuaDriverMcpServer(
+  tool: CuaDriverToolIdentity,
+  clients: readonly MCPServerConnection[],
+): MCPServerConnection | undefined {
+  const info = tool.mcpInfo
+  if (!info) return undefined
+  const server = clients.find(client => client.name === info.serverName)
+  return server && isCuaDriverMcpServer(server) ? server : undefined
+}
+
+export function isCuaDriverMcpServer(server: MCPServerConnection): boolean {
+  const config = server.config
+  const driverExecutable =
+    'command' in config &&
+    (config.type === undefined || config.type === 'stdio') &&
+    basename(config.command) === 'cua-driver'
+  const serverName =
+    server.type === 'connected'
+      ? server.serverInfo?.name.toLowerCase()
+      : undefined
+  return (
+    driverExecutable ||
+    serverName === 'cua-driver' ||
+    serverName === 'cuadriver' ||
+    serverName === 'cua-computer-use'
+  )
+}
 
 // Detection reads the command text: the tree-sitter parser behind
 // parseForSecurity is compiled out of the desktop sidecar (it is not in the
@@ -41,8 +81,18 @@ export function isCuaDriverCommand(command: string): boolean {
   return CLI_IN_COMMAND_POSITION.test(command) || APP_LAUNCH.test(command)
 }
 
-export function isCuaDriverToolCall(toolName: string, input: unknown): boolean {
-  if (toolName.startsWith(MCP_TOOL_PREFIX)) return true
+export function isCuaDriverToolCall(
+  toolName: string,
+  input: unknown,
+  identity?: CuaDriverToolContext,
+): boolean {
+  if (identity?.tool.mcpInfo) {
+    return (
+      Boolean(getCuaDriverMcpServer(identity.tool, identity.clients)) ||
+      MCP_SERVER_NAMES.includes(identity.tool.mcpInfo.serverName)
+    )
+  }
+  if (MCP_TOOL_PREFIXES.some(prefix => toolName.startsWith(prefix))) return true
   if (toolName !== BASH_TOOL_NAME) return false
   const command =
     typeof input === 'object' && input !== null && 'command' in input
@@ -61,9 +111,16 @@ export function checkCuaDriverToolCall(
   toolName: string,
   input: unknown,
   run: CuaDriverRun | undefined,
+  identity?: CuaDriverToolContext,
 ): string | null {
-  if (!isCuaDriverToolCall(toolName, input)) return null
+  if (!isCuaDriverToolCall(toolName, input, identity)) return null
   if (existsSync(getCuaDriverOffPath())) return CUA_DRIVER_OFF_MESSAGE
   if (run && !run.markUsed()) return CUA_DRIVER_RUN_ENDED_MESSAGE
+  if (
+    identity?.tool.mcpInfo &&
+    getCuaDriverMcpServer(identity.tool, identity.clients)
+  ) {
+    return getCuaDriverWindowTargetRefusal(identity.tool.mcpInfo.toolName, input)
+  }
   return null
 }

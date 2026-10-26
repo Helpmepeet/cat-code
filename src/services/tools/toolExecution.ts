@@ -44,7 +44,8 @@ import {
 import type { BashToolInput } from '../../tools/BashTool/BashTool.js'
 import { startSpeculativeClassifierCheck } from '../../tools/BashTool/bashPermissions.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
-import { checkCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
+import { checkCuaDriverToolCall, getCuaDriverMcpServer } from '../../utils/cuaDriver/guard.js'
+import { ensureCuaDriverDaemon } from '../../utils/cuaDriver/run.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
@@ -1497,11 +1498,48 @@ async function checkPermissionsAndCallTool(
 
   // Check the final canonical input after hook and permission processing,
   // immediately before tool execution.
-  const cuaDriverRefusal = checkCuaDriverToolCall(
+  const cuaDriverIdentity = { tool, clients: toolUseContext.options.mcpClients ?? [] }
+  let cuaDriverRefusal = checkCuaDriverToolCall(
     tool.name,
     processedInput,
     toolUseContext.cuaDriverRun,
+    cuaDriverIdentity,
   )
+  const cuaDriverServer = getCuaDriverMcpServer(tool, cuaDriverIdentity.clients)
+  // In-process and explicitly private-socket registrations do not use the
+  // shared daemon that run-end cleanup stops.
+  const cuaDriverConfig = cuaDriverServer?.config
+  if (cuaDriverRefusal === null && cuaDriverConfig &&
+    'command' in cuaDriverConfig &&
+    (!cuaDriverConfig.type || cuaDriverConfig.type === 'stdio') &&
+    !cuaDriverConfig.args.some(arg => arg === '--socket' || arg.startsWith('--socket=') || arg === '--no-daemon-relaunch') &&
+    (cuaDriverConfig.env?.CUA_DRIVER_MCP_NO_RELAUNCH ?? process.env.CUA_DRIVER_MCP_NO_RELAUNCH) !== '1' &&
+    (!cuaDriverConfig.env?.HOME || cuaDriverConfig.env.HOME === process.env.HOME)) {
+    try {
+      await ensureCuaDriverDaemon(toolUseContext.abortController.signal)
+    } catch (error) {
+      cuaDriverRefusal = error instanceof Error ? error.message : String(error)
+    }
+    // Startup can await while the operator stops computer use or the query
+    // finishes. Check the same guard again before dispatching any GUI action.
+    if (toolUseContext.abortController.signal.aborted) {
+      await preparation.dispose()
+      const content = createToolResultStopMessage(toolUseID)
+      content.content = withMemoryCorrectionHint(CANCEL_MESSAGE)
+      resultingMessages.push({
+        message: createUserMessage({
+          content: [content],
+          toolUseResult: CANCEL_MESSAGE,
+          toolResultStatus: 'cancelled',
+          sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+        }),
+      })
+      return resultingMessages
+    }
+    cuaDriverRefusal = checkCuaDriverToolCall(
+      tool.name, processedInput, toolUseContext.cuaDriverRun, cuaDriverIdentity,
+    ) ?? cuaDriverRefusal
+  }
   if (cuaDriverRefusal !== null) {
     await preparation.dispose()
     const decisionInfo = toolUseContext.toolDecisions?.get(toolUseID)

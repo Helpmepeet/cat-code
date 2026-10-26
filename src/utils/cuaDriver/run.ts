@@ -3,6 +3,7 @@ import { homedir } from 'os'
 import { join } from 'path'
 import { logForDebugging } from '../debug.js'
 import { execFileNoThrow } from '../execFileNoThrow.js'
+import { acquireCuaDriverDaemon } from './daemon.js'
 
 /**
  * Per-`query()` record of whether this run drove cua-driver. The `serve`
@@ -60,6 +61,24 @@ async function stopCuaDriverDaemon(
 
 let stopDaemon: () => Promise<void> = stopCuaDriverDaemon
 
+// Ordering starts and stops prevents a run ending during startup from leaving
+// a daemon behind. This deliberately does not lease it across GUI operations:
+// run-end and idle cleanup retain the accepted global stop policy.
+let daemonTransition: Promise<void> = Promise.resolve()
+function transitionDaemon(operation: () => Promise<void>): Promise<void> {
+  const next = daemonTransition.then(operation, operation)
+  daemonTransition = next.catch(() => {})
+  return next
+}
+
+export function ensureCuaDriverDaemon(signal: AbortSignal): Promise<void> {
+  return transitionDaemon(async () => {
+    const binary = findCuaDriverBinary()
+    if (!binary) throw new Error('CuaDriver is not installed. Install it before using computer use.')
+    await acquireCuaDriverDaemon(binary, signal)
+  })
+}
+
 export function createCuaDriverRun(
   idleStopMs: number = CUA_DRIVER_IDLE_STOP_MS,
 ): CuaDriverRun {
@@ -74,7 +93,7 @@ export function createCuaDriverRun(
   }
 
   const stop = (): Promise<void> =>
-    stopDaemon().catch(error => {
+    transitionDaemon(stopDaemon).catch(error => {
       logForDebugging(`[cua-driver] stop failed: ${String(error)}`, {
         level: 'warn',
       })

@@ -10,6 +10,7 @@ export type SharpInstance = {
     height: number,
     options?: { fit?: string; withoutEnlargement?: boolean },
   ): SharpInstance
+  extract(region: { left: number; top: number; width: number; height: number }): SharpInstance
   jpeg(options?: { quality?: number }): SharpInstance
   png(options?: {
     compressionLevel?: number
