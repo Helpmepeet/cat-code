@@ -1,4 +1,7 @@
 import { afterEach, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 import {
   _setWebSocketFactoryForTest,
@@ -15,6 +18,9 @@ import {
   isCodexPartialStreamReplaySkippedError,
 } from './errorUtils.js'
 
+import { createCodexCredentialHandle } from './codexCredentialUse.js'
+import { createCodexCredentialLifecycle } from './codexCredentialLifecycle.js'
+
 const CONVERSATION_ID = 'conv_ws_incomplete_regression'
 
 function withFetchPreconnect(
@@ -30,6 +36,7 @@ class IncompleteWebSocket {
   static readonly CLOSED = 3
 
   readyState: number = IncompleteWebSocket.OPEN
+  sendCalls = 0
   private readonly listeners = new Map<string, WsListener[]>()
 
   triggerOpen(): void {
@@ -48,6 +55,7 @@ class IncompleteWebSocket {
   }
 
   send(): void {
+    this.sendCalls += 1
     queueMicrotask(() => {
       const data = JSON.stringify({
         type: 'response.incomplete',
@@ -103,6 +111,11 @@ afterEach(() => {
 })
 
 test('createCodexFetch surfaces a pre-visible websocket incomplete response without HTTP replay', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'codex-incomplete-response-'))
+  const lifecycle = createCodexCredentialLifecycle({
+    directory: join(directory, 'lifecycle'),
+  })
+  const accountId = 'acct_ws_incomplete'
   const socket = new IncompleteWebSocket()
   _setWebSocketFactoryForTest(() => {
     queueMicrotask(() => socket.triggerOpen())
@@ -117,10 +130,36 @@ test('createCodexFetch surfaces a pre-visible websocket incomplete response with
   })
 
   try {
+    await lifecycle.withTransaction(
+      accountId,
+      { operationKind: 'login', operationId: 'incomplete-response-fixture' },
+      permit => {
+        const prepared = lifecycle.prepareLogin(permit)
+        if (prepared.status !== 'applied') {
+          throw new Error('failed to prepare incomplete-response credential fixture')
+        }
+        const committed = lifecycle.commitLogin(permit, {
+          expectedGeneration: prepared.record.credentialGeneration,
+        })
+        if (committed.status !== 'applied') {
+          throw new Error('failed to commit incomplete-response credential fixture')
+        }
+      },
+    )
+
     await expect(
       createCodexFetch(
-        createAccessToken('acct_ws_incomplete'),
+        createCodexCredentialHandle({
+          accountId,
+          accessToken: createAccessToken(accountId),
+          refreshToken: 'synthetic-refresh-token',
+          expiresAt: Date.now() + 60 * 60_000,
+          credentialGeneration: 1,
+          credentialSource: 'config',
+          credentialPath: join(directory, 'config.json'),
+        }),
         CONVERSATION_ID,
+        { credentialUse: { lifecycle } },
       )('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         body: JSON.stringify({
@@ -136,10 +175,12 @@ test('createCodexFetch surfaces a pre-visible websocket incomplete response with
       name: 'CodexResponseIncompleteError',
       reason: 'max_output_tokens',
     })
+    expect(socket.sendCalls).toBe(1)
     expect(httpRequests).toBe(0)
     expect(socket.readyState).toBe(IncompleteWebSocket.CLOSED)
   } finally {
     globalThis.fetch = originalFetch
+    rmSync(directory, { recursive: true, force: true })
   }
 })
 
