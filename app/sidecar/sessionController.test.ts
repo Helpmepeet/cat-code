@@ -963,13 +963,28 @@ test('PEER-SESSIONS §5 — a peer report replaces the local final without cance
     createdById: 'alex-app-session-id',
   })
 
+  // Reporting is asked for, not owed (R2). A peer told through its creator not
+  // to report reported anyway: the old text made the requesting peer the only
+  // audience and forbade the local final, so a declined report had nowhere
+  // else to go.
+  expect(doctrine).not.toContain('that peer is your audience')
   expect(doctrine).toContain(
-    "that peer is your audience. Send the requested answer, result, blocker, or completion report with SendToPeer",
+    'send that peer what it asked to hear back, when it asked for it, with SendToPeer',
+  )
+  expect(doctrine).toContain(
+    'If it asked for nothing, or asked you not to report, the user is your audience: give your final report in this tab and send nothing to that peer.',
+  )
+  expect(doctrine).toContain(
+    'If it later says its work is done or narrows what it wants, follow that.',
+  )
+  // A finished session ends a stream of progress it no longer needs.
+  expect(doctrine).toContain(
+    'tell it you are done: it should stop routine updates and contact you only if new information requires your attention or action',
   )
   // Only a queued send counts as the report: a not_delivered or unconfirmed
   // result leaves the local final report in place.
   expect(doctrine).toContain(
-    'Once SendToPeer reports the message queued, STOP. Do not repeat, summarize, or reproduce that report in your own final response',
+    'Once SendToPeer reports your final message queued, STOP. Do not repeat, summarize, or reproduce that report in your own final response',
   )
   expect(doctrine).toContain(
     'this rule overrides the ordinary instruction to give the user a self-contained final report',
