@@ -81,6 +81,9 @@ function createToolUseContext(messages: Message[]): ToolUseContext {
     toolPermissionContext: {
       mode: 'default',
       additionalWorkingDirectories: new Map<string, string>(),
+      alwaysAllowRules: {},
+      alwaysDenyRules: {},
+      alwaysAskRules: {},
     },
     mcp: {
       tools: [],
@@ -272,7 +275,7 @@ describe('query auto-compaction request assembly', () => {
       // drain
     }
 
-    expect(compactModel).toBe('claude-sonnet-5')
+    expect(compactModel).toBe('claude-sonnet-5-5')
     expect(compactProvider).toBe('firstParty')
     expect(toolUseContext.options.mainLoopModel).toContain('haiku')
     resetStateForTests()
