@@ -206,7 +206,7 @@ export function isFastModeSupportedByModel(
     normalizedModel.includes('fable-5') ||
     normalizedModel === 'gpt-6.1-sol' ||
     normalizedModel === 'gpt-6-luna' ||
-    normalizedModel === 'gpt-5.6-terra'
+    normalizedModel === 'gpt-6.1-terra'
   )
 }
 

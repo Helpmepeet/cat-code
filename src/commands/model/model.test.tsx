@@ -30,10 +30,21 @@ describe('/model state reconciliation', () => {
     setSessionProvider('openai')
     expect(
       reconcileModelSelectionState(
-        { effortValue: 'ultra' as const },
-        'gpt-5.6-terra',
+        { effortValue: 'max' as const },
+        'gpt-6.1-terra',
       ).effortValue,
-    ).toBe('ultra')
+    ).toBe('max')
+  })
+
+  test('new selections cannot restore a retired Terra model or its ultra effort', () => {
+    setSessionProvider('openai')
+    expect(reconcileModelSelectionState(
+      { effortValue: 'ultra' as const }, 'gpt-5.6-terra',
+    )).toEqual({
+      mainLoopModel: 'gpt-6.1-terra',
+      mainLoopModelForSession: null,
+      effortValue: undefined,
+    })
   })
 
   // Picking the Default row after choosing an effort dropped the effort:

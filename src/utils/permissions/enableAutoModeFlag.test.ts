@@ -56,14 +56,14 @@ describe('auto mode with Codex models', () => {
   test('GPT models support auto mode through the OpenAI provider', () => {
     process.env.CLAUDE_CODE_USE_OPENAI = '1'
     try {
-      expect(modelSupportsAutoMode('gpt-5.6-terra')).toBe(true)
+      expect(modelSupportsAutoMode('gpt-6.1-terra')).toBe(true)
     } finally {
       delete process.env.CLAUDE_CODE_USE_OPENAI
     }
   })
 
   test('Shift+Tab cycles from bypass permissions back to default for GPT sessions', () => {
-    process.env.ANTHROPIC_MODEL = 'gpt-5.6-terra'
+    process.env.ANTHROPIC_MODEL = 'gpt-6.1-terra'
     process.env.CLAUDE_CODE_USE_OPENAI = '1'
     try {
       const context = {
@@ -80,7 +80,7 @@ describe('auto mode with Codex models', () => {
   })
 
   test('Shift+Tab reaches auto mode directly from default when available', () => {
-    process.env.ANTHROPIC_MODEL = 'gpt-5.6-terra'
+    process.env.ANTHROPIC_MODEL = 'gpt-6.1-terra'
     process.env.CLAUDE_CODE_USE_OPENAI = '1'
     try {
       const context = {
@@ -110,31 +110,31 @@ describe('auto mode with Codex models', () => {
     }
   })
 
-  test('classifier cascades GPT-5.6 transient failures through the available GPT models', () => {
+  test('classifier cascades transient failures through the active GPT models', () => {
     const unavailable = new Error('model is temporarily unavailable')
-    expect(getClassifierFallbackModel('gpt-5.6-sol', unavailable)).toBe(
-      'gpt-5.6-terra',
+    expect(getClassifierFallbackModel('gpt-6.1-sol', unavailable)).toBe(
+      'gpt-6.1-terra',
     )
-    expect(getClassifierFallbackModel('gpt-5.6-terra', unavailable)).toBe(
-      'gpt-5.6-luna',
+    expect(getClassifierFallbackModel('gpt-6.1-terra', unavailable)).toBe(
+      'gpt-6-luna',
     )
-    expect(getClassifierFallbackModel('gpt-5.6-luna', unavailable)).toBeUndefined()
+    expect(getClassifierFallbackModel('gpt-6-luna', unavailable)).toBeUndefined()
   })
 
   // A true account usage cap surfaces as CodexAccountCapError (also status 429).
   // A same-account model swap can't clear it, and falling back would mask the
   // cap signal — so it must NOT fall back, matched by error name.
-  test('classifier does not fall back from a Codex account cap on GPT-5.6 Terra', () => {
+  test('classifier does not fall back from a Codex account cap on GPT-6.1 Terra', () => {
     const capError = Object.assign(
       new Error('Codex account abc123 hit usage cap'),
       { name: 'CodexAccountCapError', status: 429 },
     )
-    expect(getClassifierFallbackModel('gpt-5.6-terra', capError)).toBeUndefined()
+    expect(getClassifierFallbackModel('gpt-6.1-terra', capError)).toBeUndefined()
 
     const authError = Object.assign(
       new Error('Codex account abc123 authentication failed (401)'),
       { name: 'CodexAccountAuthError', status: 401 },
     )
-    expect(getClassifierFallbackModel('gpt-5.6-terra', authError)).toBeUndefined()
+    expect(getClassifierFallbackModel('gpt-6.1-terra', authError)).toBeUndefined()
   })
 })

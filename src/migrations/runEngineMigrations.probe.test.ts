@@ -136,14 +136,14 @@ describe('runEngineMigrations process ownership', () => {
       expect(
         JSON.parse(readFileSync(join(configHome, '.cat-code.json'), 'utf8'))
           .migrationVersion,
-      ).toBe(15)
+      ).toBe(18)
     } finally {
       if (owner.exitCode === null) owner.kill('SIGKILL')
       await owner.exited
     }
   }, 25_000)
 
-  test('two cached contenders serialize migration state and preserve unrelated settings', async () => {
+  test('two version-17 contenders migrate Terra and preserve unrelated settings', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cat-code-engine-migrations-'))
     probeRoots.push(root)
     const configHome = join(root, 'config')
@@ -155,7 +155,7 @@ describe('runEngineMigrations process ownership', () => {
     writeFileSync(
       join(configHome, '.cat-code.json'),
       JSON.stringify({
-        migrationVersion: 14,
+        migrationVersion: 17,
         autoUpdates: false,
         unrelatedGlobal: 'keep-global',
         projects: {
@@ -171,10 +171,10 @@ describe('runEngineMigrations process ownership', () => {
     writeFileSync(
       join(configHome, 'settings.json'),
       JSON.stringify({
-        model: 'gpt-5.4',
-        availableModels: ['gpt-5.4', 'custom-model'],
+        model: 'gpt-5.6-terra',
+        availableModels: ['gpt-5.6-terra', 'custom-model'],
         modelOverrides: {
-          'gpt-5.4': 'legacy-override',
+          'gpt-5.6-terra': 'legacy-override',
           'custom-model': 'keep-override',
         },
         env: { UNRELATED_ENV: 'keep-user' },
@@ -259,13 +259,13 @@ describe('runEngineMigrations process ownership', () => {
     ).toEqual(results.map(({ role, pid }) => ({ role, pid })))
     expect(
       childResults.map(result => result.cachedMigrationVersionBefore),
-    ).toEqual([14, 14])
+    ).toEqual([17, 17])
     expect(new Set(spawnedPids).size).toBe(2)
 
     const globalConfig = JSON.parse(
       readFileSync(join(configHome, '.cat-code.json'), 'utf8'),
     )
-    expect(globalConfig.migrationVersion).toBe(15)
+    expect(globalConfig.migrationVersion).toBe(18)
     expect(globalConfig.unrelatedGlobal).toBe('keep-global')
     expect(globalConfig.autoUpdates).toBeUndefined()
     expect(globalConfig.projects[canonicalWorkspace]).toEqual({
@@ -276,10 +276,10 @@ describe('runEngineMigrations process ownership', () => {
       readFileSync(join(configHome, 'settings.json'), 'utf8'),
     )
     expect(userSettings).toMatchObject({
-      model: 'gpt-5.6-luna',
-      availableModels: ['gpt-5.6-luna', 'custom-model'],
+      model: 'gpt-6.1-terra',
+      availableModels: ['gpt-6.1-terra', 'custom-model'],
       modelOverrides: {
-        'gpt-5.6-luna': 'legacy-override',
+        'gpt-6.1-terra': 'legacy-override',
         'custom-model': 'keep-override',
       },
       env: {

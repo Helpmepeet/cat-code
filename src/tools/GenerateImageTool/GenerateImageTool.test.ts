@@ -561,7 +561,7 @@ describe('GenerateImageTool', () => {
     expect(authorization).toBe('Bearer access-main-account')
     expect(accountId).toBe('main-account')
     expect(requestBody).toMatchObject({
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       tools: [{ type: 'image_generation' }],
     })
     expect(

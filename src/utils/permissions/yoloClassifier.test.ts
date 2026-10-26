@@ -29,14 +29,14 @@ describe('auto mode provider ladder', () => {
     expect(getAutoModeClassifierAttempts('sonnet', 4, 'vertex')).toEqual([
       { provider: 'vertex', model: 'sonnet' },
       { provider: 'openai', model: 'gpt-6.1-sol' },
-      { provider: 'openai', model: 'gpt-5.6-terra' },
+      { provider: 'openai', model: 'gpt-6.1-terra' },
       { provider: 'openai', model: 'gpt-6-luna' },
     ])
   })
 
   test('continues a configured GPT model at the next untried standard member', () => {
     expect(getAutoModeClassifierAttempts('gpt-5.6-terra', 2, 'bedrock')).toEqual([
-      { provider: 'openai', model: 'gpt-5.6-terra' },
+      { provider: 'openai', model: 'gpt-6.1-terra' },
       { provider: 'openai', model: 'gpt-6-luna' },
       { provider: 'bedrock', model: 'sonnet' },
     ])
@@ -45,7 +45,7 @@ describe('auto mode provider ladder', () => {
   test('remaps a retired Sol pin before choosing the classifier ladder', () => {
     expect(getAutoModeClassifierAttempts('gpt-6-sol', 4, 'bedrock')).toEqual([
       { provider: 'openai', model: 'gpt-6.1-sol' },
-      { provider: 'openai', model: 'gpt-5.6-terra' },
+      { provider: 'openai', model: 'gpt-6.1-terra' },
       { provider: 'openai', model: 'gpt-6-luna' },
       { provider: 'bedrock', model: 'sonnet' },
     ])
@@ -58,23 +58,23 @@ describe('auto mode provider ladder', () => {
     ])
   })
 
-  test('getClassifierFallbackModel steps down gpt-6.1-sol -> gpt-5.6-terra -> gpt-6-luna', () => {
+  test('getClassifierFallbackModel steps down gpt-6.1-sol -> gpt-6.1-terra -> gpt-6-luna', () => {
     const error = Object.assign(new Error('transient rate limit'), { status: 429 })
-    expect(getClassifierFallbackModel('gpt-6.1-sol', error)).toBe('gpt-5.6-terra')
-    expect(getClassifierFallbackModel('gpt-5.6-terra', error)).toBe('gpt-6-luna')
+    expect(getClassifierFallbackModel('gpt-6.1-sol', error)).toBe('gpt-6.1-terra')
+    expect(getClassifierFallbackModel('gpt-6.1-terra', error)).toBe('gpt-6-luna')
     expect(getClassifierFallbackModel('gpt-6-luna', error)).toBeUndefined()
     expect(
       getClassifierFallbackModel('gpt-6.1-sol', {
         code: 'model_unavailable',
         message: 'request failed',
       }),
-    ).toBe('gpt-5.6-terra')
+    ).toBe('gpt-6.1-terra')
     expect(
       getClassifierFallbackModel(
         'gpt-6.1-sol',
         new Error('Codex API error (503): Service Unavailable'),
       ),
-    ).toBe('gpt-5.6-terra')
+    ).toBe('gpt-6.1-terra')
     expect(
       getClassifierFallbackModel(
         'gpt-6.1-sol',
@@ -143,11 +143,11 @@ describe('classifier fallback errors', () => {
     )).toBe(false)
   })
 
-  test('translates the GPT classifier fallback to medium reasoning', () => {
+  test('translates the GPT classifier fallback to max reasoning', () => {
     const [thinking, _padding, reasoningEffort] =
-      getClassifierThinkingConfigForTest('gpt-5.6-terra')
+      getClassifierThinkingConfigForTest('gpt-6.1-terra')
     const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       ...(thinking !== undefined && { thinking }),
       output_config: { effort: reasoningEffort },
       _openaiInstructionAssembly: {

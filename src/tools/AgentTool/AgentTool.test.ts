@@ -273,6 +273,15 @@ afterEach(() => {
 })
 
 describe('AgentTool effort input', () => {
+  test('accepts Terra 6.1 and no longer offers retired Terra as a new override', () => {
+    expect(inputSchema().safeParse({
+      ...baseInput, model: 'gpt-6.1-terra',
+    }).success).toBe(true)
+    expect(inputSchema().safeParse({
+      ...baseInput, model: 'gpt-5.6-terra',
+    }).success).toBe(false)
+  })
+
   test('accepts Astra as an explicit model override', () => {
     const parsed = inputSchema().safeParse({
       ...baseInput,

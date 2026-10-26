@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { CLAUDE_SONNET_4_5_CONFIG } from './model/configs.js'
+import { CLAUDE_SONNET_4_5_CONFIG, GPT_6_1_TERRA_CONFIG } from './model/configs.js'
 import { firstPartyNameToCanonical } from './model/model.js'
 import { calculateUSDCost } from './modelCost.js'
 import { getConfiguredStandardModelCosts, ratesForPrompt } from './modelCostRates.js'
@@ -82,5 +82,35 @@ describe('claude-haiku-5-5 prompt-size tiers', () => {
     // Untiered models are unaffected.
     const sonnet = getConfiguredStandardModelCosts('claude-sonnet-5-5')!
     expect(ratesForPrompt(sonnet, 5_000_000)).toBe(sonnet)
+  })
+})
+
+describe('gpt-6.1-terra pricing', () => {
+  test('configured IDs use the standard rate card without repricing historical Terra', () => {
+    for (const id of Object.values(GPT_6_1_TERRA_CONFIG)) {
+      expect(getConfiguredStandardModelCosts(id)).toMatchObject({
+        inputTokens: 1, outputTokens: 5, promptCacheReadTokens: 0.05, promptCacheWriteTokens: 1.25,
+      })
+      expect(calculateUSDCost(id, { input_tokens: 100, output_tokens: 1_000_000 } as never)).toBeCloseTo(5.0001, 10)
+    }
+    expect(getConfiguredStandardModelCosts('gpt-5.6-terra')).toBeUndefined()
+    expect(getConfiguredStandardModelCosts('gpt-6.1-terra-future')).toBeUndefined()
+  })
+
+  test('only prompts exceeding 272K reprice input, cache, and output', () => {
+    const costs = getConfiguredStandardModelCosts('gpt-6.1-terra')!
+    expect(ratesForPrompt(costs, 272_000)).toBe(costs)
+    expect(ratesForPrompt(costs, 272_001)).toMatchObject({
+      inputTokens: 2, outputTokens: 7.5, promptCacheReadTokens: 0.1, promptCacheWriteTokens: 2.5,
+    })
+    const usage = {
+      input_tokens: 100_000,
+      cache_read_input_tokens: 100_000,
+      cache_creation_input_tokens: 72_000,
+      output_tokens: 1_000_000,
+    }
+    expect(calculateUSDCost('gpt-6.1-terra', usage as never)).toBeCloseTo(5 + 0.1 + 0.005 + 0.09, 10)
+    expect(calculateUSDCost('gpt-6.1-terra', { ...usage, cache_creation_input_tokens: 72_001 } as never))
+      .toBeCloseTo(7.5 + 0.2 + 0.01 + 72_001 * 2.5 / 1e6, 10)
   })
 })

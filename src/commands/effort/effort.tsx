@@ -192,7 +192,7 @@ function ApplyEffortAndClose(t0) {
 export async function call(onDone: LocalJSXCommandOnDone, _context: unknown, args?: string): Promise<React.ReactNode> {
   args = args?.trim() || '';
   if (COMMON_HELP_ARGS.includes(args)) {
-    onDone('Usage: /effort [low|medium|high|xhigh|max|ultra|auto]\n\nEffort levels:\n- low: Fast responses with lighter reasoning\n- medium: Balances speed and reasoning depth for everyday tasks\n- high: Greater reasoning depth for complex problems\n- xhigh: Extra high reasoning depth for complex problems\n- max: Maximum reasoning depth for the hardest problems\n- ultra: Maximum reasoning with automatic task delegation (GPT-5.6 Sol and Terra)\n- auto: Use the default effort level for your model');
+    onDone('Usage: /effort [low|medium|high|xhigh|max|ultra|auto]\n\nEffort levels:\n- low: Fast responses with lighter reasoning\n- medium: Balances speed and reasoning depth for everyday tasks\n- high: Greater reasoning depth for complex problems\n- xhigh: Extra high reasoning depth for complex problems\n- max: Maximum reasoning depth for the hardest problems\n- ultra: Legacy effort level, unavailable on current GPT models\n- auto: Use the default effort level for your model');
     return;
   }
   if (!args || args === 'current' || args === 'status') {

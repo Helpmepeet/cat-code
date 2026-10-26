@@ -26,6 +26,7 @@ export type GPTPromptFamily = 'gpt-5.6' | 'gpt-6'
 export function getGPTPromptFamily(model: string): GPTPromptFamily {
   return model === 'gpt-6-astra' ||
     model === 'gpt-6.1-sol' ||
+    model === 'gpt-6.1-terra' ||
     model === 'gpt-6-sol' ||
     model === 'gpt-6-luna'
     ? 'gpt-6'

@@ -180,6 +180,7 @@ export function resolveNativeContextWindow(
   if (
     canonicalModel === 'gpt-6-astra' ||
     canonicalModel === 'gpt-6.1-sol' ||
+    canonicalModel === 'gpt-6.1-terra' ||
     canonicalModel === 'gpt-6-luna'
   ) {
     return { window: 1_050_000, source: 'gpt_6_codex' }

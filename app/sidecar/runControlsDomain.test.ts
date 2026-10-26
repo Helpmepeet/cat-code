@@ -41,10 +41,10 @@ function snapshotWithTerra(state: AppState) {
       options: [
         ...snapshot.model.options,
         {
-          value: 'gpt-5.6-terra',
-          label: 'GPT-5.6 Terra',
+          value: 'gpt-6.1-terra',
+          label: 'GPT-6.1 Terra',
           provider: 'openai' as const,
-          effortOptions: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+          effortOptions: ['low', 'medium', 'high', 'xhigh', 'max'],
         },
       ],
     },
@@ -167,15 +167,15 @@ test('setModel via the executor mutates the store, reports changed, and notifies
     notified += 1
   })
 
-  const first = domain.setModel('gpt-5.6-terra')
-  expect(calls).toEqual(['model:gpt-5.6-terra'])
+  const first = domain.setModel('gpt-6.1-terra')
+  expect(calls).toEqual(['model:gpt-6.1-terra'])
   expect(first).toMatchObject({ ok: true, changed: true })
-  expect(store.getState().mainLoopModel).toBe('gpt-5.6-terra')
+  expect(store.getState().mainLoopModel).toBe('gpt-6.1-terra')
   expect(notified).toBe(1)
 
   // Same model again → the change-detected subscription stays silent and `changed`
   // is false (no re-broadcast), even though the executor still runs.
-  const again = domain.setModel('gpt-5.6-terra')
+  const again = domain.setModel('gpt-6.1-terra')
   expect(again.changed).toBe(false)
   expect(notified).toBe(1)
 
@@ -186,8 +186,8 @@ test('setModel via the executor mutates the store, reports changed, and notifies
 test('setEffort and setFast route through the executor and reflect in the snapshot', () => {
   const previousOverride = getMainLoopModelOverride()
   try {
-    setMainLoopModelOverride('gpt-5.6-terra')
-    const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
+    setMainLoopModelOverride('gpt-6.1-terra')
+    const store = makeStore({ mainLoopModel: 'gpt-6.1-terra' })
     const { executor, calls } = fakeExecutor(store)
     const domain = createSidecarRunControlsDomain(store, {
       executor,
@@ -209,7 +209,7 @@ test('setEffort and setFast route through the executor and reflect in the snapsh
 })
 
 test('provider-local Default clears an explicit model override', () => {
-  const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
+  const store = makeStore({ mainLoopModel: 'gpt-6.1-terra' })
   const { executor, calls } = fakeExecutor(store)
   const domain = createSidecarRunControlsDomain(store, {
     executor,
@@ -246,7 +246,7 @@ test('accepting the first turn locks cross-provider model changes and notifies t
   try {
     setProviderSwitchLocked(false)
     setSessionProvider('openai')
-    const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
+    const store = makeStore({ mainLoopModel: 'gpt-6.1-terra' })
     const { executor, calls } = fakeExecutor(store)
     const domain = createSidecarRunControlsDomain(store, {
       executor,
@@ -264,8 +264,8 @@ test('accepting the first turn locks cross-provider model changes and notifies t
       ok: false,
       changed: false,
     })
-    expect(domain.setModel('gpt-5.6-terra')).toMatchObject({ ok: true })
-    expect(calls).toEqual(['model:gpt-5.6-terra'])
+    expect(domain.setModel('gpt-6.1-terra')).toMatchObject({ ok: true })
+    expect(calls).toEqual(['model:gpt-6.1-terra'])
     unsubscribe()
   } finally {
     setProviderSwitchLocked(previousLock)
@@ -279,7 +279,7 @@ test('restored provider-bound history starts locked even when cost tokens were n
   try {
     setProviderSwitchLocked(false)
     setSessionProvider('openai')
-    const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
+    const store = makeStore({ mainLoopModel: 'gpt-6.1-terra' })
     const { executor, calls } = fakeExecutor(store)
     const domain = createSidecarRunControlsDomain(store, {
       executor,
@@ -297,7 +297,7 @@ test('restored provider-bound history starts locked even when cost tokens were n
 })
 
 test('rejects unsupported model and effort values without calling the executor', () => {
-  const store = makeStore({ mainLoopModel: 'gpt-5.6-terra' })
+  const store = makeStore({ mainLoopModel: 'gpt-6.1-terra' })
   const { executor, calls } = fakeExecutor(store)
   const domain = createSidecarRunControlsDomain(store, { executor })
 
@@ -332,7 +332,7 @@ test('rejects enabling fast mode when the live model/account gates do not allow 
 test('buildRunControlsSnapshot degrades gracefully and reports effective plus selected effort', () => {
   const previousOverride = getMainLoopModelOverride()
   try {
-    setMainLoopModelOverride('gpt-5.6-terra')
+    setMainLoopModelOverride('gpt-6.1-terra')
     const snap = buildRunControlsSnapshot({
       ...getDefaultAppState(),
       effortValue: 'high',
@@ -401,6 +401,12 @@ test('a row resolves its selection to a model id before reading its effort level
     'high',
     'xhigh',
     'max',
+  ])
+  expect(effortOptionsForSelection('gpt-6.1-terra')).toEqual([
+    'low', 'medium', 'high', 'xhigh', 'max',
+  ])
+  expect(effortOptionsForSelection('gpt-5.6-terra')).toEqual([
+    'low', 'medium', 'high', 'xhigh', 'max',
   ])
 })
 
@@ -599,12 +605,12 @@ test('LIVE: the real executor wires the engine setters — model override flips,
 
     // model.set → `setMainLoopModelOverride` so `getMainLoopModel()` (the SAME
     // resolver QueryEngine reads per turn) returns it; gpt-* → openai provider.
-    const modelResult = domain.setModel('gpt-5.6-terra')
+    const modelResult = domain.setModel('gpt-6.1-terra')
     expect(modelResult).toMatchObject({ ok: true, changed: true })
-    expect(getMainLoopModelOverride()).toBe('gpt-5.6-terra')
-    expect(getMainLoopModel()).toBe('gpt-5.6-terra')
+    expect(getMainLoopModelOverride()).toBe('gpt-6.1-terra')
+    expect(getMainLoopModel()).toBe('gpt-6.1-terra')
     expect(getSessionProvider()).toBe('openai')
-    expect(store.getState().mainLoopModel).toBe('gpt-5.6-terra')
+    expect(store.getState().mainLoopModel).toBe('gpt-6.1-terra')
 
     // effort.set → `AppState.effortValue` (QueryEngine reads it per request).
     // 'xhigh' is non-persistable (toPersistableEffort → undefined), so this LIVE
@@ -612,7 +618,7 @@ test('LIVE: the real executor wires the engine setters — model override flips,
     domain.setEffort('xhigh')
     expect(store.getState().effortValue).toBe('xhigh')
 
-    // fast.set → the engine's own `applyFastMode` (gpt-5.6-terra supports fast).
+    // fast.set → the engine's own `applyFastMode` (gpt-6.1-terra supports fast).
     domain.setFast(true)
     expect(store.getState().fastMode).toBe(true)
     domain.setFast(false)

@@ -153,12 +153,12 @@ export const GPT_5_6_SOL_CONFIG = {
   openai: 'gpt-5.6-sol',
 } as const satisfies ModelConfig
 
-export const GPT_5_6_TERRA_CONFIG = {
-  firstParty: 'gpt-5.6-terra',
-  bedrock: 'gpt-5.6-terra',
-  vertex: 'gpt-5.6-terra',
-  foundry: 'gpt-5.6-terra',
-  openai: 'gpt-5.6-terra',
+export const GPT_6_1_TERRA_CONFIG = {
+  firstParty: 'gpt-6.1-terra',
+  bedrock: 'gpt-6.1-terra',
+  vertex: 'gpt-6.1-terra',
+  foundry: 'gpt-6.1-terra',
+  openai: 'gpt-6.1-terra',
 } as const satisfies ModelConfig
 
 export const GPT_5_6_LUNA_CONFIG = {
@@ -214,7 +214,7 @@ export const ALL_MODEL_CONFIGS = {
   fable5: CLAUDE_FABLE_5_CONFIG,
   // OpenAI Codex models
   gpt56sol: GPT_5_6_SOL_CONFIG,
-  gpt56terra: GPT_5_6_TERRA_CONFIG,
+  gpt61terra: GPT_6_1_TERRA_CONFIG,
   gpt56luna: GPT_5_6_LUNA_CONFIG,
   gpt6astra: GPT_6_ASTRA_CONFIG,
   gpt61sol: GPT_6_1_SOL_CONFIG,

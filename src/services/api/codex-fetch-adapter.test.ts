@@ -1022,7 +1022,7 @@ describe('codex-fetch-adapter', () => {
   })
 
 
-  test('translateToCodexBody maps boolean disabled thinking to none for GPT-5.6 Terra', () => {
+  test('translateToCodexBody remaps retired Terra and disabled thinking to its successor', () => {
     const { codexBody } = translateToCodexBody({
       model: 'gpt-5.6-terra',
       thinking: false,
@@ -1033,6 +1033,7 @@ describe('codex-fetch-adapter', () => {
     })
 
     expect(codexBody.reasoning).toEqual({ effort: 'none' })
+    expect(codexBody.model).toBe('gpt-6.1-terra')
   })
 
 
@@ -1051,7 +1052,7 @@ describe('codex-fetch-adapter', () => {
 
   test('mapEffortToCodex maps explicit minimal to none for Luna and GPT-5.6 models', () => {
     expect(mapEffortToCodex('minimal', 'gpt-6-luna')).toBe('none')
-    expect(mapEffortToCodex('minimal', 'gpt-5.6-terra')).toBe('none')
+    expect(mapEffortToCodex('minimal', 'gpt-6.1-terra')).toBe('none')
     expect(mapEffortToCodex('minimal', 'gpt-5.6-luna')).toBe('none')
   })
 
@@ -1066,7 +1067,8 @@ describe('codex-fetch-adapter', () => {
     expect(mapEffortToCodex('xhigh', 'gpt-6.1-sol')).toBe('xhigh')
     expect(mapEffortToCodex('max', 'gpt-6.1-sol')).toBe('max')
     expect(mapEffortToCodex('ultra', 'gpt-6.1-sol')).toBeUndefined()
-    expect(mapEffortToCodex('ultra', 'gpt-5.6-terra')).toBe('ultra')
+    expect(mapEffortToCodex('max', 'gpt-6.1-terra')).toBe('max')
+    expect(mapEffortToCodex('ultra', 'gpt-6.1-terra')).toBe('max')
     expect(mapEffortToCodex('max', 'gpt-6-luna')).toBe('max')
     expect(mapEffortToCodex('ultra', 'gpt-6-luna')).toBeUndefined()
   })
@@ -4757,16 +4759,16 @@ describe('mapClaudeModelToCodex', () => {
   // auxiliary call, so making this "consistent" with the top rung would move
   // that traffic onto the frontier model.
   test('keeps both fallbacks mid tier', () => {
-    expect(mapClaudeModelToCodex(null)).toBe('gpt-5.6-terra')
-    expect(mapClaudeModelToCodex('')).toBe('gpt-5.6-terra')
-    expect(mapClaudeModelToCodex('some-unrecognized-model')).toBe('gpt-5.6-terra')
+    expect(mapClaudeModelToCodex(null)).toBe('gpt-6.1-terra')
+    expect(mapClaudeModelToCodex('')).toBe('gpt-6.1-terra')
+    expect(mapClaudeModelToCodex('some-unrecognized-model')).toBe('gpt-6.1-terra')
   })
 
   test('passes a recognized Codex model through untouched', () => {
     for (const model of [
       'gpt-6-astra',
       'gpt-6.1-sol',
-      'gpt-5.6-terra',
+      'gpt-6.1-terra',
       'gpt-6-luna',
     ]) {
       expect(mapClaudeModelToCodex(model)).toBe(model)
@@ -4780,6 +4782,7 @@ describe('mapClaudeModelToCodex', () => {
     expect(mapClaudeModelToCodex('gpt-5.4')).toBe('gpt-6-luna')
     expect(mapClaudeModelToCodex('gpt-5.3-codex')).toBe('gpt-6-luna')
     expect(mapClaudeModelToCodex('gpt-5.4-mini')).toBe('gpt-6-luna')
-    expect(mapClaudeModelToCodex('gpt-5.5')).toBe('gpt-5.6-terra')
+    expect(mapClaudeModelToCodex('gpt-5.5')).toBe('gpt-6.1-terra')
+    expect(mapClaudeModelToCodex('gpt-5.6-terra')).toBe('gpt-6.1-terra')
   })
 })

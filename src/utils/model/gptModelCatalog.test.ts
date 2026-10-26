@@ -27,10 +27,13 @@ describe('GPT retirement replacements', () => {
     expect(parseUserSpecifiedModel('gpt-5.4')).toBe('gpt-6-luna')
     expect(parseUserSpecifiedModel('gpt-5.3-codex')).toBe('gpt-6-luna')
     expect(parseUserSpecifiedModel('gpt-5.4-mini')).toBe('gpt-6-luna')
-    expect(parseUserSpecifiedModel('gpt-5.5')).toBe('gpt-5.6-terra')
+    expect(parseUserSpecifiedModel('gpt-5.5')).toBe('gpt-6.1-terra')
+    expect(parseUserSpecifiedModel('gpt-5.6-terra')).toBe('gpt-6.1-terra')
+    expect(parseUserSpecifiedModel(' GPT-5.6-TERRA[1m] ')).toBe('gpt-6.1-terra')
 
     for (const retiredModel of [
       'gpt-5.6-sol',
+      'gpt-5.6-terra',
       'gpt-6-sol',
       'gpt-5.6-luna',
       'gpt-5.4',
@@ -66,12 +69,12 @@ describe('Active GPT models: Astra, Sol 6.1, Terra, Luna', () => {
       supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     },
     {
-      id: 'gpt-5.6-terra',
-      publicDisplay: 'GPT 5.6 Terra',
-      marketingName: 'GPT-5.6 Terra',
-      window: 372_000,
+      id: 'gpt-6.1-terra',
+      publicDisplay: 'GPT 6.1 Terra',
+      marketingName: 'GPT-6.1 Terra',
+      window: 1_050_000,
       defaultEffort: 'medium',
-      supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+      supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     },
     {
       id: 'gpt-6-luna',
@@ -105,13 +108,15 @@ describe('Active GPT models: Astra, Sol 6.1, Terra, Luna', () => {
   test('the active config catalog registers 6.1 Sol and omits retired 6 Sol', () => {
     expect(ALL_MODEL_CONFIGS.gpt61sol.firstParty).toBe('gpt-6.1-sol')
     expect(ALL_MODEL_CONFIGS).not.toHaveProperty('gpt6sol')
+    expect(ALL_MODEL_CONFIGS.gpt61terra.firstParty).toBe('gpt-6.1-terra')
+    expect(ALL_MODEL_CONFIGS).not.toHaveProperty('gpt56terra')
   })
 
   test('picker order is Astra -> Sol 6.1 -> Terra -> Luna', () => {
     const agentModels = getAgentModelOptions().map(option => option.value)
     const astraIdx = agentModels.indexOf('gpt-6-astra')
     const solIdx = agentModels.indexOf('gpt-6.1-sol')
-    const terraIdx = agentModels.indexOf('gpt-5.6-terra')
+    const terraIdx = agentModels.indexOf('gpt-6.1-terra')
     const lunaIdx = agentModels.indexOf('gpt-6-luna')
 
     expect(astraIdx).toBeGreaterThanOrEqual(0)
@@ -122,7 +127,7 @@ describe('Active GPT models: Astra, Sol 6.1, Terra, Luna', () => {
     const codexModels = CODEX_MODELS.map(entry => entry.id)
     const cAstraIdx = codexModels.indexOf('gpt-6-astra')
     const cSolIdx = codexModels.indexOf('gpt-6.1-sol')
-    const cTerraIdx = codexModels.indexOf('gpt-5.6-terra')
+    const cTerraIdx = codexModels.indexOf('gpt-6.1-terra')
     const cLunaIdx = codexModels.indexOf('gpt-6-luna')
 
     expect(cAstraIdx).toBeGreaterThanOrEqual(0)
@@ -144,11 +149,10 @@ describe('Active GPT models: Astra, Sol 6.1, Terra, Luna', () => {
     expect(cycleEffortLevel('xhigh', 'right', solLevels)).toBe('max')
     expect(cycleEffortLevel('max', 'right', solLevels)).toBe('low')
 
-    const terraLevels = getSupportedEffortLevels('gpt-5.6-terra')
+    const terraLevels = getSupportedEffortLevels('gpt-6.1-terra')
     expect(cycleEffortLevel('high', 'right', terraLevels)).toBe('xhigh')
     expect(cycleEffortLevel('xhigh', 'right', terraLevels)).toBe('max')
-    expect(cycleEffortLevel('max', 'right', terraLevels)).toBe('ultra')
-    expect(cycleEffortLevel('ultra', 'right', terraLevels)).toBe('low')
+    expect(cycleEffortLevel('max', 'right', terraLevels)).toBe('low')
 
     const lunaLevels = getSupportedEffortLevels('gpt-6-luna')
     expect(cycleEffortLevel('xhigh', 'right', lunaLevels)).toBe('max')
@@ -169,10 +173,9 @@ describe('Active GPT models: Astra, Sol 6.1, Terra, Luna', () => {
       message:
         'Effort ultra is not supported by gpt-6.1-sol. Valid options are: low, medium, high, xhigh, max, auto',
     })
-    // GPT-5.6 Terra supports ultra
-    expect(executeEffort('ULTRA', 'gpt-5.6-terra')).toMatchObject({
-      effortUpdate: { value: 'ultra' },
-      message: expect.stringContaining('Ultra'),
+    expect(executeEffort('ULTRA', 'gpt-6.1-terra')).toEqual({
+      message:
+        'Effort ultra is not supported by gpt-6.1-terra. Valid options are: low, medium, high, xhigh, max, auto',
     })
     expect(showCurrentEffort('xhigh', 'gpt-6.1-sol').message).toContain('Extra high')
   })

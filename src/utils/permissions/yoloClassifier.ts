@@ -981,7 +981,7 @@ function getClassifierThinkingConfig(
   // classifier judges EVERY permission decision. Upstream runs a Sonnet-class
   // classifier for this job, and Luna reaches that class only at its ceiling.
   // That ceiling is 'max', not 'xhigh': the ladder runs low, medium, high,
-  // xhigh, max, and for Luna 'max' is the top (only Sol/Terra expose 'ultra').
+  // xhigh, max, and 'max' is the top for the active GPT models.
   // Shipping medium would put every decision below the bar the port is copying.
   if (model.startsWith('gpt-')) return [undefined, 0, 'max']
   if (
@@ -1007,8 +1007,8 @@ export function getClassifierFallbackModel(
 
   switch (model.toLowerCase()) {
     case 'gpt-6.1-sol':
-      return 'gpt-5.6-terra'
-    case 'gpt-5.6-terra':
+      return 'gpt-6.1-terra'
+    case 'gpt-6.1-terra':
       return 'gpt-6-luna'
   }
 
@@ -1016,7 +1016,7 @@ export function getClassifierFallbackModel(
 }
 
 // Transient HTTP statuses that should fall the classifier model back from
-// GPT-5.6 Sol → Terra → Luna. These are the SDK's retryable
+// Sol → Terra → Luna. These are the SDK's retryable
 // transient statuses (408 plus 5xx), Anthropic's 529 overload, and 429. A 429
 // is included because the classifier path has no app-level account failover
 // (sideQuery bypasses withRetry), so a non-cap 429 would otherwise fail closed

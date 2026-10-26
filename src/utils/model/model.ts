@@ -78,16 +78,17 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
 const RETIRED_GPT_MODEL_REPLACEMENTS: Record<string, ModelName> = {
   'gpt-6-sol': 'gpt-6.1-sol',
   'gpt-5.6-sol': 'gpt-6.1-sol',
+  'gpt-5.6-terra': 'gpt-6.1-terra',
   'gpt-5.6-luna': 'gpt-6-luna',
   'gpt-5.4': 'gpt-6-luna',
   'gpt-5.3-codex': 'gpt-6-luna',
   'gpt-5.4-mini': 'gpt-6-luna',
-  'gpt-5.5': 'gpt-5.6-terra',
+  'gpt-5.5': 'gpt-6.1-terra',
 }
 
 /**
  * Keep explicitly pinned legacy GPT values runnable while the settings
- * migration rewrites user settings. The GPT-5.6 replacements do not support a
+ * migration rewrites user settings. These replacements do not support a
  * `[1m]` suffix in Cat Code's model-selection syntax.
  */
 export function remapRetiredGptModel(model: ModelName): ModelName {
@@ -436,6 +437,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('gpt-6.1-sol')) {
     return 'gpt-6.1-sol'
   }
+  if (name.includes('gpt-6.1-terra')) {
+    return 'gpt-6.1-terra'
+  }
   if (name.includes('gpt-6-astra')) {
     return 'gpt-6-astra'
   }
@@ -553,6 +557,7 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.6-luna') return 'GPT 5.6 Luna'
     if (model === 'gpt-6-astra') return 'GPT 6 Astra'
     if (model === 'gpt-6.1-sol') return 'GPT 6.1 Sol'
+    if (model === 'gpt-6.1-terra') return 'GPT 6.1 Terra'
     if (model === 'gpt-6-sol') return 'GPT 6 Sol'
     if (model === 'gpt-6-luna') return 'GPT 6 Luna'
     if (model === 'gpt-5.2') return 'GPT 5.2'
@@ -614,8 +619,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'Haiku 3.5'
     case getModelStrings().gpt56sol:
       return 'GPT-5.6 Sol'
-    case getModelStrings().gpt56terra:
-      return 'GPT-5.6 Terra'
+    case getModelStrings().gpt61terra:
+      return 'GPT-6.1 Terra'
     case getModelStrings().gpt56luna:
       return 'GPT-5.6 Luna'
     case getModelStrings().gpt6astra:
@@ -889,6 +894,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   // OpenAI Codex models
   if (canonical.includes('gpt-6.1-sol')) {
     return 'GPT-6.1 Sol'
+  }
+  if (canonical.includes('gpt-6.1-terra')) {
+    return 'GPT-6.1 Terra'
   }
   if (canonical.includes('gpt-6-astra')) {
     return 'GPT-6 Astra'

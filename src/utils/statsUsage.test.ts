@@ -479,6 +479,19 @@ test('standard token estimates price configured models only and report token cov
     expect(summary.days.at(-1)!.contributors.items[0]!.tokenCost).toEqual({ usd: 60.9 / 1_000_000, pricedTokens: 15 });
     expect(summary.days.at(-1)!.contributors.items[0]!.tokens).toEqual({ fresh: 20, read: 6, write: 8, output: 4 });
 });
+test('Terra standard estimates price the new model and leave historical Terra unpriced', async () => {
+    const current = msg(asOf, 'terra-current', 272_001, 'current-tool');
+    current.message.model = 'gpt-6.1-terra';
+    const historical = msg(asOf, 'terra-historical', 272_001, 'historical-tool');
+    historical.message.model = 'gpt-5.6-terra';
+    const summary = (await collectRetainedUsage([await file([current, historical])], asOf)).ranges['7d'];
+    const priced = summary.models.find(model => model.label === current.message.model)!;
+    expect(priced.tokenCost.usd).toBeCloseTo((272_001 * 2 + 3 * 0.1 + 2 * 7.5) / 1_000_000, 10);
+    // Retained history cannot recover cache-write TTL and leaves writes unpriced.
+    expect(priced.tokenCost.pricedTokens).toBe(272_001 + 3 + 2);
+    expect(summary.models.find(model => model.label === historical.message.model)!.tokenCost)
+        .toEqual({ usd: 0, pricedTokens: 0 });
+});
 test('cumulative Haiku usage reprices the full request when crossing 100K', async () => {
     const rows = [99_000, 101_000].map((input, index) => {
         const row = msg(`2026-09-13T10:0${index}:00.000Z`, 'request', input);

@@ -24,6 +24,7 @@ import { poolManagesCredentials } from '../../services/api/codexAccountPool.js'
 import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { hasCodexTokens } from '../../utils/auth.js'
+import { remapRetiredGptModel } from '../../utils/model/model.js'
 import { PNG } from 'pngjs'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { expandPath } from '../../utils/path.js'
@@ -39,7 +40,7 @@ import { getDefaultFileReadingLimits } from '../FileReadTool/limits.js'
 
 const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
-const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-5.6-terra'
+const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-6.1-terra'
 // Image generation is an auxiliary tool call, so keep retries bounded locally
 // instead of inheriting the main conversation's retry budget.
 const MAX_CODEX_IMAGE_RETRIES = 2
@@ -1307,7 +1308,7 @@ For transparency, omit background and choose PNG or WebP. The interface displays
       input,
       outputFormat,
       context,
-      context.options?.mainLoopModel ?? DEFAULT_CODEX_RESPONSE_MODEL,
+      remapRetiredGptModel(context.options?.mainLoopModel ?? DEFAULT_CODEX_RESPONSE_MODEL),
     )
 
     const bytes = Buffer.from(generation.b64, 'base64')

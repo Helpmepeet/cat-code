@@ -294,11 +294,11 @@ describe('assembled system prompt', () => {
 
   // The shipped GPT-6 family templates are identical. Preserve that equivalence while
   // pinning the generation-specific differences from the GPT-5.6 baseline.
-  test('GPT-6 family (Astra, Sol 6.1, Luna, and replayed Sol 6) receive byte-identical instructions', async () => {
+  test('GPT-6 family (Astra, Sol 6.1, Terra 6.1, Luna, and replayed Sol 6) receive byte-identical instructions', async () => {
     const astra = normalizeModelIdentity(
       await assemble(FULL_TOOLS, 'gpt-6-astra'),
     )
-    for (const model of ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna']) {
+    for (const model of ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna']) {
       const prompt = normalizeModelIdentity(await assemble(FULL_TOOLS, model))
       expect({ model, prompt }).toEqual({ model, prompt: astra })
     }
@@ -363,6 +363,7 @@ describe('assembled system prompt', () => {
     for (const model of [
       'gpt-6-astra',
       'gpt-6.1-sol',
+      'gpt-6.1-terra',
       'gpt-6-sol',
       'gpt-6-luna',
       'GPT-6-ASTRA',
@@ -372,7 +373,7 @@ describe('assembled system prompt', () => {
       'gpt-5.6-sol',
       'claude-opus-5',
     ]) {
-      const expected = model === 'gpt-6-astra' || model === 'gpt-6.1-sol' || model === 'gpt-6-sol' || model === 'gpt-6-luna'
+      const expected = model === 'gpt-6-astra' || model === 'gpt-6.1-sol' || model === 'gpt-6.1-terra' || model === 'gpt-6-sol' || model === 'gpt-6-luna'
       expect(getGPTPromptFamily(model) === 'gpt-6').toBe(expected)
       const prompt = (await getSystemPrompt(MINIMAL_TOOLS, model, [], [], 'openai')).join('\n')
       expect(prompt.includes('Infer action intent from context')).toBe(expected)

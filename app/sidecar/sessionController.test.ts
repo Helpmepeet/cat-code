@@ -162,7 +162,7 @@ test('a settings-file GPT model still selects OpenAI on desktop startup', () => 
     { model: 'gpt-5.6-terra' },
     'CLAUDE_CODE_USE_BEDROCK',
     () => {
-      expect(initializeSidecarModelProvider()).toBe('gpt-5.6-terra')
+      expect(initializeSidecarModelProvider()).toBe('gpt-6.1-terra')
       expect(getSessionProvider()).toBe('openai')
     },
   )

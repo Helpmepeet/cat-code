@@ -16,6 +16,7 @@ import {
   CLAUDE_SONNET_4_CONFIG,
   CLAUDE_SONNET_5_CONFIG,
   CLAUDE_SONNET_5_5_CONFIG,
+  GPT_6_1_TERRA_CONFIG,
   type ModelConfig,
 } from './model/configs.js'
 
@@ -56,6 +57,19 @@ export const COST_FABLE_10_50 = { inputTokens: 10, outputTokens: 50, promptCache
 export const COST_SONNET_55 = { inputTokens: 2, outputTokens: 10, promptCacheWriteTokens: 2.5, promptCacheReadTokens: 0.2, webSearchRequests: 0.01 } as const satisfies ModelCosts
 export const COST_OPUS_55 = { inputTokens: 4, outputTokens: 20, promptCacheWriteTokens: 5, promptCacheReadTokens: 0.4, webSearchRequests: 0.01 } as const satisfies ModelCosts
 
+// https://developers.openai.com/api/docs/models/gpt-6.1-terra
+export const COST_GPT_61_TERRA = {
+  inputTokens: 1,
+  outputTokens: 5,
+  promptCacheWriteTokens: 1.25,
+  promptCacheReadTokens: 0.05,
+  webSearchRequests: 0.01,
+  longPrompt: {
+    promptTokens: 272_000,
+    rates: { inputTokens: 2, outputTokens: 7.5, promptCacheWriteTokens: 2.5, promptCacheReadTokens: 0.1, webSearchRequests: 0.01 },
+  },
+} as const satisfies ModelCosts
+
 // @[MODEL LAUNCH]: Update this table for new priced models. Any rate or matching
 // change used by retained history also requires a USAGE_PRICING_VERSION bump.
 const STANDARD_CONFIG_COSTS = [
@@ -76,6 +90,7 @@ const STANDARD_CONFIG_COSTS = [
   [CLAUDE_SONNET_5_5_CONFIG, COST_SONNET_55],
   [CLAUDE_OPUS_5_5_CONFIG, COST_OPUS_55],
   [CLAUDE_FABLE_5_CONFIG, COST_FABLE_10_50],
+  [GPT_6_1_TERRA_CONFIG, COST_GPT_61_TERRA],
 ] as const satisfies readonly (readonly [ModelConfig, ModelCosts])[]
 
 /** Canonical pricing table retained for existing live-query cost callers. */

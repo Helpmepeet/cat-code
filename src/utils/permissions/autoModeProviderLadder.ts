@@ -8,7 +8,7 @@ export type AutoModeClassifierAttempt = {
 
 const GPT_CLASSIFIER_FALLBACKS = [
   'gpt-6.1-sol',
-  'gpt-5.6-terra',
+  'gpt-6.1-terra',
   'gpt-6-luna',
 ] as const
 

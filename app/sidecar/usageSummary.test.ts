@@ -27,7 +27,7 @@ test('grouping preserves exact daily/model/tool totals and distinguishes reserve
 test('bounded model summaries keep current models ahead of retired and older models', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
-    const current = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra'];
+    const current = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-6.1-terra'];
     const names = [...Array.from({ length: 10 }, (_, index) => `older-${index}`), 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', ...current];
     summary.models = names.map((name, index) => ({ ...usageCategory(name), tokens: { ...emptyTokens(), fresh: index < 10 ? 1000 : 10 } }));
     summary.tokens.fresh = 10_070;

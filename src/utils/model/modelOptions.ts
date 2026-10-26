@@ -281,13 +281,13 @@ function getGpt61SolOption(): ModelOption {
   }
 }
 
-function getGpt56TerraOption(): ModelOption {
+function getGpt61TerraOption(): ModelOption {
   return {
-    value: 'gpt-5.6-terra',
-    label: 'GPT-5.6 Terra',
-    description: 'GPT-5.6 Terra · Balanced agentic coding for everyday work (preview)',
+    value: 'gpt-6.1-terra',
+    label: 'GPT-6.1 Terra',
+    description: 'GPT-6.1 Terra · Fast visual reasoning, computer use, and writing',
     descriptionForModel:
-      'GPT-5.6 Terra - balanced agentic coding model for everyday work (preview)',
+      'GPT-6.1 Terra - fast visual reasoning, computer use, and writing',
   }
 }
 
@@ -372,7 +372,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
       getDefaultOptionForUser(),
       getGpt6AstraOption(),
       getGpt61SolOption(),
-      getGpt56TerraOption(),
+      getGpt61TerraOption(),
       getGpt6LunaOption(),
     ]
     if (
@@ -627,7 +627,7 @@ export function getModelOptions(fastMode = false): ModelOption[] {
     const gptModels = [
       getGpt6AstraOption(),
       getGpt61SolOption(),
-      getGpt56TerraOption(),
+      getGpt61TerraOption(),
       getGpt6LunaOption(),
     ]
     for (const gpt of gptModels) {

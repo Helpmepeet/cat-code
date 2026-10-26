@@ -26,7 +26,7 @@ import { resetAutoModeOptInForDefaultOffer } from './resetAutoModeOptInForDefaul
 import { migrateWorkspaceHandoffStorage } from './migrateWorkspaceHandoffStorage.js'
 import { resetProToOpusDefault } from './resetProToOpusDefault.js'
 
-export const CURRENT_MIGRATION_VERSION = 17
+export const CURRENT_MIGRATION_VERSION = 18
 
 const MIGRATION_LOCK_STALE_MS = 5_000
 const MIGRATION_LOCK_UPDATE_MS = 1_000

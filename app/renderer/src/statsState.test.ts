@@ -21,6 +21,9 @@ describe('statsState', () => {
     expect(formatModelDisplayName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
     expect(formatModelDisplayName('gpt-5.6-luna')).toBe('GPT-5.6 Luna')
     expect(formatModelDisplayName('gpt-5.6-sol')).toBe('GPT-5.6 Sol')
+    expect(formatModelDisplayName('gpt-5.6-terra')).toBe('GPT-5.6 Terra')
+    expect(formatModelDisplayName('gpt-6.1-terra')).toBe('GPT-6.1 Terra')
+    expect(formatModelDisplayName('gpt-6.1-terra-20261027')).toBe('GPT-6.1 Terra')
   })
 
   test('formatModelDisplayName tests the specific 4.x ids before the general ones', () => {

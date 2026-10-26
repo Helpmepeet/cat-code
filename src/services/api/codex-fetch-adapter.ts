@@ -643,7 +643,7 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 export const CODEX_MODELS = [
   { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'GPT-6 Astra' },
   { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', description: 'Frontier model for complex professional work' },
-  { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'Balanced agentic coding model (preview)' },
+  { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', description: 'Fast visual reasoning, computer use, and writing' },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
   { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
   { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', description: 'Codex coding model' },
@@ -652,7 +652,7 @@ export const CODEX_MODELS = [
   { id: 'gpt-5.2', label: 'GPT-5.2', description: 'GPT-5.2' },
 ] as const
 
-export const DEFAULT_CODEX_MODEL = 'gpt-5.6-terra'
+export const DEFAULT_CODEX_MODEL = 'gpt-6.1-terra'
 
 /**
  * Maps legacy provider-local Claude tier names to corresponding Codex models.
@@ -1656,7 +1656,7 @@ export function mapEffortToCodex(
     // preserve their disabled-thinking path with `none`.
     if (
       model === 'gpt-6-luna' ||
-      model === 'gpt-5.6-terra' ||
+      model === 'gpt-6.1-terra' ||
       model === 'gpt-5.6-luna'
     ) return 'none'
     return 'minimal'
@@ -1666,7 +1666,7 @@ export function mapEffortToCodex(
     return (
       model === 'gpt-6.1-sol' ||
       model === 'gpt-6-luna' ||
-      model === 'gpt-5.6-terra' ||
+      model === 'gpt-6.1-terra' ||
       model === 'gpt-5.6-luna' ||
       model === 'gpt-6-astra'
     )
@@ -1677,9 +1677,7 @@ export function mapEffortToCodex(
   }
   if (e === 'ultra') {
     const model = codexModel.toLowerCase()
-    return model === 'gpt-5.6-terra'
-      ? 'ultra'
-      : undefined
+    return model === 'gpt-6.1-terra' ? 'max' : undefined
   }
   return undefined
 }

@@ -18,9 +18,9 @@ describe('getAgentModel explicit override', () => {
   test('honors an explicit Terra selection when the parent uses Sol', () => {
     expect(
       getCanonicalName(
-        getAgentModel(undefined, 'gpt-5.6-sol', 'gpt-5.6-terra', 'default'),
+        getAgentModel(undefined, 'gpt-6.1-sol', 'gpt-6.1-terra', 'default'),
       ),
-    ).toBe('gpt-5.6-terra')
+    ).toBe('gpt-6.1-terra')
   })
 
   test('honors an explicit Luna selection when the parent uses Terra', () => {
@@ -34,9 +34,9 @@ describe('getAgentModel explicit override', () => {
   test('honors a Terra subagent request as an upgrade from Luna', () => {
     expect(
       getCanonicalName(
-        getAgentModel(undefined, 'gpt-5.6-luna', 'gpt-5.6-terra', 'default'),
+        getAgentModel(undefined, 'gpt-6-luna', 'gpt-6.1-terra', 'default'),
       ),
-    ).toBe('gpt-5.6-terra')
+    ).toBe('gpt-6.1-terra')
   })
 
   test('remaps a retired Sol subagent request to 6.1 as an upgrade from Terra', () => {

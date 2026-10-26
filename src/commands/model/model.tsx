@@ -13,7 +13,7 @@ import { isBilledAsExtraUsage } from '../../utils/extraUsage.js';
 import { clearFastModeCooldown, isFastModeAvailable, isFastModeEnabled, isFastModeSupportedByModel } from '../../utils/fastMode.js';
 import { MODEL_ALIASES } from '../../utils/model/aliases.js';
 import { checkOpus1mAccess, checkSonnet1mAccess } from '../../utils/model/check1mAccess.js';
-import { getDefaultMainLoopModelSetting, isOpus1mMergeEnabled, renderDefaultModelSetting } from '../../utils/model/model.js';
+import { getDefaultMainLoopModelSetting, isOpus1mMergeEnabled, remapRetiredGptModel, renderDefaultModelSetting } from '../../utils/model/model.js';
 import { isModelAllowed } from '../../utils/model/modelAllowlist.js';
 import { canApplyModelSelection, getAPIProvider, getAPIProviderDisplayName, persistStartupProviderPreference, resolveModelSelectionProvider } from '../../utils/model/providers.js';
 import { validateModel } from '../../utils/model/validateModel.js';
@@ -29,6 +29,7 @@ export function reconcileModelSelectionState<
   mainLoopModel: string | null
   mainLoopModelForSession: null
 } {
+  model = model === null ? null : remapRetiredGptModel(model)
   return {
     ...prev,
     mainLoopModel: model,
@@ -184,7 +185,7 @@ function SetModelAndClose({
 }): React.ReactNode {
   const isFastMode = useAppState(s => s.fastMode);
   const setAppState = useSetAppState();
-  const model = args === 'default' ? null : args;
+  const model = args === 'default' ? null : remapRetiredGptModel(args);
   React.useEffect(() => {
     async function handleModelChange(): Promise<void> {
       if (model && !isModelAllowed(model)) {

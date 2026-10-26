@@ -95,7 +95,7 @@ describe('migrateRetiredGptModels', () => {
         'gpt-5.6-sol': 'legacy-sol-override',
         'gpt-5.4': 'legacy-luna-override',
         'gpt-5.5': 'legacy-terra-override',
-        'gpt-5.6-terra': 'existing-terra-override',
+        'gpt-6.1-terra': 'existing-terra-override',
         'custom-model': 'custom-override',
       },
     })
@@ -104,11 +104,11 @@ describe('migrateRetiredGptModels', () => {
 
     expect(getSettingsForSource('userSettings')).toEqual({
       model: 'gpt-6.1-sol',
-      availableModels: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-5.6-terra', 'custom-model'],
+      availableModels: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6.1-terra', 'custom-model'],
       modelOverrides: {
         'gpt-6.1-sol': 'legacy-current-sol-override',
         'gpt-6-luna': 'legacy-luna-override',
-        'gpt-5.6-terra': 'existing-terra-override',
+        'gpt-6.1-terra': 'existing-terra-override',
         'custom-model': 'custom-override',
       },
     })
@@ -153,12 +153,37 @@ describe('migrateRetiredGptModels', () => {
     migrateRetiredGptModels()
 
     expect(getSettingsForSource('userSettings')).toEqual({
-      model: 'gpt-5.6-terra',
-      availableModels: ['gpt-5.6-terra'],
-      modelOverrides: { 'gpt-5.6-terra': 'legacy-terra-override' },
+      model: 'gpt-6.1-terra',
+      availableModels: ['gpt-6.1-terra'],
+      modelOverrides: { 'gpt-6.1-terra': 'legacy-terra-override' },
     })
     expect(mainLoopOverrideWrites).toEqual(['gpt-6.1-sol'])
     expect(mainLoopOverride).toBe('gpt-6.1-sol')
+  })
+
+  test('migrates Terra pins while preserving successor overrides and unrelated settings', () => {
+    setUserSettings({
+      model: 'gpt-5.6-terra',
+      availableModels: ['gpt-5.6-terra', 'gpt-6.1-terra', 'gpt-5.5'],
+      modelOverrides: {
+        'gpt-5.6-terra': 'old-terra',
+        'gpt-6.1-terra': 'keep-terra',
+      },
+      env: { KEEP: 'unchanged' },
+    })
+    mainLoopOverride = 'gpt-5.6-terra[1m]'
+
+    expect(migrateRetiredGptModels()).toBeNull()
+    const migrated = readFileSync(join(settingsDir, 'settings.json'), 'utf8')
+    expect(migrateRetiredGptModels()).toBeNull()
+    expect(readFileSync(join(settingsDir, 'settings.json'), 'utf8')).toBe(migrated)
+    expect(getSettingsForSource('userSettings')).toEqual({
+      model: 'gpt-6.1-terra',
+      availableModels: ['gpt-6.1-terra'],
+      modelOverrides: { 'gpt-6.1-terra': 'keep-terra' },
+      env: { KEEP: 'unchanged' },
+    })
+    expect(mainLoopOverrideWrites).toEqual(['gpt-6.1-terra'])
   })
 })
 
