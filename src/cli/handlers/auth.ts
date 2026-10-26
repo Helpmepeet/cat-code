@@ -146,6 +146,18 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
   const isAnthropicConsole = !isAnthropicAuth && hasAnyAnthropicScope(tokens.scopes)
   const isCodex = !isAnthropicAuth && !isAnthropicConsole
 
+  const storageResult = saveOAuthTokensIfNeeded(tokens)
+  clearOAuthTokenCache()
+  if (storageResult.warning) {
+    logEvent('tengu_oauth_storage_warning', {
+      warning:
+        storageResult.warning as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    })
+  }
+  if (isAnthropicAuth && !storageResult.success) {
+    throw new Error('Failed to save OAuth tokens. Check credential storage and try again.')
+  }
+
   // Reuse pre-fetched profile if available, otherwise fetch fresh
   const profile =
     tokens.profile ?? (await getOauthProfileFromOauthToken(tokens.accessToken))
@@ -173,7 +185,12 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
 
   // For Anthropic claude.ai logins, add to the Claude account pool (vault).
   // This is non-destructive: existing accounts are preserved.
-  if (isAnthropicAuth && (profile || tokens.tokenAccount)) {
+  if (
+    isAnthropicAuth &&
+    tokens.refreshToken &&
+    tokens.expiresAt &&
+    (profile || tokens.tokenAccount)
+  ) {
     const accountUuid = profile?.account.uuid ?? tokens.tokenAccount!.uuid
     const emailAddress =
       profile?.account.email_address ?? tokens.tokenAccount!.emailAddress
@@ -192,16 +209,6 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
       hasExtraUsageEnabled: profile?.organization.has_extra_usage_enabled ?? undefined,
       accountCreatedAt: profile?.account.created_at,
       subscriptionCreatedAt: profile?.organization.subscription_created_at ?? undefined,
-    })
-  }
-
-  const storageResult = saveOAuthTokensIfNeeded(tokens)
-  clearOAuthTokenCache()
-
-  if (storageResult.warning) {
-    logEvent('tengu_oauth_storage_warning', {
-      warning:
-        storageResult.warning as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     })
   }
 

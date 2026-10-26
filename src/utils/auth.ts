@@ -1134,10 +1134,13 @@ export async function saveApiKey(apiKey: string): Promise<void> {
       // Process monitors only see "security -i", not the password
       const command = `add-generic-password -U -a "${username}" -s "${storageServiceName}" -X "${hexValue}"\n`
 
-      await execa('security', ['-i'], {
+      const result = await execa('security', ['-i'], {
         input: command,
         reject: false,
       })
+      if (result.exitCode !== 0) {
+        throw new Error(`Keychain API key save failed (exit ${result.exitCode})`)
+      }
 
       logEvent('tengu_api_key_saved_to_keychain', {})
       savedToKeychain = true
@@ -1157,7 +1160,7 @@ export async function saveApiKey(apiKey: string): Promise<void> {
   const normalizedKey = normalizeApiKeyForConfig(apiKey)
 
   // Save config with all updates
-  saveGlobalConfig(current => {
+  const savedToConfig = saveGlobalConfig(current => {
     const approved = current.customApiKeyResponses?.approved ?? []
     return {
       ...current,
@@ -1176,6 +1179,12 @@ export async function saveApiKey(apiKey: string): Promise<void> {
   // Clear memo cache
   getApiKeyFromConfigOrMacOSKeychain.cache.clear?.()
   clearLegacyApiKeyPrefetch()
+  if (!savedToKeychain && !savedToConfig) {
+    throw new Error('Failed to save API key. Check credential storage and try again.')
+  }
+  if (!savedToKeychain && getApiKeyFromConfigOrMacOSKeychain()?.key !== apiKey) {
+    throw new Error('Failed to activate saved API key. Check Keychain access and try again.')
+  }
 }
 
 export function isCustomApiKeyApproved(apiKey: string): boolean {
@@ -1249,15 +1258,24 @@ export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
 
     const updateStatus = secureStorage.update(storageData)
 
+    getClaudeAIOAuthTokens.cache?.clear?.()
+    clearKeychainCache()
+    clearBetasCaches()
+    clearToolSchemaCache()
+
     if (updateStatus.success) {
+      const saved = secureStorage.read()?.claudeAiOauth
+      if (
+        saved?.accessToken !== tokens.accessToken ||
+        saved?.refreshToken !== tokens.refreshToken
+      ) {
+        return { success: false, warning: 'Saved OAuth tokens could not be read back' }
+      }
       logEvent('tengu_oauth_tokens_saved', { storageBackend })
     } else {
       logEvent('tengu_oauth_tokens_save_failed', { storageBackend })
     }
 
-    getClaudeAIOAuthTokens.cache?.clear?.()
-    clearBetasCaches()
-    clearToolSchemaCache()
     return updateStatus
   } catch (error) {
     logError(error)

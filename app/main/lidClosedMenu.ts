@@ -23,7 +23,7 @@ export function lidClosedMenu(read: () => LidModeView | undefined | Promise<LidM
       appMenu.insert(quit < 0 ? appMenu.items.length : quit, new MenuItem({ id: 'lid-mode', label: 'Lid-closed mode', submenu }))
       Menu.setApplicationMenu(menu)
     }
-    const busy = !view || ['setup', 'starting', 'restoring', 'unresolved'].includes(view.phase)
+    const busy = !view || ['setup', 'starting', 'restoring', 'unavailable', 'unresolved'].includes(view.phase)
     const untilFinished = menu.getMenuItemById('lid-until-finished')!
     untilFinished.enabled = !busy && view?.workAvailable === true
     untilFinished.checked = view?.phase === 'active' && view.mode === 'work'
@@ -32,7 +32,7 @@ export function lidClosedMenu(read: () => LidModeView | undefined | Promise<LidM
       item.enabled = !busy
       item.checked = view?.phase === 'active' && view.mode === 'timed' && view.allowance === target
     }
-    menu.getMenuItemById('lid-off')!.enabled = !!view && !['off', 'unresolved'].includes(view.phase)
+    menu.getMenuItemById('lid-off')!.enabled = !!view && !['off', 'unavailable', 'unresolved'].includes(view.phase)
     menu.getMenuItemById('lid-sleep')!.enabled = view?.phase === 'active'
     menu.getMenuItemById('lid-retry')!.enabled = view?.phase === 'unresolved' && !view?.recovering
   }

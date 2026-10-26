@@ -461,8 +461,8 @@ export function appendClaudeAccount(account: {
 
   // Save to vault
   const acct = pool.accounts[pool.activeIndex]!
-  saveClaudeTokenToVault(acct)
-  acct.vaultFilePath = join(getVaultAccountsDir(), `${acct.accountUuid}.json`)
+  const vaultFilePath = saveClaudeTokenToVault(acct)
+  if (vaultFilePath) acct.vaultFilePath = vaultFilePath
 
   // Sync to keychain + config (also persists activeClaudeAccountUuid)
   syncClaudeAccountToStorage()

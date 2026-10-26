@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { MINIMUM_MACOS_VERSION } from './macosCompatibility.js'
 
 export function buildLidHelper(): void {
   if (process.platform !== 'darwin') return
@@ -10,7 +11,8 @@ export function buildLidHelper(): void {
   const output = join(source, 'dist')
   mkdirSync(output, { recursive: true })
   const sources = ['LidCore.swift','LidSecurity.swift','LidPlatform.swift','PowerObservation.swift','main.swift','install.sh','uninstall.sh']
-  const digest = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url)))
+  const target = `${process.arch}-apple-macos${MINIMUM_MACOS_VERSION}`
+  const digest = createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).update(target)
     .update(sources.map(name => readFileSync(join(source, name), 'utf8')).join('\n')).digest('hex')
   const manifestPath = join(output, 'manifest.json')
   if (existsSync(manifestPath)) {
@@ -18,7 +20,7 @@ export function buildLidHelper(): void {
     if (manifest.sourceDigest === digest && existsSync(join(output, 'helper')) &&
         createHash('sha256').update(readFileSync(join(output, 'helper'))).digest('hex') === manifest.helperSHA256) return
   }
-  const compiled = spawnSync('/usr/bin/swiftc', ['-module-cache-path', join(output, 'cache'),
+  const compiled = spawnSync('/usr/bin/swiftc', ['-target', target, '-module-cache-path', join(output, 'cache'),
     ...sources.filter(name => name.endsWith('.swift')).map(name => join(source, name)), '-o', join(output, 'helper')], { encoding: 'utf8', timeout: 60_000 })
   if (compiled.status !== 0) throw new Error(compiled.stderr || 'Lid helper compilation failed')
   const signed = spawnSync('/usr/bin/codesign', ['--force','--sign','-','--options','runtime',join(output,'helper')], { encoding: 'utf8', timeout: 10_000 })

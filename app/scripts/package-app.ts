@@ -5,8 +5,7 @@ import { flipFuses, FuseVersion, FuseV1Options } from '@electron/fuses'
  *
  *   bun run --cwd app package
  *
- * Conforms to `docs/migration/decisions/LOCAL-USE-CONTRACT.md`: one macOS
- * `.app` for this machine, ad-hoc signed, identified by `com.catcode.desktop`,
+ * Builds an Apple Silicon macOS `.app`, ad-hoc signed, identified by `com.catcode.desktop`,
  * versioned by git SHA rather than a release number.
  *
  * The one hard requirement is that the result runs with no checkout. Development
@@ -39,6 +38,7 @@ import { SIDECAR_RUNTIME_ARGS, PACKAGED_SIDECAR_BINARY } from '../main/mainDecis
 import { scanPackagedBundle, formatBundleScanFindings } from './packagedBundleScan.js'
 import { buildPngIcnsFromIconset } from './pngIcns.js'
 import { buildImageRuntime } from '../../scripts/buildImageRuntime.js'
+import { MINIMUM_MACOS_VERSION, verifyMacOSCompatibility } from './macosCompatibility.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
@@ -266,6 +266,7 @@ function assembleBundle(): void {
   plistSet(plist, 'CFBundleName', APP_NAME)
   plistSet(plist, 'CFBundleDisplayName', APP_NAME)
   plistSet(plist, 'CFBundleIdentifier', BUNDLE_ID)
+  plistSet(plist, 'LSMinimumSystemVersion', MINIMUM_MACOS_VERSION)
   plistSet(plist, 'NSUserNotificationAlertStyle', 'alert')
   // 0.0.0 per LOCAL-USE-CONTRACT §3: the commit id is the identity of record,
   // and these keys must not be dressed up to look like a release.
@@ -395,6 +396,7 @@ async function main(): Promise<void> {
   copyPayload()
   await buildSidecar()
   copyRipgrep()
+  console.log(`[package] verified macOS ${MINIMUM_MACOS_VERSION}+ deployment targets for ${verifyMacOSCompatibility(CONTENTS)} native images`)
   scan()
   await sealApplication()
   sign()

@@ -107,10 +107,42 @@ to see how usage changes across sessions.
 
 *The 30-day Analytics view, with token trends and usage breakdowns.*
 
+## Mac compatibility and installation
+
+The desktop compatibility target is **Apple Silicon Macs (M1–M5), macOS 13 or
+newer**. Intel Macs, Windows, and Linux are not supported desktop targets.
+Packaging checks the ARM64 deployment requirements of bundled native binaries;
+that check does not replace testing on the minimum OS or every chip generation.
+
+For a packaged app, use the ZIP from a successful **Desktop delivery** GitHub
+Actions run in this repository. Artifacts expire after 14 days and require
+repository access. Unzip the artifact, then the app archive inside it, and move
+the complete `Cat Code.app` to Applications. The packaged app includes its
+engine, search binary, and image runtime; it does not require Bun, Swift, or the
+source checkout to run.
+
+Downloads are ad-hoc signed, not Developer ID signed or notarized. macOS may
+require approval through its normal security controls, and managed-computer
+policy may prevent opening the app. No security bypass is part of installation.
+The root `install.sh` is retired; it is not a Cat Code installer.
+
+Sign in with your own provider accounts. Do not copy someone else's settings
+directory or account vaults. On a recipient Mac, check chat, file read/write and
+search, permission prompts, and reopening a saved conversation after restarting.
+Minimum-OS, recipient Gatekeeper, GUI, and live-login qualification are still
+required; a successful build alone does not establish those results.
+
+Lid-closed mode has separate, exact hardware/OS safety qualification and can be
+unavailable on an otherwise compatible Mac. Core chat does not require it.
+PDF page rendering requires separately installed Poppler (`pdftoppm`); other
+optional integrations require their own tools and account setup.
+
 ## Run from source
 
-Run Cat Code from a trusted checkout. With Git and
-[Bun](https://bun.sh) 1.4 or newer installed:
+Use a trusted checkout on macOS with Git, [Bun](https://bun.sh) 1.4 or newer,
+and a working Apple command-line developer toolchain/SDK (`swiftc` and
+`codesign`). The desktop build compiles its native helper even if lid-closed
+mode is not enabled.
 
 ```sh
 bun install
@@ -122,7 +154,9 @@ The desktop uses the local coding-agent engine. Claude and Codex-backed GPT
 models use their respective authentication paths; GPT requests use
 ChatGPT/Codex subscription OAuth. The app includes account management surfaces.
 
-The terminal interface is also available:
+The terminal interface is also available on macOS. It requires `rg` on PATH
+when using a compiled terminal build. Keep the generated `image-runtime`
+directory beside `cli-dev` if moving the executable:
 
 ```sh
 bun run build:dev:full
