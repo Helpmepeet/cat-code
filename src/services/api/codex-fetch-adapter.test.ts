@@ -1679,6 +1679,89 @@ describe('codex-fetch-adapter', () => {
     }
   })
 
+  test.each([
+    {
+      label: 'reference-only success',
+      content: [
+        { type: 'tool_reference', tool_name: 'mcp__calendar__search' },
+        { type: 'tool_reference', tool_name: 'mcp__calendar__create' },
+      ],
+      expected: [
+        { type: 'input_text', text: 'Loaded tool: mcp__calendar__search' },
+        { type: 'input_text', text: 'Loaded tool: mcp__calendar__create' },
+      ],
+    },
+    {
+      label: 'success with neighboring text',
+      content: [
+        { type: 'text', text: 'Search completed.' },
+        { type: 'tool_reference', tool_name: 'mcp__calendar__search' },
+      ],
+      expected: [
+        { type: 'input_text', text: 'Search completed.' },
+        { type: 'input_text', text: 'Loaded tool: mcp__calendar__search' },
+      ],
+    },
+    {
+      label: 'no matches',
+      content: 'No matching deferred tools found',
+      expected: 'No matching deferred tools found',
+    },
+  ])('createCodexFetch delivers ToolSearch feedback in outbound JSON ($label)', async ({ content, expected }) => {
+    const accessToken = createAccessToken('acct_test_tool_search_feedback')
+    const originalFetch = globalThis.fetch
+    const requests: Array<{ input: RequestInfo | URL, body: Record<string, unknown> }> = []
+    globalThis.fetch = withFetchPreconnect(async (input, init) => {
+      requests.push({ input, body: JSON.parse(String(init?.body)) })
+      const events = [
+        { type: 'response.output_text.delta', delta: 'Tools loaded.' },
+        completedWsResponse('resp_tool_search_feedback'),
+      ]
+      return new Response(events.map(event =>
+        `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+      ).join(''), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    })
+
+    try {
+      const response = await createCodexFetch(accessToken, 'conv_tool_search_feedback')(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            model: 'gpt-5.6-terra',
+            _openaiInstructionAssembly: {
+              instructions: 'Load a deferred calendar tool.',
+              inputMessages: [
+                {
+                  role: 'assistant',
+                  content: [{ type: 'tool_use', id: 'call_search', name: 'ToolSearch', input: { query: 'calendar' } }],
+                },
+                {
+                  role: 'user',
+                  content: [{ type: 'tool_result', tool_use_id: 'call_search', content }],
+                },
+              ],
+            },
+          }),
+        },
+      )
+      await response.text()
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.input).toBe('https://chatgpt.com/backend-api/codex/responses')
+      const input = requests[0]?.body.input as Array<Record<string, unknown>>
+      expect(input.find(item => item.type === 'function_call_output')).toEqual({
+        type: 'function_call_output',
+        call_id: 'call_search',
+        output: expected,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
   test('createCodexFetch returns JSON for non-streaming custom tool calls on HTTP path', async () => {
     const accessToken = createAccessToken('acct_test_nonstream_tool')
     const originalFetch = globalThis.fetch

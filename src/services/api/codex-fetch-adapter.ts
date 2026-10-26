@@ -1213,6 +1213,17 @@ function translateMessages(
           text: part.text,
         })
       } else if (
+        part.type === 'tool_reference' &&
+        typeof part.tool_name === 'string' &&
+        part.tool_name.length > 0
+      ) {
+        // History-based tool selection supplies the native schemas separately.
+        // Responses does not expand Anthropic references, so retain match feedback.
+        outputItems.push({
+          type: 'input_text',
+          text: `Loaded tool: ${part.tool_name}`,
+        })
+      } else if (
         part.type === 'image' &&
         typeof part.source === 'object' &&
         part.source !== null &&
