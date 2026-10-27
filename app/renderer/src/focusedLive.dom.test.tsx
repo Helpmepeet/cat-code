@@ -116,6 +116,64 @@ test('preparing arguments grow as streaming state and the real call replaces the
   expect(tree.container.querySelector('.focused-caret')).toBeNull()
 })
 
+test('streamed tool targets update in place in both the head and rolling calls', async () => {
+  for (const rolling of [false, true]) {
+    for (const [name, field, chunks] of [
+      ['Bash', 'command', ['bun ', 'test ', 'src/loader']],
+      ['Read', 'file_path', ['/Users/pt/', 'cat-code/app/', 'renderer/src/proseArrival.ts']],
+      ['Grep', 'pattern', ['smooth', '|arrival', '|scroll']],
+      ['Edit', 'new_string', ['one', '\\ntwo', '\\nthree']],
+    ] as const) {
+      let state = rolling ? finish(calls(start(), ['done']), 'done') : start()
+      const stream = (event: unknown) => { state = message(state, { type: 'stream_event', event }) }
+      stream({ type: 'message_start', message: { id: 'forming-target' } })
+      stream({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'forming-call', name, input: {} } })
+      const prefix = name === 'Edit' ? '{"file_path":"/repo/file.ts",' : '{'
+      stream({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: `${prefix}"${field}":"${chunks[0]}` } })
+      const tree = await harness.mount(view(state))
+      const selector = rolling ? '.focused-call-row .focused-ticker:has(.focused-caret)' : '.focused-step-text'
+      const ticker = tree.container.querySelector(selector)!
+      expect(ticker).not.toBeNull()
+      const line = ticker.querySelector(':scope > span:not([aria-hidden="true"])')!
+      const before = line.textContent
+      for (const chunk of chunks.slice(1)) {
+        stream({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: chunk } })
+        await tree.render(view(state))
+        expect(tree.container.querySelector(selector)).toBe(ticker)
+        expect(ticker.querySelector(':scope > span:not([aria-hidden="true"])')).toBe(line)
+        expect(ticker.querySelector('.focused-tick-in, .focused-tick-out')).toBeNull()
+      }
+      expect(line.textContent).not.toBe(before)
+      if (name === 'Edit') expect(line.textContent).toContain('+3')
+      else expect(line.textContent).toContain(chunks.join(''))
+      await tree.unmount()
+    }
+  }
+})
+
+test('streaming output updates in place without sliding each output batch upward', async () => {
+  for (const rolling of [false, true]) {
+    let state = calls(start(), rolling ? ['done', 'running'] : ['running'])
+    if (rolling) state = finish(state, 'done')
+    state = activity(state, 'running', 'executing', { output: 'first line\n', totalLines: 1 })
+    now += 2000
+    const tree = await harness.mount(view(state))
+    const ticker = tree.container.querySelector('.focused-live-out .focused-ticker')!
+    expect(visibleText(ticker)).toBe('first line')
+    const line = ticker.firstElementChild
+    for (const [output, totalLines] of [['first line grows', 1], ['second line', 2], ['third line', 3]] as const) {
+      state = activity(state, 'running', 'executing', { startedAt: 10000, output, totalLines })
+      await tree.render(view(state))
+      expect(tree.container.querySelector('.focused-live-out .focused-ticker')).toBe(ticker)
+      expect(ticker.firstElementChild).toBe(line)
+      expect(visibleText(ticker)).toBe(output)
+      expect(ticker.querySelector('.focused-tick-in, .focused-tick-out')).toBeNull()
+      expect(tree.container.querySelector('.focused-live-count')?.textContent).toBe(`${totalLines} lines`)
+    }
+    await tree.unmount()
+  }
+})
+
 test('the first wait follows the phrase ladder without seconds and slides whole phrases', async () => {
   const state = start()
   const tree = await harness.mount(view(state))

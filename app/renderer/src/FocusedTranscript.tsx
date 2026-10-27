@@ -144,8 +144,9 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
   const summary = finishedHead ? summarizeFocusedWork(finished) : segment
   const named = !rollingNow && segment.activeLabel === null ? focusedNamedCall(segment.rows) : rollingNow && finished.length === calls.length ? focusedNamedCall(finished) : null
   const split = (label: string) => [label.slice(0, label.indexOf(' ')), label.slice(label.indexOf(' ') + 1)] as const
-  const [key, text] = active
-    ? [`run:${active}`, <><span className={split(active)[0] === 'Queued' ? 'focused-queued-verb' : headCall?.preparing ? 'focused-step-verb focused-live-verb' : 'focused-step-verb'}>{split(active)[0]}</span>{' '}<span className="focused-step-target">{split(active)[1]}</span>{headCall?.additions ? <span className="focused-diff-add"> +{headCall.additions}</span> : null}{headCall?.preparing ? <span className="focused-caret" /> : null}</>]
+  // Streamed arguments grow in place; only a different call or phase replaces the line.
+  const [key, text] = active && headCall
+    ? [`run:${headCall.toolUseId}:${callVerb(headCall, liveState !== null)}`, <><span className={split(active)[0] === 'Queued' ? 'focused-queued-verb' : headCall?.preparing ? 'focused-step-verb focused-live-verb' : 'focused-step-verb'}>{split(active)[0]}</span>{' '}<span className="focused-step-target">{split(active)[1]}</span>{headCall?.additions ? <span className="focused-diff-add"> +{headCall.additions}</span> : null}{headCall?.preparing ? <span className="focused-caret" /> : null}</>]
     : segment.activeLabel && !finishedHead && !live
       ? [`stop:${segment.activeLabel}`, `Stopped ${split(segment.activeLabel)[1]}`]
       : named
@@ -193,7 +194,7 @@ function LiveOutput({ call, now, className = '' }: { call: FocusedCall; now: num
   const line = activity.output.replace(/\r\n/g, '\n').replace(/\n$/, '').split(/[\n\r]/).at(-1) ?? ''
   const n = activity.totalLines ?? 0
   const count = n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n)
-  return <div className={`focused-live-out ${className}`}><FocusedTicker tickKey={`${n}:${line}`} className="">{line}</FocusedTicker><span className="focused-live-count">{count} lines</span></div>
+  return <div className={`focused-live-out ${className}`}><FocusedTicker tickKey={call.toolUseId} className="">{line}</FocusedTicker><span className="focused-live-count">{count} lines</span></div>
 }
 
 function RollingCalls({ calls, now, signalled }: { calls: FocusedCall[]; now: number; signalled: boolean }) {
@@ -212,7 +213,7 @@ function RollingCalls({ calls, now, signalled }: { calls: FocusedCall[]; now: nu
     return <div key={call.toolUseId} className={`focused-call ${present ? 'focused-call-enter' : 'focused-call-leave'}`} aria-hidden={!present}>
       <div><div className="focused-call-row">
         <span className={`focused-call-mark ${FAMILY_STYLE[call.toolFamily].color}`} aria-hidden>{stepMark(call.toolFamily)}</span>
-        <FocusedTicker tickKey={`${verb}:${target}:${call.additions}`} className=""><span className={verb === 'Queued' ? 'focused-queued-verb' : call.status === 'pending' ? 'focused-live-verb' : ''}>{verb}</span>{' '}<span className="focused-step-target">{target}</span>{call.additions ? <span className="focused-diff-add"> +{call.additions}</span> : null}{call.preparing ? <span className="focused-caret" /> : null}</FocusedTicker>
+        <FocusedTicker tickKey={`${call.toolUseId}:${verb}`} className=""><span className={verb === 'Queued' ? 'focused-queued-verb' : call.status === 'pending' ? 'focused-live-verb' : ''}>{verb}</span>{' '}<span className="focused-step-target">{target}</span>{call.additions ? <span className="focused-diff-add"> +{call.additions}</span> : null}{call.preparing ? <span className="focused-caret" /> : null}</FocusedTicker>
         <CallMeta call={call} now={now} />
       </div><LiveOutput call={call} now={now} /></div>
     </div>
