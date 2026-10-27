@@ -2384,7 +2384,8 @@ html[data-glass='on'] [data-window-frame] {
 }
 .ask-question-step[aria-current="step"] { cursor: default; }
 /* One fixed-height panel for all of a question's previews (`OptionPreviews`). */
-.ask-preview-scroll { max-height: 40vh; overflow: auto; }
+/* The engine prompt (`PREVIEW_FEATURE_PROMPT.html`) quotes this ceiling. */
+.ask-preview-scroll { max-height: min(25vh, 240px); overflow: auto; }
 .ask-preview-stack { display: grid; }
 .ask-preview-cell { grid-area: 1 / 1; min-width: 0; }
 .ask-preview-cell[data-hidden] { visibility: hidden; }

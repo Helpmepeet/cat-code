@@ -68,6 +68,7 @@ describe('AskUserQuestion HTML previews', () => {
     const prompt = await AskUserQuestionTool.prompt({} as never)
     expect(prompt).toContain('A self-contained HTML fragment')
     expect(prompt).toContain('var(--fg)')
+    expect(prompt).toContain('under about 220px tall')
     expect(prompt).toContain(`at most ${MAX_HTML_PREVIEW_CHARS} characters`)
   })
 
