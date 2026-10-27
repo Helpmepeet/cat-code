@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-test('desktop engine bootstrap advertises markdown question previews', async () => {
+test('desktop engine bootstrap advertises HTML question previews', async () => {
   const home = mkdtempSync(join(tmpdir(), 'catcode-question-preview-'))
   const root = fileURLToPath(new URL('../../', import.meta.url))
   const script = `
@@ -17,7 +17,7 @@ test('desktop engine bootstrap advertises markdown question previews', async () 
       before,
       after: getQuestionPreviewFormat() ?? null,
       toolPresent: queryEngineConfig.tools.some(tool => tool.name === AskUserQuestionTool.name),
-      markdownPrompt: (await AskUserQuestionTool.prompt()).includes('Preview content is rendered as markdown'),
+      htmlPrompt: (await AskUserQuestionTool.prompt()).includes('A self-contained HTML fragment'),
     }))
     await mcpLifecycle.dispose()
     process.exit(0)
@@ -38,9 +38,9 @@ test('desktop engine bootstrap advertises markdown question previews', async () 
     expect({ exitCode, stderr: exitCode === 0 ? '' : stderr }).toEqual({ exitCode: 0, stderr: '' })
     expect(JSON.parse(stdout.trim())).toEqual({
       before: null,
-      after: 'markdown',
+      after: 'html',
       toolPresent: true,
-      markdownPrompt: true,
+      htmlPrompt: true,
     })
   } finally {
     rmSync(home, { recursive: true, force: true })

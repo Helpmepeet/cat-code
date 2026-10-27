@@ -7,6 +7,9 @@ export const ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12
 export const DESCRIPTION =
   'Asks the user free-text or multiple-choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices.'
 
+/** Per-option ceiling for an HTML preview, enforced by `validateInput`. */
+export const MAX_HTML_PREVIEW_CHARS = 20_000
+
 export const PREVIEW_FEATURE_PROMPT = {
   markdown: `
 Preview feature:
@@ -23,9 +26,20 @@ Preview feature:
 Use the optional \`preview\` field on options when presenting concrete artifacts that users need to visually compare:
 - HTML mockups of UI layouts or components
 - Formatted code snippets showing different implementations
-- Visual comparisons or diagrams
+- Diagrams (inline SVG) or visual comparisons
 
-Preview content must be a self-contained HTML fragment (no <html>/<body> wrapper, no <script> or <style> tags — use inline style attributes instead). Do not use previews for simple preference questions where labels and descriptions suffice. Note: previews are only supported for single-select questions (not multiSelect).
+Do not use previews for simple preference questions where labels and descriptions suffice. Previews are only supported for single-select questions (not multiSelect).
+
+How previews are shown: the preview of the option the user hovers or highlights renders below the option list, in a static panel up to about 840px wide that shrinks with the window. The panel is as tall as the tallest preview in the question and scrolls past about 40% of the window height, so keep a question's previews compact and similar in size.
+
+How to write a preview:
+- A self-contained HTML fragment: no <html>, <body>, <head> or <!DOCTYPE>. Wrap plain text in an element such as <div> or <pre>.
+- Style with inline style attributes only. <script> and <style> tags are rejected. Event handlers, class and id attributes (except SVG ids), links, iframes, external images, and url() references other than a local SVG #id are removed.
+- Supported: text, list, table and layout elements (div, span, p, h1-h6, ul, ol, li, table, pre, code, blockquote, details, figure), form controls drawn as static mockups (button, input, select, textarea, progress), inline <svg> with shapes, paths, text, gradients and markers, and <img> with a data:image/ URI only.
+- Nothing in the panel can be clicked, focused or typed into, so draw states such as hover, selected or error explicitly.
+- Use flex or grid layouts with percentage or max-width sizing rather than fixed widths wider than the panel.
+- Colors that follow the app's light and dark theme are available as CSS variables: var(--fg), var(--muted), var(--faint), var(--surface), var(--panel), var(--border), var(--accent), var(--good), var(--warn), var(--danger), var(--info). Prefer them to fixed colors so text stays readable in both themes.
+- Each preview is at most ${MAX_HTML_PREVIEW_CHARS} characters.
 `,
 } as const
 

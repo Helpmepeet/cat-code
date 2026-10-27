@@ -2383,6 +2383,32 @@ html[data-glass='on'] [data-window-frame] {
   cursor: pointer;
 }
 .ask-question-step[aria-current="step"] { cursor: default; }
+/* One fixed-height panel for all of a question's previews (`OptionPreviews`). */
+.ask-preview-scroll { max-height: 40vh; overflow: auto; }
+.ask-preview-stack { display: grid; }
+.ask-preview-cell { grid-area: 1 / 1; min-width: 0; }
+.ask-preview-cell[data-hidden] { visibility: hidden; }
+/* Shadow host for model HTML (`questionPreviewHtml.ts`). Containment makes the
+ * host the containing block for fixed descendants and clips their paint. The
+ * short variables are the palette the engine prompt offers the model. */
+.ask-preview-html {
+  display: block;
+  position: relative;
+  contain: layout paint;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  --fg: var(--text-primary);
+  --muted: var(--text-muted);
+  --faint: var(--text-faint);
+  --surface: var(--surface-raised);
+  --panel: var(--surface-panel);
+  --border: color-mix(in srgb, var(--text-primary) 14%, transparent);
+  --good: var(--tone-good);
+  --warn: var(--tone-warn);
+  --danger: var(--tone-danger);
+  --info: var(--tone-info);
+}
 .ask-option-wrap { position: relative; }
 .ask-option-label { display: block; }
 .ask-option-description { display: block; margin-top: 1px; }

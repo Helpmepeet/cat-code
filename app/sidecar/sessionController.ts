@@ -387,7 +387,8 @@ export async function createNormalSidecarQueryEngineConfig(
     resumedInitialState?: AppState
   } = {},
 ) {
-  setQuestionPreviewFormat('markdown')
+  // The renderer draws option previews as sanitized HTML (`questionPreviewHtml`).
+  setQuestionPreviewFormat('html')
   // Must run before QueryEngine construction: it captures the initial provider
   // and model for prompt assembly and request routing.
   const resumedModel = initialMessages

@@ -11,7 +11,7 @@
  * digit shortcuts pick their destination; focus alone does not.
  */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { MAX_QUESTION_ANSWER_CHARS } from '../../shared/limits.js'
 import type { AskUserQuestionAnswer } from '../../shared/protocol.js'
 import type { AskQuestion } from './askQuestionState.js'
@@ -24,6 +24,7 @@ import {
   type DraftAnswer,
 } from './askQuestionFlowModel.js'
 import { permissionKeysAreLive } from './permissionPromptModel.js'
+import { buildQuestionPreview, isHtmlPreview } from './questionPreviewHtml.js'
 import { isModalOverlayOpen, useModalOverlayOpen } from './overlayFocus.js'
 
 /**
@@ -557,8 +558,7 @@ export function AskQuestionFlow({
 
   if (!q) return null
   const previewIndex = hoverIndex ?? cursor
-  const focusedPreview =
-    previewIndex < optionCount ? q.options[previewIndex]?.preview ?? null : null
+  const hasPreviews = !freeText && q.options.some(option => option.preview !== null)
   const titleId = `ask-question-${requestId}`
   const tabStop = draft.optionIndices[0] ?? (cursor < optionCount ? cursor : 0)
   const showPending = pendingCount !== undefined && pendingCount > 1
@@ -820,14 +820,12 @@ export function AskQuestionFlow({
       </div>}
 
       {/* Preview follows hover, then the keyboard highlight. */}
-      {focusedPreview ? (
+      {hasPreviews ? (
         <div className="mt-1.5 rounded-[9px] border border-white/[0.07] bg-black/30 px-[11px] py-[7px]">
           <div className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.08em] text-text-faint">
             Preview
           </div>
-          <pre className="m-0 whitespace-pre-wrap font-mono text-[11px] leading-[1.55] text-text-muted">
-            {focusedPreview}
-          </pre>
+          <OptionPreviews options={q.options} shownIndex={previewIndex} />
         </div>
       ) : null}
 
@@ -877,6 +875,60 @@ export function AskQuestionFlow({
 
     </section>
   )
+}
+
+/**
+ * Every option's preview is mounted in one grid cell and only the shown one is
+ * visible, so the panel is always as tall as the tallest preview. When the
+ * panel followed the shown preview's height, the upward-growing dock moved the
+ * rows under a resting pointer: `mouseenter` landed on the neighbouring row,
+ * its preview resized the panel back, and the hover flipped between the two
+ * options without end. An option without a preview, or Other, shows the panel
+ * empty for the same reason.
+ */
+function OptionPreviews({
+  options,
+  shownIndex,
+}: {
+  options: AskQuestion['options']
+  shownIndex: number
+}) {
+  return (
+    <div className="ask-preview-scroll">
+      <div className="ask-preview-stack">
+        {options.map((option, i) =>
+          option.preview === null ? null : (
+            <div
+              className="ask-preview-cell"
+              data-ask-preview={i}
+              data-hidden={i === shownIndex ? undefined : ''}
+              key={i}
+            >
+              {isHtmlPreview(option.preview) ? (
+                <HtmlPreview html={option.preview} />
+              ) : (
+                // Previews from sessions that predate HTML previews.
+                <pre className="m-0 whitespace-pre-wrap font-mono text-[11px] leading-[1.55] text-text-muted">
+                  {option.preview}
+                </pre>
+              )}
+            </div>
+          ),
+        )}
+      </div>
+    </div>
+  )
+}
+
+function HtmlPreview({ html }: { html: string }) {
+  const hostRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const host = hostRef.current
+    if (!host) return
+    const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' })
+    root.replaceChildren(buildQuestionPreview(html, host.ownerDocument))
+  }, [html])
+  return <div className="ask-preview-html" ref={hostRef} />
 }
 
 /**

@@ -188,6 +188,14 @@ function markerText(row: HTMLElement): string {
   return row.querySelector('[data-ask-marker]')?.textContent?.trim() ?? ''
 }
 
+/** Text of the one preview cell the panel currently shows, or null. */
+function shownPreview(card: HTMLElement): string | null {
+  const shown = Array.from(card.querySelectorAll('[data-ask-preview]')).filter(
+    cell => !cell.hasAttribute('data-hidden'),
+  )
+  return shown.length === 1 ? shown[0]!.textContent : null
+}
+
 function checkedState(row: HTMLElement): string | null {
   return row.getAttribute('aria-checked')
 }
@@ -523,22 +531,73 @@ test('a digit pick overrides the Other hover preview', async () => {
 
 test('hover previews an option, then restores the highlighted preview', async () => {
   const { card } = await mountFlow([ALL_TYPES[2]!])
-  expect(card.textContent).toContain('return early')
+  expect(shownPreview(card)).toBe('return early')
 
   await act(async () => {
     optionRows(card)[2]!.dispatchEvent(
       new MouseEvent('mouseover', { bubbles: true }),
     )
   })
-  expect(card.textContent).toContain('use a ternary')
+  expect(shownPreview(card)).toBe('use a ternary')
 
   await act(async () => {
     optionRows(card)[2]!.dispatchEvent(
       new MouseEvent('mouseout', { bubbles: true }),
     )
   })
-  expect(card.textContent).toContain('return early')
-  expect(card.textContent).not.toContain('use a ternary')
+  expect(shownPreview(card)).toBe('return early')
+})
+
+// The panel's height followed the shown preview, and the dock grows upward, so
+// a taller preview moved the next row under a resting pointer and the hover
+// flipped between two options forever. Every preview stays mounted in one grid
+// cell instead; only which cell is visible may change with the hover.
+test('changing the shown preview never changes what the panel lays out', async () => {
+  const { card } = await mountFlow([{
+    question: 'Which layout?',
+    header: 'Layout',
+    multiSelect: false,
+    options: [
+      { label: 'Tall', description: '', preview: '<div style="height: 300px">tall</div>' },
+      { label: 'Short', description: '', preview: '<p>short</p>' },
+      { label: 'Plain', description: '', preview: null },
+    ],
+  }])
+  const panel = card.querySelector('.ask-preview-stack')!
+  const cells = () => Array.from(panel.querySelectorAll<HTMLElement>('[data-ask-preview]'))
+  const mounted = cells()
+  expect(mounted.map(cell => cell.dataset.askPreview)).toEqual(['0', '1'])
+
+  for (const row of [1, 2, 0, 3]) {
+    const target = row < 3
+      ? optionRows(card)[row]!
+      : card.querySelector<HTMLButtonElement>('button[data-ask-other]')!
+    await act(async () => {
+      target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    })
+    expect(card.querySelector('.ask-preview-stack')).toBe(panel)
+    expect(cells()).toEqual(mounted)
+    const visible = cells().filter(cell => !cell.hasAttribute('data-hidden'))
+    expect(visible.map(cell => cell.dataset.askPreview)).toEqual(row < 2 ? [String(row)] : [])
+  }
+})
+
+test('an HTML preview renders inside an inert shadow root, sanitized', async () => {
+  const { card } = await mountFlow([{
+    question: 'Which button?',
+    header: 'Button',
+    multiSelect: false,
+    options: [
+      { label: 'Filled', description: '', preview: '<button onclick="alert(1)" style="color: var(--accent)">Save</button><script>alert(2)</script>' },
+      { label: 'Ghost', description: '', preview: null },
+    ],
+  }])
+  const host = card.querySelector<HTMLElement>('.ask-preview-html')!
+  const root = host.shadowRoot!.querySelector('.preview-root')!
+  expect(root.hasAttribute('inert')).toBe(true)
+  expect(root.innerHTML).toBe('<button style="color: var(--accent)">Save</button>')
+  // The preview's own controls are not the card's option rows.
+  expect(optionRows(card)).toHaveLength(2)
 })
 
 test('one Enter per single-select step selects each highlighted option and advances', async () => {
@@ -576,7 +635,7 @@ test('the full sequence preserves multi-select and reaches the third preview opt
   const third = optionRows(card)[2]!
   expect(third.getAttribute('data-ask-active')).toBe('true')
   expect(third.textContent).toContain('Ternary')
-  expect(card.textContent).toContain('use a ternary')
+  expect(shownPreview(card)).toBe('use a ternary')
 
   await press(card, 'Enter')
   expect(card.textContent).toContain('Custom response?')
