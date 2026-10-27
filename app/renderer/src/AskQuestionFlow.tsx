@@ -830,7 +830,7 @@ export function AskQuestionFlow({
       ) : null}
 
       {/* Footer actions end with the primary action. */}
-      <div className="ask-question-footer mt-2 flex items-center gap-1.5">
+      <div className="ask-question-footer mt-0.5 flex items-center gap-1.5">
         {qi > 0 ? (
           <button className="ask-question-ghost" disabled={submitted} onClick={() => goToQuestion(qi - 1)} type="button">
             Back

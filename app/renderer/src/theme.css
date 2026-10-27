@@ -2459,6 +2459,19 @@ html[data-glass='on'] [data-window-frame] {
   color: var(--text-subtle);
   cursor: pointer;
 }
+/* A tall preview panel can push the card body past its height ceiling; the
+ * actions stay in reach at the bottom of its scroller. The background is the
+ * card's own (`AskQuestionFlow` section) so scrolled content passes beneath.
+ * Sticky stops at the scroller's content edge, so the footer also covers the
+ * scroller's 8px bottom padding (`pb-2`) or content shows through below it. */
+.ask-question-footer {
+  position: sticky;
+  bottom: -8px;
+  margin-bottom: -8px;
+  padding-top: 6px;
+  padding-bottom: 8px;
+  background: light-dark(#ffffff, #141416);
+}
 .ask-question-footer > .ask-question-ghost:first-child { margin-left: -8px; }
 .ask-question-ghost:disabled { opacity: 0.5; cursor: default; }
 .ask-question-key {
