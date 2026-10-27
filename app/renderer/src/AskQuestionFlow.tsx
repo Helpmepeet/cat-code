@@ -138,6 +138,10 @@ export function AskQuestionFlow({
   const answers = flowDraft.answers
   const [cursor, setCursor] = useState(0)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
+  // The option whose preview the pointer asked for. It outlives the row's
+  // mouseleave so the pointer can travel into the preview to read or scroll
+  // it; another option's hover, a pick, the keyboard, or leaving the card ends it.
+  const [previewHover, setPreviewHover] = useState<number | null>(null)
   const [otherActive, setOtherActive] = useState(false)
   const [noteIndex, setNoteIndex] = useState<number | null>(null)
   const noteInputRef = useRef<HTMLInputElement>(null)
@@ -180,6 +184,7 @@ export function AskQuestionFlow({
     const saved = answers[qi]
     setCursor(saved?.optionIndices[0] ?? (saved?.other.trim() ? optionCount : 0))
     setHoverIndex(null)
+    setPreviewHover(null)
     setOtherActive(false)
     setNoteIndex(null)
     isComposingRef.current = false
@@ -195,8 +200,10 @@ export function AskQuestionFlow({
   }, [qi])
 
   useEffect(() => {
-    if (otherActive) otherInputRef.current?.focus()
-    else isComposingRef.current = false
+    if (otherActive) {
+      setPreviewHover(null)
+      otherInputRef.current?.focus()
+    } else isComposingRef.current = false
   }, [otherActive])
 
   useEffect(() => {
@@ -306,6 +313,7 @@ export function AskQuestionFlow({
       setOtherActive(false)
     }
     setNoteIndex(null)
+    setPreviewHover(null)
   }
 
   function focusCursor(next: number) {
@@ -322,6 +330,7 @@ export function AskQuestionFlow({
 
   function moveCursor(next: number) {
     setCursor(next)
+    setPreviewHover(null)
     if (q && !q.multiSelect && next < optionCount) {
       updateDraft(current => ({ ...current, optionIndices: [next], other: '' }))
       setOtherActive(false)
@@ -557,7 +566,7 @@ export function AskQuestionFlow({
   })
 
   if (!q) return null
-  const previewIndex = hoverIndex ?? cursor
+  const previewIndex = previewHover ?? cursor
   const hasPreviews = !freeText && q.options.some(option => option.preview !== null)
   const titleId = `ask-question-${requestId}`
   const tabStop = draft.optionIndices[0] ?? (cursor < optionCount ? cursor : 0)
@@ -579,6 +588,7 @@ export function AskQuestionFlow({
         )
       }
       onFocus={() => setKeysLive(true)}
+      onMouseLeave={() => setPreviewHover(null)}
       ref={cardRef}
       role="group"
       tabIndex={isActivePane ? -1 : undefined}
@@ -685,8 +695,12 @@ export function AskQuestionFlow({
                 setCursor(i)
                 setOtherActive(false)
                 setHoverIndex(null)
+                setPreviewHover(null)
               }}
-              onMouseEnter={() => setHoverIndex(i)}
+              onMouseEnter={() => {
+                setHoverIndex(i)
+                setPreviewHover(i)
+              }}
               onMouseLeave={() => setHoverIndex(null)}
               tabIndex={q.multiSelect ? undefined : i === tabStop ? 0 : -1}
               type="button"
@@ -745,6 +759,7 @@ export function AskQuestionFlow({
                     setNoteIndex(i)
                     setOtherActive(false)
                     setHoverIndex(null)
+                    setPreviewHover(null)
                   }}
                   onBlur={() => { isComposingRef.current = false }}
                   onCompositionStart={() => { isComposingRef.current = true }}

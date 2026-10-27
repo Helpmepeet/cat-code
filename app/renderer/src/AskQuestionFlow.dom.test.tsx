@@ -529,23 +529,39 @@ test('a digit pick overrides the Other hover preview', async () => {
   expect(calls.answers).toEqual([[{ optionIndices: [1] }]])
 })
 
-test('hover previews an option, then restores the highlighted preview', async () => {
+test('a hovered preview stays while the pointer moves into it, until the pointer leaves the card', async () => {
   const { card } = await mountFlow([ALL_TYPES[2]!])
   expect(shownPreview(card)).toBe('return early')
+  const row = optionRows(card)[2]!
+  const panel = card.querySelector('.ask-preview-scroll')!
 
   await act(async () => {
-    optionRows(card)[2]!.dispatchEvent(
-      new MouseEvent('mouseover', { bubbles: true }),
-    )
+    row.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+  expect(shownPreview(card)).toBe('use a ternary')
+
+  // Row to preview: the pointer leaves the row but stays on the card, so the
+  // preview it asked for must stay readable and scrollable.
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: panel }))
+    panel.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: row }))
   })
   expect(shownPreview(card)).toBe('use a ternary')
 
   await act(async () => {
-    optionRows(card)[2]!.dispatchEvent(
-      new MouseEvent('mouseout', { bubbles: true }),
-    )
+    panel.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }))
   })
   expect(shownPreview(card)).toBe('return early')
+})
+
+test('the keyboard takes the preview back from a lingering hover', async () => {
+  const { card } = await mountFlow([ALL_TYPES[2]!])
+  await act(async () => {
+    optionRows(card)[2]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  })
+  expect(shownPreview(card)).toBe('use a ternary')
+  await press(card, 'ArrowDown')
+  expect(shownPreview(card)).toBe('use a branch')
 })
 
 // The panel's height followed the shown preview, and the dock grows upward, so
@@ -578,7 +594,11 @@ test('changing the shown preview never changes what the panel lays out', async (
     expect(card.querySelector('.ask-preview-stack')).toBe(panel)
     expect(cells()).toEqual(mounted)
     const visible = cells().filter(cell => !cell.hasAttribute('data-hidden'))
-    expect(visible.map(cell => cell.dataset.askPreview)).toEqual(row < 2 ? [String(row)] : [])
+    // Row 2 has no preview, so the panel shows nothing. Other (3) has none
+    // either but leaves the last preview up: it sits on the way to the panel.
+    expect(visible.map(cell => cell.dataset.askPreview)).toEqual(
+      row < 2 ? [String(row)] : row === 2 ? [] : ['0'],
+    )
   }
 })
 
