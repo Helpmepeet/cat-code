@@ -590,7 +590,7 @@ export function AskQuestionFlow({
        * to the viewport rather than to the dock on purpose, so that in a window
        * with room the card sits at its natural height and the dock's own
        * scroller never engages. */}
-      <div className="max-h-[60vh] overflow-y-auto px-3.5 pb-2 pt-2.5">
+      <div className="ask-question-body max-h-[60vh] overflow-y-auto px-3.5 pb-2 pt-2.5">
       {/* Header, step progress, and queued count share one line. */}
       <div className="flex min-h-[15px] items-center gap-2">
         <span className="flex text-accent">
@@ -660,7 +660,7 @@ export function AskQuestionFlow({
           ref={otherInputRef}
           value={otherText}
         />
-      ) : <div
+      ) : <div className={hasPreviews ? 'ask-question-split' : undefined}><div
         aria-labelledby={q.multiSelect ? undefined : titleId}
         className="-mx-2 mt-2 flex flex-col gap-0.5"
         role={q.multiSelect ? undefined : 'radiogroup'}
@@ -817,17 +817,18 @@ export function AskQuestionFlow({
             </KeyCap>
           ) : null}
         </div>
-      </div>}
+      </div>
 
       {/* Preview follows hover, then the keyboard highlight. */}
       {hasPreviews ? (
-        <div className="mt-1.5 rounded-[9px] border border-white/[0.07] bg-black/30 px-[11px] py-[7px]">
+        <div className="ask-question-preview-panel mt-1.5 rounded-[9px] border border-white/[0.07] bg-black/30 px-[11px] py-[7px]">
           <div className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.08em] text-text-faint">
             Preview
           </div>
           <OptionPreviews options={q.options} shownIndex={previewIndex} />
         </div>
       ) : null}
+      </div>}
 
       {/* Footer actions end with the primary action. */}
       <div className="ask-question-footer mt-0.5 flex items-center gap-1.5">

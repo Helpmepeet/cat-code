@@ -349,3 +349,17 @@ test('leaving the freeform field keeps the option the user already picked', () =
     other: '',
   })
 })
+
+test('previews share the split layout with the options only when a question has them', () => {
+  expect(render(SINGLE)).toContain('ask-question-split')
+  const plain: AskQuestion[] = [{
+    question: 'Which one?',
+    header: 'Pick',
+    multiSelect: false,
+    options: [
+      { label: 'a', description: '', preview: null },
+      { label: 'b', description: '', preview: null },
+    ],
+  }]
+  expect(render(plain)).not.toContain('ask-question-split')
+})

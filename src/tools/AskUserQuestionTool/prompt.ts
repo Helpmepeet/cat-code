@@ -30,7 +30,7 @@ Use the optional \`preview\` field on options when presenting concrete artifacts
 
 Do not use previews for simple preference questions where labels and descriptions suffice. Previews are only supported for single-select questions (not multiSelect).
 
-How previews are shown: the preview of the option the user hovers or highlights renders below the option list, in a static panel up to about 840px wide that shrinks with the window. The panel is as tall as the tallest preview in the question, up to about 240px (less in short windows), and scrolls beyond that. Keep every preview under about 220px tall: a compact sketch of the idea, not a full-size page. Use tight spacing (padding around 8-12px, gaps around 4-8px), 12-14px text, and show only the parts that differ between options.
+How previews are shown: the preview of the option the user hovers or highlights renders in a static panel about 470px wide beside the option list (below it, up to about 560px wide, in narrow windows). Design for about 460px wide and keep layouts fluid. The panel is as tall as the tallest preview in the question, up to about 240px (less in short windows), and scrolls beyond that. Keep every preview under about 220px tall: a compact sketch of the idea, not a full-size page. Use tight spacing (padding around 8-12px, gaps around 4-8px), 12-14px text, and show only the parts that differ between options.
 
 How to write a preview:
 - A self-contained HTML fragment: no <html>, <body>, <head> or <!DOCTYPE>. Wrap plain text in an element such as <div> or <pre>.

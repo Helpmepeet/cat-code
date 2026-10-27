@@ -69,6 +69,7 @@ describe('AskUserQuestion HTML previews', () => {
     expect(prompt).toContain('A self-contained HTML fragment')
     expect(prompt).toContain('var(--fg)')
     expect(prompt).toContain('under about 220px tall')
+    expect(prompt).toContain('about 470px wide beside the option list')
     expect(prompt).toContain(`at most ${MAX_HTML_PREVIEW_CHARS} characters`)
   })
 
