@@ -336,6 +336,9 @@ export type CreatedPeerNavigation = {
   availabilityFor: (appSessionId: SessionId) => CreatedPeerAvailability
   open: (appSessionId: SessionId) => void
 }
+  /** Whether a peer name written in a message label names a session to open. */
+  isNameAvailable: (name: string) => boolean
+  openByName: (name: string) => void
 const CreatedPeerNavigationContext = createContext<CreatedPeerNavigation | null>(
   null,
 )
@@ -3629,7 +3632,7 @@ function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
           {to ? (
             <>
               <span className="font-normal">To </span>
-              <span className={PEER_TONE_CLASS}>{to}</span>
+              <PeerNameLink name={to} />
             </>
           ) : (
             'To peer'
@@ -3643,6 +3646,27 @@ function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
             </span>
           )}
         </div>
+/**
+ * A peer's name in a message label. It opens that session's tab when the name
+ * resolves to exactly one session now, and stays plain text otherwise.
+ */
+function PeerNameLink({ name }: { name: string }) {
+  const navigation = useContext(CreatedPeerNavigationContext)
+  if (navigation === null || !navigation.isNameAvailable(name)) {
+    return <span className={PEER_TONE_CLASS}>{name}</span>
+  }
+  return (
+    <button
+      type="button"
+      className={`${PEER_TONE_CLASS} rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-peer`}
+      aria-label={`Open session ${name}`}
+      onClick={() => navigation.openByName(name)}
+    >
+      {name}
+    </button>
+  )
+}
+
         <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-muted">
           {text}
         </div>
@@ -6897,7 +6921,7 @@ function PeerMessageBubble({
         ) : (
           <>
             <span className="text-text-subtle font-normal">From </span>
-            <span className={PEER_TONE_CLASS}>{label}</span>
+            <PeerNameLink name={label} />
           </>
         )}
       </span>

@@ -294,6 +294,7 @@ import {
   groupByWorkspace,
   reduceSessionsCatalogState,
   resolveCreatedPeerSessionRoute,
+  resolvePeerNameSessionRoute,
   resolveSessionOpenRoute,
   selectMergedSessionRows,
   selectRowEngineSessionId,
@@ -3150,6 +3151,18 @@ export function App() {
           sessionCatalogRows,
           appSessionId,
         )
+        if (route === null || route.kind === 'none') {
+          toast('This session is no longer available.', { tone: 'danger' })
+          return
+        }
+        applyOpenRoute(route)
+      },
+      isNameAvailable(name: string) {
+        const route = resolvePeerNameSessionRoute(sessionCatalogRows, name)
+        return route !== null && route.kind !== 'none'
+      },
+      openByName(name: string) {
+        const route = resolvePeerNameSessionRoute(sessionCatalogRows, name)
         if (route === null || route.kind === 'none') {
           toast('This session is no longer available.', { tone: 'danger' })
           return

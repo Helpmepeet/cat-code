@@ -15,6 +15,7 @@ import {
   groupByWorkspace,
   reduceSessionsCatalogState,
   resolveCreatedPeerSessionRoute,
+  resolvePeerNameSessionRoute,
   resolveRecentOpenRoute,
   resolveSessionLabel,
   resolveSessionOpenRoute,
@@ -990,6 +991,37 @@ test('a created peer opens only its recorded app session id when names are reuse
     resolveCreatedPeerSessionRoute([original, reusedName], 'app-reused'),
   ).toEqual({ kind: 'focus', appSessionId: 'app-reused' })
   expect(resolveCreatedPeerSessionRoute([reusedName], 'app-original')).toBeNull()
+})
+
+test('a peer name opens the one session holding it and never guesses', () => {
+  const bear = row({
+    sessionId: 'engine-bear',
+    appSessionId: 'app-bear',
+    inRegistry: true,
+    live: true,
+    name: 'Bear',
+  })
+  const other = row({
+    sessionId: 'engine-other',
+    appSessionId: 'app-other',
+    inRegistry: true,
+    live: true,
+    name: 'Wolf',
+  })
+  const history = row({ sessionId: 'engine-history', name: null })
+
+  expect(resolvePeerNameSessionRoute([bear, other, history], ' bear ')).toEqual({
+    kind: 'focus',
+    appSessionId: 'app-bear',
+  })
+  expect(resolvePeerNameSessionRoute([bear, other], 'Fox')).toBeNull()
+  expect(resolvePeerNameSessionRoute([bear, other, history], '  ')).toBeNull()
+  expect(
+    resolvePeerNameSessionRoute(
+      [bear, row({ sessionId: 'e2', appSessionId: 'app-2', inRegistry: true, name: 'BEAR' })],
+      'Bear',
+    ),
+  ).toBeNull()
 })
 
 describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {

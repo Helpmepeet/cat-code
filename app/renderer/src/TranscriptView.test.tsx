@@ -2558,6 +2558,8 @@ test('a confirmed CreatePeer row separates immutable navigation from details', (
       createdPeerNavigation={{
         availabilityFor: () => 'available',
         open: () => {},
+        isNameAvailable: () => false,
+        openByName: () => {},
       }}
     />,
   )
@@ -2618,6 +2620,8 @@ test('a partial creation remains navigable but names the undelivered instruction
       createdPeerNavigation={{
         availabilityFor: () => 'available',
         open: () => {},
+        isNameAvailable: () => false,
+        openByName: () => {},
       }}
     />,
   )
@@ -2651,6 +2655,8 @@ test('an unavailable created peer never substitutes a same-named destination', (
         open: () => {
           throw new Error('must not open a different session')
         },
+        isNameAvailable: () => false,
+        openByName: () => {},
       }}
     />,
   )
@@ -2661,6 +2667,47 @@ test('an unavailable created peer never substitutes a same-named destination', (
   expect(html).toContain('aria-expanded="false"')
   expect(html).not.toContain('>Details ')
   expect(html).not.toContain('aria-label="Session created"')
+})
+
+test('a peer name in a message label opens that session only when it resolves', () => {
+  const opened: string[] = []
+  const navigation = (available: boolean) => ({
+    availabilityFor: () => 'unknown' as const,
+    open: () => {},
+    isNameAvailable: (name: string) => available && name === 'Bear',
+    openByName: (name: string) => {
+      opened.push(name)
+    },
+  })
+  const sent = toolRow({
+    toolName: 'SendToPeer',
+    toolFamily: 'other',
+    input: { to: 'Bear', text: 'Can you check the schema?' },
+    status: 'success',
+  })
+  const received: NestedTranscriptRow = {
+    ...blockSource,
+    id: 's:m:0:injected-peer-link',
+    kind: 'injected-turn',
+    injectedKind: 'peer',
+    label: 'Bear',
+    content: 'ran the migration',
+    isReplay: false,
+  }
+
+  const linked = renderToStaticMarkup(
+    <TranscriptRowsView rows={[sent, received]} createdPeerNavigation={navigation(true)} />,
+  )
+  expect(linked.match(/aria-label="Open session Bear"/g)?.length).toBe(2)
+  expect(linked).toContain('>To </span><button')
+  expect(linked).toContain('>From </span><button')
+
+  const plain = renderToStaticMarkup(
+    <TranscriptRowsView rows={[sent, received]} createdPeerNavigation={navigation(false)} />,
+  )
+  expect(plain).not.toContain('Open session')
+  expect(plain).toContain('<span class="text-peer">Bear</span>')
+  expect(opened).toEqual([])
 })
 
 test('a roster listing says what it listed instead of its own tool name', () => {

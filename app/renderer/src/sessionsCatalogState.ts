@@ -535,6 +535,26 @@ export function resolveCreatedPeerSessionRoute(
 }
 
 /**
+ * Resolve a peer NAME as written in a transcript ("From Bear", "To Bear") to the
+ * session holding that name now. Unlike a created peer, a sent or received
+ * message records no application id, so the name is the only handle. Names are
+ * unique among current registry rows (case-insensitively, as main resolves
+ * them), so more than one match is treated as no match.
+ */
+export function resolvePeerNameSessionRoute(
+  rows: readonly MergedSessionRow[],
+  name: string,
+): SessionOpenRoute | null {
+  const key = name.trim().toLowerCase()
+  if (key.length === 0) return null
+  const matches = rows.filter(
+    candidate => candidate.name?.trim().toLowerCase() === key,
+  )
+  const only = matches.length === 1 ? matches[0] : undefined
+  return only === undefined ? null : resolveSessionOpenRoute(only)
+}
+
+/**
  * The row's ENGINE session id, or null when nothing has named this session yet.
  *
  * `sessionId` is the merge key `engineSessionId ?? appSessionId`
