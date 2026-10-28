@@ -621,6 +621,11 @@ describe('code fences', () => {
       expect(units).toHaveLength(1)
       expect(units[0].kind).toBe('code')
       expect(count(renderToStaticMarkup(renderMarkdownTree(units[0].tree)), /<pre/g)).toBe(1)
+      const unit = units[0]
+      // Markdown's code node retains its final newline; the Copy payload does not.
+      const text = (unit.codeSource + '\n').slice(unit.codeContentOffset, unit.codeContentOffset! + unit.codeContentLength!)
+      const visible = renderToStaticMarkup(renderMarkdownTree(unit.content))
+      expect(visible.replace(/<[^>]*>/g, '')).toBe(text)
     }
   })
 

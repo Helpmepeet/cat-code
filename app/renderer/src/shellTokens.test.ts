@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { shellTokens } from './shellTokens.js'
+import { shellPromptLines, shellTokens } from './shellTokens.js'
 
 for (const source of ['ps aux | head -n 20', 'pwd && git status --short', 'echo "a | b" || echo \'c && d\'', 'ls -l; pwd # comment\nwhoami', 'cat <<EOF\n$plain | text\nEOF', 'echo "unfinished', "echo 'unfinished", 'echo escaped\\ pipe']) {
   test(`shell coloring preserves source: ${JSON.stringify(source)}`, () => {
@@ -20,4 +20,28 @@ test('quoted operators remain strings and comments stop at newline', () => {
 })
 test('heredoc remainder stays plain', () => {
   expect(shellTokens('cat <<EOF\necho | $value\nEOF').at(-1)).toEqual({ kind: 'plain', text: '<<EOF\necho | $value\nEOF' })
+})
+
+for (const [source, prompts] of [
+  ['echo hi\npwd', [true, true]],
+  ['echo hello \\\n  world\npwd', [true, false, true]],
+  ['printf hi |\n  cat\npwd', [true, false, true]],
+  ['cat <<EOF\necho not-a-command\nEOF\npwd', [true, false, false, true]],
+  ["cat <<-'EOF'\n\techo not-a-command\n\tEOF\npwd", [true, false, false, true]],
+  ['echo "one\ntwo"\npwd', [true, false, true]],
+  ['# comment\n\npwd', [false, false, true]],
+] as const) {
+  test(`prompt marks preserve source and skip continuations: ${JSON.stringify(source)}`, () => {
+    const lines = shellPromptLines(source)
+    expect(lines.map(line => line.prompt)).toEqual([...prompts])
+    expect(lines.map(line => line.tokens.map(token => token.text).join('')).join('\n')).toBe(source)
+  })
+}
+
+test('windowed prompt lines retain full-source heredoc and continuation context', () => {
+  const source = 'cat <<EOF\necho body\nEOF\npwd\n'
+  const start = source.indexOf('echo')
+  const lines = shellPromptLines(source, start, source.length - 1)
+  expect(lines.map(line => line.prompt)).toEqual([false, false, true])
+  expect(lines.map(line => line.tokens.map(token => token.text).join('')).join('\n')).toBe('echo body\nEOF\npwd')
 })

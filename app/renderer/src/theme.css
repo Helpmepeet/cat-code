@@ -2504,22 +2504,21 @@ html[data-glass='on'] [data-window-frame] {
   outline-offset: 2px;
 }
 
-.inline-command-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px 4px 14px;
-  border-bottom: 1px solid var(--shell-seam);
-}
-.inline-command-language {
-  color: var(--text-ghost);
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
+.inline-command-code { display: flow-root; }
+.inline-command-line { display: block; padding-left: 2ch; min-height: 1.65em; }
+.inline-command-line:has(.inline-command-prompt) { text-indent: -2ch; }
+.inline-command-prompt { color: var(--text-ghost); user-select: none; margin-right: 1ch; }
 .inline-command-controls {
   position: relative;
+  float: right;
   display: flex;
-  gap: 4px;
+  align-items: center;
+  gap: 2px;
+  margin: -4px -6px -4px 16px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: normal;
+  white-space: nowrap;
 }
 .inline-command-control {
   display: inline-flex;
@@ -2529,26 +2528,40 @@ html[data-glass='on'] [data-window-frame] {
   justify-content: center;
   border-radius: 6px;
 }
+.inline-command-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.inline-command-action svg { width: 12px; height: 12px; flex-shrink: 0; }
+.inline-command-action[aria-label="Stop"] svg { width: 10px; height: 10px; }
+.inline-command-action:hover,
+.inline-command-action:focus-visible,
 .inline-command-control:hover,
 .inline-command-control:focus-visible {
   background: light-dark(rgb(0 0 0 / 6%), rgb(255 255 255 / 6%));
 }
-.inline-command-control[aria-disabled="true"],
-.inline-command-explain button[aria-disabled="true"] {
+.inline-command-action[aria-disabled="true"] {
   opacity: .5;
   cursor: default;
 }
 .inline-command-output {
-  border-top: 1px solid var(--shell-seam);
   font-size: 12px;
 }
-.inline-command-status {
-  display: flex;
-  flex-wrap: wrap;
+.inline-command-meta {
+  display: inline-flex;
   align-items: center;
-  gap: 6px 10px;
-  padding: 8px 14px;
+  gap: 6px;
+  margin-right: 8px;
   color: var(--text-subtle);
+  font-size: 12px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
 .inline-command-dot {
   width: 6px;
@@ -2558,6 +2571,9 @@ html[data-glass='on'] [data-window-frame] {
   background: currentColor;
 }
 .inline-command-cwd {
+  padding: 6px 14px;
+  border-top: 1px solid var(--shell-seam);
+  color: var(--text-ghost);
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
@@ -2568,13 +2584,6 @@ html[data-glass='on'] [data-window-frame] {
   padding: 8px 0;
   color: var(--text-subtle);
   text-align: center;
-}
-.inline-command-explain {
-  position: relative;
-  margin-left: auto;
-}
-.inline-command-explain button:hover {
-  color: var(--text-primary);
 }
 .inline-command-tooltip {
   display: none;
@@ -2590,13 +2599,12 @@ html[data-glass='on'] [data-window-frame] {
   background: var(--app-bg);
   color: var(--text-primary);
   font-size: 11px;
+  white-space: normal;
 }
-.inline-command-controls:has(button:first-child:hover) > .inline-command-tooltip:not(.inline-command-copy-tooltip),
-.inline-command-controls:has(button:first-child:focus-visible) > .inline-command-tooltip:not(.inline-command-copy-tooltip),
+.inline-command-controls:has(button:nth-of-type(1):hover) > .inline-command-tooltip:not(.inline-command-copy-tooltip),
+.inline-command-controls:has(button:nth-of-type(1):focus-visible) > .inline-command-tooltip:not(.inline-command-copy-tooltip),
 .inline-command-controls:has(button:nth-of-type(2):hover) > .inline-command-copy-tooltip,
-.inline-command-controls:has(button:nth-of-type(2):focus-visible) > .inline-command-copy-tooltip,
-.inline-command-explain:focus-within > .inline-command-tooltip,
-.inline-command-explain:hover > .inline-command-tooltip {
+.inline-command-controls:has(button:nth-of-type(2):focus-visible) > .inline-command-copy-tooltip {
   display: block;
 }
 .shell-token-command { color: var(--code-palette-function); }

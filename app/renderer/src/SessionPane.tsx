@@ -1808,10 +1808,6 @@ export function SessionPane({
       {...getInlineCommandAvailability({
         connected: !!activeSessionId && (composerGate.engineInputEnabled || composerGate.turnPending),
         workspaceBusy: composerReadOnly || projectRoute !== null,
-        waitingForPermission: permissionQueue.length > 0,
-        generating,
-        queuedPrompt: pendingSubmit !== null || queuedPrompts.length > 0,
-        attachmentPending: preparingImage || pickingFile,
       })}
     >
     <AgentFaceRegistryContext.Provider value={paneFaces}>

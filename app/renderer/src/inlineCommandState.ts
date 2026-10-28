@@ -9,8 +9,6 @@ export type InlineCommandContextValue = {
   pending: ReadonlyMap<string, { requestId: string; generation: string; previousRunId?: string }>
   errors: ReadonlyMap<string, string>
   blockedReason?: string
-  explainBlockedReason?: string
-  explain?(run: InlineCommandRun): void
   start(source: InlineCommandSource): void
   stop(run: InlineCommandRun): void
 }
@@ -19,19 +17,10 @@ export const InlineCommandContext = createContext<InlineCommandContextValue | nu
 export function getInlineCommandAvailability(input: {
   connected: boolean
   workspaceBusy: boolean
-  waitingForPermission: boolean
-  generating: boolean
-  queuedPrompt: boolean
-  attachmentPending: boolean
-}): { blockedReason?: string; explainBlockedReason?: string } {
+}): { blockedReason?: string } {
   const blockedReason = !input.connected ? 'Connect to a trusted workspace before running a command.'
     : input.workspaceBusy ? 'Wait for the workspace to become available.' : undefined
   return {
     blockedReason,
-    explainBlockedReason: blockedReason ??
-      (input.waitingForPermission ? 'Respond to the pending permission request first.'
-        : input.generating ? 'Wait for the current turn to finish.'
-          : input.queuedPrompt ? 'Wait for queued prompts to finish.'
-            : input.attachmentPending ? 'Wait for the attachment to finish.' : undefined),
   }
 }
