@@ -3709,7 +3709,7 @@ test('an injected turn renders system-side — never in the operator user column
     expect(html).toContain('a message the operator did not write')
     expect(html).toContain(expectedHeading)
     expect(html).not.toContain(`>${rawTag}<`)
-    // The user-bubble grammar (UserBubble/CommandEchoBubble/UserImageRowView)
+    // The user-bubble grammar (UserBubble/CommandEchoBubble/UserImageStrip)
     // is right-aligned + accent-tinted; an injected row must use neither.
     expect(html).not.toContain('justify-end')
     expect(html).not.toContain('bg-accent/10')
@@ -3919,6 +3919,40 @@ test('P4-18a: a pasted user image renders an img with the data URI', () => {
   expect(html).toContain('data:image/png;base64,AAAA')
   expect(html).toContain('aria-label="Expand sent image"')
   expect(html).not.toContain('<svg')
+})
+
+test('the images one message sent share one thumbnail strip that leads its text', () => {
+  const image = (index: number, frameId: string): NestedTranscriptRow => ({
+    ...blockSource,
+    frameId,
+    blockIndex: index,
+    id: `s:${frameId}:${index}:user-image`,
+    kind: 'user-image',
+    source: { type: 'base64', mediaType: 'image/png', data: `IMG${frameId}${index}` },
+    isReplay: false,
+  })
+  const text = (frameId: string): NestedTranscriptRow => ({
+    ...blockSource,
+    frameId,
+    blockIndex: 9,
+    id: `s:${frameId}:9:user-text`,
+    kind: 'user-text',
+    role: 'user',
+    content: `question ${frameId}`,
+    isReplay: false,
+  })
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[image(0, 'a'), image(1, 'a'), text('a'), image(0, 'b'), image(0, 'c'), text('d')]} />,
+  )
+  const strips = html.split('data-user-images').slice(1)
+    .map(strip => [...strip.matchAll(/aria-label="(Expand sent image[^"]*)"/g)].map(match => match[1]))
+  expect(strips).toEqual([
+    ['Expand sent image 1', 'Expand sent image 2'],
+    ['Expand sent image'],
+    ['Expand sent image'],
+  ])
+  const leads = [...html.matchAll(/data-transcript-entry="([^"]+)"[^>]*data-leads-message/g)].map(match => match[1])
+  expect(leads).toEqual(['user-images:s:a:0:user-image'])
 })
 
 test('P4-18a/#7: the blocks mode renders a thinking row as an expanded markdown block', () => {
@@ -5659,6 +5693,23 @@ test('narrationRowIds marks every assistant text but the last of each turn', () 
     single(toolRow({ toolName: 'Read', toolFamily: 'read', id: 'r2' })),
   ])
   expect([...ids]).toEqual(['a1'])
+})
+
+test('narrationRowIds ends a turn at a message that sent only images', () => {
+  const image = (id: string): Extract<NestedTranscriptRow, { kind: 'user-image' }> => ({
+    ...blockSource,
+    id,
+    kind: 'user-image',
+    source: { type: 'base64', mediaType: 'image/png', data: 'AAAA' },
+    isReplay: false,
+    children: [],
+  })
+  const ids = narrationRowIds([
+    { kind: 'single', row: textRow('a1', 'reply one') },
+    { kind: 'user-images', id: 'user-images:i1', members: [image('i1'), image('i2')] },
+    { kind: 'single', row: textRow('b1', 'reply two') },
+  ])
+  expect([...ids]).toEqual([])
 })
 
 /* --------------------------------------------------------------------------- *

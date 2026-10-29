@@ -246,6 +246,7 @@ import {
   type ToolRunMember,
   type TranscriptLayoutItem,
 } from './toolRunLayout.js'
+import { groupUserImages, type UserImageMember } from './userImageLayout.js'
 import { TranscriptMotionContext, useTranscriptMotion } from './transcriptMotion.js'
 import {
   formatGrepDigest,
@@ -766,7 +767,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [displayRows, boundaryRows, reasoningMode, displayTransitions, transcriptMode, turnLive],
   )
   const renderFocusedRows = useCallback((focusedRows: readonly NestedTranscriptRow[], isNarration: boolean) => {
-    const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(focusedRows), reasoningMode))
+    const items = groupUserImages(groupToolRuns(groupDisplayItems(groupAgentDelegates(focusedRows), reasoningMode)))
     const renderItem = (item: TranscriptLayoutItem) => <div key={displayItemKey(item)} data-tool-row={isContainerlessToolItem(item) ? '' : undefined}>
       <DisplayItemView item={item} narration={isNarration} onMessageAction={onMessageAction} />
     </div>
@@ -816,6 +817,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         data-row-key={key}
         data-transcript-entry={entryKeys[index]}
         data-tool-row={isContainerlessToolItem(item) ? '' : undefined}
+        data-leads-message={leadsOwnMessage(item, entries[index + 1]) ? '' : undefined}
         key={firstRowId}
         className={`${isRevealedHiddenItem(item) ? 'opacity-55 ' : ''}${arriving ? 'animate-arrive' : ''}`}
         ref={arriving ? motion.rows.refFor(firstRowId, 'animate-arrive') : undefined}
@@ -1064,7 +1066,8 @@ function displayItemFirstRowId(item: TranscriptLayoutItem): string {
   switch (item.kind) {
     case 'single': return item.row.id
     case 'agent-group':
-    case 'tool-run': return item.members[0].id
+    case 'tool-run':
+    case 'user-images': return item.members[0].id
     case 'reasoning-run': return item.id.slice('reasoning-run:'.length)
   }
 }
@@ -1094,7 +1097,7 @@ function layoutWithContextTransitions(
         entries.push({ kind: 'focused', turn: part })
         continue
       }
-      const items = groupToolRuns(groupDisplayItems(groupAgentDelegates(part.rows), mode))
+      const items = groupUserImages(groupToolRuns(groupDisplayItems(groupAgentDelegates(part.rows), mode)))
       for (const id of narrationRowIds(items)) narration.add(id)
       if (transcriptMode === 'focused') for (const row of part.rows) {
         if (row.kind === 'assistant-text' && row.phase === 'final_answer') narration.delete(row.id)
@@ -1164,6 +1167,19 @@ function layoutWithContextTransitions(
 }
 
 /**
+ * Sent images sit closer to the text of their own message than rows do to each
+ * other. The margin belongs to the image entry itself, because the virtual list
+ * measures each entry with its own margin.
+ */
+function leadsOwnMessage(item: TranscriptLayoutItem, next: TranscriptLaneEntry | undefined): boolean {
+  const frameId = item.kind === 'user-images'
+    ? item.members[0].frameId
+    : item.kind === 'single' && item.row.kind === 'user-image' ? item.row.frameId : null
+  return frameId !== null && next?.kind === 'item' && next.item.kind === 'single' &&
+    next.item.row.kind === 'user-text' && next.item.row.frameId === frameId
+}
+
+/**
  * P4-36 — is this item a revealed hidden-tier row? Only single rows can be:
  * the hidden tier is user frames, and every grouped item (agent DelegateGroup,
  * reasoning run, tool run) is built from assistant rows, which the engine never
@@ -1217,6 +1233,8 @@ function DisplayItemView({
       return <ReasoningRun runId={item.id} steps={item.steps} />
     case 'tool-run':
       return <ToolRunCard family={item.family} members={item.members} />
+    case 'user-images':
+      return <UserImageStrip images={item.members} />
     case 'single':
       return (
         <TranscriptRowView
@@ -1667,7 +1685,7 @@ function NestedRowList({
   childGap?: number
 }) {
   const { mode } = useContext(ReasoningLayoutContext)
-  const items = groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode))
+  const items = groupUserImages(groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode)))
   const keys = useMemo(() => items.map(displayItemKey), [items])
   const narration = useMemo(() => narrationRowIds(items), [items])
   return (
@@ -1805,7 +1823,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       )
 
     case 'user-image':
-      return <UserImageRowView source={row.source} disclosureKey={row.id} />
+      return <UserImageStrip images={[row]} />
 
     case 'thinking':
       // In `trail` a reasoning row always arrives here already grouped into a
@@ -6155,40 +6173,62 @@ function CommandEchoBubble({
 }
 
 /**
- * UserImageRow: a pasted image content block. Right-aligned, user-side tinted
- * tile that opens a viewport-bounded preview. Caption-less by design (the source
- * shows only `[Image]`). Malformed or empty sources degrade to a placeholder
- * label rather than a broken `<img>`.
+ * The images one message sent, as a right-aligned strip of fixed-height
+ * thumbnails above its bubble. Each opens a viewport-bounded preview.
+ * Caption-less by design (the source shows only `[Image]`). Malformed or empty
+ * sources degrade to a placeholder label rather than a broken `<img>`.
  */
-function UserImageRowView({ source, disclosureKey }: { source: UserImageSource; disclosureKey: string }) {
+function UserImageStrip({ images }: { images: readonly UserImageMember[] }) {
+  return (
+    <div data-user-images className="ml-auto flex max-w-[82%] flex-wrap justify-end gap-1.5">
+      {images.map((image, index) => (
+        <UserImageThumb
+          key={image.id}
+          source={image.source}
+          disclosureKey={image.id}
+          label={images.length === 1 ? 'Expand sent image' : `Expand sent image ${index + 1}`}
+        />
+      ))}
+    </div>
+  )
+}
+
+function UserImageThumb({
+  source,
+  disclosureKey,
+  label,
+}: {
+  source: UserImageSource
+  disclosureKey: string
+  label: string
+}) {
   const [previewOpen, setPreviewOpen] = useTranscriptDisclosure(`user-image:${disclosureKey}`)
   const closePreview = useCallback(() => setPreviewOpen(false), [setPreviewOpen])
   const src =
     source.type === 'base64'
       ? `data:${source.mediaType};base64,${source.data}`
       : source.url
+  if (src.length === 0) {
+    return (
+      <span className="flex h-[72px] items-center rounded-lg border border-shell-seam px-3 font-mono text-[11px] text-text-subtle">
+        [Image]
+      </span>
+    )
+  }
   return (
     <>
-      <div className="flex justify-end">
-        <div className="max-w-[82%] rounded-2xl rounded-br border border-accent/20 bg-accent/[0.08] p-2">
-          {src.length > 0 ? (
-            <button
-              type="button"
-              aria-label="Expand sent image"
-              onClick={() => setPreviewOpen(true)}
-              className="block cursor-zoom-in rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-            >
-              <img
-                src={src}
-                alt="Sent image"
-                className="max-w-[220px] rounded-lg border border-shell-seam"
-              />
-            </button>
-          ) : (
-            <span className="font-mono text-[11px] text-text-subtle">[Image]</span>
-          )}
-        </div>
-      </div>
+      <button
+        type="button"
+        aria-label={label}
+        onClick={() => setPreviewOpen(true)}
+        className="block cursor-zoom-in rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        <img
+          src={src}
+          alt="Sent image"
+          className="h-[72px] w-auto min-w-10 max-w-40 rounded-lg border border-shell-seam object-cover"
+        />
+      </button>
       {previewOpen ? (
         <ImagePreview
           src={src}

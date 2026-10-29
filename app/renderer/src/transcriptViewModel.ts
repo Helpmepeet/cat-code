@@ -186,7 +186,8 @@ const MID_TURN_ROW_KINDS: ReadonlySet<NestedTranscriptRow['kind']> = new Set([
 /**
  * Assistant text rows that are narration: another assistant text row follows
  * in the same turn. Only a turn's last text is the reply worth copying whole.
- * Grouped items (agent groups, reasoning and tool runs) are all mid-turn.
+ * Grouped items (agent groups, reasoning and tool runs) are all mid-turn; a
+ * group of sent images is a user message and ends one.
  */
 export function narrationRowIds(
   items: readonly TranscriptLayoutItem[],
@@ -195,6 +196,10 @@ export function narrationRowIds(
   let replyBelow = false
   for (let index = items.length - 1; index >= 0; index--) {
     const item = items[index]!
+    if (item.kind === 'user-images') {
+      replyBelow = false
+      continue
+    }
     if (item.kind !== 'single' || item.row.isHidden === true) continue
     const row = item.row
     if (row.kind === 'assistant-text') {

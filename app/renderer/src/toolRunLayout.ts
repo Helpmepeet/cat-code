@@ -42,6 +42,7 @@
 
 import type { ReasoningLayoutItem } from './reasoningLayout.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
+import type { UserImagesItem } from './userImageLayout.js'
 
 export type ToolRunMember = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
 
@@ -59,7 +60,7 @@ export type ToolRunItem = {
 }
 
 /** Every item kind the transcript can render after all read-time derivations. */
-export type TranscriptLayoutItem = ReasoningLayoutItem | ToolRunItem
+export type TranscriptLayoutItem = ReasoningLayoutItem | ToolRunItem | UserImagesItem
 
 /**
  * A lone call keeps its own card. `groupReasoningRuns` mints a run even for one
