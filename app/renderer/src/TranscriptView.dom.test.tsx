@@ -232,6 +232,7 @@ test('reduced motion rests immediately, while uncertain arrival retains its acti
     await tree.render(<TranscriptRowsView rows={[row, notice]} workspaceMove={{ ...moving, phase: 'arrived' }} />)
     expect(tree.container.textContent).toContain('Working in cat-code')
     expect(tree.container.textContent).toContain(notice.content)
+    expect(tree.container.textContent).not.toContain('›')
     expect(tree.container.querySelector('.workspace-arrival-wash')).toBeNull()
     // Main's authoritative outcome metadata names exactly which notice the
     // stopped/failed divider replaces, rather than classifying output prose.

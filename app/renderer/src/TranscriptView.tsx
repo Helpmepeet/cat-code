@@ -6676,7 +6676,7 @@ function SystemNoticeBox({
   }, [retry?.updateId, turnLive, retry?.state, retry?.replay, retry?.delayMs])
   return (
     <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
-      {!retry || retry.state === 'waiting' ? <span className={`text-[12px] leading-5 ${glyphTone}`} aria-hidden>
+      {glyph && (!retry || retry.state === 'waiting') ? <span className={`text-[12px] leading-5 ${glyphTone}`} aria-hidden>
         {glyph}
       </span> : null}
       <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-text-muted">
@@ -6696,10 +6696,10 @@ const NOTICE_STYLE: Record<
   | 'local_command_output'
   | 'account_diagnostic'
   | 'provider_error',
-  { glyph: string; glyphTone: string }
+  { glyph: string | null; glyphTone: string }
 > = {
   api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },
-  local_command_output: { glyph: '›', glyphTone: 'text-text-muted' },
+  local_command_output: { glyph: null, glyphTone: 'text-text-muted' },
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
   provider_error: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
