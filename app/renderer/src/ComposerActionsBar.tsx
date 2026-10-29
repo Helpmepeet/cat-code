@@ -249,6 +249,9 @@ function RunControl({
   )
   const [step, setStep] = useState<'main' | 'model' | 'mode'>('main')
   const focusAfterStep = useRef<'model' | 'mode' | 'list' | null>(null)
+  // A card opened by `/model` or `/effort` serves that one change, so its pick
+  // closes it; a card opened from the face stays open for further adjustment.
+  const commandTarget = useRef<'model' | 'effort' | null>(null)
   useEffect(() => {
     const destination = focusAfterStep.current
     if (!destination) return
@@ -337,6 +340,7 @@ function RunControl({
     if (!interactive || open) return
     if (target !== 'model' && target !== 'mode' && target !== 'effort') return
     focusAfterStep.current = null
+    commandTarget.current = target === 'mode' ? null : target
     const level = snapshot?.effort.selected ?? snapshot?.effort.current
     setOpenFocus(target === 'effort' && level ? `[data-effort-rung="${level}"]` : RUN_PANEL_FOCUS)
     setStep(target === 'effort' ? 'main' : target)
@@ -364,6 +368,7 @@ function RunControl({
         onClick={() => {
           triggerRef.current?.focus()
           focusAfterStep.current = null
+          commandTarget.current = null
           setOpenFocus(RUN_PANEL_FOCUS)
           setStep('main')
           setOpen(value => !value)
@@ -424,7 +429,10 @@ function RunControl({
                     levels={snapshot.effort.options}
                     selected={snapshot.effort.selected}
                     applied={snapshot.effort.current}
-                    onSelect={onSetEffort}
+                    onSelect={effort => {
+                      onSetEffort(effort)
+                      if (commandTarget.current === 'effort') close()
+                    }}
                   />
                 </div>
               ) : null}
@@ -497,7 +505,8 @@ function RunControl({
                         onClick={() => {
                           if (groupLocked) return
                           onSetModel?.(option.value)
-                          returnToMain()
+                          if (commandTarget.current === 'model') close()
+                          else returnToMain()
                         }}
                         className={`${MENU_FOCUS_RING} flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
                           active ? 'bg-white/[0.06]' : ''

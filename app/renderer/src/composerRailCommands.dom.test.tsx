@@ -153,6 +153,61 @@ test('picking from a card opened by /mode closes it and returns to the composer'
   expect(document.activeElement === composer).toBe(true)
 })
 
+test('picking from a card opened by /model closes it and returns to the composer', async () => {
+  const { composer, recorded, run } = await mountBar()
+  await run('model')
+  const next = Array.from(openMenu()!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'))
+    .find(row => row.textContent?.includes('GPT-5.5'))
+  await act(async () => { next!.click() })
+  await harness.nextFrame()
+  expect(recorded.models).toEqual(['gpt-5.5'])
+  expect(openMenu()).toBeNull()
+  expect(document.activeElement === composer).toBe(true)
+})
+
+test('picking a level from a card opened by /effort closes it and returns to the composer', async () => {
+  const efforts: string[] = []
+  const { composer, run } = await mountBar({ onSetEffort: effort => efforts.push(effort) })
+  await run('effort')
+  await act(async () => {
+    openMenu()!.querySelector<HTMLButtonElement>('[data-effort-rung="xhigh"]')!.click()
+  })
+  await harness.nextFrame()
+  expect(efforts).toEqual(['xhigh'])
+  expect(openMenu()).toBeNull()
+  expect(document.activeElement === composer).toBe(true)
+})
+
+test('a card opened by /model stays open for an effort change made on its way', async () => {
+  const efforts: string[] = []
+  const { run } = await mountBar({ onSetEffort: effort => efforts.push(effort) })
+  await run('model')
+  await press('Escape')
+  await act(async () => {
+    openMenu()!.querySelector<HTMLButtonElement>('[data-effort-rung="xhigh"]')!.click()
+  })
+  expect(efforts).toEqual(['xhigh'])
+  expect(openMenu()?.getAttribute('aria-label')).toBe('Run controls')
+})
+
+test('a face click after a slash request keeps the card open on a model pick', async () => {
+  const { tree, recorded, run } = await mountBar()
+  await run('model')
+  await press('Escape')
+  await press('Escape')
+  await act(async () => {
+    tree.container.querySelector<HTMLElement>('[data-composer-face="run-controls"]')!.click()
+  })
+  await harness.nextFrame()
+  await act(async () => { openMenu()!.querySelector<HTMLButtonElement>('[data-run-model]')!.click() })
+  await harness.nextFrame()
+  const next = Array.from(openMenu()!.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'))
+    .find(row => row.textContent?.includes('GPT-5.5'))
+  await act(async () => { next!.click() })
+  expect(recorded.models).toEqual(['gpt-5.5'])
+  expect(openMenu()?.getAttribute('aria-label')).toBe('Run controls')
+})
+
 test('/effort opens the main card with the current effort rung focused', async () => {
   const { run } = await mountBar()
   await run('effort')
