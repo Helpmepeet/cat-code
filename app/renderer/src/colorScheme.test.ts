@@ -169,6 +169,19 @@ test('the frame seam is its own token in both appearances and leaves the shell s
   expect(light).toContain('--shell-seam: rgba(9, 9, 11, 0.1);')
 })
 
+test('the panel edge is open in dark and keeps the hairline in light and glass', () => {
+  const css = themeCss()
+  const dark = css.match(/:root\s*\{([\s\S]*?)\n\}/)?.[1] ?? ''
+  const light = css.match(/html\[data-appearance='light'\]\s*\{([^}]*(?:\([^)]*\)[^}]*)*)\}/)?.[1] ?? ''
+  const panel = css.match(/html\[data-glass='on'\] \[data-window-panel\]\s*\{([^}]*)\}/)?.[1] ?? ''
+  const tab = css.match(/html\[data-glass='on'\] \[data-window-active-tab\]\s*\{([^}]*)\}/)?.[1] ?? ''
+  expect(dark).toContain('--frame-edge: transparent;')
+  expect(light).toContain('--frame-edge: rgba(9, 9, 11, 0.1);')
+  expect(panel).toContain('--frame-edge: var(--frame-seam);')
+  expect(tab).toContain('--frame-edge: var(--frame-seam);')
+  expect(css).toMatch(/\.shell-panel\s*\{[^}]*border:\s*1px solid var\(--frame-edge\)/)
+})
+
 /**
  * `color-scheme` is load-bearing twice: Chromium's own form controls, focus
  * rings and default scrollbars, AND every `light-dark()` pair in this
@@ -195,6 +208,7 @@ test('the theme routes each appearance-dependent token through an overridable va
     ['--color-shell-chrome', '--shell-chrome'],
     ['--color-shell-seam', '--shell-seam'],
     ['--color-frame-seam', '--frame-seam'],
+    ['--color-frame-edge', '--frame-edge'],
     ['--color-shell-hover', '--shell-hover'],
     ['--color-shell-active', '--shell-active'],
     ['--color-surface-raised', '--surface-raised'],

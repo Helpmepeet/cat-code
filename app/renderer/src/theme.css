@@ -151,6 +151,11 @@
    * grounds rather than dividing content, and kept off `--shell-seam` so its
    * call sites keep their weight. */
   --frame-seam: rgba(255, 255, 255, 0.08);
+  /* The content panel's and active tab's outline. Dark drops it: the chrome to
+   * panel ground step already marks the edge, and a hairline on top of that
+   * boxes the transcript in. Light and glass keep `--frame-seam`, because their
+   * ground step is too faint or the panel is translucent. */
+  --frame-edge: transparent;
   --shell-hover: rgba(255, 255, 255, 0.045);
   --shell-active: rgba(255, 255, 255, 0.06);
 
@@ -321,6 +326,7 @@ html[data-appearance='light'] {
    * nothing; these are the same washes turned around. */
   --shell-seam: rgba(9, 9, 11, 0.1);
   --frame-seam: rgba(9, 9, 11, 0.1);
+  --frame-edge: rgba(9, 9, 11, 0.1);
   --shell-hover: rgba(9, 9, 11, 0.04);
   --shell-active: rgba(9, 9, 11, 0.065);
 
@@ -798,6 +804,9 @@ html[data-glass='on'] [data-window-overlay] {
  */
 html[data-glass='on'] [data-window-panel] {
   background: transparent;
+  /* A translucent panel has no ground step to mark its edge, so glass keeps the
+   * hairline in both appearances, on the panel and on the tab that joins it. */
+  --frame-edge: var(--frame-seam);
 }
 
 /* The active tab cannot be opaque against a translucent panel. It takes the
@@ -806,6 +815,7 @@ html[data-glass='on'] [data-window-panel] {
 html[data-glass='on'] [data-window-active-tab] {
   background: light-dark(rgba(252, 252, 253, 0.2), rgba(9, 9, 11, 0.2));
   box-shadow: none;
+  --frame-edge: var(--frame-seam);
 }
 
 html[data-glass='on'] [data-window-frame] {
@@ -829,6 +839,7 @@ html[data-glass='on'] [data-window-frame] {
   --color-shell-chrome: var(--shell-chrome);
   --color-shell-seam: var(--shell-seam);
   --color-frame-seam: var(--frame-seam);
+  --color-frame-edge: var(--frame-edge);
   --color-shell-hover: var(--shell-hover);
   --color-shell-active: var(--shell-active);
   /* Raised floating surfaces (P4-1 shared primitives): a toast/popover sits one
@@ -1490,7 +1501,7 @@ html[data-glass='on'] [data-window-frame] {
   .shell-panel {
     --app-bg: var(--conversation-bg);
     background: var(--conversation-bg);
-    border: 1px solid var(--frame-seam);
+    border: 1px solid var(--frame-edge);
     border-radius: 10px;
     overflow: hidden;
   }

@@ -279,7 +279,7 @@ function entryTarget(entry: TabBarEntry): NavigationTarget {
  * A tab's frame treatment, shared by both renderers. Every tab keeps the same
  * top margin, radius and (transparent) border, so a label does not move when its
  * tab becomes active. The active tab is filled with the content panel's ground,
- * edged on top and sides by the frame seam, and covers the panel's top border
+ * edged on top and sides by the panel's own edge, and covers the panel's top border
  * beneath it with a 1px shadow so the two read as one surface. An inactive tab
  * ends in a short divider instead, dropped on the tab just before the active one
  * because the active tab's edge already marks that boundary.
@@ -289,7 +289,7 @@ function tabClass(active: boolean, beforeActive: boolean): string {
   const base =
     'group relative mt-1.5 flex min-w-[90px] max-w-[256px] flex-1 cursor-pointer select-none items-center gap-1.5 rounded-t-lg border border-b-0 pl-3 pr-1.5 [-webkit-app-region:no-drag]'
   if (active) {
-    return `${base} border-frame-seam bg-[var(--conversation-bg)] shadow-[0_1px_0_var(--conversation-bg)]`
+    return `${base} border-frame-edge bg-[var(--conversation-bg)] shadow-[0_1px_0_var(--conversation-bg)]`
   }
   const divider = beforeActive
     ? ''
