@@ -86,6 +86,12 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
   const savedRows = Array.from({ length: fixture === 'many_rows' ? 20_000 : 4 }, (_, i) => ({ path: roots[i % roots.length]!, lastUsedAt: 20_000 - i }))
   writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: Object.fromEntries(roots.map(path => [path, { hasTrustDialogAccepted: true }])) }))
   writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: queuedHuman ? ['JumpWorkspace', 'Read'] : ['JumpWorkspace'] } }))
+  if (fixture === 'short' || retained) {
+    const hook = join(root, 'resume-hook.ts')
+    writeFileSync(hook, `console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'FRESH_HANDOFF_REQUIRED_RESUME_POLICY' } }))`)
+    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpWorkspace'] },
+      hooks: { SessionStart: [{ matcher: 'resume', hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
+  }
   writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n')
   if (queuedHuman) writeFileSync(join(root, 'queued-read.txt'), 'Read completed before the queued workspace request.\n')
   const hookLog = join(root, 'instructions.jsonl')
@@ -115,6 +121,8 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     if (JSON.parse(body).stream !== true) return Response.json({ id: 'baseline-auxiliary', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
       content: [{ type: 'text', text: 'Fixture' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } })
     const destination = body.includes('BASELINE_DESTINATION_INSTRUCTIONS')
+    if ((fixture === 'short' || retained) && destination) expect(body).toContain('FRESH_HANDOFF_REQUIRED_RESUME_POLICY')
+    if (retained && destination) expect(body).toContain('RETAINED_PARTIAL_TOOL_TRAJECTORY')
     if (unresolved && destination) {
       expect(body).toContain('DESTINATION_INCLUDED_INSTRUCTIONS')
       expect(existsSync(probeLog) && readFileSync(probeLog, 'utf8').split('\n').includes(cwd)).toBe(false)

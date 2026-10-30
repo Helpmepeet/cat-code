@@ -20,6 +20,8 @@ import type {
 } from './sessionEvents.js'
 
 export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
+  /** Minted only inside the fresh execution claim, never by app input. */
+  freshHandoffAdmission?: import('../../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity
   priorAssistantContext?: PriorAssistantContext | null
   uuid?: string
   isMeta?: boolean
@@ -45,7 +47,7 @@ export type QueryEngineSessionLike = {
   ): AsyncIterable<SDKMessage>
   interrupt?: (intent?: AppSessionAbortIntent) => void
   refreshAbortController?: () => AbortController
-  continueHandoff?: (operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void> } & HandoffTurnLifecycleOptions) => AsyncIterable<SDKMessage>
+  continueHandoff?: (operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void>; freshHandoffAdmission?: QueryEngineSessionOptions['freshHandoffAdmission'] } & HandoffTurnLifecycleOptions) => AsyncIterable<SDKMessage>
   readHandoffOutcome?: (operationId: string) => Promise<HandoffTerminalOutcome | null>
   recoverHandoffReconciliation?: (notice: { displayUuid: string; contextUuid: string }) => Promise<{
     inputUuid: string; contextUuid: string; checkpoint: ResumeCheckpoint

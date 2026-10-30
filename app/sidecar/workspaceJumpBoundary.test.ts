@@ -531,6 +531,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
     }
     server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
       message: { type: 'app.submit', requestId: 'after', prompt: 'before settlement', options: { submitId: 'after' } } }))
+    await waitForSubmitResults(received, 'after', 1)
     expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'after')).toMatchObject({
       accepted: subtype === 'interrupted',
     })

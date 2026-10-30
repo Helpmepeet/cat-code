@@ -913,3 +913,62 @@ test('real W/R seals complete actual parallel tool outputs through the transport
   expect(actual).toEqual(outputs)
   expect(h.coordinator.snapshot(h.appSessionId)?.continuation.outcome).toBe('success')
 })
+
+test.each(['intact', 'damaged'] as const)('fresh execution admission supplies deferred policy but cannot bypass %s tail evidence', async kind => {
+  const seed = createUserMessage({ content: 'preserved request at a parked source boundary' })
+  await storage.recordTranscript([seed])
+  await storage.markActiveConversationTip(seed.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably(seed.uuid)
+  if (kind === 'damaged') {
+    await fsPromises.appendFile(storage.getTranscriptPath(), '{"type":"assistant","message":')
+    await storage.prepareOwnedTranscriptForResume(bootstrap.getSessionId())
+  }
+  const loaded = await loadConversationForResume(bootstrap.getSessionId(), storage.getTranscriptPath(), { mutable: true, interruptedTurn: 'ignore' })
+  expect(loaded?.recoveryReviewRequired).toBe(true)
+  const identity = { appSessionId: randomUUID(), engineSessionId: bootstrap.getSessionId(), operationId: randomUUID(),
+    continuationId: randomUUID(), sourceGeneration: randomUUID(), admissionGeneration: randomUUID(), operationSha256: 'a'.repeat(64) }
+  const sessionStart = await import('../../src/utils/sessionStart.js')
+  const { createAttachmentMessage } = await import('../../src/utils/attachments.js')
+  let hooks = 0, providers = 0, admissions = 0
+  spies.push(spyOn(sessionStart, 'processSessionStartHooks').mockImplementation(async () => {
+    hooks++
+    return [createAttachmentMessage({ type: 'hook_additional_context', content: ['fresh admitted policy'],
+      hookName: 'SessionStart', toolUseID: 'SessionStart', hookEvent: 'SessionStart' })] as never
+  }))
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages }) {
+    providers++
+    expect(hooks).toBe(1)
+    expect(JSON.stringify(messages)).toContain('fresh admitted policy')
+    yield assistant([{ type: 'text', text: 'continued authorized move' }])
+  }))
+  const controller = createRuntimeBackedAppSession({ queryEngineConfig: {
+    ...engineConfig(loaded!.messages, []), initialRecoveryReviewRequired: true,
+    verifyFreshHandoffAdmission: async actual => {
+      expect(actual).toEqual(identity)
+      const { readWorkspaceHandoffExecution } = await import('../../src/utils/workspaceHandoffExecutionState.js')
+      const execution = await readWorkspaceHandoffExecution(identity)
+      expect(execution.kind === 'valid' && execution.record.consumed && !execution.record.inputCommitted).toBe(true)
+      admissions++
+    },
+  } })
+  await controller.waitForInitialization()
+  await expect(controller.submit('unclaimed automatic work', { isMeta: true })).rejects.toThrow('genuine user message')
+  expect(admissions).toBe(0)
+  await controller.configureWorkspaceHandoff({ identity, observerGeneration: identity.admissionGeneration,
+    origin: 'fresh', recover: false })
+  const started = await controller.startHandoffContinuation()
+  if (kind === 'damaged') {
+    await expect(started.completion).rejects.toThrow('Damaged history requires a genuine user message')
+    expect(admissions).toBe(0)
+    expect(hooks).toBe(0)
+    expect(providers).toBe(0)
+    expect(controller.canStartAutomaticTurn()).toBe(false)
+  } else {
+    await started.completion
+    expect(admissions).toBe(1)
+    expect(hooks).toBe(1)
+    expect(providers).toBe(1)
+    await expect(controller.startHandoffContinuation().then(result => result.completion)).resolves.toBeUndefined()
+    expect(providers).toBe(1)
+  }
+})

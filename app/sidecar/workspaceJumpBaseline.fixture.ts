@@ -13,7 +13,11 @@ if (mode === 'mint') {
   const storage = await import('../../src/utils/sessionStorage.js')
   switchSession(asSessionId(process.argv[3]!))
   const toolUseId = 'baseline-agent-tool'
-  const messages = [createAssistantMessage({ content: [{ type: 'tool_use', id: toolUseId, name: 'Agent', input: { description: 'fixture', subagent_type: 'Explore' } }] }),
+  const messages = [createAssistantMessage({ content: [
+    { type: 'text', text: 'RETAINED_PARTIAL_TOOL_TRAJECTORY', citations: [] },
+    { type: 'tool_use', id: toolUseId, name: 'Agent', input: { description: 'fixture', subagent_type: 'Explore' } },
+    { type: 'tool_use', id: 'baseline-retained-open', name: 'Read', input: { file_path: '/isolated/never-replay' } },
+  ] }),
     createUserMessage({ content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'fixture complete' }] })]
   for (let i = 0; i < 200; i++) messages.push(createUserMessage({ content: `fixture ${i} ${'x'.repeat(1024)}` }), createAssistantMessage({ content: 'fixture complete' }))
   await storage.recordTranscript(messages)

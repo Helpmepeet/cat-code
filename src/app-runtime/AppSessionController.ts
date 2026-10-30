@@ -62,6 +62,7 @@ export type AppSessionControllerAdapter = {
       onInputPersisted?: () => void | Promise<void>
       inlineCommand?: InlineCommandOperation
       handoffContinuation?: { operationId: string }
+      freshHandoffAdmission?: import('../../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity
       /** Controller-owned admission barrier; never accepted from app.submit. */
       handoffReconciliationAdmission?: true
     } & HandoffTurnLifecycleOptions
@@ -213,6 +214,7 @@ export class AppSessionController {
     return execution.claim(() => {
       queryTimingBoundary({ stage: 'continuation_accepted', engineSessionId: execution.configuration.identity.engineSessionId, operationId: execution.configuration.identity.operationId })
       return this.continueHandoff(execution.configuration.identity.operationId, {
+        freshHandoffAdmission: execution.configuration.identity,
         uuid: execution.configuration.identity.continuationId,
         onHandoffInputCommitted: checkpoint => execution.inputCommitted(checkpoint),
         onExecutionClosed: outcome => execution.close(outcome),
@@ -306,7 +308,7 @@ export class AppSessionController {
     this.announceHandoffState()
   }
 
-  async continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void> } & HandoffTurnLifecycleOptions): Promise<void> {
+  async continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void>; freshHandoffAdmission?: import('../../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity } & HandoffTurnLifecycleOptions): Promise<void> {
     if (this.handoffReservation !== operationId || this.requiresUserReconciliation || this.handoffContinuationAdmitted) throw new Error('Workspace continuation is not reserved')
     this.handoffContinuationAdmitted = true
     await this.runSubmit(handoffContinuationPrompt(), {
@@ -502,7 +504,7 @@ export class AppSessionController {
 
   private async runSubmit(
     prompt: AppSessionPrompt,
-    options?: AppSessionSubmitOptions & HandoffTurnLifecycleOptions & { inlineCommand?: InlineCommandOperation },
+    options?: AppSessionSubmitOptions & HandoffTurnLifecycleOptions & { inlineCommand?: InlineCommandOperation; freshHandoffAdmission?: import('../../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity },
     continuationOperationId?: string,
   ): Promise<void> {
     if (this.activeTurn) {
@@ -540,6 +542,7 @@ export class AppSessionController {
               origin: options?.origin,
               priorAssistantContext: options?.priorAssistantContext ?? null,
               inlineCommand: options?.inlineCommand,
+              ...(continuationOperationId ? { freshHandoffAdmission: options?.freshHandoffAdmission } : {}),
               ...(continuationOperationId ? { handoffContinuation: { operationId: continuationOperationId } } : {}),
               ...(reconcileInput ? { handoffReconciliationAdmission: true as const } : {}),
               onExecutionClosed: options?.onExecutionClosed,

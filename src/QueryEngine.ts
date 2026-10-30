@@ -191,6 +191,8 @@ export type QueryEngineConfig = {
   customSystemPrompt?: string
   appendSystemPrompt?: string
   initialRecoveryReviewRequired?: boolean
+  /** Receiving runtime verifies the exact parked boundary and current claim. */
+  verifyFreshHandoffAdmission?: (identity: import('../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity) => Promise<void>
   /** Trusted runtime metadata resolved after input persistence, before query. */
   getRuntimeSystemPromptAddendum?: (signal: AbortSignal) => Promise<string | undefined>
   userSpecifiedModel?: string
@@ -456,6 +458,7 @@ export class QueryEngine {
       inlineCommand?: InlineCommandOperation
       /** Only used by continueHandoff; never populated from app.submit. */
       handoffContinuation?: { operationId: string }
+      freshHandoffAdmission?: import('../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity
       /** Only the controller can request durable genuine-user reconciliation. */
       handoffReconciliationAdmission?: true
     } & HandoffTurnLifecycleOptions,
@@ -475,7 +478,18 @@ export class QueryEngine {
     prompt: string | ContentBlockParam[],
     options: NonNullable<Parameters<QueryEngine['submitMessage']>[1]>,
   ): AsyncGenerator<SDKMessage, void, unknown> {
-    if (this.tailRecoveryHold && (options.isMeta || options.origin || options.handoffContinuation || options.inlineCommand)) {
+    let freshHandoffAdmitted = false
+    if (options.freshHandoffAdmission && options.handoffContinuation &&
+      options.freshHandoffAdmission.operationId === options.handoffContinuation.operationId &&
+      this.config.verifyFreshHandoffAdmission) {
+      // A fresh claim may explain an intact parked tail, never damaged bytes.
+      if (readTailRecoveryState(this.tailRecoveryPath, getSessionId())?.reviewRequired) {
+        throw new Error('Damaged history requires a genuine user message')
+      }
+      await this.config.verifyFreshHandoffAdmission(options.freshHandoffAdmission)
+      freshHandoffAdmitted = true
+    }
+    if (this.tailRecoveryHold && !freshHandoffAdmitted && (options.isMeta || options.origin || options.handoffContinuation || options.inlineCommand)) {
       throw new Error('Recovered history requires a genuine user message')
     }
     if (options?.inlineCommand) {
@@ -872,13 +886,13 @@ export class QueryEngine {
       const input = messagesFromUserInput.find(message => message.type === 'user' && !message.isMeta && !message.origin &&
         !message.isVirtual && !message.sourceToolAssistantUUID && message.toolUseResult === undefined &&
         !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result')))
-      if (!input) throw new Error('Deferred resume policy requires a genuine new user message')
+      if (!input && !freshHandoffAdmitted) throw new Error('Deferred resume policy requires a genuine new user message')
       const context = await runDeferredResumeHooks()
       this.mutableMessages.push(...context)
       messages.push(...context)
       if (persistSession && context.length) {
         await recordTranscriptFn(messages)
-        await flushCurrentTranscriptDurablyFn(input.uuid)
+        await flushCurrentTranscriptDurablyFn(input?.uuid ?? options.uuid)
       }
       options.onResumeHooksApplied?.()
       this.resumeHooksPending = false
@@ -891,11 +905,14 @@ export class QueryEngine {
         const input = messagesFromUserInput.find(message => message.type === 'user' && !message.isMeta && !message.origin &&
           !message.isVirtual && !message.sourceToolAssistantUUID && message.toolUseResult === undefined &&
           !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result')))
-        if (!input) throw new Error('Recovered history requires a genuine persisted user message')
-        if (!inputTranscriptTip) throw new Error('Recovery input has no durable active tip')
-        await markActiveConversationTip(inputTranscriptTip)
-        await verifyActiveTranscriptTipDurably(inputTranscriptTip, input.uuid)
+        if (!input && !freshHandoffAdmitted) throw new Error('Recovered history requires a genuine persisted user message')
+        if (!freshHandoffAdmitted) {
+          if (!inputTranscriptTip || !input) throw new Error('Recovery input has no durable active tip')
+          await markActiveConversationTip(inputTranscriptTip)
+          await verifyActiveTranscriptTipDurably(inputTranscriptTip, input.uuid)
+        }
         if (readTailRecoveryState(this.tailRecoveryPath, getSessionId())?.reviewRequired) {
+          if (!input || freshHandoffAdmitted) throw new Error('Damaged history requires a genuine persisted user message')
           acceptTailRecoveryReview(this.tailRecoveryPath, getSessionId(), input.uuid)
         }
         this.tailRecoveryHold = false
@@ -1875,7 +1892,7 @@ export class QueryEngine {
     this.abortController.abort(reason)
   }
 
-  continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void> } & HandoffTurnLifecycleOptions): AsyncGenerator<SDKMessage, void, unknown> {
+  continueHandoff(operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void>; freshHandoffAdmission?: import('../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity } & HandoffTurnLifecycleOptions): AsyncGenerator<SDKMessage, void, unknown> {
     if (this.inlineSettlements) throw new Error('An inline command is still active')
     if (!operationId) throw new Error('Missing handoff operation identity')
     return this.submitMessage(handoffContinuationPrompt(), {

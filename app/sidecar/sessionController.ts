@@ -65,7 +65,8 @@ import {
 } from '../../src/utils/fileStateCache.js'
 import type { Message } from '../../src/types/message.js'
 import { SYNTHETIC_MODEL } from '../../src/utils/messages.js'
-import { getTranscriptPath } from '../../src/utils/sessionStorage.js'
+import { getTranscriptPath, verifyHandoffTranscriptDurably } from '../../src/utils/sessionStorage.js'
+import { readWorkspaceHandoffExecution } from '../../src/utils/workspaceHandoffExecutionState.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
 import { buildDesktopSystemPrompt } from './desktopSystemPrompt.js'
 import { createListPeersTool } from './listPeersTool.js'
@@ -842,6 +843,38 @@ export async function createSidecarSessionController({
       : null,
   })
 
+  queryEngineConfig.verifyFreshHandoffAdmission = async identity => {
+    const saved = appSessionId ? readWorkspaceJump(appSessionId) : null
+    if (!saved || saved.version !== 2 || saved.origin !== 'fresh' || !generation ||
+      saved.appSessionId !== identity.appSessionId || saved.engineSessionId !== getSessionId() ||
+      identity.engineSessionId !== getSessionId() || saved.operationId !== identity.operationId ||
+      saved.sourceGeneration !== identity.sourceGeneration || saved.continuation.id !== identity.continuationId ||
+      saved.continuation.admissionGeneration !== generation || identity.admissionGeneration !== generation ||
+      workspaceJumpOperationSha256(saved) !== identity.operationSha256 ||
+      saved.location !== 'destination' || saved.target.cwd !== cwd || saved.cancellation ||
+      saved.review.required || saved.continuation.outcome !== 'pending' || !saved.boundary) {
+      throw new Error('Fresh workspace continuation admission changed')
+    }
+    const execution = await readWorkspaceHandoffExecution(identity)
+    if (execution.kind !== 'valid' || execution.record.origin !== 'fresh' || !execution.record.consumed ||
+      execution.record.inputCommitted || execution.record.cancellation || execution.record.terminal ||
+      execution.record.notice || execution.record.reconciliation) {
+      throw new Error('Fresh workspace continuation claim is unavailable')
+    }
+    // The loader may append a synthetic interruption prompt after this exact
+    // parked tool result. It is not authority, and is excluded from the proof.
+    const tip = initialMessages?.findIndex(message => message.uuid === saved.boundary!.tipUuid) ?? -1
+    // Match the source's exchange selection: start at this handoff's owning
+    // assistant, not earlier retained tool trajectories.
+    const start = initialMessages?.findIndex(message => message.type === 'assistant' &&
+      message.message.content.some(block => block.type === 'tool_use' && block.id === saved.boundary!.toolUseId)) ?? -1
+    if (start < 0 || tip < start) throw new Error('Fresh workspace source boundary is unavailable')
+    await verifyHandoffTranscriptDurably({
+      tip_uuid: saved.boundary.tipUuid, tool_use_id: saved.boundary.toolUseId,
+      exchange_uuids: initialMessages!.slice(start, tip + 1)
+        .filter(message => message.type === 'user' || message.type === 'assistant').map(message => message.uuid),
+    })
+  }
   const controller = createRuntimeBackedAppSession({
     queryEngineConfig,
     initializeController: async controller => {
