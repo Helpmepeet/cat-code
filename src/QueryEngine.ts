@@ -1861,7 +1861,7 @@ export class QueryEngine {
 
   async persistHandoffOutcome(operationId: string, outcome: HandoffTerminalOutcome): Promise<SDKMessage[]> {
     if (this.inlineSettlements) throw new Error('An inline command is still active')
-    if (!operationId || operationId.length > 128 || (outcome !== 'failed' && outcome !== 'cancelled' && outcome !== 'uncertain')) throw new Error('Invalid handoff outcome')
+    if (!readHandoffOutcomeData({ operationId, outcome })) throw new Error('Invalid handoff outcome')
     const persisted = await findHandoffOutcomeInActiveTranscript(operationId)
     if (persisted) {
       if (persisted.outcome !== outcome) throw new Error('Handoff terminal outcome conflicts with saved history')

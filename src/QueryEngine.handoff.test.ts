@@ -1188,6 +1188,73 @@ test.each(['saved', 'cleared', 'absent'] as const)('resume routes restore equiva
   }
 })
 
+test('a confirmed failed continuation has its own durable notice without replaying work or releasing the review hold', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const { isWorkspaceHandoffSnapshot } = await import('../app/shared/workspaceHandoff.js')
+  const seed = createUserMessage({ content: 'original requested work' })
+  await storage.recordTranscript([seed])
+  await storage.flushCurrentTranscriptDurably()
+  let providerCalls = 0
+  const failed = assistant([{ type: 'text', text: 'Connection interrupted after partial output.' }])
+  failed.isApiErrorMessage = true
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield failed
+  }))
+  const runtime = engine([], { initialMessages: [seed] })
+  const controller = createQueryEngineSessionController(runtime)
+  const configuration = handoffConfiguration()
+  await controller.configureWorkspaceHandoff(configuration)
+  await (await controller.startHandoffContinuation()).completion
+  expect(controller.getWorkspaceHandoffSnapshot()?.record).toMatchObject({
+    kind: 'valid', record: { consumed: true, terminal: { outcome: 'failed' } },
+  })
+
+  // The host requests conservative settlement; the engine owns the proof of
+  // whether this is a known failure or genuinely missing completion evidence.
+  await controller.settleWorkspaceHandoff('uncertain')
+  const snapshot = controller.getWorkspaceHandoffSnapshot()!
+  expect(snapshot).toMatchObject({
+    gate: { mode: 'review', requiresUserReconciliation: true },
+    record: { kind: 'valid', record: { notice: { outcome: 'continuation_failed' } } },
+  })
+  expect(isWorkspaceHandoffSnapshot(snapshot)).toBe(true)
+  if (snapshot.record.kind !== 'valid') throw new Error('Missing execution receipt')
+  const record = snapshot.record.record
+  for (const altered of [
+    { ...record, consumed: false, inputCommitted: false },
+    { ...record, terminal: null },
+    { ...record, admissionGeneration: null, inputCommitted: false },
+    { ...record, terminal: { ...record.terminal!, outcome: 'success' } },
+    { ...record, terminal: { ...record.terminal!, outcome: 'interrupted' } },
+    { ...record, terminal: { ...record.terminal!, outcome: 'not_started' } },
+  ]) {
+    expect(isWorkspaceHandoffSnapshot({ ...snapshot, record: { kind: 'valid', record: altered } })).toBe(false)
+  }
+  const visible = toSDKMessages([...runtime.getMessages()]).find(message =>
+    message.type === 'system' && message.subtype === 'local_command_output') as { content: string }
+  expect(visible.content).toBe('The workspace changed successfully, but the work that followed failed. Send a message to review progress and continue.')
+  expect(visible.content).not.toContain('could not be confirmed')
+  expect(await runtime.readHandoffOutcome(configuration.identity.operationId)).toBe('continuation_failed')
+  await runtime.verifyResumeCheckpoint(record.notice!.checkpoint)
+  await controller.settleWorkspaceHandoff('uncertain')
+  expect(runtime.getMessages().filter(message => message.type === 'system' && message.subtype === 'workspace_handoff_outcome')).toHaveLength(1)
+  expect(await controller.releaseWorkspaceHandoff(configuration.identity.operationId, 'open')).toBe('refused')
+  await expect(controller.submit('automatic retry', { isMeta: true })).rejects.toThrow('user reconciliation')
+  expect(providerCalls).toBe(1)
+
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const resumed = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  expect(resumed).not.toBeNull()
+  const reopened = createRuntimeBackedAppSession({
+    queryEngineConfig: engineConfig([], { initialMessages: resumed!.messages }),
+  })
+  expect(reopened.requiresHandoffReconciliation()).toBe(true)
+  expect(reopened.canStartAutomaticTurn()).toBe(false)
+  expect(providerCalls).toBe(1)
+})
+
 test('restart recovers genuine input committed before reconciliation receipt without replaying that input', async () => {
   const { createUserMessage } = await import('./utils/messages.js')
   const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')

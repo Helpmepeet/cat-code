@@ -3,7 +3,7 @@ type HandoffCaller = { agentId?: unknown; turnHandoff?: TurnHandoff }
 
 export type HandoffRequest = { operationId: string; toolUseId: string }
 export type HandoffBoundary = { tip_uuid: string; tool_use_id: string }
-export type HandoffTerminalOutcome = 'failed' | 'cancelled' | 'uncertain'
+export type HandoffTerminalOutcome = 'failed' | 'cancelled' | 'uncertain' | 'continuation_failed'
 
 /** Shared by every executor/provider attempt in one main conversational turn. */
 export class TurnHandoff {
@@ -54,6 +54,7 @@ export function handoffContinuationPrompt(): string {
 }
 
 export function handoffTerminalPrompt(outcome: HandoffTerminalOutcome): string {
+  if (outcome === 'continuation_failed') return 'The workspace changed successfully, but the continuation failed. Some actions may have completed. Wait for the user to review existing progress and provide the next instruction.'
   if (outcome === 'uncertain') return 'The workspace changed, but continuation completion could not be confirmed. Some work may have started. Wait for the user to reconcile the conversation before continuing.'
   return outcome === 'cancelled'
     ? 'The workspace change or continuation was stopped. Some work may have started. Wait for the user to review existing progress and provide the next instruction.'
@@ -61,6 +62,7 @@ export function handoffTerminalPrompt(outcome: HandoffTerminalOutcome): string {
 }
 
 export function handoffOutcomeText(outcome: HandoffTerminalOutcome): string {
+  if (outcome === 'continuation_failed') return 'The workspace changed successfully, but the work that followed failed. Send a message to review progress and continue.'
   if (outcome === 'uncertain') return 'The workspace changed, but completion could not be confirmed. Some work may have started. Send a message to review what happened.'
   if (outcome === 'cancelled') return 'The workspace change or continuation was stopped. Review existing progress before continuing.'
   return 'The workspace change could not finish. Work did not continue. Send a message when you are ready to continue.'
@@ -71,7 +73,7 @@ export function readHandoffOutcomeData(value: unknown): { operationId: string; o
   const data = value as Record<string, unknown>
   if (Object.keys(data).sort().join(',') !== 'operationId,outcome' ||
     typeof data.operationId !== 'string' || !data.operationId || data.operationId.length > 128 ||
-    typeof data.outcome !== 'string' || !['failed', 'cancelled', 'uncertain'].includes(data.outcome)) return null
+    typeof data.outcome !== 'string' || !['failed', 'cancelled', 'uncertain', 'continuation_failed'].includes(data.outcome)) return null
   return { operationId: data.operationId, outcome: data.outcome as HandoffTerminalOutcome }
 }
 

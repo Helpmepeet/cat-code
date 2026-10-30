@@ -238,7 +238,13 @@ export class AppSessionController {
     if (!execution || !execution.canSettle || this.activeTurn || !this.adapter.persistHandoffOutcome || !this.adapter.sealResumeCheckpoint) throw new Error('Workspace outcome cannot be settled')
     const operationId = execution.configuration.identity.operationId
     const existing = execution.persisted?.notice
-    const actualOutcome = existing?.outcome ?? await this.adapter.readHandoffOutcome?.(operationId) ?? outcome
+    // A generic host settlement request must not erase durable failure evidence.
+    // Keep any already-written notice stable across receipt recovery.
+    const record = execution.persisted
+    const classifiedOutcome = outcome === 'uncertain' && record?.consumed &&
+      record.admissionGeneration !== null && record.terminal?.outcome === 'failed'
+      ? 'continuation_failed' : outcome
+    const actualOutcome = existing?.outcome ?? await this.adapter.readHandoffOutcome?.(operationId) ?? classifiedOutcome
     const messages = await this.adapter.persistHandoffOutcome(operationId, actualOutcome)
     const displayUuid = messages[0]?.uuid
     const contextUuid = messages.at(-1)?.uuid

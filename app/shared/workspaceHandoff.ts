@@ -39,7 +39,7 @@ export type WorkspaceHandoffExecutionRecord = WorkspaceHandoffIdentity & {
   notice: null | {
     displayUuid: string
     contextUuid: string
-    outcome: 'failed' | 'cancelled' | 'uncertain'
+    outcome: 'failed' | 'cancelled' | 'uncertain' | 'continuation_failed'
     checkpoint: ResumeCheckpointV1
   }
   reconciliation: null | {
@@ -116,7 +116,9 @@ export function isWorkspaceHandoffExecutionRecord(value: unknown): value is Work
   const notice = value.notice
   if (notice !== null && (!object(notice) || !keys(notice, ['displayUuid', 'contextUuid', 'outcome', 'checkpoint']) ||
     !isHandoffUuid(notice.displayUuid) || !isHandoffUuid(notice.contextUuid) ||
-    !['failed', 'cancelled', 'uncertain'].includes(notice.outcome as string) || !isResumeCheckpointV1(notice.checkpoint))) return false
+    !['failed', 'cancelled', 'uncertain', 'continuation_failed'].includes(notice.outcome as string) || !isResumeCheckpointV1(notice.checkpoint))) return false
+  if (object(notice) && notice.outcome === 'continuation_failed' &&
+    (!value.consumed || value.admissionGeneration === null || !object(terminal) || terminal.outcome !== 'failed')) return false
   const reconciliation = value.reconciliation
   if (reconciliation !== null && (!object(reconciliation) || !keys(reconciliation, ['noticeUuid', 'inputUuid', 'contextUuid', 'checkpoint']) ||
     !object(notice) || reconciliation.noticeUuid !== notice.displayUuid || !isHandoffUuid(reconciliation.inputUuid) ||
