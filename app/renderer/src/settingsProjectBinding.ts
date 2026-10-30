@@ -23,6 +23,7 @@
 
 import type { SessionId } from '../../shared/protocol.js'
 import { groupByWorkspace, type MergedSessionRow } from './sessionsCatalogState.js'
+import type { DesktopProject } from '../../shared/projects.js'
 
 /** Why nothing can be named. Each is a different fact, not one empty state. */
 export type SettingsProjectUnboundReason =
@@ -89,6 +90,7 @@ export const SETTINGS_PROJECT_UNBOUND_NOTE: Readonly<
 export function selectSettingsProjectBinding(
   rows: readonly MergedSessionRow[],
   activeSessionId: SessionId | null,
+  projects: readonly DesktopProject[] = [],
 ): SettingsProjectBinding {
   if (activeSessionId == null) return { bound: false, reason: 'no-session' }
 
@@ -102,7 +104,7 @@ export function selectSettingsProjectBinding(
     bound: true,
     appSessionId: activeSessionId,
     cwd: row.cwd,
-    name: resolveWorkspaceName(rows, row.cwd),
+    name: resolveWorkspaceName(rows, row.cwd, projects),
   }
 }
 
@@ -138,8 +140,9 @@ export function selectSettingsProjectBinding(
 function resolveWorkspaceName(
   rows: readonly MergedSessionRow[],
   cwd: string,
+  projects: readonly DesktopProject[],
 ): string {
-  const group = groupByWorkspace(rows, null).find(
+  const group = groupByWorkspace(rows, null, projects).find(
     candidate => candidate.cwd === cwd,
   )
   // Unreachable — `cwd` came from a row in `rows`, so it IS a group key. The

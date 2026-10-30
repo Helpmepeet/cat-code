@@ -11,6 +11,7 @@ import { SCHEDULED_OPTIONS_CACHE_MS } from '../../shared/scheduledTaskOptions.js
 import { createDomTestHarness, type DomTestHarness, type MountedTree } from './domTestHarness.js'
 import { ScheduledTasksPage } from './ScheduledTasksPage.js'
 import { storeScheduledSelection, storeScheduledTaskDraft } from './scheduledTasksModel.js'
+import type { HostEvent } from '../../shared/hostApi.js'
 
 let harness: DomTestHarness
 let previousBridge: typeof window.catcode | undefined
@@ -48,6 +49,7 @@ function run(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
 }
 
 type Bridge = {
+  hostListener?: (event: HostEvent) => void
   snapshot: ScheduledTasksSnapshot
   commands: ScheduledTaskCommand[]
   respond: (command: ScheduledTaskCommand) => ScheduledTasksResult | Promise<ScheduledTasksResult>
@@ -59,6 +61,10 @@ type Bridge = {
 
 function installBridge(state: Bridge): void {
   window.catcode = {
+    subscribeHost: (listener: (event: HostEvent) => void) => {
+      state.hostListener = listener
+      return () => { state.hostListener = undefined }
+    },
     readScheduledTasks: () => state.read ? state.read() : Promise.resolve(structuredClone(state.snapshot)),
     readScheduledTaskOptions: (request?: { refresh: true }) => state.readOptions ? state.readOptions(request) : Promise.resolve(state.options ?? { models: MODELS, defaultEffortOptions: ['medium', 'high'], projects: [PROJECT] }),
     scheduledTask: async (command: ScheduledTaskCommand) => { state.commands.push(command); return state.respond(command) },
@@ -120,6 +126,32 @@ const text = (tree: MountedTree) => tree.container.textContent ?? ''
 const heading = (tree: MountedTree) => tree.container.querySelector('h2')?.textContent
 const alerts = (tree: MountedTree) => [...tree.container.querySelectorAll('[role="alert"]')].map(entry => entry.textContent)
 const toggleSwitch = (tree: MountedTree) => tree.container.querySelector<HTMLButtonElement>('[role="switch"]')!
+
+test('creating an empty project refreshes choices after an in-flight read without discarding a task draft', async () => {
+  let finish!: (options: ScheduledTaskOptions) => void
+  let reads = 0
+  const newProject = { ...PROJECT, cwd: '/repo/empty', label: 'Empty named project' }
+  const state: Bridge = {
+    snapshot: { tasks: [], runs: [] }, commands: [], respond: () => ({ ok: false, error: 'not saved' }),
+    readOptions: () => ++reads === 1
+      ? new Promise(resolve => { finish = resolve })
+      : Promise.resolve({ models: MODELS, defaultEffortOptions: [], projects: [newProject] }),
+  }
+  installBridge(state)
+  const tree = await mount()
+  await click(listRow(tree, 'New task'))
+  await type(field(tree, 'Name'), 'Keep this draft')
+  await act(async () => {
+    state.hostListener!({ type: 'projects', projects: [{ id: crypto.randomUUID(), name: newProject.label, cwd: newProject.cwd, createdAt: 1 }] })
+    finish({ models: MODELS, defaultEffortOptions: [], projects: [] })
+  })
+  await flush()
+  expect(reads).toBe(2)
+  expect(field<HTMLInputElement>(tree, 'Name').value).toBe('Keep this draft')
+  await choose(tree, 'Project', 'Empty named project')
+  expect(field(tree, 'Project').textContent).toContain('/repo/empty')
+  expect(state.commands).toEqual([])
+})
 
 test('with no chats, creating a task offers catalog models/projects and sends a project handle, not a path', async () => {
   const state: Bridge = {

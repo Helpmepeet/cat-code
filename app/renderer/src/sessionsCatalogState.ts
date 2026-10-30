@@ -34,6 +34,7 @@ import type {
 } from '../../shared/protocol.js'
 import { basename } from './pathUtils.js'
 import type { SessionBinding } from '../../shared/sessionBinding.js'
+import type { DesktopProject } from '../../shared/projects.js'
 
 export type SessionsCatalogState = {
   /**
@@ -589,6 +590,8 @@ export function countWorkspaces(rows: readonly MergedSessionRow[]): number {
 }
 
 export type WorkspaceGroup = {
+  /** Present for a stored project, including one with no session rows. */
+  projectId?: string
   cwd: string
   name: string
   current: boolean
@@ -679,7 +682,9 @@ function disambiguateWorkspaceLabels(
  * fragmented header — and that bucket is held OUT of the label disambiguation,
  * since it has no path to widen.
  *
- * Labels come from `disambiguateWorkspaceLabels`, so two workspaces that share a
+ * Stored records seed empty groups and supply their chosen names. Legacy groups
+ * still derive from sessions; neither path rewrites session rows.
+ * Legacy labels come from `disambiguateWorkspaceLabels`, so workspaces sharing a
  * basename are told apart by leading path. Sorting on the LABEL (not the bare
  * basename) keeps what the operator reads alphabetical; it stays a pure function
  * of the cwd set, so the frozen-order guarantee is untouched. The prototype
@@ -689,8 +694,11 @@ function disambiguateWorkspaceLabels(
 export function groupByWorkspace(
   rows: readonly MergedSessionRow[],
   activeCwd: string | null,
+  projects: readonly DesktopProject[] = [],
 ): WorkspaceGroup[] {
   const groups = new Map<string, MergedSessionRow[]>()
+  const stored = new Map(projects.map(project => [project.cwd, project]))
+  for (const project of projects) groups.set(project.cwd, [])
   for (const row of rows) {
     if (row.binding?.kind === 'managed') continue
     const list = groups.get(row.cwd)
@@ -702,8 +710,9 @@ export function groupByWorkspace(
   )
   return [...groups.entries()]
     .map(([cwd, groupRows]) => ({
+      ...(stored.has(cwd) ? { projectId: stored.get(cwd)!.id } : {}),
       cwd,
-      name: cwd ? labels.get(cwd) ?? cwd : 'Unknown workspace',
+      name: stored.get(cwd)?.name ?? (cwd ? labels.get(cwd) ?? cwd : 'Unknown workspace'),
       current: activeCwd != null && cwd === activeCwd,
       rows: groupRows,
     }))

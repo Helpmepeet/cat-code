@@ -32,7 +32,6 @@ test.each([
   ['shortcut', 'legacy'],
   ['sidebar', 'legacy'],
   ['workspace', 'project'],
-  ['folder', 'none'],
 ] as const)('Chat creation via %s with %s active uses the matching host path', async (entry, context) => {
   let managedChats = 0
   let folderPicks = 0
@@ -89,11 +88,11 @@ test.each([
     },
     pickDirectory: async () => {
       folderPicks += 1
-      return entry === 'folder' ? 'picked-folder' : null
+      return null
     },
   } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
   const tree = await harness.mount(<App />)
-  if (entry === 'sidebar' || entry === 'workspace' || entry === 'folder') {
+  if (entry === 'sidebar' || entry === 'workspace') {
     await act(async () => {
       tree.container.querySelector<HTMLButtonElement>('button[aria-label="Pin sidebar open"]')!.click()
     })
@@ -103,8 +102,6 @@ test.each([
   await act(async () => {
     if (entry === 'shortcut') {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true, bubbles: true }))
-    } else if (entry === 'folder') {
-      tree.container.querySelector<HTMLButtonElement>('[aria-label="Add project"]')!.click()
     } else if (entry === 'workspace') {
       tree.container.querySelector<HTMLButtonElement>('[aria-label="New session in this workspace"]')!.click()
     } else if (entry === 'sidebar') {
@@ -115,10 +112,10 @@ test.each([
       newChat!.click()
     } else button!.click()
   })
-  expect(managedChats).toBe((context === 'none' ? 1 : 0) + (entry === 'workspace' || entry === 'folder' ? 0 : 1))
+  expect(managedChats).toBe((context === 'none' ? 1 : 0) + (entry === 'workspace' ? 0 : 1))
   expect(workspaceCreates).toEqual(entry === 'workspace' ? ['existing-chat'] : [])
-  expect(folderPicks).toBe(entry === 'folder' ? 1 : 0)
-  expect(directoryCreates).toBe(entry === 'folder' ? 1 : 0)
+  expect(folderPicks).toBe(0)
+  expect(directoryCreates).toBe(0)
   expect(tree.container.querySelector('[aria-label="Prompt"]')).not.toBeNull()
   expect(tree.container.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Normal chat')
   expect(document.activeElement).toBe(tree.container.querySelector('[aria-label="Prompt"]'))

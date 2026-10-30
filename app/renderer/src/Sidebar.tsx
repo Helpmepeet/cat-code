@@ -2,7 +2,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
 /**
  * Sidebar — the shell's left rail: a hover-expanding rail (48px → 240px, pin,
  * shadow, easing), a paw logo, session search, a New chat action, pinned
- * sessions, workspace ("Projects") grouping by cwd, and a footer that carries
+ * sessions, stored projects plus legacy cwd groups, and a footer that carries
  * the active account plus the nav destinations.
  *
  * One-line rows (operator, 2026-09-27, `docs/design-html/2026-09-27-sidebar-one-line-rows.html`):
@@ -197,6 +197,7 @@ import {
   type MergedSessionRow,
   type WorkspaceGroup,
 } from './sessionsCatalogState.js'
+import type { DesktopProject } from '../../shared/projects.js'
 
 // Rail geometry + hover timing, matching the design source (RAIL_W/FULL_W/delays).
 const HOVER_DELAY = 120
@@ -270,6 +271,7 @@ type SidebarView = 'chat' | 'sessions' | 'scheduled' | 'goals' | 'accounts' | 'u
 
 export function Sidebar({
   rows,
+  projects = [],
   activeSessionId,
   activeView,
   onSelectView,
@@ -280,6 +282,7 @@ export function Sidebar({
   archivedSessions = [],
   onUnarchiveSession,
   onNewSessionInWorkspace,
+  onNewProjectSession,
   onNewChat,
   onNewManagedChat,
   onAddProject,
@@ -289,6 +292,7 @@ export function Sidebar({
   storage,
 }: {
   rows: MergedSessionRow[]
+  projects?: readonly DesktopProject[]
   activeSessionId: SessionId | null
   activeView: SidebarView
   onSelectView: (view: SidebarView) => void
@@ -320,14 +324,14 @@ export function Sidebar({
    * wired.
    */
   onNewSessionInWorkspace?: (repId: SessionId) => void
+  /** Stored project IDs also allow the first session in an empty project. */
+  onNewProjectSession?: (projectId: string) => void
   /** The existing project-aware New chat action; it uses the active project
    * or creates a chat without a project when there is no active project. */
   onNewChat?: () => void
   /** Create a managed chat without a project, independently of the active view. */
   onNewManagedChat?: () => void
-  /** The Projects header's "+": choose a folder, and the session created there
-   * makes the group appear. The native picker path (`onNewSession` in App), so
-   * no cwd is authored here. Optional + additive. */
+  /** Open the create-project dialog. Saving creates a record, not a session. */
   onAddProject?: () => void
   /** The active account's alias for the footer row, or null when no account is
    * resolved yet — in which case the footer shows only the nav toggle rather
@@ -616,30 +620,46 @@ export function Sidebar({
   const allGroups = useMemo(
     () =>
       selectOrderedWorkspaceGroups(
-        groupByWorkspace(groupRows, activeCwd),
+        groupByWorkspace(groupRows, activeCwd, projects),
         workspaceOrder,
       ),
-    [groupRows, activeCwd, workspaceOrder],
+    [groupRows, activeCwd, workspaceOrder, projects],
   )
   const groups = useMemo(() => {
     if (!query) return allGroups
+    const matchingProjectCwds = new Set(
+      projects.filter(project =>
+        project.name.toLowerCase().includes(query) ||
+        project.cwd.toLowerCase().includes(query),
+      ).map(project => project.cwd),
+    )
+    const matchingRows = groupRows.filter(row => matchingProjectCwds.has(row.cwd) || matchesQuery(row))
+    const matchingRowCwds = new Set(matchingRows.map(row => row.cwd))
     return selectOrderedWorkspaceGroups(
-      groupByWorkspace(groupRows.filter(matchesQuery), activeCwd),
+      groupByWorkspace(
+        matchingRows,
+        activeCwd,
+        projects.filter(project =>
+          matchingProjectCwds.has(project.cwd) || matchingRowCwds.has(project.cwd),
+        ),
+      ),
       workspaceOrder,
     )
-  }, [allGroups, groupRows, query, activeCwd, workspaceOrder])
+  }, [allGroups, groupRows, query, activeCwd, workspaceOrder, projects])
   const activityByWorkspace = useMemo(
-    () =>
-      new Map(
+    () => {
+      const createdAt = new Map(projects.map(project => [project.cwd, project.createdAt]))
+      return new Map(
         allGroups.map(group => [
           group.cwd,
           group.rows.reduce(
             (newest, row) => Math.max(newest, sidebarActivityKey(row)),
-            0,
+            createdAt.get(group.cwd) ?? 0,
           ),
         ]),
-      ),
-    [allGroups],
+      )
+    },
+    [allGroups, projects],
   )
 
   // ➕ Projects the operator has hidden are held back HERE, after ordering and
@@ -647,6 +667,8 @@ export function Sidebar({
   // (`allGroups`, which feeds the reorder freeze list, deliberately still counts
   // it). A group reports the CC-2 warp-free activity of its newest row, which is
   // what lets a hidden project resurface on real work but not on a mere open.
+  // Explicit creation also reveals a new record if an older hide mark for that
+  // cwd outlived every session; reading that record again does not renew it.
   const { visible: visibleGroups, hidden: hiddenGroups } = useMemo(
     () =>
       selectVisibleWorkspaceGroups(groups, hiddenWorkspaces, group =>
@@ -1087,10 +1109,8 @@ export function Sidebar({
                 ) : null}
               </section>
 
-              {/* "Add project" lives on this header: pick a folder, a session is
-               * created there, and the group appears with that row. No empty
-               * group is ever persisted, because the model has no
-               * empty-workspace record to persist. */}
+              {/* Projects combine stored records, including empty ones, with
+               * legacy session-derived groups. Creation never starts a session. */}
               <section className="mb-[18px]">
                 <div className="flex items-center gap-1 pb-[5px] pl-2 pr-1 pt-0.5">
                   <span className="shrink-0 truncate text-[11px] font-medium text-text-ghost">
@@ -1101,7 +1121,7 @@ export function Sidebar({
                     <button
                       type="button"
                       onClick={onAddProject}
-                      title="Add project: choose a folder"
+                      title="Create project"
                       aria-label="Add project"
                       className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded border border-transparent text-text-faint transition-colors hover:border-accent/40 hover:bg-accent/[0.08] hover:text-accent"
                     >
@@ -1132,6 +1152,7 @@ export function Sidebar({
                         }))
                       }
                       onNewSessionInWorkspace={onNewSessionInWorkspace}
+                      onNewProjectSession={onNewProjectSession}
                       reorder={reorderHandlers}
                       headerRef={element => {
                         if (element) headerRefs.current.set(group.cwd, element)
@@ -1443,6 +1464,7 @@ export function SessionGroup({
   onOpenRowActions,
   onTogglePin,
   onNewSessionInWorkspace,
+  onNewProjectSession,
   onOpenWorkspaceActions,
   reorder,
   headerRef,
@@ -1463,6 +1485,7 @@ export function SessionGroup({
   ) => void
   onTogglePin?: (sessionId: string) => void
   onNewSessionInWorkspace?: (repId: SessionId) => void
+  onNewProjectSession?: (projectId: string) => void
   /** ➕ Project menu (operator, 2026-08-02: the Projects header could add a
    * project but nothing could remove one). Optional + additive: without it the
    * header carries no ⋮. The caller withholds it for the "Unknown workspace"
@@ -1498,13 +1521,17 @@ export function SessionGroup({
     setExpanded(value => normalizeSidebarGroupExpansion(value, overLimit))
   }, [overLimit])
 
-  // #15 — the per-workspace "+" needs a REGISTRY id to name (HC1: the host
-  // re-derives the cwd from a registry row, never a renderer path). A
-  // pure-terminal-history group has no such id, so its "+" is hidden.
+  // Stored projects use their own ID, so zero-row groups can start a session.
+  // Legacy groups still need a registry representative, never a renderer path.
   const repId =
     group.rows.find(r => r.appSessionId === activeSessionId)?.appSessionId ??
     group.rows.find(r => r.appSessionId != null)?.appSessionId ??
     null
+  const startSession = group.projectId && onNewProjectSession
+    ? () => onNewProjectSession(group.projectId!)
+    : repId && onNewSessionInWorkspace
+      ? () => onNewSessionInWorkspace(repId)
+      : null
 
   // ➕ Reordering is offered for a real workspace only — the "Unknown workspace"
   // bucket (cwd === '') is pinned last by `selectOrderedWorkspaceGroups` and is
@@ -1641,10 +1668,10 @@ export function SessionGroup({
             {group.name}
           </span>
         </button>
-        {onNewSessionInWorkspace && repId ? (
+        {startSession ? (
           <button
             type="button"
-            onClick={() => onNewSessionInWorkspace(repId)}
+            onClick={startSession}
             title="New session in this workspace"
             aria-label="New session in this workspace"
             className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-text-faint opacity-0 transition-[opacity,color,background-color] hover:bg-accent/[0.12] hover:text-accent group-hover/head:opacity-100 focus-visible:opacity-100"

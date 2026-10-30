@@ -62,6 +62,7 @@ import {
   type MergedSessionRow,
   type SessionSort,
 } from './sessionsCatalogState.js'
+import type { DesktopProject } from '../../shared/projects.js'
 import {
   createSessionsPageState,
   placeTagPopover,
@@ -89,6 +90,7 @@ const NOT_LIVE_REASON = 'Open or restore this session first.'
 
 export function SessionsPage({
   rows,
+  projects = [],
   activeCwd,
   catalogLoaded,
   truncated,
@@ -103,6 +105,7 @@ export function SessionsPage({
   hasEngine,
 }: {
   rows: readonly MergedSessionRow[]
+  projects?: readonly DesktopProject[]
   activeCwd: string | null
   /** False until the active session's catalog snapshot has arrived. */
   catalogLoaded: boolean
@@ -425,7 +428,7 @@ export function SessionsPage({
             tagged={tagFilter !== 'all'}
           />
         ) : grouped ? (
-          groupByWorkspace(visible, activeCwd).map(group => (
+          groupByWorkspace(visible, activeCwd, projects.filter(project => visible.some(row => row.cwd === project.cwd))).map(group => (
             <section key={group.cwd} className="mb-6">
               <GroupHeader
                 name={group.name}

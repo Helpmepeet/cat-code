@@ -7,6 +7,21 @@ import type { ScheduledTaskOptionsResult } from '../shared/scheduledTaskOptions.
 const catalog: ScheduledTaskOptionsResult = { type: 'scheduled-options-result', version: 1,
   models: [], defaultEffortOptions: ['high'], projectPaths: ['/project', '/alias', '/missing'] }
 
+test('empty stored projects appear by their chosen name alongside legacy folders without duplicate handles', async () => {
+  const service = new ScheduledTaskOptionsService(
+    async () => ({ ...catalog, projectPaths: ['/legacy', '/stored'] }),
+    path => ({ ok: true, realpath: path }),
+    Date.now,
+    () => [{ id: crypto.randomUUID(), name: 'My chosen name', cwd: '/stored', createdAt: 1 }],
+  )
+  const choices = (await service.read()).projects
+  expect(choices.map(project => [project.cwd, project.label])).toEqual([
+    ['/stored', 'My chosen name'], ['/legacy', 'legacy'],
+  ])
+  expect(new Set(choices.map(project => project.workspaceId)).size).toBe(2)
+  expect(service.resolve(choices[0]!.workspaceId)).toBe('/stored')
+})
+
 test('project eligibility comes from the canonical helper file and refresh observes removal', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'scheduled-map-eligibility-')))
   try {

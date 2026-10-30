@@ -4028,6 +4028,14 @@ export type OpenWorkspaceFileTarget =
 export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
+  /** Stored projects may exist without a session. Paths are display-only;
+   * creation and session launch accept only main-owned draft/project IDs. */
+  listProjects(): Promise<import('./projects.js').DesktopProject[]>
+  beginProjectDraft(): Promise<string>
+  pickProjectFolder(draftId: string): Promise<import('./projects.js').ProjectFolderResult>
+  createProject(input: import('./projects.js').CreateProjectInput): Promise<import('./projects.js').CreateProjectResult>
+  cancelProjectDraft(draftId: string): Promise<void>
+  createProjectSession(projectId: string): Promise<HostResult<SessionDescriptor>>
   lidClosed?: LidClosedBridge
   readScheduledTasks(): Promise<import('./scheduledTasks.js').ScheduledTasksSnapshot>
   readScheduledTaskOptions(request?: { refresh: true }): Promise<import('./scheduledTasks.js').ScheduledTaskOptions>

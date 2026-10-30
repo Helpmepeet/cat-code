@@ -25,7 +25,7 @@ export type WorkspaceJumpIdentity = { appSessionId: string; engineSessionId: str
 export type WorkspaceJumpCoordinatorDeps = {
   host: Pick<Host, 'reserveWorkspaceJump' | 'releaseWorkspaceJump' | 'moveWorkspaceJump' | 'getSessionGeneration'>
   row: (appSessionId: string) => PeerRegistryRow | undefined
-  knownProjects: () => readonly { path: string; lastUsedAt: number }[]
+  knownProjects: () => readonly { path: string; lastUsedAt: number; name?: string }[]
   validateCwd: (cwd: string) => CwdValidation
   /** Observation-only engine trust read. Never instructions, hooks, or accounts. */
   trustedProjectRoots: (roots: readonly string[]) => Promise<readonly string[]>
@@ -215,7 +215,8 @@ export class WorkspaceJumpCoordinator {
     const workspaces = available.map(path => {
       const handle = previous.get(path) ?? randomUUID()
       this.handles.set(handle, { appSessionId, generation: identity.generation, path })
-      return { handle, name: basename(path), path }
+      const name = this.deps.knownProjects().find(project => project.path === path && project.name)?.name
+      return { handle, name: name ?? basename(path), path }
     })
     return { ok: true, value: { workspaces, eligible: true } }
   }

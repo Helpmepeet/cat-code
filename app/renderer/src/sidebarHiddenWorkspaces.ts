@@ -3,13 +3,10 @@
  * left rail. Operator request, 2026-08-02: the Projects header can ADD a project
  * but nothing could remove one.
  *
- * A project is DERIVED, not stored: `groupByWorkspace` (`sessionsCatalogState.ts`)
- * buckets the merged roster by `cwd`, and "Add project" only opens a folder
- * picker — the session created there is what makes the group appear. There is no
- * empty-workspace record to delete, so the mirror of Add is a VIEW hide, not a
- * delete: the sessions stay on disk, and the sidebar's hidden-project control
- * restores their groups. This is the non-destructive shape
- * `isSidebarVisibleRow` also uses for dead-workspace rows.
+ * Projects combine stored records with legacy groups derived from sessions.
+ * Hiding is a VIEW preference, not deletion: both stored records (even empty
+ * ones) and sessions stay on disk, and the hidden-project control restores
+ * their groups. `isSidebarVisibleRow` likewise never deletes dead-workspace rows.
  *
  * Keyed on `cwd`, NEVER on the rendered label — `disambiguateWorkspaceLabels`
  * rewrites a label the moment a second workspace shares its basename
@@ -17,10 +14,8 @@
  *
  * SELF-HEALING, and this is the load-bearing part. Hiding is remembered with the
  * moment it happened, and the entry stops applying once that project has
- * activity newer than it. Without this, hiding a project and then picking that
- * same folder from "Add project" would create a session into an invisible group:
- * the picker would look broken. Any real work in a hidden project brings it
- * back, which is also the honest answer to "where did my session go".
+ * activity newer than it. Any real work in a hidden project brings it back;
+ * simply opening the app or reading a stored record does not.
  *
  * Renderer-local persistence through the shared codec (`viewPreference.ts`):
  * versioned JSON under a `catcode.`-prefixed key, read/written through an

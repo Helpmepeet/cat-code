@@ -767,11 +767,11 @@ test('New chat renders above the list only when wired', () => {
   expect(renderSidebar({ menuActive: true })).not.toContain('New chat')
 })
 
-test('the Projects header carries an "add project" only when wired', () => {
+test('the Projects header opens project creation only when wired', () => {
   const wired = renderSidebar({ menuActive: true, onAddProject: noop })
   expect(wired).toContain('aria-label="Add project"')
   // No em dash in user-visible text (CLAUDE.md §7).
-  expect(wired).toContain('title="Add project: choose a folder"')
+  expect(wired).toContain('title="Create project"')
   expect(renderSidebar({ menuActive: true })).not.toContain('Add project')
 })
 

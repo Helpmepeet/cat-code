@@ -2871,10 +2871,10 @@ test('the composer connects its focused textbox to the active slash or mention o
   expect(plain).not.toContain('aria-activedescendant=')
 })
 
-test('SettingsShell receives the active session binding from the merged roster', () => {
+test('SettingsShell receives the active session binding with stored project names', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   expect(source).toContain(
-    'selectSettingsProjectBinding(sessionCatalogRows, activeSessionId)',
+    'selectSettingsProjectBinding(sessionCatalogRows, activeSessionId, projects)',
   )
   const shellStart = source.indexOf('<SettingsShell')
   expect(shellStart).toBeGreaterThan(-1)
@@ -2920,18 +2920,19 @@ test('P4-50: a cold start renders no account-health bar', () => {
 
 test('P4-54: shell lifecycle failures persist until the dismiss control clears them', () => {
   // App cannot be mounted in this SSR-only file, so this pins only the
-  // lifecycle wiring source text can prove: all seven operation paths still
+  // creation and lifecycle wiring source text can prove: operation paths still
   // replace the current failure, no success path clears it, and the rendered
   // bar owns the sole explicit clear.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const operationsStart = source.indexOf('  const newSession = useCallback(')
+  const operationsStart = source.indexOf('  const createFreshSession = useCallback(')
   const operationsEnd = source.indexOf('function submitSession(', operationsStart)
   expect(operationsStart).toBeGreaterThan(-1)
   expect(operationsEnd).toBeGreaterThan(operationsStart)
   const operations = source.slice(operationsStart, operationsEnd)
 
   for (const writer of [
-    'const newSession = useCallback(',
+    'const createFreshSession = useCallback(',
+    'const newProjectSession = useCallback(',
     'const newSessionInWorkspace = useCallback(',
     'const closeTab = useCallback(',
     'const restartTab = useCallback(',

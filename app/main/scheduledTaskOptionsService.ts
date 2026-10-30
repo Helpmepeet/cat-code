@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import type { ScheduledTaskOptions } from '../shared/scheduledTasks.js'
 import { SCHEDULED_OPTIONS_CACHE_MS, type ScheduledTaskOptionsResult } from '../shared/scheduledTaskOptions.js'
 import { supportsWorkspaceMapSchedule } from './workspaceMapSchedule.js'
+import type { DesktopProject } from '../shared/projects.js'
 
 export class ScheduledTaskOptionsService {
   private readonly handles = new Map<string, string>()
@@ -15,7 +16,8 @@ export class ScheduledTaskOptionsService {
   private generation = 0
   constructor(private readonly readCatalog: () => Promise<ScheduledTaskOptionsResult>,
     private readonly validate: (path: string) => { ok: true; realpath: string } | { ok: false },
-    private readonly now: () => number = Date.now) {}
+    private readonly now: () => number = Date.now,
+    private readonly storedProjects: () => readonly DesktopProject[] = () => []) {}
 
   read(request?: { refresh: true }): Promise<ScheduledTaskOptions> {
     if (this.pending) return this.pending
@@ -48,9 +50,10 @@ export class ScheduledTaskOptionsService {
       if (generation !== this.generation) throw new Error('Scheduled task choices changed during the read')
       const projects: ScheduledTaskOptions['projects'] = []
       const seen = new Set<string>()
-      for (const path of catalog.projectPaths) {
+      const stored = new Map(this.storedProjects().map(project => [project.cwd, project]))
+      for (const path of [...stored.keys(), ...catalog.projectPaths]) {
         const checked = this.validate(path)
-        if (!checked.ok || seen.has(checked.realpath)) continue
+        if (!checked.ok || (stored.has(path) && checked.realpath !== path) || seen.has(checked.realpath)) continue
         seen.add(checked.realpath)
         let workspaceId = this.paths.get(checked.realpath)
         if (!workspaceId) {
@@ -62,7 +65,7 @@ export class ScheduledTaskOptionsService {
         projects.push({
           workspaceId,
           cwd: checked.realpath,
-          label: basename(checked.realpath) || checked.realpath,
+          label: stored.get(checked.realpath)?.name ?? (basename(checked.realpath) || checked.realpath),
           supportsWorkspaceMaps: supportsWorkspaceMapSchedule(checked.realpath),
         })
       }

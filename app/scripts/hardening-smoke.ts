@@ -215,6 +215,12 @@ async function runProductionHardeningSmoke(
     })()`)
 
     const expectedBridgeKeys = [
+      'listProjects',
+      'beginProjectDraft',
+      'pickProjectFolder',
+      'createProject',
+      'cancelProjectDraft',
+      'createProjectSession',
       'readScheduledTasks',
       'lidClosed',
       'readScheduledTaskOptions',

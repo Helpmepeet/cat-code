@@ -21,6 +21,11 @@ import { parseNotificationPreferences, type NotificationPreferences } from '../s
 import type { NotificationVisibilityBridge, NotificationVisibility } from '../shared/notificationVisibility.js'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import type { ProjectRouteCommand, ProjectRouteSnapshot } from '../shared/projectRouting.js'
+import type { DesktopProject, ProjectFolderResult, CreateProjectInput, CreateProjectResult } from '../shared/projects.js'
+import {
+  CH_PROJECTS_LIST, CH_PROJECT_DRAFT_BEGIN, CH_PROJECT_FOLDER_PICK,
+  CH_PROJECT_CREATE, CH_PROJECT_DRAFT_CANCEL, CH_PROJECT_SESSION_CREATE,
+} from '../shared/ipcChannels.js'
 import type {
   AccountDeleteMessage,
   AccountLogoutMessage,
@@ -670,6 +675,30 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   pickScheduledTaskDirectory(): Promise<string | null> {
     sendGuard.assertAllowed({ pickScheduledTaskDirectory: true })
     return ipcRenderer.invoke(CH_HOST_PICK_SCHEDULED_TASK_DIR) as Promise<string | null>
+  },
+  listProjects(): Promise<DesktopProject[]> {
+    sendGuard.assertAllowed({ listProjects: true })
+    return ipcRenderer.invoke(CH_PROJECTS_LIST) as Promise<DesktopProject[]>
+  },
+  beginProjectDraft(): Promise<string> {
+    sendGuard.assertAllowed({ beginProjectDraft: true })
+    return ipcRenderer.invoke(CH_PROJECT_DRAFT_BEGIN) as Promise<string>
+  },
+  pickProjectFolder(draftId: string): Promise<ProjectFolderResult> {
+    sendGuard.assertAllowed({ draftId })
+    return ipcRenderer.invoke(CH_PROJECT_FOLDER_PICK, draftId) as Promise<ProjectFolderResult>
+  },
+  createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
+    sendGuard.assertAllowed(input)
+    return ipcRenderer.invoke(CH_PROJECT_CREATE, input) as Promise<CreateProjectResult>
+  },
+  cancelProjectDraft(draftId: string): Promise<void> {
+    sendGuard.assertAllowed({ draftId })
+    return ipcRenderer.invoke(CH_PROJECT_DRAFT_CANCEL, draftId) as Promise<void>
+  },
+  createProjectSession(projectId: string): Promise<HostResult<SessionDescriptor>> {
+    sendGuard.assertAllowed({ projectId })
+    return ipcRenderer.invoke(CH_PROJECT_SESSION_CREATE, projectId) as Promise<HostResult<SessionDescriptor>>
   },
   createSession(
     input: CreateSessionInput,

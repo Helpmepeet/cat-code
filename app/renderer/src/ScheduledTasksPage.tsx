@@ -100,6 +100,7 @@ export function ScheduledTasksPage({
   const [now, setNow] = useState(() => Date.now())
   const order = useRef(createResponseOrder())
   const optionsInFlight = useRef(false)
+  const projectRefreshPending = useRef(false)
 
   const setDraft = useCallback((next: ScheduledTaskDraft | null) => {
     storeScheduledTaskDraft(next)
@@ -124,7 +125,7 @@ export function ScheduledTasksPage({
     }
   }, [])
 
-  const refreshOptions = useCallback(async (force = false) => {
+  const refreshOptions = useCallback(async (force = false): Promise<void> => {
     if (optionsInFlight.current) return
     optionsInFlight.current = true
     setOptionsRefreshing(true)
@@ -137,6 +138,10 @@ export function ScheduledTasksPage({
     } finally {
       optionsInFlight.current = false
       setOptionsRefreshing(false)
+      if (projectRefreshPending.current) {
+        projectRefreshPending.current = false
+        void refreshOptions()
+      }
     }
   }, [])
 
@@ -157,10 +162,18 @@ export function ScheduledTasksPage({
   const choicesVisible = (editing && draft !== null) || selection?.kind === 'preset'
   useEffect(() => {
     void refreshOptions()
+    const unsubscribe = getBridge().subscribeHost?.(event => {
+      if (event.type !== 'projects') return
+      // A project can be created from the sidebar while an unsaved task stays
+      // open. Refresh choices without remounting the page or losing that draft.
+      if (optionsInFlight.current) projectRefreshPending.current = true
+      else void refreshOptions()
+    })
     const onVisible = () => { if (!document.hidden) void refreshOptions() }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
     return () => {
+      unsubscribe?.()
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }

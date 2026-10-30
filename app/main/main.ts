@@ -18,6 +18,10 @@ import { validScheduledTaskOptionsPayload } from '../shared/scheduledTaskOptions
 import { runScheduledTaskOptionsWorker } from './scheduledTaskOptionsRunner.js'
 import { ScheduledTaskOptionsService } from './scheduledTaskOptionsService.js'
 import { createDirectoryPickerHandlers } from './directoryPicker.js'
+import { ProjectStore } from './projectStore.js'
+import { ProjectCreationController } from './projectCreation.js'
+import { registerProjectIpc } from './projectIpc.js'
+import type { DesktopProject } from '../shared/projects.js'
 import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
@@ -1859,6 +1863,7 @@ function createWindow(): void {
   // replay. `did-start-navigation` fires on the initial load and on reloads.
   window.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      projectCreation?.reset()
       notificationVisibility.reset()
       rendererDocumentId = randomUUID()
       rendererSubscriptionEpoch = 0
@@ -2097,6 +2102,7 @@ function createWindow(): void {
     }
   })
   window.webContents.on('render-process-gone', (_event, details) => {
+    projectCreation?.reset()
     notificationVisibility.reset()
     // A crashed renderer leaves the window open and `isDestroyed()` false, so
     // without this flag every scheduled send (probe, host event, frame) throws
@@ -2971,6 +2977,7 @@ function registerIpcHandlers(): void {
 
       const knownProjects = new Set([
         ...settingsPickedProjects,
+        ...storedProjectsForDiscovery().map(project => project.cwd),
         ...(host?.listSessions().map(row => row.cwd) ?? []),
         ...(readSessionsCatalogCache(defaultRegistryDir())?.entries.map(row => row.cwd) ?? []),
       ])
@@ -3033,6 +3040,7 @@ function registerIpcHandlers(): void {
       }
       const knownProjects = new Set([
         ...settingsPickedProjects,
+        ...storedProjectsForDiscovery().map(project => project.cwd),
         ...(host?.listSessions().map(row => row.cwd) ?? []),
         ...(readSessionsCatalogCache(defaultRegistryDir())?.entries.map(row => row.cwd) ?? []),
       ])
@@ -3138,6 +3146,24 @@ function registerIpcHandlers(): void {
  */
 const cwdTokens = createCwdTokenStore()
 const attachmentFileTokens = createAttachmentFileTokenStore()
+const projectStore = new ProjectStore(defaultRegistryDir())
+let projectCreation: ProjectCreationController | null = null
+
+/** Discovery can retain legacy projects if the new store is unreadable.
+ * The strict list/create/launch paths still surface the failure and never write
+ * over a damaged document. */
+function storedProjectsForDiscovery(): DesktopProject[] {
+  try {
+    return projectStore.list().filter(project => {
+      const checked = validateCwd(project.cwd)
+      return checked.ok && checked.realpath === project.cwd
+    })
+  }
+  catch (error) {
+    logLegacyDiagnostic(`[projects] discovery failed: ${errText(error)}`, 'projects', 'host')
+    return []
+  }
+}
 
 /**
  * Control-plane IPC (HC3 — fixed, per-method structured senders; no generic
@@ -3220,6 +3246,8 @@ function registerHostControlPlane(): void {
     () => runScheduledTaskOptionsWorker({ command: sidecarLaunch().command,
       args: sidecarLaunch().argsFor('scheduled-options'), cwd: process.cwd() }),
     validateCwd,
+    Date.now,
+    storedProjectsForDiscovery,
   )
   scheduledOptions = optionsService
   ipcMain.handle(CH_SCHEDULED_TASK_OPTIONS_READ, (event, payload: unknown) => {
@@ -3261,14 +3289,11 @@ function registerHostControlPlane(): void {
     error: { code: 'spawn_failed', message: 'host is not running' },
   })
 
-  // HC1 — the ONLY way a renderer obtains a cwd. Native picker in main; the
-  // renderer may REQUEST it, never answer it. Returns a one-time TOKEN bound to
-  // the realpath the user chose (never the path itself), or null (cancelled). The
-  // renderer feeds the token to createSession; it can never author a path.
-  const pickDirectory = async (defaultPath?: string): Promise<string | null> => {
+  // All folder flows share the native chooser. Only main interprets its path:
+  // sessions/tasks receive short-lived tokens; project dialogs retain a draft.
+  const chooseDirectory = async (defaultPath?: string): Promise<string | null> => {
     if (devPickerBypass.enabled) {
-      const bypassed = devPickerBypass.pick()
-      return bypassed ? cwdTokens.mint(bypassed) : null
+      return devPickerBypass.pick()
     }
     const parent = mainWindow ?? undefined
     const result = parent
@@ -3281,10 +3306,43 @@ function registerHostControlPlane(): void {
           ...(defaultPath ? { defaultPath } : {}),
         })
     if (result.canceled || result.filePaths.length === 0) return null
-    const chosen = validateCwd(result.filePaths[0])
+    return result.filePaths[0]!
+  }
+  const pickDirectory = async (defaultPath?: string): Promise<string | null> => {
+    const path = await chooseDirectory(defaultPath)
+    if (path === null) return null
+    const chosen = validateCwd(path)
     if (!chosen.ok) return null
     return cwdTokens.mint(chosen.realpath)
   }
+  const creation = new ProjectCreationController({
+    store: projectStore,
+    pick: () => chooseDirectory(),
+    validateCwd,
+    legacyKnown: () => [
+      ...(host?.listSessions() ?? []),
+      ...(readSessionsCatalogCache(defaultRegistryDir())?.entries ?? []),
+    ].filter(row => row.binding?.kind !== 'managed' && row.cwd).map(row => ({
+      cwd: row.cwd, name: basename(row.cwd) || row.cwd,
+    })),
+    log: (message, error) => logLegacyDiagnostic(`[projects] ${message}: ${errText(error)}`, 'projects', 'host'),
+  })
+  projectCreation = creation
+  registerProjectIpc<IpcMainInvokeEvent>({
+    handle: (channel, listener) => ipcMain.handle(channel, listener),
+    isAuthorized: isMainWindowSender,
+    list: () => projectStore.list(),
+    begin: () => creation.begin(),
+    pick: id => creation.pick(id),
+    create: input => creation.create(input),
+    cancel: id => creation.cancel(id),
+    validate: validateCwd,
+    createSession: cwd => host ? host.createSession({ cwd }) : Promise.resolve(noHost<SessionDescriptor>()),
+    onCreated: projects => {
+      optionsService.invalidate()
+      sendHostEvent({ type: 'projects', projects })
+    },
+  })
   const directoryPickers = createDirectoryPickerHandlers({
     isAuthorized: isMainWindowSender,
     sessions: () => host?.listSessions() ?? [],
@@ -4780,6 +4838,9 @@ function ensureHost(): Host {
     host,
     row: appSessionId => registry.sessions.find(row => row.appSessionId === appSessionId),
     knownProjects: () => [
+      ...storedProjectsForDiscovery().map(project => ({
+        path: project.cwd, name: project.name, lastUsedAt: project.createdAt,
+      })),
       ...host!.listSessions().filter(row => row.binding?.kind === 'project').map(row => ({
         path: row.cwd, lastUsedAt: Math.max(row.lastMessageSentAt ?? 0, row.lastAttachedAt),
       })),

@@ -76,6 +76,8 @@ import {
 } from './pageTabNavigation.js'
 import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
+import { CreateProjectDialog } from './CreateProjectDialog.js'
+import { createProjectsState, reduceProjectsState } from './projectsState.js'
 import {
   INITIAL_SESSION_WORK_STATE,
   OpenTabSessionsContext,
@@ -632,6 +634,9 @@ export function App() {
     Partial<Record<SessionId, number>>
   >({})
   const [historyState, setHistoryState] = useState<HistoryState>(createHistoryState)
+  const [projectsState, dispatchProjects] = useReducer(reduceProjectsState, undefined, createProjectsState)
+  const projects = projectsState.projects
+  const [createProjectOpen, setCreateProjectOpen] = useState(false)
   const [projectRoutes, setProjectRoutes] = useState<Record<SessionId, ProjectRouteSnapshot>>({})
   const projectRoutesRef = useRef(projectRoutes)
   projectRoutesRef.current = projectRoutes
@@ -1372,6 +1377,10 @@ export function App() {
     // read and the subscription. The snapshot is then folded as a BASELINE that
     // never clobbers a newer live event already applied (reduceShell hydrate).
     const unsubscribe = bridge.subscribeHost(event => {
+      if (event.type === 'projects') {
+        dispatchProjects({ type: 'snapshot', projects: event.projects })
+        return
+      }
       if (event.type === 'notification-open') {
         const navigation = parseNotificationOpenEvent(event)
         if (!navigation) return
@@ -1524,6 +1533,11 @@ export function App() {
         preloadReservedBytesRef.current.delete(event.appSessionId)
       }
       dispatchShell({ type: 'event', event })
+    })
+    void bridge.listProjects?.().then(projects => {
+      if (!routesDisposed) dispatchProjects({ type: 'baseline', projects })
+    }).catch(error => {
+      if (!routesDisposed) setShellError(errorMessage(error))
     })
     void bridge.readProjectRoutes().then(snapshots => {
       if (routesDisposed) return
@@ -1767,12 +1781,12 @@ export function App() {
   // end in `app`). Keep that binding in its dedicated selector rather than
   // falling back to the cwd basename inside SettingsShell.
   const settingsProjectBinding = useMemo(
-    () => selectSettingsProjectBinding(sessionCatalogRows, activeSessionId),
-    [activeSessionId, sessionCatalogRows],
+    () => selectSettingsProjectBinding(sessionCatalogRows, activeSessionId, projects),
+    [activeSessionId, sessionCatalogRows, projects],
   )
   const settingsProjects = useMemo(
-    () => groupByWorkspace(sessionCatalogRows, null).filter(group => group.cwd),
-    [sessionCatalogRows],
+    () => groupByWorkspace(sessionCatalogRows, null, projects).filter(group => group.cwd),
+    [sessionCatalogRows, projects],
   )
 
   useEffect(() => {
@@ -1854,6 +1868,7 @@ export function App() {
   type DesktopCommandOutcome = FreshSessionOutcome | { status: 'already-pending' }
   type FreshSessionTarget =
     | { kind: 'managed' }
+    | { kind: 'project'; projectId: string }
     | { kind: 'workspace'; representativeSessionId: SessionId }
 
   // Host creation has no app-wide guard and never changes pane focus. UI entry
@@ -1864,7 +1879,9 @@ export function App() {
         const bridge = getBridge()
         const result = target.kind === 'managed'
           ? await bridge.createManagedChat()
-          : await bridge.createSessionInWorkspace(target.representativeSessionId)
+          : target.kind === 'project'
+            ? await bridge.createProjectSession(target.projectId)
+            : await bridge.createSessionInWorkspace(target.representativeSessionId)
         if (!result.ok) {
           setShellError(hostErrorMessage(result.error))
           return { status: 'failed' }
@@ -1889,23 +1906,11 @@ export function App() {
     [],
   )
 
-  const newSession = useCallback(async () => {
-    const bridge = getBridge()
+  const newProjectSession = useCallback(async (projectId: string) => {
     const selectionClaim = claimForegroundSelection(foregroundSelectionClaimRef.current)
-    try {
-      // HC1 — the renderer never authors a path: pick → one-time token → create.
-      const token = await bridge.pickDirectory(activeSessionId)
-      if (!token) return // cancelled
-      const result = await bridge.createSession({ cwdToken: token })
-      if (result.ok) {
-        focusCreatedSession(result.value.appSessionId, selectionClaim)
-      } else {
-        setShellError(hostErrorMessage(result.error))
-      }
-    } catch (error) {
-      setShellError(errorMessage(error))
-    }
-  }, [activeSessionId, focusCreatedSession])
+    const result = await createFreshSession({ kind: 'project', projectId })
+    if (result.status === 'created') focusCreatedSession(result.sessionId, selectionClaim)
+  }, [createFreshSession, focusCreatedSession])
 
   const newManagedChat = useCallback(async () => {
     if (newManagedChatInFlightRef.current) return
@@ -4484,6 +4489,16 @@ export function App() {
         className="flex h-screen flex-col bg-shell-chrome font-sans text-text-primary"
         data-window-ground
       >
+        {createProjectOpen ? (
+          <CreateProjectDialog
+            bridge={getBridge()}
+            onClose={() => setCreateProjectOpen(false)}
+            onCreated={project => {
+              dispatchProjects({ type: 'created', project })
+              setCreateProjectOpen(false)
+            }}
+          />
+        ) : null}
         {/* The window's top row, and the app's title bar: `hiddenInset`
          * (`main.ts` `createWindow`) removes the OS strip, so the tab bar spans
          * the full width at y=0 and reserves the well the traffic lights are
@@ -4521,6 +4536,7 @@ export function App() {
         <OpenTabSessionsContext.Provider value={openTabSessionIds}>
         <Sidebar
           rows={sessionCatalogRows}
+          projects={projects}
           archivedSessions={archivedSessions}
           onUnarchiveSession={row =>
             setArchivedSessions(current => reduceSessionUnarchived(current, row))
@@ -4548,12 +4564,10 @@ export function App() {
             renamingSession?.origin === 'sidebar'
           }
           onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
+          onNewProjectSession={projectId => void newProjectSession(projectId)}
           onNewChat={() => void newChat()}
           onNewManagedChat={() => void newManagedChat()}
-          /* The Projects header's "+": the native picker, so the renderer never
-           * authors a cwd (HC1). The session created in the chosen folder is what
-           * makes the group appear — there is no empty-workspace record to keep. */
-          onAddProject={() => void newSession()}
+          onAddProject={() => setCreateProjectOpen(true)}
           accountAlias={
             selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
             null
@@ -4903,6 +4917,7 @@ export function App() {
           ) : activeView === 'sessions' ? (
             <SessionsPage
               rows={sessionCatalogRows}
+              projects={projects}
               activeCwd={
                 activeSessionId
                   ? tabDescriptorsById.get(activeSessionId)?.cwd ?? null
