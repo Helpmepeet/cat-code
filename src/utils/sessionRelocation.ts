@@ -6,6 +6,8 @@ import { randomUUID } from 'node:crypto'
 import { isPathTrusted } from './config.js'
 import { buildDisplayConversationChain, getProjectDir, loadTranscriptFile, selectActiveConversation } from './sessionStorage.js'
 import { withUnownedTranscriptLease } from './transcriptLease.js'
+import { withTranscriptAppendGuard } from './transcriptAppendGuard.js'
+import { readTailRecoveryState } from './transcriptTailRecovery.js'
 import { readPendingDeferredContinuation } from '../services/deferredContinuation.js'
 import { assertSessionNotMoving, readSessionRelocation, relocationDirectory, writeSessionRelocation, type RelocationRequest, type SessionLocation, type SessionRelocation } from './sessionRelocationState.js'
 export type { RelocationRequest } from './sessionRelocationState.js'
@@ -65,6 +67,9 @@ export async function relocateSession(request: RelocationRequest): Promise<void>
   const fromDir = join(dirname(from), id)
   const toDir = join(dirname(to), id)
   const result = await withUnownedTranscriptLease(id, async () => {
+    await mkdir(dirname(from), { recursive: true, mode: 0o700 })
+    await mkdir(dirname(to), { recursive: true, mode: 0o700 })
+    return withTranscriptAppendGuard(from, () => withTranscriptAppendGuard(to, async () => {
     assertSessionNotMoving(id)
     if (await readPendingDeferredContinuation(id)) throw new Error('Finish the scheduled continuation before moving this Chat')
     const sourceTranscript = await stat(from)
@@ -79,6 +84,15 @@ export async function relocateSession(request: RelocationRequest): Promise<void>
     if (!empty && !sourceTranscript) throw new Error('The conversation history is missing')
     const companion = await stat(fromDir)
     if (companion && (!companion.isDirectory() || companion.isSymbolicLink())) throw new Error('Unexpected conversation data location')
+    if (sourceTranscript && readTailRecoveryState(from, id)?.reviewRequired) {
+      throw new Error('Review the recovered history before moving this conversation')
+    }
+    const legacyRecovery = `${from}.recovery`
+    const legacyRecoveryTarget = `${to}.recovery`
+    const legacy = await stat(legacyRecovery)
+    if ((legacy && (!legacy.isDirectory() || legacy.isSymbolicLink())) || await stat(legacyRecoveryTarget)) {
+      throw new Error('Unexpected recovery evidence location')
+    }
     const alias = await stat(toDir)
     if (alias && (!prior || !alias.isSymbolicLink() || resolve(dirname(toDir), await readlink(toDir)) !== fromDir)) {
       throw new Error('The destination already contains conversation data')
@@ -90,6 +104,7 @@ export async function relocateSession(request: RelocationRequest): Promise<void>
     await mkdir(backup, { recursive: true, mode: 0o700 })
     if (sourceTranscript) await cp(from, join(backup, `${id}.jsonl`), { errorOnExist: true, force: false })
     if (companion) await cp(fromDir, join(backup, id), { recursive: true, dereference: false, errorOnExist: true, force: false })
+    if (legacy) await cp(legacyRecovery, join(backup, `${id}.jsonl.recovery`), { recursive: true, dereference: false, errorOnExist: true, force: false })
     const movedAt = Date.now()
     const afterFrameId = transcript ? lastDisplayFrameId(transcript) : null
     const previousTransitions = prior?.transitions ?? []
@@ -113,10 +128,12 @@ export async function relocateSession(request: RelocationRequest): Promise<void>
     if (sourceTranscript) await rename(from, to)
     if (companion) await rename(fromDir, toDir)
     else await mkdir(toDir, { mode: 0o700 })
+    if (legacy) await rename(legacyRecovery, legacyRecoveryTarget)
     await symlink(toDir, fromDir, 'dir')
     syncDirectory(dirname(from))
     syncDirectory(dirname(to))
     writeSessionRelocation({ ...record, phase: 'complete', transitions })
+    }))
   })
   if (!result.acquired) throw new Error('This conversation is still open in another process')
 }

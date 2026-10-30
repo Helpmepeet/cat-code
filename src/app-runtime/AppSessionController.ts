@@ -15,7 +15,7 @@ import type { ConversationForkResult } from '../commands/branch/branch.js'
 import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
 import { canonicalResumeJson } from '../utils/resumeCheckpoint.js'
 import { HandoffExecution, type WorkspaceHandoffConfiguration } from './handoffExecution.js'
-import type { ResumeCheckpointV1, WorkspaceHandoffSnapshot } from '../../app/shared/workspaceHandoff.js'
+import type { ResumeCheckpoint, WorkspaceHandoffSnapshot } from '../../app/shared/workspaceHandoff.js'
 import { handoffContinuationPrompt, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './handoff.js'
 import {
   createAbortStatusEvent,
@@ -74,10 +74,11 @@ export type AppSessionControllerAdapter = {
   persistHandoffOutcome?: (operationId: string, outcome: HandoffTerminalOutcome) => Promise<SDKMessage[]>
   readHandoffOutcome?: (operationId: string) => Promise<HandoffTerminalOutcome | null>
   recoverHandoffReconciliation?: (notice: { displayUuid: string; contextUuid: string }) => Promise<{
-    inputUuid: string; contextUuid: string; checkpoint: ResumeCheckpointV1
+    inputUuid: string; contextUuid: string; checkpoint: ResumeCheckpoint
   } | null>
-  sealResumeCheckpoint?: () => Promise<ResumeCheckpointV1>
-  verifyResumeCheckpoint?: (checkpoint: ResumeCheckpointV1) => Promise<void>
+  sealResumeCheckpoint?: () => Promise<ResumeCheckpoint>
+  requiresRecoveryReview?: () => boolean
+  verifyResumeCheckpoint?: (checkpoint: ResumeCheckpoint) => Promise<void>
   abort?: (intent?: AppSessionAbortIntent) => void
   getInlineCommandRuns?: () => InlineCommandRun[]
   selectUserMessage?: (targetUuid: string) => UserMessage
@@ -152,12 +153,12 @@ export class AppSessionController {
   isInlineCommandActive(): boolean { return this.inlineSettlements.size > 0 }
   canStartInlineCommand(): boolean {
     return !this.initializing && !this.inlineCommand && this.inlineSettlements.size < 8 && !this.handoffReservation &&
-      !this.requiresUserReconciliation && !this.handoffSettlement
+      !this.requiresUserReconciliation && !this.handoffSettlement && !this.adapter.requiresRecoveryReview?.()
   }
 
   getHandoffReservation(): string | null { return this.handoffReservation }
   requiresHandoffReconciliation(): boolean { return this.requiresUserReconciliation }
-  canStartAutomaticTurn(): boolean { return !this.initializing && !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation }
+  canStartAutomaticTurn(): boolean { return !this.initializing && !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation && !this.adapter.requiresRecoveryReview?.() }
   subscribeHandoffStatus(listener: () => void): () => void {
     this.handoffListeners.add(listener)
     return () => { this.handoffListeners.delete(listener) }
@@ -451,6 +452,7 @@ export class AppSessionController {
     if (this.initializing) await this.waitForInitialization()
     if (this.handoffReservation) throw new Error('Conversation is reserved for a workspace handoff')
     if (this.requiresUserReconciliation && (options?.isMeta || options?.origin)) throw new Error('Workspace handoff requires user reconciliation')
+    if (this.adapter.requiresRecoveryReview?.() && (options?.isMeta || options?.origin)) throw new Error('Recovered history requires a genuine user message')
     await this.runSubmit(prompt, options)
   }
 
@@ -553,7 +555,7 @@ export class AppSessionController {
                 const contextUuid = pending?.inputUuid === inputUuid && pending.noticeUuid === notice.displayUuid ? pending.contextUuid : randomUUID()
                 this.pendingReconciliation = { noticeUuid: notice.displayUuid, inputUuid, contextUuid, prompt: promptKey }
                 return { handoffReconciliationContext: { operationId: this.handoffExecution!.configuration.identity.operationId, noticeUuid: notice.displayUuid, contextUuid },
-                  onHandoffInputCommitted: async (checkpoint: ResumeCheckpointV1) => {
+                  onHandoffInputCommitted: async (checkpoint: ResumeCheckpoint) => {
                     if (!options?.uuid) throw new Error('Reconciliation input identity unavailable')
                     await this.handoffExecution!.reconcile({ noticeUuid: notice.displayUuid, inputUuid: options.uuid, contextUuid, checkpoint })
                     this.pendingReconciliation = null

@@ -3,7 +3,7 @@ import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
 import { basename, relative } from 'path'
 import { getCwd } from 'src/utils/cwd.js'
-import { addInvokedSkill } from '../bootstrap/state.js'
+import { addInvokedSkill, isSessionPersistenceDisabled } from '../bootstrap/state.js'
 import { asSessionId } from '../types/ids.js'
 import type {
   AttributionSnapshotMessage,
@@ -71,7 +71,13 @@ import {
   loadTranscriptFile,
   removeExtraFields,
   selectActiveConversation,
+  getTranscriptPathForSession,
+  prepareOwnedTranscriptForResume,
 } from './sessionStorage.js'
+import { activateTranscriptLease } from './transcriptLease.js'
+import { readTailRecoveryState, type TailRecoveryState } from './transcriptTailRecovery.js'
+import { openPrivateTranscript, scanTranscriptDescriptor } from './transcriptAppendGuard.js'
+import { closeSync, constants as fsConstants } from 'node:fs'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import type { ThreadGoal } from './threadGoal.js'
 
@@ -299,6 +305,7 @@ export function deserializeMessagesWithInterruptDetection(
     // This can happen when model outputs "\n\n" before thinking, user cancels mid-stream.
     const filteredMessages = filterWhitespaceOnlyAssistantMessages(
       filteredThinking,
+      { preserveUserIdentities: true },
     ) as NormalizedMessage[]
 
     const internalState = detectTurnInterruption(filteredMessages)
@@ -620,8 +627,10 @@ export async function loadMessagesFromJsonlPath(path: string): Promise<{
 export async function loadConversationForResume(
   source: string | LogOption | undefined,
   sourceJsonlFile: string | undefined,
-  options?: { interruptedTurn?: 'consume' | 'defer' | 'ignore' },
+  options?: { interruptedTurn?: 'consume' | 'defer' | 'ignore'; mutable?: boolean },
 ): Promise<{
+  tailRecovery?: TailRecoveryState
+  recoveryReviewRequired?: boolean
   messages: Message[]
   turnInterruptionState: TurnInterruptionState
   interruptedTurn: InterruptedTurnMatch | null
@@ -701,6 +710,24 @@ export async function loadConversationForResume(
     }
 
     if (log) {
+      const targetId = sessionId ?? getSessionIdFromLog(log)
+      const targetPath = sourceJsonlFile ?? log.fullPath ??
+        (targetId && (typeof source === 'string' || source === undefined || options?.mutable) ? getTranscriptPathForSession(targetId) : undefined)
+      if (targetId && targetPath) {
+        if (options?.mutable && !isSessionPersistenceDisabled()) {
+          await activateTranscriptLease(targetId)
+          await prepareOwnedTranscriptForResume(targetId, targetPath)
+          log = await loadTranscriptFromFile(targetPath)
+          if (!log) throw new Error('Recovered transcript could not be loaded')
+        } else {
+          const fd = openPrivateTranscript(targetPath, fsConstants.O_RDONLY, false)
+          try {
+            if (scanTranscriptDescriptor(fd).suffix.length) {
+              throw new Error('Transcript has an incomplete record; owned mutable resume is required')
+            }
+          } finally { closeSync(fd) }
+        }
+      }
       // Load full messages for lite logs
       if (isLiteLog(log)) {
         log = await loadFullLog(log)
@@ -733,7 +760,9 @@ export async function loadConversationForResume(
     if (sessionId) markWorkspaceResumeAttachments(messages!, sessionId)
     restoreSkillStateFromMessages(messages!)
 
-    const interruptedTurnPolicy = options?.interruptedTurn ?? 'consume'
+    const recoveryPath = sourceJsonlFile ?? log?.fullPath ?? (sessionId ? getTranscriptPathForSession(sessionId) : undefined)
+    const tailRecovery = sessionId && recoveryPath ? readTailRecoveryState(recoveryPath, sessionId) : null
+    const interruptedTurnPolicy = tailRecovery?.reviewRequired ? 'ignore' : options?.interruptedTurn ?? 'consume'
     const interruptedTurnRecord =
       interruptedTurnPolicy === 'ignore'
         ? null
@@ -748,15 +777,18 @@ export async function loadConversationForResume(
     )
     messages = deserialized.messages
 
+    const recoveryReviewRequired = !!tailRecovery?.reviewRequired || deserialized.turnInterruptionState.kind !== 'none'
     // Process session start hooks for resume
-    const hookMessages = await processSessionStartHooks('resume', { sessionId })
+    const hookMessages = recoveryReviewRequired ? [] : await processSessionStartHooks('resume', { sessionId })
 
     // Append hook messages to the conversation
     messages.push(...hookMessages)
 
     return {
+      tailRecovery,
+      recoveryReviewRequired,
       messages,
-      turnInterruptionState: deserialized.turnInterruptionState,
+      turnInterruptionState: tailRecovery?.reviewRequired ? { kind: 'none' } : deserialized.turnInterruptionState,
       interruptedTurn: deserialized.interruptedTurn,
       interruptedTurnRecord: interruptedTurnRecord ?? undefined,
       fileHistorySnapshots: log?.fileHistorySnapshots,

@@ -98,6 +98,9 @@ async function createForkFromActiveConversation(
   const projectDir = getProjectDir(getOriginalCwd())
   const forkSessionPath = getTranscriptPathForSession(forkSessionId)
   const currentTranscriptPath = getTranscriptPath()
+  const { readTailRecoveryState, recoveryHistoryForFork } = await import('../../utils/transcriptTailRecovery.js')
+  const recovery = readTailRecoveryState(currentTranscriptPath, originalSessionId)
+  if (recovery?.reviewRequired) throw new Error('Review the recovered history before creating a new branch')
 
   // Ensure project directory exists
   await mkdir(projectDir, { recursive: true, mode: 0o700 })
@@ -126,6 +129,7 @@ async function createForkFromActiveConversation(
 
   markWorkspaceResumeAttachments(mainConversationEntries, originalSessionId)
   mainConversationEntries = materializeWorkspaceResumeAttachments(mainConversationEntries)
+  mainConversationEntries = recoveryHistoryForFork(mainConversationEntries, recovery)
 
   const validToolResultIds = retainedToolResultIds(mainConversationEntries)
   const contentReplacementRecords = loaded.orderedContentReplacements.filter(

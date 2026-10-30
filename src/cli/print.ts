@@ -91,6 +91,13 @@ import { parsePluginIdentifier } from 'src/utils/plugins/pluginIdentifier.js'
 import { validateUuid } from 'src/utils/uuid.js'
 import { fromArray } from 'src/utils/generators.js'
 import { ask } from 'src/QueryEngine.js'
+import { RestoreReviewAdmission } from 'src/utils/restoreReviewAdmission.js'
+const automaticInputIds = new WeakMap<StructuredIO, Set<string>>()
+function prependAutomaticInput(io: StructuredIO, content: string): void {
+  const ids = automaticInputIds.get(io) ?? new Set<string>()
+  ids.add(io.prependUserMessage(content))
+  automaticInputIds.set(io, ids)
+}
 import type { PermissionPromptTool } from 'src/utils/queryHelpers.js'
 import {
   createFileStateCacheWithSizeLimit,
@@ -539,6 +546,7 @@ export async function runHeadless(
     sessionStartHooksPromise?: ReturnType<typeof processSessionStartHooks>
     setSDKStatus?: (status: SDKStatus) => void
     suppressInterruptedTurnReplay?: boolean
+    initialInputIsAutomatic?: boolean
     deferredAttemptUuid?: string
     deferredJobId?: string
     deferredAbortSignal?: AbortSignal
@@ -755,6 +763,7 @@ export async function runHeadless(
   const {
     messages: initialMessages,
     turnInterruptionState,
+    recoveryReviewRequired,
     agentSetting: resumedAgentSetting,
   } = await loadInitialMessages(setAppState, {
     continue: options.continue,
@@ -789,7 +798,7 @@ export async function runHeadless(
   // module-level pending value is set by the time we get here.
   const hookInitialUserMessage = takeInitialUserMessage()
   if (hookInitialUserMessage) {
-    structuredIO.prependUserMessage(hookInitialUserMessage)
+    prependAutomaticInput(structuredIO, hookInitialUserMessage)
   }
 
   // Restore agent setting from the resumed session (if not overridden by current --agent flag
@@ -962,6 +971,7 @@ export async function runHeadless(
     agents,
     options,
     turnInterruptionState,
+    recoveryReviewRequired,
   )) {
     if (transformToStreamlined) {
       // Streamlined mode: transform messages and stream immediately
@@ -1046,7 +1056,7 @@ export async function runHeadless(
   )
 }
 
-function runHeadlessStreaming(
+export function runHeadlessStreaming(
   structuredIO: StructuredIO,
   mcpClients: MCPServerConnection[],
   commands: Command[],
@@ -1083,6 +1093,7 @@ function runHeadlessStreaming(
     deferredAbortSignal?: AbortSignal
   },
   turnInterruptionState?: TurnInterruptionState,
+  recoveryReviewRequired = false,
 ): AsyncIterable<StdoutMessage> {
   let running = false
   let runPhase:
@@ -1307,6 +1318,9 @@ function runHeadlessStreaming(
   // include Assistant, User, Attachment, and Progress messages.
   // TODO: Clean up this code to avoid passing around a mutable array.
   const mutableMessages: Message[] = initialMessages
+  const restoreReview = new RestoreReviewAdmission(recoveryReviewRequired)
+  let resumeHooksPending = restoreReview.required
+  const freshReviewInputIds = new Set<string>()
 
   // Seed the readFileState cache from the transcript (content the model saw,
   // with message timestamps) so getChangedFiles can detect external edits.
@@ -1338,7 +1352,8 @@ function runHeadlessStreaming(
     turnInterruptionState &&
     turnInterruptionState.kind !== 'none' &&
     resumeInterruptedTurnEnv &&
-    !options.suppressInterruptedTurnReplay
+    !options.suppressInterruptedTurnReplay &&
+    !restoreReview.required
   ) {
     logForDebugging(
       `[print.ts] Auto-resuming interrupted turn (kind: ${turnInterruptionState.kind})`,
@@ -2094,7 +2109,9 @@ function runHeadlessStreaming(
     // notifications are drained by the subagent's mid-turn gate in query.ts.
     // Defined outside the try block so it's accessible in the post-finally
     // queue re-checks at the bottom of run().
-    const isMainThread = (cmd: QueuedCommand) => cmd.agentId === undefined
+    const isMainThread = (cmd: QueuedCommand) => cmd.agentId === undefined &&
+      (!restoreReview.required || (!!cmd.uuid && freshReviewInputIds.has(cmd.uuid))) &&
+      restoreReview.canProcessCommand(cmd, !!cmd.uuid && !!automaticInputIds.get(structuredIO)?.has(cmd.uuid))
 
     try {
       let command: QueuedCommand | undefined
@@ -2120,7 +2137,7 @@ function runHeadlessStreaming(
           // Prompt commands greedily collect followers with matching workload.
           const batch: QueuedCommand[] = [command]
           if (command.mode === 'prompt') {
-            while (canBatchWith(command, peek(isMainThread))) {
+            while (!restoreReview.required && canBatchWith(command, peek(isMainThread))) {
               batch.push(dequeue(isMainThread)!)
             }
             if (batch.length > 1) {
@@ -2336,6 +2353,15 @@ function runHeadlessStreaming(
               prompt: input,
               promptUuid: cmd.uuid,
               isMeta: cmd.isMeta,
+              onInputPersisted: () => {
+                restoreReview.inputPersisted()
+                freshReviewInputIds.clear()
+              },
+              resumeHooksDeferred: resumeHooksPending,
+              onResumeHooksApplied: () => {
+                resumeHooksPending = false
+                if (isSessionPersistenceDisabled()) restoreReview.inputAdmittedEphemerally()
+              },
               cwd: cwd(),
               tools: allTools,
               verbose: options.verbose,
@@ -2550,6 +2576,7 @@ function runHeadlessStreaming(
         hasMainThreadQueued: () => peek(isMainThread) !== undefined,
         requestGoalContinuation: headlessGoalLoop
           ? async () => {
+              if (restoreReview.required) return false
               const continuation =
                 await headlessGoalLoop.nextContinuation(mutableMessages)
               if (!continuation) return false
@@ -2734,6 +2761,7 @@ function runHeadlessStreaming(
               mode: 'prompt',
               value: formatted,
               uuid: randomUUID(),
+              isMeta: true,
             })
             void run()
             return // run() will come back here after processing
@@ -2750,6 +2778,7 @@ function runHeadlessStreaming(
               mode: 'prompt',
               value: SHUTDOWN_TEAM_PROMPT,
               uuid: randomUUID(),
+              isMeta: true,
             })
             void run()
             return // run() will come back here after processing
@@ -2789,6 +2818,7 @@ function runHeadlessStreaming(
           mode: 'prompt',
           value: SHUTDOWN_TEAM_PROMPT,
           uuid: randomUUID(),
+          isMeta: true,
         })
         void run()
       } else {
@@ -4235,12 +4265,23 @@ function runHeadlessStreaming(
         trackReceivedMessageUuid(message.uuid)
       }
 
+      const receivedUuid = message.uuid ?? randomUUID()
+      if (restoreReview.required && !automaticInputIds.get(structuredIO)?.has(receivedUuid) &&
+        receivedUuid !== options.deferredAttemptUuid &&
+        !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result')) &&
+        !('isVirtual' in message && message.isVirtual) &&
+        !('isVisibleInTranscriptOnly' in message && message.isVisibleInTranscriptOnly) &&
+        !('isCompactSummary' in message && message.isCompactSummary) &&
+        !('isReplay' in message && message.isReplay) && !('origin' in message && message.origin) &&
+        !('isMeta' in message && message.isMeta) && !('isSynthetic' in message && message.isSynthetic)) {
+        freshReviewInputIds.add(receivedUuid)
+      }
       enqueue({
         mode: 'prompt' as const,
         // file_attachments rides the protobuf catchall from the web composer.
         // Same-ref no-op when absent (no 'file_attachments' key).
         value: await resolveAndPrepend(message, message.message.content),
-        uuid: message.uuid,
+        uuid: receivedUuid,
         priority: message.priority,
         ...(message.uuid === options.deferredAttemptUuid
           ? {
@@ -4609,14 +4650,14 @@ export async function handleInitializeRequest(
 
       // SDK-defined agents arrive via init, so main.tsx's lookup missed them.
       if (mainThreadAgent.initialPrompt) {
-        structuredIO.prependUserMessage(mainThreadAgent.initialPrompt)
+        prependAutomaticInput(structuredIO, mainThreadAgent.initialPrompt)
       }
     } else if (mainThreadAgent?.initialPrompt) {
       // Filesystem-defined agent (alreadyResolved by main.tsx). main.tsx
       // handles initialPrompt for the string inputPrompt case, but when
       // inputPrompt is an AsyncIterable (SDK stream-json), it can't
       // concatenate — fall back to prependUserMessage here.
-      structuredIO.prependUserMessage(mainThreadAgent.initialPrompt)
+      prependAutomaticInput(structuredIO, mainThreadAgent.initialPrompt)
     }
   }
 
@@ -5079,6 +5120,7 @@ export function removeInterruptedMessage(
 }
 
 type LoadInitialMessagesResult = {
+  recoveryReviewRequired?: boolean
   messages: Message[]
   turnInterruptionState?: TurnInterruptionState
   agentSetting?: string
@@ -5119,8 +5161,10 @@ async function loadInitialMessages(
       const result = await loadConversationForResume(
         undefined /* sessionId */,
         undefined /* file path */,
+        { mutable: !options.forkSession && persistSession },
       )
       if (result) {
+        if (options.forkSession && result.tailRecovery?.reviewRequired) throw new Error('Review the recovered history before creating a new branch')
         // Match coordinator mode to the resumed session's mode
         if (feature('COORDINATOR_MODE') && coordinatorModeModule) {
           const warning = coordinatorModeModule.matchSessionMode(result.mode)
@@ -5181,6 +5225,7 @@ async function loadInitialMessages(
 
         return {
           messages: restoredResult.messages ?? result.messages,
+          recoveryReviewRequired: result.recoveryReviewRequired,
           turnInterruptionState: result.turnInterruptionState,
           agentSetting: result.agentSetting,
         }
@@ -5288,7 +5333,9 @@ async function loadInitialMessages(
       const result = await loadConversationForResume(
         parsedSessionId.sessionId,
         parsedSessionId.jsonlFile || undefined,
+        { mutable: !options.forkSession && persistSession },
       )
+      if (options.forkSession && result?.tailRecovery?.reviewRequired) throw new Error('Review the recovered history before creating a new branch')
 
       // hydrateFromCCRv2InternalEvents writes an empty transcript file for
       // fresh sessions (writeFile(sessionFile, '') with zero events), so
@@ -5381,6 +5428,7 @@ async function loadInitialMessages(
 
       return {
         messages: restoredResult.messages ?? result.messages,
+        recoveryReviewRequired: result.recoveryReviewRequired,
         turnInterruptionState: result.turnInterruptionState,
         agentSetting: result.agentSetting,
       }
@@ -5416,9 +5464,11 @@ function getStructuredIO(
     sdkUrl: string | undefined
     replayUserMessages?: boolean
     deferredAttemptUuid?: string
+    initialInputIsAutomatic?: boolean
   },
 ): StructuredIO {
   let inputStream: AsyncIterable<string>
+  const automaticUuid = options.initialInputIsAutomatic ? randomUUID() : undefined
   if (typeof inputPrompt === 'string') {
     if (inputPrompt.trim() !== '') {
       // Normalize to a streaming input.
@@ -5433,7 +5483,7 @@ function getStructuredIO(
           parent_tool_use_id: null,
           ...(options.deferredAttemptUuid
             ? { uuid: options.deferredAttemptUuid as UUID }
-            : {}),
+            : automaticUuid ? { uuid: automaticUuid } : {}),
         } satisfies SDKUserMessage),
       ])
     } else {
@@ -5445,9 +5495,11 @@ function getStructuredIO(
   }
 
   // Use RemoteIO if sdkUrl is provided, otherwise use regular StructuredIO
-  return options.sdkUrl
+  const io = options.sdkUrl
     ? new RemoteIO(options.sdkUrl, inputStream, options.replayUserMessages)
     : new StructuredIO(inputStream, options.replayUserMessages)
+  if (automaticUuid) automaticInputIds.set(io, new Set([automaticUuid]))
+  return io
 }
 
 /**

@@ -1,5 +1,5 @@
 import { assertSessionNotMoving } from './sessionRelocationState.js'
-import { constants } from 'fs'
+import { constants, lstatSync } from 'fs'
 import { chmod, lstat, mkdir, open, unlink } from 'fs/promises'
 import { join } from 'path'
 import { writeFileAtomicDurable } from './atomicFile.js'
@@ -158,11 +158,16 @@ async function acquireLease(sessionId: string): Promise<LeaseGuard> {
     }
     throw error
   }
+  const acquired = lstatSync(`${target}.lock`)
   return {
     sessionId,
     target,
     assertHealthy() {
       if (compromised) throw compromised
+      const current = lstatSync(`${target}.lock`)
+      if (!current.isDirectory() || acquired.dev !== current.dev || acquired.ino !== current.ino) {
+        throw new Error('Transcript lease ownership was replaced')
+      }
     },
     release,
   }
@@ -308,4 +313,13 @@ export function assertActiveTranscriptLease(sessionId: string): void {
     throw new Error(`No active transcript lease for session ${sessionId}`)
   }
   activeLease.assertHealthy()
+}
+
+/** Destructive recovery requires affirmative ownership, unlike legacy append assertions. */
+export function assertOwnedTranscriptLease(sessionId: string): void {
+  if (!activeLease || activeLease.sessionId !== sessionId) {
+    throw new Error(`Exclusive transcript ownership required for session ${sessionId}`)
+  }
+  activeLease.assertHealthy()
+  assertSessionNotMoving(sessionId)
 }

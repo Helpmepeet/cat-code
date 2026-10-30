@@ -1,4 +1,4 @@
-import type { ResumeCheckpointV1, WorkspaceHandoffExecutionOutcome } from '../../app/shared/workspaceHandoff.js'
+import type { ResumeCheckpoint, WorkspaceHandoffExecutionOutcome } from '../../app/shared/workspaceHandoff.js'
 type HandoffCaller = { agentId?: unknown; turnHandoff?: TurnHandoff }
 
 export type HandoffRequest = { operationId: string; toolUseId: string }
@@ -78,7 +78,7 @@ export function readHandoffOutcomeData(value: unknown): { operationId: string; o
 }
 
 export type HandoffTurnLifecycleOptions = {
-  onHandoffInputCommitted?: (checkpoint: ResumeCheckpointV1) => Promise<void>
+  onHandoffInputCommitted?: (checkpoint: ResumeCheckpoint) => Promise<void>
   onExecutionClosed?: (outcome: WorkspaceHandoffExecutionOutcome) => void
   handoffReconciliationContext?: { operationId: string; noticeUuid: string; contextUuid: string }
 }

@@ -10,7 +10,6 @@ import { constants as fsConstants, type Dirent } from 'fs'
 // with the async-suffixed names.
 import { closeSync, fstatSync, openSync, readFileSync, readSync } from 'fs'
 import {
-  appendFile as fsAppendFile,
   open as fsOpen,
   mkdir,
   readdir,
@@ -91,7 +90,9 @@ import { getWorktreePaths } from './getWorktreePaths.js'
 import { getBranch } from './git.js'
 import { gracefulShutdownSync, isShuttingDown } from './gracefulShutdown.js'
 import { parseJSONL } from './json.js'
-import { canonicalResumeJson, resumeProjectionV1, resumeProjectionSha256, type ResumeCheckpointV1 } from './resumeCheckpoint.js'
+import { canonicalResumeJson, resumeProjectionV1, resumeProjectionSha256, resumeProjectionV2,
+  resumeProjectionV2Sha256, verifyResumeProjectionV2, type ResumeCheckpoint, type ResumeCheckpointV2 } from './resumeCheckpoint.js'
+import { isResumeCheckpoint } from '../../app/shared/workspaceHandoff.js'
 import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
 import { sanitizePath } from './path.js'
@@ -120,6 +121,8 @@ import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
+import { appendFramedTranscriptSync, appendFramedTranscriptWithinGuard, withTranscriptAppendGuard } from './transcriptAppendGuard.js'
+import { prepareOwnedTranscriptTail, type TailRecoveryState } from './transcriptTailRecovery.js'
 
 // Capture build-time defines at module evaluation to work around bun --define
 // in async contexts (https://github.com/oven-sh/bun/issues/26168). Direct-source
@@ -1392,6 +1395,7 @@ class Project {
   >()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private activeDrain: Promise<void> | null = null
+  private appendFailure: unknown = null
   // Every mutation of one transcript must serialize with queued appends and
   // with other tombstone removals. A counter (`trackWrite`) only tells flush()
   // that work exists; it cannot protect the read-modify-write filesystem span.
@@ -1408,6 +1412,7 @@ class Project {
     if (this.flushTimer) clearTimeout(this.flushTimer)
     this.flushTimer = null
     this.activeDrain = null
+    this.appendFailure = null
     this.writeQueues = new Map()
     this.fileOperationChains = new Map()
   }
@@ -1485,24 +1490,19 @@ class Project {
         this.activeDrain = null
       }
       // If more items arrived during drain, schedule again
-      if (this.writeQueues.size > 0) {
+      if (this.writeQueues.size > 0 && !this.appendFailure) {
         this.scheduleDrain()
       }
     }, this.FLUSH_INTERVAL_MS)
   }
 
   private async appendToFile(filePath: string, data: string): Promise<void> {
-    try {
-      await fsAppendFile(filePath, data, { mode: 0o600 })
-    } catch {
-      // Directory may not exist — some NFS-like filesystems return
-      // unexpected error codes, so don't discriminate on code.
-      await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
-      await fsAppendFile(filePath, data, { mode: 0o600 })
-    }
+    await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
+    await withTranscriptAppendGuard(filePath, async () => appendFramedTranscriptWithinGuard(filePath, data))
   }
 
   private async drainWriteQueue(): Promise<void> {
+    if (this.appendFailure) throw this.appendFailure
     for (const [filePath, queue] of this.writeQueues) {
       if (queue.length === 0) {
         continue
@@ -1538,9 +1538,10 @@ class Project {
           }
         })
       } catch (err) {
-        // The batch has not been durably acknowledged. Restore it at the front
-        // so a later flush retries every entry instead of silently losing it.
+        // Retain uncertain work, but never replay a possibly partial append.
+        // Further flushes fail until a new writer is constructed.
         queue.unshift(...batch)
+        this.appendFailure = err
         throw err
       }
     }
@@ -1801,7 +1802,7 @@ class Project {
     await this.drainWriteQueue()
 
     return this.trackWrite(() =>
-      this.serializeFileOperation(sessionFile, async () => {
+      this.serializeFileOperation(sessionFile, () => withTranscriptAppendGuard(sessionFile, async () => {
       try {
         let fileSize = 0
         const fh = await fsOpen(sessionFile, 'r+')
@@ -1884,7 +1885,7 @@ class Project {
           )
         }
       }
-      }),
+      })),
     )
   }
 
@@ -2429,6 +2430,9 @@ export async function recordTranscript(
       teamInfo,
     )
   }
+  // insertMessageChain is deliberately a no-op when persistence is disabled.
+  // Do not report its intended UUID as an acceptance receipt in that case.
+  if (getOwnedTranscriptPath() === null) return null
   // Return the last ACTUALLY recorded chain-participant's UUID, OR the
   // prefix-tracked UUID if no new chain participants were recorded. This lets
   // callers (useLogMessages) maintain the correct parent chain even when the
@@ -2629,22 +2633,28 @@ export async function flushCurrentTranscriptDurably(
   // bare ENOENT at the deferred-continuation callsites. Nothing was written,
   // so there is nothing to make durable.
   const transcriptPath = getOwnedTranscriptPath()
-  if (transcriptPath === null) return
+  if (transcriptPath === null) {
+    if (expectedUuid) throw new Error('Expected transcript UUID has no owned transcript')
+    return
+  }
+  await withTranscriptAppendGuard(transcriptPath, async () => {
   const handle = await fsOpen(
     transcriptPath,
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
   )
   try {
-    await handle.sync()
     if (expectedUuid) {
-      const stat = await handle.stat()
-      const bytes = Math.min(stat.size, 1024 * 1024)
-      const buffer = Buffer.alloc(bytes)
-      await handle.read(buffer, 0, bytes, stat.size - bytes)
-      if (!buffer.toString('utf8').includes(`\"uuid\":\"${expectedUuid}\"`)) {
+      const info = await handle.stat()
+      const loaded = await loadTranscriptFile(transcriptPath, {
+        keepAllLeaves: true, strict: true, prefixBytes: info.size,
+      })
+      if (loaded.sourceTruncated || !loaded.messages.has(expectedUuid as UUID)) {
         throw new Error('Deferred continuation UUID is not durable')
       }
     }
+    // The final sync must follow observation of the expected record. A sync
+    // before the read cannot certify bytes appended while that read starts.
+    await handle.sync()
   } finally {
     await handle.close()
   }
@@ -2654,6 +2664,7 @@ export async function flushCurrentTranscriptDurably(
   } finally {
     await parent.close()
   }
+  })
 }
 
 /** Verify the live chain, not UUIDs left behind by rewind or tombstones. */
@@ -2693,7 +2704,7 @@ export async function verifyHandoffTranscriptDurably(
   return { tip_uuid: expected.tip_uuid, tool_use_id: expected.tool_use_id }
 }
 
-/** resume-projection-v1 uses logging transforms and the normal active selection.
+/** Checkpoint intent uses logging transforms and the normal active selection.
  * Trailing non-user/assistant rows do not anchor resume and are excluded.
  */
 export function intendedResumeProjection(messages: Message[]): Message[] {
@@ -2728,24 +2739,46 @@ async function hashTranscriptPrefix(path: string, prefixBytes: number): Promise<
   } finally { await handle.close() }
 }
 
-export async function verifyResumeCheckpoint(checkpoint: ResumeCheckpointV1, transcriptPath = getOwnedTranscriptPath()): Promise<void> {
+export async function verifyResumeCheckpoint(checkpoint: ResumeCheckpoint, transcriptPath = getOwnedTranscriptPath(), expectedSessionId: string = getSessionId()): Promise<void> {
+  if (!isResumeCheckpoint(checkpoint)) throw new Error('Invalid resume checkpoint')
   if (!transcriptPath) throw new Error('Persisted conversation ownership is required')
   if (await hashTranscriptPrefix(transcriptPath, checkpoint.prefixBytes) !== checkpoint.prefixSha256) {
     throw new Error('Transcript prefix digest differs')
   }
   const loaded = await loadTranscriptFile(transcriptPath, { keepAllLeaves: true, prefixBytes: checkpoint.prefixBytes, strict: true })
   const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
-  if (loaded.sourceTruncated || active.sessionId !== getSessionId() || active.tip?.uuid !== checkpoint.activeTipUuid ||
-    active.messages.length !== checkpoint.messageCount || resumeProjectionSha256(active.messages) !== checkpoint.projectionSha256) {
+  const messageCount = checkpoint.version === 1 ? active.messages.length : resumeProjectionV2(active.messages).length
+  const projectionSha256 = checkpoint.version === 1 ? resumeProjectionSha256(active.messages) : resumeProjectionV2Sha256(active.messages)
+  if (loaded.sourceTruncated || active.sessionId !== expectedSessionId || active.tip?.uuid !== checkpoint.activeTipUuid ||
+    messageCount !== checkpoint.messageCount || projectionSha256 !== checkpoint.projectionSha256) {
     throw new Error('Transcript resume projection differs')
   }
 }
 
-export async function sealResumeCheckpoint(expectedResumeProjection: Message[]): Promise<ResumeCheckpointV1> {
+/** Must run after ownership and before resume hooks or adoption metadata. */
+export async function prepareOwnedTranscriptForResume(sessionId: string, path = getTranscriptPathForSession(sessionId)): Promise<TailRecoveryState> {
+  if (isSessionPersistenceDisabled()) throw new Error('Transcript recovery is unavailable while session persistence is disabled')
+  const result = await prepareOwnedTranscriptTail(path, sessionId, {
+    verifyCheckpoint: checkpoint => verifyResumeCheckpoint(checkpoint, path, sessionId),
+    validateRetained: async prefixBytes => {
+      const loaded = await loadTranscriptFile(path, { keepAllLeaves: true, strict: true, prefixBytes })
+      const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+      if (loaded.sourceTruncated || active.sessionId !== sessionId || !active.tip || !active.messages.length ||
+        active.messages.some(message => message.parentUuid && !loaded.messages.has(message.parentUuid))) {
+        throw new Error('An intact retained conversation could not be established')
+      }
+      return active.tip.uuid
+    },
+  })
+  if (result) clearSessionMessagesCache()
+  return result
+}
+
+export async function sealResumeCheckpoint(expectedResumeProjection: Message[]): Promise<ResumeCheckpointV2> {
   assertActiveTranscriptLease(getSessionId())
   const expected = intendedResumeProjection(expectedResumeProjection)
   // Capture independently retained engine state before inspecting the file.
-  const intendedDigest = resumeProjectionSha256(expected)
+  const intended = JSON.parse(canonicalResumeJson(resumeProjectionV1(expected))) as Message[]
   const tip = expected.at(-1)
   if (!tip || (tip.type !== 'user' && tip.type !== 'assistant')) throw new Error('Resume checkpoint has no active tip')
   await flushCurrentTranscriptDurably()
@@ -2777,12 +2810,24 @@ export async function sealResumeCheckpoint(expectedResumeProjection: Message[]):
   if (updates.length) await getProject().appendFinalizedAssistantMetadata(updates)
   await markActiveConversationTip(tip.uuid as UUID)
   await flushCurrentTranscriptDurably()
+  return withTranscriptAppendGuard(path, async () => {
   const info = await stat(path)
-  const checkpoint: ResumeCheckpointV1 = { version: 1, prefixBytes: info.size,
-    prefixSha256: await hashTranscriptPrefix(path, info.size), activeTipUuid: tip.uuid,
-    projectionSha256: intendedDigest, messageCount: expected.length }
+  const prefixSha256 = await hashTranscriptPrefix(path, info.size)
+  const loaded = await loadTranscriptFile(path, { keepAllLeaves: true, strict: true, prefixBytes: info.size })
+  const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  if (loaded.sourceTruncated || active.sessionId !== getSessionId() || active.tip?.uuid !== tip.uuid) {
+    throw new Error('Transcript resume projection differs')
+  }
+  let proof: ReturnType<typeof verifyResumeProjectionV2>
+  try { proof = verifyResumeProjectionV2(intended, active.messages) }
+  catch (cause) { throw new Error('Transcript resume projection differs', { cause }) }
+  const checkpoint: ResumeCheckpointV2 = { version: 2, prefixBytes: info.size,
+    prefixSha256, activeTipUuid: tip.uuid, ...proof }
   await verifyResumeCheckpoint(checkpoint, path)
+  const handle = await fsOpen(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+  try { await handle.sync() } finally { await handle.close() }
   return checkpoint
+  })
 }
 
 /** Used for trusted outcomes and genuine-user reconciliation admission. */
@@ -2853,7 +2898,7 @@ export async function hydrateRemoteSession(
       // unlink is needed; an empty remoteLogs array produces an empty file.
       const content = remoteLogs.map(e => jsonStringify(e) + '\n').join('')
       assertHealthy()
-      await writeFile(sessionFile, content, { encoding: 'utf8', mode: 0o600 })
+      await withTranscriptAppendGuard(sessionFile, () => writeFile(sessionFile, content, { encoding: 'utf8', mode: 0o600 }))
 
       logForDebugging(`Hydrated ${remoteLogs.length} entries from remote`)
       return remoteLogs.length > 0
@@ -2908,7 +2953,7 @@ export async function hydrateFromCCRv2InternalEvents(
       const sessionFile = getTranscriptPathForSession(sessionId)
       const fgContent = events.map(e => jsonStringify(e.payload) + '\n').join('')
       assertHealthy()
-      await writeFile(sessionFile, fgContent, { encoding: 'utf8', mode: 0o600 })
+      await withTranscriptAppendGuard(sessionFile, () => writeFile(sessionFile, fgContent, { encoding: 'utf8', mode: 0o600 }))
 
       logForDebugging(
         `Hydrated ${events.length} foreground entries from CCR v2 internal events`,
@@ -2942,10 +2987,10 @@ export async function hydrateFromCCRv2InternalEvents(
               .map(p => jsonStringify(p) + '\n')
               .join('')
             assertHealthy()
-            await writeFile(agentFile, agentContent, {
+            await withTranscriptAppendGuard(agentFile, () => writeFile(agentFile, agentContent, {
               encoding: 'utf8',
               mode: 0o600,
-            })
+            }))
           }
 
           logForDebugging(
@@ -4235,14 +4280,9 @@ function appendEntryToFile(
   entry: Record<string, unknown>,
 ): void {
   assertActiveTranscriptLease(getSessionId())
-  const fs = getFsImplementation()
   const line = jsonStringify(entry) + '\n'
-  try {
-    fs.appendFileSync(fullPath, line, { mode: 0o600 })
-  } catch {
-    fs.mkdirSync(dirname(fullPath), { mode: 0o700 })
-    fs.appendFileSync(fullPath, line, { mode: 0o600 })
-  }
+  getFsImplementation().mkdirSync(dirname(fullPath), { mode: 0o700 })
+  appendFramedTranscriptSync(fullPath, line)
 }
 
 /**
@@ -5290,6 +5330,7 @@ export async function loadTranscriptFile(
       } else if (entry.type === 'queue-operation') {
         queueOperations.push({
           operation: entry.operation,
+          ...(entry.queueVersion === 2 ? { queueVersion: 2 } : {}),
           timestamp: entry.timestamp,
           sessionId: entry.sessionId,
           ...(entry.uuid !== undefined ? { uuid: entry.uuid } : {}),
@@ -5522,14 +5563,13 @@ async function loadSessionFile(
 }
 
 export type SessionQueueOperation = {
+  queueVersion?: QueueOperationMessage['queueVersion']
   priorAssistantContext?: import('../types/message.js').PriorAssistantContext | null
   /**
-   * Anything other than `enqueue` is a retraction: the command left the queue.
-   * `popAll` (the terminal's UP-arrow pull-back) is written by
-   * `messageQueueManager.logOperation` too, so readers must treat the set as
-   * open and test for `enqueue` rather than enumerate the retractions.
+   * Preserve reservation versus explicit cancellation verbs. A reservation
+   * alone does not prove the input was accepted or had no external effects.
    */
-  operation: 'enqueue' | 'dequeue' | 'remove' | 'popAll'
+  operation: QueueOperationMessage['operation']
   timestamp: string
   sessionId: string
   uuid?: UUID
@@ -5571,9 +5611,19 @@ export async function getSessionQueueOperations(
     // previously delivered UUIDs independently of the compacted model seed.
     keepCompactedHistory: true,
   })
+  const messageUuids = new Set(loaded.messages.keys())
+  for (const message of loaded.messages.values()) {
+    if (message.type !== 'attachment') continue
+    const attachment = message.attachment && typeof message.attachment === 'object' &&
+      !Array.isArray(message.attachment) ? message.attachment as Record<string, unknown> : null
+    if (attachment?.type !== 'queued_command' || attachment.commandMode !== 'prompt' ||
+      attachment.origin || attachment.isMeta) continue
+    const sourceUuid = validateUuid(attachment.source_uuid)
+    if (sourceUuid) messageUuids.add(sourceUuid)
+  }
   return {
     operations: loaded.queueOperations,
-    messageUuids: new Set(loaded.messages.keys()),
+    messageUuids,
   }
 }
 

@@ -59,6 +59,7 @@ export function createQueryEngineAppSession(
 
   return {
     getMessages: () => engine.getMessages?.() ?? [],
+    requiresRecoveryReview: () => engine.requiresRecoveryReview?.() ?? false,
     executeInlineCommand,
     submitMessage(prompt, options?: QueryEngineSessionOptions) {
       options = { ...options, priorAssistantContext: options?.priorAssistantContext === undefined

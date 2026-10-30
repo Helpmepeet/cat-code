@@ -185,9 +185,10 @@ import type { ProcessUserInputContext } from '../utils/processUserInput/processU
 import type { PastedContent } from '../utils/config.js';
 import { copyPlanForFork, copyPlanForResume, getPlanSlug, setPlanSlug } from '../utils/plans.js';
 import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript, saveAiGeneratedTitle, recordTranscript, flushCurrentTranscriptDurably } from '../utils/sessionStorage.js';
+import { RestoreReviewAdmission } from '../utils/restoreReviewAdmission.js';
 import { classifyForegroundDeferredAttempt, getForegroundDeferredAbortSignal, settleForegroundDeferredAttempt, validateForegroundDeferredOrigin } from '../services/deferredContinuationRunner.js';
 import { acquireDeferredContinuationLocks, readPendingDeferredContinuation, type DeferredContinuationLockGuard } from '../services/deferredContinuation.js';
-import { deserializeMessages } from '../utils/conversationRecovery.js';
+import { deserializeMessages, loadConversationForResume } from '../utils/conversationRecovery.js';
 import { extractReadFilesFromMessages, extractBashToolsFromMessages } from '../utils/queryHelpers.js';
 import { resetMicrocompactState } from '../services/compact/microCompact.js';
 import { runPostCompactCleanup } from '../services/compact/postCompactCleanup.js';
@@ -548,6 +549,8 @@ export type Props = {
   initialTools: Tool[];
   // Initial messages to populate the REPL with
   initialMessages?: MessageType[];
+  initialRecoveryReviewRequired?: boolean;
+  initialFreshUserMessageUuid?: string;
   // Deferred hook messages promise — REPL renders immediately and injects
   // hook messages when they resolve. Awaited before the first API call.
   pendingHookMessages?: Promise<HookResultMessage[]>;
@@ -593,6 +596,8 @@ export function REPL({
   debug,
   initialTools,
   initialMessages,
+  initialRecoveryReviewRequired,
+  initialFreshUserMessageUuid,
   pendingHookMessages,
   initialFileHistorySnapshots,
   initialContentReplacements,
@@ -1277,6 +1282,8 @@ export function REPL({
     return () => unregisterLeaderToolUseConfirmQueue();
   }, [setToolUseConfirmQueue]);
   const [messages, rawSetMessages] = useState<MessageType[]>(initialMessages ?? []);
+  const restoreReviewRef = useRef<RestoreReviewAdmission | null>(null);
+  if (!restoreReviewRef.current) restoreReviewRef.current = new RestoreReviewAdmission(!!initialRecoveryReviewRequired);
   const messagesRef = useRef(messages);
   // Stores the willowMode variant that was shown (or false if no hint shown).
   // Captured at hint_shown time so hint_converted telemetry reports the same
@@ -1928,7 +1935,12 @@ export function REPL({
       }
       // Deserialize messages to properly clean up the conversation
       // This filters unresolved tool uses and adds a synthetic assistant message if needed
-      const messages = deserializeMessages(log.messages);
+      const restored = entrypoint === 'fork' ? undefined : await loadConversationForResume(log, undefined, {
+        mutable: true,
+        interruptedTurn: 'defer'
+      });
+      if (entrypoint !== 'fork' && !restored) throw new Error('Failed to load conversation');
+      const messages = restored?.messages ?? deserializeMessages(log.messages);
 
       // Match coordinator/normal mode to the resumed session
       if (feature('COORDINATOR_MODE')) {
@@ -1970,7 +1982,7 @@ export function REPL({
       });
 
       // Process session start hooks for resume
-      const hookMessages = await processSessionStartHooks('resume', {
+      const hookMessages = restored ? [] : await processSessionStartHooks('resume', {
         sessionId,
         agentType: mainThreadAgentDefinition?.agentType,
         model: mainLoopModel
@@ -2034,6 +2046,7 @@ export function REPL({
       // a different project (cross-worktree, /branch); null derives from
       // current originalCwd.
       switchSession(asSessionId(sessionId), log.fullPath ? dirname(log.fullPath) : null);
+      restoreReviewRef.current = new RestoreReviewAdmission(!!restored?.recoveryReviewRequired);
       // Rename asciicast recording to match the resumed session ID
       const {
         renameRecordingForSession
@@ -3313,6 +3326,10 @@ export function REPL({
     let deferredProviderEntered = false;
     let removeDeferredLockAbort: (() => void) | undefined;
     try {
+      if (shouldQuery) {
+        const context = await restoreReviewRef.current!.admitTerminalInput([...messagesRef.current, ...newMessages], newMessages);
+        newMessages.push(...context);
+      }
       // isLoading is derived from queryGuard — tryStart() above already
       // transitioned dispatching→running, so no setter call needed here.
       resetTimingRefs();
@@ -3527,6 +3544,10 @@ export function REPL({
   useEffect(() => {
     const pending = initialMessage;
     if (!pending || isLoading || initialMessageRef.current) return;
+    if (restoreReviewRef.current!.required && pending.message.uuid !== initialFreshUserMessageUuid) {
+      setAppState(prev => ({ ...prev, initialMessage: null }));
+      return;
+    }
 
     // Mark as processing to prevent re-entry
     initialMessageRef.current = true;
@@ -4475,6 +4496,7 @@ export function REPL({
   }, [queryGuard, commands, setToolJSX, getToolUseContext, messages, mainLoopModel, ideSelection, setUserInputOnProcessing, canUseTool, setAbortController, onQuery, addNotification, setAppState, onBeforeQuery]);
   useQueueProcessor({
     executeQueuedInput,
+    canProcessQueue: () => restoreReviewRef.current!.canStartAutomaticTurn(),
     hasActiveLocalJsxUI: isShowingLocalJSXCommand,
     queryGuard
   });
@@ -4584,6 +4606,7 @@ export function REPL({
     isMeta?: boolean;
     teammateMessages?: import('../utils/teammateMessage.js').TeammateMessageContract[];
   }): boolean => {
+    if (restoreReviewRef.current!.required) return false;
     if (queryGuard.isActive) return false;
 
     // Defer to user-queued commands — user input always takes priority
@@ -4626,6 +4649,7 @@ export function REPL({
     // attempt stale) belong to the scheduler, not to this component.
     const isInPlanMode = toolPermissionContext.mode === 'plan';
     goalGateRef.current.canStartAutomaticTurn =
+      restoreReviewRef.current!.canStartAutomaticTurn() &&
       sessionIsIdle &&
       queuedCommands.length === 0 &&
       !isShowingLocalJSXCommand &&

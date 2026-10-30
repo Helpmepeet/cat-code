@@ -2057,6 +2057,7 @@ async function run(): Promise<CommanderCommand> {
       }
     }
 
+    const startupInputIsFresh = typeof inputPrompt === 'string' && inputPrompt.length > 0;
     // initialPrompt goes first so its slash command (if any) is processed;
     // user-provided text becomes trailing context.
     // Only concatenate when inputPrompt is a string. When it's an
@@ -2861,6 +2862,7 @@ async function run(): Promise<CommanderCommand> {
       const deferredRunner = await import('./services/deferredContinuationRunner.js');
       const deferredWorkerJob = deferredRunner.getPreparedBackgroundDeferredContinuation();
       const headlessRun = runHeadless(inputPrompt, () => headlessStore.getState(), headlessStore.setState, commandsHeadless, tools, sdkMcpConfigs, agentDefinitions.activeAgents, {
+        initialInputIsAutomatic: !startupInputIsFresh && typeof inputPrompt === 'string' && !!inputPrompt,
         continue: options.continue,
         resume: options.resume,
         verbose: verbose,
@@ -3174,7 +3176,7 @@ async function run(): Promise<CommanderCommand> {
           clearSessionCaches
         } = await import('./commands/clear/caches.js');
         clearSessionCaches();
-        const result = await loadConversationForResume(undefined /* sessionId */, undefined /* sourceFile */);
+        const result = await loadConversationForResume(undefined /* sessionId */, undefined /* sourceFile */, { mutable: !options.forkSession });
         if (!result) {
           logEvent('tengu_continue', {
             success: false
@@ -3182,6 +3184,7 @@ async function run(): Promise<CommanderCommand> {
           return await exitWithError(root, 'No conversation found to continue');
         }
         const loaded = await processResumedConversation(result, {
+          allowRecoveryReview: true,
           forkSession: !!options.forkSession,
           includeAttribution: true,
           transcriptPath: result.fullPath
@@ -3204,6 +3207,8 @@ async function run(): Promise<CommanderCommand> {
           ...sessionConfig,
           mainThreadAgentDefinition: loaded.restoredAgentDef ?? mainThreadAgentDefinition,
           initialMessages: loaded.messages,
+          initialRecoveryReviewRequired: loaded.recoveryReviewRequired,
+          initialFreshUserMessageUuid: startupInputIsFresh ? initialState.initialMessage?.message.uuid : undefined,
           initialFileHistorySnapshots: loaded.fileHistorySnapshots,
           initialContentReplacements: loaded.contentReplacements,
           initialAgentName: loaded.agentName,
@@ -3661,6 +3666,7 @@ async function run(): Promise<CommanderCommand> {
               const result = await loadConversationForResume(logOption, undefined);
               if (result) {
                 processedResume = await processResumedConversation(result, {
+                  allowRecoveryReview: true,
                   forkSession: true,
                   transcriptPath: result.fullPath
                 }, resumeContext);
@@ -3699,9 +3705,10 @@ async function run(): Promise<CommanderCommand> {
                 // ENOENT: not a file path — fall through to session-ID handling
               }
               if (logOption) {
-                const result = await loadConversationForResume(logOption, undefined /* sourceFile */);
+                const result = await loadConversationForResume(logOption, undefined /* sourceFile */, { mutable: !options.forkSession });
                 if (result) {
                   processedResume = await processResumedConversation(result, {
+                    allowRecoveryReview: true,
                     forkSession: !!options.forkSession,
                     transcriptPath: result.fullPath
                   }, resumeContext);
@@ -3743,7 +3750,7 @@ async function run(): Promise<CommanderCommand> {
           const resumeStart = performance.now();
           // Use matchedLog if available (for cross-worktree resume by custom title)
           // Otherwise fall back to sessionId string (for direct UUID resume)
-          const result = await loadConversationForResume(matchedLog ?? sessionId, undefined);
+          const result = await loadConversationForResume(matchedLog ?? sessionId, undefined, { mutable: !options.forkSession });
           if (!result) {
             logEvent('tengu_session_resumed', {
               entrypoint: 'cli_flag' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -3753,6 +3760,7 @@ async function run(): Promise<CommanderCommand> {
           }
           const fullPath = matchedLog?.fullPath ?? result.fullPath;
           processedResume = await processResumedConversation(result, {
+            allowRecoveryReview: true,
             forkSession: !!options.forkSession,
             sessionIdOverride: sessionId,
             transcriptPath: fullPath
@@ -3812,6 +3820,8 @@ async function run(): Promise<CommanderCommand> {
           ...sessionConfig,
           mainThreadAgentDefinition: resumeData.restoredAgentDef ?? mainThreadAgentDefinition,
           initialMessages: resumeData.messages,
+          initialRecoveryReviewRequired: resumeData.recoveryReviewRequired,
+          initialFreshUserMessageUuid: startupInputIsFresh ? initialState.initialMessage?.message.uuid : undefined,
           initialFileHistorySnapshots: resumeData.fileHistorySnapshots,
           initialContentReplacements: resumeData.contentReplacements,
           initialAgentName: resumeData.agentName,

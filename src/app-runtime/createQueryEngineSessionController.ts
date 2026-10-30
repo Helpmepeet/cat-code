@@ -6,7 +6,7 @@ import type { ConversationForkResult } from '../commands/branch/branch.js'
 import type { MessageOrigin } from '../types/message.js'
 import type { UserMessage } from '../types/message.js'
 import type { Message, PriorAssistantContext } from '../types/message.js'
-import type { ResumeCheckpointV1 } from '../../app/shared/workspaceHandoff.js'
+import type { ResumeCheckpoint } from '../../app/shared/workspaceHandoff.js'
 import type { HandoffTerminalOutcome, HandoffTurnLifecycleOptions } from './handoff.js'
 import {
   AppSessionController,
@@ -48,10 +48,11 @@ export type QueryEngineSessionLike = {
   continueHandoff?: (operationId: string, options?: { uuid?: string; onInputPersisted?: () => void | Promise<void> } & HandoffTurnLifecycleOptions) => AsyncIterable<SDKMessage>
   readHandoffOutcome?: (operationId: string) => Promise<HandoffTerminalOutcome | null>
   recoverHandoffReconciliation?: (notice: { displayUuid: string; contextUuid: string }) => Promise<{
-    inputUuid: string; contextUuid: string; checkpoint: ResumeCheckpointV1
+    inputUuid: string; contextUuid: string; checkpoint: ResumeCheckpoint
   } | null>
-  sealResumeCheckpoint?: () => Promise<ResumeCheckpointV1>
-  verifyResumeCheckpoint?: (checkpoint: ResumeCheckpointV1) => Promise<void>
+  sealResumeCheckpoint?: () => Promise<ResumeCheckpoint>
+  requiresRecoveryReview?: () => boolean
+  verifyResumeCheckpoint?: (checkpoint: ResumeCheckpoint) => Promise<void>
   persistHandoffOutcome?: (operationId: string, outcome: HandoffTerminalOutcome) => Promise<SDKMessage[]>
   selectUserMessage?: (targetUuid: string) => UserMessage
   rewindBeforeUserMessage?: (
@@ -81,6 +82,7 @@ export function createQueryEngineSessionAdapter(
     readHandoffOutcome: session.readHandoffOutcome ? operationId => session.readHandoffOutcome!(operationId) : undefined,
     recoverHandoffReconciliation: session.recoverHandoffReconciliation ? notice => session.recoverHandoffReconciliation!(notice) : undefined,
     sealResumeCheckpoint: session.sealResumeCheckpoint ? () => session.sealResumeCheckpoint!() : undefined,
+    requiresRecoveryReview: session.requiresRecoveryReview ? () => session.requiresRecoveryReview!() : undefined,
     verifyResumeCheckpoint: session.verifyResumeCheckpoint ? checkpoint => session.verifyResumeCheckpoint!(checkpoint) : undefined,
     persistHandoffOutcome: session.persistHandoffOutcome
       ? (operationId, outcome) => session.persistHandoffOutcome!(operationId, outcome)

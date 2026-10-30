@@ -26,6 +26,7 @@ const { createFileStateCacheWithSizeLimit } = await import('./utils/fileStateCac
 const bootstrap = await import('./bootstrap/state.js')
 const { asSessionId } = await import('./types/ids.js')
 const storage = await import('./utils/sessionStorage.js')
+const { transcriptRecoveryDirectory } = await import('./utils/transcriptTailRecovery.js')
 const { releaseActiveTranscriptLease } = await import('./utils/transcriptLease.js')
 const claude = await import('./services/api/claude.js')
 const hooks = await import('./utils/hooks.js')
@@ -572,14 +573,80 @@ test.each(['complete', 'fail'] as const)('reconciliation admission waits for act
 
 // W/R protects complete independently retained engine content; the fixtures use
 // the real writer/selector and never supply a successful checkpoint.
+test.each(['0', '1'])('ordinary input waits for durable acceptance in SIMPLE=%s', async simple => {
+  process.env.CLAUDE_CODE_SIMPLE = simple
+  let release!: () => void
+  const barrier = new Promise<void>(resolve => { release = resolve })
+  let syncing = false
+  let accepted = false
+  let providerCalls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: 'accepted once' }])
+  }))
+  const runtime = engine([], {
+    flushCurrentTranscriptDurably: async uuid => {
+      syncing = true
+      await barrier
+      await storage.flushCurrentTranscriptDurably(uuid)
+    },
+  })
+  const turn = drain(runtime.submitMessage('durable input', { onInputPersisted: () => { accepted = true } }))
+  try {
+    for (let i = 0; i < 100 && !syncing; i++) await new Promise(resolve => setTimeout(resolve, 5))
+    expect(syncing).toBe(true)
+    expect(accepted).toBe(false)
+    expect(providerCalls).toBe(0)
+  } finally {
+    release()
+    await turn
+  }
+  expect(accepted).toBe(true)
+  expect(providerCalls).toBe(1)
+})
+
+test('ordinary input sync failure never acknowledges or enters the provider', async () => {
+  let accepted = false
+  let providerCalls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: 'must not run' }])
+  }))
+  const runtime = engine([], {
+    flushCurrentTranscriptDurably: async () => { throw new Error('synthetic sync failure') },
+  })
+  await expect(drain(runtime.submitMessage('keep for review', {
+    onInputPersisted: () => { accepted = true },
+  }))).rejects.toThrow('synthetic sync failure')
+  expect(accepted).toBe(false)
+  expect(providerCalls).toBe(0)
+})
+
+test('durable UUID verification rejects text and queue records impersonating a message', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const missing = randomUUID()
+  const user = createUserMessage({ content: `not a record: {"uuid":"${missing}"}` })
+  await storage.recordTranscript([user])
+  await storage.recordQueueOperation({
+    type: 'queue-operation', operation: 'enqueue', sessionId: bootstrap.getSessionId(),
+    timestamp: new Date().toISOString(), uuid: missing, mode: 'prompt', content: 'not accepted',
+  })
+  await expect(storage.flushCurrentTranscriptDurably(missing)).rejects.toThrow('UUID is not durable')
+  await storage.flushCurrentTranscriptDurably(user.uuid)
+})
+
 test('resume seal retains final streamed metadata and excludes later appended records from its proof', async () => {
   process.env.CLAUDE_CODE_SIMPLE = '0'
   const completed = assistant([{ type: 'text', text: 'streamed complete report' }])
   completed.message.usage.output_tokens = 0
   completed.message.stop_reason = null
   let persistedEarly = false
+  const completedRecorded = Promise.withResolvers<void>()
   spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
     yield completed
+    // recordTranscript first awaits getSessionMessages before registering its
+    // writer. A flush cannot fence a producer that has not registered yet.
+    await completedRecorded.promise
     await storage.flushCurrentTranscriptDurably()
     const before = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()))
     expect(before.messages.get(completed.uuid as UUID)).toMatchObject({ message: { usage: { output_tokens: 0 }, stop_reason: null } })
@@ -587,7 +654,11 @@ test('resume seal retains final streamed metadata and excludes later appended re
     completed.message.usage.output_tokens = 91
     completed.message.stop_reason = 'end_turn'
   }))
-  const runtime = engine([])
+  const runtime = engine([], { recordTranscript: async (...args) => {
+    const tip = await storage.recordTranscript(...args)
+    if (args[0].some(message => message.uuid === completed.uuid)) completedRecorded.resolve()
+    return tip
+  } })
   await drain(runtime.submitMessage('finish the work'))
   expect(persistedEarly).toBe(true)
   const checkpoint = await runtime.sealResumeCheckpoint()
@@ -1618,4 +1689,385 @@ test.each(['success', 'reconciled', 'historical'] as const)('a fresh source hand
   expect(await controller.releaseWorkspaceHandoff(oldConfiguration.identity.operationId, 'open')).toBe('refused')
   expect(controller.getHandoffReservation()).toBe(nextConfiguration.identity.operationId)
   expect(calls).toBe(prior === 'historical' ? 1 : 2)
+})
+
+test.each(['thinking', 'unresolved-tool', 'whitespace'] as const)(
+  'V2 seals legitimate resume filtering and genuine review once: %s', async kind => {
+    const { createUserMessage } = await import('./utils/messages.js')
+    const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+    const { updateWorkspaceHandoffExecution } = await import('./utils/workspaceHandoffExecutionState.js')
+    const generation = randomUUID()
+    const configuration = { identity: { appSessionId: randomUUID(), engineSessionId: bootstrap.getSessionId(),
+      operationId: randomUUID(), continuationId: randomUUID(), sourceGeneration: randomUUID(),
+      admissionGeneration: generation, operationSha256: 'd'.repeat(64) },
+      observerGeneration: generation, origin: 'fresh' as const, recover: false }
+    const user = createUserMessage({ content: 'preserved original task' })
+    const removed = assistant(kind === 'thinking'
+      ? [{ type: 'thinking', thinking: 'unfinished reasoning', signature: '' }]
+      : kind === 'unresolved-tool'
+        ? [{ type: 'tool_use', id: 'uncertain-read', name: 'Read', input: {} }]
+        : [{ type: 'text', text: ' \n ' }])
+    const failed = assistant([{ type: 'text', text: 'provider interruption' }])
+    failed.isApiErrorMessage = true
+    const source = engine([], { initialMessages: [user, removed, failed] })
+    await storage.recordTranscript([...source.getMessages()])
+    const notice = await source.persistHandoffOutcome(configuration.identity.operationId, 'uncertain')
+    const checkpoint = await source.sealResumeCheckpoint()
+    expect(checkpoint.version).toBe(2)
+    await updateWorkspaceHandoffExecution(configuration.identity, () => ({
+      ...configuration.identity, version: 1, origin: 'fresh', revision: 1, consumed: true, inputCommitted: false,
+      cancellation: null, terminal: null,
+      notice: { displayUuid: notice[0]!.uuid, contextUuid: notice[1]!.uuid, outcome: 'uncertain', checkpoint },
+      reconciliation: null,
+    }))
+    let providerCalls = 0
+    spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+      providerCalls++
+      yield assistant([{ type: 'text', text: 'reviewed saved progress without repeating tools' }])
+    }))
+    const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+    const restored = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+    expect(restored!.messages.some(message => message.uuid === removed.uuid)).toBe(false)
+    const runtime = engine([], { initialMessages: restored!.messages })
+    const controller = createQueryEngineSessionController(runtime)
+    await controller.configureWorkspaceHandoff({ ...configuration, recover: true, observerGeneration: randomUUID() })
+    expect(controller.requiresHandoffReconciliation()).toBe(true)
+    expect(controller.canStartAutomaticTurn()).toBe(false)
+    expect(providerCalls).toBe(0)
+    await storage.recordTranscript([...runtime.getMessages()])
+    const resumedProof = await runtime.sealResumeCheckpoint()
+    await runtime.verifyResumeCheckpoint(resumedProof)
+    await controller.submit('review saved progress and continue', { uuid: randomUUID() })
+    expect(providerCalls).toBe(1)
+    expect(controller.requiresHandoffReconciliation()).toBe(false)
+    const restarted = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+    const next = createQueryEngineSessionController(engine([], { initialMessages: restarted!.messages }))
+    await next.configureWorkspaceHandoff({ ...configuration, recover: true, observerGeneration: randomUUID() })
+    expect(next.requiresHandoffReconciliation()).toBe(false)
+    expect(providerCalls).toBe(1)
+    const archived = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+    expect(archived.messages.has(removed.uuid as UUID)).toBe(true)
+    await storage.verifyResumeCheckpoint(checkpoint)
+  },
+)
+
+test('V2 seals A/whitespace/B resume with both original user identities', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { deserializeMessages } = await import('./utils/conversationRecovery.js')
+  const first = createUserMessage({ content: 'first input' })
+  const whitespace = assistant([{ type: 'text', text: '\n  ' }])
+  const second = createUserMessage({ content: 'second input' })
+  const completed = assistant([{ type: 'text', text: 'saved response' }])
+  await storage.recordTranscript([first, whitespace, second, completed])
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  await storage.flushCurrentTranscriptDurably()
+  const loaded = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+  const active = storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  const restored = deserializeMessages(active.messages)
+  expect(restored.filter(message => message.type === 'user').map(message => [message.uuid, message.message.content]))
+    .toEqual([[first.uuid, first.message.content], [second.uuid, second.message.content]])
+  const checkpoint = await engine([], { initialMessages: restored }).sealResumeCheckpoint()
+  expect(checkpoint).toMatchObject({ version: 2, messageCount: 3 })
+  await storage.verifyResumeCheckpoint(checkpoint)
+})
+
+test('restart certifies a previously persisted failed review without automatically entering provider', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const { updateWorkspaceHandoffExecution } = await import('./utils/workspaceHandoffExecutionState.js')
+  const generation = randomUUID()
+  const configuration = { identity: { appSessionId: randomUUID(), engineSessionId: bootstrap.getSessionId(),
+    operationId: randomUUID(), continuationId: randomUUID(), sourceGeneration: randomUUID(),
+    admissionGeneration: generation, operationSha256: 'e'.repeat(64) },
+    observerGeneration: generation, origin: 'fresh' as const, recover: false }
+  const user = createUserMessage({ content: 'original task' })
+  const orphan = assistant([{ type: 'thinking', thinking: 'interrupted reasoning', signature: '' }])
+  const failed = assistant([{ type: 'text', text: 'provider interruption' }])
+  failed.isApiErrorMessage = true
+  const source = engine([], { initialMessages: [user, orphan, failed] })
+  await storage.recordTranscript([...source.getMessages()])
+  const notice = await source.persistHandoffOutcome(configuration.identity.operationId, 'uncertain')
+  const checkpoint = await source.sealResumeCheckpoint()
+  await updateWorkspaceHandoffExecution(configuration.identity, () => ({
+    ...configuration.identity, version: 1, origin: 'fresh', revision: 1, consumed: true, inputCommitted: false,
+    cancellation: null, terminal: null,
+    notice: { displayUuid: notice[0]!.uuid, contextUuid: notice[1]!.uuid, outcome: 'uncertain', checkpoint },
+    reconciliation: null,
+  }))
+  let providerCalls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: 'user requested follow-up' }])
+  }))
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const restored = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  const runtime = engine([], { initialMessages: restored!.messages })
+  const controller = createQueryEngineSessionController(runtime)
+  await controller.configureWorkspaceHandoff({ ...configuration, recover: true, observerGeneration: randomUUID() })
+  // Reproduce the old crash cut: input/context reached disk, sealing failed
+  // before the reconciliation ledger or any provider entry.
+  const realSeal = storage.sealResumeCheckpoint
+  const failingSeal = spyOn(storage, 'sealResumeCheckpoint').mockRejectedValue(new Error('synthetic proof failure'))
+  const inputUuid = randomUUID()
+  try {
+    await expect(controller.submit('review saved progress', { uuid: inputUuid })).rejects.toThrow('synthetic proof failure')
+  } finally { failingSeal.mockRestore() }
+  expect(storage.sealResumeCheckpoint).toBe(realSeal)
+  expect(providerCalls).toBe(0)
+  const restarted = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  expect(restarted!.messages.some(message => message.uuid === inputUuid)).toBe(true)
+  const next = createQueryEngineSessionController(engine([], { initialMessages: restarted!.messages }))
+  await next.configureWorkspaceHandoff({ ...configuration, recover: true, observerGeneration: randomUUID() })
+  expect(next.requiresHandoffReconciliation()).toBe(false)
+  expect(providerCalls).toBe(0)
+  await next.submit('now inspect the saved progress', { uuid: randomUUID() })
+  expect(providerCalls).toBe(1)
+  const again = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  expect(again!.messages.filter(message => message.uuid === inputUuid)).toHaveLength(1)
+})
+
+test('saved V1 raw proofs retain their meaning while new seals use V2', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createHash } = await import('node:crypto')
+  const { resumeProjectionSha256 } = await import('./utils/resumeCheckpoint.js')
+  const user = createUserMessage({ content: 'preserved original task' })
+  const orphan = assistant([{ type: 'thinking', thinking: 'unfinished', signature: '' }])
+  const completed = assistant([{ type: 'text', text: 'completed message' }])
+  await storage.recordTranscript([user, orphan, completed])
+  await storage.flushCurrentTranscriptDurably()
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const bytes = await fsPromises.readFile(path)
+  const loaded = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+  const active = storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  const legacy = { version: 1 as const, prefixBytes: bytes.length,
+    prefixSha256: createHash('sha256').update(bytes).digest('hex'), activeTipUuid: completed.uuid,
+    projectionSha256: resumeProjectionSha256(active.messages), messageCount: active.messages.length }
+  await storage.verifyResumeCheckpoint(legacy)
+  const runtime = engine([], { initialMessages: [user, orphan, completed] })
+  const current = await runtime.sealResumeCheckpoint()
+  expect(current).toMatchObject({ version: 2, messageCount: 2 })
+  expect(legacy.messageCount).toBe(3)
+  await storage.verifyResumeCheckpoint(legacy)
+  await storage.verifyResumeCheckpoint(current)
+  await expect(storage.verifyResumeCheckpoint({ ...legacy, version: 2 })).rejects.toThrow('projection differs')
+  await fsPromises.writeFile(path, (await fsPromises.readFile(path, 'utf8')).replace('unfinished', 'tamperedxx'))
+  await expect(storage.verifyResumeCheckpoint(legacy)).rejects.toThrow('digest differs')
+  await expect(storage.verifyResumeCheckpoint(current)).rejects.toThrow('digest differs')
+})
+
+test('V2 sealing rejects missing completed results and altered observed unfinished rows', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const user = createUserMessage({ content: 'original task' })
+  const call = assistant([{ type: 'tool_use', id: 'completed-call', name: 'Read', input: {} }])
+  const result = createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'completed-call', content: 'real result' }] })
+  const unfinished = assistant([{ type: 'tool_use', id: 'unfinished-call', name: 'Read', input: { file_path: 'original' } }])
+  const completed = assistant([{ type: 'text', text: 'saved response' }])
+  const intended = [user, call, result, unfinished, completed]
+  await storage.recordTranscript(intended)
+  const runtime = engine([], { initialMessages: intended })
+  await runtime.sealResumeCheckpoint()
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const original = await fsPromises.readFile(path, 'utf8')
+  await fsPromises.writeFile(path, original.replace('\"file_path\":\"original\"', '\"file_path\":\"altered\"'))
+  await expect(runtime.sealResumeCheckpoint()).rejects.toThrow('assistant content differs')
+  await fsPromises.writeFile(path, original)
+  const withoutResult = engine([], { initialMessages: [user, call, unfinished, completed] })
+  await expect(withoutResult.sealResumeCheckpoint()).rejects.toThrow('projection differs')
+  await fsPromises.writeFile(path, original.split('\n').filter(line => {
+    if (!line) return true
+    return JSON.parse(line).uuid !== result.uuid
+  }).join('\n'))
+  await expect(runtime.sealResumeCheckpoint()).rejects.toThrow('projection differs')
+})
+
+test.each(['complete', 'fail'] as const)('mid-turn human queued attachment is durable before consumption and next provider: %s', async outcome => {
+  const { enqueue, resetCommandQueue } = await import('./utils/messageQueueManager.js')
+  const { setCommandLifecycleListener } = await import('./utils/commandLifecycle.js')
+  const initialUuid = randomUUID()
+  const queuedUuid = randomUUID()
+  const gate = Promise.withResolvers<void>()
+  let attachmentSyncStarted = false
+  let consumed = false
+  let providerCalls = 0
+  resetCommandQueue()
+  setCommandLifecycleListener((uuid, state) => { if (uuid === queuedUuid && state === 'started') consumed = true })
+  const observe = buildTool({
+    name: 'ObserveQueued', inputSchema: z.object({}), description: async () => 'observe', prompt: async () => 'observe',
+    maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+    async call() { return { data: 'observed' } },
+    mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: 'observed' }),
+  })
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    if (providerCalls === 1) {
+      enqueue({ value: 'human input during work', mode: 'prompt', uuid: queuedUuid })
+      yield assistant([{ type: 'tool_use', id: 'observe-queued', name: 'ObserveQueued', input: {} }])
+    } else yield assistant([{ type: 'text', text: 'received queued user input' }])
+  }))
+  const runtime = engine([observe], {
+    flushCurrentTranscriptDurably: async uuid => {
+      if (uuid !== initialUuid) {
+        attachmentSyncStarted = true
+        await gate.promise
+        if (outcome === 'fail') throw new Error('synthetic attachment sync failure')
+      }
+      await storage.flushCurrentTranscriptDurably(uuid)
+    },
+  })
+  let failure: unknown
+  let frames: SDKMessage[] = []
+  const turn = drain(runtime.submitMessage('start work', { uuid: initialUuid }))
+    .then(output => { frames = output }, error => { failure = error })
+  try {
+    for (let i = 0; i < 200 && !attachmentSyncStarted; i++) await new Promise(resolve => setTimeout(resolve, 5))
+    expect(attachmentSyncStarted).toBe(true)
+    expect(consumed).toBe(false)
+    expect(providerCalls).toBe(1)
+    gate.resolve()
+    await turn
+    if (outcome === 'complete') {
+      expect(failure).toBeUndefined()
+      expect(consumed).toBe(true)
+      expect(providerCalls).toBe(2)
+      const receipt = await storage.getSessionQueueOperations(bootstrap.getSessionId())
+      expect(receipt.messageUuids.has(queuedUuid)).toBe(true)
+      expect(receipt.operations.find(operation => operation.uuid === queuedUuid)?.queueVersion).toBe(2)
+    } else {
+      expect(consumed).toBe(false)
+      expect(providerCalls).toBe(1)
+      expect(!!failure || frames.some(frame => frame.type === 'result' && frame.is_error)).toBe(true)
+    }
+  } finally {
+    gate.resolve()
+    await turn
+    setCommandLifecycleListener(null)
+    resetCommandQueue()
+  }
+})
+
+test('stored queue receipts validate source UUID and preserve task/peer semantics', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createAttachmentMessage } = await import('./utils/attachments.js')
+  const human = randomUUID()
+  const task = randomUUID()
+  const peer = randomUUID()
+  const meta = randomUUID()
+  await storage.recordTranscript([createUserMessage({ content: 'seed owner' })])
+  await storage.recordQueueOperation({ type: 'queue-operation', queueVersion: 2,
+    operation: 'reserve', sessionId: bootstrap.getSessionId(), timestamp: new Date().toISOString(), uuid: human })
+  await storage.flushCurrentTranscriptDurably()
+  const reserved = await storage.getSessionQueueOperations(bootstrap.getSessionId())
+  expect(reserved.messageUuids.has(human)).toBe(false)
+  expect(reserved.operations.at(-1)).toMatchObject({ operation: 'reserve', queueVersion: 2, uuid: human })
+  const attachments = [
+    { type: 'queued_command', commandMode: 'prompt', source_uuid: human, prompt: 'human input' },
+    { type: 'queued_command', commandMode: 'task-notification', source_uuid: task, prompt: 'task output' },
+    { type: 'queued_command', commandMode: 'prompt', source_uuid: peer, prompt: 'peer input', origin: { kind: 'coordinator' } },
+    { type: 'queued_command', commandMode: 'prompt', source_uuid: meta, prompt: 'system input', isMeta: true },
+    { type: 'queued_command', commandMode: 'prompt', source_uuid: 'invalid-source', prompt: 'invalid identity' },
+  ]
+  await storage.recordTranscript(attachments.map(attachment => createAttachmentMessage(attachment as never)))
+  await storage.flushCurrentTranscriptDurably()
+  const receipt = await storage.getSessionQueueOperations(bootstrap.getSessionId())
+  expect(receipt.messageUuids.has(human)).toBe(true)
+  for (const uuid of [task, peer, meta, 'invalid-source']) expect(receipt.messageUuids.has(uuid as UUID)).toBe(false)
+})
+
+test('damaged-tail restore persists sanitized disclosure and waits for one genuine durable user admission', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const { RECOVERY_CONTEXT } = await import('./utils/transcriptTailRecovery.js')
+  const seed = createUserMessage({ content: 'saved task before process loss' })
+  await storage.recordTranscript([seed])
+  await storage.flushCurrentTranscriptDurably()
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const damaged = Buffer.from('{"type":"assistant","private":"must never enter model context')
+  await fsPromises.appendFile(path, damaged)
+  await storage.prepareOwnedTranscriptForResume(bootstrap.getSessionId(), path)
+  let providerCalls = 0
+  let resumeHookCalls = 0
+  spies.push(spyOn(hooks, 'executeSessionStartHooks').mockImplementation(async function* () {
+    resumeHookCalls++
+  }))
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: 'responded to the new user review' }])
+  }))
+  const restored = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'defer' })
+  expect(restored?.tailRecovery?.reviewRequired).toBe(true)
+  expect(restored?.turnInterruptionState).toEqual({ kind: 'none' })
+  expect(JSON.stringify(restored!.messages)).not.toContain('must never enter model context')
+  expect(restored!.messages.some(message => message.type === 'user' && message.isMeta && message.message.content === RECOVERY_CONTEXT)).toBe(true)
+  const runtime = engine([], { initialMessages: restored!.messages })
+  const controller = createQueryEngineSessionController(runtime)
+  expect(controller.canStartAutomaticTurn()).toBe(false)
+  await expect(controller.submit('automatic follow-up', { isMeta: true })).rejects.toThrow('genuine user')
+  expect(providerCalls).toBe(0)
+  expect(resumeHookCalls).toBe(0)
+  await controller.submit('review the intact saved progress', { uuid: randomUUID() })
+  expect(providerCalls).toBe(1)
+  expect(runtime.requiresRecoveryReview()).toBe(false)
+  expect(await fsPromises.readFile(join(transcriptRecoveryDirectory(path), "tail.bin"))).toEqual(damaged)
+  const restarted = engine([], { initialMessages: [...runtime.getMessages()] })
+  expect(restarted.requiresRecoveryReview()).toBe(false)
+  expect(providerCalls).toBe(1)
+})
+
+test('durability never accepts an expected row appended only after the transcript sync', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const seed = createUserMessage({ content: 'owned durable history' })
+  await storage.recordTranscript([seed])
+  await storage.flushCurrentTranscriptDurably()
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const absentUuid = randomUUID()
+  const lateRow = { type: 'user', uuid: absentUuid, sessionId: bootstrap.getSessionId(), parentUuid: seed.uuid,
+    timestamp: new Date().toISOString(), message: { role: 'user', content: 'arrived after sync' } }
+  let syncCalls = 0
+  const realOpen = fsPromises.open
+  spies.push(spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+    const handle = await realOpen(...args)
+    if (String(args[0]) === path) {
+      const sync = handle.sync.bind(handle)
+      handle.sync = async () => {
+        await sync()
+        syncCalls++
+        await fsPromises.appendFile(path, JSON.stringify(lateRow) + '\n')
+      }
+    }
+    return handle
+  }))
+  await expect(storage.flushCurrentTranscriptDurably(absentUuid)).rejects.toThrow('UUID is not durable')
+  expect(syncCalls).toBe(0)
+})
+
+test('failed recovery admission remains held across restart despite a surviving user record', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+  const seed = createUserMessage({ content: 'saved task' })
+  await storage.recordTranscript([seed])
+  await storage.flushCurrentTranscriptDurably()
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  await fsPromises.appendFile(path, '{"unfinished":')
+  await storage.prepareOwnedTranscriptForResume(bootstrap.getSessionId(), path)
+  const restored = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+  let calls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    calls++
+    yield assistant([{ type: 'text', text: 'responded once to genuine new input' }])
+  }))
+  const failed = engine([], { initialMessages: restored!.messages, flushCurrentTranscriptDurably: async uuid => {
+    await storage.flushCurrentTranscriptDurably(uuid)
+    throw new Error('synthetic recovery admission barrier failure')
+  } })
+  const controller = createQueryEngineSessionController(failed)
+  await expect(controller.submit('first review attempt', { uuid: randomUUID() })).rejects.toThrow('admission barrier failure')
+  expect(calls).toBe(0)
+  expect(failed.requiresRecoveryReview()).toBe(true)
+  const next = engine([], { initialMessages: [...failed.getMessages()] })
+  const nextController = createQueryEngineSessionController(next)
+  expect(nextController.canStartAutomaticTurn()).toBe(false)
+  expect(calls).toBe(0)
+  await nextController.submit('new genuine review after restart', { uuid: randomUUID() })
+  expect(calls).toBe(1)
+  expect(engine([], { initialMessages: [...next.getMessages()] }).requiresRecoveryReview()).toBe(false)
 })

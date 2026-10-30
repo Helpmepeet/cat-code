@@ -5213,16 +5213,20 @@ function hasOnlyWhitespaceTextContent(
  * This function removes such messages entirely rather than keeping a placeholder,
  * since whitespace-only content has no semantic value.
  *
- * Also used by conversationRecovery to filter these from the main state during session resume.
+ * Durable resume uses preserveUserIdentities so removing a row cannot rewrite
+ * original user UUIDs/content. Request preparation keeps the default merge.
  */
 export function filterWhitespaceOnlyAssistantMessages(
   messages: (UserMessage | AssistantMessage)[],
+  options?: { preserveUserIdentities?: boolean },
 ): (UserMessage | AssistantMessage)[]
 export function filterWhitespaceOnlyAssistantMessages(
   messages: Message[],
+  options?: { preserveUserIdentities?: boolean },
 ): Message[]
 export function filterWhitespaceOnlyAssistantMessages(
   messages: Message[],
+  options?: { preserveUserIdentities?: boolean },
 ): Message[] {
   let hasChanges = false
 
@@ -5249,8 +5253,8 @@ export function filterWhitespaceOnlyAssistantMessages(
     return true
   })
 
-  if (!hasChanges) {
-    return messages
+  if (!hasChanges || options?.preserveUserIdentities) {
+    return hasChanges ? filtered : messages
   }
 
   // Removing assistant messages may leave adjacent user messages that need

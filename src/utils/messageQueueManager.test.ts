@@ -27,8 +27,11 @@ import type { UUID } from 'crypto'
 import { asAgentId, asSessionId } from '../types/ids.js'
 import type { QueuedCommand } from '../types/textInputTypes.js'
 import { createUserMessage } from './messages.js'
+import { processQueueIfReady } from './queueProcessor.js'
+import { selectUndeliveredPrompts } from '../../app/sidecar/sessionResume.js'
 import {
   clearSessionMessagesCache,
+  flushCurrentTranscriptDurably,
   flushSessionStorage,
   getSessionQueueOperations,
   getTranscriptPathForSession,
@@ -37,9 +40,11 @@ import {
 } from './sessionStorage.js'
 import {
   clearCommandQueue,
+  dequeue,
   dequeueAll,
   dequeueAllMatching,
   enqueue,
+  flushQueueOperationsDurably,
   getCommandQueue,
   popAllEditable,
   remove,
@@ -48,6 +53,60 @@ import {
 } from './messageQueueManager.js'
 
 const cleanup: string[] = []
+
+test('delivery records a reservation rather than cancellation before acceptance', async () => {
+  const uuid = randomUUID()
+  const log = await withDurableSession(async () => {
+    enqueue({ value: 'still awaiting acceptance', mode: 'prompt', uuid })
+    expect(dequeue()?.uuid).toBe(uuid)
+    await flushQueueOperationsDurably()
+  })
+  expect(log.operations.map(operation => operation.operation)).toEqual(['enqueue', 'reserve'])
+})
+
+test('a persisted delivery reservation survives until the actual input receipt is durable', async () => {
+  const uuid = randomUUID()
+  await withDurableSession(async sessionId => {
+    enqueue({ value: 'review before continuing', mode: 'prompt', uuid })
+    expect(dequeue()?.uuid).toBe(uuid)
+    await flushQueueOperationsDurably()
+    const reserved = await getSessionQueueOperations(sessionId)
+    expect(selectUndeliveredPrompts(reserved).prompts.map(prompt => prompt.uuid)).toEqual([uuid])
+    await recordTranscript([createUserMessage({ content: 'review before continuing', uuid })])
+    await flushCurrentTranscriptDurably(uuid)
+    const accepted = await getSessionQueueOperations(sessionId)
+    expect(selectUndeliveredPrompts(accepted).prompts).toEqual([])
+  })
+})
+
+test('queue durability waits for recorder producers without a scheduling delay', async () => {
+  const uuid = randomUUID()
+  await withDurableSession(async sessionId => {
+    enqueue({ value: 'durable queued input', mode: 'prompt', uuid })
+    await flushQueueOperationsDurably()
+    const lines = readFileSync(getTranscriptPathForSession(sessionId), 'utf8')
+      .split('\n').filter(Boolean).map(line => JSON.parse(line))
+    expect(lines.find(entry => entry.type === 'queue-operation' && entry.uuid === uuid))
+      .toMatchObject({ operation: 'enqueue', queueVersion: 2 })
+  })
+})
+
+test('batched delivery records reservations for each input', async () => {
+  const first = randomUUID()
+  const second = randomUUID()
+  const log = await withDurableSession(async () => {
+    enqueue({ value: 'first', mode: 'prompt', uuid: first })
+    enqueue({ value: 'second', mode: 'prompt', uuid: second })
+    const delivered: string[] = []
+    expect(processQueueIfReady({
+      executeInput: async commands => { delivered.push(...commands.map(command => command.uuid!)) },
+    })).toEqual({ processed: true })
+    expect(delivered).toEqual([first, second])
+    await flushQueueOperationsDurably()
+  })
+  expect(log.operations.map(operation => operation.operation))
+    .toEqual(['enqueue', 'enqueue', 'reserve', 'reserve'])
+})
 
 test('queued consent binding survives persistence and re-enqueue without recapture', async () => {
   const binding = { messageUuid: randomUUID(), textHash: 'a'.repeat(64) }
@@ -317,11 +376,9 @@ test('a main-thread notification records no agentId', async () => {
   expect(enqueued?.agentId).toBeUndefined()
 })
 
-test('a retraction record carries the uuid and nothing else', async () => {
-  // Its ONLY job is to name what stopped waiting. Content on a retraction is a
-  // duplicate copy of an image-bearing prompt that no reader consults, and
-  // `mode` is read on the enqueue (`selectUndeliveredPrompts` filters
-  // non-prompts there) and by nobody here.
+test('a cancellation record carries identity and journal version, not prompt content', async () => {
+  // The body belongs to the enqueue. The version distinguishes an explicit
+  // cancellation from ambiguous removal records written by older engines.
   const uuid = randomUUID() as UUID
   const state = await withDurableSession(() => {
     enqueue({ value: 'the only copy that matters', mode: 'prompt', uuid })
@@ -333,10 +390,12 @@ test('a retraction record carries the uuid and nothing else', async () => {
   const retracted = state.operations.find(op => op.operation !== 'enqueue')
   expect(Object.keys(retracted ?? {}).sort()).toEqual([
     'operation',
+    'queueVersion',
     'sessionId',
     'timestamp',
     'uuid',
   ])
+  expect(retracted?.queueVersion).toBe(2)
   expect(retracted?.uuid).toBe(uuid)
 })
 

@@ -1,4 +1,4 @@
-import type { ResumeCheckpointV1, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
+import type { ResumeCheckpoint, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
   WorkspaceHandoffExecutionOutcome, WorkspaceHandoffRecordStatus, WorkspaceHandoffSnapshot } from '../../app/shared/workspaceHandoff.js'
 
 export type WorkspaceHandoffConfiguration = {
@@ -30,7 +30,7 @@ export class HandoffExecution {
   constructor(readonly configuration: WorkspaceHandoffConfiguration,
     private readonly changed: () => void) {}
 
-  async recover(verify: (checkpoint: ResumeCheckpointV1) => Promise<void>): Promise<void> {
+  async recover(verify: (checkpoint: ResumeCheckpoint) => Promise<void>): Promise<void> {
     const { readWorkspaceHandoffExecution } = await import('../utils/workspaceHandoffExecutionState.js')
     const status = await readWorkspaceHandoffExecution(this.configuration.identity)
     this.record = status.kind === 'identity_mismatch' ? { kind: 'invalid' } : status
@@ -91,7 +91,7 @@ export class HandoffExecution {
     }
   }
 
-  async claim(run: () => Promise<void>, seal: () => Promise<ResumeCheckpointV1>): Promise<{ completion: Promise<void> }> {
+  async claim(run: () => Promise<void>, seal: () => Promise<ResumeCheckpoint>): Promise<{ completion: Promise<void> }> {
     if (this.completion) { await this.acknowledgement; return { completion: this.completion } }
     if (this.claimed || this.frozen || this.fenced || this.record.kind !== 'absent' || this.configuration.recover ||
       this.configuration.historical || this.configuration.origin !== 'fresh' || !this.configuration.identity.admissionGeneration) {
@@ -139,7 +139,7 @@ export class HandoffExecution {
     this.frozen = { outcome, order: ++this.order }
     this.observation = 'finalizing'; this.announce()
   }
-  async inputCommitted(_checkpoint: ResumeCheckpointV1): Promise<void> {
+  async inputCommitted(_checkpoint: ResumeCheckpoint): Promise<void> {
     if (this.cancellation?.application === 'prevented_start') throw new Error('Workspace continuation cancelled before input')
     await this.publish(record => ({ ...record, inputCommitted: true }))
   }

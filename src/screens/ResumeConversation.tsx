@@ -96,6 +96,7 @@ export function ResumeConversation({
   const [resuming, setResuming] = React.useState(false);
   const [showAllProjects, setShowAllProjects] = React.useState(false);
   const [resumeData, setResumeData] = React.useState<{
+    recoveryReviewRequired?: boolean;
     messages: Message[];
     fileHistorySnapshots?: FileHistorySnapshot[];
     contentReplacements?: ContentReplacementRecord[];
@@ -198,11 +199,13 @@ export function ResumeConversation({
     }
     try {
       const result_3 = await loadConversationForResume(log_0, undefined, {
-        interruptedTurn: forkSession ? 'ignore' : 'defer'
+        interruptedTurn: forkSession ? 'ignore' : 'defer',
+        mutable: !forkSession
       });
       if (!result_3) {
         throw new Error('Failed to load conversation');
       }
+      if (forkSession && result_3.tailRecovery?.reviewRequired) throw new Error('Review the recovered history before creating a new branch');
       // Do not adopt a transcript a background continuation is appending to.
       // Unlike the CLI paths this can ask the human: surface the reason and
       // hand the picker back so they can wait or choose another conversation.
@@ -307,6 +310,7 @@ export function ResumeConversation({
       });
       setLogs([]);
       setResumeData({
+        recoveryReviewRequired: result_3.recoveryReviewRequired,
         messages: restoreResult.messages ?? result_3.messages,
         fileHistorySnapshots: result_3.fileHistorySnapshots,
         contentReplacements: result_3.contentReplacements,
@@ -332,7 +336,7 @@ export function ResumeConversation({
     return <CrossProjectMessage command={crossProjectCommand} />;
   }
   if (resumeData) {
-    return <REPL debug={debug} commands={commands} initialTools={initialTools} initialMessages={resumeData.messages} initialFileHistorySnapshots={resumeData.fileHistorySnapshots} initialContentReplacements={resumeData.contentReplacements} initialAgentName={resumeData.agentName} initialAgentColor={resumeData.agentColor} mcpClients={mcpClients} dynamicMcpConfig={dynamicMcpConfig} strictMcpConfig={strictMcpConfig} systemPrompt={systemPrompt} appendSystemPrompt={appendSystemPrompt} mainThreadAgentDefinition={resumeData.mainThreadAgentDefinition} autoConnectIdeFlag={autoConnectIdeFlag} disableSlashCommands={disableSlashCommands} taskListId={taskListId} thinkingConfig={thinkingConfig} onTurnComplete={onTurnComplete} />;
+    return <REPL debug={debug} commands={commands} initialTools={initialTools} initialMessages={resumeData.messages} initialRecoveryReviewRequired={resumeData.recoveryReviewRequired} initialFileHistorySnapshots={resumeData.fileHistorySnapshots} initialContentReplacements={resumeData.contentReplacements} initialAgentName={resumeData.agentName} initialAgentColor={resumeData.agentColor} mcpClients={mcpClients} dynamicMcpConfig={dynamicMcpConfig} strictMcpConfig={strictMcpConfig} systemPrompt={systemPrompt} appendSystemPrompt={appendSystemPrompt} mainThreadAgentDefinition={resumeData.mainThreadAgentDefinition} autoConnectIdeFlag={autoConnectIdeFlag} disableSlashCommands={disableSlashCommands} taskListId={taskListId} thinkingConfig={thinkingConfig} onTurnComplete={onTurnComplete} />;
   }
   if (loading) {
     return <Box>

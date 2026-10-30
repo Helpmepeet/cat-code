@@ -22,15 +22,16 @@ import type { PriorAssistantContext } from './message.js'
  */
 
 /**
- * Anything other than `enqueue` is a retraction: the command left the queue.
- * Readers must test for `enqueue` rather than enumerate the retractions, so
- * adding a member here does not silently change how an old reader classifies it.
+ * A delivery reservation is not acceptance or cancellation. A durable user
+ * message or queued-command attachment is the acceptance receipt.
  */
-export type QueueOperation = 'enqueue' | 'dequeue' | 'remove' | 'popAll'
+export type QueueOperation = 'enqueue' | 'reserve' | 'dequeue' | 'remove' | 'popAll'
 
 /** One durable record per queue mutation, as written to the session JSONL. */
 export type QueueOperationMessage = {
   type: 'queue-operation'
+  /** Distinguishes explicit cancellation from ambiguous legacy delivery removals. */
+  queueVersion?: 2
   operation: QueueOperation
   timestamp: string
   sessionId: string

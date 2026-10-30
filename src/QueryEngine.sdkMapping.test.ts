@@ -117,10 +117,14 @@ async function collectFrames(
     customSystemPrompt: '',
     recordTranscript: async () => null,
   })
-  if (options.interrupt) engine.interrupt(options.interrupt.reason)
+  let interrupted = false
   const frames: Record<string, unknown>[] = []
   for await (const message of engine.submitMessage('go')) {
     frames.push(message as unknown as Record<string, unknown>)
+    if (options.interrupt && !interrupted && message.type === 'assistant') {
+      interrupted = true
+      engine.interrupt(options.interrupt.reason)
+    }
   }
   return frames
 }
@@ -133,12 +137,14 @@ test('an interrupted result prefers its string abort reason over a stale assista
   const submitInterruptFrames = await collectFrames({
     interrupt: { reason: 'interrupt' },
   })
+  expect(submitInterruptFrames.some(frame => frame.type === 'assistant')).toBe(true)
   expect(submitInterruptFrames.find(frame => frame.type === 'result')).toMatchObject({
     subtype: 'interrupted',
     stop_reason: 'interrupt',
   })
 
   const defaultAbortFrames = await collectFrames({ interrupt: {} })
+  expect(defaultAbortFrames.some(frame => frame.type === 'assistant')).toBe(true)
   expect(defaultAbortFrames.find(frame => frame.type === 'result')).toMatchObject({
     subtype: 'interrupted',
     stop_reason: 'tool_use',

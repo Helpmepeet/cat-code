@@ -8,6 +8,7 @@ import {
 
 type ProcessQueueParams = {
   executeInput: (commands: QueuedCommand[]) => Promise<void>
+  canProcessQueue?: () => boolean
 }
 
 type ProcessQueueResult = {
@@ -51,7 +52,9 @@ function isSlashCommand(cmd: QueuedCommand): boolean {
  */
 export function processQueueIfReady({
   executeInput,
+  canProcessQueue,
 }: ProcessQueueParams): ProcessQueueResult {
+  if (canProcessQueue && !canProcessQueue()) return { processed: false }
   // This processor runs on the REPL main thread between turns. Skip anything
   // addressed to a subagent — an unfiltered peek() returning a subagent
   // notification would set targetMode, dequeueAllMatching would find nothing
@@ -77,6 +80,7 @@ export function processQueueIfReady({
   const targetMode = next.mode
   const commands = dequeueAllMatching(
     cmd => isMainThread(cmd) && !isSlashCommand(cmd) && cmd.mode === targetMode,
+    'reserve',
   )
   if (commands.length === 0) {
     return { processed: false }

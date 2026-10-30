@@ -10,6 +10,16 @@ export type ResumeCheckpointV1 = {
   projectionSha256: string
   messageCount: number
 }
+/**
+ * V2 binds the exact archived prefix and its raw active tip, like V1.
+ * projectionSha256/messageCount describe the identity-preserving deterministic
+ * resume projection, not the raw archived chain. Only unresolved tool
+ * trajectories, orphan thinking and whitespace-only assistants are filtered.
+ * Sealing also requires independent raw engine rows to match archived rows
+ * before filtering; finalized usage/stop metadata must already be persisted.
+ */
+export type ResumeCheckpointV2 = Omit<ResumeCheckpointV1, 'version'> & { version: 2 }
+export type ResumeCheckpoint = ResumeCheckpointV1 | ResumeCheckpointV2
 export type WorkspaceHandoffIdentity = {
   appSessionId: string
   engineSessionId: string
@@ -34,19 +44,19 @@ export type WorkspaceHandoffExecutionRecord = WorkspaceHandoffIdentity & {
   terminal: null | {
     outcome: WorkspaceHandoffExecutionOutcome
     order: number
-    checkpoint: ResumeCheckpointV1
+    checkpoint: ResumeCheckpoint
   }
   notice: null | {
     displayUuid: string
     contextUuid: string
     outcome: 'failed' | 'cancelled' | 'uncertain' | 'continuation_failed'
-    checkpoint: ResumeCheckpointV1
+    checkpoint: ResumeCheckpoint
   }
   reconciliation: null | {
     noticeUuid: string
     inputUuid: string
     contextUuid: string
-    checkpoint: ResumeCheckpointV1
+    checkpoint: ResumeCheckpoint
   }
 }
 export type WorkspaceHandoffRecordStatus =
@@ -95,6 +105,14 @@ export function isResumeCheckpointV1(value: unknown): value is ResumeCheckpointV
     value.version === 1 && integer(value.prefixBytes) && sha(value.prefixSha256) &&
     isHandoffUuid(value.activeTipUuid) && sha(value.projectionSha256) && integer(value.messageCount, 0)
 }
+export function isResumeCheckpointV2(value: unknown): value is ResumeCheckpointV2 {
+  return object(value) && keys(value, ['version', 'prefixBytes', 'prefixSha256', 'activeTipUuid', 'projectionSha256', 'messageCount']) &&
+    value.version === 2 && integer(value.prefixBytes) && sha(value.prefixSha256) &&
+    isHandoffUuid(value.activeTipUuid) && sha(value.projectionSha256) && integer(value.messageCount, 0)
+}
+export function isResumeCheckpoint(value: unknown): value is ResumeCheckpoint {
+  return isResumeCheckpointV1(value) || isResumeCheckpointV2(value)
+}
 export function isWorkspaceHandoffExecutionRecord(value: unknown): value is WorkspaceHandoffExecutionRecord {
   if (!object(value) || !keys(value, [...identityKeys, 'version', 'origin', 'revision', 'consumed', 'inputCommitted', 'cancellation', 'terminal', 'notice', 'reconciliation']) ||
     !identity(value) || value.version !== 1 || !['fresh', 'legacy'].includes(value.origin as string) ||
@@ -108,7 +126,7 @@ export function isWorkspaceHandoffExecutionRecord(value: unknown): value is Work
   if (terminal !== null) {
     if (!object(terminal) || !keys(terminal, ['outcome', 'order', 'checkpoint']) ||
       !['success', 'failed', 'interrupted', 'not_started'].includes(terminal.outcome as string) ||
-      !integer(terminal.order) || !isResumeCheckpointV1(terminal.checkpoint)) return false
+      !integer(terminal.order) || !isResumeCheckpoint(terminal.checkpoint)) return false
     if (terminal.outcome === 'success' && (value.origin !== 'fresh' || !value.consumed || !value.inputCommitted || value.admissionGeneration === null ||
       (object(cancel) && cancel.application === 'prevented_start'))) return false
     if (!value.consumed && terminal.outcome !== 'not_started') return false
@@ -116,13 +134,13 @@ export function isWorkspaceHandoffExecutionRecord(value: unknown): value is Work
   const notice = value.notice
   if (notice !== null && (!object(notice) || !keys(notice, ['displayUuid', 'contextUuid', 'outcome', 'checkpoint']) ||
     !isHandoffUuid(notice.displayUuid) || !isHandoffUuid(notice.contextUuid) ||
-    !['failed', 'cancelled', 'uncertain', 'continuation_failed'].includes(notice.outcome as string) || !isResumeCheckpointV1(notice.checkpoint))) return false
+    !['failed', 'cancelled', 'uncertain', 'continuation_failed'].includes(notice.outcome as string) || !isResumeCheckpoint(notice.checkpoint))) return false
   if (object(notice) && notice.outcome === 'continuation_failed' &&
     (!value.consumed || value.admissionGeneration === null || !object(terminal) || terminal.outcome !== 'failed')) return false
   const reconciliation = value.reconciliation
   if (reconciliation !== null && (!object(reconciliation) || !keys(reconciliation, ['noticeUuid', 'inputUuid', 'contextUuid', 'checkpoint']) ||
     !object(notice) || reconciliation.noticeUuid !== notice.displayUuid || !isHandoffUuid(reconciliation.inputUuid) ||
-    !isHandoffUuid(reconciliation.contextUuid) || !isResumeCheckpointV1(reconciliation.checkpoint))) return false
+    !isHandoffUuid(reconciliation.contextUuid) || !isResumeCheckpoint(reconciliation.checkpoint))) return false
   return true
 }
 export function isWorkspaceHandoffSnapshot(value: unknown): value is WorkspaceHandoffSnapshot {

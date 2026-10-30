@@ -14,11 +14,35 @@ import {
   createUserMessage,
   dropPreservedMessageDuplicates,
   ensureToolResultPairing,
+  filterWhitespaceOnlyAssistantMessages,
   normalizeMessages,
   normalizeMessagesForAPI,
   normalizeAttachmentForAPI,
   wrapCommandText,
 } from './messages.js'
+
+test('whitespace filtering can preserve durable user identities without changing API normalization', () => {
+  const first = createUserMessage({ content: 'first input' })
+  const whitespace = createAssistantMessage({ content: ' \n ' })
+  const second = createUserMessage({ content: 'second input' })
+  const archived = [first, whitespace, second]
+  const before = structuredClone(archived)
+  const durable = filterWhitespaceOnlyAssistantMessages(archived, { preserveUserIdentities: true })
+  expect(durable).toEqual([first, second])
+  expect(durable[0]).toBe(first)
+  expect(durable[1]).toBe(second)
+  expect(archived).toEqual(before)
+  const defaultFiltered = filterWhitespaceOnlyAssistantMessages(archived)
+  expect(defaultFiltered).toHaveLength(1)
+  for (const provider of ['firstParty', 'openai'] as const) {
+    const normalized = normalizeMessagesForAPI(durable, [], provider)
+    expect(normalized).toHaveLength(1)
+    expect(normalized[0]?.type).toBe('user')
+    expect(JSON.stringify(normalized[0]?.message.content)).toContain('first input')
+    expect(JSON.stringify(normalized[0]?.message.content)).toContain('second input')
+    expect(normalized).toEqual(normalizeMessagesForAPI(defaultFiltered, [], provider))
+  }
+})
 
 describe('tool results separated by context', () => {
   const assistant = (...ids: string[]) =>

@@ -3,6 +3,17 @@ import { describe, expect, test } from 'bun:test'
 import { createQueryEngineAppSession } from './createQueryEngineAppSession.js'
 
 describe('createQueryEngineAppSession abort lifecycle', () => {
+  test('forwards recovery review state live rather than capturing the initial value', () => {
+    let held = true
+    const session = createQueryEngineAppSession({
+      cwd: '/tmp', tools: [], commands: [], mcpClients: [], agents: [],
+      getAppState: () => ({}) as never, setAppState: () => undefined, readFileCache: new Map() as never,
+      createEngine: () => ({ requiresRecoveryReview: () => held, async *submitMessage() {} }),
+    })
+    expect(session.requiresRecoveryReview?.()).toBe(true)
+    held = false
+    expect(session.requiresRecoveryReview?.()).toBe(false)
+  })
   test('captures before lazy iteration and preserves explicit queue context', async () => {
     const history = [{
       type: 'assistant', uuid: 'a', message: { model: 'claude', content: [{ type: 'text', text: 'Do A?' }] },

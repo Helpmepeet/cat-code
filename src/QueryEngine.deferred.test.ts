@@ -181,6 +181,8 @@ test('a public deferred submit cannot enter the provider before UUID durability 
 test('a task notification origin is persisted before the sidecar acknowledgement', async () => {
   let state: AppState = getDefaultAppState()
   let persisted: Message[] = []
+  const inputUuid = randomUUID()
+  let durable = false
   let acknowledgementSawPersistedOrigin = false
   const engine = new QueryEngine({
     cwd: process.cwd(),
@@ -198,12 +200,19 @@ test('a task notification origin is persisted before the sidecar acknowledgement
     customSystemPrompt: '',
     recordTranscript: async messages => {
       persisted = messages
-      return null
+      return inputUuid
+    },
+    flushCurrentTranscriptDurably: async expectedUuid => {
+      expect(expectedUuid).toBe(inputUuid)
+      expect(persisted.some(message => message.type === 'user' && message.uuid === inputUuid))
+        .toBe(true)
+      durable = true
     },
   })
 
   try {
     for await (const _message of engine.submitMessage('worker result', {
+      uuid: inputUuid,
       origin: {
         kind: 'task-notification',
         taskId: 'worker-1',
@@ -211,7 +220,7 @@ test('a task notification origin is persisted before the sidecar acknowledgement
         result: 'done',
       },
       onInputPersisted: () => {
-        acknowledgementSawPersistedOrigin = persisted.some(
+        acknowledgementSawPersistedOrigin = durable && persisted.some(
           message =>
             message.type === 'user' &&
             message.origin?.kind === 'task-notification' &&

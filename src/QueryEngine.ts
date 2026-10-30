@@ -103,7 +103,10 @@ import {
   findHandoffOutcomeInActiveTranscript,
   sealResumeCheckpoint,
   verifyResumeCheckpoint,
+  getTranscriptPathForSession,
 } from './utils/sessionStorage.js'
+import { acceptTailRecoveryReview, readTailRecoveryState } from './utils/transcriptTailRecovery.js'
+import { runDeferredResumeHooks } from './utils/deferredResumeHooks.js'
 import { createHandoffSkippedResult } from './services/tools/handoffExecution.js'
 import { TurnHandoff, handoffContinuationPrompt, handoffReconciliationPrompt, handoffTerminalPrompt, handoffOutcomeText, readHandoffOutcomeData, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './app-runtime/handoff.js'
 import { buildEffectiveSystemPrompt } from './utils/systemPrompt.js'
@@ -326,6 +329,8 @@ export class QueryEngine {
   private transcriptLane: Promise<void> = Promise.resolve()
   private inlineExecutionOwner: InlineCommandOperation | null = null
   private inlineSettlements = 0
+  private tailRecoveryHold = false
+  private tailRecoveryPath: string
 
   private async acquireTranscriptLane(): Promise<() => void> {
     const previous = this.transcriptLane
@@ -342,9 +347,14 @@ export class QueryEngine {
     this.permissionDenials = []
     this.readFileState = config.readFileCache
     this.totalUsage = EMPTY_USAGE
+    this.tailRecoveryPath = getTranscriptPathForSession(getSessionId())
+    this.tailRecoveryHold = readTailRecoveryState(this.tailRecoveryPath, getSessionId(), config.initialMessages)?.reviewRequired ?? false
   }
 
+  requiresRecoveryReview(): boolean { return this.tailRecoveryHold }
+
   async *executeInlineCommand(operation: InlineCommandOperation): AsyncGenerator<SDKMessage, void, unknown> {
+    if (this.tailRecoveryHold) throw new Error('Review recovered history with a new user message before continuing')
     if (this.inlineExecutionOwner || this.inlineSettlements >= 8) throw new Error('An inline command is still active')
     this.inlineExecutionOwner = operation
     this.inlineSettlements++
@@ -435,6 +445,8 @@ export class QueryEngine {
       origin?: MessageOrigin
       priorAssistantContext?: import('./types/message.js').PriorAssistantContext | null
       onInputPersisted?: () => void | Promise<void>
+      resumeHooksDeferred?: boolean
+      onResumeHooksApplied?: () => void
       inlineCommand?: InlineCommandOperation
       /** Only used by continueHandoff; never populated from app.submit. */
       handoffContinuation?: { operationId: string }
@@ -457,6 +469,9 @@ export class QueryEngine {
     prompt: string | ContentBlockParam[],
     options: NonNullable<Parameters<QueryEngine['submitMessage']>[1]>,
   ): AsyncGenerator<SDKMessage, void, unknown> {
+    if (this.tailRecoveryHold && (options.isMeta || options.origin || options.handoffContinuation || options.inlineCommand)) {
+      throw new Error('Recovered history requires a genuine user message')
+    }
     if (options?.inlineCommand) {
       yield* this.executeInlineCommand(options.inlineCommand)
       return
@@ -804,25 +819,16 @@ export class QueryEngine {
     // the transcript resumable from the point the user message was accepted,
     // even if no API response ever arrives.
     //
-    // --bare / SIMPLE: fire-and-forget. Scripted calls don't --resume after
-    // kill-mid-request. The await is ~4ms on SSD, ~30ms under disk contention
-    // — the single largest controllable critical-path cost after module eval.
-    // Transcript is still written (for post-hoc debugging); just not blocking.
+    // Acceptance must survive process loss before any external work, including
+    // SIMPLE callers. A writer callback alone does not establish durability.
     let inputPersisted = false
     let inputTranscriptTip: UUID | null = null
     if (persistSession && messagesFromUserInput.length > 0) {
       const transcriptPromise = recordTranscriptFn(messages)
-      if (isBareMode() && !options?.handoffReconciliationAdmission) {
-        pendingTranscriptWrites.push(transcriptPromise.catch(error => { transcriptWriteFailure ??= error }))
-      } else {
-        inputTranscriptTip = await transcriptPromise
+      inputTranscriptTip = await transcriptPromise
+      if (inputTranscriptTip !== null) {
+        await flushCurrentTranscriptDurablyFn(messagesFromUserInput.find(message => message.type === 'user')?.uuid)
         inputPersisted = true
-        if (
-          isEnvTruthy(process.env.CLAUDE_CODE_EAGER_FLUSH) ||
-          isEnvTruthy(process.env.CLAUDE_CODE_IS_COWORK)
-        ) {
-          await flushSessionStorage()
-        }
       }
     }
     if (options?.handoffContinuation) {
@@ -848,7 +854,35 @@ export class QueryEngine {
       await verifyActiveTranscriptTipDurably(tip, input.uuid)
       inputPersisted = true
     }
+    const applyDeferredHooks = async () => {
+      const input = messagesFromUserInput.find(message => message.type === 'user' && !message.isMeta && !message.origin &&
+        !message.isVirtual && !message.sourceToolAssistantUUID && message.toolUseResult === undefined &&
+        !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result')))
+      if (!input) throw new Error('Deferred resume policy requires a genuine new user message')
+      const context = await runDeferredResumeHooks()
+      this.mutableMessages.push(...context)
+      messages.push(...context)
+      if (persistSession && context.length) {
+        await recordTranscriptFn(messages)
+        await flushCurrentTranscriptDurablyFn(input.uuid)
+      }
+      options.onResumeHooksApplied?.()
+    }
+    if (inputPersisted && (this.tailRecoveryHold || options.resumeHooksDeferred)) await applyDeferredHooks()
+    else if (!persistSession && options.resumeHooksDeferred && !this.tailRecoveryHold) await applyDeferredHooks()
+    else if (options.resumeHooksDeferred && !inputPersisted) throw new Error('Recovery input was not persisted')
     if (inputPersisted) {
+      if (this.tailRecoveryHold) {
+        const input = messagesFromUserInput.find(message => message.type === 'user' && !message.isMeta && !message.origin &&
+          !message.isVirtual && !message.sourceToolAssistantUUID && message.toolUseResult === undefined &&
+          !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result')))
+        if (!input) throw new Error('Recovered history requires a genuine persisted user message')
+        if (!inputTranscriptTip) throw new Error('Recovery input has no durable active tip')
+        await markActiveConversationTip(inputTranscriptTip)
+        await verifyActiveTranscriptTipDurably(inputTranscriptTip, input.uuid)
+        acceptTailRecoveryReview(this.tailRecoveryPath, getSessionId(), input.uuid)
+        this.tailRecoveryHold = false
+      }
       if (options?.onHandoffInputCommitted) {
         const checkpoint = await sealResumeCheckpoint(messages)
         await options.onHandoffInputCommitted(checkpoint)
@@ -859,6 +893,8 @@ export class QueryEngine {
         return
       }
     }
+
+    if (this.tailRecoveryHold) throw new Error('Recovered history cannot continue without durable user input')
 
     if (deferredAttemptUuid) {
       const accepted = messagesFromUserInput.some(
@@ -1325,7 +1361,16 @@ export class QueryEngine {
           // Record inline (same reason as progress above).
           if (persistSession) {
             messages.push(message)
-            recordTranscriptAsync(messages)
+            const attachment = message.attachment && typeof message.attachment === 'object' &&
+              !Array.isArray(message.attachment) ? message.attachment as Record<string, unknown> : null
+            if (attachment?.type === 'queued_command' && attachment.commandMode === 'prompt' &&
+              !attachment.origin && !attachment.isMeta) {
+              // query resumes consumption/acknowledgement after this yield,
+              // then may enter the next provider request. Fence that boundary.
+              if (typeof message.uuid !== 'string') throw new Error('Queued user attachment has no message identity')
+              await recordTranscriptFn(messages)
+              await flushCurrentTranscriptDurablyFn(message.uuid)
+            } else recordTranscriptAsync(messages)
           }
 
           // Extract structured output from StructuredOutput tool calls
@@ -1821,17 +1866,17 @@ export class QueryEngine {
     })
   }
 
-  sealResumeCheckpoint(): Promise<import('../app/shared/workspaceHandoff.js').ResumeCheckpointV1> {
+  sealResumeCheckpoint(): Promise<import('../app/shared/workspaceHandoff.js').ResumeCheckpoint> {
     if (this.inlineSettlements) throw new Error('An inline command is still active')
     return sealResumeCheckpoint(this.mutableMessages)
   }
 
-  verifyResumeCheckpoint(checkpoint: import('../app/shared/workspaceHandoff.js').ResumeCheckpointV1): Promise<void> {
+  verifyResumeCheckpoint(checkpoint: import('../app/shared/workspaceHandoff.js').ResumeCheckpoint): Promise<void> {
     return verifyResumeCheckpoint(checkpoint)
   }
 
   async recoverHandoffReconciliation(notice: { displayUuid: string; contextUuid: string }): Promise<{
-    inputUuid: string; contextUuid: string; checkpoint: import('../app/shared/workspaceHandoff.js').ResumeCheckpointV1
+    inputUuid: string; contextUuid: string; checkpoint: import('../app/shared/workspaceHandoff.js').ResumeCheckpoint
   } | null> {
     const index = this.mutableMessages.findIndex(message => message.uuid === notice.displayUuid)
     const display = this.mutableMessages[index]
@@ -2014,6 +2059,9 @@ export async function* ask({
   orphanedPermission,
   deferredAttemptUuid,
   deferredJobId,
+  onInputPersisted,
+  resumeHooksDeferred,
+  onResumeHooksApplied,
 }: {
   commands: Command[]
   prompt: string | Array<ContentBlockParam>
@@ -2047,6 +2095,9 @@ export async function* ask({
   orphanedPermission?: OrphanedPermission
   deferredAttemptUuid?: string
   deferredJobId?: string
+  onInputPersisted?: () => void | Promise<void>
+  resumeHooksDeferred?: boolean
+  onResumeHooksApplied?: () => void
 }): AsyncGenerator<SDKMessage, void, unknown> {
   const engine = new QueryEngine({
     cwd,
@@ -2092,6 +2143,9 @@ export async function* ask({
     yield* engine.submitMessage(prompt, {
       uuid: promptUuid,
       isMeta,
+      onInputPersisted,
+      resumeHooksDeferred,
+      onResumeHooksApplied,
     })
   } finally {
     setReadFileCache(engine.getReadFileState())

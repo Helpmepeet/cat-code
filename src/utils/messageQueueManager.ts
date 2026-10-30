@@ -17,26 +17,42 @@ import type { PastedContent } from './config.js'
 import { logForDebugging } from './debug.js'
 import { extractTextContent } from './messages.js'
 import { objectGroupBy } from './objectGroupBy.js'
-import { flushSessionStorage, recordQueueOperation } from './sessionStorage.js'
+import {
+  flushCurrentTranscriptDurably,
+  flushSessionStorage,
+  recordQueueOperation,
+} from './sessionStorage.js'
 import { createSignal } from './signal.js'
 import { taskNotificationOriginFromText } from './taskNotification.js'
 import { abandonForegroundDeferredAttempt } from '../services/deferredContinuationRunner.js'
 
 export type SetAppState = (f: (prev: AppState) => AppState) => void
 
+const pendingQueueWrites = new Set<Promise<void>>()
+let queueWriteFailure: Error | null = null
+
+/** Wait for recorder producers before flushing their queued writes and fsyncing. */
+export async function flushQueueOperationsDurably(): Promise<void> {
+  while (pendingQueueWrites.size > 0) {
+    await Promise.all([...pendingQueueWrites])
+  }
+  if (queueWriteFailure) throw queueWriteFailure
+  await flushCurrentTranscriptDurably()
+}
+
 // ============================================================================
 // Logging helper
 // ============================================================================
 
 /**
- * One durable record per queue mutation. These records outlive the process and
+ * One journal record per queue mutation. These records outlive the process and
  * are the only account of what was waiting when it died: the desktop's restore
- * replays the log in order and rebuilds the queue from it
+ * folds the log in order into review-only recovered input
  * (`app/sidecar/sessionResume.ts`). So EVERY caller must pass the command it
  * acted on — a retraction that records no uuid is indistinguishable from no
  * retraction at all, and its enqueue then looks undelivered forever.
  *
- * Content and `mode` ride on `enqueue` alone; a retraction carries only the
+ * Content and `mode` ride on `enqueue` alone; later mutations carry only the
  * uuid and the agent the notification was addressed to. The uuid is all a
  * reader matches on, `mode` is only consulted where the enqueue recorded it,
  * and the retraction copies of `content` used to
@@ -47,47 +63,42 @@ export type SetAppState = (f: (prev: AppState) => AppState) => void
  * `pastedContents` (`handlePromptSubmit.ts:414`), which stays out of the
  * transcript rather than writing pre-resize base64 on every enqueue.
  *
- * Writes are asymmetric on purpose. A lost enqueue costs nothing, so it rides
- * the ordinary 100 ms batch. A lost RETRACTION resurrects a message the user
- * took back, on this restore and every later one, and clearing the queue then
- * quitting inside that window is an ordinary sequence — so a retraction pushes
- * the batch out as soon as its record is queued. The flush must be chained
- * behind the record: `recordQueueOperation` resolves after the entry is in the
- * per-file write queue, and a flush called before that would drain nothing.
+ * Queue primitives remain synchronous. Reservations and cancellations push
+ * the batch promptly; callers promising durable acceptance/cancellation must
+ * await flushQueueOperationsDurably, including the recorder producers.
  */
 function logOperation(operation: QueueOperation, command?: QueuedCommand): void {
   const sessionId = getSessionId()
-  const isRetraction = operation !== 'enqueue'
+  const isEnqueue = operation === 'enqueue'
   const queueOp: QueueOperationMessage = {
     type: 'queue-operation',
+    queueVersion: 2,
     operation,
     timestamp: new Date().toISOString(),
     sessionId,
     ...(command?.uuid !== undefined && { uuid: command.uuid }),
     ...(command?.agentId !== undefined && { agentId: command.agentId }),
-    ...(!isRetraction && command?.mode !== undefined && { mode: command.mode }),
-    ...(!isRetraction &&
+    ...(isEnqueue && command?.mode !== undefined && { mode: command.mode }),
+    ...(isEnqueue &&
       command?.value !== undefined && { content: command.value }),
-    ...(!isRetraction && {
+    ...(isEnqueue && {
       priorAssistantContext: command?.priorAssistantContext ?? null,
     }),
   }
   const recorded = recordQueueOperation(queueOp)
-  if (!isRetraction) {
-    void recorded
-    return
-  }
-  void recorded.then(flushSessionStorage).catch((error: unknown) => {
+  const tracked: Promise<void> = (isEnqueue ? recorded : recorded.then(flushSessionStorage)).catch((error: unknown) => {
+    queueWriteFailure ??= error instanceof Error ? error : new Error(String(error))
     // Fire-and-forget by necessity: every caller is a synchronous queue
     // primitive. Say so rather than letting it surface as an unhandled
     // rejection, since the cost is a resurrected message on the next restore.
     logForDebugging(
-      `[queue] failed to persist ${operation} retraction: ${
+      `[queue] failed to persist ${operation}: ${
         error instanceof Error ? error.message : String(error)
       }`,
       { level: 'warn' },
     )
-  })
+  }).finally(() => pendingQueueWrites.delete(tracked))
+  pendingQueueWrites.add(tracked)
 }
 
 // ============================================================================
@@ -216,8 +227,8 @@ export function recheckCommandQueue(): void {
  */
 export function enqueue(command: QueuedCommand): void {
   commandQueue.push({ ...command, priority: command.priority ?? 'next' })
-  notifySubscribers()
   logOperation('enqueue', command)
+  notifySubscribers()
 }
 
 /**
@@ -237,8 +248,8 @@ export function enqueuePendingNotification(command: QueuedCommand): void {
     origin: command.origin ?? inferredOrigin,
     priority: command.priority ?? 'later',
   })
-  notifySubscribers()
   logOperation('enqueue', command)
+  notifySubscribers()
 }
 
 const PRIORITY_ORDER: Record<QueuePriority, number> = {
@@ -280,8 +291,8 @@ export function dequeue(
   if (bestIdx === -1) return undefined
 
   const [dequeued] = commandQueue.splice(bestIdx, 1)
+  logOperation('reserve', dequeued)
   notifySubscribers()
-  logOperation('dequeue', dequeued)
   return dequeued
 }
 
@@ -336,6 +347,7 @@ export function peek(
  */
 export function dequeueAllMatching(
   predicate: (cmd: QueuedCommand) => boolean,
+  operation: 'dequeue' | 'reserve' = 'dequeue',
 ): QueuedCommand[] {
   const matched: QueuedCommand[] = []
   const remaining: QueuedCommand[] = []
@@ -351,10 +363,10 @@ export function dequeueAllMatching(
   }
   commandQueue.length = 0
   commandQueue.push(...remaining)
-  notifySubscribers()
   for (const cmd of matched) {
-    logOperation('dequeue', cmd)
+    logOperation(operation, cmd)
   }
+  notifySubscribers()
   return matched
 }
 
@@ -454,6 +466,7 @@ export function clearCommandQueue(): void {
 export function resetCommandQueue(): void {
   commandQueue.length = 0
   reservedTaskNotificationIds.clear()
+  queueWriteFailure = null
   snapshot = Object.freeze([])
 }
 

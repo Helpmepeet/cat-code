@@ -13,10 +13,28 @@ import {
 } from './conversationRecovery.js'
 import {
   createUserMessage,
+  createAssistantMessage,
   NO_RESPONSE_REQUESTED,
   normalizeMessagesForAPI,
   shouldShowUserMessage,
 } from './messages.js'
+
+test('durable resume removes whitespace without merging original user UUIDs or content', () => {
+  const first = createUserMessage({ content: 'first durable input' })
+  const whitespace = createAssistantMessage({ content: '\n  ' })
+  const second = createUserMessage({ content: 'second durable input' })
+  const original = [first, whitespace, second]
+  const recovered = deserializeMessagesWithInterruptDetection(original)
+  expect(recovered.messages.filter(message => message.type === 'user')).toEqual([first, second])
+  expect(recovered.messages.some(message => message.uuid === whitespace.uuid)).toBe(false)
+  for (const provider of ['firstParty', 'openai'] as const) {
+    const apiUsers = normalizeMessagesForAPI(recovered.messages, [], provider)
+      .filter(message => message.type === 'user')
+    expect(apiUsers).toHaveLength(1)
+    expect(JSON.stringify(apiUsers[0]?.message.content)).toContain('first durable input')
+    expect(JSON.stringify(apiUsers[0]?.message.content)).toContain('second durable input')
+  }
+})
 
 describe('manual compact recovery', () => {
   const tempDirs: string[] = []

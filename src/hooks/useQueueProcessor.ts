@@ -11,6 +11,7 @@ type UseQueueProcessorParams = {
   executeQueuedInput: (commands: QueuedCommand[]) => Promise<void>
   hasActiveLocalJsxUI: boolean
   queryGuard: QueryGuard
+  canProcessQueue?: () => boolean
 }
 
 /**
@@ -29,6 +30,7 @@ export function useQueueProcessor({
   executeQueuedInput,
   hasActiveLocalJsxUI,
   queryGuard,
+  canProcessQueue,
 }: UseQueueProcessorParams): void {
   // Subscribe to the query guard. Re-renders when a query starts or ends
   // (or when reserve/cancelReservation transitions dispatching state).
@@ -57,12 +59,13 @@ export function useQueueProcessor({
     // snapshot change), isQueryActive is already true (dispatching) and the
     // guard above returns early. handlePromptSubmit's finally releases the
     // reservation via cancelReservation() (no-op if onQuery already ran end()).
-    processQueueIfReady({ executeInput: executeQueuedInput })
+    processQueueIfReady({ executeInput: executeQueuedInput, canProcessQueue })
   }, [
     queueSnapshot,
     isQueryActive,
     executeQueuedInput,
     hasActiveLocalJsxUI,
     queryGuard,
+    canProcessQueue,
   ])
 }

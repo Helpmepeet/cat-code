@@ -205,15 +205,18 @@ export class StructuredIO {
    * Works before iteration starts and mid-stream — read() re-checks
    * prependedLines between each yielded message.
    */
-  prependUserMessage(content: string): void {
+  prependUserMessage(content: string): string {
+    const uuid = randomUUID()
     this.prependedLines.push(
       jsonStringify({
         type: 'user',
         session_id: '',
         message: { role: 'user', content },
+        uuid,
         parent_tool_use_id: null,
       } satisfies SDKUserMessage) + '\n',
     )
+    return uuid
   }
 
   private async *read() {

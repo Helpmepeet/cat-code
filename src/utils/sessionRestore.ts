@@ -1,10 +1,12 @@
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
 import { realpath } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { dirname, isAbsolute, relative } from 'path'
 import {
   getMainLoopModelOverride,
   getSessionId,
+  isSessionPersistenceDisabled,
   setMainLoopModelOverride,
   setMainThreadAgentType,
   setOriginalCwd,
@@ -68,7 +70,10 @@ import {
   restoreSessionMetadata,
   saveMode,
   saveWorktreeState,
+  prepareOwnedTranscriptForResume,
+  verifyResumeCheckpoint,
 } from './sessionStorage.js'
+import { recoveryHistoryForFork, verifyKnownTranscriptCheckpoints, type TailRecoveryState } from './transcriptTailRecovery.js'
 import { isTodoV2Enabled } from './tasks.js'
 import type { TodoList } from './todo/types.js'
 import { TodoListSchema } from './todo/types.js'
@@ -82,6 +87,7 @@ import {
 } from './worktree.js'
 
 type ResumeResult = {
+  tailRecovery?: TailRecoveryState
   messages?: Message[]
   fileHistorySnapshots?: FileHistorySnapshot[]
   attributionSnapshots?: AttributionSnapshotMessage[]
@@ -109,10 +115,11 @@ export function prepareSessionRestoreResult(
   forkSession: boolean,
 ): ResumeResult {
   if (!forkSession) return result
+  if (result.tailRecovery?.reviewRequired) throw new Error('Review the recovered history before creating a new branch')
   return {
     ...result,
     messages: result.messages
-      ? materializeWorkspaceResumeAttachments(result.messages)
+      ? recoveryHistoryForFork(materializeWorkspaceResumeAttachments(result.messages), result.tailRecovery)
       : result.messages,
     threadGoal: null,
     worktreeSession: undefined,
@@ -316,6 +323,7 @@ export async function refreshAgentDefinitionsForModeSwitch(
  * Result of processing a resumed/continued conversation for rendering.
  */
 export type ProcessedResume = {
+  recoveryReviewRequired?: boolean
   messages: Message[]
   fileHistorySnapshots?: FileHistorySnapshot[]
   contentReplacements?: ContentReplacementRecord[]
@@ -337,6 +345,9 @@ type SessionModeApi = {
  * The loaded conversation data (return type of loadConversationForResume).
  */
 type ResumeLoadResult = {
+  tailRecovery?: TailRecoveryState
+  recoveryReviewRequired?: boolean
+  fullPath?: string
   messages: Message[]
   fileHistorySnapshots?: FileHistorySnapshot[]
   attributionSnapshots?: AttributionSnapshotMessage[]
@@ -775,6 +786,8 @@ export async function processResumedConversation(
     sessionIdOverride?: string
     transcriptPath?: string
     includeAttribution?: boolean
+    /** Requires an adapter that enforces the durable genuine-user admission hold. */
+    allowRecoveryReview?: boolean
   },
   context: {
     modeApi: SessionModeApi | null
@@ -790,6 +803,10 @@ export async function processResumedConversation(
   // it is not the second writer this lock exists to prevent. Runs before any
   // state is touched so a blocked resume changes nothing.
   const adoptedSessionId = opts.sessionIdOverride ?? result.sessionId
+  if (opts.forkSession && result.tailRecovery?.reviewRequired) throw new Error('Review the recovered history before creating a new branch')
+  if (result.tailRecovery?.reviewRequired && !opts.allowRecoveryReview) {
+    throw new Error('Recovered history needs review before this session can continue.')
+  }
   if (!opts.forkSession && adoptedSessionId) {
     const deferred = await checkDeferredContinuationResume(adoptedSessionId)
     if (deferred.action === 'block') {
@@ -813,6 +830,16 @@ export async function processResumedConversation(
     const sid = opts.sessionIdOverride ?? result.sessionId
     if (sid) {
       await activateTranscriptLease(sid)
+      const transcriptPath = opts.transcriptPath ?? result.fullPath ?? getTranscriptPathForSession(sid)
+      if (existsSync(transcriptPath) && !isSessionPersistenceDisabled()) {
+        const recovery = await prepareOwnedTranscriptForResume(sid, transcriptPath)
+        if (recovery && recovery.warningUuid !== result.tailRecovery?.warningUuid) {
+          throw new Error('Saved history changed during resume. Reopen it to review the recovered history.')
+        }
+      } else {
+        await verifyKnownTranscriptCheckpoints(sid, checkpoint => verifyResumeCheckpoint(checkpoint, transcriptPath, sid))
+        if ((opts.transcriptPath || result.fullPath) && !existsSync(transcriptPath)) throw new Error('The required saved transcript is missing')
+      }
       // When resuming from a different project directory (git worktrees,
       // cross-project), transcriptPath points to the actual file; its dirname
       // is the project dir. Otherwise the session lives in the current project.
@@ -871,7 +898,7 @@ export async function processResumedConversation(
       // bails on null — from running in the exit cleanup handler. For fork,
       // useLogMessages populates a *new* file via recordTranscript on REPL
       // mount; the normal lazy-materialize path is correct there.
-      adoptResumedSessionFile()
+      if (!isSessionPersistenceDisabled()) adoptResumedSessionFile()
     }
     if (adoptedSessionId) {
       await withDeferredContinuationResumeAuthority(adoptedSessionId, adopt)
@@ -924,6 +951,7 @@ export async function processResumedConversation(
 
   return {
     messages: [...(restoreResult.messages ?? result.messages), ...stallReminders],
+    recoveryReviewRequired: result.recoveryReviewRequired ?? result.tailRecovery?.reviewRequired ?? false,
     fileHistorySnapshots: result.fileHistorySnapshots,
     contentReplacements: result.contentReplacements,
     agentName: result.agentName,
