@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react'
 import { createPortal } from 'react-dom'
-import { normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewApplications, type FilePreviewDescriptor } from '../../shared/filePreview.js'
+import { normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewApplications, type FilePreviewDescriptor, type FilePreviewEvent } from '../../shared/filePreview.js'
 import type { OpenWorkspaceFileTarget } from '../../shared/protocol.js'
 import { captureMarkdownReadingPosition } from './markdownReadingPosition.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
@@ -110,6 +110,29 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
         altKey: event.altKey, ctrlKey: event.ctrlKey, bubbles: true, cancelable: true,
       }))
       return
+    }
+    // A failed navigation can return to the page still painted underneath it.
+    // Keep that page's status while the incoming page owns the visible header.
+    const retained = getFilePaneSession(appSessionId)
+    const status = retainedStatus(event)
+    if (status !== undefined) {
+      const checkpoint = retained.checkpoint
+      const appliesToCheckpoint = checkpoint?.file?.id === event.id || checkpoint?.committedFile?.id === event.id
+      const metadata = (file: FilePreviewDescriptor | null) => {
+        if (!file || file.id !== event.id) return file
+        if (event.kind === 'updated') return { ...file, watchError: event.descriptor.watchError, serverStopped: event.descriptor.serverStopped, blockedHost: event.descriptor.blockedHost }
+        if (event.kind === 'watch-error') return { ...file, watchError: true }
+        if (event.kind === 'server-stopped') return { ...file, serverStopped: true }
+        if (event.kind === 'leave') return { ...file, blockedHost: event.host }
+        return file
+      }
+      if (appliesToCheckpoint || retained.committedFile?.id === event.id) updateFilePaneSession(appSessionId, {
+        committedFile: metadata(retained.committedFile),
+        ...(appliesToCheckpoint && checkpoint ? { checkpoint: { ...checkpoint, note: status,
+          file: event.kind === 'updated' && checkpoint.file?.id === event.id ? event.descriptor : metadata(checkpoint.file),
+          committedFile: metadata(checkpoint.committedFile),
+        } } : {}),
+      })
     }
     if (event.id !== current.id) return
     if (event.kind === 'updated') updateFilePaneSession(appSessionId, { file: event.descriptor, note: previewDescriptorNote(event.descriptor) })
@@ -378,4 +401,11 @@ function PaneArrow({ back = false }: { back?: boolean }) {
 }
 function ReloadIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" /></svg>
+}
+
+function retainedStatus(event: FilePreviewEvent): ReturnType<typeof previewDescriptorNote> | undefined {
+  if (event.kind === 'updated') return previewDescriptorNote(event.descriptor)
+  if (event.kind === 'removed' || event.kind === 'watch-error' || event.kind === 'update-error' || event.kind === 'server-stopped') return event.kind
+  if (event.kind === 'leave') return 'leave'
+  return undefined
 }

@@ -307,6 +307,25 @@ test('failed real local assets reject an initial paint and roll a later navigati
 })
 
 
+test('a retained file removal survives a failed different-file candidate without changing its pending note', async () => {
+  const { pane, sessionId, firstPath, service } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const retained = getFilePaneSession(sessionId).file!
+  const body = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
+  await click(tree.container, 'Open broken.png')
+  rmSync(firstPath)
+  await act(async () => { await service.refresh(retained.id) })
+  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).not.toBe(firstPath)
+  expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+  await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('error')) })
+  await settle()
+  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
+  expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')).toBe(body)
+  expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('notes.md was removed. Showing the last version.')
+})
+
+
 test('confirmed session disposal releases its page and late scroll cleanup cannot restore session state', async () => {
   const { pane, sessionId, service, ids } = setup()
   const tree = await harness.mount(pane())
@@ -588,8 +607,12 @@ test('server stop preserves the current frame, recovery stages a new revision, a
     const old = await paintLocalFrame(tree.container)
     const id = getFilePaneSession(sessionId).file!.id
     const port = web.server.port!
+    await click(tree.container, 'Open broken.png')
     await web.server.stop(true)
     await act(async () => { await localhost.refresh(id) })
+    expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+    await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('error')) })
+    await settle()
     expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('The server stopped. Showing the last version.')
     expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)') === old).toBe(true)
     web = localServer(port)
