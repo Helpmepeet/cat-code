@@ -131,3 +131,4 @@ export const CH_FILE_PREVIEW_APPLICATION_CHOOSE = 'catcode:file-preview:applicat
 export const CH_LOCALHOST_PREVIEW_PREPARE = 'catcode:localhost-preview:prepare'
 export const CH_LOCALHOST_PREVIEW_NAVIGATE = 'catcode:localhost-preview:navigate'
 export const CH_PREVIEW_BLOCKED_NAVIGATION_OPEN = 'catcode:preview:blocked-navigation-open'
+export const CH_LOCALHOST_PREVIEW_CAPTURE = 'catcode:localhost-preview:capture'

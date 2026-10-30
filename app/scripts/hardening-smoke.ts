@@ -314,6 +314,7 @@ async function runProductionHardeningSmoke(
       // Display-only previews use fixed main-frame channels and scoped capabilities.
       'prepareFilePreview',
       'prepareLocalhostPreview',
+      'captureLocalhostPreview',
       'navigateLocalhostPreview',
       'openBlockedPreviewNavigation',
       'refreshFilePreview',

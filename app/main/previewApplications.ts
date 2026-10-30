@@ -1,4 +1,4 @@
-import { filePreviewKind, type FilePreviewApplications } from '../shared/filePreview.js'
+import { filePreviewKind, normalizeLocalhostPreviewUrl, type FilePreviewApplications } from '../shared/filePreview.js'
 import type { OpenWorkspaceFileTarget } from '../shared/protocol.js'
 import { resolveWorkspaceFile, type WorkspaceFileOptions } from './openWorkspaceFile.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
@@ -13,6 +13,7 @@ const TARGETS: Record<string, OpenWorkspaceFileTarget[]> = {
   markdown: ['default', 'vscode', 'zed', 'cursor'],
   image: ['default', 'chrome', 'safari'],
   svg: ['default', 'chrome', 'safari', 'vscode', 'zed'],
+  localhost: ['chrome', 'safari'],
 }
 const PREFERENCE_FILE = 'file-preview-applications.json'
 
@@ -22,6 +23,7 @@ export function createPreviewApplications(deps: {
   options?: WorkspaceFileOptions
   installed: (target: OpenWorkspaceFileTarget, path: string) => Promise<boolean>
   open: (path: string, target: OpenWorkspaceFileTarget) => Promise<boolean | string>
+  localAllowed?: (url: string) => string | null
 }) {
   const choices = readPreferenceFile(deps.userData, PREFERENCE_FILE, raw => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
@@ -32,9 +34,24 @@ export function createPreviewApplications(deps: {
     }
     return result
   }) ?? {}
+  function localInput(input: unknown, choose: boolean) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return null
+    const record = input as Record<string, unknown>
+    const keys = choose ? ['appSessionId','path','target'] : ['appSessionId','path']
+    if (Object.keys(record).length !== keys.length || !keys.every(key => Object.hasOwn(record,key)) || typeof record.appSessionId !== 'string' || typeof record.path !== 'string') return null
+    const url = (deps.localAllowed ?? normalizeLocalhostPreviewUrl)(record.path)
+    if (!url || !deps.sessions().some(session => session.appSessionId === record.appSessionId && !session.moving)) return null
+    return { url, target: record.target }
+  }
   return {
     async list(input: unknown): Promise<FilePreviewApplications> {
       const fallback: FilePreviewApplications = { applications: [], selected: 'default' }
+      const local = localInput(input, false)
+      if (local) {
+        const applications = (await Promise.all(TARGETS.localhost.map(async target => await deps.installed(target, local.url).catch(()=>false) ? {target,label:LABELS[target]} : null))).filter(item=>item!==null)
+        const selected = applications.some(app=>app.target===choices.localhost) ? choices.localhost : applications[0]?.target ?? 'chrome'
+        return {applications,selected}
+      }
       const resolved = await resolveWorkspaceFile(input, deps.sessions(), deps.options)
       const kind = resolved && filePreviewKind(resolved.path)
       if (!resolved || !kind) return fallback
@@ -43,6 +60,16 @@ export function createPreviewApplications(deps: {
       return { applications, selected: applications.some(app => app.target === choices[kind]) ? choices[kind] : 'default' }
     },
     async choose(input: unknown): Promise<boolean> {
+      const local = localInput(input, true)
+      if (local) {
+        if (local.target !== 'chrome' && local.target !== 'safari' || !await deps.installed(local.target,local.url).catch(()=>false)) return false
+        try {
+          const outcome = await deps.open(local.url,local.target)
+          const ok = typeof outcome === 'boolean' ? outcome : outcome === ''
+          if(ok){choices.localhost=local.target;writePreferenceFile(deps.userData,PREFERENCE_FILE,choices)}
+          return ok
+        } catch {return false}
+      }
       const resolved = await resolveWorkspaceFile(input, deps.sessions(), deps.options)
       const kind = resolved && filePreviewKind(resolved.path)
       if (!resolved || !kind || !resolved.target || (resolved.target !== 'finder' && !TARGETS[kind].includes(resolved.target))) return false

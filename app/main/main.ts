@@ -1,7 +1,9 @@
+import { createLocalhostPreviewService } from './localhostPreview.js'
+import { CH_LOCALHOST_PREVIEW_CAPTURE } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
 import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
 import { createPreviewApplications } from './previewApplications.js'
-import { FILE_PREVIEW_SCHEME, type FilePreviewScroll } from '../shared/filePreview.js'
+import { FILE_PREVIEW_SCHEME, normalizeLocalhostPreviewUrl, type FilePreviewScroll } from '../shared/filePreview.js'
 import { CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMIT, CH_FILE_PREVIEW_RELEASE, CH_FILE_PREVIEW_EVENT, CH_FILE_PREVIEW_SCROLL_READ, CH_FILE_PREVIEW_SCROLL_RESTORE, CH_FILE_PREVIEW_APPLICATIONS, CH_FILE_PREVIEW_APPLICATION_CHOOSE } from '../shared/ipcChannels.js'
 import { parseInlineCommandPayload } from './inlineCommandPayload.js'
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
@@ -1578,19 +1580,108 @@ const filePreviews = createFilePreviewService({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event)
   },
 })
+const localFrameBindings = new Map<number, { id: string; revision: number }>()
+const restoringLocalRoutes = new Map<number, string>()
+const localhostPreviews = createLocalhostPreviewService({
+  sessions: () => host?.listSessions() ?? [], devOrigin: IS_DEV ? APP_ORIGIN_DEV : null,
+  publish: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event) },
+  isLive: id => !!mainWindow?.webContents.mainFrame.frames.some(frame => localFrameBindings.get(frame.frameTreeNodeId)?.id === id),
+})
+function localFrameBinding(frame: Electron.WebFrameMain | null | undefined) {
+  if (!frame || frame.parent !== mainWindow?.webContents.mainFrame) return null
+  const binding = localFrameBindings.get(frame.frameTreeNodeId)
+  return binding && localhostPreviews.descriptor(binding.id, binding.revision) ? binding : null
+}
+function issuedLocalFrame(frame: Electron.WebFrameMain | null | undefined) {
+  if (!frame || frame.parent !== mainWindow?.webContents.mainFrame) return null
+  const match = /^cat-localhost-preview-([a-f0-9]{48})-([1-9][0-9]*)$/.exec(frame.name)
+  return match && localhostPreviews.descriptor(match[1]!, Number(match[2])) ? { id: match[1]!, revision: Number(match[2]) } : null
+}
+function previewDescriptor(id: string, revision: number) {
+  return filePreviews.descriptor(id, revision) ?? localhostPreviews.descriptor(id, revision)
+}
+function localPreviewIdentity(value: unknown) {
+  const record = value && typeof value === 'object' ? value as { src?: unknown; name?: unknown } : null
+  if (!record || typeof record.name !== 'string') return null
+  const match = /^cat-localhost-preview-([a-f0-9]{48})-([1-9][0-9]*)$/.exec(record.name)
+  return match && localhostPreviews.descriptor(match[1]!, Number(match[2])) ? { id: match[1]!, revision: Number(match[2]) } : null
+}
+async function localFrameRouteState(frame: Electron.WebFrameMain, url: string): Promise<{ state: unknown; previous: FilePreviewScroll; replace: boolean } | null> {
+  try {
+    const serialized = await frame.executeJavaScript(`(() => {
+      let state = null;
+      try { state = JSON.stringify(history.state); } catch {}
+      if (typeof state !== 'string' || state.length > 65536) state = null;
+      const tracker = window.__catcodeLocalHistory;
+      let entry = null;
+      if (tracker && Array.isArray(tracker.queue)) {
+        const index = tracker.queue.findIndex(item => item && item.url === location.href);
+        if (index >= 0) entry = tracker.queue.splice(index, 1)[0];
+      }
+      let output;
+      try { output = JSON.stringify({url:location.href,state,previous:entry?.previous ?? tracker?.interaction ?? null,replace:entry?.replace === true}); } catch { return null; }
+      return typeof output === 'string' && output.length <= 70000 ? output : null;
+    })()`)
+    if (typeof serialized !== 'string' || Buffer.byteLength(serialized) > 70_000) return null
+    const value = JSON.parse(serialized) as { url?: unknown; state?: unknown; previous?: { x?: unknown; y?: unknown }; replace?: unknown }
+    if (value.url !== url) return null
+    let state: unknown = null
+    if (typeof value.state === 'string' && Buffer.byteLength(value.state) <= 65_536) { try { state = JSON.parse(value.state) } catch {} }
+    const x = value.previous?.x, y = value.previous?.y
+    return { state, previous: { x: typeof x === 'number' && Number.isFinite(x) && Math.abs(x) <= 1e8 ? x : 0, y: typeof y === 'number' && Number.isFinite(y) && Math.abs(y) <= 1e8 ? y : 0 }, replace: value.replace === true }
+  } catch { return null }
+}
+async function localNavigationMethod(frame: Electron.WebFrameMain, target: string): Promise<string> {
+  const pending = frame.executeJavaScript(`(() => {
+    const tracker=window.__catcodeLocalHistory;
+    if(!tracker)return 'UNKNOWN';
+    const form=tracker.form;
+    tracker.form=null;
+    if(form&&typeof form.url==='string'&&form.url.length<=4096){
+      try{const actual=new URL(${JSON.stringify(target)}),submitted=new URL(form.url);if(actual.origin===submitted.origin&&actual.pathname===submitted.pathname)return form.method==='GET'?'GET':'POST';}catch{}
+    }
+    return 'GET';
+  })()`).then(value=>value==='GET'?'GET':'POST',()=> 'UNKNOWN')
+  return new Promise(resolve=>{const timer=setTimeout(()=>resolve('UNKNOWN'),150);pending.then(value=>{clearTimeout(timer);resolve(value)},()=>{clearTimeout(timer);resolve('UNKNOWN')})})
+}
+function installLocalHistory(frame: Electron.WebFrameMain): void {
+  void frame.executeJavaScript(`(() => {
+    if (window.__catcodeLocalHistory) return;
+    const position = () => { const x=scrollX,y=scrollY; return {x:typeof x==='number'&&x>=-1e8&&x<=1e8?x:0,y:typeof y==='number'&&y>=-1e8&&y<=1e8?y:0}; };
+    const tracker = {queue:[],interaction:position(),form:null};
+    Object.defineProperty(window,'__catcodeLocalHistory',{value:tracker,configurable:true});
+    for (const method of ['pushState','replaceState']) {
+      const original = history[method];
+      history[method] = function(...args) {
+        const previous=position();
+        const result=Reflect.apply(original,this,args);
+        tracker.queue.push({url:location.href,previous,replace:method==='replaceState'});
+        if(tracker.queue.length>32) tracker.queue.shift();
+        return result;
+      };
+    }
+    const submitted = form => { try {tracker.form={url:new URL(form.action,location.href).href,method:form.method.toUpperCase()};}catch{} };
+    addEventListener('submit',event=>{if(event.target instanceof HTMLFormElement)submitted(event.target)},true);
+    const submit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = function(...args){submitted(this);return Reflect.apply(submit,this,args)};
+    addEventListener('pointerdown',()=>{tracker.interaction=position()},true);
+    addEventListener('keydown',()=>{tracker.interaction=position()},true);
+  })()`).catch(() => {})
+}
 const previewScroll = new Map<string, FilePreviewScroll>()
 const pendingPreviewScroll = new Map<string, Promise<FilePreviewScroll>>()
 function previewFrame(id: string, revision: number) {
   return mainWindow?.webContents.mainFrame.framesInSubtree.find(frame => {
     const parsed = parseFilePreviewUrl(frame.url)
-    return frame.parent === mainWindow?.webContents.mainFrame && parsed?.id === id && parsed.revision === revision
+    const local = localFrameBinding(frame)
+    return frame.parent === mainWindow?.webContents.mainFrame && (parsed?.id === id && parsed.revision === revision || local?.id === id && local.revision === revision)
   })
 }
 const pendingPreviewReadiness = new Map<string, Promise<boolean>>()
 async function previewRenderReady(id: string, revision: number): Promise<boolean> {
-  const descriptor = filePreviews.descriptor(id, revision)
+  const descriptor = previewDescriptor(id, revision)
   if (!descriptor) return false
-  if (descriptor.kind !== 'html' && descriptor.kind !== 'svg') return true
+  if (descriptor.kind !== 'html' && descriptor.kind !== 'svg' && descriptor.kind !== 'localhost') return true
   const frame = previewFrame(id, revision)
   if (!frame) return false
   const key = `${id}:${revision}`
@@ -1645,14 +1736,14 @@ function timelyPreviewScroll(key: string, pending: Promise<FilePreviewScroll>): 
 }
 function readPreviewScroll(id: string, revision: number): Promise<FilePreviewScroll> {
   const key = `${id}:${revision}`
-  if (!filePreviews.descriptor(id, revision)) return Promise.resolve({ x: 0, y: 0 })
+  if (!previewDescriptor(id, revision)) return Promise.resolve({ x: 0, y: 0 })
   const existing = pendingPreviewScroll.get(key)
   if (existing) return timelyPreviewScroll(key, existing)
   const frame = previewFrame(id, revision)
   if (!frame) return Promise.resolve(previewScroll.get(key) ?? { x: 0, y: 0 })
-  const promise = frame.executeJavaScript('({x:scrollX,y:scrollY})').then(value => {
+  const promise = frame.executeJavaScript(`(() => { const x=scrollX,y=scrollY; return {x:typeof x==='number'&&x>=-1e8&&x<=1e8?x:0,y:typeof y==='number'&&y>=-1e8&&y<=1e8?y:0}; })()`).then(value => {
     const result = value as FilePreviewScroll
-    if (result && Number.isFinite(result.x) && Number.isFinite(result.y) && Math.abs(result.x) <= 1e8 && Math.abs(result.y) <= 1e8 && filePreviews.descriptor(id, revision)) previewScroll.set(key, { x: result.x, y: result.y })
+    if (result && Number.isFinite(result.x) && Number.isFinite(result.y) && Math.abs(result.x) <= 1e8 && Math.abs(result.y) <= 1e8 && previewDescriptor(id, revision)) previewScroll.set(key, { x: result.x, y: result.y })
     return previewScroll.get(key) ?? { x: 0, y: 0 }
   }).catch(() => previewScroll.get(key) ?? { x: 0, y: 0 }).finally(() => pendingPreviewScroll.delete(key))
   pendingPreviewScroll.set(key, promise)
@@ -1663,19 +1754,29 @@ function applySecurityBaseline(): void {
   // response header on the app load so it also covers the dev server.
   session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
     const parsed = parseFilePreviewUrl(details.url)
-    const isPreview = parsed !== null && filePreviews.has(parsed.id)
+    const isPreview = parsed !== null && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id))
     const isOwnedWindow = details.webContentsId === mainWindow?.webContents.id
     if (details.url.startsWith(`${FILE_PREVIEW_SCHEME}:`) && (!isPreview || !isOwnedWindow || details.resourceType === 'mainFrame')) {
       callback({ cancel: true }); return
     }
     // A preview must never acquire the app origin, even in a subframe redirect.
-    if (details.resourceType === 'subFrame' && !isPreview) { callback({ cancel: true }); return }
+    if (details.resourceType === 'subFrame' && !isPreview && !(localFrameBinding(details.frame) && localhostPreviews.allowed(details.url))) { callback({ cancel: true }); return }
     callback({})
   })
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     const parsed = parseFilePreviewUrl(details.url)
-    if (parsed && filePreviews.has(parsed.id) && details.webContentsId === mainWindow?.webContents.id) {
+    if (parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id)) && details.webContentsId === mainWindow?.webContents.id) {
       callback({ responseHeaders: details.responseHeaders }); return
+    }
+    if (localFrameBinding(details.frame)) {
+      const headers = { ...details.responseHeaders }
+      if (details.resourceType === 'subFrame' && localhostPreviews.allowed(details.url)) {
+        for (const key of Object.keys(headers)) {
+          if (key.toLowerCase() === 'x-frame-options') delete headers[key]
+          else if (key.toLowerCase() === 'content-security-policy') headers[key] = headers[key]!.map(value => value.split(';').filter(directive => !/^\s*frame-ancestors(?:\s|$)/i.test(directive)).join(';'))
+        }
+      }
+      callback({ responseHeaders: headers }); return
     }
     callback({
       responseHeaders: {
@@ -1697,7 +1798,7 @@ function applySecurityBaseline(): void {
               ? "connect-src 'self' http://localhost:5173 ws://localhost:5173"
               : "connect-src 'self'",
             "font-src 'self' data:",
-            "frame-src cat-preview:",
+            "frame-src cat-preview: http:",
             "object-src 'none'",
             "base-uri 'none'",
             "form-action 'none'",
@@ -1880,22 +1981,48 @@ function createWindow(): void {
   const scrollTimer = setInterval(() => {
     if (window.isDestroyed()) return
     for (const frame of window.webContents.mainFrame.frames) {
-      const parsed = parseFilePreviewUrl(frame.url)
-      if (parsed && filePreviews.has(parsed.id)) void readPreviewScroll(parsed.id, parsed.revision)
+      const parsed = parseFilePreviewUrl(frame.url) ?? localFrameBinding(frame)
+      if (parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id))) void readPreviewScroll(parsed.id, parsed.revision)
     }
   }, 100)
   scrollTimer.unref()
   window.once('closed', () => {
     clearInterval(scrollTimer)
     filePreviews.dispose()
+    localhostPreviews.dispose()
+    localFrameBindings.clear()
+    restoringLocalRoutes.clear()
     previewScroll.clear()
     pendingPreviewScroll.clear()
     pendingPreviewReadiness.clear()
   })
   window.webContents.on('will-frame-navigate', event => {
     if (event.isMainFrame) return
+    const frame = event.frame, local = localFrameBinding(frame)
+    if (local) {
+      if (event.initiator === window.webContents.mainFrame && localhostPreviews.allowed(event.url)) return
+      event.preventDefault()
+      const target = localhostPreviews.allowed(event.url)
+      if (!target) { localhostPreviews.leave(local.id, event.url); return }
+      if (!frame) return
+      void localNavigationMethod(frame,target).then(method=>{
+        if(method!=='GET'||window.isDestroyed()||!localhostPreviews.has(local.id))return
+        const current=localhostPreviews.current(local.id)
+        if(target===current?.path)void localhostPreviews.refresh(local.id)
+        else window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT,{id:local.id,kind:'navigate',path:target})
+      })
+      return
+    }
+    const issued = issuedLocalFrame(frame)
+    if (issued && event.initiator === window.webContents.mainFrame) {
+      const descriptor = localhostPreviews.descriptor(issued.id, issued.revision)!
+      if (event.url.split('#')[0] === descriptor.url.split('#')[0]) {
+        localFrameBindings.set(frame!.frameTreeNodeId, issued)
+        return
+      }
+    }
     const target = parseFilePreviewUrl(event.url)
-    const origin = event.frame && parseFilePreviewUrl(event.frame.url)
+    const origin = frame && parseFilePreviewUrl(frame.url)
     if (origin && filePreviews.has(origin.id)) {
       if (target && filePreviews.has(target.id) && event.initiator === window.webContents.mainFrame) return
       event.preventDefault()
@@ -1904,21 +2031,41 @@ function createWindow(): void {
     }
     if (!target || !filePreviews.has(target.id)) event.preventDefault()
   })
+  window.webContents.on('will-redirect', (event, url) => {
+    if (event.isMainFrame) return
+    const local = localFrameBinding(event.frame)
+    if (!local || !localhostPreviews.allowed(url)) { event.preventDefault(); if (local) localhostPreviews.leave(local.id, url) }
+  })
+  window.webContents.on('frame-created', (_event, details) => { details.frame?.on('dom-ready', () => { if (details.frame && localFrameBinding(details.frame)) installLocalHistory(details.frame) }) })
+  window.webContents.on('did-navigate-in-page', (_event, url, isMainFrame, processId, routingId) => {
+    if (isMainFrame) return
+    const frame = window.webContents.mainFrame.frames.find(frame => frame.processId === processId && frame.routingId === routingId)
+    const local = localFrameBinding(frame)
+    if (!frame || !local || !localhostPreviews.allowed(url)) return
+    if (restoringLocalRoutes.get(frame.frameTreeNodeId) === url) { restoringLocalRoutes.delete(frame.frameTreeNodeId); return }
+    const current = localhostPreviews.current(local.id)
+    if (!current || current.revision !== local.revision) return
+    void localFrameRouteState(frame, url).then(state => {
+      if (!localFrameBinding(frame)) return
+      const previous = state?.previous ?? previewScroll.get(`${local.id}:${local.revision}`) ?? {x:0,y:0}
+      localhostPreviews.route(local.id, url, previous, state?.state ?? null, state?.replace ?? false)
+    })
+  })
   window.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     const key = input.key.toLowerCase()
     const shellChord = input.meta && !input.control && !input.alt &&
       (['k', 't', 'w'].includes(key) || /^[1-9]$/.test(key) || input.shift && key === 'b')
     if (input.key !== 'Escape' && !shellChord) return
-    const live = window.webContents.mainFrame.frames.map(frame => parseFilePreviewUrl(frame.url)).find(parsed => parsed && filePreviews.has(parsed.id))
+    const live = window.webContents.mainFrame.frames.map(frame => parseFilePreviewUrl(frame.url) ?? localFrameBinding(frame)).find(parsed => parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id)))
     if (!live) return
     // Suppress the native Close Window accelerator before asynchronous routing.
     if (shellChord) event.preventDefault()
-    void window.webContents.mainFrame.executeJavaScript(`(() => { const el = document.activeElement; return el instanceof HTMLIFrameElement ? el.src : null })()`)
+    void window.webContents.mainFrame.executeJavaScript(`(() => { const el = document.activeElement; return el instanceof HTMLIFrameElement ? {src:el.src,name:el.name} : null })()`)
       .then(value => {
-        const focused = typeof value === 'string' && parseFilePreviewUrl(value)
+        const focused = value && typeof value === 'object' ? parseFilePreviewUrl((value as {src:string}).src) ?? localPreviewIdentity(value) : null
         const parsed = focused || (shellChord ? live : null)
-        if (parsed && filePreviews.has(parsed.id)) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, {
+        if (parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id))) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, {
           id: parsed.id, kind: 'key', key: input.key, code: input.code,
           metaKey: input.meta, shiftKey: input.shift, altKey: input.alt, ctrlKey: input.control,
         })
@@ -2058,11 +2205,18 @@ function createWindow(): void {
     }
   })
   window.webContents.on('will-redirect', (event, url) => {
-    if (!isAppOrigin(url, navigationConfig())) {
+    if (event.isMainFrame && !isAppOrigin(url, navigationConfig())) {
       event.preventDefault()
     }
   })
-  window.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url, referrer }) => {
+    const local = localhostPreviews.bindings().find(binding => { try { return new URL(binding.url).origin === new URL(referrer.url).origin } catch { return false } })
+    if (local) { localhostPreviews.leave(local.id, url); return { action: 'deny' } }
+    const liveLocal=window.webContents.mainFrame.frames.some(frame=>localFrameBinding(frame)!==null)
+    if(liveLocal&&!isAppOrigin(referrer.url,navigationConfig())){
+      void window.webContents.mainFrame.executeJavaScript(`(() => {const element=document.activeElement;return element instanceof HTMLIFrameElement?{src:element.src,name:element.name}:null})()`).then(value=>{const source=localPreviewIdentity(value);if(source)localhostPreviews.leave(source.id,url)}).catch(()=>{})
+      return {action:'deny'}
+    }
     const decision = decideWindowOpen(url)
     if ('openExternal' in decision) {
       void shell.openExternal(decision.openExternal)
@@ -4418,14 +4572,35 @@ function registerHostControlPlane(): void {
     },
   )
 
-  ipcMain.handle(CH_LOCALHOST_PREVIEW_PREPARE, () => ({ ok: false, reason: 'refused' }))
-  ipcMain.handle(CH_LOCALHOST_PREVIEW_NAVIGATE, () => null)
-  ipcMain.handle(CH_PREVIEW_BLOCKED_NAVIGATION_OPEN, () => false)
-  protocol.handle(FILE_PREVIEW_SCHEME, request => filePreviews.respond(request))
+  ipcMain.handle(CH_LOCALHOST_PREVIEW_CAPTURE, () => undefined)
+  ipcMain.handle(CH_LOCALHOST_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? localhostPreviews.prepare(input) : {ok:false,reason:'refused'})
+  ipcMain.handle(CH_LOCALHOST_PREVIEW_NAVIGATE, async (event, input: unknown) => {
+    const value = previewPayload(input, ['id','routeKey','scroll'])
+    if (!trustedPreviewSender(event) || !value || typeof value.id !== 'string' || typeof value.routeKey !== 'string' || value.routeKey.length !== 48) return null
+    const known = localhostPreviews.routeFor(value.id, value.routeKey), current = localhostPreviews.current(value.id)
+    const scroll = previewPayload(value.scroll, ['x','y'])
+    if (!known || !current || !scroll || typeof scroll.x !== 'number' || typeof scroll.y !== 'number' || !Number.isFinite(scroll.x) || !Number.isFinite(scroll.y) || Math.abs(scroll.x)>1e8 || Math.abs(scroll.y)>1e8) return null
+    const frame = previewFrame(value.id,current.revision)
+    if (!frame || !localhostPreviews.allowed(frame.url)) return null
+    restoringLocalRoutes.set(frame.frameTreeNodeId, known.url)
+    const state = JSON.stringify(known.state)
+    await frame.executeJavaScript(`history.replaceState(JSON.parse(${JSON.stringify(state)}),'',${JSON.stringify(known.url)});dispatchEvent(new PopStateEvent('popstate',{state:history.state}));scrollTo(${scroll.x},${scroll.y})`).catch(()=>{})
+    return localhostPreviews.restoreRoute(value.id,value.routeKey)
+  })
+  ipcMain.handle(CH_PREVIEW_BLOCKED_NAVIGATION_OPEN, async (event,input:unknown) => {
+    const value=previewPayload(input,['id','target'])
+    if(!trustedPreviewSender(event)||!value||typeof value.id!=='string'||(value.target!=='chrome'&&value.target!=='safari'))return false
+    const url=localhostPreviews.blockedUrl(value.id)
+    if(!url)return false
+    const opened=await launchTargetOpener(url,value.target)
+    if(opened===true||opened==='')localhostPreviews.clearBlocked(value.id)
+    return opened===true||opened===''
+  })
+  protocol.handle(FILE_PREVIEW_SCHEME, request => { const parsed=parseFilePreviewUrl(request.url); return parsed&&localhostPreviews.has(parsed.id) ? localhostPreviews.respond(parsed.id,parsed.revision,parsed.path) ?? new Response(null,{status:404}) : filePreviews.respond(request) })
   ipcMain.handle(CH_FILE_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? filePreviews.prepare(input) : null)
   ipcMain.handle(CH_FILE_PREVIEW_REFRESH, (event, input: unknown) => {
     const value = previewIdentity(input)
-    return trustedPreviewSender(event) && value ? filePreviews.refresh(value.id as string) : null
+    return trustedPreviewSender(event) && value ? localhostPreviews.has(value.id as string) ? localhostPreviews.refresh(value.id as string) : filePreviews.refresh(value.id as string) : null
   })
   ipcMain.handle(CH_FILE_PREVIEW_COMMIT, async (event, input: unknown) => {
     const value = previewIdentity(input, true)
@@ -4434,7 +4609,17 @@ function registerHostControlPlane(): void {
       filePreviews.rejectRender(value.id as string, value.revision as number)
       return false
     }
-    const ok = filePreviews.commit(value.id as string, value.revision as number)
+    const local = localhostPreviews.descriptor(value.id as string,value.revision as number)
+    if(local){
+      const frame=previewFrame(local.id,local.revision)
+      const known=local.routeKey?localhostPreviews.routeFor(local.id,local.routeKey):null
+      if(frame&&known&&localhostPreviews.allowed(frame.url)&&frame.url!==known.url){
+        restoringLocalRoutes.set(frame.frameTreeNodeId,known.url)
+        await frame.executeJavaScript(`history.replaceState(JSON.parse(${JSON.stringify(JSON.stringify(known.state))}),'',${JSON.stringify(known.url)});dispatchEvent(new PopStateEvent('popstate',{state:history.state}))`).catch(()=>{})
+      }
+      if(frame){installLocalHistory(frame);void localFrameRouteState(frame,local.path).then(state=>{if(state)localhostPreviews.rememberRoute(local.id,local.path,state.state)})}
+    }
+    const ok = local ? localhostPreviews.commit(value.id as string,value.revision as number) : filePreviews.commit(value.id as string, value.revision as number)
     if (ok) for (const key of previewScroll.keys()) if (key.startsWith(`${value.id}:`) && key !== `${value.id}:${value.revision}`) previewScroll.delete(key)
     return ok
   })
@@ -4442,6 +4627,8 @@ function registerHostControlPlane(): void {
     const value = previewIdentity(input)
     if (trustedPreviewSender(event) && value) {
       filePreviews.release(value.id as string)
+      localhostPreviews.release(value.id as string)
+      for(const [node,binding]of localFrameBindings)if(binding.id===value.id){localFrameBindings.delete(node);restoringLocalRoutes.delete(node)}
       for (const cache of [previewScroll, pendingPreviewScroll, pendingPreviewReadiness]) {
         for (const key of cache.keys()) if (key.startsWith(`${value.id}:`)) cache.delete(key)
       }
@@ -4453,7 +4640,7 @@ function registerHostControlPlane(): void {
   })
   ipcMain.handle(CH_FILE_PREVIEW_SCROLL_RESTORE, async (event, input: unknown) => {
     const value = previewPayload(input, ['id', 'revision', 'scroll'])
-    if (!trustedPreviewSender(event) || !value || !previewIdentity({ id: value.id, revision: value.revision }, true) || !filePreviews.descriptor(value.id as string, value.revision as number)) return
+    if (!trustedPreviewSender(event) || !value || !previewIdentity({ id: value.id, revision: value.revision }, true) || !previewDescriptor(value.id as string, value.revision as number)) return
     const scroll = previewPayload(value.scroll, ['x', 'y'])
     if (!scroll || typeof scroll.x !== 'number' || typeof scroll.y !== 'number' ||
       !Number.isFinite(scroll.x) || !Number.isFinite(scroll.y) || Math.abs(scroll.x) > 1e8 || Math.abs(scroll.y) > 1e8) return
@@ -4494,6 +4681,7 @@ function registerHostControlPlane(): void {
     userData: app.getPath('userData'), sessions: () => host?.listSessions() ?? [],
     options: { generatedImagesRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'), 'generated-images') },
     installed: (target, path) => externalAppIcons.installed(target, path),
+    localAllowed: url => localhostPreviews.allowed(url),
     open: (path, target) => launchTargetOpener(path, target),
   })
   ipcMain.handle(CH_FILE_PREVIEW_APPLICATIONS, (event, input: unknown) => trustedPreviewSender(event) ? previewApplications.list(input) : { applications: [], selected: 'default' })

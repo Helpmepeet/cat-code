@@ -4051,6 +4051,7 @@ export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 export type CatCodeBridge = {
   prepareFilePreview(appSessionId: SessionId, path: string): Promise<FilePreviewDescriptor | null>
   prepareLocalhostPreview(appSessionId: SessionId, url: string): Promise<LocalhostPreviewResult>
+  captureLocalhostPreview(id: string): Promise<void>
   navigateLocalhostPreview(id: string, routeKey: string, scroll: FilePreviewScroll): Promise<FilePreviewDescriptor | null>
   openBlockedPreviewNavigation(id: string, target: PreviewBrowserTarget): Promise<boolean>
   refreshFilePreview(id: string): Promise<FilePreviewDescriptor | null>
