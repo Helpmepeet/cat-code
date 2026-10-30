@@ -812,3 +812,101 @@ test('sidebar preview selection captures the departing pane before unmounting it
   expect(getFilePaneSession('a').scroll).toEqual({ x: 7, y: 191 })
   stopReading()
 })
+
+test('App forwards unhandled document web links through the closed host method without consuming pane, text, or frame clicks', async () => {
+  const app = await mountApp([sessionDescriptor('a')], true)
+  const opened: string[] = []
+  window.catcode.openExternalUrl = async url => { opened.push(url); return true }
+  const happy = window as unknown as { happyDOM: { settings: { navigation: { disableMainFrameNavigation: boolean; disableChildFrameNavigation: boolean; disableChildPageNavigation: boolean; disableFallbackToSetURL: boolean } } } }
+  const navigation = happy.happyDOM.settings.navigation
+  const original = { ...navigation }
+  Object.assign(navigation, { disableMainFrameNavigation: true, disableChildFrameNavigation: true, disableChildPageNavigation: true, disableFallbackToSetURL: true })
+  const fixture = document.createElement('div')
+  app.tree.container.appendChild(fixture)
+  try {
+    await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'message', message: {
+      type: 'assistant', uuid: 'external-link-reply', message: { role: 'assistant', content: [{ type: 'text', text: '[**Docs**](https://example.com/guide) [Local](http://localhost:4000/)' }] },
+    } } } as ServerFrame)
+    const link = app.tree.container.querySelector<HTMLAnchorElement>('a[href="https://example.com/guide"]')!
+    expect(link).not.toBeNull()
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    await act(async () => { link.querySelector('strong')!.dispatchEvent(click) })
+    expect(click.defaultPrevented).toBe(true)
+    expect(opened).toEqual(['https://example.com/guide'])
+    await act(async () => { link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })) })
+    expect(opened).toEqual(['https://example.com/guide', 'https://example.com/guide'])
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    await act(async () => { link.dispatchEvent(menu) })
+    expect(menu.defaultPrevented).toBe(false)
+    const selection = document.createRange()
+    selection.selectNodeContents(link)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(selection)
+    expect(window.getSelection()!.toString()).toBe('Docs')
+    await act(async () => { link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    expect(opened).toHaveLength(2)
+    window.getSelection()!.removeAllRanges()
+
+    const localRequests: string[] = []
+    const chosenApps: string[] = []
+    window.catcode.prepareLocalhostPreview = async (_id, url) => {
+      localRequests.push(url)
+      return { ok: false, reason: 'unavailable', hostPort: 'localhost:4000' }
+    }
+    window.catcode.getFilePreviewApplications = async () => ({ applications: [{ target: 'chrome', label: 'Google Chrome' }], selected: 'chrome' })
+    window.catcode.chooseFilePreviewApplication = async (_id, url, target) => { chosenApps.push(`${target}:${url}`); return true }
+    const localButton = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label="Open http://localhost:4000/"]')!
+    expect(localButton).not.toBeNull()
+    await act(async () => { localButton.click() })
+    await act(async () => { localButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })) })
+    expect(localRequests).toEqual(['http://localhost:4000/'])
+    expect(chosenApps).toEqual(['chrome:http://localhost:4000/'])
+    expect(opened).toHaveLength(2)
+
+    const handled = document.createElement('a')
+    handled.href = 'http://localhost:4000/handled'
+    handled.textContent = 'Handled by a pane controller'
+    handled.addEventListener('click', event => event.preventDefault())
+    fixture.appendChild(handled)
+    await act(async () => { handled.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    expect(opened).toHaveLength(2)
+    for (const href of ['#section', './local-file.md', 'file:///tmp/notes.md']) {
+      const local = document.createElement('a')
+      local.href = href
+      fixture.appendChild(local)
+      await act(async () => { local.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    }
+    expect(opened).toHaveLength(2)
+
+    const frame = document.createElement('iframe')
+    fixture.appendChild(frame)
+    const frameDocument = frame.contentDocument!
+    expect(frameDocument).not.toBeNull()
+    const frameLink = frameDocument.createElement('a')
+    frameLink.href = 'https://example.com/from-iframe'
+    const frameText = frameDocument.createElement('span')
+    frameText.textContent = 'Untrusted frame link'
+    frameLink.appendChild(frameText)
+    frameDocument.body.appendChild(frameLink)
+    const frameClick = new MouseEvent('click', { bubbles: true, cancelable: true })
+    await act(async () => { frameText.dispatchEvent(frameClick) })
+    expect(frameClick.defaultPrevented).toBe(false)
+    expect(opened).toHaveLength(2)
+    await act(async () => { link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    const middleClick = new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true })
+    await act(async () => { link.dispatchEvent(middleClick) })
+    expect(middleClick.defaultPrevented).toBe(true)
+    expect(opened).toEqual(['https://example.com/guide', 'https://example.com/guide', 'https://example.com/guide', 'https://example.com/guide'])
+    await app.tree.unmount()
+    const afterUnmount = document.createElement('a')
+    afterUnmount.href = 'https://example.com/after-unmount'
+    document.body.appendChild(afterUnmount)
+    try { await act(async () => { afterUnmount.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) }) }
+    finally { afterUnmount.remove() }
+    expect(opened).toHaveLength(4)
+  } finally {
+    window.getSelection()?.removeAllRanges()
+    fixture.remove()
+    Object.assign(navigation, original)
+  }
+})

@@ -45,7 +45,7 @@ import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
 import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, paneTargetLabel, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
-import { newestPaneFilePath } from './transcriptPaneFiles.js'
+import { newestPaneFilePath, selectedTextInside } from './transcriptPaneFiles.js'
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { selectNestedTranscriptRows } from './transcriptProjector.js'
 import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
@@ -538,6 +538,30 @@ export function App() {
     createPermissionState,
   )
   const toast = useToast()
+  useEffect(() => {
+    const openDocumentLink = (event: MouseEvent) => {
+      if (event.defaultPrevented || (event.type === 'auxclick' ? event.button !== 1 : event.button !== 0) || !(event.target instanceof Element)) return
+      const anchor = event.target.closest<HTMLAnchorElement>('a[href]')
+      if (!anchor || anchor.ownerDocument !== document || anchor.hasAttribute('download') || selectedTextInside(anchor)) return
+      const href = anchor.getAttribute('href')?.trim()
+      if (!href || !/^(?:https?:)?\/\//i.test(href)) return
+      let url: URL
+      try { url = new URL(anchor.href) } catch { return }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+      const bridge = getBridge()
+      if (typeof bridge?.openExternalUrl !== 'function') return
+      event.preventDefault()
+      // Frame clicks stay inside their own document. The host independently
+      // accepts this fixed method only from the app's main frame.
+      void bridge.openExternalUrl(url.href).catch(() => {})
+    }
+    document.addEventListener('click', openDocumentLink)
+    document.addEventListener('auxclick', openDocumentLink)
+    return () => {
+      document.removeEventListener('click', openDocumentLink)
+      document.removeEventListener('auxclick', openDocumentLink)
+    }
+  }, [])
   const [questionDrafts, setQuestionDrafts] = useState<Partial<Record<SessionId, Record<string, AskQuestionDraft>>>>({})
   useEffect(() => {
     setQuestionDrafts(current => {
