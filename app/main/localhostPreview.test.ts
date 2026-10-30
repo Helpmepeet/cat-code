@@ -9,6 +9,7 @@ function fixture(options: { devOrigin?: string; live?: boolean } = {}) {
   let server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
     const path = new URL(request.url).pathname
     requests.push({ method: request.method, path })
+    if (path === '/start' && request.method !== 'HEAD') return Response.redirect(new URL('/actual', request.url), 302)
     if (path === '/redirect') return Response.redirect(new URL('/', request.url), 302)
     if (path === '/outside') return Response.redirect('http://example.invalid/never-fetch', 302)
     if (path === '/head-only-unsupported' && request.method === 'HEAD') return new Response(null, { status: 405 })
@@ -124,5 +125,24 @@ test('committing one ready stage does not discard a newer queued revision', asyn
     const second = await f.service.refresh(opened.descriptor.id)
     expect(f.service.commit(first!.id, first!.revision)).toBe(true)
     expect(f.service.descriptor(second!.id, second!.revision)).toEqual(second)
+  } finally { f.dispose() }
+})
+
+test('adopts a real GET redirect when HEAD stayed at the original route, without replaying it as SPA history', async () => {
+  const f = fixture()
+  try {
+    const opened = await f.service.prepare({ appSessionId: 'local-session', url: f.origin + '/start' })
+    if (!opened.ok) throw new Error('Expected initial server')
+    expect(opened.descriptor.path).toBe(f.origin + '/start')
+    const response = await fetch(opened.descriptor.url)
+    expect(response.url).toBe(f.origin + '/actual')
+    const settled = f.service.settleNavigation(opened.descriptor.id, opened.descriptor.revision, response.url)
+    expect(settled?.replay).toBe(false)
+    expect(settled?.descriptor.path).toBe(f.origin + '/actual')
+    expect(settled?.descriptor.baseUrl).toBe(f.origin + '/actual')
+    expect(settled?.descriptor.url).toBe(opened.descriptor.url)
+    expect(f.service.commit(opened.descriptor.id, opened.descriptor.revision)).toBe(true)
+    expect(f.service.current(opened.descriptor.id)?.path).toBe(f.origin + '/actual')
+    expect(f.events.some(event => event.kind === 'route' && event.url === f.origin + '/actual' && event.replace)).toBe(true)
   } finally { f.dispose() }
 })

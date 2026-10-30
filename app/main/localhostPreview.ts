@@ -230,6 +230,22 @@ export function createLocalhostPreviewService(deps: {
       return { ok: true, descriptor }
     },
     refresh,
+    settleNavigation(id: string, revision: number, actualUrl: string): { descriptor: FilePreviewDescriptor; replay: boolean } | null {
+      const record = records.get(id), normalized = allowed(actualUrl)
+      const descriptor = record?.descriptors.get(revision)
+      if (!record || !descriptor || !normalized || !authorized(record)) return null
+      const replay = descriptor.path !== descriptor.url && new URL(normalized).origin === new URL(descriptor.url).origin
+      if (replay || normalized === descriptor.path) return { descriptor, replay }
+      // HEAD can differ from GET. The real frame's allowed final URL owns its route.
+      record.path = normalized
+      record.baseUrl = normalized
+      const visited = route(record, normalized)
+      record.routeKey = visited.key
+      const settled = { ...descriptor, path: normalized, displayPath: normalized.replace(/^http:\/\//i, ''), baseUrl: normalized, routeKey: visited.key }
+      record.descriptors.set(revision, settled)
+      deps.publish({ id, kind: 'route', url: normalized, scroll: { x: 0, y: 0 }, routeKey: visited.key, replace: true })
+      return { descriptor: settled, replay: false }
+    },
     commit(id: string, revision: number): boolean {
       const record = records.get(id)
       if (!record || !authorized(record) || !record.descriptors.has(revision)) return false

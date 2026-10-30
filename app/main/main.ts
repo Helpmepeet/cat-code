@@ -4614,8 +4614,9 @@ function registerHostControlPlane(): void {
     const local = localhostPreviews.descriptor(value.id as string,value.revision as number)
     if(local){
       const frame=previewFrame(local.id,local.revision)
-      const known=local.routeKey?localhostPreviews.routeFor(local.id,local.routeKey):null
-      if(frame&&known&&localhostPreviews.allowed(frame.url)&&frame.url!==known.url){
+      const settled=frame&&localhostPreviews.allowed(frame.url)?localhostPreviews.settleNavigation(local.id,local.revision,frame.url):null
+      const known=settled?.replay&&settled.descriptor.routeKey?localhostPreviews.routeFor(local.id,settled.descriptor.routeKey):null
+      if(frame&&known&&frame.url!==known.url){
         restoringLocalRoutes.set(frame.frameTreeNodeId,known.url)
         await frame.executeJavaScript(`history.replaceState(JSON.parse(${JSON.stringify(JSON.stringify(known.state))}),'',${JSON.stringify(known.url)});dispatchEvent(new PopStateEvent('popstate',{state:history.state}))`).catch(()=>{})
       }
