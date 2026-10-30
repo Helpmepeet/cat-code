@@ -939,8 +939,8 @@ export class SidecarServer {
       this.observeTurnEvent(event, turnOwned)
       this.broadcastEvent(event)
       this.observeGeneratedImageEvent(event)
-      // HOST-REQUEST-PLANE §4 step 4a — the three events that can move presence,
-      // and only those: turn boundaries and permission open/close. Deliberately
+      // Controller turn boundaries and permission open/close can move presence.
+      // Sidecar-owned turn finalizers also publish after clearing their flag.
       // NOT every event: `message` fires many times a second during streaming
       // and cannot change either input, so recomputing on it would be pure cost.
       if (
@@ -2240,6 +2240,7 @@ export class SidecarServer {
               this.handoffExecutionTask = null
               this.destinationHandoffOperation = null
               this.activeTurn = false
+              this.publishActivity()
               this.endTurnObservation(this.turnResultFailed ? 'failed' : 'ok')
               this.publishHandoffState()
               this.publishHandoffReady()
@@ -2247,6 +2248,7 @@ export class SidecarServer {
             })
           } catch (error) {
             this.activeTurn = false
+            this.publishActivity()
             this.destinationHandoffOperation = null
             this.endTurnObservation('failed')
             reason = 'durability_unconfirmed'
@@ -2551,6 +2553,7 @@ export class SidecarServer {
       })
     } catch (error) {
       this.activeTurn = false
+      this.publishActivity()
       this.endTurnObservation('failed')
       this.scheduleBoundaryDrain()
       return false
@@ -2565,6 +2568,7 @@ export class SidecarServer {
       })
       .finally(() => {
         this.activeTurn = false
+        this.publishActivity()
         // The submit promise resolving is not the turn succeeding. The engine
         // returns most failures as a result frame rather than a rejection, so
         // reading only the promise logged a turn that ended in an error as

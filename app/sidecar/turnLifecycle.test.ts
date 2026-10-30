@@ -7,11 +7,12 @@
  * production uses rather than by injecting the events under test.
  */
 
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import type { AppSessionControllerAdapter } from '../../src/app-runtime/AppSessionController.js'
 import { PROTOCOL_VERSION, type ClientFrame } from '../shared/protocol.js'
-import { encodeFrame } from '../shared/framing.js'
+import { encodeFrame, FrameDecoder } from '../shared/framing.js'
+import { MAX_OUTBOUND_FRAME_BYTES } from '../shared/limits.js'
 import { SidecarServer, type SidecarTurnLifecycleEvent } from './sidecarServer.js'
 import type { SidecarSocketLike } from './sidecarServer.js'
 import { createOperationalRecord, parseOperationalRecord } from '../shared/operationalLog.js'
@@ -29,18 +30,27 @@ afterEach(() => {
 
 function makeServer(adapter: AppSessionControllerAdapter, turnStallMs = STALL_MS) {
   const events: SidecarTurnLifecycleEvent[] = []
+  const controller = new AppSessionController(adapter)
+  const presences: string[] = []
+  const decoder = new FrameDecoder(MAX_OUTBOUND_FRAME_BYTES)
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
-    controller: new AppSessionController(adapter),
+    controller,
     onTurnLifecycle: event => events.push(event),
     turnStallMs,
     log: () => {},
   })
   servers.push(server)
-  const socket: SidecarSocketLike = { write() {}, end() {} }
+  const socket: SidecarSocketLike = { write(data) {
+    for (const value of decoder.push(Buffer.from(data))) {
+      if (value.kind === 'frame' && (value.payload as { kind: string }).kind === 'activity') {
+        presences.push((value.payload as { presence: string }).presence)
+      }
+    }
+  }, end() {} }
   const connection = server.addConnection(socket)
-  return { server, events, connection }
+  return { server, controller, events, connection, presences }
 }
 
 function submit(server: SidecarServer, connection: ReturnType<SidecarServer['addConnection']>): void {
@@ -53,6 +63,71 @@ function submit(server: SidecarServer, connection: ReturnType<SidecarServer['add
 }
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+
+for (const ending of ['success', 'rejection', 'synchronous failure'] as const) {
+  test(`human turn publishes idle after ${ending}`, async () => {
+    const h = makeServer({
+      async *runTurn() {
+        if (ending === 'rejection') throw new Error('isolated turn failure')
+        yield assistantMessage() as never
+      },
+    })
+    const statuses: boolean[] = []
+    h.controller.subscribe(event => {
+      if (event.type === 'turn.status') statuses.push(event.activeTurn)
+    })
+    const submitSpy = ending === 'synchronous failure'
+      ? spyOn(h.controller, 'submit').mockImplementation(() => {
+        // Exercise a synchronous adapter boundary that reports work before throwing.
+        const boundary = h.controller as unknown as { setActiveTurn(active: boolean): void }
+        boundary.setActiveTurn(true)
+        boundary.setActiveTurn(false)
+        throw new Error('synchronous submit failure')
+      })
+      : undefined
+    try {
+      submit(h.server, h.connection)
+      await sleep(0)
+      expect(statuses).toEqual([true, false])
+      expect(h.presences).toEqual(['idle', 'running', 'idle'])
+    } finally {
+      submitSpy?.mockRestore()
+    }
+  })
+}
+
+for (const remaining of ['permission', 'controller turn', 'inline command'] as const) {
+  test(`turn finalization preserves ${remaining} presence`, async () => {
+    let release!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const h = makeServer({
+      async *runTurn() {
+        yield assistantMessage() as never
+        await held
+      },
+    })
+    submit(h.server, h.connection)
+    expect(h.presences).toEqual(['idle', 'running'])
+    const remainingSpy = remaining === 'permission'
+      ? spyOn(h.controller, 'getPendingPermissionRequests').mockReturnValue([{}] as never)
+      : remaining === 'controller turn'
+        ? spyOn(h.controller, 'isTurnActive').mockReturnValue(true)
+        : undefined
+    if (remaining === 'inline command') {
+      ;(h.server as unknown as { inlineCommandPending: number }).inlineCommandPending = 1
+    }
+    try {
+      release()
+      await sleep(0)
+      expect(h.events.at(-1)?.kind).toBe('completed')
+      expect(h.presences).toEqual(remaining === 'permission'
+        ? ['idle', 'running', 'needs_user']
+        : ['idle', 'running'])
+    } finally {
+      remainingSpy?.mockRestore()
+    }
+  })
+}
 
 /** An assistant message shaped as the engine emits one, with no result after it. */
 function assistantMessage() {

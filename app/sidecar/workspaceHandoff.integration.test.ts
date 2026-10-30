@@ -183,6 +183,34 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
       message: { type: 'app.submit', requestId: randomUUID(), prompt: text } })) }
 }
 
+for (const ending of ['success', 'completion rejection', 'admission rejection'] as const) {
+  test(`continuation publishes idle after ${ending}`, async () => {
+    spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+      yield assistant([{ type: 'text', text: 'Completed preserved request.' }])
+    }))
+    const h = await harness()
+    if (ending !== 'success') {
+      const start = h.controller.startHandoffContinuation.bind(h.controller)
+      spies.push(spyOn(h.controller, 'startHandoffContinuation').mockImplementation(async () => {
+        const started = await start()
+        if (ending === 'admission rejection') {
+          await started.completion
+          throw new Error('isolated admission failure after controller exit')
+        }
+        return { ...started, completion: started.completion.then(() => {
+          throw new Error('isolated completion failure')
+        }) }
+      }))
+    }
+    await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+    await until(() => h.controller.getWorkspaceHandoffSnapshot()?.execution === 'terminal', 'controller completion')
+    // Controller exit precedes the sidecar finalizer, so let both promise chains settle.
+    await Bun.sleep(0)
+    expect(h.received.filter(frame => frame.kind === 'activity').map(frame => frame.presence))
+      .toEqual(['idle', 'running', 'idle'])
+  })
+}
+
 for (const lost of ['command', 'reply'] as const) test(`real durable execution converges after lost release ${lost} without a second continuation`, async () => {
   let calls = 0
   spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
