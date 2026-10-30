@@ -86,12 +86,15 @@ export function subprocessEnv(): NodeJS.ProcessEnv {
   // CCR containers.
   const proxyEnv = _getUpstreamProxyEnv?.() ?? {}
 
-  if (!isEnvTruthy(process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB)) {
-    return Object.keys(proxyEnv).length > 0
-      ? { ...process.env, ...proxyEnv }
-      : process.env
-  }
   const env = { ...process.env, ...proxyEnv }
+  // Sidecar bootstrap belongs to the supervisor's child only. Ordinary tools
+  // and test runners must not inherit its identity, model or storage binding.
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('CATCODE_SIDECAR_') || key === 'CATCODE_SESSION_BINDING_JSON') {
+      delete env[key]
+    }
+  }
+  if (!isEnvTruthy(process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB)) return env
   for (const k of GHA_SUBPROCESS_SCRUB) {
     delete env[k]
     // GitHub Actions auto-creates INPUT_<NAME> for `with:` inputs, duplicating

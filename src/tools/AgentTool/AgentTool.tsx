@@ -335,14 +335,16 @@ function getAutoBackgroundMs(): number {
 
 async function getReservedSubagentNames({
   appState,
+  getAppState,
   sessionId,
   sessionStateTracking,
 }: {
   appState: ReturnType<ToolUseContext['getAppState']>
+  getAppState?: ToolUseContext['getAppState']
   sessionId: string
   sessionStateTracking?: AgentSessionStateTracking
 }): Promise<string[]> {
-  const reserved = new Set<string>(appState.agentNameRegistry.keys())
+  const reserved = new Set<string>()
 
   const persistedMetadata = await listAgentMetadataForSession(sessionId)
   for (const entry of persistedMetadata) {
@@ -359,6 +361,11 @@ async function getReservedSubagentNames({
     }
   }
 
+  // Registration can replace the registry and release its process reservation
+  // while the persisted reads are pending. Read live names after those awaits.
+  for (const name of (getAppState?.() ?? appState).agentNameRegistry.keys()) {
+    reserved.add(name)
+  }
   return [...reserved]
 }
 
@@ -392,22 +399,28 @@ export type ResolvedSystemSubagentName = {
 export async function resolveSystemSubagentName({
   explicitName,
   appState,
+  getAppState,
   sessionId,
   sessionStateTracking,
   teamName,
 }: {
   explicitName?: string
   appState: ReturnType<ToolUseContext['getAppState']>
+  getAppState?: ToolUseContext['getAppState']
   sessionId: string
   sessionStateTracking?: AgentSessionStateTracking
   teamName?: string
 }): Promise<ResolvedSystemSubagentName> {
   const reservedSubagentNames = await getReservedSubagentNames({
     appState,
+    getAppState,
     sessionId,
     sessionStateTracking,
   })
   const forbiddenKeys = new Set(reservedSubagentNames.map(recipientNameKey))
+  for (const name of (getAppState?.() ?? appState).agentNameRegistry.keys()) {
+    forbiddenKeys.add(recipientNameKey(name))
+  }
 
   if (explicitName) {
     const agentName = normalizeExplicitSubagentName(explicitName)
@@ -754,6 +767,7 @@ export const AgentTool = buildTool({
       }
       const reservedLocalNames = await getReservedSubagentNames({
         appState,
+        getAppState: toolUseContext.getAppState,
         sessionId: getSessionId(),
       });
       const teammateAllocation = await allocateTeamRecipient({
@@ -1091,6 +1105,7 @@ export const AgentTool = buildTool({
     } = await resolveSystemSubagentName({
       explicitName: name,
       appState,
+      getAppState: toolUseContext.getAppState,
       sessionId: parentSessionId,
       sessionStateTracking,
       teamName,

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
@@ -62,6 +62,27 @@ async function runBash(command: string) {
 const file = () => join(work, 'file.txt')
 
 describe('Bash exit attribution through the engine', () => {
+  test('oversized failed output publishes a readable retained file including its ending', async () => {
+    let failure: ShellError | undefined
+    try {
+      await BashTool.call({
+        command: `printf 'BEGIN\\n'; head -c 100000 /dev/zero | tr '\\000' x; printf '\\nFINAL_FAILURE_MARKER\\n'; exit 7`,
+        description: 'Produce oversized failed output',
+      }, context())
+    } catch (error) {
+      if (!(error instanceof ShellError)) throw error
+      failure = error
+    }
+    expect(failure?.code).toBe(7)
+    expect(failure?.stderr).toContain('<persisted-output>')
+    const path = failure?.stderr.match(/Full output saved to: (.+)/)?.[1]
+    expect(path).toBeDefined()
+    const retained = readFileSync(path!, 'utf8')
+    expect(retained).toStartWith('BEGIN\n')
+    expect(retained).toEndWith('FINAL_FAILURE_MARKER\n')
+    expect(retained.length).toBeGreaterThan(100000)
+  })
+
   test('cd fails, grep never runs: the call fails', async () => {
     const result = await runBash(`cd /does-not-exist && grep hello ${file()}`)
     expect(result).toEqual({ failed: true, code: 1 })

@@ -23,6 +23,20 @@ function errorWithEvidence(diagnostics = metadata()): FilePatchModelError {
 }
 
 describe('compact patch model errors', () => {
+  test('preserves the exhausted budget and usage for a single-hunk limit', () => {
+    const result = planUpdateHunks({
+      path: '/tmp/budget.txt', source: 'a\nb\nc',
+      hunks: [{ lines: [{ kind: 'delete', text: 'c' }] }],
+      limits: { maxSourcePositionsScanned: 2 },
+    })
+    if (result.ok) throw new Error('expected budget failure')
+    const { error } = renderPlannerFailure({ failure: result.failure })
+    const failure = projectFilePatchErrorForModel(serializeFilePatchError(error)).failures[0]!
+    expect(failure.message).toContain('sourcePositionsScanned')
+    expect(failure.usage).toEqual(result.failure.usage)
+    expect(failure.repair).toContain('single hunk')
+    expect(failure.repair).toContain('may not help')
+  })
   test('samples across hunks, accumulates bounds once, and never mutates persisted evidence', () => {
     const input = metadata(50)
     input.completePlanWitnesses = Array.from({ length: 3 }, () => ({

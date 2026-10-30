@@ -12,7 +12,7 @@ import {
   submitPreparedAgentMessages,
   type LocalAgentTaskState,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
-import { dequeue, resetCommandQueue } from '../../utils/messageQueueManager.js'
+import { dequeue, enqueuePendingNotification, resetCommandQueue } from '../../utils/messageQueueManager.js'
 import {
   appendTaskOutput,
   cleanupTaskOutput,
@@ -20,6 +20,7 @@ import {
   _clearOutputsForTest,
 } from '../../utils/task/diskOutput.js'
 import { TaskOutputTool } from './TaskOutputTool.js'
+import { applyTaskEvictions, evictTerminalTask, generateTaskAttachments } from '../../utils/task/framework.js'
 
 function makeContext(appStateRef: { current: AppState }) {
   return {
@@ -80,6 +81,42 @@ function makeRunningLocalAgentTask(): LocalAgentTaskState {
 }
 
 describe('TaskOutputTool', () => {
+  test('consumed shell completion remains retrievable after eager and lazy task GC', async () => {
+    const id = 'bash-consumed-output'
+    const ref = { current: {
+      ...getDefaultAppState(),
+      tasks: { [id]: {
+        id, type: 'local_bash', status: 'failed', notified: true,
+        description: 'failed background command', command: 'exit 7',
+        startTime: 1, outputFile: '', outputOffset: 0,
+        shellCommand: null, result: { code: 7, interrupted: false },
+      } },
+    } as unknown as AppState }
+    const ctx = makeContext(ref)
+    try {
+      appendTaskOutput(id, 'retained failure ending\n')
+      await flushTaskOutput(id)
+      enqueuePendingNotification({
+        mode: 'task-notification',
+        value: `Task notification\nTask ID: ${id}\nSummary: Command failed`,
+      })
+      dequeue()
+      expect(generateTaskAttachments(ref.current).evictedTaskIds).toEqual([])
+      evictTerminalTask(id, ctx.setAppState)
+      // A stale scan must not evict it either.
+      applyTaskEvictions(ctx.setAppState, [id])
+      for (const block of [false, true]) {
+        const result = await TaskOutputTool.call({ task_id: id, block, timeout: 0 }, ctx as never)
+        expect(result.data.retrieval_status).toBe('success')
+        expect(result.data.task?.output).toContain('retained failure ending')
+        expect(result.data.task?.exitCode).toBe(7)
+      }
+    } finally {
+      await cleanupTaskOutput(id)
+      resetCommandQueue()
+    }
+  })
+
   test('prompt advertises TaskOutput as the safe structured path', async () => {
     await expect(TaskOutputTool.description()).resolves.toContain(
       'Read structured output from a background task',

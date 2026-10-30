@@ -37,6 +37,7 @@ export type ExecResult = {
 }
 
 export type ShellCommand = {
+  /** Transfers ownership to a task and removes the foreground duration timeout. */
   background: (backgroundTaskId: string) => boolean
   result: Promise<ExecResult>
   kill: () => void

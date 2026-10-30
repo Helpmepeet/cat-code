@@ -1010,6 +1010,14 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         addToTurnClassifierDuration(classifierResult.durationMs)
       }
 
+      if (
+        context.abortController.signal.aborted ||
+        classifierResult.autoModeOutcome === 'interrupted'
+      ) {
+        observation?.markFailure('interrupted')
+        throw new AbortError('Auto mode classifier cancelled')
+      }
+
       if (classifierResult.shouldBlock) {
         // Transcript exceeded the classifier's context window — deterministic
         // error, won't recover on retry. Skip iron_gate and fall back to

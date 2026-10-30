@@ -32,6 +32,7 @@ type ModelFailure = {
   patchSourceSpan?: PatchSourceSpan & { kind: 'patch-envelope-lines' }
   message: string
   repair: string
+  usage?: FilePatchDiagnosticMetadata['usage']
   nearMatch?: {
     kind: 'diagnostic-only'
     sourceLine: number
@@ -106,7 +107,7 @@ const plannerGuidance: Record<string, readonly [string, string]> = {
   ],
   PATCH_PLANNER_LIMIT: [
     'Exact placement exceeded the planning budget.',
-    'Read the intended regions and narrow the patch with distinctive consecutive context or smaller independent updates before retrying.',
+    'Inspect the reported budget and usage. A single hunk can exhaust whole-file scanning; adding context or splitting that hunk may not help. Use an EOF constraint only if it is correct, or another bounded editing method. Do not retry the same patch unchanged.',
   ],
 }
 
@@ -195,8 +196,13 @@ export function projectFilePatchErrorForModel(error: FilePatchModelError): FileP
       ...(detail.patchSourceSpan === undefined ? {} : {
         patchSourceSpan: { ...detail.patchSourceSpan, kind: 'patch-envelope-lines' as const },
       }),
-      message: known?.[0] ?? boundFilePatchErrorText(detail.message ?? error.repair ?? 'Patch failed.', 400),
+      message: detail.code === 'PATCH_PLANNER_LIMIT'
+        ? boundFilePatchErrorText(detail.message ?? error.repair, 400)
+        : known?.[0] ?? boundFilePatchErrorText(detail.message ?? error.repair ?? 'Patch failed.', 400),
       repair,
+      ...(detail.diagnostics?.usage === undefined ? {} : {
+        usage: { ...detail.diagnostics.usage },
+      }),
       ...(near?.actual === undefined || tied || !confident ? {} : {
         nearMatch: {
           kind: 'diagnostic-only' as const,

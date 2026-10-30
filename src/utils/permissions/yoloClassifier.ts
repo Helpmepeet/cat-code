@@ -1423,7 +1423,6 @@ async function classifyYoloActionWithOverrides(
         shouldBlock: true,
         reason: 'Classifier request aborted',
         model: failed.model,
-        unavailable: true,
         autoModeOutcome: 'interrupted',
         stage,
       }

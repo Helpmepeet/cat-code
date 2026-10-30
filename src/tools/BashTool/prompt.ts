@@ -241,7 +241,7 @@ export function getBashPrompt(
     'Always quote file paths that contain spaces with double quotes in your command (e.g., cd "path with spaces/file.txt")',
     'Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.',
     'If a command fails or returns no output, do not assume success: check the exit status and stderr, then retry with a corrected command or report the failure with its output. Empty output is a result to interpret, not a completion signal.',
-    `You may specify an optional timeout in milliseconds (up to ${getMaxTimeoutMs()}ms / ${getMaxTimeoutMs() / 60000} minutes). By default, your command will timeout after ${getDefaultTimeoutMs()}ms (${getDefaultTimeoutMs() / 60000} minutes).`,
+    `You may specify an optional foreground timeout in milliseconds (up to ${getMaxTimeoutMs()}ms / ${getMaxTimeoutMs() / 60000} minutes; default ${getDefaultTimeoutMs()}ms). At that limit, foreground execution stops or the command moves to the background when auto-backgrounding is enabled. Background commands have no duration timeout, including services; stop them explicitly when no longer needed.`,
     ...(backgroundNote !== null ? [backgroundNote] : []),
     'When issuing multiple commands:',
     multipleCommandsSubitems,

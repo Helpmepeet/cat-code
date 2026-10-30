@@ -315,10 +315,22 @@ describe('auto-mode permission observation core routes', () => {
       return { shouldBlock: true, unavailable: true, reason: 'interrupted' }
     })
     const aborted = await observe(tool(), context)
+    expect(aborted.decision).toBeUndefined()
+    expect(aborted.error).toMatchObject({ name: 'AbortError' })
     expect(end(aborted)).toMatchObject({
-      raw_result: 'deny',
+      raw_result: 'throw',
       disposition: 'cancelled',
       cause: 'interrupted',
     })
+  })
+
+  test('propagates classifier cancellation even without an aborted parent signal', async () => {
+    classifyYoloAction.mockResolvedValueOnce({
+      shouldBlock: true, autoModeOutcome: 'interrupted', reason: 'aborted',
+    })
+    const run = await observe(tool(), toolUseContext(permissionContext()))
+    expect(run.decision).toBeUndefined()
+    expect(run.error).toMatchObject({ name: 'AbortError' })
+    expect(end(run)).toMatchObject({ raw_result: 'throw', cause: 'interrupted' })
   })
 })

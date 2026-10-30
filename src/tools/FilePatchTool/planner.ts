@@ -541,7 +541,12 @@ function discoverCandidates(
   const candidates: HunkCandidate[] = []
   let boundaryExactMatch = false
 
-  for (let start = 0; start <= maxStart; start += 1) {
+  // Check the only admissible EOF position first. Interior matches are useful
+  // failure evidence, but cannot affect a successful hard-EOF placement.
+  for (let position = 0; position <= maxStart; position += 1) {
+    const start = hunk.isEndOfFile
+      ? position === 0 ? maxStart : position - 1
+      : position
     let matches = true
     for (let offset = 0; offset < fp.length; offset += 1) {
       // Charge the actual line comparisons, not merely the candidate-window
@@ -579,6 +584,7 @@ function discoverCandidates(
     if (totalCandidates.value > counters.limits.maxCandidatesTotal) {
       throw new PlannerLimitError('candidatesRetained')
     }
+    if (hunk.isEndOfFile && boundaryExactMatch) break
   }
 
   return {
@@ -1012,31 +1018,40 @@ function buildOutput(
   hunks: readonly EffectiveHunk[],
   planHunks: readonly HunkCandidate[],
   counters: PlannerCounters,
-): InternalOutputLine[] {
-  const output: InternalOutputLine[] = []
+): { length: number; finalLine?: InternalOutputLine; hunkLines: Map<string, number> } {
+  const output: { length: number; finalLine?: InternalOutputLine; hunkLines: Map<string, number> } =
+    { length: 0, hunkLines: new Map() }
+  const emit = (line: InternalOutputLine) => {
+    if (line.hunkIndex !== undefined) {
+      output.hunkLines.set(`${line.hunkIndex}:${line.hunkLineIndex}`, output.length)
+    }
+    output.length += 1
+    output.finalLine = line
+  }
+  const retainSourceRange = (start: number, end: number) => {
+    if (end <= start) return
+    // Unchanged source runs need only their length and final-line identity.
+    // Charge each run, not each line, without materializing the output.
+    charge(counters, 'dpTransitions')
+    output.length += end - start
+    output.finalLine = { text: source.lines[end - 1]!, sourceIndex: end - 1 }
+  }
   let cursor = 0
   for (const candidate of planHunks) {
-    while (cursor < candidate.sourceStart) {
-      // Complete-plan newline validation is part of planning, so source
-      // copying here must consume a planning budget too. Otherwise a large
-      // source would be rescanned once per structural path for free.
-      charge(counters, 'dpTransitions')
-      output.push({ text: source.lines[cursor]!, sourceIndex: cursor })
-      cursor += 1
-    }
+    retainSourceRange(cursor, candidate.sourceStart)
     const hunk = hunks[candidate.hunkIndex]!
     let sourceCursor = candidate.sourceStart
     for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex += 1) {
       const line = hunk.lines[lineIndex]!
       charge(counters, 'dpTransitions')
       if (line.kind === 'add') {
-        output.push({
+        emit({
           text: line.text,
           hunkIndex: candidate.hunkIndex,
           hunkLineIndex: lineIndex,
         })
       } else if (line.kind === 'context') {
-        output.push({
+        emit({
           text: source.lines[sourceCursor]!,
           sourceIndex: sourceCursor,
           hunkIndex: candidate.hunkIndex,
@@ -1049,11 +1064,7 @@ function buildOutput(
     }
     cursor = candidate.sourceEnd
   }
-  while (cursor < source.lines.length) {
-    charge(counters, 'dpTransitions')
-    output.push({ text: source.lines[cursor]!, sourceIndex: cursor })
-    cursor += 1
-  }
+  retainSourceRange(cursor, source.lines.length)
   return output
 }
 
@@ -1161,16 +1172,9 @@ function validateNewlines(
   }
 
   for (const marker of newMarkers) {
-    let matchingOutput = -1
-    for (let lineIndex = 0; lineIndex < outputLines.length; lineIndex += 1) {
-      charge(counters, 'dpTransitions')
-      const line = outputLines[lineIndex]!
-      if (line.hunkIndex === marker.hunkIndex && line.hunkLineIndex === marker.lineIndex) {
-        matchingOutput = lineIndex
-        break
-      }
-    }
-    if (matchingOutput < 0 || matchingOutput !== outputLast) {
+    charge(counters, 'dpTransitions')
+    const matchingOutput = outputLines.hunkLines.get(`${marker.hunkIndex}:${marker.lineIndex}`)
+    if (matchingOutput === undefined || matchingOutput !== outputLast) {
       return failureBase(
         'PATCH_NEWLINE_CONFLICT',
         'newline',
@@ -1182,7 +1186,7 @@ function validateNewlines(
     }
   }
 
-  const finalLine = outputLines[outputLast]
+  const finalLine = outputLines.finalLine
   let outputEofOwner: number | undefined = finalLine?.hunkIndex
   if (outputEofOwner === undefined) {
     // Deleting the source tail can leave a sourced line as the final output

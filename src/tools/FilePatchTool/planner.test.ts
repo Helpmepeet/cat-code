@@ -5,6 +5,20 @@ import {
   type PlannerResult,
 } from './planner.js'
 
+test('places a hard-EOF hunk beyond the whole-file scan budget', () => {
+  const source = [...Array(100_000).fill('unrelated'), 'target'].join('\n')
+  const result = planUpdateHunks({
+    path: '/tmp/large.txt', source,
+    hunks: [{ isEndOfFile: true, lines: [
+      { kind: 'delete', text: 'target' }, { kind: 'add', text: 'replacement' },
+    ] }],
+  })
+  expect(result.ok).toBe(true)
+  if (!result.ok) throw new Error(result.failure.message)
+  expect(result.plan.hunks[0]?.sourceStart).toBe(100_000)
+  expect(result.usage.sourcePositionsScanned).toBeLessThan(10)
+})
+
 function hunk(lines: PlannerHunk['lines'], overrides: Partial<PlannerHunk> = {}): PlannerHunk {
   return { lines, ...overrides }
 }

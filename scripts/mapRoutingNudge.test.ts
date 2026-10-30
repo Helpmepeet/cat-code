@@ -121,4 +121,38 @@ describe('map routing nudge lifecycle', () => {
     }, { ...options, logFile: false })
     expect(output).toContain('WORKSPACE_MAP.md')
   })
+
+  test('workers consult their own transcript and do not consume sibling or main nudges', () => {
+    const options = fixture()
+    const workerTranscript = join(options.repoRoot, 'worker.jsonl')
+    writeFileSync(workerTranscript, '{"type":"tool_use","name":"Read","input":{"file_path":"docs/maps/tasks-workers.md"}}\n')
+    const input = {
+      session_id: 'shared-parent',
+      tool_name: 'Grep',
+      tool_input: { pattern: 'owner' },
+      transcript_path: options.transcriptPath,
+    }
+    const runOptions = { ...options, logFile: false as const }
+    expect(runMapRoutingNudge({
+      ...input, agent_id: 'read-map', agent_transcript_path: workerTranscript,
+    }, runOptions)).toBeNull()
+    expect(runMapRoutingNudge({
+      ...input, agent_id: 'unread-map', agent_transcript_path: options.transcriptPath,
+    }, runOptions)).toContain('WORKSPACE_MAP.md')
+    expect(runMapRoutingNudge(input, runOptions)).toContain('WORKSPACE_MAP.md')
+  })
+
+  test('worker without its own transcript does not consult the parent or consume state', () => {
+    const options = fixture()
+    const input = {
+      session_id: 'shared-parent', agent_id: 'worker',
+      tool_name: 'Grep', tool_input: { pattern: 'owner' },
+      transcript_path: options.transcriptPath,
+    }
+    const runOptions = { ...options, logFile: false as const }
+    expect(runMapRoutingNudge(input, runOptions)).toBeNull()
+    expect(runMapRoutingNudge({
+      ...input, agent_transcript_path: options.transcriptPath,
+    }, runOptions)).toContain('WORKSPACE_MAP.md')
+  })
 })

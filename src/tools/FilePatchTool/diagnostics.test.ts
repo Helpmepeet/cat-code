@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { renderPlannerFailure, type FilePatchDiagnosticMetadata } from './diagnostics.js'
+import { plannerFailureAsFilePatchError, renderPlannerFailure, type FilePatchDiagnosticMetadata } from './diagnostics.js'
 import { planUpdateHunks, type PlannerFailure } from './planner.js'
 import { serializeFilePatchError } from './types.js'
 
@@ -15,6 +15,18 @@ function failureFor(source: string, expected: string) {
 }
 
 describe('bounded planner failure diagnostics', () => {
+  test('retains actual limit usage through the tool error adapter', () => {
+    const result = planUpdateHunks({
+      path: '/tmp/budget.txt', source: 'a\nb\nc',
+      hunks: [{ lines: [{ kind: 'delete', text: 'c' }] }],
+      limits: { maxSourcePositionsScanned: 2 },
+    })
+    if (result.ok) throw new Error('expected budget failure')
+    const error = plannerFailureAsFilePatchError({ failure: result.failure })
+    expect(error.code).toBe('PATCH_PLANNER_LIMIT')
+    expect(error.diagnostics?.usage).toEqual(result.failure.usage)
+    expect(serializeFilePatchError(error).diagnostics?.usage).toEqual(result.failure.usage)
+  })
   test('ranks actual text similarity across a file beyond the old prefix scan budget', () => {
     const expected = '        onCancelQuestion={() => {'
     const actual = '        onCancelQuestions={() => {'

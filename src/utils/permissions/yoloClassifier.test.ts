@@ -1090,6 +1090,21 @@ describe('two-stage upstream classifier', () => {
     })
   })
 
+  test('reports user cancellation without marking the classifier unavailable', async () => {
+    const controller = new AbortController()
+    const result = await _forTest.classifyYoloActionWithSideQuery(
+      [], action, tools, context, controller.signal,
+      (async () => {
+        controller.abort()
+        throw new Error('cancelled fixture')
+      }) as typeof sideQuery,
+    )
+    expect(result).toMatchObject({
+      shouldBlock: true, autoModeOutcome: 'interrupted', stage: 'fast',
+    })
+    expect(result.unavailable).toBeUndefined()
+  })
+
   test('fails closed on a malformed stage 2 response', async () => {
     const responses = [
       response('msg_fast', 'req_fast', { shouldBlock: true }),

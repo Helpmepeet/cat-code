@@ -10,6 +10,7 @@ import {
 import { dirname, isAbsolute, relative, resolve } from 'node:path'
 
 type HookInput = {
+  agent_id?: string
   agent_transcript_path?: string
   session_id?: string
   tool_input?: {
@@ -275,11 +276,14 @@ export function runMapRoutingNudge(
   const classification = classifySearch(input, options.repoRoot)
   if (classification !== 'broad') return null
 
-  const transcriptPath = input.agent_transcript_path ?? input.transcript_path
+  // A worker's parent transcript cannot establish what that worker has read.
+  const transcriptPath = input.agent_id
+    ? input.agent_transcript_path
+    : input.agent_transcript_path ?? input.transcript_path
   if (!transcriptPath || !existsSync(transcriptPath)) return null
 
   const sessionKey = createHash('sha256')
-    .update(input.session_id ?? 'unknown')
+    .update(JSON.stringify([input.session_id ?? 'unknown', input.agent_id ?? input.agent_transcript_path ?? 'main']))
     .digest('hex')
     .slice(0, 16)
   const statePath = resolve(options.stateRoot, `map-nudge-${sessionKey}`)

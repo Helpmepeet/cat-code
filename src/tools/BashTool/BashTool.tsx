@@ -246,7 +246,7 @@ isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS);
 
 const fullInputSchema = lazySchema(() => z.strictObject({
   command: z.string().describe('The command to execute'),
-  timeout: semanticNumber(z.number().optional()).describe(`Optional timeout in milliseconds (max ${getMaxTimeoutMs()})`),
+  timeout: semanticNumber(z.number().optional()).describe(`Optional foreground timeout in milliseconds (max ${getMaxTimeoutMs()}); background commands have no duration timeout`),
   description: z.string().optional().describe(`Clear, concise description of what this command does in active voice. Never use words like "complex" or "risk" in the description - just describe what it does.
 
 For simple commands (git, npm, standard CLI tools), keep it brief (5-10 words):
@@ -723,6 +723,7 @@ export const BashTool = buildTool({
     let interpretationResult: ReturnType<typeof interpretCommandResult> | undefined;
     let progressCounter = 0;
     let wasInterrupted = false;
+    let commandError: ShellError | undefined;
     let result: ExecResult;
     const isMainThread = !toolUseContext.agentId;
     const preventCwdChanges = !isMainThread || Boolean(toolUseContext.inlineCommand);
@@ -839,9 +840,9 @@ export const BashTool = buildTool({
 
       if (interpretationResult.isError && !isInterrupt) {
         // stderr is merged into stdout (merged fd); outputWithSbFailures
-        // already has the full output. Pass '' for stdout to avoid
+        // already has the merged preview. Pass '' for stdout to avoid
         // duplication in getErrorParts() and processBashCommand.
-        throw new ShellError('', outputWithSbFailures, result.code, result.interrupted);
+        commandError = new ShellError('', outputWithSbFailures, result.code, result.interrupted);
       }
       wasInterrupted = result.interrupted;
     } finally {
@@ -876,6 +877,21 @@ export const BashTool = buildTool({
       } catch {
         // File may already be gone — stdout preview is sufficient
       }
+    }
+    if (commandError) {
+      // Publish the same retained-output reference as successful commands before
+      // handing the failure to the tool runner's error formatter.
+      if (persistedOutputPath) {
+        const preview = generatePreview(commandError.stderr, PREVIEW_SIZE_BYTES);
+        throw new ShellError('', buildLargeToolResultMessage({
+          filepath: persistedOutputPath,
+          originalSize: persistedOutputSize ?? 0,
+          isJson: false,
+          preview: preview.preview,
+          hasMore: preview.hasMore
+        }), result.code, result.interrupted);
+      }
+      throw commandError;
     }
     const commandType = input.command.split(' ')[0];
     logEvent('tengu_bash_tool_command_executed', {

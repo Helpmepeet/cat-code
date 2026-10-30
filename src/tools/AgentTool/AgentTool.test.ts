@@ -872,6 +872,43 @@ describe('getBuiltInAgents in normal mode', () => {
 })
 
 describe('resolveSystemSubagentName', () => {
+  test.each([undefined, 'ada'])('rechecks the live registry after pending reads (explicit=%s)', async explicitName => {
+    Math.random = () => 0
+    const sessionId = randomUUID()
+    const appState = { agentNameRegistry: new Map<string, string>() } as never
+    let currentState = appState
+    const first = await resolveSystemSubagentName({ appState, sessionId })
+    const pending = resolveSystemSubagentName({
+      explicitName,
+      appState,
+      getAppState: () => currentState,
+      sessionId,
+    })
+    // Registration replaces app state before releasing the setup reservation.
+    currentState = {
+      agentNameRegistry: new Map([[first.agentName, 'registered-worker']]),
+    } as never
+    releaseWorkerName(first.processReservationName)
+
+    if (explicitName) {
+      await expect(pending).rejects.toThrow('Subagent name "ada" is already in use')
+    } else {
+      const second = await pending
+      expect(second.agentName).toBe('Katherine')
+      releaseWorkerName(second.processReservationName)
+    }
+
+    // Removing a registered worker must still permit reuse.
+    currentState = { agentNameRegistry: new Map() } as never
+    const reused = await resolveSystemSubagentName({
+      appState,
+      getAppState: () => currentState,
+      sessionId,
+    })
+    expect(reused.agentName).toBe('Ada')
+    releaseWorkerName(reused.processReservationName)
+  })
+
   test.each([undefined, 'Ada'])('holds its process reservation while team allocation is pending (explicit=%s)', async explicitName => {
     Math.random = () => 0
     let allocationStarted!: () => void

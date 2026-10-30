@@ -98,6 +98,7 @@ export function renderPlannerFailure(
     path: failure.path,
     ...(failure.hunkIndex === undefined ? {} : { hunkIndex: failure.hunkIndex + 1 }),
     hunkCount: failure.hunkCount,
+    usage: { ...failure.usage },
     candidateCoordinates,
     ...(omitted === undefined ? {} : { candidateCoordinatesOmitted: omitted }),
     ...(failure.completePlanWitnesses === undefined ? {} : {

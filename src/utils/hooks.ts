@@ -45,8 +45,9 @@ import {
 import {
   getTranscriptPathForSession,
   getAgentTranscriptPath,
+  getAgentTranscriptPathForSession,
 } from './sessionStorage.js'
-import type { AgentId } from '../types/ids.js'
+import { asAgentId, type AgentId } from '../types/ids.js'
 import {
   getSettings_DEPRECATED,
   getSettingsForSource,
@@ -310,6 +311,7 @@ export function createBaseHookInput(
   cwd: string
   permission_mode?: string
   agent_id?: string
+  agent_transcript_path?: string
   agent_type?: string
 } {
   const resolvedSessionId = sessionId ?? getSessionId()
@@ -323,6 +325,13 @@ export function createBaseHookInput(
     cwd: getCwd(),
     permission_mode: permissionMode,
     agent_id: agentInfo?.agentId,
+    ...(agentInfo?.agentId
+      ? {
+          agent_transcript_path: resolvedSessionId === getSessionId()
+            ? getAgentTranscriptPath(asAgentId(agentInfo.agentId))
+            : getAgentTranscriptPathForSession(resolvedSessionId, asAgentId(agentInfo.agentId)),
+        }
+      : {}),
     agent_type: resolvedAgentType,
   }
 }

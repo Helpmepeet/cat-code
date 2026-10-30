@@ -46,6 +46,41 @@ async function readPid(path: string): Promise<number> {
 }
 
 describe('ShellCommand', () => {
+  test('foreground execution still stops at its duration timeout', async () => {
+    const child = spawn('/bin/sh', ['-c', 'sleep 10'], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const command = wrapSpawn(child, new AbortController().signal, 40,
+      new TaskOutput('shell_foreground_timeout_test', null, false))
+    try {
+      const result = await command.result
+      expect(result.code).toBe(143)
+      expect(result.stderr).toContain('Command timed out')
+    } finally {
+      command.cleanup()
+      killProcessGroup(child.pid!)
+    }
+  })
+
+  test('background ownership removes the foreground timeout without ending a service', async () => {
+    const child = spawn('/bin/sh', ['-c', 'sleep 0.2; printf service-alive'], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const command = wrapSpawn(child, new AbortController().signal, 40,
+      new TaskOutput('shell_background_timeout_test', null, false))
+    try {
+      expect(command.background('shell_background_timeout_test')).toBe(true)
+      const result = await command.result
+      expect(result.code).toBe(0)
+      expect(result.interrupted).toBe(false)
+    } finally {
+      command.cleanup()
+      killProcessGroup(child.pid!)
+    }
+  })
+
   test('kills detached shell process group when the parent process exits', async () => {
     if (process.platform === 'win32') {
       return

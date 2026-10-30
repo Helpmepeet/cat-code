@@ -153,6 +153,14 @@ export type FilePatchDiagnosticMetadata = {
   path: string
   hunkIndex?: number
   hunkCount: number
+  usage?: {
+    sourcePositionsScanned: number
+    candidatesRetained: number
+    hintComparisons: number
+    dpTransitions: number
+    predecessorsStored: number
+    approximateComparisons: number
+  }
   /** Source coordinates remain zero-based/end-exclusive; hunk is a one-based ordinal. */
   candidateCoordinates: Array<{ start: number; end: number; hunk?: number }>
   candidateCoordinatesOmitted?: number
@@ -437,6 +445,14 @@ const diagnosticMetadataSchema = lazySchema(() =>
     path: z.string(),
     hunkIndex: z.number().int().positive().optional(),
     hunkCount: z.number().int().nonnegative(),
+    usage: z.object({
+      sourcePositionsScanned: z.number().int().nonnegative(),
+      candidatesRetained: z.number().int().nonnegative(),
+      hintComparisons: z.number().int().nonnegative(),
+      dpTransitions: z.number().int().nonnegative(),
+      predecessorsStored: z.number().int().nonnegative(),
+      approximateComparisons: z.number().int().nonnegative(),
+    }).optional(),
     candidateCoordinates: z.array(z.object({
       start: z.number().int().nonnegative(),
       end: z.number().int().nonnegative(),

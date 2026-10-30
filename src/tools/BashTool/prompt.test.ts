@@ -22,6 +22,16 @@ test('managed chat Bash guidance adds no GPT-only change-inspection rule', () =>
 })
 
 describe('Bash prompt working-directory guidance', () => {
+  test('timeout is a foreground limit, not a service lifetime limit', () => {
+    for (const provider of ['firstParty', 'openai'] as const) {
+      const prompt = getBashPrompt(provider)
+      expect(prompt).toContain('optional foreground timeout')
+      expect(prompt).toContain('Background commands have no duration timeout')
+      expect(prompt).toContain('auto-backgrounding is enabled')
+      expect(prompt).not.toContain('your command will timeout after')
+    }
+  })
+
   test('distinguishes main-session persistence from agent-thread Bash calls', () => {
     for (const provider of ['firstParty', 'openai'] as const) {
       const prompt = getBashPrompt(provider)

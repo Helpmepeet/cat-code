@@ -351,7 +351,8 @@ export const GrepTool = buildTool({
     if (output_mode === 'files_with_matches') {
       args.push('-l')
     } else if (output_mode === 'count') {
-      args.push('-c')
+      // Aggregation expects filename:count even when searching a single file.
+      args.push('-c', '-H')
     }
 
     // Add line numbers if requested

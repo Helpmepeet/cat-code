@@ -165,6 +165,9 @@ export function evictTerminalTask(
   setAppState(prev => {
     const task = prev.tasks?.[taskId]
     if (!task) return prev
+    // Shell output remains addressable through TaskOutput for this session.
+    // Completed shell tasks already release their process and stream resources.
+    if (task.type === 'local_bash') return prev
     if (!isTerminalTaskStatus(task.status)) return prev
     if (!task.notified) return prev
     if (hasUnresolvedLocalAgentMessages(task)) return prev
@@ -206,6 +209,7 @@ export function generateTaskAttachments(state: AppState): {
   const tasks = state.tasks ?? {}
 
   for (const taskState of Object.values(tasks) as TaskState[]) {
+    if (taskState.type === 'local_bash') continue
     // Not yet notified, or still pending/running — the parent still needs it.
     if (!taskState.notified) continue
     if (!isTerminalTaskStatus(taskState.status)) continue
@@ -235,6 +239,7 @@ export function applyTaskEvictions(
     const newTasks = { ...prev.tasks } as Record<string, TaskState>
     for (const id of evictedTaskIds) {
       const fresh = newTasks[id]
+      if (fresh?.type === 'local_bash') continue
       // Re-check terminal+notified on fresh state (TOCTOU: resume may have
       // replaced the task since it was collected)
       if (!fresh || !isTerminalTaskStatus(fresh.status) || !fresh.notified) {
