@@ -360,6 +360,22 @@ test('the prompt asks for smart messages without forbidding them, and points pee
   expect(prompt).toContain('never a peer')
 })
 
+test('the prompt separates status a peer can check from what it needs to be told', async () => {
+  const prompt = await createSendToPeerTool(
+    delivering('queued_live').requestHost,
+  ).prompt()
+
+  // Measured on 2026-10-30: 88 of 161 messages mentioned the Git index, and three
+  // status notices woke a finished session for about 643k uncached tokens.
+  // Naming only what to skip would also silence the bug reports and hand-offs
+  // those sessions depended on, so both halves are pinned.
+  expect(prompt).toContain("Don't message a peer just to report a commit")
+  expect(prompt).toContain('an empty index')
+  expect(prompt).toContain('when you find a problem in its work')
+  expect(prompt).toContain('reprocess its whole conversation')
+  expect(prompt).not.toContain('Share progress')
+})
+
 test('an outcome outside the protocol list is never read as a delivery', async () => {
   // A local check, not a boundary check: if the upstream schema and this union
   // ever fall out of step, a wrong or future string reaches this tool wearing
