@@ -1,11 +1,17 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { isToolActivity, MAX_TOOL_ACTIVITY_OUTPUT_BYTES, type ToolActivity } from './toolActivityContract.js'
+import { isAutoModeReview, type AutoModeReview } from './autoModeReviewContract.js'
 
-type Scope = { emit: (activity: ToolActivity) => void; calls: Map<string, { phase: ToolActivity['phase']; startedAt: number; lastOutput: number; timeoutMs?: number }> }
+type Scope = { emit: (activity: ToolActivity | AutoModeReview) => void; calls: Map<string, { phase: ToolActivity['phase']; startedAt: number; lastOutput: number; timeoutMs?: number }> }
 const scope = new AsyncLocalStorage<Scope>()
 
 export function withToolActivity<T>(emit: Scope['emit'], run: () => T): T {
   return scope.run({ emit, calls: new Map() }, run)
+}
+
+export function recordToolReview(review: AutoModeReview): void {
+  if (!isAutoModeReview(review)) return
+  try { scope.getStore()?.emit(review) } catch { /* Display telemetry cannot affect a tool. */ }
 }
 
 export function recordToolActivity(toolUseId: string, phase: ToolActivity['phase']): void {

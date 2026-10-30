@@ -1,0 +1,49 @@
+.auto-mode-review {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  margin: -4px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.auto-mode-review[data-outcome='blocked'] { color: var(--tone-danger); }
+.auto-mode-review svg { display: block; }
+.auto-mode-review-tooltip {
+  position: fixed;
+  z-index: 100;
+  left: var(--review-tip-x, 8px);
+  top: var(--review-tip-y, 8px);
+  width: max-content;
+  max-width: min(260px, calc(100vw - 16px));
+  padding: 6px 8px;
+  border: 1px solid var(--shell-seam);
+  border-radius: 6px;
+  background: var(--conversation-bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+  pointer-events: none;
+}
+.auto-mode-review-field { margin-bottom: 6px; }
+.auto-mode-review-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-subtle);
+}
+.auto-mode-review-value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}

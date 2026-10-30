@@ -9,6 +9,8 @@ import { useToolCardExpanded } from './toolCardExpansion.js'
 import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { AgentRevealContext, containsAgentTool } from './transcriptAgentReveal.js'
 import { TranscriptMotionContext } from './transcriptMotion.js'
+import { AutoModeReviewMark } from './AutoModeReviewMark.js'
+import { summarizeAutoModeReviews } from './autoModeReview.js'
 import './focusedTranscript.css'
 
 type RowRenderer = (rows: readonly NestedTranscriptRow[], narration: boolean) => ReactNode
@@ -164,6 +166,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
           <span className="focused-step-chevron"><FocusedChevron /></span>
         </span>
         <FocusedTicker tickKey={key} className="focused-step-text">{text}</FocusedTicker>
+        <AutoModeReviewMark summary={summarizeAutoModeReviews(calls.map(call => call.autoModeReview))} />
         <DiffTotals summary={summary} />
         <FailureMark summary={summary} />
         {live && headCall ? <CallMeta call={headCall} now={now} /> : null}
@@ -214,6 +217,7 @@ function RollingCalls({ calls, now, signalled }: { calls: FocusedCall[]; now: nu
       <div><div className="focused-call-row">
         <span className={`focused-call-mark ${FAMILY_STYLE[call.toolFamily].color}`} aria-hidden>{stepMark(call.toolFamily)}</span>
         <FocusedTicker tickKey={`${call.toolUseId}:${verb}`} className=""><span className={verb === 'Queued' ? 'focused-queued-verb' : call.status === 'pending' ? 'focused-live-verb' : ''}>{verb}</span>{' '}<span className="focused-step-target">{target}</span>{call.additions ? <span className="focused-diff-add"> +{call.additions}</span> : null}{call.preparing ? <span className="focused-caret" /> : null}</FocusedTicker>
+        <AutoModeReviewMark review={call.autoModeReview} />
         <CallMeta call={call} now={now} />
       </div><LiveOutput call={call} now={now} /></div>
     </div>

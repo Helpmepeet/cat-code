@@ -1,4 +1,7 @@
 import { recordToolActivity } from '../../app-runtime/toolActivity.js'
+import { createAutoModeReviewTracker } from '../../app-runtime/autoModeReview.js'
+import { persistAutoModeReview } from '../../app-runtime/autoModeReviewPersistence.js'
+import { recordToolReview } from '../../app-runtime/toolActivity.js'
 import { feature } from 'bun:bundle'
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
@@ -134,14 +137,21 @@ export function getEffectiveAutoMode(
   return null
 }
 
+const reviewTrackers = new WeakMap<AutoModePermissionObservationContext, ReturnType<typeof createAutoModeReviewTracker>>()
+
 export function createInitialAutoModePermissionObservation(
   tool: Pick<Tool, 'name'>,
   context: ToolUseContext,
   toolUseId: string,
 ): AutoModePermissionObservationContext | null {
   if (typeof context.getAppState !== 'function') return null
-  return createAutoModePermissionObservationContext({
+  const review = createAutoModeReviewTracker(event => {
+    persistAutoModeReview(event)
+    recordToolReview(event)
+  })
+  const observation = createAutoModePermissionObservationContext({
     writer: event => {
+      review.observe(event)
       if (!context.agentId && event.subtype === 'auto_permission_start') recordToolActivity(toolUseId, 'reviewing')
       recordAutoModeObservation(event, context.agentId)
     },
@@ -156,6 +166,8 @@ export function createInitialAutoModePermissionObservation(
       context.getAppState().toolPermissionContext,
     ),
   })
+  if (observation) reviewTrackers.set(observation, review)
+  return observation
 }
 
 function createYoloClassifierStageObserver(
@@ -890,6 +902,11 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       } finally {
         clearClassifierChecking(toolUseID)
       }
+      if (observation) reviewTrackers.get(observation)?.complete({
+        ...classifierResult,
+        unavailable: classifierResult.unavailable || classifierResult.transcriptTooLong ||
+          context.abortController.signal.aborted || classifierResult.autoModeOutcome === 'interrupted',
+      })
       if (classifierResult.autoModeOutcome) {
         recordAutoModeOutcome(toolUseID, classifierResult.autoModeOutcome)
       } else if (classifierResult.shouldBlock) {

@@ -1,4 +1,5 @@
 import type { FocusedBashJob } from './focusedBashJobs.js'
+export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
 /**
  * CatCode desktop IPC protocol — v5.
  *

@@ -1,5 +1,6 @@
 import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
-import { canPersistHandoffTranscript, recordQueueOperation, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
+import { canPersistHandoffTranscript, getTranscriptPath, recordQueueOperation, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
+import { readAutoModeReviews } from '../../src/app-runtime/autoModeReviewPersistence.js'
 import type { UndeliveredPrompt } from './sessionResume.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
@@ -1362,7 +1363,10 @@ export class SidecarServer {
    */
   private sendHistoryReplay(connection: Connection): string[] {
     const unavailable = new Set(this.unavailableParentToolUseIds)
-    if (this.history.length === 0 && !this.historySourceTruncated) return [...unavailable]
+    if (this.history.length === 0 && !this.historySourceTruncated) {
+      this.sendAutoModeReviewReplay(connection)
+      return [...unavailable]
+    }
 
     const retained: ServerFrame[] = []
     let retainedBytes = 0
@@ -1429,7 +1433,42 @@ export class SidecarServer {
     for (const frame of retained) {
       this.send(connection, frame)
     }
+    this.sendAutoModeReviewReplay(connection)
     return [...unavailable]
+  }
+
+  /** A separate display store, never merged into SDK history or engine resume state. */
+  private sendAutoModeReviewReplay(connection: Connection, recoveredMessages?: SDKMessage[]): void {
+    try {
+      let bytes = 0
+      let count = 0
+      const toolUseIds = recoveredMessages && new Set(recoveredMessages.flatMap(message => {
+        if (message.type !== 'assistant' || !Array.isArray(message.message.content)) return []
+        return message.message.content.flatMap(block =>
+          block && typeof block === 'object' && 'type' in block && block.type === 'tool_use' &&
+          'id' in block && typeof block.id === 'string' ? [block.id] : [])
+      }))
+      const reviews = readAutoModeReviews(getTranscriptPath())
+        .filter(review => !toolUseIds || toolUseIds.has(review.toolUseId))
+      for (const review of reviews.reverse()) {
+        const event = this.prepareOutboundPayload(review, 'event', 'auto mode review replay')
+        if (!event) continue
+        const frame: ServerFrame = {
+          kind: 'event', protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId, replay: true, event,
+          ...(recoveredMessages ? { recovered: true } : {}),
+        }
+        const size = Buffer.byteLength(JSON.stringify(frame), 'utf8')
+        if (++count > MAX_HISTORY_REPLAY_FRAMES || bytes + size > MAX_HISTORY_REPLAY_BYTES) {
+          this.log(`[sidecar] auto mode review replay truncated: retained ${count - 1}/${reviews.length} events (${bytes} bytes)`)
+          break
+        }
+        bytes += size
+        this.send(connection, frame)
+      }
+    } catch (error) {
+      this.log(`[sidecar] auto mode review replay failed: ${String(error)}`)
+    }
   }
 
   removeConnection(connection: Connection): void {
@@ -5565,6 +5604,7 @@ export class SidecarServer {
           oldestSentUuid = message.uuid
         }
       }
+      this.sendAutoModeReviewReplay(connection, missing)
       // The anchor moves to the OLDEST message that actually went out, so only
       // omissions strictly OLDER than it stay recoverable by a later request. A
       // message dropped mid-prefix (newer than the oldest send) now sits inside

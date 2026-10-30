@@ -1,4 +1,5 @@
 import { isToolActivity, type ToolActivity } from '../../../src/app-runtime/toolActivityContract.js'
+import { isAutoModeReview, type AutoModeReview } from '../../../src/app-runtime/autoModeReviewContract.js'
 /**
  * Transcript projector — anti-corruption boundary LAYER 2 (PROGRAM-PLAN §5).
  *
@@ -127,6 +128,8 @@ export type ToolUseRow = RowSource & {
   input: Record<string, unknown>
   status: ToolCardStatus
   result: ToolResultProjection | null
+  /** Display-only review evidence, joined at read time and never stored on rows. */
+  autoModeReview?: AutoModeReview
   /**
    * A background or resumed agent's finish, joined in at read time from
    * `agentCompletionsByToolUseId`. It settles this run's lifecycle independently
@@ -543,6 +546,7 @@ export type FocusedLiveState = {
 
 type TranscriptSessionState = {
   activities: Record<string, ToolActivity>
+  autoModeReviews: Record<string, AutoModeReview>
   awaitingApproval: Record<string, true>
   preparing: Record<string, PreparingTool>
   lastVisibleChangeAt: number
@@ -659,6 +663,7 @@ function createTranscriptSessionState(): TranscriptSessionState {
     currentStreamMessageId: null,
     currentStreamBlockIndex: null,
     activities: {},
+    autoModeReviews: {},
     awaitingApproval: {},
     preparing: {},
     lastVisibleChangeAt: Date.now(),
@@ -781,6 +786,7 @@ export function selectTranscriptRows(
     const isHidden = revealHidden && hidden[row.frameId] === true
     if (row.kind !== 'tool-use') return [isHidden ? markHidden(row) : row]
     const storedResult = session.toolResultsByUseId[row.toolUseId] ?? null
+    const autoModeReview = session.autoModeReviews[row.toolUseId]
     const resumedAgentId =
       row.toolName === 'ResumeAgent' && typeof row.input.agentId === 'string'
         ? row.input.agentId
@@ -793,6 +799,7 @@ export function selectTranscriptRows(
     const views = joinedToolRows.get(row)
     const cached = isHidden ? views?.hidden : views?.normal
     if (cached && cached.storedResult === storedResult &&
+        cached.autoModeReview === autoModeReview &&
         cached.agentCompletion === agentCompletion &&
         cached.resumedAgentId === resumedAgentId &&
         cached.agentName === resumedIdentity?.agentName &&
@@ -818,15 +825,16 @@ export function selectTranscriptRows(
     if (
       source.status === status &&
       source.result === result &&
+      source.autoModeReview === autoModeReview &&
       source.agentCompletion === agentCompletion
     ) {
       return [source]
     }
-    const joined = { ...source, status, result, agentCompletion }
+    const joined = { ...source, status, result, agentCompletion, autoModeReview }
     joinedToolRows.set(row, {
       ...views,
       [isHidden ? 'hidden' : 'normal']: {
-        storedResult, agentCompletion, resumedAgentId,
+        storedResult, agentCompletion, resumedAgentId, autoModeReview,
         agentName: resumedIdentity?.agentName, agentUsage: resumedIdentity?.agentUsage,
         row: joined,
       },
@@ -838,6 +846,7 @@ export function selectTranscriptRows(
 
 type JoinedToolRow = {
   storedResult: ToolResultProjection | null
+  autoModeReview?: AutoModeReview
   agentCompletion: AgentCompletionProjection | null
   resumedAgentId: string | null
   agentName?: string
@@ -1594,6 +1603,19 @@ export function projectServerFrames(
       }
       continue
     }
+    if (frame.kind === 'event' && frame.event.type === 'tool.review') {
+      if (isAutoModeReview(frame.event)) {
+        const review = frame.event
+        const previous = draft.session.autoModeReviews[review.toolUseId]
+        // A recovered start cannot replace a decision already received live.
+        if (!previous || previous.startedAt < review.startedAt ||
+            (previous.attemptId === review.attemptId && previous.completedAt === undefined)) {
+          draft.session.autoModeReviews = { ...draft.session.autoModeReviews, [review.toolUseId]: review }
+          draft.changed = true
+        }
+      }
+      continue
+    }
     if (frame.kind === 'event' && frame.event.type === 'tool.activity') {
       if (isToolActivity(frame.event)) {
         draft.session.activities = { ...draft.session.activities, [frame.event.toolUseId]: frame.event }
@@ -1698,6 +1720,7 @@ function createReadyDraft(
   session.engineSessionId = engineSessionId
   if (engineSessionId !== null && previous?.engineSessionId === engineSessionId) {
     session.activities = previous.activities
+    session.autoModeReviews = previous.autoModeReviews
     session.awaitingApproval = previous.awaitingApproval
     session.lastVisibleChangeAt = previous.lastVisibleChangeAt
     session.inlineCommands = previous.inlineCommands

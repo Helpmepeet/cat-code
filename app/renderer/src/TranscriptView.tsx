@@ -35,6 +35,8 @@ import {
 import Markdown from 'react-markdown'
 import { extractInlineCommandFences, inlineCommandSourceKey, isInteractiveShellCommand, type InlineCommandRun, type InlineCommandSource } from '../../shared/inlineCommand.js'
 import { InlineCommandContext } from './inlineCommandState.js'
+import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
+import { AutoModeReviewContext, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
 import { shellPromptLines } from './shellTokens.js'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
@@ -2685,6 +2687,7 @@ function ToolCardShell({
   status,
   sub,
   headerBadge,
+  reviewSummary,
   targetHover,
   targetFilePath,
   collapsedExtra,
@@ -2706,6 +2709,7 @@ function ToolCardShell({
   sub?: string
   /** Optional right-cluster chip before the state (C4 child-count for agents). */
   headerBadge?: ReactNode
+  reviewSummary?: ReviewSummary | null
   /**
    * Swapped in over `target` while the header is hovered or focused. Absent for
    * every family but bash, and for a bash call whose model sent no words of its
@@ -2749,6 +2753,8 @@ function ToolCardShell({
   children?: ReactNode
 }) {
   const focused = useContext(TranscriptModeContext).mode === 'focused'
+  const inheritedReview = useContext(AutoModeReviewContext)
+  const review = callGroup ? undefined : inheritedReview
   const toolsExpanded = useContext(ToolsExpandedContext).expanded
   const [expanded, setExpanded] = useToolCardExpanded(
     expansionKey ?? null,
@@ -2821,6 +2827,7 @@ function ToolCardShell({
           )}
         </span>
         {headerBadge}
+        <AutoModeReviewMark review={review} summary={reviewSummary === undefined ? (review ? summarizeAutoModeReviews([review]) : null) : reviewSummary} />
         {/* The word ("done"/"failed"/"running") next to a dot that already
             carries the same state in color is redundant chrome; the dot alone,
             colour-coded, is enough (operator call). */}
@@ -2849,6 +2856,7 @@ function ToolCardShell({
             ref={animateExpandedBody && entranceKey ? results.refFor(entranceKey, 'animate-arrive') : undefined}
             onAnimationEnd={entranceKey ? event => results.onAnimationEnd(entranceKey, event) : undefined}
           >
+            <AutoModeReviewReason review={review} />
             {children}
           </div>
         </div>
@@ -3245,6 +3253,10 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
  * render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
+  return <AutoModeReviewContext.Provider value={row.autoModeReview}><ToolCardContent row={row} /></AutoModeReviewContext.Provider>
+}
+
+function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   const motion = useContext(TranscriptMotionContext)
   const resolving = motion.results.active.has(row.id)
   // The weakest of the three expansion inputs: a user's own click still wins
@@ -3867,6 +3879,7 @@ function ToolRunCard({
       status={status}
       sub={head.sub}
       headerBadge={head.badge}
+      reviewSummary={summarizeAutoModeReviews(members.map(member => member.autoModeReview))}
       defaultExpanded={toolsExpanded || status === 'error' || holdsOpenedMember}
       // The run's head is keyed off its FIRST member, which does not move as the
       // run grows — so opening a two-read run and watching it become a six-read
@@ -4121,13 +4134,14 @@ const ToolRunRow = memo(function ToolRunRow({
           </span>
         ) : null}
         {family === 'edit' ? diffCountBadge(row) : null}
-        {row.status !== 'success' ? (
+        <AutoModeReviewMark review={row.autoModeReview} />
+        {row.status !== 'success' || row.autoModeReview ? (
           <span className="flex shrink-0 items-center gap-1.5">
             <span
               className={`h-1.5 w-1.5 rounded-full transition-colors duration-[var(--motion-fast)] ${st.dot} ${st.pulse && turnLive ? 'animate-pulse' : ''}`}
               aria-hidden
             />
-            <span className={`text-[10.5px] ${st.color}`}>{st.word}</span>
+            {row.status !== 'success' ? <span className={`text-[10.5px] ${st.color}`}>{st.word}</span> : null}
           </span>
         ) : null}
       </button>
@@ -4141,6 +4155,7 @@ const ToolRunRow = memo(function ToolRunRow({
           ref={resolving ? resultEntrance.refFor(row.id, 'animate-arrive') : undefined}
           onAnimationEnd={event => resultEntrance.onAnimationEnd(row.id, event)}
         >
+          <AutoModeReviewReason review={row.autoModeReview} />
           <ToolCardBody
             row={row}
             content={content}
@@ -4380,6 +4395,7 @@ function AgentIdentityLine({
   slot,
   slotLive,
   slotYields = false,
+  review,
 }: {
   axes: FaceAxes
   fill: number
@@ -4395,6 +4411,7 @@ function AgentIdentityLine({
    * so the two never overlap; both are right-anchored, so neither moves.
    */
   slotYields?: boolean
+  review?: ToolUseNestedRow['autoModeReview']
 }) {
   const { style } = useContext(ToolCardStyleContext)
   // `span`, not `div`: on a card with a body the whole two-line block IS the
@@ -4405,6 +4422,7 @@ function AgentIdentityLine({
   return (
     <span className={`flex items-center gap-[9px] ${TOOL_CARD_INSET_CLASS[style]}`}>
       <AgentFace axes={axes} fill={fill} pulse={pulse} />
+      <AutoModeReviewMark review={review} />
       <span className="inline-flex min-w-0 items-baseline gap-1.5">
         {/* The name is absent until the worker's first nested frame lands, and
             on old or failed records it never arrives — so the slot has to stand
@@ -4603,8 +4621,9 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   // body — two sibling expressions would make it an array and give every
   // childless agent card an affordance that expands to nothing.
   const body =
-    childCount === 0 && completion === null ? null : (
+    childCount === 0 && completion === null && !row.autoModeReview?.reason ? null : (
       <div className="flex flex-col gap-2">
+        <AutoModeReviewReason review={row.autoModeReview} />
         {childCount > 0 ? (
           <div className="border-l border-accent/20 pl-3">
             <NestedRowList className="flex flex-col gap-2" childGap={8} rows={row.children} />
@@ -4681,6 +4700,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         slot={slot}
         slotLive={state === 'running' || state === 'background'}
         slotYields={backgroundAction !== null}
+        review={row.autoModeReview}
       />
       <AgentTaskLine
         stateWord={stateWord}
@@ -4887,6 +4907,7 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
         <span className="min-w-0 truncate text-[12.5px] font-semibold text-text-primary">
           {label}
         </span>
+        <AutoModeReviewMark summary={summarizeAutoModeReviews(members.map(member => member.autoModeReview))} />
         {tail === null ? null : (
           <span
             className={`ml-auto shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums ${tail.tone}`}

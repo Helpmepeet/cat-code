@@ -194,6 +194,15 @@ type AppSessionAbortState =
 
 export type AppSessionEvent =
   | {
+      type: 'tool.review'
+      toolUseId: string
+      attemptId: string
+      startedAt: number
+      completedAt?: number
+      outcome: 'reviewing' | 'allowed' | 'blocked' | 'inconclusive'
+      reason?: string
+    }
+  | {
       type: 'tool.activity'
       toolUseId: string
       phase: 'reviewing' | 'executing'
