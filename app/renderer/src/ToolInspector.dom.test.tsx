@@ -210,8 +210,9 @@ test('Open full output docks beside the transcript, swaps in place, and Escape r
   const panel = outputPanel(tree.container)!
   expect(panel).not.toBeNull()
   // A column of the workspace layout, beside the transcript, never a modal.
-  expect(panel.parentElement?.className).toBe('subagent-workspace-layout')
-  expect(panel.previousElementSibling?.contains(tree.container.querySelector('main')!)).toBe(true)
+  const sharedSlot = panel.closest('.subagent-shared-slot')!
+  expect(sharedSlot.parentElement?.className).toBe('subagent-workspace-layout')
+  expect(sharedSlot.previousElementSibling?.contains(tree.container.querySelector('main')!)).toBe(true)
   expect(tree.container.querySelector('[aria-modal], .bg-scrim')).toBeNull()
   expect(panel.querySelector('.tool-output-target')?.textContent).toBe('cmd-one')
   expect(panel.querySelector('.tool-output-facts')?.textContent).toBe('900 lines')
@@ -272,7 +273,7 @@ test('the open panel follows the live row: a later result updates it and a vanis
   expect(outputPanel(tree.container)).toBeNull()
 })
 
-test('output opened from a worker panel takes its slot; Back returns to the same worker, and close dismisses both', async () => {
+test('worker and output share one slot; switching preserves the worker and closing output leaves it open', async () => {
   const agent = toolRow({
     id: 'agent-a', toolUseId: 'launch-a', toolName: 'Agent', toolFamily: 'agent', status: 'pending', result: null,
     input: { description: 'Task a', subagent_type: 'explore' },
@@ -280,41 +281,39 @@ test('output opened from a worker panel takes its slot; Back returns to the same
   })
   const tree = await harness.mount(workspace([agent], [worker()]))
   await act(async () => { tree.container.querySelector<HTMLButtonElement>('[data-dock-row="a"]')!.click() })
-  const slot = tree.container.querySelector<HTMLElement>('.subagent-side-slot')!
+  const slot = tree.container.querySelector<HTMLElement>('.subagent-shared-slot')!
   const workerBody = slot.querySelector<HTMLElement>('.subagent-side-body')!
-  expect(workerBody).not.toBeNull()
-
   await act(async () => { openButtons(slot)[0].click() })
   const panel = outputPanel(tree.container)!
   expect(panel.querySelector('.tool-output-target')?.textContent).toBe('cmd-inner')
-  // The worker stays mounted underneath, so returning to it loses nothing.
-  expect(slot.hidden).toBe(true)
+  expect(workerBody.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(true)
   expect(slot.querySelector('.subagent-side-body')).toBe(workerBody)
-
-  await act(async () => { panel.querySelector<HTMLButtonElement>('[aria-label="Back to worker-a"]')!.click() })
-  await act(async () => { await harness.nextFrame() })
+  expect(panel.querySelector('[aria-label^="Back to"]')).toBeNull()
+  expect(slot.querySelectorAll('.subagent-slot-strip [role="tab"]')).toHaveLength(2)
+  expect(slot.querySelector('.subagent-slot-strip button button')).toBeNull()
+  await act(async () => { [...slot.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(tab => tab.textContent === 'worker-a')!.click() })
+  expect(workerBody.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(false)
+  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(true)
+  await act(async () => { slot.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Full output"]')!.click() })
+  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(false)
+  await act(async () => { panel.querySelector<HTMLButtonElement>('[aria-label="Close full output"]')!.click() })
   expect(outputPanel(tree.container)).toBeNull()
-  expect(slot.hidden).toBe(false)
   expect(slot.querySelector('.subagent-side-body')).toBe(workerBody)
-  expect(document.activeElement?.getAttribute('aria-label')).toBe('Close subagent panel')
-
-  await act(async () => { openButtons(slot)[0].click() })
-  await act(async () => { outputPanel(tree.container)!.querySelector<HTMLButtonElement>('[aria-label="Close full output"]')!.click() })
-  expect(outputPanel(tree.container)).toBeNull()
-  expect(tree.container.querySelector('.subagent-side-slot')).toBeNull()
+  expect(workerBody.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(false)
+  expect(slot.querySelector('.subagent-slot-strip')).toBeNull()
 })
 
 test('the panel width is the one last chosen, and the keyboard can change it', async () => {
   window.localStorage.setItem(TOOL_OUTPUT_WIDTH_STORAGE_KEY, JSON.stringify({ version: 1, width: 700 }))
   const tree = await harness.mount(workspace([longBash('one', 'cmd-one')]))
   await act(async () => { openButtons(tree.container)[0].click() })
-  const panel = outputPanel(tree.container)!
-  expect(panel.style.getPropertyValue('--tool-output-width')).toBe('700px')
+  const panel = outputPanel(tree.container)!.closest<HTMLElement>('.subagent-shared-slot')!
+  expect(panel.style.getPropertyValue('--shared-slot-width')).toBe('700px')
 
-  const handle = panel.querySelector<HTMLElement>('[role="separator"][aria-label="Resize output panel"]')!
+  const handle = panel.querySelector<HTMLElement>('[role="separator"][aria-label="Resize side panel"]')!
   await press(handle, 'ArrowLeft')
   expect(handle.getAttribute('aria-valuenow')).toBe('732')
-  expect(panel.style.getPropertyValue('--tool-output-width')).toBe('732px')
+  expect(panel.style.getPropertyValue('--shared-slot-width')).toBe('732px')
   expect(JSON.parse(window.localStorage.getItem(TOOL_OUTPUT_WIDTH_STORAGE_KEY)!)).toEqual({ version: 1, width: 732 })
   // Escape on the handle still closes: it is part of the panel.
   await press(handle, 'Escape')

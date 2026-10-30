@@ -95,12 +95,14 @@ export function ToolInspector({
   row,
   cwd = null,
   initialFileIndex = 0,
+  embedded = false,
   back = null,
   onClose,
 }: {
   row: NestedToolUseRow | null
   cwd?: string | null
   initialFileIndex?: number
+  embedded?: boolean
   /** The worker panel this one replaced, which Back and Escape return to. */
   back?: { label: string; onBack: () => void } | null
   onClose?: () => void
@@ -111,6 +113,7 @@ export function ToolInspector({
       row={row}
       cwd={cwd}
       initialFileIndex={initialFileIndex}
+      embedded={embedded}
       back={back}
       onClose={onClose}
     />
@@ -122,12 +125,14 @@ function OutputPanel({
   row,
   cwd,
   initialFileIndex,
+  embedded,
   back,
   onClose,
 }: {
   row: NestedToolUseRow
   cwd: string | null
   initialFileIndex: number
+  embedded: boolean
   back: { label: string; onBack: () => void } | null
   onClose?: () => void
 }) {
@@ -183,7 +188,7 @@ function OutputPanel({
       aria-label="Full output"
       onKeyDown={onKeyDown}
     >
-      <ResizeHandle />
+      {embedded ? null : <ResizeHandle />}
       <header className="tool-output-header">
         <div className="tool-output-identity">
           {back ? (
