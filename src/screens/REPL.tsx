@@ -3211,6 +3211,7 @@ export function REPL({
       toolUseContext,
       querySource: getQuerySourceForREPL()
     })) {
+      await persistTerminalQueuedInput(messagesRef.current, event);
       onQueryEvent(event);
     }
     queryCheckpoint('query_end');
@@ -3222,7 +3223,6 @@ export function REPL({
       continuationKind: turnAttemptRef.current?.kind ?? null,
       toolUseCount: completedTurnToolCount
     });
-      await persistTerminalQueuedInput(messagesRef.current, event);
 
     // Capture ant-only API metrics before resetLoadingState clears the ref.
     // For multi-request turns (tool use loops), compute P50 across all requests.

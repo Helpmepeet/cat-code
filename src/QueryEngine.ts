@@ -331,11 +331,11 @@ export class QueryEngine {
   private inlineExecutionOwner: InlineCommandOperation | null = null
   private inlineSettlements = 0
   private tailRecoveryHold = false
+  private resumeHooksPending = false
   private tailRecoveryPath: string
 
   private async acquireTranscriptLane(): Promise<() => void> {
     const previous = this.transcriptLane
-  private resumeHooksPending = false
     let release!: () => void
     this.transcriptLane = new Promise<void>(resolve => { release = resolve })
     await previous
@@ -871,6 +871,7 @@ export class QueryEngine {
         await flushCurrentTranscriptDurablyFn(input.uuid)
       }
       options.onResumeHooksApplied?.()
+      this.resumeHooksPending = false
     }
     if (inputPersisted && (this.resumeHooksPending || options.resumeHooksDeferred)) await applyDeferredHooks()
     else if (!persistSession && options.resumeHooksDeferred && !this.tailRecoveryHold) await applyDeferredHooks()
@@ -893,7 +894,6 @@ export class QueryEngine {
         const checkpoint = await sealResumeCheckpoint(messages)
         await options.onHandoffInputCommitted(checkpoint)
       }
-      this.resumeHooksPending = false
       await options?.onInputPersisted?.()
       if (this.abortController.signal.aborted && options?.handoffContinuation) {
         closeExecution('not_started')
