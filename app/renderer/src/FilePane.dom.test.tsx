@@ -17,7 +17,7 @@ import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { ToastContext } from './toastContext.js'
-import { captureFilePaneScroll, closeFilePane, disposeFilePaneSession, getFilePaneSession, rememberFilePaneScroll } from './filePaneState.js'
+import { captureFilePaneScroll, closeFilePane, disposeFilePaneSession, getFilePaneSession, rememberFilePaneScroll, requestOpenFile } from './filePaneState.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 const NativeResponse = globalThis.Response
@@ -53,7 +53,7 @@ async function click(root: ParentNode, label: string) {
   await act(async () => { button!.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
   await settle()
 }
-function setup(withOutput = false, local?: { url: string; snapshot?: () => LocalhostFrozenPayload | null }) {
+function setup(withOutput = false, local?: { url: string; snapshots?: Map<string, LocalhostFrozenPayload> }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-dom-')))
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-outside-')))
   const refusedPath = join(outside, 'outside.md')
@@ -77,7 +77,7 @@ function setup(withOutput = false, local?: { url: string; snapshot?: () => Local
   const publish = (event: FilePreviewEvent) => { events.forEach(callback => callback(event)) }
   const service = createFilePreviewService({ sessions: () => sessions, publish })
   const localhost = createLocalhostPreviewService({ sessions: () => sessions, publish,
-    isLive: id => !!document.querySelector(`iframe[name*="${id}"]`), findSnapshot: () => local?.snapshot?.() ?? null })
+    isLive: id => !!document.querySelector(`iframe[name*="${id}"]`), findSnapshot: () => [...local?.snapshots?.values() ?? []].at(-1) ?? null, getSnapshot: id => local?.snapshots?.get(id) ?? null })
   const captures: Array<{ id: string; connected: boolean }> = []
   let captureGate: Promise<void> | null = null
   const pauseNextCapture = () => {
@@ -635,10 +635,11 @@ test('server stop preserves the current frame, recovery stages a new revision, a
 
 test('returning to an offline session waits for its frozen host descriptor before creating an iframe', async () => {
   const web = localServer()
-  let snapshot: LocalhostFrozenPayload | null = null
+  const snapshots = new Map<string, LocalhostFrozenPayload>()
   try {
-    snapshot = { html: await (await nativeFetch(web.url)).text(), resources: new Map() }
-    const { pane, sessionId, otherSession } = setup(false, { url: web.url, snapshot: () => snapshot })
+    const snapshot = { id: randomUUID(), html: await (await nativeFetch(web.url)).text(), resources: new Map() }
+    snapshots.set(snapshot.id, snapshot)
+    const { pane, sessionId, otherSession } = setup(false, { url: web.url, snapshots })
     const tree = await harness.mount(pane())
     await click(tree.container, `Open ${web.url}`)
     await paintLocalFrame(tree.container)
@@ -655,4 +656,70 @@ test('returning to an offline session waits for its frozen host descriptor befor
     await paintLocalFrame(tree.container)
     expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('The server stopped. Showing the last version.')
   } finally { await web.server.stop(true) }
+})
+
+
+test.each([false, true])('overlapping canonical file opens keep the winning capability after a stale reply (close between requests: %s)', async closeBetween => {
+  const { pane, sessionId, service } = setup()
+  const tree = await harness.mount(pane())
+  const prepare = window.catcode.prepareFilePreview.bind(window.catcode)
+  const replies: Array<{ id: string; resume: () => void }> = []
+  window.catcode.prepareFilePreview = async (...args) => {
+    const descriptor = await prepare(...args)
+    await new Promise<void>(resolve => { replies.push({ id: descriptor!.id, resume: resolve }) })
+    return descriptor
+  }
+  const button = tree.container.querySelector<HTMLButtonElement>('[aria-label="Open ./notes.md:12"]')!
+  await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
+  if (closeBetween) await act(async () => { closeFilePane(sessionId) })
+  await act(async () => { button.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
+  expect(replies).toHaveLength(2)
+  expect(replies[0]!.id).toBe(replies[1]!.id)
+  await act(async () => { replies[0]!.resume(); await new Promise(resolve => setTimeout(resolve, 10)) })
+  await act(async () => { replies[1]!.resume() })
+  await settle()
+  expect(getFilePaneSession(sessionId).open).toBe(true)
+  expect(service.has(replies[1]!.id)).toBe(true)
+  expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')?.textContent).toContain('Actual disk notes')
+})
+
+test('old painted page polling keeps the new target at its intended scroll and preserves outgoing history', async () => {
+  const { pane, sessionId, firstPath, brokenPath } = setup()
+  const nextPath = join(firstPath, '..', 'other.html')
+  writeFileSync(brokenPath, '<!doctype html><p>First page</p>')
+  writeFileSync(nextPath, '<!doctype html><p>Second page</p>')
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open broken.html')
+  await paintLocalFrame(tree.container)
+  const first = getFilePaneSession(sessionId).file!
+  await window.catcode.restoreFilePreviewScroll(first.id, first.revision, { x: 0, y: 500 })
+  await act(async () => { await requestOpenFile(sessionId, nextPath) })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 350)) })
+  await paintLocalFrame(tree.container)
+  expect(getFilePaneSession(sessionId).file?.path).toBe(nextPath)
+  expect(getFilePaneSession(sessionId).scroll.y).toBe(0)
+  await click(tree.container, 'Back')
+  await paintLocalFrame(tree.container)
+  expect(getFilePaneSession(sessionId).scroll.y).toBe(500)
+})
+
+test('a delayed application choice for one type cannot overwrite the newly displayed type', async () => {
+  const { pane } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const choose = window.catcode.chooseFilePreviewApplication.bind(window.catcode)
+  let resume!: () => void
+  const waiting = new Promise<void>(resolve => { resume = resolve })
+  window.catcode.chooseFilePreviewApplication = async (...args) => { await waiting; return choose(...args) }
+  await click(tree.container, 'Choose an app')
+  const option = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(node => node.textContent?.includes('Visual Studio Code'))!
+  expect(option).not.toBeUndefined()
+  await act(async () => { option.click() })
+  await click(tree.container, 'Open image.png')
+  await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('load')) })
+  await settle()
+  expect(tree.container.querySelector('.file-pane-open-app')?.getAttribute('title')).toBe('Open in Default application')
+  await act(async () => { resume(); await new Promise(resolve => setTimeout(resolve, 80)) })
+  expect(tree.container.querySelector('.file-pane-open-app .external-app-icon')?.getAttribute('data-app-target')).toBe('default')
+  expect(tree.container.querySelector('.file-pane-open-app')?.getAttribute('title')).toBe('Open in Default application')
 })

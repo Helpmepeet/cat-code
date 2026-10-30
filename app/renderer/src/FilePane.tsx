@@ -34,6 +34,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const [appMenu, setAppMenu] = useState(false)
   const [pathMenu, setPathMenu] = useState<FilePathActionsAnchor | null>(null)
   const [copied, setCopied] = useState(false)
+  const appChoice = useRef(0)
   const menuRef = useRef<HTMLDivElement>(null)
   const appTrigger = useRef<HTMLButtonElement>(null)
   const headerPath = useRef<HTMLDivElement>(null)
@@ -66,25 +67,32 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     if (showing.kind === 'markdown' && activeBody.current?.clientHeight === 0) return getFilePaneSession(appSessionId).scroll
     return activeBody.current ? { x: activeBody.current.scrollLeft, y: activeBody.current.scrollTop, ...(showing.kind === 'markdown' ? { markdown: captureMarkdownReadingPosition(activeBody.current) } : {}) } : getFilePaneSession(appSessionId).scroll
   }
-  useEffect(() => registerFilePaneScroll(appSessionId, readScroll), [appSessionId])
+  useEffect(() => registerFilePaneScroll(appSessionId, () => {
+    const current = getFilePaneSession(appSessionId)
+    const showing = paintedRef.current?.descriptor
+    return samePaneRevision(current.file, showing) && current.file?.path === showing?.path && current.file?.routeKey === showing?.routeKey
+      ? readScroll() : Promise.resolve(current.scroll)
+  }), [appSessionId])
   useEffect(() => {
     const timer = setInterval(() => {
       const showing = paintedRef.current?.descriptor
-      if (showing?.kind === 'html' || showing?.kind === 'svg' || showing?.kind === 'localhost') void readScroll().then(scroll => rememberFilePaneScroll(appSessionId, scroll))
+      if (showing?.kind === 'html' || showing?.kind === 'svg' || showing?.kind === 'localhost') void readScroll().then(scroll => rememberFilePaneScroll(appSessionId, scroll, showing))
     }, 250)
     return () => clearInterval(timer)
   }, [appSessionId])
   useEffect(() => () => {
     if (copyTimer.current) clearTimeout(copyTimer.current)
     if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
-    void readScroll().then(scroll => rememberFilePaneScroll(appSessionId, scroll))
+    const showing = paintedRef.current?.descriptor
+    void readScroll().then(scroll => rememberFilePaneScroll(appSessionId, scroll, showing))
   }, [appSessionId])
 
   useEffect(() => {
     if (!descriptor) return
     let current = true
+    const choice = ++appChoice.current
     void window.catcode.getFilePreviewApplications(appSessionId, descriptor.path)
-      .then(value => { if (current) setApps(value) }).catch(() => { if (current) setApps(null) })
+      .then(value => { if (current && choice === appChoice.current) setApps(value) }).catch(() => { if (current && choice === appChoice.current) setApps(null) })
     return () => { current = false }
   }, [appSessionId, descriptor?.path])
 
@@ -199,7 +207,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
         !(restoringCommitted && samePaneRevision(latest.committedFile, next.descriptor))) return
       const published = samePaneRevision(latest.file, next.descriptor) ? latest.file! : next.descriptor
       if (!restoringCommitted) updateFilePaneSession(appSessionId, { committedFile: published, checkpoint: null })
-      rememberFilePaneScroll(appSessionId, scroll)
+      rememberFilePaneScroll(appSessionId, scroll, published)
       setPainted({ ...next, descriptor: published })
       if (previous && previous.descriptor.id !== next.descriptor.id) window.catcode.releaseFilePreview(previous.descriptor.id)
     } catch { return }
@@ -227,11 +235,15 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const selectedLabel = apps?.applications.find(app => app.target === selected)?.label ?? (isLocalhost ? 'Google Chrome' : 'Default application')
   const openApp = async (target: OpenWorkspaceFileTarget) => {
     setAppMenu(false)
+    const choice = ++appChoice.current
+    const isCurrentChoice = () => mounted.current && choice === appChoice.current && samePaneRevision(descriptorRef.current, descriptor) &&
+      descriptorRef.current?.path === descriptor.path && descriptorRef.current?.routeKey === descriptor.routeKey
     try {
       const opened = await window.catcode.chooseFilePreviewApplication(appSessionId, descriptor.path, target)
+      if (!isCurrentChoice()) return
       if (!opened) toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' })
       else if (target !== 'finder') setApps(current => current ? { ...current, selected: target } : current)
-    } catch { toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }) }
+    } catch { if (isCurrentChoice()) toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }) }
   }
   const copyPath = () => {
     void navigator.clipboard?.writeText(descriptor.path).then(() => {
@@ -388,7 +400,7 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
     scrollElement.current = element
     if (bodyRef) bodyRef.current = element
   }} className={`${className} file-pane-markdown`} tabIndex={active ? 0 : -1}
-    onScroll={event => { if (active) rememberFilePaneScroll(appSessionId, { x: event.currentTarget.scrollLeft, y: event.currentTarget.scrollTop, markdown: captureMarkdownReadingPosition(event.currentTarget) }) }}>
+    onScroll={event => { if (active) rememberFilePaneScroll(appSessionId, { x: event.currentTarget.scrollLeft, y: event.currentTarget.scrollTop, markdown: captureMarkdownReadingPosition(event.currentTarget) }, file) }}>
     <div className="file-pane-markdown-column md-prose">
       <BoundedMarkdown sourceId={`file:${file.path}`} source={file.markdown ?? ''} scrollContainerRef={scrollElement}
         initialReadingPosition={initialScroll.current.markdown} initialScrollOffset={initialScroll.current.y} renderLeaf={leaf =>
