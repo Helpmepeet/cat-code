@@ -2067,3 +2067,14 @@ test('moving and unreadable relocation records protect empty rows at startup and
     else process.env.CLAUDE_CONFIG_DIR = previous
   }
 })
+
+test('peerOpenedAt replaces on each spawn that carries it and survives a reload', async () => {
+  const storageDir = mkdtempSync(join(tmpdir(), 'registry-peer-opened-'))
+  const { registry, registryPath } = makeRegistry({ storageDir })
+  await registry.launch()
+  await registry.upsertOnSpawn({ appSessionId: 'app-a', cwd: '/isolated', peerOpenedAt: 100 })
+  await registry.upsertOnSpawn({ appSessionId: 'app-a', cwd: '/isolated' })
+  expect(registry.findSession('app-a')?.peerOpenedAt).toBe(100)
+  await registry.upsertOnSpawn({ appSessionId: 'app-a', cwd: '/isolated', peerOpenedAt: 200 })
+  expect(readDoc(registryPath).sessions[0]?.peerOpenedAt).toBe(200)
+})

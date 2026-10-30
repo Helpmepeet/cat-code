@@ -170,6 +170,13 @@ export type SessionDescriptor = {
    */
   peerWakeBlocked?: boolean
   /**
+   * When a peer last created or woke this session, or null if none ever has. An
+   * opaque token, compared only for equality: the renderer marks the tab until it
+   * has shown the user this exact value. Additive control-plane descriptor field,
+   * not a wire frame. Optional for the same fixture reason as `name` above.
+   */
+  peerOpenedAt?: number | null
+  /**
    * Main-supplied branch provenance, persisted by the host registry. Additive
    * control-plane descriptor state, not a wire frame.
    */

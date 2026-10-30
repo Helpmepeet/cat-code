@@ -33,6 +33,8 @@ import {
 export type TabModel = {
   descriptor: SessionDescriptor
   visual: TabVisualState
+  /** A peer brought this session into the strip and the user has not opened it since. */
+  unopened?: boolean
 }
 
 export type TabBarEntry =
@@ -417,7 +419,7 @@ function Tab({
       // move focus among the rest (handled in TabBar).
       tabIndex={isTabbable ? 0 : -1}
       title={`${descriptor.binding?.kind === 'managed' ? title : descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
-      aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${workMark ? `, ${SESSION_WORK_MARK_LABEL[workMark]}` : ''}`}
+      aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${tab.unopened ? ', not opened yet' : ''}${workMark ? `, ${SESSION_WORK_MARK_LABEL[workMark]}` : ''}`}
       onClick={() => onSelect(id)}
       onKeyDown={onKeyDown}
     >
@@ -444,7 +446,9 @@ function Tab({
       <span
         className={
           'min-w-0 flex-1 truncate text-xs transition-colors ' +
-          (isActive ? 'text-text-primary' : 'text-text-subtle')
+          // The title rather than the mark lane: a peer's new session is usually
+          // working, and the spinner holds that lane until the turn ends.
+          (isActive ? 'text-text-primary' : tab.unopened ? 'text-accent' : 'text-text-subtle')
         }
       >
         {title}

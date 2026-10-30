@@ -99,6 +99,36 @@ test('notification attention follows only the rendered transcript, never page ta
   expect(app.notificationVisibility.at(-1)?.sessionId).toBeNull()
 })
 
+test('a peer-opened tab is marked until opened, and again when a peer reopens it after the user closed it', async () => {
+  const app = await mountApp([sessionDescriptor('a')])
+  const peerTab = () => app.tabs().find(tab => tab.getAttribute('aria-label')?.startsWith('Session p,'))
+  const titleClass = () => peerTab()?.querySelector('.truncate')?.className
+  const peer = sessionDescriptor('p', { createdBy: 'a', peerOpenedAt: 100 })
+
+  await app.host({ type: 'session-added', session: peer })
+  await app.frames(ready('p'))
+  expect(peerTab()?.getAttribute('aria-label')).toContain('not opened yet')
+  expect(titleClass()).toContain('text-accent')
+
+  // Viewing it is what clears the mark, and looking away does not bring it back.
+  await app.click('Session p, live, not opened yet')
+  expect(peerTab()?.getAttribute('aria-label')).not.toContain('not opened yet')
+  await app.click('Session a, live')
+  expect(titleClass()).not.toContain('text-accent')
+
+  await app.click('Close session p')
+  await app.host({ type: 'session-status', session: { ...peer, status: 'exited', restorable: true } })
+  expect(peerTab()).toBeUndefined()
+
+  await app.host({ type: 'session-status', session: { ...peer, peerOpenedAt: 200, status: 'spawning', lastAttachedAt: 2 } })
+  await app.host({ type: 'session-status', session: { ...peer, peerOpenedAt: 200, lastAttachedAt: 2 } })
+  await app.frames(ready('p'))
+  expect(peerTab()?.getAttribute('aria-label')).toContain('not opened yet')
+  expect(titleClass()).toContain('text-accent')
+  expect(app.tree.container.textContent).not.toContain('Stop not confirmed')
+  expect(app.selected()).toEqual(['Session a, live'])
+})
+
 test('Analytics activation requests one collection per App document, including with retained results', async () => {
   const app = await mountApp()
   expect(app.usageRefreshes).toEqual([])

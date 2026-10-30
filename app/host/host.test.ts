@@ -4784,3 +4784,32 @@ test('close during a branch checkout does not spawn replacement work after the s
   // The outer close coordinator, not Git cleanup, owns the final stop.
   expect((await h.host.closeSession(source)).ok).toBe(true)
 })
+
+test('peerOpenedAt: stamped by a peer create and each peer wake, untouched by a hand restore', async () => {
+  const h = makeHost()
+  const repId = randomUUID()
+  await h.registry.upsertOnSpawn({ appSessionId: repId, cwd: h.cwd, forked: false })
+
+  const byUser = await h.host.createSessionInWorkspace(repId)
+  expect(byUser.ok && byUser.value.peerOpenedAt).toBeNull()
+
+  const byPeer = await h.host.createSessionInWorkspace(repId, { createdBy: repId })
+  if (!byPeer.ok) throw new Error(byPeer.error.message)
+  const stamp = byPeer.value.peerOpenedAt
+  expect(typeof stamp).toBe('number')
+
+  writeTranscript(h.storageDir, 'engine-peer-open')
+  const created = await h.host.createSession({ cwd: h.cwd, resumeEngineSessionId: 'engine-peer-open', forked: false })
+  if (!created.ok) throw new Error(created.error.message)
+  const { appSessionId } = created.value
+  const reopen = async (options?: { openedByPeer?: boolean }) => {
+    expect((await h.host.closeSession(appSessionId)).ok).toBe(true)
+    const result = await h.host.restoreSession(appSessionId, options)
+    if (!result.ok) throw new Error(result.error.message)
+    return result.value.peerOpenedAt
+  }
+  expect(await reopen()).toBeNull()
+  const woken = await reopen({ openedByPeer: true })
+  expect(typeof woken).toBe('number')
+  expect(await reopen()).toBe(woken)
+})

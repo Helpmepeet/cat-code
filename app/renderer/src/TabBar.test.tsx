@@ -240,6 +240,25 @@ test('a tab shows the same work mark as its sidebar row, named in its label', ()
   expect(html).toContain('aria-label="Session c, ready"')
 })
 
+test('an unopened peer tab colours its title and says so, beside its work mark', () => {
+  const marks = new Map<SessionId, SessionWorkMark>([['b' as SessionId, 'working']])
+  const html = renderToStaticMarkup(
+    <SessionWorkMarksContext.Provider value={marks}>
+      <TabBar
+        tabs={[tab('a'), { ...tab('b'), unopened: true }]}
+        activeSessionId="a"
+        onSelect={noop}
+        onClose={noop}
+        onRestart={noop}
+        onNewTab={noop}
+      />
+    </SessionWorkMarksContext.Provider>,
+  )
+  expect(html).toContain('aria-label="Session b, ready, not opened yet, working"')
+  expect(html).toContain('motion-safe:animate-spin')
+  expect(html.match(/truncate text-xs transition-colors text-accent/g)).toHaveLength(1)
+})
+
 test('every tab exposes a close affordance', () => {
   const html = render([tab('a'), tab('b')], 'a')
   expect(html.match(/aria-label="Close session/g)).toHaveLength(2)

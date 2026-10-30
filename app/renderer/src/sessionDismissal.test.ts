@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
-import { createShellState, reduceShellState, selectPaneSessions } from './shellState.js'
+import { createShellState, reduceShellState, selectPaneSessions, selectPeerOpenUnseen, type ShellState } from './shellState.js'
+import { PEER_OPENS_SEEN_KEY, readPeerOpensSeen, writePeerOpensSeen } from './peerOpensSeen.js'
 import { mergeRosterSnapshot } from './rosterBootstrap.js'
 import { dismissSession, dismissSessionAndRequestStop, isSessionDismissed, loadSessionDismissalPreferences, readSessionDismissals, reopenSession, resolveDismissiblePendingSubmit, saveSessionDismissalPreferences, SESSION_DISMISSALS_KEY, writeSessionDismissals } from './sessionDismissal.js'
 import { createPendingSubmitState, reducePendingSubmitHeld, reducePendingSubmitCleared, restoreDraftWithPending, reduceRetainedSubmitHeld, reduceRetainedSubmitCleared, reduceSubmitAnswers } from './composerState.js'
@@ -145,4 +146,75 @@ test.each(['full', 'write failure', 'read failure'] as const)('preference %s can
   expect(saved.getItem(SESSION_DISMISSALS_KEY)).toBe(bytesBefore)
   if (failure === 'read failure') expect(writes).toBe(0)
   if (failure === 'full') expect(shell.dismissals).toHaveLength(4097)
+})
+
+test('a peer-opened tab stays marked until shown, and a later wake of a closed chat marks it again', () => {
+  const live = { ...session, peerOpenedAt: 100 }
+  const unmarked = (shell: ShellState) => !selectPeerOpenUnseen(shell, appSessionId)
+
+  // Created by a peer: a tab, marked, whatever status it goes through.
+  let shell = reduceShellState(createShellState(), { type: 'session-added', session: { ...live, status: 'spawning' } })
+  shell = reduceShellState(shell, { type: 'session-status', session: live })
+  expect(selectPaneSessions(shell)).toEqual([live])
+  expect(selectPeerOpenUnseen(shell, appSessionId)).toBe(true)
+
+  // Opened and read.
+  shell = reduceShellState(shell, { type: 'peer-opens-seen', sessionIds: [appSessionId] })
+  expect(unmarked(shell)).toBe(true)
+
+  // Closed by the user: stays closed through its own shutdown.
+  shell = reduceShellState(shell, { type: 'session-dismissals', dismissals: dismissSession(shell.dismissals ?? [], live) })
+  shell = reduceShellState(shell, { type: 'session-status', session: { ...live, status: 'exited', restorable: true } })
+  expect(selectPaneSessions(shell)).toEqual([])
+
+  // Woken by a peer: back in the strip, marked again, and the close is forgotten.
+  const woken = { ...live, peerOpenedAt: 200, status: 'spawning' as const }
+  shell = reduceShellState(shell, { type: 'session-status', session: woken })
+  expect(selectPaneSessions(shell)).toEqual([woken])
+  expect(selectPeerOpenUnseen(shell, appSessionId)).toBe(true)
+  expect(shell.dismissals).toEqual([])
+})
+
+test('a user close holds against everything but a new peer wake', () => {
+  const live = { ...session, peerOpenedAt: 100 }
+  let shell = reduceShellState(createShellState(), { type: 'session-added', session: live })
+  shell = reduceShellState(shell, { type: 'session-dismissals', dismissals: dismissSession([], live) })
+  // Same stamp: a slow stop or a hand restore in progress, not a wake.
+  shell = reduceShellState(shell, { type: 'session-status', session: { ...live, status: 'spawning' } })
+  expect(selectPaneSessions(shell)).toEqual([])
+  // A wake whose spawn failed left no running session to show.
+  shell = reduceShellState(shell, { type: 'session-status', session: { ...live, peerOpenedAt: 200, status: 'exited', restorable: true } })
+  expect(selectPaneSessions(shell)).toEqual([])
+  expect(shell.dismissals).toHaveLength(1)
+})
+
+test('a peer waking a tab already in the strip adds nothing to mark', () => {
+  const parked = { ...session, status: 'disconnected' as const, restorable: true, parked: true }
+  let shell = reduceShellState(createShellState(), { type: 'session-added', session })
+  shell = reduceShellState(shell, { type: 'session-status', session: parked })
+  shell = reduceShellState(shell, { type: 'session-status', session: { ...session, peerOpenedAt: 100 } })
+  expect(selectPeerOpenUnseen(shell, appSessionId)).toBe(false)
+})
+
+test('a wake does not clear a mark the user has not acted on', () => {
+  let shell = reduceShellState(createShellState(), { type: 'session-added', session: { ...session, peerOpenedAt: 100 } })
+  shell = reduceShellState(shell, { type: 'session-status', session: { ...session, peerOpenedAt: 200 } })
+  expect(selectPeerOpenUnseen(shell, appSessionId)).toBe(true)
+})
+
+test('a user-created session is never marked', () => {
+  const shell = reduceShellState(createShellState(), { type: 'session-added', session })
+  expect(selectPeerOpenUnseen(shell, appSessionId)).toBe(false)
+})
+
+test('seen stamps survive a reload, so an opened tab is not marked again', () => {
+  const saved = storage()
+  const live = { ...session, peerOpenedAt: 100 }
+  let shell = reduceShellState(createShellState(), { type: 'session-added', session: live })
+  shell = reduceShellState(shell, { type: 'peer-opens-seen', sessionIds: [appSessionId] })
+  writePeerOpensSeen(saved, shell.peerOpensSeen ?? {})
+  const reloaded = mergeRosterSnapshot({ ...createShellState(), peerOpensSeen: readPeerOpensSeen(saved) }, [live], new Set())
+  expect(selectPeerOpenUnseen(reloaded, appSessionId)).toBe(false)
+  saved.data.set(PEER_OPENS_SEEN_KEY, 'not json')
+  expect(readPeerOpensSeen(saved)).toEqual({})
 })

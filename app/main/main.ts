@@ -4989,7 +4989,7 @@ function ensureHost(): Host {
     createSessionInWorkspace: (fromAppSessionId, peer) =>
       liveHost.createSessionInWorkspace(fromAppSessionId, peer),
     restoreSession: async appSessionId => {
-      const result = await liveHost.restoreSession(appSessionId)
+      const result = await liveHost.restoreSession(appSessionId, { openedByPeer: true })
       return result.ok ? { ok: true } : { ok: false, error: result.error }
     },
     // Not `forward`: see `forwardInternal`. Plane traffic answers the engine,

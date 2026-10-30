@@ -709,6 +709,7 @@ export class Host implements HostApi {
 
   async restoreSession(
     appSessionId: SessionId,
+    options: { openedByPeer?: boolean } = {},
   ): Promise<HostResult<SessionDescriptor>> {
     await this.launched
     // HC2 — validate id shape before any lookup; unknown → session_not_found.
@@ -726,7 +727,7 @@ export class Host implements HostApi {
     }
     this.restoring.add(appSessionId)
     try {
-      return await this.restoreSessionExclusive(appSessionId)
+      return await this.restoreSessionExclusive(appSessionId, options)
     } finally {
       this.restoring.delete(appSessionId)
     }
@@ -734,6 +735,7 @@ export class Host implements HostApi {
 
   private async restoreSessionExclusive(
     appSessionId: SessionId,
+    options: { openedByPeer?: boolean },
   ): Promise<HostResult<SessionDescriptor>> {
     if (!this.registry.refreshSharedState()) {
       return hostError('registry_unavailable', 'Session ownership could not be checked safely. Try again.')
@@ -872,6 +874,7 @@ export class Host implements HostApi {
       // construction, lost "You were created by …". Every wake goes through this
       // path, including the peer-message restore (HOST-REQUEST-PLANE §4 step 5).
       ...(row.createdBy !== undefined ? { createdBy: row.createdBy } : {}),
+      ...(options.openedByPeer ? { peerOpenedAt: Date.now() } : {}),
     }, reservation)
   }
 
@@ -937,7 +940,7 @@ export class Host implements HostApi {
       resumeEngineSessionId: undefined,
       forked: false,
       binding: { kind: 'project' },
-      ...(peer?.createdBy !== undefined ? { createdBy: peer.createdBy } : {}),
+      ...(peer?.createdBy !== undefined ? { createdBy: peer.createdBy, peerOpenedAt: Date.now() } : {}),
       ...(peer?.model !== undefined ? { model: peer.model } : {}),
       ...(peer?.effort !== undefined ? { effort: peer.effort } : {}),
     }, reservation)
@@ -957,6 +960,7 @@ export class Host implements HostApi {
     forked: boolean
     binding?: SessionBinding
     createdBy?: SessionId
+    peerOpenedAt?: number
     model?: string | null
     effort?: string
     permissionMode?: RelocationControls['mode']
@@ -1019,6 +1023,7 @@ export class Host implements HostApi {
         ...(name !== undefined ? { name } : {}),
         ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
         ...(createdByName !== undefined ? { createdByName } : {}),
+        ...(input.peerOpenedAt !== undefined ? { peerOpenedAt: input.peerOpenedAt } : {}),
       })
       rowPersisted = true
       if (binding.kind === 'managed' && this.registry.lastWriteFailed) {
@@ -2366,6 +2371,7 @@ export class Host implements HostApi {
       // outlive the row it came from and later point at a different session.
       createdBy: row?.createdBy ?? null,
       peerWakeBlocked: row?.peerWakeBlocked === true,
+      peerOpenedAt: row?.peerOpenedAt ?? null,
       forked: row?.forked ?? false,
       // null ⇒ the app never recorded a title intent for this row, so the
       // renderer lets a real transcript title win (the terminal-rename fix).

@@ -11,7 +11,8 @@
 
 import type { SessionId } from '../../shared/protocol.js'
 import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
-import { isSessionDismissed, reconcileSessionDismissals, type SessionDismissals } from './sessionDismissal.js'
+import type { PeerOpensSeen } from './peerOpensSeen.js'
+import { isSessionDismissed, reconcileSessionDismissals, reopenSession, type SessionDismissals } from './sessionDismissal.js'
 
 /**
  * The shell's session roster: a stable id order plus the descriptor map. Order
@@ -36,6 +37,8 @@ export type ShellState = {
   tabs: Record<SessionId, true>
   /** Dead-session panes opened from the transcript cache, keyed like live tabs. */
   previews: Record<SessionId, true>
+  /** Each session's `peerOpenedAt` the user has already been shown (`peerOpensSeen.ts`). */
+  peerOpensSeen?: PeerOpensSeen
 }
 
 export function createShellState(): ShellState {
@@ -45,6 +48,7 @@ export function createShellState(): ShellState {
 export type ShellStateAction =
   | HostEvent
   | { type: 'session-dismissals'; dismissals: SessionDismissals }
+  | { type: 'peer-opens-seen'; sessionIds: readonly SessionId[] }
   | { type: 'preview-open'; sessionId: SessionId }
   | { type: 'preview-close'; sessionId: SessionId }
 
@@ -62,13 +66,18 @@ export function reduceShellState(
     case 'session-dismissals': {
       const tabs = { ...state.tabs }
       const previews = { ...state.previews }
+      const closed: SessionId[] = []
       for (const session of Object.values(state.byId)) {
         if (!isSessionDismissed(event.dismissals, session)) continue
         delete tabs[session.appSessionId]
         delete previews[session.appSessionId]
+        closed.push(session.appSessionId)
       }
-      return { ...state, dismissals: event.dismissals, tabs, previews }
+      // Closing settles the current stamp, so only a LATER peer wake undoes it.
+      return markPeerOpensSeen({ ...state, dismissals: event.dismissals, tabs, previews }, closed)
     }
+    case 'peer-opens-seen':
+      return markPeerOpensSeen(state, event.sessionIds)
     case 'project-routing':
       return state
     case 'preview-open': {
@@ -93,7 +102,7 @@ export function reduceShellState(
       return { ...state, previews }
     }
     case 'session-added': {
-      state = reconcileDismissalIdentity(state, event.session)
+      state = foldPeerOpen(reconcileDismissalIdentity(state, event.session), event.session)
       const id = event.session.appSessionId
       const present = Boolean(state.byId[id])
       const wasTab = Boolean(state.tabs[id])
@@ -114,7 +123,7 @@ export function reduceShellState(
       }
     }
     case 'session-status': {
-      state = reconcileDismissalIdentity(state, event.session)
+      state = foldPeerOpen(reconcileDismissalIdentity(state, event.session), event.session)
       const id = event.session.appSessionId
       // A status event carries the FULL descriptor (hostApi.ts:115), so a status
       // that races ahead of its `session-added` is not a ghost — ADOPT it
@@ -151,17 +160,57 @@ export function reduceShellState(
       delete tabs[id]
       const previews = { ...state.previews }
       delete previews[id]
+      let peerOpensSeen = state.peerOpensSeen
+      if (peerOpensSeen?.[id] !== undefined) {
+        peerOpensSeen = { ...peerOpensSeen }
+        delete (peerOpensSeen as Record<SessionId, number>)[id]
+      }
       return {
         ...state,
         order: state.order.filter(candidate => candidate !== id),
         byId,
         tabs,
         previews,
+        ...(peerOpensSeen ? { peerOpensSeen } : {}),
       }
     }
     default:
       return state
   }
+}
+
+/** A peer brought this session in and the user has not been shown it since. */
+export function selectPeerOpenUnseen(state: ShellState, sessionId: SessionId): boolean {
+  const stamp = state.byId[sessionId]?.peerOpenedAt ?? null
+  return stamp !== null && state.peerOpensSeen?.[sessionId] !== stamp
+}
+
+function markPeerOpensSeen(state: ShellState, sessionIds: readonly SessionId[]): ShellState {
+  let peerOpensSeen = state.peerOpensSeen
+  for (const id of sessionIds) {
+    if (!selectPeerOpenUnseen(state, id)) continue
+    peerOpensSeen = { ...peerOpensSeen, [id]: state.byId[id]!.peerOpenedAt! }
+  }
+  return peerOpensSeen === state.peerOpensSeen ? state : { ...state, peerOpensSeen }
+}
+
+/**
+ * Apply a new `peerOpenedAt`. A wake of a session the user closed reopens its
+ * tab, which is the only way that dismissal ends without the user. A wake of a
+ * tab still in the strip (idle-parked, or a preview) adds nothing the user could
+ * have missed, so it stays unmarked unless the tab was already marked.
+ */
+function foldPeerOpen(state: ShellState, session: SessionDescriptor): ShellState {
+  const id = session.appSessionId
+  const stamp = session.peerOpenedAt ?? null
+  if (stamp === null || state.peerOpensSeen?.[id] === stamp) return state
+  if (isSessionDismissed(state.dismissals ?? [], session)) {
+    if (session.restorable) return state
+    return { ...state, dismissals: reopenSession(state.dismissals ?? [], session) }
+  }
+  const inStrip = state.tabs[id] === true || state.previews[id] === true
+  if (!inStrip || selectPeerOpenUnseen(state, id)) return state
+  return { ...state, peerOpensSeen: { ...state.peerOpensSeen, [id]: stamp } }
 }
 
 function dismissedTabMembership(state: ShellState, session: SessionDescriptor): ShellState['tabs'] {

@@ -50,8 +50,10 @@ import {
   createShellState,
   reduceShellState,
   selectPaneSessions,
+  selectPeerOpenUnseen,
   type ShellState,
 } from './shellState.js'
+import { readPeerOpensSeen, writePeerOpensSeen } from './peerOpensSeen.js'
 import {
   attemptRosterBootstrap,
   createRosterBootstrapState,
@@ -1027,8 +1029,15 @@ export function App() {
   const [shell, dispatchShell] = useReducer(
     reduceShell,
     undefined,
-    () => ({ ...createShellState(), dismissals: dismissalSeed.entries }),
+    () => ({
+      ...createShellState(),
+      dismissals: dismissalSeed.entries,
+      peerOpensSeen: readPeerOpensSeen(defaultPromptDraftStorage()),
+    }),
   )
+  useEffect(() => {
+    writePeerOpensSeen(defaultPromptDraftStorage(), shell.peerOpensSeen ?? {})
+  }, [shell.peerOpensSeen])
   const dockObservedSessions = useMemo(() => selectShellDescriptors(shell), [shell])
   useSubagentDockObservation({ sessions: dockObservedSessions, workers: workersState, tasks, transcript, leases })
   useLayoutEffect(() => {
@@ -1742,6 +1751,7 @@ export function App() {
           shell.previews[sessionId] === true && shell.tabs[sessionId] !== true
         return {
           descriptor,
+          unopened: selectPeerOpenUnseen(shell, sessionId),
           visual: previewOnly
             ? {
                 // Label + tone come from the ONE shared vocabulary
@@ -3539,6 +3549,10 @@ export function App() {
     onScreenSessionsRef.current = onScreenSessions
     dispatchSessionWork({ type: 'seen', sessionIds: [...onScreenSessions] })
   }, [onScreenSessions])
+  // `shell.byId` too: a peer can wake the session already on screen.
+  useEffect(() => {
+    dispatchShell({ type: 'peer-opens-seen', sessionIds: [...onScreenSessions] })
+  }, [onScreenSessions, shell.byId])
   useEffect(() => {
     const sessionIds = [...onScreenSessions].sort()
     const key = sessionIds.join(' ')
@@ -5243,6 +5257,7 @@ type ShellAction =
   | { type: 'preview-open'; sessionId: SessionId }
   | { type: 'preview-close'; sessionId: SessionId }
   | { type: 'session-dismissals'; dismissals: SessionDismissals }
+  | { type: 'peer-opens-seen'; sessionIds: readonly SessionId[] }
 
 function reduceShell(state: ShellState, action: ShellAction): ShellState {
   if (action.type === 'hydrate') {

@@ -198,6 +198,8 @@ export type RegistrySession = {
    * there is nothing to reopen.
    */
   peerWakeBlocked?: boolean
+  /** [D] When a peer last created or woke this row (`SessionDescriptor.peerOpenedAt`). */
+  peerOpenedAt?: number
   /** Standing scope, retained through park/restore and removed on close. */
   peerNotice?: PeerNotice
   /** [D] */
@@ -1045,6 +1047,8 @@ export class SessionRegistry {
     name?: string
     createdBy?: string
     createdByName?: string
+    /** Unlike the two above this replaces: each peer wake is a new arrival. */
+    peerOpenedAt?: number
     enginePid?: number
     socketPath?: string
   }): Promise<string[]> {
@@ -1083,6 +1087,7 @@ export class SessionRegistry {
       ) {
         existing.createdByName = input.createdByName
       }
+      if (input.peerOpenedAt !== undefined) existing.peerOpenedAt = input.peerOpenedAt
       existing.enginePid = input.enginePid
       existing.socketPath = input.socketPath
       existing.lastAttachedAt = Math.max(now, existing.lastAttachedAt)
@@ -1104,6 +1109,7 @@ export class SessionRegistry {
         ...(input.createdByName !== undefined
           ? { createdByName: input.createdByName }
           : {}),
+        ...(input.peerOpenedAt !== undefined ? { peerOpenedAt: input.peerOpenedAt } : {}),
         createdAt: now,
         lastAttachedAt: now,
         // CC-2: a fresh spawn has SENT nothing yet — attach/spawn must not fake
@@ -1711,6 +1717,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.createdBy === right.createdBy &&
     left.createdByName === right.createdByName &&
     left.peerWakeBlocked === right.peerWakeBlocked &&
+    left.peerOpenedAt === right.peerOpenedAt &&
     JSON.stringify(left.peerNotice) === JSON.stringify(right.peerNotice) &&
     left.titleUpdatedAt === right.titleUpdatedAt &&
     left.createdAt === right.createdAt &&
@@ -1763,6 +1770,10 @@ function mergeRegistryRow(
     baseline && local.peerWakeBlocked === baseline.peerWakeBlocked
       ? latest.peerWakeBlocked
       : local.peerWakeBlocked
+  const peerOpenedAt =
+    baseline && local.peerOpenedAt === baseline.peerOpenedAt
+      ? latest.peerOpenedAt
+      : local.peerOpenedAt
   const peerNotice = baseline && JSON.stringify(local.peerNotice) === JSON.stringify(baseline.peerNotice)
     ? latest.peerNotice
     : local.peerNotice
@@ -1781,6 +1792,7 @@ function mergeRegistryRow(
     ...(createdBy !== undefined ? { createdBy } : {}),
     ...(createdByName !== undefined ? { createdByName } : {}),
     ...(peerWakeBlocked ? { peerWakeBlocked } : {}),
+    ...(peerOpenedAt !== undefined ? { peerOpenedAt } : {}),
     ...(runtime.shutdown !== 'clean' && peerNotice ? { peerNotice } : {}),
     createdAt: Math.min(latest.createdAt, local.createdAt),
     lastAttachedAt: Math.max(latest.lastAttachedAt, local.lastAttachedAt),
@@ -1881,6 +1893,7 @@ function validateRow(candidate: unknown): RegistrySession | null {
   // Absent ⇒ false (PEER-SESSIONS §6). Only `true` is stored, so an old row and a
   // row the user cleared are byte-identical on disk.
   if (candidate.peerWakeBlocked === true) row.peerWakeBlocked = true
+  if (typeof candidate.peerOpenedAt === 'number') row.peerOpenedAt = candidate.peerOpenedAt
   const peerNotice = parsePeerNotice(candidate.peerNotice)
   if (shutdown !== 'clean' && peerNotice) row.peerNotice = peerNotice
   // Absent on rows written before the field existed → "never stamped", which the
