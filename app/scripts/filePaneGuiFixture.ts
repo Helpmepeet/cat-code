@@ -12,6 +12,8 @@ import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { createTranscriptState, projectServerFrame, selectNestedTranscriptRows } from '../renderer/src/transcriptProjector.js'
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const localhostLinksArgument = process.argv.indexOf('--localhost-links')
+const localhostLinks = localhostLinksArgument < 0 ? [] : JSON.parse(readFileSync(process.argv[localhostLinksArgument + 1]!, 'utf8')) as Array<{ label: string; url: string }>
 const runRoot = realpathSync(mkdtempSync(join(tmpdir(), 'catcode-file-pane-gui-')))
 const cwd = join(runRoot, 'workspace')
 const configDir = join(runRoot, 'config')
@@ -75,12 +77,17 @@ function fixtureFrames(appSessionId: string, engineSessionId: string, second: bo
   frames.push(message(appSessionId, engineSessionId, 'user', 'Review the prepared local files. This offline fixture never submits a model request.'))
   text(second ? `# Second session\n\n[Markdown notes](${cwd}/notes.md) and [Report](${cwd}/report.html). Switch sessions after scrolling each file.` : `# File pane acceptance\n\nMarkdown link: [Report](${cwd}/report.html).\n\nBare path: ${cwd}/notes.md\n\nInline code: \`${cwd}/diagram.svg\`.\n\nLine suffix: [Report line 12](${cwd}/report.html:12).\n\n[Image](${cwd}/assets/cat.png) · [Wide page](${cwd}/wide.html) · [Uppercase HTML](${cwd}/CAPS.HTM) · [Malformed SVG](${cwd}/broken.svg) · [Corrupt PNG](${cwd}/corrupt.png) · [Isolation checks](${cwd}/isolation.html) · [Normal source](${cwd}/source.ts)\n\n[Missing file](${cwd}/missing.html) · [Outside workspace](${runRoot}/outside.html) · [Symlink outside](${cwd}/escape.html) · [Generated image](${configDir}/generated-images/generated.png)`)
   text('| Short local link | Type |\n| --- | --- |\n| [report.html](report.html) | HTML |\n| [notes.md](notes.md) | Markdown |\n| [cat.png](assets/cat.png) | Image |\n| [diagram.svg](diagram.svg) | SVG |\n| [broken.svg](broken.svg) | Malformed XML |\n| [corrupt.png](corrupt.png) | Invalid image |')
+  if (localhostLinks.length) {
+    text('# Local server acceptance\n\n| Page | URL |\n| --- | --- |\n' + localhostLinks.map(link => `| ${link.label} | [${link.label}](${link.url}) |`).join('\n'))
+    tool('fixture-localhost-bash', 'Bash', { command: 'Read the prepared local server addresses' }, localhostLinks.map(link => `${link.label}: ${link.url}`).join('\n'))
+  }
   tool('fixture-write-older', 'Write', { file_path: join(cwd, 'report.html'), content: html }, 'File created successfully.')
   tool('fixture-edit-middle', 'Edit', { file_path: join(cwd, 'report.html'), old_string: 'old', new_string: 'new' }, 'File updated successfully.')
   tool('fixture-edit-newest', 'Edit', { file_path: join(cwd, 'report.html'), old_string: 'new', new_string: 'current' }, 'File updated successfully.')
   tool('fixture-write-notes', 'Write', { file_path: join(cwd, 'notes.md'), content: readFileSync(join(cwd, 'notes.md'), 'utf8') }, 'File created successfully.')
   frames.push(message(appSessionId, engineSessionId, 'assistant', [{ type: 'tool_use', id: 'fixture-agent', name: 'Agent', input: { description: 'Inspect prepared files', subagent_type: 'general-purpose', prompt: 'Read the prepared files without modifying them.' } }]))
   text(`Worker paths: [Report](${cwd}/report.html), bare ${cwd}/notes.md and inline \`${cwd}/diagram.svg\`.`, 'fixture-agent')
+  if (localhostLinks.length) text('Worker local servers: ' + localhostLinks.map(link => `[${link.label}](${link.url})`).join(' · '), 'fixture-agent')
   tool('fixture-worker-write', 'Write', { file_path: join(cwd, 'second.html'), content: '<h1>Second local page</h1>' }, 'File written.', {}, 'fixture-agent')
   tool('fixture-worker-bash', 'Bash', { command: 'Print a large local result' }, Array.from({ length: 180 }, (_, i) => `Output line ${i + 1}: retained detail for output panel verification`).join('\n'), {}, 'fixture-agent')
   frames.push(message(appSessionId, engineSessionId, 'user', [{ type: 'tool_result', tool_use_id: 'fixture-agent', content: 'Prepared files inspected.', is_error: false }], null, { tool_use_result: { agentId: 'fixture-worker', agentName: 'File inspector', model: 'claude-sonnet-4-6', status: 'completed', totalTokens: 1200, totalToolUseCount: 2, totalDurationMs: 1000 } }))
