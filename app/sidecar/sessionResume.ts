@@ -139,6 +139,7 @@ export type SidecarResumeResult = {
    */
   initialState: AppState
   tailRecovery?: TailRecoveryState
+  recoveryReviewRequired: boolean
   turnInterrupted: boolean
   undeliveredPrompts: UndeliveredPrompt[]
   /** See `UndeliveredPromptSelection.droppedRecords`. */
@@ -309,6 +310,7 @@ export async function resumeEngineSession(
     ...(loaded.tailRecovery ? { tailRecovery: loaded.tailRecovery } : {}),
     turnInterrupted: loaded.turnInterruptionState.kind === 'interrupted_prompt',
     undeliveredPrompts: undelivered.prompts,
+    recoveryReviewRequired: !!processed.recoveryReviewRequired,
     droppedQueueRecords: undelivered.droppedRecords,
     ...(lastWorkingBranch !== undefined ? { lastWorkingBranch } : {}),
   }

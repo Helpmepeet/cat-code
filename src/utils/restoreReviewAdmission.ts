@@ -11,6 +11,20 @@ export function isGenuineReviewInput(message: Message): message is UserMessage {
     !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result'))
 }
 
+export async function persistTerminalQueuedInput(history: Message[], message: unknown): Promise<void> {
+  if (isSessionPersistenceDisabled() || !message || typeof message !== 'object') return
+  const event = message as { type?: unknown; uuid?: unknown; attachment?: unknown }
+  if (event.type !== 'attachment') return
+  const attachment = event.attachment
+  if (!attachment || typeof attachment !== 'object' || Array.isArray(attachment) ||
+      !('type' in attachment) || attachment.type !== 'queued_command' ||
+      !('commandMode' in attachment) || attachment.commandMode !== 'prompt') return
+  if (typeof event.uuid !== 'string') throw new Error('Queued terminal input has no message identity')
+  const tip = await recordTranscript([...history, message as Message])
+  if (!tip) throw new Error('Queued terminal input was not persisted')
+  await flushCurrentTranscriptDurably(event.uuid)
+}
+
 /** Freshness comes from the consuming caller's new-message list, not message text. */
 export class RestoreReviewAdmission {
   private held: boolean
@@ -31,13 +45,17 @@ export class RestoreReviewAdmission {
     this.held = false
   }
   async admitTerminalInput(history: Message[], fresh: Message[]): Promise<Message[]> {
-    if (!this.held) return []
+    const reviewing = this.held
     const input = fresh.find(message => isGenuineReviewInput(message) &&
       history.filter(row => row.uuid === message.uuid).length === 1)
-    if (!input) throw new Error('Saved progress needs a new user message before continuing')
+    if (!input) {
+      if (reviewing) throw new Error('Saved progress needs a new user message before continuing')
+      return []
+    }
     const path = getTranscriptPathForSession(getSessionId())
-    const tail = readTailRecoveryState(path, getSessionId())
+    const tail = reviewing ? readTailRecoveryState(path, getSessionId()) : null
     if (isSessionPersistenceDisabled()) {
+      if (!reviewing) return []
       if (tail?.reviewRequired) throw new Error('Recovered history cannot continue without durable user input')
       // Explicit ephemeral sessions can review intact interrupted history, but
       // publish no durable acceptance and will be held again on another restore.
@@ -48,6 +66,7 @@ export class RestoreReviewAdmission {
     const tip = await recordTranscript(history)
     if (!tip) throw new Error('Recovery input was not persisted')
     await flushCurrentTranscriptDurably(input.uuid)
+    if (!reviewing) return []
     await markActiveConversationTip(tip)
     await verifyActiveTranscriptTipDurably(tip, input.uuid)
     const context = await runDeferredResumeHooks()

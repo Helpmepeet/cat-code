@@ -374,6 +374,7 @@ export async function createNormalSidecarQueryEngineConfig(
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,
+    initialRecoveryReviewRequired,
   }: {
     /** Trusted app-session identity used to filter peer restoration state. */
     appSessionId?: string
@@ -385,6 +386,7 @@ export async function createNormalSidecarQueryEngineConfig(
     onMcpLifecycleCreated?: (dispose: () => Promise<void>) => void
     /** Durable state returned by processResumedConversation. */
     resumedInitialState?: AppState
+    initialRecoveryReviewRequired?: boolean
   } = {},
 ) {
   // The renderer draws option previews as sanitized HTML (`questionPreviewHtml`).
@@ -597,6 +599,7 @@ export async function createNormalSidecarQueryEngineConfig(
       ...(initialMessages !== undefined
         ? { initialMessages: [...initialMessages] }
         : {}),
+      ...(initialRecoveryReviewRequired !== undefined ? { initialRecoveryReviewRequired } : {}),
     },
   }
 }
@@ -725,6 +728,7 @@ export async function createSidecarSessionController({
   agentDefinitions: suppliedAgentDefinitions,
   onMcpLifecycleCreated,
   resumedInitialState,
+  initialRecoveryReviewRequired,
   timing: timingSink,
   timingIdentity: suppliedTimingIdentity,
 }: {
@@ -748,6 +752,7 @@ export async function createSidecarSessionController({
   agentDefinitions?: AgentDefinitionsResult
   /** Durable engine state returned during resume, omitted for a fresh session. */
   resumedInitialState?: AppState
+  initialRecoveryReviewRequired?: boolean
   timing?: WorkspaceJumpTimingSink
   timingIdentity?: WorkspaceJumpTimingIdentity
   /** Registers MCP disposal before setup steps that can fail. */
@@ -820,6 +825,7 @@ export async function createSidecarSessionController({
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,
+    initialRecoveryReviewRequired,
   }))
   const providerBoundHistory = initialMessages
     ? hasProviderBoundHistory(initialMessages)

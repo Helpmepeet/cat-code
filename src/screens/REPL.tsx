@@ -185,7 +185,7 @@ import type { ProcessUserInputContext } from '../utils/processUserInput/processU
 import type { PastedContent } from '../utils/config.js';
 import { copyPlanForFork, copyPlanForResume, getPlanSlug, setPlanSlug } from '../utils/plans.js';
 import { clearSessionMetadata, resetSessionFilePointer, adoptResumedSessionFile, removeTranscriptMessage, restoreSessionMetadata, getCurrentSessionTitle, isEphemeralToolProgress, isLoggableMessage, clearThreadGoal, saveThreadGoal, saveWorktreeState, getAgentTranscript, saveAiGeneratedTitle, recordTranscript, flushCurrentTranscriptDurably } from '../utils/sessionStorage.js';
-import { RestoreReviewAdmission } from '../utils/restoreReviewAdmission.js';
+import { RestoreReviewAdmission, persistTerminalQueuedInput } from '../utils/restoreReviewAdmission.js';
 import { classifyForegroundDeferredAttempt, getForegroundDeferredAbortSignal, settleForegroundDeferredAttempt, validateForegroundDeferredOrigin } from '../services/deferredContinuationRunner.js';
 import { acquireDeferredContinuationLocks, readPendingDeferredContinuation, type DeferredContinuationLockGuard } from '../services/deferredContinuation.js';
 import { deserializeMessages, loadConversationForResume } from '../utils/conversationRecovery.js';
@@ -3222,6 +3222,7 @@ export function REPL({
       continuationKind: turnAttemptRef.current?.kind ?? null,
       toolUseCount: completedTurnToolCount
     });
+      await persistTerminalQueuedInput(messagesRef.current, event);
 
     // Capture ant-only API metrics before resetLoadingState clears the ref.
     // For multi-request turns (tool use loops), compute P50 across all requests.

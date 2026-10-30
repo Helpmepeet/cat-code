@@ -519,7 +519,10 @@ async function main(): Promise<void> {
         ? { initialMessages: startupHookMessages }
         : {}),
     ...(agentDefinitions !== undefined ? { agentDefinitions } : {}),
-    ...(resumed !== undefined ? { resumedInitialState: resumed.initialState } : {}),
+    ...(resumed !== undefined ? {
+      resumedInitialState: resumed.initialState,
+      initialRecoveryReviewRequired: resumed.recoveryReviewRequired,
+    } : {}),
     onMcpLifecycleCreated: dispose => {
       disposeMcpLifecycle = dispose
     },

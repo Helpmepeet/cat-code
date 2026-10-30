@@ -189,6 +189,7 @@ export type QueryEngineConfig = {
   readFileCache: FileStateCache
   customSystemPrompt?: string
   appendSystemPrompt?: string
+  initialRecoveryReviewRequired?: boolean
   /** Trusted runtime metadata resolved after input persistence, before query. */
   getRuntimeSystemPromptAddendum?: (signal: AbortSignal) => Promise<string | undefined>
   userSpecifiedModel?: string
@@ -334,6 +335,7 @@ export class QueryEngine {
 
   private async acquireTranscriptLane(): Promise<() => void> {
     const previous = this.transcriptLane
+  private resumeHooksPending = false
     let release!: () => void
     this.transcriptLane = new Promise<void>(resolve => { release = resolve })
     await previous
@@ -348,7 +350,9 @@ export class QueryEngine {
     this.readFileState = config.readFileCache
     this.totalUsage = EMPTY_USAGE
     this.tailRecoveryPath = getTranscriptPathForSession(getSessionId())
-    this.tailRecoveryHold = readTailRecoveryState(this.tailRecoveryPath, getSessionId(), config.initialMessages)?.reviewRequired ?? false
+    this.tailRecoveryHold = !!config.initialRecoveryReviewRequired ||
+      (readTailRecoveryState(this.tailRecoveryPath, getSessionId(), config.initialMessages)?.reviewRequired ?? false)
+    this.resumeHooksPending = this.tailRecoveryHold
   }
 
   requiresRecoveryReview(): boolean { return this.tailRecoveryHold }
@@ -868,7 +872,7 @@ export class QueryEngine {
       }
       options.onResumeHooksApplied?.()
     }
-    if (inputPersisted && (this.tailRecoveryHold || options.resumeHooksDeferred)) await applyDeferredHooks()
+    if (inputPersisted && (this.resumeHooksPending || options.resumeHooksDeferred)) await applyDeferredHooks()
     else if (!persistSession && options.resumeHooksDeferred && !this.tailRecoveryHold) await applyDeferredHooks()
     else if (options.resumeHooksDeferred && !inputPersisted) throw new Error('Recovery input was not persisted')
     if (inputPersisted) {
@@ -880,13 +884,16 @@ export class QueryEngine {
         if (!inputTranscriptTip) throw new Error('Recovery input has no durable active tip')
         await markActiveConversationTip(inputTranscriptTip)
         await verifyActiveTranscriptTipDurably(inputTranscriptTip, input.uuid)
-        acceptTailRecoveryReview(this.tailRecoveryPath, getSessionId(), input.uuid)
+        if (readTailRecoveryState(this.tailRecoveryPath, getSessionId())?.reviewRequired) {
+          acceptTailRecoveryReview(this.tailRecoveryPath, getSessionId(), input.uuid)
+        }
         this.tailRecoveryHold = false
       }
       if (options?.onHandoffInputCommitted) {
         const checkpoint = await sealResumeCheckpoint(messages)
         await options.onHandoffInputCommitted(checkpoint)
       }
+      this.resumeHooksPending = false
       await options?.onInputPersisted?.()
       if (this.abortController.signal.aborted && options?.handoffContinuation) {
         closeExecution('not_started')

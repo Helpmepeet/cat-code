@@ -107,6 +107,40 @@ function engineConfig(messages: Message[], tools: ReturnType<typeof buildTool>[]
     readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'isolated handoff acceptance',
     userSpecifiedModel: 'gpt-5.6-terra', thinkingConfig: { type: 'disabled' } }
 }
+
+test('intact interrupted desktop history holds automatic work and supplies deferred resume context to genuine input', async () => {
+  const seed = createUserMessage({ content: 'interrupted request without a damaged final record' })
+  await storage.recordTranscript([seed])
+  await storage.flushCurrentTranscriptDurably(seed.uuid)
+  const sessionStart = await import('../../src/utils/sessionStart.js')
+  const { createAttachmentMessage } = await import('../../src/utils/attachments.js')
+  let hookCalls = 0, providerCalls = 0
+  spies.push(spyOn(sessionStart, 'processSessionStartHooks').mockImplementation(async () => {
+    hookCalls++
+    return [createAttachmentMessage({ type: 'hook_additional_context', content: ['required restored policy'],
+      hookName: 'SessionStart', toolUseID: 'SessionStart', hookEvent: 'SessionStart' })] as never
+  }))
+  const loaded = await loadConversationForResume(bootstrap.getSessionId(), storage.getTranscriptPath(), { mutable: true, interruptedTurn: 'ignore' })
+  expect(loaded?.recoveryReviewRequired).toBe(true)
+  expect(hookCalls).toBe(0)
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages }) {
+    providerCalls++
+    expect(hookCalls).toBe(1)
+    expect(JSON.stringify(messages)).toContain('required restored policy')
+    yield assistant([{ type: 'text', text: 'reviewed intact interruption' }])
+  }))
+  const controller = createRuntimeBackedAppSession({ queryEngineConfig: {
+    ...engineConfig(loaded!.messages, []), initialRecoveryReviewRequired: loaded!.recoveryReviewRequired,
+  } })
+  await controller.waitForInitialization()
+  expect(controller.canStartAutomaticTurn()).toBe(false)
+  await expect(controller.submit('automatic continuation', { isMeta: true })).rejects.toThrow('genuine user message')
+  expect(providerCalls).toBe(0)
+  await controller.submit('I reviewed the preserved work; continue with this new input')
+  expect(providerCalls).toBe(1)
+  expect(controller.canStartAutomaticTurn()).toBe(true)
+})
+
 async function until(predicate: () => boolean, label: string): Promise<void> {
   const deadline = Date.now() + 3_000
   while (!predicate() && Date.now() < deadline) await Bun.sleep(5)

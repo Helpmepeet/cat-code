@@ -21,7 +21,7 @@ const storage = await import('./sessionStorage.js')
 const { releaseActiveTranscriptLease } = await import('./transcriptLease.js')
 const { createUserMessage } = await import('./messages.js')
 const { loadConversationForResume } = await import('./conversationRecovery.js')
-const { RestoreReviewAdmission } = await import('./restoreReviewAdmission.js')
+const { RestoreReviewAdmission, persistTerminalQueuedInput } = await import('./restoreReviewAdmission.js')
 const claude = await import('../services/api/claude.js')
 const hooks = await import('./hooks.js')
 const sessionStart = await import('./sessionStart.js')
@@ -74,6 +74,46 @@ async function restoreTail() {
   appendFileSync(path, '{"type":"assistant","private":"damaged secret')
   return (await loadConversationForResume(bootstrap.getSessionId(), path, { mutable: true, interruptedTurn: 'ignore' }))!
 }
+
+test('ordinary terminal input is durable before admission even without a recovery hold', async () => {
+  const gate = new RestoreReviewAdmission(false)
+  const input = createUserMessage({ content: 'ordinary input after earlier work' })
+  await gate.admitTerminalInput([seed, input], [input])
+  const loaded = await storage.loadTranscriptFile(path, { strict: true, keepAllLeaves: true })
+  expect(loaded.messages.has(input.uuid as never)).toBe(true)
+  const failure = spyOn(storage, 'flushCurrentTranscriptDurably').mockRejectedValue(new Error('ordinary input sync failed'))
+  const next = createUserMessage({ content: 'must not enter provider' })
+  try { await expect(gate.admitTerminalInput([seed, input, next], [next])).rejects.toThrow('ordinary input sync failed') }
+  finally { failure.mockRestore() }
+})
+
+test('terminal queued attachment cannot resume consumption before its durable receipt', async () => {
+  const attachment = createAttachmentMessage({
+    type: 'queued_command', commandMode: 'prompt', prompt: 'terminal mid-turn input', source_uuid: randomUUID(),
+  } as never)
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const realFlush = storage.flushCurrentTranscriptDurably
+  const barrier = spyOn(storage, 'flushCurrentTranscriptDurably').mockImplementation(async uuid => {
+    entered.resolve()
+    await release.promise
+    await realFlush(uuid)
+  })
+  let consumed = false
+  async function* events() { yield attachment; consumed = true }
+  const consumer = (async () => {
+    for await (const event of events()) await persistTerminalQueuedInput([seed], event)
+  })()
+  try {
+    await entered.promise
+    expect(consumed).toBe(false)
+    release.resolve()
+    await consumer
+    expect(consumed).toBe(true)
+    const loaded = await storage.loadTranscriptFile(path, { strict: true, keepAllLeaves: true })
+    expect(loaded.messages.has(attachment.uuid as never)).toBe(true)
+  } finally { release.resolve(); barrier.mockRestore() }
+})
 
 test('real mutable loader preflights before hooks and terminal admission accepts only a fresh durable user row', async () => {
   let hookCalls = 0

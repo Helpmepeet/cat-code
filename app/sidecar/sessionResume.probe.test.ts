@@ -188,6 +188,21 @@ test('legacy ambiguous dequeue and remove survive for explicit review rather tha
   await restored.stop()
 }, TEST_TIMEOUT_MS)
 
+test('cold intact interrupted startup retains the review hold through the real desktop construction path', async () => {
+  const configHome = tmp('catcode-intact-review-cfg-'), cwd = tmp('catcode-intact-review-cwd-')
+  const engineSessionId = randomUUID(), marker = `intact-${randomUUID()}`
+  await run([minter, engineSessionId, marker, '--interrupted-queued'], cwd, configHome)
+  const restored = await startRecovery(configHome, cwd, engineSessionId)
+  const trustId = randomUUID()
+  restored.send({ type: 'workspace.trust', requestId: trustId })
+  expect(await restored.wait(frame => frame.kind === 'workspace.trust.result' && frame.requestId === trustId)).toMatchObject({ ok: true })
+  const metaId = randomUUID()
+  restored.send({ type: 'app.submit', requestId: metaId, prompt: 'Automatic work must remain held', options: { isMeta: true } })
+  expect(await restored.wait(frame => frame.kind === 'error' && frame.requestId === metaId))
+    .toMatchObject({ message: expect.stringContaining('genuine user message') })
+  await restored.stop()
+}, TEST_TIMEOUT_MS)
+
 test('large compacted restore preserves accepted archive history while keeping queued review out of the model seed', async () => {
   const configHome = tmp('catcode-compact-review-cfg-'), cwd = tmp('catcode-compact-review-cwd-')
   const engineSessionId = randomUUID(), marker = `compact-${randomUUID()}`
