@@ -319,7 +319,8 @@ export function createLocalhostPreviewService(deps: {
       const frozen = frozenId ? deps.getSnapshot?.(frozenId) : null
       if (!record || !frozen || !record.descriptors.has(revision) || !authorized(record)) return null
       const resource = path === '/index.html' ? { mimeType: 'text/html; charset=utf-8', body: Buffer.from(frozen.html) } : /^\/asset\/([a-f0-9]{64})$/.test(path) ? frozen.resources.get(path.slice('/asset/'.length)) : null
-      return resource ? new Response(new Uint8Array(resource.body), { headers: { 'Content-Type': resource.mimeType, 'Content-Security-Policy': "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; frame-src 'none'; object-src 'none'; form-action 'none'; sandbox allow-same-origin", 'Cache-Control': 'no-store' } }) : new Response(null, { status: 404 })
+      // Allow host frame evaluation for readiness/scroll; script-src none still forbids document scripts.
+      return resource ? new Response(new Uint8Array(resource.body), { headers: { 'Content-Type': resource.mimeType, 'Content-Security-Policy': "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; frame-src 'none'; object-src 'none'; form-action 'none'; sandbox allow-same-origin allow-scripts", 'Cache-Control': 'no-store' } }) : new Response(null, { status: 404 })
     },
     dispose() { for (const id of records.keys()) release(id); routes.clear() },
   }
