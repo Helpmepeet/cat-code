@@ -1445,6 +1445,7 @@ test('submission-time proposal survives later output and between-turn drain', as
   const controller = new AppSessionController({
     getMessages: () => history,
     async *runTurn({ options }) {
+      await options?.onInputPersisted?.()
       bindings.push(options?.priorAssistantContext)
       if (bindings.length === 1) await new Promise<void>(resolve => { release = resolve })
       yield buildProbeToolUseMessage()
@@ -2685,7 +2686,12 @@ function submitAnswers(received: ServerFrame[]) {
 }
 
 test('D5 — an idle submit is answered accepted, once, with its own id', async () => {
-  const controller = new AppSessionController(probeAdapter())
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      await options?.onInputPersisted?.()
+      yield buildProbeToolUseMessage()
+    },
+  })
   const { server, received, conn } = connect(controller)
 
   server.handleData(
@@ -8077,7 +8083,8 @@ test('full-session Fork blocks a new submit until its async transcript boundary 
   let forkStarted = false
   let turnStarts = 0
   const controller = new AppSessionController({
-    async *runTurn() {
+    async *runTurn({ options }) {
+      await options?.onInputPersisted?.()
       turnStarts++
     },
   })
@@ -8144,6 +8151,7 @@ test('full-session Fork blocks a new submit until its async transcript boundary 
       options: { submitId: 'submit-after-fork' },
     }),
   )
+  await flush()
   expect(received).toContainEqual(
     expect.objectContaining({
       kind: 'submit.result',

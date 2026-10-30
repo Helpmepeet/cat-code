@@ -4,6 +4,7 @@ import { readAutoModeReviews } from '../../src/app-runtime/autoModeReviewPersist
 import type { UndeliveredPrompt } from './sessionResume.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
+import { isSessionPersistenceDisabled } from '../../src/bootstrap/state.js'
 import type { WorkspaceObserver } from './workspaceObservation.js'
 import { isLidWorkControl } from '../shared/lidClosed.js'
 import { PLAN_APPROVE_OPTIONS } from '../shared/planApproval.js'
@@ -3468,15 +3469,12 @@ export class SidecarServer {
   }
 
   /**
-   * Refusals name the submit they rejected. Direct acceptance stays synchronous;
-   * queued acceptance waits for its recorder producers and durable flush.
+   * Refusals name the submit they rejected. Direct acceptance follows the
+   * engine's durable input callback; queued acceptance waits for its recorder.
    * A queued I/O failure is uncertain, never a fabricated definite refusal.
    *
-   * `startTurn`'s ASYNC `onRejected` is deliberately not one of those exits: by
-   * the time it fires the prompt has been accepted AND announced as a transcript
-   * row, so the turn failed with the message already delivered. It reports that
-   * as an ordinary error, and handing the text back on top of its own transcript
-   * row would give the user the same message twice.
+   * An asynchronous failure without a receipt can still follow a partial write.
+   * Keep the renderer's retained copy unresolved rather than inviting a resend.
    */
   private handleSubmit(
     connection: Connection,
@@ -3651,6 +3649,12 @@ export class SidecarServer {
       return
     }
 
+    let inputAccepted = false
+    const acknowledgeInput = () => {
+      if (inputAccepted) return
+      inputAccepted = true
+      this.answerSubmit(connection, submitId, { accepted: true, queued: false })
+    }
     const started = this.startTurn({
       prompt: message.prompt,
       priorAssistantContext: this.controller.bindObservedProposal(message.options?.observedProposal),
@@ -3658,6 +3662,7 @@ export class SidecarServer {
       isMeta: message.options?.isMeta,
       goalSnapshot,
       generateTitle: true,
+      onInputPersisted: acknowledgeInput,
       onRejected: error => {
         this.sendError(
           connection,
@@ -3665,18 +3670,24 @@ export class SidecarServer {
           error.message === 'Session turn already running'
             ? 'turn_already_running'
             : 'internal_error',
-          error.message,
+          inputAccepted || error.message === 'Session turn already running' ||
+              error.message === 'Recovered history requires a genuine user message'
+            ? error.message
+            : 'The message may have been saved, but acceptance could not be confirmed. Review the conversation before sending it again.',
           error.message === 'Session turn already running',
         )
+      },
+      onSettled: error => {
+        if (inputAccepted || error) return
+        if (isSessionPersistenceDisabled()) acknowledgeInput()
+        else this.sendError(connection, message.requestId, 'internal_error',
+          'The message may have been saved, but acceptance could not be confirmed. Review the conversation before sending it again.', false)
       },
     })
     if (!started) {
       refuseSubmit('turn_already_running', 'Session turn already running', true)
       return
     }
-    // The turn is running and the user message has been broadcast. Nothing later
-    // can un-accept this submit (see the method doc on `onRejected`).
-    this.answerSubmit(connection, submitId, { accepted: true, queued: false })
   }
 
   /**

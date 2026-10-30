@@ -141,6 +141,56 @@ test('intact interrupted desktop history holds automatic work and supplies defer
   expect(controller.canStartAutomaticTurn()).toBe(true)
 })
 
+test.each(['success', 'failure'] as const)('ordinary desktop input acceptance follows the real fsync boundary: %s', async outcome => {
+  const seed = createUserMessage({ content: 'saved work before idle submit' })
+  await storage.recordTranscript([seed])
+  await storage.flushCurrentTranscriptDurably(seed.uuid)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const realFlush = storage.flushCurrentTranscriptDurably
+  spies.push(spyOn(storage, 'flushCurrentTranscriptDurably').mockImplementation(async uuid => {
+    if (uuid && uuid !== seed.uuid) {
+      entered.resolve()
+      await release.promise
+      if (outcome === 'failure') throw new Error('isolated ordinary input sync failure')
+    }
+    await realFlush(uuid)
+  }))
+  let providerCalls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: 'accepted ordinary input' }])
+  }))
+  const controller = createRuntimeBackedAppSession({ queryEngineConfig: engineConfig([seed], []) })
+  const sessionId = randomUUID(), requestId = randomUUID(), submitId = randomUUID()
+  const frames: ServerFrame[] = [], decoder = new FrameDecoder(32 * 1024 * 1024)
+  const server = new SidecarServer({ sessionId, engineSessionId: bootstrap.getSessionId(), controller, log: () => {} })
+  disposers.push(() => server.close())
+  const connection = server.addConnection({
+    write(data) { for (const frame of decoder.push(Buffer.from(data))) if (frame.kind === 'frame') frames.push(frame.payload as ServerFrame) },
+    end() {},
+  })
+  server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
+    message: { type: 'app.submit', requestId, prompt: 'new genuine input', options: { submitId } } }))
+  try {
+    await entered.promise
+    expect(frames.some(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toBe(false)
+    expect(providerCalls).toBe(0)
+    release.resolve()
+    if (outcome === 'success') {
+      await until(() => frames.some(frame => frame.kind === 'submit.result' && frame.submitId === submitId), 'durable idle acceptance')
+      expect(frames.find(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toMatchObject({ accepted: true, queued: false })
+    } else {
+      await until(() => frames.some(frame => frame.kind === 'error' && frame.requestId === requestId), 'honest unconfirmed idle acceptance')
+      expect(frames.some(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toBe(false)
+      expect(frames.find(frame => frame.kind === 'error' && frame.requestId === requestId)).toMatchObject({
+        message: expect.stringContaining('acceptance could not be confirmed'),
+      })
+    }
+    await controller.waitUntilIdle()
+    expect(providerCalls).toBe(outcome === 'success' ? 1 : 0)
+  } finally { release.resolve(); await controller.waitUntilIdle() }
+})
+
 async function until(predicate: () => boolean, label: string): Promise<void> {
   const deadline = Date.now() + 3_000
   while (!predicate() && Date.now() < deadline) await Bun.sleep(5)
