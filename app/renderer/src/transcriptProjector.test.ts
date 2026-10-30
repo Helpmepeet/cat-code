@@ -1730,6 +1730,8 @@ test('a background agent finish updates its card lifecycle and keeps the later n
     kind: 'task-notification',
     status: 'completed',
     summary: 'Agent @Ada completed',
+    result: ADA_ORIGIN.result,
+    usage: ADA_ORIGIN.usage,
   })
   expect(state.sessions['session-1']!.rows.find(row => row.kind === 'tool-use')).toMatchObject({
     agentCompletion: null,
@@ -1854,6 +1856,7 @@ test('a partial or malformed completion usage never leaks into the notification 
     expect(rows[1]).toMatchObject({
       kind: 'task-notification',
       summary: 'Agent @Ada completed',
+      usage: null,
     })
   }
 })

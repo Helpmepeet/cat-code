@@ -414,6 +414,8 @@ export type TaskNotificationRow = RowSource & {
    * completion uses the id to populate that resumed run's independent card.
    */
   toolUseId: string | null
+  result: AgentCompletionProjection['result']
+  usage: AgentCompletionProjection['usage']
   timestamp?: string
   isReplay: boolean
 }
@@ -3673,6 +3675,8 @@ function projectUserContentBlock(
         status: origin.status,
         summary: origin.completion?.summary ?? null,
         toolUseId: origin.toolUseId,
+        result: origin.completion?.result ?? null,
+        usage: origin.completion?.usage ?? null,
       }
     }
     if (origin) {
@@ -3731,6 +3735,8 @@ function projectUserContentBlock(
         // predate `origin`, so they carry no join key and always stay a row.
         summary: nonEmptyString(extractXmlTag(block.text, 'summary')?.trim()),
         toolUseId: null,
+        result: null,
+        usage: null,
       }
     }
     return {

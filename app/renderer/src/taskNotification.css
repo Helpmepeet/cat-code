@@ -1,0 +1,29 @@
+.task-notification { --finish-hang: 26px; --finish-hit: 6px; }
+.task-notification-head {
+  display: flex;
+  width: calc(100% + var(--finish-hang) + 2 * var(--finish-hit));
+  min-width: 0;
+  min-height: 22px;
+  align-items: center;
+  gap: 10px;
+  margin: 0 calc(-1 * var(--finish-hit)) 0 calc(-1 * (var(--finish-hang) + var(--finish-hit)));
+  padding: 3px var(--finish-hit);
+  border-radius: 6px;
+  text-align: left;
+  font-size: 12px;
+  color: var(--text-subtle);
+  transition: background-color 100ms ease-out;
+}
+button.task-notification-head:hover { background: var(--shell-hover); }
+button.task-notification-head:focus-visible { outline: 1px solid rgb(var(--accent-rgb) / 0.4); outline-offset: 2px; }
+.task-notification-gutter { display: flex; width: 16px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center; }
+.task-notification-line { display: flex; min-width: 0; flex: 1; align-items: center; gap: 6px; white-space: nowrap; }
+.task-notification-name { overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); color: var(--text-primary); }
+.task-notification-word { flex-shrink: 0; }
+.task-notification-word[data-outcome="failed:"] { color: var(--tone-danger); }
+.task-notification-word[data-outcome="was stopped"] { color: var(--text-faint); }
+.task-notification-reason { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-faint); }
+.task-notification-result { margin: 3px 0 4px; border-left: 1px solid var(--shell-seam); padding: 1px 0 1px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.625; color: var(--text-muted); }
+@media (prefers-reduced-motion: reduce) {
+  .task-notification-head { transition: none; }
+}

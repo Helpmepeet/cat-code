@@ -1866,6 +1866,8 @@ test('an unmergeable completion renders one line, never the model-facing banner'
           kind: 'task-notification',
           status: 'completed',
           summary: 'Agent @Ada completed',
+          result: null,
+          usage: null,
           toolUseId: null,
           isReplay: false,
           children: [],
@@ -1873,17 +1875,14 @@ test('an unmergeable completion renders one line, never the model-facing banner'
       ]}
     />,
   )
-  // Printed verbatim, with the worker's own name set in mono inside the line.
-  // Bare: the engine's at-sign is the split's needle, never the reader's text.
-  expect(html).toContain('Agent ')
+  expect(html).not.toContain('Agent ')
   expect(html).toContain('>Ada</span>')
-  expect(html).toContain(' completed')
+  expect(html).toContain('>completed</span>')
   // The words the operator should never see again.
   for (const leaked of ['Task notification', 'Task ID', 'Output file', 'Tool use ID', 'Agent task']) {
     expect(html).not.toContain(leaked)
   }
-  // No status chip beside a summary that already ends in its outcome.
-  expect(html).not.toContain('>completed<')
+  expect(html.match(/>completed</g)).toHaveLength(1)
 })
 
 test('a summary-less completion draws nothing at all', () => {
@@ -1896,6 +1895,8 @@ test('a summary-less completion draws nothing at all', () => {
           kind: 'task-notification',
           status: 'completed',
           summary: null,
+          result: null,
+          usage: null,
           toolUseId: null,
           isReplay: false,
           children: [],
@@ -3097,6 +3098,8 @@ test('the finish row keeps a multi-word worker name whole', () => {
           kind: 'task-notification',
           status: 'completed',
           summary: 'Agent @Ada Lovelace completed',
+          result: null,
+          usage: null,
           toolUseId: null,
           isReplay: false,
           children: [],
@@ -3136,6 +3139,8 @@ test('a face drawn in the transcript comes from the shell registry, not a privat
             kind: 'task-notification',
             status: 'completed',
             summary: 'Agent @Ada completed',
+            result: null,
+            usage: null,
             toolUseId: null,
             isReplay: false,
             children: [],
@@ -3150,11 +3155,6 @@ test('a face drawn in the transcript comes from the shell registry, not a privat
 })
 
 test('the finish row highlights the name, and prints no at-sign anywhere', () => {
-  // The at-sign has two jobs on this row and only one of them is the reader's:
-  // it is the needle that finds the name inside the ENGINE's own sentence, and
-  // it used to be rendered as well. Dropping it from the needle would silently
-  // stop the split matching, leaving the sentence whole and the name unmarked
-  // with nothing failing. Both halves are asserted here.
   const html = renderToStaticMarkup(
     <TranscriptRowsView
       rows={[
@@ -3164,6 +3164,8 @@ test('the finish row highlights the name, and prints no at-sign anywhere', () =>
           kind: 'task-notification',
           status: 'completed',
           summary: 'Agent @Ada completed',
+          result: null,
+          usage: null,
           toolUseId: null,
           isReplay: false,
           children: [],
@@ -3172,11 +3174,9 @@ test('the finish row highlights the name, and prints no at-sign anywhere', () =>
     />,
   )
 
-  // Split still happened: the name is its own marked span, and the engine's
-  // sentence is no longer one unbroken run of text.
   expect(html).toContain('>Ada</span>')
-  expect(html).toContain('Agent ')
-  expect(html).toContain(' completed')
+  expect(html).not.toContain('Agent ')
+  expect(html).toContain('>completed</span>')
   expect(html).not.toContain('Agent @Ada completed')
   expect(html).not.toContain('@')
 })
@@ -3192,6 +3192,8 @@ test('a finish row the engine worded differently still draws, with no face claim
           status: 'completed',
           // The engine's own no-name fallback shape.
           summary: 'Agent "sweep the renderer" completed',
+          result: null,
+          usage: null,
           toolUseId: null,
           isReplay: false,
           children: [],
@@ -5365,6 +5367,8 @@ test('an orphaned subagent tail renders as an agent frame, never as user or assi
           kind: 'task-notification',
           status: 'completed',
           summary: 'Agent "sweep the renderer" completed',
+          result: null,
+          usage: null,
           toolUseId: null,
           isReplay: false,
           children: [],

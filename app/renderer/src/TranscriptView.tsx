@@ -104,6 +104,7 @@ import {
   type NestedToolUseRow,
   type NestedTranscriptRow,
   type SystemNoticeRow,
+  type TaskNotificationRow,
   type ResultRow,
   type TranscriptDisplayItem,
   type TranscriptState,
@@ -135,7 +136,9 @@ import {
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
 import { deriveFocusedTranscript, type FocusedTranscriptItem, type FocusedTurnItem } from './focusedTranscriptLayout.js'
-import { FocusedTranscript } from './FocusedTranscript.js'
+import { FocusedChevron, FocusedTranscript } from './FocusedTranscript.js'
+import { FocusedDisclosure } from './FocusedDisclosure.js'
+import './taskNotification.css'
 import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
 import {
   DIFF_ROW_CLASS,
@@ -1853,7 +1856,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       )
 
     case 'task-notification':
-      return <TaskNotificationBox summary={row.summary} />
+      return <TaskNotificationBox row={row} />
 
     case 'injected-turn':
       return (
@@ -5222,8 +5225,7 @@ function useInlineOutputWindow(lines: string[], toolUseId: string) {
  * Tone comes from the ack's own `ok`, NOT the row status, because those disagree
  * exactly when it matters: a failed resume is a successful tool call, and the
  * header's `done` is a true statement about the call. No tick or cross glyph
- * rides along, for the reason `TaskNotificationBox` states: the engine's
- * sentence already ends in its own outcome, so a glyph prints it twice.
+ * rides along: the engine's sentence already ends in its own outcome.
  */
 function AckPeek({ ack }: { ack: ToolAck }) {
   const { style } = useContext(ToolCardStyleContext)
@@ -6705,79 +6707,45 @@ const NOTICE_STYLE: Record<
 }
 
 
-/**
- * The worker's own name out of the engine's summary. The engine mints exactly
- * `Agent @Name completed` / `… failed: …` / `… was stopped`, falling back to
- * `Agent "description" …` when the task had no name (`LocalAgentTask.tsx:325`),
- * so the `@` form is the presence test. Null keeps the featureless face — the
- * honest stamp for a finish we cannot attribute to anyone.
- */
-function agentNameInSummary(summary: string): string | null {
-  // Anchored on the three whole sentences the engine mints, because a worker
-  // name may contain SPACES: `normalizeExplicitSubagentName`
-  // (`src/tools/AgentTool/AgentTool.tsx:282`) rejects only `@`, `:` and `*`. A
-  // `\\S+` capture read "Ada Lovelace" as "Ada" and handed the finish row a
-  // different face from the card's, breaking the one invariant the stamp has.
-  // Anything else returns null and keeps the featureless face, which is the
-  // honest stamp for a finish we cannot attribute.
-  const match = /^Agent @(.+?)(?: completed| failed:| was stopped)$/.exec(summary)
-  return match === null ? null : match[1]
-}
-
-/**
- * TaskNotificationRow: a background agent's finish, in transcript arrival order.
- *
- * The engine's wording is printed VERBATIM, including the failure reason a card
- * never carries — this row is the only place a background worker's outcome is
- * stated, because its launch card is a past-tense record that never learns what
- * happened (a transcript row is never rewritten). The banner text this row rides
- * is MODEL-facing — it carries the task id, the output-file path and the
- * tool-use id — so only the engine's one-line `summary` is printed (bug,
- * 2026-08-01). No summary means no row, exactly as the terminal returns null
- * without one.
- *
- * No status word rides alongside: every summary already ends in its outcome, so
- * a chip would print the same word twice. The face here is identity only, drawn
- * with no pulse, so it carries no outcome at all. The worker's own name inside the sentence is set in mono so the row is scannable
- * against the card it belongs to.
- */
-function TaskNotificationBox({ summary }: { summary: string | null }) {
+/** Structured display fields only: the model-facing banner contains private task paths. */
+function TaskNotificationBox({ row }: { row: TaskNotificationRow }) {
   const faces = useAgentFaceRegistry()
+  const [open, setOpen] = useTranscriptDisclosure(`agent-finish:${row.id}`)
+  const bodyId = useId()
+  const { summary, result, usage } = row
   if (summary === null) return null
-  const name = agentNameInSummary(summary)
+  // Names may contain spaces. Quoted descriptions are not worker identities.
+  const match = /^Agent (?:@(.+?)|"(.+?)") (completed|failed:(?: ([\s\S]*))?|was stopped)$/.exec(summary)
+  const name = match?.[1] ?? null
+  const label = name ?? match?.[2] ?? null
+  const word = match?.[3].startsWith('failed:') ? 'failed:' : match?.[3] ?? null
+  const reason = match?.[4]
   const notificationFace = faces.faceFor(null, name)
-  // TWO jobs, and only one of them is the reader's. `mention` is the needle the
-  // ENGINE wrote into its own sentence ("Agent @Ada completed"), so it keeps the
-  // at-sign or the split silently stops matching and the name stops being
-  // highlighted at all. What is rendered below is the bare name: the at-sign
-  // never reaches the screen (operator ruling, 2026-08-21).
-  const mention = name === null ? null : `@${name}`
-  const [before, after] =
-    mention === null ? [summary, ''] : splitOnce(summary, mention)
+  const stats = agentCompletionStats(usage)
+  const head = <>
+    <span className="task-notification-gutter" aria-hidden>
+      {result !== null ? <span className="focused-fold-chevron" data-open={open ? '' : undefined}><FocusedChevron /></span> : null}
+    </span>
+    <AgentFace axes={notificationFace.axes} fill={notificationFace.fill} size={13} />
+    <span className="task-notification-line">
+      {label !== null ? <>
+        <span className={name !== null ? 'task-notification-name' : 'task-notification-reason'}>{label}</span>{' '}
+        <span className="task-notification-word" data-outcome={word}>{word}</span>{' '}
+        {reason ? <span className="task-notification-reason">{reason}</span> : null}
+      </> : <span className="task-notification-reason">{summary}</span>}
+    </span>
+    {stats.length ? <>{' '}<span className="focused-meta">{stats.join(' · ')}</span></> : null}
+  </>
   return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-[5px]">
-      <AgentFace
-        axes={notificationFace.axes}
-        fill={notificationFace.fill}
-        size={17}
-      />
-      <span className="min-w-0 flex-1 truncate text-[12px] leading-4 text-text-muted">
-        {before}
-        {name === null ? null : (
-          <span className="font-mono text-text-primary">{name}</span>
-        )}
-        {after}
-      </span>
+    <div className="task-notification">
+      {result !== null
+        ? <button type="button" className="task-notification-head" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>{head}</button>
+        : <div className="task-notification-head">{head}</div>}
+      {result !== null ? <FocusedDisclosure open={open} id={bodyId}>
+        <div className="task-notification-result">{result}</div>
+      </FocusedDisclosure> : null}
     </div>
   )
-}
-
-/** `text` around its first occurrence of `needle`; the needle itself is dropped. */
-function splitOnce(text: string, needle: string): [string, string] {
-  const at = text.indexOf(needle)
-  return at === -1
-    ? [text, '']
-    : [text.slice(0, at), text.slice(at + needle.length)]
 }
 
 /** `1234` → `1.2k`; the agent card's stat line has no room for full counts. */
@@ -6793,19 +6761,8 @@ function formatDuration(ms: number): string {
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
-/**
- * A resumed run's result. ResumeAgent creates a second independent agent card,
- * so the later completion supplies that card's labelled answer and stats. The
- * summary is not repeated because the identity strip and state already carry
- * it.
- */
-function AgentCompletionBody({
-  completion,
-}: {
-  completion: AgentCompletionProjection
-}) {
-  const { result, usage } = completion
-  const stats = usage
+function agentCompletionStats(usage: AgentCompletionProjection['usage']): string[] {
+  return usage
     ? [
         // Dropped rather than shown as `~0 tokens`: an absent count persists as
         // a literal zero engine-side (see `agentProgressBadge`), so zero here
@@ -6817,6 +6774,20 @@ function AgentCompletionBody({
         formatDuration(usage.durationMs),
       ]
     : []
+}
+
+/**
+ * A resumed run's result. ResumeAgent creates a second independent agent card,
+ * so the later completion supplies that card's labelled answer and stats. The
+ * summary is not repeated because the identity strip and state already carry it.
+ */
+function AgentCompletionBody({
+  completion,
+}: {
+  completion: AgentCompletionProjection
+}) {
+  const { result, usage } = completion
+  const stats = agentCompletionStats(usage)
   if (result === null && stats.length === 0) return null
   return (
     <div className="flex flex-col gap-1.5">
@@ -6841,9 +6812,7 @@ function AgentCompletionBody({
 
 /**
  * InjectedTurnRow: one of the other engine-injected `role:'user'` turns.
- * Rendered in the SAME left-aligned notice grammar as TaskNotificationBox — the
- * GUI's "this row came from the engine, not from you" shape — never the
- * right-aligned accent bubble they used to land in.
+ * Left-aligned engine notices, never the right-aligned operator bubble.
  *
  * Glyph + heading per kind, matched to the terminal REPL rather than invented:
  *  - `channel`  — `←` (`CHANNEL_ARROW`, `src/constants/figures.ts:21`) and the

@@ -3,6 +3,8 @@ import { act } from 'react'
 
 import { createDomTestHarness } from './domTestHarness.js'
 import { TranscriptRowsView } from './TranscriptView.js'
+import { ToolCardExpansionContext, createToolCardExpansionStore } from './toolCardExpansion.js'
+import { TranscriptModeContext } from './transcriptMode.js'
 import type { WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type { DomTestHarness } from './domTestHarness.js'
@@ -42,6 +44,80 @@ const row: NestedTranscriptRow = {
   isReplay: false,
   children: [],
 }
+
+test('agent finishes fold their result independently in both transcript modes and retain the choice on remount', async () => {
+  const notification = {
+    ...row,
+    id: 'agent-finish',
+    kind: 'task-notification' as const,
+    status: 'completed',
+    summary: 'Agent @Ada Lovelace completed',
+    toolUseId: 'agent-launch',
+    result: 'First line.\nSecond line.',
+    usage: { totalTokens: 38400, toolUses: 9, durationMs: 72000 },
+  }
+  for (const mode of ['focused', 'full'] as const) {
+    const store = createToolCardExpansionStore()
+    const render = () => (
+      <ToolCardExpansionContext.Provider value={store}>
+        <TranscriptModeContext.Provider value={{ mode, setMode: () => {} }}>
+          <TranscriptRowsView rows={[notification]} />
+        </TranscriptModeContext.Provider>
+      </ToolCardExpansionContext.Provider>
+    )
+    const tree = await harness.mount(render())
+    const head = tree.container.querySelector<HTMLButtonElement>('.task-notification-head')
+    expect(head).not.toBeNull()
+    expect(head?.getAttribute('aria-expanded')).toBe('false')
+    expect(head?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Ada Lovelace completed ~38.4k tokens · 9 tools · 1m 12s')
+    expect(head?.textContent).not.toContain('Agent ')
+    expect(head?.querySelector('svg[width="13"]')).not.toBeNull()
+    expect(tree.container.textContent).not.toContain(notification.result)
+    expect(store.get('agent-launch')).toBeUndefined()
+    await act(async () => { head!.click() })
+    expect(head?.getAttribute('aria-expanded')).toBe('true')
+    expect(tree.container.querySelector('.task-notification-result')?.textContent).toBe(notification.result)
+    const bodyId = head!.getAttribute('aria-controls')!
+    expect(tree.container.querySelector(`[id="${bodyId}"]`)?.getAttribute('aria-hidden')).toBe('false')
+    await tree.unmount()
+    const remount = await harness.mount(render())
+    const reopened = remount.container.querySelector<HTMLButtonElement>('.task-notification-head')!
+    expect(reopened.getAttribute('aria-expanded')).toBe('true')
+    await act(async () => { reopened.click() })
+    expect(reopened.getAttribute('aria-expanded')).toBe('false')
+    expect(store.get('agent-launch')).toBeUndefined()
+    await remount.unmount()
+  }
+})
+
+test('failed and stopped finishes without results have empty gutters and no disclosure', async () => {
+  const notifications: NestedTranscriptRow[] = [
+    {
+      ...row, id: 'failed-finish', kind: 'task-notification', status: 'failed',
+      summary: 'Agent @Ada Lovelace failed: API Error: 529 overloaded',
+      toolUseId: null, result: null, usage: null,
+    },
+    {
+      ...row, id: 'stopped-finish', kind: 'task-notification', status: 'killed',
+      summary: 'Agent @Tukey was stopped',
+      toolUseId: null, result: null, usage: { totalTokens: 0, toolUses: 1, durationMs: 9000 },
+    },
+  ]
+  const tree = await harness.mount(<TranscriptRowsView rows={notifications} />)
+  const heads = tree.container.querySelectorAll('.task-notification-head')
+  expect(heads.length).toBe(2)
+  for (const head of heads) {
+    expect(head.tagName).toBe('DIV')
+    expect(head.hasAttribute('aria-expanded')).toBe(false)
+    expect(head.querySelector('.task-notification-gutter')?.childElementCount).toBe(0)
+  }
+  expect(heads[0]!.querySelector('.task-notification-name')?.textContent).toBe('Ada Lovelace')
+  expect(heads[0]!.querySelector('.task-notification-word')?.textContent).toBe('failed:')
+  expect(heads[0]!.querySelector('.task-notification-reason')?.textContent).toBe('API Error: 529 overloaded')
+  expect(heads[1]!.querySelector('.task-notification-word')?.textContent).toBe('was stopped')
+  expect(heads[1]!.textContent).toContain('1 tool · 9s')
+  expect(heads[1]!.textContent).not.toContain('tokens')
+})
 
 test('assistant and user reading styles reach Markdown and literal text without replacing code styles', async () => {
   const assistant: NestedTranscriptRow = {
