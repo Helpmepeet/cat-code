@@ -43,17 +43,20 @@ test('local HTTP links in parent and actual worker transcripts forward clicks an
       calls.push({ sessionId, target, external: options?.external === true }); return { ok: true as const }
     }
     const content = '[App](http://localhost:4000/start) http://127.0.0.1:4001/ http://[::1]:4002/settings `http://localhost:4003/`\n\n' +
-      '[Outside](https://example.com) [Other HTTP](http://example.com) [Alias](http://127.1:4000/) [Spoof](http://localhost.evil:4000/)'
+      '| Address |\n| --- |\n| [IPv6](http://[::1]:65046/) |\n\n' +
+      '[Outside](https://example.com) [Other HTTP](http://example.com) [Alias](http://127.1:4000/) [Spoof](http://localhost.evil:4000/) ' +
+      '[Encoded host](http://%6cocalhost:4000/) [Other IPv6](http://[::2]:65046/)'
     const tree = await harness.mount(<FilePaneContext.Provider value={opener}>{surface([prose(content)], worker)}</FilePaneContext.Provider>)
     expect(calls).toEqual([])
     const local = buttons(tree.container)
     expect(local.map(button => button.getAttribute('aria-label'))).toEqual([
-      'Open http://localhost:4000/start', 'Open http://127.0.0.1:4001/', 'Open http://[::1]:4002/settings', 'Open http://localhost:4003/',
+      'Open http://localhost:4000/start', 'Open http://127.0.0.1:4001/', 'Open http://[::1]:4002/settings', 'Open http://localhost:4003/', 'Open http://[::1]:65046/',
     ])
     for (const button of local) await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })) })
     expect(calls.map(call => [call.sessionId, call.target, call.external])).toEqual(local.map(button => [source.sessionId, button.getAttribute('aria-label')!.slice(5), true]))
     expect([...tree.container.querySelectorAll<HTMLAnchorElement>('a')].map(link => [link.getAttribute('href'), link.target])).toEqual([
       ['https://example.com', '_blank'], ['http://example.com', '_blank'], ['http://127.1:4000/', '_blank'], ['http://localhost.evil:4000/', '_blank'],
+      ['http://%6cocalhost:4000/', '_blank'], ['http://%5B::2%5D:65046/', '_blank'],
     ])
     await tree.unmount()
   }

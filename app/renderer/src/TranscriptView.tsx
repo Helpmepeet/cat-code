@@ -55,7 +55,7 @@ import { useFilePaneOpener } from './filePaneContext.js'
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { isPaneFilePath } from './filePaneState.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, paneFileKey, selectedTextInside } from './transcriptPaneFiles.js'
-import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
+import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, localhostMarkdownHref, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
   PEER_BUBBLE_CLASS,
@@ -2196,7 +2196,7 @@ function createPathAwareAnchor(
     'data-bare-file-path'?: boolean
   }) {
     const canPreview = useFilePaneOpener() !== null
-    const local = canPreview ? normalizeLocalhostPreviewUrl(href) : null
+    const local = canPreview ? localhostMarkdownHref(href) : null
     const destination = node?.properties.dataPendingDestination
     const pending = typeof destination === 'string'
     const path = pending ? pendingFileHref(destination, href) : workspaceFileHref(href)

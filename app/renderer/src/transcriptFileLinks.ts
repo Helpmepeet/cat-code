@@ -59,6 +59,11 @@ function sliceText(node: Text, start: number, end: number): Text {
   return { type: 'text', value, position: { start: point(start), end: point(end) } }
 }
 
+/** Markdown encodes brackets in IPv6 link destinations before rendering. */
+export function localhostMarkdownHref(href: string | undefined): string | null {
+  return normalizeLocalhostPreviewUrl(href?.replace(/^http:\/\/%5B::1%5D(?=[:/?#]|$)/i, 'http://[::1]'))
+}
+
 type HttpTextLink = { index: number; text: string; localhost: string | null }
 function httpTextLinks(text: string): HttpTextLink[] {
   return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => {
