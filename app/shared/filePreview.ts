@@ -18,7 +18,7 @@ export interface FilePreviewApplications {
 }
 export type FilePreviewEvent =
   | { id: string; kind: 'updated'; descriptor: FilePreviewDescriptor }
-  | { id: string; kind: 'removed' | 'watch-error' }
+  | { id: string; kind: 'removed' | 'watch-error' | 'update-error' }
   | { id: string; kind: 'navigate'; path: string }
   | { id: string; kind: 'key'; key: string; code: string; metaKey: boolean; shiftKey: boolean; altKey: boolean; ctrlKey: boolean }
 

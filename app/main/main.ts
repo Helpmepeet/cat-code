@@ -1,3 +1,7 @@
+import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
+import { createPreviewApplications } from './previewApplications.js'
+import { FILE_PREVIEW_SCHEME, type FilePreviewScroll } from '../shared/filePreview.js'
+import { CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMIT, CH_FILE_PREVIEW_RELEASE, CH_FILE_PREVIEW_EVENT, CH_FILE_PREVIEW_SCROLL_READ, CH_FILE_PREVIEW_SCROLL_RESTORE, CH_FILE_PREVIEW_APPLICATIONS, CH_FILE_PREVIEW_APPLICATION_CHOOSE } from '../shared/ipcChannels.js'
 import { parseInlineCommandPayload } from './inlineCommandPayload.js'
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
 import { lidClosedMenu } from './lidClosedMenu.js'
@@ -65,6 +69,7 @@ import {
   nativeImage,
   nativeTheme,
   powerMonitor,
+  protocol,
   screen,
   session,
   shell,
@@ -440,6 +445,8 @@ function branchOpenSeed(engineSessionId: unknown): TrustedOpenHistorySeed | unde
 }
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
+protocol.registerSchemesAsPrivileged([{ scheme: FILE_PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
+
 const IS_DEV = !app.isPackaged
 if (IS_DEV) app.setName('Cat Code Dev')
 const APP_ICON_PATH = join(__dirname, '..', 'resources', 'icon.png')
@@ -1563,10 +1570,68 @@ const readinessLatch = createReadinessLatch(() => {
   scheduleDebugStateExport.schedule()
 })
 
+const filePreviews = createFilePreviewService({
+  sessions: () => host?.listSessions() ?? [],
+  options: { generatedImagesRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'), 'generated-images') },
+  publish: event => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event)
+  },
+})
+const previewScroll = new Map<string, FilePreviewScroll>()
+const pendingPreviewScroll = new Map<string, Promise<FilePreviewScroll>>()
+function previewFrame(id: string, revision: number) {
+  return mainWindow?.webContents.mainFrame.framesInSubtree.find(frame => {
+    const parsed = parseFilePreviewUrl(frame.url)
+    return frame.parent === mainWindow?.webContents.mainFrame && parsed?.id === id && parsed.revision === revision
+  })
+}
+function previewPayload(value: unknown, keys: string[]): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  return Object.keys(record).length === keys.length && keys.every(key => Object.hasOwn(record, key)) ? record : null
+}
+function previewIdentity(value: unknown, revision = false) {
+  const record = previewPayload(value, revision ? ['id', 'revision'] : ['id'])
+  return record && typeof record.id === 'string' && /^[a-f0-9]{48}$/.test(record.id) &&
+    (!revision || typeof record.revision === 'number' && Number.isSafeInteger(record.revision) && record.revision > 0) ? record : null
+}
+function trustedPreviewSender(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
+  return isMainWindowSender(event) && event.senderFrame === mainWindow?.webContents.mainFrame
+}
+function readPreviewScroll(id: string, revision: number): Promise<FilePreviewScroll> {
+  const key = `${id}:${revision}`
+  if (!filePreviews.descriptor(id, revision)) return Promise.resolve({ x: 0, y: 0 })
+  const existing = pendingPreviewScroll.get(key)
+  if (existing) return existing
+  const frame = previewFrame(id, revision)
+  if (!frame) return Promise.resolve(previewScroll.get(key) ?? { x: 0, y: 0 })
+  const promise = frame.executeJavaScript('({x:scrollX,y:scrollY})').then(value => {
+    const result = value as FilePreviewScroll
+    if (result && Number.isFinite(result.x) && Number.isFinite(result.y) && Math.abs(result.x) <= 1e8 && Math.abs(result.y) <= 1e8 && filePreviews.descriptor(id, revision)) previewScroll.set(key, { x: result.x, y: result.y })
+    return previewScroll.get(key) ?? { x: 0, y: 0 }
+  }).catch(() => previewScroll.get(key) ?? { x: 0, y: 0 }).finally(() => pendingPreviewScroll.delete(key))
+  pendingPreviewScroll.set(key, promise)
+  return promise
+}
 function applySecurityBaseline(): void {
   // CSP for any rendered content (SECURITY-MINIMUM §3 CSP). Delivered as a
   // response header on the app load so it also covers the dev server.
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    const parsed = parseFilePreviewUrl(details.url)
+    const isPreview = parsed !== null && filePreviews.has(parsed.id)
+    const isOwnedWindow = details.webContentsId === mainWindow?.webContents.id
+    if (details.url.startsWith(`${FILE_PREVIEW_SCHEME}:`) && (!isPreview || !isOwnedWindow || details.resourceType === 'mainFrame')) {
+      callback({ cancel: true }); return
+    }
+    // A preview must never acquire the app origin, even in a subframe redirect.
+    if (details.resourceType === 'subFrame' && !isPreview) { callback({ cancel: true }); return }
+    callback({})
+  })
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const parsed = parseFilePreviewUrl(details.url)
+    if (parsed && filePreviews.has(parsed.id) && details.webContentsId === mainWindow?.webContents.id) {
+      callback({ responseHeaders: details.responseHeaders }); return
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -1582,12 +1647,12 @@ function applySecurityBaseline(): void {
               : "script-src 'self'",
             // Styles still allow inline: Tailwind v4 dev + injected style tags.
             "style-src 'self' 'unsafe-inline'",
-            "img-src 'self' data:",
+            "img-src 'self' data: cat-preview:",
             IS_DEV
               ? "connect-src 'self' http://localhost:5173 ws://localhost:5173"
               : "connect-src 'self'",
             "font-src 'self' data:",
-            "frame-src 'none'",
+            "frame-src cat-preview:",
             "object-src 'none'",
             "base-uri 'none'",
             "form-action 'none'",
@@ -1767,6 +1832,47 @@ function createWindow(): void {
   startRendererHealthTimer()
   window.once('closed', stopRendererHealthTimer)
   mainWindow = window
+  const scrollTimer = setInterval(() => {
+    if (window.isDestroyed()) return
+    for (const frame of window.webContents.mainFrame.frames) {
+      const parsed = parseFilePreviewUrl(frame.url)
+      if (parsed && filePreviews.has(parsed.id)) void readPreviewScroll(parsed.id, parsed.revision)
+    }
+  }, 100)
+  scrollTimer.unref()
+  window.once('closed', () => { clearInterval(scrollTimer); filePreviews.dispose(); previewScroll.clear() })
+  window.webContents.on('will-frame-navigate', event => {
+    if (event.isMainFrame) return
+    const target = parseFilePreviewUrl(event.url)
+    const origin = event.frame && parseFilePreviewUrl(event.frame.url)
+    if (origin && filePreviews.has(origin.id)) {
+      if (target && filePreviews.has(target.id) && event.initiator === window.webContents.mainFrame) return
+      event.preventDefault()
+      if (target?.id === origin.id && filePreviews.has(target.id)) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, { id: origin.id, kind: 'navigate', path: target.path })
+      return
+    }
+    if (!target || !filePreviews.has(target.id)) event.preventDefault()
+  })
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    const key = input.key.toLowerCase()
+    const shellChord = input.meta && !input.control && !input.alt &&
+      (['k', 't', 'w'].includes(key) || /^[1-9]$/.test(key) || input.shift && key === 'b')
+    if (input.key !== 'Escape' && !shellChord) return
+    const live = window.webContents.mainFrame.frames.map(frame => parseFilePreviewUrl(frame.url)).find(parsed => parsed && filePreviews.has(parsed.id))
+    if (!live) return
+    // Suppress the native Close Window accelerator before asynchronous routing.
+    if (shellChord) event.preventDefault()
+    void window.webContents.mainFrame.executeJavaScript(`(() => { const el = document.activeElement; return el instanceof HTMLIFrameElement ? el.src : null })()`)
+      .then(value => {
+        const focused = typeof value === 'string' && parseFilePreviewUrl(value)
+        const parsed = focused || (shellChord ? live : null)
+        if (parsed && filePreviews.has(parsed.id)) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, {
+          id: parsed.id, kind: 'key', key: input.key, code: input.code,
+          metaKey: input.meta, shiftKey: input.shift, altKey: input.alt, ctrlKey: input.control,
+        })
+      }).catch(() => {})
+  })
   const catchUpSkippedRefreshes = () => {
     // Resume only work whose scheduled tick was skipped while no window was
     // visible. Focus changes alone never affect an already-visible window's cadence.
@@ -4261,6 +4367,40 @@ function registerHostControlPlane(): void {
     },
   )
 
+  protocol.handle(FILE_PREVIEW_SCHEME, request => filePreviews.respond(request))
+  ipcMain.handle(CH_FILE_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? filePreviews.prepare(input) : null)
+  ipcMain.handle(CH_FILE_PREVIEW_REFRESH, (event, input: unknown) => {
+    const value = previewIdentity(input)
+    return trustedPreviewSender(event) && value ? filePreviews.refresh(value.id as string) : null
+  })
+  ipcMain.handle(CH_FILE_PREVIEW_COMMIT, (event, input: unknown) => {
+    const value = previewIdentity(input, true)
+    if (!trustedPreviewSender(event) || !value) return false
+    const ok = filePreviews.commit(value.id as string, value.revision as number)
+    if (ok) for (const key of previewScroll.keys()) if (key.startsWith(`${value.id}:`) && key !== `${value.id}:${value.revision}`) previewScroll.delete(key)
+    return ok
+  })
+  ipcMain.on(CH_FILE_PREVIEW_RELEASE, (event, input: unknown) => {
+    const value = previewIdentity(input)
+    if (trustedPreviewSender(event) && value) {
+      filePreviews.release(value.id as string)
+      for (const key of previewScroll.keys()) if (key.startsWith(`${value.id}:`)) previewScroll.delete(key)
+    }
+  })
+  ipcMain.handle(CH_FILE_PREVIEW_SCROLL_READ, (event, input: unknown): Promise<FilePreviewScroll> | FilePreviewScroll => {
+    const value = previewIdentity(input, true)
+    return trustedPreviewSender(event) && value ? readPreviewScroll(value.id as string, value.revision as number) : { x: 0, y: 0 }
+  })
+  ipcMain.handle(CH_FILE_PREVIEW_SCROLL_RESTORE, async (event, input: unknown) => {
+    const value = previewPayload(input, ['id', 'revision', 'scroll'])
+    if (!trustedPreviewSender(event) || !value || !previewIdentity({ id: value.id, revision: value.revision }, true) || !filePreviews.descriptor(value.id as string, value.revision as number)) return
+    const scroll = previewPayload(value.scroll, ['x', 'y'])
+    if (!scroll || typeof scroll.x !== 'number' || typeof scroll.y !== 'number' ||
+      !Number.isFinite(scroll.x) || !Number.isFinite(scroll.y) || Math.abs(scroll.x) > 1e8 || Math.abs(scroll.y) > 1e8) return
+    const frame = previewFrame(value.id as string, value.revision as number)
+    if (frame) await frame.executeJavaScript(`scrollTo(${scroll.x},${scroll.y})`).catch(() => {})
+    previewScroll.set(`${value.id}:${value.revision}`, { x: scroll.x, y: scroll.y })
+  })
   ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE, (_e, input: unknown): Promise<boolean> => {
     if (!host) return Promise.resolve(false)
     return openWorkspaceFile(
@@ -4290,6 +4430,14 @@ function registerHostControlPlane(): void {
       return resolved?.path ?? null
     },
   }))
+  const previewApplications = createPreviewApplications({
+    userData: app.getPath('userData'), sessions: () => host?.listSessions() ?? [],
+    options: { generatedImagesRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'), 'generated-images') },
+    installed: (target, path) => externalAppIcons.installed(target, path),
+    open: (path, target) => launchTargetOpener(path, target),
+  })
+  ipcMain.handle(CH_FILE_PREVIEW_APPLICATIONS, (event, input: unknown) => trustedPreviewSender(event) ? previewApplications.list(input) : { applications: [], selected: 'default' })
+  ipcMain.handle(CH_FILE_PREVIEW_APPLICATION_CHOOSE, (event, input: unknown) => trustedPreviewSender(event) ? previewApplications.choose(input) : false)
   // docs/decisions/2026-10-11-workspace-file-availability.md: metadata only,
   // with the same canonical regular-file policy and no operating-system action.
   let availabilityReads = 0
@@ -4314,6 +4462,13 @@ function launchTargetOpener(
   target?: OpenWorkspaceFileTarget,
   location?: SourceLocation,
 ): Promise<boolean | string> {
+  if (target === 'chrome' || target === 'safari') {
+    return new Promise(resolve => {
+      const child = spawn('/usr/bin/open', ['-b', target === 'chrome' ? 'com.google.Chrome' : 'com.apple.Safari', path], { stdio: 'ignore' })
+      child.once('error', () => resolve(false))
+      child.once('exit', code => resolve(code === 0))
+    })
+  }
   if (target === 'finder') {
     shell.showItemInFolder(path)
     return Promise.resolve(true)
@@ -5259,6 +5414,7 @@ app.on('window-all-closed', () => {
 
 let lidQuitFinished = false
 app.on('before-quit', event => {
+  filePreviews.dispose()
   if (!lidQuitFinished && lidMode) {
     event.preventDefault()
     const ending = lidMode; lidMode = undefined
