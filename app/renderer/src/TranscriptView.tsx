@@ -336,10 +336,10 @@ export type CreatedPeerAvailability = 'available' | 'unavailable' | 'unknown'
 export type CreatedPeerNavigation = {
   availabilityFor: (appSessionId: SessionId) => CreatedPeerAvailability
   open: (appSessionId: SessionId) => void
-}
   /** Whether a peer name written in a message label names a session to open. */
   isNameAvailable: (name: string) => boolean
   openByName: (name: string) => void
+}
 const CreatedPeerNavigationContext = createContext<CreatedPeerNavigation | null>(
   null,
 )
@@ -3649,6 +3649,14 @@ function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
             </span>
           )}
         </div>
+        <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-muted">
+          {text}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /**
  * A peer's name in a message label. It opens that session's tab when the name
  * resolves to exactly one session now, and stays plain text otherwise.
@@ -3667,14 +3675,6 @@ function PeerNameLink({ name }: { name: string }) {
     >
       {name}
     </button>
-  )
-}
-
-        <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-muted">
-          {text}
-        </div>
-      </div>
-    </div>
   )
 }
 
