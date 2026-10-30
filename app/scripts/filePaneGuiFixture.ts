@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { parseAccountsPoolWorkerResult } from '../shared/accountsPoolWorker.js'
 import { createTranscriptCache, readCache, transcriptCacheDir, writeCache } from '../main/transcriptCache.js'
 import { REGISTRY_VERSION, type RegistryDocument } from '../host/registry.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
@@ -14,8 +16,9 @@ const runRoot = realpathSync(mkdtempSync(join(tmpdir(), 'catcode-file-pane-gui-'
 const cwd = join(runRoot, 'workspace')
 const configDir = join(runRoot, 'config')
 const profile = join(runRoot, 'electron-profile')
+const fixtureHome = join(runRoot, 'fixture-home')
 const registryDir = join(configDir, 'desktop')
-for (const directory of [cwd, configDir, profile, registryDir, join(cwd, 'assets'), join(configDir, 'generated-images')]) {
+for (const directory of [cwd, configDir, profile, fixtureHome, registryDir, join(cwd, 'assets'), join(configDir, 'generated-images')]) {
   mkdirSync(directory, { recursive: true, mode: 0o700 })
 }
 
@@ -112,7 +115,16 @@ const bootstrap = join(runRoot, 'isolate-profile.cjs')
 writeFileSync(bootstrap, `const { app } = require('electron');\napp.setPath('userData', ${JSON.stringify(profile)});\n`, { mode: 0o600 })
 const binary = join(appRoot, '.dev-electron', 'Cat Code Dev.app', 'Contents', 'MacOS', 'Electron')
 const port = 5189
-const manifest = { runRoot, cwd, configDir, profile, bootstrap, appRoot, binary, rendererUrl: `http://localhost:${port}`, sessions: registry.sessions.map(row => ({ appSessionId: row.appSessionId, title: row.title })), environment: { CLAUDE_CONFIG_DIR: configDir, CATCODE_RENDERER_URL: `http://localhost:${port}`, CATCODE_TEST_CWD_ALLOWLIST: cwd, CATCODE_DEBUG_STATE: '1', ANTHROPIC_API_KEY: 'catcode-fixture-not-a-real-key' }, warning: 'Offline fixture. Do not submit a turn. The deliberately invalid API key only keeps the empty-account sign-in surface from covering the prepared transcript.' }
+const manifest = { runRoot, cwd, configDir, profile, fixtureHome, bootstrap, appRoot, binary, rendererUrl: `http://localhost:${port}`, sessions: registry.sessions.map(row => ({ appSessionId: row.appSessionId, title: row.title })), environment: { HOME: fixtureHome, CLAUDE_CONFIG_DIR: configDir, CATCODE_RENDERER_URL: `http://localhost:${port}`, CATCODE_TEST_CWD_ALLOWLIST: cwd, CATCODE_DEBUG_STATE: '1', ANTHROPIC_API_KEY: 'catcode-fixture-not-a-real-key' }, warning: 'Offline fixture. Do not submit a turn. The deliberately invalid API key only keeps the empty-account sign-in surface from covering the prepared transcript.' }
+// Both account vault defaults use homedir(), independently of CLAUDE_CONFIG_DIR.
+// Check the exact child environment before publishing a launchable fixture.
+const childEnvironment = { PATH: process.env.PATH ?? '/usr/bin:/bin', NODE_ENV: 'development', ...manifest.environment }
+const homeProbe = spawnSync(process.execPath, ['-e', 'process.stdout.write(require("node:os").homedir())'], { env: childEnvironment, encoding: 'utf8', timeout: 10000 })
+if (homeProbe.status !== 0 || homeProbe.stdout !== fixtureHome) throw new Error('Fixture child HOME is not isolated')
+const poolProbe = spawnSync(process.execPath, ['run', join(appRoot, 'sidecar', 'accountsPoolWorker.ts'), '--bare', '--cached'], { cwd, env: childEnvironment, encoding: 'utf8', timeout: 30000 })
+const poolRecords = poolProbe.stdout.trim().split('\n').filter(Boolean).map(line => parseAccountsPoolWorkerResult(JSON.parse(line)))
+const pool = poolRecords.find(record => record?.type === 'pool')
+if (poolProbe.status !== 0 || pool?.type !== 'pool' || pool.pool.poolCount !== 0 || pool.pool.anthropicPoolCount !== 0 || !pool.pool.anthropicRouteAvailable) throw new Error('Fixture account pool isolation failed')
 writeFileSync(join(runRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 })
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 const envPairs = Object.entries(manifest.environment).map(([key, value]) => `${key}=${quote(value)}`).join(' ')
