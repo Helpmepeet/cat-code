@@ -902,7 +902,7 @@ export function AskQuestionFlow({
  * options without end. An option without a preview, or Other, shows the panel
  * empty for the same reason.
  */
-function OptionPreviews({
+export function OptionPreviews({
   options,
   shownIndex,
 }: {
@@ -952,7 +952,7 @@ function HtmlPreview({ html }: { html: string }) {
  * permission card's kicker size and stroke, so the two cards' kicker rows read
  * as one family.
  */
-function QuestionGlyph() {
+export function QuestionGlyph() {
   return (
     <svg
       aria-hidden

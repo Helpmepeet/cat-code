@@ -201,6 +201,9 @@ export function toSDKMessageOrigin(
   switch (origin.kind) {
     case 'human':
       return { kind: 'human' }
+    case 'question-reply':
+      return { kind: 'question-reply', batchId: origin.batchId, questions: origin.questions,
+        ...(origin.displayQuestions !== undefined ? { displayQuestions: origin.displayQuestions } : {}) }
     case 'interruption':
       return { kind: 'interruption' }
     case 'task-notification':

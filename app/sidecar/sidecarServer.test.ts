@@ -12,6 +12,7 @@ import { installLidWorkRuntime } from '../../src/services/lidClosedWork.js'
 
 import { afterEach, expect, test } from 'bun:test'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import { PendingQuestionRegistry, type QuestionJournalEntry } from '../../src/utils/pendingQuestions.js'
 import { MAX_SUBMIT_IMAGE_BYTES } from '../../src/app-runtime/appSubmitLimits.js'
 import type { AppSessionControllerAdapter } from '../../src/app-runtime/AppSessionController.js'
 import type {
@@ -10289,4 +10290,69 @@ test('lid work control validates received windows and reports current controller
     server.handleData(conn, rawFrame({ type: 'lid.work', requestId: randomUUID(), window: { ...window, active: false } }))
     expect(received.filter(frame => frame.kind === 'lid.work')).toHaveLength(before + 1)
   } finally { finish(); await turn; runtime.dispose() }
+})
+
+async function nonblockingQuestionsBoundary() {
+  const journal: QuestionJournalEntry[] = []
+  const registry = new PendingQuestionRegistry(async entry => { journal.push(entry) })
+  const question = { question: 'Which storage?', multiSelect: false, options: [
+    { label: 'Local', description: 'Disk', preview: '<div>Local layout</div>' }, { label: 'Remote', description: 'Server' },
+  ] }
+  await registry.ask('ask-1', 'assistant-1', [question, { question: 'What name?', multiSelect: false, options: [] }])
+  await registry.ask('ask-2', 'assistant-2', [question])
+  const controller = new AppSessionController({ getQuestionRegistry: () => registry, async *runTurn() {} })
+  return { ...connect(controller), controller, registry, journal }
+}
+
+test('nonblocking v5 boundary accepts one close batch across calls and leaves a partial call pending', async () => {
+  const { server, conn, received, registry, journal } = await nonblockingQuestionsBoundary()
+  expect(received.some(frame => frame.kind === 'event' && frame.event.type === 'question.snapshot' && frame.event.snapshot.pending.length === 3)).toBe(true)
+  const message = { type: 'askUserQuestion.reply' as const, requestId: 'close-batch', replies: [
+    { toolUseId: 'ask-1', questionIndex: 0, answer: { optionIndices: [1] } },
+    { toolUseId: 'ask-2', questionIndex: 0, answer: { optionIndices: [0] } },
+  ] }
+  server.handleData(conn, clientFrame(message))
+  await waitFor(() => received.some(frame => frame.kind === 'question.result' && frame.requestId === message.requestId))
+  expect(received.find(frame => frame.kind === 'question.result')).toMatchObject({ accepted: true })
+  expect(registry.getSnapshot().pending.map(q => [q.toolUseId, q.questionIndex])).toEqual([['ask-1', 1]])
+  const delivery = registry.undelivered(new Set())[0]!
+  expect(JSON.parse(delivery.content).map((value: any) => value.answer)).toEqual(['Remote', 'Local'])
+  server.handleData(conn, clientFrame(message))
+  await waitFor(() => received.filter(frame => frame.kind === 'question.result').length === 2)
+  expect(journal.filter(entry => entry.operation === 'resolved')).toHaveLength(1)
+})
+
+test('nonblocking v5 nested payloads are closed and never accept renderer labels, previews or provenance', async () => {
+  const { server, conn, received, registry } = await nonblockingQuestionsBoundary()
+  const base = { type: 'askUserQuestion.reply', replies: [{ toolUseId: 'ask-1', questionIndex: 0, answer: { optionIndices: [0] } }] }
+  const forgeries = [
+    { ...base, origin: { kind: 'human' } },
+    { ...base, replies: [{ ...base.replies[0], question: 'forged question' }] },
+    { ...base, replies: [{ ...base.replies[0], answer: { optionIndices: [0], label: 'forged choice' } }] },
+    { ...base, replies: [{ ...base.replies[0], answer: { optionIndices: [0], preview: '<div>forged</div>' } }] },
+    { ...base, replies: [{ ...base.replies[0], images: [] }] },
+  ]
+  for (const [index, value] of forgeries.entries()) server.handleData(conn, rawFrame({ ...value, requestId: `forged-${index}` }))
+  expect(received.filter(frame => frame.kind === 'error')).toHaveLength(forgeries.length)
+  expect(registry.getSnapshot().pending).toHaveLength(3)
+  for (const [index, reply] of [
+    { toolUseId: 'invented', questionIndex: 0, answer: { optionIndices: [0] } },
+    { toolUseId: 'ask-1', questionIndex: 0, answer: { optionIndices: [3] } },
+    { toolUseId: 'ask-1', questionIndex: 1, answer: { optionIndices: [0] } },
+  ].entries()) server.handleData(conn, rawFrame({ type: 'askUserQuestion.reply', requestId: `invalid-${index}`, replies: [reply] }))
+  await waitFor(() => received.filter(frame => frame.kind === 'question.result').length === 3)
+  expect(received.filter(frame => frame.kind === 'question.result').every(frame => frame.kind === 'question.result' && !frame.accepted)).toBe(true)
+  expect(registry.getSnapshot().pending).toHaveLength(3)
+})
+
+test('nonblocking v5 answer versus dismiss resolves only one question once and dismissal is silent', async () => {
+  const { server, conn, received, registry, journal } = await nonblockingQuestionsBoundary()
+  server.handleData(conn, clientFrame({ type: 'askUserQuestion.dismiss', requestId: 'dismiss', toolUseId: 'ask-1', questionIndex: 0 }))
+  server.handleData(conn, clientFrame({ type: 'askUserQuestion.reply', requestId: 'racing-answer', replies: [{ toolUseId: 'ask-1', questionIndex: 0, answer: { optionIndices: [1] } }] }))
+  await waitFor(() => received.filter(frame => frame.kind === 'question.result').length === 2)
+  expect(received.filter(frame => frame.kind === 'question.result' && frame.accepted)).toHaveLength(1)
+  expect(registry.getSnapshot().resolved[0]?.state).toBe('dismissed')
+  expect(registry.getSnapshot().pending).toHaveLength(2)
+  expect(registry.undelivered(new Set())).toEqual([])
+  expect(journal.filter(entry => entry.operation === 'resolved')).toHaveLength(1)
 })

@@ -70,6 +70,9 @@ import {
   type AskQuestionReview,
 } from './askQuestionState.js'
 import { AskQuestionFlow } from './AskQuestionFlow.js'
+import { PendingQuestionDock } from './PendingQuestionDock.js'
+import { projectQuestionLifecycles } from './pendingQuestionsState.js'
+import type { QuestionSnapshot, QuestionReplyBatch, QuestionDismiss } from '../../shared/nonblockingQuestions.js'
 import type { AskQuestionDraft } from './askQuestionFlowModel.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
@@ -284,6 +287,10 @@ export function SessionPane({
   onRemovePaste,
   onRevisePlan,
   askQuestion,
+  pendingQuestions,
+  pendingQuestionsSuspended,
+  onReplyPendingQuestions,
+  onDismissPendingQuestion,
   askDraft,
   onAskDraftChange,
   askPendingCount,
@@ -822,7 +829,8 @@ export function SessionPane({
   const paused = permissionQueue.length > 0
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
-  const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
+  const questionSourceRows = selectNestedTranscriptRows(transcript, activeSessionId)
+  const nestedRows = useMemo(() => projectQuestionLifecycles(questionSourceRows, pendingQuestions), [questionSourceRows, pendingQuestions])
   const workspaceBranch = useWorkspaceBranch(
     activeSessionId !== null && activeDescriptor !== undefined && !isManagedChat && nestedRows.length > 0 && !activeDescriptor.moving,
     readBranch,
@@ -879,7 +887,7 @@ export function SessionPane({
     let lastText: string | null = null
     let phaseAnswer: string | null = null
     for (const row of nestedRows) {
-      if ((row.kind === 'user-text' || row.kind === 'user-image') && !row.isHidden) {
+      if ((row.kind === 'user-text' || row.kind === 'user-image' || row.kind === 'question-reply') && !row.isHidden) {
         if (row.frameId === userFrameId) continue
         userFrameId = row.frameId
         userRowId = row.id
@@ -1805,7 +1813,7 @@ export function SessionPane({
       onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
       onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}
       outputRows={revealHidden ? selectNestedTranscriptRows(transcript, activeSessionId, true) : nestedRows}>
-    <main className="session-pane relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-8">
+    <main data-pending-question-owner={activeSessionId ?? undefined} className="session-pane relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-8">
       {/* No chat header row: the prototype's ChatView has none (the session
        * title lives in the TabBar; the title + actions overflow menu is the
        * P4-6b `SessionActionsMenu`, a separate surface). The cwd/status debug
@@ -2144,6 +2152,12 @@ export function SessionPane({
        * has left after the composer, which is the bound that matters, and a
        * fixed ceiling on top of that would make this region scroll in tall
        * windows where the stack already fits. */}
+      {pendingQuestions && activeSessionId && onReplyPendingQuestions && onDismissPendingQuestion ? <div className="nq-slot">
+        <PendingQuestionDock key={`${activeSessionId}:${activeDescriptor?.engineSessionId ?? ''}`} sessionId={activeSessionId}
+          draftScopeId={activeDescriptor?.engineSessionId ?? undefined} questions={pendingQuestions.pending} onClosed={() => composerRef.current?.focus()}
+          isActivePane={isActivePane} suspended={pendingQuestionsSuspended || permissionQueue.length > 0 || planReview !== null || askQuestion !== null}
+          onReply={onReplyPendingQuestions} onDismiss={onDismissPendingQuestion} />
+      </div> : null}
       <div className="min-h-0 overflow-y-auto">
 
       {/* Docked above the composer, in Chat.jsx order — live permission-request
@@ -2986,6 +3000,10 @@ type SessionPaneProps = {
   onRevisePlan: (message: string) => void
   /** P4-20 — the pending AskUserQuestion request, or `null`; drives AskQuestionFlow. */
   askQuestion: AskQuestionReview | null
+  pendingQuestions?: QuestionSnapshot
+  pendingQuestionsSuspended?: boolean
+  onReplyPendingQuestions?: (batch: QuestionReplyBatch) => Promise<void>
+  onDismissPendingQuestion?: (request: QuestionDismiss) => Promise<void>
   askDraft?: AskQuestionDraft
   onAskDraftChange?: (draft: AskQuestionDraft) => void
   /** Session-wide requests still awaiting an answer, this question included.

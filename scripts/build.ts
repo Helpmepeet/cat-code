@@ -110,6 +110,11 @@ for (let i = 0; i < args.length; i += 1) {
     }
     continue
   }
+  // Excluded from both default and dev-full until the eval and approved flip.
+  if (arg === '--nonblocking-questions') {
+    featureSet.add('NONBLOCKING_ASK_USER_QUESTION')
+    continue
+  }
   if (arg === '--feature' && args[i + 1]) {
     featureSet.add(args[i + 1]!)
     i += 1

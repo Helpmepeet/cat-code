@@ -9,6 +9,7 @@
 
 import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
+import { questionReplySchema, questionReferenceSchema } from '../../utils/pendingQuestions.js'
 import {
   AccountInfoSchema,
   AgentDefinitionSchema,
@@ -553,6 +554,8 @@ export const SDKControlElicitationResponseSchema = lazySchema(() =>
 
 export const SDKControlRequestInnerSchema = lazySchema(() =>
   z.union([
+    z.strictObject({ subtype: z.literal('question_reply'), replies: z.array(questionReplySchema).min(1).max(256) }),
+    questionReferenceSchema.extend({ subtype: z.literal('question_dismiss') }),
     SDKControlInterruptRequestSchema(),
     SDKControlPermissionRequestSchema(),
     SDKControlInitializeRequestSchema(),

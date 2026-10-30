@@ -37,6 +37,18 @@ const handoffType = `export type SDKResultHandoff = SDKBaseMessage & {
 `
 for (const path of effortSnapshotPaths) {
   let contents = readFileSync(path, 'utf-8')
+  if (!contents.includes("subtype: 'question_reply'")) {
+    contents = contents.replace('export type SDKControlRequestInner =',
+      "export type SDKControlRequestInner =\n  | { subtype: 'question_reply'; replies: { toolUseId: string; questionIndex: number; answer: { optionIndices: number[]; other?: string; notes?: { optionIndex: number; text: string }[] }; images?: { type: 'image'; source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string } }[] }[] }\n  | { subtype: 'question_dismiss'; toolUseId: string; questionIndex: number }")
+  }
+  if (!contents.includes("kind: 'question-reply'")) {
+    if (!schemas.includes("kind: z.literal('question-reply')")) throw new Error('Missing question reply origin source')
+    contents = contents.replace("export type SDKMessageOrigin =\n  | { kind: 'human' }",
+      "export type SDKMessageOrigin =\n  | { kind: 'human' }\n  | { kind: 'question-reply'; batchId: string; questions: { toolUseId: string; questionIndex: number }[] }")
+  }
+  if (!schemas.includes('displayQuestions:')) throw new Error('Missing question reply display provenance')
+  contents = contents.replace(/^  \| \{ kind: 'question-reply';[^\n]*\}/m,
+    "  | { kind: 'question-reply'; batchId: string; questions: { toolUseId: string; questionIndex: number }[]; displayQuestions?: { toolUseId: string; questionIndex: number }[] }")
   if (!contents.includes("subtype?: 'success' | 'interrupted' | 'handoff'")) {
     contents = contents.replace("subtype?: 'success' | 'interrupted'", "subtype?: 'success' | 'interrupted' | 'handoff'")
   }

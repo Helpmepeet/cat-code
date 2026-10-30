@@ -58,6 +58,9 @@ export function createQueryEngineAppSession(
   }
 
   return {
+    getQuestionRegistry: () => engine.getQuestionRegistry?.(),
+    initializeQuestions: () => engine.initializeQuestions?.() ?? Promise.resolve(),
+    deliverQuestionReplies: () => engine.deliverQuestionReplies?.(),
     getMessages: () => engine.getMessages?.() ?? [],
     requiresRecoveryReview: () => engine.requiresRecoveryReview?.() ?? false,
     executeInlineCommand,

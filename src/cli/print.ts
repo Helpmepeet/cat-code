@@ -1,6 +1,8 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle'
 import { createHeadlessGoalLoop } from './headlessGoalLoop.js'
+import { PendingQuestionRuntime } from '../utils/pendingQuestionRuntime.js'
+import { questionReplyBatchSchema, questionDismissSchema } from '../utils/pendingQuestions.js'
 import { readFile, stat } from 'fs/promises'
 import { dirname } from 'path'
 import {
@@ -481,6 +483,7 @@ export function canBatchWith(
     next !== undefined &&
     next.mode === 'prompt' &&
     next.workload === head.workload &&
+    next.origin === undefined && head.origin === undefined &&
     next.isMeta === head.isMeta
   )
 }
@@ -1320,6 +1323,10 @@ export function runHeadlessStreaming(
   // TODO: Clean up this code to avoid passing around a mutable array.
   const mutableMessages: Message[] = initialMessages
   const restoreReview = new RestoreReviewAdmission(recoveryReviewRequired)
+  const questionRuntime = feature('NONBLOCKING_ASK_USER_QUESTION') ? new PendingQuestionRuntime(() => mutableMessages) : undefined
+  const questionInitialization = restoreReview.required ? Promise.resolve() :
+    (questionRuntime?.initialize() ?? Promise.resolve()).then(() => questionRuntime?.deliver())
+  void questionInitialization.catch(() => {})
   let resumeHooksPending = restoreReview.required
   const freshReviewInputIds = new Set<string>()
 
@@ -1375,7 +1382,7 @@ export function runHeadlessStreaming(
   // One scheduler implementation across runtimes: this drives the same module
   // the terminal, desktop, and web paths do, at headless's own idle boundary.
   // Null when the escape hatch env var is set.
-  const headlessGoalLoop = createHeadlessGoalLoop({ getAppState, setAppState })
+  const headlessGoalLoop = createHeadlessGoalLoop({ getAppState, setAppState, hasPendingQuestions: () => (questionRuntime?.registry.getSnapshot().pending.length ?? 0) > 0 })
   pauseGoalOnAbort = headlessGoalLoop
     ? () => headlessGoalLoop.pauseOnAbort()
     : null
@@ -2062,6 +2069,7 @@ export function runHeadlessStreaming(
     idleTimeout.stop()
 
     headlessProfilerCheckpoint('run_entry')
+    await questionInitialization
     // TODO(custom-tool-refactor): Should move to the init message, like browser
 
     await updateSdkMcp()
@@ -2345,6 +2353,8 @@ export function runHeadlessStreaming(
           if (isSessionPersistenceDisabled() && !restoreReview.required) acknowledgeBatch()
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
+              pendingQuestionRuntime: questionRuntime,
+              origin: cmd.origin,
               commands: uniqBy(
                 [...currentCommands, ...appState.mcp.commands],
                 'name',
@@ -2986,7 +2996,19 @@ export function runHeadlessStreaming(
       }
 
       if (message.type === 'control_request') {
-        if (message.request.subtype === 'interrupt') {
+        if (message.request.subtype === 'question_reply' || message.request.subtype === 'question_dismiss') {
+          try {
+            if (!questionRuntime || restoreReview.required) throw new Error('Nonblocking questions are unavailable')
+            await questionRuntime.initialize()
+            if (message.request.subtype === 'question_reply') {
+              await questionRuntime.registry.reply(questionReplyBatchSchema.parse({ requestId: message.request_id, replies: message.request.replies }))
+              questionRuntime.deliver()
+            } else {
+              await questionRuntime.registry.dismiss(questionDismissSchema.parse({ requestId: message.request_id, toolUseId: message.request.toolUseId, questionIndex: message.request.questionIndex }))
+            }
+            sendControlResponseSuccess(message)
+          } catch (error) { sendControlResponseError(message, String(error)) }
+        } else if (message.request.subtype === 'interrupt') {
           // Track escapes for attribution (ant-only feature)
           if (feature('COMMIT_ATTRIBUTION')) {
             setAppState(prev => ({

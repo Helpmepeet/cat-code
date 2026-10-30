@@ -17,6 +17,16 @@ const MAX_STORED_IMAGE_PATHS = 200
 
 // In-memory cache of stored image paths
 const storedImagePaths = new Map<number, string>()
+let nextImageId = 0
+
+/** The composer and a nonblocking question can hold images at the same time. */
+export function reserveImageId(preferred = 0): number {
+  if (!Number.isSafeInteger(preferred) || preferred < 0) throw new Error('Invalid image id')
+  const id = Math.max(nextImageId, preferred)
+  if (!Number.isSafeInteger(id) || id >= Number.MAX_SAFE_INTEGER) throw new Error('Image id space exhausted')
+  nextImageId = id + 1
+  return id
+}
 
 /**
  * Get the image store directory for the current session.
@@ -48,6 +58,7 @@ export function cacheImagePath(content: PastedContent): string | null {
   if (content.type !== 'image') {
     return null
   }
+  if (Number.isSafeInteger(content.id) && content.id >= 0) nextImageId = Math.max(nextImageId, content.id + 1)
   const imagePath = getImagePath(content.id, content.mediaType || 'image/png')
   evictOldestIfAtCap()
   storedImagePaths.set(content.id, imagePath)

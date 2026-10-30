@@ -8,6 +8,7 @@ import {
   spyOn,
   test,
 } from 'bun:test'
+import { feature } from 'bun:bundle'
 import {
   existsSync,
   mkdirSync,
@@ -196,7 +197,8 @@ function restore(key: string, value: string | undefined): void {
 }
 
 function checkAgainstSnapshot(name: string, actual: string): void {
-  const path = join(SNAPSHOT_DIR, `${name}.txt`)
+  const suffix = feature('NONBLOCKING_ASK_USER_QUESTION') ? '.nonblocking-questions' : ''
+  const path = join(SNAPSHOT_DIR, `${name}${suffix}.txt`)
   if (UPDATING) {
     writeFileSync(path, actual)
     return

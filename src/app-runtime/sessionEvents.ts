@@ -56,6 +56,13 @@ export type AppSessionTurnStatusEvent = {
   activeTurn: boolean
 }
 
+export type AppSessionQuestionSnapshotEvent = {
+  type: 'question.snapshot'
+  snapshot: QuestionSnapshot
+}
+
+import type { QuestionSnapshot } from '../utils/pendingQuestions.js'
+
 export type AppSessionEvent =
   | AutoModeReview
   | ToolActivity
@@ -65,6 +72,7 @@ export type AppSessionEvent =
   | AppSessionPermissionResolvedEvent
   | AppSessionAbortStatusEvent
   | AppSessionTurnStatusEvent
+  | AppSessionQuestionSnapshotEvent
 
 export function createMessageEvent(message: SDKMessage): AppSessionMessageEvent {
   return {

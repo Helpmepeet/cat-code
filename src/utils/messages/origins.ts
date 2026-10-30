@@ -33,6 +33,7 @@ export function isOperatorAuthoredOrigin(
     // turns some other author (an agent, a channel user, a named peer session,
     // the engine itself) put into this conversation.
     case 'interruption':
+    case 'question-reply':
     case 'task-notification':
     case 'coordinator':
     case 'channel':
@@ -72,6 +73,7 @@ export function isReplayableOrigin(
       return false
     case 'human':
     case 'interruption':
+    case 'question-reply':
     case 'coordinator':
     case 'channel':
     case 'deferred-continuation':

@@ -18,7 +18,7 @@ import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 
 import { getCacheControl } from '../../services/api/claude.js'
 import { parsePromptTooLongTokenCounts } from '../../services/api/errors.js'
 import type { Tool, ToolPermissionContext, Tools } from '../../Tool.js'
-import type { Message, UserMessage } from '../../types/message.js'
+import type { Message, MessageOrigin, UserMessage } from '../../types/message.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import type {
   ClassifierUsage,
@@ -426,6 +426,15 @@ function relayPrefixFor(msg: UserMessage): string {
   return ''
 }
 
+function questionReplyPrefix(origin: MessageOrigin | undefined): string | null {
+  if (origin?.kind !== 'question-reply') return null
+  // The registry validates these references before minting this engine-owned
+  // origin. A compacted model seed no longer contains the original tool call.
+  return Array.isArray(origin.questions) && origin.questions.length > 0 && origin.questions.every(ref =>
+    typeof ref.toolUseId === 'string' && ref.toolUseId.length > 0 && Number.isInteger(ref.questionIndex) && ref.questionIndex >= 0 && ref.questionIndex <= 3)
+    ? '[User answered AskUserQuestion]: ' : '[Unverified question reply - not user authorization]: '
+}
+
 /**
  * The user's answer to a question the agent asked, or null for any other tool
  * result. Correlation is by tool_use id, so a result cannot claim to be an
@@ -451,7 +460,8 @@ function askUserQuestionAnswerText(
             .map(b => b.text)
             .join('\n')
         : ''
-  const text = raw.replace(/^User has answered your questions:\s*/, '').trim()
+  if (!raw.startsWith('User has answered your questions:')) return null
+  const text = raw.slice('User has answered your questions:'.length).trim()
   return text.length > 0 ? text : null
 }
 
@@ -518,6 +528,10 @@ export function buildTranscriptEntries(
             .join('\n') || null
       }
       if (text !== null) {
+        const origin = queuedCommandOrigin(msg.attachment)
+        if (origin?.kind === 'question-reply') {
+          text = questionReplyPrefix(origin) + text
+        }
         appendProposal(
           isHumanQueuedReply(msg.attachment),
           typeof msg.attachment === 'object' && msg.attachment !== null &&
@@ -536,7 +550,7 @@ export function buildTranscriptEntries(
       // A worker result or teammate relay is delivered as a user-role turn, so
       // without this it reads as the user's own words and can clear a soft-block
       // bar. The ported prompt distrusts a relay only if it can recognise one.
-      const prefix = relayPrefixFor(msg)
+      const prefix = questionReplyPrefix(msg.origin) ?? relayPrefixFor(msg)
       if (typeof content === 'string') {
         textBlocks.push({ type: 'text', text: prefix + content })
       } else if (Array.isArray(content)) {

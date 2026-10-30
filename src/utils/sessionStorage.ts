@@ -2047,6 +2047,12 @@ class Project {
     })
   }
 
+  async insertQuestionLifecycle(entry: import('./pendingQuestions.js').QuestionJournalEntry) {
+    return this.trackWrite(async () => {
+      await this.appendEntry({ ...entry, sessionId: getSessionId(), timestamp: new Date().toISOString() })
+    })
+  }
+
   async insertAttributionSnapshot(snapshot: AttributionSnapshotMessage) {
     return this.trackWrite(async () => {
       await this.appendEntry(snapshot)
@@ -2447,6 +2453,11 @@ export async function recordSidechainTranscript(
 
 export async function recordQueueOperation(queueOp: QueueOperationMessage) {
   await getProject().insertQueueOperation(queueOp)
+}
+
+export async function recordQuestionLifecycle(entry: import('./pendingQuestions.js').QuestionJournalEntry): Promise<void> {
+  await getProject().insertQuestionLifecycle(entry)
+  await flushCurrentTranscriptDurably()
 }
 
 /**
@@ -5020,6 +5031,7 @@ export async function loadTranscriptFile(
   contextCollapseCommits: ContextCollapseCommitEntry[]
   contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
   queueOperations: SessionQueueOperation[]
+  questionLifecycles: import('./pendingQuestions.js').QuestionJournalEntry[]
   leafUuids: Set<UUID>
   sourceTruncated: boolean
   sourceBytesRead: number
@@ -5054,6 +5066,7 @@ export async function loadTranscriptFile(
   // Last-wins — later entries supersede.
   let contextCollapseSnapshot: ContextCollapseSnapshotEntry | undefined
   const queueOperations: SessionQueueOperation[] = []
+  const questionLifecycles: import('./pendingQuestions.js').QuestionJournalEntry[] = []
   let sourceTruncated = false
   let sourceBytesRead = 0
   let activeConversationTip: ActiveConversationTipEntry | undefined
@@ -5309,6 +5322,8 @@ export async function loadTranscriptFile(
         contextCollapseCommits.push(entry)
       } else if (entry.type === 'marble-origami-snapshot') {
         contextCollapseSnapshot = entry
+      } else if (entry.type === 'question-lifecycle') {
+        questionLifecycles.push(entry)
       } else if (entry.type === 'queue-operation') {
         queueOperations.push({
           operation: entry.operation,
@@ -5319,6 +5334,7 @@ export async function loadTranscriptFile(
           ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
           ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
           ...(entry.content !== undefined ? { content: entry.content } : {}),
+          ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
           ...(entry.operation === 'enqueue' ? {
             priorAssistantContext: parsePriorAssistantContext(entry.priorAssistantContext),
           } : {}),
@@ -5466,6 +5482,7 @@ export async function loadTranscriptFile(
     contextCollapseCommits,
     contextCollapseSnapshot,
     queueOperations,
+    questionLifecycles,
     leafUuids,
     sourceTruncated,
     sourceBytesRead,
@@ -5546,6 +5563,7 @@ async function loadSessionFile(
 
 export type SessionQueueOperation = {
   queueVersion?: QueueOperationMessage['queueVersion']
+  origin?: import('../types/message.js').MessageOrigin
   priorAssistantContext?: import('../types/message.js').PriorAssistantContext | null
   /**
    * Preserve reservation versus explicit cancellation verbs. A reservation

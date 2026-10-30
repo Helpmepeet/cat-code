@@ -1,4 +1,6 @@
 import { feature } from 'bun:bundle'
+import { PendingQuestionRuntime } from './utils/pendingQuestionRuntime.js'
+import { wrapCommandText } from './utils/messages.js'
 import { capturePriorAssistantContext } from './utils/permissions/priorAssistantContext.js'
 import { encodeInlineCommandResult, parseInlineCommandResult, type InlineCommandRun } from '../app/shared/inlineCommand.js'
 import { resolveInlineCommandSource, runInlineCommand, type InlineCommandOperation } from './app-runtime/inlineCommand.js'
@@ -167,6 +169,7 @@ const snipProjection = feature('HISTORY_SNIP')
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 export type QueryEngineConfig = {
+  pendingQuestionRuntime?: PendingQuestionRuntime
   cwd: string
   tools: Tools
   commands: Command[]
@@ -316,6 +319,7 @@ export function resolveMcpRuntimeInputs(
 }
 
 export class QueryEngine {
+  readonly questionRuntime: PendingQuestionRuntime | undefined
   private config: QueryEngineConfig
   private mutableMessages: Message[]
   private abortController: AbortController
@@ -348,6 +352,7 @@ export class QueryEngine {
   constructor(config: QueryEngineConfig) {
     this.config = config
     this.mutableMessages = config.initialMessages ?? []
+    this.questionRuntime = feature('NONBLOCKING_ASK_USER_QUESTION') ? config.pendingQuestionRuntime ?? new PendingQuestionRuntime(() => this.mutableMessages) : undefined
     this.abortController = config.abortController ?? createAbortController()
     this.permissionDenials = []
     this.readFileState = config.readFileCache
@@ -359,6 +364,13 @@ export class QueryEngine {
   }
 
   requiresRecoveryReview(): boolean { return this.tailRecoveryHold }
+  async initializeQuestions(): Promise<void> {
+    if (this.tailRecoveryHold) return
+    await this.questionRuntime?.initialize()
+    this.questionRuntime?.deliver()
+  }
+  getQuestionRegistry() { return this.questionRuntime?.registry }
+  deliverQuestionReplies(): void { this.questionRuntime?.deliver() }
 
   async *executeInlineCommand(operation: InlineCommandOperation): AsyncGenerator<SDKMessage, void, unknown> {
     if (this.tailRecoveryHold) throw new Error('Review recovered history with a new user message before continuing')
@@ -492,12 +504,20 @@ export class QueryEngine {
     if (this.tailRecoveryHold && !freshHandoffAdmitted && (options.isMeta || options.origin || options.handoffContinuation || options.inlineCommand)) {
       throw new Error('Recovered history requires a genuine user message')
     }
+    await this.initializeQuestions()
+    if (options.origin?.kind === 'question-reply') {
+      if (options.origin.engineSessionId !== undefined && options.origin.engineSessionId !== getSessionId()) return
+      const origin = options.origin
+      prompt = typeof prompt === 'string' ? wrapCommandText(prompt, origin) : prompt.map(block =>
+        block.type === 'text' ? { ...block, text: wrapCommandText(block.text, origin) } : block)
+    }
     if (options?.inlineCommand) {
       yield* this.executeInlineCommand(options.inlineCommand)
       return
     }
     const releaseTranscriptLane = await this.acquireTranscriptLane()
     const pendingTranscriptWrites: Promise<unknown>[] = []
+    this.questionRuntime?.registry.beginTurn()
     try {
     if (options?.handoffReconciliationAdmission &&
       (options.isMeta || options.origin || options.handoffContinuation)) {
@@ -665,6 +685,7 @@ export class QueryEngine {
 
     let processUserInputContext: ProcessUserInputContext = {
       turnHandoff,
+      pendingQuestions: this.questionRuntime?.registry,
       messages: this.mutableMessages,
       // Slash commands that mutate the message array (e.g. /force-snip)
       // call setMessages(fn).  In interactive mode this writes back to
@@ -916,6 +937,8 @@ export class QueryEngine {
           acceptTailRecoveryReview(this.tailRecoveryPath, getSessionId(), input.uuid)
         }
         this.tailRecoveryHold = false
+        await this.initializeQuestions()
+        this.questionRuntime?.registry.beginTurn()
       }
       if (options?.onHandoffInputCommitted) {
         const checkpoint = await sealResumeCheckpoint(messages)
@@ -1002,6 +1025,7 @@ export class QueryEngine {
     // model (from slash commands).
     processUserInputContext = {
       turnHandoff,
+      pendingQuestions: this.questionRuntime?.registry,
       messages,
       setMessages: () => {},
       onChangeAPIKey: () => {},
@@ -2019,6 +2043,7 @@ export class QueryEngine {
       retainedTip as UUID | null,
     )
     this.mutableMessages = retainedMessages
+    await this.questionRuntime?.restore()
     this.config.setAppState(prev => ({
       ...prev,
       toolPermissionContext:
@@ -2097,7 +2122,11 @@ export async function* ask({
   acceptedInputUuids,
   resumeHooksDeferred,
   onResumeHooksApplied,
+  pendingQuestionRuntime,
+  origin,
 }: {
+  pendingQuestionRuntime?: PendingQuestionRuntime
+  origin?: MessageOrigin
   commands: Command[]
   prompt: string | Array<ContentBlockParam>
   promptUuid?: string
@@ -2136,6 +2165,7 @@ export async function* ask({
   onResumeHooksApplied?: () => void
 }): AsyncGenerator<SDKMessage, void, unknown> {
   const engine = new QueryEngine({
+    pendingQuestionRuntime,
     cwd,
     tools,
     commands,
@@ -2177,6 +2207,7 @@ export async function* ask({
 
   try {
     yield* engine.submitMessage(prompt, {
+      origin,
       uuid: promptUuid,
       isMeta,
       onInputPersisted,

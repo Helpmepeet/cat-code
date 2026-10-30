@@ -20,6 +20,7 @@ export function isRelayedOrigin(origin: MessageOrigin | undefined): boolean {
     // The user's own keyboard, their cancellation marker, and the harness
     // re-delivering a job the user themselves queued.
     case 'human':
+    case 'question-reply':
     case 'interruption':
     case 'deferred-continuation':
       return false

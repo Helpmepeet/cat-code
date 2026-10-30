@@ -21,6 +21,7 @@ import {
 /** Every member of `MessageOrigin`, so a new kind fails to compile here too. */
 const ORIGINS: Record<MessageOrigin['kind'], MessageOrigin> = {
   human: { kind: 'human' },
+  'question-reply': { kind: 'question-reply', batchId: 'close-1', questions: [{ toolUseId: 'ask-1', questionIndex: 0 }] },
   interruption: { kind: 'interruption' },
   'task-notification': { kind: 'task-notification' },
   coordinator: { kind: 'coordinator' },
@@ -82,6 +83,7 @@ describe('replayableUserMessagesFilter', () => {
   test('still replays injected instruction turns', () => {
     for (const kind of [
       'human',
+      'question-reply',
       'coordinator',
       'channel',
       'deferred-continuation',

@@ -206,6 +206,8 @@ export type ToolResultProjection = {
   askUserQuestion?: {
     answers: Record<string, string>
     notesByQuestion: Record<string, string>
+    statesByQuestion?: Record<string, 'pending' | 'answered' | 'dismissed'>
+    shown?: true
   }
   generatedImage?: {
     filePath: string
@@ -361,6 +363,12 @@ export type UserTextRow = RowSource & {
   isReplay: boolean
 }
 
+export type QuestionReplyRow = RowSource & {
+  kind: 'question-reply'
+  isReplay: boolean
+  items: { question: string; answer: string; note?: string; state: 'answered' }[]
+}
+
 export type CommandEchoRow = RowSource & {
   kind: 'command-echo'
   commandName: string
@@ -510,6 +518,7 @@ export type TranscriptRow =
   | ThinkingRow
   | RedactedThinkingRow
   | UserTextRow
+  | QuestionReplyRow
   | CommandEchoRow
   | UserImageRow
   | TaskNotificationRow
@@ -2763,7 +2772,7 @@ function currentScopeRows(draft: SessionDraft, parent: string | null, insertAt: 
   for (let index = (insertAt ?? draft.session.rows.length) - 1; index >= 0; index--) {
     const row = draft.session.rows[index]!
     const scope = 'parentToolUseId' in row ? row.parentToolUseId ?? null : null
-    if (scope === parent && (row.kind === 'result' || row.kind === 'turn-stopped' || row.kind === 'user-text')) break
+    if (scope === parent && (row.kind === 'result' || row.kind === 'turn-stopped' || row.kind === 'user-text' || row.kind === 'question-reply')) break
     if (scope === parent) rows.push(row)
   }
   return rows.reverse()
@@ -2982,6 +2991,7 @@ function extractAskUserQuestionResult(
   return {
     answers: Object.fromEntries(Object.entries(answers)),
     notesByQuestion: Object.fromEntries(noteEntries),
+    ...(toolUseResult.shown === true ? { shown: true as const } : {}),
   }
 }
 
@@ -2989,10 +2999,9 @@ function isAskUserQuestionShape(value: unknown): boolean {
   if (!isRecord(value)) return false
   if (
     typeof value.question !== 'string' ||
-    typeof value.header !== 'string' ||
     (value.multiSelect !== undefined && typeof value.multiSelect !== 'boolean') ||
     !Array.isArray(value.options) ||
-    value.options.length < 2 ||
+    value.options.length === 1 ||
     value.options.length > 4
   ) {
     return false
@@ -3675,6 +3684,7 @@ function projectUserContentBlock(
   },
 ):
   | UserTextRow
+  | QuestionReplyRow
   | CommandEchoRow
   | UserImageRow
   | TaskNotificationRow
@@ -3686,6 +3696,26 @@ function projectUserContentBlock(
 
   if (block.type === 'text') {
     if (typeof block.text !== 'string') return null
+    if (origin?.kind === 'question-reply' && origin.questionRefs) {
+      if (origin.displayQuestions?.length === 0) return null
+      const preamble = 'The user answered questions you asked earlier (AskUserQuestion). Each quoted record identifies its question and answer:\n'
+      try {
+        const records: unknown = JSON.parse(block.text.startsWith(preamble) ? block.text.slice(preamble.length) : block.text)
+        const expected = new Set(origin.questionRefs.map(ref => JSON.stringify([ref.toolUseId, ref.questionIndex])))
+        if (Array.isArray(records) && records.length > 0 && records.length === expected.size && records.every(value => isRecord(value) &&
+          typeof value.toolUseId === 'string' && Number.isInteger(value.questionIndex) &&
+          typeof value.question === 'string' && typeof value.answer === 'string' &&
+          (value.notes === undefined || typeof value.notes === 'string') &&
+          expected.delete(JSON.stringify([value.toolUseId, value.questionIndex])))) {
+          const display = origin.displayQuestions && new Set(origin.displayQuestions.map(ref => JSON.stringify([ref.toolUseId, ref.questionIndex])))
+          const visible = records.filter(value => !display || display.has(JSON.stringify([value.toolUseId, value.questionIndex])))
+          if (!visible.length) return null
+          return { ...source, ...rowMetadata, id: rowId(source, 'question-reply'), kind: 'question-reply',
+            items: visible.map(value => ({ question: value.question, answer: value.answer, state: 'answered',
+              ...(value.notes ? { note: value.notes } : {}) })) }
+        }
+      } catch { /* Unknown reply encodings remain labelled injected turns. */ }
+    }
     // Provenance outranks every text heuristic below: an injected turn may
     // legitimately contain a `<command-message>` or any other marker, and the
     // operator must never be shown as its author.
@@ -4005,6 +4035,8 @@ function stripCrossSessionEnvelope(text: string): string {
  */
 type InjectedOrigin = {
   kind: string
+  questionRefs?: { toolUseId: string; questionIndex: number }[]
+  displayQuestions?: { toolUseId: string; questionIndex: number }[]
   /** Sender handle when the origin names one; null otherwise. */
   label: string | null
   /** `task-notification` status; null for every other kind. */
@@ -4053,6 +4085,14 @@ function projectMessageOrigin(value: unknown): InjectedOrigin | null {
     kind,
     label,
     status,
+    ...(kind === 'question-reply' && Array.isArray(value.questions) && value.questions.every(ref =>
+      isRecord(ref) && typeof ref.toolUseId === 'string' && typeof ref.questionIndex === 'number' && Number.isInteger(ref.questionIndex) && ref.questionIndex >= 0 && ref.questionIndex <= 3) ? {
+      questionRefs: value.questions.map(ref => ({ toolUseId: ref.toolUseId, questionIndex: ref.questionIndex })),
+    } : {}),
+    ...(kind === 'question-reply' && Array.isArray(value.displayQuestions) && value.displayQuestions.every(ref =>
+      isRecord(ref) && typeof ref.toolUseId === 'string' && typeof ref.questionIndex === 'number' && Number.isInteger(ref.questionIndex) && ref.questionIndex >= 0 && ref.questionIndex <= 3) ? {
+      displayQuestions: value.displayQuestions.map(ref => ({ toolUseId: ref.toolUseId, questionIndex: ref.questionIndex })),
+    } : {}),
     toolUseId: isTaskNotification ? nonEmptyString(value.toolUseId) : null,
     completion: isTaskNotification
       ? {

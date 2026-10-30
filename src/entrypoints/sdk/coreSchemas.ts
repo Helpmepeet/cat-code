@@ -1353,6 +1353,12 @@ export const SDKAccountDiagnosticProviderSchema = lazySchema(() =>
 export const SDKMessageOriginSchema = lazySchema(() =>
   z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('human') }),
+    z.object({
+      kind: z.literal('question-reply'),
+      batchId: z.string(),
+      questions: z.array(z.object({ toolUseId: z.string(), questionIndex: z.number().int().min(0).max(3) })),
+      displayQuestions: z.array(z.object({ toolUseId: z.string(), questionIndex: z.number().int().min(0).max(3) })).optional(),
+    }),
     z.object({ kind: z.literal('interruption') }),
     z.object({
       kind: z.literal('task-notification'),

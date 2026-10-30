@@ -87,6 +87,7 @@ import { appClientMessageSchema } from '../../src/app-runtime/appSessionProtocol
 // `tool_name: tool.name`), so the sidecar's tool gate can never drift from the
 // real name. `prompt.js` is a constants-only module (no React graph).
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../src/tools/AskUserQuestionTool/prompt.js'
+import { acceptQuestionVerb, questionVerbSchema } from './nonblockingQuestionMessages.js'
 import type {
   AppClientMessage,
   AppSubmitMessage,
@@ -848,6 +849,7 @@ export class SidecarServer {
    * synchronously at dispatch, decremented when the promise settles.
    */
   private inFlightDurableWrites = 0
+  private questionWritesInFlight = 0
   /** One-shot guard for the wham/usage populate (accounts snapshot). */
   private usageRefreshStarted = false
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
@@ -1206,6 +1208,7 @@ export class SidecarServer {
       })
     }
     this.publishHandoffState(connection)
+    this.sendQuestionSnapshot(connection)
     // C3 — snapshot on attach, immediately after `ready` (a separate app-owned
     // frame; the engine-owned AppReadyPayload is deliberately not widened).
     if (this.permissions) {
@@ -1664,6 +1667,7 @@ export class SidecarServer {
         (server, connection, message) =>
           server.handleAskUserQuestionAnswer(connection, message),
       ],
+      [['askUserQuestion.reply', 'askUserQuestion.dismiss'], (server, connection, message) => { void server.handleQuestionVerb(connection, message) }],
       // P4-5 account lifecycle verbs, dispatched to the engine's own account
       // machinery. Host-originated account invalidations are deliberately NOT
       // in `SESSION_ACCOUNT_VERB_TYPES` and have their own handler.
@@ -2267,9 +2271,8 @@ export class SidecarServer {
         this.manualCloseRequested = true
         this.controller.abort('Chat closed')
         const removed = removeByFilter(command =>
-          isDeliverableParentPrompt(command) && command.origin === undefined && !command.isMeta &&
-          command.uuid !== undefined &&
-          (this.stagedPrompts.has(command.uuid) || this.retriedQueuedPromptKeys.has(command.uuid)),
+          isCloseCancellablePrompt(command, command.uuid !== undefined &&
+            (this.stagedPrompts.has(command.uuid) || this.retriedQueuedPromptKeys.has(command.uuid))),
         )
         for (const command of removed) this.closeCancelledManualCommands.set(command.uuid!, command)
         reason = 'durability_unconfirmed'
@@ -2373,7 +2376,7 @@ export class SidecarServer {
     const canStart = allowUserReconciliation
       ? this.controller.requiresHandoffReconciliation() &&
         !this.controller.getHandoffReservation()
-      : this.controller.canStartAutomaticTurn()
+      : this.controller.hasQuestionRuntime?.() ? this.controller.canStartQueuedTurn() : this.controller.canStartAutomaticTurn()
     if (!canStart) return false
     if (this.closed || this.parking || this.activeTurn) return false
     if (
@@ -2387,6 +2390,8 @@ export class SidecarServer {
     // this prompt itself on its way out.
     const command = dequeue(command =>
       isDeliverableParentPrompt(command) &&
+      (this.controller.canStartAutomaticTurn() || command.origin?.kind === 'question-reply' ||
+        command.origin === undefined && !command.isMeta) &&
       (!allowUserReconciliation ||
         (command.uuid !== undefined &&
           this.forcedReconciliationPromptIds.has(command.uuid))),
@@ -2418,6 +2423,7 @@ export class SidecarServer {
       ...(command.uuid !== undefined ? { uuid: command.uuid } : {}),
       ...(command.isMeta !== undefined ? { isMeta: command.isMeta } : {}),
       priorAssistantContext: command.priorAssistantContext ?? null,
+      ...(command.origin ? { origin: command.origin } : {}),
       generateTitle: true,
       announcePrompt: stagedUuid !== null,
       onInputPersisted: () => {
@@ -2812,13 +2818,11 @@ export class SidecarServer {
 
   private retainOrCancelCloseInput(command: QueuedCommand, knownManual: boolean): void {
     // A failed reserve is not consumed input. Restore uncertain/peer input;
-    // recognized manual input instead leaves an explicit cancellation record.
+    // recognized manual input and validated answers leave explicit cancellation.
     enqueue(command)
-    if (!knownManual || !command.uuid || command.origin !== undefined || command.isMeta) {
-      return
-    }
+    if (!isCloseCancellablePrompt(command, knownManual)) return
     for (const removed of removeByFilter(queued => queued.uuid === command.uuid &&
-      isDeliverableParentPrompt(queued) && queued.origin === undefined && !queued.isMeta)) {
+      isCloseCancellablePrompt(queued, knownManual))) {
       this.closeCancelledManualCommands.set(removed.uuid!, removed)
     }
     void this.persistCloseManualCancellations().catch(error =>
@@ -4401,7 +4405,7 @@ export class SidecarServer {
       })
     }
 
-    if (this.manualCloseRequested || this.parking || this.inlineCommandActive || this.conversationMutationInFlight || this.controller.getHandoffReservation()) {
+    if (this.manualCloseRequested || this.parking || this.inlineCommandActive || this.conversationMutationInFlight || this.questionWritesInFlight > 0 || this.controller.getHandoffReservation()) {
       refuse('Another conversation update is already in progress.')
       return
     }
@@ -4549,6 +4553,12 @@ export class SidecarServer {
     connection.loadEarlierComplete = false
   }
 
+  private sendQuestionSnapshot(connection: Connection): void {
+    if (!this.controller.hasQuestionRuntime?.()) return
+    this.send(connection, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: this.sessionId,
+      event: { type: 'question.snapshot', snapshot: this.controller.getQuestionSnapshot() } })
+  }
+
   private broadcastTranscriptReset(): void {
     this.inlineCommands.retirePreviews()
     for (const connection of this.connections) {
@@ -4559,6 +4569,7 @@ export class SidecarServer {
         sessionId: this.sessionId,
       })
       this.sendInlineCommands(connection)
+      this.sendQuestionSnapshot(connection)
     }
   }
 
@@ -4573,6 +4584,7 @@ export class SidecarServer {
       })
       this.sendHistoryAvailability(connection, this.sendHistoryReplay(connection))
       this.sendInlineCommands(connection)
+      this.sendQuestionSnapshot(connection)
     }
   }
 
@@ -4917,6 +4929,35 @@ export class SidecarServer {
    * check (T6 guards renderer-SUPPLIED updatedInput; the renderer supplies none).
    * Fail-closed at every step: an invalid frame leaves the request pending.
    */
+  private async handleQuestionVerb(connection: Connection, raw: unknown): Promise<void> {
+    const parsed = questionVerbSchema.safeParse(raw)
+    if (!parsed.success) {
+      const requestId = raw && typeof raw === 'object' && 'requestId' in raw && typeof raw.requestId === 'string' ? raw.requestId : undefined
+      this.sendError(connection, requestId, 'bad_request', parsed.error.issues[0]?.message ?? 'Invalid question response', false)
+      return
+    }
+    this.inFlightDurableWrites++
+    this.questionWritesInFlight++
+    let accepted = false
+    try {
+      if (this.closed || this.parking || this.manualCloseRequested || this.conversationMutationInFlight) throw new Error('Session is unavailable')
+      await acceptQuestionVerb(this.controller, parsed.data)
+      // Close can cross the durable answer write. Retract its newly enqueued
+      // outbox input before acknowledging, just like an already waiting answer.
+      if (this.manualCloseRequested) {
+        for (const command of removeByFilter(queued => queued.origin?.kind === 'question-reply' &&
+          isCloseCancellablePrompt(queued, false))) this.closeCancelledManualCommands.set(command.uuid!, command)
+        await this.persistCloseManualCancellations()
+      }
+      accepted = true
+    } catch (error) {
+      this.log(`[sidecar] ${parsed.data.type} request=${parsed.data.requestId} rejected: ${String(error)}`)
+    } finally { this.inFlightDurableWrites--; this.questionWritesInFlight-- }
+    this.send(connection, { kind: 'question.result', protocolVersion: PROTOCOL_VERSION, sessionId: this.sessionId,
+      requestId: parsed.data.requestId, accepted })
+    if (accepted) this.scheduleBoundaryDrain()
+  }
+
   private handleAskUserQuestionAnswer(
     connection: Connection,
     rawMessage: unknown,
@@ -6582,6 +6623,11 @@ function isDeliverableParentPrompt(command: QueuedCommand): boolean {
   return command.mode === 'prompt' && command.agentId === undefined
 }
 
+function isCloseCancellablePrompt(command: QueuedCommand, knownManual: boolean): boolean {
+  return isDeliverableParentPrompt(command) && !command.isMeta && command.uuid !== undefined &&
+    (command.origin?.kind === 'question-reply' || knownManual && command.origin === undefined)
+}
+
 /** Its twin for worker results: same addressing rule, different mode. */
 function isDeliverableParentTaskNotification(command: QueuedCommand): boolean {
   return (
@@ -6853,6 +6899,8 @@ function checkStrictKeys(message: unknown): string | null {
     // inner `{optionIndices, other}` shape is closed by the sidecar-local Zod
     // schema below (checkStrictKeys guards only top-level keys).
     ['askUserQuestion.answer', new Set(['type', 'requestId', 'answers'])],
+    ['askUserQuestion.reply', new Set(['type', 'requestId', 'replies'])],
+    ['askUserQuestion.dismiss', new Set(['type', 'requestId', 'toolUseId', 'questionIndex'])],
     ['notification.planApprove', new Set(['type', 'requestId', 'optionIndex'])],
     // Account lifecycle verbs are app-owned; see
     // `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md` and

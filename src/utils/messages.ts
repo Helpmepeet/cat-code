@@ -115,7 +115,7 @@ import { EXPLORE_AGENT } from 'src/tools/AgentTool/built-in/exploreAgent.js'
 import { PLAN_AGENT } from 'src/tools/AgentTool/built-in/planAgent.js'
 import { areExplorePlanAgentsEnabled } from 'src/tools/AgentTool/builtInAgents.js'
 import { AGENT_TOOL_NAME } from 'src/tools/AgentTool/constants.js'
-import { ASK_USER_QUESTION_TOOL_NAME } from 'src/tools/AskUserQuestionTool/prompt.js'
+import { ASK_USER_QUESTION_TOOL_NAME, QUESTION_ANSWER_BOUNDARY } from 'src/tools/AskUserQuestionTool/prompt.js'
 import { BashTool } from 'src/tools/BashTool/BashTool.js'
 import { ExitPlanModeV2Tool } from 'src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.js'
 import { FileEditTool } from 'src/tools/FileEditTool/FileEditTool.js'
@@ -3502,8 +3502,8 @@ Goal: Review the plan(s) from Phase 2 and ensure alignment with the user's inten
 ${getPlanPhase4Section()}
 
 ### Phase 5: Call ${ExitPlanModeV2Tool.name}
-At the very end of your turn, once you have asked the user questions and are happy with your final plan file - you should always call ${ExitPlanModeV2Tool.name} to indicate to the user that you are done planning.
-This is critical - your turn should only end with either using the ${ASK_USER_QUESTION_TOOL_NAME} tool OR calling ${ExitPlanModeV2Tool.name}. Do not stop unless it's for these 2 reasons
+Once the answers your plan depends on have arrived and the final plan file is ready, call ${ExitPlanModeV2Tool.name} to request approval. Asking a question is not receiving its answer.
+End your turn after asking with ${ASK_USER_QUESTION_TOOL_NAME} when the plan depends on the answer, or call ${ExitPlanModeV2Tool.name} when ready for approval. ${QUESTION_ANSWER_BOUNDARY}
 
 **Important:** Use ${ASK_USER_QUESTION_TOOL_NAME} ONLY to clarify requirements or choose between approaches. Use ${ExitPlanModeV2Tool.name} to request plan approval. Do NOT ask about plan approval in any other way - no text questions, no AskUserQuestion. Phrases like "Is this plan okay?", "Should I proceed?", "How does this plan look?", "Any changes before we start?", or similar MUST use ${ExitPlanModeV2Tool.name}.
 
@@ -3561,7 +3561,7 @@ Repeat this cycle until the plan is complete:
 
 1. **Explore** — Use ${getReadOnlyToolNames()} to read code. Look for existing functions, utilities, and patterns to reuse.${areExplorePlanAgentsEnabled() ? ` You can use the ${EXPLORE_AGENT.agentType} agent type to parallelize complex searches without filling your context, though for straightforward queries direct tools are simpler.` : ''}
 2. **Update the plan file** — After each discovery, immediately capture what you learned. Don't wait until the end.
-3. **Ask the user** — When you hit an ambiguity or decision you can't resolve from code alone, use ${ASK_USER_QUESTION_TOOL_NAME}. Then go back to step 1.
+3. **Ask the user** — When you hit an ambiguity or decision you can't resolve from code alone, use ${ASK_USER_QUESTION_TOOL_NAME}. ${QUESTION_ANSWER_BOUNDARY} Return to step 1 only after an answer resolves that ambiguity.
 
 ### First Turn
 
@@ -3589,8 +3589,8 @@ Your plan is ready when you've addressed all ambiguities and it covers: what to 
 
 ### Ending Your Turn
 
-Your turn should only end by either:
-- Using ${ASK_USER_QUESTION_TOOL_NAME} to gather more information
+End your turn for either of these reasons:
+- You asked with ${ASK_USER_QUESTION_TOOL_NAME} and need its answer. Include the question in your final message. ${QUESTION_ANSWER_BOUNDARY}
 - Calling ${ExitPlanModeV2Tool.name} when the plan is ready for approval
 
 **Important:** Use ${ExitPlanModeV2Tool.name} to request plan approval. Do NOT ask about plan approval via text or AskUserQuestion.`
@@ -3607,7 +3607,7 @@ function getPlanModeV2SparseInstructions(attachment: {
     ? 'Follow iterative workflow: explore codebase, interview user, write to plan incrementally.'
     : 'Follow 5-phase workflow.'
 
-  const content = `Plan mode still active (see full instructions earlier in conversation). Read-only except plan file (${attachment.planFilePath}). ${workflowDescription} End turns with ${ASK_USER_QUESTION_TOOL_NAME} (for clarifications) or ${ExitPlanModeV2Tool.name} (for plan approval). Never ask about plan approval via text or AskUserQuestion.`
+  const content = `Plan mode still active (see full instructions earlier in conversation). Read-only except plan file (${attachment.planFilePath}). ${workflowDescription} Ask clarifying questions with ${ASK_USER_QUESTION_TOOL_NAME}, then end your turn if waiting for an answer. ${QUESTION_ANSWER_BOUNDARY} Use ${ExitPlanModeV2Tool.name} for plan approval. Never ask about plan approval via text or AskUserQuestion.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
@@ -3627,7 +3627,7 @@ function getPlanModeV2SubAgentInstructions(attachment: {
 ## Plan File Info:
 ${planFileInfo}
 You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
-Answer the user's query comprehensively, using the ${ASK_USER_QUESTION_TOOL_NAME} tool if you need to ask the user clarifying questions. If you do use the ${ASK_USER_QUESTION_TOOL_NAME}, make sure to ask all clarifying questions you need to fully understand the user's intent before proceeding.`
+Answer the user's query comprehensively, using the ${ASK_USER_QUESTION_TOOL_NAME} tool if you need to ask the user clarifying questions. ${QUESTION_ANSWER_BOUNDARY} Do not proceed with work that depends on unanswered questions.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
@@ -3991,9 +3991,12 @@ Read the team config to discover your teammates' names. Check the task list peri
       // hardcoded isMeta:true, which hid user-typed messages in brief mode
       // (filterForBriefTool) and in normal mode (shouldShowUserMessage).
       const metaProp =
-        origin !== undefined || attachment.isMeta
+        (origin !== undefined && origin.kind !== 'question-reply') || attachment.isMeta
           ? ({ isMeta: true } as const)
           : {}
+      const wrap = origin?.kind === 'question-reply'
+        ? (messages: UserMessage[]) => messages
+        : wrapMessagesInSystemReminder
 
       if (Array.isArray(attachment.prompt)) {
         // Handle content blocks (may include images)
@@ -4014,7 +4017,7 @@ Read the team config to discover your teammates' names. Check the task list peri
           ...imageBlocks,
         ]
 
-        return wrapMessagesInSystemReminder([
+        return wrap([
           createUserMessage({
             content,
             ...metaProp,
@@ -4026,7 +4029,7 @@ Read the team config to discover your teammates' names. Check the task list peri
       }
 
       // String prompt
-      return wrapMessagesInSystemReminder([
+      return wrap([
         createUserMessage({
           content: wrapCommandText(String(attachment.prompt), origin, attachment.urgent),
           ...metaProp,
@@ -5930,6 +5933,8 @@ export function wrapCommandText(
   // silently passes even when a union member is unhandled.
   if (!origin) return HUMAN_INTERRUPT_WRAPPER(raw)
   switch (origin.kind) {
+    case 'question-reply':
+      return `The user answered questions you asked earlier (AskUserQuestion). Each quoted record identifies its question and answer:\n${raw}`
     case 'task-notification':
       return `A background agent completed a task:\n${raw}`
     case 'coordinator':

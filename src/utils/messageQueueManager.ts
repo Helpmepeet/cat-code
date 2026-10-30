@@ -84,6 +84,7 @@ function logOperation(operation: QueueOperation, command?: QueuedCommand): void 
     ...(isEnqueue && {
       priorAssistantContext: command?.priorAssistantContext ?? null,
     }),
+    ...(isEnqueue && command?.origin ? { origin: command.origin } : {}),
   }
   const recorded = recordQueueOperation(queueOp)
   const tracked: Promise<void> = (isEnqueue ? recorded : recorded.then(flushSessionStorage)).catch((error: unknown) => {
@@ -375,7 +376,7 @@ export function dequeueAllMatching(
  * Callers must pass the same object references that are in the queue
  * (e.g. from getCommandsByMaxPriority). Logs a 'remove' operation for each.
  */
-export function remove(commandsToRemove: QueuedCommand[]): void {
+export function remove(commandsToRemove: QueuedCommand[], operation: 'remove' | 'reserve' = 'remove'): void {
   if (commandsToRemove.length === 0) {
     return
   }
@@ -399,7 +400,7 @@ export function remove(commandsToRemove: QueuedCommand[]): void {
   removed.reverse()
   notifySubscribers()
   for (const cmd of removed) {
-    logOperation('remove', cmd)
+    logOperation(operation, cmd)
   }
 }
 
@@ -490,7 +491,7 @@ export function isPromptInputModeEditable(
  * verification, channel messages) should not leak into the user's input.
  */
 export function isQueuedCommandEditable(cmd: QueuedCommand): boolean {
-  return isPromptInputModeEditable(cmd.mode) && !cmd.isMeta
+  return isPromptInputModeEditable(cmd.mode) && !cmd.isMeta && cmd.origin?.kind !== 'question-reply'
 }
 
 /**
@@ -499,6 +500,7 @@ export function isQueuedCommandEditable(cmd: QueuedCommand): boolean {
  * sees what arrived) but stay non-editable.
  */
 export function isQueuedCommandVisible(cmd: QueuedCommand): boolean {
+  if (cmd.origin?.kind === 'question-reply') return false
   if (
     (feature('KAIROS') || feature('KAIROS_CHANNELS')) &&
     cmd.origin?.kind === 'channel'

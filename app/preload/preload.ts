@@ -82,6 +82,7 @@ import {
   CH_ABORT,
   CH_PERMISSION,
   CH_ANSWER_QUESTIONS,
+  CH_QUESTION_VERB,
   CH_SET_MODE,
   CH_ACCOUNT_VERB,
   CH_HOST_MANAGE_ACCOUNT,
@@ -341,6 +342,12 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ACCOUNT_VERB, payload)
+  },
+  questionVerb(sessionId, verb) {
+    if (verb.type !== 'askUserQuestion.reply' && verb.type !== 'askUserQuestion.dismiss') return
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_QUESTION_VERB, payload)
   },
   deleteAccount(verb: AccountDeleteMessage) {
     sendGuard.assertAllowed(verb)

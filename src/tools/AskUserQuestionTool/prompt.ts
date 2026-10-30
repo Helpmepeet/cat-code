@@ -1,8 +1,7 @@
+import { feature } from 'bun:bundle'
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../ExitPlanModeTool/constants.js'
 
 export const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion'
-
-export const ASK_USER_QUESTION_TOOL_CHIP_WIDTH = 12
 
 export const DESCRIPTION =
   'Asks the user free-text or multiple-choice questions to gather information, clarify ambiguity, understand preferences, make decisions or offer them choices.'
@@ -43,7 +42,14 @@ How to write a preview:
 `,
 } as const
 
-export const ASK_USER_QUESTION_TOOL_PROMPT = `Use this tool when you need to ask the user questions during execution. This allows you to:
+export const NONBLOCKING_QUESTION_MODEL_CONTRACT = `AskUserQuestion shows the question and returns immediately with no answer. Any answer arrives later as a separate message, possibly much later or never. If your next step depends on the answer, ask and then end your turn; include the question in your final message so a text-only user can see what you are waiting for. Do not batch dependent tool calls with the question. Otherwise continue only with independent work and state the assumption you are working under. Do not ask a pending question again. If a late answer contradicts completed work, revise that work.`
+
+/** Empty on the retained blocking path until the eval and approved flip. */
+export const QUESTION_ANSWER_BOUNDARY = feature('NONBLOCKING_ASK_USER_QUESTION')
+  ? 'AskUserQuestion returns immediately without an answer. After asking, end your turn with the question in your final message; resume dependent steps only when the separate answer arrives in a later message. Do not repeat a pending question.'
+  : ''
+
+export const ASK_USER_QUESTION_TOOL_PROMPT = `${feature('NONBLOCKING_ASK_USER_QUESTION') ? NONBLOCKING_QUESTION_MODEL_CONTRACT + '\n\n' : ''}Use this tool when you need to ask the user questions during execution. This allows you to:
 1. Gather user preferences or requirements
 2. Clarify ambiguous instructions
 3. Get decisions on implementation choices as you work

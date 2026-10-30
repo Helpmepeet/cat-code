@@ -32,7 +32,7 @@ import type {
 import { GLOB_TOOL_NAME } from 'src/tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from 'src/tools/GrepTool/prompt.js'
 import { hasEmbeddedSearchTools } from 'src/utils/embeddedTools.js'
-import { ASK_USER_QUESTION_TOOL_NAME } from '../tools/AskUserQuestionTool/prompt.js'
+import { ASK_USER_QUESTION_TOOL_NAME, NONBLOCKING_QUESTION_MODEL_CONTRACT } from '../tools/AskUserQuestionTool/prompt.js'
 import { EXPLORE_AGENT } from 'src/tools/AgentTool/built-in/exploreAgent.js'
 import { areExplorePlanAgentsEnabled } from 'src/tools/AgentTool/builtInAgents.js'
 import {
@@ -399,6 +399,8 @@ function getSessionSpecificGuidanceSection(
   const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
 
   const items = [
+    hasAskUserQuestionTool
+      && feature('NONBLOCKING_ASK_USER_QUESTION') ? NONBLOCKING_QUESTION_MODEL_CONTRACT : null,
     hasAskUserQuestionTool
       ? `If you do not understand why the user has denied a tool call, use the ${ASK_USER_QUESTION_TOOL_NAME} to ask them.`
       : null,

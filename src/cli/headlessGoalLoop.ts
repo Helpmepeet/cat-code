@@ -57,7 +57,9 @@ export type HeadlessGoalLoop = {
 export function createHeadlessGoalLoop({
   getAppState,
   setAppState,
+  hasPendingQuestions = () => false,
 }: {
+  hasPendingQuestions?: () => boolean
   getAppState: () => AppState
   setAppState: (updater: (prev: AppState) => AppState) => void
 }): HeadlessGoalLoop | null {
@@ -91,7 +93,7 @@ export function createHeadlessGoalLoop({
     saveGoal,
     // Headless has no user typing alongside it: reaching the idle boundary IS
     // the whole gate. The caller only asks when the queue has drained.
-    canStartAutomaticTurn: () => true,
+    canStartAutomaticTurn: () => !hasPendingQuestions(),
     getUnresolvedDependencies: () => dependencies.read(),
     // Unlike the other runtimes, the scheduler cannot submit here: headless
     // owns its own queue. It captures the prompt instead and the caller

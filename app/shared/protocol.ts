@@ -1034,6 +1034,7 @@ export type SidecarClientMessage =
   | PermissionSetModeMessage
   | NotificationPlanApproveMessage
   | AskUserQuestionAnswerMessage
+  | import('./nonblockingQuestions.js').QuestionVerb
   | AccountSwitchMessage
   | AccountProfileDeletedMessage
   | AccountProfileSignedOutMessage
@@ -3813,6 +3814,7 @@ export type WorkspaceObservation = {
 }
 
 export type ServerFramePayload =
+  | import('./nonblockingQuestions.js').QuestionResultFrame
   | InlineCommandSnapshotFrame
   | WorkStatusFrame
   | { kind: 'lid.work'; protocolVersion: typeof PROTOCOL_VERSION; sessionId: SessionId; requestId: string; work: LidWorkSnapshot }
@@ -3877,6 +3879,7 @@ export type ServerFrameKind = ServerFramePayload['kind']
  * a list entry that no payload declares.
  */
 const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
+  'question.result': true,
   'inline-command.snapshot': true,
   'work.status': true,
   'lid.work': true,
@@ -4091,6 +4094,8 @@ export type CatCodeBridge = {
     requestId: string,
     answers: AskUserQuestionAnswer[],
   ): void
+  /** Gated nonblocking questions. Selections are revalidated by the engine. */
+  questionVerb?(sessionId: SessionId, verb: import('./nonblockingQuestions.js').QuestionVerb): void
   /**
    * Switch an account on the addressed pane. The sidecar re-resolves its
    * accountId against the live pool. No token crosses either way. The outcome

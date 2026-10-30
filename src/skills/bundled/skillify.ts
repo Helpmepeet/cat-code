@@ -2,6 +2,7 @@ import { getSessionMemoryContent } from '../../services/SessionMemory/sessionMem
 import type { Message } from '../../types/message.js'
 import { getMessagesAfterCompactBoundary } from '../../utils/messages.js'
 import { registerBundledSkill } from '../bundledSkills.js'
+import { QUESTION_ANSWER_BOUNDARY } from '../../tools/AskUserQuestionTool/prompt.js'
 
 function extractUserMessages(messages: Message[]): string[] {
   return messages
@@ -52,7 +53,7 @@ Before asking any questions, analyze the session to identify:
 ### Step 2: Interview the User
 
 You will use the AskUserQuestion to understand what the user wants to automate. Important notes:
-- Use AskUserQuestion for ALL questions! Never ask questions via plain text.
+- Use AskUserQuestion for each interview round. ${QUESTION_ANSWER_BOUNDARY}
 - For each round, iterate as much as needed until the user is happy.
 - The user always has a freeform "Other" option to type edits or feedback -- do NOT add your own "Needs tweaking" or "I'll provide edits" option. Just offer the substantive choices.
 
@@ -77,7 +78,7 @@ For each major step, if it's not glaringly obvious, ask:
 - How should the skill be executed? (e.g. always use a Task agent to conduct code review, or invoke an agent team for a set of concurrent steps)
 - What are the hard constraints or hard preferences? Things that must or must not happen?
 
-You may do multiple rounds of AskUserQuestion here, one round per step, especially if there are more than 3 steps or many clarification questions. Iterate as much as needed.
+You may do multiple rounds of AskUserQuestion here, one round per step, especially if there are more than 3 steps or many clarification questions. Finish each round before starting a round that depends on its answers. ${QUESTION_ANSWER_BOUNDARY}
 
 IMPORTANT: Pay special attention to places where the user corrected you during the session, to help inform your design.
 
@@ -147,7 +148,7 @@ IMPORTANT: see the next section below for the per-step annotations you can optio
 
 ### Step 4: Confirm and Save
 
-Before writing the file, output the complete SKILL.md content as a yaml code block in your response so the user can review it with proper syntax highlighting. Then ask for confirmation using AskUserQuestion with a simple question like "Does this SKILL.md look good to save?" — do NOT use the body field, keep the question concise.
+Before writing the file, output the complete SKILL.md content as a yaml code block in your response so the user can review it with proper syntax highlighting. Then ask for confirmation using AskUserQuestion with a simple question like "Does this SKILL.md look good to save?" Keep the question concise. ${QUESTION_ANSWER_BOUNDARY} Save only after an affirmative answer.
 
 After writing, tell the user:
 - Where the skill was saved

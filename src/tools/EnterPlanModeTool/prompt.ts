@@ -1,5 +1,5 @@
 import { isPlanModeInterviewPhaseEnabled } from '../../utils/planModeV2.js'
-import { ASK_USER_QUESTION_TOOL_NAME } from '../AskUserQuestionTool/prompt.js'
+import { ASK_USER_QUESTION_TOOL_NAME, QUESTION_ANSWER_BOUNDARY } from '../AskUserQuestionTool/prompt.js'
 
 const WHAT_HAPPENS_SECTION = `## What Happens in Plan Mode
 
@@ -8,7 +8,7 @@ In plan mode, you'll:
 2. Understand existing patterns and architecture
 3. Design an implementation approach
 4. Present your plan to the user for approval
-5. Use ${ASK_USER_QUESTION_TOOL_NAME} if you need to clarify approaches
+5. Use ${ASK_USER_QUESTION_TOOL_NAME} if you need to clarify approaches. ${QUESTION_ANSWER_BOUNDARY}
 6. Exit plan mode with ExitPlanMode when ready to implement
 
 `

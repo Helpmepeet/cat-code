@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { QUESTION_ANSWER_BOUNDARY } from '../AskUserQuestionTool/prompt.js'
 import { z } from 'zod/v4'
 import {
   getAllowedChannels,
@@ -111,7 +112,7 @@ In plan mode, you should:
 1. Thoroughly explore the codebase to understand existing patterns
 2. Identify similar features and architectural approaches
 3. Consider multiple approaches and their trade-offs
-4. Use AskUserQuestion if you need to clarify the approach
+4. Use AskUserQuestion if you need to clarify the approach. ${QUESTION_ANSWER_BOUNDARY}
 5. Design a concrete implementation strategy
 6. When ready, use ExitPlanMode to present your plan for approval
 

@@ -1,5 +1,5 @@
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
-import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
+import { ASK_USER_QUESTION_TOOL_NAME, QUESTION_ANSWER_BOUNDARY } from '../../tools/AskUserQuestionTool/prompt.js'
 import { ENTER_PLAN_MODE_TOOL_NAME } from '../../tools/EnterPlanModeTool/constants.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from '../../tools/ExitPlanModeTool/constants.js'
 import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
@@ -45,6 +45,8 @@ Call the \`${ENTER_PLAN_MODE_TOOL_NAME}\` tool now to enter plan mode, then:
    - An existing e2e/integration test suite the worker can run
 
    If you cannot find a concrete e2e path, use the \`${ASK_USER_QUESTION_TOOL_NAME}\` tool to ask the user how to verify this change end-to-end. Offer 2–3 specific options based on what you found (e.g., "Screenshot via chrome extension", "Run \`bun run dev\` and curl the endpoint", "No e2e — unit tests are sufficient"). Do not skip this — the workers cannot ask the user themselves.
+
+   ${QUESTION_ANSWER_BOUNDARY} Do not spawn workers or finalize a recipe that depends on an unanswered verification question.
 
    Write the recipe as a short, concrete set of steps that a worker can execute autonomously. Include any setup (start a dev server, build first) and the exact command/interaction to verify.
 

@@ -69,7 +69,7 @@ import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
 import type { PromptInputHelpers } from '../../utils/handlePromptSubmit.js';
 import { getImageFromClipboard, PASTE_THRESHOLD } from '../../utils/imagePaste.js';
 import type { ImageDimensions } from '../../utils/imageResizer.js';
-import { cacheImagePath, storeImage } from '../../utils/imageStore.js';
+import { cacheImagePath, reserveImageId, storeImage } from '../../utils/imageStore.js';
 import { isMacosOptionChar, MACOS_OPTION_SPECIAL_CHARS } from '../../utils/keyboardShortcuts.js';
 import { logError } from '../../utils/log.js';
 import { isOpus1mMergeEnabled, modelDisplayString } from '../../utils/model/model.js';
@@ -1169,7 +1169,8 @@ function PromptInput({
   function onImagePaste(image: string, mediaType?: string, filename?: string, dimensions?: ImageDimensions, sourcePath?: string) {
     logEvent('tengu_paste_image', {});
     onModeChange('prompt');
-    const pasteId = nextPasteIdRef.current++;
+    const pasteId = feature('NONBLOCKING_ASK_USER_QUESTION') ? reserveImageId(nextPasteIdRef.current) : nextPasteIdRef.current;
+    nextPasteIdRef.current = pasteId + 1;
     const newContent: PastedContent = {
       id: pasteId,
       type: 'image',

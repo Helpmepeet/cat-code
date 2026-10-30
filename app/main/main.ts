@@ -134,6 +134,7 @@ import {
   CH_ABORT,
   CH_PERMISSION,
   CH_ANSWER_QUESTIONS,
+  CH_QUESTION_VERB,
   CH_SET_MODE,
   CH_ACCOUNT_VERB,
   CH_HOST_MANAGE_ACCOUNT,
@@ -2585,6 +2586,12 @@ function registerIpcHandlers(): void {
       })
     },
   )
+
+  ipcMain.on(CH_QUESTION_VERB, (_e, arg: { sessionId: SessionId; verb: import('../shared/nonblockingQuestions.js').QuestionVerb }) => {
+    if (typeof arg?.sessionId !== 'string' ||
+      (arg.verb?.type !== 'askUserQuestion.reply' && arg.verb?.type !== 'askUserQuestion.dismiss')) return
+    forward(arg.sessionId, arg.verb)
+  })
 
   ipcMain.on(
     CH_SET_MODE,

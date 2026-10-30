@@ -2,7 +2,7 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/gr
 import type { MCPServerConnection } from '../../services/mcp/types.js'
 import { isPolicyAllowed } from '../../services/policyLimits/index.js'
 import type { ToolUseContext } from '../../Tool.js'
-import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
+import { ASK_USER_QUESTION_TOOL_NAME, QUESTION_ANSWER_BOUNDARY } from '../../tools/AskUserQuestionTool/prompt.js'
 import { REMOTE_TRIGGER_TOOL_NAME } from '../../tools/RemoteTriggerTool/prompt.js'
 import { getClaudeAIOAuthTokens } from '../../utils/auth.js'
 import { checkRepoForRemoteAccess } from '../../utils/background/remote/preconditions.js'
@@ -169,7 +169,7 @@ function buildPrompt(opts: {
 
 ${jsonStringify(initialQuestion)}
 
-Set \`header: "Action"\` and offer the four actions (create/list/update/run) as options. After the user picks, follow the matching workflow below.`
+Offer the four actions (create/list/update/run) as options. ${QUESTION_ANSWER_BOUNDARY} After the answer arrives, follow the matching workflow below.`
 
   return `# Schedule Remote Agents
 
@@ -179,6 +179,7 @@ You are helping the user schedule, update, list, or run **remote** Cat Code agen
 
 ${firstStep}
 ${setupNotesSection}
+${QUESTION_ANSWER_BOUNDARY}
 
 ## What You Can Do
 

@@ -1,3 +1,5 @@
+import { feature } from 'bun:bundle'
+
 // Non-React scheduler core for .cat-code/scheduled_tasks.json.
 // Shared by REPL (via useScheduledTasks) and SDK/-p mode (print.ts).
 //
@@ -546,7 +548,8 @@ export function buildMissedTaskNotification(missed: CronTask[]): string {
     `${plural ? 'They have' : 'It has'} already been removed from .cat-code/scheduled_tasks.json.\n\n` +
     `Do NOT execute ${plural ? 'these prompts' : 'this prompt'} yet. ` +
     `First use the AskUserQuestion tool to ask whether to run ${plural ? 'each one' : 'it'} now. ` +
-    `Only execute if the user confirms.`
+    `Only execute if the user confirms. ` +
+    (feature('NONBLOCKING_ASK_USER_QUESTION') ? `End your turn after asking, include the question in your final message, and do not execute a missed task until a separate affirmative answer arrives. Do not ask the same pending question again.` : '')
 
   const blocks = missed.map(t => {
     const meta = `[${cronToHuman(t.cron)}, created ${new Date(t.createdAt).toLocaleString()}]`

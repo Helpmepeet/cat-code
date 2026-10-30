@@ -374,6 +374,8 @@ export type ToolUseContext = {
     toolInputSummary?: string | null,
   ) => (request: PromptRequest) => Promise<PromptResponse>
   toolUseId?: string
+  /** Main-session question lifecycle; never provisioned for subagents. */
+  pendingQuestions?: import('./utils/pendingQuestions.js').PendingQuestionRegistry
   criticalSystemReminder_EXPERIMENTAL?: string
   /** When true, preserve toolUseResult on messages even for subagents.
    * Used by in-process teammates whose transcripts are viewable by the user. */

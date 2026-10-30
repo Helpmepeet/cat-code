@@ -75,11 +75,11 @@ export function retryableTurn(rows: readonly NestedTranscriptRow[]): { resultId:
   while (resultIndex >= 0 && rows[resultIndex]!.kind !== 'result') resultIndex--
   const result = rows[resultIndex]
   if (result?.kind !== 'result' || !result.isError || result.subtype === 'interrupted') return null
-  if (rows.slice(resultIndex + 1).some(row => row.kind === 'user-text' || row.kind === 'user-image' || row.kind === 'assistant-text')) return null
+  if (rows.slice(resultIndex + 1).some(row => row.kind === 'user-text' || row.kind === 'user-image' || row.kind === 'question-reply' || row.kind === 'assistant-text')) return null
   let userIndex = resultIndex - 1
   while (userIndex >= 0 && rows[userIndex]!.kind !== 'user-text') {
     const kind = rows[userIndex]!.kind
-    if (kind === 'result' || kind === 'turn-stopped' || kind === 'injected-turn' || kind === 'command-echo' || kind === 'user-image') return null
+    if (kind === 'result' || kind === 'turn-stopped' || kind === 'injected-turn' || kind === 'question-reply' || kind === 'command-echo' || kind === 'user-image') return null
     userIndex--
   }
   const user = rows[userIndex]

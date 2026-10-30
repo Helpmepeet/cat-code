@@ -326,7 +326,7 @@ If the user wants something to happen automatically in response to an EVENT, the
 
 ## CRITICAL: Use AskUserQuestion for Ambiguity
 
-When the user's request is ambiguous, use AskUserQuestion to clarify:
+When the user's request is ambiguous, use AskUserQuestion to clarify. End your turn if the edit depends on its answer, and include the question in your final message. Do not modify settings that depend on an unanswered question:
 - Which settings file to modify (user/project/local)
 - Whether to add to existing arrays or replace them
 - Specific values when multiple options exist

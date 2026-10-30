@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
+import { feature } from 'bun:bundle'
 import { randomUUID, type UUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -553,19 +554,23 @@ test('verified close cancellation fences admission before async work and preserv
   const task = { value: 'task result', mode: 'task-notification' as const, uuid: randomUUID() }
   const peer = { value: 'peer input', mode: 'task-notification' as const, uuid: randomUUID(), origin: { kind: 'peer' as const, name: 'Alex', appSessionId: randomUUID() } }
   const uncertain = { value: 'untracked input for review', mode: 'prompt' as const, uuid: randomUUID() }
-  enqueue(task); enqueue(peer); enqueue(uncertain)
+  const answer = { value: 'accepted question answer', mode: 'prompt' as const, uuid: randomUUID(),
+    origin: { kind: 'question-reply' as const, batchId: randomUUID(), questions: [{ toolUseId: 'asked', questionIndex: 0 }] } }
+  enqueue(task); enqueue(peer); enqueue(uncertain); enqueue(answer)
   const stopping = h.command({ action: 'cancel', cancelId: h.cancelId })
   // handleData has reached its first asynchronous durability boundary, not its
   // cancellation acknowledgement. A racing submit must already be fenced.
   h.submit('late close input')
   expect(h.received.some(frame => frame.kind === 'error' && frame.message === 'This chat is stopping.')).toBe(true)
   expect(getCommandQueueSnapshot().some(command => command.uuid === h.queued.uuid)).toBe(false)
+  expect(getCommandQueueSnapshot().some(command => command.uuid === answer.uuid)).toBe(false)
   try {
     const result = await stopping
     expect(result.kind).toBe('result')
     if (result.kind === 'result') expect(result.result.disposition).toBe('accepted')
     const loaded = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
     expect(loaded.queueOperations.some(op => op.uuid === h.queued.uuid && op.operation === 'remove')).toBe(true)
+    expect(loaded.queueOperations.some(op => op.uuid === answer.uuid && op.operation === 'remove')).toBe(true)
     expect(loaded.queueOperations.some(op => [task.uuid, peer.uuid, uncertain.uuid].includes(op.uuid!) && op.operation !== 'enqueue')).toBe(false)
     expect(loaded.messages.has(h.seed.uuid as UUID)).toBe(true)
     expect(loaded.messages.has(h.state.continuation.id as UUID)).toBe(true)
@@ -577,6 +582,62 @@ test('verified close cancellation fences admission before async work and preserv
   await Bun.sleep(0)
   expect(getCommandQueueSnapshot().map(command => command.uuid)).toEqual([task.uuid, peer.uuid, uncertain.uuid])
   expect(h.calls()).toBe(1)
+})
+
+test.skipIf(feature('NONBLOCKING_ASK_USER_QUESTION') ? false : true)('an accepted answer crossing close fsync is cancelled durably and never replayed', async () => {
+  const { AskUserQuestionTool } = await import('../../src/tools/AskUserQuestionTool/AskUserQuestionTool.js')
+  const { PendingQuestionRuntime } = await import('../../src/utils/pendingQuestionRuntime.js')
+  const question = { question: 'Which storage?', options: [
+    { label: 'Local', description: 'Disk' }, { label: 'Remote', description: 'Server' },
+  ], multiSelect: false }
+  let calls = 0
+  const provider = Promise.withResolvers<void>()
+  const writeEntered = Promise.withResolvers<void>()
+  const writeReleased = Promise.withResolvers<void>()
+  disposers.push(() => { provider.resolve(); writeReleased.resolve() })
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    calls++
+    if (calls === 1) yield assistant([{ type: 'tool_use', id: 'question-before-close', name: 'AskUserQuestion', input: { questions: [question] } }])
+    else { await provider.promise; yield assistant([{ type: 'text', text: 'Independent work stopped.' }]) }
+  }))
+  const h = await harness({ tools: [AskUserQuestionTool], canUseTool: async (tool, input, context) => {
+    const decision = await tool.checkPermissions(input, context)
+    if (decision.behavior !== 'allow') throw new Error('Nonblocking question unexpectedly requested permission')
+    return decision
+  } })
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => calls === 2 && h.controller.getQuestionSnapshot().pending.length === 1, 'real question tool published before independent work')
+  const record = storage.recordQuestionLifecycle
+  spies.push(spyOn(storage, 'recordQuestionLifecycle').mockImplementation(async entry => {
+    if (entry.operation === 'resolved') { writeEntered.resolve(); await writeReleased.promise }
+    await record(entry)
+  }))
+  const requestId = randomUUID()
+  try {
+    h.send({ type: 'askUserQuestion.reply', requestId, replies: [{
+      toolUseId: 'question-before-close', questionIndex: 0, answer: { optionIndices: [1] },
+    }] })
+    await writeEntered.promise
+    const cancelId = randomUUID()
+    writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, cancellation: { cancelId, requestedBy: 'close', application: 'unknown' } })
+    const stopped = await h.command({ action: 'cancel', cancelId })
+    expect(stopped.kind).toBe('result')
+    writeReleased.resolve()
+    await until(() => h.received.some(frame => frame.kind === 'question.result' && frame.requestId === requestId), 'answer write settles behind the close fence')
+    expect(h.received.find(frame => frame.kind === 'question.result' && frame.requestId === requestId)).toMatchObject({ accepted: true })
+    expect(getCommandQueueSnapshot().some(command => command.origin?.kind === 'question-reply')).toBe(false)
+  } finally { provider.resolve(); writeReleased.resolve() }
+  await until(() => !h.controller.isTurnActive(), 'independent work settles')
+  const saved = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+  const resolution = saved.questionLifecycles.find(entry => entry.operation === 'resolved')
+  if (resolution?.operation !== 'resolved' || !resolution.delivery) throw new Error('Missing durable answer outbox')
+  expect(saved.queueOperations.some(operation => operation.uuid === resolution.delivery!.uuid && operation.operation === 'remove')).toBe(true)
+  const restarted = new PendingQuestionRuntime(() => [])
+  await restarted.initialize()
+  restarted.deliver()
+  expect(restarted.registry.getSnapshot().resolved[0]?.answer).toBe('Remote')
+  expect(getCommandQueueSnapshot().some(command => command.origin?.kind === 'question-reply')).toBe(false)
+  expect(calls).toBe(2)
 })
 
 test.each(['cancellation', 'durability'] as const)('failed close %s keeps manual admission fenced and never claims unconfirmed durability', async failure => {
@@ -663,7 +724,7 @@ test('close preserves an already consumed manual turn while cancelling only its 
   expect(calls).toBe(2)
 })
 
-test('a late failed reserve retains uncertain input rather than cancelling it or draining it again', async () => {
+test.each(['uncertain', 'question-reply'] as const)('a late failed reserve handles %s input without draining it again', async kind => {
   let providerCalls = 0
   spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
     providerCalls++
@@ -676,7 +737,9 @@ test('a late failed reserve retains uncertain input rather than cancelling it or
   const reserved = new Promise<void>((_resolve, reject) => { rejectReserve = reject })
   const submit = spyOn(h.controller, 'submit').mockImplementation(() => reserved)
   spies.push(submit)
-  const uncertain = { value: 'uncertain reserved input', mode: 'prompt' as const, uuid: randomUUID() }
+  const uncertain = { value: 'uncertain reserved input', mode: 'prompt' as const, uuid: randomUUID(),
+    ...(kind === 'question-reply' ? { origin: { kind: 'question-reply' as const, batchId: randomUUID(),
+      questions: [{ toolUseId: 'asked', questionIndex: 0 }] } } : {}) }
   enqueue(uncertain)
   await until(() => submit.mock.calls.length === 1, 'server reserves unknown input but controller has not accepted it')
   const cancelId = randomUUID()
@@ -685,11 +748,17 @@ test('a late failed reserve retains uncertain input rather than cancelling it or
   expect(stopped.kind).toBe('result')
   if (stopped.kind === 'result') expect(stopped.result.disposition).toBe('accepted')
   rejectReserve(new Error('controlled refusal before durable acceptance'))
-  await until(() => getCommandQueueSnapshot().some(command => command.uuid === uncertain.uuid), 'late refusal retains the uncertain input')
+  if (kind === 'uncertain') {
+    await until(() => getCommandQueueSnapshot().some(command => command.uuid === uncertain.uuid), 'late refusal retains the uncertain input')
+  } else {
+    await until(() => !h.controller.isTurnActive(), 'late answer reserve settles after close')
+    await Bun.sleep(0)
+    expect(getCommandQueueSnapshot().some(command => command.uuid === uncertain.uuid)).toBe(false)
+  }
   await flushQueueOperationsDurably()
   const loaded = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
   expect(loaded.queueOperations.some(operation => operation.uuid === uncertain.uuid && operation.operation === 'reserve')).toBe(true)
-  expect(loaded.queueOperations.some(operation => operation.uuid === uncertain.uuid && operation.operation === 'remove')).toBe(false)
+  expect(loaded.queueOperations.some(operation => operation.uuid === uncertain.uuid && operation.operation === 'remove')).toBe(kind === 'question-reply')
   expect(submit.mock.calls).toHaveLength(1)
   expect(providerCalls).toBe(1)
 })

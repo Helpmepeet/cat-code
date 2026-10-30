@@ -5,6 +5,7 @@ import type {
 
 export type AskUserQuestionTranscriptItem = {
   question: string
+  state?: 'pending' | 'answered' | 'dismissed'
   answer?: string
   note?: string
 }
@@ -47,6 +48,17 @@ export function askUserQuestionTranscriptPresentation(
 
   const structured = result?.askUserQuestion
   if (structured === undefined) return null
+  if (structured.statesByQuestion) {
+    return {
+      state: 'pending',
+      items: questions.map(question => ({
+        question, state: Object.prototype.hasOwnProperty.call(structured.statesByQuestion, question) ? structured.statesByQuestion![question] : 'pending',
+        ...(typeof structured.answers[question] === 'string' ? { answer: structured.answers[question] } : {}),
+        ...(typeof structured.notesByQuestion[question] === 'string' && structured.notesByQuestion[question] ? { note: structured.notesByQuestion[question] } : {}),
+      })),
+    }
+  }
+  if (structured.shown) return { state: 'pending', items: questions.map(question => ({ question })) }
   const items: AskUserQuestionTranscriptItem[] = []
   for (const question of questions) {
     const answer = Object.prototype.hasOwnProperty.call(
@@ -79,11 +91,10 @@ function readQuestionTexts(value: unknown): string[] | null {
     if (!isRecord(candidate)) return null
     if (
       typeof candidate.question !== 'string' ||
-      typeof candidate.header !== 'string' ||
       (candidate.multiSelect !== undefined &&
         typeof candidate.multiSelect !== 'boolean') ||
       !Array.isArray(candidate.options) ||
-      candidate.options.length < 2 ||
+      candidate.options.length === 1 ||
       candidate.options.length > 4
     ) {
       return null

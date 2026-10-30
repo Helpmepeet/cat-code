@@ -192,6 +192,29 @@ type AppSessionAbortState =
   | { status: 'requested'; reason?: string }
   | { status: 'aborted'; reason?: string }
 
+/* --- generated question lifecycle --- */
+export type QuestionReference = { toolUseId: string; questionIndex: number }
+
+export type PendingQuestionSpec = {
+  question: string
+  options: { label: string; description: string; preview?: string }[]
+  multiSelect: boolean
+}
+
+export type PendingQuestion = QuestionReference & PendingQuestionSpec & { sourceMessageUuid: string }
+
+export type ResolvedQuestion = PendingQuestion & {
+  state: 'answered' | 'dismissed'
+  answer?: string
+  notes?: string
+  selectedPreview?: string
+}
+
+export type ResolvedQuestionSnapshot = Omit<ResolvedQuestion, 'options' | 'multiSelect' | 'selectedPreview'>
+
+export type QuestionSnapshot = { pending: PendingQuestion[]; resolved: ResolvedQuestionSnapshot[] }
+/* --- end question lifecycle --- */
+
 export type AppSessionEvent =
   | {
       type: 'tool.review'
@@ -235,6 +258,10 @@ export type AppSessionEvent =
   | {
       type: 'turn.status'
       activeTurn: boolean
+    }
+  | {
+      type: 'question.snapshot'
+      snapshot: QuestionSnapshot
     }
 
 /* --- src/app-runtime/appSessionProtocol.ts (the 4 allowlisted client message types) --- */

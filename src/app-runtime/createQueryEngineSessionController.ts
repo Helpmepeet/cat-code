@@ -38,6 +38,9 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
 }
 
 export type QueryEngineSessionLike = {
+  getQuestionRegistry?: () => import('../utils/pendingQuestions.js').PendingQuestionRegistry | undefined
+  initializeQuestions?: () => Promise<void>
+  deliverQuestionReplies?: () => void
   getMessages?: () => readonly Message[]
   executeInlineCommand?: (operation: InlineCommandOperation, options?: Pick<QueryEngineSessionOptions, 'onPermissionRequest'>) => AsyncIterable<SDKMessage>
   getInlineCommandRuns?: () => InlineCommandRun[]
@@ -70,6 +73,9 @@ export function createQueryEngineSessionAdapter(
   session: QueryEngineSessionLike,
 ): AppSessionControllerAdapter {
   return {
+    getQuestionRegistry: session.getQuestionRegistry ? () => session.getQuestionRegistry!() : undefined,
+    initializeQuestions: session.initializeQuestions ? () => session.initializeQuestions!() : undefined,
+    deliverQuestionReplies: session.deliverQuestionReplies ? () => session.deliverQuestionReplies!() : undefined,
     getMessages: session.getMessages ? () => session.getMessages!() : undefined,
     runInlineCommand: session.executeInlineCommand
       ? ({ operation, onPermissionRequest }) => session.executeInlineCommand!(operation, { onPermissionRequest })

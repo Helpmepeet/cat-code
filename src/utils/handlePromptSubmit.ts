@@ -31,7 +31,7 @@ import type { FileHistoryState } from './fileHistory.js'
 import { fileHistoryEnabled, fileHistoryMakeSnapshot } from './fileHistory.js'
 import { gracefulShutdownSync } from './gracefulShutdown.js'
 import { enqueue } from './messageQueueManager.js'
-import { createSystemMessage } from './messages.js'
+import { createSystemMessage, wrapCommandText } from './messages.js'
 import { resolveSkillModelOverride } from './model/model.js'
 import type { ProcessUserInputContext } from './processUserInput/processUserInput.js'
 import { processUserInput } from './processUserInput/processUserInput.js'
@@ -572,7 +572,10 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
           `[handlePromptSubmit] processUserInput start index=${i} mode=${cmd.mode}`,
         )
         const result = await processUserInput({
-          input: cmd.value,
+          input: cmd.origin?.kind === 'question-reply'
+            ? typeof cmd.value === 'string' ? wrapCommandText(cmd.value, cmd.origin) : cmd.value.map(block =>
+              block.type === 'text' ? { ...block, text: wrapCommandText(block.text, cmd.origin) } : block)
+            : cmd.value,
           preExpansionInput: cmd.preExpansionValue,
           mode: cmd.mode,
           setToolJSX,

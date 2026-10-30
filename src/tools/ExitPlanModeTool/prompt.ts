@@ -1,7 +1,6 @@
 // External stub for ExitPlanModeTool prompt - excludes Ant-only allowedPrompts section
 
-// Hardcoded to avoid relative import issues in stub
-const ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion'
+import { ASK_USER_QUESTION_TOOL_NAME, QUESTION_ANSWER_BOUNDARY } from '../AskUserQuestionTool/prompt.js'
 
 export const EXIT_PLAN_MODE_V2_TOOL_PROMPT = `Use this tool when you are in plan mode and have finished writing your plan to the plan file and are ready for user approval.
 
@@ -16,7 +15,7 @@ IMPORTANT: Only use this tool when the task requires planning the implementation
 
 ## Before Using This Tool
 Ensure your plan is complete and unambiguous:
-- If you have unresolved questions about requirements or approach, use ${ASK_USER_QUESTION_TOOL_NAME} first (in earlier phases)
+- If you have unresolved questions about requirements or approach, use ${ASK_USER_QUESTION_TOOL_NAME} first (in earlier phases). ${QUESTION_ANSWER_BOUNDARY} A pending question is not a clarified requirement; do not request plan approval while the plan still depends on its answer.
 - Once your plan is finalized, use THIS tool to request approval
 
 **Important:** Do NOT use ${ASK_USER_QUESTION_TOOL_NAME} to ask "Is this plan okay?" or "Should I proceed?" - that's exactly what THIS tool does. ExitPlanMode inherently requests user approval of your plan.

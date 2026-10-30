@@ -163,7 +163,7 @@ const isWork = (row: NestedTranscriptRow) => !row.isHidden &&
   !row.parentToolUseId
 
 const isOperator = (row: NestedTranscriptRow) =>
-  (row.kind === 'user-text' || row.kind === 'user-image') && !row.isHidden && !row.parentToolUseId
+  (row.kind === 'user-text' || row.kind === 'user-image' || row.kind === 'question-reply') && !row.isHidden && !row.parentToolUseId
 const isControlPoint = (row: NestedTranscriptRow) =>
   row.kind === 'system-notice' || row.kind === 'injected-turn' || row.kind === 'task-notification' ||
   (row.isHidden && (row.kind === 'assistant-text' || row.kind === 'thinking' ||

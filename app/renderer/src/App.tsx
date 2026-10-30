@@ -434,6 +434,9 @@ import {
 } from './promptDraftPersistence.js'
 import { SessionPane } from './SessionPane.js'
 import type { AskQuestionDraft } from './askQuestionFlowModel.js'
+import { createPendingQuestionsState, reducePendingQuestionsState } from './pendingQuestionsState.js'
+import { sendQuestionVerb } from './sendQuestionVerb.js'
+import { forgetQuestionDrafts } from './pendingQuestionDrafts.js'
 import {
   createToolCardExpansionStore,
   type ToolCardExpansionStore,
@@ -447,6 +450,7 @@ import { createOutputTokenState, reduceOutputTokenState, selectOutputTokens } fr
 // actions still pass straight through, so every other dispatch site is unchanged.
 const reduceServerFrameBatched = withBatch(reduceServerFrame)
 const reducePermissionStateBatched = withBatch(reducePermissionState)
+const reducePendingQuestionsStateBatched = withBatch(reducePendingQuestionsState)
 const reduceConnectionStateBatched = withBatch(reduceConnectionState)
 const reduceSettingsStateBatched = withBatch(reduceSettingsState)
 const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
@@ -540,6 +544,7 @@ export function App() {
     createPermissionState,
   )
   const toast = useToast()
+  const [pendingQuestions, dispatchPendingQuestions] = useReducer(reducePendingQuestionsStateBatched, undefined, createPendingQuestionsState)
   const [questionDrafts, setQuestionDrafts] = useState<Partial<Record<SessionId, Record<string, AskQuestionDraft>>>>({})
   useEffect(() => {
     setQuestionDrafts(current => {
@@ -1223,6 +1228,7 @@ export function App() {
               dispatchRawLog: dispatch,
               dispatchOutputTokens,
               dispatchPermission,
+              dispatchPendingQuestions,
               dispatchConnection,
               dispatchSettings,
               dispatchAgentConfig,
@@ -1583,6 +1589,8 @@ export function App() {
           type: 'session-removed',
           sessionId: event.appSessionId,
         })
+        dispatchPendingQuestions({ type: 'session-removed', sessionId: event.appSessionId })
+        forgetQuestionDrafts(event.appSessionId)
         preloadReservedBytesRef.current.delete(event.appSessionId)
       }
       dispatchShell({ type: 'event', event })
@@ -4162,6 +4170,10 @@ export function App() {
 	              toast('Sent. The agent will revise the plan.', { tone: 'info' })
 	            }}
 	            askQuestion={sessionAskQuestion}
+                pendingQuestions={pendingQuestions.sessions[sessionId]}
+                pendingQuestionsSuspended={sessionConnection.status !== 'ready'}
+                onReplyPendingQuestions={batch => sendQuestionVerb(getBridge(), sessionId, { type: 'askUserQuestion.reply', ...batch })}
+                onDismissPendingQuestion={request => sendQuestionVerb(getBridge(), sessionId, { type: 'askUserQuestion.dismiss', ...request })}
                 askDraft={sessionAskQuestion ? questionDrafts[sessionId]?.[sessionAskQuestion.request.requestId] : undefined}
                 onAskDraftChange={draft => {
                   if (!sessionAskQuestion) return

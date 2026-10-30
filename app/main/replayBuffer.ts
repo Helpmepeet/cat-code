@@ -146,6 +146,7 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
  * should not replay stale; reopening the popover queries the sidecar cache).
  */
 const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
+  'question.result': 'none',
   'work.status': 'none',
   'lid.work': 'none',
   ready: 'head',
@@ -257,6 +258,7 @@ export const STICKY_FRAME_KINDS: readonly ServerFrame['kind'][] = (
 
 type SessionEntry = {
   ready: ServerFrame | null
+  questionSnapshot: ServerFrame | null
   /**
    * One slot per `sticky` kind. Keyed by kind so a later snapshot REPLACES the
    * earlier one; a `Map` because re-setting an existing key keeps its original
@@ -302,6 +304,7 @@ export class FrameReplayBuffer {
     if (!entry) {
       entry = {
         ready: null,
+        questionSnapshot: null,
         sticky: new Map(),
         recent: [],
         recentBytes: 0,
@@ -314,6 +317,10 @@ export class FrameReplayBuffer {
       this.sessions.set(sessionId, entry)
     }
     const retention = FRAME_RETENTION[frame.kind]
+    if (frame.kind === 'event' && frame.event.type === 'question.snapshot') {
+      entry.questionSnapshot = frame
+      return
+    }
     if (retention === 'none') {
       return
     }
@@ -335,6 +342,7 @@ export class FrameReplayBuffer {
       // A new attach may belong to a replacement execution generation.
       entry.sticky.delete('inline-command.snapshot')
       entry.ready = frame
+      entry.questionSnapshot = null
       return
     }
     if (retention === 'sticky') {
@@ -517,6 +525,7 @@ export class FrameReplayBuffer {
       )
     }
     frames.push(...entry.recent)
+    if (entry.questionSnapshot) frames.push(entry.questionSnapshot)
     if (entry.previewTruncated) {
       frames.push(previewReplayTruncationFrame(sessionId))
     }

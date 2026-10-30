@@ -1,9 +1,11 @@
 import type { QueuedCommand } from '../types/textInputTypes.js'
+import { getSessionId } from '../bootstrap/state.js'
 import {
   dequeue,
   dequeueAllMatching,
   hasCommandsInQueue,
   peek,
+  removeByFilter,
 } from './messageQueueManager.js'
 
 type ProcessQueueParams = {
@@ -62,6 +64,8 @@ export function processQueueIfReady({
   // false with the queue unchanged → the React effect never re-fires and any
   // queued user prompt stalls permanently.
   const isMainThread = (cmd: QueuedCommand) => cmd.agentId === undefined
+  removeByFilter(cmd => isMainThread(cmd) && cmd.origin?.kind === 'question-reply' &&
+    cmd.origin.engineSessionId !== undefined && cmd.origin.engineSessionId !== getSessionId())
 
   const next = peek(isMainThread)
   if (!next) {

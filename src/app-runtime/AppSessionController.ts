@@ -47,6 +47,9 @@ export type AppSessionSubmitOptions = {
 export type AppSessionPrompt = string | ContentBlockParam[]
 
 export type AppSessionControllerAdapter = {
+  getQuestionRegistry?: () => import('../utils/pendingQuestions.js').PendingQuestionRegistry | undefined
+  initializeQuestions?: () => Promise<void>
+  deliverQuestionReplies?: () => void
   getMessages?: () => readonly Message[]
   runInlineCommand?: (args: {
     operation: InlineCommandOperation
@@ -126,7 +129,34 @@ export class AppSessionController {
   private readonly idleWaiters = new Set<() => void>()
   private readonly fallbackDiagnosticSessionId = randomUUID()
 
-  constructor(private readonly adapter: AppSessionControllerAdapter) {}
+  constructor(private readonly adapter: AppSessionControllerAdapter) {
+    adapter.getQuestionRegistry?.()?.subscribe(() => {
+      this.emit({ type: 'question.snapshot', snapshot: this.getQuestionSnapshot() })
+    })
+    if (adapter.getQuestionRegistry?.() && adapter.initializeQuestions) this.initializeBeforeAdmission(adapter.initializeQuestions())
+  }
+
+  getQuestionSnapshot(): import('../utils/pendingQuestions.js').QuestionSnapshot {
+    return this.adapter.getQuestionRegistry?.()?.getSnapshot() ?? { pending: [], resolved: [] }
+  }
+  hasQuestionRuntime(): boolean { return this.adapter.getQuestionRegistry?.() !== undefined }
+  async replyToQuestions(batch: import('../utils/pendingQuestions.js').QuestionReplyBatch): Promise<void> {
+    await this.waitForInitialization()
+    await this.adapter.initializeQuestions?.()
+    if (!this.canStartQueuedTurn() && !this.activeTurn) throw new Error('Question replies are unavailable during recovery')
+    const registry = this.adapter.getQuestionRegistry?.()
+    if (!registry) throw new Error('Nonblocking questions are unavailable')
+    await registry.reply(batch)
+    this.adapter.deliverQuestionReplies?.()
+  }
+  async dismissQuestion(request: import('../utils/pendingQuestions.js').QuestionDismiss): Promise<void> {
+    await this.waitForInitialization()
+    await this.adapter.initializeQuestions?.()
+    if (this.adapter.requiresRecoveryReview?.()) throw new Error('Question dismissal is unavailable during recovery')
+    const registry = this.adapter.getQuestionRegistry?.()
+    if (!registry) throw new Error('Nonblocking questions are unavailable')
+    await registry.dismiss(request)
+  }
 
   subscribe(listener: AppSessionEventListener): () => void {
     this.listeners.add(listener)
@@ -159,7 +189,8 @@ export class AppSessionController {
 
   getHandoffReservation(): string | null { return this.handoffReservation }
   requiresHandoffReconciliation(): boolean { return this.requiresUserReconciliation }
-  canStartAutomaticTurn(): boolean { return !this.initializing && !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation && !this.adapter.requiresRecoveryReview?.() }
+  canStartQueuedTurn(): boolean { return !this.initializing && !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation && !this.adapter.requiresRecoveryReview?.() }
+  canStartAutomaticTurn(): boolean { return this.canStartQueuedTurn() && this.getQuestionSnapshot().pending.length === 0 }
   subscribeHandoffStatus(listener: () => void): () => void {
     this.handoffListeners.add(listener)
     return () => { this.handoffListeners.delete(listener) }
@@ -167,7 +198,7 @@ export class AppSessionController {
 
   initializeBeforeAdmission(initialization: Promise<void>): void {
     this.initializing = true
-    this.initialization = initialization.then(() => { this.initializing = false })
+    this.initialization = Promise.all([this.initialization, initialization]).then(() => { this.initializing = false })
     void this.initialization.catch(() => {})
   }
   waitForInitialization(): Promise<void> { return this.initialization }

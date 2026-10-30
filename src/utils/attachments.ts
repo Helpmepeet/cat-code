@@ -798,7 +798,7 @@ export async function getAttachments(
     // getAttachmentMessages runs — returning [] here silently drops them.
     // Coworker runs with --bare and depends on task-notification for
     // mid-tool-call notifications from Local*Task/Remote*Task.
-    return getQueuedCommandAttachments(queuedCommands)
+    return getQueuedCommandAttachments(queuedCommands, toolUseContext.pendingQuestions)
   }
 
   // This will slow down submissions
@@ -867,7 +867,7 @@ export async function getAttachments(
     // main thread gets agentId===undefined, subagents get their own agentId.
     // Must run for all threads or subagent notifications drain into the void
     // (removed from queue by removeFromQueue but never attached).
-    maybe('queued_commands', () => getQueuedCommandAttachments(queuedCommands)),
+    maybe('queued_commands', () => getQueuedCommandAttachments(queuedCommands, toolUseContext.pendingQuestions)),
     maybe('date_change', () => getDateChangeAttachments(messages)),
     maybe('ultrathink_effort', () =>
       Promise.resolve(getUltrathinkEffortAttachment(input)),
@@ -1117,6 +1117,7 @@ const INLINE_NOTIFICATION_MODES = new Set(['prompt', 'task-notification'])
 
 export async function getQueuedCommandAttachments(
   queuedCommands: QueuedCommand[],
+  pendingQuestions?: ToolUseContext['pendingQuestions'],
 ): Promise<Attachment[]> {
   if (!queuedCommands) {
     return []
@@ -1148,7 +1149,8 @@ export async function getQueuedCommandAttachments(
         priorAssistantContext: _.priorAssistantContext ?? null,
         imagePasteIds: getImagePasteIds(_.pastedContents),
         commandMode: _.mode,
-        origin: _.origin,
+        origin: _.origin?.kind === 'question-reply' && pendingQuestions
+          ? { ..._.origin, displayQuestions: pendingQuestions.displayReferences(_.origin.questions) } : _.origin,
         isMeta: _.isMeta,
       }
     }),

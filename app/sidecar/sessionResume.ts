@@ -191,6 +191,9 @@ export function selectUndeliveredPrompts(queueState: {
       continue
     }
     if (operation.mode !== 'prompt' || operation.agentId !== undefined) continue
+    // Accepted answers recover through the engine's question outbox, never as
+    // editable, unproven composer drafts.
+    if (operation.origin?.kind === 'question-reply') continue
     const content = restorableContent(operation.content)
     if (typeof operation.uuid !== 'string' || operation.uuid.length === 0 ||
         typeof operation.timestamp !== 'string' || !Number.isFinite(Date.parse(operation.timestamp)) ||

@@ -92,6 +92,13 @@ function productiveTurn(): Message[] {
 }
 
 describe('the headless goal loop', () => {
+  test('an unresolved question prevents automatic goal continuation without cancelling the goal', async () => {
+    const sessionId = withSession()
+    let state = { threadGoal: createThreadGoal(sessionId, 'finish after an answer', undefined, 100) } as unknown as AppState
+    const loop = createHeadlessGoalLoop({ getAppState: () => state, setAppState: update => { state = update(state) }, hasPendingQuestions: () => true })
+    expect(await loop!.nextContinuation(productiveTurn())).toBeNull()
+    expect(state.threadGoal?.status).toBe('active')
+  })
   test('an active goal produces a continuation prompt', async () => {
     const sessionId = withSession()
     const { loop } = harness(

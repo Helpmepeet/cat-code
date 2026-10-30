@@ -1181,7 +1181,7 @@ function leadsOwnMessage(item: TranscriptLayoutItem, next: TranscriptLaneEntry |
     ? item.members[0].frameId
     : item.kind === 'single' && item.row.kind === 'user-image' ? item.row.frameId : null
   return frameId !== null && next?.kind === 'item' && next.item.kind === 'single' &&
-    next.item.row.kind === 'user-text' && next.item.row.frameId === frameId
+    (next.item.row.kind === 'user-text' || next.item.row.kind === 'question-reply') && next.item.row.frameId === frameId
 }
 
 /**
@@ -1802,6 +1802,8 @@ const TranscriptRowView = memo(function TranscriptRowView({
         />
       )
 
+    case 'question-reply':
+      return <AskUserQuestionAnswerRow presentation={{ state: 'answered', items: row.items }} turnLive={false} />
     case 'user-text':
       return (
         <UserBubble
@@ -3484,13 +3486,13 @@ function AskUserQuestionAnswerRow({
         ?
       </span>
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-        {presentation.items.map(item => (
-          <div className="min-w-0" key={item.question}>
+        {presentation.items.map((item, index) => (
+          <div className="min-w-0" key={index}>
             <div className="text-[12.5px] leading-[18px] text-text-muted">
               {item.question}
             </div>
             <div className="mt-0.5">
-              {presentation.state === 'answered' ? (
+              {(item.state ?? presentation.state) === 'answered' ? (
                 <>
                   <div className="text-[13px] font-medium leading-[18px] text-text-primary">
                     {item.answer}
@@ -3501,9 +3503,9 @@ function AskUserQuestionAnswerRow({
                     </div>
                   ) : null}
                 </>
-              ) : presentation.state === 'declined' ? (
+              ) : item.state === 'dismissed' || presentation.state === 'declined' ? (
                 <div className="text-[13px] leading-[18px] text-text-subtle">
-                  Declined
+                  {item.state === 'dismissed' ? 'Dismissed' : 'Declined'}
                 </div>
               ) : (
                 <div className="flex h-[18px] items-center">

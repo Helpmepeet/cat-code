@@ -1,4 +1,5 @@
 import type { Command } from '../commands.js'
+import { QUESTION_ANSWER_BOUNDARY } from '../tools/AskUserQuestionTool/prompt.js'
 
 const command = {
   type: 'prompt',
@@ -56,6 +57,10 @@ Analyze the project to detect what's in different subdirectories. The project ma
      - Chrome DevTools MCP server
      - Claude Chrome Extension MCP (browser-use via Claude's Chrome extension)
    - For Python projects, check for playwright, pytest-playwright
+
+${QUESTION_ANSWER_BOUNDARY}
+
+Do not install tools, configure authentication, or generate a verifier whose setup depends on an unanswered question. Group independent questions into a round, then resume its dependent phase only after the answers arrive.
 
 ## Phase 2: Verification Tool Setup
 
@@ -204,7 +209,7 @@ After verification:
 
 ## Self-Update
 
-If verification fails because this skill's instructions are outdated (dev server command/port/ready-signal changed, etc.) — not because the feature under test is broken — or if the user corrects you mid-run, use AskUserQuestion to confirm and then Edit this SKILL.md with a minimal targeted fix.
+If verification fails because this skill's instructions are outdated (dev server command/port/ready-signal changed, etc.), not because the feature under test is broken, or if the user corrects you mid-run, use AskUserQuestion to confirm the proposed fix. ${QUESTION_ANSWER_BOUNDARY} Edit this SKILL.md with a minimal targeted fix only after confirmation arrives.
 \`\`\`
 
 ### Allowed Tools by Type

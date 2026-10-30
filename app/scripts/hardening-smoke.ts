@@ -230,6 +230,7 @@ async function runProductionHardeningSmoke(
       'accountVerb',
       'manageAccount',
       'answerQuestions',
+      'questionVerb',
       'deleteAccount',
       'signOutAccount',
       'ping',

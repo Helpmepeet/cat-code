@@ -5,6 +5,7 @@ import type { ThreadGoal } from '../utils/threadGoal.js'
 import type { AgentId } from './ids.js'
 import type { Message } from './message.js'
 import type { QueueOperationMessage } from './messageQueueTypes.js'
+import type { QuestionJournalEntry } from '../utils/pendingQuestions.js'
 import type { SessionBinding } from '../../app/shared/sessionBinding.js'
 
 export type SessionMode = 'coordinator' | 'normal'
@@ -424,6 +425,7 @@ export type Entry =
   | FileHistorySnapshotMessage
   | AttributionSnapshotMessage
   | QueueOperationMessage
+  | (QuestionJournalEntry & { sessionId: string; timestamp: string })
   | SpeculationAcceptMessage
   | ModeEntry
   | ThreadGoalUpdatedEntry

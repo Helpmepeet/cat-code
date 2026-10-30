@@ -1,6 +1,8 @@
 import { c as _c } from "react/compiler-runtime";
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle';
+import { PendingQuestionRuntime } from '../utils/pendingQuestionRuntime.js';
+import { PendingQuestionPanel } from '../components/permissions/PendingQuestionPanel.js';
 import { spawnSync } from 'child_process';
 import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
@@ -1285,6 +1287,12 @@ export function REPL({
   const restoreReviewRef = useRef<RestoreReviewAdmission | null>(null);
   if (!restoreReviewRef.current) restoreReviewRef.current = new RestoreReviewAdmission(!!initialRecoveryReviewRequired);
   const messagesRef = useRef(messages);
+  const questionRuntimeSessionId = getSessionId();
+  const questionRuntime = useMemo(() => feature('NONBLOCKING_ASK_USER_QUESTION') ? new PendingQuestionRuntime(() => messagesRef.current) : null, [questionRuntimeSessionId]);
+  const [pendingQuestionOpen, setPendingQuestionOpen] = useState(false);
+  useEffect(() => {
+    if (!restoreReviewRef.current?.required) void questionRuntime?.initialize().then(() => questionRuntime.deliver()).catch(logError);
+  }, [questionRuntime, messages.length]);
   // Stores the willowMode variant that was shown (or false if no hint shown).
   // Captured at hint_shown time so hint_converted telemetry reports the same
   // variant — the GrowthBook value shouldn't change mid-session, but reading
@@ -2719,6 +2727,7 @@ export function REPL({
     };
     return {
       abortController,
+      pendingQuestions: questionRuntime?.registry,
       // `isRunning`, not `isActive`: the serialized dispatch path reserves the
       // guard before processUserInput builds this context, so `isActive` would
       // report the command's own reservation back to it as someone else's turn.
@@ -2834,7 +2843,7 @@ export function REPL({
       requestPrompt: feature('HOOK_PROMPTS') ? requestPrompt : undefined,
       contentReplacementState: contentReplacementStateRef.current
     };
-	  }, [commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, queryGuard]);
+	  }, [questionRuntime, commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, queryGuard]);
   getToolUseContextRef.current = getToolUseContext;
 
   // Session backgrounding (Ctrl+B to background/foreground)
@@ -3002,6 +3011,8 @@ export function REPL({
     }, onStreamingText);
   }, [setMessages, setResponseLength, setStreamMode, setStreamingToolUses, setStreamingThinking, onStreamingText]);
   const onQueryImpl = useCallback(async (messagesIncludingNewMessages: MessageType[], newMessages: MessageType[], abortController: AbortController, shouldQuery: boolean, additionalAllowedTools: string[], mainLoopModelParam: string, effort?: EffortValue) => {
+    await questionRuntime?.initialize();
+    if (shouldQuery) questionRuntime?.registry.beginTurn();
     logForDebugging(`[REPL:onQueryImpl] entry shouldQuery=${shouldQuery} newMessages=${newMessages.length} additionalAllowedTools=${additionalAllowedTools.length} model=${mainLoopModelParam}`);
     // Prepare IDE integration for new prompt. Read mcpClients fresh from
     // store — useManageMCPConnections may have populated it since the
@@ -3279,7 +3290,7 @@ export function REPL({
         ...cacheWarnings.map(w => createSystemMessage(w, 'warning')),
       ]);
     }
-  }, [initialMcpClients, resetLoadingState, getToolUseContext, toolPermissionContext, setAppState, customSystemPrompt, onTurnComplete, appendSystemPrompt, canUseTool, mainThreadAgentDefinition, onQueryEvent, sessionTitle, titleDisabled, activeRemote.isRemoteMode, accountCompletedTurnThreadGoal, store]);
+  }, [questionRuntime, initialMcpClients, resetLoadingState, getToolUseContext, toolPermissionContext, setAppState, customSystemPrompt, onTurnComplete, appendSystemPrompt, canUseTool, mainThreadAgentDefinition, onQueryEvent, sessionTitle, titleDisabled, activeRemote.isRemoteMode, accountCompletedTurnThreadGoal, store]);
   const onQuery = useCallback(async (newMessages: MessageType[], abortController: AbortController, shouldQuery: boolean, additionalAllowedTools: string[], mainLoopModelParam: string, onBeforeQueryCallback?: (input: string, newMessages: MessageType[]) => Promise<boolean>, input?: string, effort?: EffortValue): Promise<void> => {
     logForDebugging(`[REPL:onQuery] start messages=${newMessages.length} shouldQuery=${shouldQuery} additionalAllowedTools=${additionalAllowedTools.length} hasInput=${Boolean(input)}`);
     // If this is a teammate, mark them as active when starting a turn
@@ -4651,6 +4662,7 @@ export function REPL({
     const isInPlanMode = toolPermissionContext.mode === 'plan';
     goalGateRef.current.canStartAutomaticTurn =
       restoreReviewRef.current!.canStartAutomaticTurn() &&
+      (questionRuntime?.registry.getSnapshot().pending.length ?? 0) === 0 &&
       sessionIsIdle &&
       queuedCommands.length === 0 &&
       !isShowingLocalJSXCommand &&
@@ -5619,8 +5631,9 @@ export function REPL({
           }} /> : null}
 
                 {mrRender()}
+                {questionRuntime ? <React.Fragment key={questionRuntimeSessionId}><PendingQuestionPanel registry={questionRuntime.registry} active={!focusedInputDialog && !disabled && !cursor && !isShowingLocalJSXCommand && !toolJSX?.shouldHidePromptInput} onOpenChange={setPendingQuestionOpen} deliver={() => questionRuntime.deliver()} planMode={toolPermissionContext.mode === 'plan'} onMessage={value => enqueue({ mode: 'prompt', value, uuid: randomUUID(), priority: 'next' })} /></React.Fragment> : null}
 
-                {!toolJSX?.shouldHidePromptInput && !focusedInputDialog && !isExiting && !disabled && !cursor && <>
+                {!pendingQuestionOpen && !toolJSX?.shouldHidePromptInput && !focusedInputDialog && !isExiting && !disabled && !cursor && <>
                       {/* Skill improvement survey - appears when improvements detected (ant-only) */}
                       {"external" === 'ant' && skillImprovementSurvey.suggestion && <SkillImprovementSurvey isOpen={skillImprovementSurvey.isOpen} skillName={skillImprovementSurvey.suggestion.skillName} updates={skillImprovementSurvey.suggestion.updates} handleSelect={skillImprovementSurvey.handleSelect} inputValue={inputValue} setInputValue={setInputValue} />}
                       {showIssueFlagBanner && <IssueFlagBanner />}

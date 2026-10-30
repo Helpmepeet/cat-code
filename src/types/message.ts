@@ -15,6 +15,8 @@ export type PriorAssistantContext = {
 
 export type MessageOrigin =
   | { kind: 'human' }
+  | { kind: 'question-reply'; batchId: string; questions: { toolUseId: string; questionIndex: number }[];
+      displayQuestions?: { toolUseId: string; questionIndex: number }[]; engineSessionId?: string }
   /** A user-initiated cancellation marker, kept for transcript replay. */
   | { kind: 'interruption' }
   | {

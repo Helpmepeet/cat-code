@@ -51,6 +51,7 @@ export type ServerFrameBatchHandlers = {
   dispatchConnection: (action: BatchAction<ServerFrame>) => void
   dispatchTranscript: (action: BatchAction<ServerFrame>) => void
   dispatchPermission: (action: BatchAction<FrameReducerAction>) => void
+  dispatchPendingQuestions?: (action: BatchAction<FrameReducerAction>) => void
   dispatchSettings: (action: BatchAction<FrameReducerAction>) => void
   dispatchAgentConfig: (action: BatchAction<FrameReducerAction>) => void
   dispatchGoalMemory: (action: BatchAction<FrameReducerAction>) => void
@@ -99,6 +100,7 @@ export function applyServerFrameBatch(
   h.dispatchRawLog(batch(frames))
   h.dispatchOutputTokens?.({ type: 'frames', frames, baseline })
   h.dispatchPermission(batch(frameActions))
+  h.dispatchPendingQuestions?.(batch(frameActions))
   h.dispatchConnection(batch(frames))
   h.dispatchSettings(batch(frameActions))
   h.dispatchAgentConfig(batch(frameActions))

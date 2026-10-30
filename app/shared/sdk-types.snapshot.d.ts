@@ -356,6 +356,7 @@ export type SDKRateLimitInfo = {
 export type SDKMessageOrigin =
   | { kind: 'human' }
   | { kind: 'interruption' }
+  | { kind: 'question-reply'; batchId: string; questions: { toolUseId: string; questionIndex: number }[]; displayQuestions?: { toolUseId: string; questionIndex: number }[] }
   | {
       kind: 'task-notification'
       status?: 'completed' | 'failed' | 'killed' | 'running' | 'pending'
@@ -735,6 +736,8 @@ export type SDKControlChannelEnableRequest = {
 }
 
 export type SDKControlRequestInner =
+  | { subtype: 'question_reply'; replies: { toolUseId: string; questionIndex: number; answer: { optionIndices: number[]; other?: string; notes?: { optionIndex: number; text: string }[] }; images?: { type: 'image'; source: { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'; data: string } }[] }[] }
+  | { subtype: 'question_dismiss'; toolUseId: string; questionIndex: number }
   | SDKControlInterruptRequest
   | SDKControlPermissionRequest
   | SDKControlInitializeRequest

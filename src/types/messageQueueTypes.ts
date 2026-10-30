@@ -1,7 +1,7 @@
 import type { UUID } from 'crypto'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages'
 import type { AgentId } from './ids.js'
-import type { PriorAssistantContext } from './message.js'
+import type { MessageOrigin, PriorAssistantContext } from './message.js'
 
 /**
  * Restored 2026-08-17. This module is imported by `src/types/logs.ts`,
@@ -55,4 +55,5 @@ export type QueueOperationMessage = {
    */
   content?: string | ContentBlockParam[]
   priorAssistantContext?: PriorAssistantContext | null
+  origin?: MessageOrigin
 }

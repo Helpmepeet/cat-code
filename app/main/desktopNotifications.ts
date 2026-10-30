@@ -8,6 +8,7 @@ import { buildAllowResponse, buildDenyResponse, type PermissionRequest } from '.
 import { buildPermissionOptions, selectPermissionPreview } from '../renderer/src/permissionPromptModel.js'
 import { PLAN_APPROVE_OPTIONS } from '../renderer/src/planState.js'
 import { narrowAskQuestions } from '../renderer/src/askQuestionState.js'
+import type { PendingQuestion } from '../shared/nonblockingQuestions.js'
 import { OPEN_ACCOUNTS_LABEL, RETRY_LABEL, USAGE_LIMIT_TITLE, retrySendBlocked, turnResultFailureCopy } from '../renderer/src/turnFailure.js'
 
 import { createDesktopNotificationRetry } from './desktopNotificationRetry.js'
@@ -32,7 +33,7 @@ export type DesktopNotificationDependencies = {
   onError?(error: unknown): void
 }
 type Prompt = Extract<ClientMessage, { type: 'app.submit' }>['prompt']
-type Notice = { options: NotificationConstructorOptions; waiting: boolean; requestId?: string; retryResultId?: string; actions?: (() => void)[]; reply?: (text: string) => void }
+type Notice = { options: NotificationConstructorOptions; waiting: boolean; requestId?: string; questionId?: string; retryResultId?: string; actions?: (() => void)[]; reply?: (text: string) => void }
 type State = { pending: Map<string, PermissionRequest>; stopped: boolean; active: boolean; inputEnabled: boolean; aborted: boolean; retryFacts: ReturnType<typeof createDesktopNotificationRetry>; retryBlocked?: boolean; assistant: string; providerCode?: string; providerMessage?: string; errorStatus?: number; notice?: Notice; terminalNotice?: Notice; handle?: DesktopNotificationHandle }
 
 const BANNER_TEXT_LIMIT = 1000
@@ -99,7 +100,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
     } catch (error) { deps.onError?.(error); return }
     if (!handle) return
     s.handle = handle
-    const valid = () => !disposed && sessions.get(id) === s && s.handle === handle && s.notice === notice && !!deps.getSession(id) && (!notice.requestId || s.pending.has(notice.requestId))
+    const valid = () => !disposed && sessions.get(id) === s && s.handle === handle && s.notice === notice && !!deps.getSession(id) && (!notice.requestId || s.pending.has(notice.requestId)) && (!notice.questionId || pendingQuestions.get(id)?.has(notice.questionId))
     const consume = (action: () => void) => { if (!valid()) return; clear(s); action() }
     handle.on('click', () => consume(() => deps.openSession(id)))
     handle.on('action', (_event, index) => { if (typeof index === 'number' && Number.isInteger(index) && index >= 0 && actions?.[index]) consume(actions[index]!) })
@@ -146,6 +147,14 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
     if (s.active && id !== onScreenSessionId) s.terminalNotice = notice
     else show(id, s, notice)
   }
+  const pendingQuestions = new Map<string, Map<string, PendingQuestion>>()
+  function showQuestion(id: string, s: State) {
+    const question = pendingQuestions.get(id)?.values().next().value
+    if (!question || s.pending.size) return
+    const questionId = JSON.stringify([question.toolUseId, question.questionIndex])
+    if (s.handle && s.notice?.questionId === questionId) return
+    show(id, s, { questionId, waiting: true, options: { title: DESKTOP_NOTIFICATION_TITLES.question, body: question.question, actions: [], hasReply: false } })
+  }
   function receive(id: string, frame: ServerFrame) {
     if (disposed || !deps.getSession(id)) return
     let s = sessions.get(id)
@@ -170,10 +179,17 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
       if (s.active) s.stopped = false
       s.aborted = frame.payload.abort.status !== 'idle'
     } else if (frame.kind === 'lifecycle') {
-      clear(s); sessions.delete(id)
+      clear(s); sessions.delete(id); pendingQuestions.delete(id)
     } else if (frame.kind === 'event') {
       const event = frame.event
-      if (event.type === 'permission.requested') { s.pending.set(event.request.requestId, event.request); permission(id, s, event.request) }
+      if (event.type === 'question.snapshot') {
+        const previous = pendingQuestions.get(id) ?? new Map()
+        const next = new Map(event.snapshot.pending.map(question => [JSON.stringify([question.toolUseId, question.questionIndex]), question]))
+        pendingQuestions.set(id, next)
+        if (s.notice?.questionId && !next.has(s.notice.questionId)) clear(s)
+        if (s.active && [...next.keys()].some(key => !previous.has(key))) showQuestion(id, s)
+      }
+      else if (event.type === 'permission.requested') { s.pending.set(event.request.requestId, event.request); permission(id, s, event.request) }
       else if (event.type === 'permission.resolved') { s.pending.delete(event.request.requestId); if (s.notice?.requestId === event.request.requestId) clear(s) }
       else if (event.type === 'abort.status' && event.abort.status !== 'idle') { s.aborted = true; clear(s); s.stopped = false }
       else if (event.type === 'turn.status') {
@@ -202,6 +218,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
           typeof m.event.delta.text === 'string' && m.event.delta.text.length > 0) s.errorStatus = undefined
         if (m.type === 'system' && m.subtype === 'api_retry' && typeof m.error_status === 'number') s.errorStatus = m.error_status
         if (m.type === 'result' && typeof m.subtype === 'string' && typeof m.is_error === 'boolean') {
+          if (pendingQuestions.get(id)?.size) { s.stopped = false; showQuestion(id, s); badge(); return }
           clear(s)
           if (s.aborted || ['interrupted', 'handoff', 'aborted'].includes(m.subtype)) { s.stopped = false; badge(); return }
           if (m.is_error || m.subtype !== 'success') {
@@ -240,7 +257,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
     receiveHostEvent(event: HostEvent) {
       if (event.type === 'session-removed' || (event.type === 'session-status' && (event.session.parked || event.session.status === 'spawning' || event.session.status === 'exited' || event.session.status === 'disconnected'))) {
         const id = event.type === 'session-removed' ? event.appSessionId : event.session.appSessionId
-        const s = sessions.get(id); if (s) clear(s); sessions.delete(id); badge()
+        const s = sessions.get(id); if (s) clear(s); sessions.delete(id); pendingQuestions.delete(id); badge()
       }
     },
     focusChanged() {
@@ -250,6 +267,6 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
       badge()
     },
     preferencesChanged() { for (const s of sessions.values()) if (deps.getPreferences().notify === 'off' || (deps.getPreferences().notify === 'waiting' && !s.notice?.waiting)) close(s); badge() },
-    dispose() { disposed = true; for (const s of sessions.values()) clear(s); sessions.clear(); badge() },
+    dispose() { disposed = true; for (const s of sessions.values()) clear(s); sessions.clear(); pendingQuestions.clear(); badge() },
   }
 }

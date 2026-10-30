@@ -32,7 +32,7 @@ import type { Command } from '../../types/command.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
 import { GREP_TOOL_NAME } from '../../tools/GrepTool/prompt.js'
-import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
+import { ASK_USER_QUESTION_TOOL_NAME, NONBLOCKING_QUESTION_MODEL_CONTRACT } from '../../tools/AskUserQuestionTool/prompt.js'
 import { EXPLORE_AGENT } from '../../tools/AgentTool/built-in/exploreAgent.js'
 import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents.js'
 import { isReplModeEnabled } from '../../tools/REPLTool/constants.js'
@@ -321,6 +321,8 @@ export function getGPTSessionGuidanceSection(
       : null
 
   const items = [
+    hasAskUserQuestionTool
+      && feature('NONBLOCKING_ASK_USER_QUESTION') ? NONBLOCKING_QUESTION_MODEL_CONTRACT : null,
     hasAskUserQuestionTool
       ? `If you do not understand why the user denied a tool call, use ${ASK_USER_QUESTION_TOOL_NAME} to ask.`
       : null,

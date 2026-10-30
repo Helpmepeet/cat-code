@@ -2355,6 +2355,7 @@ async function* queryLoop(
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
       if (cmd.origin?.kind === 'deferred-continuation') return false
+      if (cmd.origin?.kind === 'question-reply' && cmd.origin.engineSessionId !== undefined && cmd.origin.engineSessionId !== getSessionId()) return false
       if (isMainThread) return cmd.agentId === undefined
       // Subagents only drain task-notifications addressed to them — never
       // user prompts, even if someone stamps an agentId on one.
@@ -2477,7 +2478,7 @@ async function* queryLoop(
           }
         }
       }
-      removeFromQueue(consumedCommands)
+      removeFromQueue(consumedCommands, 'reserve')
     }
 
     // Instrumentation: Track file change attachments after they're added

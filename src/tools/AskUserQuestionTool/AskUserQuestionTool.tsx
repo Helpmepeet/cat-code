@@ -10,7 +10,7 @@ import { Box, Text } from '../../ink.js';
 import type { Tool } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
 import { lazySchema } from '../../utils/lazySchema.js';
-import { ASK_USER_QUESTION_TOOL_CHIP_WIDTH, ASK_USER_QUESTION_TOOL_NAME, ASK_USER_QUESTION_TOOL_PROMPT, DESCRIPTION, MAX_HTML_PREVIEW_CHARS, PREVIEW_FEATURE_PROMPT } from './prompt.js';
+import { ASK_USER_QUESTION_TOOL_NAME, ASK_USER_QUESTION_TOOL_PROMPT, DESCRIPTION, MAX_HTML_PREVIEW_CHARS, PREVIEW_FEATURE_PROMPT } from './prompt.js';
 const questionOptionSchema = lazySchema(() => z.object({
   label: z.string().describe('The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.'),
   description: z.string().describe('Explanation of what this option means or what will happen if chosen. Useful for providing context about trade-offs or implications.'),
@@ -18,7 +18,6 @@ const questionOptionSchema = lazySchema(() => z.object({
 }));
 const questionSchema = lazySchema(() => z.object({
   question: z.string().describe('The complete question to ask the user. Should be clear, specific, and end with a question mark. Example: "Which library should we use for date formatting?" If multiSelect is true, phrase it accordingly, e.g. "Which features do you want to enable?"'),
-  header: z.string().describe(`Very short label displayed as a chip/tag (max ${ASK_USER_QUESTION_TOOL_CHIP_WIDTH} chars). Examples: "Auth method", "Library", "Approach".`),
   options: z.union([z.array(questionOptionSchema()).length(0), z.array(questionOptionSchema()).min(2).max(4)]).describe(`Use an empty array for a free-text question, or provide 2-4 choices. Never provide exactly one option. Each option should be a distinct, mutually exclusive choice (unless multiSelect is enabled). There should be no 'Other' option, that will be provided automatically.`),
   multiSelect: z.boolean().default(false).describe('Set to true to allow the user to select multiple options instead of just one. Use when choices are not mutually exclusive.')
 }));
@@ -33,7 +32,7 @@ const UNIQUENESS_REFINE = {
   check: (data: {
     questions: {
       question: string;
-      options: {
+      options?: {
         label: string;
       }[];
     }[];
@@ -43,7 +42,7 @@ const UNIQUENESS_REFINE = {
       return false;
     }
     for (const question of data.questions) {
-      const labels = question.options.map(opt => opt.label);
+      const labels = (question.options ?? []).map(opt => opt.label);
       if (labels.length !== new Set(labels).size) {
         return false;
       }
@@ -53,8 +52,10 @@ const UNIQUENESS_REFINE = {
   message: 'Question texts must be unique, option labels must be unique within each question'
 } as const;
 const commonFields = lazySchema(() => ({
-  answers: z.record(z.string(), z.string()).optional().describe('User answers collected by the permission component'),
-  annotations: annotationsSchema(),
+  ...(feature('NONBLOCKING_ASK_USER_QUESTION') ? {} : {
+    answers: z.record(z.string(), z.string()).optional().describe('User answers collected by the permission component'),
+    annotations: annotationsSchema(),
+  }),
   metadata: z.object({
     source: z.string().optional().describe('Optional identifier for the source of this question (e.g., "remember" for /remember command). Used for analytics tracking.')
   }).optional().describe('Optional metadata for tracking and analytics purposes. Not displayed to user.')
@@ -69,7 +70,8 @@ type InputSchema = ReturnType<typeof inputSchema>;
 const outputSchema = lazySchema(() => z.object({
   questions: z.array(questionSchema()).describe('The questions that were asked'),
   answers: z.record(z.string(), z.string()).describe('The answers provided by the user (question text -> answer string; multi-select answers are comma-separated)'),
-  annotations: annotationsSchema()
+  annotations: annotationsSchema(),
+  shown: z.literal(true).optional()
 }));
 type OutputSchema = ReturnType<typeof outputSchema>;
 
@@ -77,7 +79,7 @@ type OutputSchema = ReturnType<typeof outputSchema>;
 // `annotations` are public (configurable via `toolConfig.askUserQuestion`).
 export const _sdkInputSchema = inputSchema;
 export const _sdkOutputSchema = outputSchema;
-export type Question = z.infer<ReturnType<typeof questionSchema>>;
+export type Question = z.infer<ReturnType<typeof questionSchema>> & { header?: string };
 export type QuestionOption = z.infer<ReturnType<typeof questionOptionSchema>>;
 export type Output = z.infer<OutputSchema>;
 function AskUserQuestionResultMessage(t0) {
@@ -153,7 +155,7 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     return input.questions.map(q => q.question).join(' | ');
   },
   requiresUserInteraction() {
-    return true;
+    return feature('NONBLOCKING_ASK_USER_QUESTION') ? false : true;
   },
   async validateInput({
     questions
@@ -181,7 +183,7 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
   },
   async checkPermissions(input) {
     return {
-      behavior: 'ask' as const,
+      behavior: feature('NONBLOCKING_ASK_USER_QUESTION') ? 'allow' as const : 'ask' as const,
       message: 'Answer questions?',
       updatedInput: input
     };
@@ -193,8 +195,9 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     return null;
   },
   renderToolResultMessage({
-    answers
+    answers, shown
   }, _toolUseID) {
+    if (shown) return null;
     return <AskUserQuestionResultMessage answers={answers} />;
   },
   renderToolUseRejectedMessage() {
@@ -210,7 +213,13 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     questions,
     answers = {},
     annotations
-  }, _context) {
+  }, _context, _canUseTool, parentMessage) {
+    if (feature('NONBLOCKING_ASK_USER_QUESTION')) {
+      if (!_context.pendingQuestions || !_context.toolUseId || _context.agentId) throw new Error('Nonblocking question runtime unavailable');
+      if (_context.abortController?.signal.aborted) throw new Error('Question call was interrupted');
+      await _context.pendingQuestions.ask(_context.toolUseId, parentMessage.uuid, questions.map(q => ({ question: q.question, options: q.options ?? [], multiSelect: q.multiSelect })));
+      return { data: { questions, answers: {}, shown: true as const } };
+    }
     return {
       data: {
         questions,
@@ -223,8 +232,9 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
   },
   mapToolResultToToolResultBlockParam({
     answers,
-    annotations
+    annotations, shown
   }, toolUseID) {
+    if (shown) return { type: 'tool_result', content: 'Question shown to the user. No answer yet; it will arrive as a separate message.', tool_use_id: toolUseID };
     const answersText = Object.entries(answers).map(([questionText, answer]) => {
       const annotation = annotations?.[questionText];
       const parts = [`"${questionText}"="${answer}"`];
