@@ -26,3 +26,21 @@ test('offers installed type-specific apps and persists successful choices while 
     expect(opened).toEqual(['chrome', 'finder'])
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test('an older slow browser launch cannot replace the latest persisted choice', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cat-preview-choice-race-'))
+  try {
+    let finishChrome!: (result: boolean) => void
+    const deps = { userData: root, sessions: () => [sessionDescriptorFixture({ appSessionId: 's', cwd: root })],
+      installed: async () => true,
+      open: async (_path: string, target: OpenWorkspaceFileTarget) => target === 'chrome' ? new Promise<boolean>(resolve => { finishChrome = resolve }) : true,
+    }
+    const service = createPreviewApplications(deps), input = { appSessionId: 's', path: 'http://localhost:4000/' }
+    const older = service.choose({ ...input, target: 'chrome' })
+    while (!finishChrome) await Bun.sleep(0)
+    expect(await service.choose({ ...input, target: 'safari' })).toBe(true)
+    finishChrome(true)
+    expect(await older).toBe(true)
+    expect((await createPreviewApplications(deps).list(input)).selected).toBe('safari')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

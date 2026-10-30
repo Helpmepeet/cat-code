@@ -34,6 +34,9 @@ export function createPreviewApplications(deps: {
     }
     return result
   }) ?? {}
+  let choiceSequence = 0
+  const latestChoice = new Map<string, number>()
+  function registerChoice(kind: string, sequence: number): void { latestChoice.set(kind, Math.max(sequence, latestChoice.get(kind) ?? 0)) }
   function localInput(input: unknown, choose: boolean) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) return null
     const record = input as Record<string, unknown>
@@ -60,24 +63,27 @@ export function createPreviewApplications(deps: {
       return { applications, selected: applications.some(app => app.target === choices[kind]) ? choices[kind] : 'default' }
     },
     async choose(input: unknown): Promise<boolean> {
+      const sequence = ++choiceSequence
       const local = localInput(input, true)
       if (local) {
+        registerChoice('localhost', sequence)
         if (local.target !== 'chrome' && local.target !== 'safari' || !await deps.installed(local.target,local.url).catch(()=>false)) return false
         try {
           const outcome = await deps.open(local.url,local.target)
           const ok = typeof outcome === 'boolean' ? outcome : outcome === ''
-          if(ok){choices.localhost=local.target;writePreferenceFile(deps.userData,PREFERENCE_FILE,choices)}
+          if(ok && latestChoice.get('localhost') === sequence){choices.localhost=local.target;writePreferenceFile(deps.userData,PREFERENCE_FILE,choices)}
           return ok
         } catch {return false}
       }
       const resolved = await resolveWorkspaceFile(input, deps.sessions(), deps.options)
       const kind = resolved && filePreviewKind(resolved.path)
       if (!resolved || !kind || !resolved.target || (resolved.target !== 'finder' && !TARGETS[kind].includes(resolved.target))) return false
+      if (resolved.target !== 'finder') registerChoice(kind, sequence)
       if (!await deps.installed(resolved.target, resolved.path).catch(() => false)) return false
       try {
         const outcome = await deps.open(resolved.path, resolved.target)
         const ok = typeof outcome === 'boolean' ? outcome : outcome === ''
-        if (ok && resolved.target !== 'finder') {
+        if (ok && resolved.target !== 'finder' && latestChoice.get(kind) === sequence) {
           choices[kind] = resolved.target
           writePreferenceFile(deps.userData, PREFERENCE_FILE, choices)
         }
