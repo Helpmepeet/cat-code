@@ -513,3 +513,15 @@ describe('shared sidebar and tab session actions', () => {
     ])
   })
 })
+
+
+test('a tab file candidate adds Show immediately before Rename and never to archived menus', () => {
+  const target = row()
+  const items = resolveSessionActions(target, { isActiveOpen: true })
+  const actions = selectSessionMenuActions(items, target, false, 'notes.md')
+  expect(actions.slice(0, 2).map(item => [item.kind, item.label])).toEqual([
+    ['show-file', 'Show notes.md'], ['rename', 'Rename'],
+  ])
+  expect(selectSessionMenuActions(items, target).some(item => item.kind === 'show-file')).toBe(false)
+  expect(selectSessionMenuActions(items, target, true, 'notes.md').some(item => item.kind === 'show-file')).toBe(false)
+})

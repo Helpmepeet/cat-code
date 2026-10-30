@@ -1,7 +1,8 @@
 import type { ElementContent, Root, RootContent, Text } from 'hast'
+import { stripLineSuffix } from './filePathActions.js'
 
 const FILE_PATH_RE =
-  /(?:(?:\/|(?:\.{1,2}\/)|(?:[A-Za-z0-9_@.+-]+\/))(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+|[A-Za-z_@.][A-Za-z0-9_@.+-]*)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?/g
+  /(?:(?:\/|(?:\.{1,2}\/)|(?:[A-Za-z0-9_@.+-]+\/))(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+|[A-Za-z_@.][A-Za-z0-9_@.+-]*)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?::\d+(?::\d+)?)?/g
 const WEB_PATH_RE =
   /^(?:www\.|(?:[A-Za-z0-9-]+\.)+(?:(?:com|org|net|io|dev|app|ai|co|edu|gov|me|xyz)(?:[/:]|$)|[A-Za-z]{2,}\/))/i
 
@@ -10,7 +11,8 @@ function hasLetteredExtension(path: string): boolean {
   return /[A-Za-z]/.test(path.slice(path.lastIndexOf('.') + 1))
 }
 
-export function isInlineFilePath(path: string): boolean {
+export function isInlineFilePath(rawPath: string): boolean {
+  const path = stripLineSuffix(rawPath)
   return (
     path.length > 0 && path.length <= 4_096 && path === path.trim() &&
     !path.includes('\n') && !path.includes('\0') &&
@@ -23,7 +25,7 @@ export function isInlineFilePath(path: string): boolean {
 export function workspaceFileHref(href: string | undefined): string | null {
   if (href === undefined || href.length === 0) return null
   if (href.startsWith('#') || href.startsWith('//')) return null
-  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(href)) return null
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(isInlineFilePath(href) ? stripLineSuffix(href) : href)) return null
   const path = href.replace(/[?#].*$/, '')
   if (path.length === 0) return null
   try {
@@ -56,6 +58,14 @@ function sliceText(node: Text, start: number, end: number): Text {
   return { type: 'text', value, position: { start: point(start), end: point(end) } }
 }
 
+export function bareFilePaths(text: string): string[] {
+  return [...text.matchAll(FILE_PATH_RE)].filter(match => {
+    const path = match[0]
+    return !text.slice(0, match.index).endsWith(':/') && !path.startsWith('//') &&
+      !WEB_PATH_RE.test(path) && hasLetteredExtension(stripLineSuffix(path))
+  }).map(match => match[0])
+}
+
 function linkifyText(node: Text): ElementContent[] {
   const out: ElementContent[] = []
   let cursor = 0
@@ -64,7 +74,7 @@ function linkifyText(node: Text): ElementContent[] {
     const index = match.index
     if (
       node.value.slice(0, index).endsWith(':/') || path.startsWith('//') ||
-      WEB_PATH_RE.test(path) || !hasLetteredExtension(path)
+      WEB_PATH_RE.test(path) || !hasLetteredExtension(stripLineSuffix(path))
     ) continue
     if (index > cursor) out.push(sliceText(node, cursor, index))
     const text = sliceText(node, index, index + path.length)

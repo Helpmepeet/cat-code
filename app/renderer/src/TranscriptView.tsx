@@ -51,6 +51,9 @@ import type { HostResult, SessionDescriptor, WorkspaceBranches, WorkspaceMoveDis
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { FileLinkTicker } from './FileLinkTicker.js'
+import { useFilePaneOpener } from './filePaneContext.js'
+import { isPaneFilePath } from './filePaneState.js'
+import { LatestPaneFileCardContext, latestPaneFileCards, paneFileKey, selectedTextInside } from './transcriptPaneFiles.js'
 import { isInlineFilePath, linkifyFilePathTree, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
@@ -713,6 +716,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [],
   )
   const closeFilePathMenu = useCallback(() => setFilePathMenuState(null), [])
+  const inheritedFileCards = useContext(LatestPaneFileCardContext)
+  const latestFileCards = useMemo(() => inheritedFileCards ?? latestPaneFileCards(rows, cwd ?? null), [inheritedFileCards, rows, cwd])
   const { style: cardStyle } = useContext(ToolCardStyleContext)
   const filePathMenuContextValue = useMemo(
     () => ({ cwd: cwd ?? null, openFilePathMenu }),
@@ -995,6 +1000,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                   }}
                 >
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
+                  <LatestPaneFileCardContext.Provider value={latestFileCards}>
                     {content}
                     {filePathMenuState ? (
                       <FilePathActionsMenu
@@ -1006,6 +1012,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                         onClose={closeFilePathMenu}
                       />
                     ) : null}
+                  </LatestPaneFileCardContext.Provider>
                   </FilePathMenuContext.Provider>
                 </TurnErrorActionsContext.Provider>
             </CreatedPeerNavigationContext.Provider>
@@ -2001,16 +2008,19 @@ function AssistantProse({
     return { engineSessionId, ...origin, fenceOrdinal: fence.ordinal }
   }, [])
   const filePathContext = useContext(FilePathMenuContext)
+  const paneOpener = useFilePaneOpener()
   const openFile = useCallback(
-    (path: string): void => {
-      void window.catcode
-        .openWorkspaceFile(sessionId, path)
+    (path: string, external = false): void => {
+      const open = paneOpener && isPaneFilePath(path)
+        ? paneOpener(sessionId, path, { external })
+        : window.catcode.openWorkspaceFile(sessionId, path)
+      void open
         .then(opened => {
           if (!opened) toast('Could not open this file', { tone: 'warn' })
         })
         .catch(() => toast('Could not open this file', { tone: 'warn' }))
     },
-    [sessionId, toast],
+    [sessionId, toast, paneOpener],
   )
   const onContextMenu = useCallback(
     (anchor: FilePathActionsAnchor, path: string) => {
@@ -2128,10 +2138,24 @@ function AssistantProse({
   )
 }
 
+function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: string } | undefined): ((event: ReactMouseEvent<HTMLButtonElement>) => void) | null {
+  const opener = useFilePaneOpener()
+  const latest = useContext(LatestPaneFileCardContext)
+  const cwd = useContext(FilePathMenuContext)?.cwd ?? null
+  const toast = useToast()
+  if (!file || !opener || !isPaneFilePath(file.path) || latest?.get(paneFileKey(file.path, cwd)) !== file.cardId) return null
+  return event => {
+    event.stopPropagation()
+    void opener(file.sessionId, file.path, { external: event.metaKey }).then(opened => {
+      if (!opened) toast('Could not open this file', { tone: 'warn' })
+    }).catch(() => toast('Could not open this file', { tone: 'warn' }))
+  }
+}
+
 const FileLinkLabelContext = createContext(false)
 
 function createPathAwareAnchor(
-  openFile: (path: string) => void,
+  openFile: (path: string, external?: boolean) => void,
   onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
 ) {
   return function PathAwareAnchor({
@@ -2171,9 +2195,9 @@ function createPathAwareAnchor(
         type="button"
         aria-label={pending ? undefined : `Open ${path}`}
         disabled={pending || undefined}
-        onClick={() => { if (!pending) openFile(path) }}
+        onClick={event => { if (!pending && !selectedTextInside(event.currentTarget)) openFile(path, event.metaKey) }}
         onContextMenu={event => {
-          if (pending || !onContextMenu) return
+          if (pending || !onContextMenu || selectedTextInside(event.currentTarget)) return
           event.preventDefault()
           event.stopPropagation()
           onContextMenu(
@@ -2191,7 +2215,7 @@ function createPathAwareAnchor(
 }
 
 function createPathAwareCode(
-  openFile: (path: string) => void,
+  openFile: (path: string, external?: boolean) => void,
   onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
   sourceAtOffset?: (offset: number | undefined) => InlineCommandSource | undefined,
 ) {
@@ -2208,9 +2232,9 @@ function createPathAwareCode(
           className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
           type="button"
           aria-label={`Open ${text}`}
-          onClick={() => openFile(text)}
+          onClick={event => { if (!selectedTextInside(event.currentTarget)) openFile(text, event.metaKey) }}
           onContextMenu={event => {
-            if (!onContextMenu) return
+            if (!onContextMenu || selectedTextInside(event.currentTarget)) return
             event.preventDefault()
             event.stopPropagation()
             onContextMenu(
@@ -2690,6 +2714,7 @@ function ToolCardShell({
   reviewSummary,
   targetHover,
   targetFilePath,
+  fileOpen,
   collapsedExtra,
   failureOutput,
   animateCollapsedExtra = false,
@@ -2717,6 +2742,7 @@ function ToolCardShell({
    */
   targetHover?: string
   targetFilePath?: { rawPath: string; sessionId: SessionId }
+  fileOpen?: { path: string; sessionId: SessionId; cardId: string }
   collapsedExtra?: ReactNode
   failureOutput?: string
   animateCollapsedExtra?: boolean
@@ -2758,7 +2784,8 @@ function ToolCardShell({
   const toolsExpanded = useContext(ToolsExpandedContext).expanded
   const [expanded, setExpanded] = useToolCardExpanded(
     expansionKey ?? null,
-    focused && status === 'error' && !callGroup ? toolsExpanded : defaultExpanded ?? false,
+    focused && (family === 'write' || family === 'edit') ? false :
+      focused && status === 'error' && !callGroup ? toolsExpanded : defaultExpanded ?? false,
   )
   const base = FAMILY_STYLE[family]
   const fam = {
@@ -2772,15 +2799,17 @@ function ToolCardShell({
   const { style } = useContext(ToolCardStyleContext)
   const { results } = useContext(TranscriptMotionContext)
   const filePathContext = useContext(FilePathMenuContext)
+  const openPaneFile = usePaneCardOpen(fileOpen)
+  const showFileOpen = openPaneFile !== null && (!focused || expanded)
   const peek = focused && status === 'error' && !callGroup && failureOutput
     ? <BashTailPeek tail={selectPeekLines(failureOutput.split('\n'))} /> : collapsedExtra
   return (
-    <div className={TOOL_CARD_SHELL_CLASS[style]}>
+    <div className={`${TOOL_CARD_SHELL_CLASS[style]} relative`}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        className={TOOL_CARD_HEADER_CLASS[style]}
+        className={`${TOOL_CARD_HEADER_CLASS[style]}${showFileOpen ? ' pr-20' : ''}`}
       >
         <span className={`w-4 shrink-0 text-center text-[13px] ${fam.color}`} aria-hidden>
           {fam.mark}
@@ -2798,6 +2827,7 @@ function ToolCardShell({
           onContextMenu={
             targetFilePath
               ? event => {
+                  if (selectedTextInside(event.currentTarget)) return
                   event.preventDefault()
                   event.stopPropagation()
                   filePathContext?.openFilePathMenu(
@@ -2837,6 +2867,7 @@ function ToolCardShell({
           aria-label={st.word}
         />
       </button>
+      {showFileOpen ? <div className={`absolute top-0 flex items-center ${AGENT_BACKGROUND_ANCHOR_CLASS[style]}`}><button type="button" className="rounded px-2 py-0.5 text-[11px] text-text-muted hover:bg-white/[0.06] hover:text-text-primary" onClick={openPaneFile!} aria-label={`Open ${fileOpen!.path}`}>Open</button></div> : null}
       {!expanded && peek ? (
         <div
           className={animateCollapsedExtra ? 'animate-arrive' : undefined}
@@ -3303,6 +3334,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
+        fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id } : undefined}
         failureOutput={row.result?.content}
         status={row.status}
         targetHover={deriveTargetHover(row)}
@@ -3374,6 +3406,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         failureOutput={row.result?.content}
         status={row.status}
         sub={deriveSub(row)}
+        fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id } : undefined}
         headerBadge={headerBadge}
         targetHover={deriveTargetHover(row)}
         expansionKey={row.toolUseId}
@@ -3448,6 +3481,7 @@ function PatchFileCard({
       family="edit"
       target={displayFilePath(diff.filePath, filePathContext?.cwd ?? null)}
       targetFilePath={{ rawPath: diff.filePath, sessionId: row.sessionId }}
+      fileOpen={{ path: diff.filePath, sessionId: row.sessionId, cardId: row.id }}
       failureOutput={row.result?.content}
       status={row.status}
       headerBadge={diffCountsBadge(countDiff(diff))}
@@ -3877,6 +3911,7 @@ function ToolRunCard({
           : { rawPath: head.filePath, sessionId: members[0].sessionId }
       }
       status={status}
+      fileOpen={family === 'edit' && head.filePath && members.at(-1) ? { path: head.filePath, sessionId: members.at(-1)!.sessionId, cardId: members.at(-1)!.id } : undefined}
       sub={head.sub}
       headerBadge={head.badge}
       reviewSummary={summarizeAutoModeReviews(members.map(member => member.autoModeReview))}
@@ -4088,7 +4123,7 @@ const ToolRunRow = memo(function ToolRunRow({
   const focused = useContext(TranscriptModeContext).mode === 'focused'
   const [open, setOpen] = useToolCardExpanded(
     row.toolUseId,
-    toolsExpanded || (!focused && row.status === 'error'),
+    focused && family === 'edit' ? false : toolsExpanded || (!focused && row.status === 'error'),
   )
   const store = useToolCardExpansionStore()
   // Touching a member pins its RUN open. You can only reach a member row while the

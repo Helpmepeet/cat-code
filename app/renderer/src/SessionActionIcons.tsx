@@ -41,6 +41,8 @@ export function SessionActionIcon({
   switch (kind) {
     case 'open':
       return <ActionOpenIcon />
+    case 'show-file':
+      return <ActionFileIcon />
     case 'rename':
       return <ActionRenameIcon />
     case 'metadata':

@@ -44,6 +44,11 @@ import {
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
+import { captureFilePaneScroll, getFilePaneSession, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
+import { newestPaneFilePath } from './transcriptPaneFiles.js'
+import { basename } from './pathUtils.js'
+import { stripLineSuffix } from './filePathActions.js'
+import { selectNestedTranscriptRows } from './transcriptProjector.js'
 import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
 import {
   activeAfterPaneChange,
@@ -685,6 +690,18 @@ export function App() {
   const [shellError, setShellError] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
+  const activeSessionIdRef = useRef(activeSessionId)
+  activeSessionIdRef.current = activeSessionId
+  const fileSelectionRef = useRef(0)
+  const captureBeforePaneSwitch = useCallback((select: () => void) => {
+    const claim = ++fileSelectionRef.current
+    const previous = activeSessionIdRef.current
+    const finish = () => {
+      if (claim === fileSelectionRef.current && activeSessionIdRef.current === previous) select()
+    }
+    if (previous && getFilePaneSession(previous).open) void captureFilePaneScroll(previous).then(finish, finish)
+    else finish()
+  }, [])
   const newChatInFlightRef = useRef(false)
   const newManagedChatInFlightRef = useRef(false)
   const emptyChatAttemptedRef = useRef(false)
@@ -726,6 +743,7 @@ export function App() {
      */
     origin: SessionActionsOrigin
   } | null>(null)
+  const fileMenuPane = useFilePaneSession(sessionActionsTarget?.sessionId ?? '')
   const archiveStorage = useMemo(defaultViewPreferenceStorage, [])
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessions>(
     () => readArchivedSessionsFromStorage(archiveStorage) ?? createArchivedSessions(),
@@ -998,9 +1016,11 @@ export function App() {
   tabNavigationRef.current = tabNavigation
   const foregroundSelectionClaimRef = useRef(createForegroundSelectionClaim())
   const openPage = useCallback((page: PageTab) => {
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({ type: 'open-page', page })
-  }, [])
+    captureBeforePaneSwitch(() => {
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({ type: 'open-page', page })
+    })
+  }, [captureBeforePaneSwitch])
   const closePage = useCallback((page: PageTab) => {
     const selected = tabNavigationRef.current.selected
     if (selected?.kind === 'page' && selected.page === page) {
@@ -1049,8 +1069,6 @@ export function App() {
   }, [shell.dismissals, dismissalSeed.entries, dismissalSeed.error])
   const toolCardExpansionStoreRef = useRef<ToolCardExpansionStore | null>(null)
   toolCardExpansionStoreRef.current ??= createToolCardExpansionStore()
-  const activeSessionIdRef = useRef(activeSessionId)
-  activeSessionIdRef.current = activeSessionId
   const pendingCloseRequestsRef = useRef<
     Map<SessionId, { openOrder: SessionId[] }>
   >(new Map())
@@ -1989,6 +2007,7 @@ export function App() {
     newChatInFlightRef.current = true
 
     try {
+      if (activeSessionIdRef.current) await captureFilePaneScroll(activeSessionIdRef.current)
       await newManagedChat()
     } finally {
       newChatInFlightRef.current = false
@@ -2013,19 +2032,21 @@ export function App() {
   }, [shell, connection, permissions, activeSessionId])
 
   const selectTab = useCallback((sessionId: SessionId) => {
-    const descriptor = shellRef.current.byId[sessionId]
-    if (descriptor) deliberatelyReopen(descriptor)
-    // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
-    // in-flight streaming into a background session is lost on switch.
-    pendingExplicitSessionRef.current = null
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({
-      type: 'select',
-      target: { kind: 'session', sessionId },
+    captureBeforePaneSwitch(() => {
+      const descriptor = shellRef.current.byId[sessionId]
+      if (descriptor) deliberatelyReopen(descriptor)
+      // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
+      // in-flight streaming into a background session is lost on switch.
+      pendingExplicitSessionRef.current = null
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
+      setShownSessionId(sessionId)
+      setActiveSessionId(sessionId)
     })
-    setShownSessionId(sessionId)
-    setActiveSessionId(sessionId)
-  }, [deliberatelyReopen])
+  }, [deliberatelyReopen, captureBeforePaneSwitch])
 
   // Account management belongs to the app. Composer switches still address
   // their own pane's sidecar in renderSessionPane.
@@ -3699,6 +3720,18 @@ export function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      if (event.shiftKey && (event.key === 'b' || event.key === 'B')) {
+        if (!activeSessionId) return
+        event.preventDefault()
+        const rows = selectNestedTranscriptRows(transcript, activeSessionId, true)
+        const order = selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id)
+        const candidate = newestPaneFilePath(rows, order)
+        const hasFile = getFilePaneSession(activeSessionId).lastPath ?? candidate
+        void toggleFilePane(activeSessionId, candidate).then(opened => {
+          if (!opened && hasFile) toast('Could not open this file', { tone: 'warn' })
+        }).catch(() => { if (hasFile) toast('Could not open this file', { tone: 'warn' }) })
+        return
+      }
       if (event.key === 'k' || event.key === 'K') {
         // Settings owns this chord for its search field. An already-open
         // palette still owns the chord that closes it.
@@ -3733,7 +3766,7 @@ export function App() {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries, activeView, paletteOpen])
+  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries, activeView, paletteOpen, activeSessionId, transcript, toast])
 
   function copyForLlm(sessionId: SessionId): void {
     const text = buildDebugExport(
@@ -4649,6 +4682,9 @@ export function App() {
                 )
                 if (!targetRow) return null
                 const targetId = targetRow.appSessionId ?? targetRow.sessionId
+                const fileRows = selectNestedTranscriptRows(transcript, targetId, true)
+                const fileOrder = selectTranscriptRows(transcript, targetId, true).map(row => row.id)
+                const showFilePath = fileMenuPane.lastPath ?? fileMenuPane.candidatePath ?? newestPaneFilePath(fileRows, fileOrder)
                 return (
                   <SessionActionsMenu
                     items={(() => {
@@ -4671,11 +4707,16 @@ export function App() {
                         selectArchivedSidebarRows([targetRow], archivedSessions).archived.length > 0
                       return sessionActionsTarget.fromSessionsPage
                         ? selectSessionsPageActions(items)
-                        : selectSessionMenuActions(items, targetRow, archived)
+                        : selectSessionMenuActions(items, targetRow, archived, sessionActionsTarget.origin === 'tab' && !fileMenuPane.open && showFilePath ? basename(stripLineSuffix(showFilePath)) : null)
                     })()}
                     anchor={sessionActionsTarget.anchor}
                     onAction={kind => {
-                      if (kind === 'metadata') setMetadataOpen(true)
+                      if (kind === 'show-file' && showFilePath) {
+                        void requestOpenFile(targetId, showFilePath).then(opened => {
+                          if (!opened) toast('Could not open this file', { tone: 'warn' })
+                        }).catch(() => toast('Could not open this file', { tone: 'warn' }))
+                      }
+                      else if (kind === 'metadata') setMetadataOpen(true)
                       else if (kind === 'copy-text') copyForLlm(targetId)
                       // Reads the catalog row only, so it answers for ANY row —
                       // including a closed or history one the renderer holds no

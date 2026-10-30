@@ -19,6 +19,7 @@ import type { ReactNode } from 'react'
 import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { defaultUrlTransform } from 'react-markdown'
+import { isInlineFilePath, workspaceFileHref } from './transcriptFileLinks.js'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import remarkParse from 'remark-parse'
@@ -1514,7 +1515,12 @@ function normalizeTree(
     if (recognizeCallouts) normalizeCallout(node)
     for (const key of ['href', 'src']) {
       if (!Object.hasOwn(node.properties, key)) continue
-      node.properties[key] = defaultUrlTransform(String(node.properties[key] ?? ''))
+      const url = String(node.properties[key] ?? '')
+      const transformed = defaultUrlTransform(url)
+      // A filename followed by :line looks like a URI scheme to the generic
+      // transform. Make the local-path syntax explicitly relative.
+      node.properties[key] = key === 'href' && transformed === '' && /:\d+(?::\d+)?$/.test(url) &&
+        isInlineFilePath(url) && workspaceFileHref(url) !== null ? `./${url}` : transformed
     }
   }
   for (let index = 0; index < node.children.length; index += 1) {
