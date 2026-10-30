@@ -1585,6 +1585,44 @@ function previewFrame(id: string, revision: number) {
     return frame.parent === mainWindow?.webContents.mainFrame && parsed?.id === id && parsed.revision === revision
   })
 }
+const pendingPreviewReadiness = new Map<string, Promise<boolean>>()
+async function previewRenderReady(id: string, revision: number): Promise<boolean> {
+  const descriptor = filePreviews.descriptor(id, revision)
+  if (!descriptor) return false
+  if (descriptor.kind !== 'html' && descriptor.kind !== 'svg') return true
+  const frame = previewFrame(id, revision)
+  if (!frame) return false
+  const key = `${id}:${revision}`
+  let pending = pendingPreviewReadiness.get(key)
+  if (!pending) {
+    if (pendingPreviewReadiness.size >= 4) return false
+    // Browser decoding is a rendering check only. Nothing supplied by the page
+    // is forwarded as an app command or accepted as filesystem authority.
+    pending = frame.executeJavaScript(`(async () => {
+      if (${descriptor.kind === 'svg'} && document.getElementsByTagNameNS('*', 'parsererror').length) return false;
+      const images = document.images;
+      if (images.length > 2048) return false;
+      const local = new Map();
+      for (let index = 0; index < images.length; index++) {
+        const image = images[index];
+        const source = image.currentSrc || image.src;
+        if (!source || !image.complete) continue;
+        let url;
+        try { url = new URL(source, document.baseURI); } catch { continue; }
+        if (url.protocol === 'http:' || url.protocol === 'https:') continue;
+        local.set(url.href, image);
+        if (local.size > 128) return false;
+      }
+      const decoded = await Promise.all([...local.values()].map(image => image.decode().then(() => true, () => false)));
+      return decoded.every(Boolean);
+    })()`).then(result => result === true, () => false).finally(() => pendingPreviewReadiness.delete(key))
+    pendingPreviewReadiness.set(key, pending)
+  }
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(false), 1000)
+    pending!.then(result => { clearTimeout(timer); resolve(result) }, () => { clearTimeout(timer); resolve(false) })
+  })
+}
 function previewPayload(value: unknown, keys: string[]): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
@@ -4379,9 +4417,13 @@ function registerHostControlPlane(): void {
     const value = previewIdentity(input)
     return trustedPreviewSender(event) && value ? filePreviews.refresh(value.id as string) : null
   })
-  ipcMain.handle(CH_FILE_PREVIEW_COMMIT, (event, input: unknown) => {
+  ipcMain.handle(CH_FILE_PREVIEW_COMMIT, async (event, input: unknown) => {
     const value = previewIdentity(input, true)
     if (!trustedPreviewSender(event) || !value) return false
+    if (!await previewRenderReady(value.id as string, value.revision as number)) {
+      filePreviews.rejectRender(value.id as string, value.revision as number)
+      return false
+    }
     const ok = filePreviews.commit(value.id as string, value.revision as number)
     if (ok) for (const key of previewScroll.keys()) if (key.startsWith(`${value.id}:`) && key !== `${value.id}:${value.revision}`) previewScroll.delete(key)
     return ok

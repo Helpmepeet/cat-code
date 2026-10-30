@@ -279,6 +279,12 @@ export function createFilePreviewService(deps: {
       return true
     },
     release,
+    rejectRender(id: string, revision: number): void {
+      const preview = previews.get(id), snapshot = preview?.snapshots.get(revision)
+      if (!preview || !snapshot) return
+      snapshot.failed = true
+      deps.publish({ id, kind: 'update-error' })
+    },
     has(id: string): boolean { return previews.has(id) },
     sessionId(id: string): string | null { return previews.get(id)?.appSessionId ?? null },
     descriptor(id: string, revision: number): FilePreviewDescriptor | null {
