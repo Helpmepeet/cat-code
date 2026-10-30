@@ -70,8 +70,8 @@ export type WindowOpenDecision =
 /**
  * What to do with a renderer-initiated `window.open` / `target=_blank`. The
  * action is ALWAYS `deny` — the renderer may never spawn a new Electron
- * BrowserWindow. Only an `https:` URL is additionally handed to the OS browser
- * via `shell.openExternal`; `http:`, `file:`, `javascript:`, `data:`, etc. are
+ * BrowserWindow. Only an `http:` or `https:` URL is additionally handed to the OS
+ * browser via `shell.openExternal`; `file:`, `javascript:`, `data:`, etc. are
  * denied with no external hand-off.
  */
 export function decideWindowOpen(url: string): WindowOpenDecision {
@@ -81,10 +81,11 @@ export function decideWindowOpen(url: string): WindowOpenDecision {
   return { action: 'deny' }
 }
 
-/** Only `https:` is handed to the OS browser. Anything else is not opened. */
+/** Only web URLs are handed to the OS browser. Other schemes stay denied. */
 export function isSafeExternalUrl(url: string): boolean {
   try {
-    return new URL(url).protocol === 'https:'
+    const scheme = new URL(url).protocol
+    return scheme === 'https:' || scheme === 'http:'
   } catch {
     return false
   }

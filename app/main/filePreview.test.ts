@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, symlink, realpath, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createFilePreviewService } from './filePreview.js'
@@ -114,4 +114,28 @@ test('does not mint a capability when session authority changes while the root i
       expect(await pending).toBeNull()
     } finally { service.dispose() }
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+
+test.skipIf(process.getuid?.() === 0)('a watcher failure before subscription is retained on the prepared descriptor', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cat-preview-watch-error-')), root = await realpath(directory)
+  const locked = join(root, 'locked')
+  await mkdir(locked)
+  const service = createFilePreviewService({
+    sessions: () => [sessionDescriptorFixture({ appSessionId: 'watch-failure', cwd: root })],
+    publish: () => {},
+  })
+  try {
+    await writeFile(join(locked, 'report.html'), '<h1>Readable file</h1>')
+    // Traversal permits opening a known file while watching the unreadable directory fails.
+    await chmod(locked, 0o111)
+    const descriptor = await service.prepare({ appSessionId: 'watch-failure', path: 'locked/report.html' })
+    expect(descriptor).not.toBeNull()
+    expect(descriptor).toHaveProperty('watchError', true)
+    expect(await (await service.respond(new Request(descriptor!.url))).text()).toContain('Readable file')
+  } finally {
+    service.dispose()
+    await chmod(locked, 0o700)
+    await rm(root, { recursive: true, force: true })
+  }
 })

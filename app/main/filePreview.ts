@@ -113,6 +113,7 @@ export function createFilePreviewService(deps: {
       id: preview.id, appSessionId: preview.appSessionId, path: preview.path,
       displayPath: preview.path === home || preview.path.startsWith(`${home}${sep}`) ? `~${preview.path.slice(home.length)}` : preview.path,
       kind: preview.kind, revision: snapshot.revision,
+      ...(preview.watchFailed ? { watchError: true } : {}),
       url: `${FILE_PREVIEW_SCHEME}://${preview.id}/r${snapshot.revision}${encoded}`,
       ...(preview.kind === 'markdown' ? { markdown: snapshot.files.get(preview.path)!.toString('utf8') } : {}),
     }

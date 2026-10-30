@@ -10,6 +10,7 @@ export interface FilePreviewDescriptor {
   url: string
   revision: number
   markdown?: string
+  watchError?: boolean
 }
 export interface FilePreviewScroll { x: number; y: number }
 export interface FilePreviewApplications {
