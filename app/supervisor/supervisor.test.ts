@@ -14,6 +14,7 @@ import { SessionRegistry } from '../host/registry.js'
 
 import {
   MAX_FRAME_BYTES,
+  MAX_QUESTION_REPLY_FRAME_BYTES,
   MAX_PENDING_HOST_INPUT_BYTES,
   MAX_PENDING_SESSION_INPUT_BYTES,
   MAX_PROMPT_BYTES,
@@ -452,6 +453,24 @@ test('ordinary oversized controls and image submit metadata are refused before w
     prompt: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: paddedPng(1) } }],
   })).toThrow('This request is too large to send.')
   expect(h.writes()).toBe(0)
+})
+
+test('question reply admission retains frame, byte-rate and socket backpressure bounds', () => {
+  const h = sendTestHarness()
+  const message = {
+    type: 'askUserQuestion.reply' as const, requestId: 'close',
+    replies: Array.from({ length: 128 }, (_, i) => ({ toolUseId: `call-${i}`, questionIndex: 0,
+      answer: { optionIndices: [0], other: 'x'.repeat(20000), notes: [{ optionIndex: 0, text: 'x'.repeat(20000) }] } })),
+  }
+  h.socket.writableLength = MAX_PENDING_SESSION_INPUT_BYTES
+  expect(() => h.supervisor.send('target', message)).toThrow('Messages are still being sent.')
+  expect(h.writes()).toBe(0)
+  h.socket.writableLength = 0
+  for (let i = 0; i < 3; i++) h.supervisor.send('target', message)
+  expect(() => h.supervisor.send('target', message)).toThrow('Too many requests')
+  h.supervisor.send('target', { type: 'app.ping', nonce: 'still-usable' })
+  expect(h.writes()).toBe(4)
+  expect(() => h.supervisor.send('target', { ...message, requestId: 'x'.repeat(MAX_QUESTION_REPLY_FRAME_BYTES) })).toThrow('too large')
 })
 
 test('default socket allocation uses a private random directory', () => {

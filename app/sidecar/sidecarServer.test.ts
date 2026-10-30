@@ -42,6 +42,7 @@ import {
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
+  MAX_QUESTION_REPLY_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
@@ -5483,7 +5484,7 @@ test('C5 — a schema-rejected answer still correlates: the error carries the re
   server.handleData(
     conn,
     askAnswerFrame(
-      [{ optionIndices: [0] }, { optionIndices: [0], other: 'x'.repeat(5000) }],
+      [{ optionIndices: [0] }, { optionIndices: [0], other: 'x'.repeat(4097) }],
       requestId,
     ),
   )
@@ -10355,4 +10356,42 @@ test('nonblocking v5 answer versus dismiss resolves only one question once and d
   expect(registry.getSnapshot().pending).toHaveLength(2)
   expect(registry.undelivered(new Set())).toEqual([])
   expect(journal.filter(entry => entry.operation === 'resolved')).toHaveLength(1)
+})
+
+test('nonblocking reply allowance refuses oversize and byte floods while ordinary controls remain bounded', async () => {
+  const { server, conn, received, registry, journal } = await nonblockingQuestionsBoundary()
+  const oversized = await nonblockingQuestionsBoundary()
+  oversized.server.handleData(oversized.conn, rawFrame({ type: 'askUserQuestion.reply', requestId: 'oversize',
+    replies: [], padding: 'x'.repeat(MAX_QUESTION_REPLY_FRAME_BYTES) }))
+  expect(oversized.received.find(frame => frame.kind === 'error' && frame.requestId === 'oversize')).toMatchObject({
+    code: 'bad_request', message: 'This request is too large to send.',
+  })
+  const replies = Array.from({ length: 128 }, (_, index) => ({ toolUseId: `missing-${index}`, questionIndex: 0,
+    answer: { optionIndices: [0], other: 'x'.repeat(20000), notes: [{ optionIndex: 0, text: 'x'.repeat(20000) }] } }))
+  for (let index = 0; index < 4; index++) server.handleData(conn, rawFrame({ type: 'askUserQuestion.reply', requestId: `rate-${index}`, replies }))
+  expect(received.find(frame => frame.kind === 'error' && frame.requestId === 'rate-3')).toMatchObject({ code: 'bad_request' })
+  expect(received.some(frame => frame.kind === 'error' && frame.requestId === 'rate-2')).toBe(false)
+  server.handleData(conn, rawFrame({ type: 'unknown.control', requestId: 'unknown', padding: 'x'.repeat(MAX_FRAME_BYTES) }))
+  expect(received.find(frame => frame.kind === 'error' && frame.requestId === 'unknown')).toBeDefined()
+  server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'after-reply-flood' }))
+  expect(received.find(frame => frame.kind === 'pong' && frame.nonce === 'after-reply-flood')).toBeDefined()
+  expect(registry.getSnapshot().pending).toHaveLength(3)
+  expect(journal.filter(entry => entry.operation === 'resolved')).toHaveLength(0)
+})
+
+test('nonblocking question result never acknowledges acceptance before durable commit', async () => {
+  let release!: () => void
+  const barrier = new Promise<void>(resolve => { release = resolve })
+  const registry = new PendingQuestionRegistry(async entry => { if (entry.operation === 'resolved') await barrier })
+  await registry.ask('durable-call', 'assistant', [{ question: 'Name?', multiSelect: false, options: [] }])
+  const { server, conn, received } = connect(new AppSessionController({ getQuestionRegistry: () => registry, async *runTurn() {} }))
+  server.handleData(conn, clientFrame({ type: 'askUserQuestion.reply', requestId: 'durable', replies: [
+    { toolUseId: 'durable-call', questionIndex: 0, answer: { optionIndices: [], other: 'x'.repeat(20000) } },
+  ] }))
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(received.some(frame => frame.kind === 'question.result')).toBe(false)
+  expect(registry.getSnapshot().pending).toHaveLength(1)
+  release()
+  await waitFor(() => received.some(frame => frame.kind === 'question.result'))
+  expect(received.find(frame => frame.kind === 'question.result')).toMatchObject({ accepted: true })
 })

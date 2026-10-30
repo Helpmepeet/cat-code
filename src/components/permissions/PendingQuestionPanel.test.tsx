@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import React from 'react'
 import { PassThrough } from 'node:stream'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -48,12 +48,17 @@ async function harness(questions: PendingQuestionSpec[], plan = false) {
   const messages: unknown[] = []
   const open: boolean[] = []
   let node: React.ReactElement<any> | null = null
+  let questionTree: React.ReactNode = null
+  function Probe(props: React.ComponentProps<typeof QuestionView>) {
+    questionTree = QuestionView(props)
+    return questionTree
+  }
   const state = getDefaultAppState()
   if (plan) state.toolPermissionContext.mode = 'plan'
   function Inspect() {
     const rendered = PendingQuestionPanel({ registry, active: true, planMode: plan, onOpenChange: value => open.push(value), onMessage: value => messages.push(value), deliver() {} })
     node = React.isValidElement(rendered) ? rendered : null
-    return rendered
+    return node?.type === QuestionView ? <Probe key={node.key} {...node.props} /> : rendered
   }
   const stdout = Object.assign(new PassThrough(), { columns: 100, rows: 40 })
   const stdin = Object.assign(new PassThrough(), { isTTY: true, setRawMode() {}, ref() {}, unref() {} })
@@ -63,9 +68,42 @@ async function harness(questions: PendingQuestionSpec[], plan = false) {
   instances.push(instance)
   await until(() => node !== null)
   const show = async () => { node!.props.onClick(); await until(() => node?.type === QuestionView); return node!.props }
-  return { registry, messages, open, show, props: () => node!.props, output: () => output, stdin }
+  return { registry, messages, open, show, props: () => node!.props, output: () => output, stdin, multi: () => findMulti(questionTree) }
 }
 const question: PendingQuestionSpec = { question: 'Which layout?', multiSelect: false, options: [{ label: 'Stacked', description: 'One column', preview: 'Stacked preview' }, { label: 'Split', description: 'Two columns', preview: 'Split preview' }] }
+
+function findMulti(node: React.ReactNode): React.ReactElement<any> | undefined {
+  if (!React.isValidElement<any>(node)) return
+  if (node.props.onChange && Array.isArray(node.props.options) && 'submitButtonText' in node.props) return node
+  for (const child of React.Children.toArray(node.props.children)) {
+    const found = findMulti(child)
+    if (found) return found
+  }
+}
+
+test.each([
+  { labels: ['Stacked', '__other__'], text: 'Custom layout', indices: [0] },
+  { labels: ['__other__'], text: 'Custom layout', indices: [] },
+  { labels: ['__other__'], text: 'Split', indices: [] },
+  { labels: ['Stacked', '__other__'], text: 'Stacked', indices: [0] },
+])('real terminal multiselect retains Other until explicit close: %j', async ({ labels, text, indices }) => {
+  const h = await harness([{ ...question, multiSelect: true }])
+  const reply = spyOn(h.registry, 'reply')
+  await h.show()
+  h.props().onUpdateQuestionState(question.question, { textInputValue: text })
+  await until(() => h.props().questionStates[question.question].textInputValue === text)
+  h.multi()!.props.onChange(labels)
+  await until(() => h.props().questionStates[question.question].selectedValue?.includes('__other__'))
+  expect(h.registry.undelivered(new Set())).toEqual([])
+  expect(h.registry.getSnapshot().pending).toHaveLength(1)
+  h.props().onSubmit()
+  await until(() => h.open.at(-1) === false)
+  await new Promise(resolve => setImmediate(resolve))
+  const delivery = h.registry.undelivered(new Set())[0]
+  expect(delivery).toBeDefined()
+  expect(reply.mock.calls[0]?.[0].replies[0]?.answer).toEqual({ optionIndices: [...indices], other: text })
+  expect(JSON.parse(delivery!.content)[0].answer).toBe([...indices.map(index => question.options[index]!.label), text].join(', '))
+})
 
 test('terminal question arrival is non-modal and headerless navigation retains Q1', async () => {
   const h = await harness([question])
@@ -75,6 +113,33 @@ test('terminal question arrival is non-modal and headerless navigation retains Q
   expect(h.output()).not.toContain('undefined')
   expect(h.registry.getSnapshot().pending).toHaveLength(1)
   expect(h.registry.undelivered(new Set())).toEqual([])
+})
+
+test.each(['deselect', 'clear'] as const)('real terminal multiselect %s removes stale Other without delivery', async action => {
+  const h = await harness([{ ...question, multiSelect: true }])
+  const reply = spyOn(h.registry, 'reply')
+  await h.show()
+  h.props().onUpdateQuestionState(question.question, { textInputValue: 'Custom layout' })
+  await until(() => h.props().questionStates[question.question].textInputValue === 'Custom layout')
+  h.multi()!.props.onChange(['__other__'])
+  await until(() => h.props().questionStates[question.question].selectedValue?.includes('__other__'))
+  if (action === 'clear') {
+    h.multi()!.props.options.find((option: { value: string }) => option.value === '__other__').onChange('')
+    await until(() => h.props().questionStates[question.question].textInputValue === '')
+    h.multi()!.props.onChange(['__other__'])
+  } else h.multi()!.props.onChange([])
+  h.props().onSubmit()
+  await until(() => h.open.at(-1) === false)
+  expect(reply).not.toHaveBeenCalled()
+  expect(h.registry.getSnapshot().pending).toHaveLength(1)
+  expect(h.registry.undelivered(new Set())).toEqual([])
+  await until(() => typeof h.props().onClick === 'function')
+  await h.show()
+  h.multi()!.props.onChange(['Stacked'])
+  await until(() => h.props().questionStates[question.question].selectedValue?.[0] === 'Stacked')
+  h.props().onSubmit()
+  await until(() => h.registry.getSnapshot().pending.length === 0)
+  expect(reply.mock.calls[0]?.[0].replies[0]?.answer).toEqual({ optionIndices: [0] })
 })
 
 test('terminal previews and notes reach a later reply rather than the immediate tool result', async () => {

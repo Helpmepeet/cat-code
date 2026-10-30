@@ -13,6 +13,24 @@ function fixture() {
 }
 
 describe('nonblocking per-question durable outbox', () => {
+  test('owner fencing also rejects cached receipts and idempotent asks without another write', async () => {
+    let current = true
+    const journal: QuestionJournalEntry[] = []
+    const registry = new PendingQuestionRegistry(async entry => { journal.push(structuredClone(entry)) }, undefined, () => {
+      if (!current) throw new Error('Question owner changed')
+    })
+    await registry.ask('call-1', 'assistant-1', [question, question])
+    const batch = { requestId: 'answered', replies: [pick()] }
+    const dismissal = { requestId: 'dismissed', toolUseId: 'call-1', questionIndex: 1 }
+    await registry.reply(batch)
+    await registry.dismiss(dismissal)
+    current = false
+    await expect(registry.reply(batch)).rejects.toThrow('owner changed')
+    await expect(registry.dismiss(dismissal)).rejects.toThrow('owner changed')
+    await expect(registry.ask('call-1', 'assistant-1', [question, question])).rejects.toThrow('owner changed')
+    expect(journal).toHaveLength(3)
+    expect(registry.needsRecovery()).toBe(false)
+  })
   test('partially answers a call and combines multiple calls into one next-turn input', async () => {
     const { registry } = fixture()
     await registry.ask('call-1', 'assistant-1', [question, { ...question, question: 'What name?', options: [] }])

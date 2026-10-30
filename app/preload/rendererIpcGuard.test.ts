@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test'
 import {
   MAX_DIAGNOSTIC_FRAMES_PER_WINDOW,
   MAX_FRAME_BYTES,
+  MAX_QUESTION_REPLY_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
   MAX_LARGE_SUBMIT_BYTES_PER_WINDOW,
   MAX_SUBMIT_FRAME_BYTES,
@@ -26,6 +27,24 @@ function expectRejection(action: () => void, reason: 'size' | 'rate'): void {
   expect(rejection).toBeInstanceOf(RendererIpcRejection)
   expect((rejection as RendererIpcRejection).reason).toBe(reason)
 }
+
+test('question replies have a bounded wire-envelope allowance, rate budget and no control escape', () => {
+  let now = 1000
+  const guard = createRendererIpcGuard({ now: () => now })
+  const payload = { sessionId: 'session', verb: { type: 'askUserQuestion.reply', other: 'x'.repeat(MAX_QUESTION_REPLY_FRAME_BYTES / 2) } }
+  expectRejection(() => guard.assertAllowed(payload), 'size')
+  expectRejection(() => guard.assertAllowed({ ...payload, verb: { ...payload.verb, type: 'unknown' } }, 'question-reply'), 'size')
+  for (let i = 0; i < 3; i++) guard.assertAllowed(payload, 'question-reply')
+  expectRejection(() => guard.assertAllowed(payload, 'question-reply'), 'rate')
+  guard.assertAllowed({ type: 'app.ping' })
+  now += RATE_WINDOW_MS
+  guard.assertAllowed(payload, 'question-reply')
+  expectRejection(() => guard.assertAllowed({ ...payload, verb: { ...payload.verb, other: 'x'.repeat(MAX_QUESTION_REPLY_FRAME_BYTES) } }, 'question-reply'), 'size')
+  // The IPC wrapper alone fits, but the socket's protocol/message envelope does not.
+  const edge = { sessionId: 'session', verb: { type: 'askUserQuestion.reply', other: '' } }
+  edge.verb.other = 'x'.repeat(MAX_QUESTION_REPLY_FRAME_BYTES - Buffer.byteLength(JSON.stringify(edge)))
+  expectRejection(() => createRendererIpcGuard().assertAllowed(edge, 'question-reply'), 'size')
+})
 
 test('rejects renderer IPC payloads over the shared frame byte limit', () => {
   const guard = createRendererIpcGuard()

@@ -35,7 +35,11 @@ function activeQuestionCalls(messages: readonly Message[]): Map<string, string> 
 
 /** One owner per engine, including a trusted outbox distinct from recovered composer drafts. */
 export class PendingQuestionRuntime {
-  readonly registry: PendingQuestionRegistry
+  private ownedRegistry: PendingQuestionRegistry
+  // Controller subscriptions follow the runtime, but retained registry handles
+  // must remain bound to the session that created them.
+  private readonly questionListeners = new Set<() => void>()
+  get registry(): PendingQuestionRegistry { return this.ownedRegistry }
   private readonly journal: QuestionJournalEntry[] = []
   private accepted = new Set<string>()
   private enqueued = new Set<string>()
@@ -43,22 +47,65 @@ export class PendingQuestionRuntime {
   private initialization: Promise<void> | null = null
   private sessionId = getSessionId()
   private resetSession = false
+  private ownerRevision = 0
   constructor(private readonly messages: () => readonly Message[]) {
-    this.registry = new PendingQuestionRegistry(async entry => {
+    this.ownedRegistry = this.createRegistry()
+  }
+  private createRegistry(): PendingQuestionRegistry {
+    const sessionId = this.sessionId
+    const ownerRevision = this.ownerRevision
+    const assertOwner = () => {
+      if (sessionId !== getSessionId() || ownerRevision !== this.ownerRevision) {
+        throw new Error('Question owner changed')
+      }
+    }
+    return new PendingQuestionRegistry(async entry => {
+      assertOwner()
       if (!isSessionPersistenceDisabled()) await recordQuestionLifecycle(entry)
+      assertOwner()
       this.journal.push(structuredClone(entry))
-    })
+    }, undefined, assertOwner, this.questionListeners)
   }
   initialize(): Promise<void> {
     const sessionChanged = this.sessionId !== getSessionId()
     const recoveringWrite = !sessionChanged && this.registry.needsRecovery()
-    if (sessionChanged) { this.sessionId = getSessionId(); this.resetSession = true }
-    if (recoveringWrite || sessionChanged) { this.initialized = false; this.initialization = null }
+    if (sessionChanged) { this.sessionId = getSessionId(); this.resetSession = true; this.ownerRevision++ }
+    if (sessionChanged) {
+      this.ownedRegistry = this.createRegistry()
+      this.initialized = false
+      this.initialization = null
+    }
+    if (this.initialization) return this.initialization
+    if (recoveringWrite) this.initialized = false
     if (this.initialized) return Promise.resolve()
-    return this.initialization ??= this.restore(recoveringWrite).then(() => { this.initialized = true })
+    return this.restore(recoveringWrite)
   }
-  async restore(preserveTurn = false): Promise<void> {
-    await this.registry.waitForWrites()
+  restore(preserveTurn = false): Promise<void> {
+    if (this.sessionId !== getSessionId()) {
+      this.sessionId = getSessionId()
+      this.resetSession = true
+      this.ownerRevision++
+      this.ownedRegistry = this.createRegistry()
+      this.initialization = null
+      this.initialized = false
+    }
+    if (this.initialization) return this.initialization
+    this.initialized = false
+    const sessionId = this.sessionId
+    const ownerRevision = this.ownerRevision
+    const registry = this.registry
+    const operation = registry.recover(async () => {
+      await this.restoreOwned(sessionId, ownerRevision, preserveTurn, registry)
+      if (this.ownerRevision === ownerRevision && getSessionId() === sessionId) this.initialized = true
+    })
+    this.initialization = operation
+    void operation.finally(() => {
+      if (this.initialization === operation) this.initialization = null
+    }).catch(() => {})
+    return operation
+  }
+  private async restoreOwned(sessionId: string, ownerRevision: number, preserveTurn: boolean, registry: PendingQuestionRegistry): Promise<void> {
+    if (ownerRevision !== this.ownerRevision || sessionId !== getSessionId()) return
     if (this.resetSession) {
       const old = new Set(this.enqueued)
       removeByFilter(command => command.origin?.kind === 'question-reply' && !!command.uuid && old.has(command.uuid))
@@ -69,16 +116,17 @@ export class PendingQuestionRuntime {
     }
     let messages = this.messages()
     let accepted = acceptedQuestionReplyUuids(messages)
+    let journal = [...this.journal]
     if (!isSessionPersistenceDisabled()) {
       try {
         await flushSessionStorage()
-        if (this.registry.needsRecovery()) await flushCurrentTranscriptDurably()
-        const path = getTranscriptPathForSession(getSessionId())
+        if (registry.needsRecovery()) await flushCurrentTranscriptDurably()
+        const path = getTranscriptPathForSession(sessionId)
         const { size } = await stat(path)
         if (!size) {
           messages = []
           accepted.clear()
-          this.journal.length = 0
+          journal = []
         } else {
           const loaded = await loadTranscriptFile(path, { prefixBytes: size, keepAllLeaves: true, keepCompactedHistory: true, strict: true })
           if (loaded.sourceTruncated) throw new Error('Question history was truncated')
@@ -96,16 +144,18 @@ export class PendingQuestionRuntime {
           for (const uuid of receipts) accepted.add(uuid)
           const full = active.tip ? buildDisplayConversationChain(loaded.messages, active.tip) : []
           messages = full as Message[]
-          this.journal.splice(0, this.journal.length, ...loaded.questionLifecycles)
+          journal = loaded.questionLifecycles
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
     }
+    if (ownerRevision !== this.ownerRevision || sessionId !== getSessionId()) return
+    this.journal.splice(0, this.journal.length, ...journal)
     this.accepted = accepted
     const active = activeQuestionCalls(messages)
-    this.registry.restore(this.journal, new Set(active.keys()), preserveTurn, active)
-    const eligible = new Set(this.registry.undelivered(this.accepted).map(delivery => delivery.uuid))
+    registry.restore(this.journal, new Set(active.keys()), preserveTurn, active)
+    const eligible = new Set(registry.undelivered(this.accepted).map(delivery => delivery.uuid))
     for (const command of removeByFilter(command => command.origin?.kind === 'question-reply' && !!command.uuid && !eligible.has(command.uuid))) {
       if (command.uuid) this.enqueued.delete(command.uuid)
     }

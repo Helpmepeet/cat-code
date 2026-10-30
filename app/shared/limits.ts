@@ -21,6 +21,13 @@ import { MAX_SUBMIT_TEXT_BYTES, MAX_SUBMIT_TOTAL_IMAGE_BYTES } from '../../src/a
 /** Max serialized ordinary INBOUND control frame size. */
 export const MAX_FRAME_BYTES = 128 * 1024
 
+/** Nonblocking answers retain the engine/dock text contract, not the legacy modal cap. */
+export const MAX_NONBLOCKING_QUESTION_TEXT_CHARS = 20_000
+
+/** Complete serialized question-reply envelope, excluding the four-byte socket prefix. */
+export const MAX_QUESTION_REPLY_FRAME_BYTES = 8 * 1024 * 1024
+export const MAX_QUESTION_REPLY_BYTES_PER_WINDOW = 2 * MAX_QUESTION_REPLY_FRAME_BYTES
+
 /** Inline images, worst-case escaped text, and a control/options envelope. */
 export const MAX_SUBMIT_FRAME_BYTES = MAX_SUBMIT_TOTAL_IMAGE_BYTES + 6 * MAX_SUBMIT_TEXT_BYTES + MAX_FRAME_BYTES
 

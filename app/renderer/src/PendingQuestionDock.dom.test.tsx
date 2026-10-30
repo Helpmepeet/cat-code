@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
 import { PendingQuestionDock } from './PendingQuestionDock.js'
+import { retainQuestionDraft, restoreQuestionDraft } from './pendingQuestionDrafts.js'
+import { MAX_NONBLOCKING_QUESTION_TEXT_CHARS } from '../../shared/nonblockingQuestions.js'
 import { createDomTestHarness, type DomTestHarness, type MountedTree } from './domTestHarness.js'
 import type { PendingQuestion, QuestionReplyBatch, QuestionDismiss } from '../../../src/utils/pendingQuestions.js'
 
@@ -221,6 +223,31 @@ test('failed reply retains picks for an explicit close retry without duplicate i
   expect(pick(tree).getAttribute('aria-checked')).toBe('true')
   await key('Escape')
   expect(f.replies[0]?.replies[0]?.answer.optionIndices).toEqual([0])
+})
+
+test('restored long free text, Other and notes survive a rejected close without truncation', async () => {
+  const f = fixture([question(1, { options: [] }), question(2, { multiSelect: true })])
+  const freeKey = JSON.stringify(['call-1', 0])
+  const choiceKey = JSON.stringify(['call-2', 0])
+  const text = '界'.repeat(MAX_NONBLOCKING_QUESTION_TEXT_CHARS)
+  retainQuestionDraft(f.sessionId, { open: false, current: null, answers: {
+    [freeKey]: { optionIndices: [], other: text },
+    [choiceKey]: { optionIndices: [0], other: 'x'.repeat(4097), notes: { 0: text } },
+  } })
+  const attempts: QuestionReplyBatch[] = []
+  const tree = await harness.mount(f.view({ onReply: async batch => { attempts.push(batch); throw new Error('boundary refusal') } }))
+  await click(tree.container.querySelector('.nq-pending'))
+  expect(tree.container.querySelector<HTMLInputElement>('.nq-free')?.maxLength).toBe(MAX_NONBLOCKING_QUESTION_TEXT_CHARS)
+  expect(tree.container.querySelector<HTMLInputElement>('.nq-free')?.value).toBe(text)
+  await click(tree.container.querySelector('[aria-label="Next question"]'))
+  expect(tree.container.querySelector<HTMLInputElement>('.nq-note-field input')?.maxLength).toBe(MAX_NONBLOCKING_QUESTION_TEXT_CHARS)
+  await key('Escape')
+  expect(attempts[0]?.replies[0]?.answer.other).toBe(text)
+  expect(attempts[0]?.replies[1]?.answer.other).toHaveLength(4097)
+  expect(attempts[0]?.replies[1]?.answer.notes?.[0]?.text).toBe(text)
+  expect(restoreQuestionDraft(f.sessionId).answers[freeKey]?.other).toBe(text)
+  await click(tree.container.querySelector('.nq-pending'))
+  expect(tree.container.querySelector<HTMLInputElement>('.nq-free')?.value).toBe(text)
 })
 
 test('window and pane reactivation cancel advance and lock picks without sending on restored composer focus', async () => {

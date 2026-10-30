@@ -96,7 +96,6 @@ export class PendingQuestionRegistry {
   private pending = new Map<string, PendingQuestion>()
   private resolved = new Map<string, ResolvedQuestion>()
   private receipts = new Map<string, Extract<QuestionJournalEntry, { operation: 'resolved' }>>()
-  private listeners = new Set<() => void>()
   private lane: Promise<unknown> = Promise.resolve()
   private snapshot: QuestionSnapshot = { pending: [], resolved: [] }
   private turnRevision = 0
@@ -104,7 +103,9 @@ export class PendingQuestionRegistry {
   private writeFailure: Error | null = null
 
   constructor(private readonly appendDurably: (entry: QuestionJournalEntry) => Promise<void>,
-    private readonly maxSnapshotBytes = 8 * 1024 * 1024) {}
+    private readonly maxSnapshotBytes = 8 * 1024 * 1024,
+    private readonly assertOwner: () => void = () => {},
+    private readonly listeners = new Set<() => void>()) {}
 
   private snapshotOf(pending: PendingQuestion[], resolved: ResolvedQuestion[]): QuestionSnapshot {
     return { pending, resolved: resolved.map(({ toolUseId, questionIndex, sourceMessageUuid, question, state, answer, notes }) => ({
@@ -121,7 +122,11 @@ export class PendingQuestionRegistry {
   needsRecovery(): boolean { return this.writeFailure !== null }
   private async persist(entry: QuestionJournalEntry): Promise<void> {
     if (this.writeFailure) throw new Error('Question persistence recovery is required', { cause: this.writeFailure })
-    try { await this.appendDurably(entry) }
+    try {
+      this.assertOwner()
+      await this.appendDurably(entry)
+      this.assertOwner()
+    }
     catch (error) {
       // A failed fsync can leave a complete record. Do not accept a different
       // request until the owner has re-read and certified that journal.
@@ -137,6 +142,10 @@ export class PendingQuestionRegistry {
     let pending: Promise<unknown>
     do { pending = this.lane; await pending } while (pending !== this.lane)
   }
+  /** Recovery reads and their application must exclude newly accepted writes. */
+  recover(operation: () => Promise<void>): Promise<void> {
+    return this.serialize(operation)
+  }
   getSnapshot = (): QuestionSnapshot => this.snapshot
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -150,6 +159,12 @@ export class PendingQuestionRegistry {
     const next = this.lane.then(operation)
     this.lane = next.catch(() => {})
     return next
+  }
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    return this.serialize(async () => {
+      this.assertOwner()
+      return operation()
+    })
   }
   /** Active IDs must come from the full selected conversation, including its compacted ancestry. */
   restore(entries: readonly QuestionJournalEntry[], activeToolUseIds: ReadonlySet<string>, preserveTurn = false, activeSources?: ReadonlyMap<string, string>): void {
@@ -183,7 +198,7 @@ export class PendingQuestionRegistry {
   }
   ask(toolUseId: string, sourceMessageUuid: string, questions: PendingQuestionSpec[]): Promise<void> {
     const turnRevision = this.turnRevision
-    return this.serialize(async () => {
+    return this.mutate(async () => {
       const previous = [...this.pending.values(), ...this.resolved.values()].filter(ref => ref.toolUseId === toolUseId).sort((a, b) => a.questionIndex - b.questionIndex)
       if (previous.length) {
         const spec = (value: PendingQuestionSpec) => JSON.stringify([value.question, value.multiSelect,
@@ -196,6 +211,7 @@ export class PendingQuestionRegistry {
       const entry: QuestionJournalEntry = { type: 'question-lifecycle', version: 1, operation: 'asked', toolUseId, sourceMessageUuid, questions: structuredClone(questions) }
       this.checkSnapshot([...this.pending.values(), ...entry.questions.map((question, questionIndex) => ({ ...question, toolUseId, sourceMessageUuid, questionIndex }))], [...this.resolved.values()])
       await this.persist(entry)
+      this.assertOwner()
       if (this.turnRevision === turnRevision) this.askedThisTurn.add(toolUseId)
       entry.questions.forEach((question, questionIndex) => {
         const value = { ...question, toolUseId, sourceMessageUuid, questionIndex }
@@ -205,7 +221,7 @@ export class PendingQuestionRegistry {
     })
   }
   reply(raw: QuestionReplyBatch): Promise<QuestionReplyDelivery> {
-    return this.serialize(async () => {
+    return this.mutate(async () => {
       const batch = questionReplyBatchSchema.parse(raw)
       const fingerprint = createHash('sha256').update(JSON.stringify(batch)).digest('hex')
       const previous = this.receipts.get(batch.requestId)
@@ -233,11 +249,12 @@ export class PendingQuestionRegistry {
       const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`
       const delivery: QuestionReplyDelivery = { uuid, batchId: batch.requestId, questions: resolutions.map(({ toolUseId, questionIndex }) => ({ toolUseId, questionIndex })), content, ...(images.length ? { images } : {}) }
       await this.commit({ type: 'question-lifecycle', version: 1, operation: 'resolved', requestId: batch.requestId, fingerprint, resolutions, delivery })
+      this.assertOwner()
       return delivery
     })
   }
   dismiss(raw: QuestionDismiss): Promise<void> {
-    return this.serialize(async () => {
+    return this.mutate(async () => {
       const request = questionDismissSchema.parse(raw)
       const fingerprint = JSON.stringify(request)
       const previous = this.receipts.get(request.requestId)
@@ -248,6 +265,7 @@ export class PendingQuestionRegistry {
       const question = this.pending.get(questionKey(request))
       if (!question) throw new Error('Question is not pending')
       await this.commit({ type: 'question-lifecycle', version: 1, operation: 'resolved', requestId: request.requestId, fingerprint, resolutions: [{ ...question, state: 'dismissed' }] })
+      this.assertOwner()
     })
   }
   private async commit(entry: Extract<QuestionJournalEntry, { operation: 'resolved' }>): Promise<void> {
@@ -255,6 +273,7 @@ export class PendingQuestionRegistry {
     this.checkSnapshot([...this.pending.values()].filter(question => !keys.has(questionKey(question))),
       [...this.resolved.values()].filter(question => !keys.has(questionKey(question))).concat(entry.resolutions))
     await this.persist(entry)
+    this.assertOwner()
     this.receipts.set(entry.requestId, entry)
     for (const resolution of entry.resolutions) {
       this.pending.delete(questionKey(resolution))

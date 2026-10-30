@@ -83,7 +83,11 @@ export function PendingQuestionPanel({ registry, active, onOpenChange, onMessage
   function choose(_text: string, labels: string | string[], textInput?: string, advance = true) {
     if (busy.current) return
     const previous = draftsRef.current[key] ?? empty()
-    const selected = Array.isArray(labels) ? labels : [labels]
+    // QuestionView publishes raw multiselect state before replacing Other with
+    // its text in onAnswer. Only the raw state distinguishes text from labels.
+    const selected = Array.isArray(labels)
+      ? (Array.isArray(previous.state.selectedValue) ? previous.state.selectedValue : [])
+      : [labels]
     const optionIndices = current!.options.flatMap((option, index) => selected.includes(option.label) ? [index] : [])
     const other = selected.includes('__other__') ? (textInput ?? previous.state.textInputValue).trim() : undefined
     const note = textInput ?? (!current!.multiSelect && current!.options.some(option => option.preview) ? previous.state.textInputValue : '')

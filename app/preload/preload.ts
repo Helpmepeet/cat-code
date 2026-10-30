@@ -346,7 +346,7 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   questionVerb(sessionId, verb) {
     if (verb.type !== 'askUserQuestion.reply' && verb.type !== 'askUserQuestion.dismiss') return
     const payload = { sessionId, verb }
-    sendGuard.assertAllowed(payload)
+    sendGuard.assertAllowed(payload, verb.type === 'askUserQuestion.reply' ? 'question-reply' : 'control')
     ipcRenderer.send(CH_QUESTION_VERB, payload)
   },
   deleteAccount(verb: AccountDeleteMessage) {

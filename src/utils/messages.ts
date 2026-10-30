@@ -3627,7 +3627,7 @@ function getPlanModeV2SubAgentInstructions(attachment: {
 ## Plan File Info:
 ${planFileInfo}
 You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
-Answer the user's query comprehensively, using the ${ASK_USER_QUESTION_TOOL_NAME} tool if you need to ask the user clarifying questions. ${QUESTION_ANSWER_BOUNDARY} Do not proceed with work that depends on unanswered questions.`
+Answer the user's query comprehensively. If you need clarification, report the unresolved question to your caller. Stop work that depends on the answer and resume that work only when your caller supplies the answer.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),

@@ -31,6 +31,8 @@ import { join } from 'node:path'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
 import {
   MAX_FRAME_BYTES,
+  MAX_QUESTION_REPLY_FRAME_BYTES,
+  MAX_QUESTION_REPLY_BYTES_PER_WINDOW,
   MAX_QUEUED_PROMPTS,
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_TEXT_FIELD_CHARS,
@@ -237,6 +239,8 @@ export class SidecarSupervisor {
   private readonly stopping = new Map<SessionId, Set<SidecarRecord>>()
   private largeSendWindowStart = 0
   private largeSendBytes = 0
+  private questionSendWindowStart = 0
+  private questionSendBytes = 0
   private readonly listeners = new Set<(event: SupervisorEvent) => void>()
   private readonly options: Required<Pick<SupervisorOptions, 'sidecarCommand'>> &
     SupervisorOptions
@@ -580,7 +584,8 @@ export class SidecarSupervisor {
     }
     const encoded = encodeFrame(frame)
     const payloadBytes = encoded.byteLength - 4
-    if (payloadBytes > (imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
+    const questionReply = message.type === 'askUserQuestion.reply'
+    if (payloadBytes > (questionReply ? MAX_QUESTION_REPLY_FRAME_BYTES : imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
       throw new Error('That message is too large to send. Shorten it and try again.')
     }
     // write(false) already accepted the bytes. Admission must happen BEFORE
@@ -592,7 +597,17 @@ export class SidecarSupervisor {
         pending + encoded.byteLength > MAX_PENDING_HOST_INPUT_BYTES) {
       throw new Error('Messages are still being sent. Wait a moment and try again.')
     }
-    if (payloadBytes > MAX_FRAME_BYTES) {
+    if (questionReply) {
+      const now = Date.now()
+      if (now < this.questionSendWindowStart || now - this.questionSendWindowStart >= RATE_WINDOW_MS) {
+        this.questionSendWindowStart = now
+        this.questionSendBytes = 0
+      }
+      if (this.questionSendBytes + payloadBytes > MAX_QUESTION_REPLY_BYTES_PER_WINDOW) {
+        throw new Error('Too many requests at once. Wait a moment and try again.')
+      }
+      this.questionSendBytes += payloadBytes
+    } else if (payloadBytes > MAX_FRAME_BYTES) {
       const now = Date.now()
       if (now < this.largeSendWindowStart || now - this.largeSendWindowStart >= RATE_WINDOW_MS) {
         this.largeSendWindowStart = now

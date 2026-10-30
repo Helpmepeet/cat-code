@@ -109,6 +109,8 @@ import {
   HANDOFF_STATE_WINDOW_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
+  MAX_QUESTION_REPLY_FRAME_BYTES,
+  MAX_QUESTION_REPLY_BYTES_PER_WINDOW,
   MAX_LARGE_SUBMIT_BYTES_PER_WINDOW,
   MAX_HANDOFF_STATE_BYTES,
   MAX_HANDOFF_STATES_PER_WINDOW,
@@ -745,6 +747,8 @@ export class SidecarServer {
   >()
   private largeReceiveWindowStart = 0
   private largeReceiveBytes = 0
+  private questionReceiveWindowStart = 0
+  private questionReceiveBytes = 0
   private bufferedReceiveWindowStart = 0
   private bufferedReceiveBytes = 0
   /** Last staged list actually published, for `broadcastQueuedPrompts`. */
@@ -1174,7 +1178,7 @@ export class SidecarServer {
     this.clearIdleTimer()
     const connection: Connection = {
       socket,
-      decoder: new FrameDecoder(MAX_SUBMIT_FRAME_BYTES, bytes => this.admitFrameBytes(bytes)),
+      decoder: new FrameDecoder(Math.max(MAX_SUBMIT_FRAME_BYTES, MAX_QUESTION_REPLY_FRAME_BYTES), bytes => this.admitFrameBytes(bytes)),
       rateWindowStart: Date.now(),
       rateCount: 0,
       closed: false,
@@ -1504,7 +1508,8 @@ export class SidecarServer {
         return
       }
 
-      if (!this.checkRate(connection, result.byteLength)) {
+      const questionReply = (result.payload as { message?: { type?: unknown } } | null)?.message?.type === 'askUserQuestion.reply'
+      if (!this.checkRate(connection, result.byteLength, questionReply)) {
         this.rejectFrameWithSubmitAnswer(
           connection,
           result.payload,
@@ -1787,7 +1792,8 @@ export class SidecarServer {
 
     const inbound = frame.message
     const imageSubmit = inbound?.type === 'app.submit' && isImageSubmitPrompt(inbound.prompt)
-    if (byteLength > MAX_FRAME_BYTES && !imageSubmit) {
+    const questionReply = inbound?.type === 'askUserQuestion.reply'
+    if (byteLength > (questionReply ? MAX_QUESTION_REPLY_FRAME_BYTES : imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
       this.rejectFrameWithSubmitAnswer(
         connection, payload, requestId, 'bad_request',
         'This request is too large to send.', false,
@@ -6468,7 +6474,7 @@ export class SidecarServer {
     return true
   }
 
-  private checkRate(connection: Connection, byteLength: number): boolean {
+  private checkRate(connection: Connection, byteLength: number, questionReply: boolean): boolean {
     const now = Date.now()
     if (now < connection.rateWindowStart || now - connection.rateWindowStart >= RATE_WINDOW_MS) {
       connection.rateWindowStart = now
@@ -6476,7 +6482,14 @@ export class SidecarServer {
     }
     connection.rateCount += 1
     if (connection.rateCount > MAX_FRAMES_PER_WINDOW) return false
-    if (byteLength > MAX_FRAME_BYTES) {
+    if (questionReply) {
+      if (now < this.questionReceiveWindowStart || now - this.questionReceiveWindowStart >= RATE_WINDOW_MS) {
+        this.questionReceiveWindowStart = now
+        this.questionReceiveBytes = 0
+      }
+      if (this.questionReceiveBytes + byteLength > MAX_QUESTION_REPLY_BYTES_PER_WINDOW) return false
+      this.questionReceiveBytes += byteLength
+    } else if (byteLength > MAX_FRAME_BYTES) {
       if (now < this.largeReceiveWindowStart || now - this.largeReceiveWindowStart >= RATE_WINDOW_MS) {
         this.largeReceiveWindowStart = now
         this.largeReceiveBytes = 0

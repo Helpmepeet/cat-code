@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test, spyOn } from 'bun:test'
+import * as storage from '../utils/sessionStorage.js'
 import { feature } from 'bun:bundle'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync, appendFileSync } from 'node:fs'
@@ -76,6 +77,239 @@ describe.skipIf(feature('NONBLOCKING_ASK_USER_QUESTION') ? false : true)('real a
     expect(AskUserQuestionTool.mapToolResultToToolResultBlockParam(result.data, 'question-call').content).toBe('Question shown to the user. No answer yet; it will arrive as a separate message.')
     return { realSession, controller, registry }
   }
+  test('failed-write recovery is single-flight and retains the first accepted outbox across restart', async () => {
+    await shown()
+    const runtime = new PendingQuestionRuntime(() => messages)
+    await runtime.initialize()
+    const record = storage.recordQuestionLifecycle
+    const writer = spyOn(storage, 'recordQuestionLifecycle').mockImplementation(async entry => {
+      if (entry.operation === 'resolved') throw new Error('pre-append failure')
+      await record(entry)
+    })
+    try {
+      await expect(runtime.registry.reply({ requestId: 'failed', replies: [pick] })).rejects.toThrow('pre-append failure')
+    } finally { writer.mockRestore() }
+    const load = storage.loadTranscriptFile
+    const read = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let reads = 0
+    const reader = spyOn(storage, 'loadTranscriptFile').mockImplementation(async (...args) => {
+      const loaded = await load(...args)
+      reads++
+      read.resolve()
+      await release.promise
+      return loaded
+    })
+    try {
+      const a = runtime.initialize()
+      await read.promise
+      const b = runtime.initialize()
+      // Identity asserts single-flight without waiting for a forbidden second read.
+      expect(b).toBe(a)
+      release.resolve()
+      await Promise.all([a, b])
+      expect(reads).toBe(1)
+    } finally { release.resolve(); reader.mockRestore() }
+    const first = await runtime.registry.reply({ requestId: 'accepted-A', replies: [pick] })
+    runtime.deliver()
+    await expect(runtime.registry.reply({ requestId: 'accepted-B', replies: [pick] })).rejects.toThrow('not pending')
+    expect(getCommandQueue().map(command => String(command.uuid))).toEqual([first.uuid])
+    await flushQueueOperationsDurably()
+    const restarted = new PendingQuestionRuntime(() => messages)
+    await restarted.initialize()
+    restarted.deliver()
+    expect(getCommandQueue().map(command => String(command.uuid))).toEqual([first.uuid])
+    const queued = dequeue()!
+    messages.push(createUserMessage({ content: queued.value, uuid: queued.uuid, origin: queued.origin }))
+    await recordTranscript(messages)
+    await flushCurrentTranscriptDurably()
+    const consumed = new PendingQuestionRuntime(() => messages)
+    await consumed.initialize()
+    consumed.deliver()
+    expect(getCommandQueue()).toHaveLength(0)
+  })
+  test('stale-owner registry rejects asks, replies and dismissals without writing the replacement transcript', async () => {
+    const { registry } = await shown()
+    const oldPath = getTranscriptPathForSession(getSessionId())
+    await releaseActiveTranscriptLease()
+    resetProjectForTesting()
+    switchSession(asSessionId(randomUUID()), dir)
+    messages = [createUserMessage({ content: 'Replacement conversation' })]
+    await recordTranscript(messages)
+    await flushCurrentTranscriptDurably()
+    await expect(registry.reply({ requestId: 'late-old-owner', replies: [pick] })).rejects.toThrow('owner changed')
+    await expect(registry.dismiss({ requestId: 'late-dismiss', toolUseId: 'question-call', questionIndex: 1 })).rejects.toThrow('owner changed')
+    await expect(registry.ask('late-ask', randomUUID(), questions)).rejects.toThrow('owner changed')
+    // Even a no-write idempotent ask must not acknowledge an obsolete owner.
+    await expect(registry.ask('question-call', registry.getSnapshot().pending[0]!.sourceMessageUuid, questions)).rejects.toThrow('owner changed')
+    const replacement = await loadTranscriptFile(getTranscriptPathForSession(getSessionId()), { strict: true })
+    expect(replacement.questionLifecycles).toEqual([])
+    const original = await loadTranscriptFile(oldPath, { strict: true })
+    expect(original.questionLifecycles.map(entry => entry.operation)).toEqual(['asked'])
+    expect(registry.getSnapshot().pending).toHaveLength(2)
+    expect(getCommandQueue()).toHaveLength(0)
+  })
+  test('an in-flight old-owner durable reply cannot acknowledge after replacement and remains recoverable in its original transcript', async () => {
+    await shown()
+    const runtime = new PendingQuestionRuntime(() => messages)
+    await runtime.initialize()
+    const oldSession = getSessionId()
+    const oldMessages = messages
+    const oldPath = getTranscriptPathForSession(oldSession)
+    const record = storage.recordQuestionLifecycle
+    const written = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const writer = spyOn(storage, 'recordQuestionLifecycle').mockImplementation(async entry => {
+      await record(entry)
+      if (entry.operation === 'resolved') { written.resolve(); await release.promise }
+    })
+    try {
+      const replying = runtime.registry.reply({ requestId: 'in-flight-owner', replies: [pick] })
+      const result = Promise.allSettled([replying])
+      await written.promise
+      await releaseActiveTranscriptLease()
+      resetProjectForTesting()
+      switchSession(asSessionId(randomUUID()), dir)
+      messages = [createUserMessage({ content: 'Replacement conversation' })]
+      await recordTranscript(messages)
+      await flushCurrentTranscriptDurably()
+      await runtime.initialize()
+      release.resolve()
+      const [settled] = await result
+      expect(settled!.status).toBe('rejected')
+      if (settled!.status === 'rejected') expect(String(settled.reason)).toContain('owner changed')
+      runtime.deliver()
+      expect(getCommandQueue()).toHaveLength(0)
+      const replacement = await loadTranscriptFile(getTranscriptPathForSession(getSessionId()), { strict: true })
+      expect(replacement.questionLifecycles).toEqual([])
+      const original = await loadTranscriptFile(oldPath, { strict: true })
+      expect(original.questionLifecycles.map(entry => entry.operation)).toEqual(['asked', 'resolved'])
+      await releaseActiveTranscriptLease()
+      resetProjectForTesting()
+      switchSession(asSessionId(oldSession), dir)
+      messages = oldMessages
+      const recovered = new PendingQuestionRuntime(() => messages)
+      await recovered.initialize()
+      const delivery = await recovered.registry.reply({ requestId: 'in-flight-owner', replies: [pick] })
+      recovered.deliver()
+      expect(getCommandQueue().map(command => String(command.uuid))).toEqual([delivery.uuid])
+      expect(recovered.registry.getSnapshot().resolved).toHaveLength(1)
+    } finally { release.resolve(); writer.mockRestore() }
+  })
+  test('queued old-owner mutations reject across reset while a new registry accepts the replacement owner', async () => {
+    await shown()
+    const runtime = new PendingQuestionRuntime(() => messages)
+    await runtime.initialize()
+    const oldRegistry = runtime.registry
+    const load = storage.loadTranscriptFile
+    const read = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let reads = 0
+    const reader = spyOn(storage, 'loadTranscriptFile').mockImplementation(async (...args) => {
+      const loaded = await load(...args)
+      if (++reads === 1) { read.resolve(); await release.promise }
+      return loaded
+    })
+    const publications: number[] = []
+    const unsubscribe = oldRegistry.subscribe(() => publications.push(runtime.registry.getSnapshot().pending.length))
+    try {
+      const restoring = runtime.restore()
+      await read.promise
+      const queued = Promise.allSettled([
+        oldRegistry.reply({ requestId: 'queued-old-reply', replies: [pick] }),
+        oldRegistry.dismiss({ requestId: 'queued-old-dismiss', toolUseId: 'question-call', questionIndex: 1 }),
+        oldRegistry.ask('queued-old-ask', randomUUID(), questions),
+      ])
+      await releaseActiveTranscriptLease()
+      resetProjectForTesting()
+      switchSession(asSessionId(randomUUID()), dir)
+      messages = [createUserMessage({ content: 'Replacement conversation' }), assistant('question-call')]
+      await recordTranscript(messages)
+      await flushCurrentTranscriptDurably()
+      await runtime.initialize()
+      expect(runtime.registry).not.toBe(oldRegistry)
+      const source = messages[1]!.uuid
+      await runtime.registry.ask('question-call', source, questions)
+      const delivery = await runtime.registry.reply({ requestId: 'new-owner-reply', replies: [pick] })
+      await runtime.registry.dismiss({ requestId: 'new-owner-dismiss', toolUseId: 'question-call', questionIndex: 1 })
+      runtime.deliver()
+      release.resolve()
+      await restoring
+      const results = await queued
+      expect(results.map(result => result.status)).toEqual(['rejected', 'rejected', 'rejected'])
+      for (const result of results) if (result.status === 'rejected') expect(String(result.reason)).toContain('owner changed')
+      // An old retained reference remains obsolete even after reset completes.
+      await expect(oldRegistry.reply({ requestId: 'after-reset', replies: [pick] })).rejects.toThrow('owner changed')
+      await expect(oldRegistry.ask('after-reset-ask', source, questions)).rejects.toThrow('owner changed')
+      expect(getCommandQueue().map(command => String(command.uuid))).toEqual([delivery.uuid])
+      expect(publications).toEqual([0, 2, 1, 0])
+      const saved = await load(getTranscriptPathForSession(getSessionId()), { strict: true })
+      expect(saved.questionLifecycles.map(entry => entry.operation)).toEqual(['asked', 'resolved', 'resolved'])
+      for (const entry of saved.questionLifecycles) {
+        if (entry.operation === 'asked') expect(entry.sourceMessageUuid).toBe(source)
+        else expect(entry.resolutions.every(resolution => resolution.sourceMessageUuid === source)).toBe(true)
+      }
+    } finally { release.resolve(); unsubscribe(); reader.mockRestore() }
+  })
+  test('a suspended old-owner restore cannot publish into a replacement session', async () => {
+    await shown()
+    const runtime = new PendingQuestionRuntime(() => messages)
+    await runtime.initialize()
+    const load = storage.loadTranscriptFile
+    const read = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    let reads = 0
+    const reader = spyOn(storage, 'loadTranscriptFile').mockImplementation(async (...args) => {
+      const loaded = await load(...args)
+      if (++reads === 1) { read.resolve(); await release.promise }
+      return loaded
+    })
+    try {
+      const old = runtime.restore()
+      await read.promise
+      await releaseActiveTranscriptLease()
+      switchSession(asSessionId(randomUUID()), dir)
+      messages = [createUserMessage({ content: 'Replacement conversation' })]
+      await recordTranscript(messages)
+      await flushCurrentTranscriptDurably()
+      const replacement = runtime.initialize()
+      const publications: number[] = []
+      const unsubscribe = runtime.registry.subscribe(() => publications.push(runtime.registry.getSnapshot().pending.length))
+      try {
+        release.resolve()
+        await Promise.all([old, replacement])
+        expect(publications).toEqual([0])
+        expect(runtime.registry.getSnapshot()).toEqual({ pending: [], resolved: [] })
+        runtime.deliver()
+        expect(getCommandQueue()).toHaveLength(0)
+      } finally { unsubscribe() }
+    } finally { release.resolve(); reader.mockRestore() }
+  })
+  test('direct restore excludes a reply accepted while its real transcript read is suspended', async () => {
+    await shown()
+    const runtime = new PendingQuestionRuntime(() => messages)
+    await runtime.initialize()
+    const load = storage.loadTranscriptFile
+    const read = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const reader = spyOn(storage, 'loadTranscriptFile').mockImplementation(async (...args) => {
+      const loaded = await load(...args)
+      read.resolve()
+      await release.promise
+      return loaded
+    })
+    try {
+      const restoring = runtime.restore()
+      await read.promise
+      const accepting = runtime.registry.reply({ requestId: 'during-restore', replies: [pick] })
+      release.resolve()
+      const first = await accepting
+      runtime.deliver()
+      await restoring
+      await expect(runtime.registry.reply({ requestId: 'after-restore', replies: [pick] })).rejects.toThrow('not pending')
+      expect(getCommandQueue().map(command => String(command.uuid))).toEqual([first.uuid])
+    } finally { release.resolve(); reader.mockRestore() }
+  })
   test('shown never opens a permission request and accepted partial answers enqueue one durable batch', async () => {
     const { controller } = await shown()
     expect(controller.getPendingPermissionRequests()).toEqual([])

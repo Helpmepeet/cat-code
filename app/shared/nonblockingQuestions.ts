@@ -1,4 +1,5 @@
 import type { AskUserQuestionAnswer, SessionId, PROTOCOL_VERSION } from './protocol.js'
+export { MAX_NONBLOCKING_QUESTION_TEXT_CHARS } from './limits.js'
 export type { PendingQuestion, QuestionSnapshot, ResolvedQuestion } from './engine-types.snapshot.js'
 
 export type QuestionReplyMessage = {
