@@ -12,8 +12,9 @@ import type { FilePreviewEvent } from '../../shared/filePreview.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { TranscriptRowsView } from './TranscriptView.js'
+import { ToolsExpandedContext } from './toolsExpanded.js'
 import { ToastContext } from './toastContext.js'
-import { captureFilePaneScroll, closeFilePane, disposeFilePaneSession, getFilePaneSession } from './filePaneState.js'
+import { captureFilePaneScroll, closeFilePane, disposeFilePaneSession, getFilePaneSession, rememberFilePaneScroll } from './filePaneState.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 let harness: DomTestHarness
@@ -47,7 +48,7 @@ async function click(root: ParentNode, label: string) {
   await act(async () => { button!.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
   await settle()
 }
-function setup() {
+function setup(withOutput = false) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-dom-')))
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-outside-')))
   const refusedPath = join(outside, 'outside.md')
@@ -112,15 +113,22 @@ function setup() {
     parentToolUseId: null, kind: 'assistant-text', role: 'assistant', children: [],
     content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html) [Image](image.png) [Bad image](broken.png)`,
   }
+  const rows: NestedTranscriptRow[] = [row]
+  if (withOutput) rows.push({
+    id: 'long-output', sessionId, frameId: 'out-frame', messageId: 'out-message', blockIndex: 0,
+    parentToolUseId: null, kind: 'tool-use', toolUseId: 'long-output', toolName: 'Bash', toolFamily: 'bash',
+    input: { command: 'preview-scroll-output' }, status: 'success', agentCompletion: null, children: [],
+    result: { content: Array.from({ length: 900 }, (_, index) => `output line ${index}`).join('\n'), isError: false, diff: null },
+  })
   const toasts: string[] = []
   const pane = (id = sessionId) => <ToastContext.Provider value={message => { toasts.push(message) }}>
-    <SubagentWorkspace key={id} appSessionId={id}
+    <ToolsExpandedContext.Provider value={{ expanded: true, setExpanded: () => {} }}><SubagentWorkspace key={id} appSessionId={id}
       onFocusComposer={() => document.querySelector<HTMLInputElement>('[aria-label="Composer"]')?.focus({ preventScroll: true })}
       dock={{ active: [], finished: [], chipFaces: [], nextUpdateAt: null }} collapsed onCollapsedChange={() => {}}
       onClearFinished={() => {}} onDetailsVisibleChange={() => {}} onFallback={() => {}} onOpenWorkers={() => {}}
-      rows={id === sessionId ? [row] : []} cwd={root}>
-      <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? [row] : []} cwd={root} /></section><input aria-label="Composer" /></main>
-    </SubagentWorkspace>
+      rows={id === sessionId ? rows : []} cwd={root}>
+      <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? rows : []} cwd={root} /></section><input aria-label="Composer" /></main>
+    </SubagentWorkspace></ToolsExpandedContext.Provider>
   </ToastContext.Provider>
   return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, ids, external }
 }
@@ -297,4 +305,22 @@ test('image decode errors reject a corrupt initial file and retain a good image 
   await signalImage('load')
   expect(tree.container.querySelector('.file-pane-note')).toBeNull()
   expect(tree.container.querySelector('.file-pane-image:not(.file-pane-staging) img')).not.toBeNull()
+})
+
+
+test('capturing a Markdown file hidden behind real full output retains its semantic bookmark', async () => {
+  const { pane, sessionId } = setup(true)
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const leafId = tree.container.querySelector<HTMLElement>('.file-pane-markdown:not(.file-pane-staging) [data-markdown-unit]')!.dataset.markdownUnit!
+  const bookmark = { x: 0, y: 180, markdown: { leafId, offset: 12 } }
+  rememberFilePaneScroll(sessionId, bookmark)
+  const output = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.startsWith('Open full output'))!
+  expect(output).toBeDefined()
+  await act(async () => { output.click() })
+  expect(tree.container.querySelector('.file-pane')?.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(true)
+  await act(async () => { await captureFilePaneScroll(sessionId) })
+  // No layout is supplied here. A hidden node must preserve its known bookmark,
+  // while the native gate separately checks capture and restoration on screen.
+  expect(getFilePaneSession(sessionId).scroll).toEqual(bookmark)
 })

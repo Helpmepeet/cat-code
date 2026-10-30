@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react'
 import { createPortal } from 'react-dom'
-import type { FilePreviewApplications, FilePreviewDescriptor, FilePreviewScroll } from '../../shared/filePreview.js'
+import type { FilePreviewApplications, FilePreviewDescriptor } from '../../shared/filePreview.js'
 import type { OpenWorkspaceFileTarget } from '../../shared/protocol.js'
+import { captureMarkdownReadingPosition } from './markdownReadingPosition.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { renderMarkdownTree } from './markdownRenderPlan.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
@@ -11,7 +12,7 @@ import { ActionCheckIcon, ActionChevronIcon, ActionCloseIcon, ActionCopyIcon } f
 import { useToast } from './toastContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneScroll, rememberFilePaneScroll,
-  isPaneFilePath, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession,
+  isPaneFilePath, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession, type FilePaneScroll,
 } from './filePaneState.js'
 import './filePane.css'
 
@@ -50,13 +51,14 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     return () => { mounted.current = false }
   }, [])
 
-  const readScroll = async (): Promise<FilePreviewScroll> => {
+  const readScroll = async (): Promise<FilePaneScroll> => {
     const showing = paintedRef.current?.descriptor
     if (!showing) return getFilePaneSession(appSessionId).scroll
     if (showing.kind === 'html' || showing.kind === 'svg') {
       try { return await window.catcode.readFilePreviewScroll(showing.id, showing.revision) } catch { return getFilePaneSession(appSessionId).scroll }
     }
-    return activeBody.current ? { x: activeBody.current.scrollLeft, y: activeBody.current.scrollTop } : getFilePaneSession(appSessionId).scroll
+    if (showing.kind === 'markdown' && activeBody.current?.clientHeight === 0) return getFilePaneSession(appSessionId).scroll
+    return activeBody.current ? { x: activeBody.current.scrollLeft, y: activeBody.current.scrollTop, ...(showing.kind === 'markdown' ? { markdown: captureMarkdownReadingPosition(activeBody.current) } : {}) } : getFilePaneSession(appSessionId).scroll
   }
   useEffect(() => registerFilePaneScroll(appSessionId, readScroll), [appSessionId])
   useEffect(() => {
@@ -123,20 +125,20 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     if (!mounted.current) return
     if (rejectFilePaneCandidate(appSessionId, next.descriptor)) toast('Could not open this file', { tone: 'warn' })
   }
-  const ready = async (next: PaintedFile) => {
+  const ready = async (next: PaintedFile, restoredScroll?: FilePaneScroll) => {
     const current = getFilePaneSession(appSessionId)
     const restoringCommitted = !paintedRef.current && current.committedFile?.url === next.descriptor.url
     if (!mounted.current || !current.open || descriptorRef.current?.url !== next.descriptor.url && !restoringCommitted) return
     const previous = paintedRef.current
     const replacingSameFile = previous?.descriptor.path === next.descriptor.path
-    const scroll = replacingSameFile ? await readScroll() : getFilePaneSession(appSessionId).scroll
+    const scroll = restoredScroll ?? (replacingSameFile ? await readScroll() : getFilePaneSession(appSessionId).scroll)
     try {
       if (!restoringCommitted && !await window.catcode.commitFilePreview(next.descriptor.id, next.descriptor.revision)) {
         failed(next)
         return
       }
       if (next.descriptor.kind === 'html' || next.descriptor.kind === 'svg') {
-        await window.catcode.restoreFilePreviewScroll(next.descriptor.id, next.descriptor.revision, scroll)
+        await window.catcode.restoreFilePreviewScroll(next.descriptor.id, next.descriptor.revision, { x: scroll.x, y: scroll.y })
       }
     } catch { return }
     const latest = getFilePaneSession(appSessionId)
@@ -147,7 +149,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     if (previous && previous.descriptor.id !== next.descriptor.id) window.catcode.releaseFilePreview(previous.descriptor.id)
   }
   useLayoutEffect(() => {
-    if (!painted || !activeBody.current) return
+    if (!painted || painted.descriptor.kind === 'markdown' || !activeBody.current) return
     const scroll = getFilePaneSession(appSessionId).scroll
     activeBody.current.scrollLeft = scroll.x
     activeBody.current.scrollTop = scroll.y
@@ -220,7 +222,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     {state.note ? <div className="file-pane-note" role="status">{state.note === 'removed' ? `${name} was removed. Showing the last version.` : state.note === 'watch-error' ? 'File watching stopped. Showing the last version.' : 'Could not update this file. Showing the last version.'}</div> : null}
     <div className="file-pane-host">
       {painted ? <FileContent key={painted.key} file={painted.descriptor} active bodyRef={activeBody} appSessionId={appSessionId} /> : null}
-      {candidate ? <FileContent key={candidate.key} file={candidate.descriptor} active={false} appSessionId={appSessionId} onReady={() => { void ready(candidate) }} onFailure={() => failed(candidate)} /> : null}
+      {candidate ? <FileContent key={candidate.key} file={candidate.descriptor} active={false} appSessionId={appSessionId} onReady={scroll => { void ready(candidate, scroll) }} onFailure={() => failed(candidate)} /> : null}
     </div>
     {pathMenu ? <FilePathActionsMenu anchor={pathMenu} rawPath={descriptor.path} cwd={cwd} sessionId={appSessionId} onClose={() => setPathMenu(null)} /> : null}
     {appMenu ? createPortal(<>
@@ -250,14 +252,26 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
   active: boolean
   bodyRef?: React.RefObject<HTMLDivElement | null>
   appSessionId: string
-  onReady?: () => void
+  onReady?: (scroll?: FilePaneScroll) => void
   onFailure?: () => void
 }) {
+  const scrollElement = useRef<HTMLDivElement>(null)
+  const initialScroll = useRef(getFilePaneSession(appSessionId).scroll)
+  const readMarkdownScroll = (): FilePaneScroll | undefined => {
+    const element = scrollElement.current
+    if (!element) return
+    if (element.clientHeight === 0) return initialScroll.current
+    return {
+      x: element.scrollLeft, y: element.scrollTop,
+      markdown: captureMarkdownReadingPosition(element) ?? initialScroll.current.markdown,
+    }
+  }
   const ready = useRef(onReady)
   ready.current = onReady
   useEffect(() => {
     if (file.kind !== 'markdown' || active) return
-    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => ready.current?.()) })
+    if (scrollElement.current) scrollElement.current.scrollLeft = initialScroll.current.x
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => ready.current?.(readMarkdownScroll())) })
     return () => cancelAnimationFrame(frame)
   }, [file.url, file.kind, active])
   const toast = useToast()
@@ -290,10 +304,14 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
     try { resolved = new URL(source, file.url).href } catch { /* Keep a malformed source inert. */ }
     return <img src={resolved} alt={alt ?? ''} />
   }
-  return <div ref={bodyRef} className={`${className} file-pane-markdown`} tabIndex={active ? 0 : -1}
-    onScroll={event => { if (active) rememberFilePaneScroll(appSessionId, { x: event.currentTarget.scrollLeft, y: event.currentTarget.scrollTop }) }}>
+  return <div ref={element => {
+    scrollElement.current = element
+    if (bodyRef) bodyRef.current = element
+  }} className={`${className} file-pane-markdown`} tabIndex={active ? 0 : -1}
+    onScroll={event => { if (active) rememberFilePaneScroll(appSessionId, { x: event.currentTarget.scrollLeft, y: event.currentTarget.scrollTop, markdown: captureMarkdownReadingPosition(event.currentTarget) }) }}>
     <div className="file-pane-markdown-column md-prose">
-      <BoundedMarkdown sourceId={`file:${file.path}`} source={file.markdown ?? ''} renderLeaf={leaf =>
+      <BoundedMarkdown sourceId={`file:${file.path}`} source={file.markdown ?? ''} scrollContainerRef={scrollElement}
+        initialReadingPosition={initialScroll.current.markdown} initialScrollOffset={initialScroll.current.y} renderLeaf={leaf =>
         renderMarkdownTree(leaf.tree, { a: Anchor, img: Image })} />
     </div>
   </div>

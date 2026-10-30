@@ -1,11 +1,13 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import { filePreviewKind, type FilePreviewDescriptor, type FilePreviewScroll } from '../../shared/filePreview.js'
+import type { MarkdownReadingPosition } from './markdownReadingPosition.js'
 import type { SubagentDockRow } from './subagentDockState.js'
 import { defaultViewPreferenceStorage, readViewPreference, writeViewPreference } from './viewPreference.js'
 import { readToolOutputWidth } from './toolOutputPanel.js'
 
 export type SlotOccupant = 'file' | 'worker' | 'output'
-export type FilePaneHistoryEntry = { path: string; scroll: FilePreviewScroll }
+export type FilePaneScroll = FilePreviewScroll & { markdown?: MarkdownReadingPosition }
+export type FilePaneHistoryEntry = { path: string; scroll: FilePaneScroll }
 export type FilePaneOutput = { id: string; fileIndex: number; request: number }
 type FilePaneCheckpoint = Pick<FilePaneSession, 'open' | 'file' | 'committedFile' | 'lastPath' | 'visible' | 'width' | 'history' | 'forward' | 'scroll' | 'note'>
 export type FilePaneSession = {
@@ -20,7 +22,7 @@ export type FilePaneSession = {
   width: number | null
   history: FilePaneHistoryEntry[]
   forward: FilePaneHistoryEntry[]
-  scroll: FilePreviewScroll
+  scroll: FilePaneScroll
   note: 'removed' | 'watch-error' | 'update-error' | null
   checkpoint: FilePaneCheckpoint | null
 }
@@ -31,7 +33,7 @@ const EMPTY: FilePaneSession = {
 const sessions = new Map<string, FilePaneSession>()
 const listeners = new Map<string, Set<() => void>>()
 const focusers = new Map<string, () => void>()
-const scrollReaders = new Map<string, () => Promise<FilePreviewScroll>>()
+const scrollReaders = new Map<string, () => Promise<FilePaneScroll>>()
 const opening = new Map<string, number>()
 const FILE_WIDTH_KEY = 'catcode.filePaneWidth.v1'
 
@@ -63,16 +65,16 @@ export function registerFilePaneFocus(id: string, focus: () => void): () => void
   focusers.set(id, focus)
   return () => { if (focusers.get(id) === focus) focusers.delete(id) }
 }
-export function registerFilePaneScroll(id: string, read: () => Promise<FilePreviewScroll>): () => void {
+export function registerFilePaneScroll(id: string, read: () => Promise<FilePaneScroll>): () => void {
   scrollReaders.set(id, read)
   return () => { if (scrollReaders.get(id) === read) scrollReaders.delete(id) }
 }
-export function rememberFilePaneScroll(id: string, scroll: FilePreviewScroll): void {
+export function rememberFilePaneScroll(id: string, scroll: FilePaneScroll): void {
   if (!sessions.has(id)) return
   // Scroll is read when navigating. It does not repaint the shell on every pixel.
   sessions.set(id, { ...getFilePaneSession(id), scroll })
 }
-async function captureScroll(id: string): Promise<FilePreviewScroll> {
+async function captureScroll(id: string): Promise<FilePaneScroll> {
   try { return await scrollReaders.get(id)?.() ?? getFilePaneSession(id).scroll } catch { return getFilePaneSession(id).scroll }
 }
 export async function captureFilePaneScroll(id: string): Promise<void> {

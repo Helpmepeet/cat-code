@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { PluggableList } from 'unified'
 import {
   MAX_RETAINED_MARKDOWN_MEASUREMENTS,
+  MAX_MOUNTED_MARKDOWN_LEAVES,
+  MAX_MOUNTED_MARKDOWN_ELEMENTS,
   createMarkdownPlanCache,
   mergeMountedMarkdownLeaves,
   planMarkdownLeaves,
@@ -12,6 +14,7 @@ import {
   type MarkdownLeafWindow,
   type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
+import { restoreMarkdownReadingPosition, type MarkdownReadingPosition } from './markdownReadingPosition.js'
 import { REHYPE_PLUGINS, TRANSCRIPT_REHYPE_PLUGINS } from './markdownPlugins.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
@@ -37,6 +40,9 @@ export function BoundedMarkdown({
   streamingLinks = false,
   plainText = false,
   plainTextClasses,
+  initialReadingPosition,
+  initialScrollOffset = 0,
+  scrollContainerRef,
   renderLeaf,
 }: {
   sourceId: string
@@ -47,6 +53,10 @@ export function BoundedMarkdown({
   streamingLinks?: boolean
   plainText?: boolean
   plainTextClasses?: string[]
+  /** The file pane restores a semantic unit before measurements replace estimates. */
+  initialReadingPosition?: MarkdownReadingPosition
+  initialScrollOffset?: number
+  scrollContainerRef?: RefObject<HTMLElement | null>
   renderLeaf: (leaf: MountedMarkdownLeaf) => ReactNode
 }): ReactNode {
   const cacheRef = useRef(createMarkdownPlanCache())
@@ -83,7 +93,7 @@ export function BoundedMarkdown({
     [leaves, measurement],
   )
   const [leafWindow, setLeafWindow] = useState<MarkdownLeafWindow>(() =>
-    selectMarkdownLeafWindow(leaves, 0, INITIAL_VIEWPORT_HEIGHT),
+    initialReadingPosition ? restorationWindow(leaves, initialReadingPosition) : selectMarkdownLeafWindow(leaves, initialScrollOffset, INITIAL_VIEWPORT_HEIGHT),
   )
   const [copiedAtomicLeaf, setCopiedAtomicLeaf] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -116,10 +126,23 @@ export function BoundedMarkdown({
   useEffect(() => {
     const root = rootRef.current
     if (!root || typeof window === 'undefined') return
-    const scroller = findScrollParent(root)
+    const scroller = scrollContainerRef?.current ?? findScrollParent(root)
+    let pendingPosition = initialReadingPosition
+    const restoreWhenVisible = () => {
+      if (!pendingPosition || scroller.clientHeight === 0) return
+      if (!restoreMarkdownReadingPosition(scroller, pendingPosition)) scroller.scrollTop = initialScrollOffset
+      pendingPosition = undefined
+      reportPaneLayoutChange(scroller)
+    }
+    if (pendingPosition) restoreWhenVisible()
+    else if (initialScrollOffset !== 0) scroller.scrollTop = initialScrollOffset
     let frame = 0
     const update = () => {
       frame = 0
+      // A restored file can be mounted behind another occupant. Its explicit
+      // window must not be replaced by the top of an unmeasured hidden pane.
+      if (initialReadingPosition && scroller.clientHeight === 0) return
+      restoreWhenVisible()
       const rootRect = root.getBoundingClientRect()
       const scrollerRect = scroller.getBoundingClientRect()
       const scrollOffset = scrollerRect.top - rootRect.top
@@ -245,6 +268,7 @@ export function BoundedMarkdown({
         unit.kind === 'atomic-text' ? (
           <div
             data-markdown-leaf={unit.measurementKey}
+            data-markdown-unit={unit.key}
             className="my-2 rounded border border-shell-seam bg-shell-hover/40 p-3 font-mono text-xs text-text-muted"
             key={unit.key}
           >
@@ -274,7 +298,7 @@ export function BoundedMarkdown({
             <pre className="whitespace-pre-wrap break-words">{unit.text}</pre>
           </div>
         ) : (
-          <div data-markdown-leaf={unit.measurementKey} key={unit.key}>
+          <div data-markdown-leaf={unit.measurementKey} data-markdown-unit={unit.key} key={unit.key}>
             {renderLeaf(unit)}
           </div>
         ),
@@ -303,4 +327,23 @@ function sameWindow(left: MarkdownLeafWindow, right: MarkdownLeafWindow): boolea
     left.topSpacerHeight === right.topSpacerHeight &&
     left.bottomSpacerHeight === right.bottomSpacerHeight
   )
+}
+
+
+function restorationWindow(leaves: readonly MarkdownRenderLeaf[], position: MarkdownReadingPosition): MarkdownLeafWindow {
+  const index = leaves.findIndex(leaf => leaf.id === position.leafId)
+  if (index < 0) return selectMarkdownLeafWindow(leaves, 0, INITIAL_VIEWPORT_HEIGHT)
+  const prefix = leaves.slice(0, index).reduce((height, leaf) => height + leaf.estimatedHeight, 0)
+  const desired = selectMarkdownLeafWindow(leaves, prefix + Math.max(0, position.offset), INITIAL_VIEWPORT_HEIGHT)
+  let end = index
+  let elements = 0
+  while (end < Math.max(index + 1, desired.end) && end - index < MAX_MOUNTED_MARKDOWN_LEAVES) {
+    if (end > index && elements + leaves[end]!.elements > MAX_MOUNTED_MARKDOWN_ELEMENTS) break
+    elements += leaves[end]!.elements
+    end++
+  }
+  return {
+    start: index, end, topSpacerHeight: prefix,
+    bottomSpacerHeight: leaves.slice(end).reduce((height, leaf) => height + leaf.estimatedHeight, 0),
+  }
 }
