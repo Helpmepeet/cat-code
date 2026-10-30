@@ -1,3 +1,5 @@
+import { createExternalUrlHandler } from './externalUrl.js'
+import { CH_OPEN_EXTERNAL_URL } from '../shared/ipcChannels.js'
 import { createLocalhostPreviewService } from './localhostPreview.js'
 import { CH_LOCALHOST_PREVIEW_CAPTURE } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
@@ -4572,6 +4574,7 @@ function registerHostControlPlane(): void {
     },
   )
 
+  ipcMain.handle(CH_OPEN_EXTERNAL_URL, createExternalUrlHandler<IpcMainInvokeEvent>({ isTrustedSender: trustedPreviewSender, open: url => shell.openExternal(url) }))
   ipcMain.handle(CH_LOCALHOST_PREVIEW_CAPTURE, () => undefined)
   ipcMain.handle(CH_LOCALHOST_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? localhostPreviews.prepare(input) : {ok:false,reason:'refused'})
   ipcMain.handle(CH_LOCALHOST_PREVIEW_NAVIGATE, async (event, input: unknown) => {

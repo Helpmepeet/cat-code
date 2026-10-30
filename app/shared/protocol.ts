@@ -4049,6 +4049,7 @@ export type OpenWorkspaceFileTarget =
 export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
+  openExternalUrl(url: string): Promise<boolean>
   prepareFilePreview(appSessionId: SessionId, path: string): Promise<FilePreviewDescriptor | null>
   prepareLocalhostPreview(appSessionId: SessionId, url: string): Promise<LocalhostPreviewResult>
   captureLocalhostPreview(id: string): Promise<void>

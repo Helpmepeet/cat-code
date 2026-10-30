@@ -132,7 +132,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain('setPeerWakeBlocked(')
   expect(channels).toContain("export const CH_NOTIFICATION_VISIBILITY = 'catcode:notification-visibility'")
   expect(source).toContain('reportNotificationVisibility(value: NotificationVisibility): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(91)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(92)
   expect(channels).toContain("export const CH_HOST_EXTERNAL_APP_ICON = 'catcode:host:external-app-icon'")
   expect(source).toContain('ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)')
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
@@ -189,7 +189,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(97)
+  expect(names.length).toBe(98)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -285,8 +285,9 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(59)
+  expect(invokeChannels.length).toBe(60)
   const allowed = new Set([
+    'CH_OPEN_EXTERNAL_URL',
     'CH_LOCALHOST_PREVIEW_CAPTURE',
     'CH_LOCALHOST_PREVIEW_PREPARE',
     'CH_LOCALHOST_PREVIEW_NAVIGATE',
