@@ -101,7 +101,7 @@ export function closeFilePane(id: string): void {
 }
 function releaseUnusedCandidate(id: string, descriptor: FilePreviewDescriptor): void {
   const state = getFilePaneSession(id)
-  if (state.file?.id !== descriptor.id && state.committedFile?.id !== descriptor.id) window.catcode.releaseFilePreview(descriptor.id)
+  if ([state.file?.id, state.committedFile?.id, state.checkpoint?.file?.id, state.checkpoint?.committedFile?.id].every(retained => retained !== descriptor.id)) window.catcode.releaseFilePreview(descriptor.id)
 }
 async function prepare(id: string, path: string): Promise<FilePreviewDescriptor | null> {
   try { return await window.catcode?.prepareFilePreview(id, path) ?? null } catch { return null }
