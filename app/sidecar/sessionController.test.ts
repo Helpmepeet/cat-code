@@ -901,11 +901,15 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   )
   expect(unnamed).not.toContain('You are ')
   // The rest of the doctrine still applies: an unnamed session still gets the
-  // whole guideline, including the create-only-when-asked rule. A read-back
-  // acknowledgment once cost the creator a turn for nothing
-  // (docs/prompts/2026-09-06-peer-exchange-register.md §3).
+  // whole guideline, including the create-only-when-asked rule. Coordination
+  // is judged by total time lost, so silence is not the goal in itself.
   expect(unnamed).toContain(
-    'a read-back or acknowledgment is not needed',
+    'Agreeing on a plan once and then working independently often saves more time',
+  )
+  expect(unnamed).toContain('you can go quiet until it messages you')
+  expect(unnamed).toContain("The goal isn't silence")
+  expect(unnamed).toContain(
+    "another session's problem is not yours to think through unless it actually asks you for something",
   )
   // The relay to the user carries the outcome, not the peer's evidence: one
   // creator reproduced its peer's whole command list and the user read the

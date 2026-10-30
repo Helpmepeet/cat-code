@@ -338,16 +338,19 @@ test('the argument descriptions do not send the model to the roster', async () =
   expect(notFound.summary).toContain('Use ListPeers for the names.')
 })
 
-test('the prompt allows a follow-up question and points peers away from SendMessage', async () => {
+test('the prompt asks for smart messages without forbidding them, and points peers away from SendMessage', async () => {
   const prompt = await createSendToPeerTool(
     delivering('queued_live').requestHost,
   ).prompt()
 
-  // "Say everything you need in one message" stood in three places and
-  // discouraged the clarifying exchange a peer relationship runs on. The cost
-  // of a turn is still stated; the single-message rule is not.
-  expect(prompt).toContain('a follow-up question is fine')
-  expect(prompt).toContain('do not send several where one would do')
+  // A real exchange sent eleven messages one way in 23 minutes, including a
+  // question withdrawn 29 seconds later. "Say everything you need in one
+  // message" once stood in three places and discouraged the clarifying exchange
+  // a peer relationship runs on, so this asks for judgment and sets no limit.
+  expect(prompt).toContain("Don't be afraid to send a message")
+  expect(prompt).toContain('A smart message prevents the next message')
+  expect(prompt).toContain('combine related questions and updates into one')
+  expect(prompt).toContain('whether you need a reply')
   expect(prompt).not.toContain('Say everything you need in one message')
 
   // `SendMessage` is in the desktop tool list too and calls itself "Send a
