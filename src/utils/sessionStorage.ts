@@ -3927,6 +3927,13 @@ export async function loadTranscriptFromFile(
       summaries,
       customTitles,
       tags,
+      agentNames,
+      agentColors,
+      agentSettings,
+      modes,
+      prNumbers,
+      prUrls,
+      prRepositories,
       fileHistorySnapshots,
       attributionSnapshots,
       contextCollapseCommits,
@@ -3972,6 +3979,7 @@ export async function loadTranscriptFromFile(
         undefined,
         contentReplacements.get(sessionId) ?? [],
       ),
+      sessionId,
       contextCollapseCommits: contextCollapseCommits.filter(
         e => e.sessionId === sessionId,
       ),
@@ -3982,6 +3990,13 @@ export async function loadTranscriptFromFile(
       threadGoal: threadGoals.has(sessionId)
         ? (threadGoals.get(sessionId) ?? null)
         : undefined,
+      agentName: agentNames.get(sessionId) ?? transcript[0]?.agentName,
+      agentColor: agentColors.get(sessionId),
+      agentSetting: agentSettings.get(sessionId),
+      mode: modes.get(sessionId),
+      prNumber: prNumbers.get(sessionId),
+      prUrl: prUrls.get(sessionId),
+      prRepository: prRepositories.get(sessionId),
       worktreeSession: worktreeStates.has(sessionId)
         ? worktreeStates.get(sessionId)
         : undefined,
@@ -4678,6 +4693,7 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       prUrls,
       prRepositories,
       modes,
+      threadGoals,
       worktreeStates,
       fileHistorySnapshots,
       attributionSnapshots,
@@ -4719,6 +4735,9 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       agentColor: sessionId ? agentColors.get(sessionId) : log.agentColor,
       agentSetting: sessionId ? agentSettings.get(sessionId) : log.agentSetting,
       mode: sessionId ? modes.get(sessionId) : normalizeSessionMode(log.mode),
+      threadGoal: threadGoals.has(sessionId)
+        ? (threadGoals.get(sessionId) ?? null)
+        : undefined,
       worktreeSession:
         sessionId && worktreeStates.has(sessionId)
           ? worktreeStates.get(sessionId)
@@ -5466,7 +5485,12 @@ async function loadSessionFile(
   summaries: Map<UUID, string>
   customTitles: Map<UUID, string>
   tags: Map<UUID, string>
+  agentNames: Map<UUID, string>
+  agentColors: Map<UUID, string>
   agentSettings: Map<UUID, string>
+  prNumbers: Map<UUID, number>
+  prUrls: Map<UUID, string>
+  prRepositories: Map<UUID, string>
   threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
   modes: Map<UUID, SessionMode>
@@ -5577,7 +5601,12 @@ export async function getLastSessionLog(
     summaries,
     customTitles,
     tags,
+    agentNames,
+    agentColors,
     agentSettings,
+    prNumbers,
+    prUrls,
+    prRepositories,
     threadGoals,
     worktreeStates,
     modes,
@@ -5655,6 +5684,11 @@ export async function getLastSessionLog(
     messages: removeExtraFields(transcript),
     messageCount: countVisibleMessages(transcript),
     leafUuid: lastMessage?.uuid,
+    agentName: getLatestSessionScopedValue(agentNames) ?? baseTranscript[0]?.agentName,
+    agentColor: getLatestSessionScopedValue(agentColors),
+    prNumber: getLatestSessionScopedValue(prNumbers),
+    prUrl: getLatestSessionScopedValue(prUrls),
+    prRepository: getLatestSessionScopedValue(prRepositories),
     mode: messages.values().next().value?.type
       ? getLatestSessionScopedValue(modes)
       : undefined,

@@ -67,6 +67,7 @@ import {
   isLiteLog,
   loadFullLog,
   loadMessageLogs,
+  loadTranscriptFromFile,
   loadTranscriptFile,
   removeExtraFields,
   selectActiveConversation,
@@ -685,10 +686,7 @@ export async function loadConversationForResume(
       // --resume with a .jsonl path (cli/print.ts routes on suffix).
       // Same chain walk as the sid branch below — only the starting
       // path differs.
-      const loaded = await loadMessagesFromJsonlPath(sourceJsonlFile)
-      messages = loaded.messages
-      sessionId = loaded.sessionId
-      threadGoal = loaded.threadGoal
+      log = await loadTranscriptFromFile(sourceJsonlFile)
     } else if (typeof source === 'string') {
       // Load specific session by ID
       log = await getLastSessionLog(source as UUID)
@@ -715,12 +713,12 @@ export async function loadConversationForResume(
       if (sessionId) assertSessionNotMoving(sessionId)
       // Pass the original session ID to ensure the plan slug is associated with
       // the session we're resuming, not the temporary session ID before resume
-      if (sessionId) {
+      if (sessionId && !sourceJsonlFile) {
         await copyPlanForResume(log, asSessionId(sessionId))
       }
 
       // Copy file history for resume
-      void copyFileHistoryForResume(log)
+      if (!sourceJsonlFile) void copyFileHistoryForResume(log)
 
       messages = log.messages
       threadGoal = log.threadGoal

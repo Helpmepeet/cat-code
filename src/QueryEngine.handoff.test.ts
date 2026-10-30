@@ -1133,6 +1133,61 @@ test.each(['before_claim', 'while_running', 'after_success', 'after_failure'] as
   }
 })
 
+test.each(['saved', 'cleared', 'absent'] as const)('resume routes restore equivalent metadata with a %s goal', async goalState => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { createThreadGoal } = await import('./utils/threadGoal.js')
+  const seed = createUserMessage({ content: 'retained request' })
+  const reply = assistant([{ type: 'text', text: 'retained response' }])
+  await storage.recordTranscript([seed, reply])
+  await storage.flushCurrentTranscriptDurably()
+  const sessionId = bootstrap.getSessionId()
+  const path = storage.getTranscriptPathForSession(sessionId)
+  const goal = createThreadGoal(sessionId, 'Finish the saved request')
+  const timestamp = new Date().toISOString()
+  const snapshot = { messageId: seed.uuid, trackedFileBackups: {}, timestamp }
+  const attribution = { type: 'attribution-snapshot', messageId: randomUUID(), surface: 'cli', fileStates: {} }
+  const replacements = [{ kind: 'tool-result', toolUseId: 'saved-call', replacement: 'saved preview' }]
+  const collapse = { type: 'marble-origami-commit', sessionId, collapseId: '0000000000000001',
+    summaryUuid: randomUUID(), summaryContent: 'saved collapse', summary: 'saved summary',
+    firstArchivedUuid: seed.uuid, lastArchivedUuid: seed.uuid }
+  const collapseSnapshot = { type: 'marble-origami-snapshot', sessionId, staged: [], armed: true, lastSpawnTokens: 42 }
+  const entries = [
+    { type: 'custom-title', sessionId, customTitle: 'Saved title' },
+    { type: 'tag', sessionId, tag: 'saved-tag' },
+    { type: 'agent-name', sessionId, agentName: 'Saved agent' },
+    { type: 'agent-color', sessionId, agentColor: 'blue' },
+    { type: 'agent-setting', sessionId, agentSetting: 'implementor' },
+    { type: 'mode', sessionId, mode: 'coordinator' },
+    { type: 'worktree-state', sessionId, worktreeSession: null },
+    { type: 'pr-link', sessionId, prNumber: 17, prUrl: 'https://github.com/test/repo/pull/17', prRepository: 'test/repo', timestamp },
+    { type: 'file-history-snapshot', messageId: seed.uuid, snapshot, isSnapshotUpdate: false },
+    attribution,
+    { type: 'content-replacement', sessionId, replacements },
+    collapse, collapseSnapshot,
+    ...(goalState === 'absent' ? [] : [{ type: 'thread-goal-updated', sessionId, goal, timestamp }]),
+    ...(goalState === 'cleared' ? [{ type: 'thread-goal-cleared', sessionId, goalId: goal.goalId, timestamp }] : []),
+  ]
+  await fsPromises.appendFile(path, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n')
+  const imported = await storage.loadTranscriptFromFile(path)
+  const lite = { ...imported, messages: [], sessionId }
+  const expected = {
+    sessionId, customTitle: 'Saved title', tag: 'saved-tag',
+    agentName: 'Saved agent', agentColor: 'blue', agentSetting: 'implementor', mode: 'coordinator',
+    worktreeSession: null, prNumber: 17, prUrl: 'https://github.com/test/repo/pull/17', prRepository: 'test/repo',
+    contentReplacements: replacements, contextCollapseCommits: [collapse], contextCollapseSnapshot: collapseSnapshot,
+    attributionSnapshots: [attribution], fullPath: path,
+    threadGoal: goalState === 'saved' ? JSON.parse(JSON.stringify(goal)) : goalState === 'cleared' ? null : undefined,
+  }
+  for (const [source, explicitPath] of [
+    [sessionId, undefined], [sessionId, path], [imported, undefined], [lite, undefined],
+  ] as const) {
+    const restored = await loadConversationForResume(source, explicitPath, { interruptedTurn: 'ignore' })
+    expect(restored).toMatchObject(expected)
+    expect(restored?.messages.map(message => message.uuid)).toEqual([seed.uuid, reply.uuid])
+    expect(JSON.parse(JSON.stringify(restored?.fileHistorySnapshots))).toEqual([snapshot])
+  }
+})
+
 test('restart recovers genuine input committed before reconciliation receipt without replaying that input', async () => {
   const { createUserMessage } = await import('./utils/messages.js')
   const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
