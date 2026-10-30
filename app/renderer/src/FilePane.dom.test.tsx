@@ -77,6 +77,15 @@ function setup(withOutput = false) {
   })
   const previous = Object.getOwnPropertyDescriptor(window, 'catcode')
   const ids = new Set<string>()
+  const commitGates: Array<{ before: boolean; reached: () => void; waiting: Promise<void> }> = []
+  const pauseNextCommit = (before = false) => {
+    let reached!: () => void
+    let resume!: () => void
+    const reachedPromise = new Promise<void>(resolve => { reached = resolve })
+    const waiting = new Promise<void>(resolve => { resume = resolve })
+    commitGates.push({ before, reached, waiting })
+    return { reached: reachedPromise, resume }
+  }
   let prepareGate: Promise<void> | null = null
   const pauseNextPrepare = () => {
     let resume!: () => void
@@ -95,7 +104,13 @@ function setup(withOutput = false) {
     openWorkspaceFile: (appSessionId: string, path: string) => openWorkspaceFile({ appSessionId, path }, sessions, async (resolved, target, location) => { external.push({ path: resolved, target, ...(location ? { location } : {}) }); return true }),
     getWorkspaceFileAvailability: (appSessionId: string, path: string) => workspaceFileAvailability({ appSessionId, path }, sessions),
     refreshFilePreview: service.refresh,
-    commitFilePreview: async (id: string, revision: number) => service.commit(id, revision),
+    commitFilePreview: async (id: string, revision: number) => {
+      const gate = commitGates.shift()
+      if (gate?.before) { gate.reached(); await gate.waiting }
+      const committed = service.commit(id, revision)
+      if (gate && !gate.before) { gate.reached(); await gate.waiting }
+      return committed
+    },
     releaseFilePreview: service.release,
     subscribeFilePreview: (listener: (event: FilePreviewEvent) => void) => { events.add(listener); return () => events.delete(listener) },
     getFilePreviewApplications: (appSessionId: string, path: string) => applications.list({ appSessionId, path }),
@@ -132,7 +147,7 @@ function setup(withOutput = false) {
       <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? rows : []} cwd={root} /></section><input aria-label="Composer" /></main>
     </SubagentWorkspace></ToolsExpandedContext.Provider>
   </ToastContext.Provider>
-  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, ids, external }
+  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, ids, external }
 }
 
 test('a reply click crosses the real host file boundary before rendering, keeps composer focus, and refuses outside files', async () => {
@@ -350,4 +365,78 @@ test('Escape dismisses the header file menu without closing its pane, while Esca
   body.focus()
   await act(async () => { body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
   expect(getFilePaneSession(sessionId).open).toBe(false)
+})
+
+
+test('a committed revision remains paintable when a newer update arrives before its commit reply', async () => {
+  const { pane, sessionId, firstPath, service, pauseNextCommit } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const id = getFilePaneSession(sessionId).file!.id
+  const intermediate = pauseNextCommit()
+  const newer = pauseNextCommit(true)
+  try {
+    writeFileSync(firstPath, '# Intermediate committed version')
+    await act(async () => { await service.refresh(id) })
+    await act(async () => { await intermediate.reached })
+    const committedRevision = getFilePaneSession(sessionId).file!.revision
+    const intermediateBody = tree.container.querySelector('.file-pane-staging.file-pane-markdown')!
+    writeFileSync(firstPath, '# Newest staged version')
+    await act(async () => { await service.refresh(id) })
+    const newestRevision = getFilePaneSession(sessionId).file!.revision
+    expect(newestRevision).toBeGreaterThan(committedRevision)
+    expect(tree.container.querySelector('.file-pane-staging.file-pane-markdown') === intermediateBody).toBe(true)
+    await act(async () => { intermediate.resume() })
+    await settle()
+    await act(async () => { await newer.reached })
+    const state = getFilePaneSession(sessionId)
+    expect(state.file?.revision).toBe(newestRevision)
+    expect(state.committedFile?.revision).toBe(committedRevision)
+    expect(service.descriptor(id, state.committedFile!.revision)).not.toBeNull()
+    expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)') === intermediateBody).toBe(true)
+    expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')?.textContent).toContain('Intermediate committed version')
+  } finally {
+    intermediate.resume(); newer.resume()
+    await settle()
+  }
+})
+
+
+test('a delayed successful update cannot replace a newer different-file navigation', async () => {
+  const { pane, sessionId, firstPath, secondPath, service, pauseNextCommit } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const id = getFilePaneSession(sessionId).file!.id
+  const delayed = pauseNextCommit()
+  try {
+    writeFileSync(firstPath, '# Delayed earlier file')
+    await act(async () => { await service.refresh(id) })
+    await act(async () => { await delayed.reached })
+    await click(tree.container, 'Open second.markdown')
+    const newerBody = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
+    await act(async () => { delayed.resume() })
+    await settle()
+    expect(getFilePaneSession(sessionId).file?.path).toBe(secondPath)
+    expect(getFilePaneSession(sessionId).committedFile?.path).toBe(secondPath)
+    expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)') === newerBody).toBe(true)
+  } finally { delayed.resume(); await settle() }
+})
+
+test('a delayed successful update cannot reopen a closed pane', async () => {
+  const { pane, sessionId, firstPath, service, pauseNextCommit } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const id = getFilePaneSession(sessionId).file!.id
+  const delayed = pauseNextCommit()
+  try {
+    writeFileSync(firstPath, '# Delayed closed file')
+    await act(async () => { await service.refresh(id) })
+    await act(async () => { await delayed.reached })
+    await click(tree.container, 'Close file')
+    await act(async () => { delayed.resume() })
+    await settle()
+    expect(getFilePaneSession(sessionId).open).toBe(false)
+    expect(tree.container.querySelector('.file-pane')).toBeNull()
+    expect(service.has(id)).toBe(false)
+  } finally { delayed.resume(); await settle() }
 })

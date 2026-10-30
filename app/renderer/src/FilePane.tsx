@@ -25,6 +25,9 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const state = useFilePaneSession(appSessionId)
   const descriptor = state.file
   const [painted, setPainted] = useState<PaintedFile | null>(null)
+  const [committing, setCommitting] = useState<PaintedFile | null>(null)
+  const committingRef = useRef<PaintedFile | null>(null)
+  const readyKeys = useRef(new Set<string>())
   const [reload, setReload] = useState(0)
   const [apps, setApps] = useState<FilePreviewApplications | null>(null)
   const [appMenu, setAppMenu] = useState(false)
@@ -45,7 +48,9 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   descriptorRef.current = descriptor
   const stagingDescriptor = !painted && state.committedFile ? state.committedFile : descriptor
   const candidateKey = stagingDescriptor ? `${stagingDescriptor.url}:${reload}` : ''
-  const candidate = stagingDescriptor && painted?.key !== candidateKey ? { descriptor: stagingDescriptor, key: candidateKey } : null
+  const retainCommit = committing && descriptor?.id === committing.descriptor.id &&
+    descriptor.path === committing.descriptor.path && descriptor.revision >= committing.descriptor.revision
+  const candidate = retainCommit ? committing : stagingDescriptor && painted?.key !== candidateKey ? { descriptor: stagingDescriptor, key: candidateKey } : null
   useLayoutEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
@@ -128,11 +133,15 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const ready = async (next: PaintedFile, restoredScroll?: FilePaneScroll) => {
     const current = getFilePaneSession(appSessionId)
     const restoringCommitted = !paintedRef.current && current.committedFile?.url === next.descriptor.url
-    if (!mounted.current || !current.open || descriptorRef.current?.url !== next.descriptor.url && !restoringCommitted) return
-    const previous = paintedRef.current
-    const replacingSameFile = previous?.descriptor.path === next.descriptor.path
-    const scroll = restoredScroll ?? (replacingSameFile ? await readScroll() : getFilePaneSession(appSessionId).scroll)
+    if (!mounted.current || !current.open || readyKeys.current.has(next.key) ||
+      descriptorRef.current?.url !== next.descriptor.url && !restoringCommitted) return
+    readyKeys.current.add(next.key)
+    committingRef.current = next
+    setCommitting(next)
     try {
+      const previous = paintedRef.current
+      const replacingSameFile = previous?.descriptor.path === next.descriptor.path
+      const scroll = restoredScroll ?? (replacingSameFile ? await readScroll() : getFilePaneSession(appSessionId).scroll)
       if (!restoringCommitted && !await window.catcode.commitFilePreview(next.descriptor.id, next.descriptor.revision)) {
         failed(next)
         return
@@ -140,13 +149,24 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       if (next.descriptor.kind === 'html' || next.descriptor.kind === 'svg') {
         await window.catcode.restoreFilePreviewScroll(next.descriptor.id, next.descriptor.revision, { x: scroll.x, y: scroll.y })
       }
+      const latest = getFilePaneSession(appSessionId)
+      const queuedRevision = latest.file?.id === next.descriptor.id && latest.file.path === next.descriptor.path &&
+        latest.file.revision > next.descriptor.revision
+      const newerCommitted = latest.committedFile?.id === next.descriptor.id && latest.committedFile.revision > next.descriptor.revision
+      if (!mounted.current || !latest.open || newerCommitted || descriptorRef.current?.url !== next.descriptor.url && !queuedRevision &&
+        !(restoringCommitted && latest.committedFile?.url === next.descriptor.url)) return
+      if (!restoringCommitted) updateFilePaneSession(appSessionId, { committedFile: next.descriptor, checkpoint: null })
+      rememberFilePaneScroll(appSessionId, scroll)
+      setPainted(next)
+      if (previous && previous.descriptor.id !== next.descriptor.id) window.catcode.releaseFilePreview(previous.descriptor.id)
     } catch { return }
-    const latest = getFilePaneSession(appSessionId)
-    if (!mounted.current || !latest.open || descriptorRef.current?.url !== next.descriptor.url && !(restoringCommitted && latest.committedFile?.url === next.descriptor.url)) return
-    if (!restoringCommitted) updateFilePaneSession(appSessionId, { committedFile: next.descriptor, checkpoint: null })
-    rememberFilePaneScroll(appSessionId, scroll)
-    setPainted(next)
-    if (previous && previous.descriptor.id !== next.descriptor.id) window.catcode.releaseFilePreview(previous.descriptor.id)
+    finally {
+      readyKeys.current.delete(next.key)
+      if (committingRef.current?.key === next.key) {
+        committingRef.current = null
+        if (mounted.current) setCommitting(null)
+      }
+    }
   }
   useLayoutEffect(() => {
     if (!painted || painted.descriptor.kind === 'markdown' || !activeBody.current) return
