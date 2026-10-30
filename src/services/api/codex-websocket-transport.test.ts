@@ -891,7 +891,47 @@ describe('streamTurnViaWebSocket', () => {
     expect(sent[1]!.input).toEqual(turn2Input)
   })
 
-  test('falls back to full send when prior output-item baseline is missing from next input', async () => {
+  test.each([
+    { label: 'empty text with reasoning replay', content: [{ type: 'output_text', text: '', annotations: [] }], replayReasoning: true, replayEmpty: false, followUp: true },
+    { label: 'empty content without reasoning replay', content: [], replayReasoning: false, replayEmpty: false, followUp: true },
+    { label: 'zero delta after omitted empty output', content: [], replayReasoning: false, replayEmpty: false, followUp: false },
+    { label: 'explicitly replayed empty output', content: [{ type: 'output_text', text: '', annotations: [] }], replayReasoning: true, replayEmpty: true, followUp: true },
+  ])('keeps continuation after $label', async ({ content, replayReasoning, replayEmpty, followUp }) => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const turn1Input = [{ role: 'user', content: 'hello' }]
+    const reasoning = { type: 'reasoning', summary: [], encrypted_content: 'opaque_reasoning_blob' }
+    const emptyMessage = { type: 'message', role: 'assistant', content, status: 'completed' }
+    fakeWs.responses = [
+      { type: 'response.output_item.done', item: reasoning },
+      { type: 'response.output_item.done', item: emptyMessage },
+      completedEvent('resp_empty'),
+    ]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn1Input }, AUTH, turn1Input.length))
+
+    const nextMessage = { role: 'user', content: 'next' }
+    const turn2Input = [
+      ...turn1Input,
+      ...(replayReasoning ? [reasoning] : []),
+      ...(replayEmpty ? [emptyMessage] : []),
+      ...(followUp ? [nextMessage] : []),
+    ]
+    fakeWs.responses = [completedEvent('resp_next')]
+    await collectEvents(streamTurnViaWebSocket(CONV_ID, { instructions: 'sys', input: turn2Input }, AUTH, turn2Input.length))
+
+    const sent = fakeWs.getSent()
+    expect(sent).toHaveLength(2)
+    expect(sent[1]!.previous_response_id).toBe('resp_empty')
+    expect(sent[1]!.input).toEqual(followUp ? [nextMessage] : [])
+  })
+
+  test.each([
+    { label: 'non-empty text', content: [{ type: 'output_text', text: 'world', annotations: [] }] },
+    { label: 'whitespace text', content: [{ type: 'output_text', text: ' ', annotations: [] }] },
+    { label: 'refusal', content: [{ type: 'refusal', refusal: 'Cannot help.' }] },
+    { label: 'annotated empty text', content: [{ type: 'output_text', text: '', annotations: [{ type: 'url_citation', url: 'https://example.com' }] }] },
+  ])('falls back to full send when prior $label is missing from next input', async ({ content }) => {
     installFakeWs()
     await ensureWebSocketSession(CONV_ID, AUTH)
 
@@ -901,7 +941,7 @@ describe('streamTurnViaWebSocket', () => {
         item: {
           type: 'message',
           role: 'assistant',
-          content: [{ type: 'output_text', text: 'world', annotations: [] }],
+          content,
           status: 'completed',
         },
       },

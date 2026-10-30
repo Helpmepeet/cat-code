@@ -1138,6 +1138,18 @@ function getIncrementalInputDelta(
   return { delta: currentInput.slice(baseline.length), mismatchReason: null }
 }
 
+function isEmptyAssistantMessage(item: Record<string, unknown>): boolean {
+  return item.type === 'message' &&
+    item.role === 'assistant' &&
+    item.status === 'completed' &&
+    Array.isArray(item.content) &&
+    item.content.every(part => {
+      const content = part as Record<string, unknown> | null
+      return content?.type === 'output_text' && content.text === '' &&
+        Array.isArray(content.annotations) && content.annotations.length === 0
+    })
+}
+
 /**
  * Reconcile the freshly translated input[] against the canonical continuation
  * baseline using a hybrid strategy:
@@ -1152,14 +1164,13 @@ function getIncrementalInputDelta(
  *     content in place; those semantic changes require a full send so the server
  *     does not retain the unreduced context behind previous_response_id.
  *
-   *   - previousOutputItems portion → verify by strict JSON equality, except
-   *     that omitted reasoning items are tolerated. Reasoning is provider-managed
-   *     state already anchored by previous_response_id; message/tool output still
-   *     has to line up before we send a delta.
+ *   - previousOutputItems portion → verify by strict JSON equality, except
+ *     that omitted reasoning and empty assistant messages are tolerated. They
+ *     remain anchored by previous_response_id; meaningful message/tool output
+ *     still has to line up before we send a delta.
  *
-   * ASSUMPTION: non-reasoning previousOutputItems appear exactly in the next
-   * turn's input[]. Reasoning items may be replayed as hidden thinking.signature
-   * blocks or omitted from local replay entirely.
+ * ASSUMPTION: meaningful previousOutputItems appear exactly in the next turn's
+ * input[]. Reasoning and empty assistant messages may be omitted from replay.
  *
  * Returns the new-items delta (may be empty []) on success, or null with a
  * diagnostic reason when a full send is required.
@@ -1171,7 +1182,9 @@ export function reconcileCanonicalDelta(
 ): { delta: Array<Record<string, unknown>>; mismatchReason: null } | { delta: null; mismatchReason: string } {
   const minBaselineLength =
     previousInput.length +
-    previousOutputItems.filter(item => item.type !== 'reasoning').length
+    previousOutputItems.filter(item =>
+      item.type !== 'reasoning' && !isEmptyAssistantMessage(item),
+    ).length
   if (currentInput.length < minBaselineLength) {
     return {
       delta: null,
@@ -1184,8 +1197,8 @@ export function reconcileCanonicalDelta(
     return { delta: null, mismatchReason: replacedToolResult }
   }
 
-  // Verify the output-items portion strictly, with one Codex-specific escape
-  // hatch: reasoning items are provider-managed continuation state. Some local
+  // Verify the output-items portion strictly, with Codex-specific exceptions.
+  // Reasoning items are provider-managed continuation state. Some local
   // transcript paths preserve them as hidden thinking.signature blocks, while
   // others replay only the paired message/tool-call item. Because
   // previous_response_id already anchors the server to the prior response,
@@ -1202,6 +1215,12 @@ export function reconcileCanonicalDelta(
       (!actual || actual.type !== 'reasoning')
     ) {
       skippedReasoningItems++
+      continue
+    }
+    // The adapter emits no text block for empty assistant messages. The prior
+    // response still owns them, so their omission must not consume a new item.
+    if (isEmptyAssistantMessage(expected) &&
+        (!actual || !responseItemsEqual(actual, expected))) {
       continue
     }
     if (!actual || !responseItemsEqual(actual, expected)) {
