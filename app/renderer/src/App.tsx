@@ -439,6 +439,7 @@ import {
   type ToolCardExpansionStore,
 } from './toolCardExpansion.js'
 import { errorMessage } from './appModel.js'
+import { createOutputTokenState, reduceOutputTokenState, selectOutputTokens } from './outputTokenState.js'
 
 // Perf F3 (2026-07-08): batch-folding reducer variants, defined at module scope
 // so their identity is stable across renders. A batched server-frame delivery is
@@ -515,6 +516,11 @@ export function App() {
     reduceServerFrameBatched,
     undefined,
     createRawMessageLogState,
+  )
+  const [outputTokens, dispatchOutputTokens] = useReducer(
+    reduceOutputTokenState,
+    undefined,
+    createOutputTokenState,
   )
   const [transcript, dispatchSessionEvent] = useReducer(
     reduceLiveTranscriptState,
@@ -1179,11 +1185,12 @@ export function App() {
         if (!frame.deliveryTrace) continue
         bridge.deliveryAck(frame.sessionId, frame.deliveryTrace.sequence, frame.deliveryTrace.deliveryAttempt, frame.deliveryTrace.streamEpoch, frame.deliveryTrace.traceId, 'renderer.subscription.received')
       }
+      const baseline = !sessionWorkBaselineTakenRef.current
       dispatchSessionWork({
         type: 'frames',
         frames,
         visible: onScreenSessionsRef.current,
-        baseline: !sessionWorkBaselineTakenRef.current,
+        baseline,
       })
       sessionWorkBaselineTakenRef.current = true
       const previewing = new Set<SessionId>()
@@ -1199,8 +1206,10 @@ export function App() {
         previewing,
         swappedPreviewsRef.current,
         {
-          resetLiveSession: sessionId =>
-            dispatchSessionEvent({ type: 'preview-live-reset', sessionId }),
+          resetLiveSession: sessionId => {
+            dispatchSessionEvent({ type: 'preview-live-reset', sessionId })
+            dispatchOutputTokens({ type: 'session-reset', sessionId })
+          },
           applyFrames: () =>
             applyServerFrameBatch(frames, {
               getRosterById: () => shellRef.current.byId,
@@ -1212,6 +1221,7 @@ export function App() {
                   : sessionId
               }),
               dispatchRawLog: dispatch,
+              dispatchOutputTokens,
               dispatchPermission,
               dispatchConnection,
               dispatchSettings,
@@ -1231,7 +1241,7 @@ export function App() {
               dispatchSessionActionRuntime,
               dispatchVerbAckResult,
               dispatchTranscript: dispatchSessionEvent,
-            }),
+            }, baseline),
           carryPreviewImages: sessionId => {
             const previews = previewGeneratedImageFrames(
               previewTranscriptRef.current,
@@ -1493,6 +1503,9 @@ export function App() {
         if (descriptor.status !== 'disconnected') {
           dispatch({ type: 'session-removed', sessionId })
           dispatchSessionEvent({ type: 'session-removed', sessionId })
+          dispatchOutputTokens({ type: 'session-removed', sessionId })
+        } else {
+          dispatchOutputTokens({ type: 'session-reset', sessionId })
         }
 
         // PL-A + PL-B composition: main re-emits a stable session-status after
@@ -1517,6 +1530,7 @@ export function App() {
           return next
         })
         dispatch({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchOutputTokens({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchSessionEvent({
           type: 'session-removed',
           sessionId: event.appSessionId,
@@ -3930,6 +3944,7 @@ export function App() {
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
+	            outputTokens={selectOutputTokens(outputTokens, sessionId)}
 	            activeSessionId={sessionId}
 	            createdPeerNavigation={createdPeerNavigation}
 	            toolCardExpansionStore={toolCardExpansionStoreRef.current}

@@ -198,8 +198,8 @@ import {
   fmtTok,
   isTurnRunning,
   restartConnection,
-  selectLiveTokenEstimate,
 } from './appModel.js'
+import { UNAVAILABLE_OUTPUT_TOKENS, type OutputTokenReading } from './outputTokenState.js'
 import { errorMessage } from './appModel.js'
 import { retryComposerBlocked, type NotificationRetryBlocker } from './turnFailure.js'
 
@@ -241,6 +241,7 @@ export function SessionPane({
   onFocusBranchChat,
   sandboxed,
   activeLog,
+  outputTokens = UNAVAILABLE_OUTPUT_TOKENS,
   activeSessionId,
   createdPeerNavigation,
   toolCardExpansionStore,
@@ -1287,25 +1288,6 @@ export function SessionPane({
     return () => clearInterval(id)
   }, [activityRunning, turnStartedAt])
 
-  // Live per-turn token count for the activity byline: real output tokens for
-  // the turn's finished messages, a character estimate for the one still
-  // streaming. Both halves are needed — see `selectLiveTokenEstimate`. Rows
-  // supply the turn boundary and the raw log supplies the usage; the two join
-  // on the API message id. Recomputed when the transcript slice changes
-  // (streaming deltas) or the 1s elapsed tick fires, so its cadence matches the
-  // elapsed clock without a second timer. Gated on the SAME 30s threshold the
-  // byline itself uses, so the two cannot drift: `ActivityIndicator` shows this
-  // only past `SHOW_TOKENS_AFTER_MS`, and computing it earlier walked the whole
-  // retained raw log once per streaming delta to produce a number nothing could
-  // display yet.
-  const liveTokens = useMemo(
-    () =>
-      generating && jumpMove?.phase !== 'moving' && elapsedMs > SHOW_TOKENS_AFTER_MS
-        ? selectLiveTokenEstimate(nestedRows, activeLog.messages)
-        : 0,
-    [generating, jumpMove?.phase, nestedRows, activeLog.messages, elapsedMs],
-  )
-
   // Stop → the real `app.abort` boundary. The requestId is a message envelope
   // (the sidecar aborts the current turn regardless — `sidecarServer.ts:642`),
   // so a fresh id is correct; no engine-minted turn id is needed.
@@ -2253,7 +2235,7 @@ export function SessionPane({
             verb={activity.verb}
             target={activity.target}
             elapsedMs={elapsedMs}
-            liveTokens={liveTokens}
+            outputTokens={generating && jumpMove?.phase !== 'moving' ? outputTokens : UNAVAILABLE_OUTPUT_TOKENS}
             paused={paused}
             compacting={compacting}
             stopError={stopError}
@@ -2683,11 +2665,9 @@ const SHOW_TOKENS_AFTER_MS = 30_000
 /**
  * P4-18c activity indicator (`Chat.jsx` SpinnerWithVerb): pulse dots + verb +
  * active target + elapsed clock + optional per-turn token byline. Paused (a
- * pending permission request) tints amber and reads "Waiting for approval". The
- * token byline is `selectLiveTokenEstimate` — the real `output_tokens` of the
- * turn's finished messages plus a character estimate for the one still
- * streaming — gated on `elapsed > 30s && tokens > 0` like the engine. Never a
- * mocked count, and the estimated part is what the tooltip names.
+ * pending permission request) tints amber and reads "Waiting for approval".
+ * Token accounting is owned above pane mounts, independently of transcript
+ * visibility and raw-log retention. Unknown recovery totals stay hidden.
  *
  * No fill and no seam: the row floats on the pane background so it reads as a
  * byline over the conversation rather than a band separating it from the
@@ -2723,7 +2703,7 @@ function ActivityIndicator({
   verb,
   target,
   elapsedMs,
-  liveTokens,
+  outputTokens,
   paused,
   compacting,
   stopError,
@@ -2732,7 +2712,7 @@ function ActivityIndicator({
   verb: string
   target: string | null
   elapsedMs: number
-  liveTokens: number
+  outputTokens: OutputTokenReading
   paused: boolean
   /** Swaps the pulse dots for the compaction glyph (see `CompactingGlyph`). */
   compacting?: boolean
@@ -2742,7 +2722,11 @@ function ActivityIndicator({
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
   const dot = paused ? 'bg-tone-warn' : 'bg-accent'
-  const showTokens = liveTokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
+  const showTokens = outputTokens.quality !== 'unavailable' &&
+    outputTokens.tokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
+  const tokenDescription = outputTokens.quality === 'unavailable'
+    ? 'Output count unavailable for this turn.'
+    : 'Main-chat output, including reasoning and tool inputs. Excludes separate agents.'
   const todoReadout = selectTodoReadout(todoPlan)
   return (
     <div className="flex items-center gap-2.5 bg-transparent px-1 pb-1.5 pt-0 text-xs">
@@ -2767,12 +2751,12 @@ function ActivityIndicator({
           {target}
         </span>
       ) : null}
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-subtle">
+      <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-subtle" title={tokenDescription}>
         {fmtElapsed(elapsedMs)}
         {showTokens ? (
-          <span>
+          <span aria-label={`${outputTokens.quality === 'estimated' ? 'Estimated' : 'Reported'} output: ${fmtTok(outputTokens.tokens)} tokens. ${tokenDescription}`}>
             {' · ↓ '}
-            {fmtTok(liveTokens)} tokens
+            {outputTokens.quality === 'estimated' ? '~' : ''}{fmtTok(outputTokens.tokens)} tokens
           </span>
         ) : null}
       </span>
@@ -2892,6 +2876,8 @@ type SessionPaneProps = {
   turnStartedAt?: number | null
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
+  /** Main-session current-turn output, independent of the retained raw log. */
+  outputTokens?: OutputTokenReading
   /** Git branch for the empty-state meta strip — this session's own
    * `diagnostics.snapshot`, falling back to the session log's `gitBranch`. */
   branch: string | null

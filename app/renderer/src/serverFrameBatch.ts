@@ -47,6 +47,7 @@ export type ServerFrameBatchHandlers = {
   getRosterById: () => Record<string, unknown>
   setActiveSessionId: (updater: (current: SessionId | null) => SessionId | null) => void
   dispatchRawLog: (action: BatchAction<ServerFrame>) => void
+  dispatchOutputTokens?: (action: { type: 'frames'; frames: readonly ServerFrame[]; baseline: boolean }) => void
   dispatchConnection: (action: BatchAction<ServerFrame>) => void
   dispatchTranscript: (action: BatchAction<ServerFrame>) => void
   dispatchPermission: (action: BatchAction<FrameReducerAction>) => void
@@ -77,6 +78,7 @@ export type ServerFrameBatchHandlers = {
 export function applyServerFrameBatch(
   frames: readonly ServerFrame[],
   h: ServerFrameBatchHandlers,
+  baseline = false,
 ): void {
   if (frames.length === 0) return
   const frameActions: FrameReducerAction[] = frames.map(frame => ({
@@ -95,6 +97,7 @@ export function applyServerFrameBatch(
   })
 
   h.dispatchRawLog(batch(frames))
+  h.dispatchOutputTokens?.({ type: 'frames', frames, baseline })
   h.dispatchPermission(batch(frameActions))
   h.dispatchConnection(batch(frames))
   h.dispatchSettings(batch(frameActions))

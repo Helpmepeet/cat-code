@@ -84,6 +84,7 @@ function foldBatched() {
 test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () => {
   const calls: Record<string, number> = {}
   let transcriptBatchLen = -1
+  let outputBatch: unknown
   const count =
     (name: string) =>
     (...args: unknown[]) => {
@@ -94,6 +95,10 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     getRosterById: () => ({}),
     setActiveSessionId: count('setActive') as never,
     dispatchRawLog: count('rawLog') as never,
+    dispatchOutputTokens: action => {
+      count('outputTokens')()
+      outputBatch = action
+    },
     dispatchPermission: count('permission') as never,
     dispatchConnection: count('connection') as never,
     dispatchSettings: count('settings') as never,
@@ -118,7 +123,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
     },
   }
 
-  applyServerFrameBatch(delivery, handlers)
+  applyServerFrameBatch(delivery, handlers, true)
 
   // ONE dispatch per store — the whole point: not FRAME_COUNT dispatches each.
   // (SLASH-4: runControls and slashCatalog were counted but never asserted —
@@ -126,6 +131,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
   for (const store of [
     'setActive',
     'rawLog',
+    'outputTokens',
     'permission',
     'connection',
     'settings',
@@ -150,6 +156,7 @@ test('applyServerFrameBatch dispatches ONCE per store for the whole batch', () =
   }
   // That single transcript dispatch carried the entire delivery.
   expect(transcriptBatchLen).toBe(delivery.length)
+  expect(outputBatch).toEqual({ type: 'frames', frames: delivery, baseline: true })
 })
 
 test('an empty delivery dispatches nothing', () => {
@@ -161,6 +168,7 @@ test('an empty delivery dispatches nothing', () => {
     getRosterById: () => ({}),
     setActiveSessionId: mark as never,
     dispatchRawLog: mark as never,
+    dispatchOutputTokens: mark as never,
     dispatchPermission: mark as never,
     dispatchConnection: mark as never,
     dispatchSettings: mark as never,

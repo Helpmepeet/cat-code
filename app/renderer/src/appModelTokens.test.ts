@@ -1,19 +1,19 @@
 import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
-import { selectLiveTokenEstimate } from './appModel.js'
+import { createOutputTokenState, reduceOutputTokenState, selectOutputTokens } from './outputTokenState.js'
 import {
   createTranscriptState,
   projectServerFrame,
   selectNestedTranscriptRows,
 } from './transcriptProjector.js'
 import type { SDKMessage } from '@cat-code/engine/sdk'
-import type { SessionId } from '../../shared/protocol.js'
+import type { ServerFrame, SessionId } from '../../shared/protocol.js'
 
 /**
  * The byline's token count, exercised end to end: every case below feeds the
- * SAME message array to the real projector and to the selector, so the join key
- * (`row.messageId` ↔ the id `message_start` announced) is proven against the
- * shapes the projector actually emits rather than against hand-built rows. The
+ * SAME frames to the real projector and accounting reducer, so display-block
+ * replacement and token counting are exercised together rather than against
+ * hand-built rows. The
  * sibling `appModelActivity.test.ts` adopted that rule after a hand-built draft
  * drifted from the wire shape.
  *
@@ -97,6 +97,13 @@ const messageDelta = (usage: Record<string, number>) =>
 
 const messageStop = () => streamEvent({ type: 'message_stop' })
 
+const turnStatus = (activeTurn: boolean): ServerFrame => ({
+  kind: 'event',
+  protocolVersion: PROTOCOL_VERSION,
+  sessionId: SESSION,
+  event: { type: 'turn.status', activeTurn },
+})
+
 const assistantFrame = (
   messageId: string,
   content: unknown[],
@@ -151,12 +158,22 @@ const taskNotification = () => ({
 
 function project(messages: unknown[]) {
   let state = projectServerFrame(createTranscriptState(), ready)
+  let accounting = reduceOutputTokenState(createOutputTokenState(), {
+    type: 'frames', frames: [ready, turnStatus(true)],
+  })
+  const sdkMessages: SDKMessage[] = []
   for (const message of messages) {
-    state = projectServerFrame(state, frame(message))
+    const next = typeof message === 'object' && message !== null && 'kind' in message
+      ? message as ServerFrame
+      : frame(message)
+    state = projectServerFrame(state, next)
+    accounting = reduceOutputTokenState(accounting, { type: 'frames', frames: [next] })
+    if (next.kind === 'event' && next.event.type === 'message') sdkMessages.push(next.event.message)
   }
   return {
     rows: selectNestedTranscriptRows(state, SESSION),
-    messages: messages as SDKMessage[],
+    messages: sdkMessages,
+    reading: selectOutputTokens(accounting, SESSION),
   }
 }
 
@@ -169,7 +186,7 @@ test('an Anthropic-shaped turn reports the real output, including encrypted reas
   // `output_tokens` (Anthropic's Usage has no separate thinking field,
   // `@anthropic-ai/sdk/resources/messages/messages.d.ts:1368`), so the stream
   // layer counts it exactly.
-  const { rows, messages } = project([
+  const { rows, reading } = project([
     userTurn('think hard, then answer'),
     messageStart('msg_anthropic', {
       input_tokens: 1200,
@@ -200,7 +217,7 @@ test('an Anthropic-shaped turn reports the real output, including encrypted reas
     'assistant-text',
   ])
   // The character estimate over these rows is round((0 + 5) / 4) = 1.
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(4210)
+  expect(reading).toEqual({ tokens: 4210, quality: 'reported' })
 })
 
 test('a Codex-shaped turn is not zeroed by its {0,0,0,0} message_start', () => {
@@ -208,7 +225,7 @@ test('a Codex-shaped turn is not zeroed by its {0,0,0,0} message_start', () => {
   // numbers only on the final delta (`codex-fetch-adapter.ts:1719,2908`), and
   // what it returns as visible text is a reasoning SUMMARY, a fraction of the
   // reasoning actually billed.
-  const { rows, messages } = project([
+  const { rows, reading } = project([
     userTurn('plan the migration'),
     messageStart('msg_codex', {
       input_tokens: 0,
@@ -235,20 +252,22 @@ test('a Codex-shaped turn is not zeroed by its {0,0,0,0} message_start', () => {
   ])
   expect(kinds(rows)).toEqual(['user-text', 'thinking', 'assistant-text'])
   // The summary text is 31 characters, so the old estimate read 8.
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(1800)
+  expect(reading).toEqual({ tokens: 1800, quality: 'reported' })
 })
 
 test('a multi-message turn with tool calls sums each message, prior turns excluded', () => {
   // Within ONE message usage is folded (each event restates the total); ACROSS
   // the turn's messages the folded values are summed, which is what the engine
   // does at `message_stop` (`src/QueryEngine.ts:930`).
-  const { rows, messages } = project([
+  const { rows, reading } = project([
     userTurn('first turn'),
     messageStart('msg_prior', { output_tokens: 1 }),
     assistantFrame('msg_prior', [{ type: 'text', text: 'earlier answer' }]),
     messageDelta({ output_tokens: 9999 }),
     messageStop(),
 
+    turnStatus(false),
+    turnStatus(true),
     userTurn('second turn'),
     messageStart('msg_one', { output_tokens: 1 }),
     assistantFrame('msg_one', [
@@ -274,13 +293,13 @@ test('a multi-message turn with tool calls sums each message, prior turns exclud
     'tool-use',
     'assistant-text',
   ])
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(420)
+  expect(reading).toEqual({ tokens: 420, quality: 'reported' })
 })
 
 test('the message still streaming keeps contributing a character estimate', () => {
   // Pure usage would make the counter sit still until `message_stop` and then
   // jump. The completed message reports real tokens; the open one is estimated.
-  const { rows, messages } = project([
+  const { rows, messages, reading } = project([
     userTurn('write it out'),
     messageStart('msg_done', { output_tokens: 1 }),
     assistantFrame('msg_done', [{ type: 'text', text: 'first part' }]),
@@ -296,7 +315,7 @@ test('the message still streaming keeps contributing a character estimate', () =
     isStreaming: true,
   })
   // 300 real + round(200 / 4) estimated.
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(350)
+  expect(reading).toEqual({ tokens: 350, quality: 'estimated' })
 
   // And the open message flips to its real number the moment it closes, without
   // the estimate being counted twice.
@@ -306,14 +325,14 @@ test('the message still streaming keeps contributing a character estimate', () =
     messageStop(),
     assistantFrame('msg_open', [{ type: 'text', text: 'x'.repeat(200) }]),
   ])
-  expect(selectLiveTokenEstimate(closed.rows, closed.messages)).toBe(390)
+  expect(closed.reading).toEqual({ tokens: 390, quality: 'reported' })
 })
 
 test('a background agent finishing mid-turn no longer restarts the count', () => {
   // `task-notification` is INJECTED mid-turn (`src/QueryEngine.ts:995`, drained
   // at `src/query.ts:1605`), so counting it as a turn boundary threw away every
   // token the turn had already spent.
-  const { rows, messages } = project([
+  const { rows, reading } = project([
     userTurn('do the work'),
     messageStart('msg_before', { output_tokens: 1 }),
     assistantFrame('msg_before', [{ type: 'text', text: 'starting' }]),
@@ -333,7 +352,7 @@ test('a background agent finishing mid-turn no longer restarts the count', () =>
     'task-notification',
     'assistant-text',
   ])
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(420)
+  expect(reading).toEqual({ tokens: 420, quality: 'reported' })
 })
 
 test('subagent traffic stays out of the byline', () => {
@@ -341,7 +360,7 @@ test('subagent traffic stays out of the byline', () => {
   // level, and the engine drops subagent stream deltas, so neither half of the
   // hybrid can see them. That matches the context gauge, which excludes
   // subagent traffic for the same reason (`contextUsage.ts` `isMainThread`).
-  const { rows, messages } = project([
+  const { rows, reading } = project([
     userTurn('delegate it'),
     messageStart('msg_parent', { output_tokens: 1 }),
     assistantFrame('msg_parent', [
@@ -364,27 +383,25 @@ test('subagent traffic stays out of the byline', () => {
   expect(rows.at(-1)?.children.map(child => child.kind)).toEqual([
     'assistant-text',
   ])
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(500)
+  expect(reading).toEqual({ tokens: 500, quality: 'reported' })
 })
 
-test('replayed history with no stream events still reports the old estimate', () => {
-  // Restored transcripts carry no stream layer, so every message falls through
-  // to the character estimate. Degraded, never zero and never a crash.
-  const { rows, messages } = project([
+test('live assistant-only output without final usage is estimated', () => {
+  const { rows, reading } = project([
     userTurn('what happened'),
     assistantFrame('msg_replay', [{ type: 'text', text: 'a'.repeat(80) }]),
   ])
   expect(kinds(rows)).toEqual(['user-text', 'assistant-text'])
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(20)
+  expect(reading).toEqual({ tokens: 20, quality: 'estimated' })
 })
 
-test('no operator turn in view reports nothing rather than a large wrong number', () => {
-  const { rows, messages } = project([
+test('an observed engine turn counts output without an operator row', () => {
+  const { rows, reading } = project([
     messageStart('msg_orphan', { output_tokens: 1 }),
     assistantFrame('msg_orphan', [{ type: 'text', text: 'x'.repeat(400) }]),
     messageDelta({ output_tokens: 9999 }),
     messageStop(),
   ])
   expect(kinds(rows)).toEqual(['assistant-text'])
-  expect(selectLiveTokenEstimate(rows, messages)).toBe(0)
+  expect(reading).toEqual({ tokens: 9999, quality: 'reported' })
 })
