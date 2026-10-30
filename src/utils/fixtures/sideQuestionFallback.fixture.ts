@@ -82,7 +82,7 @@ try {
       rawHistoryLength: rawHistory.length,
       fallbackHistoryLength: params.forkContextMessages.length,
       fallbackInstructionCount, savedHistoryInstructionCount,
-      openaiInstructionCount: openai.openAIInstructionAssembly!.instructions.split(marker).length - 1,
+      openaiInstructionCount: JSON.stringify(openai.openAIInstructionAssembly!.inputMessages).split(marker).length - 1,
     }))
   } finally {
     spy.mockRestore()

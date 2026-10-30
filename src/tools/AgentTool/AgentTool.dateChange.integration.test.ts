@@ -19,6 +19,7 @@ const { resetStateForTests, switchSession } = await import('../../bootstrap/stat
 const { asSessionId } = await import('../../types/ids.js')
 const { getEmptyToolPermissionContext } = await import('../../Tool.js')
 const { getUserContext, clearUserContextCache } = await import('../../context.js')
+const { enableConfigs } = await import('../../utils/config.js')
 const { clearSessionCaches } = await import('../../commands/clear/caches.js')
 const { getDefaultAppState } = await import('../../state/AppStateStore.js')
 const { getAttachmentMessages, createAttachmentMessage } = await import('../../utils/attachments.js')
@@ -50,9 +51,14 @@ beforeEach(() => {
   resetStateForTests()
   switchSession(asSessionId('date-change-integration'), directory)
   clearUserContextCache()
+  // prependUserContext deliberately skips test mode, and it carries the date.
+  // Outside test mode, reading settings also needs the startup gate opened.
+  enableConfigs()
+  process.env.NODE_ENV = 'development'
 })
 
 afterEach(() => {
+  process.env.NODE_ENV = 'test'
   queryDeps = undefined
   clearUserContextCache()
   resetStateForTests()
@@ -174,7 +180,7 @@ test('a child cannot consume its parent date correction, and a fresh child gets 
   expect(childRequests).toHaveLength(2)
   expect(JSON.stringify(yielded)).toContain('Parent complete.')
   for (const request of [childRequests[0]!, parentRequests[1]!]) {
-    expect(request.instructions).toContain("Today's date is 2026-10-26.")
+    expect(JSON.stringify(request.input)).toContain("Today's date is 2026-10-26.")
     expect(JSON.stringify(request.input)).toContain("Today's date is now 2026-10-27.")
   }
   expect(parentRequests[1]!.instructions).toBe(parentRequests[0]!.instructions)
@@ -252,7 +258,7 @@ test('the first post-compaction provider request restores a correction removed f
     }),
   })) { /* Drain the real post-compaction request path. */ }
   expect(requests).toHaveLength(1)
-  expect(requests[0]!.instructions).toContain("Today's date is 2026-10-26.")
+  expect(JSON.stringify(requests[0]!.input)).toContain("Today's date is 2026-10-26.")
   expect(JSON.stringify(requests[0]!.input)).toContain('Earlier work was summarized.')
   expect((JSON.stringify(requests[0]!.input).match(/Today's date is now 2026-10-27\./g) ?? [])).toHaveLength(1)
   expect(await getUserContext()).toBe(userContext)

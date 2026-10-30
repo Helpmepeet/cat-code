@@ -412,7 +412,7 @@ describe('assembled system prompt', () => {
       }).openAIInstructionAssembly!
       expect(assembly.instructions.includes('Infer action intent from context')).toBe(model === 'gpt-6-astra')
       expect(assembly.instructions).toContain(OUTCOME_REPORTING_RULE)
-      expect(assembly.instructions).toContain('fixture user instructions')
+      expect(assembly.instructions).not.toContain('fixture user instructions')
       expect(assembly.instructions).not.toContain('fixture volatile status')
       expect(assembly.developerContext).toContain('fixture volatile status')
     }

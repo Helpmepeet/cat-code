@@ -259,10 +259,14 @@ test.each(['fallback', 'delta', 'inline'] as const)(
       new Anthropic({ apiKey: 'isolated-test-key', maxRetries: 0, fetch: codexFetch }),
     )
     async function capture(messages: Parameters<typeof buildProviderInstructionAssembly>[0]['messages']) {
+      // prependUserContext deliberately skips test mode.
+      const nodeEnv = process.env.NODE_ENV
+      process.env.NODE_ENV = 'development'
       const assembly = buildProviderInstructionAssembly({
         provider: 'openai', messages, systemPrompt: asSystemPrompt(['Stable delivery instructions']),
         userContext: { project: 'Stable project rules' }, systemContext: { gitStatus: 'Volatile git marker' },
       })
+      process.env.NODE_ENV = nodeEnv
       const count = requestBodies.length
       const receivedEvents = []
       for await (const event of queryModelWithStreaming({
@@ -296,9 +300,12 @@ test.each(['fallback', 'delta', 'inline'] as const)(
       const first = await capture([...initialMessages, ...announcements])
       expect(JSON.stringify(first.input)).toContain('mcp__delivery__read')
       expect(first.tools.some(tool => tool.name === 'mcp__delivery__read')).toBe(mode === 'inline')
-      expect(first.instructions).toBe('Stable delivery instructions\n\n# project\nStable project rules')
+      expect(first.instructions).toBe('Stable delivery instructions')
       expect(first.input[0]).toMatchObject({ type: 'message', role: 'developer' })
       expect(JSON.stringify(first.input[0])).toContain('Volatile git marker')
+      const sentInput = JSON.stringify(first.input)
+      expect(sentInput.split('# project\\nStable project rules')).toHaveLength(2)
+      expect(sentInput.indexOf('Stable project rules')).toBeLessThan(sentInput.indexOf('Inspect tools and continue'))
       if (mode === 'fallback') {
         expect(JSON.stringify(first.input)).toContain('<available-deferred-tools>')
         expect(JSON.stringify(first.input[0])).toContain('Before using any chrome browser tools')

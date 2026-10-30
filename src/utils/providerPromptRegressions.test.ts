@@ -298,35 +298,40 @@ describe('provider and prompt regressions', () => {
     })
   })
 
-  test('OpenAI instruction assembly keeps volatile system context out of user input messages', () => {
+  test('OpenAI instruction assembly sends user context as the first message and volatile context to the developer item', () => {
     const userMessage = createUserMessage({ content: 'real user prompt' })
-    const assembly = buildProviderInstructionAssembly({
-      provider: 'openai',
-      messages: [userMessage],
-      systemPrompt: ['base instructions'],
-      userContext: { currentDate: '2026-04-25' },
-      systemContext: {
-        gitStatus: 'Current branch: phase1',
-        cacheBreaker: 'cache nonce',
-      },
-    })
+    // prependUserContext deliberately skips test mode.
+    const originalNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'development'
+    try {
+      const assembly = buildProviderInstructionAssembly({
+        provider: 'openai',
+        messages: [userMessage],
+        systemPrompt: ['base instructions'],
+        userContext: { claudeMd: 'Never run bare `bun test`.' },
+        systemContext: {
+          gitStatus: 'Current branch: phase1',
+          cacheBreaker: 'cache nonce',
+        },
+      })
+      const openAI = assembly.openAIInstructionAssembly!
 
-    expect(assembly.openAIInstructionAssembly?.instructions).toContain(
-      '# currentDate\n2026-04-25',
-    )
-    expect(assembly.openAIInstructionAssembly?.instructions).not.toContain(
-      'Current branch: phase1',
-    )
-    expect(assembly.openAIInstructionAssembly?.developerContext).toContain(
-      '<gitStatus>\nCurrent branch: phase1\n</gitStatus>',
-    )
-    expect(assembly.openAIInstructionAssembly?.developerContext).toContain(
-      '<cacheBreaker>\ncache nonce\n</cacheBreaker>',
-    )
-    expect(assembly.openAIInstructionAssembly?.inputMessages).toEqual([
-      userMessage,
-    ])
-    expect(assembly.messages).toEqual([userMessage])
+      expect(openAI.instructions).toBe('base instructions')
+      expect(openAI.developerContext).toContain(
+        '<gitStatus>\nCurrent branch: phase1\n</gitStatus>',
+      )
+      expect(openAI.developerContext).toContain(
+        '<cacheBreaker>\ncache nonce\n</cacheBreaker>',
+      )
+      expect(openAI.inputMessages).toHaveLength(2)
+      const context = JSON.stringify(openAI.inputMessages[0]?.message.content ?? '')
+      expect(context).toContain('# claudeMd\\nNever run bare `bun test`.')
+      expect(context).not.toContain('Current branch: phase1')
+      expect(openAI.inputMessages[1]).toBe(userMessage)
+      expect(assembly.messages).toBe(openAI.inputMessages)
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv
+    }
   })
 
   test('provider instruction paths omit the dynamic boundary marker', () => {
@@ -607,8 +612,7 @@ describe('provider and prompt regressions', () => {
   test('the user-context wrapper does not deny authority to claudeMd', () => {
     // The wrapper called everything inside it metadata, while the claudeMd
     // block carries MEMORY_INSTRUCTION_PROMPT saying those instructions
-    // OVERRIDE default behavior. Claude-path only; GPT appends claudeMd
-    // straight into `instructions`.
+    // OVERRIDE default behavior.
     const originalNodeEnv = process.env.NODE_ENV
     process.env.NODE_ENV = 'development'
     try {

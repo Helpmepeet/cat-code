@@ -47,8 +47,9 @@ export function buildProviderInstructionAssembly({
       }
     }
 
-    const instructions = buildOpenAIInstructions(systemPrompt, stableSystemContext, userContext)
+    const instructions = buildOpenAIInstructions(systemPrompt, stableSystemContext)
     const developerContext = buildOpenAIDeveloperContext(volatileSystemContext)
+    const inputMessages = prependUserContext(messages, userContext)
 
     logForDebugging(
       `[codex-cache] instructions=${instructions.length}B developer_context=${developerContext?.length ?? 0}B volatile_keys=[${Object.keys(volatileSystemContext).join(',')}]`,
@@ -57,10 +58,10 @@ export function buildProviderInstructionAssembly({
     return {
       provider,
       systemPrompt,
-      messages,
+      messages: inputMessages,
       openAIInstructionAssembly: {
         instructions,
-        inputMessages: messages,
+        inputMessages,
         developerContext,
       },
     }
@@ -76,18 +77,13 @@ export function buildProviderInstructionAssembly({
 function buildOpenAIInstructions(
   systemPrompt: SystemPrompt,
   systemContext: { [k: string]: string },
-  userContext: { [k: string]: string },
 ): string {
   const instructionBlocks: string[] = []
   for (const block of appendSystemContext(systemPrompt, systemContext)) {
     if (block === SYSTEM_PROMPT_DYNAMIC_BOUNDARY) continue
     instructionBlocks.push(block)
   }
-  const base = instructionBlocks.join('\n\n')
-  const userEntries = Object.entries(userContext)
-  if (userEntries.length === 0) return base
-  const contextBlock = userEntries.map(([key, value]) => `# ${key}\n${value}`).join('\n\n')
-  return `${base}\n\n${contextBlock}`
+  return instructionBlocks.join('\n\n')
 }
 
 function buildOpenAIDeveloperContext(
