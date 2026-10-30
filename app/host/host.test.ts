@@ -24,7 +24,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import { createSessionBranchReader, createWorkspaceBranchSwitcher } from '../main/workspaceBranches.js'
 import { createAttachmentFileTokenStore } from '../main/mainDecisions.js'
 import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
@@ -2533,6 +2534,229 @@ test('restoreSession refuses when advisory pid/socket still identify a live prio
 /* ------------------------------------------------------------------------- *
  * closeSession — evicts replay + marks the row clean + restorable
  * ------------------------------------------------------------------------- */
+
+test.each([null, 'parked'] as const)('closeSession refuses a living foreign owner with shutdown %s without changing its row', async shutdown => {
+  const h = makeHost()
+  await h.host.listSessions()
+  const id = randomUUID()
+  writeTranscript(h.storageDir, id)
+  await h.registry.upsertOnSpawn({ appSessionId: id, cwd: h.cwd, engineSessionId: id })
+  const doc = JSON.parse(readFileSync(h.registry.filePath, 'utf8'))
+  doc.sessions[0].ownerHostPid = 424242
+  doc.sessions[0].shutdown = 'clean'
+  writeFileSync(h.registry.filePath, JSON.stringify(doc))
+  const registry = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, engineId) => join(h.storageDir, 'transcripts', `${engineId}.jsonl`),
+    isProcessAlive: pid => pid === 424242 || pid === process.pid,
+  })
+  await registry.launch()
+  const host = new Host({
+    registry, supervisor: h.supervisor as never,
+    validateCwd: cwd => ({ ok: true, realpath: cwd }),
+  })
+  await host.listSessions()
+  // The receiving host cached a terminal row before its owner reopened it.
+  const latest = JSON.parse(readFileSync(registry.filePath, 'utf8'))
+  latest.sessions[0].shutdown = shutdown
+  writeFileSync(registry.filePath, JSON.stringify(latest))
+  const before = readFileSync(registry.filePath, 'utf8')
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await host.closeSession(id)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('session_unreachable')
+    expect(readFileSync(registry.filePath, 'utf8')).toBe(before)
+    expect((await host.restoreSession(id)).ok).toBe(false)
+  }
+})
+
+test('closeSession refuses unreadable ownership state without killing its own child', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const id = created.value.appSessionId
+  writeFileSync(h.registry.filePath, '{invalid')
+  const result = await h.host.closeSession(id)
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('registry_unavailable')
+  expect(h.supervisor.records.has(id)).toBe(true)
+  expect(h.evicted).not.toContain(id)
+  expect(readFileSync(h.registry.filePath, 'utf8')).toBe('{invalid')
+})
+
+test.each([false, true])('closeSession refuses a pending restore and permits retry after settlement (spawn fails: %s)', async failSpawn => {
+  const h = makeHost()
+  await h.host.listSessions()
+  const id = randomUUID()
+  writeTranscript(h.storageDir, id)
+  await h.registry.upsertOnSpawn({ appSessionId: id, cwd: h.cwd, engineSessionId: id })
+  await h.registry.markClean(id)
+  let entered!: () => void
+  let release!: () => void
+  const paused = new Promise<void>(resolve => { entered = resolve })
+  const barrier = new Promise<void>(resolve => { release = resolve })
+  const upsert = h.registry.upsertOnSpawn.bind(h.registry)
+  h.registry.upsertOnSpawn = async input => {
+    const result = await upsert(input)
+    entered()
+    await barrier
+    return result
+  }
+  if (failSpawn) h.supervisor.throwOnNextSpawn = new Error('controlled spawn failure')
+  const restoring = h.host.restoreSession(id)
+  await paused
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const close = await h.host.closeSession(id)
+      expect(close.ok).toBe(false)
+      if (!close.ok) expect(close.error.code).toBe('session_unreachable')
+      expect(h.registry.findSession(id)?.shutdown).toBe(null)
+      expect(h.supervisor.spawnedIds).toEqual([])
+    }
+  } finally {
+    release()
+  }
+  expect((await restoring).ok).toBe(!failSpawn)
+  expect((await h.host.closeSession(id)).ok).toBe(true)
+  expect(h.supervisor.records.has(id)).toBe(false)
+  expect(h.registry.findSession(id)?.shutdown).toBe('clean')
+  expect(h.host.canResume(id)).toBe(true)
+  expect((await h.host.restoreSession(id)).ok).toBe(true)
+  expect((await h.host.closeSession(id)).ok).toBe(true)
+  expect(h.supervisor.records.has(id)).toBe(false)
+})
+
+test.each([false, true])('restore and duplicate close refuse pending close cleanup, including failure: %s', async failCleanup => {
+  const h = makeHost()
+  await h.host.listSessions()
+  const id = randomUUID()
+  writeTranscript(h.storageDir, id)
+  await h.registry.upsertOnSpawn({ appSessionId: id, cwd: h.cwd, engineSessionId: id })
+  let entered!: () => void
+  let release!: () => void
+  const paused = new Promise<void>(resolve => { entered = resolve })
+  const barrier = new Promise<void>(resolve => { release = resolve })
+  const closeOwnedSession = h.registry.closeOwnedSession.bind(h.registry)
+  h.registry.closeOwnedSession = async sessionId => {
+    entered()
+    await barrier
+    if (failCleanup) throw new Error('controlled cleanup failure')
+    return closeOwnedSession(sessionId)
+  }
+  const closing = h.host.closeSession(id)
+  await paused
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const restore = await h.host.restoreSession(id)
+      expect(restore.ok).toBe(false)
+      if (!restore.ok) expect(restore.error.code).toBe('session_unreachable')
+      const duplicateClose = await h.host.closeSession(id)
+      expect(duplicateClose.ok).toBe(false)
+      if (!duplicateClose.ok) expect(duplicateClose.error.code).toBe('session_unreachable')
+      expect(h.supervisor.spawnedIds).toEqual([])
+    }
+  } finally {
+    release()
+  }
+  if (failCleanup) {
+    await expect(closing).rejects.toThrow('controlled cleanup failure')
+  } else {
+    expect((await closing).ok).toBe(true)
+  }
+  h.registry.closeOwnedSession = closeOwnedSession
+  expect((await h.host.restoreSession(id)).ok).toBe(true)
+  expect((await h.host.closeSession(id)).ok).toBe(true)
+  expect(h.supervisor.records.has(id)).toBe(false)
+  expect(h.registry.findSession(id)?.shutdown).toBe('clean')
+})
+
+test.each([null, 'parked'] as const)('closeSession refuses a foreign claim made after admission but before its registry write lock (%s)', async shutdown => {
+  const h = makeHost()
+  await h.host.listSessions()
+  const id = randomUUID()
+  writeTranscript(h.storageDir, id)
+  await h.registry.upsertOnSpawn({ appSessionId: id, cwd: h.cwd, engineSessionId: id })
+  await h.registry.markClean(id)
+  let pauseLock = false
+  let entered!: () => void
+  let release!: () => void
+  const paused = new Promise<void>(resolve => { entered = resolve })
+  const barrier = new Promise<void>(resolve => { release = resolve })
+  const registry = new SessionRegistry({
+    storageDir: h.storageDir,
+    transcriptPathFor: (_cwd, engineId) => join(h.storageDir, 'transcripts', `${engineId}.jsonl`),
+    acquireLock: async file => {
+      if (pauseLock) {
+        pauseLock = false
+        entered()
+        await barrier
+      }
+      return require('proper-lockfile').lock(file, { realpath: false })
+    },
+  })
+  const host = new Host({
+    registry, supervisor: h.supervisor as never,
+    validateCwd: cwd => ({ ok: true, realpath: cwd }),
+  })
+  await host.listSessions()
+  pauseLock = true
+  const closing = host.closeSession(id)
+  await paused
+  const child = spawn(process.execPath, ['-e', `
+    const { SessionRegistry } = await import(${JSON.stringify(new URL('./registry.ts', import.meta.url).href)});
+    const registry = new SessionRegistry({
+      storageDir: ${JSON.stringify(h.storageDir)},
+      transcriptPathFor: () => ${JSON.stringify(join(h.storageDir, 'transcripts', `${id}.jsonl`))},
+      log() {},
+    });
+    await registry.launch();
+    const stop = new Promise(resolve => process.stdin.once('end', resolve));
+    process.stdin.resume();
+    const claim = await registry.claimForRestore(${JSON.stringify(id)}, registry.findSession(${JSON.stringify(id)}));
+    ${shutdown === 'parked' ? `if (claim === 'claimed') await registry.markParked(${JSON.stringify(id)});` : ''}
+    console.log(claim);
+    await stop;
+  `], {
+    stdio: ['pipe', 'pipe', 'inherit'],
+    env: { PATH: process.env.PATH, HOME: h.storageDir, CLAUDE_CONFIG_DIR: join(h.storageDir, 'config') },
+  })
+  const closed = new Promise(resolve => child.once('close', resolve))
+  const reader = createInterface({ input: child.stdout! })
+  try {
+    expect((await reader[Symbol.asyncIterator]().next()).value).toBe('claimed')
+    const claimed = JSON.parse(readFileSync(registry.filePath, 'utf8')).sessions[0]
+    expect(claimed.ownerHostPid).toBe(child.pid)
+    expect(claimed.shutdown).toBe(shutdown)
+    release()
+    const result = await closing
+    const after = JSON.parse(readFileSync(registry.filePath, 'utf8')).sessions[0]
+    expect(after).toEqual(claimed)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('session_unreachable')
+  } finally {
+    release()
+    await closing
+    child.stdin!.end()
+    await closed
+    reader.close()
+  }
+}, 30000)
+
+test('closeSession releases its fence if supervisor shutdown throws', async () => {
+  const h = makeHost()
+  await h.host.listSessions()
+  const id = randomUUID()
+  writeTranscript(h.storageDir, id)
+  await h.registry.upsertOnSpawn({ appSessionId: id, cwd: h.cwd, engineSessionId: id })
+  const kill = h.supervisor.killSession.bind(h.supervisor)
+  h.supervisor.killSession = () => { throw new Error('controlled kill failure') }
+  await expect(h.host.closeSession(id)).rejects.toThrow('controlled kill failure')
+  expect(h.registry.findSession(id)?.shutdown).toBe(null)
+  h.supervisor.killSession = kill
+  expect((await h.host.closeSession(id)).ok).toBe(true)
+  expect((await h.host.restoreSession(id)).ok).toBe(true)
+})
 
 test('closeSession evicts replay, marks the row clean, keeps it restorable', async () => {
   const h = makeHost()

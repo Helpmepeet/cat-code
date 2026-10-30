@@ -110,6 +110,60 @@ test.each([null, 'clean', 'crashed', 'parked'] as const)('foreign ownership resp
   expect(restored.hasLiveForeignOwner('missing')).toBe(false)
 })
 
+test.each([null, 'parked', 'clean', 'crashed'] as const)('atomic close preserves saved sessions with own lifecycle %s', async shutdown => {
+  const h = makeRegistry()
+  await h.registry.launch()
+  writeTranscript(h.storageDir, 'saved')
+  await h.registry.upsertOnSpawn({ appSessionId: 'saved', cwd: '/workspace', engineSessionId: 'saved' })
+  if (shutdown === 'parked') await h.registry.markParked('saved')
+  if (shutdown === 'clean') await h.registry.markClean('saved')
+  if (shutdown === 'crashed') await h.registry.markCrashed('saved')
+  const before = h.registry.findSession('saved')!
+  expect(await h.registry.closeOwnedSession('saved')).toBe('closed')
+  expect(h.registry.findSession('saved')).toEqual({ ...before, shutdown: 'clean' })
+  expect(readDoc(h.registryPath).sessions[0]).toEqual({ ...before, shutdown: 'clean' })
+  expect(h.registry.hasTranscript('saved')).toBe(true)
+  expect(await h.registry.closeOwnedSession('saved')).toBe('closed')
+})
+
+test('atomic close removes proven-empty rows and reports missing without writing', async () => {
+  const h = makeRegistry()
+  await h.registry.launch()
+  await h.registry.upsertOnSpawn({ appSessionId: 'empty', cwd: '/workspace' })
+  expect(await h.registry.closeOwnedSession('empty')).toBe('closed')
+  expect(h.registry.findSession('empty')).toBeUndefined()
+  expect(h.registry.lastRemovedEmptySessionIds).toEqual(['empty'])
+  const before = readFileSync(h.registryPath, 'utf8')
+  expect(await h.registry.closeOwnedSession('empty')).toBe('missing')
+  expect(readFileSync(h.registryPath, 'utf8')).toBe(before)
+})
+
+test('atomic close preserves saved state on lock and read failures and can retry', async () => {
+  let failLock = false
+  const h = makeRegistry({
+    acquireLock: async () => {
+      if (failLock) throw new Error('controlled close lock failure')
+      return async () => {}
+    },
+  })
+  await h.registry.launch()
+  writeTranscript(h.storageDir, 'saved')
+  await h.registry.upsertOnSpawn({ appSessionId: 'saved', cwd: '/workspace', engineSessionId: 'saved' })
+  const before = readFileSync(h.registryPath, 'utf8')
+  failLock = true
+  expect(await h.registry.closeOwnedSession('saved')).toBe('unavailable')
+  expect(readFileSync(h.registryPath, 'utf8')).toBe(before)
+  expect(h.registry.findSession('saved')?.shutdown).toBe(null)
+  failLock = false
+  writeFileSync(h.registryPath, '{invalid')
+  expect(await h.registry.closeOwnedSession('saved')).toBe('unavailable')
+  expect(readFileSync(h.registryPath, 'utf8')).toBe('{invalid')
+  writeFileSync(h.registryPath, before)
+  expect(await h.registry.closeOwnedSession('saved')).toBe('closed')
+  expect(h.registry.findSession('saved')?.shutdown).toBe('clean')
+  expect(h.registry.hasTranscript('saved')).toBe(true)
+})
+
 test('peer snapshots refresh foreign park and close transitions without a local write', async () => {
   const h = makeRegistry({ isProcessAlive: () => true })
   await h.registry.launch()

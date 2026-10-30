@@ -718,6 +718,9 @@ export class Host implements HostApi {
     // A duplicate restore must be a harmless refusal. In particular it must not
     // clear a just-created row or kill the winning child while the first restore
     // is between the registry write and supervisor registration.
+    if (this.closing.has(appSessionId)) {
+      return hostError('session_unreachable', 'Wait for this Chat to finish closing before reopening it')
+    }
     if (this.restoring.has(appSessionId)) {
       return hostError('session_not_found', `session ${appSessionId} is already restoring`)
     }
@@ -1261,43 +1264,65 @@ export class Host implements HostApi {
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
     }
+    // Refuse rather than report success while a restore can still publish or
+    // spawn. Hold the reciprocal fence through all asynchronous close cleanup.
+    if (this.restoring.has(appSessionId) || this.closing.has(appSessionId)) {
+      return hostError('session_unreachable', 'This Chat is opening or closing. Try closing it again shortly.')
+    }
+    if (!this.registry.refreshSharedState()) {
+      return hostError('registry_unavailable', 'Session ownership could not be checked safely. Try again.')
+    }
+    if (this.hasLiveForeignOwner(appSessionId)) {
+      return hostError('session_unreachable', 'This session belongs to another running app instance. Use it in that app.')
+    }
     if (!this.isLive(appSessionId) && !this.registry.findSession(appSessionId)) {
       return hostError('session_not_found', `unknown session ${appSessionId}`)
     }
 
     this.closing.add(appSessionId)
-    // Graceful sidecar shutdown (SIGTERM via the supervisor's kill API — the
-    // die-with-window mechanism, not process welding).
-    this.supervisor.killSession(appSessionId)
-    // Evict replay so a reload never replays a dead session's frames (P3-0 carry
-    // — the named eviction requirement; AttachmentGate.clearSession in main).
-    this.workspaceTransitions.delete(appSessionId)
-    this.evictReplay(appSessionId)
-    // Cleanup rechecks persisted input/history under the registry lock. Managed
-    // identity alone makes an open blank Chat resumable, not worth archiving.
-    await this.registry.markClean(appSessionId)
-    await this.registry.discardEmptySession(appSessionId)
-    this.surfaceRegistryHealth(appSessionId)
-    this.closing.delete(appSessionId)
+    try {
+      // Graceful sidecar shutdown (SIGTERM via the supervisor's kill API — the
+      // die-with-window mechanism, not process welding).
+      this.supervisor.killSession(appSessionId)
+      // Evict replay so a reload never replays a dead session's frames (P3-0 carry
+      // — the named eviction requirement; AttachmentGate.clearSession in main).
+      this.workspaceTransitions.delete(appSessionId)
+      this.evictReplay(appSessionId)
+      // Cleanup rechecks persisted input/history under the registry lock. Managed
+      // identity alone makes an open blank Chat resumable, not worth archiving.
+      const closed = await this.registry.closeOwnedSession(appSessionId)
+      this.surfaceRegistryHealth(appSessionId)
+      if (closed === 'foreign_owner') {
+        return hostError('session_unreachable', 'This session belongs to another running app instance. Use it in that app.')
+      }
+      if (closed === 'unavailable') {
+        return hostError('registry_unavailable', 'Session ownership could not be checked safely. Try again.')
+      }
+      if (closed === 'missing') {
+        return hostError('session_not_found', `unknown session ${appSessionId}`)
+      }
 
-    // A closed session leaves the "live" half of the union; it lives on ONLY as a
-    // restore-offer, so what it emits turns on whether it is still restorable.
-    // Not restorable — no engineSessionId, or (the resume-failed class) an
-    // engineSessionId whose transcript does not exist — means neither a tab nor
-    // an offer, and a `session-status` would be actively wrong: the renderer
-    // folds `restorable === false` back into TAB membership
-    // (`app/renderer/src/shellState.ts` foldTabMembership), so a just-closed
-    // session would reappear as a live-looking tab. Report it removed.
-    const descriptor = this.descriptorFor(appSessionId)
-    if (!descriptor || !descriptor.restorable) {
-      this.emitRemoved(appSessionId)
-    } else {
-      // Still restorable — the list projection drops the live entry and picks up
-      // the restorable one. A single session-status carries the new
-      // (exited, restorable) descriptor.
-      this.emit({ type: 'session-status', session: descriptor })
+      // A closed session leaves the "live" half of the union; it lives on ONLY as a
+      // restore-offer, so what it emits turns on whether it is still restorable.
+      // Not restorable — no engineSessionId, or (the resume-failed class) an
+      // engineSessionId whose transcript does not exist — means neither a tab nor
+      // an offer, and a `session-status` would be actively wrong: the renderer
+      // folds `restorable === false` back into TAB membership
+      // (`app/renderer/src/shellState.ts` foldTabMembership), so a just-closed
+      // session would reappear as a live-looking tab. Report it removed.
+      const descriptor = this.descriptorFor(appSessionId)
+      if (!descriptor || !descriptor.restorable) {
+        this.emitRemoved(appSessionId)
+      } else {
+        // Still restorable — the list projection drops the live entry and picks up
+        // the restorable one. A single session-status carries the new
+        // (exited, restorable) descriptor.
+        this.emit({ type: 'session-status', session: descriptor })
+      }
+      return { ok: true, value: undefined }
+    } finally {
+      this.closing.delete(appSessionId)
     }
-    return { ok: true, value: undefined }
   }
 
   /* --------------------------------------------------------------------- *

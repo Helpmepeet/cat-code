@@ -1376,6 +1376,45 @@ export class SessionRegistry {
     })
   }
 
+  /** Close admission and empty-row cleanup share a lock with restore claims. */
+  async closeOwnedSession(
+    appSessionId: string,
+  ): Promise<'closed' | 'foreign_owner' | 'missing' | 'unavailable'> {
+    if (this.readFailed) return 'unavailable'
+    let release: (() => Promise<void>) | undefined
+    try {
+      ensureDir(this.dir)
+      release = await this.acquireLock(this.path)
+      const latest = readDocumentForMerge(this.path, this.readRegistryFile)
+      const merged = mergeRegistryDocuments(latest, this.persistedDoc, this.doc)
+      this.doc = merged
+      this.persistedDoc = cloneDocument(latest)
+      const latestRow = latest.sessions.find(row => row.appSessionId === appSessionId)
+      if (!latestRow) return 'missing'
+      if (this.isLiveForeignOwner(latestRow)) return 'foreign_owner'
+      const closed = cloneDocument(merged)
+      const row = closed.sessions.find(candidate => candidate.appSessionId === appSessionId)
+      if (!row) return 'missing'
+      row.shutdown = 'clean'
+      delete row.peerNotice
+      const removed = this.removeEmptyRows(closed, new Set([appSessionId]))
+      closed.hostPid = process.pid
+      closed.updatedAt = Date.now()
+      atomicWriteJson(this.path, closed)
+      this.doc = closed
+      this.persistedDoc = cloneDocument(closed)
+      this.removedEmptySessionIds = removed
+      this.writeFailed = false
+      return 'closed'
+    } catch (error) {
+      this.writeFailed = true
+      this.log(`[registry] could not close session ownership (${errText(error)})`)
+      return 'unavailable'
+    } finally {
+      try { await release?.() } catch { /* Best-effort unlock. */ }
+    }
+  }
+
   /**
    * The find / log-if-missing / persist ladder every single-row mutator above
    * repeats. `apply` returns false for a change the row does not need persisted
