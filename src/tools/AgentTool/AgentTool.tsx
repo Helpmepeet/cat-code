@@ -2411,7 +2411,7 @@ The agent is now running and will receive instructions via mailbox.`
       const continuationHint = oneShotAsync
         ? 'internal ID - do not mention to user.'
         : `internal ID - do not mention to user.${runningHint}${stoppedHint}`
-      const prefix = `Async agent launched successfully.\nmodel: ${data.model ?? 'unknown'}\nagentId: ${data.agentId} (${continuationHint})${nameLine}\nThe agent is working in the background. You will be notified automatically when it completes.`;
+      const prefix = `Async agent launched successfully.\n${data.agentName ?? data.agentId} started working on: ${data.description}\nmodel: ${data.model ?? 'unknown'}\nagentId: ${data.agentId} (${continuationHint})${nameLine}\nThe agent is working in the background. You will be notified automatically when it completes.`;
       const instructions = data.canCheckProgress
         ? `Do not duplicate this agent's work — avoid reading, grepping, editing, or investigating the same files or topics while it is running. Work on non-overlapping tasks.
 For background launches, normally briefly tell the user what you launched, end your response, and yield the turn; the result will arrive via automatic completion notification. Do not predict or fabricate results.

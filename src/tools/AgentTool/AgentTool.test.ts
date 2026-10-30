@@ -1245,6 +1245,60 @@ describe('finalizeFailedAgentLaunch', () => {
     ).not.toThrow()
   })
 
+  test('identifies assigned tasks in out-of-order async launch acknowledgments', () => {
+    const launches = [
+      { toolUseId: 'toolu_cat', agentId: 'agent-cat', agentName: 'Ava', description: 'Draw a cat' },
+      { toolUseId: 'toolu_tree', agentId: 'agent-tree', agentName: 'Ben', description: 'Draw a tree' },
+    ]
+
+    const results = launches.toReversed().map(({ toolUseId, ...assignment }) =>
+      AgentTool.mapToolResultToToolResultBlockParam(
+        {
+          status: 'async_launched',
+          ...assignment,
+          agentType: 'general-purpose',
+          prompt: assignment.description,
+          outputFile: `/tmp/${assignment.agentId}.out`,
+          canCheckProgress: false,
+        },
+        toolUseId,
+      ),
+    )
+
+    for (const [index, result] of results.entries()) {
+      const assignment = launches[launches.length - 1 - index]!
+      const text = Array.isArray(result.content)
+        ? result.content.map(block => ('text' in block ? block.text : '')).join('\n')
+        : result.content
+      expect(result.tool_use_id).toBe(assignment.toolUseId)
+      expect(text).toContain(
+        `${assignment.agentName} started working on: ${assignment.description}`,
+      )
+      expect(text).toContain(`agentId: ${assignment.agentId}`)
+      expect(text).not.toContain(launches[index]!.description)
+      expect(text).toStartWith('Async agent launched successfully.')
+    }
+  })
+
+  test('identifies the task for an unnamed async agent', () => {
+    const result = AgentTool.mapToolResultToToolResultBlockParam(
+      {
+        status: 'async_launched',
+        agentId: 'agent-123',
+        agentType: 'general-purpose',
+        description: 'Review contracts',
+        prompt: 'Review the contracts',
+        outputFile: '/tmp/agent-123.out',
+        canCheckProgress: false,
+      },
+      'toolu_123',
+    )
+    const text = Array.isArray(result.content)
+      ? result.content.map(block => ('text' in block ? block.text : '')).join('\n')
+      : result.content
+    expect(text).toContain('agent-123 started working on: Review contracts')
+  })
+
   test('omits post-completion ResumeAgent hint for async one-shot built-ins', () => {
     const result = AgentTool.mapToolResultToToolResultBlockParam(
       {
