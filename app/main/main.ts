@@ -1,3 +1,4 @@
+import { installLocalFormTracking } from './localhostFormIntent.js'
 import { createExternalUrlHandler } from './externalUrl.js'
 import { CH_OPEN_EXTERNAL_URL } from '../shared/ipcChannels.js'
 import { createLocalhostPreviewService } from './localhostPreview.js'
@@ -1641,6 +1642,7 @@ async function localNavigationMethod(frame: Electron.WebFrameMain, target: strin
     tracker.form=null;
     if(form&&typeof form.url==='string'&&form.url.length<=4096){
       try{const actual=new URL(${JSON.stringify(target)}),submitted=new URL(form.url);if(actual.origin===submitted.origin&&actual.pathname===submitted.pathname)return form.method==='GET'?'GET':'POST';}catch{}
+      return 'POST';
     }
     return 'GET';
   })()`).then(value=>value==='GET'?'GET':'POST',()=> 'UNKNOWN')
@@ -1662,10 +1664,7 @@ function installLocalHistory(frame: Electron.WebFrameMain): void {
         return result;
       };
     }
-    const submitted = form => { try {tracker.form={url:new URL(form.action,location.href).href,method:form.method.toUpperCase()};}catch{} };
-    addEventListener('submit',event=>{if(event.target instanceof HTMLFormElement)submitted(event.target)},true);
-    const submit = HTMLFormElement.prototype.submit;
-    HTMLFormElement.prototype.submit = function(...args){submitted(this);return Reflect.apply(submit,this,args)};
+    (${installLocalFormTracking.toString()})(tracker);
     addEventListener('pointerdown',()=>{tracker.interaction=position()},true);
     addEventListener('keydown',()=>{tracker.interaction=position()},true);
   })()`).catch(() => {})
