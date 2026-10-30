@@ -6,7 +6,7 @@ import { FilePane } from './FilePane.js'
 import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OUTPUT_WIDTH_STEP, writeToolOutputWidth, type OpenToolOutput } from './toolOutputPanel.js'
 import { FilePaneContext } from './filePaneContext.js'
 import {
-  closeFilePane, getFilePaneSession, registerFilePaneFocus, rememberSlotWidth, requestOpenFile,
+  closeFilePane, getFilePaneSession, registerFilePaneFocus, rememberSlotWidth, requestOpenFile, paneTargetLabel,
   showSlotOccupant, updateFilePaneSession, useFilePaneSession, type SlotOccupant,
 } from './filePaneState.js'
 import { findNestedToolUseRow } from './transcriptViewModel.js'
@@ -103,7 +103,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
     })
   }
   const occupants: Array<{ kind: SlotOccupant; label: string }> = [
-    ...(state.open ? [{ kind: 'file' as const, label: state.file?.path.split('/').at(-1) ?? 'File' }] : []),
+    ...(state.open ? [{ kind: 'file' as const, label: state.file ? paneTargetLabel(state.file.path) : 'File' }] : []),
     ...(worker ? [{ kind: 'worker' as const, label: worker.name || worker.task }] : []),
     ...(outputRow ? [{ kind: 'output' as const, label: 'Full output' }] : []),
   ]

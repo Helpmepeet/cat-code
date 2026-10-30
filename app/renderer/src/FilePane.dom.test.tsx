@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { workspaceFileAvailability } from '../../main/workspaceFileAvailability.js'
 import { openWorkspaceFile } from '../../main/openWorkspaceFile.js'
 import { createPreviewApplications } from '../../main/previewApplications.js'
+import { createLocalhostPreviewService, type LocalhostFrozenPayload } from '../../main/localhostPreview.js'
+import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { createFilePreviewService } from '../../main/filePreview.js'
 import { sessionDescriptorFixture } from '../../shared/sessionDescriptor.fixture.js'
 import type { FilePreviewEvent } from '../../shared/filePreview.js'
@@ -18,6 +20,8 @@ import { ToastContext } from './toastContext.js'
 import { captureFilePaneScroll, closeFilePane, disposeFilePaneSession, getFilePaneSession, rememberFilePaneScroll } from './filePaneState.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
+const NativeResponse = globalThis.Response
+const nativeFetch = globalThis.fetch.bind(globalThis)
 let harness: DomTestHarness
 const originalConsoleError = console.error
 const releases: Array<() => void> = []
@@ -28,7 +32,7 @@ beforeAll(async () => {
   dom.happyDOM.settings.disableIframePageLoading = true
   console.error = (...args: unknown[]) => {
     const error = args[0]
-    if (error instanceof Error && error.message.startsWith('Failed to load iframe page "cat-preview:') && error.message.endsWith('Iframe page loading is disabled.')) return
+    if (error instanceof Error && error.message.startsWith('Failed to load iframe page "') && error.message.endsWith('Iframe page loading is disabled.')) return
     originalConsoleError(...args)
   }
 })
@@ -49,7 +53,7 @@ async function click(root: ParentNode, label: string) {
   await act(async () => { button!.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
   await settle()
 }
-function setup(withOutput = false) {
+function setup(withOutput = false, local?: { url: string; snapshot?: () => LocalhostFrozenPayload | null }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-dom-')))
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-outside-')))
   const refusedPath = join(outside, 'outside.md')
@@ -70,7 +74,24 @@ function setup(withOutput = false) {
   const events = new Set<(event: FilePreviewEvent) => void>()
   const external: Array<{ path: string; target?: string; location?: unknown }> = []
   const sessions = [sessionDescriptorFixture({ appSessionId: sessionId, cwd: root }), sessionDescriptorFixture({ appSessionId: otherSession, cwd: root })]
-  const service = createFilePreviewService({ sessions: () => sessions, publish: event => { events.forEach(callback => callback(event)) } })
+  const publish = (event: FilePreviewEvent) => { events.forEach(callback => callback(event)) }
+  const service = createFilePreviewService({ sessions: () => sessions, publish })
+  const localhost = createLocalhostPreviewService({ sessions: () => sessions, publish,
+    isLive: id => !!document.querySelector(`iframe[name*="${id}"]`), findSnapshot: () => local?.snapshot?.() ?? null })
+  const captures: Array<{ id: string; connected: boolean }> = []
+  let captureGate: Promise<void> | null = null
+  const pauseNextCapture = () => {
+    let resume!: () => void
+    captureGate = new Promise<void>(resolve => { resume = resolve })
+    return resume
+  }
+  const positions = new Map<string, { x: number; y: number }>()
+  const currentDescriptor = (id: string, revision: number) => localhost.descriptor(id, revision) ?? service.descriptor(id, revision)
+  const releasePreview = (id: string) => { if (localhost.has(id)) localhost.release(id); else service.release(id) }
+  const refreshPreview = (id: string) => localhost.has(id) ? localhost.refresh(id) : service.refresh(id)
+  const applicationsFor = (appSessionId: string, path: string) => normalizeLocalhostPreviewUrl(path)
+    ? Promise.resolve({ applications: [{ target: 'chrome' as const, label: 'Google Chrome' }, { target: 'safari' as const, label: 'Safari' }], selected: 'chrome' as const })
+    : applications.list({ appSessionId, path })
   const applications = createPreviewApplications({
     sessions: () => sessions, userData: root, installed: async () => true,
     open: async (path, target) => { external.push({ path, target }); return true },
@@ -102,24 +123,48 @@ function setup(withOutput = false) {
       return descriptor
     },
     openWorkspaceFile: (appSessionId: string, path: string) => openWorkspaceFile({ appSessionId, path }, sessions, async (resolved, target, location) => { external.push({ path: resolved, target, ...(location ? { location } : {}) }); return true }),
+    prepareLocalhostPreview: (appSessionId: string, url: string) => localhost.prepare({ appSessionId, url }),
+    captureLocalhostPreview: async (id: string) => {
+      captures.push({ id, connected: !!document.querySelector(`iframe[name*="${id}"]`) })
+      const waiting = captureGate
+      captureGate = null
+      if (waiting) await waiting
+    },
+    navigateLocalhostPreview: async (id: string, key: string, scroll: { x: number; y: number }) => {
+      if (!localhost.routeFor(id, key)) return null
+      const descriptor = localhost.restoreRoute(id, key)
+      if (descriptor) positions.set(`${id}:${descriptor.revision}`, scroll)
+      return descriptor
+    },
+    openBlockedPreviewNavigation: async (id: string, target: string) => {
+      const url = localhost.blockedUrl(id)
+      if (!url) return false
+      external.push({ path: url, target }); localhost.clearBlocked(id); return true
+    },
+    readFilePreviewScroll: async (id: string, revision: number) => positions.get(`${id}:${revision}`) ?? { x: 0, y: 0 },
+    restoreFilePreviewScroll: async (id: string, revision: number, scroll: { x: number; y: number }) => { positions.set(`${id}:${revision}`, scroll) },
     getWorkspaceFileAvailability: (appSessionId: string, path: string) => workspaceFileAvailability({ appSessionId, path }, sessions),
-    refreshFilePreview: service.refresh,
+    refreshFilePreview: refreshPreview,
     commitFilePreview: async (id: string, revision: number) => {
       const gate = commitGates.shift()
       if (gate?.before) { gate.reached(); await gate.waiting }
-      const committed = service.commit(id, revision)
+      const committed = localhost.has(id) ? localhost.commit(id, revision) : service.commit(id, revision)
       if (gate && !gate.before) { gate.reached(); await gate.waiting }
       return committed
     },
-    releaseFilePreview: service.release,
+    releaseFilePreview: releasePreview,
     subscribeFilePreview: (listener: (event: FilePreviewEvent) => void) => { events.add(listener); return () => events.delete(listener) },
-    getFilePreviewApplications: (appSessionId: string, path: string) => applications.list({ appSessionId, path }),
-    chooseFilePreviewApplication: (appSessionId: string, path: string, target: string) => applications.choose({ appSessionId, path, target }),
+    getFilePreviewApplications: applicationsFor,
+    chooseFilePreviewApplication: (appSessionId: string, path: string, target: string) => {
+      const url = normalizeLocalhostPreviewUrl(path)
+      if (url) { external.push({ path: url, target }); return Promise.resolve(true) }
+      return applications.choose({ appSessionId, path, target })
+    },
     getExternalAppIcon: async () => null,
   } })
   releases.push(() => {
     closeFilePane(sessionId); closeFilePane(otherSession)
-    ids.forEach(id => service.release(id))
+    ids.forEach(id => service.release(id)); localhost.dispose()
     if (previous) Object.defineProperty(window, 'catcode', previous)
     else Reflect.deleteProperty(window, 'catcode')
     rmSync(root, { recursive: true, force: true })
@@ -128,7 +173,7 @@ function setup(withOutput = false) {
   const row: NestedTranscriptRow = {
     id: 'reply', sessionId, frameId: 'f', messageId: 'm', blockIndex: 0,
     parentToolUseId: null, kind: 'assistant-text', role: 'assistant', children: [],
-    content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html) [Image](image.png) [Bad image](broken.png)`,
+    content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html) [Image](image.png) [Bad image](broken.png)${local ? ` [Server](${local.url})` : ''}`,
   }
   const rows: NestedTranscriptRow[] = [row]
   if (withOutput) rows.push({
@@ -137,6 +182,7 @@ function setup(withOutput = false) {
     input: { command: 'preview-scroll-output' }, status: 'success', agentCompletion: null, children: [],
     result: { content: Array.from({ length: 900 }, (_, index) => `output line ${index}`).join('\n'), isError: false, diff: null },
   })
+  if (local) writeFileSync(firstPath, `# Actual disk notes\n\n[Next document](second.markdown) [Local app](${local.url})`)
   const toasts: string[] = []
   const pane = (id = sessionId) => <ToastContext.Provider value={message => { toasts.push(message) }}>
     <ToolsExpandedContext.Provider value={{ expanded: true, setExpanded: () => {} }}><SubagentWorkspace key={id} appSessionId={id}
@@ -147,7 +193,7 @@ function setup(withOutput = false) {
       <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? rows : []} cwd={root} /></section><input aria-label="Composer" /></main>
     </SubagentWorkspace></ToolsExpandedContext.Provider>
   </ToastContext.Provider>
-  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, ids, external }
+  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
 }
 
 test('a reply click crosses the real host file boundary before rendering, keeps composer focus, and refuses outside files', async () => {
@@ -279,7 +325,7 @@ test('confirmed session disposal releases its page and late scroll cleanup canno
 
 
 test('Cmd-click opens the resolved whole file in the chosen app without forwarding a source coordinate', async () => {
-  const { pane, firstPath, external } = setup()
+  const { pane, firstPath, secondPath, external } = setup()
   const tree = await harness.mount(pane())
   await act(async () => {
     tree.container.querySelector('[aria-label="Open ./notes.md:12"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }))
@@ -287,6 +333,13 @@ test('Cmd-click opens the resolved whole file in the chosen app without forwardi
   })
   expect(external).toEqual([{ path: firstPath, target: 'default' }])
   expect(tree.container.querySelector('.file-pane')).toBeNull()
+  await click(tree.container, 'Open ./notes.md:12')
+  await act(async () => {
+    tree.container.querySelector('.file-pane-markdown-link')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }))
+    await new Promise(resolve => setTimeout(resolve, 80))
+  })
+  expect(external.at(-1)).toEqual({ path: secondPath, target: 'default' })
+  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
 })
 
 
@@ -439,4 +492,144 @@ test('a delayed successful update cannot reopen a closed pane', async () => {
     expect(tree.container.querySelector('.file-pane')).toBeNull()
     expect(service.has(id)).toBe(false)
   } finally { delayed.resume(); await settle() }
+})
+
+
+function localServer(port = 0) {
+  const requests: Array<{ method: string; path: string }> = []
+  const server = Bun.serve({ hostname: '127.0.0.1', port,
+    fetch(request) {
+      const path = new URL(request.url).pathname
+      requests.push({ method: request.method, path })
+      return new NativeResponse(path === '/' ? '<!doctype html><title>Local root</title><h1>Local app</h1>' : 'Client-only route',
+        { status: path === '/' ? 200 : 404, headers: { 'Content-Type': 'text/html' } })
+    },
+  })
+  return { server, requests, url: server.url.href }
+}
+async function paintLocalFrame(root: ParentNode) {
+  const iframe = root.querySelector<HTMLIFrameElement>('iframe.file-pane-staging')!
+  expect(iframe).not.toBeNull()
+  await act(async () => { iframe.dispatchEvent(new Event('load')) })
+  await settle()
+  expect(root.querySelector('iframe.file-pane-content:not(.file-pane-staging)') === iframe).toBe(true)
+  return iframe
+}
+
+test('a reply click preflights real HTTP and unifies SPA route receipts with file history without reloading the live frame', async () => {
+  const web = localServer()
+  try {
+    const { pane, sessionId, localhost, captures, pauseNextCapture, external } = setup(false, { url: web.url })
+    const tree = await harness.mount(pane())
+    await click(tree.container, `Open ${web.url}`)
+    const frame = await paintLocalFrame(tree.container)
+    const initial = getFilePaneSession(sessionId).file!
+    expect(web.requests.some(request => request.method === 'HEAD' && request.path === '/')).toBe(true)
+    expect(frame.name).toBe(initial.frameName!)
+    expect(frame.src).toBe(initial.url)
+    expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(web.url)
+    const client = `${web.url}client-only`
+    await act(async () => { localhost.route(initial.id, client, { x: 0, y: 140 }, { view: 'client' }) })
+    expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(client)
+    expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)') === frame).toBe(true)
+    expect(frame.src).toBe(initial.url)
+    expect(getFilePaneSession(sessionId).history[0]?.scroll).toEqual({ x: 0, y: 140 })
+    const replacement = `${web.url}replacement`
+    await act(async () => { localhost.route(initial.id, replacement, { x: 0, y: 280 }, { view: 'replacement' }, true) })
+    expect(getFilePaneSession(sessionId).history).toHaveLength(1)
+    await click(tree.container, 'Back')
+    expect(getFilePaneSession(sessionId).file?.path).toBe(web.url)
+    expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)') === frame).toBe(true)
+    await click(tree.container, 'Forward')
+    expect(getFilePaneSession(sessionId).file?.path).toBe(replacement)
+    await click(tree.container, 'Choose an app')
+    const menu = document.querySelector('[role="menu"][aria-label="Open file in"]')!
+    expect(menu.textContent).toContain('Google Chrome')
+    expect(menu.textContent).toContain('Safari')
+    expect(menu.textContent).not.toContain('Finder')
+    await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+    const resumeCapture = pauseNextCapture()
+    await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Open ./notes.md:12"]')!.click(); await new Promise(resolve => setTimeout(resolve, 90)) })
+    expect(getFilePaneSession(sessionId).file?.kind).toBe('localhost')
+    expect(frame.isConnected).toBe(true)
+    resumeCapture()
+    await settle()
+    expect(getFilePaneSession(sessionId).file?.kind).toBe('markdown')
+    const localLink = [...tree.container.querySelectorAll<HTMLButtonElement>('.file-pane-markdown-link')].find(link => link.textContent === 'Local app')!
+    await act(async () => { localLink.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })); await new Promise(resolve => setTimeout(resolve, 70)) })
+    expect(external.at(-1)).toEqual({ path: web.url, target: 'chrome' })
+    expect(getFilePaneSession(sessionId).file?.kind).toBe('markdown')
+    expect(captures.some(capture => capture.id === initial.id && capture.connected)).toBe(true)
+    await click(tree.container, 'Back')
+    const restored = getFilePaneSession(sessionId).file!
+    expect(restored.path).toBe(replacement)
+    expect(restored.url).toBe(web.url)
+    expect(web.requests.at(-1)?.path).toBe('/')
+    await paintLocalFrame(tree.container)
+  } finally { await web.server.stop(true) }
+})
+
+test('an unavailable real HTTP address reports its host and never opens an empty pane', async () => {
+  const web = localServer()
+  await web.server.stop(true)
+  const { pane, toasts } = setup(false, { url: web.url })
+  const tree = await harness.mount(pane())
+  await click(tree.container, `Open ${web.url}`)
+  expect(tree.container.querySelector('.file-pane')).toBeNull()
+  expect(toasts).toEqual([`Nothing is running at 127.0.0.1:${new URL(web.url).port}`])
+})
+
+test('server stop preserves the current frame, recovery stages a new revision, and departure uses the host-private URL', async () => {
+  let web = localServer()
+  try {
+    const { pane, sessionId, localhost, external } = setup(false, { url: web.url })
+    const tree = await harness.mount(pane())
+    await click(tree.container, `Open ${web.url}`)
+    const old = await paintLocalFrame(tree.container)
+    const id = getFilePaneSession(sessionId).file!.id
+    const port = web.server.port!
+    await web.server.stop(true)
+    await act(async () => { await localhost.refresh(id) })
+    expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('The server stopped. Showing the last version.')
+    expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)') === old).toBe(true)
+    web = localServer(port)
+    await act(async () => { await localhost.refresh(id) })
+    expect(tree.container.querySelectorAll('iframe')).toHaveLength(2)
+    const recovered = await paintLocalFrame(tree.container)
+    expect(recovered === old).toBe(false)
+    expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+    const blocked = 'https://example.com/sign-in?return=private-route'
+    await act(async () => { localhost.leave(id, blocked) })
+    expect(tree.container.querySelector('.file-pane-note')?.textContent).toContain('This page wants to open example.com')
+    expect(tree.container.querySelector('.file-pane-note')?.textContent).not.toContain('private-route')
+    const open = [...tree.container.querySelectorAll<HTMLButtonElement>('.file-pane-note-action')][0]!
+    await act(async () => { open.click() })
+    expect(external.at(-1)).toEqual({ path: blocked, target: 'chrome' })
+    expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+    expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)') === recovered).toBe(true)
+  } finally { await web.server.stop(true) }
+})
+
+test('returning to an offline session waits for its frozen host descriptor before creating an iframe', async () => {
+  const web = localServer()
+  let snapshot: LocalhostFrozenPayload | null = null
+  try {
+    snapshot = { html: await (await nativeFetch(web.url)).text(), resources: new Map() }
+    const { pane, sessionId, otherSession } = setup(false, { url: web.url, snapshot: () => snapshot })
+    const tree = await harness.mount(pane())
+    await click(tree.container, `Open ${web.url}`)
+    await paintLocalFrame(tree.container)
+    await act(async () => { await captureFilePaneScroll(sessionId) })
+    await tree.render(pane(otherSession))
+    await web.server.stop(true)
+    await tree.render(pane())
+    await settle()
+    const file = getFilePaneSession(sessionId).file!
+    expect(file.serverStopped).toBe(true)
+    expect(file.path).toBe(web.url)
+    expect(file.url.startsWith('cat-preview:')).toBe(true)
+    expect([...tree.container.querySelectorAll<HTMLIFrameElement>('iframe')].every(frame => frame.src.startsWith('cat-preview:'))).toBe(true)
+    await paintLocalFrame(tree.container)
+    expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('The server stopped. Showing the last version.')
+  } finally { await web.server.stop(true) }
 })

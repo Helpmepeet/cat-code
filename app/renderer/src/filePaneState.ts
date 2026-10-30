@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { filePreviewKind, type FilePreviewDescriptor, type FilePreviewScroll } from '../../shared/filePreview.js'
+import { filePreviewKind, normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewDescriptor, type FilePreviewScroll } from '../../shared/filePreview.js'
 import type { MarkdownReadingPosition } from './markdownReadingPosition.js'
 import type { SubagentDockRow } from './subagentDockState.js'
 import { defaultViewPreferenceStorage, readViewPreference, writeViewPreference } from './viewPreference.js'
@@ -7,7 +7,8 @@ import { readToolOutputWidth } from './toolOutputPanel.js'
 
 export type SlotOccupant = 'file' | 'worker' | 'output'
 export type FilePaneScroll = FilePreviewScroll & { markdown?: MarkdownReadingPosition }
-export type FilePaneHistoryEntry = { path: string; scroll: FilePaneScroll }
+export type PreviewOpenResult = { ok: true } | { ok: false; message: string }
+export type FilePaneHistoryEntry = { path: string; scroll: FilePaneScroll; routeKey?: string; baseUrl?: string; previewId?: string }
 export type FilePaneOutput = { id: string; fileIndex: number; request: number }
 type FilePaneCheckpoint = Pick<FilePaneSession, 'open' | 'file' | 'committedFile' | 'lastPath' | 'visible' | 'width' | 'history' | 'forward' | 'scroll' | 'note'>
 export type FilePaneSession = {
@@ -23,7 +24,7 @@ export type FilePaneSession = {
   history: FilePaneHistoryEntry[]
   forward: FilePaneHistoryEntry[]
   scroll: FilePaneScroll
-  note: 'removed' | 'watch-error' | 'update-error' | null
+  note: 'removed' | 'watch-error' | 'update-error' | 'server-stopped' | 'leave' | null
   checkpoint: FilePaneCheckpoint | null
 }
 const EMPTY: FilePaneSession = {
@@ -38,6 +39,24 @@ const opening = new Map<string, number>()
 const FILE_WIDTH_KEY = 'catcode.filePaneWidth.v1'
 
 export function isPaneFilePath(path: string): boolean { return filePreviewKind(path) !== null }
+export function paneTargetLabel(path: string): string {
+  return localhostPreviewHostPort(path) ?? path.replace(/:\d+(?::\d+)?$/, '').split('/').at(-1) ?? path
+}
+export function samePaneRevision(left: FilePreviewDescriptor | null | undefined, right: FilePreviewDescriptor | null | undefined): boolean {
+  return !!left && !!right && left.id === right.id && left.revision === right.revision && left.url === right.url
+}
+export function previewDescriptorNote(file: FilePreviewDescriptor | null): FilePaneSession['note'] {
+  return file?.serverStopped ? 'server-stopped' : file?.blockedHost ? 'leave' : file?.watchError ? 'watch-error' : null
+}
+function historyEntry(file: FilePreviewDescriptor, scroll: FilePaneScroll): FilePaneHistoryEntry {
+  return { path: file.path, scroll, ...(file.routeKey ? { routeKey: file.routeKey } : {}),
+    ...(file.baseUrl ? { baseUrl: file.baseUrl } : {}), ...(file.kind === 'localhost' ? { previewId: file.id } : {}) }
+}
+const HANDLED: PreviewOpenResult = { ok: true }
+function refusal(path: string): PreviewOpenResult {
+  return { ok: false, message: /^https?:\/\//i.test(path) ? 'Could not open this page' : 'Could not open this file' }
+}
+
 export function getFilePaneSession(id: string): FilePaneSession { return sessions.get(id) ?? EMPTY }
 export function useFilePaneSession(id: string): FilePaneSession {
   const subscribe = useCallback((listener: () => void) => {
@@ -77,8 +96,17 @@ export function rememberFilePaneScroll(id: string, scroll: FilePaneScroll): void
 async function captureScroll(id: string): Promise<FilePaneScroll> {
   try { return await scrollReaders.get(id)?.() ?? getFilePaneSession(id).scroll } catch { return getFilePaneSession(id).scroll }
 }
+async function captureForNavigation(id: string): Promise<FilePaneScroll> {
+  const state = getFilePaneSession(id)
+  const page = state.committedFile?.kind === 'localhost' ? state.committedFile : state.file?.kind === 'localhost' ? state.file : null
+  const scroll = await captureScroll(id)
+  if (page) {
+    try { await window.catcode.captureLocalhostPreview(page.id) } catch { /* Navigation remains available if a bounded capture cannot finish. */ }
+  }
+  return scroll
+}
 export async function captureFilePaneScroll(id: string): Promise<void> {
-  rememberFilePaneScroll(id, await captureScroll(id))
+  rememberFilePaneScroll(id, await captureForNavigation(id))
 }
 export function readFilePaneWidth(): number {
   return readViewPreference(defaultViewPreferenceStorage(), FILE_WIDTH_KEY, 'width', value =>
@@ -105,86 +133,117 @@ function releaseUnusedCandidate(id: string, descriptor: FilePreviewDescriptor): 
   const state = getFilePaneSession(id)
   if ([state.file?.id, state.committedFile?.id, state.checkpoint?.file?.id, state.checkpoint?.committedFile?.id].every(retained => retained !== descriptor.id)) window.catcode.releaseFilePreview(descriptor.id)
 }
-async function prepare(id: string, path: string): Promise<FilePreviewDescriptor | null> {
-  try { return await window.catcode?.prepareFilePreview(id, path) ?? null } catch { return null }
+async function prepare(id: string, path: string): Promise<({ ok: true; descriptor: FilePreviewDescriptor } | { ok: false; message: string })> {
+  try {
+    const local = normalizeLocalhostPreviewUrl(path)
+    if (local) {
+      const result = await window.catcode.prepareLocalhostPreview(id, local)
+      return result.ok ? result : { ok: false, message: result.reason === 'unavailable' ? `Nothing is running at ${result.hostPort}` : 'Could not open this page' }
+    }
+    const descriptor = await window.catcode.prepareFilePreview(id, path)
+    return descriptor ? { ok: true, descriptor } : { ok: false, message: 'Could not open this file' }
+  } catch { return { ok: false, message: normalizeLocalhostPreviewUrl(path) ? 'Could not open this page' : 'Could not open this file' } }
 }
-export async function requestOpenFile(id: string, path: string, options?: { external?: boolean }): Promise<boolean> {
+export async function requestOpenFile(id: string, path: string, options?: { external?: boolean }): Promise<PreviewOpenResult> {
   if (options?.external) {
     try {
       const apps = await window.catcode.getFilePreviewApplications(id, path)
-      return await window.catcode.chooseFilePreviewApplication(id, path, apps.selected)
-    } catch { return false }
+      return await window.catcode.chooseFilePreviewApplication(id, path, apps.selected) ? HANDLED : refusal(path)
+    } catch { return refusal(path) }
   }
   const token = (opening.get(id) ?? 0) + 1
   opening.set(id, token)
-  const descriptor = await prepare(id, path)
-  if (!descriptor) return false
-  if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return false }
+  const result = await prepare(id, path)
+  if (!result.ok) return opening.get(id) === token ? result : HANDLED
+  const descriptor = result.descriptor
+  if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return HANDLED }
   const previous = getFilePaneSession(id)
   if (previous.open && previous.file?.path === descriptor.path) {
     if (previous.file.id !== descriptor.id) window.catcode.releaseFilePreview(descriptor.id)
     showSlotOccupant(id, 'file')
     focusers.get(id)?.()
-    return true
+    return HANDLED
   }
-  const scroll = await captureScroll(id)
-  if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return false }
+  const scroll = await captureForNavigation(id)
+  if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return HANDLED }
   const settled = previous.checkpoint ?? previous
   updateFilePaneSession(id, {
     checkpoint: previous.checkpoint ?? { ...previous, scroll },
     file: descriptor, open: true, lastPath: descriptor.path, visible: 'file',
-    width: previous.width ?? readFilePaneWidth(), note: descriptor.watchError ? 'watch-error' : null, scroll: { x: 0, y: 0 },
-    history: settled.open && settled.file ? [...settled.history, { path: settled.file.path, scroll: previous.checkpoint ? settled.scroll : scroll }] : [], forward: [],
+    width: previous.width ?? readFilePaneWidth(), note: previewDescriptorNote(descriptor), scroll: { x: 0, y: 0 },
+    history: settled.open && settled.file ? [...settled.history, historyEntry(settled.file, previous.checkpoint ? settled.scroll : scroll)] : [], forward: [],
   })
   if (previous.file && previous.file.id !== previous.committedFile?.id && previous.file.id !== descriptor.id) window.catcode.releaseFilePreview(previous.file.id)
   focusers.get(id)?.()
-  return true
+  return HANDLED
 }
-export async function toggleFilePane(id: string, newestPath?: string | null): Promise<boolean> {
+export async function toggleFilePane(id: string, newestPath?: string | null): Promise<PreviewOpenResult> {
   const state = getFilePaneSession(id)
   if (state.open) {
     if (state.visible === 'file') closeFilePane(id)
     else showSlotOccupant(id, 'file')
     focusers.get(id)?.()
-    return true
+    return HANDLED
   }
   const path = state.lastPath ?? newestPath ?? state.candidatePath
-  return path ? requestOpenFile(id, path) : false
+  return path ? requestOpenFile(id, path) : HANDLED
 }
-export async function stepFilePaneHistory(id: string, direction: 'back' | 'forward'): Promise<boolean> {
+export async function stepFilePaneHistory(id: string, direction: 'back' | 'forward'): Promise<PreviewOpenResult> {
   const state = getFilePaneSession(id)
   const entries = direction === 'back' ? state.history : state.forward
   const target = entries.at(-1)
-  if (!state.open || !state.file || !target) return false
+  if (!state.open || !state.file || !target) return HANDLED
   const token = (opening.get(id) ?? 0) + 1
   opening.set(id, token)
-  const descriptor = await prepare(id, target.path)
-  if (!descriptor) return false
-  if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return false }
-  const scroll = await captureScroll(id)
-  if (opening.get(id) !== token || !getFilePaneSession(id).open) { releaseUnusedCandidate(id, descriptor); return false }
-  const current = { path: state.file.path, scroll }
+  const scroll = await captureForNavigation(id)
+  if (opening.get(id) !== token || !getFilePaneSession(id).open) return HANDLED
+  let descriptor: FilePreviewDescriptor | null = null
+  if (state.file.kind === 'localhost' && target.routeKey && target.previewId === state.file.id) {
+    try { descriptor = await window.catcode.navigateLocalhostPreview(state.file.id, target.routeKey, { x: target.scroll.x, y: target.scroll.y }) } catch { /* The host can recreate a retired route from its bounded boot record. */ }
+  }
+  if (!descriptor) {
+    const result = await prepare(id, target.path)
+    if (!result.ok) return opening.get(id) === token ? result : HANDLED
+    descriptor = result.descriptor
+  }
+  if (opening.get(id) !== token || !getFilePaneSession(id).open) { releaseUnusedCandidate(id, descriptor); return HANDLED }
+  const inPlace = descriptor.kind === 'localhost' && samePaneRevision(state.file, descriptor)
+  const current = historyEntry(state.file, scroll)
   updateFilePaneSession(id, {
-    checkpoint: state.checkpoint ?? { ...state, scroll },
-    file: descriptor, lastPath: descriptor.path, scroll: target.scroll, note: descriptor.watchError ? 'watch-error' : null,
+    checkpoint: inPlace ? null : state.checkpoint ?? { ...state, scroll },
+    ...(inPlace ? { committedFile: descriptor } : {}),
+    file: descriptor, lastPath: descriptor.path, scroll: target.scroll, note: previewDescriptorNote(descriptor),
     history: direction === 'back' ? state.history.slice(0, -1) : [...state.history, current],
     forward: direction === 'forward' ? state.forward.slice(0, -1) : [...state.forward, current],
   })
   if (state.file.id !== state.committedFile?.id && state.file.id !== descriptor.id) window.catcode.releaseFilePreview(state.file.id)
-  return true
+  return HANDLED
+}
+
+export function recordLocalhostRoute(id: string, url: string, outgoingScroll: FilePreviewScroll, routeKey: string, replace = false): void {
+  const state = getFilePaneSession(id)
+  const normalized = normalizeLocalhostPreviewUrl(url)
+  if (!state.open || state.file?.kind !== 'localhost' || !normalized || !routeKey || state.file.routeKey === routeKey) return
+  const parsed = new URL(normalized)
+  const path = parsed.pathname === '/' && !parsed.search && !parsed.hash ? '' : `${parsed.pathname}${parsed.search}${parsed.hash}`
+  const file: FilePreviewDescriptor = { ...state.file, path: normalized, displayPath: `${parsed.host}${path}`, routeKey, blockedHost: undefined }
+  updateFilePaneSession(id, {
+    file, ...(samePaneRevision(state.committedFile, file) ? { committedFile: file } : {}), lastPath: normalized,
+    history: replace ? state.history : [...state.history, historyEntry(state.file, outgoingScroll)], forward: replace ? state.forward : [], scroll: { x: 0, y: 0 }, note: previewDescriptorNote(file),
+  })
 }
 
 /** A file navigation becomes history only once its staged render is usable. */
 export function rejectFilePaneCandidate(id: string, descriptor: FilePreviewDescriptor): boolean {
   const state = getFilePaneSession(id)
-  if (!state.open || state.file?.url !== descriptor.url) return false
+  if (!state.open || !samePaneRevision(state.file, descriptor)) return false
   const checkpoint = state.checkpoint
   if (checkpoint) {
     updateFilePaneSession(id, { ...checkpoint, checkpoint: null, visible: state.visible === 'file' ? checkpoint.visible : state.visible })
     if (descriptor.id !== checkpoint.file?.id && descriptor.id !== checkpoint.committedFile?.id) window.catcode.releaseFilePreview(descriptor.id)
     return true
   }
-  updateFilePaneSession(id, { file: state.committedFile, note: 'update-error' })
+  updateFilePaneSession(id, { file: state.committedFile, note: previewDescriptorNote(state.committedFile) ?? 'update-error' })
   return false
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react'
 import { createPortal } from 'react-dom'
-import type { FilePreviewApplications, FilePreviewDescriptor } from '../../shared/filePreview.js'
+import { normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewApplications, type FilePreviewDescriptor } from '../../shared/filePreview.js'
 import type { OpenWorkspaceFileTarget } from '../../shared/protocol.js'
 import { captureMarkdownReadingPosition } from './markdownReadingPosition.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
@@ -12,7 +12,7 @@ import { ActionCheckIcon, ActionChevronIcon, ActionCloseIcon, ActionCopyIcon } f
 import { useToast } from './toastContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneScroll, rememberFilePaneScroll,
-  isPaneFilePath, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession, type FilePaneScroll,
+  isPaneFilePath, paneTargetLabel, previewDescriptorNote, recordLocalhostRoute, samePaneRevision, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession, type FilePaneScroll,
 } from './filePaneState.js'
 import './filePane.css'
 
@@ -25,6 +25,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const state = useFilePaneSession(appSessionId)
   const descriptor = state.file
   const [painted, setPainted] = useState<PaintedFile | null>(null)
+  const [serverHydrated, setServerHydrated] = useState(descriptor?.kind !== 'localhost')
   const [committing, setCommitting] = useState<PaintedFile | null>(null)
   const committingRef = useRef<PaintedFile | null>(null)
   const readyKeys = useRef(new Set<string>())
@@ -46,11 +47,11 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const toast = useToast()
   paintedRef.current = painted
   descriptorRef.current = descriptor
-  const stagingDescriptor = !painted && state.committedFile ? state.committedFile : descriptor
-  const candidateKey = stagingDescriptor ? `${stagingDescriptor.url}:${reload}` : ''
+  const stagingDescriptor = !painted && state.committedFile && descriptor?.kind !== 'localhost' ? state.committedFile : descriptor
+  const candidateKey = stagingDescriptor ? `${stagingDescriptor.id}:${stagingDescriptor.revision}:${stagingDescriptor.url}:${reload}` : ''
   const retainCommit = committing && descriptor?.id === committing.descriptor.id &&
-    descriptor.path === committing.descriptor.path && descriptor.revision >= committing.descriptor.revision
-  const candidate = retainCommit ? committing : stagingDescriptor && painted?.key !== candidateKey ? { descriptor: stagingDescriptor, key: candidateKey } : null
+    (descriptor.kind === 'localhost' || descriptor.path === committing.descriptor.path) && descriptor.revision >= committing.descriptor.revision
+  const candidate = descriptor?.kind === 'localhost' && !serverHydrated ? null : retainCommit ? committing : stagingDescriptor && painted?.key !== candidateKey ? { descriptor: stagingDescriptor, key: candidateKey } : null
   useLayoutEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
@@ -59,7 +60,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const readScroll = async (): Promise<FilePaneScroll> => {
     const showing = paintedRef.current?.descriptor
     if (!showing) return getFilePaneSession(appSessionId).scroll
-    if (showing.kind === 'html' || showing.kind === 'svg') {
+    if (showing.kind === 'html' || showing.kind === 'svg' || showing.kind === 'localhost') {
       try { return await window.catcode.readFilePreviewScroll(showing.id, showing.revision) } catch { return getFilePaneSession(appSessionId).scroll }
     }
     if (showing.kind === 'markdown' && activeBody.current?.clientHeight === 0) return getFilePaneSession(appSessionId).scroll
@@ -69,7 +70,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   useEffect(() => {
     const timer = setInterval(() => {
       const showing = paintedRef.current?.descriptor
-      if (showing?.kind === 'html' || showing?.kind === 'svg') void readScroll().then(scroll => rememberFilePaneScroll(appSessionId, scroll))
+      if (showing?.kind === 'html' || showing?.kind === 'svg' || showing?.kind === 'localhost') void readScroll().then(scroll => rememberFilePaneScroll(appSessionId, scroll))
     }, 250)
     return () => clearInterval(timer)
   }, [appSessionId])
@@ -88,14 +89,14 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   }, [appSessionId, descriptor?.path])
 
   useEffect(() => {
-    if (!descriptor || !getFilePaneSession(appSessionId).committedFile) return
+    if (!descriptor || descriptor.kind !== 'localhost' && !getFilePaneSession(appSessionId).committedFile) return
     // The frame is destroyed when its session leaves the screen. The host's
     // bounded snapshot remains available, including after a file was removed.
     void window.catcode.refreshFilePreview(descriptor.id).then(next => {
-      if (next && descriptorRef.current?.id === next.id && next.revision !== descriptorRef.current.revision) {
-        updateFilePaneSession(appSessionId, { file: next, note: next.watchError ? 'watch-error' : null })
+      if (next && descriptorRef.current?.id === next.id && (!samePaneRevision(next, descriptorRef.current) || next.serverStopped !== descriptorRef.current.serverStopped || next.blockedHost !== descriptorRef.current.blockedHost || next.watchError !== descriptorRef.current.watchError)) {
+        updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) })
       }
-    }).catch(() => {})
+    }).catch(() => {}).finally(() => { if (mounted.current) setServerHydrated(true) })
   }, [appSessionId])
 
   useEffect(() => window.catcode.subscribeFilePreview(event => {
@@ -111,12 +112,27 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       return
     }
     if (event.id !== current.id) return
-    if (event.kind === 'updated') updateFilePaneSession(appSessionId, { file: event.descriptor, note: event.descriptor.watchError ? 'watch-error' : null })
+    if (event.kind === 'updated') updateFilePaneSession(appSessionId, { file: event.descriptor, note: previewDescriptorNote(event.descriptor) })
     else if (event.kind === 'removed' || event.kind === 'watch-error' || event.kind === 'update-error') updateFilePaneSession(appSessionId, { note: event.kind })
+    else if (event.kind === 'route') recordLocalhostRoute(appSessionId, event.url, event.scroll, event.routeKey, event.replace)
+    else if (event.kind === 'server-stopped' || event.kind === 'leave') {
+      const file = { ...current, ...(event.kind === 'server-stopped' ? { serverStopped: true } : { blockedHost: event.host }) }
+      const committed = getFilePaneSession(appSessionId).committedFile
+      updateFilePaneSession(appSessionId, { file,
+        ...(committed?.id === file.id ? { committedFile: { ...committed, ...(event.kind === 'server-stopped' ? { serverStopped: true } : { blockedHost: event.host }) } } : {}),
+        note: event.kind === 'server-stopped' ? 'server-stopped' : 'leave' })
+    }
     else if (event.kind === 'navigate') {
-      void requestOpenFile(appSessionId, event.path).then(opened => { if (!opened) toast('Could not open this file', { tone: 'warn' }) })
+      void requestOpenFile(appSessionId, event.path).then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) })
     }
   }), [appSessionId, toast, onFocusComposer])
+
+  useEffect(() => {
+    if (descriptor?.kind !== 'localhost') return
+    setPainted(previous => previous && samePaneRevision(previous.descriptor, descriptor) &&
+      (previous.descriptor.path !== descriptor.path || previous.descriptor.routeKey !== descriptor.routeKey)
+      ? { ...previous, descriptor } : previous)
+  }, [descriptor?.path, descriptor?.routeKey, descriptor?.id, descriptor?.revision])
 
   useLayoutEffect(() => {
     if (!appMenu || !menuRef.current || !appTrigger.current) return
@@ -128,36 +144,40 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
 
   const failed = (next: PaintedFile) => {
     if (!mounted.current) return
-    if (rejectFilePaneCandidate(appSessionId, next.descriptor)) toast('Could not open this file', { tone: 'warn' })
+    const stopped = getFilePaneSession(appSessionId).note === 'server-stopped'
+    if (rejectFilePaneCandidate(appSessionId, next.descriptor)) toast(next.descriptor.kind === 'localhost'
+      ? stopped ? `Nothing is running at ${localhostPreviewHostPort(next.descriptor.path)}` : 'Could not open this page'
+      : 'Could not open this file', { tone: 'warn' })
   }
   const ready = async (next: PaintedFile, restoredScroll?: FilePaneScroll) => {
     const current = getFilePaneSession(appSessionId)
-    const restoringCommitted = !paintedRef.current && current.committedFile?.url === next.descriptor.url
+    const restoringCommitted = !paintedRef.current && samePaneRevision(current.committedFile, next.descriptor)
     if (!mounted.current || !current.open || readyKeys.current.has(next.key) ||
-      descriptorRef.current?.url !== next.descriptor.url && !restoringCommitted) return
+      !samePaneRevision(descriptorRef.current, next.descriptor) && !restoringCommitted) return
     readyKeys.current.add(next.key)
     committingRef.current = next
     setCommitting(next)
     try {
       const previous = paintedRef.current
-      const replacingSameFile = previous?.descriptor.path === next.descriptor.path
+      const replacingSameFile = previous?.descriptor.path === next.descriptor.path || next.descriptor.kind === 'localhost' && previous?.descriptor.id === next.descriptor.id
       const scroll = restoredScroll ?? (replacingSameFile ? await readScroll() : getFilePaneSession(appSessionId).scroll)
       if (!restoringCommitted && !await window.catcode.commitFilePreview(next.descriptor.id, next.descriptor.revision)) {
         failed(next)
         return
       }
-      if (next.descriptor.kind === 'html' || next.descriptor.kind === 'svg') {
+      if (next.descriptor.kind === 'html' || next.descriptor.kind === 'svg' || next.descriptor.kind === 'localhost') {
         await window.catcode.restoreFilePreviewScroll(next.descriptor.id, next.descriptor.revision, { x: scroll.x, y: scroll.y })
       }
       const latest = getFilePaneSession(appSessionId)
-      const queuedRevision = latest.file?.id === next.descriptor.id && latest.file.path === next.descriptor.path &&
+      const queuedRevision = latest.file?.id === next.descriptor.id && (latest.file.kind === 'localhost' || latest.file.path === next.descriptor.path) &&
         latest.file.revision > next.descriptor.revision
       const newerCommitted = latest.committedFile?.id === next.descriptor.id && latest.committedFile.revision > next.descriptor.revision
-      if (!mounted.current || !latest.open || newerCommitted || descriptorRef.current?.url !== next.descriptor.url && !queuedRevision &&
-        !(restoringCommitted && latest.committedFile?.url === next.descriptor.url)) return
-      if (!restoringCommitted) updateFilePaneSession(appSessionId, { committedFile: next.descriptor, checkpoint: null })
+      if (!mounted.current || !latest.open || newerCommitted || !samePaneRevision(descriptorRef.current, next.descriptor) && !queuedRevision &&
+        !(restoringCommitted && samePaneRevision(latest.committedFile, next.descriptor))) return
+      const published = samePaneRevision(latest.file, next.descriptor) ? latest.file! : next.descriptor
+      if (!restoringCommitted) updateFilePaneSession(appSessionId, { committedFile: published, checkpoint: null })
       rememberFilePaneScroll(appSessionId, scroll)
-      setPainted(next)
+      setPainted({ ...next, descriptor: published })
       if (previous && previous.descriptor.id !== next.descriptor.id) window.catcode.releaseFilePreview(previous.descriptor.id)
     } catch { return }
     finally {
@@ -176,18 +196,19 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   }, [painted, appSessionId])
 
   if (!descriptor) return null
-  const name = descriptor.path.split('/').at(-1) ?? descriptor.path
-  const displayed = descriptor.displayPath
-  const split = displayed.lastIndexOf('/') + 1
-  const selected = apps?.selected ?? 'default'
-  const selectedLabel = apps?.applications.find(app => app.target === selected)?.label ?? 'Default application'
+  const isLocalhost = descriptor.kind === 'localhost'
+  const name = paneTargetLabel(descriptor.path)
+  const displayed = isLocalhost ? descriptor.path : descriptor.displayPath
+  const split = isLocalhost ? 'http://'.length : displayed.lastIndexOf('/') + 1
+  const selected = apps?.selected ?? (isLocalhost ? 'chrome' : 'default')
+  const selectedLabel = apps?.applications.find(app => app.target === selected)?.label ?? (isLocalhost ? 'Google Chrome' : 'Default application')
   const openApp = async (target: OpenWorkspaceFileTarget) => {
     setAppMenu(false)
     try {
       const opened = await window.catcode.chooseFilePreviewApplication(appSessionId, descriptor.path, target)
-      if (!opened) toast('Could not open this file', { tone: 'warn' })
+      if (!opened) toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' })
       else if (target !== 'finder') setApps(current => current ? { ...current, selected: target } : current)
-    } catch { toast('Could not open this file', { tone: 'warn' }) }
+    } catch { toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }) }
   }
   const copyPath = () => {
     void navigator.clipboard?.writeText(descriptor.path).then(() => {
@@ -203,17 +224,17 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const reloadFile = async () => {
     try {
       const next = await window.catcode.refreshFilePreview(descriptor.id)
-      if (next) { updateFilePaneSession(appSessionId, { file: next, note: next.watchError ? 'watch-error' : null }); setReload(value => value + 1) }
-    } catch { updateFilePaneSession(appSessionId, { note: 'watch-error' }) }
+      if (next) { updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) }); setReload(value => value + 1) }
+    } catch { updateFilePaneSession(appSessionId, { note: isLocalhost ? 'server-stopped' : 'watch-error' }) }
   }
   return <aside className="file-pane" aria-label={`File preview: ${name}`} onKeyDown={event => {
     if (event.key === 'Escape' && !event.defaultPrevented && !pathMenu && !appMenu) { event.preventDefault(); event.stopPropagation(); closeFilePane(appSessionId); onFocusComposer?.() }
   }}>
     <header className="file-pane-header">
       <button type="button" className="file-pane-icon" aria-label="Back" title="Back" disabled={!state.history.length}
-        onClick={() => { void stepFilePaneHistory(appSessionId, 'back').then(ok => { if (!ok) toast('Could not open this file', { tone: 'warn' }) }) }}><PaneArrow back /></button>
+        onClick={() => { void stepFilePaneHistory(appSessionId, 'back').then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}><PaneArrow back /></button>
       <button type="button" className="file-pane-icon" aria-label="Forward" title="Forward" disabled={!state.forward.length}
-        onClick={() => { void stepFilePaneHistory(appSessionId, 'forward').then(ok => { if (!ok) toast('Could not open this file', { tone: 'warn' }) }) }}><PaneArrow /></button>
+        onClick={() => { void stepFilePaneHistory(appSessionId, 'forward').then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}><PaneArrow /></button>
       <button type="button" className="file-pane-icon" aria-label="Reload" title="Reload" onClick={() => { void reloadFile() }}><ReloadIcon /></button>
       <div ref={headerPath} className="file-pane-path" tabIndex={0} role="button" title={descriptor.path}
         onPointerDown={event => { drag.current = { x: event.clientX, y: event.clientY, moved: false } }}
@@ -226,7 +247,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
         }}
         onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyPath() } }}
         onCopy={event => { const text = window.getSelection()?.toString(); if (text) { event.preventDefault(); event.clipboardData.setData('text/plain', text.replace(/[\r\n]+$/, '')) } }}
-        onContextMenu={event => { if (selectedPathText()) return; event.preventDefault(); setPathMenu({ type: 'pointer', x: event.clientX, y: event.clientY }) }}>
+        onContextMenu={event => { if (isLocalhost || selectedPathText()) return; event.preventDefault(); setPathMenu({ type: 'pointer', x: event.clientX, y: event.clientY }) }}>
         <span className="file-pane-path-text"><bdi><span className="file-pane-folder">{displayed.slice(0, split)}</span>{displayed.slice(split)}</bdi></span>
       </div>
       <button type="button" className="file-pane-copy" aria-label="Copy full path" title="Copy full path" data-copied={copied || undefined}
@@ -239,7 +260,22 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       </div>
       <button type="button" className="file-pane-icon" aria-label="Close file" title="Close  ⇧⌘B" onClick={() => { closeFilePane(appSessionId); onFocusComposer?.() }}><ActionCloseIcon /></button>
     </header>
-    {state.note ? <div className="file-pane-note" role="status">{state.note === 'removed' ? `${name} was removed. Showing the last version.` : state.note === 'watch-error' ? 'File watching stopped. Showing the last version.' : 'Could not update this file. Showing the last version.'}</div> : null}
+    {state.note ? <div className="file-pane-note" role="status"><span>{state.note === 'server-stopped' ? 'The server stopped. Showing the last version.'
+      : state.note === 'leave' ? `This page wants to open ${descriptor.blockedHost ?? ''}`
+      : state.note === 'removed' ? `${name} was removed. Showing the last version.`
+      : state.note === 'watch-error' ? 'File watching stopped. Showing the last version.' : 'Could not update this file. Showing the last version.'}</span>
+      {state.note === 'leave' && isLocalhost ? <button type="button" className="file-pane-note-action" onClick={() => {
+        void window.catcode.openBlockedPreviewNavigation(descriptor.id, selected === 'safari' ? 'safari' : 'chrome').then(opened => {
+          if (opened) {
+            const current = getFilePaneSession(appSessionId)
+            if (current.file?.id === descriptor.id) {
+              const file = { ...current.file, blockedHost: undefined }
+              updateFilePaneSession(appSessionId, { file, ...(samePaneRevision(current.committedFile, file) ? { committedFile: file } : {}), note: previewDescriptorNote(file) })
+            }
+          } else toast('Could not open this page', { tone: 'warn' })
+        }).catch(() => toast('Could not open this page', { tone: 'warn' }))
+      }}>Open in {selectedLabel}</button> : null}
+    </div> : null}
     <div className="file-pane-host">
       {painted ? <FileContent key={painted.key} file={painted.descriptor} active bodyRef={activeBody} appSessionId={appSessionId} /> : null}
       {candidate ? <FileContent key={candidate.key} file={candidate.descriptor} active={false} appSessionId={appSessionId} onReady={scroll => { void ready(candidate, scroll) }} onFailure={() => failed(candidate)} /> : null}
@@ -260,8 +296,8 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
           <ExternalAppIcon request={app.target === 'default' ? { target: app.target, appSessionId, path: descriptor.path } : { target: app.target }} />
           <span>{app.label}</span>{selected === app.target ? <ActionCheckIcon /> : null}
         </button>)}
-        <div className="file-pane-menu-seam" />
-        <button type="button" className="file-pane-app-row" role="menuitem" onClick={() => { void openApp('finder') }}><ExternalAppIcon request={{ target: 'finder' }} /><span>Reveal in Finder</span></button>
+        {!isLocalhost ? <><div className="file-pane-menu-seam" />
+        <button type="button" className="file-pane-app-row" role="menuitem" onClick={() => { void openApp('finder') }}><ExternalAppIcon request={{ target: 'finder' }} /><span>Reveal in Finder</span></button></> : null}
       </div>
     </>, document.body) : null}
   </aside>
@@ -297,25 +333,26 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
   const toast = useToast()
   const loaded = () => { requestAnimationFrame(() => requestAnimationFrame(() => ready.current?.())) }
   const className = `file-pane-content${active ? '' : ' file-pane-staging'}`
-  if (file.kind === 'html' || file.kind === 'svg') return <iframe className={className} src={file.url} title={file.path.split('/').at(-1)}
-    sandbox="allow-scripts allow-same-origin" onLoad={loaded} />
+  if (file.kind === 'html' || file.kind === 'svg' || file.kind === 'localhost') return <iframe className={className} src={file.url} name={file.frameName} title={paneTargetLabel(file.path)}
+    sandbox={file.kind === 'localhost' ? 'allow-scripts allow-same-origin allow-forms allow-popups' : 'allow-scripts allow-same-origin'} onLoad={loaded} />
   if (file.kind === 'image') return <div ref={bodyRef} className={`${className} file-pane-image`}><img src={file.url} alt={file.path.split('/').at(-1)} onLoad={loaded} onError={onFailure} draggable={false} /></div>
-  const openLocal = (href: string) => {
+  const openLocal = (href: string, external = false) => {
     const path = href.startsWith('/') ? href : `${file.path.slice(0, file.path.lastIndexOf('/') + 1)}${href}`
-    const opening = isPaneFilePath(path) ? requestOpenFile(appSessionId, path) : window.catcode.openWorkspaceFile(appSessionId, path)
-    void opening.then(opened => { if (!opened) toast('Could not open this file', { tone: 'warn' }) })
+    const opening = isPaneFilePath(path) ? requestOpenFile(appSessionId, path, { external }) : window.catcode.openWorkspaceFile(appSessionId, path).then(ok => ok ? { ok: true as const } : { ok: false as const, message: 'Could not open this file' })
+    void opening.then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) })
       .catch(() => toast('Could not open this file', { tone: 'warn' }))
   }
   const Anchor = ({ href, children }: ComponentPropsWithoutRef<'a'>) => {
     if (!href) return <span>{children}</span>
+    if (normalizeLocalhostPreviewUrl(href)) return <button className="file-pane-markdown-link" type="button" onClick={event => { void requestOpenFile(appSessionId, href, { external: event.metaKey }).then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}>{children}</button>
     if (/^[a-z][a-z\d+.-]*:/i.test(href) || href.startsWith('//')) return <a href={href} target="_blank" rel="noreferrer">{children}</a>
     if (href.startsWith('#')) return <a href={href} onClick={event => {
       event.preventDefault(); document.getElementById(href.slice(1))?.scrollIntoView()
     }}>{children}</a>
-    return <button className="file-pane-markdown-link" type="button" onClick={() => {
+    return <button className="file-pane-markdown-link" type="button" onClick={event => {
       let path = href
       try { path = decodeURIComponent(href) } catch { /* Keep a literal percent in the filename. */ }
-      openLocal(path)
+      openLocal(path, event.metaKey)
     }}>{children}</button>
   }
   const Image = ({ src, alt }: ComponentPropsWithoutRef<'img'>) => {
