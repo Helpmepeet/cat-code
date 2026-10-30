@@ -1,201 +1,79 @@
 # CLAUDE.md
 
-Cat Code is a Claude Code fork for one person, with a terminal engine
-and a production Electron desktop app. Multiple agent sessions share this tree.
+Single-user Claude Code fork: terminal engine in `src/`, Electron app in `app/`.
+Many agent sessions share this tree at once.
 
-These are repository constraints and useful defaults. Choose an approach suited
-to the task; investigation, planning, and reporting do not need a fixed sequence.
-Source establishes current behavior; an implementation bug does not override a
-user requirement or security constraint. Flag meaningful documentation drift.
+Start repository work with `docs/maps/WORKSPACE_MAP.md` when present; `docs/` is
+local-only. For prompt work, also read `docs/prompts/2026-04-30-prompt-surfaces.md`.
 
-## 1. Workspace
+## Commands (§3)
 
-- `src/`, `scripts/`: terminal engine and shared runtime, using the root package.
-- `app/`: desktop package with separate build and typecheck boundaries.
-- `app/renderer/src/theme.css` owns exact UI tokens.
-- `docs/` is deliberately local-only and absent from fresh checkouts.
-  `docs/maps/`: navigation maintained against source. Dated plans and migration
-  program records describe past work; decision records may contain later amendments.
+Run what covers the change.
 
-There is no public compatibility or rollout obligation. Preserve the user's
-saved sessions, settings, credentials, and running work when changing formats.
+```bash
+bun run build:dev:full                 # engine build and lint gates
+bun test <paths>
+bun run --cwd app test
+bun run --cwd app typecheck
+bun run --cwd app typecheck:sidecar
+bun run --cwd app renderer:build       # renderer build inputs changed
+bun run --cwd app test:slow <group>    # groups in app/scripts/desktopTests.ts
+bun run --cwd app test:all             # before packaging
+git diff --check && bun run maps:lint  # docs-only changes
+```
 
-## 2. Finding the owner
+- Never run bare `bun test` (account suites need file isolation) or `bun test app/`
+  (a substring filter that runs stale copies under `tmp/`).
+- Root typecheck is already red: add no new diagnostics. Root lint reads only the
+  branch diff and skips `app/`.
+- `bun run build` and `./cli` need an explicit request. `cat-code exec` covers the
+  Claude harness only.
+- Sidecars load current code at spawn: while editing `src/` or `app/sidecar/`, do
+  not spawn or wake sessions in an open dev app. Main and preload changes need a
+  full dev restart.
 
-For repository work, read `docs/maps/WORKSPACE_MAP.md` once at the start when
-available, even when files or an owner are supplied. Without local docs, route
-directly from source and tracked package scripts; do not claim maps were checked.
-Then start with
-those files or use the map to find the owner. Read only relevant focused maps
-and references, not the whole repository.
+## Architecture (§5)
 
-- Prompt/instruction work: `docs/prompts/2026-04-30-prompt-surfaces.md` when available.
+Renderer → preload → main → supervisor → Unix socket → Bun sidecar running the real
+engine. Unless a redesign is requested, preserve the socket transport, one engine
+process per session, raw `AppSessionEvent` fidelity, and separate `appSessionId` /
+`engineSessionId`.
 
-## 3. Verification
+- Security lives at the receiving boundary: closed inbound schemas, engine-owned
+  permission requests, bounded frames. The renderer never gets raw credentials or
+  authors permission rules.
+- `app/shared/protocol.ts`: breaking wire shapes bump the version.
+- Test engine integration through `src/app-runtime/`, not stubbed tools,
+  permissions, or resume paths.
+- Features need both the set in `scripts/build.ts` and `feature(...)` consumers.
+- Regenerate, never hand-edit: `app/shared/*.snapshot.d.ts`,
+  `src/entrypoints/sdk/coreTypes.generated.ts`.
+- Raw logs, transcripts, settings, and debug output never enter product model prompts.
 
-Test the changed behavior at the lowest layer that exposes the risk. Include
-process or UI checks when the boundary itself matters. A bug regression test
-should distinguish the broken behavior from the fix.
+## Shared tree
 
-Commands below run from the repository root. Use the applicable package checks
-for code changes; documentation-only work needs the docs checks. For a small
-change, a narrower check is reasonable when it covers the affected behavior;
-state what was checked and any material gap. Shared runtime or boundary changes
-need the broader affected package checks.
-
-| Area | Checks |
-|---|---|
-| Engine | `bun run build:dev:full` and `bun test <specific test paths>` |
-| Desktop routine | `bun run --cwd app test`, `bun run --cwd app typecheck`, `bun run --cwd app typecheck:sidecar` |
-| Desktop slow regressions | `bun run --cwd app test:slow` (or an affected group below); `bun run --cwd app test:all` runs routine and slow tests together |
-| Renderer build inputs | `bun run --cwd app renderer:build` |
-| Desktop security/runtime integration | `bun run --cwd app test:hardening` (launches Electron; needs authorization for that run) |
-| Docs only | `git diff --check` and `bun run maps:lint`; check changed links |
-
-- Use the dev build; `bun run build` and `./cli` require an explicit request.
-  `cat-code exec` exercises the Claude harness only, not Codex or Cat Code.
-- Avoid bare `bun test`: some account suites require file-isolated runs.
-  Local `docs/maps/build-release-testing.md`, when available, gives details.
-- Desktop test tiers are owned by `app/scripts/desktopTests.ts`. The routine
-  command excludes only explicitly reviewed files, not all process/integration
-  tests. New tests stay routine by default. No assertions or tests are disabled.
-  Run `bun run --cwd app test:slow workspace` for workspace jumps, relocation,
-  trust/startup gates, and handoff recovery; `test:slow native` for lid-helper
-  lifecycle/power observation; `test:slow analytics` for retained-usage collection,
-  indexing, snapshot budgeting, and usage-worker deadlines; `test:slow runtime`
-  for session bootstrap/resume/leases, permissions, forced/background work,
-  scheduling, catalog/backfill/account workers, diagnostics and cleanup;
-  `test:slow tooling` for editor launch and capture/harness process lifetimes.
-  These are required area regression checks, including the jump file named
-  "baseline", not disposable benchmarks.
-  Run all slow groups for cross-cutting desktop runtime changes, and
-  `bun run --cwd app test:all` before packaging/install validation.
-  Direct `bun test ./app` still runs everything. Do not use `bun test app/`:
-  Bun treats it as a substring filter and can run stale copies under `tmp/`.
-- Root typecheck has existing engine errors. Require no new diagnostics from
-  the change; `build:dev:full` includes the separate undefined-name gate.
-  The sidecar typecheck wrapper scopes errors to owned sidecar/shared files.
-- Root lint is a branch-diff check and may miss working-tree edits. It does not
-  cover `app/`. A clean lint or bundle alone is not behavior evidence.
-- Renderer TSX runtime exports are components only; put shared helpers, hooks,
-  and constants in `.ts` modules. Desktop scripts enforce Fast Refresh boundaries.
-- Investigate failures against the current diff. A dirty file is a reason to
-  check ownership, not proof a failure is unrelated. Coordinate before changing
-  another session's work; report unrelated failures without repairing their slice.
-- Dev sidecars load current repository TypeScript when spawned. While editing
-  `src/` or `app/sidecar/`, avoid spawning sessions in an open dev app, including
-  creating peers or waking parked peers. Existing sessions retain loaded code.
-  Main/preload changes need a full dev restart; renderer HMR does not reload them.
-
-## 4. Shared-tree Git
-
-- Treat unfamiliar edits and untracked files as another session's work.
-  Check the current diff before editing or committing, and re-read shared files
-  before writing. Coordinate known overlap; an empty desktop peer list does not
-  account for terminal sessions.
-- Stage explicit paths and inspect the staged diff. If a file contains mixed
-  ownership, stage only your hunks. Do not stash, sweep-clean, revert others'
-  changes, or use broad staging (`git add -A`, `git add -u`, `git commit -a`).
-- Commit coherent, verified work to the current branch without asking, using
+- Unfamiliar edits and untracked files belong to another session. Re-read shared
+  files before writing, and check ownership before calling a failure unrelated.
+- Stage explicit paths and only your hunks. No stash, sweep-clean, `git add -A`,
+  `git add -u`, or `git commit -a`.
+- Commit verified work to the current branch without asking, as
   `type(scope): subject`. No branches, worktrees, or PRs unless requested.
-  Push only when asked: pushing this branch can publish others' commits too.
-- Avoid history rewrites on the shared branch. An authorized rewrite needs
-  explicit SHAs and a fresh tip/ownership check. Do not bypass commit hooks.
-- Requested manual worktrees use `.worktrees/<slug>` with `worktree-<slug>`;
-  `.claude/worktrees/agent-*` belongs to the harness. Use `git worktree list`
-  for inventory. Clean up your merged worktree and branch only after verifying
-  it is inactive, clean, and fully merged; do not force-remove uncertain work.
-- Write `DONE.md` only when asked.
+- Push only when asked. No history rewrites.
 
-## 5. Architecture boundaries
+## Live state
 
-Desktop flow: renderer → preload → main → supervisor → Unix socket → Bun
-sidecar running the real engine. The supervisor and host plane are Electron-free.
+`~/.cat-code/`, the account vault, and the running app hold real work; tests use
+isolated state. Get authorization for live logins, token refreshes, quota-consuming
+probes, GUI launches or driving, and `test:hardening`. GUI work uses **Cat Code Dev**.
 
-Preserve Unix-socket transport, one engine process per session, raw
-`AppSessionEvent` fidelity, the chosen window/session lifetime, and the separate
-`appSessionId` / `engineSessionId` identities unless the user requests redesign.
+## Code
 
-Security is enforced at the receiving boundary: closed inbound schemas,
-engine-owned permission requests, and bounded frames/rates. The renderer neither
-receives raw credentials nor authors permission rules. Preserve the
-separate session protocol and host control-plane contracts.
+- Desktop state uses reducers and read-time selectors; never mutate transcript rows.
+- Renderer styling belongs in stylesheets and classes, not inline `style={{}}`.
+- A comment should need almost no maintenance. Keep rationale and incident context.
 
-## 6. Sensitive and generated code
+## User-visible text (§7)
 
-- `app/shared/protocol.ts`: preserve versioning; breaking wire shapes require
-  a version bump. New inbound kinds need receiving-boundary validation, tests
-  accepting valid and rejecting invalid input, and a decision reference.
-- Regenerate `app/shared/engine-types.snapshot.d.ts`,
-  `app/shared/sdk-types.snapshot.d.ts`, and
-  `src/entrypoints/sdk/coreTypes.generated.ts` from their sources.
-- `src/migrations/runEngineMigrations.ts` owns startup migration registration,
-  order, versioning, and cross-process locking. Use it for persisted-state migrations.
-- `src/codex-core/accounts.ts` coordinates shared token rotation. Preserve its
-  locks and durable attempt ledger; exercise changes with isolated test state.
-- Keep desktop diagnostic schemas bounded and exports allowlisted/redacted.
-  Raw operational logs, transcripts, settings, and debug output must not be
-  injected into product model prompts; see `app/main/diagnosticsBundle.ts`.
-- Do not refactor `src/vendor/` or rewrite `eslint-suppressions.json` to pass lint.
-
-## 7. Coding and user-visible text
-
-- Use TypeScript and Bun. Keep desktop strictness; do not enable root strict
-  flags or fix unrelated engine diagnostics. Ask before adding dependencies.
-  Use `uv` for Python tooling when needed.
-- Follow nearby module/test conventions. For desktop state, preserve reducers
-  and read-time selectors rather than mutating stored transcript rows.
-- Reject invalid inbound input; render unknown display variants gracefully.
-  Runtime-narrow unknown shapes and keep closed-union handling exhaustive.
-  When extending SDK message handling, update its projector and fixtures together.
-- User-visible text, including accessibility labels and tool descriptions,
-  contains no em dashes or internal engineering notes. Every string must add
-  unique, decision-relevant meaning. Do not repeat visible state or selections,
-  coach discoverable interactions, or narrate implementation and automatic work.
-  Show status text only when it changes what the user should do or how displayed
-  data should be interpreted.
-  `app/renderer/src/userVisibleText.test.ts` enforces engineering-text exclusions;
-  `§7-ok` is for a justified local exception, not a widened allowlist.
-- Comments explain constraints code cannot show. Avoid prose that silently
-  becomes stale when another file changes; cite symbols instead of cross-file
-  line numbers or duplicated values. Keep useful rationale and incident context.
-- Renderer styling belongs in stylesheets/classes, not inline `style={{}}`.
-
-## 8. Engine integration
-
-Reuse real engine entry points and context from `src/app-runtime/` and the
-relevant owner. Stub tools, commands, permission context, or duplicate resume
-machinery can make a test pass while production remains broken.
-
-Feature changes need both the build-time feature set in `scripts/build.ts` and
-runtime `feature(...)` consumers. Provider behavior is owned by
-`src/utils/model/providers.ts`; verify routing there rather than inferring it
-from the session label.
-
-## 9. Scope and documentation
-
-Make the changes needed to complete the request, including affected callers,
-tests, and docs. Follow references when renaming or removing a contract; avoid
-unrelated cleanup. New plans/reports belong under `docs/<topic>/YYYY-MM-DD-slug.md`;
-maintained maps and root entrypoints are updated in place.
-
-## 10. Live state and authorization
-
-The user's `~/.cat-code/`, account vault, and running app contain real work.
-Use isolated state for tests. Live logins, token refreshes, quota-consuming
-probes, GUI launches/driving, destructive operations outside the requested edit,
-and changes to locked architecture or the security baseline need authorization
-covering that action. Honor authorization already given for this task.
-
-For GUI work, use **Cat Code Dev**. Do not steal focus or warp the cursor for
-hover-only checks; leave precise operator steps for checks you cannot perform.
-Stop only processes you started and tracked by
-PID; no name-based or discovery-paired sweep kills.
-
-## 11. Reporting
-
-<a id="11-required-workflow"></a>
-
-Report the result, relevant verification outcomes, and material limitations.
-Distinguish source inspection from observed runtime/GUI behavior. Match the
-detail to the task; no fixed report template is required.
+No em dashes or engineering notes. Status and helper text must change what the user
+does or how they read the data. `§7-ok` marks a justified exception to
+`app/renderer/src/userVisibleText.test.ts`.
