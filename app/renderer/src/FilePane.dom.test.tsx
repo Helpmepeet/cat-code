@@ -56,6 +56,11 @@ function setup() {
   const otherSession = randomUUID()
   const firstPath = join(root, 'notes.md')
   const secondPath = join(root, 'second.markdown')
+  const imagePath = join(root, 'image.png')
+  const badImagePath = join(root, 'broken.png')
+  const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=', 'base64')
+  writeFileSync(imagePath, imageBytes)
+  writeFileSync(badImagePath, Buffer.alloc(0))
   const brokenPath = join(root, 'broken.html')
   writeFileSync(brokenPath, '<!doctype html><link rel="stylesheet" href="missing.css"><p>Incomplete page</p>')
   writeFileSync(firstPath, '# Actual disk notes\n\n[Next document](second.markdown)')
@@ -105,7 +110,7 @@ function setup() {
   const row: NestedTranscriptRow = {
     id: 'reply', sessionId, frameId: 'f', messageId: 'm', blockIndex: 0,
     parentToolUseId: null, kind: 'assistant-text', role: 'assistant', children: [],
-    content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html)`,
+    content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html) [Image](image.png) [Bad image](broken.png)`,
   }
   const toasts: string[] = []
   const pane = (id = sessionId) => <ToastContext.Provider value={message => { toasts.push(message) }}>
@@ -117,7 +122,7 @@ function setup() {
       <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? [row] : []} cwd={root} /></section><input aria-label="Composer" /></main>
     </SubagentWorkspace>
   </ToastContext.Provider>
-  return { pane, sessionId, firstPath, secondPath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, ids, external }
+  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, ids, external }
 }
 
 test('a reply click crosses the real host file boundary before rendering, keeps composer focus, and refuses outside files', async () => {
@@ -257,4 +262,39 @@ test('Cmd-click opens the resolved whole file in the chosen app without forwardi
   })
   expect(external).toEqual([{ path: firstPath, target: 'default' }])
   expect(tree.container.querySelector('.file-pane')).toBeNull()
+})
+
+
+test('image decode errors reject a corrupt initial file and retain a good image during a corrupt live update', async () => {
+  const { pane, sessionId, imagePath, imageBytes, service, toasts } = setup()
+  const tree = await harness.mount(pane())
+  const signalImage = async (event: 'load' | 'error') => {
+    const image = tree.container.querySelector('.file-pane-staging.file-pane-image img')
+    expect(image).not.toBeNull()
+    // Happy DOM cannot decode pixels. These are Chromium's real element events;
+    // file preparation, revisions and retained bytes use the actual host service.
+    await act(async () => { image!.dispatchEvent(new Event(event)) })
+    await settle()
+  }
+  await click(tree.container, 'Open broken.png')
+  await signalImage('error')
+  expect(tree.container.querySelector('.file-pane')).toBeNull()
+  expect(toasts).toEqual(['Could not open this file'])
+
+  await click(tree.container, 'Open image.png')
+  await signalImage('load')
+  const goodImage = tree.container.querySelector('.file-pane-image:not(.file-pane-staging) img')!
+  expect(goodImage).not.toBeNull()
+  const id = getFilePaneSession(sessionId).file!.id
+  writeFileSync(imagePath, Buffer.alloc(0))
+  await act(async () => { await service.refresh(id) })
+  await signalImage('error')
+  expect(tree.container.querySelector('.file-pane-image:not(.file-pane-staging) img') === goodImage).toBe(true)
+  expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('Could not update this file. Showing the last version.')
+
+  writeFileSync(imagePath, imageBytes)
+  await act(async () => { await service.refresh(id) })
+  await signalImage('load')
+  expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+  expect(tree.container.querySelector('.file-pane-image:not(.file-pane-staging) img')).not.toBeNull()
 })

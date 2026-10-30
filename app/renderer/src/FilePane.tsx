@@ -119,6 +119,10 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     menuRef.current.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus()
   }, [appMenu])
 
+  const failed = (next: PaintedFile) => {
+    if (!mounted.current) return
+    if (rejectFilePaneCandidate(appSessionId, next.descriptor)) toast('Could not open this file', { tone: 'warn' })
+  }
   const ready = async (next: PaintedFile) => {
     const current = getFilePaneSession(appSessionId)
     const restoringCommitted = !paintedRef.current && current.committedFile?.url === next.descriptor.url
@@ -128,7 +132,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     const scroll = replacingSameFile ? await readScroll() : getFilePaneSession(appSessionId).scroll
     try {
       if (!restoringCommitted && !await window.catcode.commitFilePreview(next.descriptor.id, next.descriptor.revision)) {
-        if (rejectFilePaneCandidate(appSessionId, next.descriptor)) toast('Could not open this file', { tone: 'warn' })
+        failed(next)
         return
       }
       if (next.descriptor.kind === 'html' || next.descriptor.kind === 'svg') {
@@ -216,7 +220,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     {state.note ? <div className="file-pane-note" role="status">{state.note === 'removed' ? `${name} was removed. Showing the last version.` : state.note === 'watch-error' ? 'File watching stopped. Showing the last version.' : 'Could not update this file. Showing the last version.'}</div> : null}
     <div className="file-pane-host">
       {painted ? <FileContent key={painted.key} file={painted.descriptor} active bodyRef={activeBody} appSessionId={appSessionId} /> : null}
-      {candidate ? <FileContent key={candidate.key} file={candidate.descriptor} active={false} appSessionId={appSessionId} onReady={() => { void ready(candidate) }} /> : null}
+      {candidate ? <FileContent key={candidate.key} file={candidate.descriptor} active={false} appSessionId={appSessionId} onReady={() => { void ready(candidate) }} onFailure={() => failed(candidate)} /> : null}
     </div>
     {pathMenu ? <FilePathActionsMenu anchor={pathMenu} rawPath={descriptor.path} cwd={cwd} sessionId={appSessionId} onClose={() => setPathMenu(null)} /> : null}
     {appMenu ? createPortal(<>
@@ -241,12 +245,13 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   </aside>
 }
 
-function FileContent({ file, active, bodyRef, appSessionId, onReady }: {
+function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }: {
   file: FilePreviewDescriptor
   active: boolean
   bodyRef?: React.RefObject<HTMLDivElement | null>
   appSessionId: string
   onReady?: () => void
+  onFailure?: () => void
 }) {
   const ready = useRef(onReady)
   ready.current = onReady
@@ -260,7 +265,7 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady }: {
   const className = `file-pane-content${active ? '' : ' file-pane-staging'}`
   if (file.kind === 'html' || file.kind === 'svg') return <iframe className={className} src={file.url} title={file.path.split('/').at(-1)}
     sandbox="allow-scripts allow-same-origin" onLoad={loaded} />
-  if (file.kind === 'image') return <div ref={bodyRef} className={`${className} file-pane-image`}><img src={file.url} alt={file.path.split('/').at(-1)} onLoad={loaded} draggable={false} /></div>
+  if (file.kind === 'image') return <div ref={bodyRef} className={`${className} file-pane-image`}><img src={file.url} alt={file.path.split('/').at(-1)} onLoad={loaded} onError={onFailure} draggable={false} /></div>
   const openLocal = (href: string) => {
     const path = href.startsWith('/') ? href : `${file.path.slice(0, file.path.lastIndexOf('/') + 1)}${href}`
     const opening = isPaneFilePath(path) ? requestOpenFile(appSessionId, path) : window.catcode.openWorkspaceFile(appSessionId, path)
