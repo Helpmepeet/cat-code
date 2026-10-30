@@ -1,3 +1,4 @@
+import { createLocalhostPopups } from './localhostPopups.js'
 import { createLocalhostSnapshots } from './localhostSnapshot.js'
 import { installLocalFormTracking } from './localhostFormIntent.js'
 import { createExternalUrlHandler } from './externalUrl.js'
@@ -2229,18 +2230,29 @@ function createWindow(): void {
       event.preventDefault()
     }
   })
+  const localPopups = createLocalhostPopups({
+    records: () => localhostPreviews.bindings(),
+    frames: () => window.isDestroyed() ? [] : window.webContents.mainFrame.frames.flatMap(frame => {
+      if (frame.isDestroyed() || frame.detached) return []
+      const binding = localFrameBinding(frame)
+      const descriptor = binding && localhostPreviews.descriptor(binding.id, binding.revision)
+      return descriptor?.frameName && localhostPreviews.allowed(frame.url) ? [{ id: descriptor.id, frameName: descriptor.frameName, url: frame.url }] : []
+    }),
+    focusedFrameName: () => window.isDestroyed() ? Promise.resolve(null) : window.webContents.mainFrame.executeJavaScript(`(() => {
+      const active = document.activeElement;
+      const frame = active instanceof HTMLIFrameElement && active.classList.contains('file-pane-content') ? active : document.querySelector('iframe.file-pane-content:not(.file-pane-staging)');
+      return frame instanceof HTMLIFrameElement && frame.name.length <= 160 ? frame.name : null;
+    })()`),
+    leave: (id, url) => localhostPreviews.leave(id, url),
+  })
+  window.once('closed', () => localPopups.dispose())
   window.webContents.setWindowOpenHandler(({ url, referrer }) => {
-    const local = localhostPreviews.bindings().find(binding => { try { return new URL(binding.url).origin === new URL(referrer.url).origin } catch { return false } })
-    if (local) { localhostPreviews.leave(local.id, url); return { action: 'deny' } }
-    const liveLocal=window.webContents.mainFrame.frames.some(frame=>localFrameBinding(frame)!==null)
-    if(liveLocal&&!isAppOrigin(referrer.url,navigationConfig())){
-      void window.webContents.mainFrame.executeJavaScript(`(() => {const element=document.activeElement;return element instanceof HTMLIFrameElement?{src:element.src,name:element.name}:null})()`).then(value=>{const source=localPreviewIdentity(value);if(source)localhostPreviews.leave(source.id,url)}).catch(()=>{})
-      return {action:'deny'}
+    if (!isAppOrigin(referrer.url, navigationConfig())) {
+      localPopups.handle(url, referrer.url)
+      return { action: 'deny' }
     }
     const decision = decideWindowOpen(url)
-    if ('openExternal' in decision) {
-      void shell.openExternal(decision.openExternal)
-    }
+    if ('openExternal' in decision) void shell.openExternal(decision.openExternal)
     return { action: 'deny' }
   })
 
