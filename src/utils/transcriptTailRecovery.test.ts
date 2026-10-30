@@ -62,6 +62,126 @@ function prepare(fault?: Parameters<typeof recovery.prepareOwnedTranscriptTail>[
   })
 }
 
+async function acknowledgeRecovery() {
+  // Owned resume clears this cache after publishing its out-of-band disclosure.
+  storage.clearSessionMessagesCache()
+  const loaded = await storage.loadTranscriptFile(path, { strict: true, keepAllLeaves: true })
+  const active = storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  const input = createUserMessage({ content: 'genuine review of the current recovered history' })
+  await storage.recordTranscript([...active.messages, input])
+  await storage.markActiveConversationTip(input.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably(input.uuid)
+  recovery.acceptTailRecoveryReview(path, sessionId, input.uuid)
+  return input
+}
+
+test('an archived V2 receipt cannot clear review on a different selected branch', async () => {
+  appendFileSync(path, torn)
+  await prepare()
+  await acknowledgeRecovery()
+  expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(false)
+  await storage.markActiveConversationTip(seed.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+  const loaded = await storage.loadTranscriptFile(path, { strict: true, keepAllLeaves: true })
+  expect(storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+    .messages.map(row => row.uuid)).toEqual([seed.uuid])
+  expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(true)
+})
+
+test('explicit compact-boundary lineage preserves a reviewed receipt without granting it to another branch', async () => {
+  appendFileSync(path, torn)
+  await prepare()
+  const input = await acknowledgeRecovery()
+  const boundary = randomUUID(), summary = randomUUID()
+  appendFileSync(path, [
+    { type: 'system', subtype: 'compact_boundary', uuid: boundary, sessionId, parentUuid: null,
+      logicalParentUuid: input.uuid, isSidechain: false, timestamp: new Date().toISOString(),
+      content: 'Conversation compacted', compactMetadata: { trigger: 'auto', preTokens: 1000 } },
+    { ...createUserMessage({ content: 'preserved summary', isMeta: true }), uuid: summary,
+      sessionId, parentUuid: boundary, isSidechain: false },
+    { type: 'active-conversation-tip', sessionId, tipUuid: summary },
+  ].map(row => JSON.stringify(row) + '\n').join(''))
+  expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(false)
+  await storage.markActiveConversationTip(seed.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+  expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(true)
+})
+
+test.each(['backup', 'backup-sync', 'manifest', 'manifest-sync', 'truncate', 'truncate-sync', 'disclosure', 'disclosure-sync', 'partial'] as const)('later recovery preserves earlier evidence and restarts after %s', async stage => {
+  appendFileSync(path, torn)
+  const first = await prepare()
+  await acknowledgeRecovery()
+  const firstRoot = recovery.transcriptRecoveryDirectory(path)
+  const preserved = new Map(['manifest.json', 'tail.bin', 'accepted.json'].map(name =>
+    [name, readFileSync(join(firstRoot, name))]))
+  const secondTail = Buffer.from('{"type":"assistant","unfinished":"second interruption')
+  appendFileSync(path, secondTail)
+  await expect(prepare(observed => {
+    if (observed === stage || stage === 'partial' && observed === 'disclosure') {
+      if (stage === 'partial') {
+        const manifest = JSON.parse(readFileSync(join(recovery.transcriptRecoveryDirectory(path), 'manifest.json'), 'utf8'))
+        const fd = openSync(path, 'r+')
+        try { ftruncateSync(fd, manifest.boundary + 20) } finally { closeSync(fd) }
+      }
+      throw new Error(`later crash at ${stage}`)
+    }
+  })).rejects.toThrow('later crash at')
+  const second = await prepare()
+  expect(second?.reviewRequired).toBe(true)
+  expect(second?.warningUuid).not.toBe(first?.warningUuid)
+  expect(readFileSync(join(recovery.transcriptRecoveryDirectory(path), 'tail.bin'))).toEqual(secondTail)
+  for (const [name, bytes] of preserved) expect(readFileSync(join(firstRoot, name))).toEqual(bytes)
+  expect(readFileSync(path, 'utf8').split(recovery.RECOVERY_WARNING)).toHaveLength(3)
+  await acknowledgeRecovery()
+  expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(false)
+  const completed = readFileSync(path)
+  await prepare()
+  expect(readFileSync(path)).toEqual(completed)
+})
+
+test('later episode evidence cannot be hidden by a missing selection pointer', async () => {
+  appendFileSync(path, torn)
+  await prepare()
+  await acknowledgeRecovery()
+  const base = recovery.transcriptRecoveryDirectory(path)
+  const original = readFileSync(join(base, 'tail.bin'))
+  appendFileSync(path, '{"unfinished":"second episode')
+  await prepare()
+  const latest = recovery.transcriptRecoveryDirectory(path)
+  expect(latest).not.toBe(base)
+  renameSync(join(base, 'current.json'), join(base, 'current.preserved.json'))
+  const bytes = readFileSync(path)
+  expect(() => recovery.readTailRecoveryState(path, sessionId)).toThrow('episode evidence is missing')
+  await expect(prepare()).rejects.toThrow('episode evidence is missing')
+  expect(readFileSync(path)).toEqual(bytes)
+  expect(readFileSync(join(base, 'tail.bin'))).toEqual(original)
+})
+
+test('three successive recoveries retain all prior immutable episodes', async () => {
+  const roots: string[] = []
+  const tails: Buffer[] = []
+  for (let episode = 0; episode < 3; episode++) {
+    const tail = Buffer.from(`{"unfinished":"episode ${episode}`)
+    appendFileSync(path, tail)
+    await prepare()
+    roots.push(recovery.transcriptRecoveryDirectory(path))
+    tails.push(tail)
+    expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(true)
+    await acknowledgeRecovery()
+  }
+  expect(new Set(roots).size).toBe(3)
+  roots.forEach((root, index) => expect(readFileSync(join(root, 'tail.bin'))).toEqual(tails[index]!))
+  expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(false)
+})
+
+test('valid JSON with invalid recovery evidence is not reclassified as a damaged tail', async () => {
+  appendFileSync(path, JSON.stringify({ type: 'system', sessionId, uuid: randomUUID(), transcriptRecovery: { forged: true } }))
+  const bytes = readFileSync(path)
+  await expect(prepare()).rejects.toThrow('Invalid recovery disclosure')
+  expect(readFileSync(path)).toEqual(bytes)
+  expect(existsSync(recovery.transcriptRecoveryDirectory(path))).toBe(false)
+})
+
 test('framing distinguishes missing separator, invalid UTF-8 tail and terminated corruption', () => {
   expect(guard.inspectTranscriptFraming(Buffer.from('{"type":"tag"}')).needsSeparator).toBe(true)
   expect(guard.inspectTranscriptFraming(Buffer.concat([intact, Buffer.from([0xff, 0xfe])])).suffix).toEqual(Buffer.from([0xff, 0xfe]))

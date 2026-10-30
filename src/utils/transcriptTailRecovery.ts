@@ -19,12 +19,29 @@ type Manifest = {
   warningUuid: string; contextUuid: string; parentUuid: string; timestamp: string
 }
 export type TailRecoveryState = { reviewRequired: boolean; warningUuid: string; contextUuid: string } | null
-function rootFor(path: string): string {
+function evidenceBase(path: string): string {
   const canonical = canonicalTranscriptPath(path)
   const portable = join(dirname(canonical), basename(canonical, '.jsonl'), 'transcript-recovery')
   const legacy = `${canonical}.recovery`
   if (existsSync(portable) && existsSync(legacy)) throw new Error('Conflicting recovery evidence locations')
   return !existsSync(portable) && existsSync(legacy) ? legacy : portable
+}
+function rootFor(path: string): string {
+  const base = evidenceBase(path)
+  const pointer = join(base, 'current.json')
+  if (!existsSync(pointer)) return base
+  privateDirectory(base)
+  const current: unknown = JSON.parse(privateBytes(pointer, 512).toString('utf8'))
+  if (!current || typeof current !== 'object' || Array.isArray(current) ||
+      Object.keys(current).length !== 1 || !('episode' in current) || !isHandoffUuid(current.episode)) {
+    throw new Error('Invalid current recovery episode')
+  }
+  if (!existsSync(join(base, 'episodes'))) throw new Error('Saved recovery episode evidence is missing')
+  privateDirectory(join(base, 'episodes'))
+  const root = join(base, 'episodes', current.episode)
+  if (!existsSync(root)) throw new Error('Saved recovery episode evidence is missing')
+  privateDirectory(root)
+  return root
 }
 export const transcriptRecoveryDirectory = rootFor
 export function recoveryHistoryForFork<T extends object>(messages: readonly T[], state?: TailRecoveryState): T[] {
@@ -183,6 +200,22 @@ function readRange(fd: number, offset: number, length: number): Buffer {
   return bytes
 }
 
+function recoveryDisclosures(sessionId: string) {
+  const seen = new Set<string>()
+  let latest: string | undefined
+  return {
+    get latest() { return latest },
+    observe(row: Record<string, unknown>) {
+      if (row.sessionId !== sessionId || row.type !== 'system' || !('transcriptRecovery' in row)) return
+      const marker = row.transcriptRecovery
+      if (!isHandoffUuid(row.uuid) || !marker || typeof marker !== 'object' || Array.isArray(marker) ||
+          Object.keys(marker).length !== 2 || !('version' in marker) || marker.version !== 1 ||
+          !('contextUuid' in marker) || !isHandoffUuid(marker.contextUuid)) throw new Error('Invalid recovery disclosure')
+      if (!seen.has(row.uuid)) { seen.add(row.uuid); latest = marker.contextUuid }
+    },
+  }
+}
+
 function inspectReviewInput(path: string, manifest: Manifest, inputUuid?: string, expectedHash?: string) {
   const { isTranscriptMessage } = require('./sessionStorage.js') as typeof import('./sessionStorage.js')
   const fd = openPrivateTranscript(path, constants.O_RDONLY)
@@ -199,13 +232,18 @@ function inspectReviewInput(path: string, manifest: Manifest, inputUuid?: string
     let inputHash: string | undefined
     let genuine = false
     let receiptMatched = false
+    const disclosures = recoveryDisclosures(manifest.sessionId)
     const framing = scanTranscriptDescriptor(fd, row => {
+      disclosures.observe(row)
       if (row.type === 'active-conversation-tip' && row.sessionId === manifest.sessionId) {
         active = isHandoffUuid(row.tipUuid) ? row.tipUuid : undefined
       }
       if (!isTranscriptMessage(row as unknown as import('../types/logs.js').Entry) ||
         row.sessionId !== manifest.sessionId || row.isSidechain || !isHandoffUuid(row.uuid)) return
-      const parent = typeof row.parentUuid === 'string' ? ancestry.get(row.parentUuid) : undefined
+      const parentUuid = row.type === 'system' && row.subtype === 'compact_boundary'
+        ? row.parentUuid ?? row.logicalParentUuid
+        : row.parentUuid
+      const parent = typeof parentUuid === 'string' ? ancestry.get(parentUuid) : undefined
       const context = row.uuid === manifest.contextUuid || parent?.context === true
       const body = row.message && typeof row.message === 'object' && !Array.isArray(row.message)
         ? row.message as Record<string, unknown> : null
@@ -221,6 +259,7 @@ function inspectReviewInput(path: string, manifest: Manifest, inputUuid?: string
       ancestry.set(row.uuid, { context, input: (isInput && context) || parent?.input === true })
     })
     if (framing.suffix.length) throw new Error('A further damaged tail requires separate recovery')
+    if (disclosures.latest && disclosures.latest !== manifest.contextUuid) throw new Error('Saved recovery episode evidence is missing')
     return { inputHash, genuine, receiptMatched, descendsContext: !!inputUuid && ancestry.get(inputUuid)?.context === true,
       active: !!active && ancestry.get(active)?.input === true }
   } finally { closeSync(fd) }
@@ -241,10 +280,7 @@ export function readTailRecoveryState(path: string, sessionId: string, checkedMe
     const value = JSON.parse(privateBytes(acceptedPath, 512).toString('utf8')) as { inputUuid?: unknown; inputSha256?: unknown }
     if (Object.keys(value).length !== 2 || !isHandoffUuid(value.inputUuid) || typeof value.inputSha256 !== 'string') throw new Error('Invalid recovery acceptance')
     const observed = inspectReviewInput(path, manifest, value.inputUuid, value.inputSha256)
-    // V2 admission certifies active ancestry before publishing this immutable
-    // receipt. Later compaction need not retain the old context in its active view.
-    reviewRequired = manifest.version === 2 ? !observed.receiptMatched :
-      !(observed.genuine && observed.descendsContext && observed.inputHash === value.inputSha256 && observed.active)
+    reviewRequired = !(observed.receiptMatched && observed.active)
   } else inspectReviewInput(path, manifest)
   return { reviewRequired, warningUuid: manifest.warningUuid, contextUuid: manifest.contextUuid }
 }
@@ -278,8 +314,30 @@ export async function prepareOwnedTranscriptTail(path: string, sessionId: string
     try {
       const originalSize = fstatSync(fd).size
       let manifest = readManifest(path, sessionId)
-      const framing = scanTranscriptDescriptor(fd)
+      const disclosures = recoveryDisclosures(sessionId)
+      const framing = scanTranscriptDescriptor(fd, disclosures.observe)
       for (const checkpoint of knownProofs(sessionId)) await callbacks.verifyCheckpoint(checkpoint)
+      if (manifest && fstatSync(fd).size - manifest.boundary >= disclosure(manifest).length &&
+          readRange(fd, manifest.boundary, disclosure(manifest).length).equals(disclosure(manifest)) &&
+          disclosures.latest && disclosures.latest !== manifest.contextUuid) {
+        throw new Error('Saved recovery episode evidence is missing')
+      }
+      let nextEpisode: string | undefined
+      if (manifest && framing.suffix.length) {
+        const info = fstatSync(fd)
+        const marker = disclosure(manifest)
+        if (info.size - manifest.boundary >= marker.length &&
+            readRange(fd, manifest.boundary, marker.length).equals(marker)) {
+          if (info.dev !== manifest.dev || info.ino !== manifest.ino ||
+              hashTranscriptDescriptorPrefix(fd, manifest.boundary) !== manifest.prefixSha256) {
+            throw new Error('Transcript no longer matches preserved recovery evidence')
+          }
+          // Keep all earlier evidence immutable. Publish the new episode before
+          // touching its damaged suffix, just like the initial recovery journal.
+          nextEpisode = randomUUID()
+          manifest = null
+        }
+      }
       if (!manifest && !framing.suffix.length) return null
       if (!manifest && framing.boundary > MAX_RECOVERY_BYTES) throw new Error('Retained history exceeds the automatic recovery proof budget')
       const originalSha256 = hashTranscriptDescriptorPrefix(fd, originalSize)
@@ -294,7 +352,8 @@ export async function prepareOwnedTranscriptTail(path: string, sessionId: string
           originalSize, boundary: framing.boundary, prefixSha256: hashTranscriptDescriptorPrefix(fd, framing.boundary),
           suffixSha256: sha(framing.suffix), warningUuid: randomUUID(), contextUuid: randomUUID(), parentUuid,
           timestamp: new Date().toISOString() }
-        const destination = rootFor(path)
+        const base = evidenceBase(path)
+        const destination = nextEpisode ? join(base, 'episodes', nextEpisode) : rootFor(path)
         mkdirSync(dirname(destination), { recursive: true, mode: 0o700 })
         privateDirectory(dirname(destination))
         const root = `${destination}.preparing-${randomUUID()}`
@@ -304,6 +363,12 @@ export async function prepareOwnedTranscriptTail(path: string, sessionId: string
         callbacks.fault?.('backup')
         publishExclusive(join(root, 'manifest.json'), Buffer.from(JSON.stringify(manifest)))
         renameSync(root, destination)
+        if (nextEpisode) {
+          const pointer = join(base, `current-${randomUUID()}.json`)
+          publishExclusive(pointer, Buffer.from(JSON.stringify({ episode: nextEpisode })))
+          renameSync(pointer, join(base, 'current.json'))
+          syncDirectory(base)
+        }
         callbacks.fault?.('manifest-sync')
         syncDirectory(dirname(root))
         callbacks.fault?.('manifest')

@@ -83,12 +83,12 @@ export function scanTranscriptDescriptor(
     if (retained > 128 * 1024 * 1024) throw new Error('A transcript record exceeds the strict inspection budget')
     if (bytes.length) parts.push(bytes)
   }
-  const parse = (bytes: Buffer) => {
+  const parse = (bytes: Buffer): Record<string, unknown> | undefined => {
     const text = decoder.decode(bytes)
     if (!text.trim()) return
     const row: unknown = JSON.parse(text)
     if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('Invalid transcript record')
-    onRecord?.(row as Record<string, unknown>, bytes)
+    return row as Record<string, unknown>
   }
   for (let offset = 0; offset < size;) {
     const count = readSync(fd, chunk, 0, Math.min(chunk.length, size - offset), offset)
@@ -97,7 +97,10 @@ export function scanTranscriptDescriptor(
     for (let end = chunk.indexOf(10, start); end >= 0 && end < count; end = chunk.indexOf(10, start)) {
       add(Buffer.from(chunk.subarray(start, end)))
       const line = Buffer.concat(parts, retained)
-      try { parse(line) } catch (cause) {
+      try {
+        const row = parse(line)
+        if (row) onRecord?.(row, line)
+      } catch (cause) {
         throw new Error('Transcript contains a malformed terminated record; recovery refused', { cause })
       }
       parts = []; retained = 0
@@ -110,12 +113,12 @@ export function scanTranscriptDescriptor(
   if (fstatSync(fd).size !== size) throw new Error('Transcript changed during inspection')
   const suffix = Buffer.concat(parts, retained)
   if (!suffix.length) return { boundary: size, suffix, needsSeparator: false }
-  try {
-    parse(suffix)
-    return { boundary: size, suffix: Buffer.alloc(0), needsSeparator: true }
-  } catch {
+  let row: Record<string, unknown> | undefined
+  try { row = parse(suffix) } catch {
     return { boundary, suffix, needsSeparator: false }
   }
+  if (row) onRecord?.(row, suffix)
+  return { boundary: size, suffix: Buffer.alloc(0), needsSeparator: true }
 }
 
 export function hashTranscriptDescriptorPrefix(fd: number, prefixBytes: number): string {

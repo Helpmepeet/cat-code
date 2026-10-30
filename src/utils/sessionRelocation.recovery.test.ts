@@ -102,6 +102,27 @@ test('completed review and immutable backups survive actual relocation and rollb
   expect(readFileSync(path)).toEqual(originalBytes)
 })
 
+test('multiple reviewed recovery episodes move and roll back with their original evidence', async () => {
+  const firstRoot = recovery.transcriptRecoveryDirectory(path)
+  const firstTail = readFileSync(join(firstRoot, 'tail.bin'))
+  await review()
+  const laterTail = Buffer.from('{"unfinished":"a later recoverable interruption')
+  appendFileSync(path, laterTail)
+  await storage.prepareOwnedTranscriptForResume(id, path)
+  await review()
+  await releaseActiveTranscriptLease()
+  await move(source, target)
+  const moved = join(storage.getProjectDir(target.cwd), `${id}.jsonl`)
+  expect(recovery.readTailRecoveryState(moved, id)?.reviewRequired).toBe(false)
+  expect(readFileSync(join(recovery.transcriptRecoveryDirectory(moved), 'tail.bin'))).toEqual(laterTail)
+  const movedBase = join(storage.getProjectDir(target.cwd), id, 'transcript-recovery')
+  expect(readFileSync(join(movedBase, 'tail.bin'))).toEqual(firstTail)
+  expect(readFileSync(join(readSessionRelocation(id)!.backup, id, 'transcript-recovery', 'tail.bin'))).toEqual(firstTail)
+  await move(target, source, true)
+  expect(recovery.readTailRecoveryState(path, id)?.reviewRequired).toBe(false)
+  expect(readFileSync(join(recovery.transcriptRecoveryDirectory(path), 'tail.bin'))).toEqual(laterTail)
+})
+
 test('missing portable evidence and journal-free copies/forks never silently clear the hold', async () => {
   const journal = recovery.transcriptRecoveryDirectory(path)
   renameSync(journal, `${journal}.preserved`)
