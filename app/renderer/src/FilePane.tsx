@@ -187,7 +187,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     } catch { updateFilePaneSession(appSessionId, { note: 'watch-error' }) }
   }
   return <aside className="file-pane" aria-label={`File preview: ${name}`} onKeyDown={event => {
-    if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeFilePane(appSessionId); onFocusComposer?.() }
+    if (event.key === 'Escape' && !event.defaultPrevented && !pathMenu && !appMenu) { event.preventDefault(); event.stopPropagation(); closeFilePane(appSessionId); onFocusComposer?.() }
   }}>
     <header className="file-pane-header">
       <button type="button" className="file-pane-icon" aria-label="Back" title="Back" disabled={!state.history.length}

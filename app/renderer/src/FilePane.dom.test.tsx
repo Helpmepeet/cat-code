@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { workspaceFileAvailability } from '../../main/workspaceFileAvailability.js'
 import { openWorkspaceFile } from '../../main/openWorkspaceFile.js'
 import { createPreviewApplications } from '../../main/previewApplications.js'
 import { createFilePreviewService } from '../../main/filePreview.js'
@@ -92,6 +93,7 @@ function setup(withOutput = false) {
       return descriptor
     },
     openWorkspaceFile: (appSessionId: string, path: string) => openWorkspaceFile({ appSessionId, path }, sessions, async (resolved, target, location) => { external.push({ path: resolved, target, ...(location ? { location } : {}) }); return true }),
+    getWorkspaceFileAvailability: (appSessionId: string, path: string) => workspaceFileAvailability({ appSessionId, path }, sessions),
     refreshFilePreview: service.refresh,
     commitFilePreview: async (id: string, revision: number) => service.commit(id, revision),
     releaseFilePreview: service.release,
@@ -323,4 +325,29 @@ test('capturing a Markdown file hidden behind real full output retains its seman
   // No layout is supplied here. A hidden node must preserve its known bookmark,
   // while the native gate separately checks capture and restoration on screen.
   expect(getFilePaneSession(sessionId).scroll).toEqual(bookmark)
+})
+
+
+test('Escape dismisses the header file menu without closing its pane, while Escape in the page still closes it', async () => {
+  const { pane, sessionId, firstPath } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const body = tree.container.querySelector<HTMLElement>('.file-pane-markdown:not(.file-pane-staging)')!
+  const path = tree.container.querySelector<HTMLElement>('.file-pane-path')!
+  path.focus()
+  await act(async () => { path.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 100 })) })
+  await settle()
+  const menu = tree.container.querySelector<HTMLElement>('[role="menu"][aria-label="File actions for notes.md"]')!
+  expect(menu).not.toBeNull()
+  expect(menu.textContent).toContain('Copy')
+  expect(menu.textContent).toContain('Open in')
+  expect(menu.contains(document.activeElement)).toBe(true)
+  await act(async () => { document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+  expect(tree.container.querySelector('[role="menu"][aria-label="File actions for notes.md"]')).toBeNull()
+  expect(getFilePaneSession(sessionId).open).toBe(true)
+  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
+  expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)') === body).toBe(true)
+  body.focus()
+  await act(async () => { body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+  expect(getFilePaneSession(sessionId).open).toBe(false)
 })
