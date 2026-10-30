@@ -67,6 +67,7 @@ import {
   type APIProvider,
 } from '../utils/model/providers.js'
 import { getGPTPromptFamily, isGPTPromptStyle } from './promptStyle.js'
+import { getWebResearchGuidance } from './webResearch.js'
 import {
   getGPTIntroSection,
   getGPTSystemSection,
@@ -620,6 +621,11 @@ function buildDynamicPromptSections({
 }) {
   return [
     systemPromptSection(
+      'web_research',
+      { tools: toolNamesKeyInput(enabledTools) },
+      () => getWebResearchGuidance(enabledTools),
+    ),
+    systemPromptSection(
       'session_guidance',
       {
         gpt,
@@ -753,7 +759,8 @@ export async function getSystemPrompt(
         INSTRUCTION_AUTHORITY_RULE,
         OUTCOME_REPORTING_RULE,
       ].join('\n\n'),
-    ]
+      getWebResearchGuidance(new Set(tools.map(tool => tool.name))),
+    ].filter(section => section !== null)
   }
 
   const cwd = getCwd()
@@ -794,6 +801,7 @@ export async function getSystemPrompt(
       getCorePolicySection(),
       gpt ? getGPTActionsSection(gptFamily) : getActionsSection(),
       getSystemRemindersSection(),
+      getWebResearchGuidance(enabledTools),
       await loadMemoryPrompt(),
       envInfo,
       getLanguageSection(settings.language),
@@ -1116,9 +1124,13 @@ export async function enhanceSystemPromptWithEnvDetails(
       ? getDiscoverSkillsGuidance()
       : null
   const envInfo = await computeEnvInfo(model, additionalWorkingDirectories)
+  const webResearchGuidance = enabledToolNames
+    ? getWebResearchGuidance(enabledToolNames)
+    : null
   return [
     ...existingSystemPrompt,
     notes,
+    ...(webResearchGuidance !== null ? [webResearchGuidance] : []),
     ...(discoverSkillsGuidance !== null ? [discoverSkillsGuidance] : []),
     envInfo,
   ]

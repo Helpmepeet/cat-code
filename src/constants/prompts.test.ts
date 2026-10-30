@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { getSystemPrompt, LEAN_SYSTEM_PROMPT_ENV } from './prompts.js'
+import { enhanceSystemPromptWithEnvDetails, getSystemPrompt, LEAN_SYSTEM_PROMPT_ENV } from './prompts.js'
 import {
   getGPTIntroSection,
   getGPTToneAndStyleSection,
@@ -11,6 +11,8 @@ import { initializeToolPermissionContext } from '../utils/permissions/permission
 import { getTools } from '../tools.js'
 import { getWebSearchPrompt } from '../tools/WebSearchTool/prompt.js'
 import { getEmptyToolPermissionContext } from '../Tool.js'
+import { buildProviderInstructionAssembly } from '../services/api/instructionAssembly.js'
+import { asSystemPrompt } from '../utils/systemPromptType.js'
 
 // Command availability is filtered by auth, so an assembly built with no
 // credential anywhere throws before it reaches the sections under test. The
@@ -136,32 +138,83 @@ describe('GPT read discipline guidance', () => {
   })
 })
 
-describe('GPT web research guidance', () => {
-  test('appears only when WebSearch is enabled and names WebFetch only when present', () => {
-    expect(getGPTUsingToolsSection(new Set(['Read']))).not.toContain('Search with WebSearch instead of answering from memory')
+describe('web research policy delivery', () => {
+  const policyHeading = '# Web research\n'
+  const tools = (...names: string[]) => names.map(name => ({ name, shouldDefer: name === 'WebSearch' })) as unknown as Parameters<typeof getSystemPrompt>[0]
+  const researchSection = (prompt: string) => prompt.split(policyHeading)[1]?.split(/\n# /)[0] ?? ''
 
-    const searchOnly = getGPTUsingToolsSection(new Set(['WebSearch']))
-    expect(searchOnly).toContain('Search with WebSearch instead of answering from memory')
-    expect(searchOnly).toContain('search again in extended mode')
-    expect(searchOnly).toContain('when the user asks what people recommend or think about something')
-    expect(searchOnly).not.toContain('WebFetch')
+  afterEach(() => clearSystemPromptSections())
 
-    expect(
-      getGPTUsingToolsSection(new Set(['WebSearch', 'WebFetch'])),
-    ).toContain('read the page with WebFetch')
+  test.each([
+    ['gpt-6.1-sol', 'openai'],
+    ['gpt-6-astra', 'openai'],
+    ['gpt-5.6-terra', 'openai'],
+    ['claude-sonnet-5-5', 'firstParty'],
+    ['claude-opus-5-5', 'firstParty'],
+  ] as const)('reaches %s before deferred WebSearch is loaded', async (model, provider) => {
+    const systemPrompt = await getSystemPrompt(tools('WebSearch', 'WebFetch', 'ToolSearch'), model, [], [], provider)
+    const assembly = buildProviderInstructionAssembly({
+      provider,
+      messages: [], systemPrompt: asSystemPrompt(systemPrompt), userContext: {}, systemContext: {},
+    })
+    const prompt = provider === 'openai'
+      ? assembly.openAIInstructionAssembly!.instructions
+      : assembly.systemPrompt.join('\n')
+    expect(prompt.split(policyHeading)).toHaveLength(2)
+    const policy = researchSection(prompt)
+    expect(policy).toContain('You must use WebSearch before answering or choosing an implementation')
+    expect(policy).toContain('latest information')
+    expect(policy).toContain('version-sensitive APIs')
+    expect(policy).toContain('uncertain about an external fact')
+    expect(policy).toContain('recommendations depend on current options')
+    expect(policy).toContain('self-contained edits and stable explanations')
+    expect(policy).toContain('Honor requests to stay offline')
+    expect(policy).toContain('select:WebSearch')
+    expect(policy).toContain('WebFetch')
+    expect(policy).toContain('Read supplied URLs directly with WebFetch')
   })
 
-  test('reaches the assembled GPT prompt from the session tool pool', async () => {
-    clearSystemPromptSections()
-    try {
-      const tools = [{ name: 'WebSearch' }, { name: 'WebFetch' }] as Parameters<
-        typeof getSystemPrompt
-      >[0]
-      const prompt = (await getSystemPrompt(tools, 'gpt-6-sol')).join('\n')
-      expect(prompt).toContain('Search with WebSearch instead of answering from memory')
-    } finally {
-      clearSystemPromptSections()
+  test('updates policy and source-reading instructions when the allowed tool pool changes without clearing caches', async () => {
+    for (const [model, provider] of [['claude-opus-5-5', 'firstParty'], ['gpt-6.1-sol', 'openai']] as const) {
+      const withFetch = (await getSystemPrompt(tools('WebSearch', 'WebFetch', 'ToolSearch'), model, [], [], provider)).join('\n')
+      expect(researchSection(withFetch)).toContain('WebFetch')
+      const unavailable = (await getSystemPrompt(tools('Read'), model, [], [], provider)).join('\n')
+      expect(unavailable).not.toContain(policyHeading)
+      const searchOnly = (await getSystemPrompt(tools('WebSearch'), model, [], [], provider)).join('\n')
+      expect(searchOnly.split(policyHeading)).toHaveLength(2)
+      expect(researchSection(searchOnly)).not.toContain('WebFetch')
+      expect(researchSection(searchOnly)).not.toContain('ToolSearch')
     }
+  })
+
+  test.each(['full', 'simple', 'repl'] as const)('keeps the policy in the %s prompt path', async mode => {
+    const keys = [LEAN_SYSTEM_PROMPT_ENV, 'CLAUDE_CODE_SIMPLE', 'CLAUDE_REPL_MODE', 'CLAUDE_CODE_REPL']
+    const saved = keys.map(key => [key, process.env[key]] as const)
+    try {
+      process.env[LEAN_SYSTEM_PROMPT_ENV] = '0'
+      if (mode === 'simple') process.env.CLAUDE_CODE_SIMPLE = '1'
+      if (mode === 'repl') {
+        delete process.env.CLAUDE_CODE_SIMPLE
+        delete process.env.CLAUDE_CODE_REPL
+        process.env.CLAUDE_REPL_MODE = '1'
+      }
+      for (const [model, provider] of [['claude-opus-5-5', 'firstParty'], ['gpt-6.1-sol', 'openai']] as const) {
+        const prompt = (await getSystemPrompt(tools('WebSearch', 'ToolSearch'), model, [], [], provider)).join('\n')
+        expect(prompt.split(policyHeading)).toHaveLength(2)
+      }
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })
+
+  test.each([['claude-sonnet-5-5', 'firstParty'], ['gpt-6.1-sol', 'openai']] as const)('adds policy to %s workers only when their own pool permits search', async (model, provider) => {
+    const prompt = (await enhanceSystemPromptWithEnvDetails(['Worker task.'], model, [], new Set(['WebSearch', 'ToolSearch']), provider)).join('\n')
+    expect(researchSection(prompt)).toContain('select:WebSearch')
+    const noSearch = (await enhanceSystemPromptWithEnvDetails(['Worker task.'], model, [], new Set(['Read']), provider)).join('\n')
+    expect(noSearch).not.toContain(policyHeading)
   })
 
   test('lets GPT open URLs its own web searches returned', () => {

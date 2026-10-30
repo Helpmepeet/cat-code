@@ -32,8 +32,6 @@ import type { Command } from '../../types/command.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { SKILL_TOOL_NAME } from '../../tools/SkillTool/constants.js'
 import { GREP_TOOL_NAME } from '../../tools/GrepTool/prompt.js'
-import { WEB_FETCH_TOOL_NAME } from '../../tools/WebFetchTool/prompt.js'
-import { WEB_SEARCH_TOOL_NAME } from '../../tools/WebSearchTool/prompt.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
 import { EXPLORE_AGENT } from '../../tools/AgentTool/built-in/exploreAgent.js'
 import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents.js'
@@ -256,9 +254,6 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
       : null,
     taskToolName
       ? `When task tracking helps, use ${taskToolName}.`
-      : null,
-    enabledTools.has(WEB_SEARCH_TOOL_NAME)
-      ? `Search with ${WEB_SEARCH_TOOL_NAME} instead of answering from memory when the answer may have changed since your training and the repository does not settle it (versions, APIs, changelogs, prices, recent events), when you do not recognize an error, library, or name, or when the user asks what people recommend or think about something. Send independent queries together in one turn. Results are short highlights: ${enabledTools.has(WEB_FETCH_TOOL_NAME) ? `when they do not settle a claim, read the page with ${WEB_FETCH_TOOL_NAME}; ` : ''}when they are thin or off-target, rephrase or search again in extended mode rather than concluding from one search.`
       : null,
     `Issue independent tool calls together in one turn. Never run file mutations concurrently when their paths overlap or may alias; sequence them and reread before the next mutation. When a call depends on an earlier result, wait for that result; do not guess the dependent value.`,
   ].filter(item => item !== null)
