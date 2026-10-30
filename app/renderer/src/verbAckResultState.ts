@@ -166,9 +166,15 @@ export type RecallAnswerDisposition = 'first' | 'correction' | 'ignore'
 export function classifyRecallAnswer(
   requests: RecallRequests,
   frame: PromptRecallResultFrame,
+  dismissed = false,
 ): RecallAnswerDisposition {
   const request = requests.get(frame.requestId)
   if (!request) return 'ignore'
+  if (request.sessionId !== frame.sessionId) return 'ignore'
+  if (dismissed) {
+    requests.delete(frame.requestId)
+    return 'ignore'
+  }
   if (!request.answered) {
     requests.set(frame.requestId, { ...request, answered: true })
     return 'first'

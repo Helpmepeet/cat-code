@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type {
   LiveWorkersSnapshot,
@@ -39,7 +40,7 @@ function snapshot(
 test('reduce folds a workers.snapshot per session and prunes it on lifecycle/removal', () => {
   const frame: WorkersSnapshotFrame = {
     kind: 'workers.snapshot',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 's1',
     workers: snapshot([worker()]),
   }
@@ -49,7 +50,7 @@ test('reduce folds a workers.snapshot per session and prunes it on lifecycle/rem
 
   const lifecycle: LifecycleFrame = {
     kind: 'lifecycle',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 's1',
     status: 'exited',
   }

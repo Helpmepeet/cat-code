@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { WorkerSessionStatus } from '../../src/utils/workerState.js'
 import type { TaskStatus } from '../../src/Task.js'
@@ -469,7 +470,7 @@ test('does not expose prompt bodies, hook payloads, or inline MCP config objects
 
   const frame: AgentConfigSnapshotFrame = {
     kind: 'agent-config.snapshot',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'sess-1',
     agents: snapshot,
   }

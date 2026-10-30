@@ -1,10 +1,11 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { RemoteSettingsResultFrame } from '../../shared/protocol.js'
 import { directConnectResultForRequest } from './remoteSettingsPageModel.js'
 
 const SUCCESS: RemoteSettingsResultFrame = {
   kind: 'remoteSettings.result',
-  protocolVersion: 4,
+  protocolVersion: PROTOCOL_VERSION,
   sessionId: 'session-1',
   requestId: 'connect-1',
   verb: 'remoteSettings.directConnect',

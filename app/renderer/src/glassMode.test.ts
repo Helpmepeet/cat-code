@@ -327,7 +327,7 @@ test('each repaired card and framing strip carries its marker on that element', 
     ['ToolCardStylePreview.tsx', 'data-window-card', 'bg-app-bg', 1],
     ['ProseArrivalPreview.tsx', 'data-window-card', 'bg-app-bg', 1],
     ['ScheduledTasksPage.tsx', 'data-window-chrome', 'md:w-[272px]', 1],
-    ['App.tsx', 'data-window-chrome', 'text-tone-danger', 1],
+    ['App.tsx', 'data-window-chrome', 'text-tone-danger', 2],
   ] as const
   for (const [file, marker, classes, count] of surfaces) {
     const tags = rendererTags(file).filter(tag => tag.classes.includes(classes) && !tag.floating)

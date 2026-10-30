@@ -8,6 +8,7 @@
  * at-cap history through the REAL AttachmentGate + FrameReplayBuffer.
  */
 
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import {
   MAX_HISTORY_REPLAY_BYTES,
@@ -27,7 +28,7 @@ const SESSION = 'restored-session'
 function readyFrame(): ServerFrame {
   return {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
     engineSessionId: 'engine-restored',
     payload: { type: 'app.ready' } as never,
@@ -37,7 +38,7 @@ function readyFrame(): ServerFrame {
 function replayEventFrame(i: number): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
     replay: true,
     event: {

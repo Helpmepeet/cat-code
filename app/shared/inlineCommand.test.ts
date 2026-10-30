@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from './protocol.js'
 import { expect, test } from 'bun:test'
 import { encodeInlineCommandResult, extractInlineCommandFences, isInteractiveShellCommand, parseInlineCommandResult, type InlineCommandRun } from './inlineCommand.js'
 import { MAX_OUTBOUND_FRAME_BYTES } from './limits.js'
@@ -50,7 +51,7 @@ test('structured escaped output fits the result and outbound snapshot budgets', 
   const structured = { ...run, output: escaped, outputTail: escaped, omittedBytes: 1_000_000 }
   const encoded = encodeInlineCommandResult(structured)
   expect(encoded.length).toBeLessThanOrEqual(262_144)
-  const snapshot = { kind: 'inline-command.snapshot', protocolVersion: 4, sessionId: 's', generation: 'g',
+  const snapshot = { kind: 'inline-command.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 's', generation: 'g',
     runs: Array.from({ length: 128 }, () => structured) }
   expect(new TextEncoder().encode(JSON.stringify(snapshot)).length).toBeLessThan(MAX_OUTBOUND_FRAME_BYTES)
 })

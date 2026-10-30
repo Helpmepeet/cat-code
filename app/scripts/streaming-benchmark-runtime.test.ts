@@ -5,7 +5,7 @@ import { DeliveryAckQueue } from '../preload/deliveryAckQueue.js'
 import { createRendererIpcGuard } from '../preload/rendererIpcGuard.js'
 import { createFixture, manifest } from './streaming-benchmark-fixture.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgementStage } from '../shared/deliveryTrace.js'
-import type { ServerFrame } from '../shared/protocol.js'
+import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -33,7 +33,7 @@ test('all workload bootstraps keep a bounded traced marker whose applied ACK sur
   for (const workload of manifest.workloads) {
     const fixture = createFixture(workload)
     const markers: ServerFrame[] = Array.from({ length: workload.sessions }, (_, index) => ({
-      kind: 'pong', protocolVersion: 4, sessionId: `bootstrap-${index}`, nonce: 'marker', deliveryTrace: mintDeliveryTrace(index + 1),
+      kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId: `bootstrap-${index}`, nonce: 'marker', deliveryTrace: mintDeliveryTrace(index + 1),
     }))
     const bootstrap = markerTracedBootstrap(fixture.initial, [], markers)
     expect(bootstrap.filter(frame => frame.deliveryTrace)).toEqual(markers)

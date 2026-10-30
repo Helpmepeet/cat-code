@@ -131,8 +131,10 @@ import {
   enqueue,
   enqueuePendingNotification,
   getCommandQueueSnapshot,
+  flushQueueOperationsDurably,
   resetCommandQueue,
 } from '../../src/utils/messageQueueManager.js'
+import { isSessionPersistenceDisabled, setSessionPersistenceDisabled } from '../../src/bootstrap/state.js'
 import { notifyCommandLifecycle } from '../../src/utils/commandLifecycle.js'
 import { asAgentId } from '../../src/types/ids.js'
 import { createWorkspaceObserver } from './workspaceObservation.js'
@@ -2062,6 +2064,7 @@ async function serverWithStagedPromptCarrying(
       options: { submitId },
     }),
   )
+  await waitFor(() => submitAnswers(received).some(answer => answer.submitId === submitId))
   return { server, conn, received, end: release }
 }
 
@@ -2114,9 +2117,10 @@ test('large image submits stay intact through queue admission, byte refusal and 
         options: { submitId: `large-${index}` },
       }))
     }
+    await waitFor(() => submitAnswers(received).length === 3)
     const answers = submitAnswers(received)
     expect(answers).toHaveLength(3)
-    expect(answers.map(answer => answer.accepted)).toEqual([true, true, false])
+    expect(['large-0', 'large-1', 'large-2'].map(id => answers.find(answer => answer.submitId === id)?.accepted)).toEqual([true, true, false])
     expect(queuedPromptSnapshots(received).at(-1)).toHaveLength(2)
 
     server.handleData(conn, clientFrame({ type: 'prompt.recall', requestId: 'large-recall' }))
@@ -2707,10 +2711,10 @@ test('D5 — an idle submit is answered accepted, once, with its own id', async 
   ])
 })
 
-test('D5 — a mid-turn submit is answered accepted from the staging dispatch', async () => {
+test('D5 — a mid-turn submit is answered accepted after its queue recorder flushes', async () => {
   // The acceptance the renderer used to read here was the staged snapshot, which
   // is republished on ANY queue change and names no submit. This one is emitted by
-  // the dispatch that staged this prompt.
+  // the dispatch that staged this prompt, after its durable queue barrier.
   const { received, end } = await serverWithStagedPromptCarrying(
     'and the logs',
     'sub-mid',
@@ -2736,6 +2740,34 @@ test('D5 — a mid-turn submit is answered accepted from the staging dispatch', 
   ])
 
   end()
+})
+
+test.each(['ordinary text', '/help'])('D5 — no-persistence busy admission preserves %s without a false I/O refusal', async prompt => {
+  const previous = isSessionPersistenceDisabled()
+  setSessionPersistenceDisabled(true)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
+  try {
+    server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'start-no-persistence', prompt: 'start' }))
+    await waitFor(() => controller.isTurnActive())
+    server.handleData(conn, clientFrame({
+      type: 'app.submit', requestId: 'queued-no-persistence', prompt,
+      options: { submitId: 'queued-no-persistence' },
+    }))
+    await waitFor(() => submitAnswers(received).some(answer => answer.submitId === 'queued-no-persistence'))
+    expect(submitAnswers(received)).toContainEqual(expect.objectContaining({
+      submitId: 'queued-no-persistence', accepted: true, queued: true,
+    }))
+    expect(getCommandQueueSnapshot().map(command => command.value)).toEqual([prompt])
+    expect(received.some(frame => frame.kind === 'error' && frame.requestId === 'queued-no-persistence')).toBe(false)
+    server.handleData(conn, clientFrame({ type: 'prompt.recall', requestId: 'recall-no-persistence' }))
+    expect(recallResults(received).at(-1)?.recalled.map(input => input.prompt)).toEqual([prompt])
+    await flushQueueOperationsDurably()
+  } finally {
+    server.close()
+    release()
+    setSessionPersistenceDisabled(previous)
+  }
 })
 
 test('D5 — the depth-cap refusal is answered refused, naming that submit', async () => {
@@ -3094,6 +3126,7 @@ for (const persisted of [false, true]) {
         options: { submitId: 'queued-submit' },
       }),
     )
+    await waitFor(() => received.some(frame => frame.kind === 'submit.result' && frame.submitId === 'queued-submit'))
     expect(received.find(frame => frame.kind === 'submit.result')).toMatchObject({
       submitId: 'queued-submit', accepted: true,
     })

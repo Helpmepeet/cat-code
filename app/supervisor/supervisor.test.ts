@@ -99,6 +99,15 @@ test('the socket boundary admits activity v1 and correlated queue snapshots and 
     { kind: 'event', event: { ...activity, output: 'x'.repeat(2049) } },
     { kind: 'event', event: { ...activity, injected: true } },
     { kind: 'queued-prompts.snapshot', prompts: [{ id: 'engine-id', submitId: 'submit-id', text: 'queued' }] },
+    { kind: 'queued-prompts.snapshot', prompts: [{ id: 'active', text: 'queued' }],
+      recoveredPrompts: [{ id: 'recovered', text: 'saved preview' }], recoveredPromptCount: 50 },
+    { kind: 'queued-prompts.snapshot', prompts: [], recoveredPrompts: null },
+    { kind: 'queued-prompts.snapshot', prompts: [], recoveredPrompts: [{ id: 'recovered', text: 'preview', prompt: 'hidden body' }] },
+    { kind: 'queued-prompts.snapshot', prompts: [], recoveredPrompts: [{ id: 'recovered', text: 'x'.repeat(2049) }] },
+    { kind: 'queued-prompts.snapshot', prompts: [{ id: 'active', text: 'queued' }],
+      recoveredPrompts: Array.from({ length: 32 }, (_, index) => ({ id: `saved-${index}`, text: 'saved' })) },
+    { kind: 'queued-prompts.snapshot', prompts: [], recoveredPrompts: [{ id: 'saved', text: 'saved' }], recoveredPromptCount: 0 },
+    { kind: 'queued-prompts.snapshot', prompts: [], recoveredPrompts: [], recoveredPromptCount: Number.MAX_SAFE_INTEGER + 1 },
     { kind: 'queued-prompts.snapshot', prompts: [{ id: 'engine-id', submitId: 5, text: 'queued' }] },
     { kind: 'queued-prompts.snapshot', prompts: [{ id: 'engine-id', submitId: 'x'.repeat(4097), text: 'queued' }] },
     { kind: 'submit.result', submitId: 'direct', accepted: true, queued: false },
@@ -122,7 +131,10 @@ test('the socket boundary admits activity v1 and correlated queue snapshots and 
   await waitFor(() => events.some(event => event.type === 'frame' && event.frame.kind === 'pong'), 'socket did not finish delivery')
   const delivered = events.flatMap(event => event.type === 'frame' ? [event.frame] : [])
   expect(delivered.filter(frame => frame.kind === 'event')).toEqual([expect.objectContaining({ event: activity })])
-  expect(delivered.filter(frame => frame.kind === 'queued-prompts.snapshot')).toHaveLength(1)
+  expect(delivered.filter(frame => frame.kind === 'queued-prompts.snapshot')).toHaveLength(2)
+  expect(delivered.find(frame => frame.kind === 'queued-prompts.snapshot' && frame.recoveredPrompts?.length)).toMatchObject({
+    recoveredPrompts: [{ id: 'recovered', text: 'saved preview' }], recoveredPromptCount: 50,
+  })
   expect(delivered.filter(frame => frame.kind === 'submit.result')).toHaveLength(2)
   expect(delivered.filter(frame => frame.kind === 'tasks.snapshot')).toHaveLength(1)
 })

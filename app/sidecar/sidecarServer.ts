@@ -1,5 +1,6 @@
 import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
-import { canPersistHandoffTranscript, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
+import { canPersistHandoffTranscript, recordQueueOperation, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
+import type { UndeliveredPrompt } from './sessionResume.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
 import type { WorkspaceObserver } from './workspaceObservation.js'
@@ -66,7 +67,9 @@ import {
   dequeueAllMatching,
   enqueue,
   enqueuePendingNotification,
+  flushQueueOperationsDurably,
   getCommandQueueSnapshot,
+  removeByFilter,
   releaseTaskNotificationReservation,
   reserveTaskNotification,
   subscribeToCommandQueue,
@@ -294,6 +297,10 @@ export type SidecarServerOptions = {
   /** Trusted process identity minted by the supervisor before spawn. */
   generation?: string
   controller: AppSessionController
+  /** Saved input for review, never command-queue or model admission. */
+  recoveredPrompts?: readonly UndeliveredPrompt[]
+  loadRecoveredPrompts?: () => Promise<readonly UndeliveredPrompt[]>
+  recoveredUnavailableCount?: number
   /**
    * Optional socket-only wrapper. Production uses this to carry metadata-only
    * delivery identity without changing the raw `ServerFrame` schema observed by
@@ -658,6 +665,15 @@ export class SidecarServer {
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
   private stopPanelTaskReaper: (() => void) | null = null
   private activeTurn = false
+  private manualCloseRequested = false
+  private readonly closeCancelledManualCommands = new Map<string, QueuedCommand>()
+  private readonly recoveredPrompts = new Map<string, { prompt: AppSubmitPrompt; source: UndeliveredPrompt }>()
+  private recoveredPromptCount = 0
+  private recoveredPromptBytes = 0
+  private readonly recoveredUnavailableCount: number
+  private readonly loadRecoveredPrompts: SidecarServerOptions['loadRecoveredPrompts']
+  private recoveredRecallInFlight = false
+  private closeCancellationWrites: Promise<void> | null = null
   private destinationHandoffOperation: string | null = null
   private sourceHandoffOperation: string | null = null
   private handoffResult: { operationId: string; tipUuid: string; toolUseId: string } | null = null
@@ -840,6 +856,8 @@ export class SidecarServer {
     this.engineSessionId = options.engineSessionId
     this.generation = options.generation ?? randomUUID()
     this.controller = options.controller
+    this.loadRecoveredPrompts = options.loadRecoveredPrompts
+    this.recoveredUnavailableCount = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, options.recoveredUnavailableCount ?? 0))
     this.permissions = options.permissions ?? null
     this.settings = options.settings ?? null
     this.agentConfig = options.agentConfig ?? null
@@ -861,6 +879,7 @@ export class SidecarServer {
     this.remoteSettings = options.remoteSettings ?? null
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
+    this.setRecoveredPrompts(options.recoveredPrompts ?? [])
     this.seedConsumedPeerMessages()
     this.historySourceTruncated = options.historySourceTruncated ?? false
     this.unavailableParentToolUseIds = options.unavailableParentToolUseIds ?? []
@@ -1010,10 +1029,10 @@ export class SidecarServer {
         '[sidecar] command-lifecycle listener taken over by a second SidecarServer in this process; the previous session will not commit its staged messages',
       )
     }
-    setCommandLifecycleListener((uuid, state) => {
+    setCommandLifecycleListener((uuid, state, timestamp) => {
       if (state !== 'started') return
       this.announcePeerDelivery(uuid)
-      this.commitStagedPrompt(uuid)
+      this.commitStagedPrompt(uuid, timestamp)
     })
     commandLifecycleOwner = this
 
@@ -1263,10 +1282,15 @@ export class SidecarServer {
     const stagedForAttach = this.queuedPromptItems()
     if (
       stagedForAttach.length > 0 ||
+      this.recoveredPromptCount > 0 ||
       this.lastQueuedPromptsKey !== EMPTY_QUEUED_PROMPTS_KEY
     ) {
       this.sendQueuedPrompts(connection, stagedForAttach)
-      this.lastQueuedPromptsKey = JSON.stringify(stagedForAttach)
+      this.lastQueuedPromptsKey = this.queuedPromptsSnapshotKey(stagedForAttach)
+    }
+    if (this.recoveredUnavailableCount > 0) {
+      this.sendError(connection, undefined, 'internal_error',
+        `${this.recoveredUnavailableCount} saved input records could not be opened. Review the saved session files before resending.`, false)
     }
     // HOST-REQUEST-PLANE §4 step 4a — presence, last in the attach burst and
     // before history replay.
@@ -1913,7 +1937,7 @@ export class SidecarServer {
       }
       return
     }
-    if (this.closed || this.parking || this.inlineCommandRunningRequest !== null ||
+    if (this.manualCloseRequested || this.closed || this.parking || this.inlineCommandRunningRequest !== null ||
         this.conversationMutationInFlight || !this.controller.canStartInlineCommand() ||
         this.inFlightDurableWrites > 0) {
       this.sendError(connection, message.requestId, 'turn_already_running',
@@ -2196,6 +2220,22 @@ export class SidecarServer {
           prior.sourceGeneration !== state.sourceGeneration || prior.operationSha256 !== operationSha256)) {
         reason = 'conflict'; throw new Error()
       }
+      if (message.action === 'cancel' && state.cancellation?.requestedBy === 'close') {
+        if (state.cancellation.cancelId !== message.cancelId) throw new Error()
+        // Fence before configure/cancellation storage can yield. Aborting also
+        // stops an engine queue snapshot still preparing its attachments.
+        this.manualCloseRequested = true
+        this.controller.abort('Chat closed')
+        const removed = removeByFilter(command =>
+          isDeliverableParentPrompt(command) && command.origin === undefined && !command.isMeta &&
+          command.uuid !== undefined &&
+          (this.stagedPrompts.has(command.uuid) || this.retriedQueuedPromptKeys.has(command.uuid)),
+        )
+        for (const command of removed) this.closeCancelledManualCommands.set(command.uuid!, command)
+        reason = 'durability_unconfirmed'
+        await this.persistCloseManualCancellations()
+        reason = 'invalid_state'
+      }
       // Verification establishes the source boundary that is part of the
       // immutable execution identity. Do not configure against its earlier null.
       const configure = message.action !== 'verify' && (message.action !== 'status' || !!state.boundary)
@@ -2220,7 +2260,7 @@ export class SidecarServer {
         await verifyActiveTranscriptTipDurably(message.tipUuid)
         if (!this.isParkGateOpen()) throw new Error()
       } else if (message.action === 'continue') {
-        if (state.origin !== 'fresh' || state.continuation.id !== message.continuationId ||
+        if (this.manualCloseRequested || state.origin !== 'fresh' || state.continuation.id !== message.continuationId ||
             state.continuation.admissionGeneration !== this.generation || state.cancellation ||
             state.location !== 'destination' || getCwd() !== state.target.cwd) throw new Error()
         if (!isPathTrusted(getCwd()) || this.permissions?.getToolPermissionContext().mode === 'bypassPermissions') {
@@ -2280,7 +2320,7 @@ export class SidecarServer {
       }
       if (disposition === 'refused') disposition = 'accepted'
       reason = undefined
-    } catch { this.log('[sidecar] workspace handoff control refused') }
+    } catch (error) { this.log(`[sidecar] workspace handoff ${message.action} refused for ${message.operationId}: ${String(error)}`) }
     status = this.controller.getWorkspaceHandoffSnapshot() ?? status
     if (status?.operationId !== message.operationId || reason === 'wrong_identity' || reason === 'wrong_generation') status = undefined
     this.send(connection, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
@@ -2289,6 +2329,7 @@ export class SidecarServer {
   }
 
   private drainOneQueuedPrompt(allowUserReconciliation = false): boolean {
+    if (this.manualCloseRequested) return false
     const canStart = allowUserReconciliation
       ? this.controller.requiresHandoffReconciliation() &&
         !this.controller.getHandoffReservation()
@@ -2346,6 +2387,12 @@ export class SidecarServer {
       },
       onSettled: error => {
         if (!error) return
+        if (this.manualCloseRequested) {
+          if (!persisted) {
+            this.retainOrCancelCloseInput(command, stagedUuid !== null || this.retriedQueuedPromptKeys.has(retryKey))
+          }
+          return
+        }
         if (persisted || this.retriedQueuedPromptKeys.has(retryKey)) {
           if (!persisted) {
             this.log(
@@ -2383,12 +2430,17 @@ export class SidecarServer {
       // this appends, so with several queued prompts a refused one loses its
       // place. Unreachable today: nothing awaits between the gate above and
       // `startTurn`, so the two conditions it refuses on cannot have changed.
-      enqueue(command)
+      if (this.manualCloseRequested) {
+        this.retainOrCancelCloseInput(command, stagedUuid !== null || this.retriedQueuedPromptKeys.has(retryKey))
+      } else {
+        enqueue(command)
+      }
     }
     return started
   }
 
   private drainOneTaskNotification(): void {
+    if (this.manualCloseRequested) return
     if (!this.controller.canStartAutomaticTurn()) return
     if (
       this.closed ||
@@ -2521,7 +2573,7 @@ export class SidecarServer {
     onSettled?: (error?: Error) => void
     onAccepted?: () => void
   }): boolean {
-    if (this.parking || this.activeTurn || this.conversationMutationInFlight || this.controller.getHandoffReservation() || (isMeta && this.controller.requiresHandoffReconciliation())) {
+    if (this.manualCloseRequested || this.parking || this.activeTurn || this.conversationMutationInFlight || this.controller.getHandoffReservation() || (isMeta && this.controller.requiresHandoffReconciliation())) {
       return false
     }
     this.runControls?.lockProviderSwitches()
@@ -2702,6 +2754,7 @@ export class SidecarServer {
     uuid: string,
     isMeta?: boolean,
     origin?: MessageOrigin,
+    timestamp = new Date().toISOString(),
   ): void {
     this.broadcastEvent(
       createMessageEvent({
@@ -2710,11 +2763,53 @@ export class SidecarServer {
         session_id: this.engineSessionId,
         parent_tool_use_id: null,
         uuid: uuid as SDKUserMessage['uuid'],
-        timestamp: new Date().toISOString(),
+        timestamp,
         ...(isMeta ? { isSynthetic: true } : {}),
         ...toSDKMessageOriginProp(origin),
       }),
     )
+  }
+
+  private retainOrCancelCloseInput(command: QueuedCommand, knownManual: boolean): void {
+    // A failed reserve is not consumed input. Restore uncertain/peer input;
+    // recognized manual input instead leaves an explicit cancellation record.
+    enqueue(command)
+    if (!knownManual || !command.uuid || command.origin !== undefined || command.isMeta) {
+      return
+    }
+    for (const removed of removeByFilter(queued => queued.uuid === command.uuid &&
+      isDeliverableParentPrompt(queued) && queued.origin === undefined && !queued.isMeta)) {
+      this.closeCancelledManualCommands.set(removed.uuid!, removed)
+    }
+    void this.persistCloseManualCancellations().catch(error =>
+      this.log(`[sidecar] close queue cancellation failed: ${String(error)}`),
+    )
+  }
+
+  private async persistCloseManualCancellations(): Promise<void> {
+    if (this.closeCancellationWrites) {
+      await this.closeCancellationWrites
+      if (this.closeCancelledManualCommands.size > 0) await this.persistCloseManualCancellations()
+      return
+    }
+    if (this.closeCancelledManualCommands.size === 0) return
+    const commands = [...this.closeCancelledManualCommands.values()]
+    this.closeCancellationWrites = (async () => {
+      if (!canPersistHandoffTranscript()) throw new Error('Close queue cancellation has no owned transcript')
+      await flushQueueOperationsDurably()
+      for (const command of commands) {
+        this.closeCancelledManualCommands.delete(command.uuid!)
+        this.stagedPrompts.delete(command.uuid!)
+        this.retriedQueuedPromptKeys.delete(command.uuid!)
+        this.forcedReconciliationPromptIds.delete(command.uuid!)
+      }
+    })()
+    this.inFlightDurableWrites++
+    try { await this.closeCancellationWrites }
+    finally {
+      this.inFlightDurableWrites--
+      this.closeCancellationWrites = null
+    }
   }
 
   /**
@@ -2869,7 +2964,7 @@ export class SidecarServer {
    * with it. Unknown uuids (a worker result, a prompt already announced) are
    * ignored: the map is the whole vocabulary of what is still owed a row.
    */
-  private commitStagedPrompt(uuid: string): void {
+  private commitStagedPrompt(uuid: string, timestamp?: string): void {
     const staged = this.stagedPrompts.get(uuid)
     if (!staged) {
       // D1b — a message a recall took back that the engine turns out to have
@@ -2879,7 +2974,7 @@ export class SidecarServer {
       const recalled = this.recalledPrompts.get(uuid)
       if (!recalled) return
       this.recalledPrompts.delete(uuid)
-      this.broadcastPromptMessage(recalled.prompt, uuid, recalled.isMeta)
+      this.broadcastPromptMessage(recalled.prompt, uuid, recalled.isMeta, undefined, timestamp)
       // The recall answered "took it back" a moment ago, and this is the only
       // point where that turns out to be false. Correcting it here is what
       // makes the promise honest: without this the user is told the message is
@@ -2889,7 +2984,7 @@ export class SidecarServer {
       return
     }
     this.stagedPrompts.delete(uuid)
-    this.broadcastPromptMessage(staged.prompt, uuid, staged.isMeta)
+    this.broadcastPromptMessage(staged.prompt, uuid, staged.isMeta, undefined, timestamp)
     this.broadcastQueuedPrompts()
   }
 
@@ -2926,7 +3021,48 @@ export class SidecarServer {
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
       prompts,
+      recoveredPrompts: this.recoveredPromptItems().slice(0, Math.max(0, MAX_QUEUED_PROMPTS - prompts.length)),
+      recoveredPromptCount: this.recoveredPromptCount,
     })
+  }
+
+  private setRecoveredPrompts(prompts: readonly UndeliveredPrompt[]): void {
+    this.recoveredPrompts.clear()
+    this.recoveredPromptCount = 0
+    this.recoveredPromptBytes = 0
+    const activeIds = new Set<string>()
+    for (const command of getCommandQueueSnapshot()) {
+      if (isDeliverableParentPrompt(command) && command.uuid) activeIds.add(command.uuid)
+    }
+    const visibleUserIds = new Set<string>()
+    for (const message of this.history) {
+      if (message.type === 'user' && typeof message.uuid === 'string') visibleUserIds.add(message.uuid)
+    }
+    const retainedBytes = [...this.stagedPrompts.values(), ...this.recalledPrompts.values()]
+      .reduce((total, entry) => total + entry.serializedBytes, 0)
+    for (const source of prompts) {
+      if (activeIds.has(source.uuid) ||
+          this.stagedPrompts.has(source.uuid) ||
+          visibleUserIds.has(source.uuid)) continue
+      this.recoveredPromptCount++
+      if (this.recoveredPrompts.size >= MAX_QUEUED_PROMPTS) continue
+      if (!UUID_SHAPE.test(source.uuid) || validateSubmitPromptBudget(source.content) !== null) continue
+      const size = Buffer.byteLength(JSON.stringify(source))
+      if (retainedBytes + this.recoveredPromptBytes + size > MAX_QUEUED_PROMPT_BYTES) continue
+      this.recoveredPrompts.set(source.uuid, { prompt: source.content as AppSubmitPrompt, source })
+      this.recoveredPromptBytes += size
+    }
+  }
+
+  private recoveredPromptItems(): QueuedPromptItem[] {
+    return [...this.recoveredPrompts].map(([id, entry]) => ({
+      id, text: promptPreviewText(entry.prompt, MAX_QUEUED_PROMPT_PREVIEW_CHARS),
+    }))
+  }
+
+  private queuedPromptsSnapshotKey(prompts: QueuedPromptItem[]): string {
+    if (prompts.length === 0 && this.recoveredPromptCount === 0) return EMPTY_QUEUED_PROMPTS_KEY
+    return JSON.stringify([prompts, this.recoveredPromptItems().slice(0, Math.max(0, MAX_QUEUED_PROMPTS - prompts.length)), this.recoveredPromptCount])
   }
 
   /**
@@ -2944,12 +3080,13 @@ export class SidecarServer {
   private broadcastQueuedPrompts(): void {
     if (
       this.stagedPrompts.size === 0 &&
+      this.recoveredPromptCount === 0 &&
       this.lastQueuedPromptsKey === EMPTY_QUEUED_PROMPTS_KEY
     ) {
       return
     }
     const prompts = this.queuedPromptItems()
-    const key = JSON.stringify(prompts)
+    const key = this.queuedPromptsSnapshotKey(prompts)
     if (key === this.lastQueuedPromptsKey) return
     // Commit the key only once it is actually published. Recording it against
     // zero connections would remember a change nobody received, and the attach
@@ -3017,6 +3154,10 @@ export class SidecarServer {
       return
     }
     const { requestId } = parsed.data
+    if (parsed.data.recoveredPromptId !== undefined) {
+      void this.recallRecoveredPrompt(connection, requestId, parsed.data.recoveredPromptId)
+      return
+    }
 
     // Read BEFORE the removal: it is the count the user was looking at, and the
     // only thing the gap below can be measured against.
@@ -3059,6 +3200,58 @@ export class SidecarServer {
       recalled,
       alreadyDelivered,
     })
+  }
+
+  private async recallRecoveredPrompt(connection: Connection, requestId: string, id: string): Promise<void> {
+    const recovered = this.recoveredPrompts.get(id)
+    if (this.recoveredRecallInFlight) {
+      this.sendError(connection, requestId, 'bad_request', 'Wait for the current recovered input review to finish.', true)
+      return
+    }
+    if (this.manualCloseRequested) {
+      this.sendError(connection, requestId, 'session_not_ready', 'This chat is stopping.', false)
+      return
+    }
+    if (!recovered) {
+      this.sendError(connection, requestId, 'bad_request', 'This recovered input is not available for review. Reopen the chat to refresh it.', false)
+      return
+    }
+    this.recoveredRecallInFlight = true
+    this.inFlightDurableWrites++
+    try {
+      if (!canPersistHandoffTranscript()) throw new Error('Recovered input cancellation has no owned transcript')
+      await recordQueueOperation({
+        type: 'queue-operation', queueVersion: 2, operation: 'remove',
+        sessionId: this.engineSessionId, uuid: id as ReturnType<typeof randomUUID>,
+        timestamp: new Date().toISOString(),
+      })
+      await flushQueueOperationsDurably()
+      this.recoveredPrompts.delete(id)
+      this.recoveredPromptBytes = Math.max(0, this.recoveredPromptBytes - Buffer.byteLength(JSON.stringify(recovered.source)))
+      this.recoveredPromptCount = Math.max(this.recoveredPrompts.size, this.recoveredPromptCount - 1)
+      // A composer send is fresh intent, not reuse of the enqueue's proposal or
+      // consent context. Its original content and provenance stay in the ledger.
+      this.broadcastPromptRecallResult({
+        kind: 'prompt-recall.result', protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId, requestId, ok: true, alreadyDelivered: 0,
+        recalled: [{ id, prompt: recovered.prompt }], message: 'Recovered input is ready to review.',
+      })
+      if (this.loadRecoveredPrompts && !this.closed) {
+        try {
+          this.setRecoveredPrompts(await this.loadRecoveredPrompts())
+        } catch (error) {
+          this.log(`[sidecar] recovered input refresh failed: ${String(error)}`)
+          this.sendError(connection, undefined, 'internal_error', 'More recovered inputs could not be loaded. Reopen the chat to review the saved inputs.', false)
+        }
+      }
+      this.broadcastQueuedPrompts()
+    } catch (error) {
+      this.log(`[sidecar] recovered input review failed for ${id}: ${String(error)}`)
+      this.sendError(connection, requestId, 'internal_error', 'Recovered input could not be taken back safely. Its saved copy has been kept.', false)
+    } finally {
+      this.inFlightDurableWrites--
+      this.recoveredRecallInFlight = false
+    }
   }
 
   /**
@@ -3150,7 +3343,15 @@ export class SidecarServer {
 
     const requestedPromptId = parsed.data.promptId
     const promptId = [...this.stagedPrompts].find(([, staged]) => staged.submitId === requestedPromptId)?.[0] ?? requestedPromptId
-    if (this.parking) {
+    if (this.recoveredPrompts.has(promptId)) {
+      this.send(connection, {
+        kind: 'prompt-force.result', protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId, requestId: parsed.data.requestId, promptId,
+        ok: false, message: 'Take back this recovered input for review before sending it.',
+      })
+      return
+    }
+    if (this.manualCloseRequested || this.parking) {
       this.send(connection, {
         kind: 'prompt-force.result',
         protocolVersion: PROTOCOL_VERSION,
@@ -3158,7 +3359,7 @@ export class SidecarServer {
         requestId: parsed.data.requestId,
         promptId,
         ok: false,
-        message: 'The session is parking.',
+        message: this.manualCloseRequested ? 'This chat is stopping.' : 'The session is parking.',
       })
       return
     }
@@ -3205,12 +3406,32 @@ export class SidecarServer {
     })
   }
 
+  private async acknowledgeQueuedSubmit(
+    connection: Connection,
+    message: AppSubmitMessage,
+    submitId: string | undefined,
+  ): Promise<void> {
+    this.inFlightDurableWrites++
+    try {
+      await flushQueueOperationsDurably()
+      // This identifies the admission path, not whether the input is still
+      // waiting. The engine may already have durably consumed it meanwhile.
+      this.answerSubmit(connection, submitId, { accepted: true, queued: true })
+    } catch (error) {
+      this.log(`[sidecar] queued admission unconfirmed for ${this.sessionId} request ${message.requestId} submit ${submitId ?? 'uncorrelated'}: ${String(error)}`)
+      // Consumption can precede the failed enqueue flush. A refusal here would
+      // restore a composer copy and invite a duplicate, so leave it uncertain.
+      this.sendError(connection, message.requestId, 'internal_error',
+        'The message may have been delivered, but its saved state could not be confirmed. Check the conversation before sending it again.', false)
+    } finally {
+      this.inFlightDurableWrites--
+    }
+  }
+
   /**
-   * ONE SUBMIT, ONE ANSWER. Every exit from this method either accepts the
-   * prompt or refuses it, and each one answers `submitId` exactly once
-   * (`refuseSubmit` / `answerSubmit`), from the same synchronous dispatch that
-   * decided the outcome. That is what makes the renderer's retained copy exact
-   * instead of inferred (SubmitResultFrame).
+   * Refusals name the submit they rejected. Direct acceptance stays synchronous;
+   * queued acceptance waits for its recorder producers and durable flush.
+   * A queued I/O failure is uncertain, never a fabricated definite refusal.
    *
    * `startTurn`'s ASYNC `onRejected` is deliberately not one of those exits: by
    * the time it fires the prompt has been accepted AND announced as a transcript
@@ -3239,6 +3460,10 @@ export class SidecarServer {
     // `session_disconnected` is an existing ErrorFrame code the renderer already
     // folds to disconnected/inputEnabled:false — no new error code, no renderer
     // change. Retryable: the user unparks (restore-on-click) and re-sends.
+    if (this.manualCloseRequested) {
+      refuseSubmit('session_not_ready', 'This chat is stopping.', false)
+      return
+    }
     const reservation = this.controller.getHandoffReservation()
     if (reservation) {
       let canQueue = false
@@ -3354,7 +3579,7 @@ export class SidecarServer {
       // Recalled prompts still owe late-delivery reconciliation. Account for
       // both maps so repeatedly recalling/resending cannot multiply retention.
       const retainedBytes = [...this.stagedPrompts.values(), ...this.recalledPrompts.values()]
-        .reduce((total, entry) => total + entry.serializedBytes, 0)
+        .reduce((total, entry) => total + entry.serializedBytes, this.recoveredPromptBytes)
       if (retainedBytes + submitPromptSerializedBytes(message.prompt) > MAX_QUEUED_PROMPT_BYTES) {
         refuseSubmit(
           'bad_request',
@@ -3383,11 +3608,7 @@ export class SidecarServer {
       this.enqueueMidTurnPrompt(message.prompt, message.options?.isMeta,
         this.controller.bindObservedProposal(message.options?.observedProposal), submitId)
       queryTimingBoundary({ stage: 'submit_received', engineSessionId: this.engineSessionId })
-      // Staged, so the prompt is taken: the running turn's next tool round
-      // drains it. Answered HERE rather than off the staged snapshot the enqueue
-      // publishes, because that snapshot is republished on every queue change and
-      // says nothing about which submit caused this one.
-      this.answerSubmit(connection, submitId, { accepted: true, queued: true })
+      void this.acknowledgeQueuedSubmit(connection, message, submitId)
       return
     }
 
@@ -3990,6 +4211,7 @@ export class SidecarServer {
     const isWholeConversationFork = verb.type === 'session.branch'
     if (isWholeConversationFork) {
       if (
+        this.manualCloseRequested ||
         this.parking ||
         this.inlineCommandActive ||
         this.conversationMutationInFlight ||
@@ -4119,7 +4341,7 @@ export class SidecarServer {
       })
     }
 
-    if (this.parking || this.inlineCommandActive || this.conversationMutationInFlight || this.controller.getHandoffReservation()) {
+    if (this.manualCloseRequested || this.parking || this.inlineCommandActive || this.conversationMutationInFlight || this.controller.getHandoffReservation()) {
       refuse('Another conversation update is already in progress.')
       return
     }
@@ -6612,7 +6834,7 @@ function checkStrictKeys(message: unknown): string | null {
     // everything of the user's that is still waiting, so it has no target and
     // the renderer authors NOTHING but the correlation id. A forged `id`,
     // `agentId`, or `all` key is rejected here before the Zod parse.
-    ['prompt.recall', new Set(['type', 'requestId'])],
+    ['prompt.recall', new Set(['type', 'requestId', 'recoveredPromptId'])],
     // Force-send is bound to an engine-minted queued prompt id. Any attempt to
     // name a task, inject prompt content, or author queue priority is rejected.
     ['prompt.force', new Set(['type', 'requestId', 'promptId'])],
@@ -7089,7 +7311,8 @@ const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
 const promptRecallMessageSchema = z.object({
   type: z.literal('prompt.recall'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-})
+  recoveredPromptId: z.string().uuid().optional(),
+}).strict()
 
 const promptForceMessageSchema = z.object({
   type: z.literal('prompt.force'),

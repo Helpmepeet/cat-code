@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readWorkspaceJump, writeWorkspaceJump, type WorkspaceJumpStateV2 } from '../../src/utils/workspaceJumpState.js'
@@ -10,12 +10,13 @@ import { writeSessionRelocation } from '../../src/utils/sessionRelocationState.j
 import { SIDECAR_RUNTIME_ARGS } from '../main/mainDecisions.js'
 import { WorkspaceHandoffControl } from '../main/workspaceHandoffControl.js'
 import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
-import { loadDisplayTranscriptFromJsonlPath } from '../../src/utils/sessionStorage.js'
+import { loadDisplayTranscriptFromJsonlPath, verifyResumeCheckpoint } from '../../src/utils/sessionStorage.js'
+import { isWorkspaceHandoffExecutionRecord } from '../shared/workspaceHandoff.js'
 
 for (const scenario of ['success', 'historical', 'pending-question'] as const) test(scenario === 'pending-question'
   ? 'replacement releases uncertain review after a real unanswered question sharing the narration response id'
   : scenario === 'historical'
-  ? 'normal replacement startup preserves converged open history after rewind without repeating continuation'
+  ? 'replacement refuses a rewind that invalidated a known checkpoint even after converged release'
   : 'real execution survives process replacement and confirms main-authorized release without replay', async () => {
   const historical = scenario === 'historical', pendingQuestion = scenario === 'pending-question'
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'handoff-restore-')))
@@ -54,22 +55,43 @@ spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
     expect(mintCode, mintError).toBe(0)
     const receipt = JSON.parse(mintOutput.trim()) as { checkpointSha256: string; receiptRevision: number; providerCalls: number }
     expect(receipt.providerCalls).toBe(1)
+    let historicalPath: string | undefined
+    let historicalBytes: Buffer | undefined
     if (historical) {
       writeWorkspaceJump({ ...state, continuation: { ...state.continuation, dispatch: 'consumed', outcome: 'success', receiptRevision: receipt.receiptRevision, checkpointSha256: receipt.checkpointSha256 },
         release: { target: 'open', authorizedRevision: 2, confirmed: { generation: admissionGeneration, mode: 'open' } } })
       writeSessionRelocation({ version: 1, appSessionId, engineSessionId, original: state.source, source: state.source, target: state.target, phase: 'complete',
         controls: { mode: 'default' }, backup: join(root, 'backup'), movedAt: 2 })
+      const paths = await Array.fromAsync(new Bun.Glob(`**/${engineSessionId}.jsonl`).scan({ cwd: config, absolute: true }))
+      expect(paths).toHaveLength(1)
+      historicalPath = paths[0]!
+      historicalBytes = readFileSync(historicalPath)
+      const execution: unknown = JSON.parse(readFileSync(join(config, 'workspace-handoff-executions', engineSessionId, `${state.operationId}.json`), 'utf8'))
+      if (!isWorkspaceHandoffExecutionRecord(execution) || !execution.terminal) throw new Error('Missing historical checkpoint')
+      await expect(verifyResumeCheckpoint(execution.terminal.checkpoint, historicalPath, engineSessionId))
+        .rejects.toThrow('Transcript prefix digest differs')
     }
     const frames: ServerFrame[] = []
+    let exitCode: number | null | undefined
     supervisor = new SidecarSupervisor({ sidecarCommand: 'bun', sidecarArgs: [`--preload=${blocker}`, `--preload=${resolve('src/QueryEngine.ts')}`, `--preload=${providerGuard}`, ...SIDECAR_RUNTIME_ARGS, resolve('app/sidecar/index.ts')], sidecarEnv: env, socketDir: root })
     supervisor.subscribe(event => { if (event.type === 'frame') {
       frames.push(event.frame)
       const { deliveryTrace: _deliveryTrace, ...controlFrame } = event.frame
       control?.receiveFrame(appSessionId, controlFrame)
-    } })
+    } else if (event.type === 'exit') exitCode = event.code })
     supervisor.spawnSession(appSessionId, { cwd, resumeEngineSessionId: engineSessionId })
     const generation = supervisor.getSessionGeneration(appSessionId)!
     expect(generation).not.toBe(admissionGeneration)
+    if (historical) {
+      for (let i = 0; i < 500 && exitCode === undefined; i++) await Bun.sleep(20)
+      expect(exitCode).toBe(1)
+      expect(frames.some(frame => frame.kind === 'ready')).toBe(false)
+      expect(frames.some(frame => frame.kind === 'event' && frame.event.type === 'turn.status' && frame.event.activeTurn)).toBe(false)
+      expect(readFileSync(historicalPath!).equals(historicalBytes!)).toBe(true)
+      expect(existsSync(providerReplay)).toBe(false)
+      expect(readWorkspaceJump(appSessionId)).toMatchObject({ release: { target: 'open' } })
+      return
+    }
     for (let i = 0; i < 500 && !frames.some(frame => frame.kind === 'ready'); i++) await Bun.sleep(20)
     expect(frames.some(frame => frame.kind === 'ready')).toBe(true)
     supervisor.send(appSessionId, { type: 'workspace.handoff', requestId: 'status', operationId: state.operationId, forGeneration: generation, action: 'status' })

@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { describe, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -580,7 +581,7 @@ describe('buildSessionsCatalogSnapshot', () => {
     )
     const frame: SessionsCatalogSnapshotFrame = {
       kind: 'sessions.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
       catalog: snapshot,
     }

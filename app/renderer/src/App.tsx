@@ -60,6 +60,16 @@ import {
 } from './rosterBootstrap.js'
 import { deriveTabVisualState } from './tabStatus.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
+import {
+  dismissSession,
+  dismissSessionAndRequestStop,
+  isSessionDismissed,
+  loadSessionDismissalPreferences,
+  reopenSession,
+  resolveDismissiblePendingSubmit,
+  saveSessionDismissalPreferences,
+  type SessionDismissals,
+} from './sessionDismissal.js'
 import { TabBar, type TabBarEntry, type TabModel } from './TabBar.js'
 import {
   createTabNavigation,
@@ -121,7 +131,6 @@ import {
   createPreviewTranscriptState,
   hasPreviewTranscript,
   openPreloadedPreview,
-  previewClosePlan,
   previewGeneratedImageFrames,
   reduceLiveTranscriptState,
   reducePreviewTranscriptState,
@@ -186,7 +195,6 @@ import {
   removePasteOccurrence,
   reduceTransportErrorCleared,
   reduceTransportErrorSet,
-  resolvePendingSubmit,
   restoreSelectedPrompt,
   applyRefusedSubmitRestoration,
   restoreDraftWithPending,
@@ -279,6 +287,8 @@ import {
   createQueuedPromptsState,
   reduceQueuedPromptsState,
   selectQueuedPrompts,
+  selectRecoveredPrompts,
+  selectRecoveredPromptCount,
 } from './queuedPromptsState.js'
 import {
   createRemoteSettingsState,
@@ -1001,10 +1011,12 @@ export function App() {
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
   // listSessions() below, then kept live off subscribeHost.
+  const [dismissalSeed] = useState(() => loadSessionDismissalPreferences(defaultPromptDraftStorage()))
+  const [dismissalPreferenceError, setDismissalPreferenceError] = useState(dismissalSeed.error)
   const [shell, dispatchShell] = useReducer(
     reduceShell,
     undefined,
-    createShellState,
+    () => ({ ...createShellState(), dismissals: dismissalSeed.entries }),
   )
   const dockObservedSessions = useMemo(() => selectShellDescriptors(shell), [shell])
   useSubagentDockObservation({ sessions: dockObservedSessions, workers: workersState, tasks, transcript, leases })
@@ -1016,6 +1028,25 @@ export function App() {
   // the active tab is removed.
   const shellRef = useRef(shell)
   shellRef.current = shell
+  const updateDismissals = useCallback((dismissals: SessionDismissals) => {
+    setDismissalPreferenceError(saveSessionDismissalPreferences(
+      defaultPromptDraftStorage(), dismissals, dismissalSeed.error,
+    ))
+    const action = { type: 'session-dismissals' as const, dismissals }
+    shellRef.current = reduceShellState(shellRef.current, action)
+    dispatchShell(action)
+  }, [dismissalSeed.error])
+  const deliberatelyReopen = useCallback((session: SessionDescriptor) => {
+    cancelledRestoresRef.current.delete(session.appSessionId)
+    updateDismissals(reopenSession(shellRef.current.dismissals ?? [], session))
+    dispatchShell({ type: 'event', event: { type: 'session-status', session } })
+  }, [updateDismissals])
+  useEffect(() => {
+    if (shell.dismissals === dismissalSeed.entries) return
+    setDismissalPreferenceError(saveSessionDismissalPreferences(
+      defaultPromptDraftStorage(), shell.dismissals ?? [], dismissalSeed.error,
+    ))
+  }, [shell.dismissals, dismissalSeed.entries, dismissalSeed.error])
   const toolCardExpansionStoreRef = useRef<ToolCardExpansionStore | null>(null)
   toolCardExpansionStoreRef.current ??= createToolCardExpansionStore()
   const activeSessionIdRef = useRef(activeSessionId)
@@ -1173,7 +1204,13 @@ export function App() {
           applyFrames: () =>
             applyServerFrameBatch(frames, {
               getRosterById: () => shellRef.current.byId,
-              setActiveSessionId,
+              setActiveSessionId: updater => setActiveSessionId(current => {
+                const sessionId = updater(current)
+                const session = sessionId ? shellRef.current.byId[sessionId] : undefined
+                return session && isSessionDismissed(shellRef.current.dismissals ?? [], session)
+                  ? current
+                  : sessionId
+              }),
               dispatchRawLog: dispatch,
               dispatchPermission,
               dispatchConnection,
@@ -1258,9 +1295,11 @@ export function App() {
           )
         }
         if (frame.kind === 'prompt-recall.result') {
+          const descriptor = shellRef.current.byId[frame.sessionId]
           const disposition = classifyRecallAnswer(
             recallRequestsRef.current,
             frame,
+            descriptor !== undefined && isSessionDismissed(shellRef.current.dismissals ?? [], descriptor),
           )
           if (disposition === 'ignore') continue
           if (disposition === 'first') {
@@ -1666,7 +1705,8 @@ export function App() {
         [
           ...selectPaneSessions(shell),
           ...[...branchSwitchSourcesRef.current.values()].filter(
-            descriptor => !selectPaneSessions(shell).some(row => row.appSessionId === descriptor.appSessionId),
+            descriptor => !isSessionDismissed(shell.dismissals ?? [], descriptor) &&
+              !selectPaneSessions(shell).some(row => row.appSessionId === descriptor.appSessionId),
           ),
         ],
         sessionCatalogSnapshot,
@@ -1973,6 +2013,8 @@ export function App() {
   }, [shell, connection, permissions, activeSessionId])
 
   const selectTab = useCallback((sessionId: SessionId) => {
+    const descriptor = shellRef.current.byId[sessionId]
+    if (descriptor) deliberatelyReopen(descriptor)
     // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
     // in-flight streaming into a background session is lost on switch.
     pendingExplicitSessionRef.current = null
@@ -1983,7 +2025,7 @@ export function App() {
     })
     setShownSessionId(sessionId)
     setActiveSessionId(sessionId)
-  }, [])
+  }, [deliberatelyReopen])
 
   // Account management belongs to the app. Composer switches still address
   // their own pane's sidecar in renderSessionPane.
@@ -2619,11 +2661,14 @@ export function App() {
   // response. Nothing is removed here: the sidecar owns the engine's queue and
   // answers with what it actually managed to take back, which is what the
   // restore above then applies.
-  const recallQueuedPrompts = useCallback((sessionId: SessionId) => {
+  const recallQueuedPrompts = useCallback((sessionId: SessionId, recoveredPromptId?: string) => {
     const requestId = newRequestId()
     trackRecallRequest(recallRequestsRef.current, requestId, sessionId)
     try {
-      getBridge().recallPrompts(sessionId, { type: 'prompt.recall', requestId })
+      getBridge().recallPrompts(sessionId, {
+        type: 'prompt.recall', requestId,
+        ...(recoveredPromptId ? { recoveredPromptId } : {}),
+      })
     } catch (error) {
       releaseRecallRequest(recallRequestsRef.current, requestId)
       setTransportErrors(prev =>
@@ -2674,62 +2719,39 @@ export function App() {
         openOrder,
       })
     }
-    // Closing is the user saying they are done with this session, so a prompt
-    // still queued for it is handed back rather than left to drain into a
-    // session that is going away. The text lands in this session's draft, which
-    // is renderer-local and survives the close, so reopening finds it intact.
-    releasePendingSubmit(sessionId)
-    // A submit awaiting its answer is DROPPED rather than handed back: it was
-    // sent, and its retained copy holds base64 image data this closed session
-    // would otherwise keep alive with nothing left to resolve it. A recall
-    // still waiting for its answer goes the same way, for the same reason.
-    retainedSubmitsRef.current = reduceRetainedSubmitCleared(
-      retainedSubmitsRef.current,
-      sessionId,
-    )
-    refusedSubmitPrefixesRef.current.delete(sessionId)
-    forgetRecallRequests(recallRequestsRef.current, sessionId)
-    if (shellRef.current.previews[sessionId]) {
-      const plan = previewClosePlan(
-        shellRef.current.tabs[sessionId] === true,
-        lazyRestoreClaimsRef.current.has(sessionId),
+    return dismissSessionAndRequestStop(shell.dismissals ?? [], shell.byId[sessionId], updateDismissals, async () => {
+      if (lazyRestoreClaimsRef.current.has(sessionId)) cancelledRestoresRef.current.add(sessionId)
+      navigateAfterClosedSession(sessionId, openOrder)
+      // Unsent queued input returns to the session's draft for deliberate review.
+      releasePendingSubmit(sessionId)
+      // Sent input is not unsent by closing. Late answers must not recreate it.
+      retainedSubmitsRef.current = reduceRetainedSubmitCleared(
+        retainedSubmitsRef.current,
+        sessionId,
       )
-      dispatchPreviewTranscript({ type: 'preview-reset', sessionId })
-      dispatchShell({ type: 'preview-close', sessionId })
-      if (plan.cancelRestore) {
-        cancelledRestoresRef.current.add(sessionId)
-      } else {
-        lazyRestoreClaimsRef.current.delete(sessionId)
+      refusedSubmitPrefixesRef.current.delete(sessionId)
+      forgetRecallRequests(recallRequestsRef.current, sessionId)
+      if (shell.previews[sessionId]) {
+        dispatchPreviewTranscript({ type: 'preview-reset', sessionId })
       }
-      if (!plan.closeLive) {
-        navigateAfterClosedSession(sessionId, openOrder)
+      // Saved conversations become restore offers; unused rows are removed.
+      // Neither path deletes files. Dismissal is independent of stop completion.
+      const bridge = getBridge()
+      try {
+        const result = await bridge.closeSession(sessionId)
+        if (!result.ok) {
+          pendingCloseRequestsRef.current.delete(sessionId)
+          setShellError(hostErrorMessage(result.error))
+          return false
+        }
         return true
-      }
-    }
-    // Saved conversations become restore offers; unused rows are removed.
-    // Neither path deletes files. Roster and tab membership follow the host's
-    // event rather than an optimistic local delete.
-    const bridge = getBridge()
-    try {
-      const result = await bridge.closeSession(sessionId)
-      if (!result.ok) {
+      } catch (error) {
         pendingCloseRequestsRef.current.delete(sessionId)
-        setShellError(hostErrorMessage(result.error))
+        setShellError(errorMessage(error))
         return false
       }
-
-      const pendingClose = pendingCloseRequestsRef.current.get(sessionId)
-      navigateAfterClosedSession(
-        sessionId,
-        pendingClose?.openOrder ?? openOrder,
-      )
-      return true
-    } catch (error) {
-      pendingCloseRequestsRef.current.delete(sessionId)
-      setShellError(errorMessage(error))
-      return false
-    }
-  }, [navigateAfterClosedSession, releasePendingSubmit])
+    })
+  }, [navigateAfterClosedSession, releasePendingSubmit, updateDismissals])
 
   const archiveSession = (row: MergedSessionRow) => {
     const archivedAt = Date.now()
@@ -2767,6 +2789,12 @@ export function App() {
       // Main closes the old sidecar before this result is returned. The new
       // session has a fresh engine snapshot for the selected branch.
       const replacementId = result.value.appSessionId
+      if (isSessionDismissed(shellRef.current.dismissals ?? [], source)) {
+        updateDismissals(dismissSession(shellRef.current.dismissals ?? [], result.value))
+        dispatchShell({ type: 'event', event: { type: 'session-added', session: result.value } })
+        void closeTab(replacementId)
+        return null
+      }
       dispatchShell({ type: 'event', event: { type: 'session-added', session: result.value } })
       updatePromptDrafts(current =>
         reducePromptDrafts(reducePromptDrafts(current, sessionId, ''), replacementId, draft),
@@ -2803,7 +2831,7 @@ export function App() {
         return next
       })
     }
-  }, [imageAttachmentState, fileAttachmentState])
+  }, [imageAttachmentState, fileAttachmentState, closeTab, updateDismissals])
 
   const setPeerWakeBlocked = useCallback(
     async (sessionId: SessionId, blocked: boolean) => {
@@ -2843,7 +2871,8 @@ export function App() {
       try {
         const result = await bridge.restoreSession(sessionId)
         if (result.ok) {
-          if (cancelledRestoresRef.current.delete(sessionId)) {
+          if (cancelledRestoresRef.current.delete(sessionId) ||
+              isSessionDismissed(shellRef.current.dismissals ?? [], result.value)) {
             lazyRestoreClaimsRef.current.delete(sessionId)
             releasePendingSubmit(sessionId)
             const closeResult = await bridge.closeSession(sessionId)
@@ -2927,6 +2956,8 @@ export function App() {
   )
 
   const openPreviewPane = useCallback((sessionId: SessionId, selectionClaim: number) => {
+    const descriptor = shellRef.current.byId[sessionId]
+    if (!descriptor || isSessionDismissed(shellRef.current.dismissals ?? [], descriptor)) return
     swappedPreviewsRef.current.delete(sessionId)
     dispatchShell({ type: 'preview-open', sessionId })
     if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
@@ -2947,6 +2978,7 @@ export function App() {
       const selectionClaim = requestedClaim
       const descriptor = shellRef.current.byId[sessionId]
       if (removedIdsRef.current.has(sessionId) || !descriptor?.restorable) return
+      deliberatelyReopen(descriptor)
       if (
         openPreloadedPreview(
           previewTranscriptRef.current,
@@ -2981,7 +3013,7 @@ export function App() {
         }
       })()
     },
-    [openPreviewPane, restoreLiveSession],
+    [openPreviewPane, restoreLiveSession, deliberatelyReopen],
   )
 
   // SESSIONS-UNIFICATION (operator ruling 2026-07-20) — open a terminal-created
@@ -3007,6 +3039,8 @@ export function App() {
           return null
         }
         const descriptor = result.value
+        if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return descriptor
+        deliberatelyReopen(descriptor)
         if (descriptor.restorable) {
           void performRestore(descriptor.appSessionId, selectionClaim)
           return descriptor
@@ -3025,7 +3059,7 @@ export function App() {
         return null
       }
     },
-    [performRestore],
+    [performRestore, deliberatelyReopen],
   )
 
   useEffect(() => {
@@ -3372,7 +3406,12 @@ export function App() {
     for (const sessionId of Object.keys(pendingSubmits)) {
       const pending = pendingSubmits[sessionId]
       if (pending === undefined) continue
-      const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))
+      const outcome = resolveDismissiblePendingSubmit(
+        selectConnection(connection, sessionId),
+        sessionId,
+        shellRef.current.byId[sessionId],
+        shellRef.current.dismissals ?? [],
+      )
       if (outcome === 'wait') continue
       if (outcome === 'restore') {
         restoreParkedSession(sessionId)
@@ -4272,6 +4311,9 @@ export function App() {
 	              }).catch(error => toast(errorMessage(error), { tone: 'warn' }))
 	            }}
 	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId, transcriptMode === 'focused')}
+	            recoveredPrompts={selectRecoveredPrompts(queuedPrompts, sessionId)}
+	            recoveredPromptCount={selectRecoveredPromptCount(queuedPrompts, sessionId)}
+	            onReviewRecoveredPrompt={id => recallQueuedPrompts(sessionId, id)}
 	            onRecallQueuedPrompts={() => recallQueuedPrompts(sessionId)}
 	            history={selectHistory(historyState, sessionId)}
                 historyNav={historyNavigation[sessionId] ?? EMPTY_HISTORY_NAV}
@@ -4838,6 +4880,21 @@ export function App() {
             />
           ) : null}
 
+          {selectShellDescriptors(shell).filter(session =>
+            isSessionDismissed(shell.dismissals ?? [], session) &&
+            session.status !== 'exited',
+          ).map(session => (
+            <div data-window-chrome key={session.appSessionId} role="status" className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs">
+              <span className="min-w-0 flex-1">Stop not confirmed for {tabLabel(session)}. The chat is closed.</span>
+              <button type="button" onClick={() => void closeTab(session.appSessionId)}>Retry stop</button>
+              <button type="button" onClick={() => selectTab(session.appSessionId)}>Open chat</button>
+            </div>
+          ))}
+          {dismissalPreferenceError ? (
+            <div data-window-chrome role="alert" className="border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
+              {dismissalPreferenceError}
+            </div>
+          ) : null}
           {shellError ? (
             <div data-window-chrome className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
               <span className="min-w-0 flex-1">{shellError}</span>
@@ -5156,6 +5213,7 @@ type ShellAction =
   | { type: 'event'; event: HostEvent }
   | { type: 'preview-open'; sessionId: SessionId }
   | { type: 'preview-close'; sessionId: SessionId }
+  | { type: 'session-dismissals'; dismissals: SessionDismissals }
 
 function reduceShell(state: ShellState, action: ShellAction): ShellState {
   if (action.type === 'hydrate') {

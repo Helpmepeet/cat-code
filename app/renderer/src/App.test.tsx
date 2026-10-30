@@ -457,7 +457,7 @@ test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing
   expect(applyBody).toContain('void performRestore(route.appSessionId)')
 })
 
-test('close navigation waits for a successful host result and focuses the chosen pane', () => {
+test('close dismissal and navigation precede the host result and retain failure reporting', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const start = source.indexOf('const closeTab = useCallback(')
   const end = source.indexOf('\n  const setPeerWakeBlocked', start)
@@ -473,7 +473,8 @@ test('close navigation waits for a successful host result and focuses the chosen
   const navigationBody = source.slice(navigationStart, start)
   const resultIndex = body.indexOf('const result = await bridge.closeSession(sessionId)')
   const focusIndex = navigationBody.indexOf('setActiveSessionId(next)')
-  const navigateIndex = body.indexOf('navigateAfterClosedSession(', resultIndex)
+  const navigateIndex = body.indexOf('navigateAfterClosedSession(')
+  const dismissIndex = body.indexOf('return dismissSessionAndRequestStop(')
 
   expect(navigationBody).toContain('pendingCloseRequestsRef')
   expect(navigationBody).toContain('activeAfterPaneChange')
@@ -481,8 +482,17 @@ test('close navigation waits for a successful host result and focuses the chosen
   expect(body).toContain('if (!result.ok)')
   expect(body).toContain('pendingCloseRequestsRef.current.delete(sessionId)')
   expect(resultIndex).toBeGreaterThan(-1)
-  expect(navigateIndex).toBeGreaterThan(resultIndex)
+  expect(navigateIndex).toBeGreaterThan(dismissIndex)
+  expect(navigateIndex).toBeLessThan(resultIndex)
+  expect(dismissIndex).toBeGreaterThan(-1)
+  expect(body.slice(dismissIndex, navigateIndex)).not.toContain('return false')
   expect(focusIndex).toBeGreaterThan(-1)
+})
+
+test('unavailable dismissal preferences render a persistent visible warning', () => {
+  const html = renderToStaticMarkup(<App />)
+  expect(html).toContain('role="alert"')
+  expect(html).toContain('Closed chat preferences are unavailable. Chat visibility changes will not be saved.')
 })
 
 test('sidebar and tab actions share the short menu and resolve archive state from the target row', () => {
@@ -1490,8 +1500,9 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   )
   // The drain rides the EXISTING app.submit — no new frame kind or channel.
   expect(submitBody).toContain(
-    'const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))',
+    'const outcome = resolveDismissiblePendingSubmit(',
   )
+  expect(submitBody).toContain('shellRef.current.dismissals ?? []')
   expect(submitBody).toContain("if (outcome === 'wait') continue")
   expect(flatSubmit).toContain("if (outcome === 'release') { releasePendingSubmit(sessionId)")
   expect(submitBody).toContain(

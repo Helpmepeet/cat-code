@@ -17,6 +17,7 @@ function op(
   extra: Partial<SessionQueueOperation> = {},
 ): SessionQueueOperation {
   return {
+    queueVersion: 2,
     operation,
     timestamp: '2026-08-17T00:00:00.000Z',
     sessionId: SESSION,
@@ -48,6 +49,25 @@ test('every retraction verb subtracts its message, whichever primitive wrote it'
       op('popAll', 'pulled-into-the-composer'),
     ]),
   ).toEqual(['still-waiting'])
+})
+
+test('a delivery reservation remains recoverable until durable acceptance', () => {
+  const operations = [op('enqueue', 'reserved'), op('reserve', 'reserved')]
+  expect(select(operations)).toEqual(['reserved'])
+  expect(select(operations, ['reserved'])).toEqual([])
+  expect(select([...operations, op('remove', 'reserved')])).toEqual([])
+})
+
+test('ambiguous legacy removals remain available for review without inferring delivery', () => {
+  const operations = [
+    op('enqueue', 'legacy-dequeue', { queueVersion: undefined }),
+    op('dequeue', 'legacy-dequeue', { queueVersion: undefined }),
+    op('enqueue', 'legacy-remove', { queueVersion: undefined }),
+    op('remove', 'legacy-remove', { queueVersion: undefined }),
+  ]
+  expect(select(operations)).toEqual(['legacy-dequeue', 'legacy-remove'])
+  expect(select(operations, ['legacy-dequeue'])).toEqual(['legacy-remove'])
+  expect(select([...operations, op('remove', 'legacy-remove')])).toEqual(['legacy-dequeue'])
 })
 
 test('a message resent after a take-back is recovered, because it is a new message', () => {
@@ -87,6 +107,7 @@ test('only main-thread prompts are recovered', () => {
   expect(
     select([
       op('enqueue', 'worker-result', { mode: 'task-notification' }),
+      op('enqueue', 'worker-prompt', { agentId: 'worker' as never }),
       op('enqueue', 'user-prompt'),
     ]),
   ).toEqual(['user-prompt'])
@@ -124,6 +145,20 @@ test('a record with no usable content is dropped rather than half-restored', () 
   ).toEqual(['intact'])
 })
 
+test('malformed recovery identities and timestamps are counted rather than forwarded', () => {
+  const selection = selectUndeliveredPrompts({
+    operations: [
+      op('enqueue', 'invalid-id', { uuid: 7 as never }),
+      op('enqueue', 'empty-id', { uuid: '' as never }),
+      op('enqueue', 'invalid-time', { timestamp: 'not a timestamp' }),
+      op('enqueue', 'intact'),
+    ],
+    messageUuids: new Set<string>(),
+  })
+  expect(selection.prompts.map(prompt => prompt.uuid)).toEqual(['intact'])
+  expect(selection.droppedRecords).toBe(3)
+})
+
 test('only blocks a composer submit can produce are restored as user content', () => {
   // These all satisfied the old `string or array` check and went into a
   // `type:'user'` frame unexamined. None of them is a message anyone typed.
@@ -138,6 +173,12 @@ test('only blocks a composer submit can produce are restored as user content', (
     ] as unknown as SessionQueueOperation['content'],
     [
       { type: 'document', source: { type: 'base64', data: 'x' } },
+    ] as unknown as SessionQueueOperation['content'],
+    [
+      { type: 'image', source: { type: 'url', url: 'file:///private/input' } },
+    ] as unknown as SessionQueueOperation['content'],
+    [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'not base64' } },
     ] as unknown as SessionQueueOperation['content'],
   ]
   for (const content of unrestorable) {

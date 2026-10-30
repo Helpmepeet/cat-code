@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceJumpCoordinator, type WorkspaceJumpCoordinatorDeps } from './workspaceJumpCoordinator.js'
+import { SessionCloseCoordinator } from './sessionCloseCoordinator.js'
 import type { OperationalRecordInput } from '../shared/operationalLog.js'
 import { WorkspaceHandoffControl } from './workspaceHandoffControl.js'
 import type { WorkspaceHandoffSnapshot, WorkspaceHandoffExecutionRecord } from '../shared/workspaceHandoff.js'
@@ -92,6 +93,26 @@ function harness() {
     holdMove: (v: () => Promise<void>) => { holdMove = v },
   }
 }
+
+test('close cancellation retains uncertain workspace evidence and never kills before a confirmed gate', async () => {
+  const h = harness()
+  expect((await h.accept()).ok).toBe(true)
+  let killed = false
+  const close = new SessionCloseCoordinator({
+    authorize: async () => ({ ok: true, value: undefined }),
+    blocked: id => h.coordinator.isReserved(id),
+    cancel: async id => { await h.coordinator.cancel(id, undefined, 'close') },
+    observe: id => h.coordinator.queryStatus(id),
+    close: async () => { killed = true; return { ok: true, value: undefined } },
+    timeoutMs: 25,
+    retryMs: 1,
+  })
+  expect((await close.close(h.appSessionId)).ok).toBe(false)
+  const retained = h.coordinator.snapshot(h.appSessionId)
+  expect(retained?.cancellation?.requestedBy).toBe('close')
+  expect(retained?.operationId).toBe(h.operationId)
+  expect(killed).toBe(false)
+})
 
 test('jump timings require matching destination provider identity and do not alter dispatch', async () => {
   const h = harness()
@@ -815,7 +836,7 @@ test('status reply schedules a release retry after freeing its command slot with
     send: (id, message) => {
       if (message.action === 'release' && ++releases === 1) return true
       const gate = message.action === 'release' ? { mode: 'open' as const, reservationOperationId: null, requiresUserReconciliation: false } : { mode: 'held' as const, reservationOperationId: h.operationId, requiresUserReconciliation: false }
-      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: 4, sessionId: id, requestId: message.requestId, operationId: h.operationId, action: message.action, disposition: 'accepted', status: snapshot(h, ++sequence, { terminal }, gate) })
+      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION, sessionId: id, requestId: message.requestId, operationId: h.operationId, action: message.action, disposition: 'accepted', status: snapshot(h, ++sequence, { terminal }, gate) })
       return true
     },
   })
@@ -849,7 +870,7 @@ for (const interruption of ['none', 'cancel', 'replace'] as const) test(`status 
       sent.push(message)
       if (message.action === 'status' || message.action === 'cancel') return true
       const gate = { mode: 'open' as const, reservationOperationId: null, requiresUserReconciliation: false }
-      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: 4, sessionId: id,
+      control.receiveFrame(id, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION, sessionId: id,
         requestId: message.requestId, operationId: h.operationId, action: message.action,
         disposition: 'accepted', status: snapshot(h, ++sequence, { terminal }, message.action === 'release' ? gate : undefined) })
       return true
@@ -884,7 +905,7 @@ for (const interruption of ['none', 'cancel', 'replace'] as const) test(`status 
     if (interruption === 'cancel') await h.coordinator.cancel(h.appSessionId)
     if (interruption === 'replace') h.setGeneration()
     const status = sent[0]!
-    control.receiveFrame(h.appSessionId, { kind: 'workspace.handoff.result', protocolVersion: 4,
+    control.receiveFrame(h.appSessionId, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
       sessionId: h.appSessionId, requestId: status.requestId, operationId: h.operationId,
       action: 'status', disposition: 'accepted', status: { ...observed, statusSeq: ++sequence } })
     if (interruption !== 'none') control.disconnect(h.appSessionId)

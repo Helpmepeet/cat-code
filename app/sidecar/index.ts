@@ -43,12 +43,12 @@ import type { Message } from '../../src/types/message.js'
 import { processSessionStartHooks } from '../../src/utils/sessionStart.js'
 import {
   getTranscriptPath,
+  getSessionQueueOperations,
   loadDisplayTranscriptFromJsonlPath,
 } from '../../src/utils/sessionStorage.js'
 import { activateTranscriptLease, releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
 import {
   mergeDisplayHistoryWithSeed,
-  projectUndeliveredPrompts,
   projectResumedHistory,
 } from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
@@ -63,6 +63,7 @@ import {
 import { withRestoredSubagentHistory } from './subagentHistory.js'
 import {
   resumeEngineSession,
+  selectUndeliveredPrompts,
   SidecarResumeBusyError,
   SidecarResumeError,
 } from './sessionResume.js'
@@ -581,10 +582,13 @@ async function main(): Promise<void> {
   let unavailableParentToolUseIds: string[] = []
   if (resumedMessages !== undefined) {
     const projected = await projectCurrentDisplayHistory(resumedMessages)
+    const recovery = resumed?.tailRecovery
+    if (recovery?.reviewRequired &&
+        (!projected.history.some(message => message.uuid === recovery.warningUuid) ||
+          !resumedMessages.some(message => message.uuid === recovery.contextUuid))) {
+      throw new Error('Recovered history is missing its stored review disclosure')
+    }
     historyEvents = projected.history
-    historyEvents.push(
-      ...projectUndeliveredPrompts(undeliveredPrompts, getSessionId()),
-    )
     historySourceTruncated = projected.truncated
     unavailableParentToolUseIds = projected.unavailableParentToolUseIds
   }
@@ -599,6 +603,11 @@ async function main(): Promise<void> {
     engineSessionId,
     generation: args.generation,
     controller,
+    recoveredPrompts: undeliveredPrompts,
+    recoveredUnavailableCount: resumed?.droppedQueueRecords ?? 0,
+    loadRecoveredPrompts: async () => selectUndeliveredPrompts(
+      await getSessionQueueOperations(engineSessionId),
+    ).prompts,
     ...(permissions ? { permissions } : {}),
     ...(settings ? { settings } : {}),
     ...(agentConfig ? { agentConfig } : {}),
@@ -710,6 +719,10 @@ async function main(): Promise<void> {
       void exitCleanly(PARKED_EXIT_CODE)
     },
   })
+  // The server retains only its bounded review batch. More saved input is read
+  // on demand after review, never held here as a second unbounded body store.
+  undeliveredPrompts = []
+  if (resumed) resumed.undeliveredPrompts = []
   closeSocket = () => {
     server.close()
     try {

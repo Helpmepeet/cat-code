@@ -140,7 +140,7 @@ test('identical full fences use distinct canonical identities; pending rejects r
   expect(starts).toHaveLength(1)
   expect(starts[0]!.source).toEqual({ ...source, fenceOrdinal: 1 })
   expect(buttons(tree.container, 'Starting')[0]!.getAttribute('aria-disabled')).toBe('true')
-  await act(async () => listener([{ kind: 'error', sessionId: 'pending-test', protocolVersion: 4, requestId: starts[0]!.requestId, message: 'Permission denied', code: 'unauthorized', retryable: false }]))
+  await act(async () => listener([{ kind: 'error', sessionId: 'pending-test', protocolVersion: PROTOCOL_VERSION, requestId: starts[0]!.requestId, message: 'Permission denied', code: 'unauthorized', retryable: false }]))
   expect(tree.container.textContent).toContain('Permission denied')
   expect(buttons(tree.container, 'Starting')).toHaveLength(0)
   await act(async () => buttons(tree.container, 'Run again')[0]!.click())
@@ -207,7 +207,7 @@ test('an unmounted pane cannot remain pending after its refusal was missed', asy
   const requestId = starts[0]!.requestId
   await tree.unmount()
   listener([{
-    kind: 'error', sessionId: 'missed-main-refusal', protocolVersion: 4,
+    kind: 'error', sessionId: 'missed-main-refusal', protocolVersion: PROTOCOL_VERSION,
     requestId, code: 'bad_request', retryable: true, message: 'Workspace change in progress.',
   }])
   const restored = await harness.mount(view('missed-main-refusal', rows, [], 'g1', []))
@@ -258,7 +258,7 @@ test('older ledger rejection cannot replace a newer correlated failure after pen
   const rejected: InlineCommandRequest = { requestId: starts[0]!.requestId, source, status: 'rejected', error: 'Old rejection' }
   await tree.render(view('latest-failure', rows, [], 'g1', [rejected]))
   await act(async () => buttons(tree.container, 'Run again')[0]!.click())
-  await act(async () => listener([{ kind: 'error', protocolVersion: 4, sessionId: 'latest-failure', requestId: starts[1]!.requestId, message: 'New failure', code: 'unauthorized', retryable: false }]))
+  await act(async () => listener([{ kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: 'latest-failure', requestId: starts[1]!.requestId, message: 'New failure', code: 'unauthorized', retryable: false }]))
   await tree.render(view('latest-failure', rows, [], 'g1', [{ ...rejected }]))
   expect(tree.container.textContent).toContain('New failure')
   expect(tree.container.textContent).not.toContain('Old rejection')
@@ -271,7 +271,7 @@ for (const generation of ['g1', 'g2']) {
     const rows = [row('```sh\necho hi\n```')]
     const tree = await harness.mount(view(sessionId, rows, [], 'g1', []))
     await act(async () => buttons(tree.container, 'Run')[0]!.click())
-    await act(async () => listener([{ kind: 'lifecycle', protocolVersion: 4, sessionId, status: 'disconnected' }]))
+    await act(async () => listener([{ kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId, status: 'disconnected' }]))
     expect(tree.container.textContent).toContain('Outcome unknown')
     const requests: InlineCommandRequest[] = [{ requestId: starts[0]!.requestId, source, status: 'completed', runId: 'evicted' }]
     await tree.render(view(sessionId, rows, [], generation, requests))
@@ -328,7 +328,7 @@ test('busy availability is focusable, described, and recovers after the turn', a
   await tree.render(render())
   await act(async () => buttons(tree.container, 'Run')[0]!.click())
   expect(starts).toHaveLength(1)
-  await act(async () => listener([{ kind: 'error', protocolVersion: 4, sessionId: 'busy-availability', requestId: starts[0]!.requestId, message: 'Session is busy.', code: 'unauthorized', retryable: false }]))
+  await act(async () => listener([{ kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: 'busy-availability', requestId: starts[0]!.requestId, message: 'Session is busy.', code: 'unauthorized', retryable: false }]))
   expect(tree.container.querySelector('[role="alert"]')?.textContent).toBe('Session is busy.')
 })
 

@@ -4,9 +4,26 @@ import {
   createQueuedPromptsState,
   reduceQueuedPromptsState,
   selectQueuedPrompts,
+  selectRecoveredPrompts,
+  selectRecoveredPromptCount,
 } from './queuedPromptsState.js'
 
 const SESSION = 'session-1'
+
+test('saved review input never joins active or optimistic queue projections', () => {
+  let state = reduceQueuedPromptsState(createQueuedPromptsState(), { type: 'frame', frame: {
+    kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION,
+    prompts: [{ id: 'active', text: 'active input' }],
+    recoveredPrompts: [{ id: 'saved', text: 'delivery unknown' }], recoveredPromptCount: 40,
+  } })
+  state = reduceQueuedPromptsState(state, { type: 'submitted', sessionId: SESSION, submitId: 'new', text: 'new input' })
+  expect(selectQueuedPrompts(state, SESSION, true).map(input => input.id)).toEqual(['active', 'new'])
+  expect(selectRecoveredPrompts(state, SESSION).map(input => input.id)).toEqual(['saved'])
+  expect(selectRecoveredPromptCount(state, SESSION)).toBe(40)
+  state = reduceQueuedPromptsState(state, { type: 'session-removed', sessionId: SESSION })
+  expect(selectRecoveredPrompts(state, SESSION)).toEqual([])
+  expect(selectRecoveredPromptCount(state, SESSION)).toBe(0)
+})
 
 function snapshot(prompts: Array<{ id: string; text: string }>): ServerFrame {
   return {

@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act, createElement, memo, useContext } from 'react'
 import type { SDKMessage } from '@cat-code/engine/session-events'
@@ -19,14 +20,14 @@ afterAll(async () => { await harness.teardown() })
 
 const sessionId = 'motion-session'
 const ready: ServerFrame = {
-  kind: 'ready', protocolVersion: 4, sessionId, engineSessionId: 'engine-motion',
+  kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId, engineSessionId: 'engine-motion',
   payload: {
     type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
     abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
   },
 }
 const frame = (message: SDKMessage): ServerFrame => ({
-  kind: 'event', protocolVersion: 4, sessionId, event: { type: 'message', message },
+  kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId, event: { type: 'message', message },
 })
 type Uuid = `${string}-${string}-${string}-${string}-${string}`
 const assistant = (uuid: Uuid, toolId: string, name: string, input: Record<string, unknown>): SDKMessage => ({

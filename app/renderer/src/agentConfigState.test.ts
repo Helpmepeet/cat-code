@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { AgentConfigSnapshot, ServerFrame, SessionId } from '../../shared/protocol.js'
 import {
@@ -61,7 +62,7 @@ const SNAPSHOT: AgentConfigSnapshot = {
 function snapshotFrame(sessionId: SessionId, agents: AgentConfigSnapshot): ServerFrame {
   return {
     kind: 'agent-config.snapshot',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     agents,
   }
@@ -85,7 +86,7 @@ const AGENT_CONFIG_SLICE_CONSUMER: Record<
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
   return {
     kind: 'lifecycle',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     status: 'disconnected',
   }

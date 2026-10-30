@@ -26,6 +26,8 @@ import type {
 export type QueuedPromptsState = {
   sessions: Record<SessionId, readonly QueuedPromptItem[]>
   optimistic: Record<SessionId, readonly QueuedPromptItem[]>
+  recovered: Record<SessionId, readonly QueuedPromptItem[]>
+  recoveredCounts: Record<SessionId, number>
 }
 
 export type QueuedPromptsAction =
@@ -42,7 +44,7 @@ export type QueuedPromptsAction =
 const EMPTY: readonly QueuedPromptItem[] = []
 
 export function createQueuedPromptsState(): QueuedPromptsState {
-  return { sessions: {}, optimistic: {} }
+  return { sessions: {}, optimistic: {}, recovered: {}, recoveredCounts: {} }
 }
 
 export function reduceQueuedPromptsState(
@@ -52,10 +54,13 @@ export function reduceQueuedPromptsState(
   if (action.type === 'submitted') return { ...state, optimistic: { ...state.optimistic, [action.sessionId]: [...(state.optimistic[action.sessionId] ?? []), { id: action.submitId, submitId: action.submitId, text: action.text.slice(0, MAX_QUEUED_PROMPT_PREVIEW_CHARS) }] } }
   if (action.type === 'submit-failed') return { ...state, optimistic: { ...state.optimistic, [action.sessionId]: (state.optimistic[action.sessionId] ?? []).filter(item => item.submitId !== action.submitId) } }
   if (action.type === 'session-removed') {
-    if (!(action.sessionId in state.sessions) && !(action.sessionId in state.optimistic)) return state
+    if (!(action.sessionId in state.sessions) && !(action.sessionId in state.optimistic) &&
+        !(action.sessionId in state.recovered)) return state
     const { [action.sessionId]: _removed, ...rest } = state.sessions
     const { [action.sessionId]: _pending, ...optimistic } = state.optimistic
-    return { ...state, sessions: rest, optimistic }
+    const { [action.sessionId]: _recovered, ...recovered } = state.recovered
+    const { [action.sessionId]: _count, ...recoveredCounts } = state.recoveredCounts
+    return { ...state, sessions: rest, optimistic, recovered, recoveredCounts }
   }
 
   const { frame } = action
@@ -65,6 +70,9 @@ export function reduceQueuedPromptsState(
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: frame.prompts },
+      recovered: { ...state.recovered, [frame.sessionId]: frame.recoveredPrompts ?? EMPTY },
+      recoveredCounts: { ...state.recoveredCounts, [frame.sessionId]:
+        Math.max(frame.recoveredPrompts?.length ?? 0, frame.recoveredPromptCount ?? 0) },
       optimistic: { ...state.optimistic, [frame.sessionId]: (state.optimistic[frame.sessionId] ?? []).filter(item => !frame.prompts.some(prompt => prompt.submitId === item.submitId)) },
     }
   }
@@ -93,4 +101,12 @@ export function selectQueuedPrompts(
   const prompts = sessionId ? state.sessions[sessionId] : undefined
   const pending = instant && sessionId ? state.optimistic[sessionId] ?? EMPTY : EMPTY
   return pending.length ? [...(prompts ?? EMPTY), ...pending] : prompts ?? EMPTY
+}
+
+export function selectRecoveredPrompts(state: QueuedPromptsState, sessionId: SessionId | null): readonly QueuedPromptItem[] {
+  return sessionId ? state.recovered[sessionId] ?? EMPTY : EMPTY
+}
+
+export function selectRecoveredPromptCount(state: QueuedPromptsState, sessionId: SessionId | null): number {
+  return sessionId ? state.recoveredCounts[sessionId] ?? 0 : 0
 }

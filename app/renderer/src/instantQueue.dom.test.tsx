@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
 import { App } from './App.js'
@@ -27,7 +28,7 @@ test('Enter shows the Focused queue before any sidecar reply, reconciles once, a
     submit: (_id, _prompt, options) => { submits.push(options!) },
   } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
   const tree = await harness.mount(<TranscriptModeContext.Provider value={{ mode: 'focused', setMode() {} }}><App /></TranscriptModeContext.Provider>)
-  await act(async () => { receive([{ kind: 'ready', protocolVersion: 4, sessionId: 'live', engineSessionId: 'engine', payload: {
+  await act(async () => { receive([{ kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', engineSessionId: 'engine', payload: {
     type: 'app.ready', protocolVersion: 1, activeTurn: true, inputEnabled: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
   } }]) })
   const composer = () => tree.container.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]')!
@@ -40,21 +41,21 @@ test('Enter shows the Focused queue before any sidecar reply, reconciles once, a
   const strip = () => tree.container.querySelector('[role="status"] .conversation-prose')
   expect(strip()?.textContent).toContain('Check the queue')
   const submitId = submits[0]!.submitId!
-  await act(async () => { receive([{ kind: 'queued-prompts.snapshot', protocolVersion: 4, sessionId: 'live', prompts: [{ id: 'engine-queue-id', submitId, text: 'Check the queue' }] }]) })
+  await act(async () => { receive([{ kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', prompts: [{ id: 'engine-queue-id', submitId, text: 'Check the queue' }] }]) })
   expect(tree.container.querySelectorAll('[role="status"] .conversation-prose')).toHaveLength(1)
-  await act(async () => { receive([{ kind: 'queued-prompts.snapshot', protocolVersion: 4, sessionId: 'live', prompts: [] }]) })
+  await act(async () => { receive([{ kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', prompts: [] }]) })
   expect(strip()).toBeNull()
   await send('Directly delivered after the turn ended')
   const directSubmitId = submits.at(-1)!.submitId!
   await act(async () => { receive([
-    { kind: 'event', protocolVersion: 4, sessionId: 'live', event: { type: 'message', message: { type: 'user', uuid: '00000000-0000-4000-8000-000000000010', parent_tool_use_id: null, session_id: 'engine', message: { role: 'user', content: 'Directly delivered after the turn ended' } } } },
-    { kind: 'submit.result', protocolVersion: 4, sessionId: 'live', submitId: directSubmitId, accepted: true, queued: false },
+    { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', event: { type: 'message', message: { type: 'user', uuid: '00000000-0000-4000-8000-000000000010', parent_tool_use_id: null, session_id: 'engine', message: { role: 'user', content: 'Directly delivered after the turn ended' } } } },
+    { kind: 'submit.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', submitId: directSubmitId, accepted: true, queued: false },
   ]) })
   expect(strip()).toBeNull()
   expect(tree.container.querySelectorAll('[data-user-bubble]')).toHaveLength(1)
   await send('Refused input')
   expect(strip()?.textContent).toContain('Refused input')
-  await act(async () => { receive([{ kind: 'submit.result', protocolVersion: 4, sessionId: 'live', submitId: submits.at(-1)!.submitId!, accepted: false, code: 'bad_request' }]) })
+  await act(async () => { receive([{ kind: 'submit.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', submitId: submits.at(-1)!.submitId!, accepted: false, code: 'bad_request' }]) })
   expect(strip()).toBeNull()
   expect(composer().textContent).toContain('Refused input')
 })

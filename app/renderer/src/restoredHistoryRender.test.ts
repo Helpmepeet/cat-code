@@ -10,6 +10,7 @@
  * spawnConfig.probe.test.ts proves the real mapper output crossing the wire).
  */
 
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import type { ServerFrame } from '../../shared/protocol.js'
@@ -30,7 +31,7 @@ const SESSION = 'restored-session'
 function ready(): ServerFrame {
   return {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
     engineSessionId: 'engine-restored',
     payload: {
@@ -48,7 +49,7 @@ function ready(): ServerFrame {
 function frame(message: SDKMessage, replay: boolean): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
     ...(replay ? { replay: true as const } : {}),
     event: { type: 'message', message },

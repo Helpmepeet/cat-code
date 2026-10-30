@@ -9,6 +9,7 @@
  * changed binding. These drive the real derivation instead.
  */
 
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import {
   createAccountsState,
@@ -76,7 +77,7 @@ function frame(f: ServerFrame): { type: 'frame'; frame: ServerFrame } {
 }
 
 function lifecycle(status: 'disconnected' | 'exited' = 'disconnected'): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 4, sessionId: SID, status }
+  return { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: SID, status }
 }
 
 function sources(over: {
@@ -104,7 +105,7 @@ function detachedWithFast(active: boolean, supportedByModel = true) {
       base.runControls,
       frame({
         kind: 'run-controls.snapshot',
-        protocolVersion: 4,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId: SID,
         runControls: { ...SNAPSHOT, fast: { ...SNAPSHOT.fast, active, supportedByModel } },
       }),
@@ -118,7 +119,7 @@ function detached() {
     createRunControlsState(),
     frame({
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: SNAPSHOT,
     }),
@@ -127,7 +128,7 @@ function detached() {
     createPermissionState(),
     frame({
       kind: 'ready',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       engineSessionId: 'engine-1',
       payload: {
@@ -145,7 +146,7 @@ function detached() {
     permissions,
     frame({
       kind: 'permission.context',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       context: { mode: 'auto' } as never,
     }),
@@ -154,7 +155,7 @@ function detached() {
     createAccountsState(),
     frame({
       kind: 'accounts.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       accounts: SESSION_POOL,
     }),
@@ -197,7 +198,7 @@ test('a parked snapshot retains implicit effort without keeping a live setter se
     effort: { ...SNAPSHOT.effort, current: 'medium', selected: null },
   }
   let runControls = reduceRunControlsState(createRunControlsState(), frame({
-    kind: 'run-controls.snapshot', protocolVersion: 4, sessionId: SID,
+    kind: 'run-controls.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
     runControls: snapshot,
   }))
   runControls = reduceRunControlsState(runControls, frame(lifecycle()))
@@ -220,7 +221,7 @@ test('a live session arms both, and display equals the live values', () => {
     createRunControlsState(),
     frame({
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: SNAPSHOT,
     }),
@@ -250,7 +251,7 @@ test('an Anthropic session arms account switching only for a ready subscription 
     createRunControlsState(),
     frame({
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: {
         ...SNAPSHOT,
@@ -308,7 +309,7 @@ test('a ready composer rail uses the current global pool over its attachment sna
     createAccountsState(),
     frame({
       kind: 'accounts.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       accounts: SESSION_POOL,
     }),

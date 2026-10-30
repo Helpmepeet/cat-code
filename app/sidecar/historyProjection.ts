@@ -1,8 +1,6 @@
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
-import type {
-  SDKMessage,
-  SDKUserMessage,
-} from '../../src/entrypoints/agentSdkTypes.js'
+import type { UUID } from 'node:crypto'
+import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import type { Message } from '../../src/types/message.js'
 import {
   createUserMessage,
@@ -10,7 +8,9 @@ import {
 } from '../../src/utils/messages.js'
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
 import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
-import type { UndeliveredPrompt } from './sessionResume.js'
+import { RECOVERY_WARNING } from '../../src/utils/transcriptTailRecovery.js'
+import { getSessionId } from '../../src/bootstrap/state.js'
+import { isHandoffUuid } from '../shared/workspaceHandoff.js'
 
 /**
  * `AttachmentMessage.attachment` is `unknown` (src/types/message.ts), so the
@@ -94,32 +94,40 @@ export function projectResumedHistory(messages: Message[]): SDKMessage[] {
   const userUuids = new Set(
     messages.filter(message => message.type === 'user').map(message => message.uuid),
   )
-  return toSDKMessages(
-    messages
-      .filter(message => !isInternalNoResponseSentinel(message))
-      .flatMap(message => {
-        const restored = restoreQueuedMessageRow(message)
-        if (restored === message) return [message]
-        if (userUuids.has(restored.uuid)) return []
-        userUuids.add(restored.uuid)
-        return [restored]
-      }),
-  )
-}
-
-export function projectUndeliveredPrompts(
-  prompts: readonly UndeliveredPrompt[],
-  engineSessionId: string,
-): SDKMessage[] {
-  return prompts.map(prompt => ({
-    type: 'user',
-    message: { role: 'user', content: prompt.content },
-    session_id: engineSessionId,
-    parent_tool_use_id: null,
-    uuid: prompt.uuid as SDKUserMessage['uuid'],
-    timestamp: prompt.timestamp,
-    isReplay: true,
-  }))
+  const visible = messages
+    .filter(message => !isInternalNoResponseSentinel(message))
+    .flatMap(message => {
+      const restored = restoreQueuedMessageRow(message)
+      if (restored === message) return [message]
+      if (userUuids.has(restored.uuid)) return []
+      userUuids.add(restored.uuid)
+      return [restored]
+    })
+  const history: SDKMessage[] = []
+  const disclosures = new Set<string>()
+  let batch: Message[] = []
+  for (const message of visible) {
+    if (message.type !== 'system' || message.subtype !== 'informational' ||
+        message.content !== RECOVERY_WARNING || !('preventContinuation' in message) || message.preventContinuation !== true ||
+        !isHandoffUuid(message.uuid)) {
+      batch.push(message)
+      continue
+    }
+    if (disclosures.has(message.uuid)) continue
+    disclosures.add(message.uuid)
+    history.push(...toSDKMessages(batch))
+    batch = []
+    // The generic SDK mapper currently drops informational system rows. Reuse
+    // its output if that changes, otherwise project the stored disclosure once,
+    // retaining its UUID rather than creating another warning or model prompt.
+    const mapped = toSDKMessages([message])
+    history.push(...(mapped.length ? mapped : [{
+      type: 'system' as const, subtype: 'local_command_output' as const,
+      content: message.content, session_id: getSessionId(), uuid: message.uuid as UUID,
+    }]))
+  }
+  history.push(...toSDKMessages(batch))
+  return history
 }
 
 /**

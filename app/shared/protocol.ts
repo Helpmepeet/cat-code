@@ -1,6 +1,6 @@
 import type { FocusedBashJob } from './focusedBashJobs.js'
 /**
- * CatCode desktop IPC protocol — v4.
+ * CatCode desktop IPC protocol — v5.
  *
  * This is the versioned engine/session protocol (PROGRAM-PLAN §5, layer 1): the
  * typed seam between the renderer, the Electron main process, the Electron-free
@@ -98,7 +98,8 @@ import type {
 
 /** v4 retires session metadata/stats/OAuth; see decisions/SESSION-PROTOCOL-V4.md. */
 /** Additive tool.activity v1 and queue submitId: decisions/FOCUSED-LIVE-ACTIVITY.md. */
-export const PROTOCOL_VERSION = 4 as const
+/** v5 accepts versioned V1/V2 resume evidence; see CHAT-RELOCATION's V2 amendment. */
+export const PROTOCOL_VERSION = 5 as const
 
 /**
  * A session address. In P1-0 there is exactly one sidecar and one sessionId,
@@ -956,7 +957,7 @@ export type WorkspaceHandoffMessage = {
   | { action: 'settle'; outcome: 'failed' | 'cancelled' | 'uncertain' }
   | { action: 'release'; authorizationRevision: number }
 )
-export type { ResumeCheckpointV1, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
+export type { ResumeCheckpoint, ResumeCheckpointV1, ResumeCheckpointV2, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
   WorkspaceHandoffSnapshot, WorkspaceHandoffAction, WorkspaceHandoffDisposition, WorkspaceHandoffReason } from './workspaceHandoff.js'
 export type WorkspaceHandoffResultFrame = {
   kind: 'workspace.handoff.result'
@@ -3523,6 +3524,18 @@ export type QueuedPromptsSnapshotFrame = {
   sessionId: SessionId
   /** Oldest first, matching the order the engine will drain them in. */
   prompts: QueuedPromptItem[]
+  /**
+   * Review-only saved input, never an executable queue. Shares the combined
+   * MAX_QUEUED_PROMPTS count and per-item preview bounds with prompts.
+   * Full content is retrieved only through explicit prompt.recall.
+   */
+  recoveredPrompts?: QueuedPromptItem[]
+  /**
+   * Total saved review candidates, including those outside this bounded batch.
+   * A nonnegative safe integer, at least recoveredPrompts.length; never used to
+   * allocate bodies or imply queue admission. See CHAT-RELOCATION's v5 amendment.
+   */
+  recoveredPromptCount?: number
 }
 
 /* ------------------------------------------------------------------------- *
@@ -3560,12 +3573,13 @@ export const PROMPT_RECALL_VERB_TYPES = ['prompt.recall'] as const
 export type PromptRecallVerbType = (typeof PROMPT_RECALL_VERB_TYPES)[number]
 
 /**
- * Take back every message this session has waiting for its running response.
- * Deliberately parameterless beyond the T5a-analog `requestId`.
+ * Take back the active queue, or explicitly review one retained recovery item.
+ * The optional target names engine-held content, never renderer-authored input.
  */
 export type PromptRecallMessage = {
   type: 'prompt.recall'
   requestId: string
+  recoveredPromptId?: string
 }
 
 /**

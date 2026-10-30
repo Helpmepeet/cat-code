@@ -29,13 +29,14 @@ import { createInterface } from 'node:readline'
 import { createSessionBranchReader, createWorkspaceBranchSwitcher } from '../main/workspaceBranches.js'
 import { createAttachmentFileTokenStore } from '../main/mainDecisions.js'
 import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
+import { SessionCloseCoordinator } from '../main/sessionCloseCoordinator.js'
 
 import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
 import { PEER_NAME_POOL } from './peerNames.js'
 import { Host, type CwdValidation, type HostOptions } from './host.js'
 import { ManagedStorage } from './managedStorage.js'
 import { AttachmentGate } from '../main/attachmentGate.js'
-import type { SessionId } from '../shared/protocol.js'
+import { PROTOCOL_VERSION, type SessionId } from '../shared/protocol.js'
 import type {
   SidecarStatus,
   SupervisorEvent,
@@ -223,7 +224,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'ready',
-        protocolVersion: 4,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId,
         engineSessionId,
         payload: { type: 'app.ready' } as never,
@@ -246,7 +247,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'event',
-        protocolVersion: 4,
+        protocolVersion: PROTOCOL_VERSION,
         sessionId,
         ...(opts.replay ? { replay: true } : {}),
         event,
@@ -454,11 +455,11 @@ function makeHost(
 
 function emitMoveReadyContext(supervisor: FakeSupervisor, appSessionId: SessionId): void {
   supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
-    kind: 'run-controls.snapshot', protocolVersion: 4, sessionId: appSessionId,
+    kind: 'run-controls.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
     runControls: { model: { selected: 'claude-opus-4-1' }, effort: { selected: null }, fast: { active: false } },
   } as never })
   supervisor.emit({ type: 'frame', sessionId: appSessionId, frame: {
-    kind: 'permission.context', protocolVersion: 4, sessionId: appSessionId,
+    kind: 'permission.context', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
     context: { mode: 'default', permissionClassifierEnabled: false },
   } as never })
 }
@@ -604,7 +605,7 @@ test('workspace jump ready cannot complete host movement before restored permiss
   try {
     await movedReservedJump(storageRoot, async (h, id) => {
       h.supervisor.emit({ type: 'frame', sessionId: id, frame: {
-        kind: 'run-controls.snapshot', protocolVersion: 4, sessionId: id,
+        kind: 'run-controls.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
         runControls: { model: { selected: 'claude-opus-4-1' }, effort: { selected: null }, fast: { active: false } },
       } as never })
       await new Promise<void>(resolve => setImmediate(resolve))
@@ -784,11 +785,11 @@ test.each(['pending delivery', 'in-flight reservation'] as const)(
   expect(recoveries).toEqual([])
   expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
   const replay = {
-    kind: 'event', protocolVersion: 4, sessionId: appSessionId, replay: true,
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId, replay: true,
     event: { type: 'message', message: { type: 'user', message: { role: 'user', content: 'retained' } } },
   } as never
   expect(gate.onFrame(appSessionId, replay)).toEqual([])
-  const complete = { kind: 'history.replay.complete', protocolVersion: 4, sessionId: appSessionId } as never
+  const complete = { kind: 'history.replay.complete', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId } as never
   const released = gate.onFrame(appSessionId, complete)
   expect(released).toContainEqual(replay)
   expect(released).toContainEqual(complete)
@@ -850,14 +851,14 @@ test('a worker-refused move keeps the reopened conversation behind replay comple
   expect(delivered.some(frame => (frame as { kind?: string }).kind === 'ready')).toBe(false)
   expect(sourceCachePreservationRequested).toBe(true)
 
-  const ready = { kind: 'ready', protocolVersion: 4, sessionId: appSessionId,
+  const ready = { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
     engineSessionId, payload: { type: 'app.ready' } } as never
   expect(gate.isReplayCoalescing(appSessionId)).toBe(true)
-  const replay = { kind: 'event', protocolVersion: 4, sessionId: appSessionId,
+  const replay = { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
     replay: true, event: { type: 'message', message: { type: 'user' } } } as never
   expect(gate.onFrame(appSessionId, replay)).toEqual([])
   const released = gate.onFrame(appSessionId, {
-    kind: 'history.replay.complete', protocolVersion: 4, sessionId: appSessionId,
+    kind: 'history.replay.complete', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
   } as never)
   expect(released[0]).toMatchObject(ready)
   expect(released).toContainEqual(replay)
@@ -1426,7 +1427,7 @@ async function readyBranchChat(h: Harness, openingCwd: string, actualCwd = openi
   await settle(() => h.registry.findSession(id)?.engineSessionId === engineId)
   h.supervisor.emit({
     type: 'frame', sessionId: id,
-    frame: { kind: 'activity', protocolVersion: 4, sessionId: id, presence: 'idle',
+    frame: { kind: 'activity', protocolVersion: PROTOCOL_VERSION, sessionId: id, presence: 'idle',
       workspace: { cwd: actualCwd, lastWorkingBranch: 'main' } },
   })
   return id
@@ -1436,9 +1437,11 @@ function branchCoordinator(
   h: Harness,
   transfers: Array<[SessionId, SessionId]> = [],
   transferFiles?: (from: SessionId, to: SessionId) => void,
+  closeRequested?: (id: SessionId) => boolean,
 ) {
   return createWorkspaceBranchSwitcher({
     host: h.host,
+    closeRequested,
     switchingSessionIds: new Set(),
     sessionsWithSubmit: new Set(),
     isWorkspaceReserved: () => false,
@@ -1465,7 +1468,7 @@ test('main branch transaction guards the actual checkout, not another chat openi
   // remains irrelevant and no longer blocks the target checkout.
   h.supervisor.emit({
     type: 'frame', sessionId: other,
-    frame: { kind: 'activity', protocolVersion: 4, sessionId: other, presence: 'idle',
+    frame: { kind: 'activity', protocolVersion: PROTOCOL_VERSION, sessionId: other, presence: 'idle',
       workspace: { cwd: outside, lastWorkingBranch: 'main' } },
   })
   const switched = await switchBranch(source, 'target')
@@ -1763,7 +1766,7 @@ test('host tracks engine workspace observations rather than the opening folder',
   const id = created.value.appSessionId
   h.supervisor.emit({
     type: 'frame', sessionId: id,
-    frame: { kind: 'activity', protocolVersion: 4, sessionId: id, presence: 'idle',
+    frame: { kind: 'activity', protocolVersion: PROTOCOL_VERSION, sessionId: id, presence: 'idle',
       workspace: { cwd: '/entered-worktree', lastWorkingBranch: 'recorded' } },
   })
   expect(h.host.getWorkspaceObservation(id)).toEqual({ cwd: '/entered-worktree', lastWorkingBranch: 'recorded' })
@@ -2562,6 +2565,7 @@ test.each([null, 'parked'] as const)('closeSession refuses a living foreign owne
   writeFileSync(registry.filePath, JSON.stringify(latest))
   const before = readFileSync(registry.filePath, 'utf8')
   for (let attempt = 0; attempt < 2; attempt++) {
+    expect((await host.authorizeCloseCancellation(id)).ok).toBe(false)
     const result = await host.closeSession(id)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.code).toBe('session_unreachable')
@@ -2577,6 +2581,7 @@ test('closeSession refuses unreadable ownership state without killing its own ch
   if (!created.ok) return
   const id = created.value.appSessionId
   writeFileSync(h.registry.filePath, '{invalid')
+  expect((await h.host.authorizeCloseCancellation(id)).ok).toBe(false)
   const result = await h.host.closeSession(id)
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.error.code).toBe('registry_unavailable')
@@ -4693,4 +4698,48 @@ test('restoring a row written before peer names existed allocates one and hands 
   expect(PEER_NAME_POOL).toContain(allocated!)
   expect(restored.value.name).toBe(allocated!)
   expect(supervisor.records.get(appSessionId)?.name).toBe(allocated!)
+})
+
+test('receiving close waits for settlement before the real host kills and preserves saved history', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error('create failed')
+  const id = created.value.appSessionId
+  h.supervisor.emitReady(id, id)
+  await settle(() => h.registry.findSession(id)?.engineSessionId === id)
+  writeTranscript(h.storageDir, id)
+  let reserved = true
+  let cancelled = false
+  const coordinator = new SessionCloseCoordinator({
+    authorize: sessionId => h.host.authorizeCloseCancellation(sessionId),
+    cancel: async () => { cancelled = true },
+    blocked: () => reserved,
+    observe: () => {
+      expect(cancelled).toBe(true)
+      expect(h.supervisor.records.has(id)).toBe(true)
+      reserved = false
+    },
+    close: sessionId => h.host.closeSession(sessionId),
+    timeoutMs: 1000,
+    retryMs: 1,
+  })
+  expect((await coordinator.close(id)).ok).toBe(true)
+  expect(h.registry.findSession(id)?.engineSessionId).toBe(id)
+  expect(h.host.listSessions().find(session => session.appSessionId === id)?.restorable).toBe(true)
+  expect(existsSync(join(h.storageDir, 'transcripts', `${id}.jsonl`))).toBe(true)
+})
+
+test('close during a branch checkout does not spawn replacement work after the safe Git boundary', async () => {
+  const h = makeHost()
+  initializeBranchRepo(h.cwd)
+  const source = await readyBranchChat(h, h.cwd)
+  const transfers: Array<[SessionId, SessionId]> = []
+  const before = h.supervisor.spawnedIds.length
+  const result = await branchCoordinator(h, transfers, undefined, () => true)(source, 'target')
+  expect(!result.ok && 'branchChanged' in result && result.branchChanged).toBe(true)
+  expect(branchGit(h.cwd, 'symbolic-ref', '--short', 'HEAD')).toBe('target')
+  expect(h.supervisor.spawnedIds.length).toBe(before)
+  expect(transfers).toEqual([])
+  // The outer close coordinator, not Git cleanup, owns the final stop.
+  expect((await h.host.closeSession(source)).ok).toBe(true)
 })

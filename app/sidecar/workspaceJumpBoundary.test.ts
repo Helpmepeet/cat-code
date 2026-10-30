@@ -18,6 +18,71 @@ import { SDKResultSuccessSchema } from '../../src/entrypoints/sdk/coreSchemas.js
 import { getCommandQueueSnapshot, resetCommandQueue, remove } from '../../src/utils/messageQueueManager.js'
 import { notifyCommandLifecycle } from '../../src/utils/commandLifecycle.js'
 
+async function waitForSubmitResults(frames: ServerFrame[], submitId: string, count: number): Promise<void> {
+  // Observe the real acceptance callback, after its recorder/fsync barrier.
+  const deadline = Date.now() + 5_000
+  while (frames.filter(frame => frame.kind === 'submit.result' && frame.submitId === submitId).length < count) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for durable submit result: ${submitId}`)
+    await Bun.sleep(1)
+  }
+}
+
+test.each([false, true])('queued lifecycle preserves attachment time after an awaited yield, recalled=%s', async recalled => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-queued-time-'))
+  const oldConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = root
+  resetCommandQueue()
+  const gate = Promise.withResolvers<void>()
+  const started = Promise.withResolvers<void>()
+  const controller = new AppSessionController({ async *runTurn() {
+    started.resolve()
+    await gate.promise
+  } })
+  const sessionId = randomUUID()
+  const received: ServerFrame[] = [], decoder = new FrameDecoder(MAX_FRAME_BYTES)
+  const server = new SidecarServer({ sessionId, engineSessionId: randomUUID(), controller, log: () => {} })
+  const connection = server.addConnection({
+    write(data) { for (const value of decoder.push(Buffer.from(data))) if (value.kind === 'frame') received.push(value.payload as ServerFrame) },
+    end() {},
+  })
+  const send = (message: object) => server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId, message }))
+  try {
+    send({ type: 'app.submit', requestId: 'start', prompt: 'start' })
+    await started.promise
+    send({ type: 'app.submit', requestId: 'queued', prompt: 'queued', options: { submitId: 'queued' } })
+    await waitForSubmitResults(received, 'queued', 1)
+    const command = getCommandQueueSnapshot()[0]!
+    const timestamp = '2026-10-30T00:00:00.000Z'
+    // The consumer can wait for persistence (and race a recall) while its
+    // attachment yield is suspended. Its original time still owns the row.
+    async function* consume() {
+      yield { timestamp }
+      notifyCommandLifecycle(command.uuid!, 'started', timestamp)
+    }
+    const consumer = consume()
+    const attachment = await consumer.next()
+    if (attachment.done) throw new Error('Missing queued attachment')
+    const stored = attachment.value
+    if (recalled) {
+      send({ type: 'prompt.recall', requestId: 'recall' })
+      expect(received.find(frame => frame.kind === 'prompt-recall.result' && frame.requestId === 'recall'))
+        .toMatchObject({ ok: true, recalled: [{ id: command.uuid }] })
+    } else remove([command])
+    await Bun.sleep(1)
+    await consumer.next()
+    expect(received.filter(frame => frame.kind === 'event' && frame.event.type === 'message' &&
+      frame.event.message.type === 'user' && frame.event.message.uuid === command.uuid))
+      .toMatchObject([{ event: { message: { timestamp: stored.timestamp, message: { content: 'queued' } } } }])
+  } finally {
+    gate.resolve()
+    server.close()
+    resetCommandQueue()
+    if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = oldConfig
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('legacy admitted history and wrong generation controls cannot start continuation', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-legacy-boundary-'))
   const oldConfig = process.env.CLAUDE_CONFIG_DIR
@@ -335,6 +400,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       writeWorkspaceJump(admitted)
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
         message: { type: 'app.submit', requestId: 'during', prompt: 'also check the logs', options: { submitId: 'during' } } }))
+      await waitForSubmitResults(received, 'during', 1)
       expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'during')).toMatchObject({ accepted: true })
       expect(getCommandQueueSnapshot()).toMatchObject([{ value: 'also check the logs', priority: 'next' }])
       const queuedPrompt = received
@@ -363,6 +429,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       workspaceTrusted = true
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
         message: { type: 'app.submit', requestId: 'during-failed', prompt: 'withdraw this request', options: { submitId: 'during-failed' } } }))
+      await waitForSubmitResults(received, 'during-failed', 1)
       expect(received.find(frame => frame.kind === 'submit.result' && frame.submitId === 'during-failed')).toMatchObject({ accepted: true })
       const recalledPrompt = received
         .filter((frame): frame is Extract<ServerFrame, { kind: 'queued-prompts.snapshot' }> =>
@@ -384,6 +451,7 @@ for (const subtype of ['success', 'interrupted'] as const) test(`restored destin
       })
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId,
         message: { type: 'app.submit', requestId: 'during-failed', prompt: 'keep this request', options: { submitId: 'during-failed' } } }))
+      await waitForSubmitResults(received, 'during-failed', 2)
       expect(received.filter(frame => frame.kind === 'submit.result' && frame.submitId === 'during-failed')).toMatchObject([
         { accepted: true },
         { accepted: true },

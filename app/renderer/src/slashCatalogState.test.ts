@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import {
   createSlashCatalogState,
@@ -15,7 +16,7 @@ function catalogFrame(
   sessionId: string,
   commands: SlashCatalogEntry[],
 ): ServerFrame {
-  return { kind: 'slash-catalog.snapshot', protocolVersion: 4, sessionId, commands }
+  return { kind: 'slash-catalog.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId, commands }
 }
 
 test('stores the slash catalog per session and selects it', () => {
@@ -39,12 +40,12 @@ test('a lifecycle frame clears a tracked session but leaves untracked ones alone
   const before = state
   state = reduceSlashCatalogState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 4, sessionId: 's2', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 's2', status: 'disconnected' },
   })
   expect(state).toBe(before) // untracked session → no change
   state = reduceSlashCatalogState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 4, sessionId: 's1', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId: 's1', status: 'disconnected' },
   })
   expect(selectSlashCatalog(state, 's1')).toEqual([])
 })

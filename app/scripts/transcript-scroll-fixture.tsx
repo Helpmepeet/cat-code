@@ -1,4 +1,5 @@
 import { createElement } from 'react'
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { createRoot } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import { TranscriptRowsView } from '../renderer/src/TranscriptView.js'
@@ -235,13 +236,13 @@ async function focusedAnswerBoundary() {
   scenario = 'Focused answer above a virtualized structured query'
   flushSync(() => root.render(null))
   let state = projectServerFrame(createTranscriptState(), {
-    kind: 'ready', protocolVersion: 4, sessionId: 'session-1', engineSessionId: 'synthetic-engine',
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', engineSessionId: 'synthetic-engine',
     payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
       abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
   } as never)
   const message = (message: unknown) => {
     state = projectServerFrame(state, {
-      kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message },
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message },
     } as never)
   }
   for (const turn of [1, 2]) {

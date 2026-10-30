@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import {
   createPermissionState,
@@ -49,7 +50,7 @@ const BASH_REQUEST: PermissionRequest = {
 function readyFrame(pendingPermissionRequests: PermissionRequest[], sessionId = 'session-1') {
   return {
     kind: 'ready' as const,
-    protocolVersion: 4 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {

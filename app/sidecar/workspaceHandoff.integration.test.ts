@@ -10,6 +10,7 @@ import type { QueryEngineConfig } from '../../src/QueryEngine.js'
 import type { WorkspaceJumpStateV2 } from '../../src/utils/workspaceJumpState.js'
 import type { WorkspaceControlAction } from '../main/workspaceHandoffControl.js'
 import type { ServerFrame } from '../shared/protocol.js'
+import type { UndeliveredPrompt } from './sessionResume.js'
 
 // This suite owns cross-boundary convergence. Provider output is scripted, but
 // input, tools, transcript/checkpoint IO, execution records and control parsing
@@ -49,7 +50,8 @@ const { WorkspaceHandoffControl } = await import('../main/workspaceHandoffContro
 const { SidecarServer } = await import('./sidecarServer.js')
 const { FrameDecoder, encodeFrame } = await import('../shared/framing.js')
 const { PROTOCOL_VERSION } = await import('../shared/protocol.js')
-const { resetCommandQueue } = await import('../../src/utils/messageQueueManager.js')
+const { resetCommandQueue, enqueue, getCommandQueueSnapshot, flushQueueOperationsDurably } = await import('../../src/utils/messageQueueManager.js')
+const { selectUndeliveredPrompts } = await import('./sessionResume.js')
 
 const originalBootstrap = { id: bootstrap.getSessionId(), project: bootstrap.getSessionProjectDir(),
   provider: bootstrap.getSessionProvider(), cwd: bootstrap.getCwdState() }
@@ -110,12 +112,17 @@ async function until(predicate: () => boolean, label: string): Promise<void> {
   while (!predicate() && Date.now() < deadline) await Bun.sleep(5)
   expect(predicate(), label).toBe(true)
 }
-async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: ReturnType<typeof buildTool>[]; canUseTool?: QueryEngineConfig['canUseTool'] } = {}) {
+async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: ReturnType<typeof buildTool>[]; canUseTool?: QueryEngineConfig['canUseTool']; recoveredPrompts?: UndeliveredPrompt[]; recoveredUnavailableCount?: number } = {}) {
   const appSessionId = randomUUID(), engineSessionId = bootstrap.getSessionId(), operationId = randomUUID()
   const generation = randomUUID()
   const seed = createUserMessage({ content: 'Complete the preserved request in this workspace.' })
   await storage.recordTranscript([seed])
   await storage.markActiveConversationTip(seed.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+  for (const input of options.recoveredPrompts ?? []) {
+    await storage.recordQueueOperation({ type: 'queue-operation', operation: 'enqueue', mode: 'prompt',
+      sessionId: engineSessionId, uuid: input.uuid as UUID, content: input.content, timestamp: input.timestamp })
+  }
   await storage.flushCurrentTranscriptDurably()
   const state: WorkspaceJumpStateV2 = { version: 2, revision: 1, origin: 'fresh', appSessionId, engineSessionId,
     operationId, sourceGeneration: randomUUID(), source: { cwd: join(root, 'managed'), binding: {
@@ -140,7 +147,9 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
   const received: ServerFrame[] = [], decoder = new FrameDecoder(32 * 1024 * 1024)
   let control!: InstanceType<typeof WorkspaceHandoffControl>
   let connection!: ReturnType<InstanceType<typeof SidecarServer>['addConnection']>
-  const server = new SidecarServer({ sessionId: appSessionId, engineSessionId, generation, controller, log: () => {} })
+  const server = new SidecarServer({ sessionId: appSessionId, engineSessionId, generation, controller, log: () => {},
+    recoveredPrompts: options.recoveredPrompts, recoveredUnavailableCount: options.recoveredUnavailableCount,
+    loadRecoveredPrompts: async () => selectUndeliveredPrompts(await storage.getSessionQueueOperations(engineSessionId)).prompts })
   const coordinator = new WorkspaceJumpCoordinator({ row: id => id === appSessionId ? {
     appSessionId, engineSessionId, cwd: state.target.cwd, binding: state.target.binding,
     lastAttachedAt: 1, lastMessageSentAt: 1, shutdown: null } : undefined,
@@ -166,9 +175,10 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
     if (paused) { batch.push(frame); return }
     control.receiveFrame(appSessionId, frame)
   }
-  connection = server.addConnection({ write(data) { for (const value of decoder.push(Buffer.from(data))) {
+  const transport = { write(data: Uint8Array) { for (const value of decoder.push(Buffer.from(data))) {
     if (value.kind === 'frame') deliver(value.payload as ServerFrame)
-  } }, end() {} })
+  } }, end() {} }
+  connection = server.addConnection(transport)
   // Main records uncertain dispatch only after the destination is attached,
   // immediately before its first continuation command.
   state.continuation.dispatch = 'unknown'
@@ -179,9 +189,415 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
     pauseControl: () => { paused = true },
     flushControlBatch: () => { paused = false; for (const frame of batch.splice(0)) control.receiveFrame(appSessionId, frame) },
     command: (action: WorkspaceControlAction) => control.request(appSessionId, operationId, action),
+    send: (message: unknown) => server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId, message })),
+    reloadRenderer: () => { server.removeConnection(connection); connection = server.addConnection(transport) },
     submit: (text: string) => server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId,
       message: { type: 'app.submit', requestId: randomUUID(), prompt: text } })) }
 }
+
+function latestRecoveredSnapshot(h: Awaited<ReturnType<typeof harness>>) {
+  const frame = h.received.findLast(frame => frame.kind === 'queued-prompts.snapshot')
+  if (frame?.kind !== 'queued-prompts.snapshot') throw new Error('No recovered input snapshot')
+  return frame
+}
+
+test('recovered input attach/reload never queues or executes it, and force cannot skip review', async () => {
+  let calls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () { calls++; throw new Error('Unexpected model execution') }))
+  const recovered = { uuid: randomUUID(), content: 'legacy delivery is unknown', timestamp: new Date().toISOString() }
+  const h = await harness({ recoveredPrompts: [recovered], recoveredUnavailableCount: 2 })
+  expect(latestRecoveredSnapshot(h).prompts).toEqual([])
+  expect(latestRecoveredSnapshot(h).recoveredPrompts).toEqual([{ id: recovered.uuid, text: recovered.content }])
+  expect(getCommandQueueSnapshot()).toEqual([])
+  h.reloadRenderer()
+  expect(latestRecoveredSnapshot(h).recoveredPrompts).toHaveLength(1)
+  expect(h.received.some(frame => frame.kind === 'error' && frame.message.includes('2 saved input records'))).toBe(true)
+  const requestId = randomUUID()
+  h.send({ type: 'prompt.force', requestId, promptId: recovered.uuid })
+  expect(h.received.some(frame => frame.kind === 'prompt-force.result' && frame.requestId === requestId && !frame.ok)).toBe(true)
+  expect(getCommandQueueSnapshot()).toEqual([])
+  expect(calls).toBe(0)
+})
+
+test('explicit recovered review returns full text/media only after durable cancellation and stays cancelled on restart', async () => {
+  const content = [{ type: 'text' as const, text: 'review original media' },
+    { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'AAAA' } }]
+  const recovered = { uuid: randomUUID(), content, timestamp: new Date().toISOString() }
+  const h = await harness({ recoveredPrompts: [recovered] })
+  expect(JSON.stringify(h.received)).not.toContain('AAAA')
+  const requestId = randomUUID()
+  h.send({ type: 'prompt.recall', requestId, recoveredPromptId: recovered.uuid })
+  await until(() => h.received.some(frame => frame.kind === 'prompt-recall.result' && frame.requestId === requestId), 'explicit review receives original content')
+  const answer = h.received.find(frame => frame.kind === 'prompt-recall.result' && frame.requestId === requestId)
+  if (answer?.kind !== 'prompt-recall.result') throw new Error('Missing review result')
+  expect(answer.recalled).toEqual([{ id: recovered.uuid, prompt: content }])
+  const saved = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+  expect(saved.queueOperations.some(operation => operation.uuid === recovered.uuid && operation.operation === 'enqueue')).toBe(true)
+  expect(saved.queueOperations.some(operation => operation.uuid === recovered.uuid && operation.queueVersion === 2 && operation.operation === 'remove')).toBe(true)
+  const restored = selectUndeliveredPrompts(await storage.getSessionQueueOperations(h.engineSessionId))
+  expect(restored.prompts.map(prompt => prompt.uuid)).not.toContain(recovered.uuid)
+  h.server.close()
+  const restarted = await harness({ recoveredPrompts: restored.prompts })
+  restarted.reloadRenderer()
+  expect(getCommandQueueSnapshot()).toEqual([])
+  expect(restarted.received.some(frame => frame.kind === 'queued-prompts.snapshot' && frame.recoveredPrompts?.some(item => item.id === recovered.uuid))).toBe(false)
+})
+
+test('recovered review failure retains its only review reference and rejects malformed selectors', async () => {
+  const recovered = { uuid: randomUUID(), content: 'keep this for review', timestamp: new Date().toISOString() }
+  const h = await harness({ recoveredPrompts: [recovered] })
+  const original = storage.recordQueueOperation
+  const failure = spyOn(storage, 'recordQueueOperation').mockImplementation(async operation => {
+    if (operation.uuid === recovered.uuid && operation.operation === 'remove') throw new Error('Injected cancellation failure')
+    await original(operation)
+  })
+  const requestId = randomUUID()
+  try {
+    h.send({ type: 'prompt.recall', requestId, recoveredPromptId: recovered.uuid })
+    await until(() => h.received.some(frame => frame.kind === 'error' && frame.requestId === requestId), 'durability failure is explicit')
+    h.reloadRenderer()
+    expect(latestRecoveredSnapshot(h).recoveredPrompts?.map(item => item.id)).toContain(recovered.uuid)
+  } finally { failure.mockRestore() }
+  h.send({ type: 'prompt.recall', requestId: 'bad-id', recoveredPromptId: '../not-a-uuid' })
+  expect(h.received.some(frame => frame.kind === 'error' && frame.requestId === 'bad-id')).toBe(true)
+  h.send({ type: 'prompt.recall', requestId: 'extra-field', recoveredPromptId: recovered.uuid, injected: true })
+  expect(h.received.some(frame => frame.kind === 'error' && frame.requestId === 'extra-field')).toBe(true)
+  expect(getCommandQueueSnapshot()).toEqual([])
+})
+
+test('large recovered sets publish a bounded batch and refill from saved evidence after review', async () => {
+  const inputs = Array.from({ length: 40 }, (_, index) => ({
+    uuid: randomUUID(), content: `saved input ${index}`, timestamp: new Date().toISOString(),
+  }))
+  const h = await harness({ recoveredPrompts: inputs })
+  expect(latestRecoveredSnapshot(h).recoveredPrompts).toHaveLength(32)
+  expect(latestRecoveredSnapshot(h).recoveredPromptCount).toBe(40)
+  const first = inputs[0]!
+  h.send({ type: 'prompt.recall', requestId: randomUUID(), recoveredPromptId: first.uuid })
+  await until(() => latestRecoveredSnapshot(h).recoveredPromptCount === 39, 'next bounded batch becomes available')
+  expect(latestRecoveredSnapshot(h).recoveredPrompts).toHaveLength(32)
+  expect(latestRecoveredSnapshot(h).recoveredPrompts?.some(item => item.id === inputs[32]!.uuid)).toBe(true)
+  expect(getCommandQueueSnapshot()).toEqual([])
+})
+
+async function heldContinuationWithQueuedManual(recoveredPrompts?: UndeliveredPrompt[]) {
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  disposers.push(() => release())
+  let calls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    calls++
+    await held
+    yield assistant([{ type: 'text', text: 'Preserved active work.' }])
+  }))
+  const h = await harness({ recoveredPrompts })
+  expect((await h.command({ action: 'continue', continuationId: h.state.continuation.id })).kind).toBe('result')
+  await until(() => calls === 1 && h.coordinator.snapshot(h.appSessionId)?.continuation.dispatch === 'consumed',
+    'continuation consumed its durable input and entered the scripted provider')
+  h.submit('manual waiting at close')
+  const queued = getCommandQueueSnapshot().find(command => command.value === 'manual waiting at close')
+  expect(queued?.uuid).toBeDefined()
+  await storage.flushCurrentTranscriptDurably()
+  const cancelId = randomUUID()
+  const state = h.coordinator.snapshot(h.appSessionId)!
+  writeWorkspaceJump({ ...state, cancellation: { cancelId, requestedBy: 'close', application: 'unknown' } })
+  return { ...h, queued: queued!, cancelId, release, calls: () => calls }
+}
+
+test('active queued input and recovered review remain separate and share the snapshot count budget', async () => {
+  const recovered = Array.from({ length: 32 }, (_, index) => ({
+    uuid: randomUUID(), content: `review-only ${index}`, timestamp: new Date().toISOString(),
+  }))
+  const h = await heldContinuationWithQueuedManual(recovered)
+  try {
+    const snapshot = latestRecoveredSnapshot(h)
+    expect(snapshot.prompts).toHaveLength(1)
+    expect(snapshot.recoveredPrompts).toHaveLength(31)
+    expect(snapshot.recoveredPromptCount).toBe(32)
+    const requestId = randomUUID()
+    h.send({ type: 'prompt.recall', requestId })
+    const result = h.received.find(frame => frame.kind === 'prompt-recall.result' && frame.requestId === requestId)
+    if (result?.kind !== 'prompt-recall.result') throw new Error('Missing active queue recall')
+    expect(result.recalled.map(input => input.id)).toEqual([h.queued.uuid!])
+    expect(latestRecoveredSnapshot(h).recoveredPromptCount).toBe(32)
+    expect(latestRecoveredSnapshot(h).recoveredPrompts).toHaveLength(32)
+  } finally { h.release() }
+  await until(() => !h.controller.isTurnActive(), 'active continuation settles independently')
+})
+
+test('retained recovered media shares the active queue body budget instead of adding a second store', async () => {
+  const image = { type: 'image' as const, source: {
+    type: 'base64' as const, media_type: 'image/png' as const, data: 'AAAA'.repeat(1024 * 1024),
+  } }
+  const inputs = Array.from({ length: 3 }, () => ({
+    uuid: randomUUID(), content: [image, image], timestamp: new Date().toISOString(),
+  }))
+  const h = await heldContinuationWithQueuedManual(inputs)
+  try {
+    expect(latestRecoveredSnapshot(h).recoveredPrompts).toHaveLength(2)
+    expect(latestRecoveredSnapshot(h).recoveredPromptCount).toBe(3)
+    writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, cancellation: null })
+    const requestId = randomUUID()
+    h.send({ type: 'app.submit', requestId, prompt: [image, image], options: { submitId: randomUUID() } })
+    expect(h.received.find(frame => frame.kind === 'error' && frame.requestId === requestId)).toMatchObject({
+      code: 'bad_request', message: expect.stringContaining('Waiting messages contain too much data'),
+    })
+    expect(getCommandQueueSnapshot()).toHaveLength(1)
+    writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, cancellation: {
+      cancelId: h.cancelId, requestedBy: 'close', application: 'unknown',
+    } })
+    await h.command({ action: 'cancel', cancelId: h.cancelId })
+  } finally { h.release() }
+  await until(() => !h.controller.isTurnActive(), 'media budget fixture stops')
+})
+
+test('accepted transcript identity is excluded from recovered review selection', async () => {
+  const h = await harness()
+  await storage.recordQueueOperation({ type: 'queue-operation', operation: 'enqueue', mode: 'prompt',
+    sessionId: h.engineSessionId, uuid: h.seed.uuid as UUID, content: 'already accepted input', timestamp: new Date().toISOString() })
+  await storage.flushCurrentTranscriptDurably()
+  expect(selectUndeliveredPrompts(await storage.getSessionQueueOperations(h.engineSessionId)).prompts).toEqual([])
+  expect(getCommandQueueSnapshot()).toEqual([])
+})
+
+test('busy queue success waits for its recorder producer and fsync before the acknowledgement crash cut', async () => {
+  const h = await heldContinuationWithQueuedManual()
+  writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, cancellation: null })
+  const text = 'queued admission durability cut'
+  let permit!: () => void, producerEntered = false
+  const held = new Promise<void>(resolve => { permit = resolve })
+  const original = storage.recordQueueOperation
+  const recorder = spyOn(storage, 'recordQueueOperation').mockImplementation(async operation => {
+    if (operation.operation === 'enqueue' && operation.content === text) {
+      producerEntered = true
+      await held
+    }
+    await original(operation)
+  })
+  spies.push(recorder)
+  const requestId = randomUUID(), submitId = randomUUID()
+  try {
+    h.send({ type: 'app.submit', requestId, prompt: text, options: { submitId } })
+    await until(() => producerEntered, 'enqueue producer starts')
+    expect(h.received.some(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toBe(false)
+    const before = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+    expect(before.queueOperations.some(operation => operation.content === text)).toBe(false)
+    expect(h.calls()).toBe(1)
+    permit()
+    await until(() => h.received.some(frame => frame.kind === 'submit.result' && frame.submitId === submitId), 'durable enqueue receives its admission acknowledgement')
+    expect(h.received.find(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toMatchObject({
+      accepted: true, queued: true,
+    })
+    const saved = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+    expect(saved.queueOperations.some(operation => operation.operation === 'enqueue' && operation.content === text)).toBe(true)
+    writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, cancellation: {
+      cancelId: h.cancelId, requestedBy: 'close', application: 'unknown',
+    } })
+    await h.command({ action: 'cancel', cancelId: h.cancelId })
+  } finally { permit(); recorder.mockRestore(); h.release() }
+  await until(() => !h.controller.isTurnActive(), 'acknowledgement fixture stops')
+})
+
+test('an enqueue recorder failure after real consumption is uncertain, never a definitely-unaccepted answer', async () => {
+  let calls = 0, releaseFirst!: () => void, releaseSecond!: () => void, failEnqueue!: (error: Error) => void
+  const first = new Promise<void>(resolve => { releaseFirst = resolve })
+  const second = new Promise<void>(resolve => { releaseSecond = resolve })
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    calls++
+    if (calls === 1) {
+      await first
+      yield assistant([{ type: 'tool_use', id: 'queue-ack-tool', name: 'QueueAckFixture', input: {} }])
+    } else {
+      await second
+      yield assistant([{ type: 'text', text: 'Queued input was consumed.' }])
+    }
+  }))
+  const tool = buildTool({ name: 'QueueAckFixture', inputSchema: z.object({}),
+    description: async () => 'Run isolated queue fixture', prompt: async () => 'Run isolated queue fixture',
+    maxResultSizeChars: 1000, renderToolUseMessage: () => null,
+    async call() { return { data: 'Isolated tool completed.' } },
+    mapToolResultToToolResultBlockParam: (data, id) => ({ type: 'tool_result', tool_use_id: id, content: data }) })
+  const h = await harness({ tools: [tool] })
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => calls === 1 && h.coordinator.snapshot(h.appSessionId)?.continuation.dispatch === 'consumed', 'continuation enters first provider')
+  const text = 'consumed before enqueue failure'
+  const heldEnqueue = new Promise<void>((_resolve, reject) => { failEnqueue = reject })
+  const original = storage.recordQueueOperation
+  const recorder = spyOn(storage, 'recordQueueOperation').mockImplementation(async operation => {
+    if (operation.operation === 'enqueue' && operation.content === text) await heldEnqueue
+    await original(operation)
+  })
+  spies.push(recorder)
+  const requestId = randomUUID(), submitId = randomUUID()
+  try {
+    h.send({ type: 'app.submit', requestId, prompt: text, options: { submitId } })
+    const queuedId = getCommandQueueSnapshot().find(command => command.value === text)?.uuid
+    expect(queuedId).toBeDefined()
+    releaseFirst()
+    await until(() => calls === 2, 'real engine durably consumes queued input before its next provider request')
+    expect((await storage.getSessionQueueOperations(h.engineSessionId)).messageUuids.has(queuedId!)).toBe(true)
+    expect(h.received.some(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toBe(false)
+    failEnqueue(new Error('Injected enqueue recorder failure after consumption'))
+    await until(() => h.received.some(frame => frame.kind === 'error' && frame.requestId === requestId), 'uncertain I/O outcome is reported')
+    expect(h.received.find(frame => frame.kind === 'error' && frame.requestId === requestId)).toMatchObject({
+      retryable: false, message: expect.stringContaining('may have been delivered'),
+    })
+    expect(h.received.some(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toBe(false)
+    expect((await storage.getSessionQueueOperations(h.engineSessionId)).messageUuids.has(queuedId!)).toBe(true)
+  } finally {
+    failEnqueue(new Error('Fixture cleanup'))
+    recorder.mockRestore()
+    h.controller.abort('Fixture complete')
+    releaseFirst(); releaseSecond()
+  }
+  await until(() => !h.controller.isTurnActive(), 'uncertain admission fixture stops')
+})
+
+test('verified close cancellation fences admission before async work and preserves task, peer, uncertain and consumed evidence', async () => {
+  const h = await heldContinuationWithQueuedManual()
+  const task = { value: 'task result', mode: 'task-notification' as const, uuid: randomUUID() }
+  const peer = { value: 'peer input', mode: 'task-notification' as const, uuid: randomUUID(), origin: { kind: 'peer' as const, name: 'Alex', appSessionId: randomUUID() } }
+  const uncertain = { value: 'untracked input for review', mode: 'prompt' as const, uuid: randomUUID() }
+  enqueue(task); enqueue(peer); enqueue(uncertain)
+  const stopping = h.command({ action: 'cancel', cancelId: h.cancelId })
+  // handleData has reached its first asynchronous durability boundary, not its
+  // cancellation acknowledgement. A racing submit must already be fenced.
+  h.submit('late close input')
+  expect(h.received.some(frame => frame.kind === 'error' && frame.message === 'This chat is stopping.')).toBe(true)
+  expect(getCommandQueueSnapshot().some(command => command.uuid === h.queued.uuid)).toBe(false)
+  try {
+    const result = await stopping
+    expect(result.kind).toBe('result')
+    if (result.kind === 'result') expect(result.result.disposition).toBe('accepted')
+    const loaded = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+    expect(loaded.queueOperations.some(op => op.uuid === h.queued.uuid && op.operation === 'remove')).toBe(true)
+    expect(loaded.queueOperations.some(op => [task.uuid, peer.uuid, uncertain.uuid].includes(op.uuid!) && op.operation !== 'enqueue')).toBe(false)
+    expect(loaded.messages.has(h.seed.uuid as UUID)).toBe(true)
+    expect(loaded.messages.has(h.state.continuation.id as UUID)).toBe(true)
+    expect(loaded.queueOperations.some(op => op.uuid === h.state.continuation.id && op.operation === 'remove')).toBe(false)
+  } finally { h.release() }
+  await until(() => !h.controller.isTurnActive(), 'aborted consumed turn settles')
+  await h.command({ action: 'status' })
+  h.submit('late drain input')
+  await Bun.sleep(0)
+  expect(getCommandQueueSnapshot().map(command => command.uuid)).toEqual([task.uuid, peer.uuid, uncertain.uuid])
+  expect(h.calls()).toBe(1)
+})
+
+test.each(['cancellation', 'durability'] as const)('failed close %s keeps manual admission fenced and never claims unconfirmed durability', async failure => {
+  const h = await heldContinuationWithQueuedManual()
+  const originalRecord = storage.recordQueueOperation
+  const failing = failure === 'cancellation'
+    ? spyOn(h.controller, 'cancelWorkspaceHandoff').mockRejectedValue(new Error('controlled cancellation failure'))
+    : spyOn(storage, 'recordQueueOperation').mockImplementation(async operation => {
+        if (operation.operation === 'remove') throw new Error('controlled durable retraction failure')
+        await originalRecord(operation)
+      })
+  try {
+    const result = await h.command({ action: 'cancel', cancelId: h.cancelId })
+    expect(result.kind).toBe('result')
+    if (result.kind === 'result') {
+      expect(result.result.disposition).toBe('refused')
+      if (failure === 'durability') expect(result.result.reason).toBe('durability_unconfirmed')
+    }
+    h.submit('must not drain after failed cancellation')
+    expect(h.received.some(frame => frame.kind === 'error' && frame.message === 'This chat is stopping.')).toBe(true)
+    expect(getCommandQueueSnapshot().some(command => command.uuid === h.queued.uuid)).toBe(false)
+  } finally { failing.mockRestore() }
+  try {
+    const retry = await h.command({ action: 'cancel', cancelId: h.cancelId })
+    expect(retry.kind).toBe('result')
+    if (retry.kind === 'result') expect(retry.result.disposition).toBe(failure === 'durability' ? 'refused' : 'accepted')
+    const loaded = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+    expect(loaded.queueOperations.some(op => op.uuid === h.queued.uuid && op.operation === 'remove')).toBe(failure !== 'durability')
+    expect(loaded.messages.has(h.state.continuation.id as UUID)).toBe(true)
+  } finally { h.release() }
+  await until(() => !h.controller.isTurnActive(), 'failed-cancel active turn settles')
+  expect(h.calls()).toBe(1)
+})
+
+test('a wrong close cancel identity cannot retract queued input or abort the active turn', async () => {
+  const h = await heldContinuationWithQueuedManual()
+  try {
+    const rejected = await h.command({ action: 'cancel', cancelId: randomUUID() })
+    expect(rejected.kind).toBe('result')
+    if (rejected.kind === 'result') expect(rejected.result.disposition).toBe('refused')
+    expect(getCommandQueueSnapshot().some(command => command.uuid === h.queued.uuid)).toBe(true)
+    expect(h.controller.isTurnActive()).toBe(true)
+    const accepted = await h.command({ action: 'cancel', cancelId: h.cancelId })
+    expect(accepted.kind).toBe('result')
+    if (accepted.kind === 'result') expect(accepted.result.disposition).toBe('accepted')
+  } finally { h.release() }
+  await until(() => !h.controller.isTurnActive(), 'verified cancellation settles active turn')
+})
+
+test('close preserves an already consumed manual turn while cancelling only its queued successor', async () => {
+  let calls = 0, release!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  disposers.push(() => release())
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    calls++
+    if (calls > 1) await blocked
+    yield assistant([{ type: 'text', text: 'Scripted accepted input.' }])
+  }))
+  const h = await harness()
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => !h.held(), 'continuation releases the input gate')
+  h.submit('consumed manual input')
+  await until(() => calls === 2, 'manual input is durably consumed by the real controller')
+  h.submit('unconsumed successor')
+  const queued = getCommandQueueSnapshot().find(command => command.value === 'unconsumed successor')
+  expect(queued?.uuid).toBeDefined()
+  const before = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+  const consumed = [...before.messages.values()].find(message =>
+    message.type === 'user' && message.message.content === 'consumed manual input')
+  expect(consumed?.uuid).toBeDefined()
+  const cancelId = randomUUID()
+  writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, cancellation: { cancelId, requestedBy: 'close', application: 'unknown' } })
+  try {
+    const outcome = await h.command({ action: 'cancel', cancelId })
+    expect(outcome.kind).toBe('result')
+    if (outcome.kind === 'result') expect(outcome.result.disposition).toBe('accepted')
+    const after = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+    expect(after.messages.has(consumed!.uuid as UUID)).toBe(true)
+    expect(after.queueOperations.some(operation => operation.uuid === consumed!.uuid && operation.operation === 'remove')).toBe(false)
+    expect(after.queueOperations.some(operation => operation.uuid === queued!.uuid && operation.operation === 'remove')).toBe(true)
+    h.submit('late successor')
+  } finally { release() }
+  await until(() => !h.controller.isTurnActive(), 'consumed manual turn stops without losing its history')
+  expect(calls).toBe(2)
+})
+
+test('a late failed reserve retains uncertain input rather than cancelling it or draining it again', async () => {
+  let providerCalls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    providerCalls++
+    yield assistant([{ type: 'text', text: 'Preserved request completed.' }])
+  }))
+  const h = await harness()
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => !h.held(), 'continuation gate opens')
+  let rejectReserve!: (error: Error) => void
+  const reserved = new Promise<void>((_resolve, reject) => { rejectReserve = reject })
+  const submit = spyOn(h.controller, 'submit').mockImplementation(() => reserved)
+  spies.push(submit)
+  const uncertain = { value: 'uncertain reserved input', mode: 'prompt' as const, uuid: randomUUID() }
+  enqueue(uncertain)
+  await until(() => submit.mock.calls.length === 1, 'server reserves unknown input but controller has not accepted it')
+  const cancelId = randomUUID()
+  writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, cancellation: { cancelId, requestedBy: 'close', application: 'unknown' } })
+  const stopped = await h.command({ action: 'cancel', cancelId })
+  expect(stopped.kind).toBe('result')
+  if (stopped.kind === 'result') expect(stopped.result.disposition).toBe('accepted')
+  rejectReserve(new Error('controlled refusal before durable acceptance'))
+  await until(() => getCommandQueueSnapshot().some(command => command.uuid === uncertain.uuid), 'late refusal retains the uncertain input')
+  await flushQueueOperationsDurably()
+  const loaded = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
+  expect(loaded.queueOperations.some(operation => operation.uuid === uncertain.uuid && operation.operation === 'reserve')).toBe(true)
+  expect(loaded.queueOperations.some(operation => operation.uuid === uncertain.uuid && operation.operation === 'remove')).toBe(false)
+  expect(submit.mock.calls).toHaveLength(1)
+  expect(providerCalls).toBe(1)
+})
 
 for (const ending of ['success', 'completion rejection', 'admission rejection'] as const) {
   test(`continuation publishes idle after ${ending}`, async () => {

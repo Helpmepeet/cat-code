@@ -179,7 +179,7 @@ test('transcript reset discards projected rows before retained replay', () => {
   })
   const reset: ServerFrame = {
     kind: 'transcript.reset',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
   }
 
@@ -829,7 +829,7 @@ test('encrypted-only thinking and transcript reset never retain a temporary read
   play(S1_STREAMING_REASONING_TURN.messages[2]!)
   state = projectServerFrame(state, {
     kind: 'transcript.reset',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
   })
   const session = state.sessions['session-1']!
@@ -1033,7 +1033,7 @@ test('leaves state untouched for unhandled messages and non-message events', () 
   )
   state = projectServerFrame(state, {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     event: { type: 'abort.status', abort: { status: 'requested' } },
   })
@@ -3306,7 +3306,7 @@ test('a GenerateImage result and preview merge into one completed image row', ()
   )
   state = projectServerFrame(state, {
     kind: 'generated-image-preview',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     toolUseId,
     mediaType: 'image/png',
@@ -3358,7 +3358,7 @@ test('a same-transcript reattach keeps an earlier generated image', () => {
   })
   const preview = {
     kind: 'generated-image-preview' as const,
-    protocolVersion: 4 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     toolUseId,
     mediaType: 'image/png' as const,
@@ -3466,7 +3466,7 @@ test('GenerateImage inline image becomes immediate preview and is later replaced
   // 2. Dedicated generated-image-preview frame arrives later
   state = projectServerFrame(state, {
     kind: 'generated-image-preview',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     toolUseId,
     mediaType: 'image/png',
@@ -3513,7 +3513,7 @@ test('GenerateImage previews merge before results and stay isolated by session',
     )
     state = projectServerFrame(state, {
       kind: 'generated-image-preview',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId,
       toolUseId,
       mediaType: 'image/png',
@@ -3609,7 +3609,7 @@ test('GenerateImage previews stay isolated by tool-use id within one session', (
     )
     state = projectServerFrame(state, {
       kind: 'generated-image-preview',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 'session-1',
       toolUseId: image.toolUseId,
       mediaType: 'image/png',
@@ -5529,7 +5529,7 @@ test('a breadcrumb under a FRESH uuid duplicates — the defect the producer own
 function truncationFrame(sessionId: string, requestId: string) {
   return {
     kind: 'error' as const,
-    protocolVersion: 4 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     requestId,
     code: 'internal_error' as const,
@@ -5611,7 +5611,7 @@ test('a complete transcript draws no boundary row, and no ordinary error mints o
   const before = state
   state = projectServerFrame(state, {
     kind: 'error' as const,
-    protocolVersion: 4 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     requestId: 'req-1',
     code: 'internal_error' as const,
@@ -5814,10 +5814,10 @@ test('an empty truncated replay retains a recoverable boundary until an authorit
   let state = projectServerFrames(createTranscriptState(), buffer.snapshotSession('session-1'))
   expect(selectTranscriptRows(state, 'session-1')).toHaveLength(0)
   expect(selectNestedTranscriptRows(state, 'session-1')).toMatchObject([{ kind: 'history-boundary' }])
-  state = projectServerFrame(state, { kind: 'history.loadEarlier.result', protocolVersion: 4,
+  state = projectServerFrame(state, { kind: 'history.loadEarlier.result', protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1', requestId: 'read', ok: false, message: 'retry', added: 0, complete: false })
   expect(selectNestedTranscriptRows(state, 'session-1')).toHaveLength(1)
-  state = projectServerFrame(state, { kind: 'history.loadEarlier.result', protocolVersion: 4,
+  state = projectServerFrame(state, { kind: 'history.loadEarlier.result', protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1', requestId: 'read', ok: true, message: 'complete', added: 0, complete: true })
   expect(selectNestedTranscriptRows(state, 'session-1')).toHaveLength(0)
 })
@@ -5825,14 +5825,14 @@ test('an empty truncated replay retains a recoverable boundary until an authorit
 test('nested-history availability marks omitted saved steps without declaring main history truncated', () => {
   let state = projectServerFrames(createTranscriptState(), [ready('session-1'),
     agentSpawnFrame('session-1', 'toolu_agent_1'), agentResultFrame('session-1', 'toolu_agent_1'),
-    { kind: 'history.availability', protocolVersion: 4, sessionId: 'session-1', unavailableParentToolUseIds: ['toolu_agent_1'] }])
+    { kind: 'history.availability', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', unavailableParentToolUseIds: ['toolu_agent_1'] }])
   expect(state.sessions['session-1']?.historyTruncated).toBe(false)
   expect(agentRow(state)?.stepsNotLoaded).toBe(true)
   // Even partial saved steps remain visible while the omitted remainder is indicated.
   state = projectServerFrame(state, agentChildFrame('session-1', 'toolu_agent_1', 1))
   expect(agentRow(state)?.children).toHaveLength(1)
   expect(agentRow(state)?.stepsNotLoaded).toBe(true)
-  state = projectServerFrame(state, { kind: 'history.availability', protocolVersion: 4,
+  state = projectServerFrame(state, { kind: 'history.availability', protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1', unavailableParentToolUseIds: [] })
   expect(agentRow(state)?.children).toHaveLength(1)
   expect(agentRow(state)?.stepsNotLoaded).toBeUndefined()
@@ -5842,13 +5842,13 @@ test('a recovered availability verdict cannot erase the missing-worker indicatio
   const buffer = new FrameReplayBuffer()
   const initial: ServerFrame[] = [ready('session-1'), agentSpawnFrame('session-1', 'toolu_agent_1'),
     agentResultFrame('session-1', 'toolu_agent_1'), agentChildFrame('session-1', 'toolu_agent_1', 1),
-    { kind: 'history.availability', protocolVersion: 4,
+    { kind: 'history.availability', protocolVersion: PROTOCOL_VERSION,
       sessionId: 'session-1', unavailableParentToolUseIds: ['toolu_agent_1'] }]
   for (const frame of initial) buffer.record('session-1', frame)
   let state = projectServerFrames(createTranscriptState(), buffer.snapshotSession('session-1'))
   expect(agentRow(state)?.stepsNotLoaded).toBe(true)
   const child: ServerFrame = { ...agentChildFrame('session-1', 'toolu_agent_1', 2), replay: true, recovered: true }
-  const availability: ServerFrame = { kind: 'history.availability', protocolVersion: 4, sessionId: 'session-1',
+  const availability: ServerFrame = { kind: 'history.availability', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
     unavailableParentToolUseIds: [], recovered: true }
   for (const frame of [child, availability]) { buffer.record('session-1', frame); state = projectServerFrame(state, frame) }
   expect(agentRow(state)?.stepsNotLoaded).toBeUndefined()
@@ -5935,7 +5935,7 @@ function loadEarlierResult(
 ) {
   return {
     kind: 'history.loadEarlier.result' as const,
-    protocolVersion: 4 as const,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     requestId,
     ok: true,
@@ -6212,7 +6212,7 @@ test('transcript projection is invariant across replay delivery partitions', () 
     }),
     {
       kind: 'generated-image-preview',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId,
       toolUseId: 'toolu_oracle_image',
       mediaType: 'image/png',

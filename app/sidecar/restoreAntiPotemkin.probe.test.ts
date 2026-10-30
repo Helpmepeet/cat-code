@@ -41,17 +41,29 @@ import { fileURLToPath } from 'node:url'
 
 import { SidecarSupervisor, type SupervisorEvent } from '../supervisor/supervisor.js'
 import type { ServerFrame } from '../shared/protocol.js'
+import { SIDECAR_RUNTIME_ARGS } from '../main/mainDecisions.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const sidecarEntry = join(here, 'index.ts')
 const minter = join(here, 'mintTranscript.fixture.ts')
+const networkGuard = join(here, 'denyNetwork.fixture.ts')
 const TEST_TIMEOUT_MS = 120_000
 
 const supervisors: SidecarSupervisor[] = []
 const tempDirs: string[] = []
+const networkAudits = new Set<string>()
 
-afterEach(() => {
-  for (const supervisor of supervisors.splice(0)) supervisor.shutdown()
+afterEach(async () => {
+  for (const supervisor of supervisors.splice(0)) {
+    const pids = supervisor.listSessions().flatMap(session => {
+      const pid = supervisor.getSessionProcessId(session.sessionId)
+      return pid === undefined ? [] : [pid]
+    })
+    supervisor.shutdown()
+    for (const pid of pids) await waitForPidExit(pid)
+  }
+  for (const audit of networkAudits) expect(existsSync(audit)).toBe(false)
+  networkAudits.clear()
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -62,12 +74,21 @@ function tmp(prefix: string): string {
 }
 
 function makeSupervisor(configHome: string): SidecarSupervisor {
+  const audit = join(configHome, 'network-attempts')
+  networkAudits.add(audit)
   const supervisor = new SidecarSupervisor({
     sidecarCommand: 'bun',
-    sidecarArgs: ['run', sidecarEntry],
+    sidecarArgs: [`--preload=${networkGuard}`, ...SIDECAR_RUNTIME_ARGS, sidecarEntry],
     sidecarEnv: {
       ANTHROPIC_API_KEY: 'sk-ant-restore-probe',
       CLAUDE_CONFIG_DIR: configHome,
+      ANTHROPIC_UNIX_SOCKET: join(configHome, 'no-provider.sock'),
+      TEST_ENABLE_SESSION_PERSISTENCE: '1',
+      CLAUDE_CODE_SIMPLE: '1',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      DISABLE_TELEMETRY: '1',
+      CATCODE_SIDECAR_PROBE: '',
+      CATCODE_PROBE_NETWORK_AUDIT: audit,
     },
   })
   supervisors.push(supervisor)
@@ -81,12 +102,13 @@ async function mintRealisticTranscript(opts: {
   marker: string
 }): Promise<{ transcriptPath: string; sidechainPath: string }> {
   const child = Bun.spawn(
-    ['bun', 'run', minter, opts.engineSessionId, opts.marker, '--realistic-tail'],
+    ['bun', `--preload=${networkGuard}`, ...SIDECAR_RUNTIME_ARGS, minter, opts.engineSessionId, opts.marker, '--realistic-tail'],
     {
       cwd: opts.cwd,
       env: {
         ...process.env,
         CLAUDE_CONFIG_DIR: opts.configHome,
+        ANTHROPIC_UNIX_SOCKET: join(opts.configHome, 'no-provider.sock'),
         // Bun's test environment suppresses persistence. This is the engine's
         // test-only escape hatch used by the existing real-process probes.
         TEST_ENABLE_SESSION_PERSISTENCE: '1',
@@ -122,7 +144,8 @@ async function mintInterruptedQueuedTranscript(opts: {
   const child = Bun.spawn(
     [
       'bun',
-      'run',
+      `--preload=${networkGuard}`,
+      ...SIDECAR_RUNTIME_ARGS,
       minter,
       opts.engineSessionId,
       opts.marker,
@@ -133,6 +156,7 @@ async function mintInterruptedQueuedTranscript(opts: {
       env: {
         ...process.env,
         CLAUDE_CONFIG_DIR: opts.configHome,
+        ANTHROPIC_UNIX_SOCKET: join(opts.configHome, 'no-provider.sock'),
         TEST_ENABLE_SESSION_PERSISTENCE: '1',
       },
       stdout: 'pipe',
@@ -259,7 +283,7 @@ test('F2: two realistic transcripts restore through new real sidecar processes w
   expect(JSON.stringify(replayB)).not.toContain(markerA)
 }, TEST_TIMEOUT_MS)
 
-test('restore replays undelivered queued input by UUID and reports an interrupted idle turn', async () => {
+test('restore offers undelivered input for review by UUID without queued work or a fabricated user bubble', async () => {
   const configHome = tmp('catcode-queued-restore-cfg-')
   const cwd = tmp('catcode-queued-restore-cwd-')
   const engineSessionId = randomUUID()
@@ -281,19 +305,20 @@ test('restore replays undelivered queued input by UUID and reports an interrupte
     supervisor,
     frame => frame.kind === 'ready' && frame.sessionId === appSessionId,
   )
-  const queuedReplayPromise = waitForFrame(
+  const recoveredPromise = waitForFrame(
     supervisor,
     frame =>
-      frame.kind === 'event' &&
+      frame.kind === 'queued-prompts.snapshot' &&
       frame.sessionId === appSessionId &&
-      frame.replay === true &&
-      JSON.stringify(frame).includes(queuedUuid),
+      frame.recoveredPrompts?.some(input => input.id === queuedUuid) === true,
   )
+  const historyComplete = waitForFrame(supervisor, frame => frame.kind === 'history.replay.complete' && frame.sessionId === appSessionId)
 
   supervisor.spawnSession(appSessionId, { cwd, resumeEngineSessionId: engineSessionId })
-  const [ready, queuedReplay] = await Promise.all([
+  const [ready, recovered] = await Promise.all([
     readyPromise,
-    queuedReplayPromise,
+    recoveredPromise,
+    historyComplete,
   ])
 
   expect(ready).toMatchObject({
@@ -301,19 +326,10 @@ test('restore replays undelivered queued input by UUID and reports an interrupte
     turnInterrupted: true,
     payload: { inputEnabled: true, activeTurn: false },
   })
-  expect(queuedReplay).toMatchObject({
-    kind: 'event',
-    replay: true,
-    event: {
-      type: 'message',
-      message: {
-        type: 'user',
-        uuid: queuedUuid,
-        message: { role: 'user', content: `queued input ${marker}` },
-      },
-    },
+  expect(recovered).toMatchObject({
+    kind: 'queued-prompts.snapshot', prompts: [],
+    recoveredPrompts: [{ id: queuedUuid, text: `queued input ${marker}` }],
   })
-  expect(
-    frames.filter(frame => JSON.stringify(frame).includes(queuedUuid)),
-  ).toHaveLength(1)
+  expect(frames.filter(frame => frame.kind === 'event' && JSON.stringify(frame).includes(queuedUuid))).toEqual([])
+  expect(frames.some(frame => frame.kind === 'event' && frame.event.type === 'turn.status' && frame.event.activeTurn)).toBe(false)
 }, TEST_TIMEOUT_MS)

@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import { selectLiveTokenEstimate } from './appModel.js'
 import {
@@ -27,7 +28,7 @@ const ENGINE = 'engine-1'
 
 const ready = {
   kind: 'ready',
-  protocolVersion: 4,
+  protocolVersion: PROTOCOL_VERSION,
   sessionId: SESSION,
   engineSessionId: ENGINE,
   payload: {
@@ -48,7 +49,7 @@ const uuid = () =>
 const frame = (message: unknown) =>
   ({
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: SESSION,
     event: { type: 'message', message },
   }) as never

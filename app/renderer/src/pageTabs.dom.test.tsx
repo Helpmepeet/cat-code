@@ -356,27 +356,36 @@ test('page close and numeric selection focus the matching conversation instead o
   expect(app.visible.at(-1)).toEqual(['b'])
 })
 
-test('session close waits for success, chooses a page neighbor, and late close preserves newer selection', async () => {
+test('session close immediately selects a page neighbor, stays dismissed on refusal, and late close preserves newer selection', async () => {
   const app = await mountApp([sessionDescriptor('a')])
   await app.click('Goals')
   await app.host({ type: 'session-added', session: sessionDescriptor('b') })
   await app.frames(ready('b'))
   await app.key('3')
   const closing = deferred<Awaited<ReturnType<CatCodeBridge['closeSession']>>>()
-  window.catcode.closeSession = async () => closing.promise
+  const closeRequests: string[] = []
+  window.catcode.closeSession = async id => { closeRequests.push(id); return closing.promise }
   await app.key('w')
-  expect(app.selected()[0]).toContain('Session b,')
+  expect(app.selected()).toEqual(['Goals page'])
+  expect(app.tabs().some(tab => tab.getAttribute('aria-label')?.startsWith('Session b,'))).toBe(false)
+  expect(app.visible.at(-1)).toEqual([])
   await act(async () => { closing.resolve({ ok: false, error: { code: 'session_unreachable', message: 'Synthetic close refusal' } }) })
-  expect(app.selected()[0]).toContain('Session b,')
+  await app.host({ type: 'session-status', session: sessionDescriptor('b') })
+  expect(app.selected()).toEqual(['Goals page'])
+  expect(app.tabs().some(tab => tab.getAttribute('aria-label')?.startsWith('Session b,'))).toBe(false)
   const retry = deferred<Awaited<ReturnType<CatCodeBridge['closeSession']>>>()
-  window.catcode.closeSession = async () => retry.promise
-  await app.key('w')
+  window.catcode.closeSession = async id => { closeRequests.push(id); return retry.promise }
+  await app.click('Retry stop')
+  expect(closeRequests).toEqual(['b', 'b'])
+  expect(app.selected()).toEqual(['Goals page'])
   await act(async () => { retry.resolve({ ok: true, value: undefined }) })
   expect(app.selected()).toEqual(['Goals page'])
+  expect(app.tabs().some(tab => tab.getAttribute('aria-label')?.startsWith('Session b,'))).toBe(false)
   const background = deferred<Awaited<ReturnType<CatCodeBridge['closeSession']>>>()
   window.catcode.closeSession = async () => background.promise
   await app.key('1')
   await app.key('w')
+  expect(app.selected()).toEqual(['Goals page'])
   await app.click('Settings')
   await act(async () => { background.resolve({ ok: true, value: undefined }) })
   expect(app.selected()).toEqual(['Settings page'])

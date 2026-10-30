@@ -6,16 +6,45 @@ import type { QueuedCommand } from '../../src/types/textInputTypes.js'
 import {
   createAssistantAPIErrorMessage,
   createAssistantMessage,
+  createSystemMessage,
   createUserMessage,
   NO_RESPONSE_REQUESTED,
 } from '../../src/utils/messages.js'
 import {
   mergeDisplayHistoryWithSeed,
-  projectUndeliveredPrompts,
   projectResumedHistory,
 } from './historyProjection.js'
+import { RECOVERY_WARNING, RECOVERY_CONTEXT } from '../../src/utils/transcriptTailRecovery.js'
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
+import { createTranscriptState, projectServerFrames, selectTranscriptRows } from '../renderer/src/transcriptProjector.js'
 
 describe('restored history projection', () => {
+  test('stored tail disclosure renders once in order with its stable UUID, not as a new model prompt', () => {
+    const before = createUserMessage({ content: 'saved progress' })
+    const warning = createSystemMessage(RECOVERY_WARNING, 'warning', undefined, true)
+    const context = createUserMessage({ content: RECOVERY_CONTEXT, isMeta: true })
+    const after = createUserMessage({ content: 'genuine review input' })
+    const messages = [before, warning, context, warning, after]
+    const history = mergeDisplayHistoryWithSeed(messages, projectResumedHistory([warning, context, after])).history
+    expect(history.filter(message => message.uuid === warning.uuid)).toHaveLength(1)
+    expect(history.find(message => message.uuid === warning.uuid)).toMatchObject({
+      type: 'system', subtype: 'local_command_output', content: RECOVERY_WARNING,
+    })
+    expect(history.findIndex(message => message.uuid === warning.uuid)).toBeGreaterThan(history.findIndex(message => message.uuid === before.uuid))
+    expect(history.findIndex(message => message.uuid === warning.uuid)).toBeLessThan(history.findIndex(message => message.uuid === after.uuid))
+    expect(history.find(message => message.uuid === context.uuid)).toMatchObject({ type: 'user', isSynthetic: true })
+    const state = projectServerFrames(createTranscriptState(), [{
+      kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'tail-review', engineSessionId: 'tail-engine',
+      payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
+        abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
+    }, ...history.map(message => ({
+      kind: 'event' as const, protocolVersion: PROTOCOL_VERSION, sessionId: 'tail-review', replay: true as const,
+      event: { type: 'message' as const, message },
+    })), { kind: 'history.replay.complete', protocolVersion: PROTOCOL_VERSION, sessionId: 'tail-review' }])
+    expect(selectTranscriptRows(state, 'tail-review').filter(row =>
+      row.kind === 'system-notice' && row.content === RECOVERY_WARNING)).toHaveLength(1)
+  })
+
   test('peer snapshots remain model-only and produce no desktop transcript frames', () => {
     const user = createUserMessage({ content: 'Visible prompt' })
     const history = [
@@ -65,29 +94,17 @@ describe('restored history projection', () => {
     )
   })
 
-  test('replays an undelivered prompt with its producer identity', () => {
-    expect(
-      projectUndeliveredPrompts(
-        [
-          {
-            uuid: '00000000-0000-4000-8000-000000000901',
-            content: 'keep this accepted input',
-            timestamp: '2026-08-09T10:00:00.000Z',
-          },
-        ],
-        'engine-session',
-      ),
-    ).toEqual([
-      {
-        type: 'user',
-        message: { role: 'user', content: 'keep this accepted input' },
-        session_id: 'engine-session',
-        parent_tool_use_id: null,
-        uuid: '00000000-0000-4000-8000-000000000901',
-        timestamp: '2026-08-09T10:00:00.000Z',
-        isReplay: true,
-      },
-    ])
+  test('accepted history preserves the original text, media and user identity', () => {
+    const uuid = '00000000-0000-4000-8000-000000000901' as const
+    const content = [
+      { type: 'text' as const, text: 'keep this accepted input' },
+      { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'aGVsbG8=' } },
+    ]
+    const history = projectResumedHistory([createUserMessage({ uuid, content })])
+    const row = history.find(message => message.type === 'user')
+    expect(row?.uuid).toBe(uuid)
+    if (row?.type !== 'user') throw new Error('Missing accepted history')
+    expect(row.message?.content).toEqual(content)
   })
 
   test('hides current and legacy silent rate-limit fallback records', () => {

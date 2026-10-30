@@ -22,6 +22,7 @@ import { asAgentId, asSessionId } from '../../src/types/ids.js'
 import {
   dequeueAllMatching,
   enqueue,
+  flushQueueOperationsDurably,
 } from '../../src/utils/messageQueueManager.js'
 import {
   createAssistantMessage,
@@ -35,6 +36,7 @@ import {
   getTranscriptPathForSession,
   recordSidechainTranscript,
   recordTranscript,
+  recordQueueOperation,
   writeAgentMetadata,
 } from '../../src/utils/sessionStorage.js'
 import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
@@ -51,6 +53,7 @@ async function main(): Promise<void> {
   const subagentBranch = process.argv.includes('--subagent-branch')
   const interruptedQueued = process.argv.includes('--interrupted-queued')
   const recalledQueued = process.argv.includes('--recalled-queued')
+  const legacyRemovedQueued = process.argv.includes('--legacy-removed-queued')
   const queuedBeforeCompact = process.argv.includes('--queued-before-compact')
   const savedOutput = process.argv.includes('--saved-output')
   const relocationSkills = process.argv.includes('--relocation-skills')
@@ -228,7 +231,7 @@ async function main(): Promise<void> {
     await Bun.sleep(0)
     process.stdout.write(`MINTED_QUEUED_UUID=${queuedUuid}\n`)
   }
-  if (recalledQueued || queuedBeforeCompact) {
+  if (recalledQueued || queuedBeforeCompact || legacyRemovedQueued) {
     // D1b — two messages sent into a running turn, then Take back on one of
     // them, through the same queue primitives the desktop's recall handler
     // composes (`app/sidecar/sidecarServer.ts` handlePromptRecall). The one
@@ -253,13 +256,15 @@ async function main(): Promise<void> {
     })
     if (queuedBeforeCompact) {
       const consumedUuid = randomUUID()
+      const consumedResponseUuid = randomUUID()
+      const consumedResponse = { ...createAssistantMessage({ content: `consumed response ${marker}` }), uuid: consumedResponseUuid }
       enqueue({ value: `consumed input ${marker}`, mode: 'prompt', uuid: consumedUuid })
       dequeueAllMatching(command => command.uuid === consumedUuid)
       await recordTranscript([
         user,
         assistant,
         createUserMessage({ content: `consumed input ${marker}`, uuid: consumedUuid }),
-        createAssistantMessage({ content: `consumed response ${marker}` }),
+        consumedResponse,
       ])
       // An active turn can compact while later user input is still waiting.
       // Flush its enqueue records before the boundary, then retract one after
@@ -267,12 +272,27 @@ async function main(): Promise<void> {
       await Bun.sleep(0)
       await flushSessionStorage()
       await recordTranscript([
-        createCompactBoundaryMessage('auto', 200_000),
+        createCompactBoundaryMessage('auto', 200_000, consumedResponseUuid),
         createUserMessage({ content: 'compacted model seed summary', isCompactSummary: true }),
       ])
       process.stdout.write(`MINTED_CONSUMED_UUID=${consumedUuid}\n`)
     }
-    dequeueAllMatching(command => command.uuid === recalledUuid)
+    if (legacyRemovedQueued) {
+      // Historical dequeue/remove records could mean delivery or take-back.
+      // Keep their original unversioned shapes; modern cancellation is tested
+      // separately through the current queue primitive.
+      dequeueAllMatching(command => command.uuid === recalledUuid, 'reserve')
+      await recordQueueOperation({ type: 'queue-operation', operation: 'dequeue', sessionId,
+        uuid: recalledUuid, timestamp: new Date().toISOString() })
+      const legacyRemovedUuid = randomUUID()
+      enqueue({ value: `legacy removed input ${marker}`, mode: 'prompt', uuid: legacyRemovedUuid })
+      dequeueAllMatching(command => command.uuid === legacyRemovedUuid, 'reserve')
+      await recordQueueOperation({ type: 'queue-operation', operation: 'remove', sessionId,
+        uuid: legacyRemovedUuid, timestamp: new Date().toISOString() })
+      process.stdout.write(`MINTED_LEGACY_REMOVED_UUID=${legacyRemovedUuid}\n`)
+    } else {
+      dequeueAllMatching(command => command.uuid === recalledUuid)
+    }
     await Bun.sleep(0)
     process.stdout.write(`MINTED_RECALLED_UUID=${recalledUuid}\n`)
     process.stdout.write(`MINTED_WAITING_UUID=${waitingUuid}\n`)
@@ -283,6 +303,7 @@ async function main(): Promise<void> {
   }
   // Writes are queued on a flush timer; force them to disk before exit (the
   // graceful-shutdown flush we bypass with process.exit would otherwise do it).
+  await flushQueueOperationsDurably()
   await flushSessionStorage()
 
   const path = getTranscriptPathForSession(sessionId)

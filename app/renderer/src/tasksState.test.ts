@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { ServerFrame, SessionId, TaskSnapshotItem, TasksSnapshot } from '../../shared/protocol.js'
 import {
@@ -58,11 +59,11 @@ function item(over: Partial<TaskSnapshotItem> = {}): TaskSnapshotItem {
 }
 
 function tasksFrame(sessionId: SessionId, tasks: TasksSnapshot): ServerFrame {
-  return { kind: 'tasks.snapshot', protocolVersion: 4, sessionId, tasks }
+  return { kind: 'tasks.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId, tasks }
 }
 
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 4, sessionId, status: 'disconnected' }
+  return { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId, status: 'disconnected' }
 }
 
 test('reduces tasks snapshots by session id', () => {

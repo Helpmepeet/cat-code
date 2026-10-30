@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type {
   ServerFrame,
@@ -33,11 +34,11 @@ function snapshotFrame(
   sessionId: string,
   settings: SettingsSnapshot,
 ): ServerFrame {
-  return { kind: 'settings.snapshot', protocolVersion: 4, sessionId, settings }
+  return { kind: 'settings.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId, settings }
 }
 
 function lifecycleFrame(sessionId: string): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 4, sessionId, status: 'exited' }
+  return { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId, status: 'exited' }
 }
 
 test('settings.snapshot frame stores the snapshot per session', () => {
@@ -80,7 +81,7 @@ test('unrelated frame kinds are ignored', () => {
   const state = createSettingsState()
   const next = reduceSettingsState(state, {
     type: 'frame',
-    frame: { kind: 'pong', protocolVersion: 4, sessionId: 'a', nonce: 'x' },
+    frame: { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', nonce: 'x' },
   })
   expect(next).toBe(state)
 })

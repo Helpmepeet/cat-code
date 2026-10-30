@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type {
   LifecycleFrame,
@@ -29,7 +30,7 @@ test('remoteSettings.snapshot is stored per session', () => {
   const state = createRemoteSettingsState()
   const frame: RemoteSettingsSnapshotFrame = {
     kind: 'remoteSettings.snapshot',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 's1',
     remoteSettings: snapshot(),
   }
@@ -42,7 +43,7 @@ test('remoteSettings.result is stored as lastResult', () => {
   const state = createRemoteSettingsState()
   const frame: RemoteSettingsResultFrame = {
     kind: 'remoteSettings.result',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 's1',
     requestId: 'r1',
     verb: 'remoteSettings.bridgeToggle',
@@ -58,14 +59,14 @@ test('lifecycle nulls an existing session snapshot', () => {
     type: 'frame',
     frame: {
       kind: 'remoteSettings.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
       remoteSettings: snapshot(),
     },
   })
   const frame: LifecycleFrame = {
     kind: 'lifecycle',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 's1',
     status: 'disconnected',
   }
@@ -77,7 +78,7 @@ test('lifecycle for an unknown session is a no-op', () => {
   const state = createRemoteSettingsState()
   const frame: LifecycleFrame = {
     kind: 'lifecycle',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'unknown',
     status: 'disconnected',
   }
@@ -89,7 +90,7 @@ test('an unrelated frame kind is a no-op', () => {
   const state = createRemoteSettingsState()
   const next = reduceRemoteSettingsState(state, {
     type: 'frame',
-    frame: { kind: 'pong', protocolVersion: 4, sessionId: 's1', nonce: 'x' },
+    frame: { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId: 's1', nonce: 'x' },
   })
   expect(next).toBe(state)
 })

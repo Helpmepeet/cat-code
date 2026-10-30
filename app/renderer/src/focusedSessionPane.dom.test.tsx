@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
@@ -16,13 +17,13 @@ let serial = 0
 function project(content: unknown[], prior?: TranscriptState, options: { replay?: boolean; stopReason?: string; messageId?: string } = {}) {
   const sessionId = 'session-1'
   let state = prior ?? projectServerFrame(createTranscriptState(), {
-    kind: 'ready', protocolVersion: 4, sessionId, engineSessionId: 'engine-1', payload: {
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId, engineSessionId: 'engine-1', payload: {
       type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
       abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
     },
   } as never)
   const id = ++serial
-  const event = (message: unknown) => ({ kind: 'event', protocolVersion: 4, sessionId, replay: options.replay, event: { type: 'message', message } }) as never
+  const event = (message: unknown) => ({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId, replay: options.replay, event: { type: 'message', message } }) as never
   if (!prior) state = projectServerFrame(state, event({ type: 'user', uuid: `user-${id}`, session_id: 'engine-1', parent_tool_use_id: null, message: { role: 'user', content: 'Check the loader' } }))
   return projectServerFrame(state, event({ type: 'assistant', uuid: `assistant-${id}`, session_id: 'engine-1', parent_tool_use_id: null, message: {
     id: options.messageId ?? `message-${id}`, role: 'assistant', type: 'message', model: 'gpt-6.1-sol', stop_reason: options.stopReason ?? null, stop_sequence: null,
@@ -62,7 +63,7 @@ test('Focused keeps reasoning in the transcript and the running command visible 
   await tree.render(pane(state, 'full'))
   expect([...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Thinking')?.parentElement?.textContent).not.toContain('Checking the module graph')
   let running = project([{ type: 'tool_use', id: 'pending-bash', name: 'Bash', input: { command: 'bun test src/loader' } }], state)
-  running = projectServerFrame(running, { kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'tool.activity', toolUseId: 'pending-bash', phase: 'executing', startedAt: Date.now() } })
+  running = projectServerFrame(running, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'tool.activity', toolUseId: 'pending-bash', phase: 'executing', startedAt: Date.now() } })
   await tree.render(pane(running, 'focused'))
   const activity = [...tree.container.querySelectorAll('span.font-semibold')].find(element => element.textContent === 'Running')?.parentElement
   expect(activity?.textContent).toContain('Bash')
@@ -71,7 +72,7 @@ test('Focused keeps reasoning in the transcript and the running command visible 
   expect(tree.container.querySelector('.focused-fold-head')?.textContent).not.toContain('ran 1 command')
   expect(tree.container.querySelector('.focused-turn-body')?.textContent).toContain('Checking the module graph')
   const settled = projectServerFrame(running, {
-    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message: {
       type: 'user', uuid: 'tool-result', session_id: 'engine-1', parent_tool_use_id: null,
       message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'pending-bash', content: 'passed' }] },
     } },
@@ -84,14 +85,14 @@ test('Focused keeps reasoning in the transcript and the running command visible 
 test('producer assistant messages accumulate under Working and fold only when their result arrives', async () => {
   let state = project([{ type: 'text', text: 'I will trace the loader.' }])
   state = project([{ type: 'tool_use', id: 'read-loader', name: 'Read', input: { file_path: '/repo/loader.ts' } }], state)
-  state = projectServerFrame(state, { kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'tool.activity', toolUseId: 'read-loader', phase: 'executing', startedAt: Date.now() } })
+  state = projectServerFrame(state, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'tool.activity', toolUseId: 'read-loader', phase: 'executing', startedAt: Date.now() } })
   state = project([{ type: 'text', text: 'The loader is fixed.' }], state, { stopReason: 'end_turn' })
   const tree = await harness.mount(pane(state, 'focused'))
   expect([...tree.container.querySelectorAll('[data-focused-update]')].map(node => node.textContent))
     .toEqual(['I will trace the loader.', 'The loader is fixed.'])
   expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Reading')
   state = projectServerFrame(state, {
-    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message: {
       type: 'result', subtype: 'success', is_error: false, errors: [], duration_ms: 104000,
       uuid: 'completed-result', session_id: 'engine-1', result: 'The loader is fixed.',
     } },
@@ -107,7 +108,7 @@ test('producer assistant messages accumulate under Working and fold only when th
 
 test('provider phase places the streamed answer outside Working before completion and keeps commentary inside', async () => {
   let state = project([{ type: 'text', text: 'An update, not the answer.', phase: 'commentary' }])
-  const event = (value: unknown) => ({ kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: {
+  const event = (value: unknown) => ({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: {
     type: 'message', message: { type: 'stream_event', event: value, parent_tool_use_id: null },
   } }) as never
   state = projectServerFrame(state, event({ type: 'message_start', message: { id: 'final-stream' } }))
@@ -124,7 +125,7 @@ test('provider phase places the streamed answer outside Working before completio
   expect(selectNestedTranscriptRows(state, 'session-1').filter(row => row.kind === 'assistant-text' && row.phase === 'final_answer')
     .map(row => row.kind === 'assistant-text' ? row.content : '')).toEqual(['The actual answer, complete.'])
   state = projectServerFrame(state, {
-    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message: {
       type: 'result', subtype: 'success', is_error: false, errors: [], duration_ms: 1000,
       uuid: 'phase-result', session_id: 'engine-1', result: 'The actual answer, complete.',
     } },
@@ -141,7 +142,7 @@ test('saved previews use recorded end_turn for the answer, never missing or fail
     state = project([{ type: 'text', text: 'Saved answer.' }], state, { replay: true, stopReason: ending === 'unknown' ? undefined : 'end_turn' })
     if (ending === 'max_tokens') state = project([{ type: 'text', text: 'Cut off.' }], state, { replay: true, stopReason: 'max_tokens' })
     if (ending === 'interrupted') state = projectServerFrame(state, {
-      kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message: {
         type: 'result', subtype: 'interrupted', is_error: true, errors: [], uuid: 'stop', session_id: 'engine-1',
       } },
     } as never)
@@ -201,7 +202,7 @@ test('the real transcript virtual list publishes offsets for unmounted entries a
 test('a text-and-image submission anchors its first row rather than the last attachment', async () => {
   let state = project([{ type: 'thinking', thinking: 'Checking the request' }])
   state = projectServerFrame(state, {
-    kind: 'event', protocolVersion: 4, sessionId: 'session-1', event: { type: 'message', message: {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message: {
       type: 'user', uuid: 'multimodal-turn', session_id: 'engine-1', parent_tool_use_id: null,
       message: { role: 'user', content: [
         { type: 'text', text: 'What is in this screenshot?' },

@@ -13,6 +13,7 @@
  *  2. **Redaction.** The projection must be `secretGuard`-clean even when the pool
  *     holds tokens.
  */
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createTaskStateBase } from '../../src/Task.js'
 import {
@@ -517,7 +518,7 @@ describe('redaction', () => {
     )
     const frame: LeaseSnapshotFrame = {
       kind: 'lease.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 's1',
       leases: snapshot,
     }

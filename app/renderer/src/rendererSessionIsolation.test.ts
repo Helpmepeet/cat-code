@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
 import { FrameReplayBuffer } from '../../main/replayBuffer.js'
@@ -42,7 +43,7 @@ function ready(
 ): ServerFrame {
   return {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {
@@ -60,7 +61,7 @@ function ready(
 function messageFrame(sessionId: string, message: SDKMessage): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     event: { type: 'message', message },
   }
@@ -175,7 +176,7 @@ test('a permission request for B while A is active queues under B only', () => {
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SESSION_B,
       event: { type: 'permission.requested', request: REQUEST_B },
     },

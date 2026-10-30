@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
@@ -224,11 +225,11 @@ test('missing, orphaned and partially restored steps stay truthful and refresh w
 test('real SessionPane opens projected child reasoning, and the parent Agent card opens the panel without nesting steps', async () => {
   let transcript = createTranscriptState()
   const message = (uuid: string, parent: string | null, role: 'assistant' | 'user', content: unknown[], extra = {}) => ({
-    kind: 'event', protocolVersion: 4, sessionId: 'session-1',
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
     event: { type: 'message', message: { type: role, uuid, session_id: 'session-1', parent_tool_use_id: parent, message: { id: uuid, role, content }, ...extra } },
   } as unknown as ServerFrame)
   for (const frame of [
-    { kind: 'ready', protocolVersion: 4, sessionId: 'session-1', engineSessionId: 'engine-1', payload: {
+    { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', engineSessionId: 'engine-1', payload: {
       type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
       abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
     } } as ServerFrame,
@@ -334,11 +335,11 @@ test('an open panel follows its run into the background but not into a resume wi
 test('out-of-turn steps, errors and interruptions nest under the background run that produced them', () => {
   let transcript = createTranscriptState()
   const message = (uuid: string, parent: string | null, role: 'assistant' | 'user', content: unknown[], extra = {}) => ({
-    kind: 'event', protocolVersion: 4, sessionId: 'session-1',
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
     event: { type: 'message', message: { type: role, uuid, session_id: 'session-1', parent_tool_use_id: parent, message: { id: uuid, role, content }, ...extra } },
   } as unknown as ServerFrame)
   for (const frame of [
-    { kind: 'ready', protocolVersion: 4, sessionId: 'session-1', engineSessionId: 'engine-1', payload: {
+    { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', engineSessionId: 'engine-1', payload: {
       type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
       abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
     } } as ServerFrame,

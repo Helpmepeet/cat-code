@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from 'bun:test'
-import type { ServerFrame } from '../shared/protocol.js'
+import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { benchmarkCoverageComplete, benchmarkObserveBatch, benchmarkObserveCommit, benchmarkObserverSnapshot, benchmarkWrapRawReducer, resetBenchmarkObserver } from './streaming-benchmark-observer.js'
 import { streamingBenchmarkTransform } from './streaming-benchmark.vite.config.js'
 import { readFileSync } from 'node:fs'
@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 
 beforeEach(resetBenchmarkObserver)
 function frame(sequence: number): ServerFrame {
-  return { kind: 'pong', protocolVersion: 4, sessionId: 's', nonce: String(sequence), deliveryTrace: {
+  return { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId: 's', nonce: String(sequence), deliveryTrace: {
     streamEpoch: 'e', sequence, traceId: `t-${sequence}`, deliveryAttempt: 1, replay: false,
     sourceProcessInstanceId: 'p', sourceWallTimestamp: '2026-09-12T00:00:00.000Z', sourceMonotonicTimestampMs: sequence, connectionEpoch: 1,
   } }

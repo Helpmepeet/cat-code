@@ -1,6 +1,7 @@
 import { afterEach, expect, spyOn, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
 import { WorkspaceHandoffControl } from './workspaceHandoffControl.js'
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 
 const controls: WorkspaceHandoffControl[] = []
@@ -25,7 +26,7 @@ test('continuation acknowledgement expires in 20 seconds; authenticated late evi
     callbacks[0]!()
     expect(await delivery).toEqual({ kind: 'timeout' })
     expect(h.recoveries).toEqual([h.operationId])
-    h.control.receiveFrame(h.id, { kind: 'workspace.handoff.result', protocolVersion: 4, sessionId: h.id, requestId: h.sent[0]!.requestId, operationId: h.operationId, action: 'continue', disposition: 'accepted', status: h.status })
+    h.control.receiveFrame(h.id, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION, sessionId: h.id, requestId: h.sent[0]!.requestId, operationId: h.operationId, action: 'continue', disposition: 'accepted', status: h.status })
     expect(h.observations).toEqual([h.status])
   } finally { timer.mockRestore() }
 })
@@ -62,7 +63,7 @@ test('slot wait does not send or block cancellation and wakes after command ackn
 test('strict receiving rejects extra keys, wrong generation and refusal without a reason before observation or correlation', async () => {
   const h = harness()
   const pending = h.control.request(h.id, h.operationId, { action: 'status' })
-  const result = { kind: 'workspace.handoff.result', protocolVersion: 4, sessionId: h.id, requestId: h.sent[0]!.requestId, operationId: h.operationId, action: 'status', disposition: 'accepted', status: h.status }
+  const result = { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION, sessionId: h.id, requestId: h.sent[0]!.requestId, operationId: h.operationId, action: 'status', disposition: 'accepted', status: h.status }
   h.control.receiveFrame(h.id, { ...result, extra: true })
   h.control.receiveFrame(h.id, { ...result, status: { ...h.status, observerGeneration: randomUUID() } })
   h.control.receiveFrame(h.id, { ...result, disposition: 'refused' })

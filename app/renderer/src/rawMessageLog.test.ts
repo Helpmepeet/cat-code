@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { ServerFrame } from '../../shared/protocol.js'
 import {
@@ -17,7 +18,7 @@ test('captures the ready session and appends every raw SDKMessage in arrival ord
 
   state = reduceServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {
@@ -32,7 +33,7 @@ test('captures the ready session and appends every raw SDKMessage in arrival ord
   })
   state = reduceServerFrame(state, {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     event: {
       type: 'message',
@@ -51,7 +52,7 @@ test('captures the ready session and appends every raw SDKMessage in arrival ord
   })
   state = reduceServerFrame(state, {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     event: {
       type: 'message',
@@ -83,7 +84,7 @@ test('records transport errors without adding non-message events to the raw log'
 
   state = reduceServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {
@@ -98,13 +99,13 @@ test('records transport errors without adding non-message events to the raw log'
   })
   state = reduceServerFrame(state, {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     event: { type: 'abort.status', abort: { status: 'requested' } },
   })
   state = reduceServerFrame(state, {
     kind: 'error',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     code: 'internal_error',
     message: 'turn failed',
@@ -122,7 +123,7 @@ test('transcript reset replaces the raw log so replay cannot dedupe discarded ro
   const messageFrame = (content: string, replay = false): ServerFrame =>
     ({
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId,
       ...(replay ? { replay: true as const } : {}),
       event: {
@@ -138,7 +139,7 @@ test('transcript reset replaces the raw log so replay cannot dedupe discarded ro
     }) as ServerFrame
   let state = reduceServerFrame(createRawMessageLogState(), {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: 'engine-reset',
     payload: {
@@ -154,7 +155,7 @@ test('transcript reset replaces the raw log so replay cannot dedupe discarded ro
   state = reduceServerFrame(state, messageFrame('discarded'))
   state = reduceServerFrame(state, {
     kind: 'transcript.reset',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
   })
   state = reduceServerFrame(state, messageFrame('retained replay', true))
@@ -175,7 +176,7 @@ test('transcript retention boundaries do not reach the live error line', () => {
   // available to the preview/restore surface through the transcript cache.
   const ready: ServerFrame = {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {
@@ -191,7 +192,7 @@ test('transcript retention boundaries do not reach the live error line', () => {
   let suppressed = reduceServerFrame(createRawMessageLogState(), ready)
   suppressed = reduceServerFrame(suppressed, {
     kind: 'error',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     // app/main/replayBuffer.ts:76, N = DEFAULT_MAX_BUFFERED_FRAMES (8,000).
     requestId: REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
@@ -205,7 +206,7 @@ test('transcript retention boundaries do not reach the live error line', () => {
   let restored = reduceServerFrame(createRawMessageLogState(), ready)
   restored = reduceServerFrame(restored, {
     kind: 'error',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
     code: 'internal_error',
@@ -218,7 +219,7 @@ test('transcript retention boundaries do not reach the live error line', () => {
   let state = reduceServerFrame(createRawMessageLogState(), ready)
   state = reduceServerFrame(state, {
     kind: 'error',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     code: 'internal_error',
     message: 'turn failed',
@@ -229,7 +230,7 @@ test('transcript retention boundaries do not reach the live error line', () => {
 
 test('an evicted image preview shows its unavailable notice', () => {
   let state = reduceServerFrame(createRawMessageLogState(), {
-    kind: 'ready', protocolVersion: 4, sessionId: 'session-1',
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {
       type: 'app.ready', protocolVersion: 1, inputEnabled: true,
@@ -238,7 +239,7 @@ test('an evicted image preview shows its unavailable notice', () => {
     },
   })
   state = reduceServerFrame(state, {
-    kind: 'error', protocolVersion: 4, sessionId: 'session-1',
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
     requestId: PREVIEW_REPLAY_TRUNCATION_REQUEST_ID,
     code: 'internal_error',
     message: 'Some earlier generated image previews are no longer available.',
@@ -253,7 +254,7 @@ test('keys logs by ready session and rejects frames for an unattached session', 
   let state = createRawMessageLogState()
   state = reduceServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {
@@ -268,7 +269,7 @@ test('keys logs by ready session and rejects frames for an unattached session', 
   })
   state = reduceServerFrame(state, {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-2',
     event: {
       type: 'message',
@@ -283,7 +284,7 @@ test('keys logs by ready session and rejects frames for an unattached session', 
 test('session removal releases the raw message log', () => {
   let state = reduceServerFrame(createRawMessageLogState(), {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'removed',
     engineSessionId: 'engine-removed',
     payload: {
@@ -298,7 +299,7 @@ test('session removal releases the raw message log', () => {
   })
   state = reduceServerFrame(state, {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'removed',
     event: { type: 'message', message: { type: 'result', subtype: 'success' } },
   })
@@ -315,7 +316,7 @@ test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', ()
   let state = createRawMessageLogState()
   state = reduceServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {
@@ -344,7 +345,7 @@ test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', ()
     state,
     {
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 'session-1',
       event: { type: 'message', message: first },
     },
@@ -354,7 +355,7 @@ test('bounds raw retention by serialized UTF-8 bytes and exposes truncation', ()
     state,
     {
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 'session-1',
       event: { type: 'message', message: second },
     },
@@ -374,7 +375,7 @@ test('in-run restore: raw message log does not duplicate replayed history (SF-1)
   const sessionId = 'session-restore'
   const ready = (): ServerFrame => ({
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: 'engine-1',
     payload: {
@@ -390,7 +391,7 @@ test('in-run restore: raw message log does not duplicate replayed history (SF-1)
   const message = (uuid: string, replay?: true) =>
     ({
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId,
       ...(replay ? { replay: true as const } : {}),
       event: {
@@ -448,7 +449,7 @@ test('in-run restore of an EVICTED log converges on the correct chronological ta
   const frame = (uuid: string, replay?: true): ServerFrame =>
     ({
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId,
       ...(replay ? { replay: true as const } : {}),
       event: {
@@ -472,7 +473,7 @@ test('in-run restore of an EVICTED log converges on the correct chronological ta
 
   let state = reduceServerFrame(createRawMessageLogState(), {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: 'engine-1',
     payload: {
@@ -512,7 +513,7 @@ test('a replay cut short mid-burst is the one case that leaves the log inverted'
   const frame = (uuid: string, replay?: true): ServerFrame =>
     ({
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId,
       ...(replay ? { replay: true as const } : {}),
       event: {
@@ -536,7 +537,7 @@ test('a replay cut short mid-burst is the one case that leaves the log inverted'
 
   let state = reduceServerFrame(createRawMessageLogState(), {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     engineSessionId: 'engine-1',
     payload: {
@@ -566,7 +567,7 @@ test('the turn boundary moves inputEnabled and leaves the message log alone', ()
   // composer ends up half-enabled mid-turn.
   let state = reduceServerFrame(createRawMessageLogState(), {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {
@@ -583,7 +584,7 @@ test('the turn boundary moves inputEnabled and leaves the message log alone', ()
   const turnStatus = (activeTurn: boolean) =>
     ({
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 'session-1',
       event: { type: 'turn.status', activeTurn },
     }) as unknown as ServerFrame
@@ -603,7 +604,7 @@ test('a turn frame before the ready frame is a no-op', () => {
   expect(
     reduceServerFrame(state, {
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: 'ghost',
       event: { type: 'turn.status', activeTurn: true },
     } as unknown as ServerFrame),
@@ -622,7 +623,7 @@ function slashMessageFrame(
 ): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     ...(replay ? { replay: true } : {}),
     event: {
@@ -643,7 +644,7 @@ test('a replayed slash breadcrumb sharing the submit uuid is not logged twice', 
   let state = createRawMessageLogState()
   state = reduceServerFrame(state, {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'session-1',
     engineSessionId: 'engine-session-1',
     payload: {

@@ -3,6 +3,7 @@ type CommandLifecycleState = 'started' | 'completed'
 type CommandLifecycleListener = (
   uuid: string,
   state: CommandLifecycleState,
+  timestamp?: string,
 ) => void
 
 let listener: CommandLifecycleListener | null = null
@@ -16,6 +17,7 @@ export function setCommandLifecycleListener(
 export function notifyCommandLifecycle(
   uuid: string,
   state: CommandLifecycleState,
+  timestamp?: string,
 ): void {
-  listener?.(uuid, state)
+  listener?.(uuid, state, timestamp)
 }

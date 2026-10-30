@@ -27,6 +27,7 @@ import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
 import { ProjectRoutingController } from './projectRoutingController.js'
 import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention } from './workspaceJumpCoordinator.js'
+import { SessionCloseCoordinator } from './sessionCloseCoordinator.js'
 import { WorkspaceHandoffControl, type WorkspaceControlAction, type WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
 import {
@@ -762,6 +763,21 @@ const sessionsWithSubmit = new Set<SessionId>()
 // Set before the first asynchronous Git read. All prompt paths consult this
 // while an empty session is being moved to another branch.
 const switchingSessionIds = new Set<SessionId>()
+const closeHostUnavailable = (): HostResult<void> => ({
+  ok: false, error: { code: 'spawn_failed', message: 'host is not running' },
+})
+const sessionCloseCoordinator = new SessionCloseCoordinator({
+  authorize: sessionId => host ? host.authorizeCloseCancellation(sessionId) : Promise.resolve(closeHostUnavailable()),
+  blocked: sessionId => Boolean(switchingSessionIds.has(sessionId) || workspaceJump?.isReserved(sessionId) ||
+    host?.isMoving(sessionId) || host?.isRestoring(sessionId)),
+  cancel: async sessionId => {
+    projectRouting?.cancel(sessionId)
+    if (workspaceJump?.isReserved(sessionId)) await workspaceJump.cancel(sessionId, undefined, 'close')
+  },
+  observe: sessionId => workspaceJump?.queryStatus(sessionId),
+  close: sessionId => host ? host.closeSession(sessionId) : Promise.resolve(closeHostUnavailable()),
+  onFailure: (sessionId, error) => logLegacyDiagnostic(`close cleanup failed for ${sessionId}: ${String(error)}`, 'host', 'main'),
+})
 
 function scheduleReplayFlush(sessionId: SessionId): void {
   if (replayFlushTimers.has(sessionId)) return
@@ -2477,6 +2493,10 @@ function registerIpcHandlers(): void {
       return
     }
     const options = sanitizeSubmitOptions(arg.options)
+    if (sessionCloseCoordinator.isPending(arg.sessionId)) {
+      answerUnforwardedSubmit(arg.sessionId, options?.submitId, 'session_not_ready')
+      return
+    }
     const fileAttachmentToken = readFileAttachmentToken(arg.options)
     const selectedFile = fileAttachmentToken
       ? attachmentFileTokens.resolve(arg.sessionId, fileAttachmentToken)
@@ -3503,6 +3523,9 @@ function registerHostControlPlane(): void {
       if (!host) return Promise.resolve(noHost<SessionDescriptor>())
       // HC2 — the host validates id shape + membership; pass through as unknown.
       const sessionId = String(appSessionId)
+      if (sessionCloseCoordinator.isPending(sessionId)) {
+        return { ok: false, error: { code: 'session_unreachable', message: 'This chat is stopping. Retry opening it shortly.' } }
+      }
       const descriptor = host
         .listSessions()
         .find(candidate => candidate.appSessionId === sessionId)
@@ -3579,16 +3602,7 @@ function registerHostControlPlane(): void {
         sessionId,
       )
       if (!host) return Promise.resolve(noHost<void>())
-      if (switchingSessionIds.has(sessionId)) {
-        return Promise.resolve({ ok: false, error: { code: 'branch_unavailable', message: 'Wait for the branch switch to finish before closing this chat.' } })
-      }
-      if (workspaceJump?.isReserved(sessionId)) {
-        void workspaceJump.cancel(sessionId, undefined, 'close').catch(() => {
-          logOperational('diagnostic', 'warn', { source: 'workspaceJumpClose', reason: 'cancel_rejected' }, sessionId)
-        })
-        return Promise.resolve({ ok: false, error: { code: 'session_busy', message: 'This chat is finishing a workspace change. Try closing it again shortly.' } })
-      }
-      return host.closeSession(sessionId)
+      return sessionCloseCoordinator.close(sessionId)
     },
   )
 
@@ -3724,6 +3738,7 @@ function registerHostControlPlane(): void {
   const branchTransitionObservers = new Map<SessionId, LidWorkObserver>()
   const switchBranch = createWorkspaceBranchSwitcher({
     host: () => host,
+    closeRequested: id => sessionCloseCoordinator.isPending(id),
     switchingSessionIds,
     sessionsWithSubmit,
     isWorkspaceReserved: id => workspaceJump?.isReserved(id) ?? false,

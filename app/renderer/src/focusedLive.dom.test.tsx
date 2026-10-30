@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
@@ -15,18 +16,18 @@ afterAll(async () => { await harness.teardown() })
 function start() {
   now = 10000
   clock = spyOn(Date, 'now').mockImplementation(() => now)
-  return message(projectServerFrame(createTranscriptState(), { kind: 'ready', protocolVersion: 4, sessionId: 'live', engineSessionId: 'engine', payload: {
+  return message(projectServerFrame(createTranscriptState(), { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', engineSessionId: 'engine', payload: {
     type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: true, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
   } }), { type: 'user', uuid: 'user', parent_tool_use_id: null, message: { role: 'user', content: 'Check it' } })
 }
 function message(state: TranscriptState, message: unknown) {
-  return projectServerFrame(state, { kind: 'event', protocolVersion: 4, sessionId: 'live', event: { type: 'message', message } } as ServerFrame)
+  return projectServerFrame(state, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', event: { type: 'message', message } } as ServerFrame)
 }
 function calls(state: TranscriptState, ids: string[]) {
   return message(state, { type: 'assistant', uuid: `calls-${ids}`, parent_tool_use_id: null, message: { id: `msg-${ids}`, role: 'assistant', content: ids.map(id => ({ type: 'tool_use', id, name: 'Bash', input: { command: id, timeout: 120000 } })) } })
 }
 function activity(state: TranscriptState, id: string, phase: 'reviewing' | 'executing', extra = {}) {
-  return projectServerFrame(state, { kind: 'event', protocolVersion: 4, sessionId: 'live', event: { type: 'tool.activity', toolUseId: id, phase, startedAt: now, ...extra } })
+  return projectServerFrame(state, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', event: { type: 'tool.activity', toolUseId: id, phase, startedAt: now, ...extra } })
 }
 function finish(state: TranscriptState, id: string, error = false, content = 'completed output') {
   return message(state, { type: 'user', uuid: `result-${id}`, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: error }] } })
@@ -209,7 +210,7 @@ test('the first wait follows the phrase ladder without seconds and slides whole 
 test('hidden context and empty or redacted reasoning keep the first wait on the turn quiet clock', async () => {
   let state = start()
   now = 12000
-  state = projectServerFrame(state, { kind: 'event', protocolVersion: 4, sessionId: 'live', event: { type: 'turn.status', activeTurn: true } })
+  state = projectServerFrame(state, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', event: { type: 'turn.status', activeTurn: true } })
   now = 12500
   state = message(state, { type: 'user', uuid: 'hidden-first', isSynthetic: true, parent_tool_use_id: null, message: { role: 'user', content: 'Hidden internal context' } })
   state = message(state, { type: 'assistant', uuid: 'redacted-first', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'redacted_thinking', data: 'opaque' }] } })
@@ -373,7 +374,7 @@ test('a replacement stream retires abandoned Preparing calls and manual approval
   expect(Object.values(selectFocusedLiveState(state, 'live')!.preparing)).toHaveLength(0)
   state = activity(calls(state, ['manual']), 'manual', 'reviewing')
   now += 30000
-  state = projectServerFrame(state, { kind: 'event', protocolVersion: 4, sessionId: 'live', event: { type: 'permission.requested', request: {
+  state = projectServerFrame(state, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'live', event: { type: 'permission.requested', request: {
     requestId: 'manual-approval', request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: 'manual', input: { command: 'manual' } },
   } } })
   const tree = await harness.mount(view(state))

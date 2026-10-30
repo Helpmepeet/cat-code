@@ -10,6 +10,7 @@
  */
 
 import { expect, test } from 'bun:test'
+import { AttachmentGate } from './attachmentGate.js'
 
 import {
   DEFAULT_MAX_BUFFERED_BYTES,
@@ -1077,4 +1078,25 @@ test('the view anchor skips a subagent step, whose place in the deeper read is n
 test('an unbuffered session has no view anchor', () => {
   const buffer = new FrameReplayBuffer()
   expect(buffer.viewAnchorUuid('never-seen')).toBeUndefined()
+})
+
+test('renderer catch-up retains the full recovered review snapshot, then clears it authoritatively', () => {
+  const buffer = new FrameReplayBuffer(1)
+  const gate = new AttachmentGate(buffer)
+  gate.onFrame(SID, { kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    prompts: [{ id: 'old-active', text: 'old queue' }] })
+  gate.onFrame(SID, { kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    prompts: [], recoveredPrompts: [{ id: 'saved', text: 'saved preview' }], recoveredPromptCount: 40 })
+  for (let index = 0; index < 3; index++) gate.onFrame(SID, {
+    kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId: SID, nonce: String(index),
+  })
+  expect(gate.onRendererReady().find(frame => frame.kind === 'queued-prompts.snapshot')).toMatchObject({
+    prompts: [], recoveredPrompts: [{ id: 'saved', text: 'saved preview' }], recoveredPromptCount: 40,
+  })
+  gate.onNavigationStart()
+  gate.onFrame(SID, { kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    prompts: [], recoveredPrompts: [], recoveredPromptCount: 0 })
+  expect(gate.onRendererReady().find(frame => frame.kind === 'queued-prompts.snapshot')).toMatchObject({
+    recoveredPrompts: [], recoveredPromptCount: 0,
+  })
 })

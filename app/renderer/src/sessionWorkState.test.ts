@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { LiveWorkerItem, LiveWorkersSnapshot, ServerFrame, SessionId } from '../../shared/protocol.js'
 import type { ConnectionSnapshot } from './connectionState.js'
@@ -14,7 +15,7 @@ const B = 'b' as SessionId
 const NONE: ReadonlySet<SessionId> = new Set()
 
 const event = (sessionId: SessionId, payload: unknown, extra: object = {}) =>
-  ({ kind: 'event', protocolVersion: 4, sessionId, event: payload, ...extra }) as unknown as ServerFrame
+  ({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId, event: payload, ...extra }) as unknown as ServerFrame
 const turn = (sessionId: SessionId, activeTurn: boolean, extra: object = {}) =>
   event(sessionId, { type: 'turn.status', activeTurn }, extra)
 const result = (sessionId: SessionId, isError: boolean, subtype: string) =>
@@ -37,7 +38,7 @@ const worker = (agentId: string, status: LiveWorkerItem['status'] = 'running', i
   agentId, status, isBackgrounded, handle: null, role: null, description: null,
 })
 const workersFrame = (sessionId: SessionId, workers: LiveWorkerItem[]): ServerFrame => ({
-  kind: 'workers.snapshot', protocolVersion: 4, sessionId, workers: { workers },
+  kind: 'workers.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId, workers: { workers },
 })
 const workerMark = (workers: LiveWorkersSnapshot | undefined, connection = ready, pendingPermissionCount = 0) =>
   selectSessionWorkMark({ connection, pendingPermissionCount, work: undefined, workers })

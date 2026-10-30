@@ -11,7 +11,7 @@
 import { app, BrowserWindow } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ServerFrame } from '../shared/protocol.js'
+import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import type { HostEvent } from '../shared/hostApi.js'
 
 const CH_SERVER_FRAME = 'catcode:server-frame'
@@ -31,7 +31,7 @@ Object.defineProperty(app, 'isPackaged', {
 const frames: ServerFrame[] = [
   {
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: HARDENING_SESSION_ID,
     engineSessionId: 'hardening-engine-session',
     payload: {
@@ -46,7 +46,7 @@ const frames: ServerFrame[] = [
   },
   {
     kind: 'event',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: HARDENING_SESSION_ID,
     event: {
       type: 'message',
@@ -92,13 +92,13 @@ const frames: ServerFrame[] = [
 const gateFrames: ServerFrame[] = [
   {
     kind: 'workspace-trust.snapshot',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: HARDENING_SESSION_ID,
     workspaceTrust: { trusted: true, detectedRepo: null, trustRoot: null },
   },
   {
     kind: 'accounts.snapshot',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: HARDENING_SESSION_ID,
     accounts: {
       accounts: [],

@@ -170,6 +170,7 @@ export function createWorkspaceBranchSwitcher(options: {
   transferFiles(from: SessionId, to: SessionId): void
   log(message: string): void
   onTransition?(id: SessionId, active: boolean): void
+  closeRequested?(id: SessionId): boolean
 }) {
   const switchingGitRoots = new Set<string>()
   const failure = (message: string): SwitchWorkspaceBranchResult => ({
@@ -215,6 +216,10 @@ export function createWorkspaceBranchSwitcher(options: {
         const switched = await switchWorkspaceBranch(cwd, branch, observations.map(value => value!.cwd))
         checkoutMoved = switched.ok || 'branchChanged' in switched
         if (!switched.ok) return switched
+        if (options.closeRequested?.(id)) return {
+          ok: false, branchChanged: true,
+          error: { code: 'branch_unavailable', message: 'The branch changed. The chat is closing.' },
+        }
         const created = await h.completeBranchReplacement(options.validateCwd(cwd).ok ? cwd : root)
         if (!created.ok) return {
           ok: false, branchChanged: true,
@@ -224,6 +229,10 @@ export function createWorkspaceBranchSwitcher(options: {
         if (!closed.ok) return {
           ok: false, branchChanged: true,
           error: { ...closed.error, message: `Branch switched to ${branch} and a new chat opened, but the previous chat could not close. ${closed.error.message}` },
+        }
+        if (options.closeRequested?.(id)) {
+          const stopped = await h.closeSession(created.value.appSessionId)
+          if (!stopped.ok) options.log(`branch replacement stop failed for ${created.value.appSessionId}: ${stopped.error.code}: ${stopped.error.message}`)
         }
         return created
       } catch (error) {

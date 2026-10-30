@@ -5,6 +5,7 @@
  * which answers count, which are ignored, and what the row says afterwards.
  */
 
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import {
   createHistoryLoadEarlierState,
@@ -20,7 +21,7 @@ function result(
 ): HistoryLoadEarlierResultFrame {
   return {
     kind: 'history.loadEarlier.result',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: 'a',
     ok: true,
     message: 'Loaded the rest of this session.',

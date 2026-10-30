@@ -2441,7 +2441,13 @@ async function* queryLoop(
       for (const cmd of consumedCommands) {
         if (cmd.uuid) {
           consumedCommandUuids.push(cmd.uuid)
-          notifyCommandLifecycle(cmd.uuid, 'started')
+          // Use the attachment's persisted time, not the later time at which
+          // its yield resumes after the transcript durability barrier.
+          const attachment = preparedQueuedAttachments.find(
+            message => message.attachment.type === 'queued_command' &&
+              message.attachment.source_uuid === cmd.uuid,
+          )
+          notifyCommandLifecycle(cmd.uuid, 'started', attachment?.timestamp)
         }
         if (cmd.mode === 'task-notification' && typeof cmd.value === 'string') {
           const details = parseTaskNotificationDetails(cmd.value)

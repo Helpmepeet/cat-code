@@ -907,17 +907,26 @@ function unwrapServerFrame(payload: unknown): ServerFrame | null {
   if (isObjectRecord(candidate) && candidate.kind === 'submit.result' && candidate.queued !== undefined &&
     (candidate.accepted !== true || typeof candidate.queued !== 'boolean')) return null
   if (isObjectRecord(candidate) && candidate.kind === 'queued-prompts.snapshot') {
-    if (!Array.isArray(candidate.prompts) || candidate.prompts.length > MAX_QUEUED_PROMPTS || candidate.prompts.some(item =>
-      !isObjectRecord(item) || typeof item.id !== 'string' || !item.id.length || item.id.length > 200 ||
-      typeof item.text !== 'string' || item.text.length > MAX_QUEUED_PROMPT_PREVIEW_CHARS ||
-      (item.submitId !== undefined && (typeof item.submitId !== 'string' || !item.submitId.length || item.submitId.length > MAX_TEXT_FIELD_CHARS)) ||
-      Object.keys(item).some(key => !['id', 'text', 'submitId'].includes(key)))) return null
+    const recovered = candidate.recoveredPrompts === undefined ? [] : candidate.recoveredPrompts
+    if (!isQueuePreviewList(candidate.prompts) || !isQueuePreviewList(recovered) ||
+        candidate.prompts.length + recovered.length > MAX_QUEUED_PROMPTS) return null
+    if (candidate.recoveredPromptCount !== undefined &&
+        (typeof candidate.recoveredPromptCount !== 'number' || !Number.isSafeInteger(candidate.recoveredPromptCount) ||
+          candidate.recoveredPromptCount < recovered.length)) return null
   }
   if (payload.kind !== 'sidecar.delivery-envelope') return payload as ServerFrame
   if (Object.keys(payload).length !== 3 || !isObjectRecord(payload.frame) || !isDeliveryTrace(payload.deliveryTrace)) {
     return null
   }
   return { ...(payload.frame as ServerFrame), deliveryTrace: payload.deliveryTrace }
+}
+
+function isQueuePreviewList(value: unknown): value is Array<Record<string, unknown>> {
+  return Array.isArray(value) && value.length <= MAX_QUEUED_PROMPTS && !value.some(item =>
+    !isObjectRecord(item) || typeof item.id !== 'string' || !item.id.length || item.id.length > 200 ||
+    typeof item.text !== 'string' || item.text.length > MAX_QUEUED_PROMPT_PREVIEW_CHARS ||
+    (item.submitId !== undefined && (typeof item.submitId !== 'string' || !item.submitId.length || item.submitId.length > MAX_TEXT_FIELD_CHARS)) ||
+    Object.keys(item).some(key => !['id', 'text', 'submitId'].includes(key)))
 }
 
 function isDeliveryTrace(value: unknown): value is DeliveryTrace {

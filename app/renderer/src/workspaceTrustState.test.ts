@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import type { ServerFrame, WorkspaceTrustSnapshot } from '../../shared/protocol.js'
 import {
@@ -14,11 +15,11 @@ const SNAPSHOT: WorkspaceTrustSnapshot = {
 }
 
 function snapshotFrame(sessionId: string, workspaceTrust: WorkspaceTrustSnapshot): ServerFrame {
-  return { kind: 'workspace-trust.snapshot', protocolVersion: 4, sessionId, workspaceTrust }
+  return { kind: 'workspace-trust.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId, workspaceTrust }
 }
 
 function lifecycleFrame(sessionId: string): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 4, sessionId, status: 'exited' }
+  return { kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION, sessionId, status: 'exited' }
 }
 
 test('workspace-trust.snapshot frame stores the snapshot per session', () => {
@@ -60,7 +61,7 @@ test('unrelated frame kinds are ignored', () => {
   const state = createWorkspaceTrustState()
   const next = reduceWorkspaceTrustState(state, {
     type: 'frame',
-    frame: { kind: 'pong', protocolVersion: 4, sessionId: 'a', nonce: 'x' },
+    frame: { kind: 'pong', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', nonce: 'x' },
   })
   expect(next).toBe(state)
 })
@@ -72,7 +73,7 @@ function trustResultFrame(
 ): ServerFrame {
   return {
     kind: 'workspace.trust.result',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     requestId: 'r',
     ok,

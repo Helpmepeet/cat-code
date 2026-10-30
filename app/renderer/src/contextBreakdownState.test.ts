@@ -1,3 +1,4 @@
+import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import { expect, test } from 'bun:test'
 import {
   createContextBreakdownState,
@@ -34,7 +35,7 @@ const BREAKDOWN: ContextBreakdownSnapshot = {
 function frame(breakdown: ContextBreakdownSnapshot): ServerFrame {
   return {
     kind: 'context-breakdown.snapshot',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId: SID,
     breakdown,
   } as ServerFrame
@@ -172,7 +173,7 @@ test('transcript.reset drops the cached snapshot for the session', () => {
 
   state = reduceContextBreakdownState(state, {
     type: 'frame',
-    frame: { kind: 'transcript.reset', protocolVersion: 4, sessionId: SID } as unknown as ServerFrame,
+    frame: { kind: 'transcript.reset', protocolVersion: PROTOCOL_VERSION, sessionId: SID } as unknown as ServerFrame,
   })
   expect(selectContextBreakdown(state, SID)).toBeNull()
 })
@@ -188,7 +189,7 @@ test('turn.status event drops the cached snapshot', () => {
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       event: { type: 'turn.status', status: 'running' },
     } as unknown as ServerFrame,
@@ -207,7 +208,7 @@ test('main-thread compact_boundary event drops the cached snapshot', () => {
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       event: {
         type: 'message',
@@ -233,7 +234,7 @@ test('subagent compact_boundary event retains the cached snapshot', () => {
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       event: {
         type: 'message',
@@ -254,7 +255,7 @@ test('run-controls.snapshot model or window change drops the cached snapshot', (
     type: 'frame',
     frame: {
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: {
         model: { current: 'claude-3-5-sonnet', selected: 'claude-3-5-sonnet', contextWindow: 200_000 },
@@ -274,7 +275,7 @@ test('run-controls.snapshot model or window change drops the cached snapshot', (
     type: 'frame',
     frame: {
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: {
         model: { current: 'gpt-4o', selected: 'gpt-4o', contextWindow: 128_000 },
@@ -289,7 +290,7 @@ test('run-controls.snapshot with identical model and window retains the cached s
     type: 'frame',
     frame: {
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: {
         model: { current: 'claude-3-5-sonnet', selected: 'claude-3-5-sonnet', contextWindow: 200_000 },
@@ -307,7 +308,7 @@ test('run-controls.snapshot with identical model and window retains the cached s
     type: 'frame',
     frame: {
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: {
         model: { current: 'claude-3-5-sonnet', selected: 'claude-3-5-sonnet', contextWindow: 200_000 },
@@ -322,7 +323,7 @@ test('permission.context mode change drops the cached snapshot', () => {
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       context: { mode: 'ask' },
     } as unknown as ServerFrame,
@@ -338,7 +339,7 @@ test('permission.context mode change drops the cached snapshot', () => {
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       context: { mode: 'auto' },
     } as unknown as ServerFrame,
@@ -351,7 +352,7 @@ test('permission.context with identical mode retains the cached snapshot', () =>
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       context: { mode: 'ask' },
     } as unknown as ServerFrame,
@@ -367,7 +368,7 @@ test('permission.context with identical mode retains the cached snapshot', () =>
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       context: { mode: 'ask' },
     } as unknown as ServerFrame,
@@ -380,7 +381,7 @@ test('valid Plan-mode runtime-model differences between breakdown and run-contro
     type: 'frame',
     frame: {
       kind: 'run-controls.snapshot',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       runControls: {
         model: { current: 'claude-3-5-haiku', selected: 'claude-3-5-haiku', contextWindow: 200_000 },
@@ -411,7 +412,7 @@ test('successful editFromMessage session-action.result drops the cached snapshot
     type: 'frame',
     frame: {
       kind: 'session-action.result',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       verb: 'editFromMessage',
       ok: true,
@@ -431,7 +432,7 @@ test('failed editFromMessage session-action.result retains the cached snapshot',
     type: 'frame',
     frame: {
       kind: 'session-action.result',
-      protocolVersion: 4,
+      protocolVersion: PROTOCOL_VERSION,
       sessionId: SID,
       verb: 'editFromMessage',
       ok: false,

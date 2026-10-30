@@ -10,6 +10,7 @@
  * Run: `bun test app/sidecar/roundtrip.probe.test.ts`
  */
 
+import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { afterEach, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -85,7 +86,7 @@ test('normal sidecar starts a real engine session and emits app.ready without a 
   const ready = await waitForFrame(supervisor, frame => frame.kind === 'ready')
   expect(ready).toMatchObject({
     kind: 'ready',
-    protocolVersion: 4,
+    protocolVersion: PROTOCOL_VERSION,
     sessionId,
     payload: {
       type: 'app.ready',

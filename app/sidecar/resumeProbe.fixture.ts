@@ -16,7 +16,6 @@
 
 import { init } from '../../src/entrypoints/init.js'
 import { resumeEngineSession } from './sessionResume.js'
-import { projectUndeliveredPrompts } from './historyProjection.js'
 import { loadAgentDefinitionsForRuntime } from './sessionController.js'
 import { getInvokedSkills } from '../../src/bootstrap/state.js'
 import { getClaudeMds, getMemoryFiles } from '../../src/utils/claudemd.js'
@@ -67,13 +66,7 @@ async function main(): Promise<void> {
     hasCompactBoundary: result.messages.some(
       message => message.type === 'system' && message.subtype === 'compact_boundary',
     ),
-    // The exact rows `index.ts` appends to the restored history for messages
-    // that were still queued when the process died — the assertion surface for
-    // what a restore does and does not resurrect.
-    undeliveredHistory: projectUndeliveredPrompts(
-      result.undeliveredPrompts,
-      result.engineSessionId,
-    ),
+    recoveredPromptCount: result.undeliveredPrompts.length,
   }
   process.stdout.write(`RESUME_RESULT=${JSON.stringify(payload)}\n`)
   // Flush stdout before exit so the parent reliably reads the line.

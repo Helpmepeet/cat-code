@@ -33,7 +33,7 @@ const { BashTool } = await import('../../src/tools/BashTool/BashTool.js')
 const { getBuiltInAgents } = await import('../../src/tools/AgentTool/builtInAgents.js')
 const { stopTask } = await import('../../src/tasks/stopTask.js')
 const { getCommandQueueSnapshot, resetCommandQueue } = await import('../../src/utils/messageQueueManager.js')
-const { flushSessionStorage, resetProjectForTesting } = await import('../../src/utils/sessionStorage.js')
+const { flushSessionStorage, flushCurrentTranscriptDurably, getTranscriptPath, resetProjectForTesting } = await import('../../src/utils/sessionStorage.js')
 const { releaseActiveTranscriptLease } = await import('../../src/utils/transcriptLease.js')
 const bootstrap = await import('../../src/bootstrap/state.js')
 const shell = await import('../../src/utils/Shell.js')
@@ -78,6 +78,47 @@ function assistant(content: AssistantMessage['message']['content']): AssistantMe
       stop_reason: content.some(block => block.type === 'tool_use') ? 'tool_use' : 'end_turn', stop_sequence: null,
     },
   } as AssistantMessage
+}
+
+function taskReports(messages: readonly unknown[], taskId: string) {
+  return messages.filter(message => {
+    const row = message as {
+      type?: string
+      origin?: { kind: string; taskId?: string }
+      attachment?: { type: string; origin?: { kind: string; taskId?: string } }
+    }
+    const origin = row.type === 'user' ? row.origin
+      : row.type === 'attachment' && row.attachment?.type === 'queued_command' ? row.attachment.origin
+      : undefined
+    return origin?.kind === 'task-notification' && origin.taskId === taskId
+  })
+}
+
+async function expectDeliveredTaskReports(
+  h: ReturnType<typeof harness>,
+  providerInputs: readonly (readonly unknown[])[],
+  expected: { id: string; result: string }[],
+) {
+  await waitFor(() => expected.every(task => providerInputs.some(messages =>
+    taskReports(messages, task.id).length > 0,
+  )), 'Completion reports did not reach the parent model')
+  await h.controller.waitUntilIdle()
+  await waitFor(() => h.getTasks().every(task =>
+    task.type !== 'local_agent' || !isAgentLifecycleOwned(task.id),
+  ), 'Worker notification producers did not settle')
+  await flushCurrentTranscriptDurably()
+  const rows = readFileSync(getTranscriptPath(), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  for (const task of expected) {
+    // Provider snapshots contain cumulative history. Count within each input,
+    // not across requests, where the same accepted report legitimately recurs.
+    const inputs = providerInputs.map(messages => taskReports(messages, task.id))
+    expect(inputs.some(reports => reports.length === 1 && JSON.stringify(reports).includes(task.result))).toBe(true)
+    for (const reports of inputs) expect(reports.length).toBeLessThanOrEqual(1)
+    const persisted = taskReports(rows, task.id)
+    expect(persisted).toHaveLength(1)
+    expect(JSON.stringify(persisted)).toContain(task.result)
+  }
+  expect(getCommandQueueSnapshot().filter(command => command.mode === 'task-notification')).toHaveLength(0)
 }
 
 beforeEach(async () => {
@@ -177,6 +218,7 @@ test.each([false, true])('force-send preserves three foreground agents and their
   let mainCalls = 0
   let newInputSeen = 0
   let forcedMessages = ''
+  const providerInputs: (readonly unknown[])[] = []
   providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ options, signal, messages }) {
     if (options.agentId) {
       workerSignals.set(options.agentId, signal)
@@ -184,6 +226,7 @@ test.each([false, true])('force-send preserves three foreground agents and their
       if (!signal.aborted) yield assistant([{ type: 'text', text: `finished ${options.agentId}` }])
       return
     }
+    providerInputs.push([...messages])
     mainCalls++
     if (mainCalls === 1) {
       yield assistant(Array.from({ length: 3 }, (_, i) => ({
@@ -213,13 +256,9 @@ test.each([false, true])('force-send preserves three foreground agents and their
     }
     gate.resolve()
     await waitFor(() => before.every(task => h.getAppState().tasks[task.id]?.status === 'completed'), 'Workers did not complete')
-    // Completion deliberately precedes asynchronous handoff persistence.
-    await waitFor(() => before.every(task => getCommandQueueSnapshot().some(command =>
-      command.mode === 'task-notification' && command.origin?.kind === 'task-notification' && command.origin.taskId === task.id,
-    )), 'Worker notifications did not arrive')
-    const notifications = getCommandQueueSnapshot().filter(command => command.mode === 'task-notification')
-    expect(notifications).toHaveLength(3)
-    for (const task of before) expect(JSON.stringify(notifications)).toContain(`finished ${task.id}`)
+    await expectDeliveredTaskReports(h, providerInputs, before.map(task => ({
+      id: task.id, result: `finished ${task.id}`,
+    })))
   } finally {
     gate.resolve()
   }
@@ -233,7 +272,9 @@ test.each((['startup', 'explicit-startup', 'early', 'registered'] as const).flat
   const command = `${JSON.stringify(process.execPath)} --eval '${code}'`
   let mainCalls = 0
   let newInputSeen = 0
+  const providerInputs: (readonly unknown[])[] = []
   providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages }) {
+    providerInputs.push([...messages])
     if (++mainCalls === 1) {
       yield assistant([{ type: 'tool_use', id: 'shell-work', name: 'Bash', input: {
         command, timeout: 20_000, ...(phase === 'explicit-startup' ? { run_in_background: true } : {}),
@@ -273,9 +314,7 @@ test.each((['startup', 'explicit-startup', 'early', 'registered'] as const).flat
     expect(task).toMatchObject({ status: 'running', isBackgrounded: true })
     writeFileSync(releasePath, '')
     await waitFor(() => h.getAppState().tasks[task.id]?.status === 'completed', 'Shell task did not complete')
-    await waitFor(() => getCommandQueueSnapshot().some(command => command.mode === 'task-notification'), 'Shell completion notification was lost')
-    const notifications = getCommandQueueSnapshot().filter(command => command.mode === 'task-notification')
-    expect(notifications).toHaveLength(1)
+    await expectDeliveredTaskReports(h, providerInputs, [{ id: task.id, result: 'preserved shell result' }])
     expect(h.getAppState().tasks[task.id]).toMatchObject({ result: { code: 0, interrupted: false } })
     expect(readFileSync(getTaskOutputPath(task.id), 'utf8')).toContain('preserved shell result')
   } finally {

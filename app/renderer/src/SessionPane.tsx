@@ -24,6 +24,7 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
+import { RecoveredInputReview } from './RecoveredInputReview.js'
 import { createPortal } from 'react-dom'
 import { getBridge } from './bridge.js'
 import { InlineCommandProvider } from './InlineCommandProvider.js'
@@ -298,6 +299,9 @@ export function SessionPane({
   onProjectRouteChoice,
   onRecallQueuedPrompts = null,
   queuedPrompts = EMPTY_QUEUED_PROMPTS,
+  recoveredPrompts = EMPTY_QUEUED_PROMPTS,
+  recoveredPromptCount = 0,
+  onReviewRecoveredPrompt = null,
   desktopCommandPending = false,
   permissionContext,
   permissionKeyTargetRequestId = null,
@@ -2064,6 +2068,7 @@ export function SessionPane({
               </div>
             </div>
           ) : null}
+          <RecoveredInputReview inputs={recoveredPrompts} total={recoveredPromptCount} onReview={onReviewRecoveredPrompt} />
           {projectRoute ? (
             <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pb-3 pt-2.5">
               <div className="flex flex-col items-end" aria-label="Pending message">
@@ -3060,6 +3065,9 @@ type SessionPaneProps = {
   /** D1a — messages this session has waiting for its running response, oldest
    * first. Display only: they stay out of the transcript until delivered. */
   queuedPrompts?: readonly QueuedPromptItem[]
+  recoveredPrompts?: readonly QueuedPromptItem[]
+  recoveredPromptCount?: number
+  onReviewRecoveredPrompt?: ((id: string) => void) | null
   /** A desktop `/clear` or `/new` request is creating its destination chat. */
   desktopCommandPending?: boolean
   /** D1b — take every waiting message back into the composer. The pane always

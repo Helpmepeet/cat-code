@@ -1257,6 +1257,21 @@ export class Host implements HostApi {
    * unused sessions leave the registry. MUST evict replay state (the P3-0 carry).
    * --------------------------------------------------------------------- */
 
+  async authorizeCloseCancellation(appSessionId: SessionId): Promise<HostResult<void>> {
+    await this.launched
+    if (!isUuid(appSessionId)) return hostError('session_not_found', 'malformed session id')
+    if (!this.registry.refreshSharedState()) {
+      return hostError('registry_unavailable', 'Session ownership could not be checked safely. Try again.')
+    }
+    if (this.hasLiveForeignOwner(appSessionId)) {
+      return hostError('session_unreachable', 'This session belongs to another running app instance. Use it in that app.')
+    }
+    if (!this.isLive(appSessionId) && !this.registry.findSession(appSessionId)) {
+      return hostError('session_not_found', `unknown session ${appSessionId}`)
+    }
+    return { ok: true, value: undefined }
+  }
+
   async closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
     await this.launched
     if (this.workspaceJumpReservations.has(appSessionId)) return hostError('session_unreachable', 'Stop the pending workspace change before closing this Chat')
@@ -1395,6 +1410,7 @@ export class Host implements HostApi {
   }
 
   isMoving(appSessionId: SessionId): boolean { return this.moving.has(appSessionId) }
+  isRestoring(appSessionId: SessionId): boolean { return this.restoring.has(appSessionId) }
   isWorkspaceJumpReserved(appSessionId: SessionId): boolean { return this.workspaceJumpReservations.has(appSessionId) }
   getSessionGeneration(appSessionId: SessionId): string | undefined { return this.supervisor.getSessionGeneration(appSessionId) }
 

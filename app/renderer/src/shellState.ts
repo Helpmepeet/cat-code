@@ -11,6 +11,7 @@
 
 import type { SessionId } from '../../shared/protocol.js'
 import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
+import { isSessionDismissed, reconcileSessionDismissals, type SessionDismissals } from './sessionDismissal.js'
 
 /**
  * The shell's session roster: a stable id order plus the descriptor map. Order
@@ -20,6 +21,7 @@ import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
  * recency order cannot move a tab under the user mid-session.
  */
 export type ShellState = {
+  dismissals?: SessionDismissals
   /** Tab/pane order = the order panes were opened this run. */
   order: SessionId[]
   byId: Record<SessionId, SessionDescriptor>
@@ -42,6 +44,7 @@ export function createShellState(): ShellState {
 
 export type ShellStateAction =
   | HostEvent
+  | { type: 'session-dismissals'; dismissals: SessionDismissals }
   | { type: 'preview-open'; sessionId: SessionId }
   | { type: 'preview-close'; sessionId: SessionId }
 
@@ -56,12 +59,23 @@ export function reduceShellState(
   event: ShellStateAction,
 ): ShellState {
   switch (event.type) {
+    case 'session-dismissals': {
+      const tabs = { ...state.tabs }
+      const previews = { ...state.previews }
+      for (const session of Object.values(state.byId)) {
+        if (!isSessionDismissed(event.dismissals, session)) continue
+        delete tabs[session.appSessionId]
+        delete previews[session.appSessionId]
+      }
+      return { ...state, dismissals: event.dismissals, tabs, previews }
+    }
     case 'project-routing':
       return state
     case 'preview-open': {
       const id = event.sessionId
       const descriptor = state.byId[id]
-      if (!descriptor?.restorable || state.previews[id]) return state
+      if (!descriptor?.restorable || state.previews[id] ||
+          isSessionDismissed(state.dismissals ?? [], descriptor)) return state
       return {
         ...state,
         // A hydrated/restorable row may sit anywhere in the roster because the
@@ -79,11 +93,13 @@ export function reduceShellState(
       return { ...state, previews }
     }
     case 'session-added': {
+      state = reconcileDismissalIdentity(state, event.session)
       const id = event.session.appSessionId
       const present = Boolean(state.byId[id])
       const wasTab = Boolean(state.tabs[id])
-      const tabs = foldTabMembership(state.tabs, event.session)
+      const tabs = dismissedTabMembership(state, event.session)
       return {
+        ...state,
         order: reorderOnArrival(
           state.order,
           id,
@@ -98,6 +114,7 @@ export function reduceShellState(
       }
     }
     case 'session-status': {
+      state = reconcileDismissalIdentity(state, event.session)
       const id = event.session.appSessionId
       // A status event carries the FULL descriptor (hostApi.ts:115), so a status
       // that races ahead of its `session-added` is not a ghost — ADOPT it
@@ -109,8 +126,9 @@ export function reduceShellState(
       // subscribeHost() survives.
       const present = Boolean(state.byId[id])
       const wasTab = Boolean(state.tabs[id])
-      const tabs = foldTabMembership(state.tabs, event.session)
+      const tabs = dismissedTabMembership(state, event.session)
       return {
+        ...state,
         order: reorderOnArrival(
           state.order,
           id,
@@ -134,6 +152,7 @@ export function reduceShellState(
       const previews = { ...state.previews }
       delete previews[id]
       return {
+        ...state,
         order: state.order.filter(candidate => candidate !== id),
         byId,
         tabs,
@@ -143,6 +162,19 @@ export function reduceShellState(
     default:
       return state
   }
+}
+
+function dismissedTabMembership(state: ShellState, session: SessionDescriptor): ShellState['tabs'] {
+  if (!isSessionDismissed(state.dismissals ?? [], session)) return foldTabMembership(state.tabs, session)
+  const tabs = { ...state.tabs }
+  delete tabs[session.appSessionId]
+  return tabs
+}
+
+function reconcileDismissalIdentity(state: ShellState, session: SessionDescriptor): ShellState {
+  if (!state.dismissals) return state
+  const dismissals = reconcileSessionDismissals(state.dismissals, session)
+  return dismissals === state.dismissals ? state : { ...state, dismissals }
 }
 
 /**
@@ -224,7 +256,8 @@ export function selectSessions(state: ShellState): SessionDescriptor[] {
  */
 export function selectLiveSessions(state: ShellState): SessionDescriptor[] {
   return selectSessions(state).filter(
-    descriptor => state.tabs[descriptor.appSessionId] === true,
+    descriptor => state.tabs[descriptor.appSessionId] === true &&
+      !isSessionDismissed(state.dismissals ?? [], descriptor),
   )
 }
 
@@ -232,7 +265,8 @@ export function selectLiveSessions(state: ShellState): SessionDescriptor[] {
 export function selectPaneSessions(state: ShellState): SessionDescriptor[] {
   return selectSessions(state).filter(descriptor => {
     const id = descriptor.appSessionId
-    return state.tabs[id] === true || state.previews[id] === true
+    return !isSessionDismissed(state.dismissals ?? [], descriptor) &&
+      (state.tabs[id] === true || state.previews[id] === true)
   })
 }
 

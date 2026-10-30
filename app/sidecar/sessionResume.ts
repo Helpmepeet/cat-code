@@ -38,12 +38,15 @@ import {
   getSessionQueueOperations,
   getLastSessionLog,
   getTranscriptPathForSession,
+  prepareOwnedTranscriptForResume,
   type SessionQueueOperation,
 } from '../../src/utils/sessionStorage.js'
+import type { TailRecoveryState } from '../../src/utils/transcriptTailRecovery.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import type { Message } from '../../src/types/message.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { AgentDefinitionsResult } from '../../src/tools/AgentTool/loadAgentsDir.js'
+import { validateSubmitPromptBudget } from '../shared/submitBudget.js'
 
 /** A resume that could not be performed — the id has no usable transcript. */
 export class SidecarResumeError extends Error {
@@ -83,6 +86,10 @@ export async function loadOwnedConversationForResume(
     throw error
   }
   try {
+    await prepareOwnedTranscriptForResume(
+      resumeEngineSessionId,
+      getTranscriptPathForSession(resumeEngineSessionId),
+    )
     await beforeLoad?.()
     const loaded = await loadConversation(resumeEngineSessionId, undefined)
     if (!loaded) await releaseActiveTranscriptLease()
@@ -94,21 +101,9 @@ export async function loadOwnedConversationForResume(
 }
 
 /**
- * A message that was still on the mid-turn queue when the process died: the
- * user watched it leave the composer, and nothing ever delivered it.
- *
- * These become ordinary `user` rows in the restored history (`index.ts`), which
- * reads against D1a — the model never received them. It stays that way on
- * purpose: the queue itself does not survive the process, so the message can
- * never be delivered now, and the two D1a-shaped alternatives are both worse.
- * Dropping it loses text the user wrote and watched be accepted, which is the
- * bug CC-54 exists to fix. Restoring it as still-waiting either re-arms
- * delivery (a restore that starts a turn and spends tokens, which restore must
- * not do) or shows a message as waiting for a turn that will never come. The
- * row is a record of what was written, not a claim about what the model saw.
- * `isReplay` is preserved on the projected frame so consumers can distinguish
- * restored history from a newly accepted prompt. It is not a delivery signal and
- * must not be used as interruption provenance.
+ * Saved manual input without a durable acceptance receipt. Legacy removals
+ * may instead represent a recall, so these are review data, not queued work
+ * or accepted transcript messages. Only an explicit review can retrieve them.
  */
 export type UndeliveredPrompt = {
   uuid: string
@@ -143,6 +138,7 @@ export type SidecarResumeResult = {
    * disagree after a restart.
    */
   initialState: AppState
+  tailRecovery?: TailRecoveryState
   turnInterrupted: boolean
   undeliveredPrompts: UndeliveredPrompt[]
   /** See `UndeliveredPromptSelection.droppedRecords`. */
@@ -163,59 +159,21 @@ export type SidecarResumeResult = {
 function restorableContent(
   content: SessionQueueOperation['content'],
 ): string | ContentBlockParam[] | null {
-  if (typeof content === 'string') return content.length > 0 ? content : null
-  if (!Array.isArray(content) || content.length === 0) return null
-  for (const block of content) {
-    if (block === null || typeof block !== 'object') return null
-    const candidate = block as { type?: unknown; text?: unknown; source?: unknown }
-    if (candidate.type === 'text') {
-      if (typeof candidate.text !== 'string') return null
-      continue
-    }
-    if (candidate.type === 'image') {
-      if (candidate.source === null || typeof candidate.source !== 'object') {
-        return null
-      }
-      continue
-    }
-    return null
-  }
-  return content
+  return validateSubmitPromptBudget(content) === null
+    ? content as string | ContentBlockParam[]
+    : null
 }
 
 /**
- * Rebuild the mid-turn queue as it stood when the process died, from the
- * durable queue-operation log (`src/utils/messageQueueManager.ts` logOperation).
+ * Recover input for explicit review, never executable queue admission.
+ * V2 reservations retain input until its durable message receipt exists;
+ * explicit V2 cancellations remove it. Legacy delivery/removal records did
+ * not distinguish consumption from recall, so their input stays uncertain.
+ * `popAll` was always a deliberate return to the composer.
  *
- * The log is a ledger, not a list: an `enqueue` says a message started waiting
- * and every other operation says one stopped. So a prompt is undelivered only
- * if NOTHING later took it off the queue and it never became a persisted user
- * message. Reading the enqueues alone is what resurrected a message the user
- * had taken back (D1b) on every later restore, including a routine idle-park
- * one: its `enqueue` outlived the session, and the recall that answered it left
- * no record the filter looked at.
- *
- * Retractions are matched by uuid and NOTHING else. Two records with the same
- * text are two different messages; a resend after a Take back is a new uuid,
- * which is exactly why the resent copy is still recovered while the recalled
- * one is not.
- *
- * The walk is IN ORDER, over a live map, because a uuid can stop waiting and
- * start again: `drainOneQueuedPrompt` re-enqueues the same command object after
- * a turn that rejected before `onInputPersisted`, and again when `startTurn`
- * refuses outright (`app/sidecar/sidecarServer.ts`). The log then reads
- * enqueue-dequeue-enqueue for a message that is genuinely still queued.
- * Collecting the retracted uuids as an order-independent set destroyed exactly
- * that message, silently. Order is safe to rely on: `logOperation` writes
- * through `recordQueueOperation` to one per-file queue that drains in push
- * order (`src/utils/sessionStorage.ts` enqueueWrite / drainWriteQueue), and the
- * reader appends in file order (`loadTranscriptFile`). If it ever were in
- * doubt, the fix is a stable sort on `timestamp`, never discarding order:
- * same-tick records share a millisecond, so only file order separates them.
- *
- * `content` is runtime-narrowed rather than trusted: these records come off
- * disk, and a row that cannot be represented faithfully is dropped instead of
- * being restored as something the user did not send.
+ * Fold in file order and match UUIDs, not text: a retry can reuse an identity,
+ * while an edited resend has a new identity. Same-tick timestamps cannot
+ * establish that order. Malformed/unsupported content remains counted.
  */
 export function selectUndeliveredPrompts(queueState: {
   operations: readonly SessionQueueOperation[]
@@ -225,15 +183,17 @@ export function selectUndeliveredPrompts(queueState: {
   let droppedRecords = 0
   for (const operation of queueState.operations) {
     if (operation.operation !== 'enqueue') {
-      // A retraction written before the verbs recorded their command cannot say
-      // WHICH message stopped waiting, and matching by text would take back the
-      // wrong one. Replaying one stale row is the lesser harm.
-      if (operation.uuid !== undefined) waiting.delete(operation.uuid)
+      const cancelled = operation.operation === 'popAll' ||
+        operation.queueVersion === 2 &&
+        (operation.operation === 'dequeue' || operation.operation === 'remove')
+      if (cancelled && operation.uuid !== undefined) waiting.delete(operation.uuid)
       continue
     }
-    if (operation.mode !== 'prompt') continue
+    if (operation.mode !== 'prompt' || operation.agentId !== undefined) continue
     const content = restorableContent(operation.content)
-    if (operation.uuid === undefined || content === null) {
+    if (typeof operation.uuid !== 'string' || operation.uuid.length === 0 ||
+        typeof operation.timestamp !== 'string' || !Number.isFinite(Date.parse(operation.timestamp)) ||
+        content === null) {
       droppedRecords++
       continue
     }
@@ -308,6 +268,8 @@ export async function resumeEngineSession(
         // Pin the adopted id to the requested one, not merely what the log walk
         // inferred — the registry addressed us by this exact engine session id.
         sessionIdOverride: resumeEngineSessionId,
+        // Production startup uses the admission-aware QueryEngine/controller.
+        allowRecoveryReview: true,
       },
       {
         // Use the same real definitions that configure the subsequent
@@ -344,6 +306,7 @@ export async function resumeEngineSession(
     engineSessionId,
     messages: processed.messages,
     initialState: processed.initialState,
+    ...(loaded.tailRecovery ? { tailRecovery: loaded.tailRecovery } : {}),
     turnInterrupted: loaded.turnInterruptionState.kind === 'interrupted_prompt',
     undeliveredPrompts: undelivered.prompts,
     droppedQueueRecords: undelivered.droppedRecords,
