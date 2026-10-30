@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { mock } from 'bun:test'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mock, spyOn } from 'bun:test'
+import { chmod, link, mkdir, readFile, symlink, unlink, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { getSessionId } from '../bootstrap/state.js'
 import { asAgentId } from '../types/ids.js'
@@ -26,11 +26,11 @@ mock.module('../services/api/sessionIngress.js', () => ({
 const storage = await import('./sessionStorage.js')
 const path = storage.getTranscriptPathForSession(sessionId)
 await mkdir(dirname(path), { recursive: true })
-await writeFile(path, 'original-main\n')
+await writeFile(path, 'original-main\n', { mode: 0o600 })
 // Hydration switches to the target identity before deriving agent paths.
 const agentPath = join(dirname(path), sessionId, 'subagents', 'agent-probe.jsonl')
 await mkdir(dirname(agentPath), { recursive: true })
-await writeFile(agentPath, 'original-agent\n')
+await writeFile(agentPath, 'original-agent\n', { mode: 0o600 })
 let readerCalls = 0
 storage.setInternalEventReader(async () => {
   readerCalls++
@@ -56,7 +56,41 @@ const hydrate = () => mode === 'v1'
 
 let holder: ReturnType<typeof Bun.spawn> | undefined
 try {
-  if (scenario === 'busy') {
+  if (/^(symlink|hardlink|permissive)-(main|agent)$/.test(scenario)) {
+    const target = scenario.endsWith('-agent') ? agentPath : path
+    const victim = join(dirname(path), 'unrelated-private-file')
+    await writeFile(victim, 'valuable unrelated bytes\n', { mode: 0o600 })
+    if (scenario.startsWith('permissive-')) await chmod(target, 0o644)
+    else {
+      await unlink(target)
+      if (scenario.startsWith('symlink-')) await symlink(victim, target)
+      else await link(victim, target)
+    }
+    assert.equal(await hydrate(), false)
+    assert.equal(await readFile(victim, 'utf8'), 'valuable unrelated bytes\n')
+    assert.equal(await readFile(target, 'utf8'), scenario.startsWith('permissive-')
+      ? scenario.endsWith('-agent') ? 'original-agent\n' : 'original-main\n'
+      : 'valuable unrelated bytes\n')
+  } else if (scenario.startsWith('release-at-guard-')) {
+    const target = scenario.endsWith('-agent') ? agentPath : path
+    await activateTranscriptLease(sessionId)
+    const guard = await import('./transcriptAppendGuard.js')
+    const original = guard.withTranscriptAppendGuard
+    let released = false
+    const acquisition = spyOn(guard, 'withTranscriptAppendGuard').mockImplementation(async (file, action) => {
+      if (file === target && !released) {
+        released = true
+        await releaseActiveTranscriptLease()
+        await writeFile(target, 'replacement owner history\n')
+      }
+      return original(file, action)
+    })
+    try {
+      await assert.rejects(hydrate, /hydration lease released/)
+      assert.equal(released, true)
+      assert.equal(await readFile(target, 'utf8'), 'replacement owner history\n')
+    } finally { acquisition.mockRestore() }
+  } else if (scenario === 'busy') {
     holder = Bun.spawn([process.execPath, '-e', `const l = await import(${JSON.stringify(join(import.meta.dir, 'transcriptLease.ts'))}); await l.activateTranscriptLease(${JSON.stringify(sessionId)}); console.log('READY'); for await (const chunk of Bun.stdin.stream()) { break }; await l.releaseActiveTranscriptLease()`], {
       env: process.env, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
     })
@@ -74,7 +108,6 @@ try {
     failReader = scenario === 'reader-failure' || scenario === 'borrowed-failure'
     empty = scenario === 'empty'
     if (scenario === 'write-failure') {
-      const { unlink } = await import('fs/promises')
       await unlink(path)
       await mkdir(path)
     }

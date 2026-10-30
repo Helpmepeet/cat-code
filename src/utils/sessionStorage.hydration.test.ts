@@ -4,7 +4,9 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 
 for (const mode of ['v1', 'v2']) {
-  const scenarios = ['busy', 'success', 'empty', 'reader-failure', 'write-failure', 'borrowed-success', 'borrowed-failure', 'released-main', ...(mode === 'v2' ? ['epoch', 'released-agent'] : [])]
+  const scenarios = ['busy', 'success', 'empty', 'reader-failure', 'write-failure', 'borrowed-success', 'borrowed-failure', 'released-main',
+    'symlink-main', 'hardlink-main', 'permissive-main', 'release-at-guard-main',
+    ...(mode === 'v2' ? ['epoch', 'released-agent', 'symlink-agent', 'hardlink-agent', 'permissive-agent', 'release-at-guard-agent'] : [])]
   for (const scenario of scenarios) {
     test(`${mode} hydration: ${scenario}`, async () => {
       const scratch = await mkdtemp(join(tmpdir(), 'hydration-lease-'))

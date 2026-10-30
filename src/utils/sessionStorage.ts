@@ -121,7 +121,7 @@ import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
-import { appendFramedTranscriptSync, appendFramedTranscriptWithinGuard, withTranscriptAppendGuard } from './transcriptAppendGuard.js'
+import { appendFramedTranscriptSync, appendFramedTranscriptWithinGuard, replacePrivateTranscriptWithinGuard, withTranscriptAppendGuard } from './transcriptAppendGuard.js'
 import { prepareOwnedTranscriptTail, type TailRecoveryState } from './transcriptTailRecovery.js'
 
 // Capture build-time defines at module evaluation to work around bun --define
@@ -2894,11 +2894,9 @@ export async function hydrateRemoteSession(
 
       const sessionFile = getTranscriptPathForSession(sessionId)
 
-      // Replace local logs with remote logs. writeFile truncates, so no
-      // unlink is needed; an empty remoteLogs array produces an empty file.
+      // Replace only a private regular target while lease ownership is current.
       const content = remoteLogs.map(e => jsonStringify(e) + '\n').join('')
-      assertHealthy()
-      await withTranscriptAppendGuard(sessionFile, () => writeFile(sessionFile, content, { encoding: 'utf8', mode: 0o600 }))
+      await withTranscriptAppendGuard(sessionFile, async () => replacePrivateTranscriptWithinGuard(sessionFile, content, assertHealthy))
 
       logForDebugging(`Hydrated ${remoteLogs.length} entries from remote`)
       return remoteLogs.length > 0
@@ -2952,8 +2950,7 @@ export async function hydrateFromCCRv2InternalEvents(
       // Write foreground transcript
       const sessionFile = getTranscriptPathForSession(sessionId)
       const fgContent = events.map(e => jsonStringify(e.payload) + '\n').join('')
-      assertHealthy()
-      await withTranscriptAppendGuard(sessionFile, () => writeFile(sessionFile, fgContent, { encoding: 'utf8', mode: 0o600 }))
+      await withTranscriptAppendGuard(sessionFile, async () => replacePrivateTranscriptWithinGuard(sessionFile, fgContent, assertHealthy))
 
       logForDebugging(
         `Hydrated ${events.length} foreground entries from CCR v2 internal events`,
@@ -2986,11 +2983,7 @@ export async function hydrateFromCCRv2InternalEvents(
             const agentContent = entries
               .map(p => jsonStringify(p) + '\n')
               .join('')
-            assertHealthy()
-            await withTranscriptAppendGuard(agentFile, () => writeFile(agentFile, agentContent, {
-              encoding: 'utf8',
-              mode: 0o600,
-            }))
+            await withTranscriptAppendGuard(agentFile, async () => replacePrivateTranscriptWithinGuard(agentFile, agentContent, assertHealthy))
           }
 
           logForDebugging(

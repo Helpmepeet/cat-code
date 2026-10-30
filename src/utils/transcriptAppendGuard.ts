@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, fsyncSync, lstatSync, openSync, readSync, realpathSync, writeSync } from 'node:fs'
+import { constants, closeSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { lock, lockSync } from './lockfile.js'
 import { isHandoffUuid } from '../../app/shared/workspaceHandoff.js'
@@ -139,6 +139,26 @@ export function writeTranscriptBytes(fd: number, bytes: Buffer): void {
     if (!count) throw new Error('Incomplete transcript write')
     offset += count
   }
+}
+
+/** Ownership cannot be released between validation and this synchronous mutation. */
+export function replacePrivateTranscriptWithinGuard(path: string, data: string, assertHealthy: () => void): void {
+  assertTranscriptAppendGuard(path)
+  assertHealthy()
+  let fd: number
+  try { fd = openPrivateTranscript(path, constants.O_RDWR) }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    fd = openSync(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+  }
+  try {
+    const current = lstatSync(path)
+    const opened = fstatSync(fd)
+    if (current.dev !== opened.dev || current.ino !== opened.ino) throw new Error('Transcript identity changed before replacement')
+    ftruncateSync(fd, 0)
+    writeTranscriptBytes(fd, Buffer.from(data))
+    fsyncSync(fd)
+  } finally { closeSync(fd) }
 }
 
 /** Framing only. Whole-history integrity is checked at owned resume/proof boundaries. */
