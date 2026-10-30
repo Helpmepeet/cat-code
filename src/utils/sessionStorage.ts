@@ -4739,7 +4739,9 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       summary: mostRecentLeaf ? summaries.get(mostRecentLeaf.uuid) : undefined,
       customTitle: sessionId ? customTitles.get(sessionId) : log.customTitle,
       tag: sessionId ? tags.get(sessionId) : log.tag,
-      agentName: sessionId ? agentNames.get(sessionId) : log.agentName,
+      agentName: sessionId
+        ? agentNames.get(sessionId) ?? transcript[0]?.agentName
+        : log.agentName,
       agentColor: sessionId ? agentColors.get(sessionId) : log.agentColor,
       agentSetting: sessionId ? agentSettings.get(sessionId) : log.agentSetting,
       mode: sessionId ? modes.get(sessionId) : normalizeSessionMode(log.mode),

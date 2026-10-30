@@ -1188,6 +1188,30 @@ test.each(['saved', 'cleared', 'absent'] as const)('resume routes restore equiva
   }
 })
 
+test.each([false, true])('resume routes retain message-level agent names with an explicit rename: %s', async renamed => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const seed = Object.assign(createUserMessage({ content: 'retained request' }), {
+    agentName: 'Saved agent',
+  })
+  await storage.recordTranscript([seed, assistant([{ type: 'text', text: 'retained response' }])])
+  await storage.flushCurrentTranscriptDurably()
+  const sessionId = bootstrap.getSessionId()
+  const path = storage.getTranscriptPathForSession(sessionId)
+  if (renamed) {
+    await fsPromises.appendFile(path, JSON.stringify({
+      type: 'agent-name', sessionId, agentName: 'Renamed agent',
+    }) + '\n')
+  }
+  const imported = await storage.loadTranscriptFromFile(path)
+  const lite = { ...imported, messages: [], sessionId }
+  for (const [source, explicitPath] of [
+    [sessionId, undefined], [sessionId, path], [imported, undefined], [lite, undefined],
+  ] as const) {
+    const restored = await loadConversationForResume(source, explicitPath, { interruptedTurn: 'ignore' })
+    expect(restored?.agentName).toBe(renamed ? 'Renamed agent' : 'Saved agent')
+  }
+})
+
 test('a confirmed failed continuation has its own durable notice without replaying work or releasing the review hold', async () => {
   const { createUserMessage } = await import('./utils/messages.js')
   const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
