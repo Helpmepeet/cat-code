@@ -52,7 +52,7 @@ import { ProjectRoutingBar } from './ProjectRoutingBar.js'
 import type { ProjectRouteChoice, ProjectRouteSnapshot } from '../../shared/projectRouting.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
 import { ComposerInput } from './ComposerInput.js'
-import { estimateComposerCharsPerRow } from './composerDom.js'
+import { composerCaretOnEdgeRow, estimateComposerCharsPerRow } from './composerDom.js'
 import { TodoStepReadout } from './TodoPlanPanel.js'
 import { selectTodoPlan, selectTodoReadout } from './todoPlan.js'
 import type { TodoPlan } from './todoPlan.js'
@@ -1749,12 +1749,14 @@ export function SessionPane({
     }
     // ↑/↓ walk the submitted-prompt history for this session — but only at the
     // vertical edge of the draft; elsewhere the arrow moves the caret between
-    // lines (multi-line composer). `caretAtHistoryEdge` on a newline-free draft
-    // is always true, so single-line recall is unchanged.
+    // rows. `caretAtHistoryEdge` sees newlines and `composerCaretOnEdgeRow` sees
+    // soft wrapping, so a draft on one row recalls exactly as it always has.
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       const direction = event.key === 'ArrowUp' ? 'up' : 'down'
       const caret = composerRef.current?.selectionStart ?? prompt.length
       if (!caretAtHistoryEdge(prompt, caret, direction)) return
+      const field = composerRef.current?.element
+      if (field && !composerCaretOnEdgeRow(field, direction)) return
       // D1b, terminal parity — waiting messages come back before history does,
       // the way `↑` behaves in the terminal. The reasoning, and what CC-67's
       // rejection of this binding got right, is on `shouldRecallWaitingMessages`.

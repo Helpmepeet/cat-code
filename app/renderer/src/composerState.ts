@@ -622,9 +622,10 @@ export function navigateHistory(
 /**
  * P4-24: with a multi-line composer, ↑/↓ must move the caret between lines and
  * only recall history at the vertical EDGE of the draft — ArrowUp recalls when
- * no newline precedes the caret (caret on the first visual line), ArrowDown when
- * no newline follows it (caret on the last line). Otherwise the arrow is a plain
- * caret move. Parity: `Chat.jsx:745-747`, from `src/hooks/useTextInput.ts:269-315`.
+ * no newline precedes the caret, ArrowDown when no newline follows it. Otherwise
+ * the arrow is a plain caret move. A string has no soft wrapping, so the caller
+ * also applies `composerCaretOnEdgeRow`.
+ * Parity: `Chat.jsx:745-747`, from `src/hooks/useTextInput.ts:269-315`.
  * On the old single-line `<input>` there were never newlines, so this always
  * returned `true` — preserving the P4-0 recall behavior exactly.
  */

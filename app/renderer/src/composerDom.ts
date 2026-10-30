@@ -30,6 +30,78 @@ export const PASTE_TOKEN_ATTR = 'data-paste-token'
 const TEXT_NODE = 3
 const ELEMENT_NODE = 1
 
+/**
+ * Whether the caret sits on the field's top row ('up') or bottom row ('down') as
+ * laid out on screen, where soft wrapping makes rows that the draft string cannot
+ * show. Measures the text between the caret and that edge: it fits on one row
+ * exactly when the caret is already there.
+ *
+ * A caret at a wrap point has one offset for both the end of one row and the
+ * start of the next, so the measure takes in the neighbouring character and
+ * resolves that case as "not at the edge". The arrow then moves the caret, the
+ * safe outcome, instead of replacing the draft. A `<br>` is not stepped over: it
+ * is a real line end, with no such ambiguity.
+ *
+ * Without a caret in the field or any measurable layout this reports `true`, so
+ * the caller's newline check alone decides.
+ */
+export function composerCaretOnEdgeRow(
+  root: HTMLElement,
+  direction: 'up' | 'down',
+): boolean {
+  const selection = root.ownerDocument.getSelection()
+  if (!selection || selection.rangeCount === 0) return true
+  const caret = selection.getRangeAt(0)
+  if (!root.contains(caret.startContainer) || !root.contains(caret.endContainer)) return true
+  const span = root.ownerDocument.createRange()
+  span.selectNodeContents(root)
+  if (direction === 'up') {
+    span.setEnd(caret.startContainer, caret.startOffset)
+    extendAcrossNextCharacter(span)
+  } else {
+    span.setStart(caret.endContainer, caret.endOffset)
+    extendAcrossPreviousCharacter(span)
+  }
+  const rects = Array.from(span.getClientRects()).filter(rect => rect.height > 0)
+  const first = rects[0]
+  if (!first) return true
+  return rects.every(rect => {
+    const middle = (rect.top + rect.bottom) / 2
+    return middle >= first.top && middle <= first.bottom
+  })
+}
+
+function extendAcrossNextCharacter(range: Range): void {
+  const { endContainer: node, endOffset: offset } = range
+  if (node.nodeType === TEXT_NODE && offset < (node.nodeValue ?? '').length) {
+    range.setEnd(node, offset + 1)
+    return
+  }
+  const next = node.nodeType === TEXT_NODE ? node.nextSibling : node.childNodes[offset]
+  if (!next || next.nodeName === 'BR') return
+  if (next.nodeType === TEXT_NODE) {
+    if (next.nodeValue) range.setEnd(next, 1)
+  } else {
+    range.setEndAfter(next)
+  }
+}
+
+function extendAcrossPreviousCharacter(range: Range): void {
+  const { startContainer: node, startOffset: offset } = range
+  if (node.nodeType === TEXT_NODE && offset > 0) {
+    range.setStart(node, offset - 1)
+    return
+  }
+  const previous = node.nodeType === TEXT_NODE ? node.previousSibling : node.childNodes[offset - 1]
+  if (!previous || previous.nodeName === 'BR') return
+  if (previous.nodeType === TEXT_NODE) {
+    const length = (previous.nodeValue ?? '').length
+    if (length > 0) range.setStart(previous, length - 1)
+  } else {
+    range.setStartBefore(previous)
+  }
+}
+
 export function estimateComposerCharsPerRow(root: HTMLElement): number {
   const style = getComputedStyle(root)
   const padding = (Number.parseFloat(style.paddingLeft) || 0)

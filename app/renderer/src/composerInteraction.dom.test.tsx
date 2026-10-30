@@ -4,7 +4,7 @@ import { SessionPane } from './SessionPane.js'
 import { SlashCommandPicker } from './SlashCommandPicker.js'
 import { createDomTestHarness, type DomTestHarness, type MountedTree } from './domTestHarness.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
-import { composerSelectionOffsets, placeComposerSelection } from './composerDom.js'
+import { composerCaretOnEdgeRow, composerSelectionOffsets, placeComposerSelection } from './composerDom.js'
 import { EMPTY_HISTORY_NAV, type HistoryNav } from './composerState.js'
 
 let harness: DomTestHarness
@@ -21,6 +21,65 @@ async function key(field: HTMLElement, value: string): Promise<void> {
     field.dispatchEvent(new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true }))
   })
 }
+
+/** This DOM has no layout, so wrap a single text node every `perRow` characters. */
+async function withWrappedRows(perRow: number, run: () => Promise<void>): Promise<void> {
+  const original = Range.prototype.getClientRects
+  Range.prototype.getClientRects = function (this: Range) {
+    const text = this.commonAncestorContainer.textContent ?? ''
+    const start = this.startContainer.nodeType === Node.TEXT_NODE ? this.startOffset : 0
+    const end = this.endContainer.nodeType === Node.TEXT_NODE ? this.endOffset : text.length
+    if (end <= start) return [] as unknown as DOMRectList
+    const rects: { top: number; bottom: number; height: number }[] = []
+    for (let row = Math.floor(start / perRow); row <= Math.floor((end - 1) / perRow); row++) {
+      rects.push({ top: row * 20, bottom: row * 20 + 20, height: 20 })
+    }
+    return rects as unknown as DOMRectList
+  }
+  try {
+    await run()
+  } finally {
+    Range.prototype.getClientRects = original
+  }
+}
+
+test('arrow up on a wrapped row moves the caret, and recalls history only from the top row', async () => {
+  const draft = 'a'.repeat(10) + 'b'.repeat(10) + 'c'.repeat(10)
+  function Pane() {
+    const [prompt, setPrompt] = useState(draft)
+    const [nav, setNav] = useState<HistoryNav>(EMPTY_HISTORY_NAV)
+    return <SessionPane {...idleSessionPaneProps()} prompt={prompt} setPrompt={setPrompt}
+      history={['older prompt']} historyNav={nav} onHistoryNavChange={setNav} />
+  }
+  const tree = await harness.mount(<Pane />)
+  const field = fieldOf(tree)
+  field.focus()
+  await withWrappedRows(10, async () => {
+    placeComposerSelection(field, 15, 15)
+    await key(field, 'ArrowUp')
+    expect(field.textContent).toBe(draft)
+    placeComposerSelection(field, 5, 5)
+    await key(field, 'ArrowUp')
+    expect(field.textContent).toBe('older prompt')
+  })
+})
+
+test('edge-row detection covers every row and resolves a wrap point away from the edge', async () => {
+  const tree = await harness.mount(<SessionPane {...idleSessionPaneProps()}
+    prompt={'a'.repeat(30)} setPrompt={() => {}} />)
+  const field = fieldOf(tree)
+  field.focus()
+  await withWrappedRows(10, async () => {
+    const onEdge = (caret: number, direction: 'up' | 'down') => {
+      placeComposerSelection(field, caret, caret)
+      return composerCaretOnEdgeRow(field, direction)
+    }
+    expect([0, 5, 9, 10, 15, 29].map(caret => onEdge(caret, 'up')))
+      .toEqual([true, true, true, false, false, false])
+    expect([0, 15, 20, 21, 25, 30].map(caret => onEdge(caret, 'down')))
+      .toEqual([false, false, false, true, true, true])
+  })
+})
 
 test('accepting a mention leaves the caret after its name and separator', async () => {
   function Pane() {
