@@ -1298,7 +1298,9 @@ export class Host implements HostApi {
     try {
       // Graceful sidecar shutdown (SIGTERM via the supervisor's kill API — the
       // die-with-window mechanism, not process welding).
-      this.supervisor.killSession(appSessionId)
+      if (!await this.supervisor.stopSession(appSessionId)) {
+        return hostError('session_unreachable', 'Stop is not confirmed. Open the chat to review it or retry stop.')
+      }
       // Evict replay so a reload never replays a dead session's frames (P3-0 carry
       // — the named eviction requirement; AttachmentGate.clearSession in main).
       this.workspaceTransitions.delete(appSessionId)

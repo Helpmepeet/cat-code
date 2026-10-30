@@ -231,6 +231,10 @@ export function isSidecarSendError(error: unknown): error is SidecarSendError {
 
 export class SidecarSupervisor {
   private readonly registry = new Map<SessionId, SidecarRecord>()
+  // Raw kills stay invisible to listSessions, but their children remain owned
+  // until exit so a later explicit stop can still confirm them.
+  private readonly terminating = new Map<SessionId, Set<SidecarRecord>>()
+  private readonly stopping = new Map<SessionId, Set<SidecarRecord>>()
   private largeSendWindowStart = 0
   private largeSendBytes = 0
   private readonly listeners = new Set<(event: SupervisorEvent) => void>()
@@ -612,6 +616,41 @@ export class SidecarSupervisor {
     this.registry.delete(sessionId)
   }
 
+  /** Confirm exit of captured children, not socket closure or a reusable PID. */
+  async stopSession(sessionId: SessionId, timeoutMs = this.killGraceMs + 1_000): Promise<boolean> {
+    const current = this.registry.get(sessionId)
+    if (current) this.trackTerminatingChild(current)
+    const records = this.terminating.get(sessionId)
+    if (!records || records.size === 0) return true
+    this.stopping.set(sessionId, records)
+    const results = await Promise.all([...records].map(record => {
+      const child = record.child
+      if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+        records.delete(record)
+        if (this.registry.get(sessionId) === record) this.killSession(sessionId)
+        return Promise.resolve(true)
+      }
+      return new Promise<boolean>(resolve => {
+        const finish = (confirmed: boolean) => {
+          clearTimeout(timer)
+          child.off('exit', exited)
+          resolve(confirmed)
+        }
+        const exited = () => finish(true)
+        const timer = setTimeout(() => finish(false), timeoutMs)
+        timer.unref?.()
+        child.once('exit', exited)
+        if (this.registry.get(sessionId) === record) this.killSession(sessionId)
+        else this.terminateChild(record)
+      })
+    }))
+    if (this.terminating.get(sessionId) === records && records.size === 0) this.terminating.delete(sessionId)
+    if (this.stopping.get(sessionId) === records && records.size === 0) this.stopping.delete(sessionId)
+    // A concurrent spawn is not part of this stop. Do not kill it, or let the
+    // caller mark its session clean based on the previous generation's exit.
+    return results.every(Boolean) && records.size === 0 && !this.registry.has(sessionId)
+  }
+
   /** Restart a session's sidecar in place (fresh process = fresh STATE singleton). */
   restartSession(sessionId: SessionId, configOverride?: SpawnConfig): void {
     const record = this.registry.get(sessionId)
@@ -642,10 +681,13 @@ export class SidecarSupervisor {
 
   /** Snapshot of the current registry (for a future durable registry / UI). */
   listSessions(): Array<{ sessionId: SessionId; status: SidecarRecord['status'] }> {
-    return [...this.registry.values()].map(record => ({
-      sessionId: record.sessionId,
-      status: record.status,
-    }))
+    const sessions = new Map<SessionId, SidecarRecord['status']>(
+      [...this.registry.values()].map(record => [record.sessionId, record.status]),
+    )
+    for (const [sessionId, records] of this.stopping) {
+      if (!sessions.has(sessionId) && records.size > 0) sessions.set(sessionId, 'disconnected')
+    }
+    return [...sessions].map(([sessionId, status]) => ({ sessionId, status }))
   }
 
   /** Advisory process id for crash/liveness probes; not a routing identity. */
@@ -832,14 +874,29 @@ export class SidecarSupervisor {
     this.disconnectTimers.add(timer)
   }
 
+  private trackTerminatingChild(record: SidecarRecord): void {
+    const { sessionId, child } = record
+    const records = this.terminating.get(sessionId) ?? new Set<SidecarRecord>()
+    if (records.has(record)) return
+    records.add(record)
+    this.terminating.set(sessionId, records)
+    child.once('exit', () => {
+      records.delete(record)
+      if (records.size === 0) {
+        if (this.terminating.get(sessionId) === records) this.terminating.delete(sessionId)
+        if (this.stopping.get(sessionId) === records) this.stopping.delete(sessionId)
+      }
+    })
+  }
+
   /**
    * Terminate a child for real. D6's die-with-window guarantee (SESSION-LIFETIME
    * §2) is that the engine process is GONE, not that a signal was sent, and the
    * sidecar's SIGTERM handler is asynchronous — so SIGTERM alone can leave a
    * child that outlives the supervisor. `killSession` deregisters the row in the
-   * same tick and `Host.closeSession` then clears the registry's advisory pid,
-   * so the next launch's orphan sweep (REGISTRY.md §4) cannot find it either:
-   * the escalation below is the only thing that closes the window.
+   * same tick. Capturing the child directly keeps escalation independent of
+   * deregistration; explicit host close additionally awaits stopSession's exit
+   * confirmation before clearing the registry's advisory pid.
    *
    * The force-kill timer holds the child directly rather than the registry, so
    * deregistration cannot strand it. It is unref'd so it never keeps the process
@@ -851,14 +908,19 @@ export class SidecarSupervisor {
     // to signal and no escalation to schedule.
     if (child.pid === undefined) return
     if (child.exitCode !== null || child.signalCode !== null) return
-    child.kill('SIGTERM')
+    this.trackTerminatingChild(record)
+    try { child.kill('SIGTERM') }
+    catch (error) {
+      this.log(`[supervisor] sidecar ${record.sessionId} SIGTERM failed: ${String(error)}`)
+    }
     let childExited = false
     const forceKillTimer = setTimeout(() => {
       if (childExited) return
       this.log(
         `[supervisor] sidecar ${record.sessionId} did not exit on SIGTERM; sending SIGKILL`,
       )
-      child.kill('SIGKILL')
+      try { child.kill('SIGKILL') }
+      catch (error) { this.log(`[supervisor] sidecar ${record.sessionId} SIGKILL failed: ${String(error)}`) }
     }, this.killGraceMs)
     forceKillTimer.unref?.()
     child.once('exit', () => {

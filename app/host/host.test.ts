@@ -154,6 +154,11 @@ class FakeSupervisor {
     this.emit({ type: 'exit', sessionId, code: null, signal: 'SIGTERM' })
   }
 
+  async stopSession(sessionId: SessionId): Promise<boolean> {
+    this.killSession(sessionId)
+    return true
+  }
+
   restartSession(sessionId: SessionId, config?: FakeSpawnConfig): void {
     const record = this.records.get(sessionId)
     if (!record) throw new Error('no such session')
@@ -2761,6 +2766,42 @@ test('closeSession releases its fence if supervisor shutdown throws', async () =
   h.supervisor.killSession = kill
   expect((await h.host.closeSession(id)).ok).toBe(true)
   expect((await h.host.restoreSession(id)).ok).toBe(true)
+})
+
+test('closeSession awaits stop confirmation, preserves an unconfirmed row, and permits explicit retry', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const id = created.value.appSessionId
+  h.supervisor.emitReady(id, 'engine-stop-confirm')
+  await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-stop-confirm')
+  writeTranscript(h.storageDir, 'engine-stop-confirm')
+  const before = { ...h.registry.findSession(id)! }
+  let entered!: () => void
+  let release!: (confirmed: boolean) => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  const stopped = new Promise<boolean>(resolve => { release = resolve })
+  const originalStop = h.supervisor.stopSession.bind(h.supervisor)
+  h.supervisor.stopSession = async () => { entered(); return stopped }
+  const closing = h.host.closeSession(id)
+  await started
+  expect(h.evicted).not.toContain(id)
+  expect(h.registry.findSession(id)).toEqual(before)
+  expect(h.host.listSessions().find(s => s.appSessionId === id)?.status).not.toBe('exited')
+  expect((await h.host.restoreSession(id)).ok).toBe(false)
+  expect((await h.host.closeSession(id)).ok).toBe(false)
+  release(false)
+  const unconfirmed = await closing
+  expect(unconfirmed.ok).toBe(false)
+  if (!unconfirmed.ok) expect(unconfirmed.error.message).toContain('not confirmed')
+  expect(h.evicted).not.toContain(id)
+  expect(h.registry.findSession(id)).toEqual(before)
+  expect(h.host.listSessions().find(s => s.appSessionId === id)?.status).not.toBe('exited')
+  h.supervisor.stopSession = originalStop
+  expect((await h.host.closeSession(id)).ok).toBe(true)
+  expect(h.evicted).toContain(id)
+  expect(h.registry.findSession(id)?.shutdown).toBe('clean')
 })
 
 test('closeSession evicts replay, marks the row clean, keeps it restorable', async () => {

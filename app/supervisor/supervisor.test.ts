@@ -9,6 +9,8 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Host } from '../host/host.js'
+import { SessionRegistry } from '../host/registry.js'
 
 import {
   MAX_FRAME_BYTES,
@@ -1009,6 +1011,151 @@ test('a sidecar that ignores SIGTERM is force-killed after the grace period', as
     expect(lines.some(line => line.includes('SIGKILL'))).toBe(true)
   } finally {
     if (isProcessAlive(pid as number)) process.kill(pid as number, 'SIGKILL')
+  }
+})
+
+test.each([
+  { replace: false, rawKill: false },
+  { replace: true, rawKill: false },
+  { replace: false, rawKill: true },
+  { replace: true, rawKill: true },
+])('stop confirms exact child exit and protects replacement: %j', async ({ replace, rawKill }) => {
+  const lines: string[] = []
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', `process.on('SIGTERM', () => {})\n${readyScript()}`],
+    socketDir: makeTempDir('catcode-stop-confirm-'),
+    killGraceMs: 300,
+    log: line => lines.push(line),
+  })
+  supervisors.push(supervisor)
+  const id = supervisor.spawnSession('stop-confirm')
+  await waitFor(() => supervisor.listSessions().some(s => s.sessionId === id && s.status === 'ready'), 'child not ready')
+  const pid = supervisor.getSessionProcessId(id)!
+  let replacementPid: number | undefined
+  try {
+    if (rawKill) {
+      expect(supervisor.killSession(id)).toBeUndefined()
+      expect(supervisor.getSessionProcessId(id)).toBeUndefined()
+      expect(supervisor.listSessions()).toEqual([])
+      expect(isProcessAlive(pid)).toBe(true)
+    }
+    // Socket destruction and deregistration must not count as process exit.
+    expect(await supervisor.stopSession(id, 10)).toBe(false)
+    expect(isProcessAlive(pid)).toBe(true)
+    expect(supervisor.listSessions()).toEqual([{ sessionId: id, status: 'disconnected' }])
+    let settled = false
+    const retry = supervisor.stopSession(id).then(result => { settled = true; return result })
+    expect(settled).toBe(false)
+    expect(isProcessAlive(pid)).toBe(true)
+    if (replace) {
+      supervisor.spawnSession(id)
+      replacementPid = supervisor.getSessionProcessId(id)!
+      expect(replacementPid).not.toBe(pid)
+      await waitFor(() => supervisor.listSessions().some(s => s.sessionId === id && s.status === 'ready'), 'replacement not ready')
+    }
+    expect(await retry).toBe(!replace)
+    expect(isProcessAlive(pid)).toBe(false)
+    expect(lines.some(line => line.includes('SIGKILL'))).toBe(true)
+    if (replace) {
+      expect(isProcessAlive(replacementPid!)).toBe(true)
+      expect(supervisor.getSessionProcessId(id)).toBe(replacementPid)
+      expect(supervisor.listSessions()).toEqual([{ sessionId: id, status: 'ready' }])
+      expect(await supervisor.stopSession(id)).toBe(true)
+    } else {
+      expect(supervisor.listSessions()).toEqual([])
+      expect(await supervisor.stopSession(id)).toBe(true)
+    }
+  } finally {
+    for (const ownedPid of [pid, replacementPid]) {
+      if (ownedPid !== undefined && isProcessAlive(ownedPid)) process.kill(ownedPid, 'SIGKILL')
+    }
+  }
+})
+
+test('Host close keeps the real registry live until the synthetic socket child exits', async () => {
+  const storageDir = makeTempDir('catcode-host-stop-composition-')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', `process.on('SIGTERM', () => {})\n${readyScript({
+      engineSessionIdExpression: 'process.env.CATCODE_SIDECAR_SESSION_ID',
+    })}`],
+    socketDir: makeTempDir('catcode-host-stop-socket-'),
+    killGraceMs: 300,
+    log: () => {},
+  })
+  supervisors.push(supervisor)
+  const registry = new SessionRegistry({
+    storageDir, log: () => {},
+    transcriptPathFor: (_cwd, engineId) => join(storageDir, `${engineId}.jsonl`),
+  })
+  const evicted: string[] = []
+  const host = new Host({
+    supervisor, registry,
+    validateCwd: cwd => ({ ok: true, realpath: cwd }),
+    evictReplay: id => evicted.push(id),
+    log: () => {},
+  })
+  const created = await host.createSession({ cwd: storageDir })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const id = created.value.appSessionId
+  const pid = supervisor.getSessionProcessId(id)!
+  try {
+    await waitFor(() => registry.findSession(id)?.engineSessionId === id, 'Host did not observe socket readiness')
+    const closing = host.closeSession(id)
+    await waitFor(() => supervisor.listSessions().some(s => s.status === 'disconnected'), 'Host did not start stopping')
+    expect(isProcessAlive(pid)).toBe(true)
+    expect(registry.findSession(id)?.shutdown).not.toBe('clean')
+    expect(evicted).toEqual([])
+    expect(host.listSessions().find(s => s.appSessionId === id)?.status).not.toBe('exited')
+    expect((await host.restoreSession(id)).ok).toBe(false)
+    expect((await closing).ok).toBe(true)
+    expect(isProcessAlive(pid)).toBe(false)
+    expect(evicted).toEqual([id])
+    // A blank synthetic conversation is removed only after confirmed exit.
+    expect(registry.findSession(id)).toBeUndefined()
+  } finally {
+    if (isProcessAlive(pid)) process.kill(pid, 'SIGKILL')
+  }
+})
+
+test('failed escalation stays unconfirmed and retry signals the deregistered child', async () => {
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', `process.on('SIGTERM', () => {})\n${readyScript()}`],
+    socketDir: makeTempDir('catcode-stop-failed-escalation-'),
+    killGraceMs: 50,
+    log: () => {},
+  })
+  supervisors.push(supervisor)
+  const id = supervisor.spawnSession('failed-escalation')
+  await waitFor(() => supervisor.listSessions().some(s => s.status === 'ready'), 'child not ready')
+  const pid = supervisor.getSessionProcessId(id)!
+  // Inject a failed OS signal without touching a foreign process. Everything
+  // else, including child exit observation and the socket, remains real.
+  const { child } = (supervisor as unknown as {
+    registry: Map<string, { child: import('node:child_process').ChildProcess }>
+  }).registry.get(id)!
+  const kill = child.kill.bind(child)
+  let escalations = 0
+  child.kill = signal => {
+    if (signal === 'SIGKILL') { escalations++; return false }
+    return kill(signal)
+  }
+  try {
+    expect(await supervisor.stopSession(id, 150)).toBe(false)
+    expect(escalations).toBe(1)
+    expect(isProcessAlive(pid)).toBe(true)
+    expect(supervisor.getSessionProcessId(id)).toBeUndefined()
+    expect(supervisor.listSessions()).toEqual([{ sessionId: id, status: 'disconnected' }])
+    child.kill = kill
+    expect(await supervisor.stopSession(id)).toBe(true)
+    expect(isProcessAlive(pid)).toBe(false)
+    expect(supervisor.listSessions()).toEqual([])
+  } finally {
+    child.kill = kill
+    if (isProcessAlive(pid)) process.kill(pid, 'SIGKILL')
   }
 })
 
