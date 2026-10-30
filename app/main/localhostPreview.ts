@@ -15,6 +15,7 @@ export type LocalhostRoute = {
   state: unknown
 }
 export type LocalhostFrozenPayload = {
+  id: string
   html: string
   resources: ReadonlyMap<string, { mimeType: string; body: Buffer }>
 }
@@ -31,7 +32,7 @@ type Preview = {
   polling: boolean
   blockedUrl: string | null
   timer: ReturnType<typeof setInterval>
-  frozen: LocalhostFrozenPayload | null
+  frozenIds: Map<number, string>
   routeKey: string
 }
 type Probe = { status: 'online'; url: string } | { status: 'unavailable' } | { status: 'refused'; destination?: string }
@@ -71,6 +72,7 @@ export function createLocalhostPreviewService(deps: {
   publish: (event: FilePreviewEvent) => void
   isLive?: (id: string) => boolean
   findSnapshot?: (appSessionId: string, url: string) => LocalhostFrozenPayload | null
+  getSnapshot?: (id: string) => LocalhostFrozenPayload | null
 }) {
   const records = new Map<string, Preview>()
   const routes = new Map<string, LocalhostRoute>()
@@ -169,9 +171,11 @@ export function createLocalhostPreviewService(deps: {
       stopped(record)
       const frozen = deps.findSnapshot?.(record.appSessionId, record.path)
       if (!frozen) return null
-      record.frozen = frozen
-      const descriptor = describe(record, `cat-preview://${id}/r${++record.revision}/index.html`, record.revision)
-      record.descriptors.set(record.revision, descriptor)
+      const revision = ++record.revision
+      record.frozenIds.set(revision, frozen.id)
+      const descriptor = describe(record, `cat-preview://${id}/r${revision}/index.html`, revision)
+      record.descriptors.set(revision, descriptor)
+      for (const candidate of record.descriptors.keys()) if (candidate !== record.committed && candidate !== revision) { record.descriptors.delete(candidate); record.frozenIds.delete(candidate) }
       deps.publish({ id, kind: 'updated', descriptor })
       return descriptor
     }
@@ -179,7 +183,7 @@ export function createLocalhostPreviewService(deps: {
     record.blockedUrl = null
     const descriptor = describe(record, result.url, ++record.revision)
     record.descriptors.set(record.revision, descriptor)
-    for (const revision of record.descriptors.keys()) if (revision !== record.committed && revision !== record.revision) record.descriptors.delete(revision)
+    for (const revision of record.descriptors.keys()) if (revision !== record.committed && revision !== record.revision) { record.descriptors.delete(revision); record.frozenIds.delete(revision) }
     deps.publish({ id, kind: 'updated', descriptor })
     return descriptor
   }
@@ -197,12 +201,13 @@ export function createLocalhostPreviewService(deps: {
       if (!url || !session) return { ok: false, reason: 'refused' }
       for (const [id, record] of records) if (!authorized(record)) release(id)
       const existing = [...records.values()].find(record => record.appSessionId === input.appSessionId && record.path === url)
-      if (existing) return { ok: true, descriptor: existing.descriptors.get(existing.committed)! }
+      if (existing) return { ok: true, descriptor: { ...existing.descriptors.get(existing.committed)!, ...(existing.stopped ? { serverStopped: true } : {}), ...(existing.blockedUrl ? { blockedHost: new URL(existing.blockedUrl).host } : {}) } }
       const priorRoute = [...routes.values()].reverse().find(route => route.appSessionId === input.appSessionId && route.url === url)
       const authorityCwd = session.cwd
       const result = await probe(priorRoute?.baseUrl ?? url)
       if (!deps.sessions().some(session => session.appSessionId === input.appSessionId && session.cwd === authorityCwd && !session.moving)) return { ok: false, reason: 'refused' }
-      if (result.status === 'unavailable') return { ok: false, reason: 'unavailable', hostPort: localhostPreviewHostPort(url)! }
+      const frozen = result.status === 'unavailable' ? deps.findSnapshot?.(input.appSessionId, url) : null
+      if (result.status === 'unavailable' && !frozen) return { ok: false, reason: 'unavailable', hostPort: localhostPreviewHostPort(url)! }
       if (result.status === 'refused') {
         const current = [...records.values()].find(record => record.appSessionId === input.appSessionId && deps.isLive?.(record.id))
         if (current && result.destination && leave(current.id, result.destination)) return { ok: true, descriptor: current.descriptors.get(current.committed)! }
@@ -210,13 +215,13 @@ export function createLocalhostPreviewService(deps: {
       }
       if (records.size >= MAX_RECORDS || [...records.values()].filter(record => record.appSessionId === input.appSessionId).length >= 3) return { ok: false, reason: 'refused' }
       const record: Preview = {
-        id: randomBytes(24).toString('hex'), appSessionId: input.appSessionId, authorityCwd, path: priorRoute ? url : result.url,
-        baseUrl: priorRoute?.baseUrl ?? result.url, revision: 1, committed: 1, descriptors: new Map(), stopped: false,
-        polling: false, blockedUrl: null, frozen: null, routeKey: priorRoute?.key ?? '',
+        id: randomBytes(24).toString('hex'), appSessionId: input.appSessionId, authorityCwd, path: priorRoute || result.status !== 'online' ? url : result.url,
+        baseUrl: priorRoute?.baseUrl ?? (result.status === 'online' ? result.url : url), revision: 1, committed: 1, descriptors: new Map(), stopped: result.status === 'unavailable',
+        polling: false, blockedUrl: null, frozenIds: new Map(), routeKey: priorRoute?.key ?? '',
         timer: setInterval(() => {
           if (record.polling || !records.has(record.id) || !deps.isLive?.(record.id)) return
           record.polling = true
-          void probe(record.path).then(result => {
+          void probe(record.baseUrl).then(result => {
             if (!records.has(record.id) || !authorized(record)) return
             if (result.status === 'unavailable') stopped(record)
             else if (result.status === 'online' && record.stopped) void refresh(record.id)
@@ -224,7 +229,8 @@ export function createLocalhostPreviewService(deps: {
         }, 1000),
       }
       record.timer.unref?.()
-      const descriptor = describe(record, result.url, 1, priorRoute?.key)
+      if (frozen) record.frozenIds.set(1, frozen.id)
+      const descriptor = describe(record, frozen ? `cat-preview://${record.id}/r1/index.html` : result.status === 'online' ? result.url : url, 1, priorRoute?.key)
       record.descriptors.set(1, descriptor)
       records.set(record.id, record)
       return { ok: true, descriptor }
@@ -251,7 +257,7 @@ export function createLocalhostPreviewService(deps: {
       if (!record || !authorized(record) || !record.descriptors.has(revision)) return false
       record.committed = revision
       record.path = record.descriptors.get(revision)!.path
-      for (const key of record.descriptors.keys()) if (key < revision) record.descriptors.delete(key)
+      for (const key of record.descriptors.keys()) if (key < revision) { record.descriptors.delete(key); record.frozenIds.delete(key) }
       return true
     },
     current(id: string) {
@@ -309,8 +315,10 @@ export function createLocalhostPreviewService(deps: {
     bindings() { return [...records.values()].flatMap(record => [...record.descriptors.values()].filter(descriptor => descriptor.url.startsWith('http:')).map(descriptor => ({ id: record.id, appSessionId: record.appSessionId, frameName: descriptor.frameName!, url: descriptor.path }))) },
     respond(id: string, revision: number, path: string): Response | null {
       const record = records.get(id)
-      if (!record?.frozen || !record.descriptors.has(revision) || !authorized(record)) return null
-      const resource = path === '/index.html' ? { mimeType: 'text/html; charset=utf-8', body: Buffer.from(record.frozen.html) } : /^\/asset\/([a-f0-9]{64})$/.test(path) ? record.frozen.resources.get(path.slice('/asset/'.length)) : null
+      const frozenId = record?.frozenIds.get(revision)
+      const frozen = frozenId ? deps.getSnapshot?.(frozenId) : null
+      if (!record || !frozen || !record.descriptors.has(revision) || !authorized(record)) return null
+      const resource = path === '/index.html' ? { mimeType: 'text/html; charset=utf-8', body: Buffer.from(frozen.html) } : /^\/asset\/([a-f0-9]{64})$/.test(path) ? frozen.resources.get(path.slice('/asset/'.length)) : null
       return resource ? new Response(new Uint8Array(resource.body), { headers: { 'Content-Type': resource.mimeType, 'Content-Security-Policy': "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; frame-src 'none'; object-src 'none'; form-action 'none'; sandbox allow-same-origin", 'Cache-Control': 'no-store' } }) : new Response(null, { status: 404 })
     },
     dispose() { for (const id of records.keys()) release(id); routes.clear() },

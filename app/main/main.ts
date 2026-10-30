@@ -1,3 +1,4 @@
+import { createLocalhostSnapshots } from './localhostSnapshot.js'
 import { installLocalFormTracking } from './localhostFormIntent.js'
 import { createExternalUrlHandler } from './externalUrl.js'
 import { CH_OPEN_EXTERNAL_URL } from '../shared/ipcChannels.js'
@@ -1583,11 +1584,18 @@ const filePreviews = createFilePreviewService({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event)
   },
 })
+let localhostSnapshots: ReturnType<typeof createLocalhostSnapshots> | null = null
 const localFrameBindings = new Map<number, { id: string; revision: number }>()
 const restoringLocalRoutes = new Map<number, string>()
 const localhostPreviews = createLocalhostPreviewService({
   sessions: () => host?.listSessions() ?? [], devOrigin: IS_DEV ? APP_ORIGIN_DEV : null,
-  publish: event => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event) },
+  findSnapshot: (sessionId, url) => localhostSnapshots?.find(sessionId, url) ?? null,
+  getSnapshot: id => localhostSnapshots?.get(id) ?? null,
+  publish: event => {
+    const deliver = () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event) }
+    if (event.kind === 'updated' && event.descriptor.url.startsWith('http:') && localhostSnapshots) void localhostSnapshots.start().then(deliver, deliver)
+    else deliver()
+  },
   isLive: id => !!mainWindow?.webContents.mainFrame.frames.some(frame => localFrameBindings.get(frame.frameTreeNodeId)?.id === id),
 })
 function localFrameBinding(frame: Electron.WebFrameMain | null | undefined) {
@@ -1979,6 +1987,15 @@ function createWindow(): void {
   startRendererHealthTimer()
   window.once('closed', stopRendererHealthTimer)
   mainWindow = window
+  localhostSnapshots?.dispose()
+  localhostSnapshots = createLocalhostSnapshots({
+    debugger: window.webContents.debugger, devOrigin: IS_DEV ? APP_ORIGIN_DEV : null,
+    bindings: () => localhostPreviews.bindings().map(binding => {
+      const frame = window.webContents.mainFrame.frames.find(candidate => candidate.parent === window.webContents.mainFrame && candidate.name === binding.frameName)
+      const actualUrl = frame && localhostPreviews.allowed(frame.url)
+      return actualUrl ? { ...binding, url: actualUrl } : binding
+    }),
+  })
   const scrollTimer = setInterval(() => {
     if (window.isDestroyed()) return
     for (const frame of window.webContents.mainFrame.frames) {
@@ -1991,6 +2008,8 @@ function createWindow(): void {
     clearInterval(scrollTimer)
     filePreviews.dispose()
     localhostPreviews.dispose()
+    localhostSnapshots?.dispose()
+    localhostSnapshots = null
     localFrameBindings.clear()
     restoringLocalRoutes.clear()
     previewScroll.clear()
@@ -2458,6 +2477,7 @@ function createWindow(): void {
   // renderer-ready handshake then replays state through the attachment gate the
   // same way any reload does (F2).
   window.webContents.on('did-finish-load', () => {
+    if (localhostPreviews.bindings().length) void localhostSnapshots?.start()
     rendererGone = false
     rendererOsProcessId = readRendererOsProcessId()
     const pid: Record<string, number> =
@@ -4574,8 +4594,19 @@ function registerHostControlPlane(): void {
   )
 
   ipcMain.handle(CH_OPEN_EXTERNAL_URL, createExternalUrlHandler<IpcMainInvokeEvent>({ isTrustedSender: trustedPreviewSender, open: url => shell.openExternal(url) }))
-  ipcMain.handle(CH_LOCALHOST_PREVIEW_CAPTURE, () => undefined)
-  ipcMain.handle(CH_LOCALHOST_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? localhostPreviews.prepare(input) : {ok:false,reason:'refused'})
+  ipcMain.handle(CH_LOCALHOST_PREVIEW_CAPTURE, async (event, input: unknown) => {
+    const value = previewIdentity(input)
+    if (!trustedPreviewSender(event) || !value || !localhostSnapshots) return
+    const descriptor = localhostPreviews.current(value.id as string)
+    const frame = descriptor && previewFrame(descriptor.id, descriptor.revision)
+    if (frame && localhostPreviews.allowed(frame.url)) await localhostSnapshots.capture(descriptor!.id, frame)
+  })
+  ipcMain.handle(CH_LOCALHOST_PREVIEW_PREPARE, async (event, input: unknown) => {
+    if (!trustedPreviewSender(event)) return { ok: false, reason: 'refused' }
+    const result = await localhostPreviews.prepare(input)
+    if (result.ok && localhostPreviews.bindings().length) await localhostSnapshots?.start()
+    return result
+  })
   ipcMain.handle(CH_LOCALHOST_PREVIEW_NAVIGATE, async (event, input: unknown) => {
     const value = previewPayload(input, ['id','routeKey','scroll'])
     if (!trustedPreviewSender(event) || !value || typeof value.id !== 'string' || typeof value.routeKey !== 'string' || value.routeKey.length !== 48) return null
@@ -4600,9 +4631,12 @@ function registerHostControlPlane(): void {
   })
   protocol.handle(FILE_PREVIEW_SCHEME, request => { const parsed=parseFilePreviewUrl(request.url); return parsed&&localhostPreviews.has(parsed.id) ? localhostPreviews.respond(parsed.id,parsed.revision,parsed.path) ?? new Response(null,{status:404}) : filePreviews.respond(request) })
   ipcMain.handle(CH_FILE_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? filePreviews.prepare(input) : null)
-  ipcMain.handle(CH_FILE_PREVIEW_REFRESH, (event, input: unknown) => {
+  ipcMain.handle(CH_FILE_PREVIEW_REFRESH, async (event, input: unknown) => {
     const value = previewIdentity(input)
-    return trustedPreviewSender(event) && value ? localhostPreviews.has(value.id as string) ? localhostPreviews.refresh(value.id as string) : filePreviews.refresh(value.id as string) : null
+    if (!trustedPreviewSender(event) || !value) return null
+    const descriptor = await (localhostPreviews.has(value.id as string) ? localhostPreviews.refresh(value.id as string) : filePreviews.refresh(value.id as string))
+    if (descriptor?.kind === 'localhost' && descriptor.url.startsWith('http:')) await localhostSnapshots?.start()
+    return descriptor
   })
   ipcMain.handle(CH_FILE_PREVIEW_COMMIT, async (event, input: unknown) => {
     const value = previewIdentity(input, true)
@@ -4631,6 +4665,7 @@ function registerHostControlPlane(): void {
     if (trustedPreviewSender(event) && value) {
       filePreviews.release(value.id as string)
       localhostPreviews.release(value.id as string)
+      localhostSnapshots?.release(value.id as string)
       for(const [node,binding]of localFrameBindings)if(binding.id===value.id){localFrameBindings.delete(node);restoringLocalRoutes.delete(node)}
       for (const cache of [previewScroll, pendingPreviewScroll, pendingPreviewReadiness]) {
         for (const key of cache.keys()) if (key.startsWith(`${value.id}:`)) cache.delete(key)
@@ -5666,6 +5701,8 @@ app.on('window-all-closed', () => {
 let lidQuitFinished = false
 app.on('before-quit', event => {
   filePreviews.dispose()
+  localhostPreviews.dispose()
+  localhostSnapshots?.dispose()
   if (!lidQuitFinished && lidMode) {
     event.preventDefault()
     const ending = lidMode; lidMode = undefined

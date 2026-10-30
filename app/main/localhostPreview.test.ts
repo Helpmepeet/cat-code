@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { createLocalhostPreviewService } from './localhostPreview.js'
+import { createLocalhostPreviewService, type LocalhostFrozenPayload } from './localhostPreview.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import type { FilePreviewEvent } from '../shared/filePreview.js'
 
-function fixture(options: { devOrigin?: string; live?: boolean } = {}) {
+function fixture(options: { devOrigin?: string; live?: boolean; snapshots?: Map<string, LocalhostFrozenPayload> } = {}) {
   const events: FilePreviewEvent[] = []
   const requests: Array<{ method: string; path: string }> = []
   let server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(request) {
@@ -18,7 +18,7 @@ function fixture(options: { devOrigin?: string; live?: boolean } = {}) {
   } })
   const origin = `http://127.0.0.1:${server.port}`
   let sessions = [sessionDescriptorFixture({ appSessionId: 'local-session', cwd: '/private/tmp' })]
-  const service = createLocalhostPreviewService({ sessions: () => sessions, devOrigin: options.devOrigin, publish: event => events.push(event), isLive: () => options.live ?? false })
+  const service = createLocalhostPreviewService({ sessions: () => sessions, devOrigin: options.devOrigin, publish: event => events.push(event), isLive: () => options.live ?? false, findSnapshot: (_sessionId, url) => options.snapshots?.get(url) ?? null, getSnapshot: id => [...(options.snapshots?.values() ?? [])].find(snapshot => snapshot.id === id) ?? null })
   return { origin, requests, events, service,
     revoke() { sessions = [] },
     stop() { server.stop(true) },
@@ -144,5 +144,40 @@ test('adopts a real GET redirect when HEAD stayed at the original route, without
     expect(f.service.commit(opened.descriptor.id, opened.descriptor.revision)).toBe(true)
     expect(f.service.current(opened.descriptor.id)?.path).toBe(f.origin + '/actual')
     expect(f.events.some(event => event.kind === 'route' && event.url === f.origin + '/actual' && event.replace)).toBe(true)
+  } finally { f.dispose() }
+})
+
+test('serves only snapshot-owner-retained bytes for an offline return, and recovers through the real server', async () => {
+  const snapshots = new Map<string, LocalhostFrozenPayload>()
+  const f = fixture({ snapshots })
+  try {
+    const asset = 'a'.repeat(64)
+    snapshots.set(f.origin + '/', { id: 'f'.repeat(48), html: '<h1>Frozen last version</h1>', resources: new Map([[asset, { mimeType: 'image/png', body: Buffer.from('recorded image bytes') }]]) })
+    f.stop()
+    const opened = await f.service.prepare({ appSessionId: 'local-session', url: f.origin })
+    if (!opened.ok) throw new Error('Expected recorded offline fallback')
+    const descriptor = opened.descriptor
+    expect(descriptor.serverStopped).toBe(true)
+    expect(descriptor.url).toMatch(/^cat-preview:/)
+    expect(await f.service.respond(descriptor.id, descriptor.revision, '/index.html')?.text()).toBe('<h1>Frozen last version</h1>')
+    expect(await f.service.respond(descriptor.id, descriptor.revision, '/asset/' + asset)?.text()).toBe('recorded image bytes')
+    expect(f.service.respond(descriptor.id, descriptor.revision, '/index.html')?.headers.get('Content-Security-Policy')).toContain("script-src 'none'")
+    f.service.release(descriptor.id)
+    const returned = await f.service.prepare({ appSessionId: 'local-session', url: f.origin })
+    if (!returned.ok) throw new Error('Expected retained frozen route after live handle release')
+    expect(returned.descriptor.id).not.toBe(descriptor.id)
+    const superseded = await f.service.refresh(returned.descriptor.id)
+    const latest = await f.service.refresh(returned.descriptor.id)
+    expect(f.service.respond(returned.descriptor.id, superseded!.revision, '/index.html')).toBeNull()
+    expect(f.service.respond(returned.descriptor.id, latest!.revision, '/index.html')?.status).toBe(200)
+    f.restart()
+    const recovered = await f.service.refresh(returned.descriptor.id)
+    expect(recovered?.url).toBe(f.origin + '/')
+    expect(recovered?.serverStopped).toBeUndefined()
+    // A candidate must not invalidate the still-painted frozen document.
+    expect(f.service.respond(returned.descriptor.id, returned.descriptor.revision, '/index.html')?.status).toBe(200)
+    snapshots.clear()
+    // The service keeps IDs, so snapshot-owner eviction immediately revokes bytes.
+    expect(f.service.respond(returned.descriptor.id, returned.descriptor.revision, '/index.html')).toBeNull()
   } finally { f.dispose() }
 })
