@@ -39,6 +39,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { OAuthSubmitStatus } from './appModel.js'
 import { useModalFocus } from './overlayFocus.js'
 import { ProviderLogo } from './ProviderLogo.js'
+import { ExternalAppIcon } from './ExternalAppIcon.js'
 import { toneClasses, type Tone } from './tone.js'
 
 /* ── shared chrome ─────────────────────────────────────────────────────────── */
@@ -465,8 +466,9 @@ function SignInLinkActions({ url }: { url: string | null }): ReactNode {
             href={url}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center rounded-lg border border-shell-seam px-4 py-2.5 text-[13px] text-text-muted transition-colors hover:bg-shell-hover hover:text-text-primary"
+            className="inline-flex items-center gap-2 rounded-lg border border-shell-seam px-4 py-2.5 text-[13px] text-text-muted transition-colors hover:bg-shell-hover hover:text-text-primary"
           >
+            <ExternalAppIcon request={{ target: 'browser' }} />
             Open in browser
           </a>
         )}

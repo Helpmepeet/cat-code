@@ -19,6 +19,7 @@ import type {
 import type { EditableSettingPane } from '../../shared/settingsEditable.js'
 import { EDITABLE_SETTING_KEYS } from '../../shared/settingsEditable.js'
 import { AppearanceSettings } from './AppearanceSettings.js'
+import { ExternalAppIcon } from './ExternalAppIcon.js'
 import { AgentsPage } from './AgentsPage.js'
 import { getBridge } from './bridge.js'
 import { MemoryPage } from './MemoryPage.js'
@@ -775,7 +776,7 @@ function ScopeBody({
         <PaneSection title="Diagnostics">
           <p className="mb-4 text-[13px] leading-5 text-text-muted">Open application logs or save a diagnostics bundle.</p>
           <div className="flex flex-wrap gap-2">
-            {onOpenLogs ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" data-setting-key="openLogs" onClick={onOpenLogs} type="button">Open logs folder</button> : null}
+            {onOpenLogs ? <button className="inline-flex items-center gap-2 rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" data-setting-key="openLogs" onClick={onOpenLogs} type="button"><ExternalAppIcon request={{ target: 'finder' }} />Open logs folder</button> : null}
             {onSaveDiagnostics ? <button className="rounded-md border border-shell-seam px-3 py-2 text-[13px] text-text-primary hover:bg-shell-hover" data-setting-key="saveDiagnostics" onClick={onSaveDiagnostics} type="button">Save diagnostics bundle</button> : null}
           </div>
         </PaneSection>

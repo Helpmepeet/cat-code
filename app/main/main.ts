@@ -278,7 +278,10 @@ import {
   resolveOpenHistorySession,
   type TrustedOpenHistorySeed,
 } from './openHistorySession.js'
-import { openWorkspaceFile, type OpenWorkspaceFileTarget, type SourceLocation } from './openWorkspaceFile.js'
+import { openWorkspaceFile, resolveWorkspaceFile, type OpenWorkspaceFileTarget, type SourceLocation } from './openWorkspaceFile.js'
+import { createExternalAppIconService } from './externalAppIcons.js'
+import { createExternalAppIconHandler } from './externalAppIconRequest.js'
+import { CH_HOST_EXTERNAL_APP_ICON } from '../shared/ipcChannels.js'
 import { launchEditorApp } from './editorLauncher.js'
 import { workspaceFileAvailability } from './workspaceFileAvailability.js'
 import {
@@ -4272,6 +4275,21 @@ function registerHostControlPlane(): void {
       },
     )
   })
+  const externalAppIcons = createExternalAppIconService()
+  ipcMain.handle(CH_HOST_EXTERNAL_APP_ICON, createExternalAppIconHandler<IpcMainInvokeEvent>({
+    isTrustedSender: isMainWindowSender,
+    read: (target, path) => externalAppIcons.read(target, path),
+    resolveFile: async (appSessionId, path) => {
+      if (!host) return null
+      const resolved = await resolveWorkspaceFile({ appSessionId, path }, host.listSessions(), {
+        generatedImagesRoot: join(
+          process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
+          'generated-images',
+        ),
+      })
+      return resolved?.path ?? null
+    },
+  }))
   // docs/decisions/2026-10-11-workspace-file-availability.md: metadata only,
   // with the same canonical regular-file policy and no operating-system action.
   let availabilityReads = 0

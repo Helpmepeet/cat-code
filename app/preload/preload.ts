@@ -17,6 +17,7 @@ import type { LidModeView } from '../shared/lidClosed.js'
  */
 
 import { contextBridge, ipcRenderer } from 'electron'
+import { CH_HOST_EXTERNAL_APP_ICON } from '../shared/ipcChannels.js'
 import { parseNotificationPreferences, type NotificationPreferences } from '../shared/notificationPreferences.js'
 import type { NotificationVisibilityBridge, NotificationVisibility } from '../shared/notificationVisibility.js'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
@@ -648,6 +649,10 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     const payload = { appSessionId, path }
     sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_HOST_WORKSPACE_FILE_AVAILABILITY, payload) as Promise<boolean>
+  },
+  getExternalAppIcon(request) {
+    sendGuard.assertAllowed(request)
+    return ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)
   },
   reportVisibleSessions(sessionIds: SessionId[]): void {
     // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park

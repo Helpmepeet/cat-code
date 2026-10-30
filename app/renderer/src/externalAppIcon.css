@@ -1,0 +1,21 @@
+.external-app-icon {
+  display: inline-flex;
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+
+.external-app-icon > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.external-app-icon > svg {
+  width: 16px;
+  height: 16px;
+}

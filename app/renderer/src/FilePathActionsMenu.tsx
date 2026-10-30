@@ -5,6 +5,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState, Fragment, type ReactNode } from 'react'
+import { ExternalAppIcon } from './ExternalAppIcon.js'
+import type { ExternalAppIconRequest } from '../../shared/externalAppIcons.js'
 import type {
   OpenWorkspaceFileTarget,
   SessionId,
@@ -222,6 +224,8 @@ export function FilePathActionsMenu({
                 item={item}
                 flipLeft={placement.flipFlyoutLeft}
                 onAction={handleAction}
+                appSessionId={sessionId}
+                path={rawPath}
               />
             ) : (
               <FilePathMenuRow
@@ -240,10 +244,14 @@ function FilePathFlyoutRow({
   item,
   flipLeft,
   onAction,
+  appSessionId,
+  path,
 }: {
   item: FilePathActionItem
   flipLeft: boolean
   onAction: (kind: FilePathActionKind) => void
+  appSessionId: SessionId
+  path: string
 }) {
   const [open, setOpen] = useState(false)
   const flyoutRef = useRef<HTMLDivElement>(null)
@@ -324,13 +332,20 @@ function FilePathFlyoutRow({
             (flipLeft ? 'right-full mr-1' : 'left-full ml-1')
           }
         >
-          {item.flyout?.map(child => (
-            <FilePathMenuRow
-              key={child.kind}
-              item={child}
-              onAction={() => onAction(child.kind)}
-            />
-          ))}
+          {item.flyout?.map(child => {
+            const target = OPEN_TARGETS[child.kind]?.target
+            const appIcon: ExternalAppIconRequest | undefined = target === 'default'
+              ? { target, appSessionId, path }
+              : target ? { target } : undefined
+            return (
+              <FilePathMenuRow
+                key={child.kind}
+                item={child}
+                onAction={() => onAction(child.kind)}
+                appIcon={appIcon}
+              />
+            )
+          })}
         </div>
       ) : null}
     </div>
@@ -340,9 +355,11 @@ function FilePathFlyoutRow({
 function FilePathMenuRow({
   item,
   onAction,
+  appIcon,
 }: {
   item: FilePathActionItem
   onAction: () => void
+  appIcon?: ExternalAppIconRequest
 }) {
   if (!item.enabled) {
     return (
@@ -362,8 +379,9 @@ function FilePathMenuRow({
       type="button"
       role="menuitem"
       onClick={onAction}
-      className="flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-white/[0.05] hover:text-text-primary focus-visible:bg-white/[0.05] focus-visible:text-text-primary focus-visible:outline-none"
+      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-text-muted transition-colors hover:bg-white/[0.05] hover:text-text-primary focus-visible:bg-white/[0.05] focus-visible:text-text-primary focus-visible:outline-none"
     >
+      {appIcon ? <ExternalAppIcon request={appIcon} /> : null}
       <span className="flex-1 truncate">{item.label}</span>
     </button>
   )

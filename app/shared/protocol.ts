@@ -1,4 +1,5 @@
 import type { FocusedBashJob } from './focusedBashJobs.js'
+import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
 /**
  * CatCode desktop IPC protocol — v5.
@@ -4310,6 +4311,8 @@ export type CatCodeBridge = {
   ): Promise<boolean>
   /** Read whether the same file-opening policy accepts a target, without opening it. */
   getWorkspaceFileAvailability(appSessionId: SessionId, path: string): Promise<boolean>
+  /** Main-owned installed-app imagery; default file association uses the same file policy. */
+  getExternalAppIcon(request: ExternalAppIconRequest): Promise<ExternalAppIcon>
   /**
    * Main owns the native chooser and keeps the chosen path private. Image
    * selections return bounded bytes; other files return opaque tokens.

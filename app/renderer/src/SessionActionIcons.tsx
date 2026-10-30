@@ -21,6 +21,7 @@
  */
 import type { ReactNode } from 'react'
 import type { SessionActionKind } from './sessionActions.js'
+import { ExternalAppIcon } from './ExternalAppIcon.js'
 
 /**
  * The glyph for a resolved menu verb.
@@ -78,8 +79,9 @@ export function SessionActionIcon({
     case 'move-back':
       return <ActionRewindIcon />
     case 'move-to-project':
-    case 'open-chat-folder':
       return <ActionOpenIcon />
+    case 'open-chat-folder':
+      return <ExternalAppIcon request={{ target: 'finder' }} />
     case 'copy-chat-folder-path':
       return <ActionCopyIcon />
     default: {
