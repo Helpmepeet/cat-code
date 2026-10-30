@@ -133,6 +133,8 @@ export type UserMessage = {
   origin?: MessageOrigin
   /** Missing or null means no proven submission-time proposal association. */
   priorAssistantContext?: PriorAssistantContext | null
+  /** Engine-owned source identities accepted together by this durable input. */
+  acceptedInputUuids?: string[]
   planContent?: string
 }
 

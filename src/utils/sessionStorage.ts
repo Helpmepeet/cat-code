@@ -123,6 +123,7 @@ import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
 import { appendFramedTranscriptSync, appendFramedTranscriptWithinGuard, replacePrivateTranscriptWithinGuard, withTranscriptAppendGuard } from './transcriptAppendGuard.js'
 import { prepareOwnedTranscriptTail, type TailRecoveryState } from './transcriptTailRecovery.js'
+import { isAcceptedInputBatch } from './queuedInputReceipts.js'
 
 // Capture build-time defines at module evaluation to work around bun --define
 // in async contexts (https://github.com/oven-sh/bun/issues/26168). Direct-source
@@ -1479,15 +1480,12 @@ class Project {
     this.flushTimer = setTimeout(async () => {
       this.flushTimer = null
       try {
-        this.activeDrain = this.drainWriteQueue()
-        await this.activeDrain
+        await this.startDrain()
       } catch (err) {
         logForDebugging(
           `Failed to flush transcript queue: ${err instanceof Error ? err.message : String(err)}`,
           { level: 'warn' },
         )
-      } finally {
-        this.activeDrain = null
       }
       // If more items arrived during drain, schedule again
       if (this.writeQueues.size > 0 && !this.appendFailure) {
@@ -1499,6 +1497,15 @@ class Project {
   private async appendToFile(filePath: string, data: string): Promise<void> {
     await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
     await withTranscriptAppendGuard(filePath, async () => appendFramedTranscriptWithinGuard(filePath, data))
+  }
+
+  private startDrain(): Promise<void> {
+    if (this.activeDrain) return this.activeDrain
+    const drain = this.drainWriteQueue().finally(() => {
+      if (this.activeDrain === drain) this.activeDrain = null
+    })
+    this.activeDrain = drain
+    return drain
   }
 
   private async drainWriteQueue(): Promise<void> {
@@ -1749,39 +1756,21 @@ class Project {
   }
 
   async flush(): Promise<void> {
-    // Cancel pending timer
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer)
-      this.flushTimer = null
-    }
-    // Wait for any in-flight drain to finish — including one started by ANOTHER
-    // flush, not only by the timer. `drainWriteQueue` splices each queue out
-    // before it writes, so an overlapping drain finds nothing left to do and
-    // this flush would report durability for a write still in flight. A caller
-    // that flushes and then exits the process loses exactly that write.
-    if (this.activeDrain) {
-      await this.activeDrain
-    }
-    // Drain anything remaining in the queues. Published on `activeDrain` for
-    // the same reason: the next flush in has to be able to wait for it.
-    const drain = this.drainWriteQueue()
-    this.activeDrain = drain
-    try {
-      await drain
-    } finally {
-      // Only clear what this call published: a later drain may already own the
-      // slot, and stomping it would let the next flush return over an in-flight
-      // write, which is the bug this whole block exists to close.
-      if (this.activeDrain === drain) this.activeDrain = null
-    }
-
-    // Wait for non-queue tracked operations (e.g. removeMessageByUuid)
-    if (this.pendingWriteCount === 0) {
+    for (;;) {
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer)
+        this.flushTimer = null
+      }
+      // Concurrent flushers must join the same drain, including after a shared
+      // predecessor settles. An empty drain must never hide an in-flight write.
+      await this.startDrain()
+      if (this.activeDrain || [...this.writeQueues.values()].some(queue => queue.length > 0)) continue
+      if (this.pendingWriteCount > 0) {
+        await new Promise<void>(resolve => { this.flushResolvers.push(resolve) })
+        continue
+      }
       return
     }
-    return new Promise<void>(resolve => {
-      this.flushResolvers.push(resolve)
-    })
   }
 
   /**
@@ -5606,6 +5595,11 @@ export async function getSessionQueueOperations(
   })
   const messageUuids = new Set(loaded.messages.keys())
   for (const message of loaded.messages.values()) {
+    if (message.type === 'user' && !message.origin && !message.isVirtual && !message.sourceToolAssistantUUID &&
+        isAcceptedInputBatch(message.acceptedInputUuids, message.uuid) &&
+        !(Array.isArray(message.message.content) && message.message.content.some(block => block.type === 'tool_result'))) {
+      for (const uuid of message.acceptedInputUuids) messageUuids.add(uuid as UUID)
+    }
     if (message.type !== 'attachment') continue
     const attachment = message.attachment && typeof message.attachment === 'object' &&
       !Array.isArray(message.attachment) ? message.attachment as Record<string, unknown> : null

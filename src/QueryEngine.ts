@@ -107,6 +107,7 @@ import {
 } from './utils/sessionStorage.js'
 import { acceptTailRecoveryReview, readTailRecoveryState } from './utils/transcriptTailRecovery.js'
 import { runDeferredResumeHooks } from './utils/deferredResumeHooks.js'
+import { isAcceptedInputBatch } from './utils/queuedInputReceipts.js'
 import { createHandoffSkippedResult } from './services/tools/handoffExecution.js'
 import { TurnHandoff, handoffContinuationPrompt, handoffReconciliationPrompt, handoffTerminalPrompt, handoffOutcomeText, readHandoffOutcomeData, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './app-runtime/handoff.js'
 import { buildEffectiveSystemPrompt } from './utils/systemPrompt.js'
@@ -449,6 +450,7 @@ export class QueryEngine {
       origin?: MessageOrigin
       priorAssistantContext?: import('./types/message.js').PriorAssistantContext | null
       onInputPersisted?: () => void | Promise<void>
+      acceptedInputUuids?: string[]
       resumeHooksDeferred?: boolean
       onResumeHooksApplied?: () => void
       inlineCommand?: InlineCommandOperation
@@ -808,6 +810,14 @@ export class QueryEngine {
           }
         }
       }
+    }
+
+    if (options.acceptedInputUuids !== undefined) {
+      const input = messagesFromUserInput.find(message => message.type === 'user' && message.uuid === options.uuid)
+      if (input?.type !== 'user' || !isAcceptedInputBatch(options.acceptedInputUuids, input.uuid)) {
+        throw new Error('Batched input acceptance identities are invalid')
+      }
+      input.acceptedInputUuids = [...options.acceptedInputUuids]
     }
 
     // Update params to reflect updates from processing /slash commands
@@ -2067,6 +2077,7 @@ export async function* ask({
   deferredAttemptUuid,
   deferredJobId,
   onInputPersisted,
+  acceptedInputUuids,
   resumeHooksDeferred,
   onResumeHooksApplied,
 }: {
@@ -2103,6 +2114,7 @@ export async function* ask({
   deferredAttemptUuid?: string
   deferredJobId?: string
   onInputPersisted?: () => void | Promise<void>
+  acceptedInputUuids?: string[]
   resumeHooksDeferred?: boolean
   onResumeHooksApplied?: () => void
 }): AsyncGenerator<SDKMessage, void, unknown> {
@@ -2151,6 +2163,7 @@ export async function* ask({
       uuid: promptUuid,
       isMeta,
       onInputPersisted,
+      acceptedInputUuids,
       resumeHooksDeferred,
       onResumeHooksApplied,
     })

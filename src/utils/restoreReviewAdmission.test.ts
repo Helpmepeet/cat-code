@@ -87,6 +87,68 @@ test('ordinary terminal input is durable before admission even without a recover
   finally { failure.mockRestore() }
 })
 
+test('real headless batching acknowledges every original identity only after the shared input receipt', async () => {
+  const { runHeadlessStreaming } = await import('../cli/print.js')
+  const { StructuredIO } = await import('../cli/structuredIO.js')
+  const lifecycle = await import('./commandLifecycle.js')
+  const ids = [randomUUID(), randomUUID(), randomUUID()]
+  const firstEntered = Promise.withResolvers<void>(), finishFirst = Promise.withResolvers<void>()
+  const batchBarrier = Promise.withResolvers<void>(), releaseBatch = Promise.withResolvers<void>()
+  const started: string[] = [], output: { type: string; uuid?: string; isReplay?: boolean }[] = []
+  lifecycle.setCommandLifecycleListener((uuid, state) => { if (state === 'started') started.push(uuid) })
+  const realFlush = storage.flushCurrentTranscriptDurably
+  spies.push(spyOn(storage, 'flushCurrentTranscriptDurably').mockImplementation(async uuid => {
+    if (uuid === ids[2]) { batchBarrier.resolve(); await releaseBatch.promise }
+    await realFlush(uuid)
+  }))
+  let calls = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    if (++calls === 1) { firstEntered.resolve(); await finishFirst.promise }
+    else {
+      const receipts = await storage.getSessionQueueOperations(bootstrap.getSessionId())
+      expect(receipts.messageUuids.has(ids[1] as never)).toBe(true)
+      expect(receipts.messageUuids.has(ids[2] as never)).toBe(true)
+    }
+    yield { type: 'assistant', uuid: randomUUID(), timestamp: new Date().toISOString(), message: {
+      id: randomUUID(), role: 'assistant', model: 'fixture', content: [{ type: 'text', text: 'accepted batch' }],
+      usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }, stop_reason: 'end_turn', stop_sequence: null,
+    } } as never
+  }))
+  const line = (index: number) => JSON.stringify({ type: 'user', uuid: ids[index], session_id: bootstrap.getSessionId(),
+    parent_tool_use_id: null, message: { role: 'user', content: `headless input ${index}` } }) + '\n'
+  async function* input() {
+    yield line(0)
+    await firstEntered.promise
+    yield line(1)
+    yield line(2)
+    finishFirst.resolve()
+  }
+  const io = new StructuredIO(input(), false)
+  let state = getDefaultAppState()
+  const options = { systemPrompt: 'isolated batching test', userSpecifiedModel: 'gpt-5.6-terra',
+    thinkingConfig: { type: 'disabled' }, verbose: false, replayUserMessages: true } as Parameters<typeof runHeadlessStreaming>[10]
+  const consume = (async () => {
+    for await (const frame of runHeadlessStreaming(io, [], [], [], [seed], async () => ({ behavior: 'allow', updatedInput: {} }), {},
+      () => state, update => { state = update(state) }, [], options, { kind: 'none' }, false)) output.push(frame as never)
+  })()
+  try {
+    await batchBarrier.promise
+    expect(started).not.toContain(ids[1]!)
+    expect(started).not.toContain(ids[2]!)
+    expect(output.some(frame => frame.isReplay && frame.uuid === ids[1])).toBe(false)
+    expect(calls).toBe(1)
+    releaseBatch.resolve()
+    await consume
+    expect(calls).toBe(2)
+    for (const id of ids) expect(started.filter(uuid => uuid === id)).toHaveLength(1)
+    for (const id of ids) expect(output.some(frame => frame.isReplay && frame.uuid === id)).toBe(true)
+  } finally {
+    finishFirst.resolve(); releaseBatch.resolve()
+    await consume
+    lifecycle.setCommandLifecycleListener(null)
+  }
+}, 15_000)
+
 test('terminal queued attachment cannot resume consumption before its durable receipt', async () => {
   const attachment = createAttachmentMessage({
     type: 'queued_command', commandMode: 'prompt', prompt: 'terminal mid-turn input', source_uuid: randomUUID(),

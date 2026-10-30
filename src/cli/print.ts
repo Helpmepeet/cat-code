@@ -92,6 +92,7 @@ import { validateUuid } from 'src/utils/uuid.js'
 import { fromArray } from 'src/utils/generators.js'
 import { ask } from 'src/QueryEngine.js'
 import { RestoreReviewAdmission } from 'src/utils/restoreReviewAdmission.js'
+import { MAX_INPUT_BATCH_SIZE } from 'src/utils/queuedInputReceipts.js'
 const automaticInputIds = new WeakMap<StructuredIO, Set<string>>()
 function prependAutomaticInput(io: StructuredIO, content: string): void {
   const ids = automaticInputIds.get(io) ?? new Set<string>()
@@ -2137,7 +2138,7 @@ export function runHeadlessStreaming(
           // Prompt commands greedily collect followers with matching workload.
           const batch: QueuedCommand[] = [command]
           if (command.mode === 'prompt') {
-            while (!restoreReview.required && canBatchWith(command, peek(isMainThread))) {
+            while (!restoreReview.required && batch.length < MAX_INPUT_BATCH_SIZE && canBatchWith(command, peek(isMainThread))) {
               batch.push(dequeue(isMainThread)!)
             }
             if (batch.length > 1) {
@@ -2150,22 +2151,22 @@ export function runHeadlessStreaming(
           }
           const batchUuids = batch.map(c => c.uuid).filter(u => u !== undefined)
 
-          // QueryEngine will emit a replay for command.uuid (the last uuid in
-          // the batch) via its messagesToAck path. Emit replays here for the
-          // rest so consumers that track per-uuid delivery (clank's
-          // asyncMessages footer, CCR) see an ack for every message they sent,
-          // not just the one that survived the merge.
-          if (options.replayUserMessages && batch.length > 1) {
-            for (const c of batch) {
-              if (c.uuid && c.uuid !== command.uuid) {
-                output.enqueue({
-                  type: 'user',
-                  message: { role: 'user', content: c.value },
-                  session_id: getSessionId(),
-                  parent_tool_use_id: null,
-                  uuid: c.uuid,
-                  isReplay: true,
-                } satisfies SDKUserMessageReplay)
+          let batchAcknowledged = false
+          const acknowledgeBatch = () => {
+            if (batchAcknowledged) return
+            batchAcknowledged = true
+            for (const uuid of batchUuids) notifyCommandLifecycle(uuid, 'started')
+            // The final identity is replayed by QueryEngine. All other source
+            // identities share its durable combined-input receipt.
+            if (options.replayUserMessages && batch.length > 1) {
+              for (const c of batch) {
+                if (c.uuid && c.uuid !== command!.uuid) {
+                  output.enqueue({
+                    type: 'user', message: { role: 'user', content: c.value },
+                    session_id: getSessionId(), parent_tool_use_id: null,
+                    uuid: c.uuid, isReplay: true,
+                  } satisfies SDKUserMessageReplay)
+                }
               }
             }
           }
@@ -2191,10 +2192,6 @@ export function runHeadlessStreaming(
           }
 
           const allTools = buildAllTools(appState)
-
-          for (const uuid of batchUuids) {
-            notifyCommandLifecycle(uuid, 'started')
-          }
 
           // Task notifications arrive when background agents complete.
           // Emit an SDK system event for SDK consumers, then fall through
@@ -2344,6 +2341,8 @@ export function runHeadlessStreaming(
           // const-capture: TS loses `while ((command = dequeue()))` narrowing
           // inside the closure.
           const cmd = command
+          // Explicit ephemeral mode has no durable acceptance contract.
+          if (isSessionPersistenceDisabled() && !restoreReview.required) acknowledgeBatch()
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
               commands: uniqBy(
@@ -2352,8 +2351,10 @@ export function runHeadlessStreaming(
               ),
               prompt: input,
               promptUuid: cmd.uuid,
+              acceptedInputUuids: batchUuids.length > 1 ? batchUuids : undefined,
               isMeta: cmd.isMeta,
               onInputPersisted: () => {
+                acknowledgeBatch()
                 restoreReview.inputPersisted()
                 freshReviewInputIds.clear()
               },
