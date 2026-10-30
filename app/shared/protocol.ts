@@ -1,4 +1,4 @@
-import type { FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewApplications } from './filePreview.js'
+import type { FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
 import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
@@ -4050,6 +4050,9 @@ export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
   prepareFilePreview(appSessionId: SessionId, path: string): Promise<FilePreviewDescriptor | null>
+  prepareLocalhostPreview(appSessionId: SessionId, url: string): Promise<LocalhostPreviewResult>
+  navigateLocalhostPreview(id: string, routeKey: string, scroll: FilePreviewScroll): Promise<FilePreviewDescriptor | null>
+  openBlockedPreviewNavigation(id: string, target: PreviewBrowserTarget): Promise<boolean>
   refreshFilePreview(id: string): Promise<FilePreviewDescriptor | null>
   commitFilePreview(id: string, revision: number): Promise<boolean>
   releaseFilePreview(id: string): void

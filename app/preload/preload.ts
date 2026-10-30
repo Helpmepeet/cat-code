@@ -1,3 +1,4 @@
+import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
 import { CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMIT, CH_FILE_PREVIEW_RELEASE, CH_FILE_PREVIEW_EVENT, CH_FILE_PREVIEW_SCROLL_READ, CH_FILE_PREVIEW_SCROLL_RESTORE, CH_FILE_PREVIEW_APPLICATIONS, CH_FILE_PREVIEW_APPLICATION_CHOOSE } from '../shared/ipcChannels.js'
 import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
 import type { LidModeView } from '../shared/lidClosed.js'
@@ -631,6 +632,18 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   saveDiagnosticsBundle(): Promise<import('../shared/protocol.js').SaveDiagnosticsResult> {
     sendGuard.assertAllowed({ saveDiagnostics: true })
     return ipcRenderer.invoke(CH_SAVE_DIAGNOSTICS) as Promise<import('../shared/protocol.js').SaveDiagnosticsResult>
+  },
+  prepareLocalhostPreview(appSessionId, url) {
+    const payload = { appSessionId, url }; sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_LOCALHOST_PREVIEW_PREPARE, payload)
+  },
+  navigateLocalhostPreview(id, routeKey, scroll) {
+    const payload = { id, routeKey, scroll }; sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_LOCALHOST_PREVIEW_NAVIGATE, payload)
+  },
+  openBlockedPreviewNavigation(id, target) {
+    const payload = { id, target }; sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_PREVIEW_BLOCKED_NAVIGATION_OPEN, payload)
   },
   prepareFilePreview(appSessionId, path) {
     const payload = { appSessionId, path }; sendGuard.assertAllowed(payload)

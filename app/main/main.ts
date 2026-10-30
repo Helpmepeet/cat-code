@@ -1,3 +1,4 @@
+import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
 import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
 import { createPreviewApplications } from './previewApplications.js'
 import { FILE_PREVIEW_SCHEME, type FilePreviewScroll } from '../shared/filePreview.js'
@@ -4417,6 +4418,9 @@ function registerHostControlPlane(): void {
     },
   )
 
+  ipcMain.handle(CH_LOCALHOST_PREVIEW_PREPARE, () => ({ ok: false, reason: 'refused' }))
+  ipcMain.handle(CH_LOCALHOST_PREVIEW_NAVIGATE, () => null)
+  ipcMain.handle(CH_PREVIEW_BLOCKED_NAVIGATION_OPEN, () => false)
   protocol.handle(FILE_PREVIEW_SCHEME, request => filePreviews.respond(request))
   ipcMain.handle(CH_FILE_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? filePreviews.prepare(input) : null)
   ipcMain.handle(CH_FILE_PREVIEW_REFRESH, (event, input: unknown) => {
