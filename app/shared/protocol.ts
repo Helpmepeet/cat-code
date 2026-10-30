@@ -3574,13 +3574,15 @@ export const PROMPT_RECALL_VERB_TYPES = ['prompt.recall'] as const
 export type PromptRecallVerbType = (typeof PROMPT_RECALL_VERB_TYPES)[number]
 
 /**
- * Take back the active queue, or explicitly review one retained recovery item.
+ * Take back the active queue, or copy/remove one retained recovery item.
  * The optional target names engine-held content, never renderer-authored input.
  */
 export type PromptRecallMessage = {
   type: 'prompt.recall'
   requestId: string
   recoveredPromptId?: string
+  /** Explicitly remove saved review input instead of copying it to a draft. */
+  discard?: true
 }
 
 /**

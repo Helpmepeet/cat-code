@@ -46,6 +46,7 @@ test('recovered input is visibly uncertain, separate from executable queue, and 
   const section = h.tree.container.querySelector('section[aria-label="Recovered inputs for review"]')!
   expect(section.textContent).toContain('Delivery unknown')
   expect(section.textContent).toContain('will not be sent automatically')
+  expect(section.textContent).toContain('keeps the saved input here')
   expect(section.textContent).toContain('2 more saved inputs')
   expect(h.tree.container.querySelector('[aria-label="Send next queued message now"]')).toBeNull()
   expect(h.tree.container.querySelectorAll('[data-user-bubble]')).toHaveLength(0)
@@ -61,6 +62,28 @@ test('recovered input is visibly uncertain, separate from executable queue, and 
   }]) })
   expect(h.tree.container.querySelector('[contenteditable="true"][role="textbox"]')?.textContent).toContain('Original full input')
   expect(h.tree.container.querySelector('img[src="data:image/png;base64,AAAA"]')).not.toBeNull()
+  expect(h.submits()).toBe(0)
+  h.settleStop()
+})
+
+test('removing a saved review copy is explicit and does not erase or submit the copied draft', async () => {
+  const h = await mountReview()
+  const section = h.tree.container.querySelector('section[aria-label="Recovered inputs for review"]')!
+  await act(async () => { section.querySelector<HTMLButtonElement>('button')!.click() })
+  await act(async () => { h.receive([{
+    kind: 'prompt-recall.result', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+    requestId: h.recalls[0]!.requestId, ok: true, alreadyDelivered: 0, message: 'Copied.',
+    recalled: [{ id: recoveredId, prompt: 'Copied text remains in the draft' }],
+  }]) })
+  const remove = [...section.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Remove from review')!
+  await act(async () => { remove.click() })
+  expect(h.recalls[1]).toMatchObject({ recoveredPromptId: recoveredId, discard: true })
+  await act(async () => { h.receive([{
+    kind: 'prompt-recall.result', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+    requestId: h.recalls[1]!.requestId, ok: true, alreadyDelivered: 0, message: 'Removed from review.', recalled: [],
+  }, { kind: 'queued-prompts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+    prompts: [], recoveredPrompts: [], recoveredPromptCount: 0 }]) })
+  expect(h.tree.container.querySelector('[contenteditable="true"][role="textbox"]')?.textContent).toContain('Copied text remains in the draft')
   expect(h.submits()).toBe(0)
   h.settleStop()
 })

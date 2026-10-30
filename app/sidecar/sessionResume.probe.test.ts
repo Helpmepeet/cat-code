@@ -104,9 +104,9 @@ async function startRecovery(configHome: string, cwd: string, engineSessionId: s
     if (frame?.kind !== 'queued-prompts.snapshot') throw new Error('No saved-input review snapshot')
     return frame
   }
-  const recall = async (id: string) => {
+  const recall = async (id: string, discard = false) => {
     const requestId = randomUUID()
-    supervisor.send(appSessionId, { type: 'prompt.recall', requestId, recoveredPromptId: id })
+    supervisor.send(appSessionId, { type: 'prompt.recall', requestId, recoveredPromptId: id, ...(discard ? { discard: true as const } : {}) })
     const frame = await wait(frame => (frame.kind === 'prompt-recall.result' || frame.kind === 'error') && frame.requestId === requestId)
     if (frame.kind !== 'prompt-recall.result') throw new Error(`Review failed: ${JSON.stringify(frame)}`)
     expect(frame.ok).toBe(true)
@@ -127,7 +127,7 @@ async function startRecovery(configHome: string, cwd: string, engineSessionId: s
       }
     }
   }
-  return { frames, ready, snapshot, recall, stop, wait,
+  return { frames, ready, snapshot, recall, remove: (id: string) => recall(id, true), stop, wait,
     send: (message: SidecarClientMessage) => supervisor.send(appSessionId, message),
     waitForTermination: async () => {
       if (pid !== undefined) await waitForExit(pid)
@@ -144,7 +144,7 @@ function assertNotOrdinaryHistory(frames: ServerFrame[], ids: string[]): void {
   expect(frames.some(frame => frame.kind === 'event' && frame.event.type === 'turn.status' && frame.event.activeTurn)).toBe(false)
 }
 
-test('production restore exposes waiting text/media for review, excludes explicit cancellation, and persists take-back across another restart', async () => {
+test('production restore copies waiting text/media safely and persists only explicit removal across restart', async () => {
   const configHome = tmp('catcode-review-cfg-'), cwd = tmp('catcode-review-cwd-')
   const engineSessionId = randomUUID(), marker = `review-${randomUUID()}`
   const minted = await run([minter, engineSessionId, marker, '--recalled-queued'], cwd, configHome)
@@ -161,6 +161,8 @@ test('production restore exposes waiting text/media for review, excludes explici
     { type: 'text', text: `image caption ${marker}` },
     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
   ] }])
+  expect(first.snapshot().recoveredPrompts?.map(item => item.id)).toContain(image)
+  expect((await first.remove(image)).recalled).toEqual([])
   const records = readFileSync(transcriptPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
   expect(records.some(row => row.type === 'queue-operation' && row.uuid === image && row.operation === 'remove' && row.queueVersion === 2)).toBe(true)
   expect(records.some(row => row.type === 'queue-operation' && row.uuid === image && row.operation === 'enqueue')).toBe(true)
@@ -171,6 +173,28 @@ test('production restore exposes waiting text/media for review, excludes explici
   expect((await second.recall(waiting)).recalled).toEqual([{ id: waiting, prompt: `waiting input ${marker}` }])
   assertNotOrdinaryHistory(second.frames, [recalled, waiting, image])
   await second.stop()
+}, TEST_TIMEOUT_MS)
+
+test('a copied recovered input remains available after close or a lost renderer reply', async () => {
+  const configHome = tmp('catcode-copy-review-cfg-'), cwd = tmp('catcode-copy-review-cwd-')
+  const engineSessionId = randomUUID(), marker = `copy-${randomUUID()}`
+  const minted = await run([minter, engineSessionId, marker, '--recalled-queued'], cwd, configHome)
+  const image = mintedValue(minted, 'MINTED_IMAGE_UUID')
+  const first = await startRecovery(configHome, cwd, engineSessionId)
+  const requestId = randomUUID()
+  first.send({ type: 'prompt.recall', requestId, recoveredPromptId: image })
+  // Ignore the result as a closed/reloaded renderer would. No draft handoff is
+  // acknowledged, so the engine must retain normal review access to its copy.
+  await first.wait(frame => frame.kind === 'prompt-recall.result' && frame.requestId === requestId)
+  await first.stop()
+  const restarted = await startRecovery(configHome, cwd, engineSessionId)
+  expect(restarted.snapshot().recoveredPrompts?.map(item => item.id)).toContain(image)
+  expect((await restarted.recall(image)).recalled).toEqual([{ id: image, prompt: [
+    { type: 'text', text: `image caption ${marker}` },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+  ] }])
+  assertNotOrdinaryHistory(restarted.frames, [image])
+  await restarted.stop()
 }, TEST_TIMEOUT_MS)
 
 test('legacy ambiguous dequeue and remove survive for explicit review rather than becoming user bubbles or queued work', async () => {

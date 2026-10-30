@@ -302,6 +302,7 @@ export function SessionPane({
   recoveredPrompts = EMPTY_QUEUED_PROMPTS,
   recoveredPromptCount = 0,
   onReviewRecoveredPrompt = null,
+  onRemoveRecoveredPrompt = null,
   desktopCommandPending = false,
   permissionContext,
   permissionKeyTargetRequestId = null,
@@ -2068,7 +2069,7 @@ export function SessionPane({
               </div>
             </div>
           ) : null}
-          <RecoveredInputReview inputs={recoveredPrompts} total={recoveredPromptCount} onReview={onReviewRecoveredPrompt} />
+          <RecoveredInputReview inputs={recoveredPrompts} total={recoveredPromptCount} onReview={onReviewRecoveredPrompt} onRemove={onRemoveRecoveredPrompt} />
           {projectRoute ? (
             <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pb-3 pt-2.5">
               <div className="flex flex-col items-end" aria-label="Pending message">
@@ -3068,6 +3069,7 @@ type SessionPaneProps = {
   recoveredPrompts?: readonly QueuedPromptItem[]
   recoveredPromptCount?: number
   onReviewRecoveredPrompt?: ((id: string) => void) | null
+  onRemoveRecoveredPrompt?: ((id: string) => void) | null
   /** A desktop `/clear` or `/new` request is creating its destination chat. */
   desktopCommandPending?: boolean
   /** D1b — take every waiting message back into the composer. The pane always

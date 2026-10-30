@@ -303,7 +303,7 @@ test('recovered input attach/reload never queues or executes it, and force canno
   expect(calls).toBe(0)
 })
 
-test('explicit recovered review returns full text/media only after durable cancellation and stays cancelled on restart', async () => {
+test('copying recovered text/media retains the saved input until separate durable removal', async () => {
   const content = [{ type: 'text' as const, text: 'review original media' },
     { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'AAAA' } }]
   const recovered = { uuid: randomUUID(), content, timestamp: new Date().toISOString() }
@@ -315,6 +315,13 @@ test('explicit recovered review returns full text/media only after durable cance
   const answer = h.received.find(frame => frame.kind === 'prompt-recall.result' && frame.requestId === requestId)
   if (answer?.kind !== 'prompt-recall.result') throw new Error('Missing review result')
   expect(answer.recalled).toEqual([{ id: recovered.uuid, prompt: content }])
+  expect(latestRecoveredSnapshot(h).recoveredPromptCount).toBe(1)
+  expect(selectUndeliveredPrompts(await storage.getSessionQueueOperations(h.engineSessionId)).prompts
+    .map(prompt => prompt.uuid)).toContain(recovered.uuid)
+  const discardId = randomUUID()
+  h.send({ type: 'prompt.recall', requestId: discardId, recoveredPromptId: recovered.uuid, discard: true })
+  await until(() => h.received.some(frame => frame.kind === 'prompt-recall.result' && frame.requestId === discardId), 'explicit removal is durable')
+  expect(h.received.find(frame => frame.kind === 'prompt-recall.result' && frame.requestId === discardId)).toMatchObject({ recalled: [] })
   const saved = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(h.engineSessionId), { strict: true })
   expect(saved.queueOperations.some(operation => operation.uuid === recovered.uuid && operation.operation === 'enqueue')).toBe(true)
   expect(saved.queueOperations.some(operation => operation.uuid === recovered.uuid && operation.queueVersion === 2 && operation.operation === 'remove')).toBe(true)
@@ -337,7 +344,7 @@ test('recovered review failure retains its only review reference and rejects mal
   })
   const requestId = randomUUID()
   try {
-    h.send({ type: 'prompt.recall', requestId, recoveredPromptId: recovered.uuid })
+    h.send({ type: 'prompt.recall', requestId, recoveredPromptId: recovered.uuid, discard: true })
     await until(() => h.received.some(frame => frame.kind === 'error' && frame.requestId === requestId), 'durability failure is explicit')
     h.reloadRenderer()
     expect(latestRecoveredSnapshot(h).recoveredPrompts?.map(item => item.id)).toContain(recovered.uuid)
@@ -346,10 +353,12 @@ test('recovered review failure retains its only review reference and rejects mal
   expect(h.received.some(frame => frame.kind === 'error' && frame.requestId === 'bad-id')).toBe(true)
   h.send({ type: 'prompt.recall', requestId: 'extra-field', recoveredPromptId: recovered.uuid, injected: true })
   expect(h.received.some(frame => frame.kind === 'error' && frame.requestId === 'extra-field')).toBe(true)
+  h.send({ type: 'prompt.recall', requestId: 'missing-discard-id', discard: true })
+  expect(h.received.some(frame => frame.kind === 'error' && frame.requestId === 'missing-discard-id')).toBe(true)
   expect(getCommandQueueSnapshot()).toEqual([])
 })
 
-test('large recovered sets publish a bounded batch and refill from saved evidence after review', async () => {
+test('large recovered sets retain copied input and refill only after explicit removal', async () => {
   const inputs = Array.from({ length: 40 }, (_, index) => ({
     uuid: randomUUID(), content: `saved input ${index}`, timestamp: new Date().toISOString(),
   }))
@@ -358,6 +367,8 @@ test('large recovered sets publish a bounded batch and refill from saved evidenc
   expect(latestRecoveredSnapshot(h).recoveredPromptCount).toBe(40)
   const first = inputs[0]!
   h.send({ type: 'prompt.recall', requestId: randomUUID(), recoveredPromptId: first.uuid })
+  expect(latestRecoveredSnapshot(h).recoveredPromptCount).toBe(40)
+  h.send({ type: 'prompt.recall', requestId: randomUUID(), recoveredPromptId: first.uuid, discard: true })
   await until(() => latestRecoveredSnapshot(h).recoveredPromptCount === 39, 'next bounded batch becomes available')
   expect(latestRecoveredSnapshot(h).recoveredPrompts).toHaveLength(32)
   expect(latestRecoveredSnapshot(h).recoveredPrompts?.some(item => item.id === inputs[32]!.uuid)).toBe(true)

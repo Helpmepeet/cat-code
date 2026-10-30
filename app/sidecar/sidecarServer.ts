@@ -3195,7 +3195,7 @@ export class SidecarServer {
     }
     const { requestId } = parsed.data
     if (parsed.data.recoveredPromptId !== undefined) {
-      void this.recallRecoveredPrompt(connection, requestId, parsed.data.recoveredPromptId)
+      void this.recallRecoveredPrompt(connection, requestId, parsed.data.recoveredPromptId, parsed.data.discard === true)
       return
     }
 
@@ -3242,7 +3242,7 @@ export class SidecarServer {
     })
   }
 
-  private async recallRecoveredPrompt(connection: Connection, requestId: string, id: string): Promise<void> {
+  private async recallRecoveredPrompt(connection: Connection, requestId: string, id: string, discard: boolean): Promise<void> {
     const recovered = this.recoveredPrompts.get(id)
     if (this.recoveredRecallInFlight) {
       this.sendError(connection, requestId, 'bad_request', 'Wait for the current recovered input review to finish.', true)
@@ -3254,6 +3254,16 @@ export class SidecarServer {
     }
     if (!recovered) {
       this.sendError(connection, requestId, 'bad_request', 'This recovered input is not available for review. Reopen the chat to refresh it.', false)
+      return
+    }
+    if (!discard) {
+      // A best-effort reply is not a durable transfer to a renderer draft.
+      // Keep the saved copy through close, reload and transport loss.
+      this.broadcastPromptRecallResult({
+        kind: 'prompt-recall.result', protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId, requestId, ok: true, alreadyDelivered: 0,
+        recalled: [{ id, prompt: recovered.prompt }], message: 'Copied to the draft. The saved input remains available for review.',
+      })
       return
     }
     this.recoveredRecallInFlight = true
@@ -3274,7 +3284,7 @@ export class SidecarServer {
       this.broadcastPromptRecallResult({
         kind: 'prompt-recall.result', protocolVersion: PROTOCOL_VERSION,
         sessionId: this.sessionId, requestId, ok: true, alreadyDelivered: 0,
-        recalled: [{ id, prompt: recovered.prompt }], message: 'Recovered input is ready to review.',
+        recalled: [], message: 'Saved input removed from review.',
       })
       if (this.loadRecoveredPrompts && !this.closed) {
         try {
@@ -3287,7 +3297,7 @@ export class SidecarServer {
       this.broadcastQueuedPrompts()
     } catch (error) {
       this.log(`[sidecar] recovered input review failed for ${id}: ${String(error)}`)
-      this.sendError(connection, requestId, 'internal_error', 'Recovered input could not be taken back safely. Its saved copy has been kept.', false)
+      this.sendError(connection, requestId, 'internal_error', 'Saved input could not be removed from review. Its saved copy has been kept.', false)
     } finally {
       this.inFlightDurableWrites--
       this.recoveredRecallInFlight = false
@@ -6881,11 +6891,9 @@ function checkStrictKeys(message: unknown): string | null {
     // forged `taskId`/`isBackgrounded` key is rejected here before the Zod parse,
     // so the renderer can never name engine task state.
     ['task.background.one', new Set(['type', 'requestId', 'toolUseId'])],
-    // D1b prompt recall (app-owned; see PROMPT_RECALL_VERB_TYPES). It takes back
-    // everything of the user's that is still waiting, so it has no target and
-    // the renderer authors NOTHING but the correlation id. A forged `id`,
-    // `agentId`, or `all` key is rejected here before the Zod parse.
-    ['prompt.recall', new Set(['type', 'requestId', 'recoveredPromptId'])],
+    // Recovery targets name engine-held input, never renderer-authored payloads.
+    // Explicit removal is separate from copying a saved input into a draft.
+    ['prompt.recall', new Set(['type', 'requestId', 'recoveredPromptId', 'discard'])],
     // Force-send is bound to an engine-minted queued prompt id. Any attempt to
     // name a task, inject prompt content, or author queue priority is rejected.
     ['prompt.force', new Set(['type', 'requestId', 'promptId'])],
@@ -7363,7 +7371,10 @@ const promptRecallMessageSchema = z.object({
   type: z.literal('prompt.recall'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   recoveredPromptId: z.string().uuid().optional(),
-}).strict()
+  discard: z.literal(true).optional(),
+}).strict().refine(message => !message.discard || message.recoveredPromptId !== undefined, {
+  message: 'Removing saved input requires its recovery identity',
+})
 
 const promptForceMessageSchema = z.object({
   type: z.literal('prompt.force'),

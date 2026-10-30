@@ -2661,13 +2661,14 @@ export function App() {
   // response. Nothing is removed here: the sidecar owns the engine's queue and
   // answers with what it actually managed to take back, which is what the
   // restore above then applies.
-  const recallQueuedPrompts = useCallback((sessionId: SessionId, recoveredPromptId?: string) => {
+  const recallQueuedPrompts = useCallback((sessionId: SessionId, recoveredPromptId?: string, discard = false) => {
     const requestId = newRequestId()
     trackRecallRequest(recallRequestsRef.current, requestId, sessionId)
     try {
       getBridge().recallPrompts(sessionId, {
         type: 'prompt.recall', requestId,
         ...(recoveredPromptId ? { recoveredPromptId } : {}),
+        ...(discard ? { discard: true as const } : {}),
       })
     } catch (error) {
       releaseRecallRequest(recallRequestsRef.current, requestId)
@@ -4314,6 +4315,7 @@ export function App() {
 	            recoveredPrompts={selectRecoveredPrompts(queuedPrompts, sessionId)}
 	            recoveredPromptCount={selectRecoveredPromptCount(queuedPrompts, sessionId)}
 	            onReviewRecoveredPrompt={id => recallQueuedPrompts(sessionId, id)}
+	            onRemoveRecoveredPrompt={id => recallQueuedPrompts(sessionId, id, true)}
 	            onRecallQueuedPrompts={() => recallQueuedPrompts(sessionId)}
 	            history={selectHistory(historyState, sessionId)}
                 historyNav={historyNavigation[sessionId] ?? EMPTY_HISTORY_NAV}
