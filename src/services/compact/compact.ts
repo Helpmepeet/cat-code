@@ -1274,6 +1274,63 @@ export function createCompactCanUseTool(): CanUseToolFn {
   })
 }
 
+function isCompleteCompactSummary(text: string): boolean {
+  // Older/plain-text summaries remain valid, but tagged output must contain a
+  // complete nonempty summary rather than a drafting block or continuation tail.
+  if (!/<\/?(?:analysis|summary)>/.test(text)) return text.trim().length > 0
+  return /^(?:<analysis>[\s\S]*?<\/analysis>\s*)?<summary>\s*\S[\s\S]*<\/summary>\s*$/.test(
+    text.trim(),
+  )
+}
+
+function assembleCompactSummaryResponse(
+  messages: Message[],
+): AssistantMessage | undefined {
+  const response = getLastAssistantMessage(messages)
+  // A failed continuation must not turn an earlier partial summary into success.
+  if (!response || response.isApiErrorMessage) return response
+  const lastTextBlock = response.message.content.findLast(
+    block => block.type === 'text',
+  )
+  if (!lastTextBlock) return response
+
+  const lastText = response.message.content
+    .filter(block => block.type === 'text')
+    .map(block => block.text)
+    .join('')
+  if (
+    startsWithApiErrorPrefix(lastText.trim()) ||
+    lastText.trim().startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE)
+  ) {
+    return response
+  }
+  // Recovery normally continues a sealed fragment, but the model can instead
+  // produce a complete replacement. Do not prepend an abandoned draft to it.
+  const text =
+    lastText.includes('<summary>') && isCompleteCompactSummary(lastText)
+      ? lastText
+      : messages
+          .flatMap(message =>
+            message.type === 'assistant' && !message.isApiErrorMessage
+              ? message.message.content
+              : [],
+          )
+          .filter(block => block.type === 'text')
+          .map(block => block.text)
+          .join('')
+  if (!isCompleteCompactSummary(text)) return undefined
+
+  // Query yields one message per content block, including sealed partial text
+  // before a transport continuation. Keep those bytes, not just the final block.
+  return {
+    ...response,
+    message: {
+      ...response.message,
+      content: [{ ...lastTextBlock, text }],
+    },
+  }
+}
+
 /**
  * Runs the summarizer fork for one candidate message set.
  *
@@ -1347,7 +1404,7 @@ export async function streamCompactSummary({
           // `signal: context.abortController.signal` below.
           overrides: { abortController: context.abortController },
         })
-        const assistantMsg = getLastAssistantMessage(result.messages)
+        const assistantMsg = assembleCompactSummaryResponse(result.messages)
         const assistantText = assistantMsg
           ? getAssistantMessageText(assistantMsg)
           : null
@@ -1406,7 +1463,7 @@ export async function streamCompactSummary({
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       // Reset state for retry
       let hasStartedStreaming = false
-      let response: AssistantMessage | undefined
+      const responseMessages: AssistantMessage[] = []
       context.setResponseLength?.(() => 0)
 
       // Check if tool search is enabled using the main loop's tools list.
@@ -1521,13 +1578,14 @@ export async function streamCompactSummary({
           context.setResponseLength?.(length => length + charactersStreamed)
         }
 
-        if (event.type === 'assistant') {
-          response = event
+        if (event && event.type === 'assistant') {
+          responseMessages.push(event as AssistantMessage)
         }
 
         next = await streamIter.next()
       }
 
+      const response = assembleCompactSummaryResponse(responseMessages)
       if (response) {
         return response
       }
