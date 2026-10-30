@@ -1596,9 +1596,10 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
   let pending = pendingPreviewReadiness.get(key)
   if (!pending) {
     if (pendingPreviewReadiness.size >= 4) return false
-    // Browser decoding is a rendering check only. Nothing supplied by the page
+    // Read completed image dimensions instead of awaiting decode() in staging.
+    // This is a rendering check only. Nothing supplied by the page
     // is forwarded as an app command or accepted as filesystem authority.
-    pending = frame.executeJavaScript(`(async () => {
+    pending = frame.executeJavaScript(`(() => {
       if (${descriptor.kind === 'svg'} && document.getElementsByTagNameNS('*', 'parsererror').length) return false;
       const images = document.images;
       if (images.length > 2048) return false;
@@ -1613,8 +1614,7 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
         local.set(url.href, image);
         if (local.size > 128) return false;
       }
-      const decoded = await Promise.all([...local.values()].map(image => image.decode().then(() => true, () => false)));
-      return decoded.every(Boolean);
+      return [...local.values()].every(image => image.naturalWidth > 0 || image.naturalHeight > 0);
     })()`).then(result => result === true, () => false).finally(() => pendingPreviewReadiness.delete(key))
     pendingPreviewReadiness.set(key, pending)
   }
@@ -1884,7 +1884,13 @@ function createWindow(): void {
     }
   }, 100)
   scrollTimer.unref()
-  window.once('closed', () => { clearInterval(scrollTimer); filePreviews.dispose(); previewScroll.clear() })
+  window.once('closed', () => {
+    clearInterval(scrollTimer)
+    filePreviews.dispose()
+    previewScroll.clear()
+    pendingPreviewScroll.clear()
+    pendingPreviewReadiness.clear()
+  })
   window.webContents.on('will-frame-navigate', event => {
     if (event.isMainFrame) return
     const target = parseFilePreviewUrl(event.url)
@@ -4432,7 +4438,9 @@ function registerHostControlPlane(): void {
     const value = previewIdentity(input)
     if (trustedPreviewSender(event) && value) {
       filePreviews.release(value.id as string)
-      for (const key of previewScroll.keys()) if (key.startsWith(`${value.id}:`)) previewScroll.delete(key)
+      for (const cache of [previewScroll, pendingPreviewScroll, pendingPreviewReadiness]) {
+        for (const key of cache.keys()) if (key.startsWith(`${value.id}:`)) cache.delete(key)
+      }
     }
   })
   ipcMain.handle(CH_FILE_PREVIEW_SCROLL_READ, (event, input: unknown): Promise<FilePreviewScroll> | FilePreviewScroll => {
