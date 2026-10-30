@@ -1598,11 +1598,17 @@ function previewIdentity(value: unknown, revision = false) {
 function trustedPreviewSender(event: IpcMainInvokeEvent | IpcMainEvent): boolean {
   return isMainWindowSender(event) && event.senderFrame === mainWindow?.webContents.mainFrame
 }
+function timelyPreviewScroll(key: string, pending: Promise<FilePreviewScroll>): Promise<FilePreviewScroll> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(previewScroll.get(key) ?? { x: 0, y: 0 }), 150)
+    pending.then(value => { clearTimeout(timer); resolve(value) }, () => { clearTimeout(timer); resolve(previewScroll.get(key) ?? { x: 0, y: 0 }) })
+  })
+}
 function readPreviewScroll(id: string, revision: number): Promise<FilePreviewScroll> {
   const key = `${id}:${revision}`
   if (!filePreviews.descriptor(id, revision)) return Promise.resolve({ x: 0, y: 0 })
   const existing = pendingPreviewScroll.get(key)
-  if (existing) return existing
+  if (existing) return timelyPreviewScroll(key, existing)
   const frame = previewFrame(id, revision)
   if (!frame) return Promise.resolve(previewScroll.get(key) ?? { x: 0, y: 0 })
   const promise = frame.executeJavaScript('({x:scrollX,y:scrollY})').then(value => {
@@ -1611,7 +1617,7 @@ function readPreviewScroll(id: string, revision: number): Promise<FilePreviewScr
     return previewScroll.get(key) ?? { x: 0, y: 0 }
   }).catch(() => previewScroll.get(key) ?? { x: 0, y: 0 }).finally(() => pendingPreviewScroll.delete(key))
   pendingPreviewScroll.set(key, promise)
-  return promise
+  return timelyPreviewScroll(key, promise)
 }
 function applySecurityBaseline(): void {
   // CSP for any rendered content (SECURITY-MINIMUM §3 CSP). Delivered as a
