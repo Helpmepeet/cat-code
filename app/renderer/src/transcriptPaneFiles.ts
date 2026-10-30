@@ -72,7 +72,7 @@ function pathsInReply(row: Extract<NestedTranscriptRow, {kind: 'assistant-text'}
         const path = workspaceFileHref(definitions.get(node.identifier.toLowerCase()))
         if (path !== null && isPaneFilePath(path)) paths.push(path)
       } else if (node.type === 'inlineCode') {
-        if (isInlineFilePath(node.value) && isPaneFilePath(node.value)) paths.push(node.value)
+        if (workspaceFileHref(node.value) !== null && isInlineFilePath(node.value) && isPaneFilePath(node.value)) paths.push(node.value)
       } else if (node.type === 'text') {
         paths.push(...bareFilePaths(node.value).filter(isPaneFilePath))
       } else if ('children' in node) visit(node.children as RootContent[])

@@ -44,7 +44,7 @@ test('all reply path forms send modifier intent to the pane while other file typ
   installBridge(external)
   const requests: Array<{ sessionId: string; path: string; external: boolean }> = []
   const opener = async (sessionId: string, path: string, options?: { external?: boolean }) => {
-    requests.push({ sessionId, path, external: options?.external === true }); return true
+    requests.push({ sessionId, path, external: options?.external === true }); return { ok: true as const }
   }
   const cases = [
     ['[Notes](notes.md:12)', './notes.md:12'],
@@ -89,7 +89,7 @@ test('only the newest Write or Edit has a sibling Open action in both card style
     for (const grouped of [false, true]) {
     const requests: string[] = []
     const rows = [fileCard('old-write', grouped ? 'edit' : 'write', '/repo/notes.md'), fileCard('new-edit', 'edit', '/repo/notes.md')]
-    const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path) => { requests.push(path); return true }}>
+    const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path) => { requests.push(path); return { ok: true as const } }}>
       <ToolCardStyleContext.Provider value={{ style, setStyle() {} }}>
         <TranscriptRowsView rows={rows} cwd="/repo" />
       </ToolCardStyleContext.Provider>
@@ -117,7 +117,7 @@ test('Focused file cards remain folded and reveal one Open after expansion, incl
     for (const grouped of [false, true]) {
       const rows = grouped ? [fileCard('edit-a', 'edit', '/repo/notes.md'), fileCard('edit-b', 'edit', '/repo/notes.md')]
         : [fileCard('write-a', 'write', '/repo/notes.md')]
-      const tree = await harness.mount(<FilePaneContext.Provider value={async () => true}>
+      const tree = await harness.mount(<FilePaneContext.Provider value={async () => ({ ok: true })}>
         <ToolCardStyleContext.Provider value={{ style, setStyle() {} }}>
           <TranscriptModeContext.Provider value={{ mode: 'focused', setMode() {} }}>
             <ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}>
@@ -144,7 +144,7 @@ test('a session-level newest-card map also applies inside a worker transcript vi
   const oldParent = fileCard('parent-edit', 'edit', '/repo/notes.md')
   const newWorker = { ...fileCard('worker-edit', 'edit', 'notes.md'), parentToolUseId: 'agent' }
   const latest = latestPaneFileCards([oldParent, newWorker], '/repo', ['parent-edit', 'worker-edit'])
-  const tree = await harness.mount(<FilePaneContext.Provider value={async () => true}>
+  const tree = await harness.mount(<FilePaneContext.Provider value={async () => ({ ok: true })}>
     <LatestPaneFileCardContext.Provider value={latest}>
       <TranscriptRowsView rows={[oldParent]} cwd="/repo" />
       <div aria-label="Worker transcript"><TranscriptRowsView rows={[newWorker]} cwd="/repo" /></div>

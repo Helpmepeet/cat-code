@@ -44,10 +44,9 @@ import {
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
-import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
+import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, paneTargetLabel, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
 import { newestPaneFilePath } from './transcriptPaneFiles.js'
-import { basename } from './pathUtils.js'
-import { stripLineSuffix } from './filePathActions.js'
+import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { selectNestedTranscriptRows } from './transcriptProjector.js'
 import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
 import {
@@ -3740,9 +3739,9 @@ export function App() {
         const order = selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id)
         const candidate = newestPaneFilePath(rows, order)
         const hasFile = getFilePaneSession(activeSessionId).lastPath ?? candidate
-        void toggleFilePane(activeSessionId, candidate).then(opened => {
-          if (!opened && hasFile) toast('Could not open this file', { tone: 'warn' })
-        }).catch(() => { if (hasFile) toast('Could not open this file', { tone: 'warn' }) })
+        void toggleFilePane(activeSessionId, candidate).then(result => {
+          if (!result.ok) toast(result.message, { tone: 'warn' })
+        }).catch(() => { if (hasFile) toast(normalizeLocalhostPreviewUrl(hasFile) ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }) })
         return
       }
       if (event.key === 'k' || event.key === 'K') {
@@ -4720,14 +4719,14 @@ export function App() {
                         selectArchivedSidebarRows([targetRow], archivedSessions).archived.length > 0
                       return sessionActionsTarget.fromSessionsPage
                         ? selectSessionsPageActions(items)
-                        : selectSessionMenuActions(items, targetRow, archived, sessionActionsTarget.origin === 'tab' && !fileMenuPane.open && showFilePath ? basename(stripLineSuffix(showFilePath)) : null)
+                        : selectSessionMenuActions(items, targetRow, archived, sessionActionsTarget.origin === 'tab' && !fileMenuPane.open && showFilePath ? paneTargetLabel(showFilePath) : null)
                     })()}
                     anchor={sessionActionsTarget.anchor}
                     onAction={kind => {
                       if (kind === 'show-file' && showFilePath) {
-                        void requestOpenFile(targetId, showFilePath).then(opened => {
-                          if (!opened) toast('Could not open this file', { tone: 'warn' })
-                        }).catch(() => toast('Could not open this file', { tone: 'warn' }))
+                        void requestOpenFile(targetId, showFilePath).then(result => {
+                          if (!result.ok) toast(result.message, { tone: 'warn' })
+                        }).catch(() => toast(normalizeLocalhostPreviewUrl(showFilePath) ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }))
                       }
                       else if (kind === 'metadata') setMetadataOpen(true)
                       else if (kind === 'copy-text') copyForLlm(targetId)

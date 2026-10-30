@@ -758,7 +758,7 @@ async function openAppFilePreview(sessionId: string) {
   window.catcode.releaseFilePreview = id => { releases.push(id) }
   window.catcode.subscribeFilePreview = () => () => {}
   window.catcode.getFilePreviewApplications = async () => ({ applications: [{ target: 'default', label: 'Default application' }], selected: 'default' })
-  await act(async () => { expect(await requestOpenFile(sessionId, path)).toBe(true) })
+  await act(async () => { expect((await requestOpenFile(sessionId, path)).ok).toBe(true) })
   await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
   return { releases, descriptor }
 }

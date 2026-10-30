@@ -52,9 +52,10 @@ import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { FileLinkTicker } from './FileLinkTicker.js'
 import { useFilePaneOpener } from './filePaneContext.js'
+import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { isPaneFilePath } from './filePaneState.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, paneFileKey, selectedTextInside } from './transcriptPaneFiles.js'
-import { isInlineFilePath, linkifyFilePathTree, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
+import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
   PEER_BUBBLE_CLASS,
@@ -2011,14 +2012,17 @@ function AssistantProse({
   const paneOpener = useFilePaneOpener()
   const openFile = useCallback(
     (path: string, external = false): void => {
-      const open = paneOpener && isPaneFilePath(path)
-        ? paneOpener(sessionId, path, { external })
-        : window.catcode.openWorkspaceFile(sessionId, path)
-      void open
-        .then(opened => {
-          if (!opened) toast('Could not open this file', { tone: 'warn' })
-        })
-        .catch(() => toast('Could not open this file', { tone: 'warn' }))
+      const local = normalizeLocalhostPreviewUrl(path)
+      const failure = local ? 'Could not open this page' : 'Could not open this file'
+      if (paneOpener && (isPaneFilePath(path) || local)) {
+        void paneOpener(sessionId, local ?? path, { external }).then(result => {
+          if (!result.ok) toast(result.message, { tone: 'warn' })
+        }).catch(() => toast(failure, { tone: 'warn' }))
+      } else {
+        void window.catcode.openWorkspaceFile(sessionId, path).then(opened => {
+          if (!opened) toast(failure, { tone: 'warn' })
+        }).catch(() => toast(failure, { tone: 'warn' }))
+      }
     },
     [sessionId, toast, paneOpener],
   )
@@ -2146,9 +2150,30 @@ function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: str
   if (!file || !opener || !isPaneFilePath(file.path) || latest?.get(paneFileKey(file.path, cwd)) !== file.cardId) return null
   return event => {
     event.stopPropagation()
-    void opener(file.sessionId, file.path, { external: event.metaKey }).then(opened => {
-      if (!opened) toast('Could not open this file', { tone: 'warn' })
+    void opener(file.sessionId, file.path, { external: event.metaKey }).then(result => {
+      if (!result.ok) toast(result.message, { tone: 'warn' })
     }).catch(() => toast('Could not open this file', { tone: 'warn' }))
+  }
+}
+
+const localhostByResult = new WeakMap<ToolResultProjection, string | null>()
+function bashLocalhostUrl(result: ToolResultProjection | null): string | null {
+  if (!result) return null
+  if (localhostByResult.has(result)) return localhostByResult.get(result)!
+  const url = firstLocalhostUrlInOutput(result.content)
+  localhostByResult.set(result, url)
+  return url
+}
+
+function useLocalhostCardOpen(server: { url: string; sessionId: SessionId } | undefined): ((event: ReactMouseEvent<HTMLButtonElement>) => void) | null {
+  const opener = useFilePaneOpener()
+  const toast = useToast()
+  if (!server || !opener) return null
+  return event => {
+    event.stopPropagation()
+    void opener(server.sessionId, server.url, { external: event.metaKey }).then(result => {
+      if (!result.ok) toast(result.message, { tone: 'warn' })
+    }).catch(() => toast('Could not open this page', { tone: 'warn' }))
   }
 }
 
@@ -2170,16 +2195,21 @@ function createPathAwareAnchor(
     'data-pending-destination'?: string
     'data-bare-file-path'?: boolean
   }) {
+    const canPreview = useFilePaneOpener() !== null
+    const local = canPreview ? normalizeLocalhostPreviewUrl(href) : null
     const destination = node?.properties.dataPendingDestination
     const pending = typeof destination === 'string'
     const path = pending ? pendingFileHref(destination, href) : workspaceFileHref(href)
     const bare = node?.properties.dataBareFilePath === true
     const label = <FileLinkLabelContext.Provider value>{children}</FileLinkLabelContext.Provider>
+    if (local) return <button type="button" className="inline-flex items-center rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+      aria-label={pending ? undefined : `Open ${local}`} disabled={pending || undefined}
+      onClick={event => { if (!pending && !selectedTextInside(event.currentTarget)) openFile(local, event.metaKey) }}>{label}</button>
     if (path === undefined) return label
     // Everything else is an outside address. A same-window navigation is
     // refused by the navigation lockdown (T3), so an in-place <a> is a dead
     // control; `target="_blank"` reaches the window-open policy instead, which
-    // hands https to the OS browser and denies the rest
+    // hands http and https to the OS browser and denies the rest
     // (`app/main/navigationPolicy.ts`).
     if (path === null) {
       return (
@@ -2225,16 +2255,18 @@ function createPathAwareCode(
     node,
   }: ComponentPropsWithoutRef<'code'> & { node?: HastElement }) {
     const inLabel = useContext(FileLinkLabelContext)
+    const paneOpener = useFilePaneOpener()
     const text = childrenToText(children)
-    if (!inLabel && !className && isInlineFilePath(text)) {
+    const local = paneOpener && !className ? normalizeLocalhostPreviewUrl(text) : null
+    if (!inLabel && !className && (isInlineFilePath(text) || local)) {
       return (
         <button
           className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
           type="button"
           aria-label={`Open ${text}`}
-          onClick={event => { if (!selectedTextInside(event.currentTarget)) openFile(text, event.metaKey) }}
+          onClick={event => { if (!selectedTextInside(event.currentTarget)) openFile(local ?? text, event.metaKey) }}
           onContextMenu={event => {
-            if (!onContextMenu || selectedTextInside(event.currentTarget)) return
+            if (local || !onContextMenu || selectedTextInside(event.currentTarget)) return
             event.preventDefault()
             event.stopPropagation()
             onContextMenu(
@@ -2243,7 +2275,7 @@ function createPathAwareCode(
             )
           }}
         >
-          <ActionFileIcon />
+          {local ? null : <ActionFileIcon />}
           <code>{children}</code>
         </button>
       )
@@ -2715,6 +2747,7 @@ function ToolCardShell({
   targetHover,
   targetFilePath,
   fileOpen,
+  localhostOpen,
   collapsedExtra,
   failureOutput,
   animateCollapsedExtra = false,
@@ -2743,6 +2776,7 @@ function ToolCardShell({
   targetHover?: string
   targetFilePath?: { rawPath: string; sessionId: SessionId }
   fileOpen?: { path: string; sessionId: SessionId; cardId: string }
+  localhostOpen?: { url: string; sessionId: SessionId }
   collapsedExtra?: ReactNode
   failureOutput?: string
   animateCollapsedExtra?: boolean
@@ -2784,7 +2818,7 @@ function ToolCardShell({
   const toolsExpanded = useContext(ToolsExpandedContext).expanded
   const [expanded, setExpanded] = useToolCardExpanded(
     expansionKey ?? null,
-    focused && (family === 'write' || family === 'edit') ? false :
+    focused && (family === 'write' || family === 'edit' || localhostOpen) ? false :
       focused && status === 'error' && !callGroup ? toolsExpanded : defaultExpanded ?? false,
   )
   const base = FAMILY_STYLE[family]
@@ -2800,7 +2834,9 @@ function ToolCardShell({
   const { results } = useContext(TranscriptMotionContext)
   const filePathContext = useContext(FilePathMenuContext)
   const openPaneFile = usePaneCardOpen(fileOpen)
-  const showFileOpen = openPaneFile !== null && (!focused || expanded)
+  const openServer = useLocalhostCardOpen(localhostOpen)
+  const openPaneTarget = openPaneFile ?? openServer
+  const showFileOpen = openPaneTarget !== null && (!focused || expanded)
   const peek = focused && status === 'error' && !callGroup && failureOutput
     ? <BashTailPeek tail={selectPeekLines(failureOutput.split('\n'))} /> : collapsedExtra
   return (
@@ -2867,7 +2903,7 @@ function ToolCardShell({
           aria-label={st.word}
         />
       </button>
-      {showFileOpen ? <div className={`absolute top-0 flex items-center ${AGENT_BACKGROUND_ANCHOR_CLASS[style]}`}><button type="button" className="rounded px-2 py-0.5 text-[11px] text-text-muted hover:bg-white/[0.06] hover:text-text-primary" onClick={openPaneFile!} aria-label={`Open ${fileOpen!.path}`}>Open</button></div> : null}
+      {showFileOpen ? <div className={`absolute top-0 flex items-center ${AGENT_BACKGROUND_ANCHOR_CLASS[style]}`}><button type="button" className="rounded px-2 py-0.5 text-[11px] text-text-muted hover:bg-white/[0.06] hover:text-text-primary" onClick={openPaneTarget!} aria-label={`Open ${fileOpen?.path ?? localhostOpen!.url}`}>Open</button></div> : null}
       {!expanded && peek ? (
         <div
           className={animateCollapsedExtra ? 'animate-arrive' : undefined}
@@ -3297,6 +3333,8 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   const focused = useContext(TranscriptModeContext).mode === 'focused'
   const filePathContext = useContext(FilePathMenuContext)
   const filePath = toolCardFilePath(row)
+  const localUrl = row.toolFamily === 'bash' ? bashLocalhostUrl(row.result) : null
+  const localhostOpen = localUrl ? { url: localUrl, sessionId: row.sessionId } : undefined
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
   const targetFilePath =
     filePath === null ? undefined : { rawPath: filePath, sessionId: row.sessionId }
@@ -3335,6 +3373,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         target={target}
         targetFilePath={targetFilePath}
         fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id } : undefined}
+        localhostOpen={localhostOpen}
         failureOutput={row.result?.content}
         status={row.status}
         targetHover={deriveTargetHover(row)}
@@ -3406,6 +3445,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         failureOutput={row.result?.content}
         status={row.status}
         sub={deriveSub(row)}
+        localhostOpen={localhostOpen}
         fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id } : undefined}
         headerBadge={headerBadge}
         targetHover={deriveTargetHover(row)}
