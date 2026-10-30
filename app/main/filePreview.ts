@@ -30,11 +30,24 @@ const PAGE_CSP = "default-src * data: blob: cat-preview:; script-src * 'unsafe-i
 
 type Snapshot = { revision: number; files: Map<string, Buffer>; failed: boolean }
 type Preview = {
-  id: string; appSessionId: string; authorityCwd: string; path: string; kind: NonNullable<ReturnType<typeof filePreviewKind>>
-  snapshots: Map<number, Snapshot>; committed: number; nextRevision: number
-  watched: Map<string, string | null>; watchers: Map<string, FSWatcher>
-  timer?: ReturnType<typeof setTimeout>; poll: ReturnType<typeof setInterval>
-  polling: boolean; busy: boolean; dirty: boolean; removed: boolean; watchFailed: boolean; released: boolean
+  id: string
+  appSessionId: string
+  authorityCwd: string
+  path: string
+  snapshots: Map<number, Snapshot>
+  committed: number
+  nextRevision: number
+  watched: Map<string, string | null>
+  watchers: Map<string, FSWatcher>
+  timer?: ReturnType<typeof setTimeout>
+  poll: ReturnType<typeof setInterval>
+  polling: boolean
+  busy: boolean
+  dirty: boolean
+  removed: boolean
+  watchFailed: boolean
+  released: boolean
+  kind: NonNullable<ReturnType<typeof filePreviewKind>>
 }
 
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
