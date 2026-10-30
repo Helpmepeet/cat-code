@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import type { ToolUseContext } from '../../Tool.js'
 import { AbortError } from '../../utils/errors.js'
 import type { APIProvider } from '../../utils/model/providers.js'
@@ -133,15 +133,21 @@ describe('WebSearch provider routing at tool execution', () => {
   })
 
   test.each(['openai', 'firstParty'] as const)('falls back after %s native failure without using the other account provider', async provider => {
-    nativeError = new Error('private provider diagnostic')
-    const expected = provider === 'openai' ? 'openai' : 'claude'
-    const output = await invoke(context(provider === 'openai' ? 'gpt-6.1-sol' : 'sonnet', provider))
-    expect(calls.map(call => call.provider)).toEqual([expected, 'exa'])
-    expect(output.data.provider).toBe('exa')
-    const formatted = WebSearchTool.mapToolResultToToolResultBlockParam(output.data, 'search')
-    expect(formatted.content).toContain('Search provider: Exa')
-    expect(formatted.content).toContain('search was unavailable.')
-    expect(formatted.content).not.toContain('private provider diagnostic')
+    const clock = spyOn(performance, 'now').mockReturnValueOnce(100).mockReturnValue(2600)
+    try {
+      nativeError = new Error('private provider diagnostic')
+      const expected = provider === 'openai' ? 'openai' : 'claude'
+      const output = await invoke(context(provider === 'openai' ? 'gpt-6.1-sol' : 'sonnet', provider))
+      expect(calls.map(call => call.provider)).toEqual([expected, 'exa'])
+      expect(output.data.provider).toBe('exa')
+      expect(output.data.durationSeconds).toBe(2.5)
+      const formatted = WebSearchTool.mapToolResultToToolResultBlockParam(output.data, 'search')
+      expect(formatted.content).toContain('Search provider: Exa')
+      expect(formatted.content).toContain('search was unavailable.')
+      expect(formatted.content).not.toContain('private provider diagnostic')
+    } finally {
+      clock.mockRestore()
+    }
   })
 
   test('returns a valid native no-match response without performing another search', async () => {

@@ -171,7 +171,10 @@ describe('web research policy delivery', () => {
     expect(policy).toContain('Honor requests to stay offline')
     expect(policy).toContain('select:WebSearch')
     expect(policy).toContain('WebFetch')
-    expect(policy).toContain('Read supplied URLs directly with WebFetch')
+    expect(policy).toContain('public sources')
+    expect(policy).toContain('Use available repository and connected-source tools')
+    expect(policy).toContain('service-specific or MCP tool when available')
+    expect(policy).toContain('otherwise use WebFetch for public pages')
   })
 
   test('updates policy and source-reading instructions when the allowed tool pool changes without clearing caches', async () => {

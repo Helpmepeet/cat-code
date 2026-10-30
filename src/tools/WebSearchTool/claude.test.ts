@@ -4,6 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import type { ToolUseContext } from '../../Tool.js'
 import * as realAuth from '../../utils/auth.js'
+import { killDelegatedChildrenForAgent } from '../../utils/processTree.js'
 import * as realMessages from '../../utils/messages.js'
 import * as realClaudeApi from '../../services/api/claude.js'
 
@@ -91,6 +92,14 @@ describe('Claude subscription search process boundary', () => {
     await expect(searchClaude({ query: 'q' }, context())).rejects.toThrow('did not complete a search')
   })
 
+  test.each([
+    ['output limit', "process.stdout.write('x'.repeat(1_000_001)); setInterval(() => {}, 1000);", 'too much output'],
+    ['unexpected termination', "process.kill(process.pid, 'SIGTERM');", 'search failed'],
+  ])('%s remains a backend failure eligible for fallback', async (_reason, program, message) => {
+    await fakeCli(program)
+    await expect(searchClaude({ query: 'q' }, context())).rejects.toThrow(message)
+  })
+
   test('does not expose credentials echoed by the child in result fields', async () => {
     const output = successfulEvents(`Links: [{"title":"${accessToken}","url":"https://example.com/"}]`, accessToken)
     await fakeCli(`console.log(${JSON.stringify(output)});`)
@@ -100,7 +109,7 @@ describe('Claude subscription search process boundary', () => {
     expect(JSON.stringify(result)).not.toContain(accessToken)
   })
 
-  test('aborting a running child kills it and rejects as cancellation', async () => {
+  test.each(['caller abort', 'worker teardown'] as const)('%s kills a running child and propagates cancellation', async source => {
     const { capture } = await fakeCli(`import { writeFile } from 'fs/promises'; await writeFile(CAPTURE_PATH, String(process.pid)); setInterval(() => {}, 1000);`)
     const toolContext = context()
     const pending = searchClaude({ query: 'q' }, toolContext)
@@ -110,7 +119,8 @@ describe('Claude subscription search process boundary', () => {
       if (!pid) await Bun.sleep(10)
     }
     expect(pid).toBeGreaterThan(0)
-    toolContext.abortController.abort()
+    if (source === 'caller abort') toolContext.abortController.abort()
+    else killDelegatedChildrenForAgent(toolContext.agentId!)
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
     expect(() => process.kill(pid, 0)).toThrow()
   })

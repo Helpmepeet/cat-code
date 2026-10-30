@@ -10,6 +10,7 @@ export async function searchWeb(
 ): Promise<WebSearchOutput> {
   const signal = context.abortController.signal
   if (signal.aborted) throw new AbortError()
+  const startedAt = performance.now()
 
   const provider = context.options
     ? resolveRequestProvider(
@@ -42,7 +43,7 @@ export async function searchWeb(
         ? await (await import('./openai.js')).searchOpenAI(input, context)
         : await (await import('./claude.js')).searchClaude(input, context)
       if (signal.aborted) throw new AbortError()
-      return { ...output, provider: nativeProvider }
+      return { ...output, provider: nativeProvider, durationSeconds: (performance.now() - startedAt) / 1000 }
     } catch (error) {
       if (signal.aborted || isAbortError(error)) throw new AbortError()
       fallbackReason = `${nativeProvider === 'openai' ? 'OpenAI' : 'Claude'} search was unavailable.`
@@ -55,6 +56,7 @@ export async function searchWeb(
   const output = await searchExa(input, signal)
   return {
     ...output,
+    durationSeconds: (performance.now() - startedAt) / 1000,
     provider: 'exa',
     ...(fallbackReason ? { fallbackReason } : {}),
   }

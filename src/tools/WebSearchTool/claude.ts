@@ -166,7 +166,10 @@ async function runClaudeCli(
       if (outputBytes > MAX_CLI_OUTPUT_BYTES) stop(new Error('Claude web search returned too much output.'))
     })
     child.once('error', () => finish(new Error('Claude Code could not be started for web search.')))
-    child.once('close', code => finish(failure ?? (code === 0 ? undefined : new Error('Claude web search failed.'))))
+    child.once('close', (code, signal) => finish(failure ?? (
+      signal === 'SIGKILL' ? new AbortError('WebSearch was cancelled.')
+        : code === 0 ? undefined : new Error('Claude web search failed.')
+    )))
     if (context.abortController.signal.aborted) onAbort()
   })
 }

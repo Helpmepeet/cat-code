@@ -9,17 +9,17 @@ export function getWebResearchGuidance(enabledTools: ReadonlySet<string>): strin
     ? `If ${WEB_SEARCH_TOOL_NAME} is deferred, load it with ${TOOL_SEARCH_TOOL_NAME} using "select:${WEB_SEARCH_TOOL_NAME}". Deferred does not mean unavailable.\n\n`
     : ''
   const reading = enabledTools.has(WEB_FETCH_TOOL_NAME)
-    ? `Read supplied URLs directly with ${WEB_FETCH_TOOL_NAME}. Use it to verify exact quotes or details a search result does not establish.`
-    : 'Request fuller source text before relying on an exact quote or details the search result does not establish.'
+    ? `Read supplied URLs with an appropriate service-specific or MCP tool when available; otherwise use ${WEB_FETCH_TOOL_NAME} for public pages. Verify exact quotes or details against the source when search results do not establish them.`
+    : 'Use available source-reading tools or request fuller source text before relying on an exact quote or details the search result does not establish.'
 
   return `# Web research
 You must use ${WEB_SEARCH_TOOL_NAME} before answering or choosing an implementation when:
-- The user asks you to search, look up, verify online, find sources, or get the latest information.
+- The user asks for web search, online verification, public sources, or the latest information from the web.
 - The task depends on changeable external facts that supplied or already-read sources do not establish: current releases, version-sensitive APIs, prices, availability, events, or rules.
 - You are uncertain about an external fact or unfamiliar library/error, or recommendations depend on current options, and available material does not settle it.
 - Public sources needed as evidence have not been supplied or located.
 
-Use provided material, already-read sources, repository source, and installed dependencies directly for self-contained edits and stable explanations they already settle. Check the installed or chosen version before researching an external software contract. Honor requests to stay offline.
+Use available repository and connected-source tools for searches within those sources. Use provided material, already-read sources, repository source, and installed dependencies directly for self-contained edits and stable explanations they already settle. Check the installed or chosen version before researching an external software contract. Honor requests to stay offline.
 
 ${discovery}Use targeted queries, prefer primary sources and official documentation, and check dates and versions. Keep queries limited to the public information needed for the task. ${reading} If results are thin, off-target, or conflicting, refine the query or check another source before concluding. Stop when the needed claims are supported. Cite sources you actually consulted, distinguish evidence from inference, and state what remains unverified if search fails.`
 }
