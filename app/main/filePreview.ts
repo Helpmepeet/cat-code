@@ -6,10 +6,15 @@ import { basename, dirname, extname, sep } from 'node:path'
 import { resolveWorkspaceFile, type WorkspaceFileOptions } from './openWorkspaceFile.js'
 import { FILE_PREVIEW_SCHEME, filePreviewKind, type FilePreviewDescriptor, type FilePreviewEvent } from '../shared/filePreview.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { MAX_REGISTRY_SESSIONS } from '../host/registry.js'
 
 const MAX_FILE_BYTES = 16 * 1024 * 1024
 const MAX_CACHE_BYTES = 128 * 1024 * 1024
-const MAX_PREVIEWS = 32
+// A session can retain its good page while staging a replacement and accepting
+// a newer click. Restorable sessions share the registry bound, not the live-engine cap.
+const MAX_PREVIEWS_PER_SESSION = 3
+const MAX_PREVIEWS = MAX_REGISTRY_SESSIONS * MAX_PREVIEWS_PER_SESSION
+const MAX_WATCHED_FILES = 2048
 const MAX_ASSETS = 128
 const QUIET_MS = 180
 const MIME: Record<string, string> = {
@@ -29,7 +34,7 @@ type Preview = {
   snapshots: Map<number, Snapshot>; committed: number; nextRevision: number
   watched: Map<string, string | null>; watchers: Map<string, FSWatcher>
   timer?: ReturnType<typeof setTimeout>; poll: ReturnType<typeof setInterval>
-  busy: boolean; dirty: boolean; removed: boolean; watchFailed: boolean; released: boolean
+  polling: boolean; busy: boolean; dirty: boolean; removed: boolean; watchFailed: boolean; released: boolean
 }
 
 const pause = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -87,6 +92,7 @@ export function createFilePreviewService(deps: {
 }) {
   const previews = new Map<string, Preview>()
   let cachedBytes = 0
+  let watchedFiles = 0
   let pendingPrepares = 0
   let activeReads = 0
   const waitingReads: Array<() => void> = []
@@ -132,9 +138,10 @@ export function createFilePreviewService(deps: {
   }
   function track(preview: Preview, path: string) {
     if (preview.watched.has(path)) return
-    if (preview.watched.size >= MAX_ASSETS) { announceWatchFailure(preview); return }
+    if (preview.watched.size >= MAX_ASSETS || watchedFiles >= MAX_WATCHED_FILES) { announceWatchFailure(preview); return }
     preview.watched.set(path, null)
-    void signature(path).then(value => { if (!preview.released) preview.watched.set(path, value) })
+    watchedFiles++
+    void signature(path).then(value => { if (!preview.released && preview.watched.has(path)) preview.watched.set(path, value) })
     const directory = dirname(path)
     if (preview.watchers.has(directory)) return
     try {
@@ -182,7 +189,11 @@ export function createFilePreviewService(deps: {
       const snapshot: Snapshot = { revision: ++preview.nextRevision, files, failed: false }
       preview.snapshots.set(snapshot.revision, snapshot)
       cachedBytes += total
-      for (const path of preview.watched.keys()) preview.watched.set(path, await signature(path))
+      for (const path of [...preview.watched.keys()]) {
+        const current = await signature(path)
+        if (!preview.released && preview.watched.has(path)) preview.watched.set(path, current)
+      }
+      if (preview.released || !authorized(preview)) return null
       const result = descriptor(preview, snapshot)
       deps.publish({ id, kind: 'updated', descriptor: result })
       return result
@@ -203,12 +214,13 @@ export function createFilePreviewService(deps: {
     clearInterval(preview.poll)
     for (const watcher of preview.watchers.values()) watcher.close()
     for (const revision of preview.snapshots.keys()) dropSnapshot(preview, revision)
+    watchedFiles -= preview.watched.size
     previews.delete(id)
   }
   return {
     async prepare(input: unknown): Promise<FilePreviewDescriptor | null> {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 2 || !Object.hasOwn(input, 'appSessionId') || !Object.hasOwn(input, 'path')) return null
-      if (previews.size + pendingPrepares >= MAX_PREVIEWS || pendingPrepares >= 4) return null
+      if (pendingPrepares >= 4) return null
       pendingPrepares++
       try {
         const appSessionId = (input as { appSessionId: string }).appSessionId
@@ -219,18 +231,27 @@ export function createFilePreviewService(deps: {
         if (!resolved) return null
         const kind = filePreviewKind(resolved.path)
         if (!kind) return null
+        for (const [id, preview] of previews) if (!authorized(preview)) release(id)
+        const existing = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path)
+        if (existing) return descriptor(existing, existing.snapshots.get(existing.committed)!)
+        const sessionHandles = () => [...previews.values()].filter(preview => preview.appSessionId === appSessionId).length
+        if (previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
         const bytes = await read(resolved.path)
-        if (cachedBytes + bytes.length > MAX_CACHE_BYTES) return null
         if (!deps.sessions().some(session => session.appSessionId === appSessionId && session.cwd === authorityCwd && !session.moving)) return null
+        const raced = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path)
+        if (raced) return descriptor(raced, raced.snapshots.get(raced.committed)!)
+        if (cachedBytes + bytes.length > MAX_CACHE_BYTES || previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
         const preview: Preview = {
           id: randomBytes(24).toString('hex'), appSessionId, authorityCwd, path: resolved.path, kind,
           snapshots: new Map(), committed: 1, nextRevision: 1,
-          watched: new Map(), watchers: new Map(), busy: false, dirty: false, removed: false, watchFailed: false, released: false,
+          watched: new Map(), watchers: new Map(), polling: false, busy: false, dirty: false, removed: false, watchFailed: false, released: false,
           poll: setInterval(() => {
+            if (preview.polling || preview.released) return
+            preview.polling = true
             void Promise.all([...preview.watched].map(async ([path, old]) => {
               const current = await signature(path)
-              if (current !== old) { preview.watched.set(path, current); schedule(preview) }
-            }))
+              if (!preview.released && preview.watched.has(path) && current !== old) { preview.watched.set(path, current); schedule(preview) }
+            })).finally(() => { preview.polling = false })
           }, 1500),
         }
         preview.poll.unref?.()
@@ -251,7 +272,7 @@ export function createFilePreviewService(deps: {
       preview.committed = revision
       for (const key of preview.snapshots.keys()) if (key !== revision) dropSnapshot(preview, key)
       const used = preview.snapshots.get(revision)!.files
-      for (const path of preview.watched.keys()) if (!used.has(path)) preview.watched.delete(path)
+      for (const path of preview.watched.keys()) if (!used.has(path)) { preview.watched.delete(path); watchedFiles-- }
       for (const [directory, watcher] of preview.watchers) {
         if (![...preview.watched.keys()].some(path => dirname(path) === directory)) { watcher.close(); preview.watchers.delete(directory) }
       }

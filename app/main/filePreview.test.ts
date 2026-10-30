@@ -139,3 +139,32 @@ test.skipIf(process.getuid?.() === 0)('a watcher failure before subscription is 
     await rm(root, { recursive: true, force: true })
   }
 })
+
+
+test('retained saved sessions leave same-file reuse and foreground replacement available', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'cat-preview-capacity-')), root = await realpath(directory)
+  const sessions = Array.from({ length: 33 }, (_, index) => sessionDescriptorFixture({ appSessionId: `saved-${index}`, cwd: root, status: 'exited', restorable: true }))
+  const service = createFilePreviewService({ sessions: () => sessions, publish: () => {} })
+  try {
+    await writeFile(join(root, 'report.html'), '<h1>Current report</h1>')
+    await writeFile(join(root, 'replacement.html'), '<h1>Replacement report</h1>')
+    const retained = []
+    for (const session of sessions.slice(0, 32)) {
+      const prepared = await service.prepare({ appSessionId: session.appSessionId, path: 'report.html' })
+      expect(prepared).not.toBeNull()
+      retained.push(prepared!)
+    }
+    const foreground = retained[0]!
+    const reused = await service.prepare({ appSessionId: 'saved-0', path: 'report.html:42' })
+    expect(reused?.id).toBe(foreground.id)
+    expect(reused?.url).toBe(foreground.url)
+    const replacement = await service.prepare({ appSessionId: 'saved-0', path: 'replacement.html' })
+    expect(replacement).not.toBeNull()
+    expect(await (await service.respond(new Request(foreground.url))).text()).toContain('Current report')
+    expect(await (await service.respond(new Request(replacement!.url))).text()).toContain('Replacement report')
+    expect(await service.prepare({ appSessionId: 'saved-32', path: 'report.html' })).not.toBeNull()
+  } finally {
+    service.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
+})
