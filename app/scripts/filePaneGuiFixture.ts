@@ -44,6 +44,8 @@ let popup=null;try{popup=window.open('about:blank')}catch{}report('Popup blocked
 document.querySelector('#top-navigation').onclick=()=>{try{top.location.href='http://localhost:5189';document.querySelector('#attempt').textContent='Top navigation requested; the app must remain visible'}catch{document.querySelector('#attempt').textContent='Top navigation blocked'}};
 document.querySelector('#app-origin').onclick=()=>{document.querySelector('#attempt').textContent='App origin navigation requested; this file must remain visible';location.href='http://localhost:5189'};
 </script></html>`)
+writeFileSync(join(cwd, 'broken.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><rect></svg>')
+writeFileSync(join(cwd, 'corrupt.png'), Buffer.alloc(0))
 writeFileSync(join(cwd, 'source.ts'), 'export const notPreviewable = true\n')
 writeFileSync(join(runRoot, 'outside.html'), '<h1>Outside workspace: must refuse</h1>')
 symlinkSync(join(runRoot, 'outside.html'), join(cwd, 'escape.html'))
@@ -71,7 +73,8 @@ function fixtureFrames(appSessionId: string, engineSessionId: string, second: bo
     frames.push(message(appSessionId, engineSessionId, 'user', [{ type: 'tool_result', tool_use_id: id, content: result, is_error: false }], parent, { tool_use_result: structured }))
   }
   frames.push(message(appSessionId, engineSessionId, 'user', 'Review the prepared local files. This offline fixture never submits a model request.'))
-  text(second ? `# Second session\n\n[Markdown notes](${cwd}/notes.md) and [Report](${cwd}/report.html). Switch sessions after scrolling each file.` : `# File pane acceptance\n\nMarkdown link: [Report](${cwd}/report.html).\n\nBare path: ${cwd}/notes.md\n\nInline code: \`${cwd}/diagram.svg\`.\n\nLine suffix: [Report line 12](${cwd}/report.html:12).\n\n[Image](${cwd}/assets/cat.png) · [Wide page](${cwd}/wide.html) · [Uppercase HTML](${cwd}/CAPS.HTM) · [Isolation checks](${cwd}/isolation.html) · [Normal source](${cwd}/source.ts)\n\n[Missing file](${cwd}/missing.html) · [Outside workspace](${runRoot}/outside.html) · [Symlink outside](${cwd}/escape.html) · [Generated image](${configDir}/generated-images/generated.png)`)
+  text(second ? `# Second session\n\n[Markdown notes](${cwd}/notes.md) and [Report](${cwd}/report.html). Switch sessions after scrolling each file.` : `# File pane acceptance\n\nMarkdown link: [Report](${cwd}/report.html).\n\nBare path: ${cwd}/notes.md\n\nInline code: \`${cwd}/diagram.svg\`.\n\nLine suffix: [Report line 12](${cwd}/report.html:12).\n\n[Image](${cwd}/assets/cat.png) · [Wide page](${cwd}/wide.html) · [Uppercase HTML](${cwd}/CAPS.HTM) · [Malformed SVG](${cwd}/broken.svg) · [Corrupt PNG](${cwd}/corrupt.png) · [Isolation checks](${cwd}/isolation.html) · [Normal source](${cwd}/source.ts)\n\n[Missing file](${cwd}/missing.html) · [Outside workspace](${runRoot}/outside.html) · [Symlink outside](${cwd}/escape.html) · [Generated image](${configDir}/generated-images/generated.png)`)
+  text('| Short local link | Type |\n| --- | --- |\n| [report.html](report.html) | HTML |\n| [notes.md](notes.md) | Markdown |\n| [cat.png](assets/cat.png) | Image |\n| [diagram.svg](diagram.svg) | SVG |\n| [broken.svg](broken.svg) | Malformed XML |\n| [corrupt.png](corrupt.png) | Invalid image |')
   tool('fixture-write-older', 'Write', { file_path: join(cwd, 'report.html'), content: html }, 'File created successfully.')
   tool('fixture-edit-middle', 'Edit', { file_path: join(cwd, 'report.html'), old_string: 'old', new_string: 'new' }, 'File updated successfully.')
   tool('fixture-edit-newest', 'Edit', { file_path: join(cwd, 'report.html'), old_string: 'new', new_string: 'current' }, 'File updated successfully.')
@@ -93,14 +96,28 @@ for (let index = 0; index < ids.length; index++) {
   const frames = fixtureFrames(appSessionId, engineSessionId, index === 1)
   const projectDir = join(configDir, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'))
   mkdirSync(projectDir, { recursive: true, mode: 0o700 })
-  let parentUuid: string | null = null
-  const transcript = frames.map(frame => {
-    if (frame.kind !== 'event' || frame.event.type !== 'message') throw new Error('Unexpected fixture frame')
-    const row = { ...frame.event.message, parentUuid, sessionId: engineSessionId, cwd, version: 'file-pane-gui-fixture', isSidechain: false }
-    parentUuid = row.uuid ?? null
-    return JSON.stringify(row)
-  }).join('\n') + '\n'
-  writeFileSync(join(projectDir, `${engineSessionId}.jsonl`), transcript, { mode: 0o600 })
+  const serialize = (sidechain: boolean) => {
+    let parentUuid: string | null = null
+    return frames.flatMap(frame => {
+      if (frame.kind !== 'event' || frame.event.type !== 'message') throw new Error('Unexpected fixture frame')
+      const sdk = frame.event.message
+      const child = 'parent_tool_use_id' in sdk && sdk.parent_tool_use_id != null
+      if (child !== sidechain) return []
+      const row: Record<string, unknown> = { ...sdk, parentUuid, sessionId: engineSessionId, cwd, version: 'file-pane-gui-fixture', isSidechain: sidechain, ...(sidechain ? { agentId: 'fixture-worker' } : {}) }
+      // SDK display messages use snake_case. Engine JSONL persists Message fields.
+      if ('tool_use_result' in row) row.toolUseResult = row.tool_use_result
+      delete row.tool_use_result; delete row.parent_tool_use_id; delete row.session_id
+      parentUuid = typeof row.uuid === 'string' ? row.uuid : null
+      return [JSON.stringify(row)]
+    }).join('\n') + '\n'
+  }
+  writeFileSync(join(projectDir, `${engineSessionId}.jsonl`), serialize(false), { mode: 0o600 })
+  const agentDirectory = join(projectDir, engineSessionId, 'subagents')
+  mkdirSync(agentDirectory, { recursive: true, mode: 0o700 })
+  writeFileSync(join(agentDirectory, 'agent-fixture-worker.jsonl'), serialize(true), { mode: 0o600 })
+  const firstChild = frames.find(frame => frame.kind === 'event' && frame.event.type === 'message' && 'parent_tool_use_id' in frame.event.message && frame.event.message.parent_tool_use_id === 'fixture-agent')
+  const firstMessageUuid = firstChild?.kind === 'event' && firstChild.event.type === 'message' ? firstChild.event.message.uuid : undefined
+  writeFileSync(join(agentDirectory, 'agent-fixture-worker.meta.json'), JSON.stringify({ agentType: 'general-purpose', agentName: 'File inspector', description: 'Inspect prepared files', parentSessionId: engineSessionId, parentToolUseId: 'fixture-agent', spawnedAt: new Date(now).toISOString(), runs: [{ parentToolUseId: 'fixture-agent', firstMessageUuid }] }), { mode: 0o600 })
   writeCache(transcriptCacheDir(registryDir), createTranscriptCache(appSessionId, engineSessionId, frames))
   if (readCache(transcriptCacheDir(registryDir), appSessionId)?.frames.length !== frames.length) throw new Error('Fixture cache did not round-trip through production codec')
   const ready: ServerFrame = { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: appSessionId, engineSessionId, payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] } }
@@ -125,6 +142,33 @@ const poolProbe = spawnSync(process.execPath, ['run', join(appRoot, 'sidecar', '
 const poolRecords = poolProbe.stdout.trim().split('\n').filter(Boolean).map(line => parseAccountsPoolWorkerResult(JSON.parse(line)))
 const pool = poolRecords.find(record => record?.type === 'pool')
 if (poolProbe.status !== 0 || pool?.type !== 'pool' || pool.pool.poolCount !== 0 || pool.pool.anthropicPoolCount !== 0 || !pool.pool.anthropicRouteAvailable) throw new Error('Fixture account pool isolation failed')
+const replaySource = `
+const root=${JSON.stringify(resolve(appRoot, '..'))},project=${JSON.stringify(join(configDir, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-')))};
+const {ensureEngineMacro}=await import(root+'/app/sidecar/engineMetadata.ts');ensureEngineMacro();
+const {switchSession,setOriginalCwd}=await import(root+'/src/bootstrap/state.ts');setOriginalCwd(${JSON.stringify(cwd)});
+const {loadDisplayTranscriptFromJsonlPath}=await import(root+'/src/utils/sessionStorage.ts');
+const {projectResumedHistory}=await import(root+'/app/sidecar/historyProjection.ts');
+const {withRestoredSubagentHistory}=await import(root+'/app/sidecar/subagentHistory.ts');
+const {createTranscriptState,projectServerFrame,selectNestedTranscriptRows}=await import(root+'/app/renderer/src/transcriptProjector.ts');
+const {createSubagentDockState,reconcileSubagentDockState,selectSubagentDock}=await import(root+'/app/renderer/src/subagentDockState.ts');
+const {canOpenSubagentPanel}=await import(root+'/app/renderer/src/subagentPanelState.ts');
+for(const [id,engine] of ${JSON.stringify(ids.map((id, index) => [id, engineIds[index]]))}){
+ switchSession(engine,project);
+ const loaded=await loadDisplayTranscriptFromJsonlPath(project+'/'+engine+'.jsonl',{maxMessages:1000,maxBytes:4*1024*1024});
+ const restored=await withRestoredSubagentHistory(engine,projectResumedHistory(loaded.messages));
+ const ready={kind:'ready',protocolVersion:${PROTOCOL_VERSION},sessionId:id,engineSessionId:engine,payload:{type:'app.ready',protocolVersion:1,inputEnabled:true,activeTurn:false,abort:{status:'idle'},goalSnapshot:null,pendingPermissionRequests:[]}};
+ let state=projectServerFrame(createTranscriptState(),ready);
+ for(const message of restored.history)state=projectServerFrame(state,{kind:'event',protocolVersion:${PROTOCOL_VERSION},sessionId:id,event:{type:'message',message}});
+ const rows=selectNestedTranscriptRows(state,id);
+ const facts={workers:[],tasks:null,transcriptRows:rows,leases:null,nowMs:Date.now(),reducedMotion:true};
+ const dock=selectSubagentDock(reconcileSubagentDockState(createSubagentDockState(),facts),facts);
+ const worker=[...dock.active,...dock.finished].find(item=>item.agentId==='fixture-worker');
+ if(!worker||!canOpenSubagentPanel(worker,rows))throw new Error('Fixture worker is not openable after real JSONL/subagent replay');
+}
+console.log('replay-faithful');process.exit(0);
+`
+const replayProbe = spawnSync(process.execPath, ['-e', replaySource], { cwd, env: childEnvironment, encoding: 'utf8', timeout: 30000 })
+if (replayProbe.status !== 0 || !replayProbe.stdout.includes('replay-faithful')) throw new Error('Fixture production replay validation failed: ' + replayProbe.stderr.slice(-2000))
 writeFileSync(join(runRoot, 'manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600 })
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 const envPairs = Object.entries(manifest.environment).map(([key, value]) => `${key}=${quote(value)}`).join(' ')
