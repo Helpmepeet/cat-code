@@ -170,7 +170,7 @@ test('three successive recoveries retain all prior immutable episodes', async ()
     await acknowledgeRecovery()
   }
   expect(new Set(roots).size).toBe(3)
-  roots.forEach((root, index) => expect(readFileSync(join(root, 'tail.bin'))).toEqual(tails[index]!))
+  roots.forEach((root, index) => expect(readFileSync(join(root, 'tail.bin')).equals(tails[index]!)).toBe(true))
   expect(recovery.readTailRecoveryState(path, sessionId)?.reviewRequired).toBe(false)
 })
 
