@@ -12,7 +12,17 @@ export const LatestPaneFileCardContext = createContext<ReadonlyMap<string, strin
 
 export function paneFileKey(path: string, cwd: string | null): string {
   const parts = resolveFilePathParts({ rawPath: path, cwd })
-  return (parts.absolutePath ?? parts.cleanPath).replace(/:\d+(?::\d+)?$/, '')
+  const resolved = (parts.absolutePath ?? parts.cleanPath).replace(/:\d+(?::\d+)?$/, '')
+  const windows = /^[A-Za-z]:[\\/]/.test(resolved)
+  const rooted = windows || resolved.startsWith('/')
+  const prefix = windows ? resolved.slice(0, 2) : rooted ? '/' : ''
+  const normalized: string[] = []
+  for (const part of resolved.slice(windows ? 2 : 0).split(windows ? /[\\/]+/ : /\/+/)) {
+    if (!part || part === '.') continue
+    if (part === '..' && normalized.length && normalized.at(-1) !== '..') normalized.pop()
+    else if (part !== '..' || !rooted) normalized.push(part)
+  }
+  return `${prefix}${windows ? '/' : ''}${normalized.join('/')}`
 }
 
 export function paneCardPaths(row: NestedToolUseRow): string[] {
@@ -78,7 +88,11 @@ export function newestPaneFilePath(rows: readonly NestedTranscriptRow[], order?:
   let newest: string | null = null
   for (const row of orderedPaneRows(rows, order)) {
     const paths = row.kind === 'assistant-text' ? pathsInReply(row)
-      : row.kind === 'tool-use' ? paneCardPaths(row) : []
+      : row.kind === 'tool-use' ? [...new Set([
+          ...paneCardPaths(row),
+          toolCardFilePath(row),
+          row.result?.generatedImage?.filePath,
+        ].filter((path): path is string => typeof path === 'string' && isPaneFilePath(path)))] : []
     if (paths.length) newest = paths[paths.length - 1]!
   }
   return newest

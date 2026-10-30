@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { StrictMode, act } from 'react'
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js'
 import { App } from './App.js'
+import { disposeFilePaneSession, getFilePaneSession, registerFilePaneScroll, requestOpenFile } from './filePaneState.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor as fixture } from './sessionDescriptorFixture.js'
 import type { HostEvent, SessionDescriptor, SwitchWorkspaceBranchResult } from '../../shared/hostApi.js'
@@ -10,8 +11,9 @@ import type { NotificationVisibility, NotificationVisibilityBridge } from '../..
 
 let harness: DomTestHarness
 let previousBridge: CatCodeBridge
+const previewSessions = new Set<string>()
 beforeAll(async () => { harness = await createDomTestHarness(); previousBridge = window.catcode })
-afterEach(async () => { await harness.unmountAll(); window.catcode = previousBridge })
+afterEach(async () => { await harness.unmountAll(); for (const id of previewSessions) disposeFilePaneSession(id); previewSessions.clear(); window.catcode = previousBridge })
 afterAll(async () => { await harness.teardown() })
 
 function sessionDescriptor(id: string, overrides: Partial<SessionDescriptor> = {}) {
@@ -741,4 +743,72 @@ test('a cold cached conversation shows its mismatch through the read-only path w
   expect(app.tree.container.querySelector('.workspace-branch-changed')?.getAttribute('aria-label')).toBe('Checkout is on external. This chat was on recorded.')
   expect(reads).toEqual([['dead', 'readout']])
   expect(app.lifecycle).toEqual(['create'])
+})
+
+
+async function openAppFilePreview(sessionId: string) {
+  previewSessions.add(sessionId)
+  const releases: string[] = []
+  const path = `/tmp/${sessionId}/notes.md`
+  const descriptor = { id: `file-preview-${sessionId}`, appSessionId: sessionId, path, displayPath: path,
+    kind: 'markdown' as const, url: `cat-preview://file-preview-${sessionId}/r1${path}`, revision: 1, markdown: '# Retained notes' }
+  window.catcode.prepareFilePreview = async () => descriptor
+  window.catcode.refreshFilePreview = async () => null
+  window.catcode.commitFilePreview = async () => true
+  window.catcode.releaseFilePreview = id => { releases.push(id) }
+  window.catcode.subscribeFilePreview = () => () => {}
+  window.catcode.getFilePreviewApplications = async () => ({ applications: [{ target: 'default', label: 'Default application' }], selected: 'default' })
+  await act(async () => { expect(await requestOpenFile(sessionId, path)).toBe(true) })
+  await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+  return { releases, descriptor }
+}
+
+test('confirmed session closure releases pane resources while a refused close preserves them', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
+  const { releases, descriptor } = await openAppFilePreview('a')
+  const pending = deferred<Awaited<ReturnType<CatCodeBridge['closeSession']>>>()
+  window.catcode.closeSession = async () => pending.promise
+  await app.key('w')
+  expect(getFilePaneSession('a').lastPath).toBe(descriptor.path)
+  expect(releases).toEqual([])
+  await act(async () => { pending.resolve({ ok: false, error: { code: 'session_unreachable', message: 'Synthetic close refusal' } }) })
+  expect(getFilePaneSession('a').lastPath).toBe(descriptor.path)
+  const retry = deferred<Awaited<ReturnType<CatCodeBridge['closeSession']>>>()
+  window.catcode.closeSession = async () => retry.promise
+  await app.click('Retry stop')
+  await act(async () => { retry.resolve({ ok: true, value: undefined }) })
+  expect(releases).toEqual([descriptor.id])
+  expect(getFilePaneSession('a')).toMatchObject({ open: false, file: null, committedFile: null, lastPath: null, worker: null, output: null })
+})
+
+test('actual session removal releases pane resources without treating an ordinary switch as closure', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
+  const { releases, descriptor } = await openAppFilePreview('a')
+  await app.click('Session b, live')
+  expect(releases).toEqual([])
+  expect(getFilePaneSession('a').lastPath).toBe(descriptor.path)
+  await app.host({ type: 'session-removed', appSessionId: 'a' })
+  expect(releases).toEqual([descriptor.id])
+  expect(getFilePaneSession('a').lastPath).toBeNull()
+})
+
+test('sidebar preview selection captures the departing pane before unmounting its page', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('dead', { status: 'exited', restorable: true })])
+  await openAppFilePreview('a')
+  const scroll = deferred<{ x: number; y: number }>()
+  const stopReading = registerFilePaneScroll('a', () => scroll.promise)
+  window.catcode.previewSession = async () => ({ header: { appSessionId: 'dead', engineSessionId: 'engine-dead', protocolVersion: PROTOCOL_VERSION,
+    appVersion: 'test', guardVersion: 1, writtenAt: 0 }, frames: [] })
+  await app.click('Pin sidebar open')
+  await act(async () => {
+    for (const header of app.tree.container.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"][aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"]')) header.click()
+  })
+  const row = [...app.tree.container.querySelectorAll<HTMLElement>('[role="button"]')].find(element => element.getAttribute('aria-label')?.startsWith('session dead,'))!
+  expect(row).toBeDefined()
+  await act(async () => { row.click() })
+  expect(app.selected()).toEqual(['Session a, live'])
+  await act(async () => { scroll.resolve({ x: 7, y: 191 }) })
+  expect(app.selected()[0]).toContain('Session dead,')
+  expect(getFilePaneSession('a').scroll).toEqual({ x: 7, y: 191 })
+  stopReading()
 })

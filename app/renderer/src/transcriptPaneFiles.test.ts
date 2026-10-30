@@ -20,6 +20,10 @@ test('reopen discovery follows rendered reply forms and ignores fenced code and 
   }
   expect(newestPaneFilePath([prose('reply', 'See first.html\n\n```\nignore.md\n```\n\n[Outside](https://example.com/later.md)')])).toBe('first.html')
   expect(newestPaneFilePath([prose('reply', '`script.ts` [Outside](https://example.com)')])).toBeNull()
+  const read = { ...edit('read', '/repo/latest.svg:8'), toolName: 'Read', toolFamily: 'read' as const }
+  expect(newestPaneFilePath([prose('reply', 'older.html'), read])).toBe('/repo/latest.svg:8')
+  const image = { ...edit('image', 'unused.ts'), toolName: 'GenerateImage', toolFamily: 'imagegen' as const, result: { content: '', isError: false, diff: null, generatedImage: { filePath: '/generated/latest.png', model: 'image', size: '1x1', outputFormat: 'png' as const, bytes: 1 } } }
+  expect(newestPaneFilePath([read, image])).toBe('/generated/latest.png')
 })
 
 test('newest cards and reopen candidates use original arrival order across nested worker rows', () => {
@@ -31,6 +35,8 @@ test('newest cards and reopen candidates use original arrival order across neste
   const arrival = ['agent', 'early-parent', 'parent-reply', 'late-worker', 'worker-reply']
   expect(latestPaneFileCards(rows, '/repo', arrival).get('/repo/report.md')).toBe('late-worker')
   expect(newestPaneFilePath(rows, arrival)).toBe('worker-last.svg')
+  const aliases = latestPaneFileCards([edit('old-alias', '/repo/./report.md:12'), edit('new-alias', '/repo/nested/../report.md')], '/repo')
+  expect([...aliases]).toEqual([['/repo/report.md', 'new-alias']])
 })
 
 test('safe filename source locations survive Markdown URL normalization while executable schemes stay inert', () => {

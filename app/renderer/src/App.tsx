@@ -44,7 +44,7 @@ import {
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
-import { captureFilePaneScroll, getFilePaneSession, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
+import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
 import { newestPaneFilePath } from './transcriptPaneFiles.js'
 import { basename } from './pathUtils.js'
 import { stripLineSuffix } from './filePathActions.js'
@@ -1442,12 +1442,14 @@ export function App() {
         const navigation = parseNotificationOpenEvent(event)
         if (!navigation) return
         const sessionId = navigation.appSessionId
-        pendingExplicitSessionRef.current = null
-        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-        setShownSessionId(sessionId)
-        setActiveSessionId(sessionId)
-        dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
-        if (navigation.accounts) dispatchTabNavigation({ type: 'open-page', page: 'accounts' })
+        captureBeforePaneSwitch(() => {
+          pendingExplicitSessionRef.current = null
+          supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+          setShownSessionId(sessionId)
+          setActiveSessionId(sessionId)
+          dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
+          if (navigation.accounts) dispatchTabNavigation({ type: 'open-page', page: 'accounts' })
+        })
         return
       }
       if (event.type === 'project-routing') {
@@ -1522,6 +1524,7 @@ export function App() {
         }
       }
       if (event.type === 'session-removed') {
+        disposeFilePaneSession(event.appSessionId)
         setNotificationRetryLocalBlocks(current => {
           if (!current[event.appSessionId]) return current
           const next = { ...current }
@@ -1903,7 +1906,7 @@ export function App() {
   }, [hostSnapshotReady, queueTranscriptPreload])
 
   const focusCreatedSession = useCallback((sessionId: SessionId, claim: number) => {
-    applyForegroundSelectionIfCurrent(
+    captureBeforePaneSwitch(() => applyForegroundSelectionIfCurrent(
       foregroundSelectionClaimRef.current,
       claim,
       () => {
@@ -1917,8 +1920,8 @@ export function App() {
         supersedeForegroundSelection(foregroundSelectionClaimRef.current)
         dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
       },
-    )
-  }, [])
+    ))
+  }, [captureBeforePaneSwitch])
 
   type FreshSessionOutcome =
     | { status: 'created'; sessionId: SessionId }
@@ -1955,13 +1958,15 @@ export function App() {
 
   const showCreatedSession = useCallback(
     (createdSessionId: SessionId) => {
-      pendingExplicitSessionRef.current = createdSessionId
-      setShownSessionId(createdSessionId)
-      setActiveSessionId(createdSessionId)
-      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-      dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId: createdSessionId } })
+      captureBeforePaneSwitch(() => {
+        pendingExplicitSessionRef.current = createdSessionId
+        setShownSessionId(createdSessionId)
+        setActiveSessionId(createdSessionId)
+        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+        dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId: createdSessionId } })
+      })
     },
-    [],
+    [captureBeforePaneSwitch],
   )
 
   const newProjectSession = useCallback(async (projectId: string) => {
@@ -2582,13 +2587,15 @@ export function App() {
 
   // Selects a session whose pane is already on screen, e.g. from a pane control.
   const selectShownSession = useCallback((sessionId: SessionId) => {
-    setActiveSessionId(sessionId)
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({
-      type: 'select',
-      target: { kind: 'session', sessionId },
+    captureBeforePaneSwitch(() => {
+      setActiveSessionId(sessionId)
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
     })
-  }, [])
+  }, [captureBeforePaneSwitch])
 
   // CC-16 — hand a parked prompt back to the composer. Called on every terminal
   // outcome of the spawn the user's keystroke started (a rejected/thrown
@@ -2743,6 +2750,7 @@ export function App() {
     }
     return dismissSessionAndRequestStop(shell.dismissals ?? [], shell.byId[sessionId], updateDismissals, async () => {
       if (lazyRestoreClaimsRef.current.has(sessionId)) cancelledRestoresRef.current.add(sessionId)
+      if (getFilePaneSession(sessionId).open) await captureFilePaneScroll(sessionId)
       navigateAfterClosedSession(sessionId, openOrder)
       // Unsent queued input returns to the session's draft for deliberate review.
       releasePendingSubmit(sessionId)
@@ -2766,6 +2774,7 @@ export function App() {
           setShellError(hostErrorMessage(result.error))
           return false
         }
+        disposeFilePaneSession(sessionId)
         return true
       } catch (error) {
         pendingCloseRequestsRef.current.delete(sessionId)
@@ -2811,6 +2820,7 @@ export function App() {
       // Main closes the old sidecar before this result is returned. The new
       // session has a fresh engine snapshot for the selected branch.
       const replacementId = result.value.appSessionId
+      if (replacementId !== sessionId) disposeFilePaneSession(sessionId)
       if (isSessionDismissed(shellRef.current.dismissals ?? [], source)) {
         updateDismissals(dismissSession(shellRef.current.dismissals ?? [], result.value))
         dispatchShell({ type: 'event', event: { type: 'session-added', session: result.value } })
@@ -2900,7 +2910,7 @@ export function App() {
             const closeResult = await bridge.closeSession(sessionId)
             if (!closeResult.ok) {
               setShellError(hostErrorMessage(closeResult.error))
-            }
+            } else disposeFilePaneSession(sessionId)
             return
           }
           // `focus: false` is the idle-park drain: the user typed into a pane
@@ -2916,11 +2926,11 @@ export function App() {
                 target: { kind: 'session', sessionId: result.value.appSessionId },
               })
             }
-            applyForegroundSelectionIfCurrent(
+            captureBeforePaneSwitch(() => applyForegroundSelectionIfCurrent(
               foregroundSelectionClaimRef.current,
               selectionClaim,
               completeFocus,
-            )
+            ))
           }
         } else {
           lazyRestoreClaimsRef.current.delete(sessionId)
@@ -2935,7 +2945,7 @@ export function App() {
         setShellError(errorMessage(error))
       }
     },
-    [releasePendingSubmit],
+    [releasePendingSubmit, captureBeforePaneSwitch],
   )
 
   const engagePreview = useCallback(
@@ -2982,15 +2992,17 @@ export function App() {
     if (!descriptor || isSessionDismissed(shellRef.current.dismissals ?? [], descriptor)) return
     swappedPreviewsRef.current.delete(sessionId)
     dispatchShell({ type: 'preview-open', sessionId })
-    if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
-    setShownSessionId(sessionId)
-    setActiveSessionId(sessionId)
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({
-      type: 'select',
-      target: { kind: 'session', sessionId },
+    captureBeforePaneSwitch(() => {
+      if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
+      setShownSessionId(sessionId)
+      setActiveSessionId(sessionId)
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
     })
-  }, [])
+  }, [captureBeforePaneSwitch])
 
   // PL-A store-first path: a startup-preloaded transcript opens synchronously
   // with zero click-time IPC. A not-preloaded/cache-miss row retains IS-B's
@@ -3067,21 +3079,22 @@ export function App() {
           void performRestore(descriptor.appSessionId, selectionClaim)
           return descriptor
         }
-        if (isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) {
+        captureBeforePaneSwitch(() => {
+          if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
           setActiveSessionId(descriptor.appSessionId)
           supersedeForegroundSelection(foregroundSelectionClaimRef.current)
           dispatchTabNavigation({
             type: 'select',
             target: { kind: 'session', sessionId: descriptor.appSessionId },
           })
-        }
+        })
         return descriptor
       } catch (error) {
         setShellError(errorMessage(error))
         return null
       }
     },
-    [performRestore, deliberatelyReopen],
+    [performRestore, deliberatelyReopen, captureBeforePaneSwitch],
   )
 
   useEffect(() => {
