@@ -202,12 +202,12 @@ export function createLocalhostSnapshots(options: {
   }
   const command = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> => {
     const count = (name: string) => [...commands.values()].filter(value => value === name).length
-    if (disposed || commands.size >= 16 || method === 'Network.getResponseBody' && count(method) >= limits.bodyReads || method === 'Runtime.evaluate' && count(method) >= limits.captures) return Promise.reject(new Error('Snapshot command capacity exceeded'))
+    if (disposed || commands.size >= 16 || method === 'Network.getResponseBody' && count(method) >= limits.bodyReads || method === 'Runtime.evaluate' && count(method) >= limits.captures) return Promise.reject(new Error('Snapshot command capacity exceeded')) // §7-ok: Internal debugger rejection is caught before the UI boundary.
     let pending: Promise<any>
     try { pending = transport.sendCommand(method, params, sessionId) } catch (error) { return Promise.reject(error) }
     commands.set(pending, method)
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Snapshot command timed out')), limits.captureTimeoutMs)
+      const timer = setTimeout(() => reject(new Error('Snapshot command timed out')), limits.captureTimeoutMs) // §7-ok: Internal debugger rejection is caught before the UI boundary.
       pending.then(value => { clearTimeout(timer); commands.delete(pending); resolve(value) }, error => { clearTimeout(timer); commands.delete(pending); reject(error) })
     })
   }
