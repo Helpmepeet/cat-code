@@ -94,11 +94,13 @@ export function renderToolUseProgressMessage(progressMessages: ProgressMessage<W
 export function renderToolResultMessage(output: Output): React.ReactNode {
   const resultCount = getResultCount(output.results ?? []);
   const timeDisplay = output.durationSeconds >= 1 ? `${Math.round(output.durationSeconds)}s` : `${Math.round(output.durationSeconds * 1000)}ms`;
+  const providerLabel = output.provider === 'openai' ? 'OpenAI' : output.provider === 'claude' ? 'Claude' : 'Exa';
   return <Box justifyContent="space-between" width="100%">
       <MessageResponse height={1}>
         <Text>
           Found {resultCount} result
           {resultCount !== 1 ? 's' : ''} in {timeDisplay}
+          {output.provider ? ` (${providerLabel})` : ''}
         </Text>
       </MessageResponse>
     </Box>;

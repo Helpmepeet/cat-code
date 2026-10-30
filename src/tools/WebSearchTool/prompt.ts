@@ -1,18 +1,28 @@
 import { getLocalMonthYear } from 'src/constants/common.js'
+import type { APIProvider } from '../../utils/model/providers.js'
 
 export const WEB_SEARCH_TOOL_NAME = 'WebSearch'
 
-export function getWebSearchPrompt(): string {
+export function getWebSearchPrompt(provider?: APIProvider): string {
   const currentMonthYear = getLocalMonthYear()
+  const providerGuidance = provider === 'openai'
+    ? 'Standard searches use OpenAI search with the invoking GPT model and its OpenAI account.'
+    : provider === 'bedrock'
+      ? 'Search uses Exa because this model provider does not offer native web search.'
+      : provider
+        ? 'Standard searches use Claude search with the invoking Claude model and its account.'
+        : 'Standard searches use the invoking model\'s search provider: OpenAI for GPT and Claude search for Claude.'
   return `
 - Search the web and use retrieved sources to inform responses. Search works without an API key.
+- ${providerGuidance} If native search is unavailable, Exa keeps web search available. Search does not switch to the other model account provider.
 - Use this for current documentation, package/API references, GitHub or repository docs, changelogs, issue/error lookup, and general web research.
 - Results include titles, URLs, dates and authors when available, and highlights or page text.
-- Start with the default 10 results and compact highlights. Increase max_results up to 100 for broader coverage. Use content "text" to read fuller sources, with max_characters up to 50000 per result (default 10000 for text, 2000 for highlights). Page text can be incomplete if the source cannot be fully retrieved.
+- Start with the default cap of 10 results and available source highlights or a search summary. max_results caps returned links; a provider may return fewer. Increase max_results up to 100 for broader coverage. Use content "text" to read fuller sources, with max_characters up to 50000 per result (default 10000 for text, 2000 for highlights). Page text can be incomplete if the source cannot be fully retrieved.
 - Use targeted queries. For recent docs or current events, include the current year when it helps.
 - Use include_domains when the relevant site is known, such as official docs or GitHub repository documentation.
 - Use freshness when recency matters.
 - Use mode "standard" by default. Use "extended" when results are thin or the task needs deeper reading; it defaults to 20 results and page text. With EXA_API_KEY configured, it also uses Exa deep search. Keyless extended mode uses ordinary search with broader coverage and more content.
+- Full page text, an explicit max_characters bound, and extended mode use Exa. Filters unsupported by the native search provider also use Exa. The result identifies which search provider was used. Omit these options for an ordinary native search.
 - Free keyless access is rate-limited. Report a returned rate-limit error accurately; it does not mean internet access or all search tools are unavailable.
 
 CRITICAL REQUIREMENT - You MUST follow this:

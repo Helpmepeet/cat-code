@@ -3,34 +3,20 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js'
 import { AbortError, isAbortError } from '../../utils/errors.js'
 
-export type WebSearchFreshness = 'day' | 'week' | 'month' | 'year' | 'any'
-export type WebSearchMode = 'standard' | 'extended'
-
-export type WebSearchInput = {
-  query: string
-  max_results?: number
-  include_domains?: string[]
-  exclude_domains?: string[]
-  freshness?: WebSearchFreshness
-  mode?: WebSearchMode
-  content?: 'highlights' | 'text'
-  max_characters?: number
-}
-
-export type WebSearchResult = {
-  title: string
-  url: string
-  publishedDate?: string
-  author?: string
-  highlights?: string[]
-  text?: string
-}
-
-export type WebSearchOutput = {
-  query: string
-  results: WebSearchResult[]
-  durationSeconds: number
-}
+import type {
+  WebSearchFreshness,
+  WebSearchInput,
+  WebSearchMode,
+  WebSearchOutput,
+  WebSearchResult,
+} from './types.js'
+export type {
+  WebSearchFreshness,
+  WebSearchInput,
+  WebSearchMode,
+  WebSearchOutput,
+  WebSearchResult,
+} from './types.js'
 
 type ExaSearchRequest = {
   query: string

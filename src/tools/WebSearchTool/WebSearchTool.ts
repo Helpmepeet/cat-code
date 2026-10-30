@@ -14,10 +14,9 @@ import {
 import {
   MAX_CONTENT_CHARACTERS,
   MAX_RESULTS,
-  searchExa,
-  type WebSearchOutput,
-  type WebSearchResult,
 } from './exa.js'
+import { searchWeb } from './search.js'
+import type { WebSearchOutput, WebSearchResult } from './types.js'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
@@ -29,13 +28,13 @@ const inputSchema = lazySchema(() =>
       .max(MAX_RESULTS)
       .optional()
       .describe(
-        'Maximum number of results, from 1 to 100. Defaults to 10, or 20 in extended mode.',
+        'Maximum results to return, from 1 to 100. Defaults to a cap of 10, or 20 in extended mode.',
       ),
     content: z
       .enum(['highlights', 'text'])
       .optional()
       .describe(
-        'Return relevant highlights or fuller page text. Defaults to highlights, or text in extended mode.',
+        'Return available source highlights or request fuller page text through Exa. Defaults to highlights, or text in extended mode.',
       ),
     max_characters: z
       .number()
@@ -77,8 +76,8 @@ const searchResultSchema = lazySchema(() =>
     publishedDate: z
       .string()
       .optional()
-      .describe('Published date when Exa provides it'),
-    author: z.string().optional().describe('Author when Exa provides it'),
+      .describe('Published date when the source provides it'),
+    author: z.string().optional().describe('Author when the source provides it'),
     highlights: z.array(z.string()).optional().describe('Relevant highlights'),
     text: z.string().optional().describe('Page text, bounded by max_characters'),
   }),
@@ -93,6 +92,9 @@ const outputSchema = lazySchema(() =>
     durationSeconds: z
       .number()
       .describe('Time taken to complete the search operation'),
+    summary: z.string().optional().describe('Search summary returned by the provider'),
+    provider: z.enum(['claude', 'openai', 'exa']).optional().describe('Search provider used'),
+    fallbackReason: z.string().optional().describe('Why Exa was used instead of native search'),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -107,7 +109,7 @@ export const WebSearchTool = buildTool({
   maxResultSizeChars: 100_000,
   shouldDefer: true,
   async description(input) {
-    return `Claude wants to search the web for: ${input.query}`
+    return `Search the web for: ${input.query}`
   },
   userFacingName() {
     return 'Web Search'
@@ -149,8 +151,8 @@ export const WebSearchTool = buildTool({
       ],
     }
   },
-  async prompt() {
-    return getWebSearchPrompt()
+  async prompt({ provider }) {
+    return getWebSearchPrompt(provider)
   },
   renderToolUseMessage,
   renderToolUseProgressMessage,
@@ -169,7 +171,7 @@ export const WebSearchTool = buildTool({
       },
     })
 
-    const output = await searchExa(input, context.abortController.signal)
+    const output = await searchWeb(input, context)
 
     onProgress?.({
       toolUseID,
@@ -186,6 +188,15 @@ export const WebSearchTool = buildTool({
     const { query, results } = output
 
     let formattedOutput = `Web search results for query: "${query}"\n\n`
+
+    if (output.provider) {
+      const name = output.provider === 'openai'
+        ? 'OpenAI'
+        : output.provider === 'claude' ? 'Claude' : 'Exa'
+      formattedOutput += `Search provider: ${name}\n`
+      if (output.fallbackReason) formattedOutput += `${output.fallbackReason}\n`
+      formattedOutput += '\n'
+    }
 
     if (results.length === 0) {
       formattedOutput += 'No results found.\n\n'
@@ -211,6 +222,8 @@ export const WebSearchTool = buildTool({
         formattedOutput += '\n'
       })
     }
+
+    if (output.summary) formattedOutput += `Search summary:\n${output.summary}\n\n`
 
     formattedOutput +=
       'REMINDER: Cite relevant source URLs from the WebSearch results using markdown hyperlinks.'
