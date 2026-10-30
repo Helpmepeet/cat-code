@@ -11,11 +11,7 @@ import {
   renderToolUseMessage,
   renderToolUseProgressMessage,
 } from './UI.js'
-import {
-  MAX_CONTENT_CHARACTERS,
-  MAX_RESULTS,
-} from './exa.js'
-import { searchWeb } from './search.js'
+import { getSearchInputError, searchWeb } from './search.js'
 import type { WebSearchOutput, WebSearchResult } from './types.js'
 
 const inputSchema = lazySchema(() =>
@@ -25,25 +21,10 @@ const inputSchema = lazySchema(() =>
       .number()
       .int()
       .min(1)
-      .max(MAX_RESULTS)
+      .max(100)
       .optional()
       .describe(
-        'Maximum results to return, from 1 to 100. Defaults to a cap of 10, or 20 in extended mode.',
-      ),
-    content: z
-      .enum(['highlights', 'text'])
-      .optional()
-      .describe(
-        'Return available source highlights or request fuller page text through Exa. Defaults to highlights, or text in extended mode.',
-      ),
-    max_characters: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_CONTENT_CHARACTERS)
-      .optional()
-      .describe(
-        'Maximum content characters per result, from 1 to 50000. Defaults to 2000 for highlights or 10000 for text.',
+        'Maximum returned links, from 1 to 100. Defaults to 10; native search may return fewer.',
       ),
     include_domains: z
       .array(z.string().trim().min(1))
@@ -54,17 +35,11 @@ const inputSchema = lazySchema(() =>
       .array(z.string().trim().min(1))
       .max(20)
       .optional()
-      .describe('Exclude search results from these domains.'),
+      .describe('Claude search only: exclude these domains. Use either include_domains or exclude_domains, not both. Omit for OpenAI search.'),
     freshness: z
       .enum(['day', 'week', 'month', 'year', 'any'])
       .optional()
-      .describe('Published-date freshness filter. Defaults to any.'),
-    mode: z
-      .enum(['standard', 'extended'])
-      .optional()
-      .describe(
-        '"standard" (default): compact search. "extended": broader results and fuller page text; also uses deep search when EXA_API_KEY is configured.',
-      ),
+      .describe('OpenAI search only: recency filter. Omit for Claude search and put the desired time period in query instead. Defaults to any.'),
   }),
 )
 type InputSchema = ReturnType<typeof inputSchema>
@@ -79,7 +54,7 @@ const searchResultSchema = lazySchema(() =>
       .describe('Published date when the source provides it'),
     author: z.string().optional().describe('Author when the source provides it'),
     highlights: z.array(z.string()).optional().describe('Relevant highlights'),
-    text: z.string().optional().describe('Page text, bounded by max_characters'),
+    text: z.string().optional().describe('Source text when available'),
   }),
 )
 
@@ -94,7 +69,7 @@ const outputSchema = lazySchema(() =>
       .describe('Time taken to complete the search operation'),
     summary: z.string().optional().describe('Search summary returned by the provider'),
     provider: z.enum(['claude', 'openai', 'exa']).optional().describe('Search provider used'),
-    fallbackReason: z.string().optional().describe('Why Exa was used instead of native search'),
+    fallbackReason: z.string().optional().describe('Fallback reason recorded in an older search result'),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -136,6 +111,10 @@ export const WebSearchTool = buildTool({
   },
   toAutoClassifierInput(input) {
     return input.query
+  },
+  async validateInput(input, context) {
+    const message = getSearchInputError(input, context)
+    return message ? { result: false, message, errorCode: 1 } : { result: true }
   },
   async checkPermissions(_input): Promise<PermissionResult> {
     return {

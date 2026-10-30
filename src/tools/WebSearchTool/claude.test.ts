@@ -95,7 +95,7 @@ describe('Claude subscription search process boundary', () => {
   test.each([
     ['output limit', "process.stdout.write('x'.repeat(1_000_001)); setInterval(() => {}, 1000);", 'too much output'],
     ['unexpected termination', "process.kill(process.pid, 'SIGTERM');", 'search failed'],
-  ])('%s remains a backend failure eligible for fallback', async (_reason, program, message) => {
+  ])('%s remains a native backend failure', async (_reason, program, message) => {
     await fakeCli(program)
     await expect(searchClaude({ query: 'q' }, context())).rejects.toThrow(message)
   })

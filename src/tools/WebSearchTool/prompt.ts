@@ -4,35 +4,26 @@ import type { APIProvider } from '../../utils/model/providers.js'
 export const WEB_SEARCH_TOOL_NAME = 'WebSearch'
 
 export function getWebSearchPrompt(provider?: APIProvider): string {
-  const currentMonthYear = getLocalMonthYear()
   const providerGuidance = provider === 'openai'
-    ? 'Standard searches use OpenAI search with the invoking GPT model and its OpenAI account.'
+    ? 'Use OpenAI search with the invoking GPT model and its OpenAI account. include_domains and freshness are supported; exclude_domains is not supported.'
     : provider === 'bedrock'
-      ? 'Search uses Exa because this model provider does not offer native web search.'
+      ? 'Native web search is unavailable on this Bedrock connection. Report that limitation; the tool does not switch accounts or search providers.'
       : provider
-        ? 'Standard searches use Claude search with the invoking Claude model and its account.'
-        : 'Standard searches use the invoking model\'s search provider: OpenAI for GPT and Claude search for Claude.'
+        ? 'Use Claude search with the invoking Claude model and its configured account. Use include_domains or exclude_domains, not both. Omit freshness; put the desired time period in query and verify source dates.'
+        : "Use the invoking model's native search: OpenAI for GPT and Claude search for supported Claude connections. OpenAI supports include_domains and freshness; Claude supports include_domains or exclude_domains, not both, and does not support freshness."
   return `
-- Search the web and use retrieved sources to inform responses. Search works without an API key.
-- ${providerGuidance} If native search is unavailable, Exa keeps web search available. Search does not switch to the other model account provider.
+- Search the web and use retrieved sources to inform responses.
+- ${providerGuidance}
+- Searches stay with the invoking provider. Native account, availability, and request failures are returned as errors; no automatic backend substitution occurs.
 - Use this for current documentation, package/API references, GitHub or repository docs, changelogs, issue/error lookup, and general web research.
-- Results include titles, URLs, dates and authors when available, and highlights or page text.
-- Start with the default cap of 10 results and available source highlights or a search summary. max_results caps returned links; a provider may return fewer. Increase max_results up to 100 for broader coverage. Use content "text" to read fuller sources, with max_characters up to 50000 per result (default 10000 for text, 2000 for highlights). Page text can be incomplete if the source cannot be fully retrieved.
-- Use targeted queries. For recent docs or current events, include the current year when it helps.
+- Results include source titles and URLs, with available excerpts or a generated summary. A summary is not a directly read page. Use an appropriate source-reading tool to inspect pages and discussions.
+- Start with the default cap of 10 results. max_results limits returned links up to 100; the provider may return fewer. For deeper research, refine queries and inspect relevant sources.
 - Use include_domains when the relevant site is known, such as official docs or GitHub repository documentation.
-- Use freshness when recency matters.
-- Use mode "standard" by default. Use "extended" when results are thin or the task needs deeper reading; it defaults to 20 results and page text. With EXA_API_KEY configured, it also uses Exa deep search. Keyless extended mode uses ordinary search with broader coverage and more content.
-- Full page text, an explicit max_characters bound, and extended mode use Exa. Filters unsupported by the native search provider also use Exa. The result identifies which search provider was used. Omit these options for an ordinary native search.
-- Free keyless access is rate-limited. Report a returned rate-limit error accurately; it does not mean internet access or all search tools are unavailable.
+- Request OpenAI freshness only when a date cutoff is needed. Current-information questions can use dates in query; verify dates in the sources.
+- Full-page content, extended mode, and character-limit options are not supported by this tool. Read sources with a suitable page or service tool.
+- Cite relevant source URLs as markdown hyperlinks. Cite only sources actually returned or read, distinguish excerpts and generated summaries from directly read content, and state remaining uncertainty.
+- The current month is ${getLocalMonthYear()}. Use the current year when searching for recent information, documentation, changelogs, or current events.
 
-CRITICAL REQUIREMENT - You MUST follow this:
-  - After answering the user's question, include a "Sources:" section at the end of your response when WebSearch results informed the answer.
-  - In the Sources section, list relevant URLs from the search results as markdown hyperlinks: [Title](URL).
-  - Do not cite sources that were not returned by WebSearch or otherwise read with a tool.
-
-Usage notes:
-  - Domain filtering supports include_domains and exclude_domains.
-  - Freshness supports day, week, month, year, or any.
-  - The current month is ${currentMonthYear}. Use the current year when searching for recent information, documentation, changelogs, or current events.
+When WebSearch results informed the answer, include a "Sources:" section. In it, list relevant URLs from the search results as markdown hyperlinks: [Title](URL). Do not cite sources that were not returned by WebSearch or otherwise read with a tool.
 `
 }

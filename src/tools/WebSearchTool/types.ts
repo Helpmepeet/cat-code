@@ -1,5 +1,5 @@
 export type WebSearchFreshness = 'day' | 'week' | 'month' | 'year' | 'any'
-export type WebSearchMode = 'standard' | 'extended'
+// Older transcripts can still contain Exa output.
 export type WebSearchProvider = 'claude' | 'openai' | 'exa'
 
 export type WebSearchInput = {
@@ -8,9 +8,6 @@ export type WebSearchInput = {
   include_domains?: string[]
   exclude_domains?: string[]
   freshness?: WebSearchFreshness
-  mode?: WebSearchMode
-  content?: 'highlights' | 'text'
-  max_characters?: number
 }
 
 export type WebSearchResult = {
