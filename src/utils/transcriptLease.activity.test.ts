@@ -7,6 +7,7 @@ import {
   assertActiveTranscriptLease,
   readTranscriptActivationAtMs,
   releaseActiveTranscriptLease,
+  withTranscriptHydrationLease,
   withUnownedTranscriptLease,
 } from './transcriptLease.js'
 
@@ -110,4 +111,47 @@ test('marker publication failure is best-effort and does not fail resume or rele
   expect(await readTranscriptActivationAtMs(sessionId)).toBeNull()
   await releaseActiveTranscriptLease()
   expect(await withUnownedTranscriptLease(sessionId, async () => 'maintenance')).toEqual({ acquired: true, value: 'maintenance' })
+})
+
+test('hydration borrows the active target without releasing it on success or failure', async () => {
+  await activateTranscriptLease(sessionId)
+  await withTranscriptHydrationLease(sessionId, async assertHealthy => {
+    assertHealthy()
+    await activateTranscriptLease(sessionId)
+    assertHealthy()
+  })
+  await expect(withTranscriptHydrationLease(sessionId, async () => {
+    throw new Error('reader failed')
+  })).rejects.toThrow('reader failed')
+  expect(await withUnownedTranscriptLease(sessionId, async () => null)).toEqual({ acquired: false })
+  assertActiveTranscriptLease(sessionId)
+})
+
+test('temporary hydration retains a different active lease and releases only its own guard', async () => {
+  await activateTranscriptLease(sessionId)
+  await withTranscriptHydrationLease(secondSessionId, async assertHealthy => {
+    assertHealthy()
+    assertActiveTranscriptLease(sessionId)
+    // An attempted adoption must fail promptly, not deadlock behind its callback.
+    await expect(activateTranscriptLease(secondSessionId)).rejects.toThrow('already open')
+    assertHealthy()
+  })
+  assertActiveTranscriptLease(sessionId)
+  expect(await withUnownedTranscriptLease(secondSessionId, async () => null)).toEqual({ acquired: true, value: null })
+  expect(await withUnownedTranscriptLease(sessionId, async () => null)).toEqual({ acquired: false })
+})
+
+test('borrowed hydration detects release and transfer without blocking the transition queue', async () => {
+  await activateTranscriptLease(sessionId)
+  await expect(withTranscriptHydrationLease(sessionId, async assertHealthy => {
+    await releaseActiveTranscriptLease()
+    assertHealthy()
+  })).rejects.toThrow('hydration lease released')
+  await activateTranscriptLease(sessionId)
+  await expect(withTranscriptHydrationLease(sessionId, async assertHealthy => {
+    await activateTranscriptLease(secondSessionId)
+    assertHealthy()
+  })).rejects.toThrow('hydration lease released')
+  assertActiveTranscriptLease(secondSessionId)
+  expect(await withUnownedTranscriptLease(sessionId, async () => null)).toEqual({ acquired: true, value: null })
 })

@@ -232,6 +232,39 @@ export async function releaseActiveTranscriptLease(): Promise<void> {
   return operation
 }
 
+export async function withTranscriptHydrationLease<T>(
+  sessionId: string,
+  operation: (assertHealthy: () => void) => Promise<T>,
+): Promise<T> {
+  const acquisition = transition.then(async () => {
+    assertSessionNotMoving(sessionId)
+    if (activeLease?.sessionId === sessionId) {
+      activeLease.assertHealthy()
+      return { guard: activeLease, borrowed: true }
+    }
+    return { guard: await acquireLease(sessionId), borrowed: false }
+  })
+  transition = acquisition.then(() => {}, () => {})
+  const { guard, borrowed } = await acquisition
+  const assertHealthy = () => {
+    if (borrowed && activeLease !== guard) {
+      throw new Error(`Transcript hydration lease released for session ${sessionId}`)
+    }
+    guard.assertHealthy()
+    assertSessionNotMoving(sessionId)
+  }
+  try {
+    assertHealthy()
+    // Do not hold the transition queue across callbacks: readers may themselves
+    // await an active-lease transition. Borrowed guards are checked before writes.
+    const result = await operation(assertHealthy)
+    assertHealthy()
+    return result
+  } finally {
+    if (!borrowed) await releaseLease(guard)
+  }
+}
+
 export async function withUnownedTranscriptLease<T>(
   sessionId: string,
   operation: () => Promise<T>,
