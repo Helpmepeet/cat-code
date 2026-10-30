@@ -301,7 +301,9 @@ test('Auto emits review before execution while an ordinary permission check emit
       getPermissionRequestHandler: () => undefined,
       baseCanUseTool: async () => ({ behavior: 'allow', decisionReason: { type: 'other', reason: 'test' } }),
     })
-    await withToolActivity(event => events.push(event), async () => {
+    await withToolActivity(event => {
+      if (event.type === 'tool.activity') events.push(event)
+    }, async () => {
       for await (const _ of runToolUse({ type: 'tool_use', id: 'activity-call', name: tool.name, input: { value: 'x' } }, createAssistantMessage(), canUseTool, context)) { /* Drain the real tool pipeline. */ }
     })
     expect(events.map(event => event.phase)).toEqual(mode === 'auto' && feature('TRANSCRIPT_CLASSIFIER') ? ['reviewing', 'executing'] : ['executing'])
