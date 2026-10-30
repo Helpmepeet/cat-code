@@ -57,7 +57,7 @@ iframe.file-pane-content { background:white; }
 @container subagent-workspace (width < 1000px) {
   .subagent-workspace-layout[data-file-open] { flex-direction:column-reverse; }
   .subagent-workspace-layout[data-file-open] .subagent-parent { flex:0 0 auto; }
-  .subagent-workspace-layout[data-file-open] .session-pane { padding-top:12px; padding-bottom:20px; }
+  .subagent-workspace-layout[data-file-open] .subagent-parent > .session-pane { flex:0 0 auto; padding-top:12px; padding-bottom:20px; }
   .subagent-workspace-layout[data-file-open] .session-transcript-region,
   .subagent-workspace-layout[data-file-open] .subagent-dock { display:none; }
   .subagent-workspace-layout[data-file-open] .subagent-shared-slot { flex:1; width:auto; max-width:none; min-width:0; border-left:0; border-bottom:1px solid var(--shell-seam); }
