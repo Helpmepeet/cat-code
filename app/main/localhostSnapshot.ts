@@ -9,6 +9,8 @@ export interface LocalhostSnapshotBinding {
   url: string
 }
 export interface LocalhostSnapshotFrame {
+  readonly detached?: boolean
+  isDestroyed?(): boolean
   name: string
   url: string
   parent: { parent: unknown | null } | null
@@ -47,6 +49,10 @@ const DEFAULTS: LocalhostSnapshotLimits = {
   snapshots: 256, pendingRequests: 256, bodyReads: 2, queuedBodyReads: 32, captures: 4,
   captureTimeoutMs: 600, htmlBytes: 8 * 1024 * 1024, domNodes: 4_000,
 }
+function closedDebuggerTarget(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).slice(0, 256)
+  return /^(?:target closed while handling command|session with given id not found\.?|session closed\.?|target closed\.?)$/i.test(message)
+}
 function withoutHash(value: string): string {
   try { const url = new URL(value); url.hash = ''; return url.href } catch { return value }
 }
@@ -62,9 +68,10 @@ function cssWithLocalResources(css: string, base: string, assets: Map<string, st
       } catch { return 'url("data:,")' }
     })
 }
-function freezeExpression(assets: Map<string, string>, stylesheets: Map<string, string>, limits: LocalhostSnapshotLimits): string {
+function freezeExpression(assets: Map<string, string>, stylesheets: Map<string, string>, limits: LocalhostSnapshotLimits, expectedUrl: string): string {
   // The expression runs only in the independently authorized preview frame.
   return `(() => {
+    if (location.href !== ${JSON.stringify(expectedUrl)}) return null;
     const assets = ${JSON.stringify(Object.fromEntries(assets))};
     const sheets = ${JSON.stringify(Object.fromEntries(stylesheets))};
     const deadline = performance.now() + ${Math.max(50, limits.captureTimeoutMs - 50)};
@@ -163,6 +170,10 @@ export function createLocalhostSnapshots(options: {
   const queue: RequestRecord[] = []
   const sessions = new Set<string>()
   const sessionSetup = new Map<string, Promise<void>>()
+  const sessionOrder = new Map<string, number>()
+  const deferredTargets = new Map<string, { handle: ReturnType<typeof setImmediate>; resolve: () => void; pending: Promise<void> }>()
+  let deferredStop: ReturnType<typeof setImmediate> | null = null
+  let observerGeneration = 0, nextSessionOrder = 0
   const networkSessions = new Set<string>()
   const frameSessions = new Map<string, string>()
   const sessionRoots = new Map<string, FrameTree['frame']>()
@@ -171,15 +182,35 @@ export function createLocalhostSnapshots(options: {
   let refreshPending: Promise<void> | null = null
   let startPending: Promise<boolean> | null = null
   const commands = new Map<Promise<unknown>, string>()
-  const leases = new Map<string, { token: symbol; id: string; appSessionId: string }>()
-  const leaseFor = (key: string, binding: LocalhostSnapshotBinding) => {
+  const nativeAcknowledgements = new Set<Promise<unknown>>()
+  const childCommands = new Map<string, { sessionId: string; resolve: (value: unknown) => void; reject: (error: unknown) => void }>()
+  let nextChildRequest = 0
+  const sendChildCommand = (method: string, params: Record<string, unknown>, sessionId: string): Promise<unknown> => {
+    const requestId = ++nextChildRequest
+    const key = `${sessionId}:${requestId}`
+    let resolve!: (value: unknown) => void, reject!: (error: unknown) => void
+    const pending = new Promise<unknown>((done, fail) => { resolve = done; reject = fail })
+    childCommands.set(key, { sessionId, resolve, reject })
+    const fail = (error: unknown) => { if (childCommands.delete(key)) reject(error) }
+    try {
+      // Electron retains native child-command promises if a process swap eats
+      // their replies. A root acknowledgement stays separate from our bounded,
+      // session-scoped replies, which can be retired when that child detaches.
+      const acknowledgement = transport.sendCommand('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id: requestId, method, params }) })
+      nativeAcknowledgements.add(acknowledgement)
+      void acknowledgement.then(() => nativeAcknowledgements.delete(acknowledgement), error => { nativeAcknowledgements.delete(acknowledgement); fail(error) })
+    } catch (error) { fail(error) }
+    return pending
+  }
+  const leases = new Map<string, { token: symbol; id: string; appSessionId: string; frameId: string; sessionId?: string }>()
+  const leaseFor = (key: string, binding: LocalhostSnapshotBinding, frameId: string, sessionId?: string) => {
     let lease = leases.get(key)
-    if (!lease) { lease = { token: Symbol(key), id: binding.id, appSessionId: binding.appSessionId }; leases.set(key, lease) }
+    if (!lease) { lease = { token: Symbol(key), id: binding.id, appSessionId: binding.appSessionId, frameId, sessionId }; leases.set(key, lease) }
     return lease
   }
   const ownOrigin = (() => { try { return options.devOrigin ? new URL(options.devOrigin).origin : null } catch { return null } })()
   const currentBinding = (id: string, frameName: string) => options.bindings().find(item => item.id === id && item.frameName === frameName)
-  const generationKey = (binding: LocalhostSnapshotBinding, frameId: string) => `${binding.id}:${binding.frameName}:${frameId}`
+  const generationKey = (binding: LocalhostSnapshotBinding, frameId: string, sessionId?: string) => `${binding.id}:${binding.frameName}:${frameId}:${sessionId ?? ''}`
   const isOwnUrl = (url: string) => { try { return new URL(url).origin === ownOrigin } catch { return true } }
   const retainedBytes = () => {
     const buffers = new Set<Buffer>()
@@ -202,9 +233,9 @@ export function createLocalhostSnapshots(options: {
   }
   const command = (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> => {
     const count = (name: string) => [...commands.values()].filter(value => value === name).length
-    if (disposed || commands.size >= 16 || method === 'Network.getResponseBody' && count(method) >= limits.bodyReads || method === 'Runtime.evaluate' && count(method) >= limits.captures) return Promise.reject(new Error('Snapshot command capacity exceeded')) // §7-ok: Internal debugger rejection is caught before the UI boundary.
+    if (disposed || commands.size + nativeAcknowledgements.size >= 16 || method === 'Network.getResponseBody' && count(method) >= limits.bodyReads || method === 'Runtime.evaluate' && count(method) >= limits.captures) return Promise.reject(new Error('Snapshot command capacity exceeded')) // §7-ok: Internal debugger rejection is caught before the UI boundary.
     let pending: Promise<any>
-    try { pending = transport.sendCommand(method, params, sessionId) } catch (error) { return Promise.reject(error) }
+    try { pending = sessionId ? sendChildCommand(method, params, sessionId) : transport.sendCommand(method, params) } catch (error) { return Promise.reject(error) }
     commands.set(pending, method)
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Snapshot command timed out')), limits.captureTimeoutMs) // §7-ok: Internal debugger rejection is caught before the UI boundary.
@@ -219,33 +250,38 @@ export function createLocalhostSnapshots(options: {
   }
   const mapFrames = () => {
     frames.clear()
-    for (const frame of [...(mainTree?.childFrames ?? []).map(child => child.frame), ...sessionRoots.values()]) {
+    for (const frame of [...(mainTree?.childFrames ?? []).map(child => child.frame), ...[...sessionRoots].filter(([sessionId, frame]) => frameSessions.get(frame.id) === sessionId).map(([, frame]) => frame)]) {
       const binding = bindingForFrame(frame)
       if (binding) frames.set(frame.id, binding)
     }
   }
   const refreshFrames = (): Promise<void> => {
     if (refreshPending) return refreshPending
-    refreshPending = command('Page.getFrameTree').then(raw => {
-      if (disposed) return
+    const generation = observerGeneration
+    const pending = command('Page.getFrameTree').then(raw => {
+      if (disposed || generation !== observerGeneration) return
       const tree = (raw as { frameTree?: FrameTree }).frameTree
       if (!tree) return
       mainTree = { frame: tree.frame, childFrames: (tree.childFrames ?? []).slice(0, 16).map(child => ({ frame: child.frame })) }
       rootFrameId = tree.frame.id
       mapFrames()
-    }).catch(() => {}).finally(() => { refreshPending = null })
-    return refreshPending
+    }).catch(() => {}).finally(() => { if (refreshPending === pending) refreshPending = null })
+    refreshPending = pending
+    return pending
   }
   const finishRead = async (request: RequestRecord) => {
+    const generation = observerGeneration
     try {
       if (request.sessionId) await sessionSetup.get(request.sessionId)
+      if (generation !== observerGeneration || request.sessionId && !sessions.has(request.sessionId)) return
       await refreshFrames()
+      if (generation !== observerGeneration || frameSessions.get(request.frameId) !== request.sessionId) return
       const binding = frames.get(request.frameId)
       if (!binding || !currentBinding(binding.id, binding.frameName) || request.oversized || request.received <= 0 || request.received > limits.resourceBytes || !request.success || !request.mimeType || isOwnUrl(request.url)) return
-      const key = generationKey(binding, request.frameId)
-      const lease = leaseFor(key, binding)
+      const key = generationKey(binding, request.frameId, request.sessionId)
+      const lease = leaseFor(key, binding, request.frameId, request.sessionId)
       const raw = await command('Network.getResponseBody', { requestId: request.requestId }, request.sessionId) as { body?: unknown; base64Encoded?: unknown }
-      if (disposed || !currentBinding(binding.id, binding.frameName) || leases.get(key) !== lease || typeof raw.body !== 'string') return
+      if (disposed || generation !== observerGeneration || frameSessions.get(request.frameId) !== request.sessionId || !currentBinding(binding.id, binding.frameName) || leases.get(key) !== lease || typeof raw.body !== 'string') return
       if (raw.base64Encoded === true && raw.body.length > Math.ceil(limits.resourceBytes / 3) * 4 + 4 || raw.base64Encoded !== true && Buffer.byteLength(raw.body) > limits.resourceBytes) return
       const body = Buffer.from(raw.body, raw.base64Encoded === true ? 'base64' : 'utf8')
       if (body.byteLength > limits.resourceBytes || !evictFor(body.byteLength)) return
@@ -263,17 +299,17 @@ export function createLocalhostSnapshots(options: {
       void finishRead(request).finally(() => { activeReads--; drain() })
     }
   }
-  const resumeSession = async (sessionId: string) => {
+  const resumeSession = async (sessionId: string, generation = observerGeneration) => {
+    if (disposed || generation !== observerGeneration || !attached) return
     try { await command('Runtime.runIfWaitingForDebugger', {}, sessionId) }
-    catch {
+    catch (error) {
+      if (generation !== observerGeneration) return
+      if (closedDebuggerTarget(error)) { forgetSession(sessionId); return }
       if (!sessions.has(sessionId)) return
-      // Detaching releases every target if its resume command cannot complete.
-      started = false
-      transport.removeListener('message', onMessage)
-      if (attached) { try { transport.detach() } catch {} attached = false }
+      requestDeferredStop(generation)
     }
   }
-  const configureSession = async (sessionId?: string) => {
+  const configureSession = async (sessionId?: string, generation = observerGeneration, waitingForDebugger = false) => {
     const key = sessionId ?? ''
     let admitted = false
     try {
@@ -285,45 +321,122 @@ export function createLocalhostSnapshots(options: {
         command('Network.enable', { maxTotalBufferSize: Math.floor(limits.totalBytes / 4), maxResourceBufferSize: Math.min(limits.resourceBytes, Math.floor(limits.totalBytes / 4)), maxPostDataSize: 0 }, sessionId),
         command('Page.enable', {}, sessionId),
       ])
+      if (generation !== observerGeneration || !attached || sessionId && !sessions.has(sessionId)) return
       if (sessionId) {
         const frame = (await command('Page.getFrameTree', {}, sessionId) as { frameTree?: FrameTree }).frameTree?.frame
-        if (!frame || !bindingForFrame(frame, true)) return
-        sessionRoots.set(sessionId, frame)
-        frameSessions.set(frame.id, sessionId)
-        mapFrames()
+        if (generation !== observerGeneration || !sessions.has(sessionId) || !frame || !bindingForFrame(frame, true)) return
+        rememberSessionFrame(sessionId, frame)
       }
       admitted = true
       await refreshFrames()
     } finally {
-      if (!admitted) { networkSessions.delete(key); if (sessionId) await command('Network.disable', {}, sessionId).catch(() => {}) }
-      if (sessionId) await resumeSession(sessionId)
+      if (generation === observerGeneration) {
+        if (!admitted) { networkSessions.delete(key); if (sessionId && attached && sessions.has(sessionId)) await command('Network.disable', {}, sessionId).catch(() => {}) }
+        if (sessionId && waitingForDebugger && sessions.has(sessionId)) await resumeSession(sessionId, generation)
+      }
     }
+  }
+  const rememberSessionFrame = (sessionId: string, frame: FrameTree['frame']) => {
+    sessionRoots.set(sessionId, frame)
+    const previous = frameSessions.get(frame.id)
+    if (!previous || (sessionOrder.get(previous) ?? 0) <= (sessionOrder.get(sessionId) ?? 0)) frameSessions.set(frame.id, sessionId)
+    mapFrames()
+  }
+  const dropGeneration = (frameId: string, sessionId?: string) => {
+    for (const [key, lease] of leases) if (lease.frameId === frameId && lease.sessionId === sessionId) { leases.delete(key); resources.delete(key) }
+    for (const [key, request] of requests) if (request.frameId === frameId && request.sessionId === sessionId) requests.delete(key)
+    for (let index = queue.length - 1; index >= 0; index--) if (queue[index].frameId === frameId && queue[index].sessionId === sessionId) queue.splice(index, 1)
+  }
+  const requestDeferredStop = (generation: number) => {
+    if (deferredStop) return
+    deferredStop = setImmediate(() => {
+      deferredStop = null
+      if (!disposed && generation === observerGeneration) stopObserver()
+    })
+  }
+  const deferTarget = (sessionId: string, setup: boolean, waitingForDebugger: boolean): Promise<void> => {
+    const existing = deferredTargets.get(sessionId)
+    if (existing) return existing.pending
+    const generation = observerGeneration
+    if (deferredTargets.size >= 16) { requestDeferredStop(generation); return Promise.resolve() }
+    let resolve!: () => void
+    const pending = new Promise<void>(done => { resolve = done })
+    // Native target attachment finishes after its event returns. A macrotask
+    // keeps control commands from re-entering that unfinished attachment.
+    const handle = setImmediate(() => {
+      deferredTargets.delete(sessionId)
+      if (disposed || !attached || generation !== observerGeneration || setup && !sessions.has(sessionId)) { resolve(); return }
+      const work = setup ? configureSession(sessionId, generation, waitingForDebugger) : waitingForDebugger ? resumeSession(sessionId, generation) : Promise.resolve()
+      void work.catch(() => {}).finally(resolve)
+    })
+    deferredTargets.set(sessionId, { handle, resolve, pending })
+    return pending
+  }
+  const forgetSession = (detachedSession: string) => {
+    for (const [key, child] of childCommands) if (child.sessionId === detachedSession) { childCommands.delete(key); child.reject(new Error('Preview is unavailable')) }
+    const root = sessionRoots.get(detachedSession)
+    if (root) dropGeneration(root.id, detachedSession)
+    for (const lease of [...leases.values()]) if (lease.sessionId === detachedSession) dropGeneration(lease.frameId, detachedSession)
+    const deferred = deferredTargets.get(detachedSession)
+    if (deferred) { clearImmediate(deferred.handle); deferredTargets.delete(detachedSession); deferred.resolve() }
+    sessions.delete(detachedSession)
+    sessionOrder.delete(detachedSession)
+    networkSessions.delete(detachedSession)
+    sessionRoots.delete(detachedSession)
+    for (const [id, owner] of frameSessions) if (owner === detachedSession) frameSessions.delete(id)
+    for (const [key, request] of requests) if (request.sessionId === detachedSession) requests.delete(key)
+    mapFrames()
   }
   const onMessage = (_event: unknown, method: string, raw: unknown, sessionId?: string) => {
     if (disposed || !raw || typeof raw !== 'object' || Array.isArray(raw)) return
+    sessionId = sessionId || undefined
     const params = raw as Record<string, any>
+    if (method === 'Target.receivedMessageFromTarget') {
+      const childSession = params.sessionId
+      const maximumMessage = Math.max(65_536, Math.ceil(limits.resourceBytes / 3) * 4 + 65_536, limits.htmlBytes * 2)
+      if (typeof childSession !== 'string' || typeof params.message !== 'string' || params.message.length > maximumMessage) return
+      let message: Record<string, unknown>
+      try {
+        const parsed = JSON.parse(params.message)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return
+        message = parsed
+      } catch { return }
+      if (Number.isSafeInteger(message.id)) {
+        const key = `${childSession}:${message.id}`
+        const child = childCommands.get(key)
+        if (!child) return
+        childCommands.delete(key)
+        const error = message.error as { message?: unknown } | undefined
+        if (error) child.reject(new Error(typeof error.message === 'string' ? error.message.slice(0, 256) : 'Preview is unavailable'))
+        else child.resolve(message.result ?? {})
+      } else if (sessions.has(childSession) && typeof message.method === 'string') onMessage(null, message.method, message.params, childSession)
+      return
+    }
     if (method === 'Target.attachedToTarget') {
       const childSession = params.sessionId
       if (typeof childSession !== 'string' || params.targetInfo?.type !== 'iframe') return
-      if (sessions.size >= 16) { void resumeSession(childSession); return }
+      if (sessions.has(childSession)) return
+      if (sessions.size >= 16) { void deferTarget(childSession, false, params.waitingForDebugger === true); return }
       sessions.add(childSession)
-      const setup = configureSession(childSession).catch(() => {}).finally(() => { sessionSetup.delete(childSession) })
+      sessionOrder.set(childSession, ++nextSessionOrder)
+      const setup = deferTarget(childSession, true, params.waitingForDebugger === true).finally(() => { if (sessionSetup.get(childSession) === setup) sessionSetup.delete(childSession) })
       sessionSetup.set(childSession, setup)
       return
     }
     if (method === 'Target.detachedFromTarget') {
-      sessions.delete(params.sessionId)
-      networkSessions.delete(params.sessionId)
-      sessionRoots.delete(params.sessionId)
-      for (const [id, owner] of frameSessions) if (owner === params.sessionId) frameSessions.delete(id)
-      for (const [key, request] of requests) if (request.sessionId === params.sessionId) requests.delete(key)
-      mapFrames()
+      if (typeof params.sessionId === 'string') forgetSession(params.sessionId)
       return
     }
-    if (method === 'Page.frameNavigated' && sessionId && params.frame?.parentId === rootFrameId) { sessionRoots.set(sessionId, params.frame); frameSessions.set(params.frame.id, sessionId); mapFrames() }
+    if (method === 'Page.frameNavigated' && sessionId && sessions.has(sessionId) && params.frame?.parentId === rootFrameId) rememberSessionFrame(sessionId, params.frame)
     if (method === 'Page.frameDetached' && params.reason !== 'swap') {
-      for (const [owner, frame] of sessionRoots) if (frame.id === params.frameId) sessionRoots.delete(owner)
-      mapFrames()
+      const owner = frameSessions.get(params.frameId)
+      if (!sessionId || owner === sessionId) {
+        dropGeneration(params.frameId, owner)
+        for (const [key, frame] of sessionRoots) if (frame.id === params.frameId && (!sessionId || key === sessionId)) sessionRoots.delete(key)
+        frameSessions.delete(params.frameId)
+        if (mainTree?.childFrames) mainTree.childFrames = mainTree.childFrames.filter(child => child.frame.id !== params.frameId)
+        mapFrames()
+      }
     }
     if (method === 'Page.frameNavigated' || method === 'Page.frameAttached' || method === 'Page.frameDetached') { void refreshFrames(); return }
     const requestId = params.requestId
@@ -356,11 +469,18 @@ export function createLocalhostSnapshots(options: {
     promise.then(value => { clearTimeout(timer); resolve(value) }, () => { clearTimeout(timer); resolve(fallback) })
   })
   const stopObserver = () => {
+    observerGeneration++
+    if (deferredStop) { clearImmediate(deferredStop); deferredStop = null }
+    for (const deferred of deferredTargets.values()) { clearImmediate(deferred.handle); deferred.resolve() }
+    deferredTargets.clear()
+    refreshPending = null; startPending = null
     started = false
     transport.removeListener('message', onMessage)
     if (attached) { try { transport.detach() } catch {} attached = false }
+    for (const child of childCommands.values()) child.reject(new Error('Preview is unavailable'))
+    childCommands.clear(); nativeAcknowledgements.clear()
     requests.clear(); frames.clear(); resources.clear(); queue.length = 0
-    sessions.clear(); sessionSetup.clear(); networkSessions.clear(); frameSessions.clear(); sessionRoots.clear(); leases.clear(); commands.clear()
+    sessions.clear(); sessionSetup.clear(); sessionOrder.clear(); networkSessions.clear(); frameSessions.clear(); sessionRoots.clear(); leases.clear(); commands.clear()
     mainTree = null; rootFrameId = ''
   }
   const releaseLive = (id: string): void => {
@@ -375,34 +495,46 @@ export function createLocalhostSnapshots(options: {
       if (started) return true
       if (startPending) return timed(startPending, false)
       if (disposed || transport.isAttached()) return false
-      startPending = (async () => {
+      const generation = observerGeneration
+      const pending = (async () => {
         try {
           transport.attach('1.3'); attached = true
           transport.on('message', onMessage)
-          await configureSession()
-          await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: true, filter: [{ type: 'iframe', exclude: false }, { exclude: true }] })
+          await configureSession(undefined, generation)
+          if (generation !== observerGeneration || !attached) return false
+          await command('Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: true, flatten: false, filter: [{ type: 'iframe', exclude: false }, { exclude: true }] })
+          if (generation !== observerGeneration || !attached) return false
           started = true
           return true
         } catch {
-          transport.removeListener('message', onMessage)
-          if (attached) { try { transport.detach() } catch {} attached = false }
+          if (generation === observerGeneration) stopObserver()
           return false
         }
-      })().finally(() => { startPending = null })
-      return timed(startPending, false)
+      })().finally(() => { if (startPending === pending) startPending = null })
+      startPending = pending
+      return timed(pending, false)
     },
     async capture(id: string, frame: LocalhostSnapshotFrame): Promise<boolean> {
-      const captureKey = `${id}:${frame.name}`
+      let frameName: string, sourceUrl: string
+      try {
+        if (frame.isDestroyed?.() || frame.detached) return false
+        const parent = frame.parent
+        if (!parent || parent.parent !== null) return false
+        frameName = frame.name
+        sourceUrl = frame.url
+      } catch { return false }
+      const captureKey = `${id}:${frameName}`
       const existing = pendingCaptures.get(captureKey)
       if (existing) return timed(existing, false)
-      const binding = currentBinding(id, frame.name)
-      if (disposed || !started || !binding || !frame.parent || frame.parent.parent !== null || frame.name !== binding.frameName || !normalizeLocalhostPreviewUrl(frame.url) || isOwnUrl(frame.url) || new URL(frame.url).origin !== new URL(binding.url).origin || pendingCaptures.size >= limits.captures) return false
+      const binding = currentBinding(id, frameName)
+      if (disposed || !started || !binding || !normalizeLocalhostPreviewUrl(sourceUrl) || isOwnUrl(sourceUrl) || new URL(sourceUrl).origin !== new URL(binding.url).origin || pendingCaptures.size >= limits.captures) return false
       const pending = (async () => {
         await refreshFrames()
-        const cdpFrameId = [...frames].find(([, owner]) => owner.id === id && owner.frameName === frame.name)?.[0]
+        const cdpFrameId = [...frames].find(([, owner]) => owner.id === id && owner.frameName === frameName)?.[0]
         if (!cdpFrameId) return false
-        const key = generationKey(binding, cdpFrameId)
-        const lease = leaseFor(key, binding)
+        const sessionId = frameSessions.get(cdpFrameId)
+        const key = generationKey(binding, cdpFrameId, sessionId)
+        const lease = leaseFor(key, binding, cdpFrameId, sessionId)
         const group = resources.get(key) ?? new Map<string, LocalhostSnapshotResource>()
         const assets = new Map<string, string>()
         const frozenResources = new Map<string, LocalhostSnapshotResource>()
@@ -416,19 +548,18 @@ export function createLocalhostSnapshots(options: {
           stylesheetBytes += resource.body.byteLength
           stylesheets.set(url, cssWithLocalResources(resource.body.toString('utf8'), url, assets))
         }
-        const sessionId = frameSessions.get(cdpFrameId)
         const world = await command('Page.createIsolatedWorld', { frameId: cdpFrameId, worldName: 'cat-preview-snapshot', grantUniveralAccess: false }, sessionId) as { executionContextId?: number }
         if (!Number.isSafeInteger(world.executionContextId)) return false
-        const evaluated = await command('Runtime.evaluate', { expression: freezeExpression(assets, stylesheets, limits), contextId: world.executionContextId, returnByValue: true, timeout: limits.captureTimeoutMs }, sessionId) as { result?: { type?: string; value?: unknown }; exceptionDetails?: unknown }
+        const evaluated = await command('Runtime.evaluate', { expression: freezeExpression(assets, stylesheets, limits, sourceUrl), contextId: world.executionContextId, returnByValue: true, timeout: limits.captureTimeoutMs }, sessionId) as { result?: { type?: string; value?: unknown }; exceptionDetails?: unknown }
         const html = !evaluated.exceptionDetails && evaluated.result?.type === 'string' ? evaluated.result.value : null
-        if (disposed || leases.get(key) !== lease || !currentBinding(id, frame.name) || typeof html !== 'string' || Buffer.byteLength(html) > limits.htmlBytes || !evictFor(Buffer.byteLength(html))) return false
-        const identity = createHash('sha256').update(id).update('\0').update(frame.url).update('\0')
+        if (disposed || leases.get(key) !== lease || !currentBinding(id, frameName) || typeof html !== 'string' || Buffer.byteLength(html) > limits.htmlBytes || !evictFor(Buffer.byteLength(html))) return false
+        const identity = createHash('sha256').update(id).update('\0').update(sourceUrl).update('\0')
           .update(String(Buffer.byteLength(html))).update(':').update(html)
         for (const [hash, resource] of [...frozenResources].sort(([left], [right]) => left.localeCompare(right))) {
           identity.update(hash).update(String(resource.mimeType.length)).update(':').update(resource.mimeType)
         }
         const snapshotId = identity.digest('hex').slice(0, 48)
-        const snapshot = { id: snapshotId, appSessionId: binding.appSessionId, sourceUrl: frame.url, html, resources: frozenResources, byteLength: Buffer.byteLength(html) + [...frozenResources.values()].reduce((sum, resource) => sum + resource.body.byteLength, 0) }
+        const snapshot = { id: snapshotId, appSessionId: binding.appSessionId, sourceUrl, html, resources: frozenResources, byteLength: Buffer.byteLength(html) + [...frozenResources.values()].reduce((sum, resource) => sum + resource.body.byteLength, 0) }
         snapshots.delete(snapshotId); snapshots.set(snapshotId, snapshot); latestSnapshot.set(id, snapshotId)
         return true
       })().finally(() => { pendingCaptures.delete(captureKey) })
