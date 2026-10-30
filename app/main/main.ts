@@ -1597,15 +1597,18 @@ const localhostPreviews = createLocalhostPreviewService({
     if (event.kind === 'updated' && event.descriptor.url.startsWith('http:') && localhostSnapshots) void localhostSnapshots.start().then(deliver, deliver)
     else deliver()
   },
-  isLive: id => !!mainWindow?.webContents.mainFrame.frames.some(frame => localFrameBindings.get(frame.frameTreeNodeId)?.id === id),
+  isLive: id => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.mainFrame.frames.some(frame => livePreviewFrame(frame) && localFrameBindings.get(frame.frameTreeNodeId)?.id === id),
 })
+function livePreviewFrame(frame: Electron.WebFrameMain | null | undefined): frame is Electron.WebFrameMain {
+  try { return !!frame && !frame.isDestroyed() && !frame.detached } catch { return false }
+}
 function localFrameBinding(frame: Electron.WebFrameMain | null | undefined) {
-  if (!frame || frame.parent !== mainWindow?.webContents.mainFrame) return null
+  if (!livePreviewFrame(frame) || frame.parent !== mainWindow?.webContents.mainFrame) return null
   const binding = localFrameBindings.get(frame.frameTreeNodeId)
   return binding && localhostPreviews.descriptor(binding.id, binding.revision) ? binding : null
 }
 function issuedLocalFrame(frame: Electron.WebFrameMain | null | undefined) {
-  if (!frame || frame.parent !== mainWindow?.webContents.mainFrame) return null
+  if (!livePreviewFrame(frame) || frame.parent !== mainWindow?.webContents.mainFrame) return null
   const match = /^cat-localhost-preview-([a-f0-9]{48})-([1-9][0-9]*)$/.exec(frame.name)
   return match && localhostPreviews.descriptor(match[1]!, Number(match[2])) ? { id: match[1]!, revision: Number(match[2]) } : null
 }
@@ -1619,6 +1622,7 @@ function localPreviewIdentity(value: unknown) {
   return match && localhostPreviews.descriptor(match[1]!, Number(match[2])) ? { id: match[1]!, revision: Number(match[2]) } : null
 }
 async function localFrameRouteState(frame: Electron.WebFrameMain, url: string): Promise<{ state: unknown; previous: FilePreviewScroll; replace: boolean } | null> {
+  if (!livePreviewFrame(frame)) return null
   try {
     const serialized = await frame.executeJavaScript(`(() => {
       let state = null;
@@ -1644,6 +1648,7 @@ async function localFrameRouteState(frame: Electron.WebFrameMain, url: string): 
   } catch { return null }
 }
 async function localNavigationMethod(frame: Electron.WebFrameMain, target: string): Promise<string> {
+  if (!livePreviewFrame(frame)) return 'UNKNOWN'
   const pending = frame.executeJavaScript(`(() => {
     const tracker=window.__catcodeLocalHistory;
     if(!tracker)return 'UNKNOWN';
@@ -1658,6 +1663,7 @@ async function localNavigationMethod(frame: Electron.WebFrameMain, target: strin
   return new Promise(resolve=>{const timer=setTimeout(()=>resolve('UNKNOWN'),150);pending.then(value=>{clearTimeout(timer);resolve(value)},()=>{clearTimeout(timer);resolve('UNKNOWN')})})
 }
 function installLocalHistory(frame: Electron.WebFrameMain): void {
+  if (!livePreviewFrame(frame)) return
   void frame.executeJavaScript(`(() => {
     if (window.__catcodeLocalHistory) return;
     const position = () => { const x=scrollX,y=scrollY; return {x:typeof x==='number'&&x>=-1e8&&x<=1e8?x:0,y:typeof y==='number'&&y>=-1e8&&y<=1e8?y:0}; };
@@ -1682,6 +1688,7 @@ const previewScroll = new Map<string, FilePreviewScroll>()
 const pendingPreviewScroll = new Map<string, Promise<FilePreviewScroll>>()
 function previewFrame(id: string, revision: number) {
   return mainWindow?.webContents.mainFrame.framesInSubtree.find(frame => {
+    if (!livePreviewFrame(frame)) return false
     const parsed = parseFilePreviewUrl(frame.url)
     const local = localFrameBinding(frame)
     return frame.parent === mainWindow?.webContents.mainFrame && (parsed?.id === id && parsed.revision === revision || local?.id === id && local.revision === revision)
@@ -1991,8 +1998,8 @@ function createWindow(): void {
   localhostSnapshots?.dispose()
   localhostSnapshots = createLocalhostSnapshots({
     debugger: window.webContents.debugger, devOrigin: IS_DEV ? APP_ORIGIN_DEV : null,
-    bindings: () => localhostPreviews.bindings().map(binding => {
-      const frame = window.webContents.mainFrame.frames.find(candidate => candidate.parent === window.webContents.mainFrame && candidate.name === binding.frameName)
+    bindings: () => window.isDestroyed() ? [] : localhostPreviews.bindings().map(binding => {
+      const frame = window.webContents.mainFrame.frames.find(candidate => livePreviewFrame(candidate) && candidate.parent === window.webContents.mainFrame && candidate.name === binding.frameName)
       const actualUrl = frame && localhostPreviews.allowed(frame.url)
       return actualUrl ? { ...binding, url: actualUrl } : binding
     }),
@@ -2000,6 +2007,7 @@ function createWindow(): void {
   const scrollTimer = setInterval(() => {
     if (window.isDestroyed()) return
     for (const frame of window.webContents.mainFrame.frames) {
+      if (!livePreviewFrame(frame)) continue
       const parsed = parseFilePreviewUrl(frame.url) ?? localFrameBinding(frame)
       if (parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id))) void readPreviewScroll(parsed.id, parsed.revision)
     }
@@ -2057,17 +2065,27 @@ function createWindow(): void {
     const local = localFrameBinding(event.frame)
     if (!local || !localhostPreviews.allowed(url)) { event.preventDefault(); if (local) localhostPreviews.leave(local.id, url) }
   })
-  window.webContents.on('frame-created', (_event, details) => { details.frame?.on('dom-ready', () => { if (details.frame && localFrameBinding(details.frame)) installLocalHistory(details.frame) }) })
+  window.webContents.on('frame-created', (_event, details) => {
+    // Electron's event property is a lazy native lookup. Resolve it before the
+    // event returns; accessing details.frame after navigation uses a stale RFH.
+    const frame = details.frame
+    if (!livePreviewFrame(frame)) return
+    frame.on('dom-ready', () => { if (livePreviewFrame(frame) && localFrameBinding(frame)) installLocalHistory(frame) })
+  })
   window.webContents.on('did-navigate-in-page', (_event, url, isMainFrame, processId, routingId) => {
     if (isMainFrame) return
-    const frame = window.webContents.mainFrame.frames.find(frame => frame.processId === processId && frame.routingId === routingId)
+    const frame = window.webContents.mainFrame.frames.find(frame => livePreviewFrame(frame) && frame.processId === processId && frame.routingId === routingId)
     const local = localFrameBinding(frame)
     if (!frame || !local || !localhostPreviews.allowed(url)) return
     if (restoringLocalRoutes.get(frame.frameTreeNodeId) === url) { restoringLocalRoutes.delete(frame.frameTreeNodeId); return }
     const current = localhostPreviews.current(local.id)
     if (!current || current.revision !== local.revision) return
+    const nodeId = frame.frameTreeNodeId
     void localFrameRouteState(frame, url).then(state => {
-      if (!localFrameBinding(frame)) return
+      if (window.isDestroyed()) return
+      const currentFrame = window.webContents.mainFrame.frames.find(candidate => livePreviewFrame(candidate) && candidate.frameTreeNodeId === nodeId)
+      const currentBinding = localFrameBinding(currentFrame)
+      if (!currentFrame || currentBinding?.id !== local.id || currentBinding.revision !== local.revision || currentFrame.url !== url) return
       const previous = state?.previous ?? previewScroll.get(`${local.id}:${local.revision}`) ?? {x:0,y:0}
       localhostPreviews.route(local.id, url, previous, state?.state ?? null, state?.replace ?? false)
     })
@@ -2078,7 +2096,7 @@ function createWindow(): void {
     const shellChord = input.meta && !input.control && !input.alt &&
       (['k', 't', 'w'].includes(key) || /^[1-9]$/.test(key) || input.shift && key === 'b')
     if (input.key !== 'Escape' && !shellChord) return
-    const live = window.webContents.mainFrame.frames.map(frame => parseFilePreviewUrl(frame.url) ?? localFrameBinding(frame)).find(parsed => parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id)))
+    const live = window.webContents.mainFrame.frames.map(frame => livePreviewFrame(frame) ? parseFilePreviewUrl(frame.url) ?? localFrameBinding(frame) : null).find(parsed => parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id)))
     if (!live) return
     // Suppress the native Close Window accelerator before asynchronous routing.
     if (shellChord) event.preventDefault()
@@ -4609,9 +4627,11 @@ function registerHostControlPlane(): void {
   ipcMain.handle(CH_LOCALHOST_PREVIEW_CAPTURE, async (event, input: unknown) => {
     const value = previewIdentity(input)
     if (!trustedPreviewSender(event) || !value || !localhostSnapshots) return
+    const observer = localhostSnapshots
     const descriptor = localhostPreviews.current(value.id as string)
     const frame = descriptor && previewFrame(descriptor.id, descriptor.revision)
-    if (frame && localhostPreviews.allowed(frame.url)) await localhostSnapshots.capture(descriptor!.id, frame)
+    const frameUrl = frame?.url ?? null
+    if (descriptor && frame && frameUrl && localhostPreviews.allowed(frameUrl)) await observer.capture(descriptor.id, frame)
   })
   ipcMain.handle(CH_LOCALHOST_PREVIEW_PREPARE, async (event, input: unknown) => {
     if (!trustedPreviewSender(event)) return { ok: false, reason: 'refused' }
@@ -4696,6 +4716,7 @@ function registerHostControlPlane(): void {
       !Number.isFinite(scroll.x) || !Number.isFinite(scroll.y) || Math.abs(scroll.x) > 1e8 || Math.abs(scroll.y) > 1e8) return
     const frame = previewFrame(value.id as string, value.revision as number)
     if (frame) await frame.executeJavaScript(`scrollTo(${scroll.x},${scroll.y})`).catch(() => {})
+    if (!previewDescriptor(value.id as string, value.revision as number)) return
     previewScroll.set(`${value.id}:${value.revision}`, { x: scroll.x, y: scroll.y })
   })
   ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE, (_e, input: unknown): Promise<boolean> => {
