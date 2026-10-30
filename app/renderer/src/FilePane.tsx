@@ -101,7 +101,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     // The frame is destroyed when its session leaves the screen. The host's
     // bounded snapshot remains available, including after a file was removed.
     void window.catcode.refreshFilePreview(descriptor.id).then(next => {
-      if (next && descriptorRef.current?.id === next.id && (!samePaneRevision(next, descriptorRef.current) || next.serverStopped !== descriptorRef.current.serverStopped || next.blockedHost !== descriptorRef.current.blockedHost || next.watchError !== descriptorRef.current.watchError)) {
+      if (next && descriptorRef.current?.id === next.id && !olderThanRetainedRevision(appSessionId, next) && (!samePaneRevision(next, descriptorRef.current) || next.serverStopped !== descriptorRef.current.serverStopped || next.blockedHost !== descriptorRef.current.blockedHost || next.watchError !== descriptorRef.current.watchError)) {
         updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) })
       }
     }).catch(() => {}).finally(() => { if (mounted.current) setServerHydrated(true) })
@@ -122,6 +122,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     // A failed navigation can return to the page still painted underneath it.
     // Keep that page's status while the incoming page owns the visible header.
     const retained = getFilePaneSession(appSessionId)
+    if (event.kind === 'updated' && olderThanRetainedRevision(appSessionId, event.descriptor)) return
     const status = retainedStatus(event)
     if (status !== undefined) {
       const checkpoint = retained.checkpoint
@@ -259,7 +260,9 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const reloadFile = async () => {
     try {
       const next = await window.catcode.refreshFilePreview(descriptor.id)
-      if (next) { updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) }); setReload(value => value + 1) }
+      if (next && getFilePaneSession(appSessionId).file?.id === next.id && !olderThanRetainedRevision(appSessionId, next)) {
+        updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) }); setReload(value => value + 1)
+      }
     } catch { updateFilePaneSession(appSessionId, { note: isLocalhost ? 'server-stopped' : 'watch-error' }) }
   }
   return <aside className="file-pane" aria-label={`File preview: ${name}`} onKeyDown={event => {
@@ -420,4 +423,10 @@ function retainedStatus(event: FilePreviewEvent): ReturnType<typeof previewDescr
   if (event.kind === 'removed' || event.kind === 'watch-error' || event.kind === 'update-error' || event.kind === 'server-stopped') return event.kind
   if (event.kind === 'leave') return 'leave'
   return undefined
+}
+
+function olderThanRetainedRevision(appSessionId: string, incoming: FilePreviewDescriptor): boolean {
+  const state = getFilePaneSession(appSessionId)
+  return [state.file, state.committedFile, state.checkpoint?.file, state.checkpoint?.committedFile]
+    .some(file => file?.id === incoming.id && file.revision > incoming.revision)
 }

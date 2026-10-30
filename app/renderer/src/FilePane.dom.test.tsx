@@ -723,3 +723,45 @@ test('a delayed application choice for one type cannot overwrite the newly displ
   expect(tree.container.querySelector('.file-pane-open-app .external-app-icon')?.getAttribute('data-app-target')).toBe('default')
   expect(tree.container.querySelector('.file-pane-open-app')?.getAttribute('title')).toBe('Open in Default application')
 })
+
+
+test('late actual localhost refresh events and replies cannot downgrade the newer admitted revision', async () => {
+  const web = localServer()
+  let resume!: () => void
+  const waiting = new Promise<void>(resolve => { resume = resolve })
+  try {
+    const { pane, sessionId, otherSession, localhost } = setup(false, { url: web.url })
+    const tree = await harness.mount(pane())
+    await click(tree.container, `Open ${web.url}`)
+    await paintLocalFrame(tree.container)
+    const id = getFilePaneSession(sessionId).file!.id
+    await tree.render(pane(otherSession))
+    const refresh = window.catcode.refreshFilePreview.bind(window.catcode)
+    const subscribe = window.catcode.subscribeFilePreview.bind(window.catcode)
+    let reached!: () => void
+    const reachedRefresh = new Promise<void>(resolve => { reached = resolve })
+    let deliverOlderEvent: (() => void) | null = null
+    window.catcode.subscribeFilePreview = listener => subscribe(event => {
+      if (event.kind === 'updated' && !deliverOlderEvent) { deliverOlderEvent = () => listener(event); return }
+      listener(event)
+    })
+    window.catcode.refreshFilePreview = async previewId => {
+      const descriptor = await refresh(previewId)
+      reached()
+      await waiting
+      return descriptor
+    }
+    await tree.render(pane())
+    await act(async () => { await reachedRefresh })
+    await act(async () => { await localhost.refresh(id) })
+    const newest = getFilePaneSession(sessionId).file!
+    expect(localhost.descriptor(id, newest.revision)).not.toBeNull()
+    await act(async () => { deliverOlderEvent!() })
+    expect(getFilePaneSession(sessionId).file?.revision).toBe(newest.revision)
+    await act(async () => { resume(); await new Promise(resolve => setTimeout(resolve, 50)) })
+    expect(getFilePaneSession(sessionId).file?.revision).toBe(newest.revision)
+    const frame = await paintLocalFrame(tree.container)
+    expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)')).toBe(frame)
+    expect(tree.container.querySelector('.file-pane-staging')).toBeNull()
+  } finally { await act(async () => { resume(); await new Promise(resolve => setTimeout(resolve, 20)) }); await web.server.stop(true) }
+})
