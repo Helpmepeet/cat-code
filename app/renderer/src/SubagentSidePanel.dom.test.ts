@@ -296,6 +296,59 @@ test('real SessionPane shares recorded worker file origins with the docked panel
   }
 })
 
+test('worker file labels reuse transcript shortening without changing full-path actions or authored names', async () => {
+  const previousBridge = Object.getOwnPropertyDescriptor(window, 'catcode')
+  const writeText = navigator.clipboard.writeText
+  const copied: string[] = []
+  navigator.clipboard.writeText = async text => { copied.push(text) }
+  const opened: string[] = []
+  Object.defineProperty(window, 'catcode', { configurable: true, value: {
+    openWorkspaceFile: async (_sessionId: string, path: string) => { opened.push(path); return true },
+    getWorkspaceFileAvailability: async () => true,
+  } })
+  try {
+    const path = '/worker-project/app/renderer/src/SessionPane.tsx:42'
+    const relative = 'app/renderer/src/SessionPane.tsx:42'
+    const content = [
+      `- ${path}`,
+      `- \`${path}\``,
+      `- [${path}](${path})`,
+      `- [\`${path}\`](${path})`,
+      `- [Session pane source](${path})`,
+      '- /worker-project-other/source.ts',
+    ].join('\n')
+    const step = { ...prose('paths', content), agentCwd: '/worker-project' }
+    const tree = await harness.mount(workspace({ rows: [agent('a', [step])] }))
+    await click(tree.container, '[data-dock-row="a"]')
+    const panel = tree.container.querySelector('aside')!
+    const buttons = [...panel.querySelectorAll<HTMLButtonElement>('.md-prose button[aria-label^="Open "]')]
+    expect(buttons.map(button => button.textContent)).toEqual([
+      relative, relative, relative, relative, 'Session pane source', '/worker-project-other/source.ts',
+    ])
+    expect(buttons[1]!.querySelector('code')?.textContent).toBe(relative)
+    expect(buttons[3]!.querySelector('code')?.textContent).toBe(relative)
+    for (const button of buttons) {
+      expect(button.classList.contains('transcript-file-link')).toBe(true)
+      expect(button.querySelector('.transcript-file-link-label')).not.toBeNull()
+      await act(async () => { button.click() })
+    }
+    expect(buttons.slice(0, 5).map(button => button.title)).toEqual(Array(5).fill(path))
+    expect(opened).toEqual([...Array(5).fill(path), '/worker-project-other/source.ts'])
+    await act(async () => {
+      buttons[0]!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
+    })
+    const copy = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find(item => item.textContent?.trim() === 'Copy')!
+    expect(copy).toBeDefined()
+    await act(async () => { copy.click() })
+    expect(copied).toEqual([path])
+  } finally {
+    navigator.clipboard.writeText = writeText
+    if (previousBridge) Object.defineProperty(window, 'catcode', previousBridge)
+    else Reflect.deleteProperty(window, 'catcode')
+  }
+})
+
 test('a resume keeps the open panel and its earlier steps above the resumed run', async () => {
   const resumeCard: NestedToolUseRow = {
     ...agent('a', [prose('resumed-step', 'Resumed reply')]), id: 'resume-row-a', toolUseId: 'resume-a', toolName: 'ResumeAgent',

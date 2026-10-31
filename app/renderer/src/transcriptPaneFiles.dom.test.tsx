@@ -65,6 +65,20 @@ test('all reply path forms send modifier intent to the pane while other file typ
   expect(requests).toHaveLength(3)
 })
 
+test('main transcript uses the same shortened, width-bounded file labels as worker replies', async () => {
+  installBridge([])
+  const path = '/repo/app/renderer/src/SessionPane.tsx:42'
+  const tree = await harness.mount(<TranscriptRowsView rows={[prose(`See ${path} and \`${path}\` and [${path}](${path}).`)]} cwd="/repo" />)
+  const buttons = openButtons(tree.container)
+  expect(buttons).toHaveLength(3)
+  for (const button of buttons) {
+    expect(button.textContent).toBe('app/renderer/src/SessionPane.tsx:42')
+    expect(button.title).toBe(path)
+    expect(button.getAttribute('aria-label')).toBe(`Open ${path}`)
+    expect(button.querySelector('.transcript-file-link-label')).not.toBeNull()
+  }
+})
+
 test('selected path text keeps the normal text menu and an unselected path keeps file actions', async () => {
   installBridge([])
   const tree = await harness.mount(<TranscriptRowsView rows={[prose('`notes.md`')]} cwd="/repo" />)

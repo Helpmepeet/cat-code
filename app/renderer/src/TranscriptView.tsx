@@ -2037,6 +2037,7 @@ function AssistantProse({
   const filePathContext = useContext(FilePathMenuContext)
   const paneOpener = useFilePaneOpener()
   const fileCwd = useContext(TranscriptFileScopeContext)?.get(sourceId)
+  const displayCwd = fileCwd ?? filePathContext?.cwd ?? null
   const openFile = useCallback(
     (rawPath: string, external = false): void => {
       const path = scopedTranscriptFilePath(rawPath, fileCwd)
@@ -2071,10 +2072,10 @@ function AssistantProse({
   const components = useMemo(
     () => ({
       ...MARKDOWN_COMPONENTS,
-      a: createPathAwareAnchor(openFile, onContextMenu),
-      code: createPathAwareCode(openFile, onContextMenu, sourceAtOffset),
+      a: createPathAwareAnchor(openFile, onContextMenu, displayCwd),
+      code: createPathAwareCode(openFile, onContextMenu, sourceAtOffset, displayCwd),
     }),
-    [openFile, onContextMenu, sourceAtOffset],
+    [openFile, onContextMenu, sourceAtOffset, displayCwd],
   )
   const { arrival } = useContext(ProseArrivalContext)
   const { freshProse } = useContext(TranscriptMotionContext)
@@ -2211,6 +2212,7 @@ const FileLinkLabelContext = createContext(false)
 function createPathAwareAnchor(
   openFile: (path: string, external?: boolean) => void,
   onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
+  cwd: string | null = null,
 ) {
   return function PathAwareAnchor({
     children,
@@ -2248,11 +2250,19 @@ function createPathAwareAnchor(
       )
     }
     const rawPath = path
+    const text = childrenToText(children)
+    const displayPath = displayFilePath(path, cwd)
+    const pathLabel = displayPath !== path && (bare || text === path || text === href)
+      ? node?.children.length === 1 && node.children[0]?.type === 'element' && node.children[0].tagName === 'code'
+        ? <code>{displayPath}</code>
+        : displayPath
+      : label
     return (
       <button
-        className={`inline-flex items-center gap-0.5 rounded-sm align-baseline ${bare ? 'font-mono ' : ''}text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent${pending ? ' file-link-pending' : ''}`}
+        className={`transcript-file-link inline-flex items-center gap-0.5 rounded-sm align-baseline ${bare ? 'font-mono ' : ''}text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent${pending ? ' file-link-pending' : ''}`}
         type="button"
         aria-label={pending ? undefined : `Open ${path}`}
+        title={pending ? undefined : path}
         disabled={pending || undefined}
         onClick={event => { if (!pending && !selectedTextInside(event.currentTarget)) openFile(path, event.metaKey) }}
         onContextMenu={event => {
@@ -2266,7 +2276,7 @@ function createPathAwareAnchor(
         }}
       >
         <ActionFileIcon />
-        {label}
+        <span className="transcript-file-link-label">{pathLabel}</span>
         {pending ? <FileLinkTicker destination={destination} /> : null}
       </button>
     )
@@ -2277,6 +2287,7 @@ function createPathAwareCode(
   openFile: (path: string, external?: boolean) => void,
   onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
   sourceAtOffset?: (offset: number | undefined) => InlineCommandSource | undefined,
+  cwd: string | null = null,
 ) {
   return function PathAwareCode({
     className,
@@ -2290,9 +2301,10 @@ function createPathAwareCode(
     if (!inLabel && !className && (isInlineFilePath(text) || local)) {
       return (
         <button
-          className="inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+          className={`${local ? '' : 'transcript-file-link '}inline-flex items-center gap-0.5 rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent`}
           type="button"
           aria-label={`Open ${text}`}
+          title={local ? undefined : text}
           onClick={event => { if (!selectedTextInside(event.currentTarget)) openFile(local ?? text, event.metaKey) }}
           onContextMenu={event => {
             if (local || !onContextMenu || selectedTextInside(event.currentTarget)) return
@@ -2305,7 +2317,7 @@ function createPathAwareCode(
           }}
         >
           {local ? null : <ActionFileIcon />}
-          <code>{children}</code>
+          <code className={local ? undefined : 'transcript-file-link-label'}>{local ? children : displayFilePath(text, cwd)}</code>
         </button>
       )
     }

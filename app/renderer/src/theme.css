@@ -1045,6 +1045,22 @@ html[data-glass='on'] [data-window-frame] {
   animation: catcode-prose-arrive 160ms linear both;
 }
 
+.transcript-file-link {
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+.transcript-file-link > svg {
+  flex-shrink: 0;
+}
+
+.transcript-file-link-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .file-link-pending {
   position: relative;
   cursor: default;
