@@ -23,6 +23,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 export function CreateProjectDialog({ bridge, onClose, onCreated }: CreateProjectDialogProps) {
   const [name, setName] = useState('')
   const [folder, setFolder] = useState<ProjectFolder | null>(null)
+  const [trustFolder, setTrustFolder] = useState(false)
   const [draftId, setDraftId] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -71,6 +72,7 @@ export function CreateProjectDialog({ bridge, onClose, onCreated }: CreateProjec
       if (!life.active) return
       if (result.kind === 'selected') {
         setFolder(result.folder)
+        setTrustFolder(false)
         setName(current => current.trim() ? current : result.folder.name.slice(0, 160))
       } else if (result.kind === 'error') setError(result.error)
     } catch (reason) {
@@ -90,7 +92,7 @@ export function CreateProjectDialog({ bridge, onClose, onCreated }: CreateProjec
     setPending(true)
     setError(null)
     try {
-      const result = await draftBridge.createProject({ draftId: life.draftId, name: name.trim() })
+      const result = await draftBridge.createProject({ draftId: life.draftId, name: name.trim(), trustFolder })
       if (!life.active) return
       if (result.ok) { life.active = false; onCreated(result.project) }
       else setError(result.error)
@@ -119,6 +121,13 @@ export function CreateProjectDialog({ bridge, onClose, onCreated }: CreateProjec
               <FolderIcon /><span className="create-project-path" title={folder.cwd}>{folder.cwd}</span>
               <button className="create-project-change" type="button" disabled={pending} onClick={() => void pick()}>Change</button>
             </div> : <button className="create-project-folder create-project-choose" type="button" disabled={!draftId || pending} onClick={() => void pick()}><FolderIcon />Choose folder…</button>}
+          </div>
+          <div className="create-project-field">
+            <label className="create-project-trust"><input type="checkbox" checked={trustFolder} disabled={pending || !folder}
+              onChange={event => setTrustFolder(event.target.checked)} />Trust this folder</label>
+            {folder && folder.trustRoot !== folder.cwd && <p className="create-project-trust-scope">
+              Trust is stored per git repository. Approving saves trust for <span>{folder.trustRoot}</span> and covers every folder under it, including sibling projects.
+            </p>}
           </div>
           {error && <div className="create-project-error" role="alert">{error}</div>}
         </div>

@@ -8,6 +8,8 @@ export type ProjectCreationDeps = {
   store: Pick<ProjectStore, 'create'>
   pick: () => Promise<string | null>
   validateCwd: (cwd: string) => { ok: true; realpath: string } | { ok: false }
+  inspectTrustRoot: (cwd: string) => Promise<string>
+  trustFolder: (cwd: string, expectedTrustRoot: string) => Promise<void>
   legacyKnown: () => readonly { cwd: string; name: string }[]
   log?: (message: string, error: unknown) => void
 }
@@ -34,8 +36,12 @@ export class ProjectCreationController {
       if (this.draft !== draft || path === null) return { kind: 'cancelled' }
       const checked = this.deps.validateCwd(path)
       if (!checked.ok) return { kind: 'error', error: 'That folder is unavailable. Choose an existing folder you can access.' }
-      const folder = { cwd: checked.realpath, name: basename(checked.realpath) || checked.realpath }
-      draft.identity = folderIdentity(folder.cwd)
+      const identity = folderIdentity(checked.realpath)
+      const trustRoot = await this.deps.inspectTrustRoot(checked.realpath)
+      if (this.draft !== draft) return { kind: 'cancelled' }
+      if (folderIdentity(checked.realpath) !== identity) return { kind: 'error', error: 'The selected folder has changed. Choose it again.' }
+      const folder = { cwd: checked.realpath, name: basename(checked.realpath) || checked.realpath, trustRoot }
+      draft.identity = identity
       draft.folder = folder
       return { kind: 'selected', folder: { ...folder } }
     } catch (error) {
@@ -50,15 +56,26 @@ export class ProjectCreationController {
     if (draft.picking || !draft.folder) return { ok: false, error: 'Choose a folder first.' }
     if (draft.creating) return { ok: false, error: 'The project is already being saved.' }
     draft.creating = true
+    let trustFailed = false
     try {
       const checked = this.deps.validateCwd(draft.folder.cwd)
       if (!checked.ok || checked.realpath !== draft.folder.cwd || folderIdentity(checked.realpath) !== draft.identity) return { ok: false, error: 'The selected folder has changed or is unavailable. Choose it again.' }
-      const project = await this.deps.store.create({ cwd: draft.folder.cwd, name: input.name.trim() }, this.deps.legacyKnown, () => this.draft === draft && folderIdentity(draft.folder!.cwd) === draft.identity)
+      const folder = draft.folder
+      const project = await this.deps.store.create({ cwd: folder.cwd, name: input.name.trim() }, this.deps.legacyKnown, () => this.draft === draft && folderIdentity(folder.cwd) === draft.identity, input.trustFolder ? async () => {
+        try {
+          await this.deps.trustFolder(folder.cwd, folder.trustRoot)
+        } catch (error) {
+          trustFailed = true
+          throw error
+        }
+      } : undefined)
       if (this.draft === draft) this.draft = undefined
       return { ok: true, project }
     } catch (error) {
       this.deps.log?.(`Project creation failed for ${draft.folder.cwd}`, error)
-      return { ok: false, error: error instanceof DuplicateProjectError ? error.message : 'Could not save the project. Check folder access and try again.' }
+      return { ok: false, error: trustFailed
+        ? 'Could not save folder trust. The project was not created. Choose the folder again to retry, or untick Trust this folder.'
+        : error instanceof DuplicateProjectError ? error.message : 'Could not save the project. Check folder access and try again.' }
     } finally { draft.creating = false }
   }
 }

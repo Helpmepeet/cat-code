@@ -1,6 +1,6 @@
 export type DesktopProject = { id: string; name: string; cwd: string; createdAt: number }
-export type ProjectFolder = { cwd: string; name: string }
-export type CreateProjectInput = { draftId: string; name: string }
+export type ProjectFolder = { cwd: string; name: string; trustRoot: string }
+export type CreateProjectInput = { draftId: string; name: string; trustFolder: boolean }
 export type PickProjectResult = { kind: 'selected'; folder: ProjectFolder } | { kind: 'cancelled' } | { kind: 'error'; error: string }
 export type ProjectFolderResult = PickProjectResult
 export type CreateProjectResult = { ok: true; project: DesktopProject } | { ok: false; error: string }
@@ -14,5 +14,5 @@ export function isProjectName(value: unknown): value is string {
 export function isCreateProjectInput(value: unknown): value is CreateProjectInput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const row = value as Record<string, unknown>
-  return Object.keys(row).sort().join(',') === 'draftId,name' && isProjectDraftId(row.draftId) && isProjectName(row.name)
+  return Object.keys(row).sort().join(',') === 'draftId,name,trustFolder' && isProjectDraftId(row.draftId) && isProjectName(row.name) && typeof row.trustFolder === 'boolean'
 }

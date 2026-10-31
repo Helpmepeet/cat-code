@@ -8,7 +8,7 @@ let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await harness.unmountAll(); document.body.innerHTML = '' })
 afterAll(async () => { await harness.teardown() })
-const selected = (name = 'sample'): PickProjectResult => ({ kind: 'selected', folder: { cwd: `/work/${name}`, name } })
+const selected = (name = 'sample', trustRoot = `/work/${name}`): PickProjectResult => ({ kind: 'selected', folder: { cwd: `/work/${name}`, name, trustRoot } })
 function deferred<T>() {
   let resolve!: (value: T) => void
   const promise = new Promise<T>(done => { resolve = done })
@@ -37,7 +37,7 @@ async function setup(overrides: Partial<CreateProjectDialogBridge> = {}) {
   return { bridge, tree, button, name, type, click, onClose, onCreated }
 }
 
-test('requires a trimmed name and a selected folder, submits only the draft and name, blocks duplicate pending create', async () => {
+test('requires a trimmed name and a selected folder, submits only draft, name and trust choice, blocks duplicate pending create', async () => {
   const pending = deferred<Awaited<ReturnType<CreateProjectDialogBridge['createProject']>>>()
   const createProject = mock((_input: Parameters<CreateProjectDialogBridge['createProject']>[0]) => pending.promise)
   const s = await setup({ createProject })
@@ -51,7 +51,7 @@ test('requires a trimmed name and a selected folder, submits only the draft and 
   expect(s.button('Create project').disabled).toBe(true)
   await s.type('  custom  ')
   await s.click('Create project')
-  expect(createProject.mock.calls).toEqual([[{ draftId: 'draft-id', name: 'custom' }]])
+  expect(createProject.mock.calls).toEqual([[{ draftId: 'draft-id', name: 'custom', trustFolder: false }]])
   expect(s.button('Create project').disabled).toBe(true)
   await s.click('Create project')
   expect(createProject).toHaveBeenCalledTimes(1)
@@ -149,5 +149,35 @@ test('a long-open dialog keeps the same draft without a cwd token or session API
   await s.click('Create project')
   expect(s.bridge.beginProjectDraft).toHaveBeenCalledTimes(1)
   expect(s.bridge.pickProjectFolder).toHaveBeenCalledWith('draft-id')
-  expect(s.bridge.createProject).toHaveBeenCalledWith({ draftId: 'draft-id', name: 'sample' })
+  expect(s.bridge.createProject).toHaveBeenCalledWith({ draftId: 'draft-id', name: 'sample', trustFolder: false })
+})
+
+test('trust starts unticked, has no plain-folder helper, and sends only the boolean choice', async () => {
+  const s = await setup()
+  const checkbox = s.tree.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+  expect(checkbox.checked).toBe(false)
+  expect(checkbox.disabled).toBe(true)
+  expect(checkbox.closest('label')?.textContent).toBe('Trust this folder')
+  await s.click('Choose folder…')
+  expect(checkbox.disabled).toBe(false)
+  expect(s.tree.container.querySelector('.create-project-trust-scope')).toBeNull()
+  await act(async () => { checkbox.click() })
+  await s.click('Create project')
+  expect(s.bridge.createProject).toHaveBeenCalledWith({ draftId: 'draft-id', name: 'sample', trustFolder: true })
+})
+
+test('discloses an engine-supplied wider root and resets consent only when a folder selection succeeds', async () => {
+  const pickProjectFolder = mock(async (): Promise<PickProjectResult> => selected('nested', '/work'))
+  const s = await setup({ pickProjectFolder })
+  await s.click('Choose folder…')
+  expect(s.tree.container.querySelector('.create-project-trust-scope')?.textContent).toContain('Approving saves trust for /work and covers every folder under it, including sibling projects.')
+  const checkbox = s.tree.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+  await act(async () => { checkbox.click() })
+  pickProjectFolder.mockResolvedValueOnce({ kind: 'cancelled' })
+  await s.click('Change')
+  expect(checkbox.checked).toBe(true)
+  pickProjectFolder.mockResolvedValueOnce(selected('other'))
+  await s.click('Change')
+  expect(checkbox.checked).toBe(false)
+  expect(s.tree.container.querySelector('.create-project-trust-scope')).toBeNull()
 })

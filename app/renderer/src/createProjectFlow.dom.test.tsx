@@ -21,8 +21,8 @@ async function setup(projects: DesktopProject[] = []) {
   const createSession = mock(async () => ({ ok: true as const, value: session }))
   const createProjectSession = mock(async (_id: string) => ({ ok: true as const, value: session }))
   const pickDirectory = mock(async () => null)
-  const pickProjectFolder = mock(async () => ({ kind: 'selected' as const, folder: { cwd: project.cwd, name: project.name } }))
-  const createProject = mock(async (_input: { draftId: string; name: string }) => ({ ok: true as const, project }))
+  const pickProjectFolder = mock(async () => ({ kind: 'selected' as const, folder: { cwd: project.cwd, name: project.name, trustRoot: project.cwd } }))
+  const createProject = mock(async (_input: { draftId: string; name: string; trustFolder: boolean }) => ({ ok: true as const, project }))
   const cancelProjectDraft = mock(async (_id: string) => {})
   window.catcode = {
     subscribe: () => () => {}, subscribeHost: () => () => {}, rendererReady: () => {},
@@ -53,7 +53,7 @@ test('Projects plus opens the dialog, creation adds a zero-session group, and on
   expect(s.pickProjectFolder).not.toHaveBeenCalled()
   await act(async () => { button(s.tree.container, 'Choose folder…').click() })
   await act(async () => { button(s.tree.container, 'Create project').click() })
-  expect(s.createProject).toHaveBeenCalledWith({ draftId: 'draft', name: 'sample' })
+  expect(s.createProject).toHaveBeenCalledWith({ draftId: 'draft', name: 'sample', trustFolder: false })
   expect(s.createSession).not.toHaveBeenCalled()
   expect(s.createManagedChat).not.toHaveBeenCalled()
   expect(s.createProjectSession).not.toHaveBeenCalled()

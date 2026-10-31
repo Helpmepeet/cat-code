@@ -33,7 +33,7 @@ export class ProjectStore {
     return doc.projects
   }
   get(id: string): DesktopProject | undefined { return this.list().find(row => row.id === id) }
-  async create(input: { cwd: string; name: string }, legacyKnown: () => readonly { cwd: string; name: string }[] = () => [], isActive: () => boolean = () => true): Promise<DesktopProject> {
+  async create(input: { cwd: string; name: string }, legacyKnown: () => readonly { cwd: string; name: string }[] = () => [], isActive: () => boolean = () => true, beforeSave?: () => Promise<void>): Promise<DesktopProject> {
     if (!isProjectName(input.name) || !isAbsolute(input.cwd) || realpathSync(input.cwd).normalize('NFC') !== input.cwd) throw new Error('Invalid project folder or name')
     mkdirSync(this.directory, { recursive: true, mode: 0o700 })
     const release = await (this.deps.acquireLock ?? acquireLock)(this.path)
@@ -49,6 +49,12 @@ export class ProjectStore {
         }
       })
       if (duplicate) throw new DuplicateProjectError(duplicate)
+      // Trust must succeed before the project becomes visible. Check duplicates
+      // first so a rejected creation cannot grant trust as a side effect.
+      if (beforeSave) {
+        await beforeSave()
+        if (!isActive() || realpathSync(input.cwd).normalize('NFC') !== input.cwd || !statSync(input.cwd).isDirectory()) throw new Error('Project folder changed or draft cancelled')
+      }
       const project: DesktopProject = { id: randomUUID(), name: input.name.trim(), cwd: input.cwd, createdAt: (this.deps.now ?? Date.now)() }
       const temporary = `${this.path}.${randomUUID()}.tmp`
       try {

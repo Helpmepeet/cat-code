@@ -332,6 +332,7 @@ import {
 import { runSettingsInventoryWorker } from './settingsInventoryRunner.js'
 import { resolveSettingsInventoryCwd, settingsInventoryScopeArgs, settingsWriteMatchesScope } from './settingsInventoryAccess.js'
 import { runSettingsWriteWorker } from './settingsWriteRunner.js'
+import { runWorkspaceTrustWorker } from './workspaceTrustRunner.js'
 import { parseSettingsWriteWorkerRequest } from '../shared/settingsWriteWorker.js'
 import {
   createIdleParkDriver,
@@ -903,6 +904,7 @@ let sessionsCatalogAbort: AbortController | null = null
 let accountsPoolAbort: AbortController | null = null
 const settingsInventoryReads = new Set<AbortController>()
 const settingsWriteRuns = new Set<AbortController>()
+const workspaceTrustRuns = new Set<AbortController>()
 /** Directories explicitly chosen for Settings in this app process. */
 const settingsPickedProjects = new Set<string>()
 let settingsWriteTail: Promise<void> = Promise.resolve()
@@ -3749,6 +3751,29 @@ function registerHostControlPlane(): void {
     store: projectStore,
     pick: () => chooseDirectory(),
     validateCwd,
+    inspectTrustRoot: async cwd => {
+      const abort = new AbortController()
+      workspaceTrustRuns.add(abort)
+      try {
+        const result = await runWorkspaceTrustWorker({
+          command: sidecarLaunch().command, args: sidecarLaunch().argsFor('workspace-trust'), cwd,
+          request: { type: 'workspace.inspect', version: 1 }, signal: abort.signal,
+          log: line => process.stderr.write(`${line}\n`),
+        })
+        return result.trustRoot
+      } finally { workspaceTrustRuns.delete(abort) }
+    },
+    trustFolder: async (cwd, expectedTrustRoot) => {
+      const abort = new AbortController()
+      workspaceTrustRuns.add(abort)
+      try {
+        await runWorkspaceTrustWorker({
+          command: sidecarLaunch().command, args: sidecarLaunch().argsFor('workspace-trust'), cwd,
+          request: { type: 'workspace.trust', version: 1, expectedTrustRoot }, signal: abort.signal,
+          log: line => process.stderr.write(`${line}\n`),
+        })
+      } finally { workspaceTrustRuns.delete(abort) }
+    },
     legacyKnown: () => [
       ...(host?.listSessions() ?? []),
       ...(readSessionsCatalogCache(defaultRegistryDir())?.entries ?? []),
@@ -5686,6 +5711,8 @@ function stopBackgroundDrivers(): void {
   settingsInventoryReads.clear()
   for (const write of settingsWriteRuns) write.abort()
   settingsWriteRuns.clear()
+  for (const run of workspaceTrustRuns) run.abort()
+  workspaceTrustRuns.clear()
   settingsWriteGeneration += 1
   accountProfileMutationAbort?.abort()
   accountProfileMutationAbort = null
