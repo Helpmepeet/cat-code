@@ -988,16 +988,9 @@ function combineUsage(a: ClassifierUsage, b: ClassifierUsage): ClassifierUsage {
  */
 function getClassifierThinkingConfig(
   model: string,
-): [false | undefined, number, 'max' | undefined] {
-  // Maximum effort, per the operator. F6 originally fixed this at medium on the
-  // stated premise that GPT was a rarely-hit fallback behind Anthropic. That
-  // premise was wrong: this fork's Anthropic access is intermittent, so the GPT
-  // classifier judges EVERY permission decision. Upstream runs a Sonnet-class
-  // classifier for this job, and Luna reaches that class only at its ceiling.
-  // That ceiling is 'max', not 'xhigh': the ladder runs low, medium, high,
-  // xhigh, max, and 'max' is the top for the active GPT models.
-  // Shipping medium would put every decision below the bar the port is copying.
-  if (model.startsWith('gpt-')) return [undefined, 0, 'max']
+): [false | undefined, number, 'medium' | undefined] {
+  // Keep deeper GPT reviews at medium effort independently of the main chat.
+  if (model.startsWith('gpt-')) return [undefined, 0, 'medium']
   if (
     process.env.USER_TYPE === 'ant' &&
     resolveAntModel(model)?.alwaysOnThinking
@@ -1009,7 +1002,7 @@ function getClassifierThinkingConfig(
 
 export function getClassifierThinkingConfigForTest(
   model: string,
-): [false | undefined, number, 'max' | undefined] {
+): [false | undefined, number, 'medium' | undefined] {
   return getClassifierThinkingConfig(model)
 }
 

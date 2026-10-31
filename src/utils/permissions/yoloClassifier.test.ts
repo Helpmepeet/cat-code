@@ -143,7 +143,7 @@ describe('classifier fallback errors', () => {
     )).toBe(false)
   })
 
-  test('translates the GPT classifier fallback to max reasoning', () => {
+  test('translates the GPT classifier to medium reasoning', () => {
     const [thinking, _padding, reasoningEffort] =
       getClassifierThinkingConfigForTest('gpt-6.1-terra')
     const { codexBody } = translateToCodexBody({
@@ -157,7 +157,7 @@ describe('classifier fallback errors', () => {
     })
 
     expect(thinking).toBeUndefined()
-    expect(codexBody.reasoning).toMatchObject({ effort: 'max' })
+    expect(codexBody.reasoning).toMatchObject({ effort: 'medium' })
   })
 })
 
