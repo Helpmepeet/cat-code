@@ -6,7 +6,11 @@
 .file-pane-icon svg { width:14px; height:14px; }
 .file-pane-path { display:flex; flex:0 1 auto; min-width:0; align-items:center; height:26px; padding:0 6px; border-radius:5px; font:12px var(--font-mono); cursor:text; user-select:text; }
 .file-pane-path:hover { background:var(--shell-hover); }
-.file-pane-path-text { flex:0 1 auto; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; }
+.file-pane-path[data-scrollable] { cursor:grab; }
+.file-pane-path[data-dragging] { cursor:grabbing; user-select:none; }
+.file-pane-path-text { flex:0 1 auto; min-width:0; overflow-x:auto; overflow-y:hidden; white-space:nowrap; direction:ltr; scrollbar-width:none; overscroll-behavior-x:contain; }
+.file-pane-path-text::-webkit-scrollbar { display:none; }
+.file-pane-path-text > bdi { display:inline-block; }
 .file-pane-folder { color:var(--text-faint); }
 .file-pane-copy { display:flex; flex:none; margin-right:auto; width:22px; height:22px; align-items:center; justify-content:center; border-radius:5px; color:var(--text-faint); cursor:pointer; }
 .file-pane-copy:hover { color:var(--text-primary); background:var(--shell-hover); }

@@ -53,6 +53,38 @@ async function click(root: ParentNode, label: string) {
   await act(async () => { button!.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
   await settle()
 }
+function mockPathLayout() {
+  const previousObserver = globalThis.ResizeObserver
+  const callbacks = new Map<Element, () => void>()
+  globalThis.ResizeObserver = class {
+    private targets = new Set<Element>()
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) { this.targets.add(target); callbacks.set(target, () => this.callback([], this as unknown as ResizeObserver)) }
+    unobserve(target: Element) { this.targets.delete(target); callbacks.delete(target) }
+    disconnect() { for (const target of this.targets) callbacks.delete(target); this.targets.clear() }
+  } as unknown as typeof ResizeObserver
+  releases.push(() => { globalThis.ResizeObserver = previousObserver })
+  return async (path: HTMLElement, width: number, total: number) => {
+    let left = path.scrollLeft
+    Object.defineProperties(path, {
+      clientWidth: { configurable: true, get: () => width },
+      scrollWidth: { configurable: true, get: () => total },
+      scrollLeft: { configurable: true, get: () => left, set: (value: number) => { left = Math.max(0, Math.min(value, total - width)) } },
+    })
+    const resize = async (nextWidth: number) => {
+      width = nextWidth
+      left = Math.min(left, Math.max(0, total - width))
+      await act(async () => { callbacks.get(path)?.() })
+    }
+    await resize(width)
+    return resize
+  }
+}
+async function pathPointer(path: HTMLElement, type: string, x: number, options: PointerEventInit = {}) {
+  const event = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, clientX: x, ...options })
+  await act(async () => { path.dispatchEvent(event) })
+  return event
+}
 function setup(withOutput = false, local?: { url: string; snapshots?: Map<string, LocalhostFrozenPayload> }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-dom-')))
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-outside-')))
@@ -391,6 +423,112 @@ test('Cmd-click opens the resolved whole file in the chosen app without forwardi
   expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
 })
 
+
+test('long header paths drag in both directions without copying or opening the file', async () => {
+  const layout = mockPathLayout()
+  const { pane, firstPath, external } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const path = tree.container.querySelector<HTMLElement>('.file-pane-path')!
+  const text = path.querySelector<HTMLElement>('.file-pane-path-text')!
+  await layout(text, 180, 780)
+  const captures = new Set<number>()
+  path.setPointerCapture = id => { captures.add(id) }
+  path.hasPointerCapture = id => captures.has(id)
+  path.releasePointerCapture = id => { captures.delete(id) }
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  const copies: string[] = []
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { copies.push(value) } } })
+  releases.push(() => {
+    if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  })
+  expect(text.scrollLeft).toBe(600)
+  expect(path.hasAttribute('data-scrollable')).toBe(true)
+  expect((await pathPointer(path, 'pointerdown', 100)).defaultPrevented).toBe(true)
+  expect(captures.has(1)).toBe(true)
+  await pathPointer(path, 'pointermove', 160)
+  expect(text.scrollLeft).toBe(540)
+  expect(path.hasAttribute('data-dragging')).toBe(true)
+  await pathPointer(path, 'pointermove', 40)
+  expect(text.scrollLeft).toBe(600)
+  await pathPointer(path, 'pointerup', 40)
+  expect(captures.size).toBe(0)
+  expect(path.hasAttribute('data-dragging')).toBe(false)
+  await act(async () => {
+    path.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }))
+    await new Promise(resolve => setTimeout(resolve, 240))
+  })
+  expect(copies).toEqual([])
+  expect(external).toEqual([])
+  await pathPointer(path, 'pointerdown', 100)
+  await pathPointer(path, 'pointerup', 100)
+  await act(async () => { path.click(); await new Promise(resolve => setTimeout(resolve, 240)) })
+  expect(copies).toEqual([firstPath])
+  await pathPointer(path, 'pointerdown', 100, { metaKey: true })
+  await pathPointer(path, 'pointerup', 100, { metaKey: true })
+  await act(async () => { path.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })); await Bun.sleep(20) })
+  expect(external).toEqual([{ path: firstPath, target: 'default' }])
+})
+
+test('Shift-drag preserves native path selection and selected-text copying', async () => {
+  const layout = mockPathLayout()
+  const { pane } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const path = tree.container.querySelector<HTMLElement>('.file-pane-path')!
+  const text = path.querySelector<HTMLElement>('.file-pane-path-text')!
+  await layout(text, 180, 780)
+  expect((await pathPointer(path, 'pointerdown', 100, { shiftKey: true })).defaultPrevented).toBe(false)
+  expect((await pathPointer(path, 'pointermove', 160, { shiftKey: true })).defaultPrevented).toBe(false)
+  expect(text.scrollLeft).toBe(600)
+  expect(path.hasAttribute('data-dragging')).toBe(false)
+  const range = document.createRange()
+  const folder = path.querySelector('.file-pane-folder')!.firstChild!
+  range.setStart(folder, 0)
+  range.setEnd(folder, 8)
+  const selection = window.getSelection()!
+  selection.removeAllRanges()
+  selection.addRange(range)
+  releases.push(() => selection.removeAllRanges())
+  let copied = ''
+  const event = new Event('copy', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'clipboardData', { value: { setData: (_type: string, value: string) => { copied = value } } })
+  await act(async () => { path.dispatchEvent(event) })
+  expect(event.defaultPrevented).toBe(true)
+  expect(copied).toBe(folder.textContent!.slice(0, 8))
+})
+
+test('header path keyboard scrolling and resizing preserve the chosen reading position', async () => {
+  const layout = mockPathLayout()
+  const { pane } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const path = tree.container.querySelector<HTMLElement>('.file-pane-path')!
+  const text = path.querySelector<HTMLElement>('.file-pane-path-text')!
+  const resize = await layout(text, 180, 780)
+  const key = async (value: string) => {
+    const event = new KeyboardEvent('keydown', { key: value, bubbles: true, cancelable: true })
+    await act(async () => { path.dispatchEvent(event) })
+    expect(event.defaultPrevented).toBe(true)
+  }
+  await key('ArrowLeft')
+  expect(text.scrollLeft).toBe(552)
+  await key('ArrowRight')
+  expect(text.scrollLeft).toBe(600)
+  await key('Home')
+  expect(text.scrollLeft).toBe(0)
+  await resize(300)
+  expect(text.scrollLeft).toBe(0)
+  await key('End')
+  expect(text.scrollLeft).toBe(480)
+  await resize(200)
+  expect(text.scrollLeft).toBe(580)
+  await resize(1000)
+  expect(text.scrollLeft).toBe(0)
+  expect(path.hasAttribute('data-scrollable')).toBe(false)
+  expect((await pathPointer(path, 'pointerdown', 100)).defaultPrevented).toBe(false)
+})
 
 test('image decode errors reject a corrupt initial file and retain a good image during a corrupt live update', async () => {
   const { pane, sessionId, imagePath, imageBytes, service, toasts } = setup()

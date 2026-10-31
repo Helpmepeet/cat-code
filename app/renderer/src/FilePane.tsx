@@ -34,17 +34,20 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const [appMenu, setAppMenu] = useState(false)
   const [pathMenu, setPathMenu] = useState<FilePathActionsAnchor | null>(null)
   const [copied, setCopied] = useState(false)
+  const [pathScrollable, setPathScrollable] = useState(false)
+  const [pathDragging, setPathDragging] = useState(false)
   const appChoice = useRef(0)
   const menuRef = useRef<HTMLDivElement>(null)
   const appTrigger = useRef<HTMLButtonElement>(null)
   const headerPath = useRef<HTMLDivElement>(null)
+  const pathScroll = useRef<HTMLSpanElement>(null)
   const activeBody = useRef<HTMLDivElement>(null)
   const mounted = useRef(true)
   const paintedRef = useRef(painted)
   const descriptorRef = useRef(descriptor)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null)
+  const drag = useRef<{ pointerId: number; x: number; y: number; left: number; moved: boolean; scrolling: boolean } | null>(null)
   const toast = useToast()
   paintedRef.current = painted
   descriptorRef.current = descriptor
@@ -57,6 +60,23 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     mounted.current = true
     return () => { mounted.current = false }
   }, [])
+  useLayoutEffect(() => {
+    const element = pathScroll.current
+    if (!element) return
+    let previousMax = 0
+    const measure = () => {
+      const max = Math.max(0, element.scrollWidth - element.clientWidth)
+      const atEnd = element.scrollLeft >= Math.min(previousMax, max) - 1
+      setPathScrollable(max > 0)
+      if (atEnd) element.scrollLeft = max
+      previousMax = max
+    }
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(element)
+    if (element.firstElementChild) observer?.observe(element.firstElementChild)
+    return () => observer?.disconnect()
+  }, [descriptor?.path])
 
   const readScroll = async (): Promise<FilePaneScroll> => {
     const showing = paintedRef.current?.descriptor
@@ -280,18 +300,66 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
         onClick={() => { void stepFilePaneHistory(appSessionId, 'forward').then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}><PaneArrow /></button>
       <button type="button" className="file-pane-icon" aria-label="Reload" title="Reload" onClick={() => { void reloadFile() }}><ReloadIcon /></button>
       <div ref={headerPath} className="file-pane-path" tabIndex={0} role="button" title={descriptor.path}
-        onPointerDown={event => { drag.current = { x: event.clientX, y: event.clientY, moved: false } }}
-        onPointerMove={event => { if (drag.current && Math.abs(event.clientX - drag.current.x) + Math.abs(event.clientY - drag.current.y) > 3) drag.current.moved = true }}
+        data-scrollable={pathScrollable || undefined} data-dragging={pathDragging || undefined}
+        aria-description={pathScrollable ? 'Drag or use arrow keys to scroll the path. Hold Shift to select text.' : undefined}
+        onPointerDown={event => {
+          if (event.button !== 0 || !event.isPrimary) return
+          if (copyTimer.current) clearTimeout(copyTimer.current)
+          const element = pathScroll.current
+          const scrolling = !!element && element.scrollWidth > element.clientWidth && event.pointerType !== 'touch' &&
+            !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey && !selectedPathText()
+          drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, left: element?.scrollLeft ?? 0, moved: false, scrolling }
+          if (!scrolling) return
+          event.preventDefault()
+          event.currentTarget.focus({ preventScroll: true })
+          event.currentTarget.setPointerCapture(event.pointerId)
+        }}
+        onPointerMove={event => {
+          const current = drag.current
+          if (!current || current.pointerId !== event.pointerId) return
+          if (Math.abs(event.clientX - current.x) + Math.abs(event.clientY - current.y) <= 3) return
+          current.moved = true
+          if (!current.scrolling || !pathScroll.current) return
+          event.preventDefault()
+          setPathDragging(true)
+          pathScroll.current.scrollLeft = current.left - (event.clientX - current.x)
+        }}
+        onPointerUp={event => {
+          if (drag.current?.pointerId !== event.pointerId) return
+          drag.current.scrolling = false
+          setPathDragging(false)
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+        }}
+        onPointerCancel={event => {
+          if (drag.current?.pointerId !== event.pointerId) return
+          drag.current.moved = true
+          drag.current.scrolling = false
+          setPathDragging(false)
+        }}
+        onLostPointerCapture={() => {
+          if (drag.current) drag.current.scrolling = false
+          setPathDragging(false)
+        }}
         onClick={event => {
           if (copyTimer.current) clearTimeout(copyTimer.current)
+          if (drag.current?.moved) return
           if (event.metaKey) { void openApp(selected); return }
-          if (event.detail > 1 || drag.current?.moved || selectedPathText()) return
+          if (event.detail > 1 || selectedPathText()) return
           copyTimer.current = setTimeout(copyPath, 220)
         }}
-        onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyPath() } }}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); copyPath(); return }
+          const element = pathScroll.current
+          if (!element || !pathScrollable || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+          event.preventDefault()
+          event.stopPropagation()
+          element.scrollLeft = event.key === 'Home' ? 0 : event.key === 'End' ? element.scrollWidth
+            : element.scrollLeft + (event.key === 'ArrowLeft' ? -48 : 48)
+        }}
         onCopy={event => { const text = window.getSelection()?.toString(); if (text) { event.preventDefault(); event.clipboardData.setData('text/plain', text.replace(/[\r\n]+$/, '')) } }}
         onContextMenu={event => { if (isLocalhost || selectedPathText()) return; event.preventDefault(); setPathMenu({ type: 'pointer', x: event.clientX, y: event.clientY }) }}>
-        <span className="file-pane-path-text"><bdi><span className="file-pane-folder">{displayed.slice(0, split)}</span>{displayed.slice(split)}</bdi></span>
+        <span ref={pathScroll} className="file-pane-path-text"><bdi dir="ltr"><span className="file-pane-folder">{displayed.slice(0, split)}</span>{displayed.slice(split)}</bdi></span>
       </div>
       <button type="button" className="file-pane-copy" aria-label="Copy full path" title="Copy full path" data-copied={copied || undefined}
         onClick={copyPath}>{copied ? <ActionCheckIcon /> : <ActionCopyIcon />}</button>
