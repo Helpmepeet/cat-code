@@ -7,6 +7,7 @@ import { createLocalhostPreviewService, localhostPreviewInnerFrameAllowed } from
 import { CH_LOCALHOST_PREVIEW_CAPTURE } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
 import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
+import { restorePreviewScroll } from './previewScrollRestore.js'
 import { createPreviewApplications } from './previewApplications.js'
 import { FILE_PREVIEW_SCHEME, normalizeLocalhostPreviewUrl, type FilePreviewScroll } from '../shared/filePreview.js'
 import { CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMIT, CH_FILE_PREVIEW_RELEASE, CH_FILE_PREVIEW_EVENT, CH_FILE_PREVIEW_SCROLL_READ, CH_FILE_PREVIEW_SCROLL_RESTORE, CH_FILE_PREVIEW_APPLICATIONS, CH_FILE_PREVIEW_APPLICATION_CHOOSE } from '../shared/ipcChannels.js'
@@ -4785,7 +4786,7 @@ function registerHostControlPlane(): void {
     if (!scroll || typeof scroll.x !== 'number' || typeof scroll.y !== 'number' ||
       !Number.isFinite(scroll.x) || !Number.isFinite(scroll.y) || Math.abs(scroll.x) > 1e8 || Math.abs(scroll.y) > 1e8) return
     const frame = previewFrame(value.id as string, value.revision as number)
-    if (frame) await frame.executeJavaScript(`scrollTo(${scroll.x},${scroll.y})`).catch(() => {})
+    if (frame) await restorePreviewScroll(frame, { x: scroll.x, y: scroll.y })
     if (!previewDescriptor(value.id as string, value.revision as number)) return
     previewScroll.set(`${value.id}:${value.revision}`, { x: scroll.x, y: scroll.y })
   })

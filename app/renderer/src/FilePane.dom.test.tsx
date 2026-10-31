@@ -766,6 +766,82 @@ test('a committed revision remains paintable when a newer update arrives before 
 })
 
 
+test.each(['scroll restoration', 'commit reply'] as const)('Reload escapes a pending HTML %s and ignores its late completion', async pendingStep => {
+  const { pane, sessionId, brokenPath, service, pauseNextCommit } = setup()
+  writeFileSync(brokenPath, '<!doctype html><h1>Original page</h1>')
+  const tree = await harness.mount(pane())
+  const loadCandidate = async () => {
+    const frame = tree.container.querySelector('iframe.file-pane-staging')
+    expect(frame).not.toBeNull()
+    await act(async () => { frame!.dispatchEvent(new Event('load')) })
+    await settle()
+    return frame
+  }
+  await act(async () => { await requestOpenFile(sessionId, brokenPath) })
+  await settle()
+  await loadCandidate()
+  const original = getFilePaneSession(sessionId).committedFile!
+  let resume!: () => void
+  let reached!: Promise<void>
+  if (pendingStep === 'commit reply') {
+    const gate = pauseNextCommit()
+    resume = gate.resume
+    reached = gate.reached
+  } else {
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { resume = resolve })
+    reached = new Promise<void>(resolve => { entered = resolve })
+    const restore = window.catcode.restoreFilePreviewScroll
+    let first = true
+    window.catcode.restoreFilePreviewScroll = async (...args) => {
+      if (first) { first = false; entered(); await waiting }
+      await restore(...args)
+    }
+  }
+  try {
+    writeFileSync(brokenPath, '<!doctype html><h1>Updated page</h1>')
+    await act(async () => { await service.refresh(original.id) })
+    const blocked = await loadCandidate()
+    await reached
+    await click(tree.container, 'Reload')
+    const replacement = await loadCandidate()
+    const current = getFilePaneSession(sessionId).committedFile!
+    expect(replacement !== blocked).toBe(true)
+    expect(tree.container.querySelector('iframe:not(.file-pane-staging)') === replacement).toBe(true)
+    expect(await (await service.respond(new Request(current.url))).text()).toContain('Updated page')
+    await act(async () => { resume() })
+    await settle()
+    expect(getFilePaneSession(sessionId).committedFile?.revision).toBe(current.revision)
+    expect(tree.container.querySelector('iframe:not(.file-pane-staging)') === replacement).toBe(true)
+    expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+  } finally { await act(async () => { resume() }); await settle() }
+})
+
+test('an HTML scroll-restoration rejection does not prevent the new page from painting', async () => {
+  const { pane, sessionId, brokenPath, service } = setup()
+  writeFileSync(brokenPath, '<!doctype html><h1>Original page</h1>')
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, brokenPath) })
+  await settle()
+  await paintLocalFrame(tree.container)
+  const original = getFilePaneSession(sessionId).committedFile!
+  window.catcode.restoreFilePreviewScroll = async () => { throw new Error('Scroll restoration unavailable') }
+  writeFileSync(brokenPath, '<!doctype html><h1>Updated page</h1>')
+  await act(async () => { await service.refresh(original.id) })
+  await paintLocalFrame(tree.container)
+  const current = getFilePaneSession(sessionId).committedFile!
+  expect(await (await service.respond(new Request(current.url))).text()).toContain('Updated page')
+})
+
+test('Reload reports an unavailable preview instead of silently leaving the old page', async () => {
+  const { pane, sessionId, service } = setup()
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  service.release(getFilePaneSession(sessionId).file!.id)
+  await click(tree.container, 'Reload')
+  expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('Could not update this file. Showing the last version.')
+})
+
 test('a delayed successful update cannot replace a newer different-file navigation', async () => {
   const { pane, sessionId, firstPath, secondPath, service, pauseNextCommit } = setup()
   const tree = await harness.mount(pane())

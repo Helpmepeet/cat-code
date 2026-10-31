@@ -33,6 +33,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const [committing, setCommitting] = useState<PaintedFile | null>(null)
   const committingRef = useRef<PaintedFile | null>(null)
   const readyKeys = useRef(new Set<string>())
+  const renderGeneration = useRef(0)
   const [reload, setReload] = useState(0)
   const [apps, setApps] = useState<FilePreviewApplications | null>(null)
   const [appMenu, setAppMenu] = useState(false)
@@ -222,6 +223,8 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     const restoringCommitted = !paintedRef.current && samePaneRevision(current.committedFile, next.descriptor)
     if (!mounted.current || !current.open || readyKeys.current.has(next.key) ||
       !samePaneRevision(descriptorRef.current, next.descriptor) && !restoringCommitted) return
+    const generation = renderGeneration.current
+    const cancelled = () => !mounted.current || generation !== renderGeneration.current
     readyKeys.current.add(next.key)
     committingRef.current = next
     setCommitting(next)
@@ -229,13 +232,17 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       const previous = paintedRef.current
       const replacingSameFile = previous?.descriptor.path === next.descriptor.path || next.descriptor.kind === 'localhost' && previous?.descriptor.id === next.descriptor.id
       const scroll = restoredScroll ?? (replacingSameFile ? await readScroll() : getFilePaneSession(appSessionId).scroll)
-      if (!restoringCommitted && !await window.catcode.commitFilePreview(next.descriptor.id, next.descriptor.revision)) {
+      if (cancelled()) return
+      const committed = restoringCommitted || await window.catcode.commitFilePreview(next.descriptor.id, next.descriptor.revision)
+      if (cancelled()) return
+      if (!committed) {
         failed(next)
         return
       }
       if (next.descriptor.kind === 'html' || next.descriptor.kind === 'svg' || next.descriptor.kind === 'localhost') {
-        await window.catcode.restoreFilePreviewScroll(next.descriptor.id, next.descriptor.revision, { x: scroll.x, y: scroll.y })
+        await window.catcode.restoreFilePreviewScroll(next.descriptor.id, next.descriptor.revision, { x: scroll.x, y: scroll.y }).catch(() => {})
       }
+      if (cancelled()) return
       const latest = getFilePaneSession(appSessionId)
       const queuedRevision = latest.file?.id === next.descriptor.id && (latest.file.kind === 'localhost' || latest.file.path === next.descriptor.path) &&
         latest.file.revision > next.descriptor.revision
@@ -247,7 +254,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       rememberFilePaneScroll(appSessionId, scroll, published)
       setPainted({ ...next, descriptor: published })
       if (previous && previous.descriptor.id !== next.descriptor.id) window.catcode.releaseFilePreview(previous.descriptor.id)
-    } catch { return }
+    } catch { if (!cancelled()) failed(next) }
     finally {
       readyKeys.current.delete(next.key)
       if (committingRef.current?.key === next.key) {
@@ -294,12 +301,21 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     return !!selection && !selection.isCollapsed && !!(headerPath.current?.contains(selection.anchorNode) || headerPath.current?.contains(selection.focusNode))
   }
   const reloadFile = async () => {
+    const generation = ++renderGeneration.current
+    committingRef.current = null
+    setCommitting(null)
     try {
       const next = await window.catcode.refreshFilePreview(descriptor.id)
+      if (!mounted.current || generation !== renderGeneration.current) return
       if (next && getFilePaneSession(appSessionId).file?.id === next.id && !olderThanRetainedRevision(appSessionId, next)) {
         updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) }); setReload(value => value + 1)
+      } else if (!next) {
+        const current = getFilePaneSession(appSessionId)
+        if (current.file?.id === descriptor.id && !current.note) updateFilePaneSession(appSessionId, { note: 'update-error' })
       }
-    } catch { updateFilePaneSession(appSessionId, { note: isLocalhost ? 'server-stopped' : 'watch-error' }) }
+    } catch {
+      if (mounted.current && generation === renderGeneration.current) updateFilePaneSession(appSessionId, { note: isLocalhost ? 'server-stopped' : 'update-error' })
+    }
   }
   return <aside className="file-pane" aria-label={`File preview: ${name}`} onKeyDown={event => {
     if (event.key === 'Escape' && !event.defaultPrevented && !pathMenu && !appMenu) { event.preventDefault(); event.stopPropagation(); closeFilePane(appSessionId); onFocusComposer?.() }
