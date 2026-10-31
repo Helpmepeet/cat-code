@@ -4720,7 +4720,7 @@ export function App() {
                 const targetId = targetRow.appSessionId ?? targetRow.sessionId
                 const fileRows = selectNestedTranscriptRows(transcript, targetId, true)
                 const fileOrder = selectTranscriptRows(transcript, targetId, true).map(row => row.id)
-                const showFilePath = fileMenuPane.lastPath ?? fileMenuPane.candidatePath ?? newestPaneFilePath(fileRows, fileOrder)
+                const showFilePath = fileMenuPane.lastPath ?? newestPaneFilePath(fileRows, fileOrder)
                 return (
                   <SessionActionsMenu
                     items={(() => {

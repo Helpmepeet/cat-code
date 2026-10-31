@@ -1,8 +1,15 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { NestedTranscriptRow, NestedToolUseRow } from './transcriptProjector.js'
-import { latestPaneFileCards, newestPaneFilePath } from './transcriptPaneFiles.js'
+import { latestPaneFileCards, newestPaneFilePath, sameFileCards } from './transcriptPaneFiles.js'
 import { mergeMountedMarkdownLeaves, planMarkdownLeaves, renderMarkdownTree } from './markdownRenderPlan.js'
+
+test('rebuilt file cards with the same contents count as unchanged', () => {
+  const cards = new Map([['/a.html', 'one'], ['/b.md', 'two']])
+  expect(sameFileCards(cards, new Map(cards))).toBe(true)
+  expect(sameFileCards(cards, new Map([['/a.html', 'one'], ['/b.md', 'three']]))).toBe(false)
+  expect(sameFileCards(cards, new Map([['/a.html', 'one']]))).toBe(false)
+})
 
 function prose(id: string, content: string): NestedTranscriptRow {
   return { id, sessionId: 's', frameId: id, messageId: id, blockIndex: 0, parentToolUseId: null,

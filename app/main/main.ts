@@ -1706,12 +1706,14 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
   if (!pending) {
     if (pendingPreviewReadiness.size >= 4) return false
     // Read completed image dimensions instead of awaiting decode() in staging.
+    // An image the host did not serve is the page's own broken link, not a torn render.
     // This is a rendering check only. Nothing supplied by the page
     // is forwarded as an app command or accepted as filesystem authority.
     pending = frame.executeJavaScript(`(() => {
       if (${descriptor.kind === 'svg'} && document.getElementsByTagNameNS('*', 'parsererror').length) return false;
       const images = document.images;
       if (images.length > 2048) return false;
+      const absent = new Set(${JSON.stringify(filePreviews.absent(id, revision))});
       const local = new Map();
       for (let index = 0; index < images.length; index++) {
         const image = images[index];
@@ -1720,6 +1722,7 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
         let url;
         try { url = new URL(source, document.baseURI); } catch { continue; }
         if (url.protocol === 'http:' || url.protocol === 'https:') continue;
+        try { if (absent.has(decodeURIComponent(url.pathname).replace(/^[/]r[0-9]+/, ''))) continue; } catch {}
         local.set(url.href, image);
         if (local.size > 128) return false;
       }
@@ -1728,9 +1731,22 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
     pendingPreviewReadiness.set(key, pending)
   }
   return new Promise(resolve => {
-    const timer = setTimeout(() => resolve(false), 1000)
+    // A page too busy to answer has still loaded. Only a completed check can call it broken.
+    const timer = setTimeout(() => resolve(true), 1000)
     pending!.then(result => { clearTimeout(timer); resolve(result) }, () => { clearTimeout(timer); resolve(false) })
   })
+}
+/** Preview handles are owned by the renderer store, which a window close or document load discards. */
+function retirePreviews(): void {
+  const live = localhostPreviews.bindings().map(binding => binding.id)
+  filePreviews.dispose()
+  localhostPreviews.dispose()
+  for (const id of live) localhostSnapshots?.release(id)
+  localFrameBindings.clear()
+  restoringLocalRoutes.clear()
+  previewScroll.clear()
+  pendingPreviewScroll.clear()
+  pendingPreviewReadiness.clear()
 }
 function previewPayload(value: unknown, keys: string[]): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -2004,26 +2020,10 @@ function createWindow(): void {
       return actualUrl ? { ...binding, url: actualUrl } : binding
     }),
   })
-  const scrollTimer = setInterval(() => {
-    if (window.isDestroyed()) return
-    for (const frame of window.webContents.mainFrame.frames) {
-      if (!livePreviewFrame(frame)) continue
-      const parsed = parseFilePreviewUrl(frame.url) ?? localFrameBinding(frame)
-      if (parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id))) void readPreviewScroll(parsed.id, parsed.revision)
-    }
-  }, 100)
-  scrollTimer.unref()
   window.once('closed', () => {
-    clearInterval(scrollTimer)
-    filePreviews.dispose()
-    localhostPreviews.dispose()
+    retirePreviews()
     localhostSnapshots?.dispose()
     localhostSnapshots = null
-    localFrameBindings.clear()
-    restoringLocalRoutes.clear()
-    previewScroll.clear()
-    pendingPreviewScroll.clear()
-    pendingPreviewReadiness.clear()
   })
   window.webContents.on('will-frame-navigate', event => {
     if (event.isMainFrame) return
@@ -2507,7 +2507,7 @@ function createWindow(): void {
   // renderer-ready handshake then replays state through the attachment gate the
   // same way any reload does (F2).
   window.webContents.on('did-finish-load', () => {
-    if (localhostPreviews.bindings().length) void localhostSnapshots?.start()
+    retirePreviews()
     rendererGone = false
     rendererOsProcessId = readRendererOsProcessId()
     const pid: Record<string, number> =

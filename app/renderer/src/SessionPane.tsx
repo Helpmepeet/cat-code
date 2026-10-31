@@ -165,8 +165,7 @@ import {
   AgentFaceRegistryStoreContext,
 } from './agentFace.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
-import { setFilePaneCandidate } from './filePaneState.js'
-import { LatestPaneFileCardContext, latestPaneFileCards, newestPaneFilePath } from './transcriptPaneFiles.js'
+import { LatestPaneFileCardContext, latestPaneFileCards, sameFileCards } from './transcriptPaneFiles.js'
 import { useSubagentDock } from './subagentDockController.js'
 import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
 import type { SubagentDockRow } from './subagentDockState.js'
@@ -826,12 +825,13 @@ export function SessionPane({
   // `deriveActivity` and the token estimate share one projection.
   const nestedRows = selectNestedTranscriptRows(transcript, activeSessionId)
   const paneFileRows = selectNestedTranscriptRows(transcript, activeSessionId, true)
-  const paneFileOrder = useMemo(() => selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id), [transcript, activeSessionId])
-  const latestFileCards = useMemo(() => latestPaneFileCards(paneFileRows, activeDescriptor?.cwd ?? null, paneFileOrder), [paneFileRows, activeDescriptor?.cwd, paneFileOrder])
-  const newestFilePath = useMemo(() => newestPaneFilePath(paneFileRows, paneFileOrder), [paneFileRows, paneFileOrder])
-  useEffect(() => {
-    if (activeSessionId) setFilePaneCandidate(activeSessionId, newestFilePath)
-  }, [activeSessionId, newestFilePath])
+  const paneFileSession = activeSessionId ? transcript.sessions[activeSessionId] : undefined
+  const paneFileOrder = useMemo(() => selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id), [paneFileSession, activeSessionId])
+  const nextFileCards = useMemo(() => latestPaneFileCards(paneFileRows, activeDescriptor?.cwd ?? null, paneFileOrder), [paneFileRows, activeDescriptor?.cwd, paneFileOrder])
+  // Every tool card reads this through context, past its memo. A streamed delta must not change its identity.
+  const latestFileCardsRef = useRef(nextFileCards)
+  if (!sameFileCards(latestFileCardsRef.current, nextFileCards)) latestFileCardsRef.current = nextFileCards
+  const latestFileCards = latestFileCardsRef.current
   const workspaceBranch = useWorkspaceBranch(
     activeSessionId !== null && activeDescriptor !== undefined && !isManagedChat && nestedRows.length > 0 && !activeDescriptor.moving,
     readBranch,

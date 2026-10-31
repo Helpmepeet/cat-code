@@ -2,7 +2,7 @@ import { constants, watch, type FSWatcher } from 'node:fs'
 import { open, realpath, stat } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, dirname, extname, sep } from 'node:path'
+import { basename, dirname, extname, normalize, relative, sep } from 'node:path'
 import { resolveWorkspaceFile, type WorkspaceFileOptions } from './openWorkspaceFile.js'
 import { FILE_PREVIEW_SCHEME, filePreviewKind, type FilePreviewDescriptor, type FilePreviewEvent } from '../shared/filePreview.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
@@ -16,6 +16,8 @@ const MAX_PREVIEWS_PER_SESSION = 3
 const MAX_PREVIEWS = MAX_REGISTRY_SESSIONS * MAX_PREVIEWS_PER_SESSION
 const MAX_WATCHED_FILES = 2048
 const MAX_ASSETS = 128
+// Admission only. Two reads run at once; a page within its asset budget waits its turn.
+const MAX_PENDING_ASSET_READS = 256
 const QUIET_MS = 180
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
@@ -24,11 +26,13 @@ const MIME: Record<string, string> = {
   '.webp': 'image/webp', '.gif': 'image/gif', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json', '.woff': 'font/woff', '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=utf-8',
+  '.ttf': 'font/ttf', '.otf': 'font/otf', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=utf-8',
+  '.avif': 'image/avif', '.bmp': 'image/bmp', '.csv': 'text/csv; charset=utf-8', '.wasm': 'application/wasm',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
 }
 const PAGE_CSP = "default-src * data: blob: cat-preview:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob: cat-preview:; style-src * 'unsafe-inline' data: blob: cat-preview:; img-src * data: blob: cat-preview:; connect-src * data: blob: cat-preview:; frame-src 'none'; object-src 'none'; form-action 'none'; sandbox allow-scripts allow-same-origin"
 
-type Snapshot = { revision: number; files: Map<string, Buffer>; failed: boolean }
+type Snapshot = { revision: number; files: Map<string, Buffer>; absent: Set<string>; failed: boolean }
 type Preview = {
   id: string
   appSessionId: string
@@ -85,6 +89,16 @@ async function stableRead(path: string): Promise<Buffer> {
   return first
 }
 
+/**
+ * Page scripts share this origin and may reach the network, so a same-origin read
+ * must not reach credentials: web asset types only, and no hidden path except images.
+ */
+function servableAsset(mainFile: string, path: string): boolean {
+  const type = MIME[extname(path).toLowerCase()]
+  if (!type) return false
+  return type.startsWith('image/') || !relative(dirname(mainFile), path).split(sep).some(part => part.startsWith('.') && part !== '..')
+}
+
 export function parseFilePreviewUrl(value: string): { id: string; revision: number; path: string } | null {
   try {
     const url = new URL(value)
@@ -112,7 +126,7 @@ export function createFilePreviewService(deps: {
   const assetReads = new Map<string, Promise<Buffer | null>>()
   async function read(path: string): Promise<Buffer> {
     if (activeReads >= 2) {
-      if (waitingReads.length >= 32) throw new Error('Preview busy')
+      if (waitingReads.length >= MAX_PENDING_ASSET_READS) throw new Error('Preview busy')
       await new Promise<void>(resolve => waitingReads.push(resolve))
     } else activeReads++
     try { return await stableRead(path) }
@@ -176,6 +190,17 @@ export function createFilePreviewService(deps: {
   async function resolve(preview: Pick<Preview, 'appSessionId'>, path: string) {
     return resolveWorkspaceFile({ appSessionId: preview.appSessionId, path }, deps.sessions(), deps.options)
   }
+  /** An unavailable asset renders as it would in a browser. If it appears later, the page refreshes. */
+  async function noteAbsent(preview: Preview, snapshot: Snapshot, path: string) {
+    if (snapshot.absent.size >= MAX_ASSETS) return
+    snapshot.absent.add(path)
+    const root = await realpath(preview.authorityCwd).catch(() => null)
+    if (root === null || normalize(path) !== path || relative(root, path).split(sep)[0] === '..' || !servableAsset(preview.path, path)) return
+    const current = await signature(path)
+    if (preview.released || preview.watched.has(path) || preview.watched.size >= MAX_ASSETS || watchedFiles >= MAX_WATCHED_FILES) return
+    preview.watched.set(path, current)
+    watchedFiles++
+  }
   async function refresh(id: string): Promise<FilePreviewDescriptor | null> {
     const preview = previews.get(id)
     if (!preview || preview.released) return null
@@ -199,7 +224,7 @@ export function createFilePreviewService(deps: {
       if (preview.released || !authorized(preview)) return null
       preview.removed = false
       for (const revision of preview.snapshots.keys()) if (revision !== preview.committed) dropSnapshot(preview, revision)
-      const snapshot: Snapshot = { revision: ++preview.nextRevision, files, failed: false }
+      const snapshot: Snapshot = { revision: ++preview.nextRevision, files, absent: new Set(), failed: false }
       preview.snapshots.set(snapshot.revision, snapshot)
       cachedBytes += total
       for (const path of [...preview.watched.keys()]) {
@@ -268,7 +293,7 @@ export function createFilePreviewService(deps: {
           }, 1500),
         }
         preview.poll.unref?.()
-        const snapshot = { revision: 1, files: new Map([[preview.path, bytes]]), failed: false }
+        const snapshot: Snapshot = { revision: 1, files: new Map([[preview.path, bytes]]), absent: new Set(), failed: false }
         preview.snapshots.set(1, snapshot)
         cachedBytes += bytes.length
         previews.set(preview.id, preview)
@@ -284,8 +309,8 @@ export function createFilePreviewService(deps: {
       if (preview.snapshots.get(revision)!.failed) { deps.publish({ id, kind: 'update-error' }); return false }
       preview.committed = revision
       for (const key of preview.snapshots.keys()) if (key !== revision) dropSnapshot(preview, key)
-      const used = preview.snapshots.get(revision)!.files
-      for (const path of preview.watched.keys()) if (!used.has(path)) { preview.watched.delete(path); watchedFiles-- }
+      const { files: used, absent } = preview.snapshots.get(revision)!
+      for (const path of preview.watched.keys()) if (!used.has(path) && !absent.has(path)) { preview.watched.delete(path); watchedFiles-- }
       for (const [directory, watcher] of preview.watchers) {
         if (![...preview.watched.keys()].some(path => dirname(path) === directory)) { watcher.close(); preview.watchers.delete(directory) }
       }
@@ -299,6 +324,7 @@ export function createFilePreviewService(deps: {
       deps.publish({ id, kind: 'update-error' })
     },
     has(id: string): boolean { return previews.has(id) },
+    absent(id: string, revision: number): string[] { return [...previews.get(id)?.snapshots.get(revision)?.absent ?? []] },
     sessionId(id: string): string | null { return previews.get(id)?.appSessionId ?? null },
     descriptor(id: string, revision: number): FilePreviewDescriptor | null {
       const preview = previews.get(id), snapshot = preview?.snapshots.get(revision)
@@ -314,12 +340,12 @@ export function createFilePreviewService(deps: {
       let bytes = snapshot.files.get(parsed.path)
       if (!bytes) {
         if (snapshot.files.size >= MAX_ASSETS) { snapshot.failed = true; return new Response(null, { status: 413 }) }
-        const resolved = await resolve(preview, parsed.path)
-        if (!resolved || resolved.path !== parsed.path) { snapshot.failed = true; return new Response(null, { status: 403 }) }
+        const resolved = servableAsset(preview.path, parsed.path) ? await resolve(preview, parsed.path) : null
+        if (!resolved || resolved.path !== parsed.path) { await noteAbsent(preview, snapshot, parsed.path); return new Response(null, { status: 403 }) }
         const key = `${preview.id}:${snapshot.revision}:${parsed.path}`
         let pending = assetReads.get(key)
         if (!pending) {
-          if (assetReads.size >= 32) return new Response(null, { status: 429 })
+          if (assetReads.size >= MAX_PENDING_ASSET_READS) return new Response(null, { status: 429 })
           pending = (async () => {
             try {
               const data = await read(resolved.path)

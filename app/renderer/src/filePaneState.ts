@@ -16,7 +16,6 @@ export type FilePaneSession = {
   file: FilePreviewDescriptor | null
   committedFile: FilePreviewDescriptor | null
   lastPath: string | null
-  candidatePath: string | null
   visible: SlotOccupant | null
   worker: SubagentDockRow | null
   output: FilePaneOutput | null
@@ -28,7 +27,7 @@ export type FilePaneSession = {
   checkpoint: FilePaneCheckpoint | null
 }
 const EMPTY: FilePaneSession = {
-  open: false, file: null, committedFile: null, lastPath: null, candidatePath: null, visible: null,
+  open: false, file: null, committedFile: null, lastPath: null, visible: null,
   worker: null, output: null, width: null, history: [], forward: [], scroll: { x: 0, y: 0 }, note: null, checkpoint: null,
 }
 const sessions = new Map<string, FilePaneSession>()
@@ -78,9 +77,6 @@ export function updateFilePaneSession(id: string, patch: Partial<FilePaneSession
   }
   sessions.set(id, next)
   listeners.get(id)?.forEach(listener => listener())
-}
-export function setFilePaneCandidate(id: string, path: string | null): void {
-  if (getFilePaneSession(id).candidatePath !== path) updateFilePaneSession(id, { candidatePath: path })
 }
 export function registerFilePaneFocus(id: string, focus: () => void): () => void {
   focusers.set(id, focus)
@@ -226,7 +222,7 @@ export async function toggleFilePane(id: string, newestPath?: string | null): Pr
     focusers.get(id)?.()
     return HANDLED
   }
-  const path = state.lastPath ?? newestPath ?? state.candidatePath
+  const path = state.lastPath ?? newestPath
   return path ? requestOpenFile(id, path) : HANDLED
 }
 export async function stepFilePaneHistory(id: string, direction: 'back' | 'forward'): Promise<PreviewOpenResult> {

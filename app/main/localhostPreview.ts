@@ -57,7 +57,11 @@ async function head(url: string): Promise<{ status: number; location?: string } 
         finish({ status: response.statusCode ?? 0, ...(response.headers.location ? { location: response.headers.location } : {}) })
         response.destroy()
       })
-      const timer = setTimeout(() => { finish(null); request.destroy() }, 700)
+      // An accepted connection proves the server is up. A first-hit compile can take
+      // seconds to answer, and the real frame's GET still settles the final route.
+      let connected = false
+      request.once('socket', socket => socket.once('connect', () => { connected = true }))
+      const timer = setTimeout(() => { finish(connected ? { status: 0 } : null); request.destroy() }, 700)
       request.once('error', () => finish(null))
       request.end()
     })

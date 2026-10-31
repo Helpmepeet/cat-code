@@ -27,6 +27,17 @@ function fixture(options: { devOrigin?: string; live?: boolean; snapshots?: Map<
   }
 }
 
+test('a connected server that answers slowly is running, not stopped', async () => {
+  const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: async () => { await Bun.sleep(1500); return new Response('<h1>Compiled</h1>') } })
+  const events: FilePreviewEvent[] = []
+  const service = createLocalhostPreviewService({ sessions: () => [sessionDescriptorFixture({ appSessionId: 'slow', cwd: '/private/tmp' })], publish: event => events.push(event), isLive: () => true })
+  try {
+    expect((await service.prepare({ appSessionId: 'slow', url: `http://127.0.0.1:${server.port}/` })).ok).toBe(true)
+    await Bun.sleep(1200)
+    expect(events.some(event => event.kind === 'server-stopped')).toBe(false)
+  } finally { service.dispose(); server.stop(true) }
+})
+
 test('prepares only a real permitted session server and keeps same-URL preparation reload-free', async () => {
   const f = fixture()
   try {

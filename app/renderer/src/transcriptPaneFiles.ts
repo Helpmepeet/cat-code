@@ -54,6 +54,13 @@ export function latestPaneFileCards(rows: readonly NestedTranscriptRow[], cwd: s
   return latest
 }
 
+export function sameFileCards(left: ReadonlyMap<string, string>, right: ReadonlyMap<string, string>): boolean {
+  if (left === right) return true
+  if (left.size !== right.size) return false
+  for (const [key, id] of right) if (left.get(key) !== id) return false
+  return true
+}
+
 const parser = unified().use(remarkParse)
 const replyPaths = new WeakMap<object, string[]>()
 
