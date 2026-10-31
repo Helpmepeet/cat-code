@@ -101,7 +101,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     // The frame is destroyed when its session leaves the screen. The host's
     // bounded snapshot remains available, including after a file was removed.
     void window.catcode.refreshFilePreview(descriptor.id).then(next => {
-      if (next && descriptorRef.current?.id === next.id && !olderThanRetainedRevision(appSessionId, next) && (!samePaneRevision(next, descriptorRef.current) || next.serverStopped !== descriptorRef.current.serverStopped || next.blockedHost !== descriptorRef.current.blockedHost || next.watchError !== descriptorRef.current.watchError)) {
+      if (next && descriptorRef.current?.id === next.id && !olderThanRetainedRevision(appSessionId, next) && (!samePaneRevision(next, descriptorRef.current) || next.serverStopped !== descriptorRef.current.serverStopped || next.blockedHost !== descriptorRef.current.blockedHost || next.browserNote !== descriptorRef.current.browserNote || next.watchError !== descriptorRef.current.watchError)) {
         updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) })
       }
     }).catch(() => {}).finally(() => { if (mounted.current) setServerHydrated(true) })
@@ -129,15 +129,16 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       const appliesToCheckpoint = checkpoint?.file?.id === event.id || checkpoint?.committedFile?.id === event.id
       const metadata = (file: FilePreviewDescriptor | null) => {
         if (!file || file.id !== event.id) return file
-        if (event.kind === 'updated') return { ...file, watchError: event.descriptor.watchError, serverStopped: event.descriptor.serverStopped, blockedHost: event.descriptor.blockedHost }
+        if (event.kind === 'updated') return { ...file, watchError: event.descriptor.watchError, serverStopped: event.descriptor.serverStopped, blockedHost: event.descriptor.blockedHost, browserNote: file.path === event.descriptor.path ? event.descriptor.browserNote : file.browserNote }
         if (event.kind === 'watch-error') return { ...file, watchError: true }
         if (event.kind === 'server-stopped') return { ...file, serverStopped: true }
         if (event.kind === 'leave') return { ...file, blockedHost: event.host }
+        if (event.kind === 'browser-note' && file.path === event.path) return { ...file, browserNote: event.note }
         return file
       }
       if (appliesToCheckpoint || retained.committedFile?.id === event.id) updateFilePaneSession(appSessionId, {
         committedFile: metadata(retained.committedFile),
-        ...(appliesToCheckpoint && checkpoint ? { checkpoint: { ...checkpoint, note: status,
+        ...(appliesToCheckpoint && checkpoint ? { checkpoint: { ...checkpoint, note: event.kind === 'browser-note' ? previewDescriptorNote(metadata(checkpoint.file)) : status,
           file: event.kind === 'updated' && checkpoint.file?.id === event.id ? event.descriptor : metadata(checkpoint.file),
           committedFile: metadata(checkpoint.committedFile),
         } } : {}),
@@ -146,7 +147,11 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     if (event.id !== current.id) return
     if (event.kind === 'updated') updateFilePaneSession(appSessionId, { file: event.descriptor, note: previewDescriptorNote(event.descriptor) })
     else if (event.kind === 'removed' || event.kind === 'watch-error' || event.kind === 'update-error') updateFilePaneSession(appSessionId, { note: event.kind })
-    else if (event.kind === 'route') recordLocalhostRoute(appSessionId, event.url, event.scroll, event.routeKey, event.replace)
+    else if (event.kind === 'route') recordLocalhostRoute(appSessionId, event.url, event.scroll, event.routeKey, event.replace, event.browserNote)
+    else if (event.kind === 'browser-note' && current.path === event.path) {
+      const file = { ...current, browserNote: event.note }
+      updateFilePaneSession(appSessionId, { file, note: previewDescriptorNote(file) })
+    }
     else if (event.kind === 'server-stopped' || event.kind === 'leave') {
       const file = { ...current, ...(event.kind === 'server-stopped' ? { serverStopped: true } : { blockedHost: event.host }) }
       const committed = getFilePaneSession(appSessionId).committedFile
@@ -234,13 +239,13 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const split = isLocalhost ? 'http://'.length : displayed.lastIndexOf('/') + 1
   const selected = apps?.selected ?? (isLocalhost ? 'chrome' : 'default')
   const selectedLabel = apps?.applications.find(app => app.target === selected)?.label ?? (isLocalhost ? 'Google Chrome' : 'Default application')
-  const openApp = async (target: OpenWorkspaceFileTarget) => {
+  const openApp = async (target: OpenWorkspaceFileTarget, path = descriptor.path) => {
     setAppMenu(false)
     const choice = ++appChoice.current
     const isCurrentChoice = () => mounted.current && choice === appChoice.current && samePaneRevision(descriptorRef.current, descriptor) &&
       descriptorRef.current?.path === descriptor.path && descriptorRef.current?.routeKey === descriptor.routeKey
     try {
-      const opened = await window.catcode.chooseFilePreviewApplication(appSessionId, descriptor.path, target)
+      const opened = await window.catcode.chooseFilePreviewApplication(appSessionId, path, target)
       if (!isCurrentChoice()) return
       if (!opened) toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' })
       else if (target !== 'finder') setApps(current => current ? { ...current, selected: target } : current)
@@ -300,9 +305,12 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     </header>
     {state.note ? <div className="file-pane-note" role="status"><span>{state.note === 'server-stopped' ? 'The server stopped. Showing the last version.'
       : state.note === 'leave' ? `This page wants to open ${descriptor.blockedHost ?? ''}`
+      : state.note === 'browser-required' ? 'This page needs a browser to continue.'
+      : state.note === 'frame-blocked' ? 'Part of this page can only show in a browser.'
       : state.note === 'removed' ? `${name} was removed. Showing the last version.`
       : state.note === 'watch-error' ? 'File watching stopped. Showing the last version.' : 'Could not update this file. Showing the last version.'}</span>
-      {state.note === 'leave' && isLocalhost ? <button type="button" className="file-pane-note-action" onClick={() => {
+      {(state.note === 'leave' || state.note === 'browser-required' || state.note === 'frame-blocked') && isLocalhost ? <button type="button" className="file-pane-note-action" onClick={() => {
+        if (state.note !== 'leave') { void openApp(selected, state.committedFile?.path ?? descriptor.path); return }
         void window.catcode.openBlockedPreviewNavigation(descriptor.id, selected === 'safari' ? 'safari' : 'chrome').then(opened => {
           if (opened) {
             const current = getFilePaneSession(appSessionId)
@@ -422,6 +430,7 @@ function retainedStatus(event: FilePreviewEvent): ReturnType<typeof previewDescr
   if (event.kind === 'updated') return previewDescriptorNote(event.descriptor)
   if (event.kind === 'removed' || event.kind === 'watch-error' || event.kind === 'update-error' || event.kind === 'server-stopped') return event.kind
   if (event.kind === 'leave') return 'leave'
+  if (event.kind === 'browser-note') return event.note
   return undefined
 }
 

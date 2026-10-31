@@ -3,7 +3,7 @@ import { createLocalhostSnapshots } from './localhostSnapshot.js'
 import { installLocalFormTracking } from './localhostFormIntent.js'
 import { createExternalUrlHandler } from './externalUrl.js'
 import { CH_OPEN_EXTERNAL_URL } from '../shared/ipcChannels.js'
-import { createLocalhostPreviewService } from './localhostPreview.js'
+import { createLocalhostPreviewService, localhostPreviewInnerFrameAllowed } from './localhostPreview.js'
 import { CH_LOCALHOST_PREVIEW_CAPTURE } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
 import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
@@ -1608,6 +1608,13 @@ function localFrameBinding(frame: Electron.WebFrameMain | null | undefined) {
   const binding = localFrameBindings.get(frame.frameTreeNodeId)
   return binding && localhostPreviews.descriptor(binding.id, binding.revision) ? binding : null
 }
+function localFrameOwner(frame: Electron.WebFrameMain | null | undefined) {
+  for (let ancestor = frame; livePreviewFrame(ancestor); ancestor = ancestor.parent) {
+    const binding = localFrameBinding(ancestor)
+    if (binding) return { frame: ancestor, ...binding }
+  }
+  return null
+}
 function issuedLocalFrame(frame: Electron.WebFrameMain | null | undefined) {
   if (!livePreviewFrame(frame) || frame.parent !== mainWindow?.webContents.mainFrame) return null
   const match = /^cat-localhost-preview-([a-f0-9]{48})-([1-9][0-9]*)$/.exec(frame.name)
@@ -1660,7 +1667,7 @@ async function localNavigationMethod(frame: Electron.WebFrameMain, target: strin
       return 'POST';
     }
     return 'GET';
-  })()`).then(value=>value==='GET'?'GET':'POST',()=> 'UNKNOWN')
+  })()`).then(value=>value==='GET'?'GET':value==='POST'?'POST':'UNKNOWN',()=> 'UNKNOWN')
   return new Promise(resolve=>{const timer=setTimeout(()=>resolve('UNKNOWN'),150);pending.then(value=>{clearTimeout(timer);resolve(value)},()=>{clearTimeout(timer);resolve('UNKNOWN')})})
 }
 function installLocalHistory(frame: Electron.WebFrameMain): void {
@@ -1790,11 +1797,21 @@ function applySecurityBaseline(): void {
     const parsed = parseFilePreviewUrl(details.url)
     const isPreview = parsed !== null && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id))
     const isOwnedWindow = details.webContentsId === mainWindow?.webContents.id
+    // Check every document request, including each redirect destination.
+    if (details.resourceType === 'subFrame') {
+      const owner = localFrameOwner(details.frame)
+      if (owner && owner.frame !== details.frame) {
+        if (!localhostPreviewInnerFrameAllowed(owner.frame.url, details.url, localhostPreviews.allowed)) {
+          localhostPreviews.browserNote(owner.id, owner.revision, 'frame-blocked')
+          callback({ cancel: true }); return
+        }
+      } else if (!isPreview && !(owner && localhostPreviews.allowed(details.url))) {
+        callback({ cancel: true }); return
+      }
+    }
     if (details.url.startsWith(`${FILE_PREVIEW_SCHEME}:`) && (!isPreview || !isOwnedWindow || details.resourceType === 'mainFrame')) {
       callback({ cancel: true }); return
     }
-    // A preview must never acquire the app origin, even in a subframe redirect.
-    if (details.resourceType === 'subFrame' && !isPreview && !(localFrameBinding(details.frame) && localhostPreviews.allowed(details.url))) { callback({ cancel: true }); return }
     callback({})
   })
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -1802,7 +1819,7 @@ function applySecurityBaseline(): void {
     if (parsed && (filePreviews.has(parsed.id) || localhostPreviews.has(parsed.id)) && details.webContentsId === mainWindow?.webContents.id) {
       callback({ responseHeaders: details.responseHeaders }); return
     }
-    if (localFrameBinding(details.frame)) {
+    if (localFrameOwner(details.frame)) {
       const headers = { ...details.responseHeaders }
       if (details.resourceType === 'subFrame' && localhostPreviews.allowed(details.url)) {
         for (const key of Object.keys(headers)) {
@@ -2029,14 +2046,26 @@ function createWindow(): void {
   window.webContents.on('will-frame-navigate', event => {
     if (event.isMainFrame) return
     const frame = event.frame, local = localFrameBinding(frame)
+    const owner = localFrameOwner(frame)
+    if (owner && !local) {
+      if (!localhostPreviewInnerFrameAllowed(owner.frame.url, event.url, localhostPreviews.allowed)) {
+        event.preventDefault()
+        localhostPreviews.browserNote(owner.id, owner.revision, 'frame-blocked')
+      }
+      return
+    }
     if (local) {
       if (event.initiator === window.webContents.mainFrame && localhostPreviews.allowed(event.url)) return
       event.preventDefault()
       const target = localhostPreviews.allowed(event.url)
       if (!target) { localhostPreviews.leave(local.id, event.url); return }
       if (!frame) return
+      const pageUrl = frame.url
       void localNavigationMethod(frame,target).then(method=>{
-        if(method!=='GET'||window.isDestroyed()||!localhostPreviews.has(local.id))return
+        if(window.isDestroyed()||!localhostPreviews.has(local.id))return
+        const binding = localFrameBinding(frame)
+        if (binding?.id !== local.id || binding.revision !== local.revision || frame.url !== pageUrl) return
+        if (method !== 'GET') { localhostPreviews.browserNote(local.id, local.revision, 'browser-required'); return }
         const current=localhostPreviews.current(local.id)
         if(target===current?.path)void localhostPreviews.refresh(local.id)
         else window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT,{id:local.id,kind:'navigate',path:target})
@@ -2064,6 +2093,14 @@ function createWindow(): void {
   window.webContents.on('will-redirect', (event, url) => {
     if (event.isMainFrame) return
     const local = localFrameBinding(event.frame)
+    const owner = localFrameOwner(event.frame)
+    if (owner && !local) {
+      if (!localhostPreviewInnerFrameAllowed(owner.frame.url, url, localhostPreviews.allowed)) {
+        event.preventDefault()
+        localhostPreviews.browserNote(owner.id, owner.revision, 'frame-blocked')
+      }
+      return
+    }
     if (!local || !localhostPreviews.allowed(url)) { event.preventDefault(); if (local) localhostPreviews.leave(local.id, url) }
   })
   window.webContents.on('frame-created', (_event, details) => {

@@ -195,3 +195,40 @@ test('serves only snapshot-owner-retained bytes for an offline return, and recov
     expect(f.service.respond(returned.descriptor.id, returned.descriptor.revision, '/index.html')).toBeNull()
   } finally { f.dispose() }
 })
+
+test('browser notes are page-bound, retained across reloads, deduplicated, and separate from leave targets', async () => {
+  const f = fixture({ live: true })
+  try {
+    const opened = await f.service.prepare({ appSessionId: 'local-session', url: f.origin })
+    if (!opened.ok) throw new Error('Expected server')
+    const { id, revision } = opened.descriptor
+    const requests = f.requests.length
+    expect(f.service.browserNote(id, revision, 'frame-blocked')).toBe(true)
+    expect(f.service.browserNote(id, revision, 'frame-blocked')).toBe(false)
+    expect(f.service.blockedUrl(id)).toBeNull()
+    expect(f.requests).toHaveLength(requests)
+    expect(f.events).toEqual([{ id, kind: 'browser-note', path: f.origin + '/', note: 'frame-blocked' }])
+    const next = await f.service.refresh(id)
+    expect(next?.browserNote).toBe('frame-blocked')
+    expect(f.service.commit(id, next!.revision)).toBe(true)
+    expect(f.service.browserNote(id, next!.revision, 'frame-blocked')).toBe(false)
+    expect(f.service.browserNote(id, next!.revision, 'browser-required')).toBe(true)
+    expect(f.service.browserNote(id, next!.revision, 'frame-blocked')).toBe(false)
+    expect(f.service.browserNote(id, next!.revision, 'browser-required')).toBe(false)
+    expect(f.events.filter(event => event.kind === 'browser-note')).toHaveLength(2)
+    expect(f.service.current(id)?.browserNote).toBe('browser-required')
+    const reused = await f.service.prepare({ appSessionId: 'local-session', url: f.origin + '/' })
+    expect(reused.ok && reused.descriptor.browserNote).toBe('browser-required')
+    const page = f.service.current(id)!
+    f.service.route(id, f.origin + '/other-page', { x: 0, y: 0 }, null)
+    expect(f.service.current(id)?.browserNote).toBeUndefined()
+    expect(f.service.restoreRoute(id, page.routeKey!)?.browserNote).toBe('browser-required')
+    expect(f.service.browserNote(id, next!.revision, 'browser-required')).toBe(false)
+    f.service.leave(id, 'https://example.invalid/leave-target')
+    expect(f.service.blockedUrl(id)).toBe('https://example.invalid/leave-target')
+    expect(f.service.current(id)?.blockedHost).toBe('example.invalid')
+    f.revoke()
+    expect(f.service.browserNote(id, next!.revision, 'frame-blocked')).toBe(false)
+    expect(f.service.browserNote(id, 9999, 'browser-required')).toBe(false)
+  } finally { f.dispose() }
+})

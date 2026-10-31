@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { filePreviewKind, normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewDescriptor, type FilePreviewScroll } from '../../shared/filePreview.js'
+import { filePreviewKind, normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewDescriptor, type FilePreviewScroll, type LocalhostPreviewNote } from '../../shared/filePreview.js'
 import type { MarkdownReadingPosition } from './markdownReadingPosition.js'
 import type { SubagentDockRow } from './subagentDockState.js'
 import { defaultViewPreferenceStorage, readViewPreference, writeViewPreference } from './viewPreference.js'
@@ -23,7 +23,7 @@ export type FilePaneSession = {
   history: FilePaneHistoryEntry[]
   forward: FilePaneHistoryEntry[]
   scroll: FilePaneScroll
-  note: 'removed' | 'watch-error' | 'update-error' | 'server-stopped' | 'leave' | null
+  note: 'removed' | 'watch-error' | 'update-error' | 'server-stopped' | 'leave' | LocalhostPreviewNote | null
   checkpoint: FilePaneCheckpoint | null
 }
 const EMPTY: FilePaneSession = {
@@ -47,7 +47,7 @@ export function samePaneRevision(left: FilePreviewDescriptor | null | undefined,
   return !!left && !!right && left.id === right.id && left.revision === right.revision && left.url === right.url
 }
 export function previewDescriptorNote(file: FilePreviewDescriptor | null): FilePaneSession['note'] {
-  return file?.serverStopped ? 'server-stopped' : file?.blockedHost ? 'leave' : file?.watchError ? 'watch-error' : null
+  return file?.serverStopped ? 'server-stopped' : file?.blockedHost ? 'leave' : file?.browserNote ?? (file?.watchError ? 'watch-error' : null)
 }
 function historyEntry(file: FilePreviewDescriptor, scroll: FilePaneScroll): FilePaneHistoryEntry {
   return { path: file.path, scroll, ...(file.routeKey ? { routeKey: file.routeKey } : {}),
@@ -260,13 +260,13 @@ export async function stepFilePaneHistory(id: string, direction: 'back' | 'forwa
   } finally { finishOpening(id, token) }
 }
 
-export function recordLocalhostRoute(id: string, url: string, outgoingScroll: FilePreviewScroll, routeKey: string, replace = false): void {
+export function recordLocalhostRoute(id: string, url: string, outgoingScroll: FilePreviewScroll, routeKey: string, replace = false, browserNote?: LocalhostPreviewNote): void {
   const state = getFilePaneSession(id)
   const normalized = normalizeLocalhostPreviewUrl(url)
   if (!state.open || state.file?.kind !== 'localhost' || !normalized || !routeKey || state.file.routeKey === routeKey) return
   const parsed = new URL(normalized)
   const path = parsed.pathname === '/' && !parsed.search && !parsed.hash ? '' : `${parsed.pathname}${parsed.search}${parsed.hash}`
-  const file: FilePreviewDescriptor = { ...state.file, path: normalized, displayPath: `${parsed.host}${path}`, routeKey, blockedHost: undefined }
+  const file: FilePreviewDescriptor = { ...state.file, path: normalized, displayPath: `${parsed.host}${path}`, routeKey, blockedHost: undefined, browserNote }
   updateFilePaneSession(id, {
     file, ...(samePaneRevision(state.committedFile, file) ? { committedFile: file } : {}), lastPath: normalized,
     history: replace ? state.history : [...state.history, historyEntry(state.file, outgoingScroll)], forward: replace ? state.forward : [], scroll: { x: 0, y: 0 }, note: previewDescriptorNote(file),

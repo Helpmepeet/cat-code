@@ -663,6 +663,66 @@ test('server stop preserves the current frame, recovery stages a new revision, a
   } finally { await web.server.stop(true) }
 })
 
+for (const [note, text] of [
+  ['browser-required', 'This page needs a browser to continue.'],
+  ['frame-blocked', 'Part of this page can only show in a browser.'],
+] as const) test(`${note} reuses the note action to open the displayed page in the selected browser without replay`, async () => {
+  const web = localServer()
+  try {
+    const { pane, sessionId, localhost, external } = setup(false, { url: web.url })
+    const tree = await harness.mount(pane())
+    await click(tree.container, `Open ${web.url}`)
+    const frame = await paintLocalFrame(tree.container)
+    const initial = getFilePaneSession(sessionId).file!
+    const displayed = `${web.url}displayed-route`
+    await act(async () => { localhost.route(initial.id, displayed, { x: 0, y: 0 }, null) })
+    await act(async () => { localhost.browserNote(initial.id, initial.revision, note) })
+    expect(tree.container.querySelectorAll('.file-pane-note')).toHaveLength(1)
+    expect(tree.container.querySelector('.file-pane-note span')?.textContent).toBe(text)
+    const action = tree.container.querySelector<HTMLButtonElement>('.file-pane-note-action')!
+    expect(action.textContent).toBe('Open in Google Chrome')
+    const requests = web.requests.length
+    await act(async () => { action.click() })
+    expect(external).toEqual([{ path: displayed, target: 'chrome' }])
+    expect(web.requests).toHaveLength(requests)
+    expect(localhost.blockedUrl(initial.id)).toBeNull()
+    expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)')).toBe(frame)
+    await click(tree.container, 'Choose an app')
+    const safari = [...document.querySelectorAll<HTMLButtonElement>('.file-pane-app-row')].find(button => button.textContent === 'Safari')!
+    await act(async () => { safari.click() })
+    expect(action.textContent).toBe('Open in Safari')
+    await act(async () => { action.click() })
+    expect(external.at(-1)).toEqual({ path: displayed, target: 'safari' })
+    expect(web.requests).toHaveLength(requests)
+    await click(tree.container, 'Reload')
+    await paintLocalFrame(tree.container)
+    expect(tree.container.querySelectorAll('.file-pane-note')).toHaveLength(1)
+    expect(tree.container.querySelector('.file-pane-note span')?.textContent).toBe(text)
+    const current = getFilePaneSession(sessionId).file!
+    expect(localhost.browserNote(current.id, current.revision, note)).toBe(false)
+    await act(async () => { localhost.route(initial.id, `${web.url}another-page`, { x: 0, y: 0 }, null) })
+    expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+  } finally { await web.server.stop(true) }
+})
+
+test('browser notes from the still-painted page survive a rejected candidate without appearing on that candidate', async () => {
+  const web = localServer()
+  try {
+    const { pane, sessionId, localhost } = setup(false, { url: web.url })
+    const tree = await harness.mount(pane())
+    await click(tree.container, `Open ${web.url}`)
+    await paintLocalFrame(tree.container)
+    const initial = getFilePaneSession(sessionId).file!
+    await click(tree.container, 'Open broken.png')
+    await act(async () => { localhost.browserNote(initial.id, initial.revision, 'browser-required') })
+    expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+    await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('error')) })
+    await settle()
+    expect(tree.container.querySelector('.file-pane-note span')?.textContent).toBe('This page needs a browser to continue.')
+    expect(getFilePaneSession(sessionId).file?.path).toBe(web.url)
+  } finally { await web.server.stop(true) }
+})
+
 test('returning to an offline session waits for its frozen host descriptor before creating an iframe', async () => {
   const web = localServer()
   const snapshots = new Map<string, LocalhostFrozenPayload>()

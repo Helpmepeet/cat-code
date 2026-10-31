@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { MAX_REGISTRY_SESSIONS } from '../host/registry.js'
 import {
   normalizeLocalhostPreviewUrl, localhostPreviewHostPort,
-  type FilePreviewDescriptor, type FilePreviewEvent, type FilePreviewScroll, type LocalhostPreviewResult,
+  type FilePreviewDescriptor, type FilePreviewEvent, type FilePreviewScroll, type LocalhostPreviewResult, type LocalhostPreviewNote,
 } from '../shared/filePreview.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 
@@ -31,6 +31,7 @@ type Preview = {
   stopped: boolean
   polling: boolean
   blockedUrl: string | null
+  browserNotes: Map<string, LocalhostPreviewNote>
   timer: ReturnType<typeof setInterval>
   frozenIds: Map<number, string>
   routeKey: string
@@ -40,6 +41,11 @@ const MAX_RECORDS = MAX_REGISTRY_SESSIONS * 3
 const MAX_ROUTES = MAX_REGISTRY_SESSIONS * 64
 const MAX_ROUTE_STATE_BYTES = 64 * 1024
 const MAX_ROUTE_STATE_TOTAL_BYTES = 8 * 1024 * 1024
+
+export function localhostPreviewInnerFrameAllowed(previewUrl: string, target: unknown, allowed: (value: unknown) => string | null): boolean {
+  const preview = allowed(previewUrl), destination = allowed(target)
+  return !!preview && !!destination && new URL(preview).origin === new URL(destination).origin
+}
 
 function exactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key))
@@ -149,6 +155,7 @@ export function createLocalhostPreviewService(deps: {
       frameName: `cat-localhost-preview-${record.id}-${revision}`, baseUrl: record.baseUrl,
       routeKey: currentRoute?.key, ...(record.stopped ? { serverStopped: true } : {}),
       ...(record.blockedUrl ? { blockedHost: new URL(record.blockedUrl).host } : {}),
+      browserNote: record.browserNotes.get(record.path),
     }
   }
   function stopped(record: Preview): void {
@@ -198,6 +205,20 @@ export function createLocalhostPreviewService(deps: {
   return {
     allowed,
     probe,
+    browserNote(id: string, revision: number, note: LocalhostPreviewNote): boolean {
+      const record = records.get(id), descriptor = record?.descriptors.get(revision)
+      if (!record || !descriptor || !authorized(record)) return false
+      const previous = record.browserNotes.get(descriptor.path)
+      // A form that cannot continue takes precedence over an unavailable embed.
+      if (previous === note || previous === 'browser-required') return false
+      record.browserNotes.set(descriptor.path, note)
+      if (record.browserNotes.size > 64) record.browserNotes.delete(record.browserNotes.keys().next().value!)
+      for (const [key, retained] of record.descriptors) {
+        if (retained.path === descriptor.path) record.descriptors.set(key, { ...retained, browserNote: note })
+      }
+      deps.publish({ id, kind: 'browser-note', path: descriptor.path, note })
+      return true
+    },
     async prepare(input: unknown): Promise<LocalhostPreviewResult> {
       if (!exactObject(input, ['appSessionId', 'url']) || typeof input.appSessionId !== 'string') return { ok: false, reason: 'refused' }
       const url = allowed(input.url)
@@ -205,7 +226,7 @@ export function createLocalhostPreviewService(deps: {
       if (!url || !session) return { ok: false, reason: 'refused' }
       for (const [id, record] of records) if (!authorized(record)) release(id)
       const existing = [...records.values()].find(record => record.appSessionId === input.appSessionId && record.path === url)
-      if (existing) return { ok: true, descriptor: { ...existing.descriptors.get(existing.committed)!, ...(existing.stopped ? { serverStopped: true } : {}), ...(existing.blockedUrl ? { blockedHost: new URL(existing.blockedUrl).host } : {}) } }
+      if (existing) return { ok: true, descriptor: { ...existing.descriptors.get(existing.committed)!, ...(existing.stopped ? { serverStopped: true } : {}), ...(existing.blockedUrl ? { blockedHost: new URL(existing.blockedUrl).host } : {}), browserNote: existing.browserNotes.get(existing.path) } }
       const priorRoute = [...routes.values()].reverse().find(route => route.appSessionId === input.appSessionId && route.url === url)
       const authorityCwd = session.cwd
       const result = await probe(priorRoute?.baseUrl ?? url)
@@ -221,7 +242,7 @@ export function createLocalhostPreviewService(deps: {
       const record: Preview = {
         id: randomBytes(24).toString('hex'), appSessionId: input.appSessionId, authorityCwd, path: priorRoute || result.status !== 'online' ? url : result.url,
         baseUrl: priorRoute?.baseUrl ?? (result.status === 'online' ? result.url : url), revision: 1, committed: 1, descriptors: new Map(), stopped: result.status === 'unavailable',
-        polling: false, blockedUrl: null, frozenIds: new Map(), routeKey: priorRoute?.key ?? '',
+        polling: false, blockedUrl: null, browserNotes: new Map(), frozenIds: new Map(), routeKey: priorRoute?.key ?? '',
         timer: setInterval(() => {
           if (record.polling || !records.has(record.id) || !deps.isLive?.(record.id)) return
           record.polling = true
@@ -251,9 +272,10 @@ export function createLocalhostPreviewService(deps: {
       record.baseUrl = normalized
       const visited = route(record, normalized)
       record.routeKey = visited.key
-      const settled = { ...descriptor, path: normalized, displayPath: normalized.replace(/^http:\/\//i, ''), baseUrl: normalized, routeKey: visited.key }
+      const browserNote = record.browserNotes.get(normalized)
+      const settled = { ...descriptor, path: normalized, displayPath: normalized.replace(/^http:\/\//i, ''), baseUrl: normalized, routeKey: visited.key, browserNote }
       record.descriptors.set(revision, settled)
-      deps.publish({ id, kind: 'route', url: normalized, scroll: { x: 0, y: 0 }, routeKey: visited.key, replace: true })
+      deps.publish({ id, kind: 'route', url: normalized, scroll: { x: 0, y: 0 }, routeKey: visited.key, replace: true, browserNote })
       return { descriptor: settled, replay: false }
     },
     commit(id: string, revision: number): boolean {
@@ -268,7 +290,7 @@ export function createLocalhostPreviewService(deps: {
       const record = records.get(id)
       if (!record) return null
       const current = record.descriptors.get(record.committed)
-      return current ? { ...current, ...(record.stopped ? { serverStopped: true } : {}), ...(record.blockedUrl ? { blockedHost: new URL(record.blockedUrl).host } : {}) } : null
+      return current ? { ...current, ...(record.stopped ? { serverStopped: true } : {}), ...(record.blockedUrl ? { blockedHost: new URL(record.blockedUrl).host } : {}), browserNote: record.browserNotes.get(current.path) } : null
     },
     rememberRoute(id: string, url: string, state: unknown) {
       const record = records.get(id)
@@ -298,9 +320,10 @@ export function createLocalhostPreviewService(deps: {
       record.path = normalized
       record.routeKey = visited.key
       const current = record.descriptors.get(record.committed)!
-      const descriptor = { ...current, path: normalized, displayPath: normalized.replace(/^http:\/\//i, ''), routeKey: visited.key }
+      const browserNote = record.browserNotes.get(normalized)
+      const descriptor = { ...current, path: normalized, displayPath: normalized.replace(/^http:\/\//i, ''), routeKey: visited.key, browserNote }
       record.descriptors.set(record.committed, descriptor)
-      deps.publish({ id, kind: 'route', url: normalized, scroll, routeKey: visited.key, ...(replace ? { replace: true } : {}) })
+      deps.publish({ id, kind: 'route', url: normalized, scroll, routeKey: visited.key, browserNote, ...(replace ? { replace: true } : {}) })
       return descriptor
     },
     routeFor(id: string, key: string): LocalhostRoute | null {
@@ -312,7 +335,7 @@ export function createLocalhostPreviewService(deps: {
       if (!record || !known || !authorized(record) || record.appSessionId !== known.appSessionId) return null
       record.path = known.url
       record.routeKey = key
-      const descriptor = { ...record.descriptors.get(record.committed)!, path: known.url, displayPath: known.url.replace(/^http:\/\//i, ''), routeKey: key }
+      const descriptor = { ...record.descriptors.get(record.committed)!, path: known.url, displayPath: known.url.replace(/^http:\/\//i, ''), routeKey: key, browserNote: record.browserNotes.get(known.url) }
       record.descriptors.set(record.committed, descriptor)
       return descriptor
     },

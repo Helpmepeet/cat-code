@@ -1,6 +1,7 @@
 import type { OpenWorkspaceFileTarget } from './protocol.js'
 
 export type FilePreviewKind = 'html' | 'markdown' | 'image' | 'svg' | 'localhost'
+export type LocalhostPreviewNote = 'browser-required' | 'frame-blocked'
 export interface FilePreviewDescriptor {
   id: string
   appSessionId: string
@@ -16,6 +17,7 @@ export interface FilePreviewDescriptor {
   routeKey?: string
   serverStopped?: boolean
   blockedHost?: string
+  browserNote?: LocalhostPreviewNote
 }
 export interface FilePreviewScroll { x: number; y: number }
 export interface FilePreviewApplications {
@@ -26,9 +28,10 @@ export type FilePreviewEvent =
   | { id: string; kind: 'updated'; descriptor: FilePreviewDescriptor }
   | { id: string; kind: 'removed' | 'watch-error' | 'update-error' }
   | { id: string; kind: 'navigate'; path: string }
-  | { id: string; kind: 'route'; url: string; scroll: FilePreviewScroll; routeKey: string; replace?: boolean }
+  | { id: string; kind: 'route'; url: string; scroll: FilePreviewScroll; routeKey: string; replace?: boolean; browserNote?: LocalhostPreviewNote }
   | { id: string; kind: 'server-stopped' }
   | { id: string; kind: 'leave'; host: string }
+  | { id: string; kind: 'browser-note'; path: string; note: LocalhostPreviewNote }
   | { id: string; kind: 'key'; key: string; code: string; metaKey: boolean; shiftKey: boolean; altKey: boolean; ctrlKey: boolean }
 
 export function filePreviewKind(path: string): Exclude<FilePreviewKind, 'localhost'> | null {
