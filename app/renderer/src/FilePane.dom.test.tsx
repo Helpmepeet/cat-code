@@ -68,7 +68,9 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
   writeFileSync(imagePath, imageBytes)
   writeFileSync(badImagePath, Buffer.alloc(0))
   const brokenPath = join(root, 'broken.html')
-  writeFileSync(brokenPath, '<!doctype html><link rel="stylesheet" href="missing.css"><p>Incomplete page</p>')
+  writeFileSync(brokenPath, '<!doctype html><link rel="stylesheet" href="oversized.css"><p>Unreadable stylesheet</p>')
+  const missingAssetPath = join(root, 'missing-asset.html')
+  writeFileSync(missingAssetPath, '<!doctype html><link rel="stylesheet" href="missing.css"><p>Missing stylesheet still paints</p>')
   writeFileSync(firstPath, '# Actual disk notes\n\n[Next document](second.markdown)')
   writeFileSync(secondPath, '# Actual second document\n\nAnother page.')
   const events = new Set<(event: FilePreviewEvent) => void>()
@@ -173,7 +175,7 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
   const row: NestedTranscriptRow = {
     id: 'reply', sessionId, frameId: 'f', messageId: 'm', blockIndex: 0,
     parentToolUseId: null, kind: 'assistant-text', role: 'assistant', children: [],
-    content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html) [Image](image.png) [Bad image](broken.png)${local ? ` [Server](${local.url})` : ''}`,
+    content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html) [Missing asset](missing-asset.html) [Image](image.png) [Bad image](broken.png)${local ? ` [Server](${local.url})` : ''}`,
   }
   const rows: NestedTranscriptRow[] = [row]
   if (withOutput) rows.push({
@@ -193,7 +195,7 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
       <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? rows : []} cwd={root} /></section><input aria-label="Composer" /></main>
     </SubagentWorkspace></ToolsExpandedContext.Provider>
   </ToastContext.Provider>
-  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
+  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, missingAssetPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
 }
 
 test('a reply click crosses the real host file boundary before rendering, keeps composer focus, and refuses outside files', async () => {
@@ -279,15 +281,18 @@ test('closing during an in-flight history request cannot reopen the pane or reta
 })
 
 
-test('failed real local assets reject an initial paint and roll a later navigation back to its last good file', async () => {
-  const { pane, sessionId, firstPath, service, toasts } = setup()
+test('unreadable real local assets reject an initial paint and roll a later navigation back to its last good file', async () => {
+  const { pane, sessionId, firstPath, brokenPath, service, toasts } = setup()
+  // The asset exists, but exceeds the host's 16 MiB per-file read limit.
+  writeFileSync(join(brokenPath, '..', 'oversized.css'), Buffer.alloc(16 * 1024 * 1024 + 1))
   const tree = await harness.mount(pane())
   const failStagedPage = async () => {
     const file = getFilePaneSession(sessionId).file!
     // Happy DOM has no protocol transport. Drive the actual host request that
     // Electron makes for this page's stylesheet, then the frame's load event.
-    const response = await service.respond(new Request(new URL('missing.css', file.url)))
-    expect(response.status).toBe(403)
+    const response = await service.respond(new Request(new URL('oversized.css', file.url)))
+    expect(response.status).toBe(404)
+    expect(service.absent(file.id, file.revision)).toEqual([])
     await act(async () => { tree.container.querySelector('iframe.file-pane-staging')!.dispatchEvent(new Event('load')) })
     await settle()
   }
@@ -304,6 +309,31 @@ test('failed real local assets reject an initial paint and roll a later navigati
   expect(getFilePaneSession(sessionId).history).toEqual([])
   expect(getFilePaneSession(sessionId).forward).toEqual([])
   expect(toasts).toEqual(['Could not open this file', 'Could not open this file'])
+})
+
+
+test('a missing real local asset permits both an initial paint and navigation from a good file', async () => {
+  const { pane, sessionId, firstPath, missingAssetPath, service, toasts } = setup()
+  const tree = await harness.mount(pane())
+  const paintMissingAssetPage = async () => {
+    const file = getFilePaneSession(sessionId).file!
+    // Happy DOM has no protocol transport, so request the stylesheet before load.
+    const response = await service.respond(new Request(new URL('missing.css', file.url)))
+    expect(response.status).toBe(403)
+    expect(service.absent(file.id, file.revision)).toEqual([join(missingAssetPath, '..', 'missing.css')])
+    await paintLocalFrame(tree.container)
+    expect(getFilePaneSession(sessionId).committedFile?.path).toBe(missingAssetPath)
+    expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(missingAssetPath)
+  }
+  await click(tree.container, 'Open missing-asset.html')
+  await paintMissingAssetPage()
+  expect(getFilePaneSession(sessionId).history).toEqual([])
+  await click(tree.container, 'Open ./notes.md:12')
+  await click(tree.container, 'Open missing-asset.html')
+  await paintMissingAssetPage()
+  expect(getFilePaneSession(sessionId).history.map(entry => entry.path)).toEqual([missingAssetPath, firstPath])
+  expect(getFilePaneSession(sessionId).forward).toEqual([])
+  expect(toasts).toEqual([])
 })
 
 

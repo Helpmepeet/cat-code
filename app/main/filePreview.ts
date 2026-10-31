@@ -190,7 +190,7 @@ export function createFilePreviewService(deps: {
   async function resolve(preview: Pick<Preview, 'appSessionId'>, path: string) {
     return resolveWorkspaceFile({ appSessionId: preview.appSessionId, path }, deps.sessions(), deps.options)
   }
-  /** An unavailable asset renders as it would in a browser. If it appears later, the page refreshes. */
+  /** A missing asset renders as it would in a browser. If it appears later, the page refreshes. */
   async function noteAbsent(preview: Preview, snapshot: Snapshot, path: string) {
     if (snapshot.absent.size >= MAX_ASSETS) return
     snapshot.absent.add(path)
