@@ -1,9 +1,9 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { workspaceFileAvailability } from '../../main/workspaceFileAvailability.js'
 import { openWorkspaceFile } from '../../main/openWorkspaceFile.js'
 import { createPreviewApplications } from '../../main/previewApplications.js'
@@ -11,7 +11,7 @@ import { createLocalhostPreviewService, type LocalhostFrozenPayload } from '../.
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { createFilePreviewService } from '../../main/filePreview.js'
 import { sessionDescriptorFixture } from '../../shared/sessionDescriptor.fixture.js'
-import type { FilePreviewEvent } from '../../shared/filePreview.js'
+import type { FilePreviewEvent, FilePreviewSource } from '../../shared/filePreview.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { TranscriptRowsView } from './TranscriptView.js'
@@ -149,11 +149,11 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
     return resume
   }
   Object.defineProperty(window, 'catcode', { configurable: true, value: {
-    prepareFilePreview: async (appSessionId: string, path: string) => {
+    prepareFilePreview: async (appSessionId: string, path: string, source?: FilePreviewSource) => {
       const gate = prepareGate
       prepareGate = null
       if (gate) await gate
-      const descriptor = await service.prepare({ appSessionId, path })
+      const descriptor = await service.prepare({ appSessionId, path, ...(source ? { source } : {}) })
       if (descriptor) ids.add(descriptor.id)
       return descriptor
     },
@@ -228,7 +228,7 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
       <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? rows : []} cwd={root} /></section><input aria-label="Composer" /></main>
     </SubagentWorkspace></ToolsExpandedContext.Provider>
   </ToastContext.Provider>
-  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, missingAssetPath, outsidePath, missingPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
+  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, missingAssetPath, outsidePath, missingPath, otherSession, toasts, service, publish, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
 }
 
 test('a reply click opens workspace and outside files through the real host boundary, keeps composer focus, and refuses missing files', async () => {
@@ -253,6 +253,27 @@ test('a reply click opens workspace and outside files through the real host boun
   expect(toasts).toEqual(['Could not open this file'])
   expect(getFilePaneSession(sessionId).file?.path).toBe(outsidePath)
   expect(tree.container.querySelectorAll('.subagent-shared-slot')).toHaveLength(1)
+})
+
+test('automatic file navigation carries its source scope while explicit outside clicks remain available', async () => {
+  const { pane, sessionId, firstPath, missingAssetPath, outsidePath, publish, toasts } = setup()
+  const escape = join(dirname(firstPath), 'escape.md')
+  symlinkSync(outsidePath, escape)
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open missing-asset.html')
+  await paintLocalFrame(tree.container)
+  const original = getFilePaneSession(sessionId).file!
+  const source = { id: original.id, revision: original.revision }
+  await act(async () => { publish({ id: source.id, kind: 'navigate', path: escape, source }) })
+  await settle()
+  expect(getFilePaneSession(sessionId).file?.path).toBe(missingAssetPath)
+  expect(toasts).toEqual(['Could not open this file'])
+  await act(async () => { publish({ id: source.id, kind: 'navigate', path: firstPath, source }) })
+  await settle()
+  expect(getFilePaneSession(sessionId).file?.path).toBe(firstPath)
+  expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')?.textContent).toContain('Actual disk notes')
+  await click(tree.container, `Open ${outsidePath}`)
+  expect(getFilePaneSession(sessionId).file?.path).toBe(outsidePath)
 })
 
 test('file history restores scroll and session switches preserve file and width without retaining live pages', async () => {

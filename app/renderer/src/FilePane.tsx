@@ -180,7 +180,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
         note: event.kind === 'server-stopped' ? 'server-stopped' : 'leave' })
     }
     else if (event.kind === 'navigate') {
-      void requestOpenFile(appSessionId, event.path).then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) })
+      void requestOpenFile(appSessionId, event.path, { source: event.source }).then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) })
     }
   }), [appSessionId, toast, onFocusComposer])
 

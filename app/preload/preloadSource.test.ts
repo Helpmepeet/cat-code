@@ -9,6 +9,28 @@ function readChannelNames(): string {
   return readFileSync(new URL('../shared/ipcChannels.ts', import.meta.url), 'utf8')
 }
 
+test('file preview preparation forwards optional navigation authority through the guarded sender', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('  prepareFilePreview(')
+  const end = source.indexOf('\n  },', start)
+  if (start < 0 || end < 0) throw new Error('Missing file preview sender')
+  const guarded: unknown[] = []
+  const invoked: Array<[string, unknown]> = []
+  const sender = new Function('ipcRenderer', 'sendGuard', 'CH_FILE_PREVIEW_PREPARE', `return ({${source.slice(start, end + 4)}}).prepareFilePreview`)(
+    { invoke: (channel: string, payload: unknown) => { invoked.push([channel, payload]) } },
+    { assertAllowed: (payload: unknown) => { guarded.push(payload) } },
+    'preview-prepare',
+  )
+  const origin = { id: 'preview', revision: 2 }
+  sender('s', '/tmp/report.html')
+  sender('s', '/tmp/next.html', origin)
+  expect(guarded).toEqual([
+    { appSessionId: 's', path: '/tmp/report.html' },
+    { appSessionId: 's', path: '/tmp/next.html', source: origin },
+  ])
+  expect(invoked).toEqual(guarded.map(payload => ['preview-prepare', payload]))
+})
+
 test('every fixed renderer-to-main sender passes through the shared IPC guard', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
   const channels = readChannelNames()

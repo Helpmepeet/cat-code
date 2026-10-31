@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createLocalhostPreviewService, localhostPreviewInnerFrameAllowed } from './localhostPreview.js'
 import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
+import type { FilePreviewEvent } from '../shared/filePreview.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 
 // Execute the registered handlers without importing main.ts and starting Electron.
@@ -172,8 +173,9 @@ test('file preview root-relative links pass request guards and navigate to works
     expect(f.request(file, new URL('/assets/site.css', preview!.url).href, 'stylesheet')).toEqual({})
     expect(f.headers(file, preview!.url)['Content-Security-Policy']).toEqual(["default-src 'self'; frame-ancestors 'none'; script-src 'self'"])
     expect(f.navigate(file, target)).toBe(true)
-    expect(f.sent).toEqual([{ id: preview!.id, kind: 'navigate', path: join(root, 'next #.html') }])
-    const next = await service.prepare({ appSessionId: 's1', path: join(root, 'next #.html') })
+    const source = { id: preview!.id, revision: preview!.revision }
+    expect(f.sent).toEqual([{ id: preview!.id, kind: 'navigate', path: join(root, 'next #.html'), source }])
+    const next = await service.prepare({ appSessionId: 's1', path: join(root, 'next #.html'), source })
     expect(next?.path).toBe(join(root, 'next #.html'))
     expect(f.navigate(file, new URL('/%2e%2e%2fsecret.html', preview!.url).href)).toBe(true)
     expect(f.sent).toHaveLength(1)
@@ -185,6 +187,31 @@ test('file preview root-relative links pass request guards and navigate to works
   } finally {
     service.dispose()
     await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('file-page navigation retains source authority when a lexical target is an outside symlink', async () => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'cat-preview-navigation-scope-')))
+  const root = join(base, 'workspace')
+  const outside = join(base, 'private')
+  await mkdir(root)
+  await mkdir(outside)
+  const service = createFilePreviewService({ sessions: () => [sessionDescriptorFixture({ appSessionId: 's1', cwd: root })], publish: () => {} })
+  try {
+    await writeFile(join(root, 'report.html'), '<script>location.href="/escape.md"</script>')
+    await writeFile(join(outside, 'secret.md'), '# Private notes')
+    await symlink(join(outside, 'secret.md'), join(root, 'escape.md'))
+    const preview = await service.prepare({ appSessionId: 's1', path: 'report.html' })
+    const f = fixture(service)
+    const frame = f.frame(preview!.url, f.main)
+    expect(f.navigate(frame, new URL('/escape.md', preview!.url).href)).toBe(true)
+    const event = f.sent[0] as Extract<FilePreviewEvent, { kind: 'navigate' }>
+    expect(event.source).toEqual({ id: preview!.id, revision: preview!.revision })
+    expect(await service.prepare({ appSessionId: 's1', path: event.path, source: event.source })).toBeNull()
+    expect((await service.prepare({ appSessionId: 's1', path: event.path }))?.markdown).toBe('# Private notes')
+  } finally {
+    service.dispose()
+    await rm(base, { recursive: true, force: true })
   }
 })
 

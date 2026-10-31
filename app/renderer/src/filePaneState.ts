@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react'
-import { filePreviewKind, normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewDescriptor, type FilePreviewScroll, type LocalhostPreviewNote } from '../../shared/filePreview.js'
+import { filePreviewKind, normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewDescriptor, type FilePreviewScroll, type FilePreviewSource, type LocalhostPreviewNote } from '../../shared/filePreview.js'
 import type { MarkdownReadingPosition } from './markdownReadingPosition.js'
 import type { SubagentDockRow } from './subagentDockState.js'
 import { defaultViewPreferenceStorage, readViewPreference, writeViewPreference } from './viewPreference.js'
@@ -167,18 +167,18 @@ function finishOpening(id: string, token: number): void {
     flushDeferredReleases(id)
   }
 }
-async function prepare(id: string, path: string): Promise<({ ok: true; descriptor: FilePreviewDescriptor } | { ok: false; message: string })> {
+async function prepare(id: string, path: string, source?: FilePreviewSource): Promise<({ ok: true; descriptor: FilePreviewDescriptor } | { ok: false; message: string })> {
   try {
     const local = normalizeLocalhostPreviewUrl(path)
     if (local) {
       const result = await window.catcode.prepareLocalhostPreview(id, local)
       return result.ok ? result : { ok: false, message: result.reason === 'unavailable' ? `Nothing is running at ${result.hostPort}` : 'Could not open this page' }
     }
-    const descriptor = await window.catcode.prepareFilePreview(id, path)
+    const descriptor = await window.catcode.prepareFilePreview(id, path, source)
     return descriptor ? { ok: true, descriptor } : { ok: false, message: 'Could not open this file' }
   } catch { return { ok: false, message: normalizeLocalhostPreviewUrl(path) ? 'Could not open this page' : 'Could not open this file' } }
 }
-export async function requestOpenFile(id: string, path: string, options?: { external?: boolean }): Promise<PreviewOpenResult> {
+export async function requestOpenFile(id: string, path: string, options?: { external?: boolean; source?: FilePreviewSource }): Promise<PreviewOpenResult> {
   if (options?.external) {
     try {
       const apps = await window.catcode.getFilePreviewApplications(id, path)
@@ -189,7 +189,7 @@ export async function requestOpenFile(id: string, path: string, options?: { exte
   opening.set(id, token)
   beginOpening(id, token)
   try {
-    const result = await prepare(id, path)
+    const result = await prepare(id, path, options?.source)
     if (!result.ok) return opening.get(id) === token ? result : HANDLED
     const descriptor = result.descriptor
     if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return HANDLED }

@@ -1,4 +1,4 @@
-import type { FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
+import type { FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewSource, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
 import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
@@ -4053,7 +4053,7 @@ export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
   openExternalUrl(url: string): Promise<boolean>
-  prepareFilePreview(appSessionId: SessionId, path: string): Promise<FilePreviewDescriptor | null>
+  prepareFilePreview(appSessionId: SessionId, path: string, source?: FilePreviewSource): Promise<FilePreviewDescriptor | null>
   prepareLocalhostPreview(appSessionId: SessionId, url: string): Promise<LocalhostPreviewResult>
   captureLocalhostPreview(id: string): Promise<void>
   navigateLocalhostPreview(id: string, routeKey: string, scroll: FilePreviewScroll): Promise<FilePreviewDescriptor | null>
@@ -4322,10 +4322,10 @@ export type CatCodeBridge = {
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<SaveDiagnosticsResult>
   /**
-   * Open a model-mentioned file from this session's workspace in the operating
+   * Open a model-mentioned local file in the operating
    * system's associated application, or a specific chosen editor or file manager.
    * Main resolves the path against the host-owned session cwd and rejects
-   * missing, non-file, or escaping targets.
+   * missing or non-file targets.
    */
   openWorkspaceFile(
     appSessionId: SessionId,

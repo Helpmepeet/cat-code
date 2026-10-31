@@ -20,6 +20,7 @@ export interface FilePreviewDescriptor {
   browserNote?: LocalhostPreviewNote
 }
 export interface FilePreviewScroll { x: number; y: number }
+export type FilePreviewSource = Pick<FilePreviewDescriptor, 'id' | 'revision'>
 export interface FilePreviewApplications {
   applications: Array<{ target: OpenWorkspaceFileTarget; label: string }>
   selected: OpenWorkspaceFileTarget
@@ -27,7 +28,7 @@ export interface FilePreviewApplications {
 export type FilePreviewEvent =
   | { id: string; kind: 'updated'; descriptor: FilePreviewDescriptor }
   | { id: string; kind: 'removed' | 'watch-error' | 'update-error' }
-  | { id: string; kind: 'navigate'; path: string }
+  | { id: string; kind: 'navigate'; path: string; source?: FilePreviewSource }
   | { id: string; kind: 'route'; url: string; scroll: FilePreviewScroll; routeKey: string; replace?: boolean; browserNote?: LocalhostPreviewNote }
   | { id: string; kind: 'server-stopped' }
   | { id: string; kind: 'leave'; host: string }

@@ -290,32 +290,47 @@ export function createFilePreviewService(deps: {
   }
   return {
     async prepare(input: unknown): Promise<FilePreviewDescriptor | null> {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 2 || !Object.hasOwn(input, 'appSessionId') || !Object.hasOwn(input, 'path')) return null
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['appSessionId', 'path', 'source'].includes(key)) || !Object.hasOwn(input, 'appSessionId') || !Object.hasOwn(input, 'path')) return null
       if (pendingPrepares >= 4) return null
       pendingPrepares++
       try {
-        const appSessionId = (input as { appSessionId: string }).appSessionId
+        const { appSessionId, path } = input as { appSessionId: string; path: string }
+        let source: { preview: Preview; revision: number } | null = null
+        if (Object.hasOwn(input, 'source')) {
+          const value = (input as { source: unknown }).source
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+          const record = value as Record<string, unknown>
+          if (Object.keys(record).length !== 2 || !Object.hasOwn(record, 'id') || !Object.hasOwn(record, 'revision') || typeof record.id !== 'string' || typeof record.revision !== 'number' || !Number.isSafeInteger(record.revision) || record.revision < 1) return null
+          const preview = previews.get(record.id)
+          if (!preview) return null
+          source = { preview, revision: record.revision }
+        }
+        const sourceCurrent = () => !source || source.preview.appSessionId === appSessionId &&
+          previews.get(source.preview.id) === source.preview && source.preview.snapshots.has(source.revision) && authorized(source.preview)
         const authority = deps.sessions().find(session => session.appSessionId === appSessionId)
-        if (!authority || authority.moving) return null
+        if (!authority || authority.moving || !sourceCurrent()) return null
         const authorityCwd = authority.cwd
         const workspaceRoot = await realpath(authorityCwd)
-        const resolved = await resolveWorkspaceFile(input, deps.sessions())
-        if (!resolved) return null
+        const resolved = await resolveWorkspaceFile({ appSessionId, path }, deps.sessions())
+        // Page navigation retains its source scope, even though explicit clicks
+        // may open any local file. Resolve symlinks before applying that scope.
+        if (!resolved || !sourceCurrent() || source && !isWithin(source.preview.assetRoot, resolved.path)) return null
         const kind = filePreviewKind(resolved.path)
         if (!kind) return null
+        const assetRoot = source?.preview.assetRoot ?? (isWithin(workspaceRoot, resolved.path) ? workspaceRoot : dirname(resolved.path))
         for (const [id, preview] of previews) if (!authorized(preview)) release(id)
-        const existing = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path)
+        const existing = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path && preview.assetRoot === assetRoot)
         if (existing) return descriptor(existing, existing.snapshots.get(existing.committed)!)
         const sessionHandles = () => [...previews.values()].filter(preview => preview.appSessionId === appSessionId).length
         if (previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
         const bytes = await read(resolved.path)
-        if (!deps.sessions().some(session => session.appSessionId === appSessionId && session.cwd === authorityCwd && !session.moving)) return null
-        const raced = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path)
+        if (!sourceCurrent() || !deps.sessions().some(session => session.appSessionId === appSessionId && session.cwd === authorityCwd && !session.moving)) return null
+        const raced = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path && preview.assetRoot === assetRoot)
         if (raced) return descriptor(raced, raced.snapshots.get(raced.committed)!)
         if (cachedBytes + bytes.length > MAX_CACHE_BYTES || previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
         const preview: Preview = {
           id: randomBytes(24).toString('hex'), appSessionId, authorityCwd,
-          assetRoot: isWithin(workspaceRoot, resolved.path) ? workspaceRoot : dirname(resolved.path),
+          assetRoot,
           path: resolved.path, kind,
           snapshots: new Map(), committed: 1, nextRevision: 1,
           watched: new Map(), watchers: new Map(), polling: false, busy: false, dirty: false, removed: false, watchFailed: false, released: false,

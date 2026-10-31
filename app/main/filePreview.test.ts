@@ -94,6 +94,57 @@ test('external HTML assets stay inside the selected file directory and retain pr
   } finally { await f.cleanup() }
 })
 
+test('page navigation rejects outside symlinks while explicit opening remains available', async () => {
+  const f = await fixture()
+  try {
+    await writeFile(join(f.outside, 'secret.md'), '# Private notes')
+    await writeFile(join(f.root, 'next.md'), '# Next page')
+    await symlink(join(f.outside, 'secret.md'), join(f.root, 'escape.md'))
+    const url = new URL('/escape.md', f.preview.url)
+    expect((await f.service.respond(new Request(url))).status).toBe(403)
+    const path = f.service.pathForUrl(url.href)
+    const source = { id: f.preview.id, revision: f.preview.revision }
+    const explicit = await f.service.prepare({ appSessionId: 's1', path })
+    expect(explicit?.markdown).toBe('# Private notes')
+    expect(await f.service.prepare({ appSessionId: 's1', path, source })).toBeNull()
+    const next = await f.service.prepare({ appSessionId: 's1', path: 'next.md', source })
+    expect(next?.markdown).toBe('# Next page')
+  } finally { await f.cleanup() }
+})
+
+test('navigation scope preserves external page roots and rejects invalid or retired source capabilities', async () => {
+  const f = await fixture()
+  try {
+    f.service.release(f.preview.id)
+    await mkdir(join(f.outside, 'pages'))
+    await writeFile(join(f.outside, 'report.html'), '<h1>Outside</h1>')
+    await writeFile(join(f.outside, 'pages/next.html'), '<h1>Next</h1>')
+    const preview = await f.service.prepare({ appSessionId: 's1', path: join(f.outside, 'report.html') })
+    const source = { id: preview!.id, revision: preview!.revision }
+    const nextPath = join(f.outside, 'pages/next.html')
+    const explicit = await f.service.prepare({ appSessionId: 's1', path: nextPath })
+    const next = await f.service.prepare({ appSessionId: 's1', path: nextPath, source })
+    expect(next?.url.endsWith('/pages/next.html')).toBe(true)
+    expect(next?.id).not.toBe(explicit?.id)
+    expect(await f.service.prepare({ appSessionId: 's1', path: join(f.root, 'REPORT.HTML'), source })).toBeNull()
+    for (const invalid of [null, [], {}, { ...source, extra: true }, { id: source.id, revision: 0 }, { id: source.id, revision: 999 }, { ...source, id: 'unknown' }]) {
+      expect(await f.service.prepare({ appSessionId: 's1', path: nextPath, source: invalid })).toBeNull()
+    }
+    f.service.release(source.id)
+    expect(await f.service.prepare({ appSessionId: 's1', path: nextPath, source })).toBeNull()
+  } finally { await f.cleanup() }
+})
+
+test('a source revoked during target preparation cannot mint a navigation capability', async () => {
+  const f = await fixture()
+  try {
+    await writeFile(join(f.root, 'next.md'), '# Next')
+    const pending = f.service.prepare({ appSessionId: 's1', path: 'next.md', source: { id: f.preview.id, revision: f.preview.revision } })
+    const timer = setTimeout(() => f.service.release(f.preview.id), 10)
+    try { expect(await pending).toBeNull() } finally { clearTimeout(timer) }
+  } finally { await f.cleanup() }
+})
+
 test('an external page refreshes when missing assets arrive and keeps its snapshot after deletion', async () => {
   const f = await fixture()
   try {

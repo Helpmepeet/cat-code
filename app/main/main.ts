@@ -2088,7 +2088,7 @@ function createWindow(): void {
       if (target && filePreviews.has(target.id) && event.initiator === window.webContents.mainFrame) return
       event.preventDefault()
       const path = target?.id === origin.id ? filePreviews.pathForUrl(event.url) : null
-      if (path) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, { id: origin.id, kind: 'navigate', path })
+      if (path) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, { id: origin.id, kind: 'navigate', path, source: { id: origin.id, revision: origin.revision } })
       return
     }
     if (!target || !filePreviews.has(target.id)) event.preventDefault()

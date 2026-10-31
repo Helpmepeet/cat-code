@@ -662,8 +662,8 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     const payload = { id, target }; sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_PREVIEW_BLOCKED_NAVIGATION_OPEN, payload)
   },
-  prepareFilePreview(appSessionId, path) {
-    const payload = { appSessionId, path }; sendGuard.assertAllowed(payload)
+  prepareFilePreview(appSessionId, path, source) {
+    const payload = { appSessionId, path, ...(source !== undefined ? { source } : {}) }; sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_FILE_PREVIEW_PREPARE, payload)
   },
   refreshFilePreview(id) {
