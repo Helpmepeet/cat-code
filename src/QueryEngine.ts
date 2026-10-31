@@ -111,7 +111,7 @@ import { acceptTailRecoveryReview, readTailRecoveryState } from './utils/transcr
 import { runDeferredResumeHooks } from './utils/deferredResumeHooks.js'
 import { isAcceptedInputBatch } from './utils/queuedInputReceipts.js'
 import { createHandoffSkippedResult } from './services/tools/handoffExecution.js'
-import { TurnHandoff, handoffContinuationPrompt, handoffReconciliationPrompt, handoffTerminalPrompt, handoffOutcomeText, readHandoffOutcomeData, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './app-runtime/handoff.js'
+import { TurnHandoff, handoffContinuationPrompt, handoffReconciliationPrompt, handoffTerminalPrompt, handoffOutcomeText, isHandoffOutcomeText, isHandoffTerminalPrompt, readHandoffOutcomeData, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './app-runtime/handoff.js'
 import { buildEffectiveSystemPrompt } from './utils/systemPrompt.js'
 import { resolveThemeSetting } from './utils/systemTheme.js'
 import {
@@ -1975,11 +1975,13 @@ export class QueryEngine {
       const runtimeData = runtimeDisplay?.type === 'system'
         ? readHandoffOutcomeData(runtimeDisplay.data)
         : null
-      if (runtimeIndex < 0 || runtimeDisplay?.type !== 'system' || runtimeDisplay.subtype !== 'workspace_handoff_outcome' ||
+      if (runtimeIndex < 0 || savedDisplay?.type !== 'system' || savedContext?.type !== 'user' ||
+        runtimeDisplay?.type !== 'system' || runtimeDisplay.subtype !== 'workspace_handoff_outcome' ||
         runtimeData?.operationId !== operationId || runtimeData.outcome !== persisted.outcome ||
-        runtimeDisplay.content !== handoffOutcomeText(persisted.outcome) || runtimeDisplay.level !== 'warning' ||
+        runtimeDisplay.content !== savedDisplay.content || !isHandoffOutcomeText(runtimeDisplay.content, persisted.outcome) || runtimeDisplay.level !== 'warning' ||
         runtimeContext?.type !== 'user' || runtimeContext.uuid !== savedContext?.uuid || !runtimeContext.isMeta ||
-        runtimeContext.message.content !== handoffTerminalPrompt(persisted.outcome)) {
+        runtimeContext.message.content !== savedContext.message.content ||
+        !isHandoffTerminalPrompt(runtimeContext.message.content, persisted.outcome)) {
         throw new Error('Saved handoff outcome does not match runtime history')
       }
       // Recovery can append an internal no-response sentinel and session-start
@@ -1991,7 +1993,7 @@ export class QueryEngine {
     const localIndex = this.mutableMessages.findLastIndex(m => m.type === 'system' && m.subtype === 'workspace_handoff_outcome' && readHandoffOutcomeData(m.data)?.operationId === operationId)
     const localDisplay = localIndex < 0 ? undefined : this.mutableMessages[localIndex]
     const localContext = localIndex < 0 ? undefined : this.mutableMessages[localIndex + 1]
-    if (localDisplay && (localDisplay.type !== 'system' || readHandoffOutcomeData(localDisplay.data)?.outcome !== outcome || localContext?.type !== 'user' || !localContext.isMeta || localContext.message.content !== handoffTerminalPrompt(outcome))) {
+    if (localDisplay && (localDisplay.type !== 'system' || readHandoffOutcomeData(localDisplay.data)?.outcome !== outcome || localContext?.type !== 'user' || !localContext.isMeta || !isHandoffTerminalPrompt(localContext.message.content, outcome))) {
       throw new Error('Handoff terminal outcome conflicts with pending history')
     }
     const message = localContext?.type === 'user' ? localContext : createUserMessage({ content: handoffTerminalPrompt(outcome), isMeta: true })

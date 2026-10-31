@@ -4333,8 +4333,8 @@ test('renders curated auth and execution failures without raw errors', () => {
     errors: ['provider stack trace'],
   })
 
-  expect(auth).toContain('Sign-in expired')
-  expect(auth).toContain('Sign in again in Accounts to continue.')
+  expect(auth).toContain('Authentication failed')
+  expect(auth).toContain('Check your provider credentials and access settings before trying again.')
   expect(auth).not.toContain('OAuth access token has been revoked')
   expect(execution).toContain('This turn could not finish')
   expect(execution).toContain('save a diagnostics bundle')
@@ -4378,7 +4378,10 @@ test('failed turns show one tailored card and Retry only on the latest idle plai
   expect(draw([user, result, { ...user, id: 'next-user', frameId: 'next-frame' }, laterFailure]).match(/>Retry<\/button>/g)).toHaveLength(1)
   for (const [providerCode, providerMessage, title] of [
     ['rate_limit', 'Codex account usage limit reached. Use /switch-account to switch.', 'Usage limit reached'],
-    ['authentication_failed', 'OAuth token revoked · Please run /login', 'Sign-in expired'],
+    ['authentication_failed', 'OAuth token revoked · Please run /login', 'Authentication failed'],
+    ['authentication_failed', 'Invalid API key · Fix external API key', 'Authentication failed'],
+    ['authentication_failed', 'Your ANTHROPIC_API_KEY belongs to a disabled organization · Update or unset the environment variable', 'Authentication failed'],
+    ['authentication_failed', 'Authentication error · This may be a temporary network issue, please try again', 'Authentication failed'],
     ['unknown', 'Request refused. Please run /login', 'This turn could not finish'],
   ]) {
     const tailored = draw([user, { ...result, errorStatus: undefined, providerCode, providerMessage }])
@@ -4386,7 +4389,14 @@ test('failed turns show one tailored card and Retry only on the latest idle plai
     expect(tailored).not.toContain('/login')
     expect(tailored).not.toContain('/switch-account')
     expect(tailored).toContain('>Retry</button>')
-    expect(tailored).toContain(providerCode === 'unknown' ? 'Save diagnostics bundle' : 'Open Accounts')
+    if (providerCode === 'authentication_failed') {
+      expect(tailored).toContain(providerMessage!.split(' · Please run')[0]!)
+      expect(tailored).not.toContain('Open Accounts')
+      expect(tailored).not.toContain('Sign-in expired')
+      expect(tailored).not.toContain('Sign in again')
+    } else {
+      expect(tailored).toContain(providerCode === 'unknown' ? 'Save diagnostics bundle' : 'Open Accounts')
+    }
   }
 })
 

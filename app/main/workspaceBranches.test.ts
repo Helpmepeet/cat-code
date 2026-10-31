@@ -206,15 +206,34 @@ test('confirms a checkout from the Git root when the target removes the session 
   }
 })
 
+test('reports the known current branch when a failing post-checkout hook leaves HEAD changed', async () => {
+  const cwd = fixture()
+  try {
+    const hook = join(cwd, '.git', 'hooks', 'post-checkout')
+    writeFileSync(hook, '#!/bin/sh\nexit 1\n')
+    chmodSync(hook, 0o755)
+    const result = await switchWorkspaceBranch(cwd, 'feature/login', [])
+    expect(result).toEqual({
+      ok: false, branchChanged: true,
+      error: { code: 'branch_unavailable', message: 'The checkout is now on feature/login, but Git reported an error. Check Git and open a fresh chat.' },
+    })
+    const after = await readWorkspaceBranch(cwd)
+    expect(after).toEqual({ ok: true, value: { current: 'feature/login' } })
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
 test('reports that checkout moved when a post-checkout hook makes Git inspection fail', async () => {
   const cwd = fixture()
   try {
     const hook = join(cwd, '.git', 'hooks', 'post-checkout')
-    writeFileSync(hook, '#!/bin/sh\nmv .git .git-hidden\n')
+    writeFileSync(hook, '#!/bin/sh\nmv .git .git-hidden\nexit 1\n')
     chmodSync(hook, 0o755)
     const result = await switchWorkspaceBranch(cwd, 'feature/login', [])
     expect(result.ok).toBe(false)
     if (!result.ok) expect('branchChanged' in result && result.branchChanged).toBe(true)
+    if (!result.ok) expect(result.error.message).toBe('Git may have changed the checkout, but could not confirm its branch. Check Git and open a fresh chat.')
     const head = execFileSync('git', ['--git-dir', join(cwd, '.git-hidden'), 'symbolic-ref', '--short', 'HEAD'], { encoding: 'utf8' })
     expect(head.trim()).toBe('feature/login')
   } finally {

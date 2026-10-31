@@ -2872,14 +2872,14 @@ export async function findHandoffOutcomeInActiveTranscript(operationId: string):
   const loaded = await loadTranscriptFile(transcriptPath, { keepAllLeaves: true })
   if (loaded.sourceTruncated) throw new Error('Handoff outcome history is incomplete')
   const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
-  const { readHandoffOutcomeData, handoffTerminalPrompt } = await import('../app-runtime/handoff.js')
+  const { readHandoffOutcomeData, isHandoffTerminalPrompt } = await import('../app-runtime/handoff.js')
   for (let index = active.messages.length - 1; index >= 0; index--) {
     const display = active.messages[index]!
     if (display.type !== 'system' || display.subtype !== 'workspace_handoff_outcome') continue
     const data = readHandoffOutcomeData(display.data)
     if (data?.operationId !== operationId) continue
     const context = active.messages[index + 1]
-    if (context?.type !== 'user' || !context.isMeta || context.message.content !== handoffTerminalPrompt(data.outcome)) {
+    if (context?.type !== 'user' || !context.isMeta || !isHandoffTerminalPrompt(context.message.content, data.outcome)) {
       throw new Error('Handoff outcome exchange is incomplete')
     }
     return { outcome: data.outcome, messages: [display, context] }

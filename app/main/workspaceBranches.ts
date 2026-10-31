@@ -137,7 +137,10 @@ export async function switchWorkspaceBranch(
     const current = attemptedSwitch
       ? await git(root, 'symbolic-ref', '--quiet', '--short', 'HEAD').catch(() => null)
       : listed.value.current
-    if (attemptedSwitch && (current === null || current !== listed.value.current)) {
+    if (attemptedSwitch && current !== null && current !== listed.value.current) {
+      return { ok: false, branchChanged: true, error: { code: 'branch_unavailable', message: `The checkout is now on ${current}, but Git reported an error. Check Git and open a fresh chat.` } }
+    }
+    if (attemptedSwitch && current === null) {
       return { ok: false, branchChanged: true, error: { code: 'branch_unavailable', message: 'Git may have changed the checkout, but could not confirm its branch. Check Git and open a fresh chat.' } }
     }
     const stderr = (error as { stderr?: unknown }).stderr

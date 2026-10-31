@@ -9,7 +9,9 @@ const failure = { id: 'failure', sessionId: 's', frameId: 'result', kind: 'resul
 
 test('classifies structured auth and overloaded status, narrowly recognizes usage failures, and strips terminal instructions', () => {
   expect(turnFailureCopy({ subtype: 'error_during_execution', errorStatus: 529 }).title).toBe('The service is overloaded')
-  expect(turnFailureCopy({ subtype: 'error_during_execution', providerCode: 'authentication_failed' }).title).toBe('Sign-in expired')
+  expect(turnFailureCopy({ subtype: 'error_during_execution', providerCode: 'authentication_failed' })).toEqual({
+    title: 'Authentication failed', detail: 'Check your provider credentials and access settings before trying again.', action: null,
+  })
   expect(turnFailureCopy({ subtype: 'error_during_execution', providerMessage: 'Repeated 529 Overloaded errors' }).title).toBe('The service is overloaded')
   expect(turnFailureCopy({ subtype: 'error_during_execution', providerMessage: 'Codex account usage limit reached. Use /switch-account to switch to another account, or /accounts to check status.' })).toMatchObject({ title: 'Usage limit reached', action: 'accounts' })
   expect(turnFailureCopy({ subtype: 'error_during_execution', providerMessage: 'Codex usage limit reached.\n\nRun /continue-after-limit to continue this conversation after the reset.' }).title).toBe('Usage limit reached')
@@ -17,6 +19,28 @@ test('classifies structured auth and overloaded status, narrowly recognizes usag
   expect(turnFailureCopy({ subtype: 'error_during_execution', providerMessage: 'Request rejected. Use /accounts to check status.' }).detail).toBe('Request rejected')
   expect(turnFailureCopy({ subtype: 'future', providerMessage: 'The data mentions overloaded usage but is not a limit error.' }).title).toBe('This turn could not finish')
   expect(turnFailureCopy({ subtype: 'error_during_execution', providerMessage: 'Please run /login' }).detail).toContain('save a diagnostics bundle')
+})
+
+test('auth failures retain distinct provider causes and useful remediation without assuming expiry', () => {
+  for (const [providerMessage, detail] of [
+    ['Invalid API key · Fix external API key', 'Invalid API key · Fix external API key'],
+    ['Your ANTHROPIC_API_KEY belongs to a disabled organization · Update or unset the environment variable', 'Your ANTHROPIC_API_KEY belongs to a disabled organization · Update or unset the environment variable'],
+    ['OAuth token revoked · Please run /login', 'OAuth token revoked'],
+    ['Authentication error · This may be a temporary network issue, please try again', 'Authentication error · This may be a temporary network issue, please try again'],
+    ['Please run /login · API Error: Access restricted by organization policy', 'API Error: Access restricted by organization policy'],
+    ['Please run /login. Contact your administrator to restore access.', 'Contact your administrator to restore access.'],
+  ]) {
+    for (const classification of [
+      { subtype: 'error_auth_required' },
+      { subtype: 'error_during_execution', providerCode: 'authentication_failed' },
+    ]) {
+      expect(turnFailureCopy({ ...classification, providerMessage })).toEqual({
+        title: 'Authentication failed', detail, action: null,
+      })
+    }
+  }
+  expect(turnFailureCopy({ subtype: 'error_auth_required', providerMessage: 'Please run /login' }).detail)
+    .toBe('Check your provider credentials and access settings before trying again.')
 })
 
 test('retry only targets the latest failed plain text turn and refuses ambiguous content', () => {

@@ -45,8 +45,12 @@ export function claimTurnRetry(claimed: Set<string>, resultId: string): boolean 
 
 export function turnFailureCopy(row: Pick<ResultRow, 'subtype' | 'providerCode' | 'providerMessage' | 'errorStatus'>) {
   const message = row.providerMessage ?? ''
+  const detail = message
+    .replace(/(?:[.·]\s*)?(?:Please\s+)?(?:run|use)\s+\/(?:login|switch-account|accounts)\b[^.!?\n·]*(?:[.!?](?=\s|$))?/gi, '')
+    .replace(/^\s*·\s*/, '')
+    .trim()
   if (row.subtype === 'error_auth_required' || row.providerCode === 'authentication_failed') {
-    return { title: 'Sign-in expired', detail: 'Sign in again in Accounts to continue.', action: 'accounts' as const }
+    return { title: 'Authentication failed', detail: detail || 'Check your provider credentials and access settings before trying again.', action: null }
   }
   if (row.errorStatus === 529 || /\b529\b.*\bOverloaded\b/i.test(message)) {
     return { title: 'The service is overloaded', detail: '', action: null }
@@ -54,9 +58,6 @@ export function turnFailureCopy(row: Pick<ResultRow, 'subtype' | 'providerCode' 
   if (/^(?:Codex (?:account )?)?usage limit reached\b/i.test(message) || /\busage_limit_reached\b/.test(message)) {
     return { title: USAGE_LIMIT_TITLE, detail: 'Switch to another account to continue.', action: 'accounts' as const }
   }
-  const detail = message
-    .replace(/(?:[.·]\s*)?(?:Please\s+)?(?:run|use)\s+\/(?:login|switch-account|accounts)\b[^\n]*/gi, '')
-    .trim()
   return { title: 'This turn could not finish', detail: detail || 'Try again. If this keeps happening, save a diagnostics bundle.', action: 'diagnostics' as const }
 }
 

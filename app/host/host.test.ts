@@ -551,6 +551,51 @@ test('agent move reports durable destination when relocation commits but its res
   }
 })
 
+test.each(['spawn', 'ready'] as const)('manual move preserves its committed destination when replacement %s fails', async failure => {
+  const storageRoot = tempDir()
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageRoot
+  try {
+    const managedStorage = new ManagedStorage({
+      appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership'),
+    })
+    const h = makeHost({
+      managedStorage,
+      validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+      relocate: async request => {
+        writeSessionRelocation({ version: 1, ...request, original: request.source,
+          phase: 'complete', backup: join(storageRoot, 'private-backup'), movedAt: Date.now() })
+        if (failure === 'spawn') h.supervisor.throwOnNextSpawn = new Error('replacement spawn refused')
+      },
+    })
+    const created = await h.host.createManagedChat()
+    if (!created.ok) throw new Error(created.error.message)
+    const id = created.value.appSessionId
+    const engineSessionId = randomUUID()
+    writeTranscript(h.storageDir, engineSessionId)
+    h.supervisor.emitReady(id, engineSessionId)
+    emitMoveReadyContext(h.supervisor, id)
+    await settle(() => h.registry.findSession(id)?.engineSessionId === engineSessionId)
+    h.supervisor.onSend = (sessionId, message) => {
+      if ((message as { type?: string }).type === 'app.park') h.supervisor.emitPark(sessionId)
+    }
+    const moving = h.host.moveSession(id, h.cwd)
+    if (failure === 'ready') {
+      await settle(() => h.supervisor.spawnedIds.length === 2)
+      h.supervisor.emitCrash(id)
+    }
+    expect(await moving).toMatchObject({
+      ok: false,
+      error: { message: 'The Chat moved, but could not reopen. Restore it from the sidebar.' },
+    })
+    expect(h.registry.findSession(id)?.cwd).toBe(realpathSync(h.cwd))
+    expect(h.registry.findSession(id)?.binding).toEqual({ kind: 'project' })
+  } finally {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  }
+})
+
 async function movedReservedJump(storageRoot: string, beforePermission?: (h: Harness, appSessionId: SessionId) => Promise<void>): Promise<{ h: Harness; state: WorkspaceJumpStateV2 }> {
   const managedStorage = new ManagedStorage({ appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership') })
   const h = makeHost({ managedStorage,
@@ -850,6 +895,8 @@ test('a worker-refused move keeps the reopened conversation behind replay comple
   emitMoveReadyContext(h.supervisor, appSessionId)
   const result = await moving
   expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.message).toBe('Could not move this Chat. Its saved history is retained.')
+  expect(h.registry.findSession(appSessionId)?.cwd).toBe(created.value.cwd)
   const failedDisplay = h.host.listSessions().find(row => row.appSessionId === appSessionId)?.workspaceMove
   expect(failedDisplay?.id).toBe(display?.id)
   expect(failedDisplay?.phase).toBe('failed')

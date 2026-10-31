@@ -475,7 +475,40 @@ test.each(['uncertain', 'cancelled'] as const)('%s terminal outcome is visible a
   const visible = output.find(m => m.type === 'system' && m.subtype === 'local_command_output') as { content: string }
   expect(visible.content).toContain(outcome === 'uncertain' ? 'Some work may have started' : 'Review existing progress')
   expect(visible.content).not.toContain('Work did not continue')
+  if (outcome === 'cancelled') {
+    expect(visible.content).toStartWith('Work was stopped.')
+    expect(visible.content).not.toContain('workspace')
+    const context = runtime.getMessages().at(-1)!
+    expect(context).toMatchObject({ type: 'user', isMeta: true })
+    expect(context.type === 'user' && context.message.content).toBe('Work was stopped. Some actions may have completed. Wait for the user to review existing progress and provide the next instruction.')
+  }
   expect(modelCalls).toBe(0)
+})
+
+test('legacy cancellation warnings remain valid recovery evidence without being rewritten', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const display = {
+    type: 'system', subtype: 'workspace_handoff_outcome', uuid: randomUUID(),
+    timestamp: new Date().toISOString(), level: 'warning',
+    content: 'The workspace change or continuation was stopped. Review existing progress before continuing.',
+    data: { operationId: 'legacy-cancellation', outcome: 'cancelled' },
+  } satisfies import('./types/message.js').SystemWorkspaceHandoffOutcomeMessage
+  const context = createUserMessage({
+    content: 'The workspace change or continuation was stopped. Some work may have started. Wait for the user to review existing progress and provide the next instruction.',
+    isMeta: true,
+  })
+  const messages = [createUserMessage({ content: 'original work' }), display, context]
+  await storage.recordTranscript(messages)
+  await storage.markActiveConversationTip(context.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+  const runtime = engine([], { initialMessages: messages })
+  const before = await fsPromises.readFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()), 'utf8')
+  expect(await runtime.readHandoffOutcome('legacy-cancellation')).toBe('cancelled')
+  expect(await runtime.persistHandoffOutcome('legacy-cancellation', 'cancelled')).toEqual(toSDKMessages([display, context]))
+  const after = await storage.loadTranscriptFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()))
+  expect(after.messages.get(display.uuid as UUID)).toMatchObject({ content: display.content })
+  expect(after.messages.get(context.uuid as UUID)).toMatchObject({ message: { content: context.message.content } })
+  expect(await fsPromises.readFile(storage.getTranscriptPathForSession(bootstrap.getSessionId()), 'utf8')).toBe(before)
 })
 
 test('reopening a durable cancellation without a host operation preserves the hold until a genuine user input is persisted', async () => {

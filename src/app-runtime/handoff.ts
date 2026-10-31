@@ -58,15 +58,26 @@ export function handoffTerminalPrompt(outcome: HandoffTerminalOutcome): string {
   if (outcome === 'continuation_failed') return 'The workspace changed successfully, but the continuation failed. Some actions may have completed. Wait for the user to review existing progress and provide the next instruction.'
   if (outcome === 'uncertain') return 'The workspace changed, but continuation completion could not be confirmed. Some work may have started. Wait for the user to reconcile the conversation before continuing.'
   return outcome === 'cancelled'
-    ? 'The workspace change or continuation was stopped. Some work may have started. Wait for the user to review existing progress and provide the next instruction.'
+    ? 'Work was stopped. Some actions may have completed. Wait for the user to review existing progress and provide the next instruction.'
     : 'The accepted workspace jump could not finish safely. Work did not continue. Wait for the user to reconcile the conversation before continuing.'
 }
 
 export function handoffOutcomeText(outcome: HandoffTerminalOutcome): string {
   if (outcome === 'continuation_failed') return 'The workspace changed successfully, but the work that followed failed. Send a message to review progress and continue.'
   if (outcome === 'uncertain') return 'The workspace changed, but completion could not be confirmed. Some work may have started. Send a message to review what happened.'
-  if (outcome === 'cancelled') return 'The workspace change or continuation was stopped. Review existing progress before continuing.'
+  if (outcome === 'cancelled') return 'Work was stopped. Review existing progress before continuing.'
   return 'The workspace change could not finish. Work did not continue. Send a message when you are ready to continue.'
+}
+
+// Saved warnings are recovery evidence. Recognize old copy without rewriting it.
+export function isHandoffOutcomeText(value: unknown, outcome: HandoffTerminalOutcome): boolean {
+  return value === handoffOutcomeText(outcome) || (outcome === 'cancelled' &&
+    value === 'The workspace change or continuation was stopped. Review existing progress before continuing.')
+}
+
+export function isHandoffTerminalPrompt(value: unknown, outcome: HandoffTerminalOutcome): boolean {
+  return value === handoffTerminalPrompt(outcome) || (outcome === 'cancelled' &&
+    value === 'The workspace change or continuation was stopped. Some work may have started. Wait for the user to review existing progress and provide the next instruction.')
 }
 
 export function readHandoffOutcomeData(value: unknown): { operationId: string; outcome: HandoffTerminalOutcome } | null {

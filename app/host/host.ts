@@ -1944,7 +1944,8 @@ export class Host implements HostApi {
         ? `${error.message}. ${recoveryFailed ? 'Restore the Chat from the sidebar.' : 'The Chat is back in its original location.'}`
         : recoveryFailed
         ? 'The move failed and the original Chat could not reopen. Restore it from the sidebar.'
-        : recoveredMoved ? 'The Chat moved, but could not reopen. Restore it from the sidebar.'
+        : moveCommitted && destinationVerified ? 'The Chat moved, but could not return to its previous idle state. Its saved history is retained.'
+        : recoveredMoved || moveCommitted ? 'The Chat moved, but could not reopen. Restore it from the sidebar.'
         : reason ?? 'Could not move this Chat. Its saved history is retained.')
     } finally {
       if (sourceWasInactive && this.supervisor.listSessions().some(item => item.sessionId === appSessionId && item.status === 'ready')) {
