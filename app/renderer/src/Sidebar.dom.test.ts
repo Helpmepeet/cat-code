@@ -22,6 +22,7 @@ import { Sidebar, SidebarRowItem } from './Sidebar.js'
 import { sessionDescriptor } from './sessionDescriptorFixture.js'
 import { selectMergedSessionRows, type MergedSessionRow } from './sessionsCatalogState.js'
 import { reduceSessionUnarchived } from './sidebarArchivedSessions.js'
+import { SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY } from './sidebarHiddenWorkspaces.js'
 import {
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_WIDTH_STORAGE_KEY,
@@ -99,33 +100,35 @@ test('a persisted width the window can afford is restored untouched', async () =
 })
 
 test('a hover-expanded destination remains direct and dismisses the overlay after selection', async () => {
-  const selections: string[] = []
-  const tree = await harness.mount(
-    sidebar({ onSelectView: view => { selections.push(view) } }),
-  )
-  const aside = tree.container.querySelector('aside')
-  expect(aside).not.toBeNull()
+  await withStubbedRects(async () => {
+    const selections: string[] = []
+    const tree = await harness.mount(
+      sidebar({ onSelectView: view => { selections.push(view) } }),
+    )
+    const aside = tree.container.querySelector('aside')
+    expect(aside).not.toBeNull()
 
-  await act(async () => {
-    aside!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
-    await new Promise(resolve => setTimeout(resolve, 140))
+    await act(async () => {
+      aside!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      await new Promise(resolve => setTimeout(resolve, 140))
+    })
+    expect(aside!.className).toContain('sidebar-expanded')
+
+    const destination = tree.container.querySelector<HTMLButtonElement>(
+      '[data-sidebar-nav-id="goals"]',
+    )
+    expect(destination?.getAttribute('aria-label')).toBe('Goals')
+    expect(
+      tree.container.querySelector('[data-sidebar-nav-id="sessions"]'),
+    ).toBeNull()
+    expect(tree.container.textContent).not.toContain('Show destinations')
+
+    await act(async () => {
+      destination!.click()
+    })
+    expect(selections).toEqual(['goals'])
+    expect(aside!.className).toContain('w-12')
   })
-  expect(aside!.className).toContain('sidebar-expanded')
-
-  const destination = tree.container.querySelector<HTMLButtonElement>(
-    '[data-sidebar-nav-id="goals"]',
-  )
-  expect(destination?.getAttribute('aria-label')).toBe('Goals')
-  expect(
-    tree.container.querySelector('[data-sidebar-nav-id="sessions"]'),
-  ).toBeNull()
-  expect(tree.container.textContent).not.toContain('Show destinations')
-
-  await act(async () => {
-    destination!.click()
-  })
-  expect(selections).toEqual(['goals'])
-  expect(aside!.className).toContain('w-12')
 })
 
 test('selecting a destination preserves an explicitly pinned sidebar', async () => {
@@ -191,37 +194,39 @@ test('an outside click collapses a pinned sidebar on a non-Chat page', async () 
 })
 
 test('an outside pointerdown dismisses an unpinned Chat sidebar even when propagation stops', async () => {
-  const tree = await harness.mount(sidebar())
-  const aside = tree.container.querySelector('aside')!
-  await hoverOpenAt(aside, 200)
-  const search = tree.container.querySelector<HTMLInputElement>('input')!
-  await act(async () => { search.focus() })
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar())
+    const aside = tree.container.querySelector('aside')!
+    await hoverOpenAt(aside, 200)
+    const search = tree.container.querySelector<HTMLInputElement>('input')!
+    await act(async () => { search.focus() })
 
-  await act(async () => {
-    search.dispatchEvent(new Event('pointerdown', { bubbles: true }))
-  })
-  expect(aside.className).toContain('sidebar-expanded')
+    await act(async () => {
+      search.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    })
+    expect(aside.className).toContain('sidebar-expanded')
 
-  const outside = document.createElement('button')
-  outside.addEventListener('pointerdown', event => event.stopPropagation())
-  tree.container.appendChild(outside)
-  let clicks = 0
-  outside.addEventListener('click', () => { clicks += 1 })
-  await act(async () => {
-    outside.dispatchEvent(new Event('pointerdown', { bubbles: true }))
-    outside.focus()
-    outside.click()
-  })
-  expect(aside.className).toContain('w-12')
-  expect(clicks).toBe(1)
+    const outside = document.createElement('button')
+    outside.addEventListener('pointerdown', event => event.stopPropagation())
+    tree.container.appendChild(outside)
+    let clicks = 0
+    outside.addEventListener('click', () => { clicks += 1 })
+    await act(async () => {
+      outside.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+      outside.focus()
+      outside.click()
+    })
+    expect(aside.className).toContain('w-12')
+    expect(clicks).toBe(1)
 
-  // A later hover must not resurrect the focus state from before dismissal.
-  await hoverOpenAt(aside, 200)
-  await act(async () => {
-    aside.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: outside }))
-    await new Promise(resolve => setTimeout(resolve, 400))
+    // A later hover must not resurrect the focus state from before dismissal.
+    await hoverOpenAt(aside, 200)
+    await act(async () => {
+      aside.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: outside }))
+      await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    expect(aside.className).toContain('w-12')
   })
-  expect(aside.className).toContain('w-12')
 })
 
 test('outside pointerdown preserves a sidebar held open by its row menu', async () => {
@@ -268,22 +273,23 @@ test('New chat, Chats plus, and Add project dispatch separate actions with no se
 })
 
 /**
- * The footer's pointer band (operator, 2026-09-27). happy-dom has no layout, so
- * the rects the band is measured from are stubbed: the rail's bottom edge at
- * RAIL_BOTTOM and the collapsed icon column's top at BAND_TOP. The band is
- * measured from the COLLAPSED column, so its height must not depend on which
- * footer form the open rail shows.
+ * happy-dom has no layout. Supply non-zero rects so these tests exercise the
+ * column hit area rather than passing because every pointer is below zero.
+ * The movable top also catches a hard-coded or mount-time-cached column height.
  */
 const RAIL_BOTTOM = 900
 const BAND_TOP = 712
 
-async function withStubbedRects(run: () => Promise<void>): Promise<void> {
+async function withStubbedRects(
+  run: () => Promise<void>,
+  columnTop: () => number = () => BAND_TOP,
+): Promise<void> {
   const original = HTMLElement.prototype.getBoundingClientRect
   HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
     const rect = original.call(this)
     if (this.tagName === 'ASIDE') return { ...rect, top: 40, bottom: RAIL_BOTTOM }
     if (this.tagName === 'NAV' && this.className.includes('mt-auto')) {
-      return { ...rect, top: BAND_TOP, bottom: RAIL_BOTTOM }
+      return { ...rect, top: columnTop(), bottom: RAIL_BOTTOM }
     }
     return rect
   }
@@ -301,68 +307,191 @@ async function hoverOpenAt(aside: HTMLElement, clientY: number): Promise<void> {
   })
 }
 
-function footerShowsList(container: HTMLElement): boolean {
-  return (
-    container.querySelector('[data-sidebar-nav-id="goals"]')?.textContent ===
-    'Goals'
-  )
+async function movePointer(aside: HTMLElement, clientY: number): Promise<void> {
+  await act(async () => {
+    aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY }))
+  })
 }
 
-test('opening from above the band rests the footer as the icon strip', async () => {
+test('the open footer stays the same one-line strip across pointer movement, with or without a pin', async () => {
   await withStubbedRects(async () => {
-    const tree = await harness.mount(sidebar({ accountAlias: 'main' }))
+    const archived = sessionRow('Archived')
+    const tree = await harness.mount(sidebar({
+      accountAlias: 'main',
+      activeView: 'goals',
+      accountsNeedingSignIn: 2,
+      rows: [
+        sessionRow('Low project', { cwd: '/tmp/low-project' }),
+        sessionRow('Hidden project', { cwd: '/tmp/hidden', createdAtMs: 1 }),
+        archived,
+      ],
+      archivedSessions: [{ sessionId: archived.sessionId, archivedAt: 1 }],
+      storage: {
+        getItem: key => key === SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY
+          ? JSON.stringify({ version: 1, workspaces: [{ cwd: '/tmp/hidden', hiddenAt: 2 }] })
+          : null,
+        setItem: () => {},
+      },
+    }))
     const aside = tree.container.querySelector('aside')!
     await hoverOpenAt(aside, BAND_TOP - 20)
     expect(aside.className).toContain('sidebar-expanded')
-    expect(footerShowsList(tree.container)).toBe(false)
-    expect(
-      tree.container.querySelector('[data-sidebar-nav-id="goals"]')?.getAttribute('aria-label'),
-    ).toBe('Goals')
-  })
-})
-
-test('opening inside the band shows the labelled list at once', async () => {
-  await withStubbedRects(async () => {
-    const tree = await harness.mount(sidebar({ activeView: 'goals' }))
-    const aside = tree.container.querySelector('aside')!
-    await hoverOpenAt(aside, BAND_TOP + 4)
-    expect(footerShowsList(tree.container)).toBe(true)
-    // The list keeps the session-row hover and active treatments.
-    const html = tree.container.innerHTML
-    expect(html).toContain(
-      'border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07]',
+    const footer = aside.querySelector('nav')!
+    const original = footer.innerHTML
+    const destinations = [...footer.querySelectorAll<HTMLButtonElement>('[data-sidebar-nav-id]')]
+    const lowRow = aside.querySelector('[aria-label^="session Low project,"]')!
+    const archives = archiveToggle(tree.container)!
+    const hiddenToggle = [...aside.querySelectorAll('button')].find(button =>
+      button.textContent === 'Show 1 hidden project',
     )
-    expect(html).toContain('border-accent/[0.18] bg-accent/[0.09] text-accent-soft')
+    expect(destinations).toHaveLength(5)
+    expect(footer.firstElementChild?.className).toContain('flex items-center')
+    expect(footer.firstElementChild?.firstElementChild?.textContent).toContain('main')
+    expect(destinations.map(button => button.textContent)).toEqual(['', '', '', '', ''])
+    expect(destinations.map(button => button.title)).toEqual([
+      'Scheduled', 'Goals', 'Accounts, 2 Codex accounts need sign-in', 'Analytics', 'Settings',
+    ])
+    expect(destinations[1]!.getAttribute('aria-current')).toBe('page')
+    expect(destinations[2]!.querySelector('[data-sidebar-nav-badge="accounts"]')).not.toBeNull()
+    expect(lowRow).not.toBeNull()
+    expect(archives).toBeDefined()
+    expect(hiddenToggle).toBeDefined()
+
+    for (const pinned of [false, true]) {
+      if (pinned) {
+        await act(async () => {
+          aside.querySelector<HTMLButtonElement>('[aria-label="Pin sidebar open"]')!.click()
+        })
+      }
+      for (const y of [BAND_TOP, BAND_TOP + 60, RAIL_BOTTOM - 1, BAND_TOP - 1]) {
+        await movePointer(aside, y)
+        expect(footer.innerHTML).toBe(original)
+        expect([...footer.querySelectorAll('[data-sidebar-nav-id]')]).toEqual(destinations)
+        expect(aside.querySelector('[aria-label^="session Low project,"]')).toBe(lowRow)
+        expect(archiveToggle(tree.container)).toBe(archives)
+        expect(hiddenToggle!.isConnected).toBe(true)
+      }
+    }
   })
 })
 
-test('an open rail grows the footer when the pointer enters the band and rests it on leaving', async () => {
+test('every collapsed destination stays put under mouse hover and dispatches only its own click', async () => {
+  await withStubbedRects(async () => {
+    for (const accountAlias of [null, 'main']) {
+      for (const [index, id] of ['scheduled', 'goals', 'accounts', 'usage', 'settings'].entries()) {
+        const calls: string[] = []
+        const tree = await harness.mount(sidebar({
+          accountAlias,
+          rows: [sessionRow('Do not select')],
+          onSelectView: view => calls.push(view),
+          onSelectLive: () => calls.push('session'),
+        }))
+        const aside = tree.container.querySelector('aside')!
+        const destination = aside.querySelector<HTMLButtonElement>(`[data-sidebar-nav-id="${id}"]`)!
+        await act(async () => {
+          destination.dispatchEvent(new MouseEvent('mouseover', {
+            bubbles: true, clientY: BAND_TOP + 16 + index * 32,
+          }))
+          await new Promise(resolve => setTimeout(resolve, 140))
+        })
+        expect(aside.className).toContain('w-12')
+        expect(aside.querySelector(`[data-sidebar-nav-id="${id}"]`)).toBe(destination)
+        expect(destination.title).not.toBe('')
+        await act(async () => {
+          // happy-dom does not perform native press-to-focus. Model that default
+          // only when mousedown was not cancelled, then release at the same node.
+          const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 })
+          destination.dispatchEvent(press)
+          if (!press.defaultPrevented) destination.focus()
+        })
+        expect(aside.className).toContain('w-12')
+        expect(destination.isConnected).toBe(true)
+        await act(async () => {
+          destination.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }))
+          destination.click()
+        })
+        expect(calls).toEqual([id])
+        expect(aside.className).toContain('w-12')
+      }
+    }
+  })
+})
+
+test('moving up out of the collapsed column opens after the usual delay without leaving the rail', async () => {
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar({ accountAlias: 'main' }))
+    const aside = tree.container.querySelector('aside')!
+    await hoverOpenAt(aside, BAND_TOP)
+    expect(aside.className).toContain('w-12')
+    await movePointer(aside, BAND_TOP - 1)
+    expect(aside.className).toContain('w-12')
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 70))
+    })
+    expect(aside.className).toContain('w-12')
+    await movePointer(aside, BAND_TOP - 20)
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 70))
+    })
+    expect(aside.className).toContain('sidebar-expanded')
+  })
+})
+
+test('reaching the column before the hover delay cancels opening, and moving back up rearms it', async () => {
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar())
+    const aside = tree.container.querySelector('aside')!
+    await act(async () => {
+      aside.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, clientY: BAND_TOP - 20 }))
+      await new Promise(resolve => setTimeout(resolve, 40))
+    })
+    await movePointer(aside, BAND_TOP)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 140)) })
+    expect(aside.className).toContain('w-12')
+    await movePointer(aside, BAND_TOP - 1)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 140)) })
+    expect(aside.className).toContain('sidebar-expanded')
+  })
+})
+
+test('the collapsed hit area follows the current column rect rather than a fixed or cached height', async () => {
+  let top = BAND_TOP
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar())
+    const aside = tree.container.querySelector('aside')!
+    top = 650
+    await hoverOpenAt(aside, 700)
+    expect(aside.className).toContain('w-12')
+    top = 780
+    await movePointer(aside, 700)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 140)) })
+    expect(aside.className).toContain('sidebar-expanded')
+  }, () => top)
+})
+
+test('explicit collapse stays dismissed during pointer movement until the next entry', async () => {
   await withStubbedRects(async () => {
     const tree = await harness.mount(sidebar())
     const aside = tree.container.querySelector('aside')!
     await hoverOpenAt(aside, 200)
-    expect(footerShowsList(tree.container)).toBe(false)
-
     await act(async () => {
-      aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP + 1 }))
+      aside.querySelector<HTMLButtonElement>('[aria-label="Collapse sidebar"]')!.click()
     })
-    expect(footerShowsList(tree.container)).toBe(true)
-
-    // Still inside the band measured from the collapsed column, even though the
-    // list is now the footer on screen.
+    await movePointer(aside, 220)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 140)) })
+    expect(aside.className).toContain('w-12')
     await act(async () => {
-      aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP + 60 }))
+      aside.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: tree.container }))
     })
-    expect(footerShowsList(tree.container)).toBe(true)
-
-    await act(async () => {
-      aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP - 1 }))
-    })
-    expect(footerShowsList(tree.container)).toBe(false)
+    await hoverOpenAt(aside, BAND_TOP + 1)
+    expect(aside.className).toContain('w-12')
+    await movePointer(aside, 200)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 140)) })
+    expect(aside.className).toContain('sidebar-expanded')
   })
 })
 
-test('replacing a focused footer button does not leave the unpinned Chat sidebar stuck open', async () => {
+test('pointer movement never replaces a focused open-footer destination', async () => {
   await withStubbedRects(async () => {
     const tree = await harness.mount(sidebar())
     const aside = tree.container.querySelector('aside')!
@@ -374,29 +503,37 @@ test('replacing a focused footer button does not leave the unpinned Chat sidebar
     await act(async () => {
       aside.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: BAND_TOP + 1 }))
     })
-    expect(destination.isConnected).toBe(false)
-    expect(aside.contains(document.activeElement)).toBe(false)
+    expect(destination.isConnected).toBe(true)
+    expect(document.activeElement).toBe(destination)
 
     await act(async () => {
       aside.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: tree.container }))
       await new Promise(resolve => setTimeout(resolve, 400))
+    })
+    expect(aside.className).toContain('sidebar-expanded')
+    await act(async () => {
+      destination.blur()
     })
     expect(aside.className).toContain('w-12')
   })
 })
 
 test('keyboard entry preserves focus when the collapsed navigation is replaced', async () => {
-  const tree = await harness.mount(sidebar())
-  const aside = tree.container.querySelector('aside')!
-  const destination = tree.container.querySelector<HTMLButtonElement>(
-    '[data-sidebar-nav-id="goals"]',
-  )!
-  await act(async () => { destination.focus() })
-  expect(destination.isConnected).toBe(false)
-  expect(aside.className).toContain('sidebar-expanded')
-  expect(document.activeElement).toBe(
-    tree.container.querySelector('[data-sidebar-nav-id="goals"]'),
-  )
+  await withStubbedRects(async () => {
+    const tree = await harness.mount(sidebar())
+    const aside = tree.container.querySelector('aside')!
+    await hoverOpenAt(aside, BAND_TOP + 1)
+    expect(aside.className).toContain('w-12')
+    const destination = tree.container.querySelector<HTMLButtonElement>(
+      '[data-sidebar-nav-id="goals"]',
+    )!
+    await act(async () => { destination.focus() })
+    expect(destination.isConnected).toBe(false)
+    expect(aside.className).toContain('sidebar-expanded')
+    expect(document.activeElement).toBe(
+      tree.container.querySelector('[data-sidebar-nav-id="goals"]'),
+    )
+  })
 })
 
 function sessionRow(id: string, over: Partial<MergedSessionRow> = {}): MergedSessionRow {

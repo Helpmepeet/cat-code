@@ -7,7 +7,7 @@ import {
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
   resolveNavSelection,
-  selectSidebarFooterExpanded,
+  selectSidebarHoverAllowed,
   selectSidebarNavFocusHandoff,
   selectSidebarOpen,
   selectShellDescriptors,
@@ -286,14 +286,14 @@ test('CC-2: restoring a closed session does NOT move its Sidebar row', () => {
 // twin, so its cases live in those two suites.
 
 test('resolveNavSelection routes every enabled Sidebar.tsx NAV id to itself', () => {
-  // Mirrors Sidebar.tsx's NAV list (all six entries are enabled:true) — the
+  // Mirrors Sidebar.tsx's NAV list (all entries are enabled:true) — the
   // regression this guards is the P4-REVIEW B2 bug: a per-id allowlist in the
   // onClick handler omitted 'sessions', so clicking it never called
   // onSelectView even though the item rendered as enabled/clickable. This is
   // the routing-decision half of the fix; it cannot exercise a live click
-  // (no jsdom in this repo — see module doc), only that the pure decision is
-  // correct for every id BOTH NavItemExpanded and NavItemRail call it with.
-  const ids = ['chat', 'sessions', 'goals', 'accounts', 'settings'] as const
+  // (the DOM suite covers clicks), only that the pure decision is correct for
+  // every id NavItemRail calls it with in both rail states.
+  const ids = ['scheduled', 'goals', 'accounts', 'usage', 'settings'] as const
   for (const id of ids) {
     expect(resolveNavSelection({ id, enabled: true })).toBe(id)
   }
@@ -591,15 +591,16 @@ describe('sidebarActivityKey / compareSidebarActivity (CC-2 warp-free)', () => {
   })
 })
 
-describe('selectSidebarFooterExpanded', () => {
-  test('the list shows only while the pointer is inside the band above the rail bottom', () => {
-    expect(selectSidebarFooterExpanded(712, 900, 188)).toBe(true)
-    expect(selectSidebarFooterExpanded(899, 900, 188)).toBe(true)
-    expect(selectSidebarFooterExpanded(711, 900, 188)).toBe(false)
+describe('selectSidebarHoverAllowed', () => {
+  test('hover opening stops at the collapsed column top, including its padding', () => {
+    expect(selectSidebarHoverAllowed(711, 712)).toBe(true)
+    expect(selectSidebarHoverAllowed(712, 712)).toBe(false)
+    expect(selectSidebarHoverAllowed(899, 712)).toBe(false)
   })
 
-  test('an unknown pointer or an unmeasured band keeps the strip', () => {
-    expect(selectSidebarFooterExpanded(null, 900, 188)).toBe(false)
-    expect(selectSidebarFooterExpanded(850, 900, 0)).toBe(false)
+  test('the boundary follows the mounted column, not a fixed height', () => {
+    expect(selectSidebarHoverAllowed(700, 650)).toBe(false)
+    expect(selectSidebarHoverAllowed(700, 780)).toBe(true)
+    expect(selectSidebarHoverAllowed(850, null)).toBe(true)
   })
 })

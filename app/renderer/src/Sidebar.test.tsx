@@ -1016,9 +1016,8 @@ test('no account resolved yet leaves the expanded footer with direct destination
   expect(html).toContain('data-sidebar-nav-id="settings"')
 })
 
-test('the open rail rests with every destination directly available, no intermediary toggle', () => {
-  // Server markup has no pointer, so the footer renders in its resting strip.
-  // The labelled list and its pointer band are covered in `Sidebar.dom.test.ts`.
+test('the open rail has every destination directly available in its icon strip', () => {
+  // Pointer movement must preserve this strip too (`Sidebar.dom.test.ts`).
   const html = renderSidebar({ menuActive: true })
   expect(html).not.toContain('Show destinations')
   expect(html).not.toContain('Hide destinations')

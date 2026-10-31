@@ -8,10 +8,10 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  * One-line rows (operator, 2026-09-27, `docs/design-html/2026-09-27-sidebar-one-line-rows.html`):
  * a row is its title and the mark in its leading lane, nothing else. The recency
  * and the session name left the row; the name moved into the row tooltip.
- * Resting titles use the muted ink and brighten under the pointer. The open
- * rail's footer rests as one strip of icons and grows into the labelled list
- * only while the pointer is inside the band the collapsed rail's icon column
- * occupies.
+ * Resting titles use the muted ink and brighten under the pointer.
+ * Footer (operator, 2026-10-31, replacing the 2026-09-27 footer ruling):
+ * the open rail always shows one icon strip. Hovering the collapsed bottom
+ * icon column never opens the rail, so a destination stays under the pointer.
  *
  * Design source (2026-08-01): the operator's Claude Design project "Cat Code
  * Sidebar", `components/sidebar/index.html`. It supersedes the older
@@ -141,7 +141,7 @@ import {
   normalizeSidebarGroupExpansion,
   reorderDragHandlers,
   resolveNavSelection,
-  selectSidebarFooterExpanded,
+  selectSidebarHoverAllowed,
   selectSidebarNavFocusHandoff,
   selectSidebarOpen,
   selectVisibleSidebarRows,
@@ -334,7 +334,7 @@ export function Sidebar({
   /** Open the create-project dialog. Saving creates a record, not a session. */
   onAddProject?: () => void
   /** The active account's alias for the footer row, or null when no account is
-   * resolved yet — in which case the footer shows only the nav toggle rather
+   * resolved yet — in which case the footer shows only the destinations rather
    * than an empty avatar. */
   accountAlias?: string | null
   /**
@@ -417,13 +417,7 @@ export function Sidebar({
    * whose focus must survive the branch replacement. */
   const navRefs = useRef(new Map<NavItem['id'], HTMLButtonElement>())
   const refocusNavId = useRef<NavItem['id'] | null>(null)
-  /** Footer form while open: the labelled list, or the one-line icon strip.
-   * `selectSidebarFooterExpanded` decides it from the pointer's last y and the
-   * height of the collapsed rail's icon column, measured while collapsed. */
-  const [footerExpanded, setFooterExpanded] = useState(false)
-  const pointerY = useRef<number | null>(null)
   const collapsedNavRef = useRef<HTMLElement | null>(null)
-  const footerBandHeight = useRef(0)
 
   const open =
     !dismissed &&
@@ -434,24 +428,31 @@ export function Sidebar({
       focusWithin,
     })
 
-  const readFooterExpanded = useCallback(() => {
-    const aside = asideRef.current
-    return (
-      aside != null &&
-      selectSidebarFooterExpanded(
-        pointerY.current,
-        aside.getBoundingClientRect().bottom,
-        footerBandHeight.current,
-      )
+  const updateHover = (clientY: number) => {
+    // Read the mounted column, not a fixed height or a cached rectangle: the
+    // account identity and window size can change its hit area while collapsed.
+    const allowed = selectSidebarHoverAllowed(
+      clientY,
+      collapsedNavRef.current?.getBoundingClientRect().top ?? null,
     )
-  }, [])
-  const onEnter = () => {
+    if (!allowed) {
+      if (showTimer.current) clearTimeout(showTimer.current)
+      showTimer.current = null
+    } else if (!showTimer.current && !hovering) {
+      showTimer.current = setTimeout(() => {
+        showTimer.current = null
+        setHovering(true)
+      }, HOVER_DELAY)
+    }
+  }
+  const onEnter = (clientY: number) => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setDismissed(false)
-    showTimer.current = setTimeout(() => setHovering(true), HOVER_DELAY)
+    updateHover(clientY)
   }
   const onLeave = () => {
     if (showTimer.current) clearTimeout(showTimer.current)
+    showTimer.current = null
     // Don't start the hide timer while a row's menu/rename is open. Reaching for
     // that menu means leaving the rail.
     if (menuActive) return
@@ -459,6 +460,7 @@ export function Sidebar({
   }
   const collapseSidebar = useCallback(() => {
     if (showTimer.current) clearTimeout(showTimer.current)
+    showTimer.current = null
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setPinned(false)
     setHovering(false)
@@ -796,31 +798,12 @@ export function Sidebar({
     rowRefs.current.get(id)?.focus()
   }, [pinnedSessions])
 
-  // The band the footer list answers to is the collapsed icon column, so it is
-  // measured while that column is on screen.
-  useLayoutEffect(() => {
-    if (open) return
-    const aside = asideRef.current
-    const nav = collapsedNavRef.current
-    if (aside == null || nav == null) return
-    footerBandHeight.current =
-      aside.getBoundingClientRect().bottom - nav.getBoundingClientRect().top
-  }, [open, accountAlias])
-
-  // Opening decides the footer form from where the pointer already is.
-  useLayoutEffect(() => {
-    setFooterExpanded(open && readFooterExpanded())
-  }, [open, readFooterExpanded])
-
   useLayoutEffect(() => {
     const navId = refocusNavId.current
     if (navId == null || !open) return
-    // Wait out a footer swap the open transition is about to make, or focus
-    // would land on a button that unmounts one render later.
-    if (footerExpanded !== readFooterExpanded()) return
     refocusNavId.current = null
     navRefs.current.get(navId)?.focus()
-  }, [open, footerExpanded, readFooterExpanded])
+  }, [open])
 
   // Removing a focused control does not emit blur. Reconcile after each commit,
   // after any navigation focus handoff has finished.
@@ -867,18 +850,11 @@ export function Sidebar({
 
       <aside
         ref={asideRef}
-        onMouseEnter={event => {
-          pointerY.current = event.clientY
-          onEnter()
-        }}
+        onMouseEnter={event => onEnter(event.clientY)}
         onMouseMove={event => {
-          pointerY.current = event.clientY
-          if (open) setFooterExpanded(readFooterExpanded())
+          if (!open && !dismissed) updateHover(event.clientY)
         }}
-        onMouseLeave={() => {
-          pointerY.current = null
-          onLeave()
-        }}
+        onMouseLeave={onLeave}
         onFocusCapture={event => {
           const target = event.target
           const focusedNavId =
@@ -1233,65 +1209,41 @@ export function Sidebar({
               ) : null}
             </div>
 
-            {/* Footer: direct destinations and the active account. At rest it
-             * is one strip of icons; it grows into the labelled list only while
-             * the pointer is in the collapsed icon column's band
-             * (`selectSidebarFooterExpanded`), so opening the rail to reach a
-             * session never spends rows on destinations. Both forms keep every
-             * destination directly clickable. */}
+            {/* A stable one-line footer leaves the roster above it reachable. */}
             <nav
               aria-label="Views"
               className="flex shrink-0 flex-col items-stretch border-t border-shell-seam px-2 pb-[7px] pt-[5px]"
             >
-              {footerExpanded ? (
-                <>
-                  <div className="flex flex-col pb-1">
-                    {NAV.map(item => (
-                      <NavItemExpanded
-                        activeView={activeView}
-                        buttonRef={element => {
-                          if (element) navRefs.current.set(item.id, element)
-                          else navRefs.current.delete(item.id)
-                        }}
-                        item={item}
-                        key={item.id}
-                        needsSignIn={
-                          item.id === 'accounts' ? accountsNeedingSignIn : 0
-                        }
-                        onSelectView={selectView}
-                      />
-                    ))}
-                  </div>
-                  {accountButton}
-                </>
-              ) : (
-                <div className="flex items-center gap-0.5">
-                  <div className="flex min-w-0 flex-1">{accountButton}</div>
-                  {NAV.map(item => (
-                    <NavItemRail
-                      activeView={activeView}
-                      buttonRef={element => {
-                        if (element) navRefs.current.set(item.id, element)
-                        else navRefs.current.delete(item.id)
-                      }}
-                      item={item}
-                      key={item.id}
-                      needsSignIn={
-                        item.id === 'accounts' ? accountsNeedingSignIn : 0
-                      }
-                      onSelectView={selectView}
-                    />
-                  ))}
-                </div>
-              )}
+              <div className="flex items-center gap-0.5">
+                <div className="flex min-w-0 flex-1">{accountButton}</div>
+                {NAV.map(item => (
+                  <NavItemRail
+                    activeView={activeView}
+                    buttonRef={element => {
+                      if (element) navRefs.current.set(item.id, element)
+                      else navRefs.current.delete(item.id)
+                    }}
+                    item={item}
+                    key={item.id}
+                    needsSignIn={
+                      item.id === 'accounts' ? accountsNeedingSignIn : 0
+                    }
+                    onSelectView={selectView}
+                  />
+                ))}
+              </div>
             </nav>
           </>
         ) : (
-          /* Collapsed rail: destinations above the bottom-anchored account,
-           * matching the expanded footer so neither changes sides on hover. */
+          /* The column stays in place under the pointer until it moves above. */
           <nav
             ref={collapsedNavRef}
             aria-label="Views"
+            // A mouse press must reach click before keyboard-style focus entry
+            // replaces this column. Keyboard focus keeps the normal handoff.
+            onMouseDown={event => {
+              if (event.button === 0) event.preventDefault()
+            }}
             className="mt-auto flex flex-col items-center gap-1 pb-3 pt-2"
           >
             {NAV.map(item => (
@@ -2083,77 +2035,6 @@ export function SidebarRowItem({
         </div>
       ) : null}
     </div>
-  )
-}
-
-function NavItemExpanded({
-  item,
-  activeView,
-  buttonRef,
-  needsSignIn = 0,
-  onSelectView,
-}: {
-  item: NavItem
-  activeView: SidebarView
-  buttonRef: (element: HTMLButtonElement | null) => void
-  /** Accounts needing a fresh sign-in; 0 renders no mark. */
-  needsSignIn?: number
-  onSelectView: (view: SidebarView) => void
-}) {
-  const active = item.enabled && item.id === activeView
-  const signInLabel = formatAccountsNeedingSignIn(needsSignIn)
-  if (!item.enabled) {
-    return (
-      <button
-        ref={buttonRef}
-        type="button"
-        disabled
-        aria-disabled="true"
-        data-sidebar-nav-id={item.id}
-        className="flex w-full cursor-not-allowed items-center gap-1 rounded-[5px] py-[3px] text-text-subtle/55"
-      >
-        <span className="flex h-[18px] w-[26px] shrink-0 items-center justify-center [&_svg]:size-3.5">
-          {item.icon}
-        </span>
-        <span className="text-xs">{item.label}</span>
-      </button>
-    )
-  }
-  return (
-    <button
-      ref={buttonRef}
-      type="button"
-      aria-current={active ? 'page' : undefined}
-      aria-label={signInLabel ? `${item.label}, ${signInLabel}` : undefined}
-      data-sidebar-nav-id={item.id}
-      onClick={() => {
-        const view = resolveNavSelection(item)
-        if (view) onSelectView(view)
-      }}
-      className={
-        'flex w-full items-center gap-1 rounded-[5px] border py-[3px] transition-colors ' +
-        (active
-          ? ' border-accent/[0.18] bg-accent/[0.09] text-accent-soft'
-          : ' border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07] hover:text-[light-dark(#3f3f46,#d4d4d8)]')
-      }
-    >
-      <span className="flex h-[18px] w-[26px] shrink-0 items-center justify-center [&_svg]:size-3.5">
-        {item.icon}
-      </span>
-      <span className={'text-xs ' + (active ? 'font-medium' : '')}>
-        {item.label}
-      </span>
-      {signInLabel ? (
-        <span
-          aria-hidden="true"
-          title={signInLabel}
-          data-sidebar-nav-badge={item.id}
-          className="ml-auto mr-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-tone-warn/[0.16] px-1 text-[9.5px] font-semibold tabular-nums text-tone-warn"
-        >
-          {needsSignIn}
-        </span>
-      ) : null}
-    </button>
   )
 }
 

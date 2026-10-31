@@ -76,25 +76,20 @@ export function selectSidebarNavFocusHandoff<Id extends string>(
 }
 
 /**
- * Whether the open rail's footer shows its labelled destination list rather than
- * the one-line icon strip (operator, 2026-09-27). The list is for a pointer that
- * is going to the footer: it shows while the pointer is inside the band, measured
- * up from the rail's bottom edge, that the collapsed rail's icon column occupies.
- * An unknown pointer or an unmeasured band keeps the strip.
+ * Keep collapsed destinations under the pointer instead of opening the rail
+ * out from under a click. A null top means the collapsed column is not mounted.
  */
-export function selectSidebarFooterExpanded(
-  pointerY: number | null,
-  railBottom: number,
-  bandHeight: number,
+export function selectSidebarHoverAllowed(
+  pointerY: number,
+  collapsedNavTop: number | null,
 ): boolean {
-  if (pointerY == null || bandHeight <= 0) return false
-  return pointerY >= railBottom - bandHeight
+  return collapsedNavTop == null || pointerY < collapsedNavTop
 }
 
 /**
  * Resolve a nav-rail click into the view to switch to, or `null` when the
- * item is disabled. Pure so `Sidebar.tsx`'s `NavItemExpanded` and
- * `NavItemRail` can BOTH route every click through the same tested logic
+ * item is disabled. Pure so `Sidebar.tsx`'s `NavItemRail` routes clicks in
+ * both rail states through the same tested logic
  * instead of a hand-maintained per-id allowlist in the `onClick` handler —
  * that allowlist (P4-REVIEW B2) omitted `'sessions'`, so the Sessions nav
  * item silently did nothing when clicked despite `enabled: true`. Disabled
