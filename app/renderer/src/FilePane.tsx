@@ -25,7 +25,8 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const state = useFilePaneSession(appSessionId)
   const descriptor = state.file
   const [painted, setPainted] = useState<PaintedFile | null>(null)
-  const [serverHydrated, setServerHydrated] = useState(descriptor?.kind !== 'localhost')
+  const [previewHydrated, setPreviewHydrated] = useState(!descriptor)
+  const hydrationRequest = useRef<{ id: string; promise: Promise<FilePreviewDescriptor | null> } | null>(null)
   const [committing, setCommitting] = useState<PaintedFile | null>(null)
   const committingRef = useRef<PaintedFile | null>(null)
   const readyKeys = useRef(new Set<string>())
@@ -55,7 +56,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const candidateKey = stagingDescriptor ? `${stagingDescriptor.id}:${stagingDescriptor.revision}:${stagingDescriptor.url}:${reload}` : ''
   const retainCommit = committing && descriptor?.id === committing.descriptor.id &&
     (descriptor.kind === 'localhost' || descriptor.path === committing.descriptor.path) && descriptor.revision >= committing.descriptor.revision
-  const candidate = descriptor?.kind === 'localhost' && !serverHydrated ? null : retainCommit ? committing : stagingDescriptor && painted?.key !== candidateKey ? { descriptor: stagingDescriptor, key: candidateKey } : null
+  const candidate = !previewHydrated ? null : retainCommit ? committing : stagingDescriptor && painted?.key !== candidateKey ? { descriptor: stagingDescriptor, key: candidateKey } : null
   useLayoutEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
@@ -117,14 +118,21 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   }, [appSessionId, descriptor?.path])
 
   useEffect(() => {
-    if (!descriptor || descriptor.kind !== 'localhost' && !getFilePaneSession(appSessionId).committedFile) return
+    if (!descriptor) return
+    let current = true
     // The frame is destroyed when its session leaves the screen. The host's
     // bounded snapshot remains available, including after a file was removed.
-    void window.catcode.refreshFilePreview(descriptor.id).then(next => {
-      if (next && descriptorRef.current?.id === next.id && !olderThanRetainedRevision(appSessionId, next) && (!samePaneRevision(next, descriptorRef.current) || next.serverStopped !== descriptorRef.current.serverStopped || next.blockedHost !== descriptorRef.current.blockedHost || next.browserNote !== descriptorRef.current.browserNote || next.watchError !== descriptorRef.current.watchError)) {
+    // Even an uncommitted first-load snapshot can miss updates while off-screen.
+    // StrictMode's effect replay must await the same catch-up read.
+    const pending = hydrationRequest.current?.id === descriptor.id
+      ? hydrationRequest.current.promise : window.catcode.refreshFilePreview(descriptor.id)
+    hydrationRequest.current = { id: descriptor.id, promise: pending }
+    void pending.then(next => {
+      if (current && next && descriptorRef.current?.id === next.id && !olderThanRetainedRevision(appSessionId, next) && (!samePaneRevision(next, descriptorRef.current) || next.serverStopped !== descriptorRef.current.serverStopped || next.blockedHost !== descriptorRef.current.blockedHost || next.browserNote !== descriptorRef.current.browserNote || next.watchError !== descriptorRef.current.watchError)) {
         updateFilePaneSession(appSessionId, { file: next, note: previewDescriptorNote(next) })
       }
-    }).catch(() => {}).finally(() => { if (mounted.current) setServerHydrated(true) })
+    }).catch(() => {}).finally(() => { if (current && mounted.current) setPreviewHydrated(true) })
+    return () => { current = false }
   }, [appSessionId])
 
   useEffect(() => window.catcode.subscribeFilePreview(event => {

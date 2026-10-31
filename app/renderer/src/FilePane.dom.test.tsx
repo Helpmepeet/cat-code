@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act } from 'react'
+import { act, StrictMode } from 'react'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -302,6 +302,49 @@ test('file history restores scroll and session switches preserve file and width 
   expect(getFilePaneSession(sessionId).history).toEqual([])
   expect(getFilePaneSession(sessionId).forward).toEqual([])
 })
+
+test.each([
+  ['pending', false], ['complete', false],
+  ['pending', true], ['complete', true],
+] as const)('an HTML preview catches up after a session switch with its first load %s (StrictMode: %s)', async (firstLoad, strictMode) => {
+  const { pane, sessionId, brokenPath, otherSession, service } = setup()
+  const renderPane = (id = sessionId) => strictMode ? <StrictMode>{pane(id)}</StrictMode> : pane(id)
+  writeFileSync(brokenPath, '<!doctype html><h1>Original HTML</h1>')
+  const tree = await harness.mount(renderPane())
+  const paintCandidate = async () => {
+    const frame = tree.container.querySelector('iframe.file-pane-staging')
+    expect(frame).not.toBeNull()
+    await act(async () => { frame!.dispatchEvent(new Event('load')) })
+    await settle()
+  }
+  await act(async () => { await requestOpenFile(sessionId, brokenPath) })
+  await settle()
+  if (firstLoad === 'complete') await paintCandidate()
+  else expect(getFilePaneSession(sessionId).committedFile).toBeNull()
+  const original = getFilePaneSession(sessionId).file!
+  await tree.render(renderPane(otherSession))
+  const updates: Array<Extract<FilePreviewEvent, { kind: 'updated' }>> = []
+  const unsubscribe = window.catcode.subscribeFilePreview(event => {
+    if (event.kind === 'updated' && event.id === original.id) updates.push(event)
+  })
+  try {
+    writeFileSync(brokenPath, '<!doctype html><h1>Edited while away</h1>')
+    for (let attempt = 0; attempt < 35 && !updates.length; attempt++) {
+      await act(async () => { await new Promise(resolve => setTimeout(resolve, 100)) })
+    }
+    const update = updates.at(-1)
+    if (!update) throw new Error('The file watcher did not publish the HTML edit')
+    expect(await (await service.respond(new Request(update.descriptor.url))).text()).toContain('Edited while away')
+    await tree.render(renderPane())
+    await settle()
+    await paintCandidate()
+    if (tree.container.querySelector('iframe.file-pane-staging')) await paintCandidate()
+    const committed = getFilePaneSession(sessionId).committedFile!
+    expect(tree.container.querySelector('iframe:not(.file-pane-staging)')?.getAttribute('src')).toBe(committed.url)
+    expect(await (await service.respond(new Request(committed.url))).text()).toContain('Edited while away')
+    expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+  } finally { unsubscribe() }
+}, 10000)
 
 test('a watched file stages new bytes while removal keeps the last rendered version and recovers', async () => {
   const { pane, sessionId, firstPath, service } = setup()
