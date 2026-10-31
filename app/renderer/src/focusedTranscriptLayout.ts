@@ -57,11 +57,11 @@ export function isFocusedDeliverable(row: NestedTranscriptRow): boolean {
 }
 
 /** A settled stretch of exactly one call is named by its target instead of counted. */
-export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: string; target: string } | null {
+export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: string; target: string; toolUseId: string } | null {
   const calls = rows.filter(row => row.kind === 'tool-use')
   const call = calls[0]
   if (calls.length !== 1 || call?.kind !== 'tool-use' || call.status === 'pending') return null
-  return { verb: pastVerbs[call.toolFamily] ?? 'Used', target: deriveTarget(call) }
+  return { verb: pastVerbs[call.toolFamily] ?? 'Used', target: deriveTarget(call), toolUseId: call.toolUseId }
 }
 
 function rowHasError(row: NestedTranscriptRow): boolean {

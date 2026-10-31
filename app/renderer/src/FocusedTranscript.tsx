@@ -9,6 +9,7 @@ import { useToolCardExpanded } from './toolCardExpansion.js'
 import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { AgentRevealContext, containsAgentTool } from './transcriptAgentReveal.js'
 import { TranscriptMotionContext } from './transcriptMotion.js'
+import { FocusedNamedCallContext } from './transcriptMode.js'
 import { AutoModeReviewMark } from './AutoModeReviewMark.js'
 import { summarizeAutoModeReviews } from './autoModeReview.js'
 import './focusedTranscript.css'
@@ -154,6 +155,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
       : named
         ? [`named:${named.verb}:${named.target}`, <>{named.verb} <span className="focused-step-target">{named.target}</span></>]
         : [`sum:${summary.summary}`, capitalize(summary.summary)]
+  const headNames = !active && !(segment.activeLabel && !finishedHead && !live) ? named : null
   const mainTool = headCall ?? (live ? segment.rows.find(row => row.kind === 'tool-use' && row.status === 'pending') : null)
     ?? segment.rows.find(row => row.kind === 'tool-use')
   const family = mainTool?.kind === 'tool-use' ? mainTool.toolFamily : null
@@ -174,7 +176,9 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
       {live && headCall ? <LiveOutput call={headCall} now={now} className="focused-head-out" /> : null}
       <RollingCalls calls={rollingNow ? rollingCalls(calls.filter(call => call !== headCall)) : []} now={now} signalled={liveState !== null} />
       <FocusedDisclosure open={open} id={bodyId}>
-        <div className="focused-step-body">{renderRows(segment.rows.filter(row => !isFocusedDeliverable(row)), false)}</div>
+        <FocusedNamedCallContext.Provider value={headNames?.toolUseId ?? null}>
+          <div className="focused-step-body">{renderRows(segment.rows.filter(row => !isFocusedDeliverable(row)), false)}</div>
+        </FocusedNamedCallContext.Provider>
       </FocusedDisclosure>
     </div>
   )

@@ -120,6 +120,12 @@ export const TOOL_CARD_BODY_CLASS: Record<ToolCardStyle, string> = {
   lines: 'ml-6 border-l border-shell-seam pl-3',
 }
 
+/** The body of a card whose header another line already carries: no rule under a header that is not drawn. */
+export const TOOL_CARD_HEADERLESS_BODY_CLASS: Record<ToolCardStyle, string> = {
+  cards: 'bg-black/[0.28]',
+  lines: '',
+}
+
 /** Body padding. `lines` drops the side padding the indent already supplies. */
 export const TOOL_CARD_BODY_INNER_CLASS: Record<ToolCardStyle, string> = {
   cards: 'px-3 pb-2.5 pt-1',

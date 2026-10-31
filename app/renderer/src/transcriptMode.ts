@@ -27,6 +27,9 @@ export type TranscriptModeContextValue = {
   setMode: (next: TranscriptMode) => void
 }
 
+/** The `toolUseId` a Focused step head already names, so its own card leaves the header out. */
+export const FocusedNamedCallContext = createContext<string | null>(null)
+
 export const TranscriptModeContext = createContext<TranscriptModeContextValue>({
   mode: DEFAULT_TRANSCRIPT_MODE,
   setMode: () => {},

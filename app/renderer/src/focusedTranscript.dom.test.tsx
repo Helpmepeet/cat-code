@@ -47,6 +47,23 @@ test('Working keeps updates and reasoning in order, with tool rows behind their 
   expect(tree.container.textContent).toContain('12 pass')
 })
 
+test('a step naming one finished command shows its output without repeating the command', async () => {
+  const tree = await harness.mount(view(complete, false, false))
+  await click(tree.container.querySelector('.focused-fold-head'))
+  const step = tree.container.querySelector('.focused-step-head')!
+  expect(step.textContent).toContain('Ran bun test src/loader')
+  await click(step)
+  const body = tree.container.querySelector('.focused-step-body')!
+  expect(body.textContent).toContain('12 pass')
+  expect(body.textContent).not.toContain('bun test src/loader')
+  expect(body.querySelector('button')).toBeNull()
+  // A second command in the stretch is counted by the head, so each card keeps its own header.
+  const second: NestedTranscriptRow = { ...tool, id: 'tool-2', toolUseId: 'call-2', input: { command: 'bun test src/other' } }
+  await tree.render(view([...work.slice(0, 4), second, ...complete.slice(4)], false, false))
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Ran 2 commands')
+  expect(tree.container.querySelector('.focused-step-body')?.textContent).toContain('bun test src/other')
+})
+
 test('successful work folds at turn end and reopens with all updates, independent of expanded tool detail', async () => {
   const tree = await harness.mount(view(complete, false, true))
   const head = tree.container.querySelector('.focused-fold-head')!

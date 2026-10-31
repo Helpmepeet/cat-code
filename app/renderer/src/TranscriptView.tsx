@@ -124,6 +124,7 @@ import { withoutTodoRows } from './todoPlan.js'
 import {
   TOOL_CARD_BAND_CLASS,
   TOOL_CARD_BODY_CLASS,
+  TOOL_CARD_HEADERLESS_BODY_CLASS,
   TOOL_CARD_BODY_INNER_CLASS,
   TOOL_CARD_DIVIDER_CLASS,
   TOOL_CARD_HEADER_CLASS,
@@ -136,7 +137,7 @@ import {
   type ToolCardStyle,
 } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
-import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
+import { FocusedNamedCallContext, TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
 import { deriveFocusedTranscript, type FocusedTranscriptItem, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { FocusedChevron, FocusedTranscript } from './FocusedTranscript.js'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
@@ -2703,6 +2704,7 @@ function ToolCardShell({
   presentation,
   tone,
   targetNode,
+  headerless = false,
   children,
 }: {
   family: ToolFamily
@@ -2752,16 +2754,21 @@ function ToolCardShell({
    * so the hover swap and the file-path menu keep working off one value.
    */
   targetNode?: ReactNode
+  /** The line above already names this call, so the body stands alone and stays open. */
+  headerless?: boolean
   children?: ReactNode
 }) {
   const focused = useContext(TranscriptModeContext).mode === 'focused'
   const inheritedReview = useContext(AutoModeReviewContext)
   const review = callGroup ? undefined : inheritedReview
+  // Reviewed calls keep their own mark when a Focused head already names them.
+  headerless = headerless && !review
   const toolsExpanded = useContext(ToolsExpandedContext).expanded
-  const [expanded, setExpanded] = useToolCardExpanded(
+  const [expandedChoice, setExpanded] = useToolCardExpanded(
     expansionKey ?? null,
     focused && status === 'error' && !callGroup ? toolsExpanded : defaultExpanded ?? false,
   )
+  const expanded = expandedChoice || headerless
   const base = FAMILY_STYLE[family]
   const fam = {
     mark: presentation?.mark ?? base.mark,
@@ -2778,7 +2785,7 @@ function ToolCardShell({
     ? <BashTailPeek tail={selectPeekLines(failureOutput.split('\n'))} /> : collapsedExtra
   return (
     <div className={TOOL_CARD_SHELL_CLASS[style]}>
-      <button
+      {headerless && hasBody ? null : <button
         type="button"
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
@@ -2838,7 +2845,7 @@ function ToolCardShell({
           role="img"
           aria-label={st.word}
         />
-      </button>
+      </button>}
       {!expanded && peek ? (
         <div
           className={animateCollapsedExtra ? 'animate-arrive' : undefined}
@@ -2849,7 +2856,7 @@ function ToolCardShell({
         </div>
       ) : null}
       {expanded && hasBody ? (
-        <div className={TOOL_CARD_BODY_CLASS[style]}>
+        <div className={headerless ? TOOL_CARD_HEADERLESS_BODY_CLASS[style] : TOOL_CARD_BODY_CLASS[style]}>
           {sub ? (
             <div className={TOOL_CARD_SUB_CLASS[style]}>{sub}</div>
           ) : null}
@@ -3266,6 +3273,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   // itself, for reasons this preference knows nothing about.
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
   const focused = useContext(TranscriptModeContext).mode === 'focused'
+  const namedCallId = useContext(FocusedNamedCallContext)
   const filePathContext = useContext(FilePathMenuContext)
   const filePath = toolCardFilePath(row)
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
@@ -3378,6 +3386,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         sub={deriveSub(row)}
         headerBadge={headerBadge}
         targetHover={deriveTargetHover(row)}
+        headerless={row.toolFamily === 'bash' && row.status !== 'pending' && namedCallId === row.toolUseId}
         expansionKey={row.toolUseId}
         defaultExpanded={
           toolsExpanded || row.status === 'error' || isImageDone || hasResultImages
