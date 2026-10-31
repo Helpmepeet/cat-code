@@ -1,6 +1,7 @@
 import { constants, closeSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, writeSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { lock, lockSync } from './lockfile.js'
+import { sleep } from './sleep.js'
 import { isHandoffUuid } from '../../app/shared/workspaceHandoff.js'
 import { assertSessionNotMoving } from './sessionRelocationState.js'
 
@@ -212,6 +213,19 @@ export async function withTranscriptAppendGuard<T>(path: string, action: () => P
 /** Never repairs damaged bytes. Mutation of an incomplete tail needs owned preflight. */
 export function appendFramedTranscriptSync(path: string, data: string): void {
   withTranscriptAppendGuardSync(path, () => appendFramedTranscriptWithinGuard(path, data))
+}
+
+// Takes the lock for one synchronous step: sync appenders cannot wait on an
+// async holder in their own process, so they must never find the lock taken by
+// a routine append. The retries only cover other holders.
+export async function appendFramedTranscript(path: string, data: string): Promise<void> {
+  for (let retry = 0; ; retry++) {
+    try { return appendFramedTranscriptSync(path, data) }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ELOCKED' || retry >= 40) throw error
+      await sleep(Math.min(100, 5 * 1.2 ** retry))
+    }
+  }
 }
 
 export function appendFramedTranscriptWithinGuard(path: string, data: string): void {

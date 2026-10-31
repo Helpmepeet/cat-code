@@ -28,11 +28,11 @@ test('concurrent flushers cannot return over a later drain started after their s
     bootstrap.switchSession(randomUUID() as never)
     const seed = createUserMessage({ content: 'seed' })
     await storage.recordTranscript([seed]); await storage.flushCurrentTranscriptDurably(seed.uuid)
-    const original = guard.withTranscriptAppendGuard
-    interception = spyOn(guard, 'withTranscriptAppendGuard').mockImplementation(async (path, action) => {
+    const original = guard.appendFramedTranscript
+    interception = spyOn(guard, 'appendFramedTranscript').mockImplementation(async (path, data) => {
       if (++writes === 1) { firstEntered.resolve(); await releaseFirst.promise }
       else if (writes === 2) { secondEntered.resolve(); await releaseSecond.promise }
-      return original(path, action)
+      return original(path, data)
     })
     const first = createUserMessage({ content: 'first queued write' })
     await storage.recordTranscript([seed, first])

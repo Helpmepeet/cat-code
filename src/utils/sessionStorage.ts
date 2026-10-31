@@ -121,7 +121,7 @@ import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
-import { appendFramedTranscriptSync, appendFramedTranscriptWithinGuard, replacePrivateTranscriptWithinGuard, withTranscriptAppendGuard } from './transcriptAppendGuard.js'
+import { appendFramedTranscript, appendFramedTranscriptSync, replacePrivateTranscriptWithinGuard, withTranscriptAppendGuard } from './transcriptAppendGuard.js'
 import { prepareOwnedTranscriptTail, type TailRecoveryState } from './transcriptTailRecovery.js'
 import { isAcceptedInputBatch } from './queuedInputReceipts.js'
 
@@ -1496,7 +1496,7 @@ class Project {
 
   private async appendToFile(filePath: string, data: string): Promise<void> {
     await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
-    await withTranscriptAppendGuard(filePath, async () => appendFramedTranscriptWithinGuard(filePath, data))
+    await appendFramedTranscript(filePath, data)
   }
 
   private startDrain(): Promise<void> {
