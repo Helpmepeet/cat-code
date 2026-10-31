@@ -8,6 +8,7 @@ import { assertSessionNotMoving } from './sessionRelocationState.js'
 export type TranscriptFraming = { boundary: number; suffix: Buffer; needsSeparator: boolean }
 export const canonicalTranscriptPath = (path: string) => join(realpathSync(dirname(path)), basename(path))
 const held = new Map<string, { dev: number; ino: number }>()
+const readHolders = new Set<string>()
 
 export function assertTranscriptAppendGuard(path: string): void {
   const key = canonicalTranscriptPath(path)
@@ -197,6 +198,7 @@ export function inspectTranscriptAppendBoundary(fd: number): { needsSeparator: b
 // claim exclusion against older binaries or arbitrary filesystem writers.
 export function withTranscriptAppendGuardSync<T>(path: string, action: () => T): T {
   const key = canonicalTranscriptPath(path)
+  if (readHolders.has(key)) return action()
   const release = lockSync(`${key}.append`, { realpath: false, retries: 0, stale: 120_000 })
   held.set(key, lstatSync(`${key}.append.lock`))
   try { return action() } finally { held.delete(key); release() }
@@ -215,17 +217,33 @@ export function appendFramedTranscriptSync(path: string, data: string): void {
   withTranscriptAppendGuardSync(path, () => appendFramedTranscriptWithinGuard(path, data))
 }
 
-// Takes the lock for one synchronous step: sync appenders cannot wait on an
-// async holder in their own process, so they must never find the lock taken by
-// a routine append. The retries only cover other holders.
-export async function appendFramedTranscript(path: string, data: string): Promise<void> {
+async function retryWhileLocked<T>(attempt: () => T): Promise<T> {
   for (let retry = 0; ; retry++) {
-    try { return appendFramedTranscriptSync(path, data) }
+    try { return attempt() }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ELOCKED' || retry >= 40) throw error
       await sleep(Math.min(100, 5 * 1.2 ** retry))
     }
   }
+}
+
+// Takes the lock for one synchronous step: sync appenders cannot wait on an
+// async holder in their own process, so they must never find the lock taken by
+// a routine append. The retries only cover other holders.
+export function appendFramedTranscript(path: string, data: string): Promise<void> {
+  return retryWhileLocked(() => appendFramedTranscriptSync(path, data))
+}
+
+// For holders that only read a prefix fixed by their own stat. The lock keeps
+// other processes out. Appends from this process land whole, past that prefix,
+// so they proceed under this lock instead of failing. It is taken and released
+// synchronously so no append can arrive while it changes hands.
+export async function withTranscriptReadGuard<T>(path: string, action: () => Promise<T>): Promise<T> {
+  const key = canonicalTranscriptPath(path)
+  const release = await retryWhileLocked(() => lockSync(`${key}.append`, { realpath: false, retries: 0, stale: 120_000 }))
+  held.set(key, lstatSync(`${key}.append.lock`))
+  readHolders.add(key)
+  try { return await action() } finally { readHolders.delete(key); held.delete(key); release() }
 }
 
 export function appendFramedTranscriptWithinGuard(path: string, data: string): void {

@@ -121,7 +121,7 @@ import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
-import { appendFramedTranscript, appendFramedTranscriptSync, replacePrivateTranscriptWithinGuard, withTranscriptAppendGuard } from './transcriptAppendGuard.js'
+import { appendFramedTranscript, appendFramedTranscriptSync, replacePrivateTranscriptWithinGuard, withTranscriptAppendGuard, withTranscriptReadGuard } from './transcriptAppendGuard.js'
 import { prepareOwnedTranscriptTail, type TailRecoveryState } from './transcriptTailRecovery.js'
 import { isAcceptedInputBatch } from './queuedInputReceipts.js'
 
@@ -2637,7 +2637,7 @@ export async function flushCurrentTranscriptDurably(
     if (expectedUuid) throw new Error('Expected transcript UUID has no owned transcript')
     return
   }
-  await withTranscriptAppendGuard(transcriptPath, async () => {
+  await withTranscriptReadGuard(transcriptPath, async () => {
   const handle = await fsOpen(
     transcriptPath,
     fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
@@ -2810,7 +2810,7 @@ export async function sealResumeCheckpoint(expectedResumeProjection: Message[]):
   if (updates.length) await getProject().appendFinalizedAssistantMetadata(updates)
   await markActiveConversationTip(tip.uuid as UUID)
   await flushCurrentTranscriptDurably()
-  return withTranscriptAppendGuard(path, async () => {
+  return withTranscriptReadGuard(path, async () => {
   const info = await stat(path)
   const prefixSha256 = await hashTranscriptPrefix(path, info.size)
   const loaded = await loadTranscriptFile(path, { keepAllLeaves: true, strict: true, prefixBytes: info.size })

@@ -59,6 +59,27 @@ test('subagent markers written between queued transcript writes never find the l
   expect(lines.filter(line => line.type === 'user')).toHaveLength(messages.length)
 }, 20_000)
 
+test('subagent markers written during a durable flush never find the lock held', async () => {
+  const seed = createUserMessage({ content: 'seed' })
+  await storage.recordTranscript([seed])
+  const path = storage.getTranscriptPath()
+  let markers = 0
+  for (let index = 0; index < 50; index++) {
+    let settled = false
+    const flush = storage.flushCurrentTranscriptDurably(seed.uuid).finally(() => { settled = true })
+    while (!settled) {
+      storage.appendSubagentTerminal(path, {
+        sessionId: bootstrap.getSessionId(), agentId: 'a-marker' as never, toolUseId: `tool-${markers++}`,
+        status: 'completed', durationMs: 1, endedAt: new Date().toISOString(),
+      })
+      await Bun.sleep(0)
+    }
+    await flush
+  }
+  const lines = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  expect(lines.filter(line => line.type === 'subagent-terminal')).toHaveLength(markers)
+}, 20_000)
+
 test('a queued transcript write waits for a lock held by another writer', async () => {
   const dir = join(root, 'held')
   mkdirSync(dir)
