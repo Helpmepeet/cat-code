@@ -423,14 +423,20 @@ export function stampSubagentFrames(
   frames: readonly SDKMessage[],
   parentToolUseId: string,
   agentName: string | undefined,
+  agentCwd?: string,
 ): SubagentDisplayFrame[] {
+  const cwd = typeof agentCwd === 'string' && agentCwd.startsWith('/') &&
+    agentCwd.length <= 4096 && !agentCwd.includes('\0') ? agentCwd : undefined
   const stamped: SubagentDisplayFrame[] = []
   for (const frame of frames) {
     if (frame.type !== 'assistant' && frame.type !== 'user') continue
+    // Provenance comes only from this run, never from an incoming frame.
+    const { agent_cwd: _untrustedCwd, ...displayFrame } = frame
     stamped.push({
-      ...frame,
+      ...displayFrame,
       parent_tool_use_id: parentToolUseId,
       ...(agentName !== undefined ? { agent_name: agentName } : {}),
+      ...(cwd !== undefined ? { agent_cwd: cwd } : {}),
     })
   }
   return stamped

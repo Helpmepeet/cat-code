@@ -84,6 +84,7 @@ import { clearSessionHooks } from '../../utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from '../../utils/hooks.js'
 import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
 import { stampSubagentFrames, toSDKMessages } from '../../utils/messages/mappers.js'
+import { getCwd } from '../../utils/cwd.js'
 import {
   formatBlockedHandoff,
   parseAskParentSessionEscalation,
@@ -528,6 +529,8 @@ async function* runAgentInCleanupScope({
    * message is yielded for >60s. */
   onQueryProgress?: () => void
 }, setupCleanups: SetupCleanup[]): AsyncGenerator<Message, void> {
+  // Iteration begins inside the caller's cwd/worktree async scope.
+  const agentCwd = getCwd()
   // Track subagent usage for feature discovery
 
   const appState = toolUseContext.getAppState()
@@ -1156,7 +1159,7 @@ async function* runAgentInCleanupScope({
   const publishFrame = publishDisplaySteps ? toolUseContext.publishSubagentFrame : undefined
   const publishSteps = (messages: Message[]) => {
     if (!publishFrame || !parentToolUseId) return
-    for (const frame of stampSubagentFrames(toSDKMessages(messages), parentToolUseId, workerName)) {
+    for (const frame of stampSubagentFrames(toSDKMessages(messages), parentToolUseId, workerName, agentCwd)) {
       // Display is an observer: a failing subscriber must not fail the run.
       try {
         publishFrame(frame)
@@ -1184,8 +1187,8 @@ async function* runAgentInCleanupScope({
             runs: [
               ...previousAgentRuns(previous),
               runStartUuid
-                ? { parentToolUseId, firstMessageUuid: runStartUuid }
-                : { parentToolUseId },
+                ? { parentToolUseId, firstMessageUuid: runStartUuid, cwd: agentCwd }
+                : { parentToolUseId, cwd: agentCwd },
             ].slice(-MAX_AGENT_RUN_RECORDS),
           }
         : {}),

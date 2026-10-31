@@ -720,7 +720,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   )
   const closeFilePathMenu = useCallback(() => setFilePathMenuState(null), [])
   const inheritedFileCards = useContext(LatestPaneFileCardContext)
-  const latestFileCards = useMemo(() => inheritedFileCards ?? latestPaneFileCards(rows, cwd ?? null), [inheritedFileCards, rows, cwd])
   const { style: cardStyle } = useContext(ToolCardStyleContext)
   const filePathMenuContextValue = useMemo(
     () => ({ cwd: cwd ?? null, openFilePathMenu }),
@@ -728,8 +727,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   )
   const inheritedFileScopes = useContext(TranscriptFileScopeContext)
   const fileScopes = useMemo(
-    () => contextTransitions.length ? transcriptFileScopes(boundaryRows, contextTransitions) : inheritedFileScopes,
+    () => inheritedFileScopes ?? transcriptFileScopes(boundaryRows, contextTransitions),
     [boundaryRows, contextTransitions, inheritedFileScopes],
+  )
+  const latestFileCards = useMemo(
+    () => inheritedFileCards ?? latestPaneFileCards(rows, cwd ?? null, undefined, fileScopes),
+    [inheritedFileCards, rows, cwd, fileScopes],
   )
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   const { mode: transcriptMode } = useContext(TranscriptModeContext)
@@ -2161,7 +2164,7 @@ function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: str
   const scopes = useContext(TranscriptFileScopeContext)
   const cwd = useContext(FilePathMenuContext)?.cwd ?? null
   const toast = useToast()
-  if (!file || !opener || !isPaneFilePath(file.path) || latest?.get(paneFileKey(file.path, cwd)) !== file.cardId) return null
+  if (!file || !opener || !isPaneFilePath(file.path) || latest?.get(paneFileKey(file.path, scopes?.get(file.cardId) ?? cwd)) !== file.cardId) return null
   return event => {
     event.stopPropagation()
     void opener(file.sessionId, scopedTranscriptFilePath(file.path, scopes?.get(file.cardId)), { external: event.metaKey }).then(result => {
@@ -2789,7 +2792,7 @@ function ToolCardShell({
    * own (`bashCommandLabel.ts`).
    */
   targetHover?: string
-  targetFilePath?: { rawPath: string; sessionId: SessionId }
+  targetFilePath?: { rawPath: string; sessionId: SessionId; rowId: string }
   fileOpen?: { path: string; sessionId: SessionId; cardId: string }
   localhostOpen?: { url: string; sessionId: SessionId }
   collapsedExtra?: ReactNode
@@ -2853,6 +2856,7 @@ function ToolCardShell({
   const { style } = useContext(ToolCardStyleContext)
   const { results } = useContext(TranscriptMotionContext)
   const filePathContext = useContext(FilePathMenuContext)
+  const fileCwd = useContext(TranscriptFileScopeContext)?.get(targetFilePath?.rowId ?? '')
   const openPaneFile = usePaneCardOpen(fileOpen)
   const openServer = useLocalhostCardOpen(localhostOpen)
   const openPaneTarget = openPaneFile ?? openServer
@@ -2890,6 +2894,7 @@ function ToolCardShell({
                     { type: 'pointer', x: event.clientX, y: event.clientY },
                     targetFilePath.rawPath,
                     targetFilePath.sessionId,
+                    fileCwd ? { sourceCwd: fileCwd } : undefined,
                   )
                 }
               : undefined
@@ -3358,7 +3363,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   const localhostOpen = localUrl ? { url: localUrl, sessionId: row.sessionId } : undefined
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
   const targetFilePath =
-    filePath === null ? undefined : { rawPath: filePath, sessionId: row.sessionId }
+    filePath === null ? undefined : { rawPath: filePath, sessionId: row.sessionId, rowId: row.id }
   // A send is speech, not a card. Ahead of the cancelled branch because the
   // shape does not change when the call was stopped: the row still says who
   // this session was talking to and what it said.
@@ -3542,7 +3547,7 @@ function PatchFileCard({
     <ToolCardShell
       family="edit"
       target={displayFilePath(diff.filePath, filePathContext?.cwd ?? null)}
-      targetFilePath={{ rawPath: diff.filePath, sessionId: row.sessionId }}
+      targetFilePath={{ rawPath: diff.filePath, sessionId: row.sessionId, rowId: row.id }}
       fileOpen={{ path: diff.filePath, sessionId: row.sessionId, cardId: row.id }}
       failureOutput={row.result?.content}
       status={row.status}
@@ -3970,7 +3975,7 @@ function ToolRunCard({
       targetFilePath={
         head.filePath === undefined || members[0] === undefined
           ? undefined
-          : { rawPath: head.filePath, sessionId: members[0].sessionId }
+          : { rawPath: head.filePath, sessionId: members[0].sessionId, rowId: members[0].id }
       }
       status={status}
       fileOpen={family === 'edit' && head.filePath && members.at(-1) ? { path: head.filePath, sessionId: members.at(-1)!.sessionId, cardId: members.at(-1)!.id } : undefined}
@@ -4290,6 +4295,7 @@ function ToolRunRowLabel({
   hoistedPrefix: string
 }) {
   const filePathContext = useContext(FilePathMenuContext)
+  const fileCwd = useContext(TranscriptFileScopeContext)?.get(row.id)
   if (family === 'edit') {
     const location = editLocationLabel(row)
     return location !== null ? (
@@ -4325,6 +4331,7 @@ function ToolRunRowLabel({
       { type: 'pointer', x: event.clientX, y: event.clientY },
       path,
       row.sessionId,
+      fileCwd ? { sourceCwd: fileCwd } : undefined,
     )
   }
   return (

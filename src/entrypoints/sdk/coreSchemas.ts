@@ -1405,6 +1405,8 @@ const SDKUserMessageContentSchema = lazySchema(() =>
     // The engine-minted identity of the subagent that emitted this nested
     // transcript frame. Absent on ordinary main-session turns.
     agent_name: z.string().optional(),
+    // Engine-owned effective worker filesystem origin, never the parent's cwd.
+    agent_cwd: z.string().max(4096).regex(/^\/[^\0]*$/).optional(),
     isSynthetic: z.boolean().optional(),
     tool_use_result: z.unknown().optional(),
     /**
@@ -1493,6 +1495,7 @@ export const SDKAssistantMessageSchema = lazySchema(() =>
     // See SDKUserMessageContentSchema: this stays with the replayable nested
     // frame rather than being joined from live task state by a consumer.
     agent_name: z.string().optional(),
+    agent_cwd: z.string().max(4096).regex(/^\/[^\0]*$/).optional(),
     error: SDKAssistantErrorCodeSchema().optional(),
     uuid: UUIDPlaceholder(),
     session_id: z.string(),

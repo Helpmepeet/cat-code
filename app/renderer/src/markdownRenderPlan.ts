@@ -19,6 +19,7 @@ import type { ReactNode } from 'react'
 import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { defaultUrlTransform } from 'react-markdown'
+import { localFileUrlPath } from '../../shared/localFileUrl.js'
 import { isInlineFilePath, workspaceFileHref } from './transcriptFileLinks.js'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
@@ -198,6 +199,14 @@ function buildProcessor(rehypePlugins: PluggableList, math: boolean) {
   // and explicit `$$...$$` remains available for Markdown-authored math.
   if (math) processor.use(remarkMath, { singleDollarTextMath: false })
   return processor
+    .use(() => (tree: MdastRoot) => {
+      const visit = (node: MdastNodes): void => {
+        // Validate before mdast-to-hast repairs malformed percent escapes.
+        if ('url' in node && /^file:/i.test(node.url) && localFileUrlPath(node.url) === null) node.url = ''
+        if ('children' in node) node.children.forEach(visit)
+      }
+      visit(tree)
+    })
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypePlugins)
 }
@@ -1516,7 +1525,7 @@ function normalizeTree(
     for (const key of ['href', 'src']) {
       if (!Object.hasOwn(node.properties, key)) continue
       const url = String(node.properties[key] ?? '')
-      const transformed = defaultUrlTransform(url)
+      const transformed = key === 'href' && localFileUrlPath(url) !== null ? url : defaultUrlTransform(url)
       // A filename followed by :line looks like a URI scheme to the generic
       // transform. Make the local-path syntax explicitly relative.
       node.properties[key] = key === 'href' && transformed === '' && /:\d+(?::\d+)?$/.test(url) &&

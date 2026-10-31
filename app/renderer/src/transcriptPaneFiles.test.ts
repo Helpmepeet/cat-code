@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { NestedTranscriptRow, NestedToolUseRow } from './transcriptProjector.js'
 import { latestPaneFileCards, newestPaneFilePath, sameFileCards } from './transcriptPaneFiles.js'
+import { transcriptFileScopes } from './transcriptFileScope.js'
 import { mergeMountedMarkdownLeaves, planMarkdownLeaves, renderMarkdownTree } from './markdownRenderPlan.js'
 
 test('rebuilt file cards with the same contents count as unchanged', () => {
@@ -52,6 +53,19 @@ test('reopen candidates resolve relative paths using persisted move boundaries',
   const transition = { id: 'move', afterFrameId: 'boundary', cwd: '/repo', binding: { kind: 'project' as const } }
   expect(newestPaneFilePath(rows, undefined, [transition])).toBe('/repo/docs/report.html')
   expect(newestPaneFilePath(rows, undefined, [{ ...transition, afterFrameId: 'not-loaded' }])).toBe('docs/report.html')
+})
+
+test('worker previews and newest-file discovery retain their recorded run folder', () => {
+  const child = { ...edit('child', 'report.html'), parentToolUseId: 'agent', agentCwd: '/old' }
+  const parent = { ...edit('agent', 'ignored.ts'), toolFamily: 'agent' as const, children: [child] }
+  const rows = [parent, edit('current', 'report.html')]
+  const transition = { id: 'move', afterFrameId: null, cwd: '/new', binding: { kind: 'project' as const } }
+  const scopes = transcriptFileScopes(rows, [transition])
+  expect([...latestPaneFileCards(rows, '/new', undefined, scopes)]).toEqual([
+    ['/old/report.html', 'child'], ['/new/report.html', 'current'],
+  ])
+  expect(newestPaneFilePath([parent], undefined, [transition])).toBe('/old/report.html')
+  expect(newestPaneFilePath([prose('reply', '`file:///repo/report%2520final.html`')])).toBe('/repo/report%20final.html')
 })
 
 test('safe filename source locations survive Markdown URL normalization while executable schemes stay inert', () => {

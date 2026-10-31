@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { bareFilePaths, isInlineFilePath, workspaceFileHref } from './transcriptFileLinks.js'
 import {
   estimateFilePathMenuHeight,
   extractLineSuffix,
@@ -10,12 +11,40 @@ import {
   FILE_PATH_FLYOUT_WIDTH,
 } from './filePathActions.js'
 
+test('local URL actions and discovery decode paths only once', () => {
+  const url = 'file:///workspace/a%20b%2520.html:12'
+  expect(isInlineFilePath(url)).toBe(true)
+  expect(workspaceFileHref(url)).toBe('/workspace/a b%20.html:12')
+  expect(resolveFilePathParts({ rawPath: url })).toMatchObject({
+    absolutePath: '/workspace/a b%20.html:12', cleanPath: '/workspace/a b%20.html',
+    filename: 'a b%20.html', lineSuffix: ':12',
+  })
+  expect(bareFilePaths(`See ${url} and file://remote/tmp/evil.html`)).toEqual([url])
+  for (const bad of ['file://remote/tmp/a.html', 'file:///tmp/a%00.html', 'file:///tmp/a%.html']) {
+    expect(isInlineFilePath(bad)).toBe(false)
+    expect(workspaceFileHref(bad)).toBeNull()
+    expect(bareFilePaths(bad)).toEqual([])
+  }
+})
+
 test('stripLineSuffix removes only trailing line and column suffixes', () => {
   expect(stripLineSuffix('src/foo.ts')).toBe('src/foo.ts')
   expect(stripLineSuffix('src/foo.ts:42')).toBe('src/foo.ts')
   expect(stripLineSuffix('src/foo.ts:42:10')).toBe('src/foo.ts')
   expect(stripLineSuffix('src/foo.ts?query=1')).toBe('src/foo.ts?query=1')
   expect(stripLineSuffix('src/C#/Program.cs')).toBe('src/C#/Program.cs')
+})
+
+test('bare local URL links exclude prose punctuation but retain balanced path punctuation', () => {
+  expect(bareFilePaths('See file:///repo/report.html.')).toEqual(['file:///repo/report.html'])
+  expect(bareFilePaths('(file:///repo/report.html), [file:///repo/other.html];')).toEqual([
+    'file:///repo/report.html', 'file:///repo/other.html',
+  ])
+  expect(bareFilePaths('See (file:///repo/report(v2).html).')).toEqual(['file:///repo/report(v2).html'])
+  expect(bareFilePaths('See file:///repo/report[final] and file:///repo/report{final}.')).toEqual([
+    'file:///repo/report[final]', 'file:///repo/report{final}',
+  ])
+  expect(bareFilePaths('See file://remote/repo/report.html.')).toEqual([])
 })
 
 test('resolveFilePathParts preserves literal hash and question-mark characters', () => {

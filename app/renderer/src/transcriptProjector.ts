@@ -98,6 +98,8 @@ type RowSource = FrameRowSource & {
    * without one, and on every non-assistant row.
    */
   model?: string
+  /** Engine-recorded working folder for this worker run, including restored steps. */
+  agentCwd?: string
 }
 
 export type AssistantTextRow = RowSource & {
@@ -2233,6 +2235,9 @@ function projectAssistantFrame(
   const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
   const agentName = normalizeAgentName(message.agent_name)
   const model = nonEmptyString(body.model)
+  const agentCwd = parentToolUseId !== null && typeof message.agent_cwd === 'string' &&
+    message.agent_cwd.startsWith('/') && message.agent_cwd.length <= 4096 && !message.agent_cwd.includes('\0')
+    ? message.agent_cwd : undefined
   const rows = body.content.flatMap((block, localIndex) => {
     const row = projectAssistantContentBlock(block, {
       sessionId: draft.sessionId,
@@ -2241,6 +2246,7 @@ function projectAssistantFrame(
       blockIndex: blockIndexes[localIndex]!,
       parentToolUseId,
       ...(agentName ? { agentName } : {}),
+      ...(agentCwd ? { agentCwd } : {}),
       ...(model !== null ? { model } : {}),
     })
     if (row?.kind === 'assistant-text' && frameId && parentToolUseId === null) {

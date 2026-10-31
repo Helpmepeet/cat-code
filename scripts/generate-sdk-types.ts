@@ -183,6 +183,18 @@ function syncAgentNameField(contents: string): string {
   )
 }
 
+function syncAgentCwdField(contents: string): string {
+  const field = '  agent_cwd?: string\n'
+  const enabled = /agent_cwd:\s*z\.string\(\)\.max\(4096\)/.test(schemas)
+  return agentNameTypes.reduce((next, typeName) =>
+    replaceTypeDeclaration(next, typeName, declaration => {
+      const clean = declaration.replace(field, '')
+      return enabled
+        ? clean.replace('  agent_name?: string\n', `  agent_name?: string\n${field}`)
+        : clean
+    }), contents)
+}
+
 function replaceTypeDeclaration(
   contents: string,
   typeName: string,
@@ -276,7 +288,7 @@ function syncToolResultStatus(contents: string): string {
 
 for (const path of effortSnapshotPaths) {
   const contents = readFileSync(path, 'utf-8')
-  const nextContents = syncAgentNameField(contents)
+  const nextContents = syncAgentCwdField(syncAgentNameField(contents))
   if (nextContents !== contents) {
     writeFileSync(path, nextContents, 'utf-8')
     console.log(`Synced subagent frame identity in ${path.slice(repoRoot.length + 1)}.`)

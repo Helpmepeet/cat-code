@@ -255,6 +255,47 @@ test('real SessionPane opens projected child reasoning, and the parent Agent car
   expect(tree.container.querySelector('main')?.textContent).not.toContain('Child reply')
 })
 
+test('real SessionPane shares recorded worker file origins with the docked panel and preview buttons', async () => {
+  const previousBridge = Object.getOwnPropertyDescriptor(window, 'catcode')
+  const requested: string[] = []
+  Object.defineProperty(window, 'catcode', { configurable: true, value: {
+    prepareFilePreview: async (_sessionId: string, path: string) => { requested.push(path); return null },
+  } })
+  try {
+    let transcript = createTranscriptState()
+    const message = (uuid: string, parent: string | null, content: unknown[], extra = {}) => ({
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
+      event: { type: 'message', message: {
+        type: 'assistant', uuid, session_id: 'session-1', parent_tool_use_id: parent,
+        message: { id: uuid, role: 'assistant', content }, ...extra,
+      } },
+    } as unknown as ServerFrame)
+    for (const frame of [
+      { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', engineSessionId: 'engine-1', payload: {
+        type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
+        abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
+      } } as ServerFrame,
+      message('parent', null, [{ type: 'tool_use', id: 'file-worker', name: 'Agent', input: { description: 'Write the report' } }]),
+      message('child', 'file-worker', [
+        { type: 'text', text: '`docs/report.html`' },
+        { type: 'tool_use', id: 'worker-write', name: 'Write', input: { file_path: 'docs/report.html', content: 'body' } },
+      ], { agent_name: 'file-writer', agent_cwd: '/worker-project' }),
+    ]) transcript = projectServerFrame(transcript, frame)
+    const tree = await harness.mount(createElement(SessionPane, { ...idleSessionPaneProps(), transcript }))
+    const parentCard = tree.container.querySelector('[data-agent-tool-id="file-worker"]')!
+    await act(async () => { parentCard.querySelector<HTMLButtonElement>('button')!.click() })
+    const panel = tree.container.querySelector('aside')!
+    const buttons = [...panel.querySelectorAll<HTMLButtonElement>('button[aria-label^="Open "]')]
+    expect(buttons).toHaveLength(2)
+    for (const button of buttons) await act(async () => { button.click() })
+    expect(requested).toEqual(['/worker-project/docs/report.html', '/worker-project/docs/report.html'])
+    await tree.unmount()
+  } finally {
+    if (previousBridge) Object.defineProperty(window, 'catcode', previousBridge)
+    else Reflect.deleteProperty(window, 'catcode')
+  }
+})
+
 test('a resume keeps the open panel and its earlier steps above the resumed run', async () => {
   const resumeCard: NestedToolUseRow = {
     ...agent('a', [prose('resumed-step', 'Resumed reply')]), id: 'resume-row-a', toolUseId: 'resume-a', toolName: 'ResumeAgent',

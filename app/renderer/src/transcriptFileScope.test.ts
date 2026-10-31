@@ -44,3 +44,25 @@ test('scoping preserves absolute paths, locations, and web URLs without weakenin
   expect(scopedTranscriptFilePath('./docs/../report.md:12:3', '/repo')).toBe('/repo/report.md:12:3')
   expect(scopedTranscriptFilePath('../other/report.html', '/repo')).toBe('/other/report.html')
 })
+
+test('worker origins survive parent moves and missing launch cards without inheriting a new folder', () => {
+  const oldWorker = { ...row('old-worker'), parentToolUseId: 'launch', agentCwd: '/one' }
+  const newWorker = { ...row('resumed-worker'), parentToolUseId: 'resume', agentCwd: '/two' }
+  const legacyWorker = { ...row('legacy-worker'), parentToolUseId: 'launch' }
+  const nested = { ...row('launch'), children: [oldWorker, legacyWorker, {
+    ...row('nested-launch'), parentToolUseId: 'launch', agentCwd: '/one', children: [newWorker],
+  }] }
+  const scopes = transcriptFileScopes([row('move'), nested], [move('move', '/two')])
+  expect(scopes.get('old-worker')).toBe('/one')
+  expect(scopes.get('resumed-worker')).toBe('/two')
+  expect(scopes.has('legacy-worker')).toBe(false)
+  expect(transcriptFileScopes([oldWorker, legacyWorker], [move(null, '/two')]).get('old-worker')).toBe('/one')
+  expect(transcriptFileScopes([oldWorker, legacyWorker], [move(null, '/two')]).has('legacy-worker')).toBe(false)
+})
+
+test('file URLs become absolute paths without decoding literal percent escapes twice', () => {
+  for (const cwd of [undefined, '/different-project']) {
+    expect(scopedTranscriptFilePath('file:///repo/report%2520final.html', cwd)).toBe('/repo/report%20final.html')
+    expect(scopedTranscriptFilePath('/repo/report%20final.html', cwd)).toBe('/repo/report%20final.html')
+  }
+})

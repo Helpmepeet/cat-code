@@ -184,10 +184,11 @@ export function projectBranchFrames(
   parentToolUseId: string,
   agentName: string | undefined,
   seenUuids: ReadonlySet<string> = new Set(),
+  agentCwd?: string,
 ): SDKMessage[] {
   // Same stamping as live publication (`runAgent`'s display publisher), so a
   // restore over live frames lands on the same identities.
-  return stampSubagentFrames(projectResumedHistory(messages), parentToolUseId, agentName)
+  return stampSubagentFrames(projectResumedHistory(messages), parentToolUseId, agentName, agentCwd)
     .filter(frame => typeof frame.uuid !== 'string' || !seenUuids.has(frame.uuid))
 }
 
@@ -254,7 +255,7 @@ async function loadBranchCandidates(
       agentId,
       parentToolUseId,
       agentName: nonEmptyString(metadata.agentName),
-      ...(Array.isArray(metadata.runs) && runs.length > 0 ? { runs } : {}),
+      ...(runs.length > 0 ? { runs } : {}),
     })
   }
   return candidates
@@ -335,7 +336,10 @@ export async function loadBranchesWithinBudget(
       })
       .map(segment => ({
         parentToolUseId: segment.parentToolUseId,
-        frames: projectBranchFrames(segment.messages, segment.parentToolUseId, candidate.agentName, seenUuids),
+        frames: projectBranchFrames(
+          segment.messages, segment.parentToolUseId, candidate.agentName, seenUuids,
+          candidate.runs?.find(run => run.parentToolUseId === segment.parentToolUseId)?.cwd,
+        ),
       }))
       .filter(branch => branch.frames.length > 0)
     const frames = runBranches.flatMap(branch => branch.frames)

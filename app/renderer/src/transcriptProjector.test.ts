@@ -3939,6 +3939,22 @@ test('a nested frame with no agent_name leaves the child row unnamed, never gues
   expect(child.agentName).toBeUndefined()
 })
 
+test('only valid nested worker cwd provenance becomes a file origin', () => {
+  for (const agentCwd of ['/worker/project', 'relative', '/bad\0path', '/'.repeat(4097), undefined]) {
+    let state = projectServerFrame(createTranscriptState(), ready('session-1'))
+    for (const original of AGENT_WITH_NESTED_SUBAGENT_TURN.messages) {
+      const message = { ...original, agent_cwd: agentCwd } as SDKMessage
+      state = projectServerFrame(state, messageFrame('session-1', message))
+    }
+    const agent = selectNestedTranscriptRows(state, 'session-1')[0]
+    if (agent?.kind !== 'tool-use') throw new Error('expected agent tool-use row')
+    expect(agent.agentCwd).toBeUndefined()
+    const child = agent.children[0]
+    if (child?.kind !== 'tool-use') throw new Error('expected nested child tool-use row')
+    expect(child.agentCwd).toBe(agentCwd === '/worker/project' ? agentCwd : undefined)
+  }
+})
+
 test('an Agent tool_use_result carries the worker name onto the row, @-stripped', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))

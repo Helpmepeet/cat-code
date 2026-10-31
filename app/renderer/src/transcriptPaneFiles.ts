@@ -48,10 +48,15 @@ function orderedPaneRows(rows: readonly NestedTranscriptRow[], order?: readonly 
   return all
 }
 
-export function latestPaneFileCards(rows: readonly NestedTranscriptRow[], cwd: string | null, order?: readonly string[]): ReadonlyMap<string, string> {
+export function latestPaneFileCards(
+  rows: readonly NestedTranscriptRow[],
+  cwd: string | null,
+  order?: readonly string[],
+  scopes?: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
   const latest = new Map<string, string>()
   for (const row of orderedPaneRows(rows, order)) {
-    if (row.kind === 'tool-use') for (const path of paneCardPaths(row)) latest.set(paneFileKey(path, cwd), row.id)
+    if (row.kind === 'tool-use') for (const path of paneCardPaths(row)) latest.set(paneFileKey(path, scopes?.get(row.id) ?? cwd), row.id)
   }
   return latest
 }

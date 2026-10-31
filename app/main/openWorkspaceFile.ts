@@ -1,6 +1,7 @@
 import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
+import { localFileUrlPath } from '../shared/localFileUrl.js'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import type { OpenWorkspaceFileTarget } from '../shared/protocol.js'
@@ -50,16 +51,24 @@ export async function resolveWorkspaceFile(
     return null
   }
   const appSessionId = record.appSessionId
-  const rawPath = record.path
+  const inputPath = record.path
   const target = record.target
   if (
     typeof appSessionId !== 'string' ||
-    typeof rawPath !== 'string' ||
-    rawPath.length === 0 ||
-    rawPath.length > MAX_OPEN_FILE_PATH_CHARS ||
-    rawPath.includes('\0') ||
+    typeof inputPath !== 'string' ||
+    inputPath.length === 0 ||
+    inputPath.length > MAX_OPEN_FILE_PATH_CHARS ||
+    inputPath.includes('\0') ||
     (target !== undefined && (typeof target !== 'string' || !ALLOWED_TARGETS.has(target)))
   ) {
+    return null
+  }
+  let rawPath: string = inputPath
+  if (/^file:/i.test(rawPath)) {
+    const path = localFileUrlPath(rawPath)
+    if (path === null) return null
+    rawPath = path
+  } else if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawPath)) {
     return null
   }
 

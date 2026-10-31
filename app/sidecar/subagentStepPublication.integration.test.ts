@@ -227,6 +227,7 @@ test('background, resumed and foreground runs publish every step live, identical
     await waitFor(() => textOf(nested('tu-agent-bg')).includes('worker done bg'), 'background worker steps')
     const background = nested('tu-agent-bg')
     expect(blocksOf(background)).toEqual(expect.arrayContaining(['thinking', 'text', 'tool_use', 'tool_result']))
+    expect(background.every(frame => frame.agent_cwd === process.cwd())).toBe(true)
     const afterIdle = session.received.slice(idleAt).filter(frame => frame.event?.message?.parent_tool_use_id === 'tu-agent-bg')
     expect(blocksOf(afterIdle.map(frame => frame.event!.message as WireMessage))).toContain('thinking')
     const ack = messages().find(message => message.type === 'user' && textOf(message.message?.content).includes('tu-agent-bg'))
@@ -240,7 +241,10 @@ test('background, resumed and foreground runs publish every step live, identical
     // Live frames are the frames a restore reads back.
     const saved = await storage.getDisplayAgentTranscriptForSession(getSessionId(), agentId as never, { maxBytes: 10_000_000, maxMessages: 10_000 })
     const withoutSession = ({ session_id: _session, ...rest }: Record<string, unknown>) => rest
-    const restored = projectBranchFrames(saved!.messages, 'tu-agent-bg', background[0]?.agent_name as string | undefined)
+    const recordedCwd = (await storage.readAgentMetadata(agentId as never))?.runs
+      ?.find(run => run.parentToolUseId === 'tu-agent-bg')?.cwd
+    expect(recordedCwd).toBe(process.cwd())
+    const restored = projectBranchFrames(saved!.messages, 'tu-agent-bg', background[0]?.agent_name as string | undefined, new Set(), recordedCwd)
     expect(restored.map(frame => withoutSession(frame as never))).toEqual(background.map(frame => withoutSession(frame)))
 
     // Two resumes publish under their own ResumeAgent cards.
@@ -262,8 +266,10 @@ test('background, resumed and foreground runs publish every step live, identical
       (message.type === 'assistant' || message.type === 'user') && !message.parent_tool_use_id)
     const restoredAll = await withRestoredSubagentHistory(getSessionId(), parentHistory as never)
     for (const card of ['tu-agent-bg', 'tu-resume-1', 'tu-resume-2']) {
-      const restoredUuids = restoredAll.history.filter(frame => 'parent_tool_use_id' in frame && frame.parent_tool_use_id === card).map(frame => frame.uuid)
+      const restoredFrames = restoredAll.history.filter(frame => 'parent_tool_use_id' in frame && frame.parent_tool_use_id === card)
+      const restoredUuids = restoredFrames.map(frame => frame.uuid)
       expect(restoredUuids).toEqual(nested(card).map(frame => frame.uuid))
+      expect(restoredFrames.map(frame => 'agent_cwd' in frame ? frame.agent_cwd : undefined)).toEqual(nested(card).map(frame => frame.agent_cwd))
     }
 
     // A foreground run now publishes reasoning and prose live, each step once.
@@ -274,6 +280,7 @@ test('background, resumed and foreground runs publish every step live, identical
     await waitFor(idle, 'foreground idle')
     const foreground = nested('tu-agent-fg')
     expect(blocksOf(foreground)).toEqual(expect.arrayContaining(['thinking', 'text', 'tool_use', 'tool_result']))
+    expect(foreground.every(frame => frame.agent_cwd === process.cwd())).toBe(true)
     const uuids = foreground.map(frame => frame.uuid)
     expect(new Set(uuids).size).toBe(uuids.length)
   } finally {

@@ -7,6 +7,7 @@
 import { createContext } from 'react'
 import type { SessionId } from '../../shared/protocol.js'
 import { basename } from './pathUtils.js'
+import { localFileUrlPath } from '../../shared/localFileUrl.js'
 
 /** What a surface adds to the menu beyond the path itself. */
 export type FilePathMenuExtras = {
@@ -99,8 +100,10 @@ export function resolveFilePathParts({
   rawPath: string
   cwd?: string | null
 }): FilePathParts {
-  const lineSuffix = extractLineSuffix(rawPath)
-  const cleanPath = stripLineSuffix(rawPath)
+  const localPath = localFileUrlPath(rawPath)
+  const path = localPath ?? rawPath
+  const lineSuffix = extractLineSuffix(path)
+  const cleanPath = stripLineSuffix(path)
   const filename = basename(cleanPath) || cleanPath
 
   let absolutePath: string | null = null
@@ -109,7 +112,7 @@ export function resolveFilePathParts({
     WINDOWS_ABSOLUTE_PATH_PATTERN.test(cleanPath) ||
     isAbsoluteUrlLike(cleanPath)
   ) {
-    absolutePath = rawPath
+    absolutePath = path
   } else if (cwd && cwd.trim().length > 0) {
     const baseAbs = resolvePathFromCwd(cwd, cleanPath)
     absolutePath = lineSuffix ? `${baseAbs}${lineSuffix}` : baseAbs

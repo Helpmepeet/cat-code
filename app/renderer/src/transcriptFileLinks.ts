@@ -1,6 +1,7 @@
 import type { ElementContent, Root, RootContent, Text } from 'hast'
 import { stripLineSuffix } from './filePathActions.js'
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
+import { localFileUrlPath } from '../../shared/localFileUrl.js'
 
 const FILE_PATH_RE =
   /(?:(?:\/|(?:\.{1,2}\/)|(?:[A-Za-z0-9_@.+-]+\/))(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+|[A-Za-z_@.][A-Za-z0-9_@.+-]*)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?::\d+(?::\d+)?)?/g
@@ -13,6 +14,8 @@ function hasLetteredExtension(path: string): boolean {
 }
 
 export function isInlineFilePath(rawPath: string): boolean {
+  if (/^file:/i.test(rawPath)) return localFileUrlPath(rawPath) !== null
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawPath)) return false
   const path = stripLineSuffix(rawPath)
   return (
     path.length > 0 && path.length <= 4_096 && path === path.trim() &&
@@ -25,6 +28,7 @@ export function isInlineFilePath(rawPath: string): boolean {
 /** Host owns containment and source-location resolution, not this display classifier. */
 export function workspaceFileHref(href: string | undefined): string | null {
   if (href === undefined || href.length === 0) return null
+  if (/^file:/i.test(href)) return localFileUrlPath(href)
   if (href.startsWith('#') || href.startsWith('//')) return null
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(isInlineFilePath(href) ? stripLineSuffix(href) : href)) return null
   const path = href.replace(/[?#].*$/, '')
@@ -65,27 +69,40 @@ export function localhostMarkdownHref(href: string | undefined): string | null {
 }
 
 type HttpTextLink = { index: number; text: string; localhost: string | null }
+function trimProseUrlToken(value: string): string {
+  let token = value.replace(/[.,;]+$/, '')
+  while (/[)\]}]$/.test(token)) {
+    const close = token.at(-1)!
+    const open = close === ')' ? '(' : close === ']' ? '[' : '{'
+    if (token.split(close).length <= token.split(open).length) break
+    token = token.slice(0, -1)
+  }
+  return token
+}
+
 function httpTextLinks(text: string): HttpTextLink[] {
   return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => {
-    let token = match[0].replace(/[.,;]+$/, '')
-    while (/[)\]}]$/.test(token)) {
-      const close = token.at(-1)!
-      const open = close === ')' ? '(' : close === ']' ? '[' : '{'
-      if (token.split(close).length <= token.split(open).length) break
-      token = token.slice(0, -1)
-    }
+    const token = trimProseUrlToken(match[0])
     return { index: match.index, text: token, localhost: normalizeLocalhostPreviewUrl(token) }
   })
 }
 
 function filePathMatches(text: string): RegExpExecArray[] {
   const urls = httpTextLinks(text)
-  return [...text.matchAll(FILE_PATH_RE)].filter(match => {
+  const schemeTokens = [...text.matchAll(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"'`]+/g)]
+  const paths = [...text.matchAll(FILE_PATH_RE)].filter(match => {
     const path = match[0]
-    return !urls.some(url => match.index >= url.index && match.index < url.index + url.text.length) &&
+    return !schemeTokens.some(url => match.index >= url.index && match.index < url.index + url[0].length) &&
+      !urls.some(url => match.index >= url.index && match.index < url.index + url.text.length) &&
       !text.slice(0, match.index).endsWith(':/') && !path.startsWith('//') &&
       !WEB_PATH_RE.test(path) && hasLetteredExtension(stripLineSuffix(path))
   })
+  const localUrls = schemeTokens.map(match => {
+    match[0] = trimProseUrlToken(match[0])
+    return match
+  }).filter(match => localFileUrlPath(match[0]) !== null)
+  return [...paths, ...localUrls]
+    .sort((left, right) => left.index - right.index)
 }
 
 export function bareFilePaths(text: string): string[] { return filePathMatches(text).map(match => match[0]) }

@@ -2,10 +2,11 @@ import { createContext } from 'react'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { resolveFilePathParts } from './filePathActions.js'
+import { localFileUrlPath } from '../../shared/localFileUrl.js'
 
 export const TranscriptFileScopeContext = createContext<ReadonlyMap<string, string> | null>(null)
 
-/** Only persisted seams with a loaded anchor establish a reply's workspace. */
+/** Parent replies use loaded move seams; workers use their recorded run folder. */
 export function transcriptFileScopes(
   rows: readonly NestedTranscriptRow[],
   transitions: SessionDescriptor['contextTransitions'] = [],
@@ -24,14 +25,22 @@ export function transcriptFileScopes(
     }
   }
   const scopes = new Map<string, string>()
+  const workerScopes = (row: NestedTranscriptRow) => {
+    // Worker runs can use a custom folder or outlive a parent move. Only their
+    // engine-recorded working folder is provenance, never the parent's position.
+    if ('agentCwd' in row && row.agentCwd) scopes.set(row.id, row.agentCwd)
+    for (const child of row.children) workerScopes(child)
+  }
   let cwd = boundaries.get(-1)
   rows.forEach((row, index) => {
-    if (cwd) scopes.set(row.id, cwd)
+    if (cwd && 'parentToolUseId' in row && row.parentToolUseId === null) scopes.set(row.id, cwd)
+    workerScopes(row)
     cwd = boundaries.get(index) ?? cwd
   })
   return scopes
 }
 
 export function scopedTranscriptFilePath(path: string, cwd: string | undefined): string {
-  return cwd ? resolveFilePathParts({ rawPath: path, cwd }).absolutePath ?? path : path
+  const localPath = localFileUrlPath(path) ?? path
+  return cwd ? resolveFilePathParts({ rawPath: localPath, cwd }).absolutePath ?? localPath : localPath
 }

@@ -37,6 +37,16 @@ function mount(leaves: readonly MarkdownRenderLeaf[], start: number, end: number
     .join('')
 }
 
+test('retains only bounded local file hrefs without enabling file image sources', () => {
+  const leaves = planMarkdownLeaves('file-url', '[report](file:///tmp/a%20b%2520.html) ![image](file:///tmp/a.png) [remote](file://remote/tmp/a.html)')
+  const markup = mount(leaves, 0, leaves.length)
+  expect(markup).toContain('href="file:///tmp/a%20b%2520.html"')
+  expect(markup).not.toContain('src="file:')
+  expect(markup).not.toContain('href="file://remote')
+  const malformed = planMarkdownLeaves('malformed', '[bad](file:///tmp/a%.html)')
+  expect(mount(malformed, 0, malformed.length)).not.toContain('href="file:')
+})
+
 describe('streaming inline links', () => {
   const html = (source: string, streamingLinks = true, cache?: MarkdownPlanCache) => {
     const leaves = planMarkdownLeaves('pending', source, { streamingLinks, cache })

@@ -120,6 +120,56 @@ test('a relative link menu uses the same recorded workspace as its click', async
   expect(document.querySelector('[role="menu"]')?.textContent).toContain('Open in')
 })
 
+test('single and grouped tool filename menus use their originating row workspace', async () => {
+  installBridge([])
+  const checked: string[] = []
+  window.catcode.getWorkspaceFileAvailability = async (_id, path) => { checked.push(path); return true }
+  const boundary = { ...prose('Moving'), id: 'move', frameId: 'move-frame' }
+  const read = (id: string): NestedToolUseRow => ({
+    ...fileCard(id, 'write', `docs/${id}.html`), toolName: 'Read', toolFamily: 'read',
+  })
+  for (const files of [
+    [fileCard('write', 'write', 'docs/write.html')],
+    [fileCard('edit', 'edit', 'docs/edit.html')],
+    [read('read')],
+    [read('first'), read('second')],
+    [fileCard('edit-first', 'edit', 'docs/report.html'), fileCard('edit-second', 'edit', 'docs/report.html')],
+  ]) {
+    const tree = await harness.mount(<TranscriptRowsView rows={[boundary, ...files]} cwd="/repo"
+      contextTransitions={[{ id: 'move', afterFrameId: 'move-frame', cwd: '/repo', binding: { kind: 'project' } }]} />)
+    if (!tree.container.querySelector('[data-file-actions]')) {
+      await act(async () => { tree.container.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!.click() })
+    }
+    const target = tree.container.querySelector<HTMLElement>('[data-file-actions]')!
+    expect(target).not.toBeNull()
+    await act(async () => { target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })) })
+    expect(checked.at(-1)).toBe(`/repo/${files[0]!.input.file_path}`)
+    expect(document.querySelector('[role="menu"]')?.textContent).toContain('Open in')
+    await tree.unmount()
+  }
+})
+
+test('local file URL chips and links open one decoded absolute path in preview and external actions', async () => {
+  installBridge([])
+  const requests: Array<{ path: string; external: boolean }> = []
+  for (const content of [
+    '[Report](file:///repo/report%2520final.html)',
+    '`file:///repo/report%2520final.html`',
+    'See file:///repo/report%2520final.html',
+  ]) {
+    const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path, options) => {
+      requests.push({ path, external: options?.external === true }); return { ok: true }
+    }}><TranscriptRowsView rows={[prose(content)]} cwd="/different-project" /></FilePaneContext.Provider>)
+    const button = openButtons(tree.container)[0]!
+    expect(button).toBeDefined()
+    await act(async () => { button.click() })
+    expect(requests.at(-1)).toEqual({ path: '/repo/report%20final.html', external: false })
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })) })
+    expect(requests.at(-1)).toEqual({ path: '/repo/report%20final.html', external: true })
+    await tree.unmount()
+  }
+})
+
 test('older replies are not resolved against a later workspace, even when filenames match', async () => {
   installBridge([])
   const requests: string[] = []

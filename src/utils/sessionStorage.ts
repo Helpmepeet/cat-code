@@ -488,7 +488,12 @@ export type AgentMetadata = {
   runs?: AgentRunRecord[]
 }
 
-export type AgentRunRecord = { parentToolUseId: string; firstMessageUuid?: string }
+export type AgentRunRecord = {
+  parentToolUseId: string
+  firstMessageUuid?: string
+  /** Effective filesystem origin captured for this run, not a resume override. */
+  cwd?: string
+}
 
 /** Runs older than this window fold into the earliest kept one. */
 export const MAX_AGENT_RUN_RECORDS = 64
@@ -500,16 +505,23 @@ export const MAX_AGENT_RUN_RECORDS = 64
  */
 export function previousAgentRuns(previous: AgentMetadata | null): AgentRunRecord[] {
   if (!previous) return []
+  const cwdFields = (value: unknown): { cwd?: string } =>
+    typeof value === 'string' && value.startsWith('/') &&
+    value.length <= 4096 && !value.includes('\0') ? { cwd: value } : {}
+  const legacyCwd = previous.assignedCwd ?? previous.worktreePath
   if (Array.isArray(previous.runs)) {
     return previous.runs.filter((run): run is AgentRunRecord =>
       typeof run?.parentToolUseId === 'string' && run.parentToolUseId.length > 0 &&
       (run.firstMessageUuid === undefined || typeof run.firstMessageUuid === 'string'))
-      .map(run => run.firstMessageUuid === undefined
-        ? { parentToolUseId: run.parentToolUseId }
-        : { parentToolUseId: run.parentToolUseId, firstMessageUuid: run.firstMessageUuid })
+      .map(run => ({
+        ...(run.firstMessageUuid === undefined
+          ? { parentToolUseId: run.parentToolUseId }
+          : { parentToolUseId: run.parentToolUseId, firstMessageUuid: run.firstMessageUuid }),
+        ...cwdFields(run.cwd ?? legacyCwd),
+      }))
   }
   return typeof previous.parentToolUseId === 'string' && previous.parentToolUseId.length > 0
-    ? [{ parentToolUseId: previous.parentToolUseId }]
+    ? [{ parentToolUseId: previous.parentToolUseId, ...cwdFields(legacyCwd) }]
     : []
 }
 

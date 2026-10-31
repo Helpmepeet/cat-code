@@ -49,6 +49,35 @@ test('opens an existing workspace-relative regular file', async () => {
   }
 })
 
+test('local file URLs retain literal-first suffix resolution and canonical containment', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-file-url-'))
+  const outside = mkdtempSync(join(tmpdir(), 'catcode-file-url-outside-'))
+  try {
+    const file = join(root, 'a %20.html')
+    writeFileSync(file, 'report')
+    writeFileSync(`${file}:12`, 'literal')
+    writeFileSync(join(outside, 'secret.html'), 'secret')
+    symlinkSync(join(outside, 'secret.html'), join(root, 'escape.html'))
+    const url = (path: string) => `file://${path.split('/').map(encodeURIComponent).join('/')}`
+    const opened: Array<[string, unknown]> = []
+    const open = async (path: string, _target: unknown, location: unknown) => {
+      opened.push([path, location])
+      return true
+    }
+    expect(await openWorkspaceFile({ appSessionId: 'session-1', path: `${url(file)}:12` }, [session(root)], open)).toBe(true)
+    expect(opened.pop()).toEqual([realpathSync(`${file}:12`), undefined])
+    expect(await openWorkspaceFile({ appSessionId: 'session-1', path: `${url(file)}:13:2` }, [session(root)], open)).toBe(true)
+    expect(opened.pop()).toEqual([realpathSync(file), { line: 13, column: 2 }])
+    for (const path of [url(join(outside, 'secret.html')), url(join(root, 'escape.html')), 'file://remote/tmp/a.html', `${url(file)}%00`]) {
+      expect(await openWorkspaceFile({ appSessionId: 'session-1', path }, [session(root)], open)).toBe(false)
+    }
+    expect(opened).toEqual([])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(outside, { recursive: true, force: true })
+  }
+})
+
 test('rejects traversal, symlink escape, directories, and unknown sessions', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-open-file-'))
   const outside = mkdtempSync(join(tmpdir(), 'catcode-open-file-outside-'))

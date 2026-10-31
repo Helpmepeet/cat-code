@@ -5,6 +5,7 @@ import { mkdtempSync } from 'fs'
 import { readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
 
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
 import {
@@ -1571,6 +1572,25 @@ describe('runAgent display step publication', () => {
     expect(published).toEqual([])
   })
 
+  for (const cwd of ['/tmp/custom-worker', '/tmp/isolated-worktree']) {
+    test(`captures effective async cwd ${cwd}, not display assignment options`, async () => {
+      const harness = createAppStateHarness()
+      const published: Array<Record<string, unknown>> = []
+      const step = createAssistantMessage({ content: 'worker file: ./result.txt' })
+      queryScript = async function* () { yield step }
+      await runWithCwdOverride(cwd, async () => {
+        for await (const _message of startAgent(harness, {
+          parentContext: publishingContext(harness, frame => published.push(frame as Record<string, unknown>)),
+          publishDisplaySteps: true,
+        })) { /* drain */ }
+      })
+      expect(published.length).toBeGreaterThan(0)
+      expect(published.every(frame => frame.agent_cwd === cwd)).toBe(true)
+      expect(published.at(-1)?.uuid).toBe(step.uuid)
+      expect(published.every(frame => frame.parent_tool_use_id === 'tu-agent-card')).toBe(true)
+    })
+  }
+
   for (const isAsync of [false, true]) {
     test(`nested ${isAsync ? 'background' : 'foreground'} runs publish through the inherited context`, async () => {
       const harness = createAppStateHarness()
@@ -1660,14 +1680,15 @@ describe('runAgent display step publication', () => {
         }
       }
 
-      await run('tu-original', [first], firstAnswer)
+      await runWithCwdOverride('/tmp/original-worker', () => run('tu-original', [first], firstAnswer))
+      const resumedCwd = getCwd()
       await run('tu-resume', [first, firstAnswer, resumePrompt], resumeAnswer, [first, firstAnswer])
 
       const metadata = await readAgentMetadata(agentId)
       expect(metadata?.parentToolUseId).toBe('tu-resume')
       expect(metadata?.runs).toEqual([
-        { parentToolUseId: 'tu-original', firstMessageUuid: first.uuid },
-        { parentToolUseId: 'tu-resume', firstMessageUuid: resumePrompt.uuid },
+        { parentToolUseId: 'tu-original', firstMessageUuid: first.uuid, cwd: '/tmp/original-worker' },
+        { parentToolUseId: 'tu-resume', firstMessageUuid: resumePrompt.uuid, cwd: resumedCwd },
       ])
     } finally {
       clearSessionMessagesCache()

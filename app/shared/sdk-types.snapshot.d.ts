@@ -127,6 +127,7 @@ export type SDKAssistantMessage = SDKBaseMessage & {
   }
   parent_tool_use_id?: string | null
   agent_name?: string
+  agent_cwd?: string
   error?: SDKAssistantErrorCode
   requestId?: string | null
   timestamp?: string
@@ -381,6 +382,7 @@ export type SDKUserMessage = SDKBaseMessage & {
   }
   parent_tool_use_id?: string | null
   agent_name?: string
+  agent_cwd?: string
   isSynthetic?: boolean
   tool_use_result?: unknown
   tool_result_status?: 'cancelled'

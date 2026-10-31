@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { getSessionId, getSessionProjectDir, switchSession } from '../../src/bootstrap/state.js'
 import { asAgentId, asSessionId } from '../../src/types/ids.js'
-import { getAgentTranscriptPathForSession, writeAgentMetadata } from '../../src/utils/sessionStorage.js'
+import { getAgentTranscriptPathForSession, previousAgentRuns, writeAgentMetadata } from '../../src/utils/sessionStorage.js'
 
 import { MAX_HISTORY_REPLAY_BYTES, MAX_HISTORY_REPLAY_FRAMES } from '../shared/limits.js'
 
@@ -61,6 +61,67 @@ function branchFrame(parentToolUseId: string, uuid: string): SDKMessage {
 const uuidsOf = (frames: readonly SDKMessage[]) => frames.map(frame => frame.uuid)
 
 describe('restored subagent branches', () => {
+  test('restores each run with its own cwd without changing uuid or card ownership', async () => {
+    const first = createAssistantMessage({ content: 'first ./a.txt' })
+    const second = createAssistantMessage({ content: 'resumed ./a.txt' })
+    const { branches } = await loadBranchesWithinBudget('session', [{
+      agentId: 'worker' as never,
+      parentToolUseId: 'resume',
+      agentName: 'Ada',
+      runs: [
+        { parentToolUseId: 'launch', firstMessageUuid: first.uuid, cwd: '/tmp/custom' },
+        { parentToolUseId: 'resume', firstMessageUuid: second.uuid, cwd: '/tmp/new-parent' },
+      ],
+    }], 10, new Set(), async () => ({
+      messages: [first, second], bytesRead: 100, truncated: false,
+    }) as never)
+    expect(branches.flatMap(branch => branch.frames).map(frame => [
+      frame.uuid, frame.type === 'assistant' && frame.parent_tool_use_id,
+      frame.type === 'assistant' && frame.agent_cwd,
+    ])).toEqual([
+      [first.uuid, 'launch', '/tmp/custom'],
+      [second.uuid, 'resume', '/tmp/new-parent'],
+    ])
+  })
+
+  test('legacy metadata uses only known explicit scope and validates read cwd', () => {
+    expect(previousAgentRuns({ agentType: 'test', parentToolUseId: 'old' })).toEqual([
+      { parentToolUseId: 'old' },
+    ])
+    for (const field of ['assignedCwd', 'worktreePath'] as const) {
+      expect(previousAgentRuns({
+        agentType: 'test', parentToolUseId: 'old', [field]: '/tmp/known',
+      })).toEqual([{ parentToolUseId: 'old', cwd: '/tmp/known' }])
+    }
+    for (const cwd of [undefined, 'relative', '/bad\0path', '/' + 'x'.repeat(4096), 123]) {
+      const runs = previousAgentRuns({
+        agentType: 'test', runs: [{ parentToolUseId: 'old', cwd: cwd as string }],
+      })
+      expect(runs).toEqual([{ parentToolUseId: 'old' }])
+      const frame = createAssistantMessage({ content: 'file' })
+      const stamped = stampSubagentFrames(toSDKMessages([frame]), 'old', undefined, cwd as string)
+      expect(stamped[0]).not.toHaveProperty('agent_cwd')
+      expect(stamped[0]?.uuid).toBe(frame.uuid)
+    }
+  })
+
+  test('restore omits unknown legacy cwd and stamping discards incoming provenance', async () => {
+    const message = createAssistantMessage({ content: './file.txt' })
+    const { branches } = await loadBranchesWithinBudget('session', [{
+      agentId: 'legacy' as never, parentToolUseId: 'old', agentName: undefined,
+    }], 10, new Set(), async () => ({
+      messages: [message], bytesRead: 100, truncated: false,
+    }) as never)
+    expect(branches[0]?.frames[0]).not.toHaveProperty('agent_cwd')
+    const incoming = toSDKMessages([message]).map(frame => ({
+      ...frame, agent_cwd: '/tmp/untrusted',
+    }))
+    expect(stampSubagentFrames(incoming, 'old', undefined)[0]).not.toHaveProperty('agent_cwd')
+    expect(stampSubagentFrames(incoming, 'old', undefined, '/tmp/real')[0]).toMatchObject({
+      uuid: message.uuid, parent_tool_use_id: 'old', agent_cwd: '/tmp/real',
+    })
+  })
+
   test('splices a branch directly after the tool_use that spawned it', () => {
     const history = [plainFrame('before'), spawnFrame('tu-1', 'spawn'), plainFrame('after')]
 

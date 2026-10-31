@@ -169,6 +169,7 @@ import {
 } from './agentFace.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, sameFileCards } from './transcriptPaneFiles.js'
+import { TranscriptFileScopeContext, transcriptFileScopes } from './transcriptFileScope.js'
 import { useSubagentDock } from './subagentDockController.js'
 import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
 import type { SubagentDockRow } from './subagentDockState.js'
@@ -836,7 +837,11 @@ export function SessionPane({
   const paneFileRows = selectNestedTranscriptRows(transcript, activeSessionId, true)
   const paneFileSession = activeSessionId ? transcript.sessions[activeSessionId] : undefined
   const paneFileOrder = useMemo(() => selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id), [paneFileSession, activeSessionId])
-  const nextFileCards = useMemo(() => latestPaneFileCards(paneFileRows, activeDescriptor?.cwd ?? null, paneFileOrder), [paneFileRows, activeDescriptor?.cwd, paneFileOrder])
+  const fileScopes = useMemo(
+    () => transcriptFileScopes(paneFileRows, activeDescriptor?.contextTransitions),
+    [paneFileRows, activeDescriptor?.contextTransitions],
+  )
+  const nextFileCards = useMemo(() => latestPaneFileCards(paneFileRows, activeDescriptor?.cwd ?? null, paneFileOrder, fileScopes), [paneFileRows, activeDescriptor?.cwd, paneFileOrder, fileScopes])
   // Every tool card reads this through context, past its memo. A streamed delta must not change its identity.
   const latestFileCardsRef = useRef(nextFileCards)
   if (!sameFileCards(latestFileCardsRef.current, nextFileCards)) latestFileCardsRef.current = nextFileCards
@@ -1819,6 +1824,7 @@ export function SessionPane({
     >
     <AgentFaceRegistryContext.Provider value={paneFaces}>
     <LatestPaneFileCardContext.Provider value={latestFileCards}>
+    <TranscriptFileScopeContext.Provider value={fileScopes}>
     <SubagentWorkspace key={activeSessionId} appSessionId={activeSessionId ?? undefined} onFocusComposer={() => composerRef.current?.element?.focus({ preventScroll: true })} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
       onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
       onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
@@ -2643,6 +2649,7 @@ export function SessionPane({
       ) : null}
     </main>
     </SubagentWorkspace>
+    </TranscriptFileScopeContext.Provider>
     </LatestPaneFileCardContext.Provider>
     </AgentFaceRegistryContext.Provider>
     </InlineCommandProvider>
