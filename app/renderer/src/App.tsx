@@ -2108,10 +2108,32 @@ export function App() {
     })
   }, [deliberatelyReopen, captureBeforePaneSwitch])
 
-  // Account management belongs to the app. Composer switches still address
-  // their own pane's sidecar in renderSessionPane.
+  // Account management stays session-free. A same-provider switch also belongs
+  // to the retained chat: changing only the worker's default leaves its live
+  // sidecar on the old account until the chat is reopened.
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
+      if (verb.type === 'account.switch') {
+        const sessionId = activeSessionIdRef.current
+        const session = sessionId ? shellRef.current.byId[sessionId] : undefined
+        if (
+          sessionId && session &&
+          !isSessionDismissed(shellRef.current.dismissals ?? [], session) &&
+          selectConnection(connection, sessionId).status === 'ready' &&
+          selectRunControlsSnapshot(runControls, sessionId)?.model.provider === (verb.provider ?? 'openai')
+        ) {
+          try {
+            getBridge().accountVerb(sessionId, verb)
+          } catch (error) {
+            dispatchAccounts({ type: 'frame', frame: {
+              kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId,
+              requestId: verb.requestId, verb: verb.type, ok: false,
+              message: errorMessage(error),
+            } })
+          }
+          return
+        }
+      }
       if (verb.type === 'account.delete' || verb.type === 'account.logout') {
         const request =
           verb.type === 'account.delete'
@@ -2169,7 +2191,7 @@ export function App() {
         if (verb.type === 'account.login') setAppOAuthProgress({ state: 'error', message })
       })
     },
-    [],
+    [connection, runControls],
   )
 
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
