@@ -83,6 +83,7 @@ import {
 import {
   selectIsCompacting,
   selectNestedTranscriptRows,
+  selectTranscriptRows,
   selectSlashCommands,
   type TranscriptState,
 } from './transcriptProjector.js'
@@ -167,6 +168,7 @@ import {
   AgentFaceRegistryStoreContext,
 } from './agentFace.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
+import { LatestPaneFileCardContext, latestPaneFileCards, sameFileCards } from './transcriptPaneFiles.js'
 import { useSubagentDock } from './subagentDockController.js'
 import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
 import type { SubagentDockRow } from './subagentDockState.js'
@@ -831,6 +833,14 @@ export function SessionPane({
   // `deriveActivity` and the token estimate share one projection.
   const questionSourceRows = selectNestedTranscriptRows(transcript, activeSessionId)
   const nestedRows = useMemo(() => projectQuestionLifecycles(questionSourceRows, pendingQuestions), [questionSourceRows, pendingQuestions])
+  const paneFileRows = selectNestedTranscriptRows(transcript, activeSessionId, true)
+  const paneFileSession = activeSessionId ? transcript.sessions[activeSessionId] : undefined
+  const paneFileOrder = useMemo(() => selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id), [paneFileSession, activeSessionId])
+  const nextFileCards = useMemo(() => latestPaneFileCards(paneFileRows, activeDescriptor?.cwd ?? null, paneFileOrder), [paneFileRows, activeDescriptor?.cwd, paneFileOrder])
+  // Every tool card reads this through context, past its memo. A streamed delta must not change its identity.
+  const latestFileCardsRef = useRef(nextFileCards)
+  if (!sameFileCards(latestFileCardsRef.current, nextFileCards)) latestFileCardsRef.current = nextFileCards
+  const latestFileCards = latestFileCardsRef.current
   const workspaceBranch = useWorkspaceBranch(
     activeSessionId !== null && activeDescriptor !== undefined && !isManagedChat && nestedRows.length > 0 && !activeDescriptor.moving,
     readBranch,
@@ -1808,7 +1818,8 @@ export function SessionPane({
       })}
     >
     <AgentFaceRegistryContext.Provider value={paneFaces}>
-    <SubagentWorkspace key={activeSessionId} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
+    <LatestPaneFileCardContext.Provider value={latestFileCards}>
+    <SubagentWorkspace key={activeSessionId} appSessionId={activeSessionId ?? undefined} onFocusComposer={() => composerRef.current?.element?.focus({ preventScroll: true })} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
       onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
       onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
       onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}
@@ -1895,12 +1906,12 @@ export function SessionPane({
        * `overflow-hidden`, so this region's inner `overflow-auto` engages under
        * the flex-height chain; the scroll div tracks stick-to-bottom + drives
        * the jump-to-bottom control. */}
-      <section className="relative flex min-h-0 flex-1 flex-col">
+      <section className="session-transcript-region relative flex min-h-0 flex-1 flex-col">
         <div
           ref={transcriptScrollRef}
           onScroll={onTranscriptScroll}
           tabIndex={focusedMode ? 0 : undefined}
-          className="relative min-h-0 flex-1 overflow-auto outline-none"
+          className="session-transcript-scroll relative min-h-0 flex-1 overflow-auto outline-none"
         >
           <TranscriptView
             turnLive={generating}
@@ -2632,6 +2643,7 @@ export function SessionPane({
       ) : null}
     </main>
     </SubagentWorkspace>
+    </LatestPaneFileCardContext.Provider>
     </AgentFaceRegistryContext.Provider>
     </InlineCommandProvider>
   )

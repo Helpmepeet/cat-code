@@ -132,7 +132,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain('setPeerWakeBlocked(')
   expect(channels).toContain("export const CH_NOTIFICATION_VISIBILITY = 'catcode:notification-visibility'")
   expect(source).toContain('reportNotificationVisibility(value: NotificationVisibility): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(80)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(93)
   expect(channels).toContain("export const CH_HOST_EXTERNAL_APP_ICON = 'catcode:host:external-app-icon'")
   expect(source).toContain('ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)')
   expect(channels).toContain("export const CH_QUESTION_VERB = 'catcode:question-verb'")
@@ -191,7 +191,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(85)
+  expect(names.length).toBe(99)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -287,8 +287,20 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(48)
+  expect(invokeChannels.length).toBe(60)
   const allowed = new Set([
+    'CH_OPEN_EXTERNAL_URL',
+    'CH_LOCALHOST_PREVIEW_CAPTURE',
+    'CH_LOCALHOST_PREVIEW_PREPARE',
+    'CH_LOCALHOST_PREVIEW_NAVIGATE',
+    'CH_PREVIEW_BLOCKED_NAVIGATION_OPEN',
+    'CH_FILE_PREVIEW_PREPARE',
+    'CH_FILE_PREVIEW_REFRESH',
+    'CH_FILE_PREVIEW_COMMIT',
+    'CH_FILE_PREVIEW_SCROLL_READ',
+    'CH_FILE_PREVIEW_SCROLL_RESTORE',
+    'CH_FILE_PREVIEW_APPLICATIONS',
+    'CH_FILE_PREVIEW_APPLICATION_CHOOSE',
     'CH_HOST_EXTERNAL_APP_ICON',
     'CH_PROJECTS_LIST',
     'CH_PROJECT_DRAFT_BEGIN',
@@ -349,10 +361,9 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   // check — only real code counts.
   expect(code).not.toContain('send(channel')
   expect(code).not.toContain('invoke(channel')
-  // No control-plane method returns filesystem contents — the picker returns a
-  // single realpath string, never a directory listing or file bytes.
-  expect(code).not.toContain('readdir')
-  expect(code).not.toContain('readFile')
+  // Filesystem access stays in validated main handlers. Display methods may
+  // request bounded file previews but the preload never reads files itself.
+  expect(code).not.toMatch(/\b(?:readdir|readFile)(?:Sync)?\s*\(/)
   // P4-35 — and none of them touches the filesystem in the other direction
   // either. The preload runs in the renderer's process, so a write here would be
   // a renderer-reachable file write with no user dialog in front of it; the sink

@@ -9,7 +9,7 @@ export type { OpenWorkspaceFileTarget }
 
 const MAX_OPEN_FILE_PATH_CHARS = 4_096
 const MAX_SOURCE_COORDINATE = 2_147_483_647
-const ALLOWED_TARGETS = new Set<string>(['default', 'vscode', 'zed', 'cursor', 'finder'])
+const ALLOWED_TARGETS = new Set<string>(['default', 'vscode', 'zed', 'cursor', 'finder', 'chrome', 'safari'])
 const GENERATED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 
 export interface SourceLocation {

@@ -1,4 +1,4 @@
-export const EXTERNAL_APP_ICON_TARGETS = ['vscode', 'zed', 'cursor', 'finder', 'browser', 'default'] as const
+export const EXTERNAL_APP_ICON_TARGETS = ['vscode', 'zed', 'cursor', 'finder', 'browser', 'default', 'chrome', 'safari'] as const
 export type ExternalAppIconTarget = typeof EXTERNAL_APP_ICON_TARGETS[number]
 export type ExternalAppIconResult = { dataUrl: string | null }
 export type ExternalAppIcon = ExternalAppIconResult

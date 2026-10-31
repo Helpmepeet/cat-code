@@ -1,3 +1,4 @@
+import type { FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
 import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
@@ -4045,10 +4046,27 @@ export type OpenWorkspaceFileTarget =
   | 'zed'
   | 'cursor'
   | 'finder'
+  | 'chrome'
+  | 'safari'
 
 export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
+  openExternalUrl(url: string): Promise<boolean>
+  prepareFilePreview(appSessionId: SessionId, path: string): Promise<FilePreviewDescriptor | null>
+  prepareLocalhostPreview(appSessionId: SessionId, url: string): Promise<LocalhostPreviewResult>
+  captureLocalhostPreview(id: string): Promise<void>
+  navigateLocalhostPreview(id: string, routeKey: string, scroll: FilePreviewScroll): Promise<FilePreviewDescriptor | null>
+  openBlockedPreviewNavigation(id: string, target: PreviewBrowserTarget): Promise<boolean>
+  refreshFilePreview(id: string): Promise<FilePreviewDescriptor | null>
+  commitFilePreview(id: string, revision: number): Promise<boolean>
+  releaseFilePreview(id: string): void
+  subscribeFilePreview(callback: (event: FilePreviewEvent) => void): () => void
+  readFilePreviewScroll(id: string, revision: number): Promise<FilePreviewScroll>
+  restoreFilePreviewScroll(id: string, revision: number, scroll: FilePreviewScroll): Promise<void>
+  getFilePreviewApplications(appSessionId: SessionId, path: string): Promise<FilePreviewApplications>
+  chooseFilePreviewApplication(appSessionId: SessionId, path: string, target: OpenWorkspaceFileTarget): Promise<boolean>
+
   /** Stored projects may exist without a session. Paths are display-only;
    * creation and session launch accept only main-owned draft/project IDs. */
   listProjects(): Promise<import('./projects.js').DesktopProject[]>

@@ -44,6 +44,10 @@ import {
 import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
+import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, paneTargetLabel, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
+import { newestPaneFilePath, selectedTextInside } from './transcriptPaneFiles.js'
+import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
+import { selectNestedTranscriptRows } from './transcriptProjector.js'
 import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
 import {
   activeAfterPaneChange,
@@ -547,6 +551,30 @@ export function App() {
   )
   const toast = useToast()
   const [pendingQuestions, dispatchPendingQuestions] = useReducer(reducePendingQuestionsStateBatched, undefined, createPendingQuestionsState)
+  useEffect(() => {
+    const openDocumentLink = (event: MouseEvent) => {
+      if (event.defaultPrevented || (event.type === 'auxclick' ? event.button !== 1 : event.button !== 0) || !(event.target instanceof Element)) return
+      const anchor = event.target.closest<HTMLAnchorElement>('a[href]')
+      if (!anchor || anchor.ownerDocument !== document || anchor.hasAttribute('download') || selectedTextInside(anchor)) return
+      const href = anchor.getAttribute('href')?.trim()
+      if (!href || !/^(?:https?:)?\/\//i.test(href)) return
+      let url: URL
+      try { url = new URL(anchor.href) } catch { return }
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+      const bridge = getBridge()
+      if (typeof bridge?.openExternalUrl !== 'function') return
+      event.preventDefault()
+      // Frame clicks stay inside their own document. The host independently
+      // accepts this fixed method only from the app's main frame.
+      void bridge.openExternalUrl(url.href).catch(() => {})
+    }
+    document.addEventListener('click', openDocumentLink)
+    document.addEventListener('auxclick', openDocumentLink)
+    return () => {
+      document.removeEventListener('click', openDocumentLink)
+      document.removeEventListener('auxclick', openDocumentLink)
+    }
+  }, [])
   const [questionDrafts, setQuestionDrafts] = useState<Partial<Record<SessionId, Record<string, AskQuestionDraft>>>>({})
   useEffect(() => {
     setQuestionDrafts(current => {
@@ -698,6 +726,18 @@ export function App() {
   const [shellError, setShellError] = useState<string | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeSessionId, setActiveSessionId] = useState<SessionId | null>(null)
+  const activeSessionIdRef = useRef(activeSessionId)
+  activeSessionIdRef.current = activeSessionId
+  const fileSelectionRef = useRef(0)
+  const captureBeforePaneSwitch = useCallback((select: () => void) => {
+    const claim = ++fileSelectionRef.current
+    const previous = activeSessionIdRef.current
+    const finish = () => {
+      if (claim === fileSelectionRef.current && activeSessionIdRef.current === previous) select()
+    }
+    if (previous && getFilePaneSession(previous).open) void captureFilePaneScroll(previous).then(finish, finish)
+    else finish()
+  }, [])
   const newChatInFlightRef = useRef(false)
   const newManagedChatInFlightRef = useRef(false)
   const emptyChatAttemptedRef = useRef(false)
@@ -739,6 +779,7 @@ export function App() {
      */
     origin: SessionActionsOrigin
   } | null>(null)
+  const fileMenuPane = useFilePaneSession(sessionActionsTarget?.sessionId ?? '')
   const archiveStorage = useMemo(defaultViewPreferenceStorage, [])
   const [archivedSessions, setArchivedSessions] = useState<ArchivedSessions>(
     () => readArchivedSessionsFromStorage(archiveStorage) ?? createArchivedSessions(),
@@ -1011,9 +1052,11 @@ export function App() {
   tabNavigationRef.current = tabNavigation
   const foregroundSelectionClaimRef = useRef(createForegroundSelectionClaim())
   const openPage = useCallback((page: PageTab) => {
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({ type: 'open-page', page })
-  }, [])
+    captureBeforePaneSwitch(() => {
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({ type: 'open-page', page })
+    })
+  }, [captureBeforePaneSwitch])
   const closePage = useCallback((page: PageTab) => {
     const selected = tabNavigationRef.current.selected
     if (selected?.kind === 'page' && selected.page === page) {
@@ -1069,8 +1112,6 @@ export function App() {
   }, [shell.dismissals, dismissalSeed.entries, dismissalSeed.error])
   const toolCardExpansionStoreRef = useRef<ToolCardExpansionStore | null>(null)
   toolCardExpansionStoreRef.current ??= createToolCardExpansionStore()
-  const activeSessionIdRef = useRef(activeSessionId)
-  activeSessionIdRef.current = activeSessionId
   const pendingCloseRequestsRef = useRef<
     Map<SessionId, { openOrder: SessionId[] }>
   >(new Map())
@@ -1449,12 +1490,14 @@ export function App() {
         const navigation = parseNotificationOpenEvent(event)
         if (!navigation) return
         const sessionId = navigation.appSessionId
-        pendingExplicitSessionRef.current = null
-        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-        setShownSessionId(sessionId)
-        setActiveSessionId(sessionId)
-        dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
-        if (navigation.accounts) dispatchTabNavigation({ type: 'open-page', page: 'accounts' })
+        captureBeforePaneSwitch(() => {
+          pendingExplicitSessionRef.current = null
+          supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+          setShownSessionId(sessionId)
+          setActiveSessionId(sessionId)
+          dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
+          if (navigation.accounts) dispatchTabNavigation({ type: 'open-page', page: 'accounts' })
+        })
         return
       }
       if (event.type === 'project-routing') {
@@ -1532,6 +1575,7 @@ export function App() {
         }
       }
       if (event.type === 'session-removed') {
+        disposeFilePaneSession(event.appSessionId)
         setNotificationRetryLocalBlocks(current => {
           if (!current[event.appSessionId]) return current
           const next = { ...current }
@@ -1917,7 +1961,7 @@ export function App() {
   }, [hostSnapshotReady, queueTranscriptPreload])
 
   const focusCreatedSession = useCallback((sessionId: SessionId, claim: number) => {
-    applyForegroundSelectionIfCurrent(
+    captureBeforePaneSwitch(() => applyForegroundSelectionIfCurrent(
       foregroundSelectionClaimRef.current,
       claim,
       () => {
@@ -1931,8 +1975,8 @@ export function App() {
         supersedeForegroundSelection(foregroundSelectionClaimRef.current)
         dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId } })
       },
-    )
-  }, [])
+    ))
+  }, [captureBeforePaneSwitch])
 
   type FreshSessionOutcome =
     | { status: 'created'; sessionId: SessionId }
@@ -1969,13 +2013,15 @@ export function App() {
 
   const showCreatedSession = useCallback(
     (createdSessionId: SessionId) => {
-      pendingExplicitSessionRef.current = createdSessionId
-      setShownSessionId(createdSessionId)
-      setActiveSessionId(createdSessionId)
-      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-      dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId: createdSessionId } })
+      captureBeforePaneSwitch(() => {
+        pendingExplicitSessionRef.current = createdSessionId
+        setShownSessionId(createdSessionId)
+        setActiveSessionId(createdSessionId)
+        supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+        dispatchTabNavigation({ type: 'select', target: { kind: 'session', sessionId: createdSessionId } })
+      })
     },
-    [],
+    [captureBeforePaneSwitch],
   )
 
   const newProjectSession = useCallback(async (projectId: string) => {
@@ -2021,6 +2067,7 @@ export function App() {
     newChatInFlightRef.current = true
 
     try {
+      if (activeSessionIdRef.current) await captureFilePaneScroll(activeSessionIdRef.current)
       await newManagedChat()
     } finally {
       newChatInFlightRef.current = false
@@ -2045,19 +2092,21 @@ export function App() {
   }, [shell, connection, permissions, activeSessionId])
 
   const selectTab = useCallback((sessionId: SessionId) => {
-    const descriptor = shellRef.current.byId[sessionId]
-    if (descriptor) deliberatelyReopen(descriptor)
-    // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
-    // in-flight streaming into a background session is lost on switch.
-    pendingExplicitSessionRef.current = null
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({
-      type: 'select',
-      target: { kind: 'session', sessionId },
+    captureBeforePaneSwitch(() => {
+      const descriptor = shellRef.current.byId[sessionId]
+      if (descriptor) deliberatelyReopen(descriptor)
+      // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
+      // in-flight streaming into a background session is lost on switch.
+      pendingExplicitSessionRef.current = null
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
+      setShownSessionId(sessionId)
+      setActiveSessionId(sessionId)
     })
-    setShownSessionId(sessionId)
-    setActiveSessionId(sessionId)
-  }, [deliberatelyReopen])
+  }, [deliberatelyReopen, captureBeforePaneSwitch])
 
   // Account management belongs to the app. Composer switches still address
   // their own pane's sidecar in renderSessionPane.
@@ -2593,13 +2642,15 @@ export function App() {
 
   // Selects a session whose pane is already on screen, e.g. from a pane control.
   const selectShownSession = useCallback((sessionId: SessionId) => {
-    setActiveSessionId(sessionId)
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({
-      type: 'select',
-      target: { kind: 'session', sessionId },
+    captureBeforePaneSwitch(() => {
+      setActiveSessionId(sessionId)
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
     })
-  }, [])
+  }, [captureBeforePaneSwitch])
 
   // CC-16 — hand a parked prompt back to the composer. Called on every terminal
   // outcome of the spawn the user's keystroke started (a rejected/thrown
@@ -2754,6 +2805,7 @@ export function App() {
     }
     return dismissSessionAndRequestStop(shell.dismissals ?? [], shell.byId[sessionId], updateDismissals, async () => {
       if (lazyRestoreClaimsRef.current.has(sessionId)) cancelledRestoresRef.current.add(sessionId)
+      if (getFilePaneSession(sessionId).open) await captureFilePaneScroll(sessionId)
       navigateAfterClosedSession(sessionId, openOrder)
       // Unsent queued input returns to the session's draft for deliberate review.
       releasePendingSubmit(sessionId)
@@ -2777,6 +2829,7 @@ export function App() {
           setShellError(hostErrorMessage(result.error))
           return false
         }
+        disposeFilePaneSession(sessionId)
         return true
       } catch (error) {
         pendingCloseRequestsRef.current.delete(sessionId)
@@ -2822,6 +2875,7 @@ export function App() {
       // Main closes the old sidecar before this result is returned. The new
       // session has a fresh engine snapshot for the selected branch.
       const replacementId = result.value.appSessionId
+      if (replacementId !== sessionId) disposeFilePaneSession(sessionId)
       if (isSessionDismissed(shellRef.current.dismissals ?? [], source)) {
         updateDismissals(dismissSession(shellRef.current.dismissals ?? [], result.value))
         dispatchShell({ type: 'event', event: { type: 'session-added', session: result.value } })
@@ -2911,7 +2965,7 @@ export function App() {
             const closeResult = await bridge.closeSession(sessionId)
             if (!closeResult.ok) {
               setShellError(hostErrorMessage(closeResult.error))
-            }
+            } else disposeFilePaneSession(sessionId)
             return
           }
           // `focus: false` is the idle-park drain: the user typed into a pane
@@ -2927,11 +2981,11 @@ export function App() {
                 target: { kind: 'session', sessionId: result.value.appSessionId },
               })
             }
-            applyForegroundSelectionIfCurrent(
+            captureBeforePaneSwitch(() => applyForegroundSelectionIfCurrent(
               foregroundSelectionClaimRef.current,
               selectionClaim,
               completeFocus,
-            )
+            ))
           }
         } else {
           lazyRestoreClaimsRef.current.delete(sessionId)
@@ -2946,7 +3000,7 @@ export function App() {
         setShellError(errorMessage(error))
       }
     },
-    [releasePendingSubmit],
+    [releasePendingSubmit, captureBeforePaneSwitch],
   )
 
   const engagePreview = useCallback(
@@ -2993,15 +3047,17 @@ export function App() {
     if (!descriptor || isSessionDismissed(shellRef.current.dismissals ?? [], descriptor)) return
     swappedPreviewsRef.current.delete(sessionId)
     dispatchShell({ type: 'preview-open', sessionId })
-    if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
-    setShownSessionId(sessionId)
-    setActiveSessionId(sessionId)
-    supersedeForegroundSelection(foregroundSelectionClaimRef.current)
-    dispatchTabNavigation({
-      type: 'select',
-      target: { kind: 'session', sessionId },
+    captureBeforePaneSwitch(() => {
+      if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
+      setShownSessionId(sessionId)
+      setActiveSessionId(sessionId)
+      supersedeForegroundSelection(foregroundSelectionClaimRef.current)
+      dispatchTabNavigation({
+        type: 'select',
+        target: { kind: 'session', sessionId },
+      })
     })
-  }, [])
+  }, [captureBeforePaneSwitch])
 
   // PL-A store-first path: a startup-preloaded transcript opens synchronously
   // with zero click-time IPC. A not-preloaded/cache-miss row retains IS-B's
@@ -3078,21 +3134,22 @@ export function App() {
           void performRestore(descriptor.appSessionId, selectionClaim)
           return descriptor
         }
-        if (isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) {
+        captureBeforePaneSwitch(() => {
+          if (!isForegroundSelectionCurrent(foregroundSelectionClaimRef.current, selectionClaim)) return
           setActiveSessionId(descriptor.appSessionId)
           supersedeForegroundSelection(foregroundSelectionClaimRef.current)
           dispatchTabNavigation({
             type: 'select',
             target: { kind: 'session', sessionId: descriptor.appSessionId },
           })
-        }
+        })
         return descriptor
       } catch (error) {
         setShellError(errorMessage(error))
         return null
       }
     },
-    [performRestore, deliberatelyReopen],
+    [performRestore, deliberatelyReopen, captureBeforePaneSwitch],
   )
 
   useEffect(() => {
@@ -3735,6 +3792,18 @@ export function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return
+      if (event.shiftKey && (event.key === 'b' || event.key === 'B')) {
+        if (!activeSessionId) return
+        event.preventDefault()
+        const rows = selectNestedTranscriptRows(transcript, activeSessionId, true)
+        const order = selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id)
+        const candidate = newestPaneFilePath(rows, order)
+        const hasFile = getFilePaneSession(activeSessionId).lastPath ?? candidate
+        void toggleFilePane(activeSessionId, candidate).then(result => {
+          if (!result.ok) toast(result.message, { tone: 'warn' })
+        }).catch(() => { if (hasFile) toast(normalizeLocalhostPreviewUrl(hasFile) ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }) })
+        return
+      }
       if (event.key === 'k' || event.key === 'K') {
         // Settings owns this chord for its search field. An already-open
         // palette still owns the chord that closes it.
@@ -3769,7 +3838,7 @@ export function App() {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries, activeView, paletteOpen])
+  }, [newChat, closeTab, closePage, openPage, selectTab, tabBarEntries, activeView, paletteOpen, activeSessionId, transcript, toast])
 
   function copyForLlm(sessionId: SessionId): void {
     const text = buildDebugExport(
@@ -4690,6 +4759,9 @@ export function App() {
                 )
                 if (!targetRow) return null
                 const targetId = targetRow.appSessionId ?? targetRow.sessionId
+                const fileRows = selectNestedTranscriptRows(transcript, targetId, true)
+                const fileOrder = selectTranscriptRows(transcript, targetId, true).map(row => row.id)
+                const showFilePath = fileMenuPane.lastPath ?? newestPaneFilePath(fileRows, fileOrder)
                 return (
                   <SessionActionsMenu
                     items={(() => {
@@ -4712,11 +4784,16 @@ export function App() {
                         selectArchivedSidebarRows([targetRow], archivedSessions).archived.length > 0
                       return sessionActionsTarget.fromSessionsPage
                         ? selectSessionsPageActions(items)
-                        : selectSessionMenuActions(items, targetRow, archived)
+                        : selectSessionMenuActions(items, targetRow, archived, sessionActionsTarget.origin === 'tab' && !fileMenuPane.open && showFilePath ? paneTargetLabel(showFilePath) : null)
                     })()}
                     anchor={sessionActionsTarget.anchor}
                     onAction={kind => {
-                      if (kind === 'metadata') setMetadataOpen(true)
+                      if (kind === 'show-file' && showFilePath) {
+                        void requestOpenFile(targetId, showFilePath).then(result => {
+                          if (!result.ok) toast(result.message, { tone: 'warn' })
+                        }).catch(() => toast(normalizeLocalhostPreviewUrl(showFilePath) ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }))
+                      }
+                      else if (kind === 'metadata') setMetadataOpen(true)
                       else if (kind === 'copy-text') copyForLlm(targetId)
                       // Reads the catalog row only, so it answers for ANY row —
                       // including a closed or history one the renderer holds no

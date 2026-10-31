@@ -506,9 +506,16 @@ test('sidebar and tab actions share the short menu and resolve archive state fro
   // sessionActions.test.ts. This pins both entry points to that same selector.
   expect(body).toContain('sessionActionsTarget.fromSessionsPage')
   expect(body).toContain('selectSessionsPageActions(items)')
-  expect(body).toContain('selectSessionMenuActions(items, targetRow, archived)')
-  expect(body).toContain('selectArchivedSidebarRows([targetRow], archivedSessions)')
-  expect(body).not.toContain('sessionActionsTarget.origin')
+  expect(body).toMatch(/selectSessionMenuActions\(\s*items\s*,\s*targetRow\s*,\s*archived(?:\s*,|\s*\))/)
+  // Tab-only additions may depend on origin; archive state still comes from
+  // the target row, regardless of which surface opened this shared menu.
+  const archiveStart = body.indexOf('const archived')
+  const archiveEnd = body.indexOf('return sessionActionsTarget.fromSessionsPage', archiveStart)
+  expect(archiveStart).toBeGreaterThan(-1)
+  expect(archiveEnd).toBeGreaterThan(archiveStart)
+  const archiveSource = body.slice(archiveStart, archiveEnd)
+  expect(archiveSource).toContain('selectArchivedSidebarRows([targetRow], archivedSessions)')
+  expect(archiveSource).not.toContain('sessionActionsTarget.origin')
   expect(body).not.toContain('sessionActionsTarget.archived')
 })
 

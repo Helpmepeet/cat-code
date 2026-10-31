@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { StrictMode, act } from 'react'
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js'
 import { App } from './App.js'
+import { disposeFilePaneSession, getFilePaneSession, registerFilePaneScroll, requestOpenFile } from './filePaneState.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor as fixture } from './sessionDescriptorFixture.js'
 import type { HostEvent, SessionDescriptor, SwitchWorkspaceBranchResult } from '../../shared/hostApi.js'
@@ -10,8 +11,9 @@ import type { NotificationVisibility, NotificationVisibilityBridge } from '../..
 
 let harness: DomTestHarness
 let previousBridge: CatCodeBridge
+const previewSessions = new Set<string>()
 beforeAll(async () => { harness = await createDomTestHarness(); previousBridge = window.catcode })
-afterEach(async () => { await harness.unmountAll(); window.catcode = previousBridge })
+afterEach(async () => { await harness.unmountAll(); for (const id of previewSessions) disposeFilePaneSession(id); previewSessions.clear(); window.catcode = previousBridge })
 afterAll(async () => { await harness.teardown() })
 
 function sessionDescriptor(id: string, overrides: Partial<SessionDescriptor> = {}) {
@@ -771,4 +773,170 @@ test('a cold cached conversation shows its mismatch through the read-only path w
   expect(app.tree.container.querySelector('.workspace-branch-changed')?.getAttribute('aria-label')).toBe('Checkout is on external. This chat was on recorded.')
   expect(reads).toEqual([['dead', 'readout']])
   expect(app.lifecycle).toEqual(['create'])
+})
+
+
+async function openAppFilePreview(sessionId: string) {
+  previewSessions.add(sessionId)
+  const releases: string[] = []
+  const path = `/tmp/${sessionId}/notes.md`
+  const descriptor = { id: `file-preview-${sessionId}`, appSessionId: sessionId, path, displayPath: path,
+    kind: 'markdown' as const, url: `cat-preview://file-preview-${sessionId}/r1${path}`, revision: 1, markdown: '# Retained notes' }
+  window.catcode.prepareFilePreview = async () => descriptor
+  window.catcode.refreshFilePreview = async () => null
+  window.catcode.commitFilePreview = async () => true
+  window.catcode.releaseFilePreview = id => { releases.push(id) }
+  window.catcode.subscribeFilePreview = () => () => {}
+  window.catcode.getFilePreviewApplications = async () => ({ applications: [{ target: 'default', label: 'Default application' }], selected: 'default' })
+  await act(async () => { expect((await requestOpenFile(sessionId, path)).ok).toBe(true) })
+  await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+  return { releases, descriptor }
+}
+
+test('confirmed session closure releases pane resources while a refused close preserves them', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
+  const { releases, descriptor } = await openAppFilePreview('a')
+  const pending = deferred<Awaited<ReturnType<CatCodeBridge['closeSession']>>>()
+  window.catcode.closeSession = async () => pending.promise
+  await app.key('w')
+  expect(getFilePaneSession('a').lastPath).toBe(descriptor.path)
+  expect(releases).toEqual([])
+  await act(async () => { pending.resolve({ ok: false, error: { code: 'session_unreachable', message: 'Synthetic close refusal' } }) })
+  expect(getFilePaneSession('a').lastPath).toBe(descriptor.path)
+  const retry = deferred<Awaited<ReturnType<CatCodeBridge['closeSession']>>>()
+  window.catcode.closeSession = async () => retry.promise
+  await app.click('Retry stop')
+  await act(async () => { retry.resolve({ ok: true, value: undefined }) })
+  expect(releases).toEqual([descriptor.id])
+  expect(getFilePaneSession('a')).toMatchObject({ open: false, file: null, committedFile: null, lastPath: null, worker: null, output: null })
+})
+
+test('actual session removal releases pane resources without treating an ordinary switch as closure', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
+  const { releases, descriptor } = await openAppFilePreview('a')
+  await app.click('Session b, live')
+  expect(releases).toEqual([])
+  expect(getFilePaneSession('a').lastPath).toBe(descriptor.path)
+  await app.host({ type: 'session-removed', appSessionId: 'a' })
+  expect(releases).toEqual([descriptor.id])
+  expect(getFilePaneSession('a').lastPath).toBeNull()
+})
+
+test('sidebar preview selection captures the departing pane before unmounting its page', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('dead', { status: 'exited', restorable: true })])
+  await openAppFilePreview('a')
+  const scroll = deferred<{ x: number; y: number }>()
+  const stopReading = registerFilePaneScroll('a', () => scroll.promise)
+  window.catcode.previewSession = async () => ({ header: { appSessionId: 'dead', engineSessionId: 'engine-dead', protocolVersion: PROTOCOL_VERSION,
+    appVersion: 'test', guardVersion: 1, writtenAt: 0 }, frames: [] })
+  await app.click('Pin sidebar open')
+  await act(async () => {
+    for (const header of app.tree.container.querySelectorAll<HTMLButtonElement>('button[aria-expanded="false"][aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"]')) header.click()
+  })
+  const row = [...app.tree.container.querySelectorAll<HTMLElement>('[role="button"]')].find(element => element.getAttribute('aria-label')?.startsWith('session dead,'))!
+  expect(row).toBeDefined()
+  await act(async () => { row.click() })
+  expect(app.selected()).toEqual(['Session a, live'])
+  await act(async () => { scroll.resolve({ x: 7, y: 191 }) })
+  expect(app.selected()[0]).toContain('Session dead,')
+  expect(getFilePaneSession('a').scroll).toEqual({ x: 7, y: 191 })
+  stopReading()
+})
+
+test('App forwards unhandled document web links through the closed host method without consuming pane, text, or frame clicks', async () => {
+  const app = await mountApp([sessionDescriptor('a')], true)
+  const opened: string[] = []
+  window.catcode.openExternalUrl = async url => { opened.push(url); return true }
+  const happy = window as unknown as { happyDOM: { settings: { navigation: { disableMainFrameNavigation: boolean; disableChildFrameNavigation: boolean; disableChildPageNavigation: boolean; disableFallbackToSetURL: boolean } } } }
+  const navigation = happy.happyDOM.settings.navigation
+  const original = { ...navigation }
+  Object.assign(navigation, { disableMainFrameNavigation: true, disableChildFrameNavigation: true, disableChildPageNavigation: true, disableFallbackToSetURL: true })
+  const fixture = document.createElement('div')
+  app.tree.container.appendChild(fixture)
+  try {
+    await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'message', message: {
+      type: 'assistant', uuid: 'external-link-reply', message: { role: 'assistant', content: [{ type: 'text', text: '[**Docs**](https://example.com/guide) [Local](http://localhost:4000/)' }] },
+    } } } as ServerFrame)
+    const link = app.tree.container.querySelector<HTMLAnchorElement>('a[href="https://example.com/guide"]')!
+    expect(link).not.toBeNull()
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true })
+    await act(async () => { link.querySelector('strong')!.dispatchEvent(click) })
+    expect(click.defaultPrevented).toBe(true)
+    expect(opened).toEqual(['https://example.com/guide'])
+    await act(async () => { link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })) })
+    expect(opened).toEqual(['https://example.com/guide', 'https://example.com/guide'])
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true })
+    await act(async () => { link.dispatchEvent(menu) })
+    expect(menu.defaultPrevented).toBe(false)
+    const selection = document.createRange()
+    selection.selectNodeContents(link)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(selection)
+    expect(window.getSelection()!.toString()).toBe('Docs')
+    await act(async () => { link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    expect(opened).toHaveLength(2)
+    window.getSelection()!.removeAllRanges()
+
+    const localRequests: string[] = []
+    const chosenApps: string[] = []
+    window.catcode.prepareLocalhostPreview = async (_id, url) => {
+      localRequests.push(url)
+      return { ok: false, reason: 'unavailable', hostPort: 'localhost:4000' }
+    }
+    window.catcode.getFilePreviewApplications = async () => ({ applications: [{ target: 'chrome', label: 'Google Chrome' }], selected: 'chrome' })
+    window.catcode.chooseFilePreviewApplication = async (_id, url, target) => { chosenApps.push(`${target}:${url}`); return true }
+    const localButton = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label="Open http://localhost:4000/"]')!
+    expect(localButton).not.toBeNull()
+    await act(async () => { localButton.click() })
+    await act(async () => { localButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true })) })
+    expect(localRequests).toEqual(['http://localhost:4000/'])
+    expect(chosenApps).toEqual(['chrome:http://localhost:4000/'])
+    expect(opened).toHaveLength(2)
+
+    const handled = document.createElement('a')
+    handled.href = 'http://localhost:4000/handled'
+    handled.textContent = 'Handled by a pane controller'
+    handled.addEventListener('click', event => event.preventDefault())
+    fixture.appendChild(handled)
+    await act(async () => { handled.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    expect(opened).toHaveLength(2)
+    for (const href of ['#section', './local-file.md', 'file:///tmp/notes.md']) {
+      const local = document.createElement('a')
+      local.href = href
+      fixture.appendChild(local)
+      await act(async () => { local.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    }
+    expect(opened).toHaveLength(2)
+
+    const frame = document.createElement('iframe')
+    fixture.appendChild(frame)
+    const frameDocument = frame.contentDocument!
+    expect(frameDocument).not.toBeNull()
+    const frameLink = frameDocument.createElement('a')
+    frameLink.href = 'https://example.com/from-iframe'
+    const frameText = frameDocument.createElement('span')
+    frameText.textContent = 'Untrusted frame link'
+    frameLink.appendChild(frameText)
+    frameDocument.body.appendChild(frameLink)
+    const frameClick = new MouseEvent('click', { bubbles: true, cancelable: true })
+    await act(async () => { frameText.dispatchEvent(frameClick) })
+    expect(frameClick.defaultPrevented).toBe(false)
+    expect(opened).toHaveLength(2)
+    await act(async () => { link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) })
+    const middleClick = new MouseEvent('auxclick', { button: 1, bubbles: true, cancelable: true })
+    await act(async () => { link.dispatchEvent(middleClick) })
+    expect(middleClick.defaultPrevented).toBe(true)
+    expect(opened).toEqual(['https://example.com/guide', 'https://example.com/guide', 'https://example.com/guide', 'https://example.com/guide'])
+    await app.tree.unmount()
+    const afterUnmount = document.createElement('a')
+    afterUnmount.href = 'https://example.com/after-unmount'
+    document.body.appendChild(afterUnmount)
+    try { await act(async () => { afterUnmount.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })) }) }
+    finally { afterUnmount.remove() }
+    expect(opened).toHaveLength(4)
+  } finally {
+    window.getSelection()?.removeAllRanges()
+    fixture.remove()
+    Object.assign(navigation, original)
+  }
 })

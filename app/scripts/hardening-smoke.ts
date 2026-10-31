@@ -312,6 +312,21 @@ async function runProductionHardeningSmoke(
       // realpath must stay inside that session's realpath'd cwd and be a regular
       // file. Traversal and symlink escape both fail closed.
       'openWorkspaceFile',
+      'openExternalUrl',
+      // Display-only previews use fixed main-frame channels and scoped capabilities.
+      'prepareFilePreview',
+      'prepareLocalhostPreview',
+      'captureLocalhostPreview',
+      'navigateLocalhostPreview',
+      'openBlockedPreviewNavigation',
+      'refreshFilePreview',
+      'commitFilePreview',
+      'releaseFilePreview',
+      'subscribeFilePreview',
+      'readFilePreviewScroll',
+      'restoreFilePreviewScroll',
+      'getFilePreviewApplications',
+      'chooseFilePreviewApplication',
       // Same validated regular-file policy, boolean metadata only; no OS action.
       'getWorkspaceFileAvailability',
       'getExternalAppIcon',

@@ -2,7 +2,7 @@
  * F16 / F8 / T3 — navigation and window-open policy.
  *
  * The renderer must be unable to navigate the app frame anywhere but the app
- * itself, and unable to spawn a new Electron window; only https: links reach the
+ * itself, and unable to spawn a new Electron window; only http(s): links reach the
  * OS browser. These are the pure decisions behind `will-navigate`,
  * `will-redirect`, and `setWindowOpenHandler`. Testing them here covers the
  * security POLICY without an Electron process (the live-renderer behaviors —
@@ -103,14 +103,16 @@ test('window.open / target=_blank is ALWAYS denied (no new Electron window)', ()
   }
 })
 
-test('only an https: link is handed to the OS browser', () => {
-  const https = decideWindowOpen('https://example.com/docs')
-  expect(https).toEqual({ action: 'deny', openExternal: 'https://example.com/docs' })
+test('http and https links are handed to the OS browser without opening an app window', () => {
+  for (const url of ['https://example.com/docs', 'http://example.com/docs']) {
+    expect(decideWindowOpen(url)).toEqual({ action: 'deny', openExternal: url })
+  }
 })
 
-test('non-https window.open targets are denied WITHOUT an external hand-off', () => {
+test('non-web window.open targets are denied WITHOUT an external hand-off', () => {
   for (const url of [
-    'http://example.com',
+    'mailto:someone@example.com',
+    'ssh://example.com',
     'javascript:alert(1)',
     'file:///etc/passwd',
     'data:text/html,x',
@@ -119,9 +121,9 @@ test('non-https window.open targets are denied WITHOUT an external hand-off', ()
   }
 })
 
-test('isSafeExternalUrl only accepts https:', () => {
+test('isSafeExternalUrl only accepts http and https', () => {
   expect(isSafeExternalUrl('https://x.example')).toBe(true)
-  expect(isSafeExternalUrl('http://x.example')).toBe(false)
+  expect(isSafeExternalUrl('http://x.example')).toBe(true)
   expect(isSafeExternalUrl('javascript:1')).toBe(false)
   expect(isSafeExternalUrl('garbage')).toBe(false)
 })

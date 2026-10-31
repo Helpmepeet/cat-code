@@ -13,13 +13,13 @@
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
-import { createElement, useState } from 'react'
+import { act, createElement, createRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { _forTest as coordinator } from './markdownScrollCoordinator.js'
-import { renderMarkdownTree, type MountedMarkdownLeaf } from './markdownRenderPlan.js'
+import { planMarkdownLeaves, renderMarkdownTree, type MountedMarkdownLeaf } from './markdownRenderPlan.js'
 
 let harness: DomTestHarness
 
@@ -229,4 +229,29 @@ describe('BoundedMarkdown pane registration', () => {
     expect(pane!.querySelectorAll('tbody tr').length).toBeLessThan(500)
     expect(pane!.querySelectorAll('tbody tr').length).toBeGreaterThan(0)
   })
+})
+
+
+test('an explicit reading position mounts its deep unit before viewport measurements are available', async () => {
+  const source = paragraphs(400)
+  const leaves = planMarkdownLeaves('restored-file', source)
+  const target = leaves.find(leaf => JSON.stringify(leaf.children).includes('Paragraph 350.'))!
+  expect(target).toBeDefined()
+  const scroller = createRef<HTMLElement>()
+  const tree = await harness.mount(createElement('div', {
+    ref: (element: HTMLDivElement | null) => {
+      scroller.current = element
+      if (element) element.style.overflowY = 'auto'
+    },
+  }, createElement(BoundedMarkdown, {
+    sourceId: 'restored-file', source, scrollContainerRef: scroller,
+    initialReadingPosition: { leafId: target.id, offset: 12 }, initialScrollOffset: 3200,
+    renderLeaf: (leaf: MountedMarkdownLeaf) => renderMarkdownTree(leaf.tree),
+  })))
+  await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+  // This proves the restoration window handoff, not browser layout or pixels.
+  // The native GUI gate verifies that the same text remains at the same place.
+  expect(tree.container.textContent).toContain('Paragraph 350.')
+  expect(tree.container.textContent).not.toContain('Paragraph 0.')
+  expect(tree.container.querySelectorAll('[data-markdown-unit]').length).toBeLessThan(120)
 })

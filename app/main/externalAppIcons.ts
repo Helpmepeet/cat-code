@@ -28,6 +28,8 @@ function run(argv) {
 }`
 
 const APPS = {
+  chrome: { id: 'com.google.Chrome', name: 'Google Chrome.app' },
+  safari: { id: 'com.apple.Safari', name: 'Safari.app' },
   vscode: { id: 'com.microsoft.VSCode', name: 'Visual Studio Code.app' },
   zed: { id: 'dev.zed.Zed', name: 'Zed.app' },
   cursor: { id: 'com.todesktop.230313mzl4w4u92', name: 'Cursor.app' },
@@ -51,6 +53,7 @@ export function createExternalAppIconService(options: ExternalAppIconServiceOpti
   const cache = new Map<string, { dataUrl: string; expires: number }>()
   const bundles = new Map<string, Promise<ExternalAppIconResult>>()
   const requests = new Map<string, Promise<ExternalAppIconResult>>()
+  const installationRequests = new Map<string, Promise<boolean>>()
   let active = 0
   const waiters: Array<() => void> = []
 
@@ -64,6 +67,7 @@ export function createExternalAppIconService(options: ExternalAppIconServiceOpti
     const candidates = typeof resolved === 'string' ? [resolved] : []
     if (app) {
       if (target === 'finder') candidates.push('/System/Library/CoreServices/Finder.app')
+      if (target === 'safari') candidates.push('/System/Applications/Safari.app')
       candidates.push(...roots.map(root => join(root, app.name)))
     }
     for (const candidate of candidates) {
@@ -139,6 +143,26 @@ export function createExternalAppIconService(options: ExternalAppIconServiceOpti
   }
 
   return {
+    installed(target: ExternalAppIconTarget, trustedPath?: string): Promise<boolean> {
+      if (platform !== 'darwin' || !parseExternalAppIconTarget(target)) return Promise.resolve(false)
+      const key = JSON.stringify([target, target === 'default' ? trustedPath : null])
+      const existing = installationRequests.get(key)
+      if (existing) return existing
+      if (installationRequests.size >= 32) return Promise.resolve(false)
+      const promise = (async () => {
+        if (active >= 4) await new Promise<void>(resolve => waiters.push(resolve))
+        else active++
+        try { return await resolveBundle(target, trustedPath) !== null }
+        catch { return false }
+        finally {
+          const next = waiters.shift()
+          if (next) next()
+          else active--
+        }
+      })().finally(() => installationRequests.delete(key))
+      installationRequests.set(key, promise)
+      return promise
+    },
     read(target: ExternalAppIconTarget, trustedPath?: string): Promise<ExternalAppIconResult> {
       if (platform !== 'darwin' || !parseExternalAppIconTarget(target) ||
         (target === 'default' && (!trustedPath || !isAbsolute(trustedPath) || trustedPath.length > 4096 || trustedPath.includes('\0')))) return Promise.resolve({ dataUrl: null })

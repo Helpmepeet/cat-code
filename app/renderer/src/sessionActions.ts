@@ -42,6 +42,7 @@ import { selectRowEngineSessionId, type MergedSessionRow } from './sessionsCatal
 export type SessionActionKind =
   | 'open'
   | 'rename'
+  | 'show-file'
   | 'metadata'
   | 'copy-text'
   /**
@@ -331,6 +332,7 @@ export function selectSessionMenuActions(
   items: readonly SessionActionItem[],
   row: MergedSessionRow,
   archived = false,
+  showFileName: string | null = null,
 ): SessionActionItem[] {
   const engineSessionId = selectRowEngineSessionId(row)
   const copy: SessionActionItem = {
@@ -353,6 +355,7 @@ export function selectSessionMenuActions(
   const rename = items.find(item => item.kind === 'rename')
   const exportAction = items.find(item => item.kind === 'export')
   return [
+    ...(showFileName ? [{ kind: 'show-file' as const, label: `Show ${showFileName}`, section: 'primary' as const, enabled: true }] : []),
     ...(rename ? [rename] : []),
     {
       kind: 'fork',
