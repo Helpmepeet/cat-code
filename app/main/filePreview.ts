@@ -200,6 +200,8 @@ export function createFilePreviewService(deps: {
     if (preview.released || preview.watched.has(path) || preview.watched.size >= MAX_ASSETS || watchedFiles >= MAX_WATCHED_FILES) return
     preview.watched.set(path, current)
     watchedFiles++
+    // An asset may have arrived between resolution and watcher registration.
+    if (current !== null && (await resolve(preview, path))?.path === path) schedule(preview)
   }
   async function refresh(id: string): Promise<FilePreviewDescriptor | null> {
     const preview = previews.get(id)
