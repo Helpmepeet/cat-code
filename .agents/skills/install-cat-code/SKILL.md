@@ -1,6 +1,6 @@
 ---
 name: install-cat-code
-description: Installs or updates Cat Code.app from a matching GitHub-verified build when the user asks to install the latest update, or on $install-cat-code. Also handles explicitly requested local builds and build-only work. Not for explaining updates, ordinary code edits, development launches, the CLI updater, or the Codex app.
+description: Installs or updates Cat Code.app by building committed HEAD locally when the user asks to install the latest update, or on $install-cat-code. Uses a matching GitHub-verified build only when asked for a verified build. Also handles build-only work. Not for explaining updates, ordinary code edits, development launches, the CLI updater, or the Codex app.
 ---
 
 # Build and install Cat Code
@@ -11,9 +11,9 @@ Use this only for an explicit build or installation request in the Cat Code repo
 
 Inspect the branch, `HEAD`, working tree, origin repository, and existing `/Applications/Cat Code.app`. Identify which changes the user wants in the app. A shared checkout can contain another session's edits: do not include them accidentally, stash them, or clean them.
 
-For an ordinary install/update request, prefer the matching verified GitHub delivery below. An explicit request to build locally or build without installing uses the local-build path instead. If the user requested particular changes, a successful older build that lacks them is not a substitute. For "latest verified build", select the newest eligible delivered version, but disclose newer local or remote changes that it excludes.
+For an ordinary install/update request, build committed `HEAD` locally and install it without waiting for CI, even if CI is pending or failed for that commit; report any known failure. A request for a verified or GitHub build uses the verified GitHub delivery below. A request to build without installing uses the local-build path and stops before installation. If the user requested particular changes, a build that lacks them is not a substitute: report uncommitted work rather than committing it. For "latest verified build", select the newest eligible delivered version, but disclose newer local or remote changes that it excludes.
 
-If the matching CI or delivery run is pending or failed, or its artifact is missing, expired, or inaccessible, report that condition. Do not silently install an older version, rebuild locally, push changes, or rerun GitHub workflows. Offer waiting, investigating the failure, or an explicitly authorized local build; preserve any build route the user already requested.
+On the verified route, if the matching CI or delivery run is pending or failed, or its artifact is missing, expired, or inaccessible, report that condition. Do not silently install an older version, rebuild locally, push changes, or rerun GitHub workflows. Offer waiting, investigating the failure, or a local build; preserve any build route the user already requested.
 
 Building, installing, pushing, and launching are distinct actions. An explicit request to build and install authorizes that run's build and replacement steps; a build-only request does not authorize installation. Push only when separately requested. For a requested push, fetch the current remote, inspect divergence, verify the destination and signed-in account, and use a normal non-force push. Do not publish another session's uncommitted work.
 
@@ -29,7 +29,7 @@ Building, installing, pushing, and launching are distinct actions. An explicit r
 
 GitHub's archive retention is finite; check the artifact's actual expiry. This is an ad-hoc-signed personal build, not Developer ID signed or notarized. Signature and smoke checks do not establish Gatekeeper acceptance, GUI behavior, or live-account behavior. Report a first downloaded build's remaining target-Mac checks, and do not remove quarantine, disable Gatekeeper, or bypass a security refusal to force it open.
 
-## Build locally when requested
+## Build locally
 
 Prefer a clean committed snapshot of the intended ref in a temporary clone when the checkout has unrelated changes. Install dependencies inside the selected clean checkout with `bun install --frozen-lockfile` at the root and in `app/`; do not link either `node_modules` directory from the shared checkout. The default installer does this automatically for committed `HEAD`. A lockfile mismatch must fail the build rather than update the lockfiles. Confirm the build prints the intended commit without a dirty suffix.
 
@@ -47,4 +47,4 @@ The install is complete only when `/Applications/Cat Code.app` is the sole visib
 
 On failure, preserve recovery artifacts and report the actual installed/rollback state. An interrupted-install lock or extra visible production app requires inspection; do not bypass the lock or sweep another session's artifacts. Do not report success while duplicate-app or registration checks fail. Launcher caches can refresh later, so distinguish filesystem/registration checks from an observed launcher UI.
 
-Report the selected route (GitHub download or local build), installed path and SHA, CI/delivery run links when used, checksum/signature/headless smoke results, retained rollback path, and whether the app was launched or observed running. Leave unrelated working-tree edits untouched.
+Report the selected route (GitHub download or local build), installed path and SHA, CI/delivery run links when used, checksum/signature/headless smoke results, retained rollback path, and whether the app was launched or observed running. For a local build, state that the full test suite has not run on it through this install, whether its commit is pushed, and its CI result if known. Leave unrelated working-tree edits untouched.
