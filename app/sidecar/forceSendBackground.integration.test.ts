@@ -383,6 +383,8 @@ test('worker approvals survive force-send and a later approval remains answerabl
   await waitFor(() => h.getTasks().some(task => task.type === 'local_agent' && task.status === 'completed'), 'Approved background worker did not complete')
   expect(h.controller.getPendingPermissionRequests()).toHaveLength(0)
   expect(workerCalls).toBe(3)
+  // The worker's report starts one more parent turn. Left running, it takes the next test's scripted reply.
+  await waitFor(() => mainCalls === 3 && !h.controller.isTurnActive(), 'Worker report did not reach the parent')
 }, 15_000)
 
 test('force-send cancels a main-tool approval and never starts its denied command', async () => {
