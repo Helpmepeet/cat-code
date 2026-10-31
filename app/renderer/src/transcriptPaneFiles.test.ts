@@ -47,6 +47,13 @@ test('newest cards and reopen candidates use original arrival order across neste
   expect([...aliases]).toEqual([['/repo/report.md', 'new-alias']])
 })
 
+test('reopen candidates resolve relative paths using persisted move boundaries', () => {
+  const rows = [prose('boundary', 'Moving'), prose('reply', '`docs/report.html`')]
+  const transition = { id: 'move', afterFrameId: 'boundary', cwd: '/repo', binding: { kind: 'project' as const } }
+  expect(newestPaneFilePath(rows, undefined, [transition])).toBe('/repo/docs/report.html')
+  expect(newestPaneFilePath(rows, undefined, [{ ...transition, afterFrameId: 'not-loaded' }])).toBe('docs/report.html')
+})
+
 test('safe filename source locations survive Markdown URL normalization while executable schemes stay inert', () => {
   const source = '[Notes](notes.md:12:3) [JS](javascript:12) [JS file](javascript:evil.md:12) [Data](data:text/html,bad)'
   const leaves = planMarkdownLeaves('paths', source)

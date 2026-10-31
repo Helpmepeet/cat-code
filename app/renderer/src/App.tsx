@@ -3797,7 +3797,7 @@ export function App() {
         event.preventDefault()
         const rows = selectNestedTranscriptRows(transcript, activeSessionId, true)
         const order = selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id)
-        const candidate = newestPaneFilePath(rows, order)
+        const candidate = newestPaneFilePath(rows, order, shellRef.current.byId[activeSessionId]?.contextTransitions)
         const hasFile = getFilePaneSession(activeSessionId).lastPath ?? candidate
         void toggleFilePane(activeSessionId, candidate).then(result => {
           if (!result.ok) toast(result.message, { tone: 'warn' })
@@ -4761,7 +4761,7 @@ export function App() {
                 const targetId = targetRow.appSessionId ?? targetRow.sessionId
                 const fileRows = selectNestedTranscriptRows(transcript, targetId, true)
                 const fileOrder = selectTranscriptRows(transcript, targetId, true).map(row => row.id)
-                const showFilePath = fileMenuPane.lastPath ?? newestPaneFilePath(fileRows, fileOrder)
+                const showFilePath = fileMenuPane.lastPath ?? newestPaneFilePath(fileRows, fileOrder, shell.byId[targetId]?.contextTransitions)
                 return (
                   <SessionActionsMenu
                     items={(() => {

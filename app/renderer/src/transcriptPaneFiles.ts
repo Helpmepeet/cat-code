@@ -3,7 +3,9 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import type { RootContent } from 'mdast'
 import type { NestedTranscriptRow, NestedToolUseRow } from './transcriptProjector.js'
+import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { bareFilePaths, isInlineFilePath, workspaceFileHref } from './transcriptFileLinks.js'
+import { scopedTranscriptFilePath, transcriptFileScopes } from './transcriptFileScope.js'
 import { resolveFilePathParts } from './filePathActions.js'
 import { isPaneFilePath } from './filePaneState.js'
 import { toolCardFilePath } from './transcriptToolTarget.js'
@@ -91,16 +93,22 @@ function pathsInReply(row: Extract<NestedTranscriptRow, {kind: 'assistant-text'}
 }
 
 /** Read-time discovery only. Resolving or opening still requires the user's action. */
-export function newestPaneFilePath(rows: readonly NestedTranscriptRow[], order?: readonly string[]): string | null {
+export function newestPaneFilePath(
+  rows: readonly NestedTranscriptRow[],
+  order?: readonly string[],
+  transitions?: SessionDescriptor['contextTransitions'],
+): string | null {
   let newest: string | null = null
-  for (const row of orderedPaneRows(rows, order)) {
+  const ordered = orderedPaneRows(rows, order)
+  const scopes = transcriptFileScopes(ordered, transitions)
+  for (const row of ordered) {
     const paths = row.kind === 'assistant-text' ? pathsInReply(row)
       : row.kind === 'tool-use' ? [...new Set([
           ...paneCardPaths(row),
           toolCardFilePath(row),
           row.result?.generatedImage?.filePath,
         ].filter((path): path is string => typeof path === 'string' && isPaneFilePath(path)))] : []
-    if (paths.length) newest = paths[paths.length - 1]!
+    if (paths.length) newest = scopedTranscriptFilePath(paths[paths.length - 1]!, scopes.get(row.id))
   }
   return newest
 }

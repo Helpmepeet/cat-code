@@ -56,6 +56,7 @@ import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { isPaneFilePath } from './filePaneState.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, paneFileKey, selectedTextInside } from './transcriptPaneFiles.js'
 import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, localhostMarkdownHref, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
+import { TranscriptFileScopeContext, scopedTranscriptFilePath, transcriptFileScopes } from './transcriptFileScope.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
   PEER_BUBBLE_CLASS,
@@ -725,6 +726,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     () => ({ cwd: cwd ?? null, openFilePathMenu }),
     [cwd, openFilePathMenu],
   )
+  const inheritedFileScopes = useContext(TranscriptFileScopeContext)
+  const fileScopes = useMemo(
+    () => contextTransitions.length ? transcriptFileScopes(boundaryRows, contextTransitions) : inheritedFileScopes,
+    [boundaryRows, contextTransitions, inheritedFileScopes],
+  )
   const { mode: reasoningMode } = useContext(ReasoningLayoutContext)
   const { mode: transcriptMode } = useContext(TranscriptModeContext)
   const motion = useTranscriptMotion(
@@ -1003,6 +1009,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                 >
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
                   <LatestPaneFileCardContext.Provider value={latestFileCards}>
+                  <TranscriptFileScopeContext.Provider value={fileScopes}>
                     {content}
                     {filePathMenuState ? (
                       <FilePathActionsMenu
@@ -1014,6 +1021,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                         onClose={closeFilePathMenu}
                       />
                     ) : null}
+                  </TranscriptFileScopeContext.Provider>
                   </LatestPaneFileCardContext.Provider>
                   </FilePathMenuContext.Provider>
                 </TurnErrorActionsContext.Provider>
@@ -2013,8 +2021,10 @@ function AssistantProse({
   }, [])
   const filePathContext = useContext(FilePathMenuContext)
   const paneOpener = useFilePaneOpener()
+  const fileCwd = useContext(TranscriptFileScopeContext)?.get(sourceId)
   const openFile = useCallback(
-    (path: string, external = false): void => {
+    (rawPath: string, external = false): void => {
+      const path = scopedTranscriptFilePath(rawPath, fileCwd)
       const local = normalizeLocalhostPreviewUrl(path)
       const failure = local ? 'Could not open this page' : 'Could not open this file'
       if (paneOpener && (isPaneFilePath(path) || local)) {
@@ -2027,13 +2037,13 @@ function AssistantProse({
         }).catch(() => toast(failure, { tone: 'warn' }))
       }
     },
-    [sessionId, toast, paneOpener],
+    [sessionId, toast, paneOpener, fileCwd],
   )
   const onContextMenu = useCallback(
     (anchor: FilePathActionsAnchor, path: string) => {
-      filePathContext?.openFilePathMenu(anchor, path, sessionId)
+      filePathContext?.openFilePathMenu(anchor, path, sessionId, fileCwd ? { sourceCwd: fileCwd } : undefined)
     },
-    [filePathContext, sessionId],
+    [filePathContext, sessionId, fileCwd],
   )
   // The prototype's `showCopy` gate (Messages.jsx:2068): no chip while the reply
   // is still arriving (there is no settled answer to take yet), and none on an
@@ -2148,12 +2158,13 @@ function AssistantProse({
 function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: string } | undefined): ((event: ReactMouseEvent<HTMLButtonElement>) => void) | null {
   const opener = useFilePaneOpener()
   const latest = useContext(LatestPaneFileCardContext)
+  const scopes = useContext(TranscriptFileScopeContext)
   const cwd = useContext(FilePathMenuContext)?.cwd ?? null
   const toast = useToast()
   if (!file || !opener || !isPaneFilePath(file.path) || latest?.get(paneFileKey(file.path, cwd)) !== file.cardId) return null
   return event => {
     event.stopPropagation()
-    void opener(file.sessionId, file.path, { external: event.metaKey }).then(result => {
+    void opener(file.sessionId, scopedTranscriptFilePath(file.path, scopes?.get(file.cardId)), { external: event.metaKey }).then(result => {
       if (!result.ok) toast(result.message, { tone: 'warn' })
     }).catch(() => toast('Could not open this file', { tone: 'warn' }))
   }

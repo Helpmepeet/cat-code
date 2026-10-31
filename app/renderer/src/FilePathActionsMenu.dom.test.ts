@@ -213,3 +213,36 @@ test('accepted availability offers Finder and editors for the unchanged raw cita
   await act(async () => { finder.click() })
   expect(opened).toEqual([[sessionId, 'source.ts:42:3', 'finder']])
 })
+
+test('a recorded source workspace resolves Open without changing Copy relative path', async () => {
+  const opened: unknown[] = []
+  const checked: string[] = []
+  const settle = bridge(async (id, path) => { checked.push(path); return availability(id, path) }, opened)
+  const copied: string[] = []
+  const previousClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+    writeText: async (text: string) => { copied.push(text) },
+  } })
+  try {
+    const tree = await harness.mount(menu('source.ts:42:3', { cwd: '/different-project', extras: { sourceCwd: workspace } }))
+    await settle()
+    expect(checked).toEqual([join(workspace, 'source.ts:42:3')])
+    const copy = [...tree.container.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find(item => item.textContent?.trim() === 'Copy')!
+    await act(async () => { copy.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) })
+    const relative = [...tree.container.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Copy"] button')]
+      .find(item => item.textContent?.trim() === 'Relative path')!
+    await act(async () => { relative.click() })
+    expect(copied).toEqual(['source.ts:42:3'])
+    const open = [...tree.container.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find(item => item.textContent?.trim() === 'Open in')!
+    await act(async () => { open.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true })) })
+    const finder = [...tree.container.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Open in"] button')]
+      .find(item => /Finder|file manager/.test(item.textContent ?? ''))!
+    await act(async () => { finder.click() })
+    expect(opened).toEqual([[sessionId, join(workspace, 'source.ts:42:3'), 'finder']])
+  } finally {
+    if (previousClipboard) Object.defineProperty(navigator, 'clipboard', previousClipboard)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  }
+})

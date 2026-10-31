@@ -83,6 +83,65 @@ test('selected path text keeps the normal text menu and an unselected path keeps
   expect(document.querySelector('[role="menu"]')?.textContent).toContain('Copy')
 })
 
+test('new relative HTML links after a move open in their recorded project in every reply form', async () => {
+  installBridge([])
+  const requests: Array<{ path: string; external: boolean }> = []
+  const relative = 'docs/design-html/2026-10-31-project-trust-for-workspace-jump.html'
+  const boundary = { ...prose('Moving'), id: 'move', frameId: 'move-frame' }
+  for (const content of [
+    `The file is new and untracked: \`${relative}\`.`,
+    `The file is new and untracked: ${relative}.`,
+    `[Open the design](${relative})`,
+  ]) {
+    const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path, options) => {
+      requests.push({ path, external: options?.external === true }); return { ok: true }
+    }}>
+      <TranscriptRowsView rows={[boundary, prose(content)]} cwd="/Users/pt/cat-code"
+        contextTransitions={[{ id: 'move', afterFrameId: 'move-frame', cwd: '/Users/pt/cat-code', binding: { kind: 'project' } }]} />
+    </FilePaneContext.Provider>)
+    const button = openButtons(tree.container)[0]!
+    await act(async () => { button.click() })
+    expect(requests.at(-1)).toEqual({ path: `/Users/pt/cat-code/${relative}`, external: false })
+    await act(async () => { button.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })) })
+    expect(requests.at(-1)).toEqual({ path: `/Users/pt/cat-code/${relative}`, external: true })
+    await tree.unmount()
+  }
+})
+
+test('a relative link menu uses the same recorded workspace as its click', async () => {
+  installBridge([])
+  const checked: string[] = []
+  window.catcode.getWorkspaceFileAvailability = async (_id, path) => { checked.push(path); return true }
+  const boundary = { ...prose('Moving'), id: 'move', frameId: 'move-frame' }
+  const tree = await harness.mount(<TranscriptRowsView rows={[boundary, prose('`docs/report.html`')]} cwd="/repo"
+    contextTransitions={[{ id: 'move', afterFrameId: 'move-frame', cwd: '/repo', binding: { kind: 'project' } }]} />)
+  await act(async () => { openButtons(tree.container)[0]!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })) })
+  expect(checked).toEqual(['/repo/docs/report.html'])
+  expect(document.querySelector('[role="menu"]')?.textContent).toContain('Open in')
+})
+
+test('older replies are not resolved against a later workspace, even when filenames match', async () => {
+  installBridge([])
+  const requests: string[] = []
+  const rows = [
+    { ...prose('`report.html`'), id: 'before', frameId: 'before' },
+    { ...prose('First move'), id: 'first', frameId: 'first' },
+    { ...prose('`report.html`'), id: 'middle', frameId: 'middle' },
+    { ...prose('Second move'), id: 'second', frameId: 'second' },
+    { ...prose('`report.html`'), id: 'after', frameId: 'after' },
+  ]
+  const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path) => {
+    requests.push(path); return { ok: true }
+  }}>
+    <TranscriptRowsView rows={rows} cwd="/two" contextTransitions={[
+      { id: 'one', afterFrameId: 'first', cwd: '/one', binding: { kind: 'project' } },
+      { id: 'two', afterFrameId: 'second', cwd: '/two', binding: { kind: 'project' } },
+    ]} />
+  </FilePaneContext.Provider>)
+  for (const button of openButtons(tree.container)) await act(async () => { button.click() })
+  expect(requests).toEqual(['report.html', '/one/report.html', '/two/report.html'])
+})
+
 test('only the newest Write or Edit has a sibling Open action in both card styles, including pending edits', async () => {
   installBridge([])
   for (const style of ['cards', 'lines'] as ToolCardStyle[]) {
@@ -108,6 +167,23 @@ test('only the newest Write or Edit has a sibling Open action in both card style
     }
     await tree.unmount()
     }
+  }
+})
+
+test('relative Write and Edit preview actions use the recorded workspace after a move', async () => {
+  installBridge([])
+  const requests: string[] = []
+  for (const family of ['write', 'edit'] as const) {
+    const boundary = { ...prose('Moving'), id: 'move', frameId: 'move-frame' }
+    const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path) => {
+      requests.push(path); return { ok: true }
+    }}>
+      <TranscriptRowsView rows={[boundary, fileCard('file', family, 'docs/report.html')]} cwd="/repo"
+        contextTransitions={[{ id: 'move', afterFrameId: 'move-frame', cwd: '/repo', binding: { kind: 'project' } }]} />
+    </FilePaneContext.Provider>)
+    await act(async () => { openButtons(tree.container)[0]!.click() })
+    expect(requests.at(-1)).toBe('/repo/docs/report.html')
+    await tree.unmount()
   }
 })
 

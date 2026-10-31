@@ -10,6 +10,8 @@ import { basename } from './pathUtils.js'
 
 /** What a surface adds to the menu beyond the path itself. */
 export type FilePathMenuExtras = {
+  /** Persisted message workspace; keep copied relative text separate from its opening target. */
+  sourceCwd?: string
   /** A surface may suppress Open; host availability still decides whether it can be offered. */
   canOpen?: boolean
   /** One row above the file actions, for the thing the path belongs to. */

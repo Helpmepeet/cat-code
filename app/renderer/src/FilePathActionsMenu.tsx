@@ -106,9 +106,11 @@ export function FilePathActionsMenu({
   onClose: () => void
 }): ReactNode {
   const menuRef = useRef<HTMLDivElement>(null)
+  const parts = resolveFilePathParts({ rawPath, cwd: extras?.sourceCwd ?? cwd })
+  const openPath = extras?.sourceCwd ? parts.absolutePath ?? rawPath : rawPath
   const request = useMemo(
-    () => ({ rawPath, cwd, sessionId, anchor, allowOpen: extras?.canOpen !== false }),
-    [anchor, cwd, rawPath, sessionId, extras?.canOpen],
+    () => ({ rawPath: openPath, cwd, sessionId, anchor, allowOpen: extras?.canOpen !== false }),
+    [anchor, cwd, openPath, sessionId, extras?.canOpen],
   )
   const [availability, setAvailability] = useState<{
     request: typeof request
@@ -136,7 +138,6 @@ export function FilePathActionsMenu({
     return () => { active = false }
   }, [request])
 
-  const parts = resolveFilePathParts({ rawPath, cwd })
   const canOpen = request.allowOpen && availability?.request === request && availability.available
   const items = resolveFilePathActionItems(
     parts,
@@ -173,7 +174,7 @@ export function FilePathActionsMenu({
     const open = OPEN_TARGETS[kind]
     if (!open) return
     void window.catcode
-      ?.openWorkspaceFile(sessionId, parts.rawPath, open.target)
+      ?.openWorkspaceFile(sessionId, openPath, open.target)
       .then(opened => {
         if (!opened) toast(open.failure, { tone: 'warn' })
       })
