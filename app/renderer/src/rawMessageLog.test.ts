@@ -117,6 +117,45 @@ test('records transport errors without adding non-message events to the raw log'
   expect(active.error).toBe('turn failed')
 })
 
+test('notice dismissal stays session-scoped, retains diagnostics, and allows repeated errors', () => {
+  const error: ServerFrame = {
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
+    code: 'internal_error', message: 'Acceptance could not be confirmed.', retryable: false,
+  }
+  let state = reduceServerFrame(createRawMessageLogState(), error)
+  state = reduceServerFrame(state, {
+    type: 'notice-dismissed', sessionId: 'session-1', notice: error.message,
+  })
+  expect(selectRawMessageLog(state, 'session-1')).toMatchObject({
+    error: error.message, dismissedNotice: error.message,
+  })
+  state = reduceServerFrame(state, { ...error, sessionId: 'session-2' })
+  expect(selectRawMessageLog(state, 'session-2').dismissedNotice).toBeNull()
+  expect(selectRawMessageLog(state, 'session-1').dismissedNotice).toBe(error.message)
+  state = reduceServerFrame(state, { ...error, message: 'A different failure.' })
+  expect(selectRawMessageLog(state, 'session-1').dismissedNotice).toBeNull()
+  expect(reduceServerFrame(state, {
+    type: 'notice-dismissed', sessionId: 'session-1', notice: error.message,
+  })).toBe(state)
+  state = reduceServerFrame(state, error)
+  state = reduceServerFrame(state, {
+    type: 'notice-dismissed', sessionId: 'session-1', notice: error.message,
+  })
+  state = reduceServerFrame(state, error)
+  expect(selectRawMessageLog(state, 'session-1').dismissedNotice).toBeNull()
+  state = reduceServerFrame(state, { type: 'session-removed', sessionId: 'session-1' })
+  expect(state.sessions['session-1']).toBeUndefined()
+})
+
+test('preview-only notice dismissal does not require a live raw log', () => {
+  const state = reduceServerFrame(createRawMessageLogState(), {
+    type: 'notice-dismissed', sessionId: 'preview', notice: 'Earlier images are unavailable.',
+  })
+  expect(selectRawMessageLog(state, 'preview')).toMatchObject({
+    error: null, dismissedNotice: 'Earlier images are unavailable.',
+  })
+})
+
 test('transcript reset replaces the raw log so replay cannot dedupe discarded rows', () => {
   const sessionId = 'session-reset'
   const uuid = '11111111-1111-4111-8111-111111111111'

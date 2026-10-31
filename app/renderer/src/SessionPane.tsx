@@ -249,6 +249,7 @@ export function SessionPane({
   onFocusBranchChat,
   sandboxed,
   activeLog,
+  onDismissLogNotice,
   outputTokens = UNAVAILABLE_OUTPUT_TOKENS,
   activeSessionId,
   createdPeerNavigation,
@@ -465,11 +466,8 @@ export function SessionPane({
   // log (up to 8 MiB) was the dominant DOM reflow on every switch/frame/keystroke;
   // gated + capped to the last 20 messages, it costs nothing until asked for.
   const [rawDebugOpen, setRawDebugOpen] = useState(false)
-  // The raw-log `error` field (rawMessageLog.ts) is never cleared by the store
-  // itself — the retention notice it carries (e.g. history-replay truncation)
-  // is informational, not a live fault, but nothing re-derives it false once
-  // set. Dismissal is display-only and local to this pane, keyed by the exact
-  // message so a genuinely NEW notice (different text) still shows.
+  // Standalone panes can hide notices locally. In the app, acknowledgement
+  // belongs to the session store because switching tabs unmounts this pane.
   const [dismissedLogError, setDismissedLogError] = useState<string | null>(
     null,
   )
@@ -480,7 +478,10 @@ export function SessionPane({
     ? transcript.sessions[activeSessionId]?.imagePreviewNotice ?? null
     : null
   const logNotice = activeLog.error ?? imagePreviewNotice
-  const showLogError = logNotice !== null && logNotice !== dismissedLogError
+  const dismissedNotice = onDismissLogNotice
+    ? activeLog.dismissedNotice
+    : dismissedLogError
+  const showLogError = logNotice !== null && logNotice !== dismissedNotice
   // Same inputs the action bar's faces use to decide whether they are controls.
   // A live pane always has context usage; a preview's donut has no command.
   const railCommands = selectDesktopRailCommands({
@@ -2223,7 +2224,11 @@ export function SessionPane({
           <span className="min-w-0 flex-1">{logNotice}</span>
           <button
             type="button"
-            onClick={() => setDismissedLogError(logNotice)}
+            onClick={() => {
+              if (logNotice === null) return
+              if (onDismissLogNotice) onDismissLogNotice(logNotice)
+              else setDismissedLogError(logNotice)
+            }}
             title="Dismiss"
             aria-label="Dismiss message log notice"
             className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded text-sm leading-none text-text-subtle transition-colors hover:text-text-primary"
@@ -2913,6 +2918,7 @@ type SessionPaneProps = {
   turnStartedAt?: number | null
   activeDescriptor: SessionDescriptor | undefined
   activeLog: RawMessageSessionLog
+  onDismissLogNotice?: (notice: string) => void
   /** Main-session current-turn output, independent of the retained raw log. */
   outputTokens?: OutputTokenReading
   /** Git branch for the empty-state meta strip — this session's own

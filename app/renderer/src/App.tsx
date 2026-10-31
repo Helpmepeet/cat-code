@@ -4036,6 +4036,9 @@ export function App() {
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
+                onDismissLogNotice={notice => dispatch({
+                  type: 'notice-dismissed', sessionId, notice,
+                })}
 	            outputTokens={selectOutputTokens(outputTokens, sessionId)}
 	            activeSessionId={sessionId}
 	            createdPeerNavigation={createdPeerNavigation}

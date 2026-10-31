@@ -31,6 +31,8 @@ export type RawMessageSessionLog = {
   retainedBytes: number
   truncated: boolean
   error: string | null
+  /** Display-only acknowledgement; the diagnostic itself stays available. */
+  dismissedNotice?: string | null
   /** Parallel to messages; avoids re-serializing surviving messages on eviction. */
   messageBytes: number[]
 }
@@ -47,6 +49,7 @@ export type RawMessageLogLimits = {
 export type RawMessageLogAction =
   | ServerFrame
   | { type: 'session-removed'; sessionId: SessionId }
+  | { type: 'notice-dismissed'; sessionId: SessionId; notice: string }
 
 const EMPTY_SESSION_LOG: RawMessageSessionLog = {
   inputEnabled: false,
@@ -75,6 +78,15 @@ export function reduceServerFrame(
   action: RawMessageLogAction,
 ): RawMessageLogState {
   if ('type' in action) {
+    if (action.type === 'notice-dismissed') {
+      const session = state.sessions[action.sessionId] ?? EMPTY_SESSION_LOG
+      if (session.error !== null && session.error !== action.notice) return state
+      if (session.dismissedNotice === action.notice) return state
+      return updateSession(state, action.sessionId, {
+        ...session,
+        dismissedNotice: action.notice,
+      })
+    }
     if (action.type === 'session-removed') {
       if (!state.sessions[action.sessionId]) return state
       const sessions = { ...state.sessions }
@@ -104,6 +116,7 @@ export function reduceServerFrameWithLimits(
           ...previous,
           inputEnabled: frame.payload.inputEnabled,
           error: null,
+          dismissedNotice: null,
         },
       },
     }
@@ -127,6 +140,7 @@ export function reduceServerFrameWithLimits(
       return updateSession(state, frame.sessionId, {
         ...session,
         error: frame.message,
+        dismissedNotice: null,
       })
     }
     if (
@@ -139,6 +153,7 @@ export function reduceServerFrameWithLimits(
     return updateSession(state, frame.sessionId, {
       ...session,
       error: frame.message,
+      dismissedNotice: null,
     })
   }
 

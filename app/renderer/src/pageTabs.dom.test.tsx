@@ -83,6 +83,36 @@ async function mountApp(sessions: SessionDescriptor[] = [], strict = false) {
   return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, notificationVisibility, inventoryCwds, usageRefreshes }
 }
 
+test('dismissing a message log warning survives tab switches but not a new error', async () => {
+  const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
+  const warning = 'The message may have been saved, but acceptance could not be confirmed. Review the conversation before sending it again.'
+  const error: ServerFrame = {
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: 'a',
+    requestId: 'submit-1', code: 'internal_error', message: warning, retryable: false,
+  }
+  const notice = () => app.tree.container.querySelector('[aria-label="Dismiss message log notice"]')
+  await app.frames(error)
+  expect(notice()?.parentElement?.textContent).toContain(warning)
+  await app.click('Dismiss message log notice')
+  expect(notice()).toBeNull()
+  await app.click('Session b, live')
+  await app.click('Session a, live')
+  expect(notice()).toBeNull()
+  expect(app.tree.container.textContent).not.toContain(warning)
+  await app.click('Settings')
+  await app.click('Session a, live')
+  expect(notice()).toBeNull()
+
+  await app.frames({ ...error, requestId: 'submit-2' })
+  expect(notice()?.parentElement?.textContent).toContain(warning)
+  await app.click('Dismiss message log notice')
+  await app.frames({ ...error, sessionId: 'b' })
+  await app.click('Session b, live')
+  expect(notice()?.parentElement?.textContent).toContain(warning)
+  await app.click('Session a, live')
+  expect(notice()).toBeNull()
+})
+
 test('notification attention follows only the rendered transcript, never page tabs or startup gates', async () => {
   const app = await mountApp([sessionDescriptor('a'), sessionDescriptor('b')])
   expect(app.notificationVisibility.at(-1)?.sessionId).toBe('a')
