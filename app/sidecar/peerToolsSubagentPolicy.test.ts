@@ -28,7 +28,7 @@ test('subagents never receive the desktop session tools from an inherited pool',
   ]
   const sessionNames = sessionTools.map(tool => tool.name)
   expect(sessionNames.sort()).toEqual([
-    'Announce', 'CreatePeer', 'JumpWorkspace', 'ListPeers', 'ListWorkspaces', 'ReadPeer', 'SendToPeer',
+    'Announce', 'CreatePeer', 'JumpToProject', 'ListPeers', 'ListProjects', 'ReadPeer', 'SendToPeer',
   ])
   const parentPool = [FileReadTool, ...sessionTools]
   const customAgent = { tools: undefined, disallowedTools: undefined, source: 'userSettings' as const, permissionMode: undefined }

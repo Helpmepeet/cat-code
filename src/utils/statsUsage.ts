@@ -107,7 +107,7 @@ const zeroSources = (): UsageTokenSources => ({ chat: zero(), subagents: zero(),
 const integration = (name: string | null): string | null => {
     if (['SendToPeer', 'ReadPeer', 'ListPeers', 'CreatePeer', 'Announce'].includes(name ?? '')) return 'peers';
     if (['WebFetch', 'WebSearch'].includes(name ?? '')) return 'web';
-    if (['JumpWorkspace', 'ListWorkspaces'].includes(name ?? '')) return 'workspaces';
+    if (['JumpToProject', 'ListProjects', 'JumpWorkspace', 'ListWorkspaces'].includes(name ?? '')) return 'workspaces';
     if (name?.startsWith('mcp__cua-driver__')) return 'computer';
     if (name === 'ImageGen' || name === 'GenerateImage') return 'image';
     if (name === 'ClaudeCli') return 'claude-cli';

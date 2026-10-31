@@ -164,13 +164,13 @@ describe('restored history projection', () => {
         type: 'tool_use', id: 'jump-1', name: 'JumpWorkspace', input: {},
       }] }),
       createUserMessage({ content: [{
-        type: 'tool_result', tool_use_id: 'jump-1', content: 'Workspace change accepted.',
+        type: 'tool_result', tool_use_id: 'jump-1', content: 'Workspace jump accepted. Work will continue after the conversation moves.',
       }] }),
     ]
     const recovered = deserializeMessagesWithInterruptDetection(archival)
-    expect(recovered.turnInterruptionState.kind).toBe('interrupted_prompt')
+    expect(recovered.turnInterruptionState.kind).toBe('none')
     const seed = projectResumedHistory(recovered.messages)
-    expect(seed.length).toBeGreaterThan(projectResumedHistory(archival).length)
+    expect(seed).toEqual(projectResumedHistory(archival))
 
     expect(mergeDisplayHistoryWithSeed(archival, seed)).toEqual({
       history: seed,

@@ -1672,8 +1672,8 @@ export function SessionGroup({
           <button
             type="button"
             onClick={startSession}
-            title="New session in this workspace"
-            aria-label="New session in this workspace"
+            title="New session in this project"
+            aria-label="New session in this project"
             className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded text-text-faint opacity-0 transition-[opacity,color,background-color] hover:bg-accent/[0.12] hover:text-accent group-hover/head:opacity-100 focus-visible:opacity-100"
           >
             <PlusIcon />

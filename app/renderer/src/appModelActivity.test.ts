@@ -145,8 +145,8 @@ function project(messages: unknown[]) {
 
 const kinds = (rows: ReturnType<typeof project>) => rows.map(row => row.kind)
 
-test('the workspace jump tool name is never an activity target', () => {
-  const rows = project([userTurn('move workspaces'), toolCalls([{ id: 'toolu_jump', name: 'JumpWorkspace' }])])
+test.each(['JumpWorkspace', 'JumpToProject'])('%s is never an activity target', (name) => {
+  const rows = project([userTurn('move workspaces'), toolCalls([{ id: 'toolu_jump', name }])])
   expect(kinds(rows)).toContain('tool-use')
   expect(deriveActivity(rows)).toEqual({ verb: 'Working', target: null })
 })

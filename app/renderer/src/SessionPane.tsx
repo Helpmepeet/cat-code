@@ -1,3 +1,4 @@
+import type { DesktopProject } from '../../shared/projects.js'
 /**
  * SessionPane — one session's pane: transcript, composer, and the per-session
  * chrome around them.
@@ -228,6 +229,7 @@ const newRequestId = (): string => crypto.randomUUID()
  * session id; switching focus never tears down a background session's state.
  */
 export function SessionPane({
+  projects,
   leases = null,
   accountsSnapshot,
   accountsUsagePending,
@@ -1920,6 +1922,7 @@ export function SessionPane({
           className="session-transcript-scroll relative min-h-0 flex-1 overflow-auto outline-none"
         >
           <TranscriptView
+            projects={projects}
             turnLive={generating}
             focusedTasks={tasksSnapshot}
             columnRef={transcriptColumnRef}
@@ -2874,6 +2877,7 @@ export function ConnectionRecovery({
 }
 
 type SessionPaneProps = {
+  projects?: readonly DesktopProject[]
   /**
    * This session's Codex leases (the P4-32b read seam), forwarded to the
    * transcript so an agent card can name the account its worker holds. Null on

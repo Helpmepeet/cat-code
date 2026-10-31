@@ -6,10 +6,10 @@ import type { SessionLocation, SessionLocationTransition } from '../../src/utils
 import type { WorkspaceMoveDisplay } from '../shared/hostApi.js'
 
 /** Presentation has no authority over relocation or continuation admission. */
-export function moveDisplayTarget(target: SessionLocation): WorkspaceMoveDisplay['target'] {
+export function moveDisplayTarget(target: SessionLocation, projectName?: string): WorkspaceMoveDisplay['target'] {
   return {
     kind: target.binding.kind === 'project' ? 'project' : 'chat',
-    name: target.binding.kind === 'project' ? (basename(target.cwd) || target.cwd).slice(0, 256) : 'Chat',
+    name: target.binding.kind === 'project' ? (projectName || basename(target.cwd) || target.cwd).slice(0, 256) : 'Chat',
     path: target.binding.kind === 'project' ? target.cwd.slice(0, 4096) : null,
     ...(target.binding.kind === 'project' ? { displayPath: (target.cwd.startsWith(homedir() + '/')
       ? '~' + target.cwd.slice(homedir().length) : target.cwd).slice(0, 4096) } : {}),
@@ -19,6 +19,7 @@ export function moveDisplayTarget(target: SessionLocation): WorkspaceMoveDisplay
 export function workspaceJumpDisplay(
   state: WorkspaceJumpState,
   transitions: readonly SessionLocationTransition[],
+  projectName?: string,
 ): WorkspaceMoveDisplay | null {
   const normalized = upgradeWorkspaceJumpState(state)
   const latest = transitions.at(-1)
@@ -38,7 +39,7 @@ export function workspaceJumpDisplay(
     : normalized.continuation.dispatch === 'consumed' ? 'dispatched' : 'waiting'
   return {
     id: state.operationId.slice(0, 128),
-    target: moveDisplayTarget(state.target),
+    target: moveDisplayTarget(state.target, projectName),
     phase,
     agentJump: true,
     continuation,

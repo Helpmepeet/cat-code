@@ -567,6 +567,9 @@ export async function createNormalSidecarQueryEngineConfig(
           getManagedSessionPolicy()?.sharedFilesNotice === true,
           binding.kind === 'managed' && recreatedFolderNotice,
           workspaceJumpUnavailable,
+          binding.kind === 'project' && process.env.CATCODE_SIDECAR_PROJECT_NAME
+            ? { name: process.env.CATCODE_SIDECAR_PROJECT_NAME, cwd }
+            : undefined,
         ) + relocationPrompt,
         ...(binding.kind === 'managed' && !workspaceJumpUnavailable
           ? { getRuntimeSystemPromptAddendum: workspaceJumpTools.getInitialCatalogContext }

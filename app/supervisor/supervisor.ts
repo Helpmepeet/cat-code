@@ -93,6 +93,8 @@ export type SupervisorOptions = {
    * engine project identity is initialized from process.cwd().
    */
   sidecarCwd?: string
+  /** Main-owned display metadata, resolved from the saved project folder. */
+  projectNameForCwd?: (cwd: string) => string | undefined
   /**
    * Directory for per-session socket files. Defaults to a private random temp
    * dir; callers supplying one own its access-control policy.
@@ -427,6 +429,9 @@ export class SidecarSupervisor {
         // the sidecar's own missing-cwd guard still fires for misconfigured
         // callers. The resume id rides env only when a resume was requested.
         ...(spawnCwd !== undefined ? { CATCODE_SIDECAR_CWD: spawnCwd } : {}),
+        CATCODE_SIDECAR_PROJECT_NAME: spawnCwd !== undefined && config?.binding?.kind !== 'managed'
+          ? this.options.projectNameForCwd?.(spawnCwd) ?? ''
+          : '',
         ...(config?.resumeEngineSessionId !== undefined
           ? { CATCODE_SIDECAR_RESUME_SESSION_ID: config.resumeEngineSessionId }
           : { CATCODE_SIDECAR_RESUME_SESSION_ID: '' }),

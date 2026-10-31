@@ -60,7 +60,7 @@ test('Projects plus opens the dialog, creation adds a zero-session group, and on
   expect(s.tree.container.querySelector('[role="dialog"]')).toBeNull()
   const label = button(s.tree.container, 'sample')
   expect(label.parentElement?.querySelector('span[aria-hidden="true"]')?.textContent).toBe('0')
-  await act(async () => { label.parentElement!.querySelector<HTMLButtonElement>('[aria-label="New session in this workspace"]')!.click() })
+  await act(async () => { label.parentElement!.querySelector<HTMLButtonElement>('[aria-label="New session in this project"]')!.click() })
   expect(s.createProjectSession).toHaveBeenCalledWith(project.id)
 })
 

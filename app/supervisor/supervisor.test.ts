@@ -1279,6 +1279,27 @@ test('carries the peer spawn-env keys and CLEARS the ones the host did not suppl
   })
 })
 
+test('project names follow the saved folder mapping and never leak into plain Chats or unnamed folders', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-project-')
+  const sessionCwd = makeTempDir('catcode-project-folder-')
+  const observed = join(socketDir, 'project-')
+  const script = `require('node:fs').writeFileSync(process.argv[1] + process.env.CATCODE_SIDECAR_SESSION_ID, process.env.CATCODE_SIDECAR_PROJECT_NAME ?? 'ABSENT')`
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath, sidecarArgs: ['-e', script, observed], socketDir,
+    sidecarEnv: { CATCODE_SIDECAR_PROJECT_NAME: 'Inherited project' },
+    projectNameForCwd: cwd => cwd === sessionCwd ? 'P1_gaming' : undefined,
+  })
+  supervisors.push(supervisor)
+  supervisor.spawnSession('project', { cwd: sessionCwd })
+  supervisor.spawnSession('chat', { cwd: sessionCwd,
+    binding: { kind: 'managed', storageId: crypto.randomUUID(), storageRootId: crypto.randomUUID() } })
+  supervisor.spawnSession('legacy', { cwd: socketDir })
+  await waitFor(() => ['project', 'chat', 'legacy'].every(id => existsSync(observed + id)), 'project environment was not reported')
+  expect(readFileSync(observed + 'project', 'utf8')).toBe('P1_gaming')
+  expect(readFileSync(observed + 'chat', 'utf8')).toBe('')
+  expect(readFileSync(observed + 'legacy', 'utf8')).toBe('')
+})
+
 test('a session spawned without a name does not inherit one from the parent process', async () => {
   // The literal `...process.env` case: a `CATCODE_SIDECAR_NAME` in main's own
   // environment must not name a session main never named. This is the

@@ -1507,6 +1507,7 @@ function createSupervisor(): SidecarSupervisor {
     // through the host API (createSession → native picker, HC1); this stays only
     // as the supervisor-wide default for probe/legacy callers.
     sidecarCwd: process.cwd(),
+    projectNameForCwd: cwd => storedProjectsForDiscovery().find(project => project.cwd === cwd)?.name,
     log: line => logLegacyDiagnostic(line, 'supervisor', 'supervisor'),
     onOperationalRecord: record => {
       operationalLog.writeRecord(record)
@@ -5311,6 +5312,7 @@ function ensureHost(): Host {
     supervisor,
     registry,
     validateCwd,
+    projectNameForCwd: cwd => storedProjectsForDiscovery().find(project => project.cwd === cwd)?.name,
     managedStorage,
     prepareSessionRecovery: appSessionId => {
       if (!workspaceJump) throw new Error('Workspace recovery is unavailable')

@@ -27,6 +27,8 @@ const LEGACY_TOOL_NAME_ALIASES: Record<string, string> = {
   KillShell: TASK_STOP_TOOL_NAME,
   AgentOutputTool: TASK_OUTPUT_TOOL_NAME,
   BashOutputTool: TASK_OUTPUT_TOOL_NAME,
+  ListWorkspaces: 'ListProjects',
+  JumpWorkspace: 'JumpToProject',
   [LEGACY_FILE_PATCH_TOOL_NAME]: FILE_PATCH_TOOL_NAME,
   ...((feature('KAIROS') || feature('KAIROS_BRIEF')) && BRIEF_TOOL_NAME
     ? { Brief: BRIEF_TOOL_NAME }

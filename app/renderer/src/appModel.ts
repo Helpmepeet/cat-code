@@ -184,7 +184,7 @@ export function deriveActivity(
       // been made; until it is, this reports one tool that is genuinely running
       // rather than inventing a format.
       if (row.kind === 'tool-use' && row.status === 'pending') {
-        if (row.toolName === 'JumpWorkspace') continue
+        if (row.toolName === 'JumpWorkspace' || row.toolName === 'JumpToProject') continue
         return { verb: 'Running', target: row.toolName }
       }
     }

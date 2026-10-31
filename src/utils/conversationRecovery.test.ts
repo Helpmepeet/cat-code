@@ -5,6 +5,7 @@ import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { compactResumeFixture } from './conversationRecovery.fixture.js'
+import { PROJECT_JUMP_ACCEPTED_MESSAGE, handoffContinuationPrompt } from '../app-runtime/handoff.js'
 import {
   deserializeMessagesWithInterruptDetection,
   isSelectableUserMessage,
@@ -18,6 +19,34 @@ import {
   normalizeMessagesForAPI,
   shouldShowUserMessage,
 } from './messages.js'
+
+test.each([
+  ['JumpToProject', PROJECT_JUMP_ACCEPTED_MESSAGE],
+  ['JumpWorkspace', 'Workspace jump accepted. Work will continue after the conversation moves.'],
+])('accepted %s ends the source turn without a synthetic continue request', (name, accepted) => {
+  for (const request of ['Jump to P1_gaming', 'Work in P1_gaming', 'Work in P1_gaming and fix the checkout bug']) {
+    const original = [
+      createUserMessage({ content: request }),
+      createAssistantMessage({ content: [{ type: 'tool_use', id: 'jump', name, input: {} }] }),
+      createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'jump', content: accepted }] }),
+    ]
+    const recovered = deserializeMessagesWithInterruptDetection(original)
+    expect(recovered.turnInterruptionState).toEqual({ kind: 'none' })
+    expect(recovered.messages.filter(message => message.type === 'user')).toEqual([original[0], original[2]])
+    expect(JSON.stringify(recovered.messages)).not.toContain('Continue from where you left off.')
+    expect(handoffContinuationPrompt()).toBe('The conversation has moved to the selected project. Its instructions are now loaded.')
+  }
+})
+
+test.each(['JumpToProject', 'JumpWorkspace', 'Bash'])('failed or ordinary %s results still receive interruption recovery', name => {
+  const recovered = deserializeMessagesWithInterruptDetection([
+    createUserMessage({ content: 'Run the requested task' }),
+    createAssistantMessage({ content: [{ type: 'tool_use', id: 'tool', name, input: {} }] }),
+    createUserMessage({ content: [{ type: 'tool_result', tool_use_id: 'tool',
+      content: name === 'Bash' ? 'output' : PROJECT_JUMP_ACCEPTED_MESSAGE, is_error: name !== 'Bash' }] }),
+  ])
+  expect(recovered.turnInterruptionState.kind).toBe('interrupted_prompt')
+})
 
 test('durable resume removes whitespace without merging original user UUIDs or content', () => {
   const first = createUserMessage({ content: 'first durable input' })

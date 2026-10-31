@@ -4,6 +4,7 @@ type HandoffCaller = { agentId?: unknown; turnHandoff?: TurnHandoff }
 export type HandoffRequest = { operationId: string; toolUseId: string }
 export type HandoffBoundary = { tip_uuid: string; tool_use_id: string }
 export type HandoffTerminalOutcome = 'failed' | 'cancelled' | 'uncertain' | 'continuation_failed'
+export const PROJECT_JUMP_ACCEPTED_MESSAGE = 'Project jump accepted. The conversation is moving.'
 
 /** Shared by every executor/provider attempt in one main conversational turn. */
 export class TurnHandoff {
@@ -50,7 +51,7 @@ export function isHandoffExecutionFenced(context: HandoffCaller): boolean {
 }
 
 export function handoffContinuationPrompt(): string {
-  return 'The conversation has moved to the selected workspace. Its instructions are now loaded. Continue the existing user request from the saved conversation. Do not repeat completed work or attempt another workspace jump.'
+  return 'The conversation has moved to the selected project. Its instructions are now loaded.'
 }
 
 export function handoffTerminalPrompt(outcome: HandoffTerminalOutcome): string {

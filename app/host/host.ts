@@ -143,6 +143,7 @@ export type HostOptions = {
    * the row and the spawn both use the SAME resolved path (no symlink skew).
    */
   validateCwd: (cwd: string) => CwdValidation
+  projectNameForCwd?: (cwd: string) => string | undefined
   /** Host-owned storage allocator; app-data base is supplied by Electron main. */
   managedStorage?: ManagedStorage
   relocate?: (request: RelocationRequest) => Promise<void>
@@ -194,6 +195,7 @@ export class Host implements HostApi {
   private readonly supervisor: SidecarSupervisor
   private readonly registry: SessionRegistry
   private readonly validateCwd: (cwd: string) => CwdValidation
+  private readonly projectNameForCwd?: HostOptions['projectNameForCwd']
   private readonly managedStorage?: ManagedStorage
   private readonly relocate?: HostOptions['relocate']
   private readonly peerMoveState?: HostOptions['peerMoveState']
@@ -281,6 +283,7 @@ export class Host implements HostApi {
     this.supervisor = options.supervisor
     this.registry = options.registry
     this.validateCwd = options.validateCwd
+    this.projectNameForCwd = options.projectNameForCwd
     this.relocate = options.relocate
     this.peerMoveState = options.peerMoveState
     this.peerMoveSettled = options.peerMoveSettled
@@ -1409,7 +1412,7 @@ export class Host implements HostApi {
     if (!row || row.engineSessionId !== state.engineSessionId) return
     try {
       const record = readSessionRelocation(state.engineSessionId)
-      const display = workspaceJumpDisplay(state, record?.appSessionId === state.appSessionId ? record.transitions ?? [] : [])
+      const display = workspaceJumpDisplay(state, record?.appSessionId === state.appSessionId ? record.transitions ?? [] : [], this.projectNameForCwd?.(state.target.cwd))
       if (display) this.workspaceMoves.set(state.appSessionId, display)
       else this.workspaceMoves.delete(state.appSessionId)
       this.emitStatus(state.appSessionId)
@@ -1720,7 +1723,7 @@ export class Host implements HostApi {
       : null
     const previousControls: RelocationControls | null = isRelocationControls(previousCandidate) ? previousCandidate : null
     if (!jump) this.workspaceMoves.set(appSessionId, {
-      id: randomUUID(), phase: 'moving', target: moveDisplayTarget(target),
+      id: randomUUID(), phase: 'moving', target: moveDisplayTarget(target, this.projectNameForCwd?.(target.cwd)),
     })
     this.moving.add(appSessionId)
     this.emitStatus(appSessionId)

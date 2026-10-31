@@ -103,7 +103,7 @@ test.each([
     if (entry === 'shortcut') {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 't', metaKey: true, bubbles: true }))
     } else if (entry === 'workspace') {
-      tree.container.querySelector<HTMLButtonElement>('[aria-label="New session in this workspace"]')!.click()
+      tree.container.querySelector<HTMLButtonElement>('[aria-label="New session in this project"]')!.click()
     } else if (entry === 'sidebar') {
       const newChat = [...tree.container.querySelectorAll('button')].find(
         button => button.textContent?.includes('New chat') && !button.hasAttribute('aria-label'),

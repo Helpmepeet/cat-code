@@ -53,7 +53,7 @@ async function until(read: () => boolean, timeout = 60_000) {
 }
 function sse(toolHandle?: string, readPath?: string) {
   const content = readPath ? { type: 'tool_use', id: 'baseline-read', name: 'Read', input: {} }
-    : toolHandle ? { type: 'tool_use', id: 'baseline-jump', name: 'JumpWorkspace', input: {} } : { type: 'text', text: '' }
+    : toolHandle ? { type: 'tool_use', id: 'baseline-jump', name: 'JumpToProject', input: {} } : { type: 'text', text: '' }
   const events = [
     { type: 'message_start', message: { id: 'baseline-message', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
     { type: 'content_block_start', index: 0, content_block: content },
@@ -83,13 +83,14 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
   process.env.CATCODE_OPERATIONAL_LAUNCH_ID = randomUUID()
   const roots = [cwd, ...Array.from({ length: 3 }, (_, i) => join(root, `other-${i}`))]
   for (const path of roots.slice(1)) mkdirSync(path)
-  const savedRows = Array.from({ length: fixture === 'many_rows' ? 20_000 : 4 }, (_, i) => ({ path: roots[i % roots.length]!, lastUsedAt: 20_000 - i }))
+  const savedRows = Array.from({ length: fixture === 'many_rows' ? 20_000 : 4 }, (_, i) => ({ path: roots[i % roots.length]!, lastUsedAt: 20_000 - i,
+    ...(i % roots.length === 0 ? { name: 'P1_gaming' } : {}) }))
   writeFileSync(join(config, '.config.json'), JSON.stringify({ projects: Object.fromEntries(roots.map(path => [path, { hasTrustDialogAccepted: true }])) }))
-  writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: queuedHuman ? ['JumpWorkspace', 'Read'] : ['JumpWorkspace'] } }))
+  writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: queuedHuman ? ['JumpToProject', 'Read'] : ['JumpToProject'] } }))
   if (fixture === 'short' || retained) {
     const hook = join(root, 'resume-hook.ts')
     writeFileSync(hook, `console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'FRESH_HANDOFF_REQUIRED_RESUME_POLICY' } }))`)
-    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpWorkspace'] },
+    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpToProject'] },
       hooks: { SessionStart: [{ matcher: 'resume', hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
   }
   writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n')
@@ -102,7 +103,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n@included.md\n')
     const hook = join(root, 'instruction-hook.ts')
     writeFileSync(hook, `const input = await new Response(Bun.stdin.stream()).text(); require('node:fs').appendFileSync(${JSON.stringify(hookLog)}, input.trim() + '\\n')`)
-    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpWorkspace'] },
+    writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpToProject'] },
       hooks: { InstructionsLoaded: [{ hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
   }
   let sourceRequests = 0, destinationRequests = 0, retainedReplayCount = 0, validationCalls = 0
@@ -121,6 +122,14 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     if (JSON.parse(body).stream !== true) return Response.json({ id: 'baseline-auxiliary', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
       content: [{ type: 'text', text: 'Fixture' }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } })
     const destination = body.includes('BASELINE_DESTINATION_INSTRUCTIONS')
+    if (fixture === 'short' && destination) {
+      expect(body).toContain('Jump to P1_gaming')
+      expect(body).toContain('Current project metadata')
+      expect(body).toContain('P1_gaming')
+      expect(body).not.toContain('Continue from where you left off.')
+      expect(body).not.toContain('Continue the existing user request')
+      expect(body).not.toContain('Work will continue after the conversation moves.')
+    }
     if ((fixture === 'short' || retained) && destination) expect(body).toContain('FRESH_HANDOFF_REQUIRED_RESUME_POLICY')
     if (retained && destination) expect(body).toContain('RETAINED_PARTIAL_TOOL_TRAJECTORY')
     if (unresolved && destination) {
@@ -185,6 +194,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
   const diagnostics: string[] = []
   const observations: unknown[] = []
   const supervisor = new SidecarSupervisor({ socketDir: join(root, 's'), sidecarCommand: launch.command, sidecarArgs: launchArgs(blocker, 'session', unresolved ? 'app/sidecar/optionalInstallation.fixture.ts' : undefined), sidecarEnv: env,
+    projectNameForCwd: folder => folder === cwd ? 'P1_gaming' : undefined,
     log: line => { diagnostics.push(line) }, onOperationalRecord: record => {
       if (record.event !== 'workspace.jump.timing') return
       timings.push(record)
@@ -299,7 +309,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       expect((await host.restoreSession(id)).ok).toBe(true)
       await until(() => supervisor.listSessions().some(row => row.sessionId === id && row.status === 'ready'))
     }
-    supervisor.send(id, { type: 'app.submit', requestId: randomUUID(), prompt: 'Run the isolated jump fixture.' })
+    supervisor.send(id, { type: 'app.submit', requestId: randomUUID(), prompt: fixture === 'short' ? 'Jump to P1_gaming' : 'Run the isolated jump fixture.' })
     if (queuedHuman) {
       await until(() => sourceRequests === 1)
       supervisor.send(id, { type: 'app.submit', requestId: randomUUID(), prompt: queuedText })
@@ -393,7 +403,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
         const rows = selectNestedTranscriptRows(projected, id)
         const promptIndex = rows.findIndex(row => row.kind === 'user-text' && row.content === queuedText)
         const readIndex = rows.findIndex(row => row.kind === 'tool-use' && row.toolUseId === 'baseline-read')
-        const jumpIndex = rows.findIndex(row => row.kind === 'tool-use' && row.toolName === 'JumpWorkspace')
+        const jumpIndex = rows.findIndex(row => row.kind === 'tool-use' && row.toolName === 'JumpToProject')
         expect(readIndex).toBeGreaterThan(0)
         expect(promptIndex).toBeGreaterThan(readIndex)
         expect(jumpIndex).toBeGreaterThan(promptIndex)

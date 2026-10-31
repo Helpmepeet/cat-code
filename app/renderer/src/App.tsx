@@ -4004,6 +4004,7 @@ export function App() {
 	        connection: sessionConnection,
 	        content: (
 	          <SessionPane
+	            projects={projects}
 	            /* P4-32b read seam, reused: the agent card names the Codex account
 	             * its worker holds. This pane's own session, not the active one. */
 	            leases={panelLeases}

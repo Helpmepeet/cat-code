@@ -39,6 +39,20 @@ test('main-agent jump reserves before host acceptance and fences the accepted to
   expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump'])
 })
 
+test('renamed project tools preserve legacy allow, ask, and deny rules', async () => {
+  const { toolAlwaysAllowedRule, getAskRuleForTool, getDenyRuleForTool } = await import('../../src/utils/permissions/permissions.js')
+  const { getDefaultAppState } = await import('../../src/state/AppStateStore.js')
+  const { findToolByName } = await import('../../src/Tool.js')
+  const fixture = setup()
+  for (const [legacy, tool] of [['ListWorkspaces', fixture.list], ['JumpWorkspace', fixture.jump]] as const) {
+    const base = getDefaultAppState().toolPermissionContext
+    expect(findToolByName(fixture.tools, legacy)).toBe(tool)
+    expect(toolAlwaysAllowedRule({ ...base, alwaysAllowRules: { localSettings: [legacy] } }, tool)?.ruleValue.toolName).toBe(tool.name)
+    expect(getDenyRuleForTool({ ...base, alwaysDenyRules: { localSettings: [legacy] } }, tool)?.ruleValue.toolName).toBe(tool.name)
+    expect(getAskRuleForTool({ ...base, alwaysAskRules: { localSettings: [legacy] } }, tool)?.ruleValue.toolName).toBe(tool.name)
+  }
+})
+
 test('one concurrent initial observation freezes metadata and authorizes a direct handle with the real Auto path', async () => {
   const fixture = setup()
   const signal = new AbortController().signal
@@ -139,7 +153,7 @@ test('workspace refusals and rate limits describe their own action without raw h
     const [list] = createWorkspaceJumpTools((async () => ({ ok: false, error: { code, message: 'raw host diagnostic /secret/path' } })) as PeerHostRequester).tools
     const result = await list.call({}, context())
     expect(result.data.ok).toBe(false)
-    expect(result.data.message).toContain('workspace request')
+    expect(result.data.message).toContain('project request')
     expect(result.data.message).not.toContain('not connected')
     expect(result.data.message).not.toContain('peer')
     expect(result.data.message).not.toContain('/secret/path')
@@ -184,7 +198,7 @@ test('real jump errors fence following effects in a mixed engine tool batch', as
         updateFileHistoryState() {}, updateAttributionState() {}, messages: [],
       } as ToolUseContext
       await fixture.list.call({}, ctx)
-      const blocks = [{ type: 'tool_use' as const, name: 'JumpWorkspace', id: 'jump-call', caller: { type: 'direct' as const }, input: { destination: handle } },
+      const blocks = [{ type: 'tool_use' as const, name: 'JumpToProject', id: 'jump-call', caller: { type: 'direct' as const }, input: { destination: handle } },
         { type: 'tool_use' as const, name: 'FollowingEffect', id: 'later-effect', caller: { type: 'direct' as const }, input: {} }]
       const assistant = createAssistantMessage({ content: blocks })
       const results: Array<{ tool_use_id: string; is_error?: boolean }> = []

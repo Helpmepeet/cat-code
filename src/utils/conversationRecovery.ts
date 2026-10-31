@@ -1,4 +1,5 @@
 import { assertSessionNotMoving } from './sessionRelocationState.js'
+import { PROJECT_JUMP_ACCEPTED_MESSAGE } from '../app-runtime/handoff.js'
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
 import { basename, relative } from 'path'
@@ -527,7 +528,13 @@ function isTerminalToolResult(
         return (
           b.name === BRIEF_TOOL_NAME ||
           b.name === LEGACY_BRIEF_TOOL_NAME ||
-          b.name === SEND_USER_FILE_TOOL_NAME
+          b.name === SEND_USER_FILE_TOOL_NAME ||
+          // An accepted project jump deliberately ends the source turn. Its
+          // destination has a separate admission, not an interrupted task.
+          ((b.name === 'JumpToProject' || b.name === 'JumpWorkspace') &&
+            !block.is_error &&
+            (block.content === PROJECT_JUMP_ACCEPTED_MESSAGE ||
+              block.content === 'Workspace jump accepted. Work will continue after the conversation moves.'))
         )
       }
     }

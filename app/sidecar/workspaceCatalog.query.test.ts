@@ -135,7 +135,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
       return result
     }) as PeerHostRequester)
     setWorkspaceJumpAdmission({ reserve: () => true, release() {}, cancelNotAccepted() {} })
-    const jump = setup.queryEngineConfig.tools.find(tool => tool.name === 'JumpWorkspace')!
+    const jump = setup.queryEngineConfig.tools.find(tool => tool.name === 'JumpToProject')!
     const schemaOptions = { tools: setup.queryEngineConfig.tools, agents: [], model: 'gpt-6-luna', getToolPermissionContext: async () => setup.appStateStore.getState().toolPermissionContext }
     const before = JSON.stringify(await toolToAPISchema(jump, schemaOptions))
     let providerCalls = 0
@@ -146,7 +146,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
       deliveredInstructions = request.openAIInstructionAssembly?.instructions
       deliveredTools = request.tools
       yield assistant(selectedHandle
-        ? [{ type: 'tool_use', id: 'direct-jump', name: 'JumpWorkspace', input: { destination: selectedHandle } }]
+        ? [{ type: 'tool_use', id: 'direct-jump', name: 'JumpToProject', input: { destination: selectedHandle } }]
         : [{ type: 'text', text: 'No initial catalog was supplied.' }])
     }))
     const projections: unknown[] = []
@@ -157,13 +157,13 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     expect(providerCalls).toBe(1)
     expect(deliveredInstructions).toContain(JSON.stringify({ handle: selectedHandle, name: 'project', path: realpathSync(target) }))
     expect(deliveredInstructions).not.toContain('CANDIDATE_INSTRUCTIONS_MUST_NOT_LOAD')
-    expect(deliveredInstructions).toContain('do not by themselves prohibit selecting a workspace')
+    expect(deliveredInstructions).toContain('do not by themselves prohibit selecting a project')
     expect(deliveredTools).toContain(jump)
     expect(hostCalls).toEqual(['workspaces.list', 'workspace.jump'])
     expect(projections).toContainEqual({ action: 'move_this_conversation', destination: realpathSync(target) })
     expect(events.findLast(event => event.type === 'result')).toMatchObject({ type: 'result', subtype: 'handoff' })
     expect(coordinator.snapshot(setup.appSessionId)?.phase).toBe('accepted')
-    expect(runtime.getMessages().flatMap(message => message.type === 'assistant' ? message.message.content.filter(block => block.type === 'tool_use').map(block => block.name) : [])).toEqual(['JumpWorkspace'])
+    expect(runtime.getMessages().flatMap(message => message.type === 'assistant' ? message.message.content.filter(block => block.type === 'tool_use').map(block => block.name) : [])).toEqual(['JumpToProject'])
     clearToolSchemaCache()
     expect(JSON.stringify(await toolToAPISchema(jump, schemaOptions))).toBe(before)
 
@@ -174,7 +174,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
       classifierRequest = JSON.stringify(request.messages)
       return { ...assistant([{ type: 'tool_use', id: 'verdict', name: YOLO_CLASSIFIER_TOOL_NAME, input: { shouldBlock: false } }]).message, type: 'message' } as never
     }))
-    const verdict = await classifyYoloAction([], formatActionForClassifier('JumpWorkspace', { destination: selectedHandle }),
+    const verdict = await classifyYoloAction([], formatActionForClassifier('JumpToProject', { destination: selectedHandle }),
       setup.queryEngineConfig.tools, { ...setup.appStateStore.getState().toolPermissionContext, mode: 'auto' }, new AbortController().signal)
     expect(verdict.shouldBlock).toBe(false)
     expect(classifierRequest).toContain(realpathSync(target))
@@ -226,7 +226,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     const handle = randomUUID()
     finish({ ok: true, value: { eligible: true, workspaces: [{ handle, name: 'late-project', path: '/projects/late' }] } })
     await Promise.resolve()
-    expect(setup.queryEngineConfig.tools.find(tool => tool.name === 'JumpWorkspace')!.toAutoClassifierInput!({ destination: handle } as never)).toMatchObject({ destination: 'unavailable' })
+    expect(setup.queryEngineConfig.tools.find(tool => tool.name === 'JumpToProject')!.toAutoClassifierInput!({ destination: handle } as never)).toMatchObject({ destination: 'unavailable' })
     runtime.refreshAbortController()
     const recovered = await drain(runtime.submitMessage('Reply only: recovered.'))
     expect(recovered.findLast(event => event.type === 'result')).toMatchObject({ subtype: 'success', result: 'recovered' })

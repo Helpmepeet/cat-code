@@ -1,3 +1,4 @@
+import type { DesktopProject } from '../../shared/projects.js'
 import { selectFocusedLiveState, type FocusedLiveState } from './transcriptProjector.js'
 /**
  * Renders the projector's view models from transcriptProjector.ts.
@@ -403,6 +404,7 @@ export const TranscriptView = memo(function TranscriptView({
   initialScrollRowKey,
   revealAgent = null,
   welcomeExiting = false,
+  projects,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
   workspaceMove: workspaceMoveInput = null,
   onMoveBack,
@@ -475,6 +477,7 @@ export const TranscriptView = memo(function TranscriptView({
   /** Send-message motion (behavior 3): keep `WelcomeScreen` mounted, exiting,
    * for one more render after `state` already has this session's first row. */
   welcomeExiting?: boolean
+  projects?: readonly DesktopProject[]
   contextTransitions?: SessionDescriptor['contextTransitions']
   workspaceMove?: WorkspaceMoveDisplay | null
   onMoveBack?: () => void
@@ -520,6 +523,7 @@ export const TranscriptView = memo(function TranscriptView({
       revealAgent={revealAgent}
       columnRef={columnRef}
       welcomeExiting={welcomeExiting}
+      projects={projects}
       contextTransitions={contextTransitions}
       workspaceMove={readWorkspaceMoveDisplay(workspaceMoveInput)}
       onMoveBack={onMoveBack}
@@ -529,6 +533,7 @@ export const TranscriptView = memo(function TranscriptView({
 })
 
 function ContextTransitionRow({
+  projects,
   transition,
   transcriptEntryKey,
   move,
@@ -537,6 +542,7 @@ function ContextTransitionRow({
   onMoveBack,
   moveBackDisabled,
 }: {
+  projects?: readonly DesktopProject[]
   transition: ContextTransition
   transcriptEntryKey?: string
   move?: WorkspaceMoveDisplay | null
@@ -547,7 +553,10 @@ function ContextTransitionRow({
 }) {
   const project = move ? move.target.kind === 'project' : transition.binding.kind === 'project'
   const phase = move?.phase ?? 'arrived'
-  const name = move?.target.name ?? (project ? basename(transition.cwd) : 'Chat')
+  const path = move ? move.target.path : transition.cwd
+  const name = project
+    ? projects?.find(project => project.cwd === path)?.name ?? move?.target.name ?? basename(transition.cwd)
+    : 'Chat'
   const caption = phase === 'moving' ? 'Moving to' : phase === 'failed' ? 'Could not move to'
     : phase === 'stopped' ? 'Stopped moving to' : 'Working in'
   const dividerRef = useRef<HTMLDivElement>(null)
@@ -588,7 +597,7 @@ function ContextTransitionRow({
           </svg>
         ) : null}
         <span className="workspace-move-caption">{caption} </span>
-        <span className="chat-project-divider-label">{name}</span>
+        <span className="chat-project-divider-label" title={project ? path ?? undefined : undefined}>{name}</span>
         {phase === 'moving' && move?.target.path ? (
           <span className="workspace-move-path"> {move.target.displayPath ?? move.target.path}</span>
         ) : null}
@@ -641,6 +650,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   initialScrollRowKey = null,
   revealAgent = null,
   welcomeExiting = false,
+  projects,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
   workspaceMove: workspaceMoveInput = null,
   onMoveBack,
@@ -682,6 +692,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   initialScrollRowKey?: string | null
   revealAgent?: AgentRevealRequest | null
   welcomeExiting?: boolean
+  projects?: readonly DesktopProject[]
   contextTransitions?: SessionDescriptor['contextTransitions']
   workspaceMove?: WorkspaceMoveDisplay | null
   onMoveBack?: () => void
@@ -809,6 +820,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       transition.binding.kind === 'project' && transition.cwd === cwd
     return <ContextTransitionRow
       key={`context-transition:${transition.id}`}
+      projects={projects}
       transition={transition}
       transcriptEntryKey={entryKey}
       move={currentMove}

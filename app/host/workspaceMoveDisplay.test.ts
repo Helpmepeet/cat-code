@@ -52,3 +52,15 @@ test('the display projects durable continuation dispatch and outcome', () => {
   expect(workspaceJumpDisplay({ ...arrived, continuation: { ...arrived.continuation, dispatch: 'none' } }, [seam])?.continuation).toBe('finished')
   expect(workspaceJumpDisplay({ ...arrived, cancellation: { cancelId: 'cancel', requestedBy: 'stop', application: 'abort_signalled' } }, [seam])?.continuation).toBe('finished')
 })
+
+test('saved project names do not replace the underlying folder location', () => {
+  const target = { cwd: '/projects/P1_Gaming_POS', binding: { kind: 'project' as const } }
+  expect(moveDisplayTarget(target, 'P1_gaming')).toMatchObject({
+    name: 'P1_gaming', path: target.cwd, displayPath: target.cwd, kind: 'project',
+  })
+  expect(workspaceJumpDisplay({ ...state, target }, [], 'P1_gaming')?.target).toMatchObject({
+    name: 'P1_gaming', path: target.cwd,
+  })
+  expect(moveDisplayTarget(target).name).toBe('P1_Gaming_POS')
+  expect(moveDisplayTarget(state.source, 'Ignored')).toEqual({ kind: 'chat', name: 'Chat', path: null })
+})

@@ -495,15 +495,15 @@ test('a workspace group with a registry row exposes a "+" when onNewSessionInWor
   const html = renderGroup([registryRow('a', { displayLabel: 'Alpha' })], {
     onNewSessionInWorkspace: noop,
   })
-  expect(html.match(/aria-label="New session in this workspace"/g)).toHaveLength(
+  expect(html.match(/aria-label="New session in this project"/g)).toHaveLength(
     1,
   )
-  expect(html).toContain('title="New session in this workspace"')
+  expect(html).toContain('title="New session in this project"')
 })
 
 test('no "+" renders when the group is not wired for new sessions', () => {
   const html = renderGroup([registryRow('a', { displayLabel: 'Alpha' })])
-  expect(html).not.toContain('New session in this workspace')
+  expect(html).not.toContain('New session in this project')
 })
 
 test('a pure-terminal-history group hides the "+" (HC1: no registry id to name)', () => {
@@ -511,7 +511,7 @@ test('a pure-terminal-history group hides the "+" (HC1: no registry id to name)'
     [historyRow('h1', { displayLabel: 'One', cwd: '/tmp/proj' })],
     { onNewSessionInWorkspace: noop },
   )
-  expect(html).not.toContain('New session in this workspace')
+  expect(html).not.toContain('New session in this project')
 })
 
 // ── ➕ workspace reordering (operator, 2026-07-26) ────────────────────────────

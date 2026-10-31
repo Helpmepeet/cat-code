@@ -62,6 +62,8 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   'CreatePeer',
   'SendToPeer',
   'ReadPeer',
+  'ListProjects',
+  'JumpToProject',
   'ListWorkspaces',
   'JumpWorkspace',
 ])

@@ -222,7 +222,7 @@ test('Edit and Branch report the row session, verb, and frame id', async () => {
   ])
 })
 
-test('workspace moves replace tool cards in place and animate only a live arrival', async () => {
+test.each(['JumpWorkspace', 'JumpToProject'])('workspace moves replace %s tool cards in place and animate only a live arrival', async (jumpName) => {
   const target = { kind: 'project' as const, name: 'cat-code', path: '/projects/cat-code', displayPath: '~/cat-code' }
   const source = { ...row, id: 'before', frameId: 'before', content: 'Before move' }
   const tool = (toolName: string): NestedTranscriptRow => ({
@@ -230,7 +230,7 @@ test('workspace moves replace tool cards in place and animate only a live arriva
     toolUseId: toolName, toolFamily: 'other', input: { destination: 'opaque-handle' },
     status: 'pending', result: null, children: [],
   })
-  let rows = [source, tool('ListWorkspaces'), tool('JumpWorkspace')]
+  let rows = [source, tool('ListWorkspaces'), tool('ListProjects'), tool(jumpName)]
   const move = { id: 'move', phase: 'moving' as const, target }
   const arrived = { ...move, phase: 'arrived' as const, transitionId: 'seam', afterFrameId: 'jump-frame' }
   const seam = { id: 'seam', afterFrameId: 'jump-frame', cwd: target.path, binding: { kind: 'project' as const } }
@@ -243,6 +243,8 @@ test('workspace moves replace tool cards in place and animate only a live arriva
   const tree = await harness.mount(draw(null))
   expect(tree.container.textContent).not.toContain('ListWorkspaces')
   expect(tree.container.textContent).not.toContain('JumpWorkspace')
+  expect(tree.container.textContent).not.toContain('ListProjects')
+  expect(tree.container.textContent).not.toContain('JumpToProject')
   await tree.render(draw(move))
   const divider = tree.container.querySelector('[data-workspace-move="move"]')
   expect(divider?.textContent).toContain('Moving to cat-code ~/cat-code')
@@ -276,6 +278,34 @@ test('workspace moves replace tool cards in place and animate only a live arriva
   expect(restored.container.querySelector('.workspace-arrival-wash')).toBeNull()
   await restored.render(draw(arrived))
   expect(restored.container.querySelector('.workspace-arrival-wash')).toBeNull()
+})
+
+test.each([true, false])('saved project identity survives live and restored moves (agent jump: %s)', async (agentJump) => {
+  const cwd = '/projects/P1_Gaming_POS'
+  const projects = [{ id: 'saved-project', name: 'P1_gaming', cwd, createdAt: 1 }]
+  const target = { kind: 'project' as const, name: 'P1_Gaming_POS', path: cwd }
+  const move: WorkspaceMoveDisplay = { id: 'identity-move', phase: 'moving', target, ...(agentJump ? { agentJump: true as const } : {}) }
+  const seam = { id: 'saved-seam', afterFrameId: row.frameId, cwd, binding: { kind: 'project' as const } }
+  const tree = await harness.mount(<TranscriptRowsView rows={[row]} projects={projects} workspaceMove={move} />)
+  const label = () => tree.container.querySelector('.chat-project-divider-label')
+  expect(label()?.textContent).toBe('P1_gaming')
+  expect(label()?.getAttribute('title')).toBe(cwd)
+  expect(tree.container.querySelector('.workspace-move-path')?.textContent).toContain(cwd)
+  await tree.render(<TranscriptRowsView rows={[row]} projects={projects} workspaceMove={{ ...move, phase: 'arrived' }} />)
+  expect(label()?.textContent).toBe('P1_gaming')
+  expect(label()?.getAttribute('title')).toBe(cwd)
+  await tree.unmount()
+  const restored = await harness.mount(<TranscriptRowsView rows={[row]} projects={projects} contextTransitions={[seam]} restorePhase="preview" />)
+  expect(restored.container.querySelector('.chat-project-divider-label')?.textContent).toBe('P1_gaming')
+  expect(restored.container.querySelector('.chat-project-divider-label')?.getAttribute('title')).toBe(cwd)
+  await restored.render(<TranscriptRowsView rows={[row]} contextTransitions={[seam]} />)
+  expect(restored.container.querySelector('.chat-project-divider-label')?.textContent).toBe('P1_Gaming_POS')
+  await restored.render(<TranscriptRowsView rows={[row]} workspaceMove={{ ...move, target: { ...target, name: 'Legacy name' } }} />)
+  expect(restored.container.querySelector('.chat-project-divider-label')?.textContent).toBe('Legacy name')
+  await restored.render(<TranscriptRowsView rows={[row]} projects={projects}
+    contextTransitions={[{ ...seam, binding: { kind: 'chat' } }]} />)
+  expect(restored.container.querySelector('.chat-project-divider-label')?.textContent).toBe('Chat')
+  expect(restored.container.querySelector('.chat-project-divider-label')?.hasAttribute('title')).toBe(false)
 })
 
 test('failed and stopped moves use the same neutral seam; Chat has no folder or path', async () => {

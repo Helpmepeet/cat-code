@@ -29,7 +29,7 @@ export function withoutWorkspaceTools(rows: NestedTranscriptRow[]): NestedTransc
   if (cached) return cached
   const result: NestedTranscriptRow[] = []
   for (const row of rows) {
-    if (row.kind === 'tool-use' && (row.toolName === 'ListWorkspaces' || row.toolName === 'JumpWorkspace')) continue
+    if (row.kind === 'tool-use' && (row.toolName === 'ListWorkspaces' || row.toolName === 'ListProjects' || row.toolName === 'JumpWorkspace' || row.toolName === 'JumpToProject')) continue
     const children = withoutWorkspaceTools(row.children)
     result.push(children === row.children ? row : { ...row, children })
   }
@@ -54,7 +54,7 @@ export function useWorkspaceMoveView(
   const arrivalElement = useRef<{ id: string; element: HTMLElement } | null>(null)
   if (move && anchor.current?.id !== move.id) {
     const tool = move.toolUseId ? rows.find(row => row.kind === 'tool-use' && row.toolUseId === move.toolUseId)
-      : move.agentJump ? [...rows].reverse().find(row => row.kind === 'tool-use' && row.toolName === 'JumpWorkspace') : undefined
+      : move.agentJump ? [...rows].reverse().find(row => row.kind === 'tool-use' && (row.toolName === 'JumpWorkspace' || row.toolName === 'JumpToProject')) : undefined
     anchor.current = {
       id: move.id,
       frameId: move.afterFrameId !== undefined ? move.afterFrameId : tool?.frameId ?? rows.at(-1)?.frameId ?? null,

@@ -16,6 +16,7 @@ import {
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
+import { createUserMessage } from '../../src/utils/messages.js'
 import { writeWorkspaceJump } from '../../src/utils/workspaceJumpState.js'
 import { clearCommandMemoizationCaches, isHeadlessSafeCommand } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
@@ -330,7 +331,7 @@ test('recreated managed folder notice reaches the model system prompt without ch
     expect(queryEngineConfig.initialMessages).toEqual(messages)
     const normal = buildDesktopSystemPrompt(undefined, cwd)
     expect(normal).not.toContain('Earlier file references in the conversation may no longer exist.')
-    expect(normal).toContain('use JumpWorkspace before continuing the request')
+    expect(normal).toContain('select it with JumpToProject')
     expect(normal).toContain('Changing directories in Bash does not move the conversation.')
     expect(buildDesktopSystemPrompt(undefined, undefined, false, true)).not.toContain(
       'Earlier file references in the conversation may no longer exist.',
@@ -761,19 +762,47 @@ test('workspace tool schemas survive the jump and managed return while consumed 
     const destination = await createNormalSidecarQueryEngineConfig(target, [], { appSessionId })
     const returned = await createNormalSidecarQueryEngineConfig(source, [], { appSessionId, binding })
     const workspaceSchemas = async (config: typeof before) => Promise.all(config.queryEngineConfig.tools
-      .filter(tool => tool.name === 'ListWorkspaces' || tool.name === 'JumpWorkspace')
+      .filter(tool => tool.name === 'ListProjects' || tool.name === 'JumpToProject')
       .map(async tool => ({ name: tool.name, schema: z.toJSONSchema(tool.inputSchema), prompt: await tool.prompt({ tools: [], agents: [], getToolPermissionContext: async () => before.queryEngineConfig.getAppState().toolPermissionContext }) })))
     expect(await workspaceSchemas(before)).toHaveLength(2)
     expect(await workspaceSchemas(destination)).toEqual(await workspaceSchemas(before))
     expect(await workspaceSchemas(returned)).toEqual(await workspaceSchemas(before))
     expect(destination.queryEngineConfig.getRuntimeSystemPromptAddendum).toBeUndefined()
     expect(returned.queryEngineConfig.getRuntimeSystemPromptAddendum).toBeUndefined()
-    expect(before.queryEngineConfig.appendSystemPrompt).toContain('use JumpWorkspace before continuing')
-    expect(returned.queryEngineConfig.appendSystemPrompt).toContain('Behave as though JumpWorkspace is gone')
-    expect(returned.queryEngineConfig.appendSystemPrompt).not.toContain('use JumpWorkspace before continuing')
+    expect(before.queryEngineConfig.appendSystemPrompt).toContain('select it with JumpToProject')
+    expect(returned.queryEngineConfig.appendSystemPrompt).toContain('JumpToProject is unavailable')
+    expect(returned.queryEngineConfig.appendSystemPrompt).not.toContain('select it with JumpToProject')
   } finally {
     if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    resetSettingsCache()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('saved project name reaches the normal and resumed model context without becoming instructions', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-project-name-'))
+  const previousConfig = process.env.CLAUDE_CONFIG_DIR
+  const previousName = process.env.CATCODE_SIDECAR_PROJECT_NAME
+  const name = 'P1_gaming"\nnot an instruction'
+  try {
+    process.env.CLAUDE_CONFIG_DIR = root
+    process.env.CATCODE_SIDECAR_PROJECT_NAME = name
+    resetSettingsCache()
+    for (const messages of [[], [createUserMessage({ content: 'Jump to P1_gaming' })]]) {
+      const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(root, messages)
+      expect(queryEngineConfig.appendSystemPrompt).toContain(JSON.stringify({ name, cwd: root }))
+      expect(queryEngineConfig.appendSystemPrompt).not.toContain('P1_gaming"\nnot an instruction')
+      expect(queryEngineConfig.initialMessages).toEqual(messages)
+    }
+    const binding = { kind: 'managed' as const, storageRootId: randomUUID(), storageId: randomUUID() }
+    const managed = await createNormalSidecarQueryEngineConfig(root, [], { binding })
+    expect(managed.queryEngineConfig.appendSystemPrompt).not.toContain(JSON.stringify({ name, cwd: root }))
+  } finally {
+    if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    if (previousName === undefined) delete process.env.CATCODE_SIDECAR_PROJECT_NAME
+    else process.env.CATCODE_SIDECAR_PROJECT_NAME = previousName
     resetSettingsCache()
     rmSync(root, { recursive: true, force: true })
   }

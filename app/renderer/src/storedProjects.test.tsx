@@ -58,7 +58,7 @@ test('an empty stored project renders a zero count and its own session action', 
   const html = renderToStaticMarkup(<SessionGroup group={group} activeSessionId={null} collapsed={false} onToggle={() => {}}
     onSelectLive={() => {}} onRestore={() => {}} onOpenHistory={() => {}} onNewProjectSession={() => {}} />)
   expect(html).toContain('Chosen name')
-  expect(html).toContain('New session in this workspace')
+  expect(html).toContain('New session in this project')
   expect(html).toMatch(/>0<\/span>/)
   expect(html).not.toContain('Existing session')
 })
