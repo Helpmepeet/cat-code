@@ -1,6 +1,6 @@
 import { filePreviewKind, normalizeLocalhostPreviewUrl, type FilePreviewApplications } from '../shared/filePreview.js'
 import type { OpenWorkspaceFileTarget } from '../shared/protocol.js'
-import { resolveWorkspaceFile, type WorkspaceFileOptions } from './openWorkspaceFile.js'
+import { resolveWorkspaceFile } from './openWorkspaceFile.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { readPreferenceFile, writePreferenceFile } from './preferenceFile.js'
 
@@ -20,7 +20,6 @@ const PREFERENCE_FILE = 'file-preview-applications.json'
 export function createPreviewApplications(deps: {
   userData: string
   sessions: () => readonly SessionDescriptor[]
-  options?: WorkspaceFileOptions
   installed: (target: OpenWorkspaceFileTarget, path: string) => Promise<boolean>
   open: (path: string, target: OpenWorkspaceFileTarget) => Promise<boolean | string>
   localAllowed?: (url: string) => string | null
@@ -55,7 +54,7 @@ export function createPreviewApplications(deps: {
         const selected = applications.some(app=>app.target===choices.localhost) ? choices.localhost : applications[0]?.target ?? 'chrome'
         return {applications,selected}
       }
-      const resolved = await resolveWorkspaceFile(input, deps.sessions(), deps.options)
+      const resolved = await resolveWorkspaceFile(input, deps.sessions())
       const kind = resolved && filePreviewKind(resolved.path)
       if (!resolved || !kind) return fallback
       const applications = (await Promise.all([...TARGETS[kind], 'finder' as const].map(async target =>
@@ -75,7 +74,7 @@ export function createPreviewApplications(deps: {
           return ok
         } catch {return false}
       }
-      const resolved = await resolveWorkspaceFile(input, deps.sessions(), deps.options)
+      const resolved = await resolveWorkspaceFile(input, deps.sessions())
       const kind = resolved && filePreviewKind(resolved.path)
       if (!resolved || !kind || !resolved.target || (resolved.target !== 'finder' && !TARGETS[kind].includes(resolved.target))) return false
       if (resolved.target !== 'finder') registerChoice(kind, sequence)

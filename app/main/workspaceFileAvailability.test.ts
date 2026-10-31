@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import { workspaceFileAvailability } from './workspaceFileAvailability.js'
 
-test('availability returns only a boolean for canonical regular files and allowed generated images', async () => {
+test('availability returns only a boolean for canonical regular files inside and outside the workspace', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-file-availability-'))
   try {
     const workspace = join(root, 'workspace')
@@ -24,12 +24,11 @@ test('availability returns only a boolean for canonical regular files and allowe
     for (const [path, available] of [
       ['source.ts', true], ['source.ts:42:3', true], ['file-link', true],
       ['.', false], ['folder', false], ['folder-link', false],
-      ['missing', false], ['broken-link', false], ['escape-link', false],
-      [join(images, 'image.png'), true], [join(images, 'notes.txt'), false],
+      ['missing', false], ['broken-link', false], ['escape-link', true],
+      [join(images, 'image.png'), true], [join(images, 'notes.txt'), true],
     ] as const) {
       expect(await workspaceFileAvailability(
         { appSessionId: 'availability-session', path }, sessions,
-        { generatedImagesRoot: images },
       )).toBe(available)
     }
     expect(await workspaceFileAvailability(

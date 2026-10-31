@@ -519,7 +519,7 @@ test('right-clicking a generated image offers the image and its file outside the
   const bridge: Pick<CatCodeBridge, 'getWorkspaceFileAvailability'> = {
     getWorkspaceFileAvailability(appSessionId, path) {
       requests.push({ appSessionId, path })
-      const read = workspaceFileAvailability({ appSessionId, path }, sessions, { generatedImagesRoot })
+      const read = workspaceFileAvailability({ appSessionId, path }, sessions)
       reads.push(read)
       return read
     },

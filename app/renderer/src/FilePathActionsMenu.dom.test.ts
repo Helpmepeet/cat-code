@@ -49,7 +49,6 @@ function availability(id: SessionId, path: string): Promise<boolean> {
   return workspaceFileAvailability(
     { appSessionId: id, path },
     [sessionDescriptorFixture({ appSessionId: sessionId, cwd: workspace })],
-    { generatedImagesRoot: images },
   )
 }
 
@@ -121,7 +120,7 @@ test('mounted file actions match real file, directory, symlink, and generated-im
     expect(tree.container.textContent).toContain('Copy')
     await tree.unmount()
   }
-  expect(observed).toEqual([false, false, false, false, true, true, true, false])
+  expect(observed).toEqual([false, false, false, true, true, true, true, true])
 })
 
 test('pending and rejected availability keep Copy usable without offering Open', async () => {

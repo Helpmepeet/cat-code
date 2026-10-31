@@ -46,6 +46,76 @@ test('serves immutable contained files while refusing forged and escaping resour
   } finally { await f.cleanup() }
 })
 
+test('explicit external previews open HTML, SVG, Markdown, and images without a workspace exception', async () => {
+  const f = await fixture()
+  try {
+    f.service.release(f.preview.id)
+    for (const [name, content, kind] of [
+      ['report.html', '<h1>Outside report</h1>', 'html'],
+      ['diagram.svg', '<svg xmlns="http://www.w3.org/2000/svg"></svg>', 'svg'],
+      ['notes.md', '# Outside notes', 'markdown'],
+      ['picture.png', 'image bytes', 'image'],
+    ] as const) {
+      const path = join(f.outside, name)
+      await writeFile(path, content)
+      const preview = await f.service.prepare({ appSessionId: 's1', path })
+      expect(preview?.kind).toBe(kind)
+      expect(preview?.path).toBe(await realpath(path))
+      const response = await f.service.respond(new Request(preview!.url))
+      expect(response.status).toBe(200)
+      expect(await response.text()).toBe(content)
+      if (kind === 'markdown') expect(preview?.markdown).toBe(content)
+      f.service.release(preview!.id)
+    }
+  } finally { await f.cleanup() }
+})
+
+test('external HTML assets stay inside the selected file directory and retain private-data restrictions', async () => {
+  const f = await fixture()
+  try {
+    await mkdir(join(f.outside, 'assets'))
+    await writeFile(join(f.outside, 'report.html'), '<link rel="stylesheet" href="/assets/site.css"><h1>External</h1>')
+    await writeFile(join(f.outside, 'assets/site.css'), 'body {color:blue}')
+    await writeFile(join(f.outside, '.env'), 'secret')
+    await writeFile(join(f.outside, 'data.json'), '{"secret":true}')
+    await writeFile(join(f.outside, 'notes.md'), '# Private notes')
+    await writeFile(join(f.outside, '.hidden.js'), 'secret')
+    await symlink(join(f.root, 'assets/site.css'), join(f.outside, 'assets/escape.css'))
+    const preview = await f.service.prepare({ appSessionId: 's1', path: join(f.outside, 'report.html') })
+    expect(preview?.url.endsWith('/report.html')).toBe(true)
+    const asset = new URL('/assets/site.css', preview!.url)
+    expect(f.service.pathForUrl(asset.href)).toBe(await realpath(join(f.outside, 'assets/site.css')))
+    expect(await (await f.service.respond(new Request(asset))).text()).toBe('body {color:blue}')
+    for (const path of ['/assets/escape.css', '/.env', '/data.json', '/notes.md', '/.hidden.js', '/%2e%2e%2fsecret.css']) {
+      expect((await f.service.respond(new Request(new URL(path, preview!.url)))).status).toBe(403)
+    }
+    expect(f.service.pathForUrl(new URL('/%2e%2e%2fsecret.css', preview!.url).href)).toBeNull()
+    expect(f.service.absentPaths(preview!.id, preview!.revision)).not.toContain('/secret.css')
+  } finally { await f.cleanup() }
+})
+
+test('an external page refreshes when missing assets arrive and keeps its snapshot after deletion', async () => {
+  const f = await fixture()
+  try {
+    const path = join(f.outside, 'report.html')
+    await writeFile(path, '<h1>External page</h1>')
+    const preview = await f.service.prepare({ appSessionId: 's1', path })
+    expect(preview).not.toBeNull()
+    expect((await f.service.respond(new Request(new URL('/late.css', preview!.url)))).status).toBe(403)
+    await writeFile(join(f.outside, 'late.css'), 'body {color:green}')
+    const deadline = Date.now() + 4000
+    while (Date.now() < deadline && !f.events.some(event => event.id === preview!.id && event.kind === 'updated')) await new Promise(resolve => setTimeout(resolve, 50))
+    const updated = f.events.find(event => event.id === preview!.id && event.kind === 'updated')
+    if (updated?.kind !== 'updated') throw new Error('Expected an external page refresh')
+    expect(await (await f.service.respond(new Request(new URL('/late.css', updated.descriptor.url)))).text()).toBe('body {color:green}')
+    await rm(path)
+    expect(await f.service.refresh(preview!.id)).toBeNull()
+    expect(await (await f.service.respond(new Request(preview!.url))).text()).toBe('<h1>External page</h1>')
+    f.revoke()
+    expect((await f.service.respond(new Request(preview!.url))).status).toBe(403)
+  } finally { await f.cleanup() }
+})
+
 test('root-relative assets resolve from the workspace root, including nested CSS and module dependencies', async () => {
   const f = await fixture()
   try {

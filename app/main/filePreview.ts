@@ -2,8 +2,8 @@ import { constants, watch, type FSWatcher } from 'node:fs'
 import { open, realpath, stat } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, dirname, extname, normalize, relative, resolve as resolvePath, sep } from 'node:path'
-import { resolveWorkspaceFile, type WorkspaceFileOptions } from './openWorkspaceFile.js'
+import { basename, dirname, extname, isAbsolute, normalize, relative, resolve as resolvePath, sep } from 'node:path'
+import { resolveWorkspaceFile } from './openWorkspaceFile.js'
 import { FILE_PREVIEW_SCHEME, filePreviewKind, type FilePreviewDescriptor, type FilePreviewEvent } from '../shared/filePreview.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { MAX_REGISTRY_SESSIONS } from '../host/registry.js'
@@ -37,7 +37,7 @@ type Preview = {
   id: string
   appSessionId: string
   authorityCwd: string
-  workspaceRoot: string
+  assetRoot: string
   path: string
   snapshots: Map<number, Snapshot>
   committed: number
@@ -119,30 +119,32 @@ export function parseFilePreviewUrl(value: string): ParsedFilePreviewUrl | null 
   } catch { return null }
 }
 
-function usesWorkspaceRoot(preview: Preview): boolean {
+function isWithin(root: string, path: string): boolean {
+  const location = relative(root, path)
+  return location !== '..' && !location.startsWith(`..${sep}`) && !isAbsolute(location)
+}
+
+function usesAssetRoot(preview: Preview): boolean {
   return preview.kind === 'html' || preview.kind === 'svg'
 }
 
 function resourceUrl(preview: Preview, revision: number, path: string): string {
-  const encoded = (usesWorkspaceRoot(preview) ? relative(preview.workspaceRoot, path) : path).split(sep).map(encodeURIComponent).join('/')
+  const encoded = (usesAssetRoot(preview) ? relative(preview.assetRoot, path) : path).split(sep).map(encodeURIComponent).join('/')
   // A root-relative URL drops every path prefix. Keep its revision in the
   // authority so the visible page and its staged replacement cannot mix assets.
-  return usesWorkspaceRoot(preview)
+  return usesAssetRoot(preview)
     ? `${FILE_PREVIEW_SCHEME}://r${revision}.${preview.id}/${encoded}`
     : `${FILE_PREVIEW_SCHEME}://${preview.id}/r${revision}${encoded}`
 }
 
 function resourcePath(preview: Preview, parsed: ParsedFilePreviewUrl): string | null {
-  if (parsed.workspaceRelative !== usesWorkspaceRoot(preview)) return null
-  if (!parsed.workspaceRelative) return parsed.path
-  const path = resolvePath(preview.workspaceRoot, `.${parsed.path}`)
-  const location = relative(preview.workspaceRoot, path)
-  return location === '..' || location.startsWith(`..${sep}`) ? null : path
+  if (parsed.workspaceRelative !== usesAssetRoot(preview)) return null
+  const path = parsed.workspaceRelative ? resolvePath(preview.assetRoot, `.${parsed.path}`) : parsed.path
+  return isWithin(preview.assetRoot, path) ? path : null
 }
 
 export function createFilePreviewService(deps: {
   sessions: () => readonly SessionDescriptor[]
-  options?: WorkspaceFileOptions
   publish: (event: FilePreviewEvent) => void
   home?: string
 }) {
@@ -215,15 +217,16 @@ export function createFilePreviewService(deps: {
     preview.timer = setTimeout(() => { preview.timer = undefined; void refresh(preview.id) }, QUIET_MS)
     preview.timer.unref?.()
   }
-  async function resolve(preview: Pick<Preview, 'appSessionId'>, path: string) {
-    return resolveWorkspaceFile({ appSessionId: preview.appSessionId, path }, deps.sessions(), deps.options)
+  async function resolve(preview: Pick<Preview, 'appSessionId' | 'assetRoot'>, path: string) {
+    const resolved = await resolveWorkspaceFile({ appSessionId: preview.appSessionId, path }, deps.sessions())
+    // Clicking a file grants a preview, not page-script access to the whole disk.
+    return resolved && isWithin(preview.assetRoot, resolved.path) ? resolved : null
   }
   /** A missing asset renders as it would in a browser. If it appears later, the page refreshes. */
   async function noteAbsent(preview: Preview, snapshot: Snapshot, path: string) {
     if (snapshot.absent.size >= MAX_ASSETS) return
     snapshot.absent.add(path)
-    const root = await realpath(preview.authorityCwd).catch(() => null)
-    if (root === null || normalize(path) !== path || relative(root, path).split(sep)[0] === '..' || !servableAsset(preview.path, path)) return
+    if (normalize(path) !== path || !isWithin(preview.assetRoot, path) || !servableAsset(preview.path, path)) return
     const current = await signature(path)
     if (preview.released || preview.watched.has(path) || preview.watched.size >= MAX_ASSETS || watchedFiles >= MAX_WATCHED_FILES) return
     preview.watched.set(path, current)
@@ -296,7 +299,7 @@ export function createFilePreviewService(deps: {
         if (!authority || authority.moving) return null
         const authorityCwd = authority.cwd
         const workspaceRoot = await realpath(authorityCwd)
-        const resolved = await resolveWorkspaceFile(input, deps.sessions(), deps.options)
+        const resolved = await resolveWorkspaceFile(input, deps.sessions())
         if (!resolved) return null
         const kind = filePreviewKind(resolved.path)
         if (!kind) return null
@@ -311,7 +314,9 @@ export function createFilePreviewService(deps: {
         if (raced) return descriptor(raced, raced.snapshots.get(raced.committed)!)
         if (cachedBytes + bytes.length > MAX_CACHE_BYTES || previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
         const preview: Preview = {
-          id: randomBytes(24).toString('hex'), appSessionId, authorityCwd, workspaceRoot, path: resolved.path, kind,
+          id: randomBytes(24).toString('hex'), appSessionId, authorityCwd,
+          assetRoot: isWithin(workspaceRoot, resolved.path) ? workspaceRoot : dirname(resolved.path),
+          path: resolved.path, kind,
           snapshots: new Map(), committed: 1, nextRevision: 1,
           watched: new Map(), watchers: new Map(), polling: false, busy: false, dirty: false, removed: false, watchFailed: false, released: false,
           poll: setInterval(() => {

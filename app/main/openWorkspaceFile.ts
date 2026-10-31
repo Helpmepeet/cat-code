@@ -1,4 +1,4 @@
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 import { localFileUrlPath } from '../shared/localFileUrl.js'
@@ -11,7 +11,6 @@ export type { OpenWorkspaceFileTarget }
 const MAX_OPEN_FILE_PATH_CHARS = 4_096
 const MAX_SOURCE_COORDINATE = 2_147_483_647
 const ALLOWED_TARGETS = new Set<string>(['default', 'vscode', 'zed', 'cursor', 'finder', 'chrome', 'safari'])
-const GENERATED_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp'])
 
 export interface SourceLocation {
   line: number
@@ -24,26 +23,10 @@ export interface ResolvedWorkspaceFile {
   location?: SourceLocation
 }
 
-export interface WorkspaceFileOptions {
-  generatedImagesRoot?: string
-}
-
-/** True when `target` is strictly beneath `root`, by canonical relative path. */
-function isInside(root: string, target: string): boolean {
-  const rel = relative(root, target)
-  return !(rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))
-}
-
 /** The opening and read-only availability boundaries share the same file policy. */
 export async function resolveWorkspaceFile(
   input: unknown,
   sessions: readonly SessionDescriptor[],
-  /**
-   * The default GenerateImage output folder sits in the config home, outside any
-   * workspace. Image files beneath it open like workspace files; nothing else
-   * outside the workspace does.
-   */
-  options: WorkspaceFileOptions = {},
 ): Promise<ResolvedWorkspaceFile | null> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return null
   const record = input as Record<string, unknown>
@@ -84,12 +67,9 @@ export async function resolveWorkspaceFile(
       return null
     }
     const workspace = await realpath(session.cwd)
-    const imagesRoot = options.generatedImagesRoot
-      ? await realpath(options.generatedImagesRoot).catch(() => null)
-      : null
     // A trailing :line[:column] is ambiguous on POSIX. Prefer a real literal
     // file first; only fall back to source-location parsing when that literal
-    // cannot pass the same canonical containment and file checks.
+    // cannot pass the same canonical regular-file checks.
     const candidates: Array<{ path: string; location?: SourceLocation }> = [{ path: rawPath }]
     const suffix = /:(\d+)(?::(\d+))?$/.exec(rawPath)
     if (suffix && suffix.index > 0) {
@@ -109,12 +89,7 @@ export async function resolveWorkspaceFile(
     for (const candidate of candidates) {
       try {
         const requested = await realpath(resolve(workspace, candidate.path))
-        const allowed =
-          isInside(workspace, requested) ||
-          (imagesRoot !== null &&
-            GENERATED_IMAGE_EXTENSIONS.has(extname(requested).toLowerCase()) &&
-            isInside(imagesRoot, requested))
-        if (!allowed || !(await stat(requested)).isFile()) {
+        if (!(await stat(requested)).isFile()) {
           continue
         }
         return {
@@ -136,9 +111,8 @@ export async function openWorkspaceFile(
   input: unknown,
   sessions: readonly SessionDescriptor[],
   openPath: (path: string, target?: OpenWorkspaceFileTarget, location?: SourceLocation) => Promise<boolean | string>,
-  options: WorkspaceFileOptions = {},
 ): Promise<boolean> {
-  const resolved = await resolveWorkspaceFile(input, sessions, options)
+  const resolved = await resolveWorkspaceFile(input, sessions)
   if (!resolved) return false
   try {
     const result = await openPath(resolved.path, resolved.target, resolved.location)

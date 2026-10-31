@@ -88,8 +88,9 @@ async function pathPointer(path: HTMLElement, type: string, x: number, options: 
 function setup(withOutput = false, local?: { url: string; snapshots?: Map<string, LocalhostFrozenPayload> }) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-dom-')))
   const outside = realpathSync(mkdtempSync(join(tmpdir(), 'cat-file-pane-outside-')))
-  const refusedPath = join(outside, 'outside.md')
-  writeFileSync(refusedPath, '# Existing outside workspace')
+  const outsidePath = join(outside, 'outside.md')
+  const missingPath = join(outside, 'missing.md')
+  writeFileSync(outsidePath, '# Existing outside workspace')
   const sessionId = randomUUID()
   const otherSession = randomUUID()
   const firstPath = join(root, 'notes.md')
@@ -207,7 +208,7 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
   const row: NestedTranscriptRow = {
     id: 'reply', sessionId, frameId: 'f', messageId: 'm', blockIndex: 0,
     parentToolUseId: null, kind: 'assistant-text', role: 'assistant', children: [],
-    content: `[Notes](notes.md:12) [Second](second.markdown) [Refused](${refusedPath}) [Broken](broken.html) [Missing asset](missing-asset.html) [Image](image.png) [Bad image](broken.png)${local ? ` [Server](${local.url})` : ''}`,
+    content: `[Notes](notes.md:12) [Second](second.markdown) [Outside](${outsidePath}) [Missing](${missingPath}) [Broken](broken.html) [Missing asset](missing-asset.html) [Image](image.png) [Bad image](broken.png)${local ? ` [Server](${local.url})` : ''}`,
   }
   const rows: NestedTranscriptRow[] = [row]
   if (withOutput) rows.push({
@@ -227,11 +228,11 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
       <main className="session-pane"><section className="session-transcript-region"><TranscriptRowsView rows={id === sessionId ? rows : []} cwd={root} /></section><input aria-label="Composer" /></main>
     </SubagentWorkspace></ToolsExpandedContext.Provider>
   </ToastContext.Provider>
-  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, missingAssetPath, refusedPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
+  return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, missingAssetPath, outsidePath, missingPath, otherSession, toasts, service, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
 }
 
-test('a reply click crosses the real host file boundary before rendering, keeps composer focus, and refuses outside files', async () => {
-  const { pane, sessionId, firstPath, refusedPath, toasts } = setup()
+test('a reply click opens workspace and outside files through the real host boundary, keeps composer focus, and refuses missing files', async () => {
+  const { pane, sessionId, firstPath, outsidePath, missingPath, toasts } = setup()
   const tree = await harness.mount(pane())
   expect(tree.container.querySelector('.file-pane')).toBeNull()
   await click(tree.container, 'Open ./notes.md:12')
@@ -243,9 +244,14 @@ test('a reply click crosses the real host file boundary before rendering, keeps 
   const body = paneElement.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
   await click(tree.container, 'Open ./notes.md:12')
   expect(paneElement.querySelector('.file-pane-markdown:not(.file-pane-staging)')).toBe(body)
-  await click(tree.container, `Open ${refusedPath}`)
+  await click(tree.container, `Open ${outsidePath}`)
+  expect(paneElement.querySelector('.file-pane-markdown:not(.file-pane-staging)')?.textContent).toContain('Existing outside workspace')
+  expect(getFilePaneSession(sessionId).file?.path).toBe(outsidePath)
+  expect(document.activeElement?.getAttribute('aria-label')).toBe('Composer')
+  expect(toasts).toEqual([])
+  await click(tree.container, `Open ${missingPath}`)
   expect(toasts).toEqual(['Could not open this file'])
-  expect(getFilePaneSession(sessionId).file?.path).toBe(firstPath)
+  expect(getFilePaneSession(sessionId).file?.path).toBe(outsidePath)
   expect(tree.container.querySelectorAll('.subagent-shared-slot')).toHaveLength(1)
 })
 

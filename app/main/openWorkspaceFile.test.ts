@@ -8,7 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
@@ -49,7 +49,7 @@ test('opens an existing workspace-relative regular file', async () => {
   }
 })
 
-test('local file URLs retain literal-first suffix resolution and canonical containment', async () => {
+test('local file URLs retain literal-first suffix resolution and canonical file resolution', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-file-url-'))
   const outside = mkdtempSync(join(tmpdir(), 'catcode-file-url-outside-'))
   try {
@@ -68,7 +68,11 @@ test('local file URLs retain literal-first suffix resolution and canonical conta
     expect(opened.pop()).toEqual([realpathSync(`${file}:12`), undefined])
     expect(await openWorkspaceFile({ appSessionId: 'session-1', path: `${url(file)}:13:2` }, [session(root)], open)).toBe(true)
     expect(opened.pop()).toEqual([realpathSync(file), { line: 13, column: 2 }])
-    for (const path of [url(join(outside, 'secret.html')), url(join(root, 'escape.html')), 'file://remote/tmp/a.html', `${url(file)}%00`]) {
+    for (const path of [url(join(outside, 'secret.html')), url(join(root, 'escape.html'))]) {
+      expect(await openWorkspaceFile({ appSessionId: 'session-1', path }, [session(root)], open)).toBe(true)
+      expect(opened.pop()).toEqual([realpathSync(join(outside, 'secret.html')), undefined])
+    }
+    for (const path of ['file://remote/tmp/a.html', `${url(file)}%00`]) {
       expect(await openWorkspaceFile({ appSessionId: 'session-1', path }, [session(root)], open)).toBe(false)
     }
     expect(opened).toEqual([])
@@ -78,7 +82,7 @@ test('local file URLs retain literal-first suffix resolution and canonical conta
   }
 })
 
-test('rejects traversal, symlink escape, directories, and unknown sessions', async () => {
+test('rejects missing files, directories, and unknown sessions', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-open-file-'))
   const outside = mkdtempSync(join(tmpdir(), 'catcode-open-file-outside-'))
   try {
@@ -90,7 +94,6 @@ test('rejects traversal, symlink escape, directories, and unknown sessions', asy
 
     for (const input of [
       { appSessionId: 'session-1', path: '../outside.md' },
-      { appSessionId: 'session-1', path: 'linked.md' },
       { appSessionId: 'session-1', path: '.' },
       { appSessionId: 'missing', path: 'report.md' },
       { appSessionId: 'session-1', path: 'report.md', target: 'unknown_app' },
@@ -231,7 +234,7 @@ test('preserves literal hash characters in workspace paths', async () => {
   }
 })
 
-test('relocated conversations refuse ambiguous relative links while retaining current-workspace absolute links', async () => {
+test('relocated conversations refuse ambiguous relative links while allowing absolute links in either workspace', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-open-relocated-file-'))
   const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
   try {
@@ -264,12 +267,13 @@ test('relocated conversations refuse ambiguous relative links while retaining cu
       return true
     }
 
-    for (const path of ['report.md', 'report.md:12:3', oldReport]) {
+    for (const path of ['report.md', 'report.md:12:3']) {
       expect(await openWorkspaceFile({ appSessionId, path }, [relocated], openPath)).toBe(false)
     }
     expect(opened).toEqual([])
     expect(await openWorkspaceFile({ appSessionId, path: newReport }, [relocated], openPath)).toBe(true)
-    expect(opened).toEqual([realpathSync(newReport)])
+    expect(await openWorkspaceFile({ appSessionId, path: oldReport }, [relocated], openPath)).toBe(true)
+    expect(opened).toEqual([realpathSync(newReport), realpathSync(oldReport)])
   } finally {
     if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
@@ -277,7 +281,7 @@ test('relocated conversations refuse ambiguous relative links while retaining cu
   }
 })
 
-test('opens image files under the generated-images root outside the workspace, and nothing else there', async () => {
+test('opens external absolute paths, parent-relative paths, and canonical symlink targets regardless of extension', async () => {
   const base = mkdtempSync(join(tmpdir(), 'catcode-open-generated-'))
   try {
     const workspace = join(base, 'workspace')
@@ -296,24 +300,16 @@ test('opens image files under the generated-images root outside the workspace, a
       opened.push(path)
       return ''
     }
-    const open = (path: string, options?: { generatedImagesRoot?: string }) =>
+    const open = (path: string) =>
       openWorkspaceFile(
         { appSessionId: 'session-1', path },
         [session(workspace)],
         opener,
-        options,
       )
-    const options = { generatedImagesRoot: imagesRoot }
-
-    expect(await open(image, options)).toBe(true)
-    expect(opened).toEqual([realpathSync(image)])
-
-    expect(await open(note, options)).toBe(false)
-    expect(await open(strayImage, options)).toBe(false)
-    expect(await open(linked, options)).toBe(false)
-    expect(await open(image)).toBe(false)
-    expect(await open(image, { generatedImagesRoot: join(base, 'missing') })).toBe(false)
-    expect(opened).toHaveLength(1)
+    for (const path of [image, note, strayImage, linked, relative(workspace, note)]) {
+      expect(await open(path)).toBe(true)
+    }
+    expect(opened).toEqual([image, note, strayImage, strayImage, note].map(path => realpathSync(path)))
   } finally {
     rmSync(base, { recursive: true, force: true })
   }

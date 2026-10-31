@@ -1584,7 +1584,6 @@ const readinessLatch = createReadinessLatch(() => {
 
 const filePreviews = createFilePreviewService({
   sessions: () => host?.listSessions() ?? [],
-  options: { generatedImagesRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'), 'generated-images') },
   publish: event => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event)
   },
@@ -4796,12 +4795,6 @@ function registerHostControlPlane(): void {
       input,
       host.listSessions(),
       (path, target, location) => launchTargetOpener(path, target, location),
-      {
-        generatedImagesRoot: join(
-          process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
-          'generated-images',
-        ),
-      },
     )
   })
   const externalAppIcons = createExternalAppIconService()
@@ -4810,18 +4803,12 @@ function registerHostControlPlane(): void {
     read: (target, path) => externalAppIcons.read(target, path),
     resolveFile: async (appSessionId, path) => {
       if (!host) return null
-      const resolved = await resolveWorkspaceFile({ appSessionId, path }, host.listSessions(), {
-        generatedImagesRoot: join(
-          process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
-          'generated-images',
-        ),
-      })
+      const resolved = await resolveWorkspaceFile({ appSessionId, path }, host.listSessions())
       return resolved?.path ?? null
     },
   }))
   const previewApplications = createPreviewApplications({
     userData: app.getPath('userData'), sessions: () => host?.listSessions() ?? [],
-    options: { generatedImagesRoot: join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'), 'generated-images') },
     installed: (target, path) => externalAppIcons.installed(target, path),
     localAllowed: url => localhostPreviews.allowed(url),
     open: (path, target) => launchTargetOpener(path, target),
@@ -4835,12 +4822,7 @@ function registerHostControlPlane(): void {
     if (!host || !isMainWindowSender(event) || availabilityReads >= 8) return false
     availabilityReads++
     try {
-      return await workspaceFileAvailability(input, host.listSessions(), {
-        generatedImagesRoot: join(
-          process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.cat-code'),
-          'generated-images',
-        ),
-      })
+      return await workspaceFileAvailability(input, host.listSessions())
     } finally {
       availabilityReads--
     }

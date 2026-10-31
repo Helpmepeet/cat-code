@@ -44,3 +44,31 @@ test('an older slow browser launch cannot replace the latest persisted choice', 
     expect((await createPreviewApplications(deps).list(input)).selected).toBe('safari')
   } finally { await rm(root, { recursive: true, force: true }) }
 })
+
+test('offers and opens external local files while rejecting remote file hosts and directories', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cat-preview-external-'))
+  const outside = await mkdtemp(join(tmpdir(), 'cat-preview-external-file-'))
+  try {
+    const file = join(outside, 'page.html')
+    await writeFile(file, '<h1>External</h1>')
+    const opened: string[] = []
+    const service = createPreviewApplications({
+      userData: root,
+      sessions: () => [sessionDescriptorFixture({ appSessionId: 's', cwd: root })],
+      installed: async () => true,
+      open: async path => { opened.push(path); return true },
+    })
+    for (const path of [file, `file://${file}`]) {
+      expect((await service.list({ appSessionId: 's', path })).applications.length).toBeGreaterThan(0)
+      expect(await service.choose({ appSessionId: 's', path, target: 'chrome' })).toBe(true)
+    }
+    expect(opened).toEqual([await realpath(file), await realpath(file)])
+    for (const path of [outside, 'file://remote/tmp/page.html']) {
+      expect((await service.list({ appSessionId: 's', path })).applications).toEqual([])
+      expect(await service.choose({ appSessionId: 's', path, target: 'chrome' })).toBe(false)
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(outside, { recursive: true, force: true })
+  }
+})
