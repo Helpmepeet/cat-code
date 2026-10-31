@@ -746,6 +746,13 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           'When true, fast mode is enabled. When absent or false, fast mode is off.',
         ),
+      autoModeFastMode: z
+        .boolean()
+        .optional()
+        .describe(
+          'Use Fast mode for supported GPT Auto mode classification calls at higher usage. ' +
+            'Independent of chat Fast mode; does not apply to Claude. Defaults to off.',
+        ),
       fastModePerSessionOptIn: z
         .boolean()
         .optional()

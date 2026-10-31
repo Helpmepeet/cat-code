@@ -49,6 +49,37 @@ function snapshot(partial: Partial<SettingsSnapshot>): SettingsSnapshot {
 
 const noop = () => {}
 
+test('Fast Auto mode reviews are visible in model settings and default off independently of chat Fast mode', () => {
+  for (const enabled of [undefined, true]) {
+    const html = renderToStaticMarkup(
+      <SettingsPane
+        layer="userSettings"
+        onWrite={noop}
+        pane="model"
+        keys={['autoModeFastMode']}
+        snapshot={snapshot({
+          layers: [{
+            source: 'userSettings',
+            origin: '/u/settings.json',
+            keys: ['fastMode', ...(enabled ? ['autoModeFastMode'] : [])],
+          }],
+          resolved: enabled
+            ? [{ key: 'autoModeFastMode', source: 'userSettings', editable: true, managed: false }]
+            : [],
+          editableValues: [
+            { key: 'fastMode', value: true, source: 'userSettings' },
+            ...(enabled ? [{ key: 'autoModeFastMode', value: true, source: 'userSettings' as const }] : []),
+          ],
+        })}
+      />,
+    )
+    expect(html).toContain('Fast Auto mode reviews')
+    expect(html).toContain('GPT')
+    expect(html).toContain('role="switch"')
+    expect(html).toContain(`aria-checked="${enabled === true}"`)
+  }
+})
+
 /** React escapes apostrophes; compare against prose after decoding. */
 function decode(html: string): string {
   return html

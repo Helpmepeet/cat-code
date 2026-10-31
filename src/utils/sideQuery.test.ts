@@ -8,7 +8,15 @@ import {
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
 } from '../services/api/codexAccountPool.js'
-import { CodexAccountCapError } from '../services/api/codex-fetch-adapter.js'
+import {
+  CodexAccountCapError,
+  translateToCodexBody,
+} from '../services/api/codex-fetch-adapter.js'
+import {
+  getSessionSettingsCache,
+  resetSettingsCache,
+  setSessionSettingsCache,
+} from './settings/settingsCache.js'
 
 let capturedBody: Record<string, unknown> | null = null
 let capturedClientArgs: Record<string, unknown> | null = null
@@ -52,6 +60,61 @@ function resetCaptures() {
 }
 
 describe('sideQuery', () => {
+  test('Fast Auto mode reviews apply only to supported GPT review calls, independently of chat speed', async () => {
+    const originalSettings = getSessionSettingsCache()
+    const originalDisabled = process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+    const originalApiKey = process.env.ANTHROPIC_API_KEY
+    process.env.ANTHROPIC_API_KEY = 'synthetic-test-key'
+    ;(globalThis as typeof globalThis & { MACRO?: { VERSION: string } }).MACRO =
+      { VERSION: 'test' }
+    const { sideQuery } = await import('./sideQuery.js')
+    const cases = [
+      { enabled: undefined, chatFast: true, fast: false },
+      { enabled: false, chatFast: true, fast: false },
+      { enabled: true, chatFast: false, fast: true },
+      { enabled: true, chatFast: true, fast: true },
+      { enabled: true, chatFast: false, source: 'insights' as const, fast: false },
+      { enabled: true, chatFast: true, model: 'claude-sonnet-4-6', fast: false },
+      { enabled: true, chatFast: false, model: 'gpt-custom-unsupported', fast: false },
+      { enabled: true, chatFast: false, disabled: true, fast: false },
+    ]
+    try {
+      for (const entry of cases) {
+        resetCaptures()
+        process.env.CLAUDE_CODE_DISABLE_FAST_MODE = entry.disabled ? '1' : '0'
+        setSessionSettingsCache({
+          settings: { autoModeFastMode: entry.enabled, fastMode: entry.chatFast },
+          errors: [],
+        })
+        const model = entry.model ?? 'gpt-6-luna'
+        await sideQuery({
+          model,
+          provider: model.startsWith('gpt-') ? 'openai' : 'firstParty',
+          messages: [{ role: 'user', content: 'Review this synthetic command.' }],
+          skipSystemPromptPrefix: true,
+          querySource: entry.source ?? 'auto_mode',
+          thinking: false,
+          reasoningEffort: 'medium',
+        })
+        expect(capturedBody).not.toBeNull()
+        expect(capturedBody?.speed).toBe(entry.fast ? 'fast' : undefined)
+        expect(capturedBody?.thinking).toEqual({ type: 'disabled' })
+        expect(capturedBody?.output_config).toEqual({ effort: 'medium' })
+        if (model.startsWith('gpt-')) {
+          const { codexBody } = translateToCodexBody(capturedBody!)
+          expect(codexBody.service_tier).toBe(entry.fast ? 'priority' : undefined)
+        }
+      }
+    } finally {
+      resetSettingsCache()
+      if (originalSettings) setSessionSettingsCache(originalSettings)
+      if (originalDisabled === undefined) delete process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+      else process.env.CLAUDE_CODE_DISABLE_FAST_MODE = originalDisabled
+      if (originalApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = originalApiKey
+    }
+  })
+
   test('includes OpenAI instruction assembly for Codex-routed requests', async () => {
     resetCaptures()
     process.env.ANTHROPIC_API_KEY = 'test-key'

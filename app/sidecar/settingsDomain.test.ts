@@ -379,28 +379,35 @@ const write = (
   value,
 })
 
-test('runVerb persists an editable write and the re-read reflects value + provenance', () => {
-  const settingsFile = useTempConfigHome()
-  const domain = createSidecarSettingsDomain()
+for (const [key, nextValue] of [
+  ['includeCoAuthoredBy', false],
+  ['autoModeFastMode', true],
+] as const) {
+  test(`runVerb persists ${key} and the re-read reflects value + provenance`, () => {
+    const settingsFile = useTempConfigHome()
+    writeFileSync(settingsFile, JSON.stringify({ fastMode: false }))
+    const domain = createSidecarSettingsDomain()
 
-  const result = domain.runVerb(write('userSettings', 'includeCoAuthoredBy', false))
-  expect(result).toEqual({ ok: true, message: 'Updated includeCoAuthoredBy.', changed: true })
+    const result = domain.runVerb(write('userSettings', key, nextValue))
+    expect(result).toEqual({ ok: true, message: `Updated ${key}.`, changed: true })
 
-  // Persisted verbatim on disk.
-  const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
-  expect(onDisk.includeCoAuthoredBy).toBe(false)
+    // Persisted verbatim on disk.
+    const onDisk = JSON.parse(readFileSync(settingsFile, 'utf8'))
+    expect(onDisk[key]).toBe(nextValue)
+    expect(onDisk.fastMode).toBe(false)
 
-  // The domain's re-read snapshot reflects the value + userSettings provenance.
-  const snapshot = domain.getSnapshot()
-  const value = snapshot?.editableValues.find(e => e.key === 'includeCoAuthoredBy')
-  expect(value).toEqual({
-    key: 'includeCoAuthoredBy',
-    value: false,
-    source: 'userSettings',
+    // The domain's re-read snapshot reflects the value + userSettings provenance.
+    const snapshot = domain.getSnapshot()
+    const value = snapshot?.editableValues.find(e => e.key === key)
+    expect(value).toEqual({
+      key,
+      value: nextValue,
+      source: 'userSettings',
+    })
+    const resolution = snapshot?.resolved.find(r => r.key === key)
+    expect(resolution).toMatchObject({ source: 'userSettings', editable: true, managed: false })
   })
-  const resolution = snapshot?.resolved.find(r => r.key === 'includeCoAuthoredBy')
-  expect(resolution).toMatchObject({ source: 'userSettings', editable: true, managed: false })
-})
+}
 
 test('two sequential writes read-modify-write under lock — no lost update', () => {
   const settingsFile = useTempConfigHome()

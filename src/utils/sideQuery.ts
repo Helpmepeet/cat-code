@@ -18,8 +18,10 @@ import { EMPTY_USAGE } from '../services/api/emptyUsage.js'
 import { withRetry } from '../services/api/withRetry.js'
 import { getModelBetas, modelSupportsStructuredOutputs } from './betas.js'
 import { computeFingerprint } from './fingerprint.js'
+import { isFastModeSupportedByModel } from './fastMode.js'
 import { normalizeModelStringForAPI } from './model/model.js'
 import { type APIProvider, resolveRequestProvider } from './model/providers.js'
+import { getInitialSettings } from './settings/settings.js'
 
 type MessageParam = Anthropic.MessageParam
 type TextBlockParam = Anthropic.TextBlockParam
@@ -203,6 +205,13 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   }
 
   const normalizedModel = normalizeModelStringForAPI(model)
+  // Review speed is independent of the chat and is re-evaluated on provider fallback.
+  const fastAutoModeReview =
+    opts.querySource === 'auto_mode' &&
+    provider === 'openai' &&
+    normalizedModel.startsWith('gpt-') &&
+    getInitialSettings().autoModeFastMode === true &&
+    isFastModeSupportedByModel(normalizedModel)
   const openAIInstructionAssembly =
     provider === 'openai'
       ? {
@@ -218,6 +227,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     system: systemBlocks,
     messages,
     ...openAIInstructionAssembly,
+    ...(fastAutoModeReview && { speed: 'fast' as const }),
     ...(tools && { tools }),
     ...(tool_choice && { tool_choice }),
     ...((output_format || reasoningEffort) && {

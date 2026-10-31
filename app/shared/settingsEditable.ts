@@ -232,7 +232,15 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     key: 'fastMode',
     pane: 'model',
     label: 'Fast mode',
-    description: 'Trade some reasoning depth for lower latency (default: off).',
+    description: 'Run supported models faster with higher usage (default: off).',
+    control: { kind: 'boolean', default: false },
+  },
+  {
+    key: 'autoModeFastMode',
+    pane: 'model',
+    label: 'Fast Auto mode reviews',
+    description:
+      'Run GPT reviews faster with higher usage. Main chat speed stays unchanged. Claude reviews use standard speed (default: off).',
     control: { kind: 'boolean', default: false },
   },
   // `effortLevel` is deliberately NOT here (operator ruling, 2026-07-27).
