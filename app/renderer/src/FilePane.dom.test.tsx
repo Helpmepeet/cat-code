@@ -292,7 +292,7 @@ test('unreadable real local assets reject an initial paint and roll a later navi
     // Electron makes for this page's stylesheet, then the frame's load event.
     const response = await service.respond(new Request(new URL('oversized.css', file.url)))
     expect(response.status).toBe(404)
-    expect(service.absent(file.id, file.revision)).toEqual([])
+    expect(service.absentPaths(file.id, file.revision)).toEqual([])
     await act(async () => { tree.container.querySelector('iframe.file-pane-staging')!.dispatchEvent(new Event('load')) })
     await settle()
   }
@@ -320,7 +320,7 @@ test('a missing real local asset permits both an initial paint and navigation fr
     // Happy DOM has no protocol transport, so request the stylesheet before load.
     const response = await service.respond(new Request(new URL('missing.css', file.url)))
     expect(response.status).toBe(403)
-    expect(service.absent(file.id, file.revision)).toEqual([join(missingAssetPath, '..', 'missing.css')])
+    expect(service.absentPaths(file.id, file.revision)).toEqual([new URL('missing.css', file.url).pathname])
     await paintLocalFrame(tree.container)
     expect(getFilePaneSession(sessionId).committedFile?.path).toBe(missingAssetPath)
     expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(missingAssetPath)

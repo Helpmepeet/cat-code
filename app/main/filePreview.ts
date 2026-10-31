@@ -2,7 +2,7 @@ import { constants, watch, type FSWatcher } from 'node:fs'
 import { open, realpath, stat } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, dirname, extname, normalize, relative, sep } from 'node:path'
+import { basename, dirname, extname, normalize, relative, resolve as resolvePath, sep } from 'node:path'
 import { resolveWorkspaceFile, type WorkspaceFileOptions } from './openWorkspaceFile.js'
 import { FILE_PREVIEW_SCHEME, filePreviewKind, type FilePreviewDescriptor, type FilePreviewEvent } from '../shared/filePreview.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
@@ -37,6 +37,7 @@ type Preview = {
   id: string
   appSessionId: string
   authorityCwd: string
+  workspaceRoot: string
   path: string
   snapshots: Map<number, Snapshot>
   committed: number
@@ -102,16 +103,41 @@ function servableAsset(mainFile: string, path: string): boolean {
   return type.startsWith('image/') || !relative(dirname(mainFile), path).split(sep).some(part => part.startsWith('.') && part !== '..')
 }
 
-export function parseFilePreviewUrl(value: string): { id: string; revision: number; path: string } | null {
+type ParsedFilePreviewUrl = { id: string; revision: number; path: string; workspaceRelative: boolean }
+
+export function parseFilePreviewUrl(value: string): ParsedFilePreviewUrl | null {
   try {
     const url = new URL(value)
-    if (url.protocol !== `${FILE_PREVIEW_SCHEME}:` || url.username || url.password || url.port || !/^[a-f0-9]{48}$/.test(url.hostname)) return null
-    const match = /^\/r([1-9]\d*)\/(.+)$/.exec(url.pathname)
-    if (!match || !Number.isSafeInteger(Number(match[1]))) return null
-    const path = decodeURIComponent(`/${match[2]}`)
+    if (url.protocol !== `${FILE_PREVIEW_SCHEME}:` || url.username || url.password || url.port) return null
+    const authority = /^r([1-9]\d*)\.([a-f0-9]{48})$/.exec(url.hostname)
+    const legacy = !authority && /^[a-f0-9]{48}$/.test(url.hostname) ? /^\/r([1-9]\d*)\/(.+)$/.exec(url.pathname) : null
+    const revision = Number(authority?.[1] ?? legacy?.[1])
+    if (!Number.isSafeInteger(revision) || revision < 1) return null
+    const path = decodeURIComponent(authority ? url.pathname : `/${legacy![2]}`)
     if (path.includes('\0') || path.length > 4096) return null
-    return { id: url.hostname, revision: Number(match[1]), path }
+    return { id: authority?.[2] ?? url.hostname, revision, path, workspaceRelative: authority !== null }
   } catch { return null }
+}
+
+function usesWorkspaceRoot(preview: Preview): boolean {
+  return preview.kind === 'html' || preview.kind === 'svg'
+}
+
+function resourceUrl(preview: Preview, revision: number, path: string): string {
+  const encoded = (usesWorkspaceRoot(preview) ? relative(preview.workspaceRoot, path) : path).split(sep).map(encodeURIComponent).join('/')
+  // A root-relative URL drops every path prefix. Keep its revision in the
+  // authority so the visible page and its staged replacement cannot mix assets.
+  return usesWorkspaceRoot(preview)
+    ? `${FILE_PREVIEW_SCHEME}://r${revision}.${preview.id}/${encoded}`
+    : `${FILE_PREVIEW_SCHEME}://${preview.id}/r${revision}${encoded}`
+}
+
+function resourcePath(preview: Preview, parsed: ParsedFilePreviewUrl): string | null {
+  if (parsed.workspaceRelative !== usesWorkspaceRoot(preview)) return null
+  if (!parsed.workspaceRelative) return parsed.path
+  const path = resolvePath(preview.workspaceRoot, `.${parsed.path}`)
+  const location = relative(preview.workspaceRoot, path)
+  return location === '..' || location.startsWith(`..${sep}`) ? null : path
 }
 
 export function createFilePreviewService(deps: {
@@ -144,13 +170,12 @@ export function createFilePreviewService(deps: {
   }
   const home = deps.home ?? homedir()
   function descriptor(preview: Preview, snapshot: Snapshot): FilePreviewDescriptor {
-    const encoded = preview.path.split(sep).map(encodeURIComponent).join('/')
     return {
       id: preview.id, appSessionId: preview.appSessionId, path: preview.path,
       displayPath: preview.path === home || preview.path.startsWith(`${home}${sep}`) ? `~${preview.path.slice(home.length)}` : preview.path,
       kind: preview.kind, revision: snapshot.revision,
       ...(preview.watchFailed ? { watchError: true } : {}),
-      url: `${FILE_PREVIEW_SCHEME}://${preview.id}/r${snapshot.revision}${encoded}`,
+      url: resourceUrl(preview, snapshot.revision, preview.path),
       ...(preview.kind === 'markdown' ? { markdown: snapshot.files.get(preview.path)!.toString('utf8') } : {}),
     }
   }
@@ -270,6 +295,7 @@ export function createFilePreviewService(deps: {
         const authority = deps.sessions().find(session => session.appSessionId === appSessionId)
         if (!authority || authority.moving) return null
         const authorityCwd = authority.cwd
+        const workspaceRoot = await realpath(authorityCwd)
         const resolved = await resolveWorkspaceFile(input, deps.sessions(), deps.options)
         if (!resolved) return null
         const kind = filePreviewKind(resolved.path)
@@ -285,7 +311,7 @@ export function createFilePreviewService(deps: {
         if (raced) return descriptor(raced, raced.snapshots.get(raced.committed)!)
         if (cachedBytes + bytes.length > MAX_CACHE_BYTES || previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
         const preview: Preview = {
-          id: randomBytes(24).toString('hex'), appSessionId, authorityCwd, path: resolved.path, kind,
+          id: randomBytes(24).toString('hex'), appSessionId, authorityCwd, workspaceRoot, path: resolved.path, kind,
           snapshots: new Map(), committed: 1, nextRevision: 1,
           watched: new Map(), watchers: new Map(), polling: false, busy: false, dirty: false, removed: false, watchFailed: false, released: false,
           poll: setInterval(() => {
@@ -329,7 +355,14 @@ export function createFilePreviewService(deps: {
       deps.publish({ id, kind: 'update-error' })
     },
     has(id: string): boolean { return previews.has(id) },
-    absent(id: string, revision: number): string[] { return [...previews.get(id)?.snapshots.get(revision)?.absent ?? []] },
+    absentPaths(id: string, revision: number): string[] {
+      const preview = previews.get(id), snapshot = preview?.snapshots.get(revision)
+      return preview && snapshot ? [...snapshot.absent].map(path => new URL(resourceUrl(preview, revision, path)).pathname) : []
+    },
+    pathForUrl(value: string): string | null {
+      const parsed = parseFilePreviewUrl(value), preview = parsed && previews.get(parsed.id)
+      return parsed && preview?.snapshots.has(parsed.revision) && authorized(preview) ? resourcePath(preview, parsed) : null
+    },
     sessionId(id: string): string | null { return previews.get(id)?.appSessionId ?? null },
     descriptor(id: string, revision: number): FilePreviewDescriptor | null {
       const preview = previews.get(id), snapshot = preview?.snapshots.get(revision)
@@ -341,13 +374,15 @@ export function createFilePreviewService(deps: {
       const snapshot = parsed && preview?.snapshots.get(parsed.revision)
       if (!parsed || !preview || !snapshot || !['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 404 })
       if (!authorized(preview)) { release(preview.id); return new Response(null, { status: 403 }) }
+      const path = resourcePath(preview, parsed)
+      if (!path) return new Response(null, { status: 403 })
       // The snapshot survives deletion, but new assets still require current policy.
-      let bytes = snapshot.files.get(parsed.path)
+      let bytes = snapshot.files.get(path)
       if (!bytes) {
         if (snapshot.files.size >= MAX_ASSETS) { snapshot.failed = true; return new Response(null, { status: 413 }) }
-        const resolved = servableAsset(preview.path, parsed.path) ? await resolve(preview, parsed.path) : null
-        if (!resolved || resolved.path !== parsed.path) { await noteAbsent(preview, snapshot, parsed.path); return new Response(null, { status: 403 }) }
-        const key = `${preview.id}:${snapshot.revision}:${parsed.path}`
+        const resolved = servableAsset(preview.path, path) ? await resolve(preview, path) : null
+        if (!resolved || resolved.path !== path) { await noteAbsent(preview, snapshot, path); return new Response(null, { status: 403 }) }
+        const key = `${preview.id}:${snapshot.revision}:${path}`
         let pending = assetReads.get(key)
         if (!pending) {
           if (assetReads.size >= MAX_PENDING_ASSET_READS) return new Response(null, { status: 429 })
@@ -355,11 +390,11 @@ export function createFilePreviewService(deps: {
             try {
               const data = await read(resolved.path)
               if (preview.released || !authorized(preview) || preview.snapshots.get(snapshot.revision) !== snapshot || cachedBytes + data.length > MAX_CACHE_BYTES) return null
-              const existing = snapshot.files.get(parsed.path)
+              const existing = snapshot.files.get(path)
               if (existing) return existing
-              snapshot.files.set(parsed.path, data)
+              snapshot.files.set(path, data)
               cachedBytes += data.length
-              track(preview, parsed.path)
+              track(preview, path)
               return data
             } catch { return null }
             finally { assetReads.delete(key) }
@@ -371,7 +406,7 @@ export function createFilePreviewService(deps: {
       }
       return new Response(request.method === 'HEAD' ? null : new Uint8Array(bytes), {
         headers: {
-          'Content-Type': MIME[extname(parsed.path).toLowerCase()] ?? 'application/octet-stream',
+          'Content-Type': MIME[extname(path).toLowerCase()] ?? 'application/octet-stream',
           'Content-Security-Policy': PAGE_CSP,
           'Cache-Control': 'no-store',
           'X-Content-Type-Options': 'nosniff',

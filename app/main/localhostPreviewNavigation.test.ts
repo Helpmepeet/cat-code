@@ -1,7 +1,11 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createLocalhostPreviewService, localhostPreviewInnerFrameAllowed } from './localhostPreview.js'
-import { parseFilePreviewUrl } from './filePreview.js'
+import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 
 // Execute the registered handlers without importing main.ts and starting Electron.
 const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
@@ -24,7 +28,7 @@ type Frame = {
 }
 type Navigation = { frame: Frame; url: string; initiator: Frame; isMainFrame: boolean; preventDefault: () => void }
 type Request = { frame: Frame; url: string; resourceType: string; webContentsId: number; responseHeaders?: Record<string, string[]> }
-function fixture() {
+function fixture(filePreviews: Pick<ReturnType<typeof createFilePreviewService>, 'has' | 'pathForUrl'> = { has: () => false, pathForUrl: () => null }) {
   const callbacks = new Map<string, (event: Navigation, url?: string) => void>()
   let beforeRequest!: (details: Request, callback: (result: { cancel?: boolean }) => void) => void
   let headersReceived!: (details: Request, callback: (result: { responseHeaders: Record<string, string[]> }) => void) => void
@@ -56,7 +60,7 @@ function fixture() {
   } }
   const context = {
     window, mainWindow: window, localhostPreviews, localFrameBindings: bindings,
-    localhostPreviewInnerFrameAllowed, parseFilePreviewUrl, filePreviews: { has: () => false },
+    localhostPreviewInnerFrameAllowed, parseFilePreviewUrl, filePreviews,
     FILE_PREVIEW_SCHEME: 'cat-preview', CH_FILE_PREVIEW_EVENT: 'preview-event', IS_DEV: true,
     VITE_REACT_PREAMBLE_CSP_HASH: 'hash',
     session: { defaultSession: { webRequest: {
@@ -151,6 +155,37 @@ test('other origins, own dev origin, and non-HTTP inner frames stay blocked and 
   // An unbound sibling cannot inherit another preview's admission.
   expect(f.request(f.frame('about:blank', f.main), 'http://localhost:6006/')).toEqual({ cancel: true })
   expect(f.request(f.outer, 'http://localhost:5173/redirected')).toEqual({ cancel: true })
+})
+
+test('file preview root-relative links pass request guards and navigate to workspace files', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cat-preview-navigation-')))
+  const service = createFilePreviewService({ sessions: () => [sessionDescriptorFixture({ appSessionId: 's1', cwd: root })], publish: () => {} })
+  try {
+    await mkdir(join(root, 'pages'))
+    await writeFile(join(root, 'pages/report.html'), '<a href="/next%20%23.html">Next</a>')
+    await writeFile(join(root, 'next #.html'), '<h1>Next</h1>')
+    const preview = await service.prepare({ appSessionId: 's1', path: 'pages/report.html' })
+    expect(preview).not.toBeNull()
+    const f = fixture(service)
+    const file = f.frame(preview!.url, f.main)
+    const target = new URL('/next%20%23.html', preview!.url).href
+    expect(f.request(file, new URL('/assets/site.css', preview!.url).href, 'stylesheet')).toEqual({})
+    expect(f.headers(file, preview!.url)['Content-Security-Policy']).toEqual(["default-src 'self'; frame-ancestors 'none'; script-src 'self'"])
+    expect(f.navigate(file, target)).toBe(true)
+    expect(f.sent).toEqual([{ id: preview!.id, kind: 'navigate', path: join(root, 'next #.html') }])
+    const next = await service.prepare({ appSessionId: 's1', path: join(root, 'next #.html') })
+    expect(next?.path).toBe(join(root, 'next #.html'))
+    expect(f.navigate(file, new URL('/%2e%2e%2fsecret.html', preview!.url).href)).toBe(true)
+    expect(f.sent).toHaveLength(1)
+    expect(f.navigate(file, next!.url, false, f.main)).toBe(false)
+    service.release(preview!.id)
+    expect(f.request(file, target)).toEqual({ cancel: true })
+    expect(f.navigate(file, target)).toBe(true)
+    expect(f.sent).toHaveLength(1)
+  } finally {
+    service.dispose()
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test('inner frames get the outer preview header treatment, while the app keeps its own CSP', () => {

@@ -1721,7 +1721,7 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
       if (${descriptor.kind === 'svg'} && document.getElementsByTagNameNS('*', 'parsererror').length) return false;
       const images = document.images;
       if (images.length > 2048) return false;
-      const absent = new Set(${JSON.stringify(filePreviews.absent(id, revision))});
+      const absent = new Set(${JSON.stringify(filePreviews.absentPaths(id, revision))});
       const local = new Map();
       for (let index = 0; index < images.length; index++) {
         const image = images[index];
@@ -1730,7 +1730,7 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
         let url;
         try { url = new URL(source, document.baseURI); } catch { continue; }
         if (url.protocol === 'http:' || url.protocol === 'https:') continue;
-        try { if (absent.has(decodeURIComponent(url.pathname).replace(/^[/]r[0-9]+/, ''))) continue; } catch {}
+        if (absent.has(url.pathname)) continue;
         local.set(url.href, image);
         if (local.size > 128) return false;
       }
@@ -2085,7 +2085,8 @@ function createWindow(): void {
     if (origin && filePreviews.has(origin.id)) {
       if (target && filePreviews.has(target.id) && event.initiator === window.webContents.mainFrame) return
       event.preventDefault()
-      if (target?.id === origin.id && filePreviews.has(target.id)) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, { id: origin.id, kind: 'navigate', path: target.path })
+      const path = target?.id === origin.id ? filePreviews.pathForUrl(event.url) : null
+      if (path) window.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, { id: origin.id, kind: 'navigate', path })
       return
     }
     if (!target || !filePreviews.has(target.id)) event.preventDefault()

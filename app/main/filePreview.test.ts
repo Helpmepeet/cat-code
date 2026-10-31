@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, rm, symlink, realpath, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createFilePreviewService } from './filePreview.js'
+import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import type { FilePreviewEvent } from '../shared/filePreview.js'
 
@@ -44,6 +44,83 @@ test('serves immutable contained files while refusing forged and escaping resour
     await writeFile(join(f.root, 'REPORT.HTML'), '<h1>Second</h1>')
     expect(await (await f.service.respond(new Request(f.preview.url))).text()).toContain('First')
   } finally { await f.cleanup() }
+})
+
+test('root-relative assets resolve from the workspace root, including nested CSS and module dependencies', async () => {
+  const f = await fixture()
+  try {
+    await mkdir(join(f.root, 'pages'))
+    await mkdir(join(f.root, 'assets/nested'))
+    await writeFile(join(f.root, 'pages/report.html'), '<link rel="stylesheet" href="/assets/site.css"><script type="module" src="/assets/app.js"></script>')
+    await writeFile(join(f.root, 'assets/app.js'), 'import "./nested/helper.js"')
+    await writeFile(join(f.root, 'assets/nested/helper.js'), 'export const ready = true')
+    await writeFile(join(f.root, 'assets/nested/detail.css'), 'body {color:blue}')
+    const page = await f.service.prepare({ appSessionId: 's1', path: 'pages/report.html' })
+    expect(page).not.toBeNull()
+    const css = new URL('/assets/site.css?theme=light', page!.url)
+    expect(await (await f.service.respond(new Request(css))).text()).toBe('body {color:red}')
+    expect(await (await f.service.respond(new Request(new URL('nested/detail.css', css)))).text()).toBe('body {color:blue}')
+    const script = new URL('/assets/app.js', page!.url)
+    expect(await (await f.service.respond(new Request(script))).text()).toBe('import "./nested/helper.js"')
+    expect(await (await f.service.respond(new Request(new URL('./nested/helper.js', script)))).text()).toBe('export const ready = true')
+    expect(await (await f.service.respond(new Request(new URL('../assets/site.css', page!.url)))).text()).toBe('body {color:red}')
+  } finally { await f.cleanup() }
+})
+
+test('root-relative resources stay pinned to their revision until the replacement commits', async () => {
+  const f = await fixture()
+  try {
+    const asset = new URL('/assets/site.css', f.preview.url)
+    expect(await (await f.service.respond(new Request(asset))).text()).toBe('body {color:red}')
+    await writeFile(join(f.root, 'assets/site.css'), 'body {color:blue}')
+    const next = await f.service.refresh(f.preview.id)
+    expect(next).not.toBeNull()
+    const replacement = new URL('/assets/site.css', next!.url)
+    expect(replacement.host).not.toBe(asset.host)
+    expect(await (await f.service.respond(new Request(replacement))).text()).toBe('body {color:blue}')
+    expect(await (await f.service.respond(new Request(asset))).text()).toBe('body {color:red}')
+    expect(f.service.commit(next!.id, next!.revision)).toBe(true)
+    expect((await f.service.respond(new Request(asset))).status).toBe(404)
+    expect(await (await f.service.respond(new Request(replacement))).text()).toBe('body {color:blue}')
+  } finally { await f.cleanup() }
+})
+
+test('workspace-root URLs preserve encoded names and refuse traversal, symlinks, hidden scripts, and private data', async () => {
+  const f = await fixture()
+  try {
+    await mkdir(join(f.root, 'pages'))
+    await mkdir(join(f.root, '.private'))
+    await writeFile(join(f.root, 'pages/diagram #%.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><image href="/assets/icon%20%23.png"/></svg>')
+    await writeFile(join(f.root, 'assets/icon #.png'), 'png')
+    await writeFile(join(f.root, '.private/secret.js'), 'secret')
+    await writeFile(join(f.root, 'data.json'), '{"secret":true}')
+    await symlink(join(f.outside, 'secret.css'), join(f.root, 'assets/escape.css'))
+    const page = await f.service.prepare({ appSessionId: 's1', path: 'pages/diagram #%.svg' })
+    expect(page).not.toBeNull()
+    expect(await (await f.service.respond(new Request(page!.url))).text()).toContain('<svg')
+    const image = new URL('/assets/icon%20%23.png', page!.url)
+    expect(await (await f.service.respond(new Request(image))).text()).toBe('png')
+    expect(f.service.pathForUrl(image.href)).toBe(join(f.root, 'assets/icon #.png'))
+    for (const path of ['/assets/escape.css', '/.private/secret.js', '/data.json', '/%2e%2e%2fsecret.css']) {
+      expect((await f.service.respond(new Request(new URL(path, page!.url)))).status).toBe(403)
+    }
+    expect(f.service.pathForUrl(new URL('/%2e%2e%2fsecret.css', page!.url).href)).toBeNull()
+    f.revoke()
+    expect(f.service.pathForUrl(image.href)).toBeNull()
+    expect((await f.service.respond(new Request(image))).status).toBe(403)
+  } finally { await f.cleanup() }
+})
+
+test('preview URL parsing retains localhost snapshot paths and rejects malformed revision authorities', () => {
+  const id = 'a'.repeat(48)
+  expect(parseFilePreviewUrl(`cat-preview://${id}/r2/index.html`)).toEqual({ id, revision: 2, path: '/index.html', workspaceRelative: false })
+  expect(parseFilePreviewUrl(`cat-preview://r2.${id}/pages/report%20%23.html`)).toEqual({ id, revision: 2, path: '/pages/report #.html', workspaceRelative: true })
+  for (const url of [
+    `cat-preview://r0.${id}/index.html`, `cat-preview://r01.${id}/index.html`,
+    `cat-preview://r9007199254740992.${id}/index.html`, `cat-preview://r1.${id}:80/index.html`,
+    `cat-preview://user@r1.${id}/index.html`, `cat-preview://r1.${id}/%00.css`,
+    `cat-preview://r1.${id}/%zz.css`, `cat-preview://r1.${id}.other/index.html`,
+  ]) expect(parseFilePreviewUrl(url)).toBeNull()
 })
 
 test('page scripts read web assets but never credentials beside the page', async () => {
@@ -111,20 +188,23 @@ test('previewed Markdown loads from its snapshot but cannot read another Markdow
   } finally { await f.cleanup() }
 })
 
-test('a missing asset still renders, and its arrival refreshes the page', async () => {
+test.each([
+  ['assets/chart.png', 'assets/chart.png'],
+  ['/assets/chart%20%23.png', 'assets/chart #.png'],
+])('a missing asset %s still renders, and its arrival refreshes the page', async (urlPath, diskPath) => {
   const f = await fixture()
   try {
-    const chart = new URL('assets/chart.png', f.preview.url)
+    const chart = new URL(urlPath, f.preview.url)
     expect((await f.service.respond(new Request(chart))).status).toBe(403)
-    expect(f.service.absent(f.preview.id, f.preview.revision)).toEqual([join(f.root, 'assets/chart.png')])
+    expect(f.service.absentPaths(f.preview.id, f.preview.revision)).toEqual([chart.pathname])
     expect(f.service.commit(f.preview.id, f.preview.revision)).toBe(true)
     f.events.length = 0
-    await writeFile(join(f.root, 'assets/chart.png'), 'png')
+    await writeFile(join(f.root, diskPath), 'png')
     const deadline = Date.now() + 4000
     while (Date.now() < deadline && !f.events.some(event => event.kind === 'updated')) await new Promise(resolve => setTimeout(resolve, 50))
     const updated = f.events.find(event => event.kind === 'updated')
     if (updated?.kind !== 'updated') throw new Error('Expected a refresh when the asset arrived')
-    const next = new URL('assets/chart.png', updated.descriptor.url)
+    const next = new URL(urlPath, updated.descriptor.url)
     expect(await (await f.service.respond(new Request(next))).text()).toBe('png')
     expect(f.events.some(event => event.kind === 'watch-error')).toBe(false)
   } finally { await f.cleanup() }
