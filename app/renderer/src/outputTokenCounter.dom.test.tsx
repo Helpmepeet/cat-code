@@ -105,7 +105,7 @@ test('real App batches show tool arguments immediately, replace estimates with u
   ])
   expect(estimated(tree.container)).toBeNull()
   await elapsed(31_000)
-  expect(estimated(tree.container)?.textContent).toContain('↓ ~10k tokens')
+  expect(estimated(tree.container)?.textContent).toBe(' · ↓ 10k tokens')
   expect(estimated(tree.container)?.getAttribute('aria-label')).toContain('Excludes separate agents')
   await send([
     stream({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 12_345 } }),

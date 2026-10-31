@@ -69,7 +69,7 @@ test('agent finishes fold their result independently in both transcript modes an
     const head = tree.container.querySelector<HTMLButtonElement>('.task-notification-head')
     expect(head).not.toBeNull()
     expect(head?.getAttribute('aria-expanded')).toBe('false')
-    expect(head?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Ada Lovelace completed ~38.4k tokens · 9 tools · 1m 12s')
+    expect(head?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Ada Lovelace completed 38.4k tokens · 9 tools · 1m 12s')
     expect(head?.textContent).not.toContain('Agent ')
     expect(head?.querySelector('svg[width="13"]')).not.toBeNull()
     expect(tree.container.textContent).not.toContain(notification.result)

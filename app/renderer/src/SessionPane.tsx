@@ -2782,7 +2782,7 @@ function ActivityIndicator({
         {showTokens ? (
           <span aria-label={`${outputTokens.quality === 'estimated' ? 'Estimated' : 'Reported'} output: ${fmtTok(outputTokens.tokens)} tokens. ${tokenDescription}`}>
             {' · ↓ '}
-            {outputTokens.quality === 'estimated' ? '~' : ''}{fmtTok(outputTokens.tokens)} tokens
+            {fmtTok(outputTokens.tokens)} tokens
           </span>
         ) : null}
       </span>

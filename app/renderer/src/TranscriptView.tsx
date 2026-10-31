@@ -6871,11 +6871,11 @@ function formatDuration(ms: number): string {
 function agentCompletionStats(usage: AgentCompletionProjection['usage']): string[] {
   return usage
     ? [
-        // Dropped rather than shown as `~0 tokens`: an absent count persists as
+        // Dropped rather than shown as `0 tokens`: an absent count persists as
         // a literal zero engine-side (see `agentProgressBadge`), so zero here
         // means "no usage was reported", not "this worker used none".
         ...(usage.totalTokens > 0
-          ? [`~${compactCount(usage.totalTokens)} tokens`]
+          ? [`${compactCount(usage.totalTokens)} tokens`]
           : []),
         `${usage.toolUses} ${usage.toolUses === 1 ? 'tool' : 'tools'}`,
         formatDuration(usage.durationMs),

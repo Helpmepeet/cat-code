@@ -1162,7 +1162,7 @@ test('a resumed agent is an independent agent card named by the follow-up prompt
   expect(html).toContain('measure the card height')
   expect(html).toContain('resumed')
   expect(html).toContain('The card is 84 pixels high.')
-  expect(html).toContain('~9.5k tokens')
+  expect(html).toContain('9.5k tokens')
   expect(html).not.toContain('resume @Ramanujan')
   expect(html).not.toContain(RESUME_ACK)
   expect(html).not.toContain('"success"')
@@ -2033,7 +2033,7 @@ test('a backgrounded agent never claims to be "starting" for its whole run', () 
   expect(html).not.toContain('starting')
 })
 
-test('a resumed agent keeps settled usage in its result body, not its header', () => {
+test('a resumed agent includes settled usage in its result body without an estimate prefix', () => {
   const html = render(
     {
       ...agentRow('owner', { agentId: 'agent-1', prompt: 'investigate' }, 'success', [], {
@@ -2050,7 +2050,8 @@ test('a resumed agent keeps settled usage in its result body, not its header', (
       toolName: 'ResumeAgent',
     },
   )
-  expect(html.match(/~12\.0k tokens/g)).toHaveLength(1)
+  expect(html.match(/12\.0k tokens · 0 tools · 1s/g)).toHaveLength(1)
+  expect(html).not.toContain('~12.0k tokens')
   expect(html).toContain('0 tools')
 })
 
