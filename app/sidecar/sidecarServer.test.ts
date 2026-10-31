@@ -6546,7 +6546,7 @@ test('host deletion notice reconciles a live sidecar pool without rerunning dele
       },
     }),
   )
-  await flush()
+  await waitFor(() => cacheInvalidations === 1)
 
   expect(deleted).toEqual([])
   expect(cacheInvalidations).toBe(1)

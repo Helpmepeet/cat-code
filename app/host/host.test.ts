@@ -366,7 +366,7 @@ function writeTranscript(storageDir: string, engineSessionId: string): void {
  * after it pass for the OPPOSITE reason, because the state it was waiting for
  * never arriving usually satisfies the same "not yet / still false" check.
  */
-async function settle(predicate: () => boolean, tries = 100): Promise<void> {
+async function settle(predicate: () => boolean, tries = 1500): Promise<void> {
   for (let i = 0; i < tries; i++) {
     if (predicate()) return
     await new Promise(resolve => setTimeout(resolve, 2))
