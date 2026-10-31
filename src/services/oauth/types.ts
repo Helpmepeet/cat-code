@@ -40,6 +40,8 @@ export type OAuthTokenExchangeResponse = {
 }
 
 export type OAuthTokens = {
+  /** Account identity verified by login, a vault entry, or the token response. */
+  accountUuid?: string
   accessToken: string
   refreshToken: string | null
   expiresAt: number | null

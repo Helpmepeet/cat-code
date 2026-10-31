@@ -32,6 +32,35 @@ async function waitFor(path: string, pid: number): Promise<void> {
 }
 
 describe('secure storage cross-process updates', () => {
+  test('a stale refresh keeps its account identity with its complete credential pair', () => {
+    let stored = {
+      claudeAiOauth: { accountUuid: 'a', accessToken: 'access-a', refreshToken: 'refresh-a' },
+      unrelated: 'initial',
+    }
+    const storage = createCrossProcessSafeStorage({
+      name: 'synthetic',
+      read: () => structuredClone(stored),
+      readAsync: async () => structuredClone(stored),
+      readFresh: () => ({ status: 'present', data: structuredClone(stored) }),
+      update: data => { stored = structuredClone(data); return { success: true } },
+      delete: () => true,
+    })
+    const snapshot = storage.read()!
+    stored = {
+      claudeAiOauth: { accountUuid: 'b', accessToken: 'access-b', refreshToken: 'refresh-b' },
+      unrelated: 'concurrent',
+    }
+    snapshot.claudeAiOauth = {
+      accountUuid: 'a', accessToken: 'refreshed-access-a', refreshToken: 'refreshed-refresh-a',
+    }
+
+    expect(storage.update(snapshot).success).toBe(true)
+    expect(stored).toEqual({
+      claudeAiOauth: { accountUuid: 'a', accessToken: 'refreshed-access-a', refreshToken: 'refreshed-refresh-a' },
+      unrelated: 'concurrent',
+    })
+  })
+
   test('refuses to publish when the fresh store read is unavailable', () => {
     const writes: Record<string, unknown>[] = []
     const storage = createCrossProcessSafeStorage({

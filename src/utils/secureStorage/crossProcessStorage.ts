@@ -46,7 +46,9 @@ function mergeChanges(
     const nextValue = next[key]
     if (equal(baseValue, nextValue)) continue
     const freshValue = merged[key]
-    if (isRecord(nextValue)) {
+    // A token pair and its identity are one credential. Field-wise merging
+    // can retain a concurrent account's identity beside another account's tokens.
+    if (isRecord(nextValue) && key !== 'claudeAiOauth') {
       merged[key] = mergeChanges(
         isRecord(baseValue) ? baseValue : {},
         nextValue,

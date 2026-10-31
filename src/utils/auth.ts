@@ -1243,6 +1243,7 @@ export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
     const existingOauth = storageData.claudeAiOauth
 
     storageData.claudeAiOauth = {
+      accountUuid: tokens.profile?.account.uuid ?? tokens.tokenAccount?.uuid ?? tokens.accountUuid,
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresAt: tokens.expiresAt,
@@ -1267,7 +1268,8 @@ export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
       const saved = secureStorage.read()?.claudeAiOauth
       if (
         saved?.accessToken !== tokens.accessToken ||
-        saved?.refreshToken !== tokens.refreshToken
+        saved?.refreshToken !== tokens.refreshToken ||
+        saved?.accountUuid !== storageData.claudeAiOauth.accountUuid
       ) {
         return { success: false, warning: 'Saved OAuth tokens could not be read back' }
       }
@@ -1320,13 +1322,12 @@ export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
     }
   }
 
-  // When a Claude multi-account pool is available, read from the pool
-  // instead of the keychain. This remains true after internal failover
-  // leaves a single healthy replacement account in the initialized pool.
+  // The initialized pool owns credentials, including a single vault account.
   if (shouldUseClaudePoolTokenSource()) {
     const acct = getActiveClaudeAccount()
     if (acct) {
       return {
+        accountUuid: acct.accountUuid,
         accessToken: acct.accessToken,
         refreshToken: acct.refreshToken,
         expiresAt: acct.expiresAt,
@@ -1345,6 +1346,8 @@ export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
     if (!oauthData?.accessToken) {
       return null
     }
+    if (oauthData.accountUuid !== undefined &&
+        oauthData.accountUuid !== getGlobalConfig().oauthAccount?.accountUuid) return null
 
     return oauthData
   } catch (error) {
@@ -1769,12 +1772,12 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
     return getClaudeAIOAuthTokens()
   }
 
-  // When a Claude multi-account pool is available, read from the pool
-  // (same as sync version — pool tokens are in-memory, no keychain hit)
+  // The initialized pool owns credentials, as in the synchronous getter.
   if (shouldUseClaudePoolTokenSource()) {
     const acct = getActiveClaudeAccount()
     if (acct) {
       return {
+        accountUuid: acct.accountUuid,
         accessToken: acct.accessToken,
         refreshToken: acct.refreshToken,
         expiresAt: acct.expiresAt,
@@ -1792,6 +1795,8 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
     if (!oauthData?.accessToken) {
       return null
     }
+    if (oauthData.accountUuid !== undefined &&
+        oauthData.accountUuid !== getGlobalConfig().oauthAccount?.accountUuid) return null
     return oauthData
   } catch (error) {
     logError(error)
@@ -1919,7 +1924,7 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
         ? undefined
         : lockedTokens.scopes,
     })
-    saveOAuthTokensIfNeeded(refreshedTokens)
+    saveOAuthTokensIfNeeded({ ...refreshedTokens, accountUuid: lockedTokens.accountUuid })
 
     // Write refreshed tokens back to the Claude pool + vault so the
     // in-memory pool doesn't serve stale tokens on the next read.

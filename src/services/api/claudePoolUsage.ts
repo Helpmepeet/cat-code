@@ -8,6 +8,7 @@
  * kept in a private on-disk cache. The cache also bounds how often a 60 s
  * caller polls Anthropic per account.
  */
+import { createHash } from 'crypto'
 import { mkdirSync, readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { z } from 'zod/v4'
@@ -40,6 +41,7 @@ const windowSchema = z
   .strict()
 const entrySchema = z
   .object({
+    credentialKey: z.string().regex(/^[a-f0-9]{64}$/),
     fetchedAt: z.number().finite().min(0),
     fiveHour: windowSchema.nullable(),
     weekly: windowSchema.nullable(),
@@ -47,13 +49,14 @@ const entrySchema = z
   .strict()
 const cacheSchema = z
   .object({
-    version: z.literal(1),
+    version: z.literal(2),
     accounts: z.record(z.string().min(1).max(256), entrySchema),
   })
   .strict()
 // Declared rather than inferred: without root strict mode zod infers every
 // field optional, though the schema requires each one.
 type CacheEntry = {
+  credentialKey: string
   fetchedAt: number
   fiveHour: ClaudeUsageWindow | null
   weekly: ClaudeUsageWindow | null
@@ -81,7 +84,7 @@ async function writeCache(
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 })
   await writeFileAtomicDurable(
     file,
-    JSON.stringify({ version: 1, accounts }),
+    JSON.stringify({ version: 2, accounts }),
     { mode: 0o600 },
   )
 }
@@ -141,17 +144,24 @@ export async function fetchClaudePoolUsage(
   const cacheFile = options.cacheFile ?? defaultCacheFile()
   const fetchUsage = options.fetchUsage ?? fetchUtilizationForToken
   const cached = readCache(cacheFile)
+  const credentialKeys = new Map(accounts.map(account => [
+    account.accountUuid,
+    createHash('sha256').update(JSON.stringify([account.accountUuid, account.accessToken])).digest('hex'),
+  ]))
   const next: Record<string, CacheEntry> = {}
   let changed = false
 
   await Promise.all(
     accounts.map(async account => {
       let entry = cached[account.accountUuid]
+      const credentialKey = credentialKeys.get(account.accountUuid)!
+      if (entry?.credentialKey !== credentialKey) entry = undefined
       const stale = !entry || now - entry.fetchedAt >= CLAUDE_USAGE_FRESH_MS
       if (!options.cachedOnly && stale && canRead(account, now)) {
         try {
           const data = await fetchUsage(account.accessToken)
           entry = {
+            credentialKey,
             fetchedAt: now,
             fiveHour: toWindow(data.five_hour),
             weekly: toWindow(data.seven_day),
@@ -205,6 +215,7 @@ export async function fetchClaudePoolUsage(
 
   const usage = new Map<string, ClaudeAccountUsage>()
   for (const [id, entry] of Object.entries(next)) {
+    if (entry.credentialKey !== credentialKeys.get(id)) continue
     const fiveHour = current(entry.fiveHour, now, entry.fetchedAt)
     const weekly = current(entry.weekly, now, entry.fetchedAt)
     if (fiveHour || weekly) usage.set(id, { fiveHour, weekly })

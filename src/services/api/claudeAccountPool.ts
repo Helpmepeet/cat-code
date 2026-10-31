@@ -87,53 +87,20 @@ const pool: ClaudePoolState = {
  * without ever writing a credential file. Mirrors the Codex precedent,
  * `loadPoolForObservation` (`codexAccountPool.ts:171-181`).
  *
- * A config-only account (keychain/config uuid absent from the vault) is
- * still merged into the in-memory pool here — same accounts, same
- * `activeIndex`, as `initClaudeAccountPool` would produce — just without the
- * `saveClaudeTokenToVault` write and without stamping `vaultFilePath`. A
- * merged account that lacks `vaultFilePath` is exactly the signal
- * `initClaudeAccountPool` uses below to know it still owes that account a
- * vault file.
- *
- * A config-only account is indistinguishable, from data alone, between the
- * legacy pre-vault single-account case this exists to migrate, and a
- * lingering keychain/`config.oauthAccount` remnant of a removed vault
- * file. Explicit deletion through `removeClaudeAccount` clears matching
- * fallback state before removing the vault file. Both
- * initClaudeAccountPool and this observation path show it either way; the
- * guarantee this extraction adds is narrower and disk-only: the observation
- * path never re-creates the vault file, so a deletion is never undone on
- * disk by an unattended background read.
- *
- * Disk reads only — never writes a file. `initClaudeAccountPool` calls this
- * first and then performs its own migration write, so this refactor changes
- * no `initClaudeAccountPool` behavior.
+ * Each vault account owns its credentials. Keychain tokens
+ * and config identity are written separately and can describe different
+ * accounts, so their combination must never overwrite a vault credential.
+ * A config-only account may supplement the vault only with a bound identity.
+ * An unbound legacy account is accepted only before the first vault migration;
+ * `initClaudeAccountPool` performs that write separately.
  */
 export function loadClaudePoolForObservation(): void {
   const vaultAccounts = loadVaultAccounts()
-  const configAccount = loadConfigAccount()
-
-  const byUuid = new Map<string, ClaudePoolAccount>()
-  for (const acct of vaultAccounts) {
-    byUuid.set(acct.accountUuid, acct)
+  const configAccount = loadConfigAccount(vaultAccounts.length > 0)
+  pool.accounts = vaultAccounts
+  if (configAccount && !vaultAccounts.some(account => account.accountUuid === configAccount.accountUuid)) {
+    pool.accounts.push(configAccount)
   }
-
-  if (configAccount && !byUuid.has(configAccount.accountUuid)) {
-    // Merge in memory only — no vault write, no vaultFilePath. See doc
-    // comment above.
-    byUuid.set(configAccount.accountUuid, configAccount)
-  } else if (configAccount && byUuid.has(configAccount.accountUuid)) {
-    // Config has fresher tokens — update the vault entry in memory only.
-    const existing = byUuid.get(configAccount.accountUuid)!
-    existing.accessToken = configAccount.accessToken
-    existing.refreshToken = configAccount.refreshToken
-    existing.expiresAt = configAccount.expiresAt
-    existing.scopes = configAccount.scopes
-    existing.subscriptionType = configAccount.subscriptionType
-    existing.rateLimitTier = configAccount.rateLimitTier
-  }
-
-  pool.accounts = Array.from(byUuid.values())
   restoreActiveClaudeAccountPointer()
   pool.initialized = true
 
@@ -203,14 +170,12 @@ export function isClaudePoolActive(): boolean {
 }
 
 /**
- * True when token getters should prefer the in-memory Claude pool over
- * keychain/config fallback. A multi-account pool remains the request-local token
- * source after internal failover even if only one healthy replacement remains.
+ * An initialized vault-backed pool owns credentials even with one account.
+ * Keychain/config is only the legacy fallback before vault migration.
  */
 export function shouldUseClaudePoolTokenSource(): boolean {
   return (
     pool.initialized &&
-    pool.accounts.length > 1 &&
     pool.accounts.some((a) => a.status === 'healthy')
   )
 }
@@ -483,6 +448,7 @@ export function syncClaudeAccountToStorage(): void {
     const secureStorage = getSecureStorage()
     const storageData = secureStorage.read() || {}
     storageData.claudeAiOauth = {
+      accountUuid: acct.accountUuid,
       accessToken: acct.accessToken,
       refreshToken: acct.refreshToken,
       expiresAt: acct.expiresAt,
@@ -490,12 +456,20 @@ export function syncClaudeAccountToStorage(): void {
       subscriptionType: acct.subscriptionType ?? null,
       rateLimitTier: acct.rateLimitTier ?? null,
     }
-    secureStorage.update(storageData)
+    const result = secureStorage.update(storageData)
+    if (!result.success) throw new Error('Credential write failed')
+    clearOAuthTokenCache()
+    const saved = secureStorage.read()?.claudeAiOauth
+    if (saved?.accountUuid !== acct.accountUuid ||
+        saved.accessToken !== acct.accessToken || saved.refreshToken !== acct.refreshToken) {
+      throw new Error('Credential read-back did not match')
+    }
   } catch (err) {
     logForDebugging(
       `[claude-pool] Failed to sync tokens to keychain: ${err instanceof Error ? err.message : String(err)}`,
       { level: 'warn' },
     )
+    throw new Error('Failed to save Claude account credentials. Try switching accounts again.')
   }
 
   // Update config: oauthAccount profile metadata + active account pointer.
@@ -815,7 +789,7 @@ let configAccountOverrideForTest: { active: boolean; value: ClaudePoolAccount | 
   value: null,
 }
 
-function loadConfigAccount(): ClaudePoolAccount | null {
+function loadConfigAccount(requireBoundIdentity = false): ClaudePoolAccount | null {
   if (configAccountOverrideForTest.active) return configAccountOverrideForTest.value
   try {
     const secureStorage = getSecureStorage()
@@ -826,6 +800,8 @@ function loadConfigAccount(): ClaudePoolAccount | null {
     const config = getGlobalConfig()
     const profile = config.oauthAccount
     if (!profile?.accountUuid || !profile?.emailAddress) return null
+    if (requireBoundIdentity && !oauthData.accountUuid) return null
+    if (oauthData.accountUuid !== undefined && oauthData.accountUuid !== profile.accountUuid) return null
 
     return {
       accountUuid: profile.accountUuid,

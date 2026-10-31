@@ -317,6 +317,28 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
     expect(getClaudePoolStatus().accounts[0]?.status).toBe('healthy')
   })
 
+  test('keeps each vault credential when the config identity is paired with another account token', () => {
+    const apple = buildClaudeAccount({ accountUuid: 'apple' })
+    const gmail = buildClaudeAccount({ accountUuid: 'gmail' })
+    writeVaultAccountFile(apple)
+    writeVaultAccountFile(gmail)
+    setClaudeConfigAccountForTest({
+      active: true,
+      value: { ...apple, accessToken: gmail.accessToken, refreshToken: gmail.refreshToken },
+    })
+    saveGlobalConfig(current => ({ ...current, activeClaudeAccountUuid: apple.accountUuid }))
+
+    loadClaudePoolForObservation()
+
+    const { accounts, activeIndex } = getClaudePoolStatus()
+    expect(accounts[activeIndex]?.accountUuid).toBe(apple.accountUuid)
+    expect(accounts.map(({ accountUuid, accessToken, refreshToken }) => ({
+      accountUuid, accessToken, refreshToken,
+    }))).toEqual([apple, gmail].map(({ accountUuid, accessToken, refreshToken }) => ({
+      accountUuid, accessToken, refreshToken,
+    })))
+  })
+
   test('loadClaudePoolForObservation merges a config-only account into memory without writing to the vault', () => {
     const configOnly = buildClaudeAccount({
       accountUuid: 'resurrection-uuid',

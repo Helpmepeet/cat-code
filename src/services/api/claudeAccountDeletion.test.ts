@@ -81,6 +81,7 @@ test('final deletion removes matching fallback and cannot resurrect through obse
 })
 
 test('replacement fallback tokens and profile survive deletion', () => {
+  data.claudeAiOauth.accountUuid = 'replacement'
   data.claudeAiOauth.accessToken = 'replacement-access'
   data.claudeAiOauth.refreshToken = 'replacement-refresh'
   settings.oauthAccount = { accountUuid: 'replacement', emailAddress: 'replacement@example.com' }

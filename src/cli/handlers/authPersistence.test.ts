@@ -115,8 +115,46 @@ describe('API key persistence', () => {
 describe('Claude account vault path', () => {
   test('does not invent a vault path on failed writes', () => {
     failVault()
+    storageSuccess = true
     pool.appendClaudeAccount({ ...tokens, ...tokens.tokenAccount, accountUuid: tokens.tokenAccount.uuid })
     expect(pool.getActiveClaudeAccount()?.vaultFilePath).toBeUndefined()
+  })
+})
+
+describe('Claude credential mirror', () => {
+  for (const failure of ['write', 'exception', 'stale read'] as const) {
+    test(`does not publish a new profile after a credential ${failure} failure`, () => {
+      storageSuccess = failure !== 'write'
+      storageThrows = failure === 'exception'
+      staleRead = failure === 'stale read'
+      stored = { claudeAiOauth: { ...tokens, accessToken: 'previous-access' } }
+      savedConfig.oauthAccount = { accountUuid: 'previous', emailAddress: 'previous@example.com' }
+      const previous = structuredClone(savedConfig)
+      pool.seedClaudeAccountPoolForTest({
+        activeAccountUuid: tokens.tokenAccount.uuid,
+        accounts: [{ ...tokens, accountUuid: tokens.tokenAccount.uuid, emailAddress: 'test@example.com', status: 'healthy' }],
+      })
+
+      expect(() => pool.syncClaudeAccountToStorage()).toThrow('Failed to save Claude account credentials')
+      expect(savedConfig).toEqual(previous)
+    })
+  }
+
+  test('saves the credential identity and refuses a config-only profile with a different binding', async () => {
+    storageSuccess = true
+    pool.seedClaudeAccountPoolForTest({
+      activeAccountUuid: tokens.tokenAccount.uuid,
+      accounts: [{ ...tokens, accountUuid: tokens.tokenAccount.uuid, emailAddress: 'test@example.com', status: 'healthy' }],
+    })
+    pool.syncClaudeAccountToStorage()
+    expect(stored?.claudeAiOauth?.accountUuid).toBe(tokens.tokenAccount.uuid)
+
+    savedConfig.oauthAccount = { accountUuid: 'different', emailAddress: 'different@example.com' }
+    pool.loadClaudePoolForObservation()
+    expect(pool.getClaudePoolStatus().accounts).toHaveLength(0)
+    auth.clearOAuthTokenCache()
+    expect(auth.getClaudeAIOAuthTokens()).toBeNull()
+    expect(await auth.getClaudeAIOAuthTokensAsync()).toBeNull()
   })
 })
 
@@ -126,13 +164,25 @@ describe('OAuth installation', () => {
     await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save OAuth tokens')
     expect(pool.getActiveClaudeAccount()).toBeNull()
   })
-  test('accepts effective plaintext fallback even when the vault fails', async () => {
-    failVault()
-    storageSuccess = true
-    await expect(installOAuthTokens(tokens)).resolves.toBeUndefined()
-    expect(stored?.claudeAiOauth?.accessToken).toBe(tokens.accessToken)
-    expect(stored?.claudeAiOauth?.refreshToken).toBe(tokens.refreshToken)
-  })
+  for (const hasVaultAccount of [false, true]) {
+    test(`accepts bound plaintext fallback when the vault fails (existing vault: ${hasVaultAccount})`, async () => {
+      storageSuccess = true
+      if (hasVaultAccount) {
+        pool.appendClaudeAccount({
+          ...tokens, accountUuid: 'previous', emailAddress: 'previous@example.com',
+          accessToken: 'previous-access', refreshToken: 'previous-refresh',
+        })
+      }
+      failVault()
+      await expect(installOAuthTokens(tokens)).resolves.toBeUndefined()
+      expect(stored?.claudeAiOauth?.accessToken).toBe(tokens.accessToken)
+      expect(stored?.claudeAiOauth?.refreshToken).toBe(tokens.refreshToken)
+      pool.setClaudeVaultPathForTest(directory)
+      pool.loadClaudePoolForObservation()
+      expect(pool.getActiveClaudeAccount()?.accountUuid).toBe(tokens.tokenAccount.uuid)
+      expect(pool.getActiveClaudeAccount()?.accessToken).toBe(tokens.accessToken)
+    })
+  }
   test('rejects when all durable writes fail', async () => {
     failVault()
     await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save OAuth tokens')

@@ -109,6 +109,24 @@ test('a fresh cached reading is reused instead of asking again', async () => {
   expect(refreshed.get('a')?.fiveHour?.percent).toBe(2)
 })
 
+test('a changed credential cannot reuse usage attributed to the old token', async () => {
+  await fetchClaudePoolUsage([account({ accountUuid: 'a', accessToken: 'wrong-account-token' })], {
+    now: NOW, cacheFile, fetchUsage: async () => reading(100, 20),
+  })
+  const accounts = [account({ accountUuid: 'a', accessToken: 'correct-account-token' })]
+  const cached = await fetchClaudePoolUsage(accounts, {
+    now: NOW + 1, cacheFile, cachedOnly: true,
+  })
+  expect(cached.has('a')).toBe(false)
+
+  const refreshed = await fetchClaudePoolUsage(accounts, {
+    now: NOW + 2, cacheFile, fetchUsage: async () => reading(21, 3),
+  })
+  expect(refreshed.get('a')?.fiveHour?.percent).toBe(21)
+  expect(refreshed.get('a')?.weekly?.percent).toBe(3)
+  expect(readFileSync(cacheFile, 'utf8')).not.toContain('account-token')
+})
+
 test('a window past its reset time is dropped rather than shown as current', async () => {
   const accounts = [account({ accountUuid: 'a', expiresAt: NOW + 10 * HOUR })]
   await fetchClaudePoolUsage(accounts, {
@@ -168,7 +186,7 @@ test('removed accounts leave the cache and a corrupt cache is ignored', async ()
     fetchUsage: async () => reading(5, 5),
   })
   expect(JSON.parse(readFileSync(join(dir, 'corrupt.json'), 'utf8'))).toEqual({
-    version: 1,
+    version: 2,
     accounts: {},
   })
 })
