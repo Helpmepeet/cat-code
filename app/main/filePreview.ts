@@ -25,9 +25,9 @@ const MIME: Record<string, string> = {
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
   '.webp': 'image/webp', '.gif': 'image/gif', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
-  '.json': 'application/json', '.woff': 'font/woff', '.woff2': 'font/woff2',
-  '.ttf': 'font/ttf', '.otf': 'font/otf', '.ico': 'image/x-icon', '.txt': 'text/plain; charset=utf-8',
-  '.avif': 'image/avif', '.bmp': 'image/bmp', '.csv': 'text/csv; charset=utf-8', '.wasm': 'application/wasm',
+  '.woff': 'font/woff', '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf', '.otf': 'font/otf', '.ico': 'image/x-icon',
+  '.avif': 'image/avif', '.bmp': 'image/bmp', '.wasm': 'application/wasm',
   '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
 }
 const PAGE_CSP = "default-src * data: blob: cat-preview:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob: cat-preview:; style-src * 'unsafe-inline' data: blob: cat-preview:; img-src * data: blob: cat-preview:; connect-src * data: blob: cat-preview:; frame-src 'none'; object-src 'none'; form-action 'none'; sandbox allow-scripts allow-same-origin"
@@ -91,10 +91,13 @@ async function stableRead(path: string): Promise<Buffer> {
 
 /**
  * Page scripts share this origin and may reach the network, so a same-origin read
- * must not reach credentials: web asset types only, and no hidden path except images.
+ * must not reach local data: web asset types only, and no hidden path except images.
+ * Markdown is served only as the preview's own snapshot, never as an asset.
  */
 function servableAsset(mainFile: string, path: string): boolean {
-  const type = MIME[extname(path).toLowerCase()]
+  const extension = extname(path).toLowerCase()
+  if (extension === '.md' || extension === '.markdown') return false
+  const type = MIME[extension]
   if (!type) return false
   return type.startsWith('image/') || !relative(dirname(mainFile), path).split(sep).some(part => part.startsWith('.') && part !== '..')
 }

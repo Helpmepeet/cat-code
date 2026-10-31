@@ -53,22 +53,61 @@ test('page scripts read web assets but never credentials beside the page', async
     await mkdir(join(f.root, '.aws'))
     await mkdir(join(f.root, '.github'))
     await mkdir(join(f.root, '.claude'))
-    for (const name of ['.env', '.git/config', '.aws/credentials.json', 'id_rsa', 'server.pem', 'app.ts']) await writeFile(join(f.root, name), 'secret')
+    const refusedFiles = ['.env', '.git/config', '.aws/credentials.json', 'id_rsa', 'server.pem', 'app.ts', 'data.json', 'notes.txt', 'export.csv', 'notes.md', 'notes.markdown', 'DATA.JSON', 'NOTES.TXT', 'EXPORT.CSV', 'NOTES.MD', 'NOTES.MARKDOWN']
+    for (const name of refusedFiles) await writeFile(join(f.root, name), 'secret')
     await writeFile(join(f.root, '.github/logo.png'), 'png')
-    await writeFile(join(f.root, 'data.json'), '{}')
-    for (const name of ['.env', '.git/config', '.aws/credentials.json', 'id_rsa', 'server.pem', 'app.ts']) {
+    for (const name of refusedFiles) {
       const refused = await f.service.respond(new Request(new URL(name, f.preview.url)))
       expect(refused.status).toBe(403)
       expect(await refused.text()).toBe('')
     }
     expect((await f.service.respond(new Request(new URL('.github/logo.png', f.preview.url)))).status).toBe(200)
-    expect((await f.service.respond(new Request(new URL('data.json', f.preview.url)))).status).toBe(200)
     expect(f.service.commit(f.preview.id, f.preview.revision)).toBe(true)
     await writeFile(join(f.root, '.claude/report.html'), '<h1>Inside a hidden folder</h1>')
     await writeFile(join(f.root, '.claude/style.css'), 'body {}')
+    await writeFile(join(f.root, '.claude/settings.local.json'), '{"secret":"credential"}')
     const hidden = await f.service.prepare({ appSessionId: 's1', path: '.claude/report.html' })
+    expect(hidden).not.toBeNull()
     expect((await f.service.respond(new Request(new URL('style.css', hidden!.url)))).status).toBe(200)
     expect((await f.service.respond(new Request(new URL('../.env', hidden!.url)))).status).toBe(403)
+    const settings = await f.service.respond(new Request(new URL('settings.local.json', hidden!.url)))
+    expect(settings.status).toBe(403)
+    expect(await settings.text()).toBe('')
+  } finally { await f.cleanup() }
+})
+
+test('a report cannot read non-hidden configuration data from a parent directory', async () => {
+  const f = await fixture()
+  try {
+    await mkdir(join(f.root, 'reports'))
+    await mkdir(join(f.root, 'config'))
+    await writeFile(join(f.root, 'reports/report.html'), '<h1>Report</h1>')
+    await writeFile(join(f.root, 'config/service-account.json'), '{"private_key":"secret"}')
+    const report = await f.service.prepare({ appSessionId: 's1', path: 'reports/report.html' })
+    expect(report).not.toBeNull()
+    const response = await f.service.respond(new Request(new URL('../config/service-account.json', report!.url)))
+    expect(response.status).toBe(403)
+    expect(await response.text()).toBe('')
+    expect(f.service.commit(report!.id, report!.revision)).toBe(true)
+  } finally { await f.cleanup() }
+})
+
+test('previewed Markdown loads from its snapshot but cannot read another Markdown file', async () => {
+  const f = await fixture()
+  try {
+    for (const name of ['notes.md', 'notes.markdown']) {
+      await writeFile(join(f.root, name), '# Snapshot notes')
+      const markdown = await f.service.prepare({ appSessionId: 's1', path: name })
+      expect(markdown?.kind).toBe('markdown')
+      expect(markdown?.markdown).toBe('# Snapshot notes')
+      await rm(join(f.root, name))
+      const response = await f.service.respond(new Request(markdown!.url))
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+      expect(await response.text()).toBe('# Snapshot notes')
+      await writeFile(join(f.root, 'other.md'), '# Private notes')
+      expect((await f.service.respond(new Request(new URL('other.md', markdown!.url)))).status).toBe(403)
+    }
   } finally { await f.cleanup() }
 })
 
