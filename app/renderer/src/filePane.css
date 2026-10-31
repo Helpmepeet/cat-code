@@ -32,6 +32,12 @@ iframe.file-pane-content { background:white; }
 .file-pane-staging { visibility:hidden; pointer-events:none; }
 .file-pane-markdown { min-height:0; overflow:auto; scrollbar-width:thin; scrollbar-color:color-mix(in srgb,var(--text-muted) 25%,transparent) transparent; }
 .file-pane-markdown-column { max-width:900px; margin:0 auto; padding:20px 24px 40px; font:15px/1.6 var(--font-sans); color:var(--conversation-ink); }
+/* Keep margins inside measured leaves, with rhythm across virtualized units. */
+.file-pane-markdown-column [data-markdown-leaf] { display:flow-root; }
+.file-pane-markdown-column [data-markdown-leaf] + [data-markdown-leaf] > .md-prose > :first-child { margin-top:.85em; }
+.file-pane-markdown-column [data-markdown-leaf] + [data-markdown-leaf] > .md-prose > :is(h1,h2):first-child { margin-top:1.5em; }
+.file-pane-markdown-column [data-markdown-leaf] + [data-markdown-leaf] > .md-prose > :is(h3,h4,h5,h6):first-child { margin-top:1.35em; }
+.file-pane-markdown-column [data-markdown-leaf]:has(> .md-prose > :is(h1,h2,h3,h4,h5,h6):last-child) + [data-markdown-leaf] > .md-prose > :first-child { margin-top:.5em; }
 .file-pane-markdown-link { color:var(--accent); cursor:pointer; text-align:inherit; }
 .file-pane-markdown-link:hover { color:var(--accent-soft); }
 .file-pane-image { display:flex; align-items:center; justify-content:center; padding:16px; overflow:hidden; }

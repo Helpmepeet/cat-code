@@ -3,6 +3,7 @@ import type { Root as HastRoot } from 'hast'
 import { FocusedReasoning, TranscriptRowsView } from './TranscriptView.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { renderMarkdownTree } from './markdownRenderPlan.js'
+import { MARKDOWN_COMPONENTS } from './markdownComponents.js'
 import { MAX_PROSE_ARRIVAL_STAGGER_MS, PROSE_ARRIVAL_WORD_CLASS, PROSE_ARRIVAL_WORD_STAGGER_MS, ProseArrivalContext } from './proseArrival.js'
 import { markArrivedText } from './proseArrivalMark.js'
 import { PROSE_PREVIEW_CHUNKS, PROSE_PREVIEW_CHUNK_MS, prosePreviewFrame } from './proseArrivalPreviewModel.js'
@@ -69,7 +70,8 @@ function ArrivingReply({ play }: { play: boolean }) {
   return (
     <div className="appearance-arrival font-sans font-medium text-sm leading-relaxed">
       <div aria-hidden className="appearance-arrival-measure">{COMPLETE_REPLY}</div>
-      <div className="md-prose"><BoundedMarkdown sourceId="appearance-preview-reply" source={source} renderLeaf={leaf => renderMarkdownTree(mark(leaf.tree))} /></div>
+      <BoundedMarkdown sourceId="appearance-preview-reply" source={source}
+        renderLeaf={leaf => <div className="md-prose">{renderMarkdownTree(mark(leaf.tree), MARKDOWN_COMPONENTS)}</div>} />
     </div>
   )
 }

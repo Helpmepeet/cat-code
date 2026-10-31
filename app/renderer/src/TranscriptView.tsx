@@ -17,7 +17,6 @@ import {
   Component,
   createContext,
   Fragment,
-  isValidElement,
   memo,
   useCallback,
   useContext,
@@ -28,17 +27,17 @@ import {
   useReducer,
   useRef,
   useState,
+  type ComponentProps,
   type ComponentPropsWithoutRef,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type Ref,
 } from 'react'
 import Markdown from 'react-markdown'
-import { extractInlineCommandFences, inlineCommandSourceKey, isInteractiveShellCommand, type InlineCommandRun, type InlineCommandSource } from '../../shared/inlineCommand.js'
+import { extractInlineCommandFences, type InlineCommandRun, type InlineCommandSource } from '../../shared/inlineCommand.js'
 import { InlineCommandContext } from './inlineCommandState.js'
 import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { AutoModeReviewContext, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
-import { shellPromptLines } from './shellTokens.js'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, CatCodeBridge, SessionId } from '../../shared/protocol.js'
@@ -51,6 +50,9 @@ import {
 import type { HostResult, SessionDescriptor, WorkspaceBranches, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import { MarkdownCode, MarkdownCodeBlock } from './MarkdownElements.js'
+import { MARKDOWN_COMPONENTS } from './markdownComponents.js'
+import { childrenToText } from './markdownText.js'
 import { FileLinkTicker } from './FileLinkTicker.js'
 import { useFilePaneOpener } from './filePaneContext.js'
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
@@ -215,8 +217,6 @@ import {
   ActionCopyIcon,
   ActionFileIcon,
   ActionRewindIcon,
-  ActionRunIcon,
-  ActionStopIcon,
 } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
 import {
@@ -2321,7 +2321,7 @@ function createPathAwareCode(
         </button>
       )
     }
-    return <MarkdownCode className={className} inlineSource={sourceAtOffset?.(node?.position?.start.offset)}>{children}</MarkdownCode>
+    return <MarkdownCode className={className} inlineSource={sourceAtOffset?.(node?.position?.start.offset)} renderOutput={run => <InlineCommandOutput key={run.runId} run={run} />}>{children}</MarkdownCode>
   }
 }
 
@@ -2364,52 +2364,6 @@ function MarkdownTree({
   return <>{renderMarkdownTree(tree, components)}</>
 }
 
-/** Flatten react-markdown code children (a string, a node array, or the
- * highlight.js <span> element tree `rehype-highlight` wraps tokens in) to raw
- * text — the copy button needs the un-tokenized source. */
-function childrenToText(children: ReactNode): string {
-  if (typeof children === 'string') return children
-  if (typeof children === 'number') return String(children)
-  if (Array.isArray(children)) return children.map(childrenToText).join('')
-  if (isValidElement(children)) {
-    const props: unknown = children.props
-    if (props !== null && typeof props === 'object' && 'children' in props) {
-      return childrenToText((props as { children?: ReactNode }).children)
-    }
-  }
-  return ''
-}
-
-const MARKDOWN_COMPONENTS = {
-  // react-markdown wraps a fenced block in <pre><code>; unwrap the <pre> and let
-  // the <code> renderer own the framed CodeBlock (avoids a nested <pre>).
-  pre: ({ children }: ComponentPropsWithoutRef<'pre'>) => <>{children}</>,
-  code: MarkdownCode,
-  aside: MarkdownCallout,
-  // GFM pipe tables (remark-gfm). Exact prototype ProseTable values
-  // (Messages.jsx:1890-1906): rounded 8px scroll wrapper w/ a 0.08 white border,
-  // horizontal-only rules (header 0.12, body 0.05), a 0.03 header wash, 13px, and
-  // the prototype's #e4e4e7 / #c4c4c8 cell text. Column alignment (remark-gfm's
-  // per-cell `style`) is intentionally not forwarded — the prototype is
-  // left-aligned throughout and this keeps zero inline style. Static arbitrary
-  // classes only (the FAMILY_STYLE precedent for palette values with no token).
-  table: ({ children }: ComponentPropsWithoutRef<'table'>) => (
-    <div className="my-3 overflow-x-auto rounded-lg border border-white/[0.08]">
-      <table className="w-full border-collapse text-[13px]">{children}</table>
-    </div>
-  ),
-  th: ({ children }: ComponentPropsWithoutRef<'th'>) => (
-    <th className="whitespace-nowrap border-b border-white/[0.12] bg-white/[0.03] px-3 py-[7px] text-left font-semibold text-[light-dark(#27272a,#e4e4e7)]">
-      {children}
-    </th>
-  ),
-  td: ({ children }: ComponentPropsWithoutRef<'td'>) => (
-    <td className="border-b border-white/[0.05] px-3 py-[7px] align-top text-[light-dark(#52525b,#c4c4c8)]">
-      {children}
-    </td>
-  ),
-}
-
 const USER_BUBBLE_MARKDOWN_COMPONENTS = {
   ...MARKDOWN_COMPONENTS,
   p: ({ children }: ComponentPropsWithoutRef<'p'>) => (
@@ -2441,216 +2395,9 @@ const USER_BUBBLE_LITERAL_CLASSES = [
   'break-words',
 ]
 
-function MarkdownCode({
-  className,
-  children,
-  inlineSource,
-}: ComponentPropsWithoutRef<'code'> & { inlineSource?: InlineCommandSource }) {
-  const match = /language-(\w+)/.exec(className ?? '')
-  const text = childrenToText(children)
-  // Inline code (single backtick, no language, no newline) stays inline.
-  if (!match && !text.includes('\n')) {
-    return <code className={className}>{children}</code>
-  }
-  // Fenced block: `children` carries rehype-highlight's colored <span> tree for
-  // DISPLAY; `text` is the raw source used by the copy button.
-  return (
-    <CodeBlock
-      code={text.replace(/\n$/, '')}
-      language={match?.[1]}
-      inlineSource={inlineSource}
-      highlighted={children}
-    />
-  )
-}
-
-type CalloutKind = 'note' | 'tip' | 'important' | 'warning' | 'caution'
-
-function MarkdownCallout({
-  node,
-  children,
-}: ComponentPropsWithoutRef<'aside'> & {
-  node?: { properties?: Record<string, unknown> }
-}) {
-  const kind = calloutKindOf(node?.properties?.dataCalloutKind)
-  if (kind === null) return <aside>{children}</aside>
-
-  return (
-    <aside className="md-callout" data-callout-kind={kind}>
-      <div className="md-callout-label">{calloutLabel(kind)}</div>
-      <div className="md-callout-body">{children}</div>
-    </aside>
-  )
-}
-
-function calloutKindOf(value: unknown): CalloutKind | null {
-  switch (value) {
-    case 'note':
-    case 'tip':
-    case 'important':
-    case 'warning':
-    case 'caution':
-      return value
-    default:
-      return null
-  }
-}
-
-function calloutLabel(kind: CalloutKind): string {
-  switch (kind) {
-    case 'note':
-      return 'Note'
-    case 'tip':
-      return 'Tip'
-    case 'important':
-      return 'Important'
-    case 'warning':
-      return 'Warning'
-    case 'caution':
-      return 'Caution'
-    default: {
-      const exhaustive: never = kind
-      return exhaustive
-    }
-  }
-}
-
-/**
- * Fenced code block — exact prototype ProseCode grammar (Messages.jsx:1795-1828):
- * a page-black (#09090b = app-bg) panel with an 8px radius + 0.06 white border,
- * and a floating top-right copy control that does not reserve vertical space.
- * Syntax
- * tokens come from `rehype-highlight` (`hljs-*` <span>s colored by the fixed
- * Dracula stylesheet in theme.css). `highlighted` is the colored span tree for
- * DISPLAY; `code` is the raw source the copy button writes.
- *
- * The 5-theme Settings picker is a separate §5 ledger deferral (owner P4-18;
- * needs the Settings code-theme sync seam).
- */
-export function CodeBlock({
-  code,
-  highlighted,
-  streaming = false,
-  inlineSource,
-  language,
-  windowed = false,
-  displayRange,
-}: {
-  windowed?: boolean
-  displayRange?: readonly [number, number]
-  language?: string
-  code: string
-  highlighted: ReactNode
-  /** The fence is still arriving, so there is no finished block to copy. */
-  streaming?: boolean
-  inlineSource?: InlineCommandSource
-}) {
-  const [copied, setCopied] = useState(false)
-  const commands = useContext(InlineCommandContext)
-  const sourceKey = inlineSource ? inlineCommandSourceKey(inlineSource) : undefined
-  const run = sourceKey ? [...(commands?.runs ?? [])].reverse().find(run => inlineCommandSourceKey(run.source) === sourceKey) : undefined
-  const pending = sourceKey ? commands?.pending.has(sourceKey) : false
-  const completedAttempt = sourceKey ? commands?.requests.some(request => inlineCommandSourceKey(request.source) === sourceKey && request.status === 'completed') : false
-  const error = sourceKey ? commands?.errors.get(sourceKey) : undefined
-  const running = run?.status === 'running'
-  const busy = !!commands && (commands.pending.size > 0 || commands.runs.some(run => run.status === 'running'))
-  const descriptionId = useId()
-  const unavailable = pending ? 'Wait for the command to start.'
-    : !commands?.generation ? 'Connect to the session before running a command.'
-      : commands.blockedReason ?? (busy ? 'Wait for the current command to finish.'
-        : isInteractiveShellCommand(code) ? 'This command needs an interactive terminal.' : undefined)
-  const action = running ? 'Stop' : pending ? 'Starting' : run || error || completedAttempt ? 'Run again' : 'Run'
-  const runnable = !!inlineSource && !!commands
-  const outcome = run?.status === 'failed' ? (run.exitCode === null ? 'Failed' : `Exit ${run.exitCode}`)
-    : run?.status === 'stopped' ? 'Stopped' : run?.status === 'interrupted' ? 'Interrupted' : ''
-  const promptLines = useMemo(() => inlineSource && (!windowed || displayRange)
-    ? shellPromptLines(code, displayRange?.[0], displayRange?.[1]) : null, [code, inlineSource, windowed, displayRange?.[0], displayRange?.[1]])
-  const copy = (): void => {
-    if (streaming) return
-    const clipboard =
-      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-    if (!clipboard) return
-    void clipboard
-      .writeText(code)
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1200)
-      })
-      .catch(() => {})
-  }
-  // `data-window-ground`: this frame repeats the page ground rather than painting
-  // a surface of its own, which is the whole grammar of a fenced block here
-  // (`theme.css`: code sits IN the page, not on a coloured slab). Opaque that is
-  // invisible, because `bg-app-bg` IS the page. Under glass the page goes
-  // translucent and this did not, so the block became the flat slab the grammar
-  // exists to avoid, whichever way the wallpaper pushed it. Marked so glass
-  // clears it and the toggle stops changing this block's relationship to the
-  // page it sits in.
-  return (
-    <div
-      className="relative my-3 overflow-hidden rounded-lg border border-shell-seam bg-app-bg"
-      data-window-ground
-    >
-      <pre className={`whitespace-pre-wrap break-words py-3.5 pl-3.5 font-mono text-[12.5px] leading-[1.65] ${inlineSource ? 'inline-command-code pr-3.5' : 'pr-10'}`} data-language={language}>
-      {runnable ? (
-          <span className="inline-command-controls">
-            {outcome ? <span className="inline-command-meta"><span className={`inline-command-dot ${run?.status === 'failed' ? 'text-tone-danger' : 'text-tone-warn'}`} aria-hidden />{outcome}</span> : null}
-            <button type="button" className={`inline-command-action ${running ? 'text-tone-danger' : action === 'Run' || pending ? 'text-accent' : 'text-text-subtle'}`}
-              aria-label={action} aria-busy={pending || undefined}
-              aria-disabled={!running && !!unavailable}
-              aria-describedby={!running && unavailable ? descriptionId : undefined}
-              title={!running && unavailable ? unavailable : action}
-              onClick={() => {
-                if (running && run) commands.stop(run)
-                else if (!unavailable) commands.start(inlineSource)
-              }}
-            >{running ? <ActionStopIcon /> : action === 'Run again' ? <ActionRewindIcon /> : <ActionRunIcon />}<span>{action}</span></button>
-            <span id={descriptionId} className="inline-command-tooltip" role="tooltip">{!running && unavailable ? unavailable : action}</span>
-            <button type="button" className={`inline-command-control ${copied ? 'text-[light-dark(#15803d,#86efac)]' : 'text-text-subtle'}`} onClick={copy} aria-label={copied ? 'Code copied' : 'Copy code'} title={copied ? 'Code copied' : 'Copy code'}>{copied ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg> : <ActionCopyIcon />}</button>
-            <span className="inline-command-tooltip inline-command-copy-tooltip" role="tooltip">{copied ? 'Code copied' : 'Copy code'}</span>
-          </span>
-      ) : null}
-        <code className="hljs">{promptLines ? promptLines.map((line, index) => <span key={index} className="inline-command-line">{line.prompt ? <span className="inline-command-prompt" aria-hidden>$</span> : null}{line.tokens.map((token, index) => <span key={index} className={`shell-token-${token.kind}`}>{token.text}</span>)}</span>) : highlighted}</code>
-      </pre>
-      {!inlineSource ? (
-      <button
-        type="button"
-        onClick={copy}
-        disabled={streaming}
-        title={streaming ? 'Code still writing' : copied ? 'Code copied' : 'Copy code'}
-        aria-label={streaming ? 'Code still writing' : copied ? 'Code copied' : 'Copy code'}
-        className={`absolute right-2 top-1 z-[1] inline-flex size-7 items-center justify-center rounded-md transition-colors ${
-          streaming
-            ? 'cursor-default text-text-ghost'
-            : copied
-              ? 'text-[light-dark(#15803d,#86efac)]'
-              : 'text-text-subtle hover:bg-white/[0.06] hover:text-text-primary'
-        }`}
-      >
-        {copied ? (
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
-          >
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        ) : (
-          <ActionCopyIcon />
-        )}
-      </button>
-      ) : null}
-      {!run && completedAttempt ? <p className="border-t border-shell-seam px-3.5 py-3 text-xs text-text-subtle">Command output is no longer retained.</p> : null}
-      {run ? <InlineCommandOutput key={run.runId} run={run} /> : null}
-      {error ? <p role="alert" className="border-t border-shell-seam px-3.5 py-2 text-xs text-text-muted">{error}</p> : null}
-    </div>
-  )
+/** Transcript fences can attach command output; file previews never supply a source. */
+export function CodeBlock(props: Omit<ComponentProps<typeof MarkdownCodeBlock>, 'renderOutput'>) {
+  return <MarkdownCodeBlock {...props} renderOutput={run => <InlineCommandOutput key={run.runId} run={run} />} />
 }
 
 function InlineCommandOutput({ run }: { run: InlineCommandRun }) {

@@ -277,7 +277,7 @@ test('the inset boxes that repeat the page ground are cleared too', () => {
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^[ \t]*\/\/.*$/gm, '')
 
-  for (const file of ['TranscriptView.tsx']) {
+  for (const file of ['MarkdownElements.tsx']) {
     const source = strip(file)
     // The attribute has to sit in the SAME opening tag as the ground class, not
     // merely somewhere in the file.

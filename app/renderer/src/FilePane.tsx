@@ -5,6 +5,9 @@ import type { OpenWorkspaceFileTarget } from '../../shared/protocol.js'
 import { captureMarkdownReadingPosition } from './markdownReadingPosition.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import { renderMarkdownTree } from './markdownRenderPlan.js'
+import { MARKDOWN_COMPONENTS } from './markdownComponents.js'
+import { MarkdownCodeBlock } from './MarkdownElements.js'
+import { REHYPE_PLUGINS } from './markdownPlugins.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import type { FilePathActionsAnchor } from './filePathActions.js'
 import { ExternalAppIcon } from './ExternalAppIcon.js'
@@ -488,10 +491,14 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
     if (bodyRef) bodyRef.current = element
   }} className={`${className} file-pane-markdown`} tabIndex={active ? 0 : -1}
     onScroll={event => { if (active) rememberFilePaneScroll(appSessionId, { x: event.currentTarget.scrollLeft, y: event.currentTarget.scrollTop, markdown: captureMarkdownReadingPosition(event.currentTarget) }, file) }}>
-    <div className="file-pane-markdown-column md-prose">
+    <div className="file-pane-markdown-column">
       <BoundedMarkdown sourceId={`file:${file.path}`} source={file.markdown ?? ''} scrollContainerRef={scrollElement}
+        rehypePlugins={REHYPE_PLUGINS} recognizeCallouts
         initialReadingPosition={initialScroll.current.markdown} initialScrollOffset={initialScroll.current.y} renderLeaf={leaf =>
-        renderMarkdownTree(leaf.tree, { a: Anchor, img: Image })} />
+        <div className="md-prose">{leaf.kind === 'code'
+          ? <MarkdownCodeBlock code={leaf.codeSource} language={leaf.codeLanguage} windowed
+              highlighted={renderMarkdownTree(leaf.content)} />
+          : renderMarkdownTree(leaf.tree, { ...MARKDOWN_COMPONENTS, a: Anchor, img: Image })}</div>} />
     </div>
   </div>
 }

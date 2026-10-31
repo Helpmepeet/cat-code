@@ -231,6 +231,60 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
   return { pane, sessionId, firstPath, secondPath, imagePath, imageBytes, badImagePath, brokenPath, missingAssetPath, outsidePath, missingPath, otherSession, toasts, service, publish, pauseNextPrepare, pauseNextCommit, pauseNextCapture, captures, localhost, currentDescriptor, ids, external }
 }
 
+test('Markdown previews share chat table, fence and callout presentation without losing local navigation', async () => {
+  const { pane, firstPath, secondPath, sessionId } = setup()
+  writeFileSync(firstPath, [
+    '# Data model', '', 'Introductory paragraph.', '', '## Entities', '',
+    '| Entity | Key |', '| --- | --- |', '| Customer | `id` |', '',
+    '```text', 'Customer -> Sale', '```', '',
+    '> [!NOTE]', '> Keep the receipt.', '',
+    '[Next document](second.markdown)', '', '![Diagram](image.png)',
+  ].join('\n'))
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const preview = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
+  expect(preview.querySelector('.file-pane-markdown-column.md-prose')).toBeNull()
+  expect(preview.querySelector('[data-markdown-leaf] > .md-prose > h2')?.textContent).toBe('Entities')
+  const table = preview.querySelector('table')!
+  expect(table.parentElement?.classList.contains('overflow-x-auto')).toBe(true)
+  expect(table.parentElement?.classList.contains('border')).toBe(true)
+  expect(table.querySelector('th')?.classList.contains('px-3')).toBe(true)
+  expect(table.querySelector('td')?.classList.contains('py-[7px]')).toBe(true)
+  const pre = preview.querySelector('pre')!
+  expect(pre.parentElement?.hasAttribute('data-window-ground')).toBe(true)
+  expect(pre.querySelector('code')?.textContent).toBe('Customer -> Sale\n')
+  expect(preview.querySelectorAll('button[aria-label="Copy code"]')).toHaveLength(1)
+  expect(preview.querySelector('button[aria-label="Run"]')).toBeNull()
+  expect(preview.querySelector('.md-callout-label')?.textContent).toBe('Note')
+  expect(preview.querySelector('.md-callout-body')?.textContent).toContain('Keep the receipt.')
+  expect(preview.querySelector('img')?.getAttribute('src')).toEndWith('/image.png')
+  const link = [...preview.querySelectorAll('button')].find(button => button.textContent === 'Next document')!
+  await act(async () => { link.click() })
+  await settle()
+  expect(getFilePaneSession(sessionId).file?.path).toBe(secondPath)
+})
+
+test('a windowed Markdown preview fence copies the whole fence, not just mounted lines', async () => {
+  const { pane, firstPath } = setup()
+  const code = Array.from({ length: 2500 }, (_, index) => `line ${index}`).join('\n')
+  writeFileSync(firstPath, `# Long fence\n\n\`\`\`text\n${code}\n\`\`\``)
+  const copied: string[] = []
+  const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied.push(text) } } })
+  releases.push(() => {
+    if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  })
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  const preview = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
+  expect(preview.querySelectorAll('pre')).toHaveLength(1)
+  expect(preview.querySelector('pre')?.textContent).toContain('line 0')
+  expect(preview.querySelector('pre')?.textContent).not.toContain('line 2499')
+  await click(preview, 'Copy code')
+  expect(copied).toEqual([code])
+})
+
 test('a reply click opens workspace and outside files through the real host boundary, keeps composer focus, and refuses missing files', async () => {
   const { pane, sessionId, firstPath, outsidePath, missingPath, toasts } = setup()
   const tree = await harness.mount(pane())
