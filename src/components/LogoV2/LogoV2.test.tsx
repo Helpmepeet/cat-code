@@ -9,7 +9,9 @@ import * as providersModule from '../../utils/model/providers.js'
 import * as usageModule from '../../services/api/usage.js'
 import * as codexUsageModule from '../../services/api/codexUsage.js'
 import * as codexPoolModule from '../../services/api/codexAccountPool.js'
-import { resetClaudeAccountPoolForTest } from '../../services/api/claudeAccountPool.js'
+import { resetClaudeAccountPoolForTest, seedClaudeAccountPoolForTest, switchToClaudeAccount } from '../../services/api/claudeAccountPool.js'
+import * as authModule from '../../utils/auth.js'
+import * as settingsModule from '../../utils/settings/settings.js'
 import { resetCodexLeaseManagerForTest, seedCodexLeaseForTest } from '../../services/api/codexAccountLeaseManager.js'
 import { _setGlobalConfigCacheForTesting } from 'src/utils/config.js'
 
@@ -183,6 +185,7 @@ async function renderFrameForDuration(
 }
 
 afterEach(() => {
+  authModule.clearOAuthTokenCache()
   mock.restore()
   codexPoolModule.resetCodexAccountPoolForTest()
   resetCodexLeaseManagerForTest()
@@ -213,6 +216,9 @@ describe('LogoV2', () => {
       } as never)
 
       spyOn(providersModule, 'getAPIProvider').mockReturnValue('firstParty')
+      spyOn(authModule, 'getOauthAccountInfo').mockReturnValue({
+        accountUuid: 'claude-account', emailAddress: 'claude@example.com', displayName: 'Claude Name',
+      })
       spyOn(logoV2UtilsModule, 'getLogoDisplayData').mockReturnValue({
         cwd: '/repo',
         billingType: null,
@@ -240,6 +246,54 @@ describe('LogoV2', () => {
       } else {
         process.env.NODE_ENV = originalNodeEnv
       }
+    }
+  })
+
+  test('Claude greeting and announcement attribution follow local identity across switches', async () => {
+    process.env.DEMO_VERSION = 'test'
+    const originalDemo = process.env.IS_DEMO
+    delete process.env.IS_DEMO
+    try {
+      const shared = {
+        numStartups: 1, theme: 'dark',
+        oauthAccount: {
+          accountUuid: 'b', emailAddress: 'b@example.com',
+          displayName: 'Shared B', organizationName: 'Shared Org B',
+        },
+      }
+      _setGlobalConfigCacheForTesting(shared as never)
+      spyOn(authModule, 'isAnthropicAuthEnabled').mockReturnValue(true)
+      spyOn(providersModule, 'getAPIProvider').mockReturnValue('firstParty')
+      spyOn(settingsModule, 'getInitialSettings').mockReturnValue({
+        companyAnnouncements: ['An announcement'],
+      } as ReturnType<typeof settingsModule.getInitialSettings>)
+      spyOn(logoV2UtilsModule, 'getLogoDisplayData').mockReturnValue({
+        cwd: '/repo', billingType: null, agentName: '',
+      })
+      spyOn(usageModule, 'fetchUtilization').mockResolvedValue({})
+      seedClaudeAccountPoolForTest({
+        activeAccountUuid: 'a',
+        accounts: ['a', 'b'].map(id => ({
+          accountUuid: id, emailAddress: `${id}@example.com`,
+          displayName: `Local ${id.toUpperCase()}`, organizationName: `Local Org ${id.toUpperCase()}`,
+          accessToken: `access-${id}`, refreshToken: `refresh-${id}`,
+          expiresAt: Date.now() + 3_600_000, scopes: ['user:inference', 'user:profile'],
+          status: 'healthy' as const,
+        })),
+      })
+      authModule.clearOAuthTokenCache()
+      const { LogoV2 } = await import('./LogoV2.js')
+      const first = await renderFrameForDuration(<AppStateProvider><LogoV2 /></AppStateProvider>)
+      expect(first).toContain('Welcome back Local A!')
+      expect(first).toContain('Message from Local Org A:')
+      expect(first).not.toContain('Shared B')
+      switchToClaudeAccount('b', { persistDefault: false })
+      const second = await renderFrameForDuration(<AppStateProvider><LogoV2 /></AppStateProvider>)
+      expect(second).toContain('Welcome back Local B!')
+      expect(second).toContain('Message from Local Org B:')
+    } finally {
+      if (originalDemo === undefined) delete process.env.IS_DEMO
+      else process.env.IS_DEMO = originalDemo
     }
   })
 

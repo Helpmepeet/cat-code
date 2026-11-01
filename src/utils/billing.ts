@@ -1,6 +1,7 @@
 import {
   getAnthropicApiKey,
   getAuthTokenSource,
+  getOauthAccountInfo,
   getSubscriptionType,
   isClaudeAISubscriber,
 } from './auth.js'
@@ -68,8 +69,7 @@ export function hasClaudeAiBillingAccess(): boolean {
   }
 
   // Team/Enterprise - check for admin or billing roles
-  const config = getGlobalConfig()
-  const orgRole = config.oauthAccount?.organizationRole
+  const orgRole = getOauthAccountInfo()?.organizationRole
 
   return (
     !!orgRole &&

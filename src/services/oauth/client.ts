@@ -1,5 +1,6 @@
 // OAuth client for handling authentication flows with Claude services
 import axios from 'axios'
+import { updateClaudeAccountRoles } from '../api/claudeAccountPool.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -308,7 +309,10 @@ export async function refreshOAuthToken(
 
 export async function fetchAndStoreUserRoles(
   accessToken: string,
+  accountUuid: string | undefined,
+  organizationUuid?: string,
 ): Promise<void> {
+  if (!accountUuid) return
   const response = await axios.get(getOauthConfig().ROLES_URL, {
     headers: { Authorization: `Bearer ${accessToken}` },
   })
@@ -317,20 +321,22 @@ export async function fetchAndStoreUserRoles(
     throw new Error(`Failed to fetch user roles: ${response.statusText}`)
   }
   const data = response.data as UserRolesResponse
-  const config = getGlobalConfig()
-
-  if (!config.oauthAccount) {
-    throw new Error('OAuth account information not found in config')
+  const normalize = (value: unknown): string | null =>
+    typeof value === 'string' ? value : null
+  const roles = {
+    organizationRole: normalize(data.organization_role),
+    workspaceRole: normalize(data.workspace_role),
+    organizationName: normalize(data.organization_name),
   }
+  updateClaudeAccountRoles(accountUuid, roles, organizationUuid)
 
   saveGlobalConfig(current => ({
     ...current,
-    oauthAccount: current.oauthAccount
+    oauthAccount: current.oauthAccount?.accountUuid === accountUuid &&
+      current.oauthAccount.organizationUuid === organizationUuid
       ? {
           ...current.oauthAccount,
-          organizationRole: data.organization_role,
-          workspaceRole: data.workspace_role,
-          organizationName: data.organization_name,
+          ...roles,
         }
       : current.oauthAccount,
   }))

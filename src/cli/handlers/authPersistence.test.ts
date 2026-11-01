@@ -28,6 +28,7 @@ const { installOAuthTokens } = await import('./auth.js')
 
 const tokens = {
   accessToken: 'test-access', refreshToken: 'test-refresh', expiresAt: 123456,
+  subscriptionType: null, rateLimitTier: null,
   scopes: ['user:inference', 'user:profile'],
   tokenAccount: { uuid: 'test-account', emailAddress: 'test@example.com' },
 }
@@ -84,6 +85,115 @@ afterEach(() => {
   rmSync(directory, { recursive: true, force: true })
 })
 
+describe('role persistence', () => {
+  test('Console roles update the captured shared profile without a pool account', async () => {
+    spyOn(oauth, 'fetchAndStoreUserRoles').mockRestore()
+    savedConfig.oauthAccount = { accountUuid: 'console', emailAddress: 'console@example.com' }
+    spyOn(axios, 'get').mockResolvedValue({
+      status: 200,
+      data: { organization_role: 'admin', workspace_role: null, organization_name: 'ConsoleOrg' },
+    })
+    await oauth.fetchAndStoreUserRoles('console-token', 'console')
+    expect(savedConfig.oauthAccount.organizationName).toBe('ConsoleOrg')
+    expect(savedConfig.oauthAccount.organizationRole).toBe('admin')
+  })
+
+  test('login roles reach the effective profile and survive vault reload', async () => {
+    storageSuccess = true
+    spyOn(oauth, 'storeOAuthAccountInfo').mockRestore()
+    spyOn(oauth, 'fetchAndStoreUserRoles').mockRestore()
+    spyOn(auth, 'isAnthropicAuthEnabled').mockReturnValue(true)
+    spyOn(axios, 'get').mockResolvedValue({
+      status: 200,
+      data: { organization_role: 'admin', workspace_role: 'member', organization_name: 'TestOrg' },
+    })
+    await installOAuthTokens(tokens)
+    expect(auth.getOauthAccountInfo()?.organizationRole).toBe('admin')
+    expect(savedConfig.oauthAccount?.organizationName).toBe('TestOrg')
+    pool.resetClaudeAccountPoolForTest()
+    pool.setClaudeVaultPathForTest(directory)
+    pool.loadClaudePoolForObservation()
+    expect(pool.getActiveClaudeAccount()?.organizationName).toBe('TestOrg')
+    expect(pool.getActiveClaudeAccount()?.workspaceRole).toBe('member')
+  })
+
+  test('late roles do not replace a newer organization for the same account', async () => {
+    storageSuccess = true
+    spyOn(oauth, 'storeOAuthAccountInfo').mockRestore()
+    spyOn(oauth, 'fetchAndStoreUserRoles').mockRestore()
+    let finish!: (response: unknown) => void
+    let started!: () => void
+    const starting = new Promise<void>(resolve => { started = resolve })
+    spyOn(axios, 'get').mockImplementation(() => {
+      started()
+      return new Promise(resolve => { finish = resolve })
+    })
+    const pending = installOAuthTokens({
+      ...tokens, tokenAccount: { ...tokens.tokenAccount, organizationUuid: 'org-a' },
+    })
+    await starting
+    pool.appendClaudeAccount({
+      ...tokens, accountUuid: 'test-account', emailAddress: 'test@example.com',
+      accessToken: 'new-access', organizationUuid: 'org-b',
+    })
+    const path = join(directory, 'accounts', 'test-account.json')
+    const before = readFileSync(path, 'utf8')
+    finish({ status: 200, data: { organization_role: 'admin', organization_name: 'OldOrg' } })
+    await pending
+    expect(pool.getActiveClaudeAccount()?.organizationUuid).toBe('org-b')
+    expect(pool.getActiveClaudeAccount()?.organizationRole).toBeUndefined()
+    expect(savedConfig.oauthAccount?.organizationUuid).toBe('org-b')
+    expect(savedConfig.oauthAccount?.organizationRole).toBeUndefined()
+    expect(readFileSync(path, 'utf8')).toBe(before)
+  })
+
+  test.each([false, true])('late roles cannot overwrite B after switch (global=%s)', async persistDefault => {
+    storageSuccess = true
+    spyOn(oauth, 'storeOAuthAccountInfo').mockRestore()
+    spyOn(oauth, 'fetchAndStoreUserRoles').mockRestore()
+    let resolve!: (response: unknown) => void
+    let started!: () => void
+    const starting = new Promise<void>(r => { started = r })
+    spyOn(axios, 'get').mockImplementation(() => {
+      started()
+      return new Promise(r => { resolve = r })
+    })
+    const login = installOAuthTokens(tokens)
+    await starting
+    pool.appendClaudeAccount({
+      accountUuid: 'account-b', emailAddress: 'b@example.com',
+      accessToken: 'access-b', refreshToken: 'refresh-b', expiresAt: 123456,
+      scopes: tokens.scopes,
+    })
+    pool.updateClaudeAccountRoles('account-b', {
+      organizationName: 'OrgB', organizationRole: null, workspaceRole: null,
+    })
+    pool.switchToClaudeAccount('account-b', { persistDefault })
+    // Another process can publish B even when this process only switched locally.
+    savedConfig.oauthAccount = { accountUuid: 'account-b', emailAddress: 'b@example.com', organizationName: 'OrgB' }
+    const before = structuredClone(stored)
+    const bPath = join(directory, 'accounts', 'account-b.json')
+    const bVault = readFileSync(bPath, 'utf8')
+    const aPath = join(directory, 'accounts', 'test-account.json')
+    const refreshedA = JSON.parse(readFileSync(aPath, 'utf8'))
+    refreshedA.tokens.access_token = 'fresh-a'
+    refreshedA.tokens.refresh_token = 'rotated-a'
+    writeFileSync(aPath, JSON.stringify(refreshedA))
+    resolve({ status: 200, data: { organization_role: 'admin', workspace_role: {}, organization_name: 'OrgA' } })
+    await login
+    expect(savedConfig.oauthAccount.organizationName).toBe('OrgB')
+    expect(stored).toEqual(before)
+    expect(readFileSync(bPath, 'utf8')).toBe(bVault)
+    expect(pool.getActiveClaudeAccount()?.organizationName).toBe('OrgB')
+    const a = JSON.parse(readFileSync(aPath, 'utf8'))
+    expect(a.profile.organization_role).toBe('admin')
+    expect(a.profile.workspace_role).toBeNull()
+    expect(a.profile.organization_name).toBe('OrgA')
+    expect(a.tokens.access_token).toBe('fresh-a')
+    expect(a.tokens.refresh_token).toBe('rotated-a')
+  })
+})
+
 describe('Claude process account isolation', () => {
   function seedAccounts() {
     const a = {
@@ -111,6 +221,26 @@ describe('Claude process account isolation', () => {
     pool.switchToClaudeAccount('account-b', { persistDefault: false })
     expect(auth.getOauthAccountInfo()?.accountUuid).toBe('account-b')
     expect(auth.getClaudeAIOAuthTokens()?.accessToken).toBe('access-b')
+  })
+
+  test('legacy roles are reused only for the same account and organization', () => {
+    const { a, b } = seedAccounts()
+    spyOn(auth, 'isAnthropicAuthEnabled').mockReturnValue(true)
+    savedConfig.oauthAccount = {
+      accountUuid: a.accountUuid, emailAddress: a.emailAddress,
+      organizationUuid: a.organizationUuid, organizationRole: 'admin',
+    }
+    expect(auth.getOauthAccountInfo()?.organizationRole).toBe('admin')
+    savedConfig.oauthAccount.organizationUuid = 'other-org'
+    expect(auth.getOauthAccountInfo()?.organizationRole).toBeUndefined()
+    savedConfig.oauthAccount = {
+      accountUuid: b.accountUuid, emailAddress: b.emailAddress,
+      organizationUuid: a.organizationUuid, organizationRole: 'admin',
+    }
+    expect(auth.getOauthAccountInfo()?.organizationRole).toBeUndefined()
+    savedConfig.oauthAccount.accountUuid = a.accountUuid
+    pool.getActiveClaudeAccount()!.organizationRole = null
+    expect(auth.getOauthAccountInfo()?.organizationRole).toBeNull()
   })
 
   test('an exhausted local pool never borrows another account from shared credentials', async () => {

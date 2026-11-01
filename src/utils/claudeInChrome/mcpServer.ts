@@ -9,7 +9,7 @@ import {
 } from '../../services/analytics/index.js'
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js'
 import { initializeAnalyticsSink } from '../../services/analytics/sink.js'
-import { getClaudeAIOAuthTokens } from '../auth.js'
+import { getClaudeAIOAuthTokens, getOauthAccountInfo } from '../auth.js'
 import { enableConfigs, getGlobalConfig, saveGlobalConfig } from '../config.js'
 import { logForDebugging } from '../debug.js'
 import { isEnvTruthy } from '../envUtils.js'
@@ -138,7 +138,7 @@ export function createChromeContext(
       bridgeConfig: {
         url: chromeBridgeUrl,
         getUserId: async () => {
-          return getGlobalConfig().oauthAccount?.accountUuid
+          return getOauthAccountInfo()?.accountUuid
         },
         getOAuthToken: async () => {
           return getClaudeAIOAuthTokens()?.accessToken ?? ''

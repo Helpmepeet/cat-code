@@ -33,6 +33,7 @@ import { Mascot } from './Mascot.js'
 import { AccountsPanel } from './AccountsPanel.js'
 import { getPoolStatus } from '../../services/api/codexAccountPool.js'
 import { getAPIProvider } from '../../utils/model/providers.js'
+import { getOauthAccountInfo } from '../../utils/auth.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const ChannelsNoticeModule =
@@ -72,11 +73,12 @@ export function LogoV2() {
   const effortValue = useAppState(_temp2)
   const config = getGlobalConfig()
   const provider = getAPIProvider()
+  const oauthAccount = provider === 'openai' ? undefined : getOauthAccountInfo()
   const codexPoolStatus = provider === 'openai' ? getPoolStatus() : null
   const activeCodexAccount = codexPoolStatus?.accounts[codexPoolStatus.activeIndex]
   const username = provider === 'openai'
     ? activeCodexAccount?.alias ?? activeCodexAccount?.accountId.slice(0, 12) ?? ''
-    : config.oauthAccount?.displayName ?? ''
+    : oauthAccount?.displayName ?? ''
 
   const [announcement] = useState(() => {
     const announcements = getInitialSettings().companyAnnouncements
@@ -126,8 +128,8 @@ export function LogoV2() {
       )}
       {announcement && (
         <Box paddingLeft={2} flexDirection="column">
-          {!process.env.IS_DEMO && config.oauthAccount?.organizationName && (
-            <Text dimColor>Message from {config.oauthAccount.organizationName}:</Text>
+          {!process.env.IS_DEMO && oauthAccount?.organizationName && (
+            <Text dimColor>Message from {oauthAccount.organizationName}:</Text>
           )}
           <Text>{announcement}</Text>
         </Box>

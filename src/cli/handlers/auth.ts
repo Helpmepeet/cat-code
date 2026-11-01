@@ -214,7 +214,11 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
 
   // Roles and first-token-date may fail for limited-scope tokens (e.g.
   // inference-only from setup-token). They're not required for core auth.
-  await fetchAndStoreUserRoles(tokens.accessToken).catch(err =>
+  await fetchAndStoreUserRoles(
+    tokens.accessToken,
+    profile?.account.uuid ?? tokens.tokenAccount?.uuid,
+    profile?.organization?.uuid ?? tokens.tokenAccount?.organizationUuid,
+  ).catch(err =>
     logForDebugging(String(err), { level: 'error' }),
   )
 

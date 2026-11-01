@@ -549,6 +549,39 @@ export function updateClaudeAccountTokens(
   logForDebugging(`[claude-pool] Updated account tokens after refresh`)
 }
 
+/** Store roles for the request's account without republishing its credentials. */
+export function updateClaudeAccountRoles(
+  accountUuid: string,
+  roles: Required<Pick<ClaudePoolAccount, 'organizationRole' | 'workspaceRole' | 'organizationName'>>,
+  organizationUuid?: string,
+): void {
+  if (!pool.initialized) return
+  const account = pool.accounts.find(account => account.accountUuid === accountUuid)
+  if (!account || account.organizationUuid !== organizationUuid) return
+  Object.assign(account, roles)
+  if (!account.vaultFilePath) return
+
+  let releaseLock: (() => void) | undefined
+  try {
+    releaseLock = acquireVaultMutationLockSync(account.vaultFilePath)
+    const existing = JSON.parse(readFileSync(account.vaultFilePath, 'utf8'))
+    if (existing.profile?.account_uuid !== accountUuid ||
+        existing.profile?.organization_uuid !== organizationUuid) return
+    existing.profile = {
+      ...existing.profile,
+      organization_role: roles.organizationRole,
+      workspace_role: roles.workspaceRole,
+      organization_name: roles.organizationName,
+    }
+    writeFileAtomicDurableSync(account.vaultFilePath, JSON.stringify(existing, null, 2) + '\n', {
+      encoding: 'utf-8',
+      mode: 0o600,
+    })
+  } finally {
+    releaseLock?.()
+  }
+}
+
 export function deleteClaudeVaultFile(filePath: string): boolean {
   let releaseLock: (() => void) | undefined
   try {

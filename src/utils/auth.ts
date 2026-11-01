@@ -2066,13 +2066,19 @@ export function getOauthAccountInfo(): AccountInfo | undefined {
   if (shouldUseClaudePoolTokenSource()) {
     const account = getActiveClaudeAccount()
     if (!account || account.accountUuid !== tokens.accountUuid) return undefined
+    const shared = getGlobalConfig().oauthAccount
+    // Older vault entries predate role persistence. Reuse only the same
+    // account and organization, and never override an explicit fetched null.
+    const legacyProfile = account.organizationUuid !== undefined &&
+      shared?.accountUuid === account.accountUuid &&
+      shared.organizationUuid === account.organizationUuid ? shared : undefined
     return {
       accountUuid: account.accountUuid,
       emailAddress: account.emailAddress,
       organizationUuid: account.organizationUuid,
-      organizationName: account.organizationName,
-      organizationRole: account.organizationRole,
-      workspaceRole: account.workspaceRole,
+      organizationName: account.organizationName !== undefined ? account.organizationName : legacyProfile?.organizationName,
+      organizationRole: account.organizationRole !== undefined ? account.organizationRole : legacyProfile?.organizationRole,
+      workspaceRole: account.workspaceRole !== undefined ? account.workspaceRole : legacyProfile?.workspaceRole,
       displayName: account.displayName,
       billingType: account.billingType as AccountInfo['billingType'],
       hasExtraUsageEnabled: account.hasExtraUsageEnabled,
