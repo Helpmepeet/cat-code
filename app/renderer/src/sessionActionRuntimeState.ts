@@ -28,12 +28,20 @@ export type SessionActionRuntimeState = {
   errorBySession: Record<SessionId, SessionActionError | null>
   /** Edit, fork, and export results retained by correlation id until consumed. */
   targetedByRequestId: Record<string, SessionActionResultFrame>
+  localByRequestId: Record<string, SessionActionLocalOutcome>
 }
 
 export type SessionActionError = { requestId: string; message: string }
+export type SessionActionLocalOutcome = {
+  sessionId: SessionId
+  requestId: string
+  status: 'refused' | 'unknown'
+  message: string
+}
 
 export type SessionActionRuntimeAction =
   | { type: 'frame'; frame: ServerFrame }
+  | { type: 'local-send-outcome'; outcome: SessionActionLocalOutcome }
   /**
    * A consumer has copied this exact outcome into its own short-lived state.
    * Match the request id so an older dialog can never erase a newer action.
@@ -42,17 +50,23 @@ export type SessionActionRuntimeAction =
   | { type: 'session-removed'; sessionId: SessionId }
 
 export function createSessionActionRuntimeState(): SessionActionRuntimeState {
-  return { lastBySession: {}, errorBySession: {}, targetedByRequestId: {} }
+  return { lastBySession: {}, errorBySession: {}, targetedByRequestId: {}, localByRequestId: {} }
 }
 
 export function reduceSessionActionRuntimeState(
   state: SessionActionRuntimeState,
   action: SessionActionRuntimeAction,
 ): SessionActionRuntimeState {
+  if (action.type === 'local-send-outcome') {
+    const localByRequestId = { ...state.localByRequestId, [action.outcome.requestId]: action.outcome }
+    for (const id of Object.keys(localByRequestId).slice(0, -64)) delete localByRequestId[id]
+    return { ...state, localByRequestId }
+  }
   if (action.type === 'session-removed') {
     if (
       !(action.sessionId in state.lastBySession) &&
       !(action.sessionId in state.errorBySession) &&
+      !Object.values(state.localByRequestId).some(result => result.sessionId === action.sessionId) &&
       !Object.values(state.targetedByRequestId).some(
         result => result.sessionId === action.sessionId,
       )
@@ -68,7 +82,8 @@ export function reduceSessionActionRuntimeState(
     )
     delete lastBySession[action.sessionId]
     delete errorBySession[action.sessionId]
-    return { ...state, lastBySession, errorBySession, targetedByRequestId }
+    const localByRequestId = Object.fromEntries(Object.entries(state.localByRequestId).filter(([, result]) => result.sessionId !== action.sessionId))
+    return { ...state, lastBySession, errorBySession, targetedByRequestId, localByRequestId }
   }
   if (action.type === 'discard-result') {
     const result = state.lastBySession[action.sessionId]
@@ -76,20 +91,25 @@ export function reduceSessionActionRuntimeState(
     const discardResult = result?.requestId === action.requestId
     const discardError = error?.requestId === action.requestId
     const discardTargeted = action.requestId in state.targetedByRequestId
-    if (!discardResult && !discardError && !discardTargeted) return state
+    const discardLocal = state.localByRequestId[action.requestId]?.sessionId === action.sessionId
+    if (!discardResult && !discardError && !discardTargeted && !discardLocal) return state
 
     const lastBySession = { ...state.lastBySession }
     const errorBySession = { ...state.errorBySession }
     const targetedByRequestId = { ...state.targetedByRequestId }
+    const localByRequestId = { ...state.localByRequestId }
     if (discardResult) delete lastBySession[action.sessionId]
     if (discardError) delete errorBySession[action.sessionId]
     if (discardTargeted) delete targetedByRequestId[action.requestId]
-    return { ...state, lastBySession, errorBySession, targetedByRequestId }
+    if (discardLocal) delete localByRequestId[action.requestId]
+    return { ...state, lastBySession, errorBySession, targetedByRequestId, localByRequestId }
   }
 
   const { frame } = action
 
   if (frame.kind === 'session-action.result') {
+    const local = state.localByRequestId[frame.requestId]
+    if (local && local.sessionId !== frame.sessionId) return state
     const targeted =
       frame.verb === 'editFromMessage' ||
       frame.verb === 'branchFromMessage' ||

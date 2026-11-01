@@ -759,6 +759,26 @@ export class SessionRegistry {
     return true
   }
 
+  private mustRetainOwnership(row: RegistrySession): boolean {
+    return (row.ownerHostPid !== undefined && row.ownerHostPid !== process.pid &&
+      this.isProcessAlive(row.ownerHostPid)) || this.matchesSidecarIdentity(row)
+  }
+
+  private canReapForBound(row: RegistrySession): boolean {
+    return isReapableForBound(row) && !this.retainSession(row.appSessionId) &&
+      !this.mustRetainOwnership(row)
+  }
+
+  private admissionBlockedByRetainedWriter(): boolean {
+    if (!this.atBoundWithNothingReapable()) return false
+    // HR4's parked-tab churn limit is opt-in at the host. Ordinary operator
+    // admission is blocked here only by retained writer ownership, not tabs.
+    return this.doc.sessions.some(row =>
+      (row.shutdown !== null && this.mustRetainOwnership(row)) ||
+      (row.ownerHostPid !== undefined && row.ownerHostPid !== process.pid &&
+        this.isProcessAlive(row.ownerHostPid)))
+  }
+
   /**
    * (3) Reap: drop rows whose transcript is gone, TERMINAL rows that never
    * acquired an `engineSessionId` (an address that never got content is not
@@ -790,6 +810,7 @@ export class SessionRegistry {
   private reap(doc: RegistryDocument): void {
     // Drop missing-transcript rows and null-engineSessionId terminal rows.
     doc.sessions = doc.sessions.filter(row => {
+      if (this.mustRetainOwnership(row)) return true
       if (row.shutdown === null || row.shutdown === 'parked' ||
           this.retainSession(row.appSessionId) || row.hasAcceptedInput === true ||
           row.lastMessageSentAt !== null || row.forked) return true
@@ -852,6 +873,7 @@ export class SessionRegistry {
   }
 
   private isEmptyTerminalRow(row: RegistrySession): boolean {
+    if (this.mustRetainOwnership(row)) return false
     if (row.shutdown === null || row.shutdown === 'parked' ||
         this.retainSession(row.appSessionId) || row.hasAcceptedInput === true ||
         row.lastMessageSentAt !== null || row.forked) return false
@@ -926,8 +948,19 @@ export class SessionRegistry {
   private enforceBound(doc: RegistryDocument = this.doc): string[] {
     if (doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
+    // TERM is not proof of exit. Keep identity until the process is gone.
+    for (const row of doc.sessions) {
+      if (!isReapableForBound(row) || this.retainSession(row.appSessionId) ||
+          (row.ownerHostPid !== undefined && row.ownerHostPid !== process.pid &&
+            this.isProcessAlive(row.ownerHostPid)) || !this.matchesSidecarIdentity(row)) continue
+      try { this.killProcess(row.enginePid!) }
+      catch (error) {
+        this.log(`[registry] failed to SIGTERM over-bound orphan pid=${row.enginePid}: ${errText(error)}`)
+      }
+    }
+
     const terminal = doc.sessions
-      .filter(row => isReapableForBound(row) && !this.retainSession(row.appSessionId))
+      .filter(row => this.canReapForBound(row))
       .sort(
         (a, b) =>
           Number(a.peerWakeBlocked === true) - Number(b.peerWakeBlocked === true) ||
@@ -937,28 +970,6 @@ export class SessionRegistry {
     const doomedRows = terminal.slice(0, removeCount)
     const doomed = new Set(doomedRows.map(r => r.appSessionId))
     if (doomed.size > 0) {
-      // CC-3 (docs O1) — evict-reap. Dropping a terminal row makes its orphan
-      // permanently unreachable: no future launch sweep can see a pid whose row
-      // no longer exists. So, before the row disappears, SIGTERM its sidecar iff
-      // pid liveness AND identity both hold — the SAME §9-A3 check the orphan
-      // sweep uses (never kill on pid-match alone; a recycled pid or a cleanly
-      // shut-down session's dead pid is spared). A clean row's sidecar was already
-      // killed at close, so its pid fails the liveness check and nothing happens.
-      for (const row of doomedRows) {
-        const pid = row.enginePid
-        if (typeof pid === 'number' && this.matchesSidecarIdentity(row)) {
-          try {
-            this.killProcess(pid)
-            this.log(
-              `[registry] evict-reaped orphaned sidecar pid=${pid} for over-bound row ${row.appSessionId}`,
-            )
-          } catch (error) {
-            this.log(
-              `[registry] failed to SIGTERM evicted orphan pid=${pid}: ${errText(error)}`,
-            )
-          }
-        }
-      }
       doc.sessions = doc.sessions.filter(r => !doomed.has(r.appSessionId))
       this.log(`[registry] reaped ${doomed.size} over-bound terminal row(s)`)
     }
@@ -1052,6 +1063,9 @@ export class SessionRegistry {
     enginePid?: number
     socketPath?: string
   }): Promise<string[]> {
+    if (!this.find(input.appSessionId) && this.admissionBlockedByRetainedWriter()) {
+      throw new Error('Session registry is full; previous session ownership is still retained')
+    }
     const now = Date.now()
     this.ownedSessionIds.add(input.appSessionId)
     let reaped: string[] = []
@@ -1153,6 +1167,9 @@ export class SessionRegistry {
     title?: string
     forked?: boolean
   }): Promise<void> {
+    if (!this.find(input.appSessionId) && this.admissionBlockedByRetainedWriter()) {
+      throw new Error('Session registry is full; previous session ownership is still retained')
+    }
     const existing = this.find(input.appSessionId)
     if (existing) {
       if (existing.binding.kind !== 'managed' || existing.binding.storageId !== input.binding.storageId || existing.binding.storageRootId !== input.binding.storageRootId) {
@@ -1296,7 +1313,7 @@ export class SessionRegistry {
    */
   atBoundWithNothingReapable(): boolean {
     if (this.doc.sessions.length < MAX_REGISTRY_SESSIONS) return false
-    return !this.doc.sessions.some(isReapableForBound)
+    return !this.doc.sessions.some(row => this.canReapForBound(row))
   }
 
   /** Heartbeat `lastAttachedAt` on attach (§4.5). */

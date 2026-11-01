@@ -1099,9 +1099,10 @@ test('evict-reap SIGTERMs a matching over-bound orphan and SPARES a recycled-pid
   // The matching orphan was SIGTERM'd before eviction; the impostor (identity
   // mismatch) was spared — never kill on pid-match alone.
   expect(killed).toEqual([matchPid])
-  // Both over-bound rows were evicted regardless of whether they were killed.
+  // A successful TERM request is not exit confirmation. Retain the matching
+  // writer; evict the impostor and the next eligible terminal row instead.
   const ids = new Set(restorable.map(r => r.appSessionId))
-  expect(ids.has('app-match')).toBe(false)
+  expect(ids.has('app-match')).toBe(true)
   expect(ids.has('app-impostor')).toBe(false)
   expect(restorable.length).toBe(MAX_REGISTRY_SESSIONS)
 })
@@ -1865,6 +1866,19 @@ test('atBoundWithNothingReapable is true only when the registry is full of rows 
   }
   expect(registry.atBoundWithNothingReapable()).toBe(true)
 
+  // HR4 is opt-in. Operator admission may exceed the parked-tab bound without
+  // removing existing tabs when there is no retained live writer identity.
+  await registry.upsertOnSpawn({ appSessionId: 'operator-new', cwd: '/Users/pt/cat-code' })
+  await registry.markParked('operator-new')
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS + 1)
+  expect(registry.sessions.filter(row => row.shutdown === 'parked').length).toBe(MAX_REGISTRY_SESSIONS + 1)
+  writeTranscript(storageDir, 'managed-operator-engine')
+  await registry.registerManagedHistorySession({
+    appSessionId: 'managed-operator', engineSessionId: 'managed-operator-engine',
+    cwd: '/managed', binding: managedBinding,
+  })
+  expect(registry.sessions.filter(row => row.shutdown === 'parked').length).toBe(MAX_REGISTRY_SESSIONS + 1)
+
   // One reapable row is enough to allow a create again.
   await registry.upsertOnSpawn({ appSessionId: 'app-0', cwd: '/Users/pt/cat-code' })
   await registry.markClean('app-0')
@@ -2077,4 +2091,58 @@ test('peerOpenedAt replaces on each spawn that carries it and survives a reload'
   expect(registry.findSession('app-a')?.peerOpenedAt).toBe(100)
   await registry.upsertOnSpawn({ appSessionId: 'app-a', cwd: '/isolated', peerOpenedAt: 200 })
   expect(readDoc(registryPath).sessions[0]?.peerOpenedAt).toBe(200)
+})
+
+test('unconfirmed injected writers survive launch, empty pruning and full admission until late exit', async () => {
+  const storageDir = tempDir()
+  const socketPath = join(storageDir, 'owned.sock')
+  writeFileSync(socketPath, '')
+  let alive = true
+  const killed: number[] = []
+  const probes: Partial<RegistryOptions> = {
+    storageDir, sidecarCommandMarker: 'owned-fixture',
+    isProcessAlive: pid => alive && pid === 812345,
+    processCommand: () => 'owned-fixture',
+    killProcess: pid => { killed.push(pid) }, // successful TERM, deliberately no exit
+  }
+  seed(join(storageDir, 'registry.json'), Array.from({ length: MAX_REGISTRY_SESSIONS }, (_, i) => baseRow({
+    appSessionId: `writer-${i}`, engineSessionId: i % 2 ? 'missing-transcript' : null,
+    enginePid: 812345, socketPath, shutdown: null,
+  })))
+  const first = makeRegistry(probes).registry
+  await first.launch()
+  expect(killed.length).toBe(MAX_REGISTRY_SESSIONS)
+  expect(await first.discardEmptySession('writer-0')).toBe(false)
+  const relaunched = makeRegistry(probes).registry
+  await relaunched.launch()
+  expect(relaunched.restorable().length).toBe(MAX_REGISTRY_SESSIONS)
+  expect(relaunched.atBoundWithNothingReapable()).toBe(true)
+  await expect(relaunched.upsertOnSpawn({ appSessionId: 'new', cwd: '/fixture' })).rejects.toThrow('registry is full')
+  await expect(relaunched.registerManagedHistorySession({
+    appSessionId: 'managed-new', engineSessionId: 'managed-engine', cwd: '/managed', binding: managedBinding,
+  })).rejects.toThrow('registry is full')
+  expect(readDoc(join(storageDir, 'registry.json')).sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  alive = false
+  const afterExit = makeRegistry(probes).registry
+  await afterExit.launch()
+  expect(afterExit.restorable()).toEqual([])
+  await afterExit.upsertOnSpawn({ appSessionId: 'new', cwd: '/fixture' })
+  expect(afterExit.findSession('new')).toBeDefined()
+})
+
+test.each(['recycled-command', 'missing-socket'])('empty pruning does not retain invalid writer identity: %s', async invalid => {
+  const storageDir = tempDir()
+  const socketPath = join(storageDir, 'owned.sock')
+  if (invalid !== 'missing-socket') writeFileSync(socketPath, '')
+  const killed: number[] = []
+  seed(join(storageDir, 'registry.json'), [baseRow({ appSessionId: 'invalid', engineSessionId: null,
+    shutdown: null, enginePid: 812345, socketPath })])
+  const { registry } = makeRegistry({ storageDir, sidecarCommandMarker: 'owned-fixture',
+    isProcessAlive: pid => pid === 812345,
+    processCommand: () => invalid === 'recycled-command' ? 'innocent-fixture' : 'owned-fixture',
+    killProcess: pid => { killed.push(pid) },
+  })
+  await registry.launch()
+  expect(registry.restorable()).toEqual([])
+  expect(killed).toEqual([])
 })

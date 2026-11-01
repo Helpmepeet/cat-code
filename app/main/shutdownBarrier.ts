@@ -1,4 +1,18 @@
-export type ShutdownResult = { confirmed: boolean; unresolvedSessionIds: string[] }
+export type ShutdownResult = {
+  confirmed: boolean
+  unresolvedSessionIds: string[]
+  persistenceConfirmed?: boolean
+  restorationConfirmed?: boolean
+}
+
+export function shutdownFullyClean(result: ShutdownResult): boolean {
+  return result.confirmed && result.persistenceConfirmed !== false && result.restorationConfirmed !== false
+}
+
+/** Failed cleanup must remain reachable through a fresh recovery UI. */
+export function canReopenRuntime(result: ShutdownResult): boolean {
+  return result.confirmed
+}
 
 export async function settleShutdownTasks(
   runtime: Promise<ShutdownResult>,
@@ -7,7 +21,14 @@ export async function settleShutdownTasks(
 ): Promise<ShutdownResult> {
   const [runtimeResult, helperResult, workersResult] = await Promise.allSettled([runtime, helper, workers])
   const result = runtimeResult.status === 'fulfilled' ? runtimeResult.value : { confirmed: false, unresolvedSessionIds: [] }
-  return { ...result, confirmed: result.confirmed && helperResult.status === 'fulfilled' && workersResult.status === 'fulfilled' && workersResult.value }
+  const helperOutcome = helperResult.status === 'fulfilled' ? helperResult.value as
+    { restorationConfirmed?: boolean; processConfirmed?: boolean } | undefined : undefined
+  return {
+    ...result,
+    confirmed: result.confirmed && helperResult.status === 'fulfilled' && helperOutcome?.processConfirmed !== false &&
+      workersResult.status === 'fulfilled' && workersResult.value,
+    ...(helperOutcome?.restorationConfirmed === undefined ? {} : { restorationConfirmed: helperOutcome.restorationConfirmed }),
+  }
 }
 
 /** Keep all normal exit routes on the same bounded runtime teardown. */

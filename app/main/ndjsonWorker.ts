@@ -133,6 +133,8 @@ export async function runNdjsonWorker(
   let reportedUnconfirmed = false
   if (options.mutationKey) pendingWriters.add(options.mutationKey)
   const confirmedExit = (code = child.exitCode, signal = child.signalCode) => {
+    // Exit may precede close and a replacement claim. Release only once.
+    if (processExited) return
     processExited = true
     if (options.mutationKey) pendingWriters.delete(options.mutationKey)
     child.removeListener('exit', confirmedExit)

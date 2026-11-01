@@ -2,9 +2,11 @@ import { expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createShutdownBarrier, settleShutdownTasks, type ShutdownResult } from './shutdownBarrier.js'
+import { canReopenRuntime, createShutdownBarrier, settleShutdownTasks, shutdownFullyClean, type ShutdownResult } from './shutdownBarrier.js'
 import { createOwnedWorkerShutdownTracker } from './ownedWorkerShutdown.js'
 import { runNdjsonWorker } from './ndjsonWorker.js'
+import { runWorkspaceTrustWorker } from './workspaceTrustRunner.js'
+import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 
 test('shutdown barrier closes admission once and waits for helpers before success', async () => {
   let starts = 0
@@ -57,6 +59,28 @@ test('helper rejection still waits for captured runtime exits before settling', 
   expect((await pending).confirmed).toBe(false)
 })
 
+test('confirmed exits do not hide failed durable clean marks or helper restoration', async () => {
+  const result = await settleShutdownTasks(
+    Promise.resolve({ confirmed: true, unresolvedSessionIds: [], persistenceConfirmed: false }),
+    Promise.resolve({ processConfirmed: true, restorationConfirmed: false }),
+    Promise.resolve(true),
+  )
+  expect(result.confirmed).toBe(true)
+  expect(result.persistenceConfirmed).toBe(false)
+  expect(result.restorationConfirmed).toBe(false)
+  expect(shutdownFullyClean(result)).toBe(false)
+  expect(shutdownFullyClean({ confirmed: true, unresolvedSessionIds: [], persistenceConfirmed: false })).toBe(false)
+})
+
+test('confirmed exits permit recovery UI after failed cleanup without reporting fully clean shutdown', () => {
+  for (const cleanup of [{ persistenceConfirmed: false }, { restorationConfirmed: false }]) {
+    const result = { confirmed: true, unresolvedSessionIds: [], ...cleanup }
+    expect(canReopenRuntime(result)).toBe(true)
+    expect(shutdownFullyClean(result)).toBe(false)
+    expect(canReopenRuntime({ ...result, confirmed: false })).toBe(false)
+  }
+})
+
 test('worker tracker retains uncertain identity until a late matching exit', async () => {
   const tracker = createOwnedWorkerShutdownTracker()
   tracker.observe('old-generation', { phase: 'started', pid: 100 })
@@ -89,6 +113,37 @@ test('worker shutdown barrier waits for actual owned child exit', async () => {
   expect((await barrier()).confirmed).toBe(true)
   expect((await run).termination).toBe('confirmed')
   expect(tracker.pendingPids()).toEqual([])
+})
+
+test('trust and relocation runners publish captured lifecycle and cancel owned fixtures', async () => {
+  for (const role of ['trust', 'relocation'] as const) {
+    const tracker = createOwnedWorkerShutdownTracker()
+    const abort = new AbortController()
+    let started = false
+    const options = {
+      command: process.execPath,
+      args: ['-e', `process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`],
+      cwd: tmpdir(), signal: abort.signal,
+      onWorkerLifecycle: (event: import('./ndjsonWorker.js').WorkerProcessLifecycle) => {
+        tracker.observe(role, event)
+        if (event.phase === 'started') { started = true; setTimeout(() => abort.abort(), 30) }
+      },
+    }
+    const pending = role === 'trust'
+      ? runWorkspaceTrustWorker({ ...options, request: { type: 'workspace.inspect', version: 1 } })
+      : runSessionRelocationWorker({ ...options, request: {
+        type: 'session-relocation', version: 1,
+        appSessionId: '00000000-0000-4000-8000-000000000001',
+        engineSessionId: '00000000-0000-4000-8000-000000000002',
+        source: { cwd: '/fixture-source', binding: { kind: 'project' } },
+        target: { cwd: '/fixture-target', binding: { kind: 'project' } },
+        controls: { mode: 'default', model: null, fastMode: false },
+      } })
+    await expect(pending).rejects.toThrow()
+    expect(started).toBe(true)
+    expect(await tracker.waitForExit(100)).toBe(true)
+    expect(tracker.pendingPids()).toEqual([])
+  }
 })
 
 for (const route of ['signal', 'quit'] as const) {

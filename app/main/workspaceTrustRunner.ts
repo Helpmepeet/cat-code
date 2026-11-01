@@ -1,11 +1,12 @@
 import { isAbsolute } from 'node:path'
-import { runNdjsonWorker } from './ndjsonWorker.js'
+import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
 import { MAX_WORKSPACE_TRUST_BYTES, parseWorkspaceTrustWorkerRequest, parseWorkspaceTrustWorkerResult, type WorkspaceTrustWorkerRequest, type WorkspaceTrustWorkerResult } from '../shared/workspaceTrustWorker.js'
 
 /** Resolve or accept trust without starting a chat or loading project code. */
 export async function runWorkspaceTrustWorker(options: {
   command: string; args: string[]; cwd: string; request: WorkspaceTrustWorkerRequest; env?: NodeJS.ProcessEnv; signal?: AbortSignal
   log?: (line: string) => void
+  onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
 }): Promise<WorkspaceTrustWorkerResult> {
   if (!parseWorkspaceTrustWorkerRequest(options.request)) throw new Error('Invalid workspace trust request')
   let result: WorkspaceTrustWorkerResult | null = null

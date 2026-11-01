@@ -972,6 +972,10 @@ export class Host implements HostApi {
     preferSpawnModel?: boolean
     recoverBeforeSpawn?: boolean
   }, reservation: SpawnReservation): Promise<HostResult<SessionDescriptor>> {
+    if (this.shutdownStarted) {
+      this.releaseSpawnReservation(reservation)
+      return hostError('session_unreachable', 'Application is shutting down')
+    }
     const { appSessionId, cwd, resumeEngineSessionId, forked } = input
     const title = input.title ?? undefined
 
@@ -1007,6 +1011,10 @@ export class Host implements HostApi {
     try {
       if (existingRow) {
         const claim = await this.claimSessionForSpawn(existingRow)
+        if (this.shutdownStarted) {
+          this.releaseSpawnReservation(reservation)
+          return hostError('session_unreachable', 'Application is shutting down')
+        }
         if (!claim.ok) {
           this.releaseSpawnReservation(reservation)
           return claim
@@ -1029,6 +1037,10 @@ export class Host implements HostApi {
         ...(input.peerOpenedAt !== undefined ? { peerOpenedAt: input.peerOpenedAt } : {}),
       })
       rowPersisted = true
+      if (this.shutdownStarted) {
+        this.releaseSpawnReservation(reservation)
+        return hostError('session_unreachable', 'Application is shutting down')
+      }
       if (binding.kind === 'managed' && this.registry.lastWriteFailed) {
         this.releaseSpawnReservation(reservation)
         return hostError('registry_unavailable', 'managed chat binding could not be saved safely')
@@ -1655,9 +1667,21 @@ export class Host implements HostApi {
     return this.moveSessionInternal(appSessionId, cwd)
   }
 
-  private async moveSessionInternal(appSessionId: SessionId, cwd: string | null,
+  private readonly pendingMoves = new Set<Promise<HostResult<SessionDescriptor>>>()
+
+  private moveSessionInternal(appSessionId: SessionId, cwd: string | null,
+    jump?: { operationId: string; beforeMutation: () => boolean }): Promise<HostResult<SessionDescriptor>> {
+    if (this.shutdownStarted) return Promise.resolve(hostError('session_unreachable', 'Application is shutting down'))
+    const pending = this.performMoveSession(appSessionId, cwd, jump)
+    this.pendingMoves.add(pending)
+    void pending.finally(() => this.pendingMoves.delete(pending)).catch(() => {})
+    return pending
+  }
+
+  private async performMoveSession(appSessionId: SessionId, cwd: string | null,
     jump?: { operationId: string; beforeMutation: () => boolean }): Promise<HostResult<SessionDescriptor>> {
     await this.launched
+    if (this.shutdownStarted) return hostError('session_unreachable', 'Application is shutting down')
     const jumpReservation = this.workspaceJumpReservations.get(appSessionId)
     if (jumpReservation && jumpReservation.operationId !== jump?.operationId) return hostError('session_unreachable', 'This Chat has a pending workspace change')
     if (jump && (!jumpReservation || jumpReservation.generation !== this.supervisor.getSessionGeneration(appSessionId))) return hostError('session_unreachable', 'The workspace change is no longer current')
@@ -1832,10 +1856,12 @@ export class Host implements HostApi {
       // Reuse the existing idle gate. A declined park times out without killing work.
       const timingIdentity = { appSessionId, engineSessionId: movingRow.engineSessionId, operationId: jump?.operationId, generation: this.supervisor.getSessionGeneration(appSessionId) ?? undefined }
       await this.timing.span(timingIdentity, 'park_to_clean_exit', () => this.parkForMove(appSessionId))
+      if (this.shutdownStarted) throw new Error('Application is shutting down')
       sourceParked = true
       if (hasPeerWork()) throw new Error('Finish active peer work and deliveries before moving this Chat')
       if (jump && !jump.beforeMutation()) throw new Error('The workspace change was cancelled')
       await this.timing.span(timingIdentity, 'relocation_worker', () => this.relocate!({ appSessionId, engineSessionId: movingRow.engineSessionId!, source, target, controls }))
+      if (this.shutdownStarted) throw new Error('Application is shutting down')
       const destinationEmpty = readSessionRelocation(movingRow.engineSessionId)?.empty === true
       moveCommitted = true
       await this.registry.updateLocation(appSessionId, target.cwd, target.binding)
@@ -1867,6 +1893,7 @@ export class Host implements HostApi {
       }
       return { ok: true, value: this.descriptorFor(appSessionId)! }
     } catch (error) {
+      if (this.shutdownStarted) return hostError('session_unreachable', 'Application is shutting down')
       if (moveCommitted && !destinationVerified) {
         try { this.supervisor.killSession(appSessionId); await this.registry.markClean(appSessionId) }
         catch (cleanupError) { this.log(`[host] moved Chat stop failed: ${errText(cleanupError)}`) }
@@ -1948,7 +1975,7 @@ export class Host implements HostApi {
         : recoveredMoved || moveCommitted ? 'The Chat moved, but could not reopen. Restore it from the sidebar.'
         : reason ?? 'Could not move this Chat. Its saved history is retained.')
     } finally {
-      if (sourceWasInactive && this.supervisor.listSessions().some(item => item.sessionId === appSessionId && item.status === 'ready')) {
+      if (!this.shutdownStarted && sourceWasInactive && this.supervisor.listSessions().some(item => item.sessionId === appSessionId && item.status === 'ready')) {
         try {
           await this.parkForMove(appSessionId)
           if (!sourceWasParked) await this.registry.markClean(appSessionId)
@@ -2076,17 +2103,18 @@ export class Host implements HostApi {
 
   /** Close admission immediately; persist clean state only after confirmed exit. */
 
-  private shutdownPromise?: Promise<{ confirmed: boolean; unresolvedSessionIds: string[] }>
+  private shutdownPromise?: Promise<{ confirmed: boolean; unresolvedSessionIds: string[]; persistenceConfirmed: boolean }>
   private shutdownStarted = false
 
-  shutdownAll(): Promise<{ confirmed: boolean; unresolvedSessionIds: string[] }> {
+  shutdownAll(): Promise<{ confirmed: boolean; unresolvedSessionIds: string[]; persistenceConfirmed: boolean }> {
     if (this.shutdownPromise) return this.shutdownPromise
     this.shutdownStarted = true
-    this.shutdownPromise = this.supervisor.shutdown().then(result => {
+    const processes = this.supervisor.shutdown()
+    this.shutdownPromise = Promise.all([processes, Promise.allSettled([...this.pendingMoves])]).then(([result]) => {
       const marked = this.registry.markLiveCleanSync(new Set(result.unresolvedSessionIds))
       for (const appSessionId of marked) this.evictReplay(appSessionId)
       for (const appSessionId of this.registry.lastRemovedEmptySessionIds) this.emitRemoved(appSessionId)
-      return result
+      return { ...result, persistenceConfirmed: !this.registry.lastWriteFailed }
     })
     return this.shutdownPromise
   }
@@ -2252,6 +2280,7 @@ export class Host implements HostApi {
   private reserveSpawn(consumesLive: boolean, replacesLive = false):
     | { ok: true; token: string; consumesLive: boolean }
     | { ok: false; result: HostResult<never> } {
+    if (this.shutdownStarted) return { ok: false, result: hostError('session_unreachable', 'Application is shutting down') }
     if (this.branchSwitching) {
       return { ok: false, result: hostError('branch_unavailable', 'A branch switch is in progress. Try again shortly.') }
     }

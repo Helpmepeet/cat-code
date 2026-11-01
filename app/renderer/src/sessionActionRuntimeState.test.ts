@@ -242,8 +242,24 @@ describe('sessionActionRuntimeState', () => {
       lastBySession: { [SESSION]: resultFrame() as Extract<ServerFrame, { kind: 'session-action.result' }> },
       errorBySession: { [SESSION]: { requestId: 'request', message: 'failed' } },
       targetedByRequestId: {},
+      localByRequestId: {},
     }
     expect(reduceSessionActionRuntimeState(state, { type: 'session-removed', sessionId: SESSION }))
-      .toEqual({ lastBySession: {}, errorBySession: {}, targetedByRequestId: {} })
+      .toEqual({ lastBySession: {}, errorBySession: {}, targetedByRequestId: {}, localByRequestId: {} })
   })
+})
+
+test('local export outcomes are request/session-owned and exact consumption cannot erase a newer request', () => {
+  let state = createSessionActionRuntimeState()
+  state = reduceSessionActionRuntimeState(state, { type: 'local-send-outcome', outcome: { sessionId: SESSION, requestId: 'old', status: 'refused', message: 'Not sent' } })
+  state = reduceSessionActionRuntimeState(state, { type: 'local-send-outcome', outcome: { sessionId: SESSION, requestId: 'new', status: 'unknown', message: 'Unknown' } })
+  state = reduceSessionActionRuntimeState(state, { type: 'discard-result', sessionId: OTHER, requestId: 'new' })
+  expect(state.localByRequestId.new?.status).toBe('unknown')
+  state = reduceSessionActionRuntimeState(state, { type: 'discard-result', sessionId: SESSION, requestId: 'old' })
+  expect(state.localByRequestId.old).toBeUndefined()
+  expect(state.localByRequestId.new?.status).toBe('unknown')
+  state = reduceSessionActionRuntimeState(state, { type: 'frame', frame: resultFrame({ sessionId: OTHER, requestId: 'new', verb: 'export', exportText: 'WRONG SESSION' }) })
+  expect(state.targetedByRequestId.new).toBeUndefined()
+  state = reduceSessionActionRuntimeState(state, { type: 'session-removed', sessionId: SESSION })
+  expect(state.localByRequestId).toEqual({})
 })

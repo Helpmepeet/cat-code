@@ -83,3 +83,47 @@ test('synchronous callback failures are curated and healthy state removes the no
   await tree.render(<RoutingStorageRecovery health={{ status: 'healthy', code: null }} draft="draft" onRevalidate={async () => blocked} onInspect={async () => {}} />)
   expect(tree.container.textContent).toBe('')
 })
+
+for (const change of ['edit', 'session']) test(`copy completion and existing notice cannot follow a draft ${change}`, async () => {
+  let finish!: () => void
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise<void>(resolve => { finish = resolve }) } })
+  const props = { health: blocked, onRevalidate: async () => blocked, onInspect: async () => {} }
+  try {
+    const tree = await harness.mount(<RoutingStorageRecovery {...props} draft="draft A" draftIdentity="session A" />)
+    await act(async () => { button(tree.container, 'Copy draft').click() })
+    const next = { draft: change === 'edit' ? 'draft B' : 'draft A', draftIdentity: change === 'edit' ? 'session A' : 'session B' }
+    await tree.render(<RoutingStorageRecovery {...props} {...next} />)
+    await act(async () => { finish() })
+    expect(tree.container.textContent).not.toContain('Draft copied.')
+    await act(async () => { button(tree.container, 'Copy draft').click() })
+    await act(async () => { finish() })
+    expect(tree.container.textContent).toContain('Draft copied.')
+    await tree.render(<RoutingStorageRecovery {...props} draft="new draft" draftIdentity="session C" />)
+    expect(tree.container.textContent).not.toContain('Draft copied.')
+  } finally {
+    if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  }
+})
+
+test('late clipboard failure cannot warn for a different draft or an unmounted recovery panel', async () => {
+  let fail!: (error: Error) => void
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: () => new Promise<void>((_resolve, reject) => { fail = reject }) } })
+  const props = { health: blocked, onRevalidate: async () => blocked, onInspect: async () => {} }
+  try {
+    const tree = await harness.mount(<RoutingStorageRecovery {...props} draft="A" draftIdentity="session A" />)
+    await act(async () => { button(tree.container, 'Copy draft').click() })
+    await tree.render(<RoutingStorageRecovery {...props} draft="B" draftIdentity="session B" />)
+    await act(async () => { fail(new Error('Clipboard refused old draft')) })
+    expect(tree.container.textContent).not.toContain('Could not copy')
+    await act(async () => { button(tree.container, 'Copy draft').click() })
+    await tree.unmount()
+    await act(async () => { fail(new Error('Clipboard refused after unmount')) })
+    expect(tree.container.textContent).toBe('')
+  } finally {
+    if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor)
+    else Reflect.deleteProperty(navigator, 'clipboard')
+  }
+})

@@ -2,9 +2,52 @@ import { expect, test } from 'bun:test'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { parseLidNativeReply } from './lidClosedNative.js'
+import { EventEmitter } from 'node:events'
+import { PassThrough } from 'node:stream'
+import { LidNativeClient, parseLidNativeReply } from './lidClosedNative.js'
 
 const identity = '0b8b8c9d-4e6f-4a51-9e1a-2b3c4d5e6f70'
+
+test('late native exit releases only its captured claim after the bounded close deadline', async () => {
+  const client = new LidNativeClient()
+  const state = client as unknown as {
+    child: unknown
+    closing: Map<unknown, Promise<boolean>>
+  }
+  const fake = () => {
+    const signals: string[] = []
+    const child = Object.assign(new EventEmitter(), {
+      pid: 987654, exitCode: null, signalCode: null, stdin: new PassThrough(),
+      kill(signal: string) { signals.push(signal); return true },
+    })
+    return { child, signals }
+  }
+  const first = fake()
+  state.child = first.child
+  try {
+    expect(await client.close()).toBe(false)
+    expect(first.signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(first.child.listenerCount('exit')).toBe(1)
+    expect(state.closing.has(first.child)).toBe(true)
+    first.child.emit('exit', null, 'SIGKILL')
+    expect(state.closing.size).toBe(0)
+    expect(await client.close()).toBe(true)
+
+    const second = fake()
+    state.child = second.child
+    const pending = client.close()
+    first.child.emit('exit', null, 'SIGKILL')
+    expect(state.closing.has(second.child)).toBe(true)
+    second.child.emit('exit', null, 'SIGTERM')
+    expect(await pending).toBe(true)
+    expect(state.closing.size).toBe(0)
+  } finally {
+    // These are EventEmitters with inert kill methods, never OS processes.
+    for (const child of state.closing.keys()) (child as EventEmitter).emit('exit', null, 'SIGKILL')
+    await client.close(true)
+  }
+})
+
 function workSnapshot(record: Record<string, unknown>) {
   return { record: { phase: 'active', began: 1, deadline: 2, allowance: 10, needsRestore: true,
     sleepRequested: false, sleepRequestAttempted: false, ...record },
@@ -58,8 +101,72 @@ test('an unavailable XPC generation is discarded before the next native request'
     const output = join(directory, 'adapter.mjs')
     await Bun.write(output, built.outputs[0]!)
     const adapter = await import(pathToFileURL(output).href) as typeof import('./lidClosedNative.js')
+    expect(adapter.LID_HELPER).toBe(helper)
     client = new adapter.LidNativeClient()
     expect((await client.command({ op: 'status' })).ok).toBe(false)
     expect((await client.command({ op: 'status' })).snapshot?.safety.sleepDisabled).toBe(false)
-  } finally { client?.close(); rmSync(directory, { recursive: true, force: true }) }
+  } finally { await client?.close(true); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('a missing private helper can recover after its executable becomes available', async () => {
+  const directory = mkdtempSync('/private/tmp/cat-lid-missing-')
+  let client: LidNativeClient | undefined
+  try {
+    const helper = join(directory, 'bridge')
+    const built = await Bun.build({ entrypoints: [new URL('./lidClosedNative.ts', import.meta.url).pathname], target: 'bun',
+      plugins: [{ name: 'missing-bridge-fixture', setup(builder) {
+        builder.onLoad({ filter: /lidClosedNative\.ts$/ }, args => ({ loader: 'ts', contents:
+          readFileSync(args.path, 'utf8').replace("'/Library/PrivilegedHelperTools/com.catcode.lid-closed'", JSON.stringify(helper)) }))
+      } }] })
+    expect(built.success).toBe(true)
+    const output = join(directory, 'adapter.mjs')
+    await Bun.write(output, built.outputs[0]!)
+    const adapter = await import(pathToFileURL(output).href) as typeof import('./lidClosedNative.js')
+    expect(adapter.LID_HELPER).toBe(helper)
+    client = new adapter.LidNativeClient()
+    await expect(client.command({ op: 'status' })).rejects.toThrow('Helper unavailable')
+    const snapshot = { record: { version: 1, phase: 'off', began: 0, deadline: 0, allowance: 0,
+      needsRestore: false, sleepRequested: false, sleepRequestAttempted: false },
+      safety: { sleepDisabled: false, thermal: 'nominal' }, remainingSeconds: 0, hardwareQualified: true }
+    writeFileSync(helper, `#!${process.execPath}
+      import { createInterface } from 'node:readline';
+      createInterface({input:process.stdin}).on('line',()=>console.log(${JSON.stringify(JSON.stringify({ ok: true, snapshot }))}));`)
+    chmodSync(helper, 0o700)
+    expect((await client.command({ op: 'status' })).snapshot?.safety.sleepDisabled).toBe(false)
+    expect(await client.close()).toBe(true)
+  } finally { await client?.close(true); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('native shutdown confirms captured fixture exit after TERM escalation and closes admission', async () => {
+  const directory = mkdtempSync('/private/tmp/cat-lid-shutdown-')
+  let client: import('./lidClosedNative.js').LidNativeClient | undefined
+  try {
+    const helper = join(directory, 'bridge')
+    const pidFile = join(directory, 'pid')
+    writeFileSync(helper, `#!${process.execPath}
+      import { createInterface } from 'node:readline';
+      import { writeFileSync } from 'node:fs';
+      writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      process.on('SIGTERM',()=>{});
+      createInterface({input:process.stdin}).on('line',()=>console.log(JSON.stringify({ok:false,error:'fixture'})));
+      setInterval(()=>{},1000);`)
+    chmodSync(helper, 0o700)
+    const built = await Bun.build({ entrypoints: [new URL('./lidClosedNative.ts', import.meta.url).pathname], target: 'bun',
+      plugins: [{ name: 'owned-bridge-fixture', setup(builder) {
+        builder.onLoad({ filter: /lidClosedNative\.ts$/ }, args => ({ loader: 'ts', contents:
+          readFileSync(args.path, 'utf8').replace("'/Library/PrivilegedHelperTools/com.catcode.lid-closed'", JSON.stringify(helper)) }))
+      } }] })
+    expect(built.success).toBe(true)
+    const output = join(directory, 'adapter.mjs')
+    await Bun.write(output, built.outputs[0]!)
+    const adapter = await import(pathToFileURL(output).href) as typeof import('./lidClosedNative.js')
+    expect(adapter.LID_HELPER).toBe(helper)
+    client = new adapter.LidNativeClient()
+    expect((await client.command({ op: 'status' })).ok).toBe(false)
+    const closing = client.close(true)
+    await expect(client.command({ op: 'status' })).rejects.toThrow('Helper unavailable')
+    expect(await closing).toBe(true)
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    expect(() => process.kill(pid, 0)).toThrow()
+  } finally { await client?.close(true); rmSync(directory, { recursive: true, force: true }) }
 })

@@ -24,6 +24,7 @@ import { AgentsPage } from './AgentsPage.js'
 import { getBridge } from './bridge.js'
 import { MemoryPage } from './MemoryPage.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
+import type { RemoteSettingsOutcome } from './remoteSettingsState.js'
 import { SelectControl, SettingsPane } from './SettingsEditors.js'
 import type { SettingWriteInput } from './SettingsEditors.js'
 import type { SettingsProjectBinding } from './settingsProjectBinding.js'
@@ -69,6 +70,7 @@ export function SettingsShell({
   cwd,
   remoteSnapshot,
   remoteLastResult,
+  remoteOutcomesByRequestId,
   onRemoteVerb,
   projectBinding,
   projects,
@@ -82,6 +84,7 @@ export function SettingsShell({
   cwd?: string | null
   remoteSnapshot?: RemoteSettingsSnapshot | null
   remoteLastResult?: RemoteSettingsResultFrame | null
+  remoteOutcomesByRequestId?: Readonly<Record<string, RemoteSettingsOutcome>>
   onRemoteVerb?: (verb: RemoteVerbMessage) => void
   /** Names the focused session's project (`settingsProjectBinding.ts`), so the
    * picker's "current" entry gets the roster-disambiguated label instead of a
@@ -537,6 +540,7 @@ export function SettingsShell({
                 onSettingWrite={handleSettingWrite}
                 pendingSettingKeys={pendingSettingKeys}
                 remoteLastResult={remoteLastResult ?? null}
+                remoteOutcomesByRequestId={remoteOutcomesByRequestId}
                 remoteSnapshot={remoteSnapshot ?? null}
                 selectedProject={selectedProject}
                 sessionOpen={sessionOpen}
@@ -638,6 +642,7 @@ function ScopeBody({
   memorySnapshot,
   remoteSnapshot,
   remoteLastResult,
+  remoteOutcomesByRequestId,
   onRemoteVerb,
   onRetryInventory,
   onSettingWrite,
@@ -659,6 +664,7 @@ function ScopeBody({
   memorySnapshot: MemorySnapshot | null
   remoteSnapshot: RemoteSettingsSnapshot | null
   remoteLastResult: RemoteSettingsResultFrame | null
+  remoteOutcomesByRequestId?: Readonly<Record<string, RemoteSettingsOutcome>>
   onRemoteVerb: (verb: RemoteVerbMessage) => void
   onRetryInventory: () => void
   onSettingWrite: (input: SettingWriteInput) => void
@@ -767,6 +773,7 @@ function ScopeBody({
       return (
         <RemoteSettingsPage
           lastResult={remoteLastResult}
+          outcomesByRequestId={remoteOutcomesByRequestId}
           onVerb={onRemoteVerb}
           snapshot={remoteSnapshot}
         />

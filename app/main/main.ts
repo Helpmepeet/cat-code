@@ -39,7 +39,7 @@ import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
 import { ProjectRoutingController } from './projectRoutingController.js'
-import { createShutdownBarrier, settleShutdownTasks, type ShutdownResult } from './shutdownBarrier.js'
+import { canReopenRuntime, createShutdownBarrier, settleShutdownTasks, shutdownFullyClean, type ShutdownResult } from './shutdownBarrier.js'
 import { createOwnedWorkerShutdownTracker } from './ownedWorkerShutdown.js'
 import type { WorkerProcessLifecycle } from './ndjsonWorker.js'
 import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention } from './workspaceJumpCoordinator.js'
@@ -1239,16 +1239,19 @@ function startUsageRefresh(): void {
         command: sidecarLaunch().command,
         args: sidecarLaunch().argsFor('usage-stats', ['--bare', '--cached']),
         cwd: process.cwd(), signal: abort.signal, timeoutMs: 5000,
+        onWorkerLifecycle: createWorkerLifecycleLogger('usage-stats'),
       })
       if (!abort.signal.aborted && saved.type === 'usage' && usagePublication.accept(generation, saved)) {
         sendHostEvent({ type: 'usage-dashboard', result: saved })
         sendHostEvent({ type: 'usage-dashboard-loading' })
       }
     }
+    if (runtimeStopping || abort.signal.aborted) return
     const result = await runUsageStatsWorker({
       command: sidecarLaunch().command,
       args: sidecarLaunch().argsFor('usage-stats', ['--bare']),
       cwd: process.cwd(), signal: abort.signal,
+      onWorkerLifecycle: createWorkerLifecycleLogger('usage-stats'),
       onDiagnostic: diagnostic => logOperational('worker.failed', 'warn', {
         role: 'usage-stats',
         reason: diagnostic.reason,
@@ -3762,24 +3765,28 @@ function registerHostControlPlane(): void {
     pick: () => chooseDirectory(),
     validateCwd,
     inspectTrustRoot: async cwd => {
+      if (runtimeStopping) throw new Error('Application is shutting down')
       const abort = new AbortController()
       workspaceTrustRuns.add(abort)
       try {
         const result = await runWorkspaceTrustWorker({
           command: sidecarLaunch().command, args: sidecarLaunch().argsFor('workspace-trust'), cwd,
           request: { type: 'workspace.inspect', version: 1 }, signal: abort.signal,
+          onWorkerLifecycle: createWorkerLifecycleLogger('workspace-trust'),
           log: line => process.stderr.write(`${line}\n`),
         })
         return result.trustRoot
       } finally { workspaceTrustRuns.delete(abort) }
     },
     trustFolder: async (cwd, expectedTrustRoot) => {
+      if (runtimeStopping) throw new Error('Application is shutting down')
       const abort = new AbortController()
       workspaceTrustRuns.add(abort)
       try {
         await runWorkspaceTrustWorker({
           command: sidecarLaunch().command, args: sidecarLaunch().argsFor('workspace-trust'), cwd,
           request: { type: 'workspace.trust', version: 1, expectedTrustRoot }, signal: abort.signal,
+          onWorkerLifecycle: createWorkerLifecycleLogger('workspace-trust'),
           log: line => process.stderr.write(`${line}\n`),
         })
       } finally { workspaceTrustRuns.delete(abort) }
@@ -4521,6 +4528,7 @@ function registerHostControlPlane(): void {
             '--bare',
             '--account-delete',
           ]),
+          onWorkerLifecycle: createWorkerLifecycleLogger('account-delete'),
           cwd: process.cwd(),
           signal: abort.signal,
           forceKillOnAbort: true,
@@ -4621,6 +4629,7 @@ function registerHostControlPlane(): void {
       const runSignOutWorker = async (
         recovery: boolean,
       ): Promise<AccountsPoolWorkerSignOutResult | null> => {
+        if (runtimeStopping) return null
         const abort = new AbortController()
         accountProfileMutationAbort = abort
         const delivery: {
@@ -4635,6 +4644,7 @@ function registerHostControlPlane(): void {
               '--account-sign-out',
               ...(recovery ? ['--account-sign-out-recovery'] : []),
             ]),
+            onWorkerLifecycle: createWorkerLifecycleLogger('account-sign-out'),
             cwd: process.cwd(),
             signal: abort.signal,
             forceKillOnAbort: true,
@@ -5351,16 +5361,21 @@ function ensureHost(): Host {
       }
     },
     relocate: request => {
+      if (runtimeStopping) return Promise.reject(new Error('Application is shutting down'))
+      const abort = new AbortController()
+      workspaceTrustRuns.add(abort)
       const invocation = randomUUID()
       return runSessionRelocationWorker({
         command: sidecarLaunch().command,
         args: sidecarLaunch().argsFor('relocation'),
         cwd: request.source.cwd,
         request: { type: 'session-relocation', version: 1, ...request },
+        signal: abort.signal,
+        onWorkerLifecycle: createWorkerLifecycleLogger('session-relocation'),
         onTiming: measurement => operationalLog.write({ process: 'main', level: 'info', event: 'workspace.jump.timing',
           appSessionId: request.appSessionId, engineSessionId: request.engineSessionId,
           fields: { ...measurement, invocationId: invocation } }),
-      })
+      }).finally(() => workspaceTrustRuns.delete(abort))
     },
     peerMoveState: appSessionId => ({
       presence: peerPlane?.presenceOf(appSessionId),
@@ -5669,7 +5684,7 @@ if (!gotSingleInstanceLock) {
       void (async () => {
         if (windowlessShutdown) {
           const result = await windowlessShutdown
-          if (!result.confirmed || applicationShutdown) return
+          if (!canReopenRuntime(result) || applicationShutdown) return
         }
         if (applicationShutdown) return
         ensureHost()
@@ -5769,8 +5784,9 @@ function finishApplicationShutdown(reason: 'sigint' | 'sigterm' | 'before-quit')
     cancelAllReplayFlushes()
     liveFrameDelivery?.dispose()
     disposeRendererRecovery?.()
-    if (result.confirmed) logOperational('app.shutdown.completed', 'info')
-    else logOperational('diagnostic', 'error', { source: 'shutdown', reason: 'termination_unconfirmed' })
+    if (shutdownFullyClean(result)) logOperational('app.shutdown.completed', 'info')
+    else logOperational('diagnostic', 'error', { source: 'shutdown', reason: !result.confirmed
+      ? 'termination_unconfirmed' : result.persistenceConfirmed === false ? 'clean_state_not_saved' : 'helper_restoration_unconfirmed' })
     logOperational('process.exited', 'info', {
       role: 'electron-main', expected: result.confirmed,
       ...(reason === 'before-quit' ? {} : { signal: reason === 'sigint' ? 'SIGINT' : 'SIGTERM' }),
@@ -5812,7 +5828,7 @@ app.on('window-all-closed', () => {
   const endingHost = host
   windowlessShutdown = shutdownRuntime().then(result => {
     // An unconfirmed former writer must never overlap a rebuilt runtime.
-    if (!result.confirmed || host !== endingHost) return result
+    if (!canReopenRuntime(result) || host !== endingHost) return result
     supervisor = null
     // Rebuild supervisor, registry and host together only after the old writers
     // have exited, so activation cannot overlap two generations.

@@ -25,6 +25,7 @@ import { directConnectResultForRequest } from './remoteSettingsPageModel.js'
 import { PaneSection } from './SettingsField.js'
 import { useToast } from './toastContext.js'
 import { isDefiniteLocalSendRefusal } from './localSendFailure.js'
+import type { RemoteSettingsOutcome } from './remoteSettingsState.js'
 
 const newRequestId = (): string => crypto.randomUUID()
 
@@ -33,19 +34,21 @@ type DirectConnectDetails = NonNullable<RemoteSettingsResultFrame['directConnect
 export function RemoteSettingsPage({
   snapshot,
   lastResult,
+  outcomesByRequestId = {},
   onVerb,
 }: {
   snapshot: RemoteSettingsSnapshot | null
-  lastResult: RemoteSettingsResultFrame | null
+  lastResult: RemoteSettingsOutcome | null
+  outcomesByRequestId?: Readonly<Record<string, RemoteSettingsOutcome>>
   onVerb: (verb: RemoteVerbMessage) => void
 }) {
   return !snapshot ? (
     <WaitingState />
   ) : (
     <>
-      <BridgePanel bridge={snapshot.bridge} lastResult={lastResult} onVerb={onVerb} />
+      <BridgePanel bridge={snapshot.bridge} lastResult={lastResult} outcomesByRequestId={outcomesByRequestId} onVerb={onVerb} />
       <CommandFilterSection filter={snapshot.commandFilter} />
-      <DirectConnectSection lastResult={lastResult} onVerb={onVerb} />
+      <DirectConnectSection lastResult={lastResult} outcomesByRequestId={outcomesByRequestId} onVerb={onVerb} />
     </>
   )
 }
@@ -87,17 +90,20 @@ export function RemoteRolePill() {
 
 function BridgePanel({
   bridge,
-  lastResult,
+  lastResult: latestResult,
+  outcomesByRequestId,
   onVerb,
 }: {
   bridge: RemoteSettingsSnapshot['bridge']
-  lastResult: RemoteSettingsResultFrame | null
+  lastResult: RemoteSettingsOutcome | null
+  outcomesByRequestId: Readonly<Record<string, RemoteSettingsOutcome>>
   onVerb: (verb: RemoteVerbMessage) => void
 }) {
   const toast = useToast()
   const [toggling, setToggling] = useState(false)
   const [uncertain, setUncertain] = useState(false)
   const pendingRequestId = useRef<string | null>(null)
+  const lastResult = outcomesByRequestId[pendingRequestId.current ?? ''] ?? latestResult
 
   useEffect(() => {
     if (
@@ -107,8 +113,13 @@ function BridgePanel({
     ) {
       return
     }
-    pendingRequestId.current = null
     setToggling(false)
+    if (lastResult.delivery === 'unknown') {
+      setUncertain(true)
+      toast(lastResult.message, { tone: 'danger' })
+      return
+    }
+    pendingRequestId.current = null
     setUncertain(false)
     toast(lastResult.message, { tone: lastResult.ok ? 'success' : 'danger' })
   }, [lastResult, toast])
@@ -259,10 +270,12 @@ function FilterCard({
 /* ── direct connect ──────────────────────────────────────────────────────── */
 
 function DirectConnectSection({
-  lastResult,
+  lastResult: latestResult,
+  outcomesByRequestId,
   onVerb,
 }: {
-  lastResult: RemoteSettingsResultFrame | null
+  lastResult: RemoteSettingsOutcome | null
+  outcomesByRequestId: Readonly<Record<string, RemoteSettingsOutcome>>
   onVerb: (verb: RemoteVerbMessage) => void
 }) {
   const toast = useToast()
@@ -271,6 +284,7 @@ function DirectConnectSection({
   const [uncertain, setUncertain] = useState(false)
   const [connected, setConnected] = useState<DirectConnectDetails | null>(null)
   const pendingRequestId = useRef<string | null>(null)
+  const lastResult = outcomesByRequestId[pendingRequestId.current ?? ''] ?? latestResult
 
   useEffect(() => {
     const matched = directConnectResultForRequest(
@@ -278,8 +292,13 @@ function DirectConnectSection({
       lastResult,
     )
     if (!matched) return
-    pendingRequestId.current = null
     setConnecting(false)
+    if (lastResult?.delivery === 'unknown') {
+      setUncertain(true)
+      toast(lastResult.message, { tone: 'danger' })
+      return
+    }
+    pendingRequestId.current = null
     setUncertain(false)
     setConnected(matched.ok ? (matched.directConnect ?? null) : null)
     toast(matched.message, { tone: matched.ok ? 'success' : 'danger' })

@@ -4226,7 +4226,7 @@ test('createSession that resumes after shutdownAll fails closed instead of spawn
 
   expect(result.ok).toBe(false)
   if (result.ok) return
-  expect(result.error.code).toBe('spawn_failed')
+  expect(result.error.code).toBe('session_unreachable')
 
   // Nothing was spawned, and the row written before the spawn attempt is not
   // left masquerading as live for the next launch's orphan sweep.
@@ -4253,6 +4253,66 @@ test('shutdownAll marks every live row clean so the next launch sweep sees no cr
 
   expect(h.registry.sessions.length).toBe(2)
   expect(h.registry.sessions.every(row => row.shutdown === 'clean')).toBe(true)
+})
+
+test('shutdown reports confirmed process exit separately from a failed durable clean mark', async () => {
+  const h = makeHost()
+  expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(true)
+  const original = h.registry.markLiveCleanSync.bind(h.registry)
+  h.registry.markLiveCleanSync = excluded => {
+    const marked = original(excluded)
+    Object.defineProperty(h.registry, 'lastWriteFailed', { get: () => true })
+    return marked
+  }
+  expect(await h.host.shutdownAll()).toEqual({ confirmed: true, unresolvedSessionIds: [], persistenceConfirmed: false })
+})
+
+test('shutdown fences and drains a late relocation without starting its replacement', async () => {
+  const storageRoot = tempDir()
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = storageRoot
+  let finish!: () => void
+  let entered = false
+  const gate = new Promise<void>(resolve => { finish = resolve })
+  try {
+    const managedStorage = new ManagedStorage({
+      appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership'),
+    })
+    const h = makeHost({
+      managedStorage,
+      validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+      relocate: async () => { entered = true; await gate },
+    })
+    const created = await h.host.createManagedChat()
+    if (!created.ok) throw new Error(created.error.message)
+    const id = created.value.appSessionId
+    const source = h.registry.findSession(id)!.cwd
+    const engineSessionId = randomUUID()
+    writeTranscript(h.storageDir, engineSessionId)
+    h.supervisor.emitReady(id, engineSessionId)
+    emitMoveReadyContext(h.supervisor, id)
+    await settle(() => h.registry.findSession(id)?.engineSessionId === engineSessionId)
+    h.supervisor.onSend = (sessionId, message) => {
+      if ((message as { type?: string }).type === 'app.park') h.supervisor.emitPark(sessionId)
+    }
+    const moving = h.host.moveSession(id, h.cwd)
+    await settle(() => entered)
+    let ended = false
+    const shutdown = h.host.shutdownAll()
+    void shutdown.then(() => { ended = true })
+    await Promise.resolve()
+    expect(ended).toBe(false)
+    expect((await h.host.moveSession(id, h.cwd)).ok).toBe(false)
+    finish()
+    expect((await moving).ok).toBe(false)
+    expect((await shutdown).confirmed).toBe(true)
+    expect(h.supervisor.spawnedIds).toHaveLength(1)
+    expect(h.registry.findSession(id)?.cwd).toBe(source)
+  } finally {
+    finish()
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+  }
 })
 
 /* ------------------------------------------------------------------------- *

@@ -325,6 +325,18 @@ test('an unavailable presence query does not replace active work counts with zer
   } finally { await f.cleanup() }
 })
 
+test('shutdown explicitly reports unresolved restoration and preserves its recovery marker', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize()
+    await f.mode.command({ action: 'set', target: 15 })
+    f.failRestore(true)
+    expect(await f.mode.shutdown()).toEqual({ processConfirmed: true, restorationConfirmed: false })
+    expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(true)
+    expect(f.mode.read().phase).toBe('unresolved')
+  } finally { await f.cleanup() }
+})
+
 test('failed switch restoration cannot admit replacement', async () => {
   const f = fixture()
   try {

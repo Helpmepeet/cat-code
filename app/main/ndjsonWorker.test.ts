@@ -19,6 +19,32 @@ function options(extra: Partial<NdjsonWorkerOptions> = {}): NdjsonWorkerOptions 
     escalateKillAfterMs: 10, finalCloseWaitMs: 10, maxRecordBytes: 100,
     onRecord: () => 'continue', onOversizeRecord: () => {}, ...extra }
 }
+test.each(['close', 'error'])('an old exit followed by delayed %s cannot release a replacement writer', async terminal => {
+  const first = fake()
+  const second = fake()
+  const key = `delayed-${terminal}-generation`
+  const a = runNdjsonWorker(options({ ...first, mutationKey: key, timeoutMs: 10_000 }))
+  first.child.emit('exit', 0, null)
+  const b = runNdjsonWorker(options({ ...second, mutationKey: key, timeoutMs: 10_000 }))
+  if (terminal === 'close') {
+    first.child.emit('close', 0, null)
+    await a
+  } else {
+    first.child.emit('error', new Error('old worker error'))
+    await expect(runNdjsonWorker(options({ ...fake(), mutationKey: key }))).rejects.toThrow('replacement is blocked')
+    first.child.emit('close', 0, null)
+    expect((await a).killError).toBeInstanceOf(Error)
+  }
+  try {
+    await expect(runNdjsonWorker(options({ ...fake(), mutationKey: key }))).rejects.toThrow('replacement is blocked')
+    first.child.emit('exit', 0, null)
+    first.child.emit('close', 0, null)
+    await expect(runNdjsonWorker(options({ ...fake(), mutationKey: key }))).rejects.toThrow('replacement is blocked')
+  } finally {
+    second.child.emit('close', 0, null)
+    await b
+  }
+})
 test('no-close settles with identity, signal order, cleanup and writer fence until confirmed exit', async () => {
   const fixture = fake()
   let disconnected = 0

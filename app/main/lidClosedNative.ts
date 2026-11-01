@@ -103,17 +103,46 @@ export class LidNativeClient {
   private pending: { resolve(value: LidNativeReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | undefined
   private buffer = ''
   private chain: Promise<unknown> = Promise.resolve()
+  private stopped = false
+  private readonly closing = new Map<ChildProcessWithoutNullStreams, Promise<boolean>>()
   command(value: LidNativeCommand): Promise<LidNativeReply> {
+    if (this.stopped) return Promise.reject(new Error('Helper unavailable'))
     const call = this.chain.catch(() => {}).then(() => this.request(value))
     this.chain = call
     return call
   }
-  close(): void {
+  async close(permanent = false): Promise<boolean> {
+    if (permanent) this.stopped = true
     const child = this.child; this.child = undefined; this.buffer = ''
     if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(new Error('Helper unavailable')); this.pending = undefined }
-    if (child) { child.stdin.end(); if (child.exitCode === null && child.signalCode === null) child.kill() }
+    // A failed spawn has no PID and emits error/close, not a process exit.
+    if (child && child.pid !== undefined && child.pid > 0 &&
+        !this.closing.has(child) && child.exitCode === null && child.signalCode === null) {
+      const exited = new Promise<boolean>(resolve => {
+        let killTimer: ReturnType<typeof setTimeout>
+        let deadline: ReturnType<typeof setTimeout>
+        const finish = (confirmed: boolean) => {
+          clearTimeout(killTimer); clearTimeout(deadline)
+          // Keep the captured child's confirmation observer after the deadline.
+          // A late exit may release only this generation's claim.
+          if (confirmed) {
+            child.removeListener('exit', onExit)
+            this.closing.delete(child)
+          }
+          resolve(confirmed)
+        }
+        const onExit = () => finish(true)
+        child.once('exit', onExit)
+        killTimer = setTimeout(() => { try { child.kill('SIGKILL') } catch { /* Exit still needs confirmation. */ } }, 250)
+        deadline = setTimeout(() => finish(false), 1500)
+      })
+      this.closing.set(child, exited)
+      try { child.stdin.end(); child.kill('SIGTERM') } catch { /* Wait for the captured child's exit. */ }
+    }
+    return (await Promise.all([...this.closing.values()])).every(Boolean)
   }
-  private request(value: object): Promise<LidNativeReply> {
+  private async request(value: object): Promise<LidNativeReply> {
+    if (!(await Promise.all([...this.closing.values()])).every(Boolean) || this.stopped) throw new Error('Helper unavailable')
     return new Promise((resolve, reject) => {
       if (!this.child) {
         const child = spawn(LID_HELPER, ['--client'], { env: { PATH: '/usr/bin:/bin', LANG: 'C' }, stdio: 'pipe' })

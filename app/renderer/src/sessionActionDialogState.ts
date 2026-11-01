@@ -14,6 +14,7 @@
 
 import type { SaveTextResult } from '../../shared/hostApi'
 import type { SessionActionResultFrame } from '../../shared/protocol'
+import type { SessionActionLocalOutcome } from './sessionActionRuntimeState.js'
 
 /**
  * The export's suggested file name (`SessionActions.jsx:356` — slugified title +
@@ -78,6 +79,7 @@ export function selectExportPreview(
 export type LatchedExportPreview = {
   requestId: string
   state: ExportPreviewState
+  provisional?: boolean
 }
 
 /**
@@ -177,10 +179,16 @@ export function selectBulkExportOutcome(
   >,
   errorsBySession: Readonly<Record<string, { requestId: string; message: string } | null>> = {},
   engineBySession: Readonly<Record<string, boolean>> = {},
+  localByRequestId: Readonly<Record<string, SessionActionLocalOutcome>> = {},
 ): BulkExportOutcome {
   const sections: { title: string | null; text: string }[] = []
   let failed = 0
   for (const request of requests) {
+    const local = localByRequestId[request.requestId]
+    if (local?.sessionId === request.sessionId && local.status === 'refused') {
+      failed += 1
+      continue
+    }
     const error = errorsBySession[request.sessionId]
     if (error?.requestId === request.requestId) {
       failed += 1

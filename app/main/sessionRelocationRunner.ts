@@ -1,10 +1,12 @@
-import { runNdjsonWorker } from './ndjsonWorker.js'
+import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
 import { parseWorkerTimings, type WorkerTiming } from '../shared/workerTiming.js'
 import { MAX_RELOCATION_RECORD_BYTES, parseSessionRelocationRequest, parseSessionRelocationResult, type SessionRelocationRequest } from '../shared/sessionRelocationWorker.js'
 
 export async function runSessionRelocationWorker(options: {
   command: string; args: string[]; cwd: string; request: SessionRelocationRequest; env?: NodeJS.ProcessEnv
   onTiming?: (timing: WorkerTiming) => void
+  signal?: AbortSignal
+  onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
 }): Promise<void> {
   if (!parseSessionRelocationRequest(options.request)) throw new Error('Invalid move request')
   let accepted = false

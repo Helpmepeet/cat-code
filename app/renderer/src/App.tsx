@@ -2316,6 +2316,7 @@ export function App() {
   const sendRemoteSettingsVerb = useCallback(
     (verb: RemoteVerbMessage) => {
       if (!activeSessionId) throw new Error('No active session')
+      dispatchRemoteSettings({ type: 'request', sessionId: activeSessionId, verb })
       getBridge().remoteSettingsVerb(activeSessionId, verb)
     },
     [activeSessionId],
@@ -2331,7 +2332,11 @@ export function App() {
         getBridge().sessionActionVerb(sessionId, verb)
       } catch (error) {
         if (verb.type === 'session.export') {
-          setLatchedExport({ requestId: verb.requestId, state: { status: 'failed', message: isDefiniteLocalSendRefusal(error) ? 'Could not send the export request. Try again.' : 'Export delivery is unknown. Check the session before requesting another export.' } })
+          const refused = isDefiniteLocalSendRefusal(error)
+          dispatchSessionActionRuntime({ type: 'local-send-outcome', outcome: {
+            sessionId, requestId: verb.requestId, status: refused ? 'refused' : 'unknown',
+            message: refused ? 'Could not send the export request. Try again.' : 'Export delivery is unknown. Check the session before requesting another export.',
+          } })
         } else toast(isDefiniteLocalSendRefusal(error) ? 'Could not send the change. Try again.' : 'Delivery is unknown. Check the session status before making another change.', { tone: 'danger' })
       }
     },
@@ -2495,6 +2500,7 @@ export function App() {
   // Declared BEFORE that effect for the same reason the tag effect is: effects run
   // in declaration order, so this must have the ids first.
   const pendingBulkExportRef = useRef<BulkExportRequest[] | null>(null)
+  const [bulkExportUnknown, setBulkExportUnknown] = useState(false)
   useEffect(() => {
     const requests = pendingBulkExportRef.current
     if (!requests) return
@@ -2512,8 +2518,18 @@ export function App() {
       ])),
       sessionActionRuntime.errorBySession,
       engineBySession,
+      sessionActionRuntime.localByRequestId,
     )
-    if (outcome.status === 'waiting') return
+    if (outcome.status === 'waiting') {
+      setBulkExportUnknown(requests.some(request => {
+        const local = sessionActionRuntime.localByRequestId[request.requestId]
+        const result = sessionActionRuntime.targetedByRequestId[request.requestId]
+        return local?.sessionId === request.sessionId && local.status === 'unknown' &&
+          selectExportPreview(result ?? null, request.requestId).status === 'pending'
+      }))
+      return
+    }
+    setBulkExportUnknown(false)
     pendingBulkExportRef.current = null
     for (const request of requests) {
       dispatchSessionActionRuntime({ type: 'discard-result', sessionId: request.sessionId as SessionId, requestId: request.requestId })
@@ -2547,6 +2563,7 @@ export function App() {
     // can wait indefinitely; leaving the page is the point past which a save
     // dialog appearing would be a surprise rather than an answer.
     pendingBulkExportRef.current = null
+    setBulkExportUnknown(false)
   }, [activeView])
 
   const latestSessionActionResult = selectLatestSessionActionResult(
@@ -2598,7 +2615,16 @@ export function App() {
       sessionActionRuntime,
       exportDialog.sessionId,
     )
-    if (error?.requestId === exportDialog.requestId) {
+    const local = sessionActionRuntime.localByRequestId[exportDialog.requestId]
+    if (projected.status === 'pending' && local?.sessionId === exportDialog.sessionId) {
+      setLatchedExport(current => current?.requestId === exportDialog.requestId && !current.provisional ? current : {
+        requestId: exportDialog.requestId,
+        state: { status: 'failed', message: local.message },
+        provisional: local.status === 'unknown',
+      })
+      return
+    }
+    if (projected.status === 'pending' && error?.requestId === exportDialog.requestId) {
       setLatchedExport(current =>
         current?.requestId === exportDialog.requestId
           ? current
@@ -2624,7 +2650,7 @@ export function App() {
       return
     }
     setLatchedExport(current =>
-      current?.requestId === exportDialog.requestId
+      current?.requestId === exportDialog.requestId && !current.provisional
         ? current
         : { requestId: exportDialog.requestId, state: projected },
     )
@@ -4669,7 +4695,11 @@ export function App() {
         data-window-ground
       >
         <ExternalLinkRecovery />
+        {activeView === 'sessions' && bulkExportUnknown ? <p role="status" aria-label="Bulk export status" className="border border-warning/40 bg-shell-hover p-3">
+          Export delivery is unknown for one or more sessions. Wait for the session results before exporting again. Completed transcripts are being kept.
+        </p> : null}
         <RoutingStorageRecovery health={routingStorageHealth}
+          draftIdentity={activeSessionId}
           draft={activeSessionId ? restoreDraftWithPending(
             expandPasteRefs(selectRecoveryDraft(promptDrafts, activeSessionId), selectSessionPasteState(pasteState, activeSessionId).entries),
             selectPendingSubmit(pendingSubmits, activeSessionId)?.text ?? '',
@@ -5128,7 +5158,8 @@ export function App() {
               onRemoteVerb={sendRemoteSettingsVerb}
               onOpenLogs={() => getBridge().openLogsFolder()}
               onSaveDiagnostics={() => void requestDiagnosticsSave(toast)}
-              remoteLastResult={remoteSettings.lastResult}
+              remoteLastResult={remoteSettings.lastResult?.sessionId === activeSessionId ? remoteSettings.lastResult : null}
+              remoteOutcomesByRequestId={remoteSettings.outcomesByRequestId}
               remoteSnapshot={selectRemoteSettingsSnapshot(remoteSettings, activeSessionId)}
               projectBinding={settingsProjectBinding}
               projects={settingsProjects}
@@ -5202,6 +5233,8 @@ export function App() {
                 }
               }}
               onExportRows={targets => {
+                if (pendingBulkExportRef.current) return
+                setBulkExportUnknown(false)
                 // P4-35 — one verb per LIVE row, which is what the bar's own
                 // disabled reason already tells the user. Each export is rendered by
                 // that session's OWN engine (N-process, LOCKED); the results are

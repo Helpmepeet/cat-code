@@ -6,7 +6,7 @@ import { LID_HELPER, LidSetupCancelled, lidRestored, type LidNativeClient, type 
 import { WORK_COMPLETION_GRACE_MS, type LidWorkAggregate } from './lidWorkObserver.js'
 
 type Dependencies = {
-  native: Pick<LidNativeClient, 'command' | 'close'>
+  native: Pick<LidNativeClient, 'command'> & { close(permanent?: boolean): void | boolean | Promise<boolean> }
   hardware(): Promise<LidHardware>
   install(recoveryOnly: boolean): Promise<void>
   installed(): boolean
@@ -177,11 +177,12 @@ export class LidClosedMode {
       return this.read()
     })
   }
-  async shutdown(): Promise<void> {
+  async shutdown(): Promise<{ restorationConfirmed: boolean; processConfirmed: boolean }> {
     this.stopped = true; this.epoch++; this.disarmWork(); this.deps.work.stop()
     if (this.timer) clearInterval(this.timer)
     await this.enqueue(async () => { if (this.needsRecovery) await this.end('stopped') })
-    this.deps.native.close()
+    const processConfirmed = await this.deps.native.close(true)
+    return { restorationConfirmed: !this.needsRecovery, processConfirmed: processConfirmed !== false }
   }
   private enqueue<T>(action: () => Promise<T>): Promise<T> {
     const next = this.chain.catch(() => {}).then(action); this.chain = next; return next
