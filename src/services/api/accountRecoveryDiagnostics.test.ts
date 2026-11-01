@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import { APIConnectionError, APIError } from '@anthropic-ai/sdk'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -45,7 +45,8 @@ const {
 } = await import('./codexAccountPool.js')
 type PoolAccount = import('./codexAccountPool.js').PoolAccount
 const { getAnthropicClient } = await import('./client.js')
-const { getClaudeAIOAuthTokens } = await import('../../utils/auth.js')
+const auth = await import('../../utils/auth.js')
+const { getClaudeAIOAuthTokens, isClaudeAISubscriber } = auth
 const { _resetKeepAliveForTesting } = await import('../../utils/proxy.js')
 const {
   CannotRetryError,
@@ -199,6 +200,7 @@ describe('account recovery diagnostics', () => {
   })
 
   afterEach(() => {
+    mock.restore()
     globalThis.fetch = originalFetch
     _resetAccountDiagnosticStreamJsonHookForTesting()
     resetCodexCacheContext()
@@ -877,6 +879,7 @@ describe('account recovery diagnostics', () => {
   })
 
   test('fails over to a healthy Claude account through the real auth getter path without exposing alias or email', async () => {
+    spyOn(auth, 'isAnthropicAuthEnabled').mockReturnValue(true)
     seedClaudeAccountPoolForTest({
       activeAccountUuid: 'claude-one',
       accounts: [
@@ -897,6 +900,7 @@ describe('account recovery diagnostics', () => {
       ],
     })
     getClaudeAIOAuthTokens.cache?.clear?.()
+    expect(isClaudeAISubscriber()).toBe(true)
 
     let attempts = 0
     let retryAccessToken: string | null | undefined

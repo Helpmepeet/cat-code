@@ -11,7 +11,7 @@ import { resetClaudeAiLimits } from '../../services/claudeAiLimits.js';
 import { clearPolicyLimitsCache } from '../../services/policyLimits/index.js';
 // flushTelemetry is loaded lazily to avoid pulling in ~1.1MB of OpenTelemetry at startup
 import { clearRemoteManagedSettingsCache } from '../../services/remoteManagedSettings/index.js';
-import { clearCodexOAuthTokens, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
+import { clearCodexOAuthTokens, clearPendingOAuthCredentials, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
 import { getClaudePoolStatus, removeClaudeAccount, syncClaudeAccountToStorage } from '../../services/api/claudeAccountPool.js';
 import { clearBetasCaches } from '../../utils/betas.js';
 import { saveGlobalConfig } from '../../utils/config.js';
@@ -33,6 +33,7 @@ export async function performLogout({
   // Wipe all secure storage data on logout
   const secureStorage = getSecureStorage();
   secureStorage.delete();
+  clearPendingOAuthCredentials();
   clearCodexOAuthTokens();
   await clearAuthRelatedCaches();
   saveGlobalConfig(current => {

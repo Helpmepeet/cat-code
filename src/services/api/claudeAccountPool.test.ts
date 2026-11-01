@@ -2,8 +2,9 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 
+import * as atomic from '../../utils/atomicFile.js'
 import { saveGlobalConfig } from '../../utils/config.js'
 import {
   getClaudePoolStatus,
@@ -17,6 +18,7 @@ import {
   updateClaudeAccountTokens,
   getActiveClaudeAccount,
   reloadActiveClaudeAccountCredentials,
+  retryClaudeAccountTokenPersistence,
   type ClaudePoolAccount,
 } from './claudeAccountPool.js'
 
@@ -204,6 +206,23 @@ describe('updateClaudeAccountTokens', () => {
   afterEach(() => {
     resetClaudeAccountPoolForTest()
     rmSync(vaultDir, { recursive: true, force: true })
+  })
+
+  test('inventory reload cannot regress pending credentials and local retry preserves account identity', () => {
+    const account = buildClaudeAccount({ accountUuid: 'pending-account' })
+    seedClaudeAccountPoolForTest({ accounts: [account], activeAccountUuid: account.accountUuid })
+    expect(updateClaudeAccountTokens(account.accountUuid, { accessToken: 'old', expiresAt: 100 })).toBe('durable')
+    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('ENOSPC') })
+    try {
+      expect(updateClaudeAccountTokens(account.accountUuid, { accessToken: 'new', refreshToken: 'rotated', expiresAt: 200 })).toBe('pending')
+      setClaudeConfigAccountForTest({ active: true, value: null })
+      loadClaudePoolForObservation()
+      expect(getActiveClaudeAccount()?.accessToken).toBe('new')
+      expect(getActiveClaudeAccount()?.refreshToken).toBe('rotated')
+      expect(retryClaudeAccountTokenPersistence(account.accountUuid)).toBe('pending')
+    } finally { write.mockRestore() }
+    expect(retryClaudeAccountTokenPersistence(account.accountUuid)).toBe('durable')
+    expect(JSON.parse(readFileSync(join(vaultDir, 'accounts', 'pending-account.json'), 'utf8')).tokens.access_token).toBe('new')
   })
 
   test('updates the refresh source account when another account is active', () => {

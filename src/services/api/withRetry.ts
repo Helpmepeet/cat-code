@@ -51,8 +51,7 @@ import {
   clearApiKeyHelperCache,
   clearAwsCredentialsCache,
   clearGcpCredentialsCache,
-  getClaudeAIOAuthTokens,
-  handleOAuth401Error,
+  recoverOAuth401Error,
   isClaudeAISubscriber,
   isEnterpriseSubscriber,
 } from '../../utils/auth.js'
@@ -89,10 +88,22 @@ import type { DeferredTerminalFailureV1 } from '../../types/message.js'
 import { ReauthenticationRequiredError } from './codexTokenRefresh.js'
 import {
   failoverClaudeAccount,
-  getActiveClaudeAccount,
   getClaudePoolStatus,
-  isClaudePoolActive,
 } from './claudeAccountPool.js'
+
+type ClaudeOAuthClientCredential = Readonly<{
+  accessToken: string
+  accountUuid?: string
+}>
+const claudeOAuthClientCredentials = new WeakMap<object, ClaudeOAuthClientCredential>()
+
+/** A delayed auth failure belongs to the client's credential, not current selection. */
+export function recordClaudeOAuthClientCredential(
+  client: object,
+  credential: ClaudeOAuthClientCredential,
+): void {
+  claudeOAuthClientCredentials.set(client, Object.freeze({ ...credential }))
+}
 
 const abortError = () => new APIUserAbortError()
 
@@ -388,6 +399,7 @@ export async function* withRetry<T, Client = Anthropic>(
     ...(isFastModeEnabled() && { fastMode: options.fastMode }),
   }
   let client: Client | null = null
+  let failedClaudeCredential: ClaudeOAuthClientCredential | undefined
   let consecutive529Errors = options.initialConsecutive529Errors ?? 0
   let lastError: unknown
   let persistentAttempt = 0
@@ -547,25 +559,42 @@ export async function* withRetry<T, Client = Anthropic>(
             ((lastError instanceof APIError && lastError.status === 401) ||
               isOAuthTokenRevokedError(lastError))
           ) {
-            const failedAccount = getActiveClaudeAccount()
-            const failedAccessToken = getClaudeAIOAuthTokens()?.accessToken
-            const recovered = failedAccessToken
-              ? await handleOAuth401Error(failedAccessToken)
-              : false
+            const rejectedCredential = failedClaudeCredential
+            const recovery = rejectedCredential
+              ? await recoverOAuth401Error(
+                  rejectedCredential.accessToken,
+                  rejectedCredential.accountUuid,
+                )
+              : undefined
+            if (recovery?.status === 'persistence_pending') {
+              emitClaudeDiagnostic({
+                code: 'account.token_refresh.failed',
+                severity: 'warning',
+                recoverable: true,
+                account_ref: recovery.accountUuid,
+                reason: 'New credentials could not be saved. Keep this session open and restore storage access before restarting.',
+                model: retryContext.model,
+              })
+            }
+            const failedAccount = rejectedCredential?.accountUuid
+              ? getClaudePoolStatus().accounts.find(account =>
+                  account.accountUuid === rejectedCredential.accountUuid &&
+                  account.accessToken === rejectedCredential.accessToken)
+              : undefined
 
-            if (!recovered && isClaudePoolActive() && failedAccount) {
+            if (recovery?.status === 'reauth_required' && failedAccount) {
               emitClaudeDiagnostic({
                 code: 'account.token_refresh.failed',
                 severity: 'warning',
                 recoverable: true,
                 account_ref: failedAccount.accountUuid,
-                reason: 'active Claude account failed OAuth recovery',
+                reason: 'the rejected Claude credential requires authentication',
                 model: retryContext.model,
               })
 
               const replacementAccount = failoverClaudeAccount(
                 failedAccount.accountUuid,
-                'OAuth recovery failed after 401',
+                'Rejected Claude credential cannot be recovered',
               )
               if (replacementAccount) {
                 emitClaudeDiagnostic({
@@ -573,7 +602,7 @@ export async function* withRetry<T, Client = Anthropic>(
                   severity: 'info',
                   recoverable: true,
                   account_ref: replacementAccount.accountUuid,
-                  reason: 'switched to a healthy Claude account after OAuth failure',
+                  reason: 'a healthy Claude account is selected after OAuth failure',
                   model: retryContext.model,
                 })
               } else {
@@ -594,7 +623,16 @@ export async function* withRetry<T, Client = Anthropic>(
           client = await getClient()
         }
 
-        return operation(client, attempt, retryContext)
+        const requestCredential = client !== null &&
+          (typeof client === 'object' || typeof client === 'function')
+          ? claudeOAuthClientCredentials.get(client)
+          : undefined
+        try {
+          return await operation(client, attempt, retryContext)
+        } catch (error) {
+          failedClaudeCredential = requestCredential
+          throw error
+        }
       })
     } catch (caughtError) {
       const error = unwrapCodexAccountError(caughtError)
@@ -1606,7 +1644,7 @@ function shouldRetry(error: APIError): boolean {
   }
 
   // Clear API key cache on 401 and allow retry.
-  // OAuth token handling is done in the main retry loop via handleOAuth401Error.
+  // OAuth token handling is done in the main retry loop via recoverOAuth401Error.
   if (error.status === 401) {
     clearApiKeyHelperCache()
     return true

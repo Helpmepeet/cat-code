@@ -33,6 +33,8 @@ import {
   getClaudePoolStatus,
   updateClaudeAccountTokens,
   reloadActiveClaudeAccountCredentials,
+  reloadClaudeAccountCredentials,
+  retryClaudeAccountTokenPersistence,
 } from '../services/api/claudeAccountPool.js'
 import { getActiveAccount, hasAnyPoolAccount } from '../services/api/codexAccountPool.js'
 import {
@@ -1275,6 +1277,7 @@ export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
       ) {
         return { success: false, warning: 'Saved OAuth tokens could not be read back' }
       }
+      pendingSecureOAuth.delete(storageData.claudeAiOauth.accountUuid)
       logEvent('tengu_oauth_tokens_saved', { storageBackend })
     } else {
       logEvent('tengu_oauth_tokens_save_failed', { storageBackend })
@@ -1291,6 +1294,23 @@ export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
     })
     return { success: false, warning: 'Failed to save OAuth tokens' }
   }
+}
+
+// Secure-storage failures retain only process-local account-bound credentials.
+const pendingSecureOAuth = new Map<string | undefined, { tokens: OAuthTokens; superseded: Set<string> }>()
+export function clearPendingOAuthCredentials(): void {
+  pendingSecureOAuth.clear()
+}
+function retainPendingSecureOAuth(disk: OAuthTokens | null): OAuthTokens | null {
+  const accountUuid = getGlobalConfig().oauthAccount?.accountUuid
+  const pending = pendingSecureOAuth.get(accountUuid)
+  if (!pending) return disk
+  if (disk && disk.accountUuid === accountUuid && disk.accessToken !== pending.tokens.accessToken &&
+      !pending.superseded.has(disk.accessToken) && (disk.expiresAt ?? 0) > (pending.tokens.expiresAt ?? 0)) {
+    pendingSecureOAuth.delete(accountUuid)
+    return disk
+  }
+  return pending.tokens
 }
 
 export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
@@ -1347,15 +1367,15 @@ export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
     const oauthData = storageData?.claudeAiOauth
 
     if (!oauthData?.accessToken) {
-      return null
+      return retainPendingSecureOAuth(null)
     }
     if (oauthData.accountUuid !== undefined &&
         oauthData.accountUuid !== getGlobalConfig().oauthAccount?.accountUuid) return null
 
-    return oauthData
+    return retainPendingSecureOAuth(oauthData)
   } catch (error) {
     logError(error)
-    return null
+    return retainPendingSecureOAuth(null)
   }
 })
 
@@ -1708,55 +1728,140 @@ async function invalidateOAuthCacheIfDiskChanged(): Promise<void> {
 // caches and re-read the keychain. Without this, each call's clearOAuthTokenCache()
 // nukes readInFlight in macOsKeychainStorage and triggers a fresh spawn —
 // sync spawns stacked to 800ms+ of blocked render frames.
-const pending401Handlers = new Map<string, Promise<boolean>>()
+export type ClaudeOAuthRecoveryResult = {
+  status: 'refreshed' | 'adopted_newer' | 'persistence_pending' | 'reauth_required' | 'transient_failure' | 'unavailable'
+  accountUuid?: string
+}
+const pending401Handlers = new Map<string, Promise<ClaudeOAuthRecoveryResult>>()
 
-/**
- * Handle a 401 "OAuth token has expired" error from the API.
- *
- * This function forces a token refresh when the server says the token is expired,
- * even if our local expiration check disagrees (which can happen due to clock
- * issues when the token was issued).
- *
- * Safety: We compare the failed token with what's in keychain. If another tab
- * already refreshed (different token in keychain), we use that instead of
- * refreshing again. Concurrent calls with the same failedAccessToken are
- * deduplicated to a single keychain read.
- *
- * @param failedAccessToken - The access token that was rejected with 401
- * @returns true if we now have a valid token, false otherwise
- */
-export function handleOAuth401Error(
+export async function handleOAuth401Error(failedAccessToken: string): Promise<boolean> {
+  const result = await recoverOAuth401Error(failedAccessToken)
+  return ['refreshed', 'adopted_newer', 'persistence_pending'].includes(result.status)
+}
+
+export function recoverOAuth401Error(
   failedAccessToken: string,
-): Promise<boolean> {
-  const pending = pending401Handlers.get(failedAccessToken)
+  failedAccountUuid?: string,
+): Promise<ClaudeOAuthRecoveryResult> {
+  const current = getClaudeAIOAuthTokens()
+  const matchedAccount = getClaudePoolStatus().accounts.find(account => account.accessToken === failedAccessToken)
+  const accountUuid = failedAccountUuid ?? matchedAccount?.accountUuid ?? (
+    !process.env.CLAUDE_CODE_OAUTH_TOKEN && !getOAuthTokenFromFileDescriptor() &&
+    current?.accessToken === failedAccessToken
+      ? current.accountUuid ?? getGlobalConfig().oauthAccount?.accountUuid
+      : undefined
+  )
+  if (!accountUuid) return Promise.resolve({ status: 'unavailable' })
+  const key = JSON.stringify([accountUuid, failedAccessToken])
+  const pending = pending401Handlers.get(key)
   if (pending) return pending
-
-  const promise = handleOAuth401ErrorImpl(failedAccessToken).finally(() => {
-    pending401Handlers.delete(failedAccessToken)
+  const promise = recoverOAuth401ErrorImpl(failedAccessToken, accountUuid).finally(() => {
+    pending401Handlers.delete(key)
   })
-  pending401Handlers.set(failedAccessToken, promise)
+  pending401Handlers.set(key, promise)
   return promise
 }
 
-async function handleOAuth401ErrorImpl(
+async function recoverOAuth401ErrorImpl(
   failedAccessToken: string,
-): Promise<boolean> {
-  // Clear caches and re-read from keychain (async — sync read blocks ~100ms/call)
-  clearOAuthTokenCache()
-  const currentTokens = await getClaudeAIOAuthTokensAsync()
-
-  if (!currentTokens?.refreshToken) {
-    return false
+  accountUuid?: string,
+): Promise<ClaudeOAuthRecoveryResult> {
+  const result = (status: ClaudeOAuthRecoveryResult['status']): ClaudeOAuthRecoveryResult => ({ status, accountUuid })
+  const poolAccount = shouldUseClaudePoolTokenSource()
+    ? getClaudePoolStatus().accounts.find(account => account.accountUuid === accountUuid)
+    : undefined
+  const read = async (): Promise<OAuthTokens | null> => {
+    clearOAuthTokenCache()
+    if (poolAccount) {
+      reloadClaudeAccountCredentials(poolAccount.accountUuid)
+      const current = getClaudePoolStatus().accounts.find(account => account.accountUuid === poolAccount.accountUuid)
+      if (!current || current.status !== 'healthy') return null
+      return { ...current, scopes: current.scopes ?? null,
+        subscriptionType: (current.subscriptionType as SubscriptionType) ?? null, rateLimitTier: current.rateLimitTier ?? null }
+    }
+    const tokens = await getClaudeAIOAuthTokensAsync()
+    const currentUuid = tokens?.accountUuid ?? getGlobalConfig().oauthAccount?.accountUuid
+    return tokens && currentUuid === accountUuid ? tokens : null
   }
-
-  // If keychain has a different token, another tab already refreshed - use it
-  if (currentTokens.accessToken !== failedAccessToken) {
-    logEvent('tengu_oauth_401_recovered_from_keychain', {})
-    return true
+  const adopted = (tokens: OAuthTokens | null) => tokens &&
+    tokens.accessToken !== failedAccessToken && !isOAuthTokenExpired(tokens.expiresAt)
+  const adoptionResult = (): ClaudeOAuthRecoveryResult => {
+    if (poolAccount && !getClaudePoolStatus().accounts.some(account =>
+      account.accountUuid === poolAccount.accountUuid && account.status === 'healthy')) return result('unavailable')
+    if (poolAccount && retryClaudeAccountTokenPersistence(poolAccount.accountUuid) === 'pending') {
+      logForDebugging('Fresh Claude credentials are usable in this process but not saved. Restore vault access or free disk space and retry.', { level: 'warn' })
+      return result('persistence_pending')
+    }
+    const pending = poolAccount ? undefined : pendingSecureOAuth.get(accountUuid)
+    if (pending) {
+      if (!saveOAuthTokensIfNeeded(pending.tokens).success) return result('persistence_pending')
+      pendingSecureOAuth.delete(accountUuid)
+    }
+    return result('adopted_newer')
   }
-
-  // Same token that failed - force refresh, bypassing local expiration check
-  return checkAndRefreshOAuthTokenIfNeeded(0, true)
+  let release: (() => Promise<void>) | undefined
+  try {
+    const initial = await read()
+    if (adopted(initial)) return adoptionResult()
+    if (!initial?.refreshToken) return result(poolAccount && initial?.accessToken === failedAccessToken ? 'reauth_required' : 'unavailable')
+    if (!shouldUseClaudeAIAuth(initial.scopes ?? undefined)) return result('unavailable')
+    const fresh = await read()
+    if (adopted(fresh)) return adoptionResult()
+    const claudeDir = getClaudeConfigHomeDir()
+    await mkdir(claudeDir, { recursive: true })
+    release = await lockfile.lock(claudeDir)
+    const locked = await read()
+    if (adopted(locked)) return adoptionResult()
+    if (!locked?.refreshToken) return result('unavailable')
+    const refreshedResponse = await refreshOAuthToken(locked.refreshToken, {
+      persistProfile: !poolAccount,
+      scopes: shouldUseClaudeAIAuth(locked.scopes ?? undefined) ? undefined : locked.scopes ?? undefined,
+    })
+    const refreshed = { ...refreshedResponse, refreshToken: refreshedResponse.refreshToken ?? locked.refreshToken }
+    let durable: boolean
+    if (poolAccount) {
+      const persisted = updateClaudeAccountTokens(poolAccount.accountUuid, refreshed, {
+        accessToken: locked.accessToken, refreshToken: locked.refreshToken,
+      })
+      if (persisted === 'unavailable') return result('unavailable')
+      if (persisted === 'superseded') {
+        return adopted(await read()) ? adoptionResult() : result('transient_failure')
+      }
+      durable = persisted === 'durable'
+    } else {
+      const current = await read()
+      if (!current) return result('unavailable')
+      if (current.accessToken !== locked.accessToken) {
+        return adopted(current) ? adoptionResult() : result('transient_failure')
+      }
+      durable = getGlobalConfig().oauthAccount?.accountUuid === accountUuid &&
+        saveOAuthTokensIfNeeded({ ...refreshed, accountUuid }).success
+    }
+    if (!durable && !poolAccount) {
+      const previous = pendingSecureOAuth.get(accountUuid)
+      const superseded = previous?.superseded ?? new Set<string>()
+      superseded.add(locked.accessToken)
+      pendingSecureOAuth.set(accountUuid, { tokens: { ...refreshed, accountUuid }, superseded })
+    }
+    clearOAuthTokenCache()
+    if (!durable) {
+      logForDebugging('Fresh Claude credentials are usable in this process but not saved. Restore vault access or free disk space and retry.', { level: 'warn' })
+      return result('persistence_pending')
+    }
+    return result('refreshed')
+  } catch (error) {
+    const current = await read()
+    if (adopted(current)) return adoptionResult()
+    const response = (error as { code?: string; response?: { status?: number; data?: { error?: string } } }).response
+    logForDebugging(
+      `[auth] Claude OAuth recovery failed: status=${response?.status ?? 'none'}, code=${(error as NodeJS.ErrnoException).code ?? 'none'}, invalid_grant=${response?.data?.error === 'invalid_grant'}`,
+      { level: 'warn' },
+    )
+    return result(response?.data?.error === 'invalid_grant' ? 'reauth_required' : 'transient_failure')
+  } finally {
+    // Unlock failure cannot undo issued credentials or their persistence outcome.
+    try { await release?.() } catch { logForDebugging('Claude credential lock cleanup failed', { level: 'warn' }) }
+  }
 }
 
 /**
@@ -1800,167 +1905,33 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
     const storageData = await secureStorage.readAsync()
     const oauthData = storageData?.claudeAiOauth
     if (!oauthData?.accessToken) {
-      return null
+      return retainPendingSecureOAuth(null)
     }
     if (oauthData.accountUuid !== undefined &&
         oauthData.accountUuid !== getGlobalConfig().oauthAccount?.accountUuid) return null
-    return oauthData
+    return retainPendingSecureOAuth(oauthData)
   } catch (error) {
     logError(error)
-    return null
+    return retainPendingSecureOAuth(null)
   }
 }
 
-// In-flight promise for deduplicating concurrent calls
-let pendingRefreshCheck: Promise<boolean> | null = null
-
-export function checkAndRefreshOAuthTokenIfNeeded(
-  retryCount = 0,
+export async function checkAndRefreshOAuthTokenIfNeeded(
+  _retryCount = 0,
   force = false,
 ): Promise<boolean> {
-  // Deduplicate concurrent non-retry, non-force calls
-  if (retryCount === 0 && !force) {
-    if (pendingRefreshCheck) {
-      return pendingRefreshCheck
-    }
-
-    const promise = checkAndRefreshOAuthTokenIfNeededImpl(retryCount, force)
-    pendingRefreshCheck = promise.finally(() => {
-      pendingRefreshCheck = null
-    })
-    return pendingRefreshCheck
-  }
-
-  return checkAndRefreshOAuthTokenIfNeededImpl(retryCount, force)
-}
-
-async function checkAndRefreshOAuthTokenIfNeededImpl(
-  retryCount: number,
-  force: boolean,
-): Promise<boolean> {
-  const MAX_RETRIES = 5
-
   await invalidateOAuthCacheIfDiskChanged()
-
-  // First check if token is expired with cached value
-  // Skip this check if force=true (server already told us token is bad)
+  const selected = getActiveClaudeAccount()
+  if (selected && retryClaudeAccountTokenPersistence(selected.accountUuid) === 'pending') return false
+  const pending = shouldUseClaudePoolTokenSource()
+    ? undefined
+    : pendingSecureOAuth.get(getGlobalConfig().oauthAccount?.accountUuid)
+  if (pending && !saveOAuthTokensIfNeeded(pending.tokens).success) return false
   const tokens = getClaudeAIOAuthTokens()
-  if (!force) {
-    if (!tokens?.refreshToken || !isOAuthTokenExpired(tokens.expiresAt)) {
-      return false
-    }
-  }
-
-  if (!tokens?.refreshToken) {
-    return false
-  }
-
-  if (!shouldUseClaudeAIAuth(tokens.scopes)) {
-    return false
-  }
-
-  // Re-read tokens async to check if they're still expired
-  // Another process might have refreshed them
-  getClaudeAIOAuthTokens.cache?.clear?.()
-  clearKeychainCache()
-  const freshTokens = await getClaudeAIOAuthTokensAsync()
-  if (
-    !freshTokens?.refreshToken ||
-    !isOAuthTokenExpired(freshTokens.expiresAt)
-  ) {
-    return false
-  }
-
-  // Tokens are still expired, try to acquire lock and refresh
-  const claudeDir = getClaudeConfigHomeDir()
-  await mkdir(claudeDir, { recursive: true })
-
-  let release
-  try {
-    logEvent('tengu_oauth_token_refresh_lock_acquiring', {})
-    release = await lockfile.lock(claudeDir)
-    logEvent('tengu_oauth_token_refresh_lock_acquired', {})
-  } catch (err) {
-    if ((err as { code?: string }).code === 'ELOCKED') {
-      // Another process has the lock, let's retry if we haven't exceeded max retries
-      if (retryCount < MAX_RETRIES) {
-        logEvent('tengu_oauth_token_refresh_lock_retry', {
-          retryCount: retryCount + 1,
-        })
-        // Wait a bit before retrying
-        await sleep(1000 + Math.random() * 1000)
-        return checkAndRefreshOAuthTokenIfNeededImpl(retryCount + 1, force)
-      }
-      logEvent('tengu_oauth_token_refresh_lock_retry_limit_reached', {
-        maxRetries: MAX_RETRIES,
-      })
-      return false
-    }
-    logError(err)
-    logEvent('tengu_oauth_token_refresh_lock_error', {
-      error: errorMessage(
-        err,
-      ) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-    })
-    return false
-  }
-  try {
-    // Check one more time after acquiring lock
-    getClaudeAIOAuthTokens.cache?.clear?.()
-    clearKeychainCache()
-    // The refresh must update the account that supplied this refresh token, not
-    // whichever account happens to be active after the network await below.
-    const lockedTokens = await getClaudeAIOAuthTokensAsync()
-    const lockedPoolAccount = shouldUseClaudePoolTokenSource()
-      ? getClaudePoolStatus().accounts.find(account => account.accountUuid === lockedTokens?.accountUuid)
-      : null
-    if (
-      !lockedTokens?.refreshToken ||
-      !isOAuthTokenExpired(lockedTokens.expiresAt)
-    ) {
-      logEvent('tengu_oauth_token_refresh_race_resolved', {})
-      return false
-    }
-
-    logEvent('tengu_oauth_token_refresh_starting', {})
-    const refreshedTokens = await refreshOAuthToken(lockedTokens.refreshToken, {
-      persistProfile: !lockedPoolAccount,
-      // For Claude.ai subscribers, omit scopes so the default
-      // CLAUDE_AI_OAUTH_SCOPES applies — this allows scope expansion
-      // (e.g. adding user:file_upload) on refresh without re-login.
-      scopes: shouldUseClaudeAIAuth(lockedTokens.scopes)
-        ? undefined
-        : lockedTokens.scopes,
-    })
-    // Write refreshed tokens back to the Claude pool + vault so the
-    // in-memory pool doesn't serve stale tokens on the next read.
-    if (lockedPoolAccount) {
-      updateClaudeAccountTokens(lockedPoolAccount.accountUuid, refreshedTokens)
-    } else {
-      saveOAuthTokensIfNeeded({ ...refreshedTokens, accountUuid: lockedTokens.accountUuid })
-    }
-
-    // Clear the cache after refreshing token
-    getClaudeAIOAuthTokens.cache?.clear?.()
-    clearKeychainCache()
-    return true
-  } catch (error) {
-    logError(error)
-
-    getClaudeAIOAuthTokens.cache?.clear?.()
-    clearKeychainCache()
-    const currentTokens = await getClaudeAIOAuthTokensAsync()
-    if (currentTokens && !isOAuthTokenExpired(currentTokens.expiresAt)) {
-      logEvent('tengu_oauth_token_refresh_race_recovered', {})
-      return true
-    }
-
-    return false
-  } finally {
-    logEvent('tengu_oauth_token_refresh_lock_releasing', {})
-    await release()
-    logEvent('tengu_oauth_token_refresh_lock_released', {})
-  }
+  if (!tokens?.refreshToken || (!force && !isOAuthTokenExpired(tokens.expiresAt))) return false
+  const result = await recoverOAuth401Error(tokens.accessToken, tokens.accountUuid)
+  // Legacy callers must not interpret unsaved credentials as a durable refresh.
+  return result.status === 'refreshed' || (force && result.status === 'adopted_newer')
 }
 
 export function isClaudeAISubscriber(): boolean {

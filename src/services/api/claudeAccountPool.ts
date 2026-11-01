@@ -97,6 +97,17 @@ const pool: ClaudePoolState = {
 export function loadClaudePoolForObservation(): void {
   const selectedUuid = getActiveClaudeAccount()?.accountUuid
   const vaultAccounts = loadVaultAccounts()
+  for (const account of pool.accounts) {
+    const superseded = pendingTokenWrites.get(account.accountUuid)
+    if (!superseded) continue
+    const index = vaultAccounts.findIndex(candidate => candidate.accountUuid === account.accountUuid)
+    const disk = vaultAccounts[index]
+    if (disk && disk.accessToken !== account.accessToken && !superseded.has(disk.accessToken) &&
+        disk.expiresAt > account.expiresAt) {
+      pendingTokenWrites.delete(account.accountUuid)
+    } else if (index >= 0) vaultAccounts[index] = account
+    else vaultAccounts.push(account)
+  }
   const configAccount = loadConfigAccount(vaultAccounts.length > 0)
   pool.accounts = vaultAccounts
   if (configAccount && !vaultAccounts.some(account => account.accountUuid === configAccount.accountUuid)) {
@@ -188,12 +199,29 @@ export function shouldUseClaudePoolTokenSource(): boolean {
   return pool.initialized && pool.accounts.length > 0
 }
 
-/** Reload credentials for the selected identity without adopting disk selection. */
-export function reloadActiveClaudeAccountCredentials(): void {
-  const account = getActiveClaudeAccount()
+export type ClaudeTokenPersistenceResult = 'durable' | 'pending'
+// Retain issued credentials until a local write succeeds. Known superseded tokens
+// must never win a later disk reread, even when expiry timestamps are identical.
+const pendingTokenWrites = new Map<string, Set<string>>()
+
+export function retryClaudeAccountTokenPersistence(accountUuid: string): ClaudeTokenPersistenceResult {
+  const account = pool.accounts.find(candidate => candidate.accountUuid === accountUuid)
+  if (!account) return 'pending'
+  if (!pendingTokenWrites.has(accountUuid)) return 'durable'
+  const result = saveClaudeTokenToVault(account) ? 'durable' : 'pending'
+  clearOAuthTokenCache()
+  return result
+}
+
+export function reloadClaudeAccountCredentials(accountUuid: string): void {
+  const account = pool.accounts.find(candidate => candidate.accountUuid === accountUuid)
   if (!account?.vaultFilePath) return
-  const fresh = loadVaultAccounts().find(candidate => candidate.accountUuid === account.accountUuid)
+  const fresh = loadVaultAccounts().find(candidate => candidate.accountUuid === accountUuid)
   if (!fresh) return
+  const superseded = pendingTokenWrites.get(accountUuid)
+  if (superseded && (superseded.has(fresh.accessToken) ||
+      (fresh.accessToken !== account.accessToken && fresh.expiresAt <= account.expiresAt))) return
+  if (fresh.accessToken !== account.accessToken) pendingTokenWrites.delete(accountUuid)
   account.accessToken = fresh.accessToken
   account.refreshToken = fresh.refreshToken
   account.expiresAt = fresh.expiresAt
@@ -201,6 +229,12 @@ export function reloadActiveClaudeAccountCredentials(): void {
   account.subscriptionType = fresh.subscriptionType
   account.rateLimitTier = fresh.rateLimitTier
   clearOAuthTokenCache()
+}
+
+/** Reload credentials for the selected identity without adopting disk selection. */
+export function reloadActiveClaudeAccountCredentials(): void {
+  const account = getActiveClaudeAccount()
+  if (account) reloadClaudeAccountCredentials(account.accountUuid)
 }
 
 /** Returns the currently active Claude account, or null if pool empty. */
@@ -408,6 +442,10 @@ export function appendClaudeAccount(account: {
   subscriptionCreatedAt?: string
   alias?: string
 }): void {
+  const superseded = pendingTokenWrites.get(account.accountUuid) ?? new Set<string>()
+  const previous = pool.accounts.find(candidate => candidate.accountUuid === account.accountUuid)
+  if (previous && previous.accessToken !== account.accessToken) superseded.add(previous.accessToken)
+  pendingTokenWrites.set(account.accountUuid, superseded)
   const existing = pool.accounts.findIndex(
     (a) => a.accountUuid === account.accountUuid,
   )
@@ -451,7 +489,7 @@ export function appendClaudeAccount(account: {
 
   // Save to vault
   const acct = pool.accounts[pool.activeIndex]!
-  const vaultFilePath = saveClaudeTokenToVault(acct)
+  const vaultFilePath = saveClaudeTokenToVault(acct, true)
   if (vaultFilePath) acct.vaultFilePath = vaultFilePath
 
   // Sync to keychain + config (also persists activeClaudeAccountUuid)
@@ -533,11 +571,17 @@ export function updateClaudeAccountTokens(
     subscriptionType?: string | null
     rateLimitTier?: string | null
   },
-): void {
-  if (!pool.initialized) return
+  expected?: { accessToken: string; refreshToken: string | null },
+): ClaudeTokenPersistenceResult | 'superseded' | 'unavailable' {
+  if (!pool.initialized) return 'unavailable'
   const acct = pool.accounts.find(account => account.accountUuid === accountUuid)
-  if (!acct) return
+  if (!acct || acct.status !== 'healthy') return 'unavailable'
+  if (expected && (acct.accessToken !== expected.accessToken ||
+      acct.refreshToken !== expected.refreshToken)) return 'superseded'
 
+  const superseded = pendingTokenWrites.get(accountUuid) ?? new Set<string>()
+  if (acct.accessToken !== tokens.accessToken) superseded.add(acct.accessToken)
+  pendingTokenWrites.set(accountUuid, superseded)
   acct.accessToken = tokens.accessToken
   if (tokens.refreshToken) acct.refreshToken = tokens.refreshToken
   if (tokens.expiresAt) acct.expiresAt = tokens.expiresAt
@@ -545,8 +589,9 @@ export function updateClaudeAccountTokens(
   if (tokens.rateLimitTier !== undefined) acct.rateLimitTier = tokens.rateLimitTier
 
   // Write updated tokens to vault
-  saveClaudeTokenToVault(acct)
-  logForDebugging(`[claude-pool] Updated account tokens after refresh`)
+  const saved = saveClaudeTokenToVault(acct)
+  clearOAuthTokenCache()
+  return saved ? 'durable' : 'pending'
 }
 
 /** Store roles for the request's account without republishing its credentials. */
@@ -587,6 +632,9 @@ export function deleteClaudeVaultFile(filePath: string): boolean {
   try {
     releaseLock = acquireVaultMutationLockSync(filePath)
     unlinkSync(filePath)
+    for (const account of pool.accounts) {
+      if (account.vaultFilePath === filePath) pendingTokenWrites.delete(account.accountUuid)
+    }
     return true
   } catch (err) {
     logForDebugging(
@@ -653,6 +701,7 @@ export function removeClaudeAccount(accountUuid: string): boolean {
   }
 
   // Remove from pool
+  pendingTokenWrites.delete(accountUuid)
   pool.accounts.splice(idx, 1)
 
   pool.activeIndex = nextActiveIndex
@@ -706,7 +755,7 @@ function getVaultAccountsDir(): string {
   return join(vaultPathOverrideForTest ?? DEFAULT_VAULT_PATH, 'accounts')
 }
 
-function saveClaudeTokenToVault(account: ClaudePoolAccount): string | null {
+function saveClaudeTokenToVault(account: ClaudePoolAccount, explicitLogin = false): string | null {
   let releaseLock: (() => void) | undefined
   try {
     const accountsDir = getVaultAccountsDir()
@@ -718,6 +767,27 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount): string | null {
     const existing = existsSync(filePath)
       ? (JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>)
       : {}
+    const diskProfile = existing.profile as Record<string, unknown> | undefined
+    if (diskProfile?.account_uuid && diskProfile.account_uuid !== account.accountUuid) return null
+    const diskTokens = existing.tokens as Record<string, unknown> | undefined
+    const superseded = pendingTokenWrites.get(account.accountUuid)
+    if (explicitLogin && superseded && typeof diskTokens?.access_token === 'string' &&
+        diskTokens.access_token !== account.accessToken) superseded.add(diskTokens.access_token)
+    if (superseded && typeof diskTokens?.access_token === 'string' &&
+        diskTokens.access_token !== account.accessToken &&
+        !superseded.has(diskTokens.access_token)) {
+      // Different alone does not establish ordering. Do not overwrite either
+      // credential when the external expiry supplies no evidence of advancement.
+      if (diskProfile?.account_uuid !== account.accountUuid ||
+          typeof diskTokens.refresh_token !== 'string' || !diskTokens.refresh_token ||
+          typeof diskTokens.expires_at !== 'number' || !Number.isFinite(diskTokens.expires_at) ||
+          diskTokens.expires_at <= account.expiresAt) return null
+      account.accessToken = diskTokens.access_token
+      account.refreshToken = diskTokens.refresh_token
+      account.expiresAt = diskTokens.expires_at
+      pendingTokenWrites.delete(account.accountUuid)
+      return filePath
+    }
     const data: Record<string, unknown> = {
       ...existing,
       tokens: {
@@ -744,15 +814,29 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount): string | null {
       last_refresh: new Date().toISOString(),
     }
     if (account.alias) data.alias = account.alias
-    writeFileAtomicDurableSync(filePath, JSON.stringify(data, null, 2) + '\n', {
-      encoding: 'utf-8',
-      mode: 0o600,
-    })
+    try {
+      writeFileAtomicDurableSync(filePath, JSON.stringify(data, null, 2) + '\n', {
+        encoding: 'utf-8', mode: 0o600,
+      })
+    } catch {
+      // Atomic publication may have completed before a cleanup error. Reconcile
+      // while holding the same mutation lock, not by replaying token redemption.
+      const actual = JSON.parse(readFileSync(filePath, 'utf8'))
+      if (actual.profile?.account_uuid === account.accountUuid &&
+          actual.tokens?.access_token === account.accessToken &&
+          actual.tokens?.refresh_token === account.refreshToken) {
+        account.vaultFilePath = filePath
+      }
+      // Visibility is not proof of directory durability. Keep the issued
+      // credentials pending until a later local durable write completes.
+      return null
+    }
+    pendingTokenWrites.delete(account.accountUuid)
     logForDebugging(`[claude-pool] Saved account ${account.emailAddress} to vault`)
     return filePath
   } catch (err) {
     logForDebugging(
-      `[claude-pool] Failed to save account to vault: ${err instanceof Error ? err.message : String(err)}`,
+      '[claude-pool] Credential persistence pending; free disk space or restore vault access and retry.',
       { level: 'warn' },
     )
     return null
@@ -931,6 +1015,7 @@ export function setClaudeConfigAccountForTest(
 }
 
 export function resetClaudeAccountPoolForTest(): void {
+  pendingTokenWrites.clear()
   pool.accounts = []
   pool.activeIndex = -1
   pool.initialized = false

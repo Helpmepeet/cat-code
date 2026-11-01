@@ -59,7 +59,7 @@ import {
   type CodexCredentialHandle,
   type CodexCredentialUseOptions,
 } from './codexCredentialUse.js'
-import { CodexAccountUnavailableError } from './withRetry.js'
+import { CodexAccountUnavailableError, recordClaudeOAuthClientCredential } from './withRetry.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
 import { maybeRefreshAccount, type CodexCoreAccount } from '../../codex-core/accounts.js'
 
@@ -648,11 +648,10 @@ export async function getAnthropicClient({
     }
   }
 
+  const oauthTokens = isClaudeAISubscriber() ? getClaudeAIOAuthTokens() : null
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
-    apiKey: isClaudeAISubscriber() ? null : apiKey || getAnthropicApiKey(),
-    authToken: isClaudeAISubscriber()
-      ? getClaudeAIOAuthTokens()?.accessToken
-      : undefined,
+    apiKey: oauthTokens ? null : apiKey || getAnthropicApiKey(),
+    authToken: oauthTokens?.accessToken,
     // Set baseURL from OAuth config when using staging OAuth
     ...(process.env.USER_TYPE === 'ant' &&
     isEnvTruthy(process.env.USE_STAGING_OAUTH)
@@ -662,7 +661,15 @@ export async function getAnthropicClient({
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }
 
-  return new Anthropic(clientConfig)
+  const client = new Anthropic(clientConfig)
+  if (oauthTokens?.accessToken &&
+      !Object.keys(defaultHeaders).some(name => name.toLowerCase() === 'authorization')) {
+    recordClaudeOAuthClientCredential(client, {
+      accessToken: oauthTokens.accessToken,
+      accountUuid: oauthTokens.accountUuid,
+    })
+  }
+  return client
 }
 
 async function configureApiKeyHeaders(
