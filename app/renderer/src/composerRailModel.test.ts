@@ -268,7 +268,7 @@ test('an Anthropic session arms account switching only for a ready subscription 
       connectionStatus: status,
       accounts: {
         ...createAccountsState(),
-        pool: accountsSnapshot({ anthropicSubscriptionActive: true }),
+        sessions: { [SID]: accountsSnapshot({ anthropicSubscriptionActive: true }) },
       },
     }))
     expect(subscription.canSwitchAccount).toBe(status === 'ready')
@@ -331,6 +331,95 @@ test('a session that never reported anything claims nothing', () => {
   expect(rail.lastPermissionMode).toBeNull()
   expect(rail.accountsSnapshot).toBeNull()
   expect(rail.canSwitchAccount).toBe(false)
+})
+
+function identityPool(active: string, usage = 10): AccountsSnapshot {
+  return accountsSnapshot({
+    activeAccountId: active,
+    anthropicActiveAccountId: active,
+    anthropicRouteAvailable: true,
+    anthropicSubscriptionActive: true,
+    accounts: ['a', 'b', 'blocked'].map(id => ({
+      id,
+      isDefault: id === active,
+      availability: id === 'blocked' ? 'blocked' : 'available',
+      switchable: id !== active && id !== 'blocked',
+      usagePrimary: usage,
+    })) as AccountsSnapshot['accounts'],
+    anthropicAccounts: ['a', 'b'].map(id => ({
+      id,
+      alias: id,
+      email: `${id}@example.com`,
+      status: 'healthy',
+      isDefault: id === active,
+      hasVaultProfile: true,
+      subscriptionType: 'max',
+      usageFiveHour: usage,
+    })),
+  })
+}
+
+function reportAccounts(state: AccountsState, sessionId: string, snapshot: AccountsSnapshot) {
+  return reduceAccountsState(state, frame({
+    kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+    sessionId, accounts: snapshot,
+  }))
+}
+
+test('two Claude panes keep their own identity through global polls and sibling switches', () => {
+  let accounts = reportAccounts(createAccountsState(), SID, identityPool('a'))
+  accounts = reportAccounts(accounts, 'session-2', identityPool('b'))
+  for (const active of ['b', 'a']) {
+    accounts = reduceAccountsState(accounts, { type: 'pool', pool: identityPool(active, 75) })
+    for (const [sessionId, identity] of [[SID, 'a'], ['session-2', 'b']]) {
+      const snapshot = selectComposerRail({ ...sources({ accounts }), sessionId: sessionId! }).accountsSnapshot!
+      expect(snapshot.activeAccountId).toBe(identity)
+      expect(snapshot.anthropicActiveAccountId).toBe(identity)
+      expect(snapshot.accounts.filter(row => row.isDefault).map(row => row.id)).toEqual([identity!])
+      expect(snapshot.anthropicAccounts.filter(row => row.isDefault).map(row => row.id)).toEqual([identity!])
+      expect(snapshot.accounts.find(row => row.id === identity)?.switchable).toBe(false)
+      expect(snapshot.accounts.find(row => row.id === (identity === 'a' ? 'b' : 'a'))?.switchable).toBe(true)
+      expect(snapshot.accounts.find(row => row.id === 'blocked')?.switchable).toBe(false)
+      expect(snapshot.anthropicAccounts[0]?.usageFiveHour).toBe(75)
+    }
+  }
+  accounts = reportAccounts(accounts, 'session-2', identityPool('a'))
+  expect(selectComposerRail(sources({ accounts })).accountsSnapshot?.anthropicActiveAccountId).toBe('a')
+})
+
+test('parked identity and auth survive while inventory and usage stay fresh', () => {
+  let accounts = reportAccounts(createAccountsState(), SID, identityPool('a'))
+  accounts = reduceAccountsState(accounts, frame(lifecycle()))
+  const pool = identityPool('b', 90)
+  pool.anthropicSubscriptionActive = false
+  pool.anthropicRouteAvailable = false
+  accounts = reduceAccountsState(accounts, { type: 'pool', pool })
+  for (const connectionStatus of ['parked', 'disconnected', 'starting', 'ready'] as const) {
+    const rail = selectComposerRail(sources({ accounts, connectionStatus }))
+    expect(rail.accountsSnapshot?.anthropicActiveAccountId).toBe('a')
+    expect(rail.accountsSnapshot?.anthropicSubscriptionActive).toBe(true)
+    expect(rail.accountsSnapshot?.anthropicRouteAvailable).toBe(true)
+    expect(rail.accountsSnapshot?.anthropicAccounts[0]?.usageFiveHour).toBe(90)
+    expect(rail.canSwitchAccount).toBe(false)
+  }
+})
+
+test('inventory without session evidence never supplies identity or effective auth', () => {
+  let accounts = reportAccounts(createAccountsState(), 'other', identityPool('b'))
+  for (const pool of [null, identityPool('b', 60)]) {
+    accounts = { ...accounts, pool }
+    const runControls = reduceRunControlsState(createRunControlsState(), frame({
+      kind: 'run-controls.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+      runControls: { ...SNAPSHOT, model: { ...SNAPSHOT.model, provider: 'anthropic' } },
+    }))
+    const rail = selectComposerRail(sources({ accounts, runControls }))
+    expect(rail.accountsSnapshot?.activeAccountId).toBeNull()
+    expect(rail.accountsSnapshot?.anthropicActiveAccountId).toBeNull()
+    expect(rail.accountsSnapshot?.accounts.some(row => row.isDefault)).toBe(false)
+    expect(rail.accountsSnapshot?.anthropicAccounts.some(row => row.isDefault)).toBe(false)
+    expect(rail.accountsSnapshot?.anthropicRouteAvailable).toBe(false)
+    expect(rail.canSwitchAccount).toBe(false)
+  }
 })
 
 /* --------------------------------------------------------------------- *

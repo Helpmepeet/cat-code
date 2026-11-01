@@ -30,7 +30,9 @@ import type { OAuthTokens, SubscriptionType } from '../services/oauth/types.js'
 import {
   shouldUseClaudePoolTokenSource,
   getActiveClaudeAccount,
+  getClaudePoolStatus,
   updateClaudeAccountTokens,
+  reloadActiveClaudeAccountCredentials,
 } from '../services/api/claudeAccountPool.js'
 import { getActiveAccount, hasAnyPoolAccount } from '../services/api/codexAccountPool.js'
 import {
@@ -1336,6 +1338,7 @@ export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
         rateLimitTier: acct.rateLimitTier ?? null,
       }
     }
+    return null
   }
 
   try {
@@ -1774,6 +1777,9 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
 
   // The initialized pool owns credentials, as in the synchronous getter.
   if (shouldUseClaudePoolTokenSource()) {
+    // Other processes may refresh this account's vault credentials. Reload the
+    // inventory without adopting their default account selection.
+    reloadActiveClaudeAccountCredentials()
     const acct = getActiveClaudeAccount()
     if (acct) {
       return {
@@ -1786,6 +1792,7 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
         rateLimitTier: acct.rateLimitTier ?? null,
       }
     }
+    return null
   }
 
   try {
@@ -1903,10 +1910,10 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
     clearKeychainCache()
     // The refresh must update the account that supplied this refresh token, not
     // whichever account happens to be active after the network await below.
-    const lockedPoolAccount = shouldUseClaudePoolTokenSource()
-      ? getActiveClaudeAccount()
-      : null
     const lockedTokens = await getClaudeAIOAuthTokensAsync()
+    const lockedPoolAccount = shouldUseClaudePoolTokenSource()
+      ? getClaudePoolStatus().accounts.find(account => account.accountUuid === lockedTokens?.accountUuid)
+      : null
     if (
       !lockedTokens?.refreshToken ||
       !isOAuthTokenExpired(lockedTokens.expiresAt)
@@ -1917,6 +1924,7 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
 
     logEvent('tengu_oauth_token_refresh_starting', {})
     const refreshedTokens = await refreshOAuthToken(lockedTokens.refreshToken, {
+      persistProfile: !lockedPoolAccount,
       // For Claude.ai subscribers, omit scopes so the default
       // CLAUDE_AI_OAUTH_SCOPES applies — this allows scope expansion
       // (e.g. adding user:file_upload) on refresh without re-login.
@@ -1924,12 +1932,12 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
         ? undefined
         : lockedTokens.scopes,
     })
-    saveOAuthTokensIfNeeded({ ...refreshedTokens, accountUuid: lockedTokens.accountUuid })
-
     // Write refreshed tokens back to the Claude pool + vault so the
     // in-memory pool doesn't serve stale tokens on the next read.
     if (lockedPoolAccount) {
       updateClaudeAccountTokens(lockedPoolAccount.accountUuid, refreshedTokens)
+    } else {
+      saveOAuthTokensIfNeeded({ ...refreshedTokens, accountUuid: lockedTokens.accountUuid })
     }
 
     // Clear the cache after refreshing token
@@ -2038,7 +2046,42 @@ export function is1PApiCustomer(): boolean {
  * Returns undefined when using external API keys or third-party services.
  */
 export function getOauthAccountInfo(): AccountInfo | undefined {
-  return isAnthropicAuthEnabled() ? getGlobalConfig().oauthAccount : undefined
+  if (!isAnthropicAuthEnabled()) return undefined
+  // External tokens may carry explicit SDK identity, never the pool's profile.
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN || getOAuthTokenFromFileDescriptor()) {
+    const accountUuid = process.env.CLAUDE_CODE_ACCOUNT_UUID
+    const emailAddress = process.env.CLAUDE_CODE_USER_EMAIL
+    const organizationUuid = process.env.CLAUDE_CODE_ORGANIZATION_UUID
+    return accountUuid && emailAddress && organizationUuid
+      ? { accountUuid, emailAddress, organizationUuid }
+      : undefined
+  }
+  const tokens = getClaudeAIOAuthTokens()
+  if (!tokens || !shouldUseClaudeAIAuth(tokens.scopes ?? undefined)) {
+    // Console login uses its managed API key rather than subscription tokens.
+    return getApiKeyFromConfigOrMacOSKeychain()?.key
+      ? getGlobalConfig().oauthAccount
+      : undefined
+  }
+  if (shouldUseClaudePoolTokenSource()) {
+    const account = getActiveClaudeAccount()
+    if (!account || account.accountUuid !== tokens.accountUuid) return undefined
+    return {
+      accountUuid: account.accountUuid,
+      emailAddress: account.emailAddress,
+      organizationUuid: account.organizationUuid,
+      organizationName: account.organizationName,
+      organizationRole: account.organizationRole,
+      workspaceRole: account.workspaceRole,
+      displayName: account.displayName,
+      billingType: account.billingType as AccountInfo['billingType'],
+      hasExtraUsageEnabled: account.hasExtraUsageEnabled,
+      accountCreatedAt: account.accountCreatedAt,
+      subscriptionCreatedAt: account.subscriptionCreatedAt,
+    }
+  }
+  const account = getGlobalConfig().oauthAccount
+  return tokens.accountUuid && tokens.accountUuid !== account?.accountUuid ? undefined : account
 }
 
 /**

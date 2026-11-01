@@ -629,6 +629,7 @@ test('composer management and account-health action focus the same Accounts tab'
   const pool = { accounts: [account], signedOutProfiles: [], activeAccountId: account.id, readyCount: 1, poolCount: 1, initialized: true,
     anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0, anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true }
   await app.host({ type: 'accounts-pool', pool })
+  await app.frames({ kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', accounts: pool })
   await app.frames({ kind: 'run-controls.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', runControls: {
     model: { current: 'gpt-5.6-terra', currentLabel: 'GPT-5.6 Terra', contextWindow: 372000, selected: 'gpt-5.6-terra', provider: 'openai', providerSwitchLocked: false, options: [] },
     effort: { current: 'low', selected: 'low', supported: true, options: ['low'] },

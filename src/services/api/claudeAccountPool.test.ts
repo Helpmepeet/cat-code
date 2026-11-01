@@ -15,6 +15,8 @@ import {
   setClaudeConfigAccountForTest,
   setClaudeVaultPathForTest,
   updateClaudeAccountTokens,
+  getActiveClaudeAccount,
+  reloadActiveClaudeAccountCredentials,
   type ClaudePoolAccount,
 } from './claudeAccountPool.js'
 
@@ -315,6 +317,41 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
     loadClaudePoolForObservation()
 
     expect(getClaudePoolStatus().accounts[0]?.status).toBe('healthy')
+  })
+
+  test('inventory reload retains process selection while a fresh process adopts the disk default', () => {
+    writeVaultAccountFile(buildClaudeAccount({ accountUuid: 'apple' }))
+    writeVaultAccountFile(buildClaudeAccount({ accountUuid: 'gmail' }))
+    setClaudeConfigAccountForTest({ active: true, value: null })
+    saveGlobalConfig(current => ({ ...current, activeClaudeAccountUuid: 'apple' }))
+    loadClaudePoolForObservation()
+    saveGlobalConfig(current => ({ ...current, activeClaudeAccountUuid: 'gmail' }))
+    writeVaultAccountFile(buildClaudeAccount({ accountUuid: 'apple', accessToken: 'refreshed-apple' }))
+    loadClaudePoolForObservation()
+    expect(getActiveClaudeAccount()?.accountUuid).toBe('apple')
+    expect(getActiveClaudeAccount()?.accessToken).toBe('refreshed-apple')
+
+    resetClaudeAccountPoolForTest()
+    setClaudeVaultPathForTest(vaultDir)
+    setClaudeConfigAccountForTest({ active: true, value: null })
+    loadClaudePoolForObservation()
+    expect(getActiveClaudeAccount()?.accountUuid).toBe('gmail')
+  })
+
+  test('credential reload updates only the selected identity from its vault', () => {
+    writeVaultAccountFile(buildClaudeAccount({ accountUuid: 'apple' }))
+    writeVaultAccountFile(buildClaudeAccount({ accountUuid: 'gmail' }))
+    setClaudeConfigAccountForTest({ active: true, value: null })
+    saveGlobalConfig(current => ({ ...current, activeClaudeAccountUuid: 'apple' }))
+    loadClaudePoolForObservation()
+    const selected = getActiveClaudeAccount()
+    writeVaultAccountFile(buildClaudeAccount({ accountUuid: 'apple', accessToken: 'fresh', emailAddress: 'changed@example.com' }))
+    saveGlobalConfig(current => ({ ...current, activeClaudeAccountUuid: 'gmail' }))
+    reloadActiveClaudeAccountCredentials()
+    expect(getActiveClaudeAccount()).toBe(selected)
+    expect(selected?.accountUuid).toBe('apple')
+    expect(selected?.emailAddress).toBe('apple@example.com')
+    expect(selected?.accessToken).toBe('fresh')
   })
 
   test('keeps each vault credential when the config identity is paired with another account token', () => {

@@ -95,14 +95,25 @@ const pool: ClaudePoolState = {
  * `initClaudeAccountPool` performs that write separately.
  */
 export function loadClaudePoolForObservation(): void {
+  const selectedUuid = getActiveClaudeAccount()?.accountUuid
   const vaultAccounts = loadVaultAccounts()
   const configAccount = loadConfigAccount(vaultAccounts.length > 0)
   pool.accounts = vaultAccounts
   if (configAccount && !vaultAccounts.some(account => account.accountUuid === configAccount.accountUuid)) {
     pool.accounts.push(configAccount)
   }
-  restoreActiveClaudeAccountPointer()
+  if (pool.initialized) {
+    pool.activeIndex = pool.accounts.findIndex(
+      account => account.accountUuid === selectedUuid && account.status === 'healthy',
+    )
+    if (pool.activeIndex < 0) {
+      pool.activeIndex = pool.accounts.findIndex(account => account.status === 'healthy')
+    }
+  } else {
+    restoreActiveClaudeAccountPointer()
+  }
   pool.initialized = true
+  clearOAuthTokenCache()
 
   const healthy = pool.accounts.filter((a) => a.status === 'healthy').length
   logForDebugging(
@@ -170,14 +181,26 @@ export function isClaudePoolActive(): boolean {
 }
 
 /**
- * An initialized vault-backed pool owns credentials even with one account.
- * Keychain/config is only the legacy fallback before vault migration.
+ * An initialized inventory owns credentials even when none are usable.
+ * Exhaustion must not fall back to another session's shared credentials.
  */
 export function shouldUseClaudePoolTokenSource(): boolean {
-  return (
-    pool.initialized &&
-    pool.accounts.some((a) => a.status === 'healthy')
-  )
+  return pool.initialized && pool.accounts.length > 0
+}
+
+/** Reload credentials for the selected identity without adopting disk selection. */
+export function reloadActiveClaudeAccountCredentials(): void {
+  const account = getActiveClaudeAccount()
+  if (!account?.vaultFilePath) return
+  const fresh = loadVaultAccounts().find(candidate => candidate.accountUuid === account.accountUuid)
+  if (!fresh) return
+  account.accessToken = fresh.accessToken
+  account.refreshToken = fresh.refreshToken
+  account.expiresAt = fresh.expiresAt
+  account.scopes = fresh.scopes
+  account.subscriptionType = fresh.subscriptionType
+  account.rateLimitTier = fresh.rateLimitTier
+  clearOAuthTokenCache()
 }
 
 /** Returns the currently active Claude account, or null if pool empty. */
@@ -280,13 +303,14 @@ export function resolveClaudeAccountByPrefix(
  * alternative. Callers that want to surface a candidate list on ambiguity
  * should call `resolveClaudeAccountByPrefix` first.
  *
- * IMPORTANT: This only updates the in-memory pool and persisted pointers.
- * The caller must also:
- *   - Call syncClaudeAccountToStorage() to update keychain + config
- *   - Call clearAuthRelatedCaches()
- *   - Call applyPostSwitchAccountStateRefresh()
+ * This low-level operation persists the new-process default unless opted out.
+ * Session switches should use commitClaudeAccountSwitch for local selection
+ * and the associated cache and engine-state refresh.
  */
-export function switchToClaudeAccount(idPrefix: string | null): ClaudePoolAccount | null {
+export function switchToClaudeAccount(
+  idPrefix: string | null,
+  { persistDefault = true }: { persistDefault?: boolean } = {},
+): ClaudePoolAccount | null {
   if (!pool.initialized || pool.accounts.length === 0) return null
 
   let targetIdx: number
@@ -311,7 +335,7 @@ export function switchToClaudeAccount(idPrefix: string | null): ClaudePoolAccoun
 
   if (targetIdx === pool.activeIndex) {
     // Self-heal: persist pointer even on no-op in case config is out of sync
-    saveGlobalConfig(current => ({
+    if (persistDefault) saveGlobalConfig(current => ({
       ...current,
       activeClaudeAccountUuid: pool.accounts[targetIdx]!.accountUuid,
     }))
@@ -323,9 +347,10 @@ export function switchToClaudeAccount(idPrefix: string | null): ClaudePoolAccoun
     `[claude-pool] Switch: ${prev?.emailAddress ?? '?'} → ${pool.accounts[targetIdx]!.emailAddress}`,
   )
   pool.activeIndex = targetIdx
+  clearOAuthTokenCache()
 
   // Persist active account pointer
-  saveGlobalConfig(current => ({
+  if (persistDefault) saveGlobalConfig(current => ({
     ...current,
     activeClaudeAccountUuid: pool.accounts[targetIdx]!.accountUuid,
   }))
@@ -434,10 +459,8 @@ export function appendClaudeAccount(account: {
 }
 
 /**
- * Sync the active Claude pool account's tokens to keychain and profile to config.
- * Must be called after switchToClaudeAccount() so existing consumers
- * (39 files reading getClaudeAIOAuthTokens, 10 files reading config.oauthAccount)
- * see the correct data.
+ * Persist shared login/default state to keychain and config. Session switches
+ * must not call this: their tokens and effective profile stay process-local.
  */
 export function syncClaudeAccountToStorage(): void {
   const acct = getActiveClaudeAccount()
@@ -496,7 +519,8 @@ export function syncClaudeAccountToStorage(): void {
 
 /**
  * Update one pool account's tokens after a refresh.
- * Keeps the in-memory pool and vault in sync with the keychain.
+ * Keeps the in-memory pool and account vault in sync without changing the
+ * shared login/default credentials.
  * The caller must identify the account before awaiting the refresh, because the
  * active account may change while the refresh request is in flight.
  */

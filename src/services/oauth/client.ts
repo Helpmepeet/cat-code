@@ -13,6 +13,7 @@ import {
 import {
   checkAndRefreshOAuthTokenIfNeeded,
   getClaudeAIOAuthTokens,
+  getOauthAccountInfo,
   hasProfileScope,
   isClaudeAISubscriber,
   saveApiKey,
@@ -173,8 +174,14 @@ export async function exchangeCodeForTokens(
 
 export async function refreshOAuthToken(
   refreshToken: string,
-  { scopes: requestedScopes }: { scopes?: string[] } = {},
+  { scopes: requestedScopes, persistProfile = true }: {
+    scopes?: string[]
+    persistProfile?: boolean
+  } = {},
 ): Promise<OAuthTokens> {
+  const currentTokens = getClaudeAIOAuthTokens()
+  const existing = currentTokens?.refreshToken === refreshToken ? currentTokens : null
+  const accountInfo = existing ? getOauthAccountInfo() : undefined
   const requestBody = {
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
@@ -225,12 +232,10 @@ export async function refreshOAuthToken(
     // subscription type for paying users. By passing through existing values,
     // the re-login path writes cached ?? wiped ?? null = cached; and if secure
     // storage was already empty we fall through to the fetch.
-    const config = getGlobalConfig()
-    const existing = getClaudeAIOAuthTokens()
     const haveProfileAlready =
-      config.oauthAccount?.billingType !== undefined &&
-      config.oauthAccount?.accountCreatedAt !== undefined &&
-      config.oauthAccount?.subscriptionCreatedAt !== undefined &&
+      accountInfo?.billingType !== undefined &&
+      accountInfo?.accountCreatedAt !== undefined &&
+      accountInfo?.subscriptionCreatedAt !== undefined &&
       existing?.subscriptionType != null &&
       existing?.rateLimitTier != null
 
@@ -239,7 +244,7 @@ export async function refreshOAuthToken(
       : await fetchProfileInfo(accessToken)
 
     // Update the stored properties if they have changed
-    if (profileInfo && config.oauthAccount) {
+    if (persistProfile && profileInfo && accountInfo) {
       const updates: Partial<AccountInfo> = {}
       if (profileInfo.displayName !== undefined) {
         updates.displayName = profileInfo.displayName
@@ -259,7 +264,7 @@ export async function refreshOAuthToken(
       if (Object.keys(updates).length > 0) {
         saveGlobalConfig(current => ({
           ...current,
-          oauthAccount: current.oauthAccount
+          oauthAccount: current.oauthAccount?.accountUuid === accountInfo.accountUuid
             ? { ...current.oauthAccount, ...updates }
             : current.oauthAccount,
         }))
@@ -452,9 +457,8 @@ export async function fetchProfileInfo(accessToken: string): Promise<{
  * @returns The organization UUID or null if not authenticated
  */
 export async function getOrganizationUUID(): Promise<string | null> {
-  // Check global config first to avoid unnecessary API call
-  const globalConfig = getGlobalConfig()
-  const orgUUID = globalConfig.oauthAccount?.organizationUuid
+  // Use metadata bound to the effective token before fetching a profile.
+  const orgUUID = getOauthAccountInfo()?.organizationUuid
   if (orgUUID) {
     return orgUUID
   }

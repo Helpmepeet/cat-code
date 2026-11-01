@@ -728,6 +728,68 @@ describe('real Codex switch executor', () => {
   })
 })
 
+describe('real Anthropic switch executor', () => {
+  test('awaits the session-local engine transaction before reporting success', async () => {
+    let finish!: (account: ClaudePoolAccount) => void
+    const pending = new Promise<ClaudePoolAccount>(resolve => { finish = resolve })
+    const calls: string[] = []
+    const executor = createRealAccountsExecutor({
+      commitAnthropicSwitch: accountId => {
+        calls.push(accountId)
+        return pending
+      },
+    })
+    let reported = false
+    const result = executor.switchAnthropic('claude-b').then(value => {
+      reported = true
+      return value
+    })
+
+    expect(calls).toEqual(['claude-b'])
+    expect(reported).toBe(false)
+    finish({
+      accountUuid: 'claude-b',
+      emailAddress: 'b@example.com',
+      alias: 'work',
+      accessToken: 'test-access',
+      refreshToken: 'test-refresh',
+      expiresAt: Date.now() + 3_600_000,
+      status: 'healthy',
+    })
+    expect(await result).toEqual({ ok: true, message: 'Switched to work' })
+  })
+
+  test('a refused local transaction reports no pool change', async () => {
+    seedClaudeAccountPoolForTest({
+      accounts: [{
+        accountUuid: 'claude-a',
+        emailAddress: 'a@example.com',
+        accessToken: 'test-access',
+        refreshToken: 'test-refresh',
+        expiresAt: Date.now() + 3_600_000,
+        status: 'healthy',
+      }],
+      activeAccountUuid: 'claude-a',
+    })
+    const domain = makeAccountsDomain({
+      executor: createRealAccountsExecutor({
+        commitAnthropicSwitch: async () => null,
+      }),
+    })
+    const outcome = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'claude-refused',
+      accountId: 'claude-a',
+      provider: 'anthropic',
+    })
+    expect(outcome.result).toEqual({
+      ok: false,
+      message: 'Could not switch to that Anthropic account.',
+    })
+    expect(outcome.poolChanged).toBe(false)
+  })
+})
+
 /**
  * A FAKE OAuth runner — never opens a browser, binds port 1455, or writes the
  * vault (the real run is the operator's live step). Drives the controller's state

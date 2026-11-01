@@ -70,10 +70,9 @@ import {
 import {
   getClaudePoolStatus,
   loadClaudePoolForObservation,
-  switchToClaudeAccount,
-  syncClaudeAccountToStorage,
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
+import { commitClaudeAccountSwitch } from '../../src/services/api/claudeAccountSwitch.js'
 import type { ClaudeAccountUsage } from '../../src/services/api/claudePoolUsage.js'
 import type { CodexAccountDisplayUsage } from '../../src/services/api/codexUsageDisplayCache.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
@@ -111,7 +110,6 @@ import {
 import { OAuthService } from '../../src/services/oauth/index.js'
 import { runCodexOAuthFlow, type CodexTokens } from '../../src/services/oauth/codex-client.js'
 import {
-  clearOAuthTokenCache,
   hasAnthropicCredentials,
   isClaudeAISubscriber,
   validateForceLoginOrgForToken,
@@ -154,7 +152,7 @@ export type AccountsCommandExecutor = {
    * awaits (`commitCodexAccountSwitch`, `src/services/api/codexAccountSwitch.ts`).
    */
   switch(accountId: string): Promise<AccountVerbResult>
-  /** Switch the active Anthropic subscription account and refresh auth caches. */
+  /** Switch this session's Anthropic account without changing shared credentials. */
   switchAnthropic(accountId: string): Promise<AccountVerbResult>
   /** Rename a vault account. `alias` already re-validated against the live pool. */
   rename(accountId: string, alias: string): AccountVerbResult
@@ -643,6 +641,7 @@ export function createRealAccountsExecutor(
      * transaction without touching a real vault.
      */
     commitSwitch?: (accountId: string) => Promise<PoolAccount | null>
+    commitAnthropicSwitch?: (accountId: string) => Promise<ClaudePoolAccount | null>
     deleteTransaction?: (
       input: CodexAccountDeletionInput,
     ) => Promise<CodexAccountDeletionResult>
@@ -652,6 +651,8 @@ export function createRealAccountsExecutor(
   } = {},
 ): AccountsCommandExecutor {
   const commitSwitch = options.commitSwitch ?? commitCodexAccountSwitch
+  const commitAnthropicSwitch =
+    options.commitAnthropicSwitch ?? commitClaudeAccountSwitch
   const deleteTransaction = options.deleteTransaction ?? deleteCodexAccount
   const signOutTransaction = options.signOutTransaction ?? signOutCodexAccount
   return {
@@ -668,16 +669,13 @@ export function createRealAccountsExecutor(
         : { ok: false, message: 'Could not switch to that account.' }
     },
     async switchAnthropic(accountId) {
-      const account = switchToClaudeAccount(accountId)
+      const account = await commitAnthropicSwitch(accountId)
       if (!account) {
         return {
           ok: false,
           message: 'Could not switch to that Anthropic account.',
         }
       }
-      syncClaudeAccountToStorage()
-      clearOAuthTokenCache()
-      await clearAuthRelatedCaches()
       return {
         ok: true,
         message: `Switched to ${account.alias ?? account.emailAddress}`,

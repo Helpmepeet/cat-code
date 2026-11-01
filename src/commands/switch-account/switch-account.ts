@@ -1,6 +1,4 @@
-import { clearAuthRelatedCaches } from '../logout/logout.js'
 import {
-  applyPostCodexAccountSwitchRefresh,
   describeCodexAccountAvailability,
   getCodexAccountAvailability,
   getPoolStatus,
@@ -17,8 +15,6 @@ import { commitCodexAccountSwitch } from '../../services/api/codexAccountSwitch.
 import {
   getClaudePoolStatus,
   resolveClaudeAccountByPrefix,
-  switchToClaudeAccount,
-  syncClaudeAccountToStorage,
 } from '../../services/api/claudeAccountPool.js'
 import type { LocalCommandCall } from '../../types/command.js'
 import {
@@ -27,7 +23,7 @@ import {
   setMainLoopModelOverride,
   setSessionProvider,
 } from '../../bootstrap/state.js'
-import { clearOAuthTokenCache } from '../../utils/auth.js'
+import { commitClaudeAccountSwitch } from '../../services/api/claudeAccountSwitch.js'
 import { reconcileEffortForModel } from '../../utils/effort.js'
 import { getDefaultCodexModel } from '../../utils/model/model.js'
 import { stripSignatureBlocks } from '../../utils/messages.js'
@@ -161,14 +157,10 @@ async function performClaudeSwitch(
     return providerSwitchLockedMessage()
   }
 
-  const result = switchToClaudeAccount(idPrefix)
+  const result = await commitClaudeAccountSwitch(idPrefix)
   if (!result) return null
 
-  // Sync keychain + config.oauthAccount for all existing consumers
-  syncClaudeAccountToStorage()
-  clearOAuthTokenCache()
-  await clearAuthRelatedCaches()
-  applyPostSwitchAccountStateRefresh(context, applyPostCodexAccountSwitchRefresh)
+  applyPostSwitchAccountStateRefresh(context)
   if (crossingProvider) {
     switchRuntimeProvider('anthropic', context)
   }

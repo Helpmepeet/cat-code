@@ -109,31 +109,37 @@ function engineReady(status: ConnectionSnapshot['status']): boolean {
 }
 
 /**
- * Which accounts view a pane should show, freshest-first.
- *
- * The host-owned global pool wins whenever its worker has published one. It is
- * the current process-global usage view, while a session snapshot is refreshed
- * only at attachment and after that session mutates the pool.
- *
- * Before the host's first worker result, retain the existing session-first
- * fallback so the face does not blank during startup.
+ * Inventory and usage are host-global; identity and effective auth are not.
+ * Keep the session's last identity through park/restore without letting a host
+ * poll (or another pane's switch) replace it.
  */
 function railAccounts(
   accounts: AccountsState,
   sessionId: SessionId,
-  ready: boolean,
 ): AccountsSnapshot | null {
-  if (accounts.pool) return accounts.pool
-  if (ready) {
-    return (
-      selectAccountsSnapshot(accounts, sessionId) ??
-      selectFirstAccountsSnapshot(accounts)
-    )
+  const session = selectAccountsSnapshot(accounts, sessionId) ??
+    selectLastAccountsSnapshot(accounts, sessionId)
+  const inventory = accounts.pool ?? session ?? selectFirstAccountsSnapshot(accounts)
+  if (!inventory) return null
+  const activeAccountId = session?.activeAccountId ?? null
+  const anthropicActiveAccountId = session?.anthropicActiveAccountId ?? null
+  return {
+    ...inventory,
+    activeAccountId,
+    anthropicActiveAccountId,
+    anthropicRouteAvailable: session?.anthropicRouteAvailable ?? false,
+    anthropicSubscriptionActive: session?.anthropicSubscriptionActive ?? false,
+    accounts: inventory.accounts.map(account => ({
+      ...account,
+      isDefault: account.id === activeAccountId,
+      // The host's active row is not switchable only because it is active there.
+      switchable: account.id !== activeAccountId && account.availability !== 'blocked',
+    })),
+    anthropicAccounts: inventory.anthropicAccounts.map(account => ({
+      ...account,
+      isDefault: account.id === anthropicActiveAccountId,
+    })),
   }
-  return (
-    selectLastAccountsSnapshot(accounts, sessionId) ??
-    selectFirstAccountsSnapshot(accounts)
-  )
 }
 
 export function selectComposerRail(
@@ -144,7 +150,7 @@ export function selectComposerRail(
   const ready = engineReady(connectionStatus)
   const last = selectLastRunControlsSnapshot(runControls, sessionId)
   const live = selectRunControlsSnapshot(runControls, sessionId)
-  const accountsSnapshot = railAccounts(accounts, sessionId, ready)
+  const accountsSnapshot = railAccounts(accounts, sessionId)
   return {
     model: last?.model.current ?? null,
     modelLabel: last?.model.currentLabel ?? null,
