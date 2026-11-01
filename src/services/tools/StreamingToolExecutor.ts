@@ -88,11 +88,11 @@ export class StreamingToolExecutor {
     this.ptcloveToolStatus.clear()
   }
 
-  stopUnstartedTools(): void {
+  stopUnstartedTools(reason: 'urgent_message' | 'stream_interrupted' = 'urgent_message'): void {
     this.stoppedForUrgentMessage = true
     for (const tool of this.tools) {
       if (tool.status !== 'queued') continue
-      tool.results = [this.createSyntheticErrorMessage(tool.id, 'urgent_message', tool.assistantMessage)]
+      tool.results = [this.createSyntheticErrorMessage(tool.id, reason, tool.assistantMessage)]
       tool.status = 'completed'
     }
   }
@@ -183,14 +183,14 @@ export class StreamingToolExecutor {
 
   private createSyntheticErrorMessage(
     toolUseId: string,
-    reason: 'sibling_error' | 'user_interrupted' | 'streaming_fallback' | 'urgent_message',
+    reason: 'sibling_error' | 'user_interrupted' | 'streaming_fallback' | 'urgent_message' | 'stream_interrupted',
     assistantMessage: AssistantMessage,
   ): Message {
-    if (reason === 'urgent_message') {
+    if (reason === 'urgent_message' || reason === 'stream_interrupted') {
       return createUserMessage({
         content: [{
           type: 'tool_result',
-          content: 'Not run: an urgent message changed the next step.',
+          content: reason === 'stream_interrupted' ? 'Not run: the response stream was interrupted.' : 'Not run: an urgent message changed the next step.',
           is_error: true,
           tool_use_id: toolUseId,
         }],

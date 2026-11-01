@@ -774,6 +774,7 @@ async function* queryLoop(
     }
 
     const assistantMessages: AssistantMessage[] = []
+    let attemptOutputEscaped = false
     const toolResults: (UserMessage | AttachmentMessage)[] = []
     // @see https://docs.claude.com/en/docs/build-with-claude/tool-use
     // Note: stop_reason === 'tool_use' is unreliable -- it's not always set correctly.
@@ -988,6 +989,7 @@ async function* queryLoop(
                   toolUseContext.turnHandoff.invalidate()
                   throw new Error('Response stream failed during workspace handoff')
                 }
+                if (attemptOutputEscaped) throw new Error('Response interrupted after output started; replay was skipped.')
                 streamingFallbackOccured = true
               },
               querySource,
@@ -1020,6 +1022,12 @@ async function* queryLoop(
               }),
             },
           })) {
+            if (message.type === 'assistant' ||
+                (message.type === 'stream_event' &&
+                  ((message.event as { type?: string }).type === 'content_block_start' ||
+                   (message.event as { type?: string }).type === 'content_block_delta'))) {
+              attemptOutputEscaped = true
+            }
             // We won't use the tool_calls from the first attempt
             // We could.. but then we'd have to merge assistant messages
             // with different ids and double up on full the tool_results
@@ -1148,6 +1156,9 @@ async function* queryLoop(
             }
             if (message.type === 'assistant') {
               assistantMessages.push(message)
+              if (message.isApiErrorMessage) {
+                streamingToolExecutor?.stopUnstartedTools('stream_interrupted')
+              }
 
               const msgToolUseBlocks = message.message.content.filter(
                 content => content.type === 'tool_use',
@@ -1245,7 +1256,7 @@ async function* queryLoop(
             toolUseContext.turnHandoff.invalidate()
             throw innerError
           }
-          if (innerError instanceof FallbackTriggeredError && fallbackModel) {
+          if (innerError instanceof FallbackTriggeredError && fallbackModel && !attemptOutputEscaped) {
             // Fallback was triggered - switch model and retry
             currentModel = fallbackModel
             currentProvider = resolveRequestProvider(
@@ -1361,7 +1372,14 @@ async function* queryLoop(
       // yield them as synthetic assistant messages. However if it does throw
       // due to a bug, we may end up in a state where we have already emitted
       // a tool_use block but will stop before emitting the tool_result.
-      yield* yieldMissingToolResultBlocks(assistantMessages, errorMessage)
+      if (streamingToolExecutor) {
+        streamingToolExecutor.stopUnstartedTools('stream_interrupted')
+        for await (const update of streamingToolExecutor.getRemainingResults()) {
+          if (update.message) yield update.message
+        }
+      } else {
+        yield* yieldMissingToolResultBlocks(assistantMessages, errorMessage)
+      }
 
       // Surface the real error instead of a misleading "[Request interrupted
       // by user]" — this path is a model/runtime failure, not a user action.

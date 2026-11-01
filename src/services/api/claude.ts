@@ -1,3 +1,4 @@
+import { StreamIdleError, withStreamIdleDeadline, streamIdleTimeoutMs } from './streamIdle.js'
 import type {
   BetaContentBlock,
   BetaContentBlockParam,
@@ -1798,12 +1799,43 @@ async function* queryModel(
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins -- Response is available in Node 18+ and is used by the SDK
   let streamResponse: Response | undefined = undefined
   let activeStreamingAttempt: ModelAttempt | undefined
+  let attemptOutputEscaped = false
+  let lastNetworkProgress = 0
+  let cancelProgressBody: (() => void) | undefined
+  // The SDK consumes SSE pings internally, so observe body chunks before parsing.
+  const progressFetch: typeof fetch = Object.assign(async (...args: Parameters<typeof fetch>) => {
+    const response = await (options.fetchOverride ?? globalThis.fetch)(...args)
+    if (!response.body) return response
+    const reader = response.body.getReader()
+    let cancelled = false
+    const cancel = () => {
+      if (cancelled) return
+      cancelled = true
+      void reader.cancel().catch(() => {}).finally(() => reader.releaseLock())
+    }
+    cancelProgressBody = cancel
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const chunk = await reader.read()
+        if (chunk.done) {
+          controller.close()
+          return
+        }
+        lastNetworkProgress = performance.now()
+        controller.enqueue(chunk.value)
+      },
+      cancel,
+    })
+    return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
+  }, { preconnect: globalThis.fetch.preconnect })
 
   // Release all stream resources to prevent native memory leaks.
   // The Response object holds native TLS/socket buffers that live outside the
   // V8 heap (observed on the Node.js/npm path; see GH #32920), so we must
   // explicitly cancel and release it regardless of how the generator exits.
   function releaseStreamResources(): void {
+    cancelProgressBody?.()
+    cancelProgressBody = undefined
     cleanupStream(stream)
     stream = undefined
     if (streamResponse) {
@@ -2128,7 +2160,7 @@ async function* queryModel(
           maxRetries: 0, // Disabled auto-retry in favor of manual implementation
           model: options.model,
           provider: requestProvider,
-          fetchOverride: options.fetchOverride,
+          fetchOverride: requestProvider === 'openai' ? options.fetchOverride : progressFetch,
           source: options.querySource,
           codexLeaseOwnerId: options.agentId ?? getSessionId(),
           codexLeaseOwnerType: options.agentId ? 'subagent' : 'main',
@@ -2249,9 +2281,10 @@ async function* queryModel(
     // kill hung streams. Without this, a silently dropped connection can hang
     // the session indefinitely since the SDK's request timeout only covers the
     // initial fetch(), not the streaming body.
-    const streamWatchdogEnabled = isEnvTruthy(
-      process.env.CLAUDE_ENABLE_STREAM_WATCHDOG,
-    )
+    // Claude body reads use the bounded iterator below. Keep the adapter's
+    // existing opt-in watchdog separate from that provider-specific policy.
+    const streamWatchdogEnabled = requestProvider === 'openai' &&
+      isEnvTruthy(process.env.CLAUDE_ENABLE_STREAM_WATCHDOG)
     const STREAM_IDLE_TIMEOUT_MS =
       parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || '', 10) || 90_000
     const STREAM_IDLE_WARNING_MS = STREAM_IDLE_TIMEOUT_MS / 2
@@ -2334,7 +2367,14 @@ async function* queryModel(
         }
       }
 
-      for await (const part of stream) {
+      for await (const part of requestProvider === 'openai' ? stream : withStreamIdleDeadline(
+        stream, signal, streamIdleTimeoutMs(), releaseStreamResources,
+        () => new APIUserAbortError(),
+        () => lastNetworkProgress,
+      )) {
+        if (part.type === 'content_block_start' || part.type === 'content_block_delta') {
+          attemptOutputEscaped = true
+        }
         resetStreamIdleTimer()
         const now = Date.now()
 
@@ -2927,11 +2967,14 @@ async function* queryModel(
         }
       }
 
-      // The Codex adapter uses this error to signal that visible output has
+      // Idle recovery must not enter a non-streaming body with no read deadline.
+      // Other pre-output transport failures remain eligible for safe fallback.
+      // The Codex adapter uses its error to signal that visible output has
       // already escaped and replaying the turn could duplicate text or execute
       // a surfaced tool call twice. This safety decision must survive the outer
       // provider-agnostic streaming fallback.
-      if (isCodexPartialStreamReplaySkippedError(streamingError)) {
+      if (streamingError instanceof StreamIdleError ||
+          attemptOutputEscaped || isCodexPartialStreamReplaySkippedError(streamingError)) {
         throw streamingError
       }
 
@@ -3093,6 +3136,9 @@ async function* queryModel(
       clearStreamIdleTimers()
     }
   } catch (errorFromRetry) {
+    if (errorFromRetry instanceof StreamIdleError) {
+      throw errorFromRetry
+    }
     // FallbackTriggeredError must propagate to query.ts, which performs the
     // actual model switch. Swallowing it here would turn the fallback into a
     // no-op — the user would just see "Model fallback triggered: X -> Y" as
