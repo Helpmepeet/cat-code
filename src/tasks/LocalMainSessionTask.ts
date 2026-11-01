@@ -1,3 +1,4 @@
+import { createAgentInterruptedTools } from '../services/tools/agentInterruptedTools.js'
 /**
  * LocalMainSessionTask - Handles backgrounding the main session query.
  *
@@ -395,94 +396,101 @@ export function startBackgroundSession({
       let tokenCount = 0
       let lastRecordedUuid: UUID | null = messages.at(-1)?.uuid ?? null
 
-      for await (const event of query({
-        messages: bgMessages,
-        ...backgroundQueryParams,
-      })) {
-        if (abortSignal.aborted) {
-          // Aborted mid-stream — completeMainSessionTask won't be reached.
-          // chat:killAgents path already marked notified + emitted; stopTask path did not.
-          let alreadyNotified = false
-          updateTaskState(taskId, setAppState, task => {
-            alreadyNotified = task.notified === true
-            return alreadyNotified ? task : { ...task, notified: true }
-          })
-          if (!alreadyNotified) {
-            emitTaskTerminatedSdk(taskId, 'stopped', {
-              summary: description,
+      const interruptedTools = createAgentInterruptedTools(backgroundQueryParams.toolUseContext, {
+        getParent: () => lastRecordedUuid,
+        setParent: uuid => { lastRecordedUuid = uuid },
+        publish: message => { bgMessages.push(message) },
+      })
+      try {
+        for await (const event of query({
+          messages: bgMessages,
+          ...backgroundQueryParams,
+        })) {
+          if (abortSignal.aborted) {
+            // Aborted mid-stream — completeMainSessionTask won't be reached.
+            // chat:killAgents path already marked notified + emitted; stopTask path did not.
+            let alreadyNotified = false
+            updateTaskState(taskId, setAppState, task => {
+              alreadyNotified = task.notified === true
+              return alreadyNotified ? task : { ...task, notified: true }
             })
+            if (!alreadyNotified) {
+              emitTaskTerminatedSdk(taskId, 'stopped', {
+                summary: description,
+              })
+            }
+            return
           }
-          return
-        }
 
-        if (
-          event.type !== 'user' &&
-          event.type !== 'assistant' &&
-          event.type !== 'system'
-        ) {
-          continue
-        }
+          if (
+            event.type !== 'user' &&
+            event.type !== 'assistant' &&
+            event.type !== 'system'
+          ) {
+            continue
+          }
 
-        bgMessages.push(event)
+          bgMessages.push(event)
 
-        // Per-message write (matches runAgent.ts pattern) — gives live
-        // TaskOutput progress and keeps the transcript file current even if
-        // /clear re-links the symlink mid-run.
-        void recordSidechainTranscript([event], taskId, lastRecordedUuid).catch(
-          err => logForDebugging(`bg-session transcript write failed: ${err}`),
-        )
-        lastRecordedUuid = event.uuid
+          // Per-message write (matches runAgent.ts pattern) — gives live
+          // TaskOutput progress and keeps the transcript file current even if
+          // /clear re-links the symlink mid-run.
+          void recordSidechainTranscript([event], taskId, lastRecordedUuid).catch(
+            err => logForDebugging(`bg-session transcript write failed: ${err}`),
+          )
+          lastRecordedUuid = event.uuid
 
-        if (event.type === 'assistant') {
-          for (const block of event.message.content) {
-            if (block.type === 'text') {
-              tokenCount += roughTokenCountEstimation(block.text)
-            } else if (block.type === 'tool_use') {
-              toolCount++
-              const activity: ToolActivity = {
-                toolName: block.name,
-                input: block.input as Record<string, unknown>,
-              }
-              recentActivities.push(activity)
-              if (recentActivities.length > MAX_RECENT_ACTIVITIES) {
-                recentActivities.shift()
+          if (event.type === 'assistant') {
+            for (const block of event.message.content) {
+              if (block.type === 'text') {
+                tokenCount += roughTokenCountEstimation(block.text)
+              } else if (block.type === 'tool_use') {
+                toolCount++
+                const activity: ToolActivity = {
+                  toolName: block.name,
+                  input: block.input as Record<string, unknown>,
+                }
+                recentActivities.push(activity)
+                if (recentActivities.length > MAX_RECENT_ACTIVITIES) {
+                  recentActivities.shift()
+                }
               }
             }
           }
+
+          setAppState(prev => {
+            const task = prev.tasks[taskId]
+            if (!task || task.type !== 'local_agent') return prev
+            const prevProgress = task.progress
+            if (
+              prevProgress?.tokenCount === tokenCount &&
+              prevProgress.toolUseCount === toolCount &&
+              task.messages === bgMessages
+            ) {
+              return prev
+            }
+            return {
+              ...prev,
+              tasks: {
+                ...prev.tasks,
+                [taskId]: {
+                  ...task,
+                  progress: {
+                    tokenCount,
+                    toolUseCount: toolCount,
+                    recentActivities:
+                      prevProgress?.toolUseCount === toolCount
+                        ? prevProgress.recentActivities
+                        : [...recentActivities],
+                  },
+                  messages: bgMessages,
+                },
+              },
+            }
+          })
         }
 
-        setAppState(prev => {
-          const task = prev.tasks[taskId]
-          if (!task || task.type !== 'local_agent') return prev
-          const prevProgress = task.progress
-          if (
-            prevProgress?.tokenCount === tokenCount &&
-            prevProgress.toolUseCount === toolCount &&
-            task.messages === bgMessages
-          ) {
-            return prev
-          }
-          return {
-            ...prev,
-            tasks: {
-              ...prev.tasks,
-              [taskId]: {
-                ...task,
-                progress: {
-                  tokenCount,
-                  toolUseCount: toolCount,
-                  recentActivities:
-                    prevProgress?.toolUseCount === toolCount
-                      ? prevProgress.recentActivities
-                      : [...recentActivities],
-                },
-                messages: bgMessages,
-              },
-            },
-          }
-        })
-      }
-
+      } finally { await interruptedTools.finish() }
       completeMainSessionTask(taskId, true, setAppState)
     } catch (error) {
       logError(error)

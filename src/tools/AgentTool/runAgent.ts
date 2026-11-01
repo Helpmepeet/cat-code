@@ -1,3 +1,5 @@
+import { createAgentInterruptedTools } from '../../services/tools/agentInterruptedTools.js'
+import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from '../../services/tools/interruptedToolRun.js'
 import { feature } from 'bun:bundle'
 import type { BetaJSONOutputFormat } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { UUID } from 'crypto'
@@ -549,6 +551,7 @@ async function* runAgentInCleanupScope({
     toolUseContext.options.mainLoopProvider,
   )
 
+  if (getInterruptedToolRun(getSessionId()).blocked) throw new Error(UNRESOLVED_TOOL_MESSAGE)
   const agentId = override?.agentId ? override.agentId : createAgentId()
   const persistedWorkerHandle =
     sessionStateTracking && override?.agentId
@@ -1222,6 +1225,14 @@ async function* runAgentInCleanupScope({
       seededChainTailUuid ??
       findLastChainParticipantUuid(initialMessages)
   }
+  const interruptedTools = createAgentInterruptedTools(agentToolUseContext, {
+    getParent: () => lastRecordedUuid,
+    setParent: uuid => { lastRecordedUuid = uuid },
+    publish: message => {
+      if (!publishFrame || !parentToolUseId) return
+      for (const frame of stampSubagentFrames(toSDKMessages([message]), parentToolUseId, workerName, agentCwd)) publishFrame(frame)
+    },
+  })
   const submittedLocalMessages = new Map<string, AttachmentMessage>()
   agentToolUseContext.onLocalAgentMessagesDelivered = async messageIds => {
     for (const messageId of messageIds) {
@@ -1411,55 +1422,57 @@ async function* runAgentInCleanupScope({
       agentDefinition.callback()
     }
   } finally {
-    detachParentAbort()
-    // Reaching here means setup completed, so this block owns every pre-loop
-    // resource too. Disarm the setup scope first so the two never both release.
+    // Transfer setup ownership now: finish may defer the resource releases
+    // until an interrupted effect's real receipt has been saved and published.
     setupCleanups.length = 0
-    // Clean up agent's session hooks
-    clearSessionHooks(rootSetAppState, agentId)
-    // Clean up agent-specific MCP servers (runs on normal completion, abort, or error)
-    await mcpCleanup()
-    // Clean up prompt cache tracking state for this agent
-    if (feature('PROMPT_CACHE_BREAK_DETECTION')) {
-      cleanupAgentTracking(agentId)
-    }
-    // Release cloned file state cache memory
-    agentToolUseContext.readFileState.clear()
-    // Release the cloned fork context messages
-    initialMessages.length = 0
-    // Release perfetto agent registry entry
-    unregisterPerfettoAgent(agentId)
-    // Release transcript subdir mapping
-    clearAgentTranscriptSubdir(agentId)
-    // Release this agent's todos entry. Without this, every subagent that
-    // called TodoWrite leaves a key in AppState.todos forever (even after all
-    // items complete, the value is [] but the key stays). Whale sessions
-    // spawn hundreds of agents; each orphaned key is a small leak that adds up.
-    rootSetAppState(prev => {
-      if (!(agentId in prev.todos)) return prev
-      const { [agentId]: _removed, ...todos } = prev.todos
-      return { ...prev, todos }
+    await interruptedTools.finish(async () => {
+      detachParentAbort()
+      // Clean up agent's session hooks
+      clearSessionHooks(rootSetAppState, agentId)
+      // Clean up agent-specific MCP servers (runs on normal completion, abort, or error)
+      await mcpCleanup()
+      // Clean up prompt cache tracking state for this agent
+      if (feature('PROMPT_CACHE_BREAK_DETECTION')) {
+        cleanupAgentTracking(agentId)
+      }
+      // Release cloned file state cache memory
+      agentToolUseContext.readFileState.clear()
+      // Release the cloned fork context messages
+      initialMessages.length = 0
+      // Release perfetto agent registry entry
+      unregisterPerfettoAgent(agentId)
+      // Release transcript subdir mapping
+      clearAgentTranscriptSubdir(agentId)
+      // Release this agent's todos entry. Without this, every subagent that
+      // called TodoWrite leaves a key in AppState.todos forever (even after all
+      // items complete, the value is [] but the key stays). Whale sessions
+      // spawn hundreds of agents; each orphaned key is a small leak that adds up.
+      rootSetAppState(prev => {
+        if (!(agentId in prev.todos)) return prev
+        const { [agentId]: _removed, ...todos } = prev.todos
+        return { ...prev, todos }
+      })
+      // Kill any background bash tasks this agent spawned. Without this, a
+      // `run_in_background` shell loop (e.g. test fixture fake-logs.sh) outlives
+      // the agent as a PPID=1 zombie once the main session eventually exits.
+      killShellTasksForAgent(agentId, toolUseContext.getAppState, rootSetAppState)
+      // Same reasoning as killShellTasksForAgent, for delegated Claude CLI runs
+      // instead of background shells: a worker's own child processes should not
+      // outlive the worker.
+      killDelegatedChildrenForAgent(agentId)
+      releaseWorkerName(workerName)
+      /* eslint-disable @typescript-eslint/no-require-imports */
+      if (feature('MONITOR_TOOL')) {
+        const mcpMod =
+          require('../../tasks/MonitorMcpTask/MonitorMcpTask.js') as typeof import('../../tasks/MonitorMcpTask/MonitorMcpTask.js')
+        mcpMod.killMonitorMcpTasksForAgent(
+          agentId,
+          toolUseContext.getAppState,
+          rootSetAppState,
+        )
+      }
+      /* eslint-enable @typescript-eslint/no-require-imports */
     })
-    // Kill any background bash tasks this agent spawned. Without this, a
-    // `run_in_background` shell loop (e.g. test fixture fake-logs.sh) outlives
-    // the agent as a PPID=1 zombie once the main session eventually exits.
-    killShellTasksForAgent(agentId, toolUseContext.getAppState, rootSetAppState)
-    // Same reasoning as killShellTasksForAgent, for delegated Claude CLI runs
-    // instead of background shells: a worker's own child processes should not
-    // outlive the worker.
-    killDelegatedChildrenForAgent(agentId)
-    releaseWorkerName(workerName)
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    if (feature('MONITOR_TOOL')) {
-      const mcpMod =
-        require('../../tasks/MonitorMcpTask/MonitorMcpTask.js') as typeof import('../../tasks/MonitorMcpTask/MonitorMcpTask.js')
-      mcpMod.killMonitorMcpTasksForAgent(
-        agentId,
-        toolUseContext.getAppState,
-        rootSetAppState,
-      )
-    }
-    /* eslint-enable @typescript-eslint/no-require-imports */
   }
 }
 

@@ -63,6 +63,9 @@ export function createQueryEngineAppSession(
     deliverQuestionReplies: () => engine.deliverQuestionReplies?.(),
     getMessages: () => engine.getMessages?.() ?? [],
     requiresRecoveryReview: () => engine.requiresRecoveryReview?.() ?? false,
+    hasUnresolvedToolEffects: () => engine.hasUnresolvedToolEffects?.() ?? false,
+    retryInterruptedToolReceipts: () => engine.retryInterruptedToolReceipts?.(),
+    dispose: () => engine.dispose?.(),
     executeInlineCommand,
     submitMessage(prompt, options?: QueryEngineSessionOptions) {
       options = { ...options, priorAssistantContext: options?.priorAssistantContext === undefined

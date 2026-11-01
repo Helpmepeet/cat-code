@@ -834,6 +834,7 @@ export type Options = {
   maxOutputTokensOverride?: number
   fallbackModel?: string
   onStreamingFallback?: () => void
+  onStreamInterrupted?: () => void
   querySource: QuerySource
   agents: AgentDefinition[]
   allowedAgentTypes?: string[]
@@ -1798,6 +1799,7 @@ async function* queryModel(
   let clientRequestId: string | undefined = undefined
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins -- Response is available in Node 18+ and is used by the SDK
   let streamResponse: Response | undefined = undefined
+  let streamResponseHeaders: Headers | undefined
   let activeStreamingAttempt: ModelAttempt | undefined
   let attemptOutputEscaped = false
   let lastNetworkProgress = 0
@@ -1814,18 +1816,40 @@ async function* queryModel(
       void reader.cancel().catch(() => {}).finally(() => reader.releaseLock())
     }
     cancelProgressBody = cancel
+    const reads = withStreamIdleDeadline(
+      { [Symbol.asyncIterator]: () => ({ next: async () => {
+        const result = await reader.read()
+        return result.done
+          ? { done: true as const, value: undefined }
+          : { done: false as const, value: result.value }
+      } }) },
+      args[1]?.signal ?? signal,
+      streamIdleTimeoutMs(),
+      error => {
+        if (error && attemptOutputEscaped) options.onStreamInterrupted?.()
+        cancel()
+      },
+      () => new APIUserAbortError(),
+    )
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        const chunk = await reader.read()
-        if (chunk.done) {
-          controller.close()
-          return
+        try {
+          const chunk = await reads.next()
+          if (chunk.done) {
+            controller.close()
+            return
+          }
+          lastNetworkProgress = performance.now()
+          controller.enqueue(chunk.value)
+        } catch (error) {
+          // Let the SDK retain HTTP status/headers and its auth/retry policy
+          // even when an error response never finishes its diagnostic body.
+          if (!response.ok && error instanceof StreamIdleError) controller.close()
+          else controller.error(error)
         }
-        lastNetworkProgress = performance.now()
-        controller.enqueue(chunk.value)
       },
       cancel,
-    })
+    }, { highWaterMark: 0 })
     return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })
   }, { preconnect: globalThis.fetch.preconnect })
 
@@ -2238,6 +2262,7 @@ async function* queryModel(
         if (observeMainProvider) queryTimingBoundary({ stage: 'provider_response', engineSessionId: getSessionId(), durationMs: performance.now() - providerRequestStarted })
         streamRequestId = result.request_id
         streamResponse = result.response
+        streamResponseHeaders = result.response.headers
         return result.data
       },
       {
@@ -2368,7 +2393,10 @@ async function* queryModel(
       }
 
       for await (const part of requestProvider === 'openai' ? stream : withStreamIdleDeadline(
-        stream, signal, streamIdleTimeoutMs(), releaseStreamResources,
+        stream, signal, streamIdleTimeoutMs(), error => {
+          if (error && attemptOutputEscaped) options.onStreamInterrupted?.()
+          releaseStreamResources()
+        },
         () => new APIUserAbortError(),
         () => lastNetworkProgress,
       )) {
@@ -2895,14 +2923,14 @@ async function* queryModel(
       // streamResponse is set when the stream is created in the withRetry callback above
       // TypeScript's control flow analysis can't track that streamResponse is set in the callback
       // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
-      const resp = streamResponse as unknown as Response | undefined
-      if (resp) {
-        extractQuotaStatusFromHeaders(resp.headers)
+      if (streamResponseHeaders) {
+        extractQuotaStatusFromHeaders(streamResponseHeaders)
         // Store headers for gateway detection
-        responseHeaders = resp.headers
+        responseHeaders = streamResponseHeaders
       }
       activeStreamingAttempt?.end('succeeded')
     } catch (streamingError) {
+      if (attemptOutputEscaped) options.onStreamInterrupted?.()
       activeStreamingAttempt?.end(
         streamingError instanceof APIUserAbortError || signal.aborted
           ? 'cancelled'
@@ -3075,7 +3103,7 @@ async function* queryModel(
       const result = yield* executeNonStreamingRequest(
         {
           model: options.model,
-          fetchOverride: options.fetchOverride,
+          fetchOverride: requestProvider === 'openai' ? options.fetchOverride : progressFetch,
           source: options.querySource,
           codexLeaseOwnerId: options.agentId ?? getSessionId(),
           codexLeaseOwnerType: options.agentId ? 'subagent' : 'main',
@@ -3193,7 +3221,7 @@ async function* queryModel(
         const result = yield* executeNonStreamingRequest(
           {
             model: options.model,
-            fetchOverride: options.fetchOverride,
+            fetchOverride: requestProvider === 'openai' ? options.fetchOverride : progressFetch,
             source: options.querySource,
             codexLeaseOwnerId: options.agentId ?? getSessionId(),
             codexLeaseOwnerType: options.agentId ? 'subagent' : 'main',

@@ -1,3 +1,4 @@
+import { createAgentInterruptedTools } from '../../services/tools/agentInterruptedTools.js'
 import { randomUUID } from 'crypto'
 import type { HookEvent } from 'src/entrypoints/agentSdkTypes.js'
 import { query } from '../../query.js'
@@ -65,7 +66,7 @@ export async function execAgentHook(
     // Create user message directly - no need for processUserInput which would
     // trigger UserPromptSubmit hooks and cause infinite recursion
     const userMessage = createUserMessage({ content: processedPrompt })
-    const agentMessages = [userMessage]
+    const agentMessages: Message[] = [userMessage]
 
     logForDebugging(
       `Hooks: Starting agent query with ${agentMessages.length} messages`,
@@ -163,74 +164,82 @@ When done, return your result using the ${SYNTHETIC_OUTPUT_TOOL_NAME} tool with:
       let turnCount = 0
       let hitMaxTurns = false
 
-      // Use query() for multi-turn execution
-      for await (const message of query({
-        messages: agentMessages,
-        systemPrompt,
-        userContext: {},
-        systemContext: {},
-        canUseTool: hasPermissionsToUseTool,
-        toolUseContext: agentToolUseContext,
-        querySource: 'hook_agent',
-      })) {
-        // Process stream events to update response length in the spinner
-        handleMessageFromStream(
-          message,
-          () => {}, // onMessage - we handle messages below
-          newContent =>
-            toolUseContext.setResponseLength(
-              length => length + newContent.length,
-            ),
-          toolUseContext.setStreamMode ?? (() => {}),
-          () => {}, // onStreamingToolUses - not needed for hooks
-        )
+      let lastRecordedUuid = userMessage.uuid as import('crypto').UUID
+      const interruptedTools = createAgentInterruptedTools(agentToolUseContext, {
+        getParent: () => lastRecordedUuid,
+        setParent: uuid => { lastRecordedUuid = uuid },
+        getHistory: () => agentMessages,
+      })
+      try {
+        // Use query() for multi-turn execution
+        for await (const message of query({
+          messages: agentMessages,
+          systemPrompt,
+          userContext: {},
+          systemContext: {},
+          canUseTool: hasPermissionsToUseTool,
+          toolUseContext: agentToolUseContext,
+          querySource: 'hook_agent',
+        })) {
+          if (message.type === 'assistant' || message.type === 'user') agentMessages.push(message as Message)
+          // Process stream events to update response length in the spinner
+          handleMessageFromStream(
+            message,
+            () => {}, // onMessage - we handle messages below
+            newContent =>
+              toolUseContext.setResponseLength(
+                length => length + newContent.length,
+              ),
+            toolUseContext.setStreamMode ?? (() => {}),
+            () => {}, // onStreamingToolUses - not needed for hooks
+          )
 
-        // Skip streaming events for further processing
-        if (
-          message.type === 'stream_event' ||
-          message.type === 'stream_request_start'
-        ) {
-          continue
-        }
+          // Skip streaming events for further processing
+          if (
+            message.type === 'stream_event' ||
+            message.type === 'stream_request_start'
+          ) {
+            continue
+          }
 
-        // Count assistant turns
-        if (message.type === 'assistant') {
-          turnCount++
+          // Count assistant turns
+          if (message.type === 'assistant') {
+            turnCount++
 
-          // Check if we've hit the turn limit
-          if (turnCount >= MAX_AGENT_TURNS) {
-            hitMaxTurns = true
-            logForDebugging(
-              `Hooks: Agent turn ${turnCount} hit max turns, aborting`,
-            )
-            hookAbortController.abort()
-            break
+            // Check if we've hit the turn limit
+            if (turnCount >= MAX_AGENT_TURNS) {
+              hitMaxTurns = true
+              logForDebugging(
+                `Hooks: Agent turn ${turnCount} hit max turns, aborting`,
+              )
+              hookAbortController.abort()
+              break
+            }
+          }
+
+          // Check for structured output in attachments
+          if (
+            message.type === 'attachment' &&
+            message.attachment.type === 'structured_output'
+          ) {
+            const parsed = hookResponseSchema().safeParse(message.attachment.data)
+            if (parsed.success) {
+              structuredOutputResult = parsed.data
+              logForDebugging(
+                `Hooks: Got structured output: ${jsonStringify(structuredOutputResult)}`,
+              )
+              // Got structured output, abort and exit
+              hookAbortController.abort()
+              break
+            }
           }
         }
 
-        // Check for structured output in attachments
-        if (
-          message.type === 'attachment' &&
-          message.attachment.type === 'structured_output'
-        ) {
-          const parsed = hookResponseSchema().safeParse(message.attachment.data)
-          if (parsed.success) {
-            structuredOutputResult = parsed.data
-            logForDebugging(
-              `Hooks: Got structured output: ${jsonStringify(structuredOutputResult)}`,
-            )
-            // Got structured output, abort and exit
-            hookAbortController.abort()
-            break
-          }
-        }
+      } finally {
+        await interruptedTools.finish(() => clearSessionHooks(toolUseContext.setAppState, hookAgentId))
       }
-
       parentTimeoutSignal.removeEventListener('abort', onParentTimeout)
       cleanupCombinedSignal()
-
-      // Clean up the session hook we registered for this agent
-      clearSessionHooks(toolUseContext.setAppState, hookAgentId)
 
       // Check if we got a result
       if (!structuredOutputResult) {

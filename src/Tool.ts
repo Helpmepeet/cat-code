@@ -268,6 +268,8 @@ export type ToolUseContext = {
   abortController: AbortController
   /** Internal executor hook fired immediately before a permitted tool effect starts. */
   onToolExecutionStart?: () => void
+  /** Session-owned late receipts and admission fence for interrupted foreground effects. */
+  interruptedToolRun?: import('./services/tools/interruptedToolRun.js').InterruptedToolRun
   /** Called only after a provider has returned a valid response to a request
    * containing claimed local-worker instructions. */
   onLocalAgentMessagesDelivered?: (messageIds: string[]) => Promise<void> | void

@@ -37,6 +37,7 @@ type TrackedTool = {
   pendingProgress: Message[]
   contextModifiers?: Array<(context: ToolUseContext) => ToolUseContext>
   effectStarted?: boolean
+  abortController?: AbortController
 }
 
 /**
@@ -91,6 +92,9 @@ export class StreamingToolExecutor {
   stopUnstartedTools(reason: 'urgent_message' | 'stream_interrupted' = 'urgent_message'): void {
     this.stoppedForUrgentMessage = true
     for (const tool of this.tools) {
+      if (reason === 'stream_interrupted' && tool.status === 'executing' && !tool.effectStarted) {
+        tool.abortController?.abort('stream_interrupted')
+      }
       if (tool.status !== 'queued') continue
       tool.results = [this.createSyntheticErrorMessage(tool.id, reason, tool.assistantMessage)]
       tool.status = 'completed'
@@ -346,11 +350,13 @@ export class StreamingToolExecutor {
         const toolAbortController = createChildAbortController(
           this.siblingAbortController,
         )
+        tool.abortController = toolAbortController
         toolAbortController.signal.addEventListener(
           'abort',
           () => {
             if (
               toolAbortController.signal.reason !== 'sibling_error' &&
+              toolAbortController.signal.reason !== 'stream_interrupted' &&
               !this.toolUseContext.abortController.signal.aborted &&
               !this.discarded
             ) {
@@ -370,6 +376,9 @@ export class StreamingToolExecutor {
             ...this.toolUseContext,
             abortController: toolAbortController,
             onToolExecutionStart: () => {
+              if (toolAbortController.signal.aborted) {
+                throw new Error('Tool execution cancelled before its effect started.')
+              }
               tool.effectStarted = true
             },
           } as ToolUseContext,
@@ -384,7 +393,7 @@ export class StreamingToolExecutor {
           // Check if we were aborted by a sibling tool error or user interruption.
           // Only add the synthetic error if THIS tool didn't produce the error.
           const abortReason = this.getAbortReason(tool)
-          if (abortReason && !thisToolErrored) {
+          if (abortReason && !thisToolErrored && !tool.effectStarted) {
             messages.push(
               this.createSyntheticErrorMessage(
                 tool.id,

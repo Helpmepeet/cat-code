@@ -82,6 +82,9 @@ export type AppSessionControllerAdapter = {
   } | null>
   sealResumeCheckpoint?: () => Promise<ResumeCheckpoint>
   requiresRecoveryReview?: () => boolean
+  hasUnresolvedToolEffects?: () => boolean
+  retryInterruptedToolReceipts?: () => void
+  dispose?: () => void
   verifyResumeCheckpoint?: (checkpoint: ResumeCheckpoint) => Promise<void>
   abort?: (intent?: AppSessionAbortIntent) => void
   getInlineCommandRuns?: () => InlineCommandRun[]
@@ -115,6 +118,7 @@ export class AppSessionController {
   private goalSnapshot: AppGoalSnapshot = null
   private abortController: AbortController | null = null
   private activeTurn = false
+  private disposed = false
   private inlineCommand: { runId: string; controller: AbortController; sessionController: AbortController } | null = null
   private readonly inlineSettlements = new Set<{ sessionController: AbortController }>()
   private handoffExecution: HandoffExecution | null = null
@@ -165,6 +169,13 @@ export class AppSessionController {
     }
   }
 
+  dispose(): void {
+    this.disposed = true
+    this.adapter.dispose?.()
+    this.abortController?.abort('Session disposed')
+    this.listeners.clear()
+  }
+
   getAbortState(): AppSessionAbortState {
     return this.abortState
   }
@@ -181,15 +192,22 @@ export class AppSessionController {
     return this.activeTurn
   }
 
+  notifyToolReceiptSettlement(): void {
+    if (!this.disposed && !this.adapter.hasUnresolvedToolEffects?.()) {
+      this.emit(createTurnStatusEvent(this.activeTurn))
+    }
+  }
+
   isInlineCommandActive(): boolean { return this.inlineSettlements.size > 0 }
   canStartInlineCommand(): boolean {
-    return !this.initializing && !this.inlineCommand && this.inlineSettlements.size < 8 && !this.handoffReservation &&
-      !this.requiresUserReconciliation && !this.handoffSettlement && !this.adapter.requiresRecoveryReview?.()
+    return !this.disposed && !this.initializing && !this.inlineCommand && this.inlineSettlements.size < 8 && !this.handoffReservation &&
+      !this.requiresUserReconciliation && !this.handoffSettlement && !this.adapter.requiresRecoveryReview?.() &&
+      !this.adapter.hasUnresolvedToolEffects?.()
   }
 
   getHandoffReservation(): string | null { return this.handoffReservation }
   requiresHandoffReconciliation(): boolean { return this.requiresUserReconciliation }
-  canStartQueuedTurn(): boolean { return !this.initializing && !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation && !this.adapter.requiresRecoveryReview?.() }
+  canStartQueuedTurn(): boolean { return !this.disposed && !this.initializing && !this.activeTurn && !this.handoffReservation && !this.requiresUserReconciliation && !this.adapter.requiresRecoveryReview?.() && !this.adapter.hasUnresolvedToolEffects?.() }
   canStartAutomaticTurn(): boolean { return this.canStartQueuedTurn() && this.getQuestionSnapshot().pending.length === 0 }
   subscribeHandoffStatus(listener: () => void): () => void {
     this.handoffListeners.add(listener)
@@ -402,6 +420,7 @@ export class AppSessionController {
     reason = 'Session aborted',
     adapterIntent?: AppSessionAbortIntent,
   ): void {
+    if (this.adapter.hasUnresolvedToolEffects?.()) this.adapter.abort?.(adapterIntent)
     if (adapterIntent === undefined) {
       for (const operation of this.inlineSettlements) operation.sessionController.abort(reason)
     }
@@ -479,6 +498,11 @@ export class AppSessionController {
     prompt: AppSessionPrompt,
     options?: AppSessionSubmitOptions,
   ): Promise<void> {
+    if (this.disposed) throw new Error('Session disposed')
+    if (this.adapter.hasUnresolvedToolEffects?.()) {
+      this.adapter.retryInterruptedToolReceipts?.()
+      throw new Error('Some tool actions have not finished. New work is blocked until their results are saved.')
+    }
     options = { ...options, priorAssistantContext: options?.priorAssistantContext === undefined
       ? capturePriorAssistantContext(this.adapter.getMessages?.() ?? [])
       : options.priorAssistantContext }
@@ -538,6 +562,7 @@ export class AppSessionController {
     options?: AppSessionSubmitOptions & HandoffTurnLifecycleOptions & { inlineCommand?: InlineCommandOperation; freshHandoffAdmission?: import('../../app/shared/workspaceHandoff.js').WorkspaceHandoffIdentity },
     continuationOperationId?: string,
   ): Promise<void> {
+    if (this.adapter.hasUnresolvedToolEffects?.()) throw new Error('Some tool actions have not finished. New work is blocked until their results are saved.')
     if (this.activeTurn) {
       throw new Error('Session turn already running')
     }

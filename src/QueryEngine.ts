@@ -38,6 +38,7 @@ import type { CanUseToolFn } from './hooks/useCanUseTool.js'
 import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
+import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from './services/tools/interruptedToolRun.js'
 import { categorizeRetryableAPIError } from './services/api/errors.js'
 import type {
   MCPServerConnection,
@@ -212,6 +213,9 @@ export type QueryEngineConfig = {
   includePartialMessages?: boolean
   setSDKStatus?: (status: SDKStatus) => void
   publishSubagentFrame?: ToolUseContext['publishSubagentFrame']
+  /** Receipts from interrupted tools can arrive after the foreground turn ends. */
+  publishLateToolMessage?: (message: SDKMessage) => void | Promise<void>
+  onInterruptedToolsSettled?: () => void
   getPostCompactRuntimeAttachments?: ToolUseContext['getPostCompactRuntimeAttachments']
   getTurnStartRuntimeAttachments?: ToolUseContext['getTurnStartRuntimeAttachments']
   abortController?: AbortController
@@ -319,6 +323,10 @@ export function resolveMcpRuntimeInputs(
 }
 
 export class QueryEngine {
+  private readonly toolOwnerSessionId = getSessionId()
+  private readonly interruptedTools = getInterruptedToolRun(getSessionId())
+  private readonly interruptedToolLease: { isCurrent: () => boolean; dispose: () => void }
+  private readonly unsubscribeInterruptedTools: () => void
   readonly questionRuntime: PendingQuestionRuntime | undefined
   private config: QueryEngineConfig
   private mutableMessages: Message[]
@@ -352,6 +360,42 @@ export class QueryEngine {
   constructor(config: QueryEngineConfig) {
     this.config = config
     this.mutableMessages = config.initialMessages ?? []
+    this.interruptedToolLease = this.interruptedTools.attach(async (message, isCurrent) => {
+      const release = await this.acquireTranscriptLane()
+      try {
+        if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
+        if (message.type === 'user' && message.sourceToolAssistantUUID &&
+            !this.mutableMessages.some(row => row.uuid === message.sourceToolAssistantUUID)) {
+          throw new Error('The original tool request is unavailable')
+        }
+        const snapshot = this.mutableMessages.some(row => row.uuid === message.uuid)
+          ? this.mutableMessages : [...this.mutableMessages, message]
+        if (!isSessionPersistenceDisabled()) {
+          await (this.config.recordTranscript ?? recordTranscript)(snapshot)
+          await (this.config.flushCurrentTranscriptDurably ?? flushCurrentTranscriptDurably)(message.uuid)
+        }
+        if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
+        // Keep the retained headless history alive across per-input engines.
+        // Direct engine users read receipts through getMessages(); adapters with
+        // an output transport additionally acknowledge delivery before admission.
+        if (!this.mutableMessages.some(row => row.uuid === message.uuid)) this.mutableMessages.push(message)
+        for (const frame of toSDKMessages([message])) {
+          await this.config.publishLateToolMessage?.(frame)
+          if (!isCurrent()) throw new Error('Tool receipt owner changed')
+        }
+      } finally { release() }
+    })
+    const reference = new WeakRef(this)
+    const unsubscribe = config.onInterruptedToolsSettled
+      ? this.interruptedTools.subscribe(() => {
+          const engine = reference.deref()
+          if (!engine) { unsubscribe(); return }
+          if (engine.interruptedToolLease.isCurrent() && !engine.interruptedTools.blocked) {
+            engine.config.onInterruptedToolsSettled?.()
+          }
+        })
+      : () => {}
+    this.unsubscribeInterruptedTools = unsubscribe
     this.questionRuntime = feature('NONBLOCKING_ASK_USER_QUESTION') ? config.pendingQuestionRuntime ?? new PendingQuestionRuntime(() => this.mutableMessages) : undefined
     this.abortController = config.abortController ?? createAbortController()
     this.permissionDenials = []
@@ -364,6 +408,21 @@ export class QueryEngine {
   }
 
   requiresRecoveryReview(): boolean { return this.tailRecoveryHold }
+  hasUnresolvedToolEffects(): boolean {
+    return getSessionId() !== this.toolOwnerSessionId ||
+      !this.interruptedToolLease.isCurrent() || this.interruptedTools.blocked
+  }
+  dispose(): void {
+    if (this.interruptedToolLease.isCurrent()) this.interruptedTools.cancelPending()
+    this.interruptedToolLease.dispose()
+    this.unsubscribeInterruptedTools()
+  }
+  retryInterruptedToolReceipts(): void { this.interruptedTools.retryDelivery() }
+  private assertToolEffectsSettled(): void {
+    if (!this.hasUnresolvedToolEffects()) return
+    this.interruptedTools.retryDelivery()
+    throw new Error(UNRESOLVED_TOOL_MESSAGE)
+  }
   async initializeQuestions(): Promise<void> {
     if (this.tailRecoveryHold) return
     await this.questionRuntime?.initialize()
@@ -373,6 +432,7 @@ export class QueryEngine {
   deliverQuestionReplies(): void { this.questionRuntime?.deliver() }
 
   async *executeInlineCommand(operation: InlineCommandOperation): AsyncGenerator<SDKMessage, void, unknown> {
+    this.assertToolEffectsSettled()
     if (this.tailRecoveryHold) throw new Error('Review recovered history with a new user message before continuing')
     if (this.inlineExecutionOwner || this.inlineSettlements >= 8) throw new Error('An inline command is still active')
     this.inlineExecutionOwner = operation
@@ -490,6 +550,7 @@ export class QueryEngine {
     prompt: string | ContentBlockParam[],
     options: NonNullable<Parameters<QueryEngine['submitMessage']>[1]>,
   ): AsyncGenerator<SDKMessage, void, unknown> {
+    this.assertToolEffectsSettled()
     let freshHandoffAdmitted = false
     if (options.freshHandoffAdmission && options.handoffContinuation &&
       options.freshHandoffAdmission.operationId === options.handoffContinuation.operationId &&
@@ -1024,6 +1085,7 @@ export class QueryEngine {
     // Recreate after processing the prompt to pick up updated messages and
     // model (from slash commands).
     processUserInputContext = {
+      interruptedToolRun: this.interruptedTools,
       turnHandoff,
       pendingQuestions: this.questionRuntime?.registry,
       messages,
@@ -1720,6 +1782,9 @@ export class QueryEngine {
       }
     }
 
+    if (this.interruptedTools.blocked && persistSession) {
+      await (this.config.flushCurrentTranscriptDurably ?? flushCurrentTranscriptDurably)(messages.at(-1)?.uuid)
+    }
     if (turnHandoff.accepted || queryTerminal?.reason === 'handoff_failed') {
       if (hasUnsettledMessageUsage) this.totalUsage = accumulateUsage(this.totalUsage, currentMessageUsage)
       let boundary: import('./app-runtime/handoff.js').HandoffBoundary | undefined
@@ -1822,7 +1887,7 @@ export class QueryEngine {
       return
     }
 
-    if (!isResultSuccessful(result, lastStopReason)) {
+    if (!isResultSuccessful(result, lastStopReason) || queryTerminal?.reason === 'model_error') {
       yield {
         type: 'result',
         subtype: 'error_during_execution',
@@ -1913,6 +1978,7 @@ export class QueryEngine {
   }
 
   interrupt(reason?: string): void {
+    if (this.interruptedToolLease.isCurrent()) this.interruptedTools.cancelPending()
     this.abortController.abort(reason)
   }
 
@@ -1924,7 +1990,8 @@ export class QueryEngine {
     })
   }
 
-  sealResumeCheckpoint(): Promise<import('../app/shared/workspaceHandoff.js').ResumeCheckpoint> {
+  async sealResumeCheckpoint(): Promise<import('../app/shared/workspaceHandoff.js').ResumeCheckpoint> {
+    if (this.interruptedTools.blocked) throw new Error(UNRESOLVED_TOOL_MESSAGE)
     if (this.inlineSettlements) throw new Error('An inline command is still active')
     return sealResumeCheckpoint(this.mutableMessages)
   }
@@ -2021,6 +2088,7 @@ export class QueryEngine {
   }
 
   selectUserMessage(targetUuid: string): UserMessage {
+    this.assertToolEffectsSettled()
     return resolveSelectableUserMessageByProducerPrefix(
       this.mutableMessages,
       targetUuid,
@@ -2030,6 +2098,7 @@ export class QueryEngine {
   async rewindBeforeUserMessage(
     targetUuid: string,
   ): Promise<ConversationRewindResult> {
+    this.assertToolEffectsSettled()
     if (this.inlineSettlements) throw new Error('An inline command is still active')
     const { message: prompt, index } =
       resolveSelectableUserMessageByProducerPrefix(
@@ -2125,8 +2194,10 @@ export async function* ask({
   resumeHooksDeferred,
   onResumeHooksApplied,
   pendingQuestionRuntime,
+  publishLateToolMessage,
   origin,
 }: {
+  publishLateToolMessage?: QueryEngineConfig['publishLateToolMessage']
   pendingQuestionRuntime?: PendingQuestionRuntime
   origin?: MessageOrigin
   commands: Command[]
@@ -2168,6 +2239,11 @@ export async function* ask({
 }): AsyncGenerator<SDKMessage, void, unknown> {
   const engine = new QueryEngine({
     pendingQuestionRuntime,
+    publishLateToolMessage: async frame => {
+      const retained = engine.getMessages()
+      if (retained !== mutableMessages) mutableMessages.splice(0, mutableMessages.length, ...retained)
+      await publishLateToolMessage?.(frame)
+    },
     cwd,
     tools,
     commands,

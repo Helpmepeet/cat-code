@@ -55,6 +55,11 @@ export function createRuntimeBackedAppSession({
     // Background and resumed runs outlive the turn that launched them, so their
     // steps have no turn stream to ride. Same late-bound controller as above.
     publishSubagentFrame: frame => controller?.emitMessage(frame),
+    publishLateToolMessage: frame => {
+      if (!controller) throw new Error('Tool receipt delivery is unavailable')
+      controller.emitMessage(frame)
+    },
+    onInterruptedToolsSettled: () => controller?.notifyToolReceiptSettlement(),
   })
   controller = createQueryEngineSessionController(session)
   let requiresReconciliation = false

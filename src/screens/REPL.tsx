@@ -35,6 +35,8 @@ import { createFileStateCacheWithSizeLimit, mergeFileStateCaches, READ_FILE_STAT
 import { updateLastInteractionTime, getLastInteractionTime, getOriginalCwd, getProjectRoot, getSessionId, switchSession, setCostStateForRestore, getTurnHookDurationMs, getTurnHookCount, resetTurnHookDuration, getTurnToolDurationMs, getTurnToolCount, resetTurnToolDuration, getTurnClassifierDurationMs, getTurnClassifierCount, resetTurnClassifierDuration, setSessionProvider } from '../bootstrap/state.js';
 import { asSessionId, asAgentId } from '../types/ids.js';
 import { logForDebugging } from '../utils/debug.js';
+import { createTerminalInterruptedTools } from '../utils/terminalInterruptedTools.js';
+import { UNRESOLVED_TOOL_MESSAGE } from '../services/tools/interruptedToolRun.js';
 import { QueryGuard } from '../utils/QueryGuard.js';
 import { isEnvTruthy } from '../utils/envUtils.js';
 import { formatTokens, truncateToWidth } from '../utils/format.js';
@@ -1333,6 +1335,14 @@ export function REPL({
     rawSetMessages(next);
   }, []);
   setMessagesRef.current = setMessages;
+  const interruptedTools = useMemo(() => createTerminalInterruptedTools({
+    sessionId: questionRuntimeSessionId, guard: queryGuard,
+    getMessages: () => messagesRef.current,
+    append: message => setMessages((previous: MessageType[]) => [...previous, message]),
+  }), [questionRuntimeSessionId, queryGuard, setMessages]);
+  useEffect(() => () => interruptedTools.dispose(), [interruptedTools]);
+  React.useSyncExternalStore(interruptedTools.run.subscribe, interruptedTools.run.getSnapshot);
+
 
   // Callback to filter commands based on CCR's available slash commands
   const handleRemoteInit = useCallback((remoteSlashCommands: string[]) => {
@@ -2405,6 +2415,7 @@ export function REPL({
     prevLocalJsxVisibleRef.current = isShowingLocalJSXCommand;
   }, [isShowingLocalJSXCommand, repinScroll]);
   function onCancel() {
+    interruptedTools.run.cancelPending();
     if (focusedInputDialog === 'elicitation') {
       // Elicitation dialog handles its own Escape, and closing it shouldn't affect any loading state.
       return;
@@ -2728,6 +2739,7 @@ export function REPL({
     return {
       abortController,
       pendingQuestions: questionRuntime?.registry,
+      interruptedToolRun: interruptedTools.run,
       // `isRunning`, not `isActive`: the serialized dispatch path reserves the
       // guard before processUserInput builds this context, so `isActive` would
       // report the command's own reservation back to it as someone else's turn.
@@ -2843,7 +2855,7 @@ export function REPL({
       requestPrompt: feature('HOOK_PROMPTS') ? requestPrompt : undefined,
       contentReplacementState: contentReplacementStateRef.current
     };
-	  }, [questionRuntime, commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, queryGuard]);
+	  }, [interruptedTools, questionRuntime, commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, queryGuard]);
   getToolUseContextRef.current = getToolUseContext;
 
   // Session backgrounding (Ctrl+B to background/foreground)
@@ -3292,6 +3304,8 @@ export function REPL({
     }
   }, [questionRuntime, initialMcpClients, resetLoadingState, getToolUseContext, toolPermissionContext, setAppState, customSystemPrompt, onTurnComplete, appendSystemPrompt, canUseTool, mainThreadAgentDefinition, onQueryEvent, sessionTitle, titleDisabled, activeRemote.isRemoteMode, accountCompletedTurnThreadGoal, store]);
   const onQuery = useCallback(async (newMessages: MessageType[], abortController: AbortController, shouldQuery: boolean, additionalAllowedTools: string[], mainLoopModelParam: string, onBeforeQueryCallback?: (input: string, newMessages: MessageType[]) => Promise<boolean>, input?: string, effort?: EffortValue): Promise<void> => {
+    try { interruptedTools.assertAdmission(); }
+    catch { setMessages((previous: MessageType[]) => [...previous, createSystemMessage(UNRESOLVED_TOOL_MESSAGE, 'warning')]); return; }
     logForDebugging(`[REPL:onQuery] start messages=${newMessages.length} shouldQuery=${shouldQuery} additionalAllowedTools=${additionalAllowedTools.length} hasInput=${Boolean(input)}`);
     // If this is a teammate, mark them as active when starting a turn
     if (isAgentSwarmsEnabled()) {
@@ -3548,7 +3562,7 @@ export function REPL({
       }
       logForDebugging(`[REPL:onQuery] finally complete generation=${thisGeneration}`);
     }
-  }, [onQueryImpl, setAppState, resetLoadingState, queryGuard, mrOnBeforeQuery, mrOnTurnComplete]);
+  }, [interruptedTools, setMessages, onQueryImpl, setAppState, resetLoadingState, queryGuard, mrOnBeforeQuery, mrOnTurnComplete]);
 
   // Handle initial message (from CLI args or plan mode exit with context clear)
   // This effect runs when isLoading becomes false and there's a pending message
@@ -3685,6 +3699,11 @@ export function REPL({
   }) => {
     // Freeze the committed visible proposal before hooks, commands, or any
     // other await can let a newer assistant response replace the referent.
+    if (interruptedTools.run.blocked && !input.trim().startsWith('/stop')) {
+      interruptedTools.run.retryDelivery();
+      setMessages((previous: MessageType[]) => [...previous, createSystemMessage(UNRESOLVED_TOOL_MESSAGE, 'warning')]);
+      return;
+    }
     const visiblePriorAssistantContext = visiblePriorAssistantContextRef.current;
     logForDebugging(`[REPL:onSubmit] start inputLength=${input.length} speculation=${Boolean(speculationAccept)} fromKeybinding=${Boolean(options?.fromKeybinding)} isLoading=${isLoading} externalLoading=${isExternalLoading}`);
     // Re-pin scroll to bottom on submit so the user always sees the new
@@ -4145,7 +4164,7 @@ export function REPL({
       setPastedContents(stashedPrompt.pastedContents);
       setStashedPrompt(undefined);
     }
-  }, [queryGuard,
+  }, [interruptedTools, setMessages, queryGuard,
   // isLoading is read at the !isLoading checks above for input-clearing
   // and submitCount gating. It's derived from isQueryActive || isExternalLoading,
   // so including it here ensures the closure captures the fresh value.
@@ -4479,6 +4498,7 @@ export function REPL({
   // Process queued commands when query completes and queue has items
 
   const executeQueuedInput = useCallback(async (queuedCommands: QueuedCommand[]) => {
+    interruptedTools.assertAdmission();
     await handlePromptSubmit({
       helpers: {
         setCursorOffset: () => {},
@@ -4505,10 +4525,10 @@ export function REPL({
       setMessages,
       queuedCommands
     });
-  }, [queryGuard, commands, setToolJSX, getToolUseContext, messages, mainLoopModel, ideSelection, setUserInputOnProcessing, canUseTool, setAbortController, onQuery, addNotification, setAppState, onBeforeQuery]);
+  }, [interruptedTools, queryGuard, commands, setToolJSX, getToolUseContext, messages, mainLoopModel, ideSelection, setUserInputOnProcessing, canUseTool, setAbortController, onQuery, addNotification, setAppState, onBeforeQuery]);
   useQueueProcessor({
     executeQueuedInput,
-    canProcessQueue: () => restoreReviewRef.current!.canStartAutomaticTurn(),
+    canProcessQueue: () => !interruptedTools.run.blocked && restoreReviewRef.current!.canStartAutomaticTurn(),
     hasActiveLocalJsxUI: isShowingLocalJSXCommand,
     queryGuard
   });
@@ -4661,7 +4681,7 @@ export function REPL({
     // attempt stale) belong to the scheduler, not to this component.
     const isInPlanMode = toolPermissionContext.mode === 'plan';
     goalGateRef.current.canStartAutomaticTurn =
-      restoreReviewRef.current!.canStartAutomaticTurn() &&
+      !interruptedTools.run.blocked && restoreReviewRef.current!.canStartAutomaticTurn() &&
       (questionRuntime?.registry.getSnapshot().pending.length ?? 0) === 0 &&
       sessionIsIdle &&
       queuedCommands.length === 0 &&

@@ -1,3 +1,4 @@
+import { createAgentInterruptedTools } from '../services/tools/agentInterruptedTools.js'
 /**
  * Helper for running forked agent query loops with usage tracking.
  *
@@ -384,6 +385,8 @@ export function createSubagentContext(
         }
 
   return {
+    // A child transcript and generation must never inherit its parent's receipt sink.
+    interruptedToolRun: undefined,
     // Mutable state - cloned by default to maintain isolation
     // Clone overrides.readFileState if provided, otherwise clone from parent
     readFileState: cloneFileStateCache(
@@ -552,6 +555,15 @@ export async function runForkedAgent({
         : null
   }
 
+  // Even non-recorded forks need a distinct effect owner. Late effects are
+  // exceptional durable receipts, not a replay of the fork's normal output.
+  if (agentId) isolatedToolUseContext.agentId = agentId
+  const interruptedTools = createAgentInterruptedTools(isolatedToolUseContext, {
+    ...(skipTranscript ? { getHistory: () => [...initialMessages, ...outputMessages] } : {}),
+    getParent: () => lastRecordedUuid,
+    setParent: uuid => { lastRecordedUuid = uuid },
+    publish: message => { outputMessages.push(message); onMessage?.(message) },
+  })
   // Run the query loop with isolated context (cache-safe params preserved)
   try {
     for await (const message of query({
@@ -609,20 +621,22 @@ export async function runForkedAgent({
       }
     }
   } finally {
-    // Release cloned file state cache memory (same pattern as runAgent.ts)
-    isolatedToolUseContext.readFileState.clear()
-    // Release the cloned fork context messages
-    initialMessages.length = 0
-    const agentId = isolatedToolUseContext.agentId
-    if (agentId) {
-      clearSessionHooks(
-        isolatedToolUseContext.setAppStateForTasks ??
-          isolatedToolUseContext.setAppState,
-        agentId,
-      )
-      releaseCodexLease(agentId)
-      clearWebSocketSession(`${getSessionId()}/${agentId}`)
-    }
+    await interruptedTools.finish(async () => {
+      // Release cloned file state cache memory (same pattern as runAgent.ts)
+      isolatedToolUseContext.readFileState.clear()
+      // Release the cloned fork context messages
+      initialMessages.length = 0
+      const agentId = isolatedToolUseContext.agentId
+      if (agentId) {
+        clearSessionHooks(
+          isolatedToolUseContext.setAppStateForTasks ??
+            isolatedToolUseContext.setAppState,
+          agentId,
+        )
+        releaseCodexLease(agentId)
+        clearWebSocketSession(`${getSessionId()}/${agentId}`)
+      }
+    })
   }
 
   logForDebugging(

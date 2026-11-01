@@ -131,6 +131,9 @@ import { executeStopFailureHooks } from './utils/hooks.js'
 import type { QuerySource } from './constants/querySource.js'
 import { createDumpPromptsFetch } from './services/api/dumpPrompts.js'
 import { StreamingToolExecutor } from './services/tools/StreamingToolExecutor.js'
+import {
+  getInterruptedToolRun, settleInterruptedTools, toolUpdatesUntilAbort, UNRESOLVED_TOOL_MESSAGE,
+} from './services/tools/interruptedToolRun.js'
 import { queryCheckpoint } from './utils/queryProfiler.js'
 import { runTools } from './services/tools/toolOrchestration.js'
 import { applyToolResultBudget } from './utils/toolResultStorage.js'
@@ -406,6 +409,14 @@ async function* queryLoop(
     outputFormat,
   } = params
   const deps = params.deps ?? productionDeps()
+  const interruptedTools = params.toolUseContext.interruptedToolRun ??
+    getInterruptedToolRun(getSessionId(), params.toolUseContext.agentId)
+  if (interruptedTools.blocked) {
+    interruptedTools.retryDelivery()
+    const error = new Error(UNRESOLVED_TOOL_MESSAGE)
+    yield createAssistantAPIErrorMessage({ content: error.message })
+    return { reason: 'model_error', error }
+  }
 
   // Cache-sharing children inherit transcript rows, but the starting roster is
   // main-only. Filter the child view without changing the parent's saved history.
@@ -962,6 +973,11 @@ async function* queryLoop(
           }
 
           let streamingFallbackOccured = false
+          if (interruptedTools.blocked) {
+            const error = new Error(UNRESOLVED_TOOL_MESSAGE)
+            yield createAssistantAPIErrorMessage({ content: error.message })
+            return { reason: 'model_error', error }
+          }
           queryCheckpoint('query_api_streaming_start')
           for await (const message of (requestController?.signal ?? toolUseContext.abortController.signal).aborted ? [] : deps.callModel({
             messages: instructionAssembly.messages,
@@ -984,6 +1000,9 @@ async function* queryLoop(
               isNonInteractiveSession:
                 toolUseContext.options.isNonInteractiveSession,
               fallbackModel,
+              onStreamInterrupted: () => {
+                streamingToolExecutor?.stopUnstartedTools('stream_interrupted')
+              },
               onStreamingFallback: () => {
                 if (!toolUseContext.agentId && toolUseContext.turnHandoff?.requested) {
                   toolUseContext.turnHandoff.invalidate()
@@ -1327,9 +1346,13 @@ async function* queryLoop(
       if (!toolUseContext.agentId && toolUseContext.turnHandoff?.requested) {
         toolUseContext.turnHandoff.invalidate()
         if (streamingToolExecutor) {
-          for await (const update of streamingToolExecutor.getRemainingResults()) {
-            if (update.message) yield update.message
-          }
+          streamingToolExecutor.stopUnstartedTools('stream_interrupted')
+          const settled = yield* settleInterruptedTools(
+            streamingToolExecutor.getRemainingResults(), interruptedTools,
+            toolUseContext.abortController.signal,
+            () => toolUseContext.abortController.abort('Interrupted tools cancelled'),
+          )
+          if (!settled) yield createAssistantAPIErrorMessage({ content: UNRESOLVED_TOOL_MESSAGE })
         }
         return { reason: 'handoff_failed' }
       }
@@ -1372,22 +1395,22 @@ async function* queryLoop(
       // yield them as synthetic assistant messages. However if it does throw
       // due to a bug, we may end up in a state where we have already emitted
       // a tool_use block but will stop before emitting the tool_result.
+      // Show the provider failure before waiting for effects to settle. The
+      // effects stay owned if the foreground settlement deadline expires.
+      yield createAssistantAPIErrorMessage({ content: errorMessage })
       if (streamingToolExecutor) {
         streamingToolExecutor.stopUnstartedTools('stream_interrupted')
-        for await (const update of streamingToolExecutor.getRemainingResults()) {
-          if (update.message) yield update.message
+        const settled = yield* settleInterruptedTools(
+          streamingToolExecutor.getRemainingResults(), interruptedTools,
+          toolUseContext.abortController.signal,
+          () => toolUseContext.abortController.abort('Interrupted tools cancelled'),
+        )
+        if (!settled) {
+          yield createAssistantAPIErrorMessage({ content: UNRESOLVED_TOOL_MESSAGE })
         }
       } else {
         yield* yieldMissingToolResultBlocks(assistantMessages, errorMessage)
       }
-
-      // Surface the real error instead of a misleading "[Request interrupted
-      // by user]" — this path is a model/runtime failure, not a user action.
-      // SDK consumers were seeing phantom interrupts on e.g. Node 18's missing
-      // Array.prototype.with(), masking the actual cause.
-      yield createAssistantAPIErrorMessage({
-        content: errorMessage,
-      })
 
       // To help track down bugs, log loudly for ants
       logAntError('Query error', error)
@@ -1463,12 +1486,18 @@ async function* queryLoop(
     // Without this, tool_use blocks would lack matching tool_result blocks.
     if (toolUseContext.abortController.signal.aborted) {
       if (streamingToolExecutor) {
-        // Consume remaining results - executor generates synthetic tool_results for
-        // aborted tools since it checks the abort signal in executeTool()
-        for await (const update of streamingToolExecutor.getRemainingResults()) {
-          if (update.message) {
-            yield update.message
+        if (toolUseContext.abortController.signal.reason === 'terminal_handoff') {
+          for await (const update of streamingToolExecutor.getRemainingResults()) {
+            if (update.message) yield update.message
           }
+        } else {
+          streamingToolExecutor.stopUnstartedTools('stream_interrupted')
+          const settled = yield* settleInterruptedTools(
+            streamingToolExecutor.getRemainingResults(), interruptedTools,
+            toolUseContext.abortController.signal,
+            () => toolUseContext.abortController.abort('Interrupted tools cancelled'),
+          )
+          if (!settled) yield createAssistantAPIErrorMessage({ content: UNRESOLVED_TOOL_MESSAGE })
         }
       } else {
         yield* yieldMissingToolResultBlocks(
@@ -2154,9 +2183,27 @@ async function* queryLoop(
       })
     }
 
+    const streamingUpdates = async function* () {
+      const executor = streamingToolExecutor!
+      const settled = yield* toolUpdatesUntilAbort(
+        executor.getRemainingResults(), interruptedTools,
+        toolUseContext.abortController.signal,
+        () => executor.stopUnstartedTools('stream_interrupted'),
+      )
+      if (!settled) yield { message: createAssistantAPIErrorMessage({ content: UNRESOLVED_TOOL_MESSAGE }), newContext: undefined }
+    }
     const toolUpdates = streamingToolExecutor
-      ? streamingToolExecutor.getRemainingResults()
-      : runTools(toolUseBlocks, assistantMessages, canUseTool, toolUseContext)
+      ? streamingUpdates()
+      : (async function* () {
+          const settled = yield* toolUpdatesUntilAbort(
+            runTools(toolUseBlocks, assistantMessages, canUseTool, toolUseContext),
+            interruptedTools,
+            toolUseContext.abortController.signal,
+            // runToolUse checks this same signal before every unstarted effect.
+            () => {},
+          )
+          if (!settled) yield { message: createAssistantAPIErrorMessage({ content: UNRESOLVED_TOOL_MESSAGE }), newContext: undefined }
+        })()
 
     for await (const update of toolUpdates) {
       if (update.message) {

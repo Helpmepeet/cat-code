@@ -1,6 +1,7 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle'
 import { createHeadlessGoalLoop } from './headlessGoalLoop.js'
+import { getInterruptedToolRun } from '../services/tools/interruptedToolRun.js'
 import { PendingQuestionRuntime } from '../utils/pendingQuestionRuntime.js'
 import { questionReplyBatchSchema, questionDismissSchema } from '../utils/pendingQuestions.js'
 import { readFile, stat } from 'fs/promises'
@@ -976,6 +977,17 @@ export async function runHeadless(
     options,
     turnInterruptionState,
     recoveryReviewRequired,
+    async message => {
+      // Late receipts use the same format policy as foreground SDK messages,
+      // but must not replace the final turn result in text/nonverbose JSON.
+      if (transformToStreamlined) {
+        const transformed = transformToStreamlined(message)
+        if (transformed) await structuredIO.write(transformed)
+      } else if (options.outputFormat === 'stream-json' && options.verbose) {
+        await structuredIO.write(message)
+      }
+      if (needsFullArray) messages.push(message)
+    },
   )) {
     if (transformToStreamlined) {
       // Streamlined mode: transform messages and stream immediately
@@ -1098,6 +1110,7 @@ export function runHeadlessStreaming(
   },
   turnInterruptionState?: TurnInterruptionState,
   recoveryReviewRequired = false,
+  publishLateToolMessage?: (message: SDKMessage) => void | Promise<void>,
 ): AsyncIterable<StdoutMessage> {
   let running = false
   let runPhase:
@@ -1161,6 +1174,7 @@ export function runHeadlessStreaming(
   let pauseGoalOnAbort: (() => void) | null = null
   // Same queue sendRequest() enqueues to — one FIFO for everything.
   const output = structuredIO.outbound
+  const interruptedTools = getInterruptedToolRun(getSessionId())
 
   function flushSdkEvents(): void {
     flushQueuedSdkEvents(output)
@@ -2053,6 +2067,7 @@ export function runHeadlessStreaming(
 
   // Abort the current operation when a 'now' priority message arrives.
   subscribeToCommandQueue(() => {
+    if (interruptedTools.blocked) interruptedTools.retryDelivery()
     if (abortController && getCommandsByMaxPriority('now').length > 0) {
       abortController.abort('interrupt')
     }
@@ -2354,6 +2369,11 @@ export function runHeadlessStreaming(
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
               pendingQuestionRuntime: questionRuntime,
+              publishLateToolMessage: async message => {
+                if (publishLateToolMessage) await publishLateToolMessage(message)
+                else output.enqueue(message)
+                forwardMessagesToBridge()
+              },
               origin: cmd.origin,
               commands: uniqBy(
                 [...currentCommands, ...appState.mcp.commands],
@@ -2460,6 +2480,18 @@ export function runHeadlessStreaming(
               }
             }
           }) // end runWithWorkload
+
+          // Keep the session writer alive and queued inputs untouched while an
+          // escaped effect is unknown. Never close output or replay the input
+          // merely because the foreground iterator returned.
+          while (interruptedTools.blocked) {
+            await new Promise<void>(resolve => {
+              const unsubscribe = interruptedTools.subscribe(() => {
+                if (!interruptedTools.blocked) { unsubscribe(); resolve() }
+              })
+              if (!interruptedTools.blocked) { unsubscribe(); resolve() }
+            })
+          }
 
           for (const uuid of batchUuids) {
             notifyCommandLifecycle(uuid, 'completed')

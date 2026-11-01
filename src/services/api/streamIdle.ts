@@ -16,11 +16,12 @@ export async function* withStreamIdleDeadline<T>(
   source: AsyncIterable<T>,
   signal: AbortSignal,
   timeoutMs: number,
-  cleanup: () => void,
+  cleanup: (error?: unknown) => void,
   cancellation: () => Error,
   lastNetworkProgress: () => number = () => 0,
 ): AsyncGenerator<T> {
   const iterator = source[Symbol.asyncIterator]()
+  let failure: unknown
   try {
     while (true) {
       let timer: ReturnType<typeof setTimeout> | undefined
@@ -48,8 +49,11 @@ export async function* withStreamIdleDeadline<T>(
         if (onAbort) signal.removeEventListener('abort', onAbort)
       }
     }
+  } catch (error) {
+    failure = error
+    throw error
   } finally {
-    cleanup()
+    cleanup(failure)
     // An uncooperative reader must not keep settlement waiting for return().
     void Promise.resolve().then(() => iterator.return?.()).catch(() => {})
   }

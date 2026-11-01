@@ -57,6 +57,9 @@ export type QueryEngineSessionLike = {
   } | null>
   sealResumeCheckpoint?: () => Promise<ResumeCheckpoint>
   requiresRecoveryReview?: () => boolean
+  hasUnresolvedToolEffects?: () => boolean
+  retryInterruptedToolReceipts?: () => void
+  dispose?: () => void
   verifyResumeCheckpoint?: (checkpoint: ResumeCheckpoint) => Promise<void>
   persistHandoffOutcome?: (operationId: string, outcome: HandoffTerminalOutcome) => Promise<SDKMessage[]>
   selectUserMessage?: (targetUuid: string) => UserMessage
@@ -91,6 +94,9 @@ export function createQueryEngineSessionAdapter(
     recoverHandoffReconciliation: session.recoverHandoffReconciliation ? notice => session.recoverHandoffReconciliation!(notice) : undefined,
     sealResumeCheckpoint: session.sealResumeCheckpoint ? () => session.sealResumeCheckpoint!() : undefined,
     requiresRecoveryReview: session.requiresRecoveryReview ? () => session.requiresRecoveryReview!() : undefined,
+    hasUnresolvedToolEffects: session.hasUnresolvedToolEffects ? () => session.hasUnresolvedToolEffects!() : undefined,
+    retryInterruptedToolReceipts: session.retryInterruptedToolReceipts ? () => session.retryInterruptedToolReceipts!() : undefined,
+    dispose: session.dispose ? () => session.dispose!() : undefined,
     verifyResumeCheckpoint: session.verifyResumeCheckpoint ? checkpoint => session.verifyResumeCheckpoint!(checkpoint) : undefined,
     persistHandoffOutcome: session.persistHandoffOutcome
       ? (operationId, outcome) => session.persistHandoffOutcome!(operationId, outcome)
