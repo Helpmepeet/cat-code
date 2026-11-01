@@ -46,7 +46,8 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   const workspace = useRef<HTMLDivElement>(null)
   const workers = [...dock.active, ...dock.finished]
   const observed = selected ? workers.find(row => row.agentId === selected.agentId) : undefined
-  const candidate = observed ?? selected
+  const retained = useRef<{ selection: SubagentDockRow; row: SubagentDockRow } | null>(null)
+  const candidate = observed ?? (retained.current?.selection === selected ? retained.current.row : selected)
   const worker = candidate && canOpenSubagentPanel(candidate, rows) ? candidate : null
   const branch = selectSubagentPanelBranch(rows, worker?.toolUseId ?? null, worker?.runToolUseIds)
   const opener = useRef<HTMLElement | null>(null)
@@ -60,12 +61,16 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
     if (output && !outputRow) updateFilePaneSession(sessionId, { output: null })
   }, [sessionId, output, outputRow])
   useLayoutEffect(() => {
+    // Dock rows are presentation snapshots, not new shared-slot selections.
+    retained.current = selected && candidate ? { selection: selected, row: candidate } : null
+  }, [selected, candidate])
+  useLayoutEffect(() => {
     if (!selected) return
     if (!worker) {
       updateFilePaneSession(sessionId, { worker: null })
-      onFallback(observed ?? selected)
-    } else if (observed && observed !== selected) updateFilePaneSession(sessionId, { worker: observed })
-  }, [sessionId, selected, observed, worker, onFallback])
+      onFallback(candidate ?? selected)
+    }
+  }, [sessionId, selected, candidate, worker, onFallback])
   useLayoutEffect(() => {
     if (state.width !== null) slot.current?.style.setProperty('--shared-slot-width', `${state.width}px`)
   }, [state.width])

@@ -10,7 +10,7 @@ export type FilePaneScroll = FilePreviewScroll & { markdown?: MarkdownReadingPos
 export type PreviewOpenResult = { ok: true } | { ok: false; message: string }
 export type FilePaneHistoryEntry = { path: string; scroll: FilePaneScroll; routeKey?: string; baseUrl?: string; previewId?: string }
 export type FilePaneOutput = { id: string; fileIndex: number; request: number }
-type FilePaneCheckpoint = Pick<FilePaneSession, 'open' | 'file' | 'committedFile' | 'lastPath' | 'visible' | 'width' | 'history' | 'forward' | 'scroll' | 'note'>
+type FilePaneCheckpoint = Pick<FilePaneSession, 'open' | 'file' | 'committedFile' | 'lastPath' | 'history' | 'forward' | 'scroll' | 'note'>
 export type FilePaneSession = {
   open: boolean
   file: FilePreviewDescriptor | null
@@ -38,6 +38,13 @@ const opening = new Map<string, number>()
 const pendingOpenings = new Map<string, Set<number>>()
 const deferredReleases = new Map<string, Map<string, FilePreviewDescriptor>>()
 const FILE_WIDTH_KEY = 'catcode.filePaneWidth.v1'
+
+function fileCheckpoint(state: FilePaneSession, scroll: FilePaneScroll): FilePaneCheckpoint {
+  return {
+    open: state.open, file: state.file, committedFile: state.committedFile, lastPath: state.lastPath,
+    history: state.history, forward: state.forward, scroll, note: state.note,
+  }
+}
 
 export function isPaneFilePath(path: string): boolean { return filePreviewKind(path) !== null }
 export function paneTargetLabel(path: string): string {
@@ -70,11 +77,13 @@ export function useFilePaneSession(id: string): FilePaneSession {
   return useSyncExternalStore(subscribe, snapshot, snapshot)
 }
 export function updateFilePaneSession(id: string, patch: Partial<FilePaneSession>): void {
-  const next = { ...getFilePaneSession(id), ...patch }
+  const previous = getFilePaneSession(id)
+  const next = { ...previous, ...patch }
   if (!next.open && !next.worker && !next.output) { next.visible = null; next.width = null }
   else if (next.visible === 'file' && !next.open || next.visible === 'worker' && !next.worker || next.visible === 'output' && !next.output) {
     next.visible = next.open ? 'file' : next.worker ? 'worker' : 'output'
   }
+  if ((Object.keys(next) as Array<keyof FilePaneSession>).every(key => Object.is(previous[key], next[key]))) return
   sessions.set(id, next)
   listeners.get(id)?.forEach(listener => listener())
 }
@@ -193,7 +202,7 @@ export async function requestOpenFile(id: string, path: string, options?: { exte
     if (!result.ok) return opening.get(id) === token ? result : HANDLED
     const descriptor = result.descriptor
     if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return HANDLED }
-    const previous = getFilePaneSession(id)
+    let previous = getFilePaneSession(id)
     if (previous.open && previous.file?.path === descriptor.path) {
       if (previous.file.id !== descriptor.id) window.catcode.releaseFilePreview(descriptor.id)
       showSlotOccupant(id, 'file')
@@ -202,9 +211,10 @@ export async function requestOpenFile(id: string, path: string, options?: { exte
     }
     const scroll = await captureForNavigation(id)
     if (opening.get(id) !== token) { releaseUnusedCandidate(id, descriptor); return HANDLED }
+    previous = getFilePaneSession(id)
     const settled = previous.checkpoint ?? previous
     updateFilePaneSession(id, {
-      checkpoint: previous.checkpoint ?? { ...previous, scroll },
+      checkpoint: previous.checkpoint ?? fileCheckpoint(previous, scroll),
       file: descriptor, open: true, lastPath: descriptor.path, visible: 'file',
       width: previous.width ?? readFilePaneWidth(), note: previewDescriptorNote(descriptor), scroll: { x: 0, y: 0 },
       history: settled.open && settled.file ? [...settled.history, historyEntry(settled.file, previous.checkpoint ? settled.scroll : scroll)] : [], forward: [],
@@ -249,7 +259,7 @@ export async function stepFilePaneHistory(id: string, direction: 'back' | 'forwa
     const inPlace = descriptor.kind === 'localhost' && samePaneRevision(state.file, descriptor)
     const current = historyEntry(state.file, scroll)
     updateFilePaneSession(id, {
-      checkpoint: inPlace ? null : state.checkpoint ?? { ...state, scroll },
+      checkpoint: inPlace ? null : state.checkpoint ?? fileCheckpoint(state, scroll),
       ...(inPlace ? { committedFile: descriptor } : {}),
       file: descriptor, lastPath: descriptor.path, scroll: target.scroll, note: previewDescriptorNote(descriptor),
       history: direction === 'back' ? state.history.slice(0, -1) : [...state.history, current],
@@ -279,7 +289,7 @@ export function rejectFilePaneCandidate(id: string, descriptor: FilePreviewDescr
   if (!state.open || !samePaneRevision(state.file, descriptor)) return false
   const checkpoint = state.checkpoint
   if (checkpoint) {
-    updateFilePaneSession(id, { ...checkpoint, checkpoint: null, visible: state.visible === 'file' ? checkpoint.visible : state.visible })
+    updateFilePaneSession(id, { ...checkpoint, checkpoint: null })
     if (descriptor.id !== checkpoint.file?.id && descriptor.id !== checkpoint.committedFile?.id) window.catcode.releaseFilePreview(descriptor.id)
     return true
   }
