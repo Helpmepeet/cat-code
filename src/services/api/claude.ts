@@ -654,7 +654,17 @@ export function userMessageToMessageParam(
   enablePromptCaching: boolean,
   querySource?: QuerySource,
 ): MessageParam {
-  const content = providerFacingUserContent(message)
+  const storedContent = providerFacingUserContent(message)
+  // Agent results can contain provider-native text blocks, including on replay.
+  // Project only the wire content; retain metadata in stored engine history.
+  const content = Array.isArray(storedContent)
+    ? storedContent.map(block => {
+        if (block.type !== 'tool_result' || !Array.isArray(block.content)) {
+          return stripTextPhase(block)
+        }
+        return { ...block, content: block.content.map(stripTextPhase) }
+      })
+    : storedContent
 
   if (addCache) {
     if (typeof content === 'string') {
@@ -758,6 +768,13 @@ export function projectProviderFacingMessages(
   })
 }
 
+function stripTextPhase<T extends { type: string }>(block: T): T {
+  if (block.type !== 'text' || !('phase' in block)) return block
+  const text = { ...block } as T & { phase?: unknown }
+  delete text.phase
+  return text
+}
+
 export function assistantMessageToMessageParam(
   message: AssistantMessage,
   addCache = false,
@@ -767,11 +784,7 @@ export function assistantMessageToMessageParam(
   // Phase belongs to Codex history and the UI, not Anthropic's text schema.
   // The Codex request uses the separate instruction assembly with stored blocks.
   const content = Array.isArray(message.message.content)
-    ? message.message.content.map(block => {
-        if (block.type !== 'text' || !('phase' in block)) return block
-        const { phase: _phase, ...text } = block as typeof block & { phase?: unknown }
-        return text
-      })
+    ? message.message.content.map(stripTextPhase)
     : message.message.content
   if (addCache) {
     if (typeof content === 'string') {
