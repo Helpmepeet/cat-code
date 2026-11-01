@@ -24,6 +24,7 @@ import { Chip } from './Chip.js'
 import { directConnectResultForRequest } from './remoteSettingsPageModel.js'
 import { PaneSection } from './SettingsField.js'
 import { useToast } from './toastContext.js'
+import { isDefiniteLocalSendRefusal } from './localSendFailure.js'
 
 const newRequestId = (): string => crypto.randomUUID()
 
@@ -95,6 +96,7 @@ function BridgePanel({
 }) {
   const toast = useToast()
   const [toggling, setToggling] = useState(false)
+  const [uncertain, setUncertain] = useState(false)
   const pendingRequestId = useRef<string | null>(null)
 
   useEffect(() => {
@@ -107,14 +109,28 @@ function BridgePanel({
     }
     pendingRequestId.current = null
     setToggling(false)
+    setUncertain(false)
     toast(lastResult.message, { tone: lastResult.ok ? 'success' : 'danger' })
   }, [lastResult, toast])
 
   const toggle = () => {
+    if (toggling || uncertain || pendingRequestId.current !== null) return
     const requestId = newRequestId()
     pendingRequestId.current = requestId
     setToggling(true)
-    onVerb({ type: 'remoteSettings.bridgeToggle', requestId, enable: !bridge.enabled })
+    try {
+      onVerb({ type: 'remoteSettings.bridgeToggle', requestId, enable: !bridge.enabled })
+    } catch (error) {
+      if (pendingRequestId.current !== requestId) return
+      setToggling(false)
+      if (isDefiniteLocalSendRefusal(error)) {
+        pendingRequestId.current = null
+        toast('Could not send the change. Try again.', { tone: 'danger' })
+      } else {
+        setUncertain(true)
+        toast('Delivery is unknown. Check the session status before making another change.', { tone: 'danger' })
+      }
+    }
   }
 
   return (
@@ -125,6 +141,7 @@ function BridgePanel({
           : 'border-shell-seam bg-shell-hover/40'
       }`}
     >
+      {uncertain ? <p role="status">Delivery is unknown. Wait for the session status before making another change.</p> : null}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="mb-1.5 flex items-center gap-2.5">
@@ -161,7 +178,7 @@ function BridgePanel({
               ? 'border-tone-danger/40 bg-tone-danger/10 text-tone-danger'
               : 'border-accent/40 bg-accent/12 text-accent'
           }`}
-          disabled={toggling}
+          disabled={toggling || uncertain}
           onClick={toggle}
           type="button"
         >
@@ -251,6 +268,7 @@ function DirectConnectSection({
   const toast = useToast()
   const [serverUrl, setServerUrl] = useState('')
   const [connecting, setConnecting] = useState(false)
+  const [uncertain, setUncertain] = useState(false)
   const [connected, setConnected] = useState<DirectConnectDetails | null>(null)
   const pendingRequestId = useRef<string | null>(null)
 
@@ -262,22 +280,36 @@ function DirectConnectSection({
     if (!matched) return
     pendingRequestId.current = null
     setConnecting(false)
+    setUncertain(false)
     setConnected(matched.ok ? (matched.directConnect ?? null) : null)
     toast(matched.message, { tone: matched.ok ? 'success' : 'danger' })
   }, [lastResult, toast])
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
-    if (!serverUrl.trim() || connecting) return
+    if (!serverUrl.trim() || connecting || uncertain || pendingRequestId.current !== null) return
     const requestId = newRequestId()
     pendingRequestId.current = requestId
     setConnected(null)
     setConnecting(true)
-    onVerb({ type: 'remoteSettings.directConnect', requestId, serverUrl: serverUrl.trim() })
+    try {
+      onVerb({ type: 'remoteSettings.directConnect', requestId, serverUrl: serverUrl.trim() })
+    } catch (error) {
+      if (pendingRequestId.current !== requestId) return
+      setConnecting(false)
+      if (isDefiniteLocalSendRefusal(error)) {
+        pendingRequestId.current = null
+        toast('Could not send the connection request. Try again.', { tone: 'danger' })
+      } else {
+        setUncertain(true)
+        toast('Connection delivery is unknown. Check the session status before connecting again.', { tone: 'danger' })
+      }
+    }
   }
 
   return (
     <PaneSection title="Connect a remote session">
+      {uncertain ? <p role="status">Connection delivery is unknown. Wait for the session status before connecting again.</p> : null}
       <form className="rounded-lg border border-shell-seam bg-shell-hover/40 px-4 py-3.5" onSubmit={submit}>
         <div className="mb-3 flex items-center justify-between">
           <span className="text-[12px] text-text-subtle">
@@ -291,7 +323,7 @@ function DirectConnectSection({
         <input
           data-setting-key="remoteDirectConnect"
           className="mb-3 w-full rounded-lg border border-shell-seam bg-app-bg px-2.5 py-2 font-mono text-[12.5px] text-text-primary outline-none"
-          disabled={connecting}
+          disabled={connecting || uncertain}
           id="remote-server-url"
           onChange={event => setServerUrl(event.target.value)}
           placeholder="https://host:8200"
@@ -299,7 +331,7 @@ function DirectConnectSection({
         />
         <button
           className="rounded-lg bg-accent px-3.5 py-2 text-[12.5px] font-semibold text-on-fill transition-opacity disabled:opacity-50"
-          disabled={connecting || !serverUrl.trim()}
+          disabled={connecting || uncertain || !serverUrl.trim()}
           type="submit"
         >
           {connecting ? 'Connecting…' : 'Connect'}

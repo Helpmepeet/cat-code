@@ -68,5 +68,8 @@ export function createDesktopNotificationRetry() {
       if (!value || value.resultId !== resultId || !claimTurnRetry(claimed, resultId)) return null
       return value
     },
+    releaseUnsent(resultId: string) {
+      claimed.delete(resultId)
+    },
   }
 }

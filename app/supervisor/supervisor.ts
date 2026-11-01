@@ -65,6 +65,9 @@ import { isDeliveryStage, isSafeDeliveryIdentifier, type DeliveryTrace, type Sid
 import type { SessionBinding } from '../shared/sessionBinding.js'
 
 export type SupervisorOptions = {
+  startupTimeoutMs?: number
+  /** Transport factory override for isolated lifecycle tests. */
+  connectSocket?: (path: string) => Socket
   /**
    * Grace period before a closed socket is reported as `disconnected`, so an
    * ordinary process exit is not first announced as a transport failure
@@ -126,6 +129,8 @@ export type SidecarStatus =
 
 /** One managed sidecar. The registry maps sessionId → this. */
 type SidecarRecord = {
+  terminationStarted?: boolean
+  startupTimer?: ReturnType<typeof setTimeout>
   sessionId: SessionId
   /** Process-instance authority; never derived from reusable operating-system ids. */
   generation: string
@@ -218,10 +223,10 @@ export type SendFailureCode =
   | 'session_disconnected'
 
 export class SidecarSendError extends Error {
-  readonly code: SendFailureCode
+  readonly code: SendFailureCode | 'bad_request'
   readonly retryable: boolean
 
-  constructor(code: SendFailureCode, message: string) {
+  constructor(code: SendFailureCode | 'bad_request', message: string) {
     super(message)
     this.name = 'SidecarSendError'
     this.code = code
@@ -234,6 +239,7 @@ export function isSidecarSendError(error: unknown): error is SidecarSendError {
 }
 
 export class SidecarSupervisor {
+  private shutdownPromise?: Promise<{ confirmed: boolean; unresolvedSessionIds: string[] }>
   private readonly registry = new Map<SessionId, SidecarRecord>()
   // Raw kills stay invisible to listSessions, but their children remain owned
   // until exit so a later explicit stop can still confirm them.
@@ -387,7 +393,7 @@ export class SidecarSupervisor {
     if (this.closed) {
       throw new Error('supervisor has shut down; refusing to spawn')
     }
-    if (this.registry.has(sessionId)) {
+    if (this.registry.has(sessionId) || this.terminating.get(sessionId)?.size) {
       throw new Error(`session ${sessionId} already exists`)
     }
     // Per-session cwd wins over the supervisor-wide default; it must be both the
@@ -480,6 +486,12 @@ export class SidecarSupervisor {
       operationalBuffer: '',
     }
     this.registry.set(sessionId, record)
+    record.startupTimer = setTimeout(() => {
+      if (this.registry.get(sessionId) !== record || record.status === 'ready' || record.status === 'exited') return
+      this.setStatus(record, 'failed')
+      record.socket?.destroy()
+      this.terminateChild(record)
+    }, this.options.startupTimeoutMs ?? 10_000)
 
     const operational = child.stdio[3]
     if (operational) {
@@ -493,12 +505,15 @@ export class SidecarSupervisor {
     // emits an 'error' event; without a listener Node treats it as unhandled and
     // can terminate Electron main. Handle it as a session failure instead.
     child.on('error', error => {
+      clearTimeout(record.startupTimer)
       this.log(`[supervisor] sidecar ${sessionId} spawn error: ${error.message}`)
       this.operational('sidecar.spawn.failed', 'error', sessionId, { reason: 'spawn_error' })
       this.setStatus(record, 'failed')
     })
 
     child.on('exit', (code, signal) => {
+      clearTimeout(record.startupTimer)
+      this.cleanupSocketFile(record)
       // F11 — only report the exit if this record is still the registered one.
       // After a restart, the OLD child's async exit must not mark the live
       // replacement dead.
@@ -582,16 +597,16 @@ export class SidecarSupervisor {
     const imageSubmit = message.type === 'app.submit' && isImageSubmitPrompt(message.prompt)
     if (message.type === 'app.submit') {
       const problem = validateSubmitPromptBudget(message.prompt)
-      if (problem) throw new Error(problem)
+      if (problem) throw new SidecarSendError('bad_request', problem)
       if (Buffer.byteLength(JSON.stringify({ ...frame, message: { ...message, prompt: '' } })) > MAX_FRAME_BYTES) {
-        throw new Error('This request is too large to send.')
+        throw new SidecarSendError('bad_request', 'This request is too large to send.')
       }
     }
     const encoded = encodeFrame(frame)
     const payloadBytes = encoded.byteLength - 4
     const questionReply = message.type === 'askUserQuestion.reply'
     if (payloadBytes > (questionReply ? MAX_QUESTION_REPLY_FRAME_BYTES : imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
-      throw new Error('That message is too large to send. Shorten it and try again.')
+      throw new SidecarSendError('bad_request', 'That message is too large to send. Shorten it and try again.')
     }
     // write(false) already accepted the bytes. Admission must happen BEFORE
     // writing, and must include all sessions sharing this host.
@@ -600,7 +615,7 @@ export class SidecarSupervisor {
     )
     if (record.socket.writableLength + encoded.byteLength > MAX_PENDING_SESSION_INPUT_BYTES ||
         pending + encoded.byteLength > MAX_PENDING_HOST_INPUT_BYTES) {
-      throw new Error('Messages are still being sent. Wait a moment and try again.')
+      throw new SidecarSendError('bad_request', 'Messages are still being sent. Wait a moment and try again.')
     }
     if (questionReply) {
       const now = Date.now()
@@ -609,7 +624,7 @@ export class SidecarSupervisor {
         this.questionSendBytes = 0
       }
       if (this.questionSendBytes + payloadBytes > MAX_QUESTION_REPLY_BYTES_PER_WINDOW) {
-        throw new Error('Too many requests at once. Wait a moment and try again.')
+        throw new SidecarSendError('bad_request', 'Too many requests at once. Wait a moment and try again.')
       }
       this.questionSendBytes += payloadBytes
     } else if (payloadBytes > MAX_FRAME_BYTES) {
@@ -619,7 +634,7 @@ export class SidecarSupervisor {
         this.largeSendBytes = 0
       }
       if (this.largeSendBytes + payloadBytes > MAX_LARGE_SUBMIT_BYTES_PER_WINDOW) {
-        throw new Error('Images are being sent too quickly. Wait a moment and try again.')
+        throw new SidecarSendError('bad_request', 'Images are being sent too quickly. Wait a moment and try again.')
       }
       this.largeSendBytes += payloadBytes
     }
@@ -631,8 +646,13 @@ export class SidecarSupervisor {
     const record = this.registry.get(sessionId)
     if (!record) return
     record.socket?.destroy()
+    clearTimeout(record.startupTimer)
     this.terminateChild(record)
-    this.cleanupSocketFile(record)
+    if (record.child.pid === undefined || record.child.exitCode !== null || record.child.signalCode !== null) {
+      this.cleanupSocketFile(record)
+    } else {
+      record.child.once('exit', () => this.cleanupSocketFile(record))
+    }
     this.registry.delete(sessionId)
   }
 
@@ -658,7 +678,6 @@ export class SidecarSupervisor {
         }
         const exited = () => finish(true)
         const timer = setTimeout(() => finish(false), timeoutMs)
-        timer.unref?.()
         child.once('exit', exited)
         if (this.registry.get(sessionId) === record) this.killSession(sessionId)
         else this.terminateChild(record)
@@ -672,31 +691,33 @@ export class SidecarSupervisor {
   }
 
   /** Restart a session's sidecar in place (fresh process = fresh STATE singleton). */
-  restartSession(sessionId: SessionId, configOverride?: SpawnConfig): void {
+  async restartSession(sessionId: SessionId, configOverride?: SpawnConfig): Promise<void> {
     const record = this.registry.get(sessionId)
     if (!record) {
       throw new Error(`session ${sessionId} does not exist`)
     }
     const config = configOverride ?? record.config
-    this.killSession(sessionId)
+    if (!await this.stopSession(sessionId)) throw new Error('The previous session is still stopping. Wait before trying again.')
     // Re-apply the same spawn config so the fresh process re-roots in the same
     // cwd and re-resumes the same engine session.
     this.spawnSession(sessionId, config)
   }
 
-  /** Kill every sidecar and clear the registry. Terminal: no further spawns. */
-  shutdown(): void {
+  /** Close admission and await captured children; preserve unconfirmed evidence. */
+  shutdown(): Promise<{ confirmed: boolean; unresolvedSessionIds: string[] }> {
+    if (this.shutdownPromise) return this.shutdownPromise
     this.closed = true
     for (const timer of this.disconnectTimers) clearTimeout(timer)
     this.disconnectTimers.clear()
-    for (const sessionId of [...this.registry.keys()]) {
-      this.killSession(sessionId)
-    }
-    try {
-      rmSync(this.socketDir, { recursive: true, force: true })
-    } catch {
-      // best-effort
-    }
+    const ids = [...new Set([...this.registry.keys(), ...this.terminating.keys()])]
+    this.shutdownPromise = Promise.all(ids.map(async id => ({ id, confirmed: await this.stopSession(id) }))).then(results => {
+      const unresolvedSessionIds = results.filter(result => !result.confirmed).map(result => result.id)
+      if (unresolvedSessionIds.length === 0) {
+        try { rmSync(this.socketDir, { recursive: true, force: true }) } catch { /* best effort */ }
+      }
+      return { confirmed: unresolvedSessionIds.length === 0, unresolvedSessionIds }
+    })
+    return this.shutdownPromise
   }
 
   /** Snapshot of the current registry (for a future durable registry / UI). */
@@ -760,15 +781,18 @@ export class SidecarSupervisor {
 
     // Keep the local writable half open until the explicit `end` handler runs.
     // This makes remote FIN observable rather than relying on an implicit close.
-    const socket = connect({ path: record.socketPath, allowHalfOpen: true })
+    const socket = this.options.connectSocket?.(record.socketPath) ??
+      connect({ path: record.socketPath, allowHalfOpen: true })
     record.socket = socket
 
     socket.on('connect', () => {
+      if (this.registry.get(record.sessionId) !== record || record.status === 'failed' || record.status === 'exited' || this.closed) { socket.destroy(); return }
       this.setStatus(record, 'connecting')
       this.operational('sidecar.socket.connected', 'info', record.sessionId)
     })
 
     socket.on('data', chunk => {
+      if (this.registry.get(record.sessionId) !== record || record.status === 'failed' || record.status === 'exited' || this.closed) return
       const results = record.decoder.push(chunk)
       for (const result of results) {
         if (result.kind === 'error') {
@@ -802,6 +826,7 @@ export class SidecarSupervisor {
             return
           }
           this.setStatus(record, 'ready')
+          clearTimeout(record.startupTimer)
           this.emit({
             type: 'frame',
             sessionId: record.sessionId,
@@ -919,8 +944,8 @@ export class SidecarSupervisor {
    * confirmation before clearing the registry's advisory pid.
    *
    * The force-kill timer holds the child directly rather than the registry, so
-   * deregistration cannot strand it. It is unref'd so it never keeps the process
-   * alive at shutdown, and cleared as soon as the child exits on its own.
+   * deregistration cannot strand it. It keeps the parent alive through escalation
+   * and is cleared as soon as the child exits on its own.
    */
   private terminateChild(record: SidecarRecord): void {
     const child = record.child
@@ -928,6 +953,8 @@ export class SidecarSupervisor {
     // to signal and no escalation to schedule.
     if (child.pid === undefined) return
     if (child.exitCode !== null || child.signalCode !== null) return
+    if (record.terminationStarted) return
+    record.terminationStarted = true
     this.trackTerminatingChild(record)
     try { child.kill('SIGTERM') }
     catch (error) {
@@ -941,8 +968,8 @@ export class SidecarSupervisor {
       )
       try { child.kill('SIGKILL') }
       catch (error) { this.log(`[supervisor] sidecar ${record.sessionId} SIGKILL failed: ${String(error)}`) }
+      record.terminationStarted = false
     }, this.killGraceMs)
-    forceKillTimer.unref?.()
     child.once('exit', () => {
       childExited = true
       clearTimeout(forceKillTimer)

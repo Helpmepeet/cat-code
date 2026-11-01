@@ -1471,10 +1471,11 @@ export class SessionRegistry {
    * `'crashed'` is still never relabelled — a genuine crash keeps its state.
    * Returns the ids it marked.
    */
-  markLiveCleanSync(): string[] {
+  markLiveCleanSync(unresolvedSessionIds: ReadonlySet<string> = new Set()): string[] {
     this.removedEmptySessionIds = []
     const marked: string[] = []
     for (const row of this.doc.sessions) {
+      if (unresolvedSessionIds.has(row.appSessionId)) continue
       if (!this.ownedSessionIds.has(row.appSessionId) || row.ownerHostPid !== process.pid) continue
       if (row.shutdown !== null && row.shutdown !== 'parked') continue
       row.shutdown = 'clean'

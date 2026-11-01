@@ -6,17 +6,23 @@ import type {
 import type {
   ProjectRouteCommand,
   ProjectRouteSnapshot,
+  RoutingStorageHealth,
 } from '../shared/projectRouting.js'
 
 type PendingRoute = Omit<RouteRecord, 'phase'> & { phase: ProjectRouteSnapshot['phase'] }
 
 export type ProjectRoutingControllerOptions = {
   store?: ProjectRoutingStore
+  /** Preserve an earlier startup read failure until explicit revalidation. */
+  initialStorageFailure?: boolean
   prepareForward?(sessionId: string): Promise<void>
   currentCwd(sessionId: string): string | null
   forward(sessionId: string, message: SidecarClientMessage): ErrorFrame['code'] | null
   answerRefused(sessionId: string, submitId: string, code: ErrorFrame['code']): void
   publish(sessionId: string, snapshot: ProjectRouteSnapshot | null): void
+  publishStorageHealth?(health: RoutingStorageHealth): void
+  /** Clear main's matching legacy retention latch synchronously before reopening. */
+  onStorageRecovered?(): void
   log(message: string): void
 }
 
@@ -32,8 +38,9 @@ export class ProjectRoutingController {
   private readonly receiptTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
   constructor(private readonly options: ProjectRoutingControllerOptions) {
+    this.storageFailure = options.initialStorageFailure === true
     try {
-      for (const route of options.store?.load() ?? []) {
+      for (const route of this.storageFailure ? [] : options.store?.load() ?? []) {
         if (route.outcome === 'accepted') this.accepted.set(route.sessionId, route)
         else this.pending.set(route.sessionId, {
           ...route,
@@ -45,9 +52,45 @@ export class ProjectRoutingController {
       this.storageFailure = true
       options.log(`[project-routing] recovery failed: ${errorMessage(error)}`)
     }
+    options.publishStorageHealth?.(this.storageHealth())
+  }
+
+  storageHealth(): RoutingStorageHealth {
+    return this.storageFailure
+      ? { status: 'blocked', code: 'routing_storage_unreadable' }
+      : { status: 'healthy', code: null }
+  }
+
+  /** Explicit read-only reconciliation. Never send or rewrite recovered input. */
+  revalidateStorage(): RoutingStorageHealth {
+    if (!this.storageFailure) return this.storageHealth()
+    try {
+      const store = this.options.store
+      const records = store ? (store.loadForRecovery?.() ?? store.load()) : []
+      const pending = new Map<string, PendingRoute>()
+      const accepted = new Map<string, RouteRecord>()
+      for (const route of records) {
+        if (route.outcome === 'accepted') accepted.set(route.sessionId, route)
+        else pending.set(route.sessionId, {
+          ...route, phase: route.outcome === 'unknown' ? 'uncertain' : 'unsent', messageText: null,
+        })
+      }
+      this.options.onStorageRecovered?.()
+      this.pending.clear()
+      this.accepted.clear()
+      for (const [id, route] of pending) this.pending.set(id, route)
+      for (const [id, route] of accepted) this.accepted.set(id, route)
+      this.storageFailure = false
+    } catch (error) {
+      this.options.log(`[project-routing] revalidation failed: ${errorMessage(error)}`)
+    }
+    for (const route of this.pending.values()) this.options.publish(route.sessionId, this.snapshot(route))
+    this.options.publishStorageHealth?.(this.storageHealth())
+    return this.storageHealth()
   }
 
   private persist(): void {
+    if (this.storageFailure) throw new Error('Routing storage requires revalidation')
     this.options.store?.save([...this.accepted.values(), ...this.pending.values()])
   }
 

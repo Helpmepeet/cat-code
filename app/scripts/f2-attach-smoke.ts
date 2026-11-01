@@ -190,7 +190,7 @@ app.whenReady().then(async () => {
   )
   if (!bothReady) {
     process.stdout.write('[f2-attach-smoke] FAIL: both sidecars did not become ready\n')
-    supervisor.shutdown()
+    await supervisor.shutdown()
     app.exit(1)
     return
   }
@@ -209,7 +209,7 @@ app.whenReady().then(async () => {
   )
   if (!bothPonged) {
     process.stdout.write('[f2-attach-smoke] FAIL: both sidecars did not answer pre-attach pings\n')
-    supervisor.shutdown()
+    await supervisor.shutdown()
     app.exit(1)
     return
   }
@@ -229,10 +229,14 @@ app.whenReady().then(async () => {
 
   const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(RENDERER_HTML)}`
 
-  const finish = (pass: boolean, detail: string) => {
-    process.stdout.write(`[f2-attach-smoke] ${pass ? 'PASS' : 'FAIL'}: ${detail}\n`)
-    supervisor.shutdown()
-    app.exit(pass ? 0 : 1)
+  const finish = async (pass: boolean, detail: string) => {
+    const stopped = await supervisor.shutdown()
+    const succeeded = pass && stopped.confirmed
+    process.stdout.write(`[f2-attach-smoke] ${succeeded ? 'PASS' : 'FAIL'}: ${detail}\n`)
+    if (!stopped.confirmed) {
+      process.stdout.write(`[f2-attach-smoke] shutdown unconfirmed: ${stopped.unresolvedSessionIds.join(', ')}\n`)
+    }
+    app.exit(succeeded ? 0 : 1)
   }
 
   const count = (kinds: string[], k: string) => kinds.filter(x => x === k).length
@@ -355,5 +359,5 @@ app.whenReady().then(async () => {
   process.stdout.write(
     '[f2-attach-smoke] observed shared settings-file class risk: both real sidecars initialize from the same settings roots; no concurrent settings write was exercised\n',
   )
-  finish(true, 'two sidecars routed independently; survivor stayed live; killed session was evicted')
+  return finish(true, 'two sidecars routed independently; survivor stayed live; killed session was evicted')
 })

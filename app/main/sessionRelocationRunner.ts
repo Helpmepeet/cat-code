@@ -17,6 +17,7 @@ export async function runSessionRelocationWorker(options: {
     input: `${JSON.stringify(options.request)}\n`,
     timeoutMs: 120_000,
     forceKillOnAbort: true,
+    mutationKey: 'session-relocation',
     maxRecordBytes: MAX_RELOCATION_RECORD_BYTES,
     log: line => {
       for (const timing of parseWorkerTimings(line)) { try { options.onTiming?.(timing) } catch { /* Observation only. */ } }

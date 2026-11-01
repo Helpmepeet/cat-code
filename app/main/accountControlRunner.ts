@@ -64,6 +64,7 @@ export function createAccountControlRunner(options: {
     task = runNdjsonWorker({
       ...options.launch(), simpleMode: false, signal: controller.signal,
       timeoutMs: 30 * 60_000, forceKillOnAbort: true, escalateKillAfterMs: 2_000,
+      mutationKey: 'account-control',
       maxRecordBytes: MAX_ACCOUNT_CONTROL_RECORD_BYTES,
       connectInput: writer => { send = writer; return () => { send = null } },
       onOversizeRecord: () => { protocolError = true },

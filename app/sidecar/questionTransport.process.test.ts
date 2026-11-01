@@ -95,7 +95,7 @@ test('producer-backed cross-call close crosses preload, real supervisor/socket a
     expect(journal(root).filter(entry => entry.type === 'question-lifecycle' && entry.operation === 'resolved')).toHaveLength(1)
   } finally {
     await supervisor.stopSession('question-transport')
-    supervisor.shutdown()
+    expect((await supervisor.shutdown()).confirmed).toBe(true)
     rmSync(root, { recursive: true, force: true })
   }
 }, 25000)

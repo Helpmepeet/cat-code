@@ -1,5 +1,9 @@
 import { isRecord } from './narrow.js'
 
+export type RoutingStorageHealth =
+  | { status: 'healthy'; code: null }
+  | { status: 'blocked'; code: 'routing_storage_unreadable' }
+
 export type ProjectRouteChoice = 'resend' | 'cancel'
 export type ProjectRouteSnapshot = {
   appSessionId: string

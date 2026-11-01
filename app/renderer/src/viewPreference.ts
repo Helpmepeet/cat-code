@@ -55,13 +55,15 @@ export function writeViewPreference(
   key: string,
   field: string,
   value: unknown,
-): void {
-  if (!storage) return
+): boolean {
+  if (!storage) return false
   try {
     storage.setItem(key, JSON.stringify({ version: 1, [field]: value }))
+    return true
   } catch {
     // Renderer-owned view persistence is best-effort; a storage failure must not
     // affect the live session/control-plane state.
+    return false
   }
 }
 

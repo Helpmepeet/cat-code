@@ -65,7 +65,7 @@ export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContrac
 import type { AppSessionEvent } from '@cat-code/engine/session-events'
 import type { NotificationPreferences } from './notificationPreferences.js'
 import type { LidWorkControl, LidWorkSnapshot, LidClosedBridge } from './lidClosed.js'
-import type { ProjectRouteCommand, ProjectRouteSnapshot } from './projectRouting.js'
+import type { ProjectRouteCommand, ProjectRouteSnapshot, RoutingStorageHealth } from './projectRouting.js'
 import type {
   AppClientMessage,
   AppReadyPayload,
@@ -4300,7 +4300,7 @@ export type CatCodeBridge = {
   getNotificationPreferences(): Promise<NotificationPreferences>
   setNotificationPreferences(value: NotificationPreferences): Promise<NotificationPreferences>
   /** Retry a currently eligible failed turn, selected by its projected result ID. */
-  retryTurn(sessionId: SessionId, resultId: string): Promise<boolean>
+  retryTurn(sessionId: SessionId, resultId: string): Promise<import('./notificationNavigation.js').TurnRetryResult>
   reportNotificationRetryBlocked(sessionIds: readonly SessionId[]): void
   /**
    * Ask main's existing account-pool driver for one fresh global snapshot. This
@@ -4386,6 +4386,9 @@ export type CatCodeBridge = {
   /** Manual move: a native picker token, or null for Move back. */
   moveSession(appSessionId: SessionId, cwdToken: string | null): Promise<HostResult<SessionDescriptor>>
   readProjectRoutes(): Promise<ProjectRouteSnapshot[]>
+  readRoutingStorageHealth(): Promise<RoutingStorageHealth>
+  inspectRoutingStorage(): Promise<HostResult<void>>
+  revalidateRoutingStorage(): Promise<RoutingStorageHealth>
   resolveProjectRoute(command: ProjectRouteCommand): Promise<HostResult<void>>
   getSessionFolderState(appSessionId: SessionId): Promise<HostResult<'available' | 'missing'>>
   recreateManagedChatFolder(appSessionId: SessionId): Promise<HostResult<SessionDescriptor>>

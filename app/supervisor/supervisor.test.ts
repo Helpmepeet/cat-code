@@ -142,8 +142,8 @@ test('the socket boundary admits activity v1 and correlated queue snapshots and 
   expect(delivered.filter(frame => frame.kind === 'tasks.snapshot')).toHaveLength(1)
 })
 
-afterEach(() => {
-  for (const supervisor of supervisors.splice(0)) supervisor.shutdown()
+afterEach(async () => {
+  for (const supervisor of supervisors.splice(0)) expect((await supervisor.shutdown()).confirmed).toBe(true)
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -239,7 +239,7 @@ test('the child receives the supervisor generation and replacement cannot inheri
   await waitFor(() => existsSync(observed) && readFileSync(observed, 'utf8').length > 0, 'child did not report generation')
   expect(readFileSync(observed, 'utf8')).toBe(first)
   expect(first).toMatch(/^[0-9a-f-]{36}$/)
-  supervisor.restartSession('generation-session')
+  await supervisor.restartSession('generation-session')
   const second = supervisor.getSessionGeneration('generation-session')!
   await waitFor(() => readFileSync(observed, 'utf8') === second, 'replacement did not report generation')
   expect(second).not.toBe(first)
@@ -515,7 +515,7 @@ test('remote FIN transitions ready to disconnected and the session can restart',
   })
 
   const readyCount = statuses.filter(status => status === 'ready').length
-  supervisor.restartSession(sessionId)
+  await supervisor.restartSession(sessionId)
   expect(supervisor.getSessionGeneration(sessionId)).not.toBe(firstGeneration)
   await waitFor(
     () => statuses.filter(status => status === 'ready').length > readyCount,
@@ -929,7 +929,7 @@ test('F11 — a stale old-child exit after restart does not mark the new session
   events.length = 0
 
   // Restart the session
-  supervisor.restartSession(sessionId)
+  await supervisor.restartSession(sessionId)
 
   // Wait for the restarted session to become ready
   await waitFor(
@@ -961,7 +961,7 @@ test('F11 — a stale old-child exit after restart does not mark the new session
  * moment. A spawn accepted after shutdown produces a sidecar with no supervisor
  * to reach it, breaking die-with-window (D6).
  */
-test('spawnSession after shutdown throws instead of starting an unowned sidecar', () => {
+test('spawnSession after shutdown throws instead of starting an unowned sidecar', async () => {
   const socketDir = makeTempDir('catcode-supervisor-closed-')
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.execPath,
@@ -970,12 +970,13 @@ test('spawnSession after shutdown throws instead of starting an unowned sidecar'
   })
   supervisors.push(supervisor)
 
-  supervisor.shutdown()
+  const shutdown = supervisor.shutdown()
 
   expect(() => supervisor.spawnSession('after-shutdown-session')).toThrow(
     /shut down/,
   )
   expect(supervisor.listSessions()).toHaveLength(0)
+  expect((await shutdown).confirmed).toBe(true)
 })
 
 function isProcessAlive(pid: number): boolean {
@@ -1068,12 +1069,15 @@ test.each([
     expect(settled).toBe(false)
     expect(isProcessAlive(pid)).toBe(true)
     if (replace) {
+      expect(() => supervisor.spawnSession(id)).toThrow('already exists')
+    }
+    expect(await retry).toBe(true)
+    if (replace) {
       supervisor.spawnSession(id)
       replacementPid = supervisor.getSessionProcessId(id)!
       expect(replacementPid).not.toBe(pid)
       await waitFor(() => supervisor.listSessions().some(s => s.sessionId === id && s.status === 'ready'), 'replacement not ready')
     }
-    expect(await retry).toBe(!replace)
     expect(isProcessAlive(pid)).toBe(false)
     expect(lines.some(line => line.includes('SIGKILL'))).toBe(true)
     if (replace) {

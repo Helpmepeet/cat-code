@@ -1,3 +1,4 @@
+import type { TurnRetryResult } from '../../shared/notificationNavigation.js'
 import type { DesktopProject } from '../../shared/projects.js'
 /**
  * SessionPane — one session's pane: transcript, composer, and the per-session
@@ -3077,7 +3078,7 @@ type SessionPaneProps = {
   setPermissionMode: (mode: PermissionSetModeMode) => void
   setPrompt: (value: string, reason?: DraftWriteReason) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
-  retryTurn?: (text: string, resultId: string) => void
+  retryTurn?: (text: string, resultId: string) => void | TurnRetryResult | Promise<TurnRetryResult>
   onRetryBlockChange?: (sessionId: SessionId, blocker: NotificationRetryBlocker, blocked: boolean) => void
   /** Real @-mention sources for this session (agents; files need a read-seam). */
   mentionItems: MentionItem[]

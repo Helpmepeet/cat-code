@@ -1,5 +1,10 @@
 import type { HostEvent } from './hostApi.js'
 
+export type TurnRetryResult =
+  | { status: 'admitted' }
+  | { status: 'refused'; reason: 'blocked' | 'stale' | 'not_sent' | 'local_refusal' }
+  | { status: 'unknown' }
+
 type NotificationOpenEvent = Extract<HostEvent, { type: 'notification-open' }>
 
 export function parseNotificationRetryBlocked(raw: unknown): string[] | null {

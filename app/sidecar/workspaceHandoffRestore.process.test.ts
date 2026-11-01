@@ -146,10 +146,10 @@ spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
       })
     }
     expect(existsSync(providerReplay)).toBe(false)
-    supervisor.shutdown()
+    expect((await supervisor.shutdown()).confirmed).toBe(true)
   } finally {
     control?.dispose()
-    supervisor?.shutdown()
+    if (supervisor) expect((await supervisor.shutdown()).confirmed).toBe(true)
     for (const child of children) if (child.exitCode === null) child.kill('SIGTERM')
     await Promise.all(children.map(child => child.exited))
     if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR

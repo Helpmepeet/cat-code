@@ -74,7 +74,7 @@ test('Retry sends the failed turn text to the submit callback and disappears whi
   state = projectServerFrame(state, frame({ type: 'result', subtype: 'error_during_execution', uuid: 'failure', is_error: true }))
   const rows = selectNestedTranscriptRows(state, 'session')
   const submitted: string[] = []
-  const draw = (live: boolean) => <TranscriptRowsView rows={rows} turnLive={live} onRetryTurn={text => submitted.push(text)} />
+  const draw = (live: boolean) => <TranscriptRowsView rows={rows} turnLive={live} onRetryTurn={text => { submitted.push(text) }} />
   const tree = await harness.mount(draw(false))
   const button = [...tree.container.querySelectorAll('button')].find(control => control.textContent === 'Retry')
   expect(button).toBeDefined()
@@ -99,3 +99,32 @@ test('connection recovery uses the failure card and keeps restart failures in th
   await tree.render(<ConnectionRecovery connection={{ status: 'restore_failed', inputEnabled: false }} sessionId="session" />)
   expect(tree.container.querySelector('button')).toBeNull()
 })
+
+for (const status of ['refused', 'admitted', 'unknown', 'reject', 'throw'] as const) {
+  test(`Retry ${status} releases only a definite refusal`, async () => {
+    let state = projectServerFrame(readyState(), frame({ type: 'user', uuid: 'user', message: { role: 'user', content: 'Retry exact text' } }))
+    state = projectServerFrame(state, frame({ type: 'result', subtype: 'error_during_execution', uuid: 'failure', is_error: true }))
+    let sends = 0
+    let resolve!: (value: import('../../shared/notificationNavigation.js').TurnRetryResult) => void
+    const pending = new Promise<import('../../shared/notificationNavigation.js').TurnRetryResult>(done => { resolve = done })
+    const tree = await harness.mount(<TranscriptRowsView rows={selectNestedTranscriptRows(state, 'session')} turnLive={false} onRetryTurn={() => {
+      sends++
+      if (status === 'throw') throw new Error('unknown invocation failure')
+      if (status === 'reject') return Promise.reject(new Error('unknown delivery'))
+      return pending
+    }} />)
+    const findRetry = () => [...tree.container.querySelectorAll('button')].find(button => button.textContent === 'Retry')
+    const retry = findRetry()!
+    await act(async () => { retry.click(); retry.click() })
+    expect(sends).toBe(1)
+    expect(findRetry()).toBeUndefined()
+    if (status !== 'throw' && status !== 'reject') await act(async () => {
+      resolve(status === 'refused' ? { status, reason: 'local_refusal' } : { status })
+    })
+    expect(Boolean(findRetry())).toBe(status === 'refused')
+    if (status === 'refused') {
+      await act(async () => { findRetry()!.click() })
+      expect(sends).toBe(2)
+    }
+  })
+}

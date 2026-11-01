@@ -1,3 +1,8 @@
+import { ExternalLinkRecovery } from './ExternalLinkRecovery.js'
+import { RoutingStorageRecovery } from './RoutingStorageRecovery.js'
+import type { RoutingStorageHealth } from '../../shared/projectRouting.js'
+import { UnsavedTextProtection } from './UnsavedTextProtection.js'
+import { isDefiniteLocalSendRefusal } from './localSendFailure.js'
 import { useContext } from 'react'
 import { isTurnRunning } from './appModel.js'
 import { TranscriptModeContext } from './transcriptMode.js'
@@ -45,7 +50,7 @@ import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
 import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, paneTargetLabel, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
-import { newestPaneFilePath, selectedTextInside } from './transcriptPaneFiles.js'
+import { newestPaneFilePath } from './transcriptPaneFiles.js'
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { selectNestedTranscriptRows } from './transcriptProjector.js'
 import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
@@ -204,6 +209,7 @@ import {
   restoreSelectedPrompt,
   applyRefusedSubmitRestoration,
   restoreDraftWithPending,
+  expandPasteRefs,
   selectAgentMentionItems,
   selectFileAttachment,
   selectHistory,
@@ -434,7 +440,6 @@ import {
   type PromptDraftState,
 } from './appModel.js'
 import {
-  PROMPT_DRAFT_WRITE_DEBOUNCE_MS,
   readPromptDraftsFromStorage,
   writePromptDraftsToStorage,
 } from './promptDraftPersistence.js'
@@ -550,31 +555,9 @@ export function App() {
     createPermissionState,
   )
   const toast = useToast()
+  const [routingStorageHealth, setRoutingStorageHealth] = useState<RoutingStorageHealth>({ status: 'healthy', code: null })
+  const [draftProtection, setDraftProtection] = useState<ReturnType<typeof writePromptDraftsToStorage>>({})
   const [pendingQuestions, dispatchPendingQuestions] = useReducer(reducePendingQuestionsStateBatched, undefined, createPendingQuestionsState)
-  useEffect(() => {
-    const openDocumentLink = (event: MouseEvent) => {
-      if (event.defaultPrevented || (event.type === 'auxclick' ? event.button !== 1 : event.button !== 0) || !(event.target instanceof Element)) return
-      const anchor = event.target.closest<HTMLAnchorElement>('a[href]')
-      if (!anchor || anchor.ownerDocument !== document || anchor.hasAttribute('download') || selectedTextInside(anchor)) return
-      const href = anchor.getAttribute('href')?.trim()
-      if (!href || !/^(?:https?:)?\/\//i.test(href)) return
-      let url: URL
-      try { url = new URL(anchor.href) } catch { return }
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') return
-      const bridge = getBridge()
-      if (typeof bridge?.openExternalUrl !== 'function') return
-      event.preventDefault()
-      // Frame clicks stay inside their own document. The host independently
-      // accepts this fixed method only from the app's main frame.
-      void bridge.openExternalUrl(url.href).catch(() => {})
-    }
-    document.addEventListener('click', openDocumentLink)
-    document.addEventListener('auxclick', openDocumentLink)
-    return () => {
-      document.removeEventListener('click', openDocumentLink)
-      document.removeEventListener('auxclick', openDocumentLink)
-    }
-  }, [])
   const [questionDrafts, setQuestionDrafts] = useState<Partial<Record<SessionId, Record<string, AskQuestionDraft>>>>({})
   useEffect(() => {
     setQuestionDrafts(current => {
@@ -599,6 +582,7 @@ export function App() {
   const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>(
     () => readPromptDraftsFromStorage(defaultPromptDraftStorage()) ?? {},
   )
+  const [recoveredDrafts, setRecoveredDrafts] = useState(() => promptDrafts)
   const promptDraftsRef = useRef(promptDrafts)
   promptDraftsRef.current = promptDrafts
   const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
@@ -624,20 +608,13 @@ export function App() {
     const navigation = historyNavigationRef.current[sessionId]
     return navigation?.index != null ? navigation.savedDraft : selectPromptDraft(drafts, sessionId)
   }, [])
-  // Typing rewrites the draft on every keystroke and `setItem` is synchronous on
-  // this thread, so the write is debounced rather than run per character.
+  // Persist the bounded record and refresh protection health for every edit.
   useEffect(() => {
-    const storage = defaultPromptDraftStorage()
-    if (!storage) return
-    const timer = setTimeout(() => {
-      writePromptDraftsToStorage(storage, promptDrafts, pasteState, {
-        pendingSubmits, historyNavigation,
-      })
-    }, PROMPT_DRAFT_WRITE_DEBOUNCE_MS)
-    return () => clearTimeout(timer)
+    setDraftProtection(writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDrafts, pasteState, {
+      pendingSubmits, historyNavigation,
+    }))
   }, [promptDrafts, pasteState, pendingSubmits, historyNavigation])
-  // A reload or a quit can land inside the debounce window, which is exactly the
-  // moment the draft matters most. `pagehide` fires on both and still allows a
+  // A reload or a quit can precede the save effect. `pagehide` still allows a
   // synchronous write, so the pending one is flushed there.
   useEffect(() => {
     const storage = defaultPromptDraftStorage()
@@ -1476,12 +1453,18 @@ export function App() {
   useEffect(() => {
     const bridge = getBridge()
     const routeEventsSeen = new Set<SessionId>()
+    let storageHealthEventSeen = false
     let routesDisposed = false
     // Subscribe-before-snapshot (F3): install the live stream FIRST so no
     // session-added/status/removed can slip through the gap between the snapshot
     // read and the subscription. The snapshot is then folded as a BASELINE that
     // never clobbers a newer live event already applied (reduceShell hydrate).
     const unsubscribe = bridge.subscribeHost(event => {
+      if (event.type === 'routing-storage-health') {
+        storageHealthEventSeen = true
+        setRoutingStorageHealth(event.health)
+        return
+      }
       if (event.type === 'projects') {
         dispatchProjects({ type: 'snapshot', projects: event.projects })
         return
@@ -1653,6 +1636,13 @@ export function App() {
     }).catch(error => {
       if (!routesDisposed) setShellError(errorMessage(error))
     })
+    if (typeof bridge.readRoutingStorageHealth === 'function') {
+      void Promise.resolve().then(() => bridge.readRoutingStorageHealth()).then(health => {
+        if (!routesDisposed && !storageHealthEventSeen) setRoutingStorageHealth(health)
+      }).catch(() => {
+        if (!routesDisposed && !storageHealthEventSeen) setRoutingStorageHealth({ status: 'blocked', code: 'routing_storage_unreadable' })
+      })
+    }
     void bridge.readProjectRoutes().then(snapshots => {
       if (routesDisposed) return
       setProjectRoutes(current => {
@@ -2325,7 +2315,7 @@ export function App() {
   // `remoteSettings.result` frame (→ remoteSettings.lastResult).
   const sendRemoteSettingsVerb = useCallback(
     (verb: RemoteVerbMessage) => {
-      if (!activeSessionId) return
+      if (!activeSessionId) throw new Error('No active session')
       getBridge().remoteSettingsVerb(activeSessionId, verb)
     },
     [activeSessionId],
@@ -2337,7 +2327,13 @@ export function App() {
   // The outcome returns as a `session-action.result` frame (→ the toast effect).
   const sendSessionActionVerb = useCallback(
     (sessionId: SessionId, verb: SessionActionVerbMessage) => {
-      getBridge().sessionActionVerb(sessionId, verb)
+      try {
+        getBridge().sessionActionVerb(sessionId, verb)
+      } catch (error) {
+        if (verb.type === 'session.export') {
+          setLatchedExport({ requestId: verb.requestId, state: { status: 'failed', message: isDefiniteLocalSendRefusal(error) ? 'Could not send the export request. Try again.' : 'Export delivery is unknown. Check the session before requesting another export.' } })
+        } else toast(isDefiniteLocalSendRefusal(error) ? 'Could not send the change. Try again.' : 'Delivery is unknown. Check the session status before making another change.', { tone: 'danger' })
+      }
     },
     [],
   )
@@ -3370,8 +3366,6 @@ export function App() {
   function submitSession(
     sessionId: SessionId,
     event: FormEvent<HTMLFormElement> | null,
-    retryText?: string,
-    retryResultId?: string,
   ): void {
     event?.preventDefault()
     const submittedDraft = selectPromptDraft(promptDraftsRef.current, sessionId)
@@ -3395,16 +3389,6 @@ export function App() {
     const sessionConnection = selectConnection(connection, sessionId)
     const images = selectImageAttachments(imageAttachmentState, sessionId)
     const file = selectFileAttachment(fileAttachmentState, sessionId)
-    if (retryText !== undefined && (
-      submittedDraft.trim() || images.length > 0 || file !== null ||
-      retrySendBlocked(sessionConnection, sessionLog.inputEnabled)
-    )) return
-    if (retryResultId !== undefined && sessionConnection.status === 'ready') {
-      void getBridge().retryTurn(sessionId, retryResultId).catch(error => {
-        toast(errorMessage(error), { tone: 'danger' })
-      })
-      return
-    }
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
@@ -3413,8 +3397,8 @@ export function App() {
     // mid-turn submit is NOT parked: it goes out and the engine queues it into
     // the running turn. Only a terminal session refuses outright.
     const action = planSessionSubmit({
-      draft: retryText ?? selectPromptDraft(promptDrafts, sessionId),
-      pasteEntries: retryText === undefined ? selectSessionPasteState(pasteState, sessionId).entries : [],
+      draft: selectPromptDraft(promptDrafts, sessionId),
+      pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
       hasImages: images.length > 0 || file !== null,
       preview: hasPreviewTranscript(previewTranscript, sessionId),
       connectionStatus: sessionConnection.status,
@@ -3436,7 +3420,7 @@ export function App() {
       return
     }
     const text = action.text
-    const observedProposal = retryText !== undefined || hasPreviewTranscript(previewTranscript, sessionId) ? null
+    const observedProposal = hasPreviewTranscript(previewTranscript, sessionId) ? null
       : selectObservedProposal(sessionLog.messages, selectTranscriptRows(transcript, sessionId))
     const submitPrompt = buildSubmitPrompt(text, images)
     // Both paths retire the draft the same way: the prompt has left the
@@ -4425,7 +4409,22 @@ export function App() {
 	              setSessionPrompt(sessionId, value, reason)
 	            }
 	            submit={event => submitSession(sessionId, event)}
-	            retryTurn={notificationRetryBlockedIds.has(sessionId) ? undefined : (text, resultId) => submitSession(sessionId, null, text, resultId)}
+	            retryTurn={notificationRetryBlockedIds.has(sessionId) ? undefined : async (_text, resultId) => {
+              const draft = selectPromptDraft(promptDraftsRef.current, sessionId)
+              if (notificationRetryBlockedIds.has(sessionId) || draft.trim() || selectImageAttachments(imageAttachmentState, sessionId).length || selectFileAttachment(fileAttachmentState, sessionId) || retrySendBlocked(selectConnection(connection, sessionId), selectRawMessageLog(state, sessionId).inputEnabled)) {
+                toast('Finish the current message before retrying.', { tone: 'danger' })
+                return { status: 'refused' as const, reason: 'blocked' as const }
+              }
+              try {
+                const result = await getBridge().retryTurn(sessionId, resultId)
+                if (result.status === 'refused') toast('The retry was not sent. Check the session and try again.', { tone: 'danger' })
+                if (result.status === 'unknown') toast('Retry delivery is unknown. Wait for the session to reconnect before trying again.', { tone: 'warn' })
+                return result
+              } catch {
+                toast('Retry delivery is unknown. Wait for the session to reconnect before trying again.', { tone: 'warn' })
+                return { status: 'unknown' as const }
+              }
+            }}
                 onRetryBlockChange={changeNotificationRetryBlock}
 	            mentionItems={selectAgentMentionItems(
 	              selectAgentConfigSnapshot(agentConfig, sessionId),
@@ -4669,13 +4668,41 @@ export function App() {
         className="flex h-screen flex-col bg-shell-chrome font-sans text-text-primary"
         data-window-ground
       >
+        <ExternalLinkRecovery />
+        <RoutingStorageRecovery health={routingStorageHealth}
+          draft={activeSessionId ? restoreDraftWithPending(
+            expandPasteRefs(selectRecoveryDraft(promptDrafts, activeSessionId), selectSessionPasteState(pasteState, activeSessionId).entries),
+            selectPendingSubmit(pendingSubmits, activeSessionId)?.text ?? '',
+          ) : ''}
+          onRevalidate={async () => {
+            const health = await getBridge().revalidateRoutingStorage()
+            setRoutingStorageHealth(health)
+            return health
+          }}
+          onInspect={async () => {
+            const result = await getBridge().inspectRoutingStorage()
+            if (!result.ok) throw new Error('Could not show the saved message file')
+          }}
+        />
+        {Object.keys(recoveredDrafts).length ? <section role="alert" className="border border-warning/40 bg-shell-hover p-3">
+          <p>Recovered last-good draft copies, not any newer unsaved text. Check these saved copies before sending.</p>
+          <button type="button" onClick={() => setRecoveredDrafts({})}>I have checked my drafts</button>
+        </section> : null}
+        {Object.entries(draftProtection).filter(([, draft]) => draft.status !== 'saved').map(([id, draft]) =>
+          <UnsavedTextProtection key={id} message={draft.status === 'stale' ? 'Your latest draft is not saved. Only an older copy will survive a reload. Copy the full text before leaving.' : 'This draft is not saved. Copy the full text before leaving.'} text={draft.text} />)}
+        {Object.values(draftProtection).some(draft => draft.status !== 'saved') ? <button type="button" onClick={() => {
+          setDraftProtection(writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDraftsRef.current, pasteStateRef.current, {
+            pendingSubmits: pendingSubmitsRef.current, historyNavigation: historyNavigationRef.current,
+          }))
+        }}>Try saving drafts again</button> : null}
         {createProjectOpen ? (
           <CreateProjectDialog
             bridge={getBridge()}
             onClose={() => setCreateProjectOpen(false)}
-            onCreated={project => {
+            onCreated={(project, warning) => {
               dispatchProjects({ type: 'created', project })
               setCreateProjectOpen(false)
+              if (warning) toast(warning, { tone: 'warn', duration: 10000 })
             }}
           />
         ) : null}

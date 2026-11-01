@@ -39,6 +39,9 @@ import { runSessionRelocationWorker } from './sessionRelocationRunner.js'
 import { parseMoveSessionCommand } from '../shared/sessionRelocationWorker.js'
 import { FileProjectRoutingStore } from './projectRoutingStore.js'
 import { ProjectRoutingController } from './projectRoutingController.js'
+import { createShutdownBarrier, settleShutdownTasks, type ShutdownResult } from './shutdownBarrier.js'
+import { createOwnedWorkerShutdownTracker } from './ownedWorkerShutdown.js'
+import type { WorkerProcessLifecycle } from './ndjsonWorker.js'
 import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention } from './workspaceJumpCoordinator.js'
 import { SessionCloseCoordinator } from './sessionCloseCoordinator.js'
 import { WorkspaceHandoffControl, type WorkspaceControlAction, type WorkspaceControlDelivery } from './workspaceHandoffControl.js'
@@ -46,6 +49,7 @@ import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
 import {
   parseProjectRouteCommand,
   type ProjectRouteSnapshot,
+  type RoutingStorageHealth,
 } from '../shared/projectRouting.js'
 import {
   createUsagePublication,
@@ -189,6 +193,9 @@ import {
   CH_HOST_CREATE_MANAGED,
   CH_HOST_MOVE_SESSION,
   CH_HOST_PROJECT_ROUTES,
+  CH_HOST_ROUTING_STORAGE_HEALTH,
+  CH_HOST_INSPECT_ROUTING_STORAGE,
+  CH_HOST_REVALIDATE_ROUTING_STORAGE,
   CH_HOST_RESOLVE_PROJECT_ROUTE,
   CH_HOST_FOLDER_STATE,
   CH_HOST_FOLDER_RECREATE,
@@ -528,15 +535,17 @@ function flushRendererHealthFlightRecorder(reason: string): void {
 }
 
 /** Each disposable engine-graph worker gets a distinct process timeline. */
-function createWorkerLifecycleLogger(role: string): (event: {
-  phase: 'started' | 'exited'
-  pid: number
-  code?: number | null
-  signal?: NodeJS.Signals | null
-}) => void {
+const ownedWorkers = createOwnedWorkerShutdownTracker()
+let runtimeStopping = false
+function createWorkerLifecycleLogger(role: string): (event: WorkerProcessLifecycle) => void {
   const processInstanceId = randomUUID()
   const processStartedAt = new Date().toISOString()
   return event => {
+    ownedWorkers.observe(processInstanceId, event)
+    if (event.phase === 'termination-unconfirmed') {
+      logOperational('diagnostic', 'error', { source: 'worker', reason: 'termination_unconfirmed' })
+      return
+    }
     try {
       operationalLog.writeRecord(createOperationalRecord(
         event.phase === 'started'
@@ -1332,7 +1341,7 @@ function hasReadableWindow(): boolean {
 
 function isMainWindowSender(event: Pick<IpcMainEvent, 'sender'>): boolean {
   const contents = mainWindow?.webContents
-  return contents !== undefined && !contents.isDestroyed() && event.sender === contents
+  return !runtimeStopping && contents !== undefined && !contents.isDestroyed() && event.sender === contents
 }
 
 function notifySidecarsOfAccountDeletion(
@@ -3287,7 +3296,7 @@ function registerIpcHandlers(): void {
   registerNotificationRetryIpc<IpcMainInvokeEvent>({
     handle: (channel, listener) => ipcMain.handle(channel, listener),
     isTrustedSender: isMainWindowSender,
-    retry: (id, resultId) => desktopNotifications?.retry(id, resultId) ?? false,
+    retry: (id, resultId) => desktopNotifications?.retryOutcome(id, resultId) ?? { status: 'refused', reason: 'blocked' },
   })
   registerNotificationRetryBlockedIpc<IpcMainEvent>({
     on: (channel, listener) => ipcMain.on(channel, listener),
@@ -3917,6 +3926,29 @@ function registerHostControlPlane(): void {
   ipcMain.handle(CH_HOST_PROJECT_ROUTES, (): ProjectRouteSnapshot[] =>
     projectRouting?.snapshots() ?? [],
   )
+
+  const assertRoutingStorageRequest = (event: IpcMainInvokeEvent, args: unknown[]): void => {
+    if (!isMainWindowSender(event) || event.senderFrame !== mainWindow?.webContents.mainFrame || args.length !== 0) {
+      throw new TypeError('Invalid saved message recovery request')
+    }
+  }
+  ipcMain.handle(CH_HOST_ROUTING_STORAGE_HEALTH, (event, ...args: unknown[]): RoutingStorageHealth => {
+    assertRoutingStorageRequest(event, args)
+    return projectRouting?.storageHealth() ?? { status: 'blocked', code: 'routing_storage_unreadable' }
+  })
+  ipcMain.handle(CH_HOST_REVALIDATE_ROUTING_STORAGE, (event, ...args: unknown[]): RoutingStorageHealth => {
+    assertRoutingStorageRequest(event, args)
+    return projectRouting?.revalidateStorage() ?? { status: 'blocked', code: 'routing_storage_unreadable' }
+  })
+  ipcMain.handle(CH_HOST_INSPECT_ROUTING_STORAGE, (event, ...args: unknown[]): HostResult<void> => {
+    assertRoutingStorageRequest(event, args)
+    try {
+      shell.showItemInFolder(join(defaultRegistryDir(), 'project-routing.json'))
+      return { ok: true, value: undefined }
+    } catch {
+      return { ok: false, error: { code: 'registry_unavailable', message: 'Could not show the saved message file.' } }
+    }
+  })
 
   ipcMain.handle(CH_HOST_RESOLVE_PROJECT_ROUTE, async (_e, input: unknown): Promise<HostResult<void>> => {
     const command = parseProjectRouteCommand(input)
@@ -4974,6 +5006,7 @@ function handOff(
   sessionId: SessionId,
   message: SidecarClientMessage,
   audience: 'renderer' | 'internal',
+  delivery?: { status: 'refused' | 'admitted' | 'unknown' },
 ): ErrorFrame['code'] | null {
   const refuseEarly = (code: ErrorFrame['code']): ErrorFrame['code'] => {
     if (audience === 'renderer') {
@@ -5044,12 +5077,15 @@ function handOff(
       admission = lidWorkObserver?.beginAdmission(sessionId)
       if (admission !== undefined) lidMode?.onAdmissionStarted()
     }
+    if (delivery) delivery.status = 'unknown'
     supervisor.send(sessionId, message)
+    if (delivery) delivery.status = 'admitted'
     finishAdmission(true)
     if (message.type === 'app.submit' || message.type === 'peer.deliver') sessionsWithSubmit.add(sessionId)
     if (isUserTurnSubmit(message, audience)) peerPlane?.onUserMessage(sessionId)
     return null
   } catch (error) {
+    if (delivery?.status === 'unknown' && isSidecarSendError(error)) delivery.status = 'refused'
     finishAdmission(false)
     const messageText = error instanceof Error ? error.message : String(error)
     const code = isSidecarSendError(error) ? error.code : 'bad_request'
@@ -5235,6 +5271,11 @@ function ensureHost(): Host {
     setBadge: text => app.dock?.setBadge(text),
     openSession: openNotificationSession,
     send: (id, message) => forward(id, message) === null,
+    sendRetry: (id, message) => {
+      const delivery: { status: 'refused' | 'admitted' | 'unknown' } = { status: 'refused' }
+      handOff(id, message, 'renderer', delivery)
+      return delivery.status === 'refused' ? { status: 'refused', reason: 'not_sent' } : { status: delivery.status }
+    },
     onError: () => logOperational('diagnostic', 'warn', { source: 'notifications', reason: 'delivery_failed' }),
   })
   desktopNotifications.preferencesChanged()
@@ -5346,9 +5387,8 @@ function ensureHost(): Host {
     // The P3-0 carry: a closed/restarted session's replay buffer must be evicted
     // so a reload never replays a dead session's frames. IS-A: persist the
     // transcript cache FIRST (snapshot → persist → evict). This fires on
-    // close/restart AND — synchronously — on the quit path (host.shutdownAll),
-    // so the persist here uses a synchronous atomic write. Restart persisting a
-    // cache is acceptable (a bounded extra sync write).
+    // close/restart and after confirmed shutdown. The persist here uses a
+    // synchronous atomic write so eviction never races its cache snapshot.
     evictReplay: appSessionId => {
       const beforeClear = () => {
         persistTranscriptCache(appSessionId)
@@ -5370,6 +5410,9 @@ function ensureHost(): Host {
   wireHostEvents(host)
   projectRouting = new ProjectRoutingController({
     store: routingStore,
+    initialStorageFailure: retainUnreadableLegacy,
+    onStorageRecovered: () => { retainUnreadableLegacy = false },
+    publishStorageHealth: health => { sendHostEvent({ type: 'routing-storage-health', health }) },
     prepareForward: appSessionId => host!.prepareRoutedSubmit(appSessionId),
     currentCwd: appSessionId => host?.listSessions().find(session => session.appSessionId === appSessionId)?.cwd ?? null,
     forward,
@@ -5564,8 +5607,7 @@ function ensureHost(): Host {
       }
     })
     setTimeout(() => {
-      supervisor?.shutdown()
-      app.exit(0)
+      void finishApplicationShutdown('before-quit')
     }, smokeMs)
   }
 
@@ -5624,38 +5666,43 @@ if (!gotSingleInstanceLock) {
     createWindow()
 
     app.on('activate', () => {
-      // F5 — reopening on macOS must rebuild a live host if it was torn down.
-      ensureHost()
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      void (async () => {
+        if (windowlessShutdown) {
+          const result = await windowlessShutdown
+          if (!result.confirmed || applicationShutdown) return
+        }
+        if (applicationShutdown) return
+        ensureHost()
+        if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      })()
     })
   })
 }
 
-/**
- * B3 — mark live rows CLEAN, then kill the sidecars. A clean quit must not
- * resurface as crash recovery on the next launch. Falls back to a bare
- * supervisor shutdown if the host never came up. Synchronous throughout
- * (`markLiveCleanSync`), so it is safe on a path that exits immediately after.
- */
-function shutdownRuntime(): void {
-  workspaceJump?.dispose()
-  if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
-  workspaceStatusTimer = null
-  desktopPower?.dispose()
-  desktopPower = undefined
-  lidWorkObserver?.stop()
-  lidWorkObserver = undefined
-  const endingLidMode = lidMode
-  lidMode = undefined
-  updateLidMenu()
-  if (endingLidMode) lidReady = endingLidMode.shutdown().catch(() => {})
-  scheduledTasks?.stop()
-  scheduledTasks = null
-  if (host) {
-    host.shutdownAll()
-  } else {
-    supervisor?.shutdown()
-  }
+let runtimeShutdown: (() => Promise<ShutdownResult>) | undefined
+let windowlessShutdown: Promise<ShutdownResult> | undefined
+function shutdownRuntime(): Promise<ShutdownResult> {
+  runtimeShutdown ??= createShutdownBarrier(() => {
+    runtimeStopping = true
+    stopBackgroundDrivers()
+    workspaceJump?.dispose()
+    if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)
+    workspaceStatusTimer = null
+    desktopPower?.dispose()
+    desktopPower = undefined
+    lidWorkObserver?.stop()
+    lidWorkObserver = undefined
+    const endingLidMode = lidMode
+    lidMode = undefined
+    updateLidMenu()
+    const helperShutdown = endingLidMode ? Promise.resolve().then(() => endingLidMode.shutdown()) : lidReady
+    scheduledTasks?.stop()
+    scheduledTasks = null
+    const sidecars = host ? host.shutdownAll() : supervisor?.shutdown() ??
+      Promise.resolve({ confirmed: true, unresolvedSessionIds: [] })
+    return settleShutdownTasks(sidecars, helperShutdown, ownedWorkers.waitForExit())
+  })
+  return runtimeShutdown()
 }
 
 /**
@@ -5709,35 +5756,40 @@ function stopBackgroundDrivers(): void {
   visibleSessions = new Set()
 }
 
-/**
- * Fallback when Node receives a signal directly, including Ctrl-C in the dev
- * launcher. Electron installs native shutdown signal handlers after startup
- * that call Browser::Quit, so a running packaged app normally enters
- * `before-quit` instead. Marking is synchronous on this direct-exit route too,
- * so the next launch does not mistake live rows for crashed sessions.
- *
- * `app.exit` rather than `app.quit`: the teardown has already run here, and
- * `quit` would re-enter it through `before-quit`.
- */
-let signalTeardownStarted = false
+let applicationShutdown: Promise<void> | undefined
+let applicationExitAuthorized = false
+function finishApplicationShutdown(reason: 'sigint' | 'sigterm' | 'before-quit'): Promise<void> {
+  if (applicationShutdown) return applicationShutdown
+  runtimeStopping = true
+  logOperational('app.shutdown.started', 'info', { reason })
+  filePreviews.dispose()
+  localhostPreviews.dispose()
+  localhostSnapshots?.dispose()
+  applicationShutdown = Promise.resolve().then(() => shutdownRuntime()).then(result => {
+    cancelAllReplayFlushes()
+    liveFrameDelivery?.dispose()
+    disposeRendererRecovery?.()
+    if (result.confirmed) logOperational('app.shutdown.completed', 'info')
+    else logOperational('diagnostic', 'error', { source: 'shutdown', reason: 'termination_unconfirmed' })
+    logOperational('process.exited', 'info', {
+      role: 'electron-main', expected: result.confirmed,
+      ...(reason === 'before-quit' ? {} : { signal: reason === 'sigint' ? 'SIGINT' : 'SIGTERM' }),
+    })
+    operationalLog.close()
+    deliveryTrace.close()
+    applicationExitAuthorized = true
+    // Re-enter native quit on a later event-loop turn, not within the canceled
+    // before-quit emission. Signals use exit only after the same barrier.
+    setImmediate(() => {
+      if (reason === 'before-quit') app.quit()
+      else app.exit(reason === 'sigint' ? 130 : 143)
+    })
+  })
+  return applicationShutdown
+}
+
 function teardownOnSignal(signal: 'SIGINT' | 'SIGTERM'): void {
-  if (signalTeardownStarted) return
-  signalTeardownStarted = true
-  stopBackgroundDrivers()
-  shutdownRuntime()
-  cancelAllReplayFlushes()
-  liveFrameDelivery?.dispose()
-  disposeRendererRecovery?.()
-  // Without these the launch has no completion record, so every later export
-  // reads a Ctrl-C run as an interrupted launch and reports the whole window's
-  // evidence as incomplete. Same pair `before-quit` writes; both are synchronous
-  // enough to land before the exit below.
-  logOperational('app.shutdown.started', 'info', { reason: signal === 'SIGINT' ? 'sigint' : 'sigterm' })
-  logOperational('app.shutdown.completed', 'info')
-  logOperational('process.exited', 'info', { role: 'electron-main', signal, expected: true })
-  operationalLog.close()
-  deliveryTrace.close()
-  app.exit(signal === 'SIGINT' ? 130 : 143)
+  void finishApplicationShutdown(signal === 'SIGINT' ? 'sigint' : 'sigterm')
 }
 
 process.on('SIGINT', () => teardownOnSignal('SIGINT'))
@@ -5757,64 +5809,43 @@ app.on('window-all-closed', () => {
   // D6: die-with-window for v1 — tear down every sidecar via the supervisor's
   // kill API (NOT by welding the sidecar to the window's lifecycle). `activate`
   // rebuilds the host on reopen (F5).
-  shutdownRuntime()
-  // Drivers are window-scoped: a fresh `activate` re-arms them after the next paint.
-  stopBackgroundDrivers()
-  supervisor = null
-  // Drop the host too so `ensureHost` rebuilds supervisor + registry + host as a
-  // unit on the next `activate` (a fresh registry re-reads the file and re-runs
-  // its launch sweep).
-  host = null
-  workspaceJump = null
-  projectRouting = null
-  peerPlane = null
-  observedWorkspaceHandoffs.clear()
-  workspaceControl?.dispose()
-  registryForDebug = null
-  scheduleDebugStateExport.cancel()
-  // F2 — drop buffered frames from the closed window so a macOS reopen never
-  // replays dead-session frames into the new renderer.
-  attachedFrameDelivery?.reset()
-  attachedFrameDelivery = null
-  liveFrameDelivery?.dispose()
-  liveFrameDelivery = null
-  handleRendererDeliveryFailure = null
-  markRendererDocumentReady = null
-  disposeRendererRecovery?.()
-  disposeRendererRecovery = null
-  cancelAllReplayFlushes()
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
+  const endingHost = host
+  windowlessShutdown = shutdownRuntime().then(result => {
+    // An unconfirmed former writer must never overlap a rebuilt runtime.
+    if (!result.confirmed || host !== endingHost) return result
+    supervisor = null
+    // Rebuild supervisor, registry and host together only after the old writers
+    // have exited, so activation cannot overlap two generations.
+    host = null
+    workspaceJump = null
+    projectRouting = null
+    peerPlane = null
+    observedWorkspaceHandoffs.clear()
+    workspaceControl?.dispose()
+    registryForDebug = null
+    scheduleDebugStateExport.cancel()
+    attachedFrameDelivery?.reset()
+    attachedFrameDelivery = null
+    liveFrameDelivery?.dispose()
+    liveFrameDelivery = null
+    handleRendererDeliveryFailure = null
+    markRendererDocumentReady = null
+    disposeRendererRecovery?.()
+    disposeRendererRecovery = null
+    cancelAllReplayFlushes()
+    if (!applicationShutdown) {
+      runtimeShutdown = undefined
+      runtimeStopping = false
+    }
+    return result
+  })
+  if (process.platform !== 'darwin') app.quit()
 })
 
-let lidQuitFinished = false
 app.on('before-quit', event => {
-  filePreviews.dispose()
-  localhostPreviews.dispose()
-  localhostSnapshots?.dispose()
-  if (!lidQuitFinished && lidMode) {
-    event.preventDefault()
-    const ending = lidMode; lidMode = undefined
-    void ending.shutdown().finally(() => {
-      // Electron drains microtasks before its native before-quit emission
-      // returns. Re-entering quit there lets the canceled outer quit overwrite
-      // the nested quit's flag, so macOS parks after the windows close.
-      setImmediate(() => { lidQuitFinished = true; app.quit() })
-    })
-    return
-  }
-  logOperational('app.shutdown.started', 'info', { reason: 'before-quit' })
-  // B3 — same clean-marking on ⌘Q; idempotent if window-all-closed already ran
-  // (no live rows left to mark).
-  shutdownRuntime()
-  stopBackgroundDrivers()
-  liveFrameDelivery?.dispose()
-  disposeRendererRecovery?.()
-  logOperational('app.shutdown.completed', 'info')
-  logOperational('process.exited', 'info', { role: 'electron-main', expected: true })
-  operationalLog.close()
-  deliveryTrace.close()
+  if (applicationExitAuthorized) return
+  event.preventDefault()
+  void finishApplicationShutdown('before-quit')
 })
 
 process.on('uncaughtException', error => {

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import type { SidecarClientMessage as ClientMessage, ServerFrame } from '../shared/protocol.js'
 import type { HostEvent, SessionDescriptor } from '../shared/hostApi.js'
 import type { NotificationPreferences } from '../shared/notificationPreferences.js'
+import type { TurnRetryResult } from '../shared/notificationNavigation.js'
 import { buildAllowResponse, buildDenyResponse, type PermissionRequest } from '../renderer/src/permissionState.js'
 import { buildPermissionOptions, selectPermissionPreview } from '../renderer/src/permissionPromptModel.js'
 import { PLAN_APPROVE_OPTIONS } from '../renderer/src/planState.js'
@@ -30,6 +31,7 @@ export type DesktopNotificationDependencies = {
   setBadge(text: string): void
   openSession(id: string, accounts?: boolean): void
   send(id: string, message: ClientMessage): unknown
+  sendRetry?(id: string, message: ClientMessage): TurnRetryResult
   onError?(error: unknown): void
 }
 type Prompt = Extract<ClientMessage, { type: 'app.submit' }>['prompt']
@@ -74,15 +76,30 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
   }
   const clear = (s: State) => { close(s); s.notice = undefined; s.terminalNotice = undefined }
   const submit = (id: string, prompt: Prompt) => deps.send(id, { type: 'app.submit', requestId: randomUUID(), prompt })
-  function retry(id: string, resultId: string): boolean {
+  function retryOutcome(id: string, resultId: string): TurnRetryResult {
     const s = sessions.get(id)
     const session = deps.getSession(id)
-    if (disposed || !s || !session || s.aborted || deps.isRetryBlocked?.(id) || retrySendBlocked({ status: session.status, inputEnabled: s.inputEnabled }, !s.active) || s.active) return false
+    if (disposed || !s || !session || s.aborted || deps.isRetryBlocked?.(id) || retrySendBlocked({ status: session.status, inputEnabled: s.inputEnabled }, !s.active) || s.active) return { status: 'refused', reason: 'blocked' }
     const candidate = s.retryFacts.claim(resultId)
-    if (!candidate) return false
-    clear(s)
-    try { return submit(id, candidate.text) !== false }
-    catch (error) { deps.onError?.(error); return false }
+    if (!candidate) return { status: 'refused', reason: 'stale' }
+    try {
+      const outcome: TurnRetryResult = deps.sendRetry
+        ? deps.sendRetry(id, { type: 'app.submit', requestId: randomUUID(), prompt: candidate.text })
+        : submit(id, candidate.text) === false ? { status: 'refused', reason: 'not_sent' } : { status: 'admitted' }
+      if (outcome.status === 'refused') {
+        s.retryFacts.releaseUnsent(resultId)
+        return outcome
+      }
+      if (outcome.status === 'admitted') clear(s)
+      return outcome
+    } catch (error) {
+      // A throwing transport may have written before failing. Keep the claim.
+      deps.onError?.(error)
+      return { status: 'unknown' }
+    }
+  }
+  function retry(id: string, resultId: string): boolean {
+    return retryOutcome(id, resultId).status === 'admitted'
   }
   function show(id: string, s: State, notice: Notice, quiet = false) {
     clear(s)
@@ -240,6 +257,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
   return {
     receive,
     retry,
+    retryOutcome,
     onScreenChanged(sessionId: string | null) {
       if (disposed || (sessionId !== null && !deps.getSession(sessionId))) return
       onScreenSessionId = sessionId

@@ -45,9 +45,8 @@ export const PROMPT_DRAFTS_STORAGE_KEY = 'catcode.promptDrafts.v1'
  *
  * The per-draft cap is the one that matters: a pasted transcript can be
  * megabytes, and `localStorage` is a single shared quota for the whole renderer.
- * An oversized draft is DROPPED rather than truncated: handing back a silently
- * cut-off prompt is worse than handing back nothing, because the user cannot see
- * what went missing.
+ * An oversized replacement retains its last-good copy and reports unsaved text
+ * to the renderer. Text is never truncated to fit.
  */
 export const MAX_PERSISTED_PROMPT_DRAFTS = 32
 export const MAX_PERSISTED_PROMPT_DRAFT_CHARS = 20_000
@@ -106,7 +105,7 @@ export function writePromptDraftsToStorage(
     pendingSubmits?: PendingSubmitState
     historyNavigation?: Partial<Record<SessionId, HistoryNav>>
   } = {},
-): void {
+): Record<string, { status: 'saved' | 'stale' | 'unsaved'; text: string }> {
   // Paste pills depend on volatile entries. Persist their text so restoring a
   // draft after a reload never leaves a pill whose contents no longer exist.
   const expanded: Record<string, string> = {}
@@ -128,19 +127,29 @@ export function writePromptDraftsToStorage(
       recovery.pendingSubmits?.[sessionId]?.text ?? '',
     )
   }
-  writeViewPreference(
+  // Keep each last-good value until its replacement fits. Capacity must never
+  // evict another nonempty draft merely because a new draft was added.
+  const previous = readPromptDraftsFromStorage(storage) ?? {}
+  const next: Record<string, string> = Object.fromEntries(
+    Object.entries(previous).filter(([key]) => key in expanded),
+  )
+  for (const [key, text] of Object.entries(expanded)) {
+    if (!text) {
+      delete next[key]
+    } else if (text.length <= MAX_PERSISTED_PROMPT_DRAFT_CHARS &&
+      (key in next || Object.keys(next).length < MAX_PERSISTED_PROMPT_DRAFTS)) {
+      next[key] = text
+    }
+  }
+  const written = writeViewPreference(
     storage,
     PROMPT_DRAFTS_STORAGE_KEY,
     'drafts',
-    normalizePromptDrafts(expanded),
+    next,
   )
+  const protectedDrafts = written ? next : previous
+  return Object.fromEntries(Object.entries(expanded).filter(([, text]) => text.length > 0).map(([key, text]) => [
+    key,
+    { status: protectedDrafts[key] === text ? 'saved' : protectedDrafts[key] ? 'stale' : 'unsaved', text },
+  ]))
 }
-
-/**
- * How long the write waits after the last keystroke. Typing rewrites the draft
- * on every character, and `localStorage.setItem` is synchronous on the renderer
- * thread, so an unthrottled write would serialize the whole draft set per
- * keystroke. Long enough to coalesce a burst of typing, short enough that the
- * pause before a user quits or a crash lands has almost always elapsed.
- */
-export const PROMPT_DRAFT_WRITE_DEBOUNCE_MS = 500

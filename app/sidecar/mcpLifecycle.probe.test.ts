@@ -33,7 +33,7 @@ const tempRoots: string[] = []
 const ownedFixturePids = new Set<number>()
 
 afterEach(async () => {
-  supervisor?.shutdown()
+  if (supervisor) expect((await supervisor.shutdown()).confirmed).toBe(true)
   supervisor = null
   await reapOwnedFixtures()
   for (const root of tempRoots.splice(0)) {
@@ -258,7 +258,7 @@ test(
     const pid = fixturePid(fixtureEvents(eventsPath))
     expect(isAlive(pid)).toBe(true)
 
-    supervisor.shutdown()
+    expect((await supervisor.shutdown()).confirmed).toBe(true)
     supervisor = null
     await waitFor(() => !isAlive(pid), 'fixture subprocess shutdown', 15_000)
     unsubscribe()

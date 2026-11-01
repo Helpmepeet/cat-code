@@ -1,6 +1,7 @@
 import { CH_GET_NOTIFICATION_PREFERENCES, CH_SET_NOTIFICATION_PREFERENCES, CH_RETRY_TURN, CH_NOTIFICATION_RETRY_BLOCKED } from '../shared/ipcChannels.js'
 import { parseNotificationPreferences, type NotificationPreferences } from '../shared/notificationPreferences.js'
 import { parseTurnRetryRequest, parseNotificationRetryBlocked } from '../shared/notificationNavigation.js'
+import type { TurnRetryResult } from '../shared/notificationNavigation.js'
 
 export function registerNotificationPreferenceIpc<E>(options: {
   handle: (channel: string, listener: (event: E, ...args: unknown[]) => NotificationPreferences) => void
@@ -24,9 +25,9 @@ export function registerNotificationPreferenceIpc<E>(options: {
 }
 
 export function registerNotificationRetryIpc<E>(options: {
-  handle: (channel: string, listener: (event: E, ...args: unknown[]) => boolean) => void
+  handle: (channel: string, listener: (event: E, ...args: unknown[]) => TurnRetryResult) => void
   isTrustedSender: (event: E) => boolean
-  retry: (sessionId: string, resultId: string) => boolean
+  retry: (sessionId: string, resultId: string) => TurnRetryResult
 }): void {
   options.handle(CH_RETRY_TURN, (event, ...args) => {
     if (!options.isTrustedSender(event) || args.length !== 1) throw new TypeError('Invalid retry request')

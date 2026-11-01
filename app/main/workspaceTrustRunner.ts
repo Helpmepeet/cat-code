@@ -11,6 +11,7 @@ export async function runWorkspaceTrustWorker(options: {
   let result: WorkspaceTrustWorkerResult | null = null
   let invalid = false
   const terminal = await runNdjsonWorker({ ...options, input: `${JSON.stringify(options.request)}\n`,
+    mutationKey: 'workspace-trust',
     timeoutMs: 15_000, escalateKillAfterMs: 1_000, forceKillOnAbort: true, maxRecordBytes: MAX_WORKSPACE_TRUST_BYTES,
     onOversizeRecord: () => { invalid = true },
     onRecord: line => {

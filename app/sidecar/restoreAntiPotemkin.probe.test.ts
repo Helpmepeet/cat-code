@@ -59,7 +59,7 @@ afterEach(async () => {
       const pid = supervisor.getSessionProcessId(session.sessionId)
       return pid === undefined ? [] : [pid]
     })
-    supervisor.shutdown()
+    expect((await supervisor.shutdown()).confirmed).toBe(true)
     for (const pid of pids) await waitForPidExit(pid)
   }
   for (const audit of networkAudits) expect(existsSync(audit)).toBe(false)
@@ -251,7 +251,7 @@ test('F2: two realistic transcripts restore through new real sidecar processes w
   expect(firstPidA).toBeNumber()
   expect(firstPidB).toBeNumber()
 
-  first.shutdown()
+  expect((await first.shutdown()).confirmed).toBe(true)
   await Promise.all([waitForPidExit(firstPidA!), waitForPidExit(firstPidB!)])
 
   // Fresh supervisor = a restore after the old process pair has died. The

@@ -68,8 +68,8 @@ const TEST_TIMEOUT_MS = 120_000
 const supervisors: SidecarSupervisor[] = []
 const tempDirs: string[] = []
 
-afterEach(() => {
-  for (const s of supervisors.splice(0)) s.shutdown()
+afterEach(async () => {
+  for (const s of supervisors.splice(0)) expect((await s.shutdown()).confirmed).toBe(true)
   for (const d of tempDirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
@@ -326,7 +326,7 @@ test('(b) compacted resume replays archival prefix plus seam while the model see
   // same transcript; P5-5c deliberately rejects concurrent ownership.
   const ownerPid = sup.getSessionProcessId('p31-compact-replay')
   expect(ownerPid).toBeNumber()
-  sup.shutdown()
+  expect((await sup.shutdown()).confirmed).toBe(true)
   await waitForPidExit(ownerPid!)
   const probe = Bun.spawn(
     ['bun', 'run', resumeProbe, engineSessionId, marker],

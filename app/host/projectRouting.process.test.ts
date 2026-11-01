@@ -97,7 +97,7 @@ for (const { established, refusal } of [
       expect(readWorkspaceJump(id)).toMatchObject({ operationId, target: { cwd }, consumed: true, outcome: 'completed' })
     }
   } finally {
-    supervisor.shutdown()
+    expect((await supervisor.shutdown()).confirmed).toBe(true)
     if (oldConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = oldConfig
     rmSync(root, { recursive: true, force: true })
@@ -149,7 +149,7 @@ test('a pre-ready journal keeps its original Chat addressable across registry re
     expect(registry.findSession(id)?.engineSessionId).toBeTruthy()
     expect(journal.load()[0]?.outcome).toBe('accepted')
   } finally {
-    supervisor.shutdown()
+    expect((await supervisor.shutdown()).confirmed).toBe(true)
     if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfig
     rmSync(root, { recursive: true, force: true })

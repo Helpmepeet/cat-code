@@ -167,3 +167,39 @@ describe('prompt draft persistence', () => {
     expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf({}))
   })
 })
+
+test('overflow reports every unsaved full draft without evicting the existing 32', () => {
+  const storage = fakeStorage()
+  const first = Object.fromEntries(Array.from({ length: MAX_PERSISTED_PROMPT_DRAFTS }, (_, index) => [`s${index}`, `text ${index}`]))
+  writePromptDraftsToStorage(storage, draftsOf(first))
+  const outcomes = writePromptDraftsToStorage(storage, draftsOf({ extra: 'full new draft', ...first }))
+  expect(outcomes.extra).toEqual({ status: 'unsaved', text: 'full new draft' })
+  expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf(first))
+})
+
+test('quota refusal reports stale full text and does not replace the last-good copy', () => {
+  const storage = fakeStorage()
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'old' }))
+  const refusing = { getItem: storage.getItem, setItem: () => { throw new Error('quota') } }
+  const outcomes = writePromptDraftsToStorage(refusing, draftsOf({ a: 'latest', b: 'never saved' }))
+  expect(outcomes.a).toEqual({ status: 'stale', text: 'latest' })
+  expect(outcomes.b).toEqual({ status: 'unsaved', text: 'never saved' })
+  expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf({ a: 'old' }))
+})
+
+test('expanded oversized paste and unavailable storage return full actionable text', () => {
+  const sessionId = 'paste-session' as SessionId
+  const content = 'full context\n'.repeat(2000)
+  const pasted = reducePasteAdded(createPasteState(), sessionId, content)
+  const outcomes = writePromptDraftsToStorage(null, draftsOf({ [sessionId]: pasted.token }), pasted.state)
+  expect(outcomes[sessionId]).toEqual({ status: 'unsaved', text: content })
+})
+
+test('a later successful save replaces stale health and recovers the latest complete text', () => {
+  const storage = fakeStorage()
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'old' }))
+  const refusal = { getItem: storage.getItem, setItem: () => { throw new Error('quota') } }
+  expect(writePromptDraftsToStorage(refusal, draftsOf({ a: 'new' })).a!.status).toBe('stale')
+  expect(writePromptDraftsToStorage(storage, draftsOf({ a: 'new' })).a!.status).toBe('saved')
+  expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf({ a: 'new' }))
+})

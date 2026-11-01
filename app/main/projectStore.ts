@@ -6,6 +6,15 @@ import { isProjectDraftId, isProjectName, type DesktopProject } from '../shared/
 export type ProjectStoreDeps = {
   acquireLock?: (path: string) => Promise<() => Promise<void>>
   now?: () => number
+  fsync?: typeof fsyncSync
+  rename?: typeof renameSync
+  onWarning?: (project: DesktopProject, warning: string, cause: unknown) => void
+  onCleanupError?: (error: unknown, primaryError: unknown) => void
+}
+export class ProjectCommitUncertainError extends Error {
+  constructor(public readonly project: DesktopProject, cause: unknown) {
+    super('Project saving could not be confirmed. Check the project list before trying again.', { cause })
+  }
 }
 export class DuplicateProjectError extends Error {
   constructor(public readonly project: { cwd: string; name: string }) { super(`This folder already belongs to project "${project.name}".`) }
@@ -37,6 +46,9 @@ export class ProjectStore {
     if (!isProjectName(input.name) || !isAbsolute(input.cwd) || realpathSync(input.cwd).normalize('NFC') !== input.cwd) throw new Error('Invalid project folder or name')
     mkdirSync(this.directory, { recursive: true, mode: 0o700 })
     const release = await (this.deps.acquireLock ?? acquireLock)(this.path)
+    let committed: DesktopProject | undefined
+    let primaryError: unknown
+    let hasPrimaryError = false
     try {
       if (!isActive()) throw new Error('Project draft cancelled')
       if (realpathSync(input.cwd).normalize('NFC') !== input.cwd || !statSync(input.cwd).isDirectory()) throw new Error('Project folder changed')
@@ -59,19 +71,56 @@ export class ProjectStore {
       const temporary = `${this.path}.${randomUUID()}.tmp`
       try {
         const fd = openSync(temporary, 'wx', 0o600)
-        try { writeFileSync(fd, JSON.stringify({ version: 1, projects: [...projects, project] }) + '\n'); fsyncSync(fd) } finally { closeSync(fd) }
-        renameSync(temporary, this.path)
+        try { writeFileSync(fd, JSON.stringify({ version: 1, projects: [...projects, project] }) + '\n'); (this.deps.fsync ?? fsyncSync)(fd) } finally { closeSync(fd) }
+        ;(this.deps.rename ?? renameSync)(temporary, this.path)
         // Windows does not support opening directory handles this way. The
         // file is already flushed; POSIX also makes the rename durable here.
         if (process.platform !== 'win32') {
           const directoryFd = openSync(this.directory, 'r')
-          try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+          try { (this.deps.fsync ?? fsyncSync)(directoryFd) } finally { closeSync(directoryFd) }
         }
+        committed = project
+      } catch (error) {
+        // Reconcile the exact generated identity under the lock, including
+        // rename implementations that performed the rename before throwing.
+        let visible: DesktopProject | undefined
+        try { visible = this.get(project.id) } catch { throw new ProjectCommitUncertainError(project, error) }
+        if (!visible || JSON.stringify(visible) !== JSON.stringify(project)) throw error
+        committed = project
+        this.warn(project, 'The project was saved, but its durability could not be confirmed. Check the project list before making further changes.', error)
       } finally {
-        try { unlinkSync(temporary) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+        try { unlinkSync(temporary) } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') this.warn(project, 'The project save left a temporary file that could not be removed.', error)
+        }
       }
       return project
-    } finally { await release() }
+    } catch (error) {
+      primaryError = error
+      hasPrimaryError = true
+      throw error
+    } finally {
+      try { await release() } catch (error) {
+        if (committed) this.warn(committed, 'The project was saved, but its save lock could not be released. Further changes may be temporarily unavailable.', error)
+        else if (!hasPrimaryError) throw error
+        else {
+          // Retain the primary exception and the secondary cleanup evidence.
+          if (primaryError instanceof Error && Object.isExtensible(primaryError)) {
+            try { Object.defineProperty(primaryError, 'cleanupError', { value: error, configurable: true }) } catch { /* The original error can have a read-only cleanup property. */ }
+          }
+          try { this.deps.onCleanupError?.(error, primaryError) } catch { /* Preserve the primary failure. */ }
+        }
+      }
+    }
+  }
+  private warnings = new Map<string, string>()
+  takeWarning(id: string): string | undefined {
+    const warning = this.warnings.get(id)
+    this.warnings.delete(id)
+    return warning
+  }
+  private warn(project: DesktopProject, warning: string, cause: unknown): void {
+    this.warnings.set(project.id, [this.warnings.get(project.id), warning].filter(Boolean).join(' '))
+    try { this.deps.onWarning?.(project, warning, cause) } catch { /* Diagnostics cannot replace the save outcome. */ }
   }
 }
 async function acquireLock(path: string): Promise<() => Promise<void>> {

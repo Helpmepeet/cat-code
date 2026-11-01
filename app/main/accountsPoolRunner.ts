@@ -211,6 +211,7 @@ export async function runAccountsPoolWorker(
       maxRecordBytes: MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
       input: options.input ? `${JSON.stringify(options.input)}\n` : undefined,
       forceKillOnAbort: options.forceKillOnAbort,
+      mutationKey: 'accounts-pool',
       escalateKillAfterMs: ACCOUNTS_FORCE_KILL_AFTER_MS,
       onWorkerLifecycle: options.onWorkerLifecycle,
       log: options.log,

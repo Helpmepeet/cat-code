@@ -19,7 +19,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 const MAX_WORKER_STDERR_BYTES = 64 * 1024
 
 export type WorkerProcessLifecycle = Readonly<{
-  phase: 'started' | 'exited'
+  phase: 'started' | 'exited' | 'termination-unconfirmed'
   pid: number
   code?: number | null
   signal?: NodeJS.Signals | null
@@ -55,10 +55,12 @@ export type NdjsonWorkerOptions = {
    */
   forceKillOnAbort?: boolean
   /**
-   * Escalate an unanswered SIGTERM to SIGKILL after this long. Absent means the
-   * worker is only ever asked to stop, never forced.
+   * Escalate an unanswered SIGTERM to SIGKILL after this long (default 2s).
    */
   escalateKillAfterMs?: number
+  finalCloseWaitMs?: number
+  /** Stable resource identity for workers that may mutate persistent state. */
+  mutationKey?: string
   /** One complete, non-empty NDJSON line, still unparsed. */
   onRecord: (line: Buffer) => NdjsonRecordDisposition
   /**
@@ -77,6 +79,9 @@ export type NdjsonWorkerOutcome = {
   signal: NodeJS.Signals | null
   aborted: boolean
   timedOut: boolean
+  termination: 'confirmed' | 'unconfirmed'
+  pid: number | undefined
+  killError: unknown
   /** What `stdin` emitted, if anything. The caller decides what it means. */
   stdinError: unknown
   /** Bytes left in the frame buffer with no terminating newline. */
@@ -88,10 +93,15 @@ export type NdjsonWorkerOutcome = {
  * only on a spawn error (which `waitForClose` surfaces); every other terminal
  * condition is reported in the outcome for the caller's own ladder to judge.
  */
+const pendingWriters = new Set<string>()
+
 export async function runNdjsonWorker(
   options: NdjsonWorkerOptions,
 ): Promise<NdjsonWorkerOutcome> {
   const spawnWorker = options.spawnWorker ?? spawn
+  if (options.mutationKey && pendingWriters.has(options.mutationKey)) {
+    throw new Error('Previous worker termination is unconfirmed; replacement is blocked')
+  }
   const child = spawnWorker(options.command, options.args, {
     cwd: options.cwd,
     env: {
@@ -114,17 +124,46 @@ export async function runNdjsonWorker(
   let stopped = false
   let childClosed = false
   let forceKillTimer: ReturnType<typeof setTimeout> | null = null
+  let finalTimer: ReturnType<typeof setTimeout> | null = null
+  let killError: unknown = null
+  let finishUnconfirmed: () => void = () => {}
+  let terminationRequested = false
+  let killRequested = false
+  let processExited = false
+  let reportedUnconfirmed = false
+  if (options.mutationKey) pendingWriters.add(options.mutationKey)
+  const confirmedExit = (code = child.exitCode, signal = child.signalCode) => {
+    processExited = true
+    if (options.mutationKey) pendingWriters.delete(options.mutationKey)
+    child.removeListener('exit', confirmedExit)
+    child.removeListener('close', confirmedExit)
+    if (reportedUnconfirmed) {
+      reportedUnconfirmed = false
+      options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
+    }
+  }
+  child.once('exit', confirmedExit)
+  child.once('close', confirmedExit)
+  const sendSignal = (signal: NodeJS.Signals) => {
+    try { child.kill(signal) } catch (error) { killError = error }
+  }
+  const forceKill = () => {
+    if (!killRequested && !processExited) { killRequested = true; sendSignal('SIGKILL') }
+    if (finalTimer === null) finalTimer = setTimeout(() => finishUnconfirmed(), options.finalCloseWaitMs ?? 2_000)
+  }
 
   const terminate = (force = false) => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill(force ? 'SIGKILL' : 'SIGTERM')
+    if (terminationRequested && !force) return
+    terminationRequested = true
+    if (!processExited && child.exitCode === null && child.signalCode === null) {
+      if (force) forceKill()
+      else sendSignal('SIGTERM')
     }
-    if (force || options.escalateKillAfterMs === undefined) return
+    if (force) { if (finalTimer === null) forceKill(); return }
     if (forceKillTimer === null) {
       forceKillTimer = setTimeout(() => {
-        if (!childClosed) child.kill('SIGKILL')
-      }, options.escalateKillAfterMs)
-      forceKillTimer.unref?.()
+        if (!childClosed) forceKill()
+      }, options.escalateKillAfterMs ?? 2_000)
     }
   }
   const timeout = setTimeout(() => {
@@ -137,16 +176,17 @@ export async function runNdjsonWorker(
   }
   options.signal?.addEventListener('abort', onAbort, { once: true })
 
-  child.stderr.on('data', chunk => {
+  const onStderr = (chunk: Buffer | string) => {
     if (stderr.byteLength >= MAX_WORKER_STDERR_BYTES) return
     const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     stderr = Buffer.concat([
       stderr,
       next.subarray(0, MAX_WORKER_STDERR_BYTES - stderr.byteLength),
     ])
-  })
+  }
+  child.stderr.on('data', onStderr)
 
-  child.stdout.on('data', chunk => {
+  const onStdout = (chunk: Buffer | string) => {
     if (stopped) return
     const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     pending = Buffer.concat([pending, next])
@@ -175,14 +215,19 @@ export async function runNdjsonWorker(
       options.onOversizeRecord()
       terminate()
     }
-  })
+  }
+  child.stdout.on('data', onStdout)
 
   const onStdinError = (error: unknown) => {
     stdinError = error
     terminate()
   }
   child.stdin.on('error', onStdinError)
-  const closed = waitForClose(child)
+  const closeWait = waitForClose(child, error => { killError = error })
+  const closed = closeWait.promise
+  const unconfirmed = new Promise<{ code: null; signal: null }>(resolve => {
+    finishUnconfirmed = () => resolve({ code: null, signal: null })
+  })
   let code: number | null
   let signal: NodeJS.Signals | null
   let disconnectInput: (() => void) | undefined
@@ -193,15 +238,30 @@ export async function runNdjsonWorker(
       child.stdin.end(options.input)
     }
     if (options.signal?.aborted) onAbort()
-    ;({ code, signal } = await closed)
-    childClosed = true
-    options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
+    ;({ code, signal } = await Promise.race([closed.then(value => { childClosed = true; confirmedExit(); return value }), unconfirmed]))
+    reportedUnconfirmed = !childClosed && !processExited
+    options.onWorkerLifecycle?.({ phase: reportedUnconfirmed ? 'termination-unconfirmed' : 'exited', pid: child.pid ?? 0, code, signal })
   } finally {
-    disconnectInput?.()
     clearTimeout(timeout)
     if (forceKillTimer !== null) clearTimeout(forceKillTimer)
+    if (finalTimer !== null) clearTimeout(finalTimer)
     options.signal?.removeEventListener('abort', onAbort)
     child.stdin.removeListener('error', onStdinError)
+    closeWait.cleanup()
+    child.stdout.removeListener('data', onStdout)
+    child.stderr.removeListener('data', onStderr)
+    if (!child.pid) confirmedExit()
+    if (childClosed || !child.pid) {
+      child.removeListener('exit', confirmedExit)
+      child.removeListener('close', confirmedExit)
+    }
+    stopped = true
+    if (!childClosed) {
+      child.stdin.destroy()
+      child.stdout.destroy()
+      child.stderr.destroy()
+    }
+    disconnectInput?.()
   }
 
   const diagnostics = stderr.toString('utf8').trim()
@@ -211,6 +271,9 @@ export async function runNdjsonWorker(
     signal,
     aborted,
     timedOut,
+    termination: childClosed || processExited ? 'confirmed' : 'unconfirmed',
+    pid: child.pid,
+    killError,
     stdinError,
     trailingBytes: pending.byteLength,
   }
@@ -218,12 +281,21 @@ export async function runNdjsonWorker(
 
 function waitForClose(
   child: ChildProcessWithoutNullStreams,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject)
+  onRunningError: (error: Error) => void,
+): { promise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>; cleanup: () => void } {
+  let onError: (error: Error) => void
+  let onClose: (code: number | null, signal: NodeJS.Signals | null) => void
+  const promise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    onError = error => { if (child.pid) onRunningError(error); else reject(error) }
+    child.once('error', onError)
     // `exit` can precede delivery of the final stdout chunk. `close` is the
     // child-process guarantee that stdio has drained, so a caller's completion
     // validation cannot race the final record.
-    child.once('close', (code, signal) => resolve({ code, signal }))
+    onClose = (code, signal) => resolve({ code, signal })
+    child.once('close', onClose)
   })
+  return { promise, cleanup: () => {
+    child.removeListener('error', onError!)
+    child.removeListener('close', onClose!)
+  } }
 }

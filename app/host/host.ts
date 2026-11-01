@@ -415,7 +415,7 @@ export class Host implements HostApi {
       this.workspaceTransitions.delete(appSessionId)
       // A graceful close already marked the row clean + emitted removed; don't
       // re-report the async exit that killSession triggers.
-      if (!this.closing.has(appSessionId)) {
+      if (!this.closing.has(appSessionId) && !this.shutdownStarted) {
         // IDLE-PARK (decisions/IDLE-PARK.md §2) — the exit CODE is the truth
         // signal. A `PARKED_EXIT_CODE` self-exit is a park, not a crash: mark it
         // `'parked'` so the descriptor stays disconnected+restorable (tab kept)
@@ -2032,7 +2032,7 @@ export class Host implements HostApi {
       this.prepareSessionRecovery?.(appSessionId)
       // Evict replay only after recovery succeeds, before replacing the child.
       this.evictReplay(appSessionId)
-      this.supervisor.restartSession(appSessionId, {
+      await this.supervisor.restartSession(appSessionId, {
         cwd: validatedCwd.realpath,
         binding: row.binding,
         forked: row.forked,
@@ -2074,24 +2074,21 @@ export class Host implements HostApi {
     return { ok: true, value: undefined }
   }
 
-  /* --------------------------------------------------------------------- *
-   * shutdownAll — die-with-window (B3). SYNCHRONOUS: mark every LIVE row clean
-   * (one atomic write) + evict its replay, THEN kill the sidecars. A clean quit
-   * must not masquerade as crash recovery on the next launch (which the orphan
-   * sweep would report if rows stayed `shutdown:null`). Saved conversations are
-   * kept; unused rows are discarded, as on closeSession. Sync because it runs on
-   * `window-all-closed`/`before-quit`, where the process may exit before an async
-   * persist could settle.
-   * --------------------------------------------------------------------- */
+  /** Close admission immediately; persist clean state only after confirmed exit. */
 
-  shutdownAll(): void {
-    const marked = this.registry.markLiveCleanSync()
-    const removed = this.registry.lastRemovedEmptySessionIds
-    for (const appSessionId of marked) {
-      this.evictReplay(appSessionId)
-    }
-    this.supervisor.shutdown()
-    for (const appSessionId of removed) this.emitRemoved(appSessionId)
+  private shutdownPromise?: Promise<{ confirmed: boolean; unresolvedSessionIds: string[] }>
+  private shutdownStarted = false
+
+  shutdownAll(): Promise<{ confirmed: boolean; unresolvedSessionIds: string[] }> {
+    if (this.shutdownPromise) return this.shutdownPromise
+    this.shutdownStarted = true
+    this.shutdownPromise = this.supervisor.shutdown().then(result => {
+      const marked = this.registry.markLiveCleanSync(new Set(result.unresolvedSessionIds))
+      for (const appSessionId of marked) this.evictReplay(appSessionId)
+      for (const appSessionId of this.registry.lastRemovedEmptySessionIds) this.emitRemoved(appSessionId)
+      return result
+    })
+    return this.shutdownPromise
   }
 
   /* --------------------------------------------------------------------- *

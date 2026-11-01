@@ -15,7 +15,7 @@ export interface CreateProjectDialogBridge {
 export interface CreateProjectDialogProps {
   bridge: CreateProjectDialogBridge
   onClose(): void
-  onCreated(project: DesktopProject): void
+  onCreated(project: DesktopProject, warning?: string): void
 }
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -94,7 +94,11 @@ export function CreateProjectDialog({ bridge, onClose, onCreated }: CreateProjec
     try {
       const result = await draftBridge.createProject({ draftId: life.draftId, name: name.trim(), trustFolder })
       if (!life.active) return
-      if (result.ok) { life.active = false; onCreated(result.project) }
+      if (result.ok) {
+        life.active = false
+        if (result.warning) onCreated(result.project, result.warning)
+        else onCreated(result.project)
+      }
       else setError(result.error)
     } catch (reason) {
       if (life.active) setError(errorText(reason))

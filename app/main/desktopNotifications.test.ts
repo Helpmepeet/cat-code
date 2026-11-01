@@ -3,6 +3,7 @@ import { createDesktopNotifications, type DesktopNotificationHandle } from './de
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import type { ServerFrame } from '../shared/protocol.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import type { TurnRetryResult } from '../shared/notificationNavigation.js'
 import { createTranscriptState, projectServerFrames, selectNestedTranscriptRows } from '../renderer/src/transcriptProjector.js'
 import { retryableTurn } from '../renderer/src/turnFailure.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
@@ -17,7 +18,7 @@ function cardRows(frames: ServerFrame[]) {
   return selectNestedTranscriptRows(projectServerFrames(createTranscriptState(), [ready, ...frames]), 'a')
 }
 
-function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true) {
+function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true, sendRetry?: () => TurnRetryResult) {
   const handles: Array<{ options: any; closed: boolean; emit: (event: string, ...args: any[]) => void }> = []
   const sent: any[] = [], opened: any[] = []
   const sessionReads: string[] = [], badgeWrites: string[] = []
@@ -38,6 +39,7 @@ function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true
       return { on(event, cb) { listeners.set(event, cb); return this }, show() {}, close() { h.closed = true; h.emit('close') } } as DesktopNotificationHandle
     },
     setBadge: text => { badge = text; badgeWrites.push(text) }, openSession: (...args) => { opened.push(args) }, send: (...args) => { sent.push(args); return sendSuccess },
+    ...(sendRetry ? { sendRetry: (...args) => { sent.push(args); return sendRetry() } } : {}),
   })
   const frame = (value: any, id = 'a') => coordinator.receive(id, { sessionId: id, ...value } as ServerFrame)
   const event = (value: any, replay = false, id = 'a') => frame({ kind: 'event', event: value, ...(replay ? { replay: true } : {}) }, id)
@@ -552,7 +554,7 @@ describe('desktop notifications', () => {
       expect(h.handles.at(-1)!.options.actions).toEqual([])
     }
   })
-  test('retry rechecks live input gates and claims once even when sending fails', () => {
+  test('retry rechecks live input gates and releases only definite unsent claims', () => {
     for (const sendSuccess of [true, false]) {
       const h = harness({ status: 'ready' }, sendSuccess)
       h.message({ type: 'user', message: { content: 'Operator task' } })
@@ -562,7 +564,29 @@ describe('desktop notifications', () => {
       ready(true, false); expect(h.coordinator.retry('a', id)).toBe(false)
       ready(false, false); expect(h.coordinator.retry('a', id)).toBe(false)
       ready(false, true); expect(h.coordinator.retry('a', id)).toBe(sendSuccess)
-      expect(h.coordinator.retry('a', id)).toBe(false); expect(h.sent).toHaveLength(1)
+      expect(h.coordinator.retry('a', id)).toBe(false)
+      expect(h.sent).toHaveLength(sendSuccess ? 1 : 2)
     }
+  })
+  test('ambiguous and throwing sends keep the retry receipt claimed', () => {
+    for (const send of [() => ({ status: 'unknown' } as const), () => { throw new Error('write outcome unknown') }]) {
+      const h = harness({ status: 'ready' }, true, send)
+      h.message({ type: 'user', message: { content: 'Operator task' } })
+      h.message({ type: 'result', uuid: 'failed-turn', subtype: 'error_during_execution', is_error: true })
+      expect(h.coordinator.retryOutcome('a', 'a:failed-turn:result')).toEqual({ status: 'unknown' })
+      expect(h.coordinator.retryOutcome('a', 'a:failed-turn:result')).toEqual({ status: 'refused', reason: 'stale' })
+      expect(h.sent).toHaveLength(1)
+    }
+  })
+  test('confirmed refusal preserves the same candidate for a successful explicit retry', () => {
+    let writable = false
+    const h = harness({ status: 'ready' }, true, () => writable ? { status: 'admitted' } : { status: 'refused', reason: 'not_sent' })
+    h.message({ type: 'user', message: { content: 'Operator task' } })
+    h.message({ type: 'result', uuid: 'failed-turn', subtype: 'error_during_execution', is_error: true })
+    expect(h.coordinator.retryOutcome('a', 'a:failed-turn:result')).toEqual({ status: 'refused', reason: 'not_sent' })
+    writable = true
+    expect(h.coordinator.retryOutcome('a', 'a:failed-turn:result')).toEqual({ status: 'admitted' })
+    expect(h.coordinator.retryOutcome('a', 'a:failed-turn:result')).toEqual({ status: 'refused', reason: 'stale' })
+    expect(h.sent).toHaveLength(2)
   })
 })

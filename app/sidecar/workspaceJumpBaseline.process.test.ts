@@ -448,7 +448,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
   } finally {
     coordinator?.dispose()
     control?.dispose()
-    supervisor.shutdown()
+    expect((await supervisor.shutdown()).confirmed).toBe(true)
     releaseSource?.()
     server.stop(true)
     if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previousConfig

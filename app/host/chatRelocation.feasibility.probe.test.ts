@@ -42,8 +42,8 @@ function lifecycleAdmissionClock(): () => number {
   return () => { clock += SPAWN_RATE_WINDOW_MS; return clock }
 }
 
-afterEach(() => {
-  for (const supervisor of supervisors.splice(0)) supervisor.shutdown()
+afterEach(async () => {
+  for (const supervisor of supervisors.splice(0)) expect((await supervisor.shutdown()).confirmed).toBe(true)
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
   if (priorConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = priorConfigDir
@@ -690,7 +690,7 @@ test('empty Chat moves live and parked, preserves startup artifacts, and is disc
   expect(readFileSync(join(companion, 'startup-artifact'), 'utf8')).toBe('kept')
 
   expect((await host.closeSession(appSessionId)).ok).toBe(true)
-  host.shutdownAll()
+  await host.shutdownAll()
   const relaunchedRegistry = new SessionRegistry({ storageDir: join(root, 'registry'), log: () => {} })
   await relaunchedRegistry.launch()
   expect(relaunchedRegistry.findSession(artifactAppId)).toBeUndefined()

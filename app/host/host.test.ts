@@ -159,7 +159,7 @@ class FakeSupervisor {
     return true
   }
 
-  restartSession(sessionId: SessionId, config?: FakeSpawnConfig): void {
+  async restartSession(sessionId: SessionId, config?: FakeSpawnConfig): Promise<void> {
     const record = this.records.get(sessionId)
     if (!record) throw new Error('no such session')
     // Fresh child = new pid + socketPath (what SF5 must re-record).
@@ -184,13 +184,14 @@ class FakeSupervisor {
     }
   }
 
-  shutdown(): void {
+  async shutdown(): Promise<{ confirmed: boolean; unresolvedSessionIds: string[] }> {
     this.closed = true
     const ids = [...this.records.keys()]
     this.records.clear()
     for (const sessionId of ids) {
       this.emit({ type: 'exit', sessionId, code: null, signal: 'SIGTERM' })
     }
+    return { confirmed: true, unresolvedSessionIds: [] }
   }
 
   listSessions(): Array<{ sessionId: SessionId; status: SidecarStatus }> {
@@ -1622,7 +1623,7 @@ test('uncertain transition holds do not expire, but closing or restarting the ow
   // A ready frame may come from a reconnect, not a new process.
   h.supervisor.emitReady(other, randomUUID())
   expect(h.host.beginBranchReplacement(source).ok).toBe(false)
-  h.supervisor.restartSession(other, { cwd: h.cwd })
+  await h.supervisor.restartSession(other, { cwd: h.cwd })
   h.supervisor.emitReady(other, randomUUID())
   expect(h.host.beginBranchReplacement(source).ok).toBe(true)
   h.host.endBranchSwitch()
@@ -3837,7 +3838,7 @@ test('shutdownAll marks live rows clean and kills the sidecars', async () => {
   expect(h.registry.findSession(a.value.appSessionId)?.shutdown).toBeNull()
   expect(h.registry.findSession(b.value.appSessionId)?.shutdown).toBeNull()
 
-  h.host.shutdownAll()
+  await h.host.shutdownAll()
 
   // A clean quit leaves BOTH rows marked clean — not left null (which the next
   // launch's orphan sweep would report as crashed).
@@ -3848,6 +3849,32 @@ test('shutdownAll marks live rows clean and kills the sidecars', async () => {
   expect(h.evicted).toContain(a.value.appSessionId)
   expect(h.evicted).toContain(b.value.appSessionId)
 })
+
+for (const confirmed of [true, false]) {
+  test(`shutdownAll defers clean state until captured exit confirmation: ${confirmed}`, async () => {
+    const h = makeHost()
+    const created = await h.host.createSession({ cwd: h.cwd })
+    if (!created.ok) throw new Error('create failed')
+    const id = created.value.appSessionId
+    h.supervisor.emitReady(id, 'engine-barrier')
+    await settle(() => h.registry.findSession(id)?.engineSessionId === 'engine-barrier')
+    writeTranscript(h.storageDir, 'engine-barrier')
+    const before = h.registry.findSession(id)!
+    const pid = before.enginePid
+    const socketPath = before.socketPath
+    let finish!: (value: { confirmed: boolean; unresolvedSessionIds: string[] }) => void
+    h.supervisor.shutdown = () => new Promise(resolve => { finish = resolve })
+    const barrier = h.host.shutdownAll()
+    expect(h.host.shutdownAll()).toBe(barrier)
+    expect(h.registry.findSession(id)?.shutdown).toBeNull()
+    finish({ confirmed, unresolvedSessionIds: confirmed ? [] : [id] })
+    expect((await barrier).confirmed).toBe(confirmed)
+    expect(h.registry.findSession(id)?.shutdown).toBe(confirmed ? 'clean' : null)
+    expect(h.registry.findSession(id)?.enginePid).toBe(pid)
+    expect(h.registry.findSession(id)?.socketPath).toBe(socketPath)
+    expect(h.evicted.includes(id)).toBe(confirmed)
+  })
+}
 
 test('shutdownAll discards unused ready and parked Chats but preserves their files', async () => {
   const root = tempDir()
@@ -3881,7 +3908,7 @@ test('shutdownAll discards unused ready and parked Chats but preserves their fil
     const doc = JSON.parse(readFileSync(h.registry.filePath, 'utf8')) as { sessions: { shutdown: string | null }[] }
     return doc.sessions.some(row => row.shutdown === 'parked')
   })
-  h.host.shutdownAll()
+  await h.host.shutdownAll()
   expect(h.supervisor.records.size).toBe(0)
   expect(h.registry.sessions).toEqual([])
   for (const id of ids) {
@@ -3966,7 +3993,7 @@ test('F3: a mid-run sidecar crash marks the row crashed, and a later quit does N
   expect(h.registry.findSession(id)?.enginePid).toBe(10001)
 
   // Quit after the crash: markLiveCleanSync must not relabel the crash.
-  h.host.shutdownAll()
+  await h.host.shutdownAll()
   expect(h.registry.findSession(id)?.shutdown).toBe('crashed')
   // The row kept its engineSessionId — still restorable, honestly flagged.
   expect(h.registry.findSession(id)?.engineSessionId).toBe('engine-crash-test')
@@ -4009,7 +4036,7 @@ test('IDLE-PARK — an ordinary quit marks PARKED rows clean, so the next launch
   // The quit. A park is a reclaim the host chose, so an ordinary quit that finds
   // one is an ordinary quit — the parked row ends clean. A real crash is still
   // never relabelled.
-  h.host.shutdownAll()
+  await h.host.shutdownAll()
   expect(h.registry.findSession(parkedId)?.shutdown).toBe('clean')
   expect(h.registry.findSession(crashedId)?.shutdown).toBe('crashed')
 
@@ -4194,7 +4221,7 @@ test('createSession that resumes after shutdownAll fails closed instead of spawn
 
   // Start the create, then tear down before awaiting it — the launch-gate race.
   const pending = h.host.createSession({ cwd: h.cwd })
-  h.host.shutdownAll()
+  await h.host.shutdownAll()
   const result = await pending
 
   expect(result.ok).toBe(false)
@@ -4222,7 +4249,7 @@ test('shutdownAll marks every live row clean so the next launch sweep sees no cr
   writeTranscript(h.storageDir, 'engine-clean-second')
   expect(h.registry.sessions.every(row => row.shutdown === null)).toBe(true)
 
-  h.host.shutdownAll()
+  await h.host.shutdownAll()
 
   expect(h.registry.sessions.length).toBe(2)
   expect(h.registry.sessions.every(row => row.shutdown === 'clean')).toBe(true)

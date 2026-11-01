@@ -25,7 +25,9 @@ import { CH_HOST_EXTERNAL_APP_ICON } from '../shared/ipcChannels.js'
 import { parseNotificationPreferences, type NotificationPreferences } from '../shared/notificationPreferences.js'
 import type { NotificationVisibilityBridge, NotificationVisibility } from '../shared/notificationVisibility.js'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
-import type { ProjectRouteCommand, ProjectRouteSnapshot } from '../shared/projectRouting.js'
+import type { ProjectRouteCommand, ProjectRouteSnapshot, RoutingStorageHealth } from '../shared/projectRouting.js'
+import type { TurnRetryResult } from '../shared/notificationNavigation.js'
+import { CH_HOST_ROUTING_STORAGE_HEALTH, CH_HOST_REVALIDATE_ROUTING_STORAGE, CH_HOST_INSPECT_ROUTING_STORAGE } from '../shared/ipcChannels.js'
 import type { DesktopProject, ProjectFolderResult, CreateProjectInput, CreateProjectResult } from '../shared/projects.js'
 import {
   CH_PROJECTS_LIST, CH_PROJECT_DRAFT_BEGIN, CH_PROJECT_FOLDER_PICK,
@@ -593,10 +595,16 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     sendGuard.assertAllowed(preferences)
     return ipcRenderer.invoke(CH_SET_NOTIFICATION_PREFERENCES, preferences)
   },
-  retryTurn(sessionId: SessionId, resultId: string): Promise<boolean> {
+  retryTurn(sessionId: SessionId, resultId: string): Promise<TurnRetryResult> {
     const payload = { sessionId, resultId }
-    sendGuard.assertAllowed(payload)
-    return ipcRenderer.invoke(CH_RETRY_TURN, payload)
+    try { sendGuard.assertAllowed(payload) } catch {
+      return Promise.resolve({ status: 'refused', reason: 'local_refusal' })
+    }
+    try {
+      return ipcRenderer.invoke(CH_RETRY_TURN, payload).catch(() => ({ status: 'unknown' as const }))
+    } catch {
+      return Promise.resolve({ status: 'unknown' })
+    }
   },
   reportNotificationRetryBlocked(sessionIds: readonly SessionId[]): void {
     sendGuard.assertAllowed(sessionIds)
@@ -793,6 +801,18 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   readProjectRoutes(): Promise<ProjectRouteSnapshot[]> {
     sendGuard.assertAllowed({ readProjectRoutes: true })
     return ipcRenderer.invoke(CH_HOST_PROJECT_ROUTES) as Promise<ProjectRouteSnapshot[]>
+  },
+  readRoutingStorageHealth(): Promise<RoutingStorageHealth> {
+    sendGuard.assertAllowed({ readRoutingStorageHealth: true })
+    return ipcRenderer.invoke(CH_HOST_ROUTING_STORAGE_HEALTH) as Promise<RoutingStorageHealth>
+  },
+  inspectRoutingStorage(): Promise<HostResult<void>> {
+    sendGuard.assertAllowed({ inspectRoutingStorage: true })
+    return ipcRenderer.invoke(CH_HOST_INSPECT_ROUTING_STORAGE) as Promise<HostResult<void>>
+  },
+  revalidateRoutingStorage(): Promise<RoutingStorageHealth> {
+    sendGuard.assertAllowed({ revalidateRoutingStorage: true })
+    return ipcRenderer.invoke(CH_HOST_REVALIDATE_ROUTING_STORAGE) as Promise<RoutingStorageHealth>
   },
   resolveProjectRoute(command: ProjectRouteCommand): Promise<HostResult<void>> {
     sendGuard.assertAllowed(command)

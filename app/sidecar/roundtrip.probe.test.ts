@@ -27,8 +27,8 @@ const TEST_TIMEOUT_MS = 120_000
 let supervisor: SidecarSupervisor | null = null
 const configHomes: string[] = []
 
-afterEach(() => {
-  supervisor?.shutdown()
+afterEach(async () => {
+  if (supervisor) expect((await supervisor.shutdown()).confirmed).toBe(true)
   supervisor = null
   for (const configHome of configHomes.splice(0)) {
     rmSync(configHome, { recursive: true, force: true })

@@ -48,6 +48,7 @@ export async function runSettingsWriteWorker(
     simpleMode: false,
     input,
     forceKillOnAbort: true,
+    mutationKey: 'settings-write',
     maxRecordBytes: MAX_SETTINGS_WRITE_WORKER_RECORD_BYTES,
     onWorkerLifecycle: options.onWorkerLifecycle,
     log: options.log,

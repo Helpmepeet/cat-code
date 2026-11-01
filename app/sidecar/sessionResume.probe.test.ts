@@ -21,7 +21,7 @@ const running: Array<{ supervisor: SidecarSupervisor; pids: number[] }> = []
 
 afterEach(async () => {
   for (const item of running.splice(0)) {
-    item.supervisor.shutdown()
+    expect((await item.supervisor.shutdown()).confirmed).toBe(true)
     for (const pid of item.pids) await waitForExit(pid)
   }
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })

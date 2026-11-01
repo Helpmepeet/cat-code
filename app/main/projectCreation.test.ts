@@ -22,6 +22,21 @@ test('selection has no TTL, creates no session and is consumed only on success',
   expect(store.list()[0]?.name).toBe('Project')
   expect((await controller.create({ draftId, name: 'Again', trustFolder: false })).ok).toBe(false)
 })
+test('controller adopts the saved project and cleanup warning when lock release fails', async () => {
+  const { root, deps } = setup()
+  const store = new ProjectStore(join(root, 'warning-registry'), {
+    acquireLock: async () => async () => { throw new Error('release failed') },
+  })
+  const controller = new ProjectCreationController({ ...deps, store })
+  const draftId = controller.begin()
+  await controller.pick(draftId)
+  const result = await controller.create({ draftId, name: 'Saved', trustFolder: false })
+  expect(result.ok).toBe(true)
+  expect(result).toHaveProperty('warning')
+  if (result.ok) expect(store.list()).toEqual([result.project])
+  expect((await controller.create({ draftId, name: 'Retry', trustFolder: false })).ok).toBe(false)
+  expect(store.list()).toHaveLength(1)
+})
 test('picker cancel, close and stale async picker create nothing', async () => {
   const { controller, deps, store, cwd } = setup()
   deps.pick = async () => null

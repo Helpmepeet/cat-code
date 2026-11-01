@@ -15,7 +15,7 @@ import { PROTOCOL_VERSION } from '../shared/protocol.js'
 const dirs: string[] = []
 const supervisors: SidecarSupervisor[] = []
 const managers: ScheduledTasks[] = []
-afterEach(() => { for (const manager of managers.splice(0)) manager.stop(); for (const supervisor of supervisors.splice(0)) supervisor.shutdown(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+afterEach(async () => { for (const manager of managers.splice(0)) manager.stop(); for (const supervisor of supervisors.splice(0)) expect((await supervisor.shutdown()).confirmed).toBe(true); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 async function waitFor(predicate: () => boolean) { const deadline = Date.now() + 20_000; while (!predicate()) { if (Date.now() > deadline) throw new Error('Scheduled process did not settle'); await Bun.sleep(10) } }
 
 function setup(trusted: boolean, options: { now?: () => number; registryFailure?: boolean; socketLossRoute?: 'host' | 'lifecycle' } = {}) {

@@ -989,7 +989,7 @@ async function* queryLoop(
                   toolUseContext.turnHandoff.invalidate()
                   throw new Error('Response stream failed during workspace handoff')
                 }
-                if (attemptOutputEscaped) throw new Error('Response interrupted after output started; replay was skipped.')
+                if (attemptOutputEscaped) throw new Error('The response stopped after work began. Check the results before continuing.')
                 streamingFallbackOccured = true
               },
               querySource,

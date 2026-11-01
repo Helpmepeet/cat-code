@@ -3,7 +3,7 @@ export type ProjectFolder = { cwd: string; name: string; trustRoot: string }
 export type CreateProjectInput = { draftId: string; name: string; trustFolder: boolean }
 export type PickProjectResult = { kind: 'selected'; folder: ProjectFolder } | { kind: 'cancelled' } | { kind: 'error'; error: string }
 export type ProjectFolderResult = PickProjectResult
-export type CreateProjectResult = { ok: true; project: DesktopProject } | { ok: false; error: string }
+export type CreateProjectResult = { ok: true; project: DesktopProject; warning?: string } | { ok: false; error: string }
 
 export function isProjectDraftId(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)

@@ -69,7 +69,7 @@ test('the live card selects the same projected result through the shared Retry g
     recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
-    retryTurn: async (id, resultId) => { retries.push([id, resultId]); return true },
+    retryTurn: async (id, resultId) => { retries.push([id, resultId]); return { status: 'admitted' } },
     reportNotificationRetryBlocked: ids => { blocked.push([...ids]) },
     pickAttachmentFile: () => new Promise<null>(resolve => { finishAttachment = resolve }),
     submit: () => { throw new Error('Retry must not bypass its claim gate') },

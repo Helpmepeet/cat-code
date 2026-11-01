@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { SidecarClientMessage } from '../shared/protocol.js'
 import type { ProjectRouteSnapshot } from '../shared/projectRouting.js'
@@ -24,6 +24,7 @@ export type RouteRecord = {
 }
 export interface ProjectRoutingStore {
   load(): RouteRecord[]
+  loadForRecovery?(): RouteRecord[]
   save(records: RouteRecord[]): void
 }
 
@@ -32,14 +33,35 @@ export interface ProjectRoutingStore {
 export class FileProjectRoutingStore implements ProjectRoutingStore {
   constructor(private readonly path: string) {}
   load(): RouteRecord[] {
-    if (!existsSync(this.path)) return []
-    const document = JSON.parse(readFileSync(this.path, 'utf8'))
-    if (document.version !== 1 || !Array.isArray(document.records) || document.records.some((row: RouteRecord) =>
+    return this.read(true)
+  }
+  loadForRecovery(): RouteRecord[] {
+    return this.read(false)
+  }
+  private read(allowMissing: boolean): RouteRecord[] {
+    let bytes: string
+    try { bytes = readFileSync(this.path, 'utf8') } catch (error) {
+      if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw error
+    }
+    const document = JSON.parse(bytes)
+    if (!document || document.version !== 1 || !Array.isArray(document.records) || document.records.some((row: RouteRecord) =>
       !row || typeof row.sessionId !== 'string' || typeof row.submitId !== 'string' ||
       typeof row.sourceCwd !== 'string' || typeof row.routingText !== 'string' ||
       row.message?.type !== 'app.submit' || row.message.options?.submitId !== row.submitId ||
+      typeof row.message.requestId !== 'string' ||
+      !(typeof row.message.prompt === 'string' || Array.isArray(row.message.prompt)) ||
+      !['checking', 'ask', 'moving', 'unsent', 'uncertain', 'recovery', 'failed'].includes(row.phase) ||
+      !(row.decision === null || (typeof row.decision === 'object' &&
+        typeof row.decision.cwd === 'string' && typeof row.decision.name === 'string' &&
+        typeof row.decision.explicit === 'boolean' && ['auto', 'ask'].includes(row.decision.kind))) ||
       !['unsent', 'unknown', 'accepted'].includes(row.outcome))) {
       throw new Error('Unreadable pending message record')
+    }
+    const sessions = new Set<string>()
+    for (const row of document.records as RouteRecord[]) {
+      if (sessions.has(row.sessionId)) throw new Error('Duplicate pending message record')
+      sessions.add(row.sessionId)
     }
     return document.records
   }

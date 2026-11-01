@@ -1,6 +1,6 @@
 import type { UsageCollectionResult } from './usageDashboard.js'
 import type { SettingsInventory } from './settingsInventoryWorker.js'
-import type { ProjectRouteSnapshot } from './projectRouting.js'
+import type { ProjectRouteSnapshot, RoutingStorageHealth } from './projectRouting.js'
 import type { DesktopProject } from './projects.js'
 /**
  * The host control-plane contract (D1 — `decisions/REGISTRY.md` §6.1; trust zone
@@ -436,6 +436,7 @@ export type HostEvent =
   | { type: 'usage-dashboard'; result: UsageCollectionResult }
   | { type: 'usage-dashboard-loading' }
   | { type: 'project-routing'; appSessionId: SessionId; snapshot: ProjectRouteSnapshot | null }
+  | { type: 'routing-storage-health'; health: RoutingStorageHealth }
   | { type: 'projects'; projects: DesktopProject[] }
 
 /* ------------------------------------------------------------------------- *

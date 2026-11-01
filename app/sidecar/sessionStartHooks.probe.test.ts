@@ -49,8 +49,8 @@ const TEST_TIMEOUT_MS = 120_000
 let supervisor: SidecarSupervisor | null = null
 const tempDirs: string[] = []
 
-afterEach(() => {
-  supervisor?.shutdown()
+afterEach(async () => {
+  if (supervisor) expect((await supervisor.shutdown()).confirmed).toBe(true)
   supervisor = null
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true })

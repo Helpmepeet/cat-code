@@ -1,3 +1,4 @@
+import type { TurnRetryResult } from '../../shared/notificationNavigation.js'
 import type { DesktopProject } from '../../shared/projects.js'
 import { selectFocusedLiveState, type FocusedLiveState } from './transcriptProjector.js'
 /**
@@ -452,7 +453,7 @@ export const TranscriptView = memo(function TranscriptView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
-  onRetryTurn?: (text: string, resultId: string) => void
+  onRetryTurn?: (text: string, resultId: string) => void | TurnRetryResult | Promise<TurnRetryResult>
   /** Present only for an ordinary live pane. */
   onMessageAction?: MessageActionHandler
   /**
@@ -684,7 +685,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
-  onRetryTurn?: (text: string, resultId: string) => void
+  onRetryTurn?: (text: string, resultId: string) => void | TurnRetryResult | Promise<TurnRetryResult>
   onMessageAction?: MessageActionHandler
   createdPeerNavigation?: CreatedPeerNavigation | null
   toolCardExpansionStore?: ToolCardExpansionStore | null
@@ -703,13 +704,31 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // the button in between; the ref stops a second click in the same frame.
   const retriedRef = useRef(new Set<string>())
   const [retried, setRetried] = useState<ReadonlySet<string>>(() => new Set())
+  const retryAttempts = useRef(new Map<string, symbol>())
+  const [pendingRetryId, setPendingRetryId] = useState<string | null>(null)
   const candidate = !turnLive && restorePhase === null ? retryableTurn(rows) : null
   const retryTarget = candidate && !retried.has(candidate.resultId) ? candidate : null
   const sendRetry = retryTarget && onRetryTurn
     ? () => {
       if (!claimTurnRetry(retriedRef.current, retryTarget.resultId)) return
       setRetried(new Set(retriedRef.current))
-      onRetryTurn(retryTarget.text, retryTarget.resultId)
+      const resultId = retryTarget.resultId
+      const attempt = Symbol()
+      retryAttempts.current.set(resultId, attempt)
+      setPendingRetryId(resultId)
+      // A definite refusal is safe to release. Rejection/void means delivery is
+      // unknown and retains duplicate protection until engine reconciliation.
+      void Promise.resolve().then(() => onRetryTurn(retryTarget.text, resultId)).then(result => {
+        if (retryAttempts.current.get(resultId) !== attempt) return
+        setPendingRetryId(current => current === resultId ? null : current)
+        if (result?.status !== 'refused') return
+        retriedRef.current.delete(resultId)
+        setRetried(new Set(retriedRef.current))
+      }).catch(() => {
+        if (retryAttempts.current.get(resultId) === attempt) {
+          setPendingRetryId(current => current === resultId ? null : current)
+        }
+      })
     }
     : undefined
   const [filePathMenuState, setFilePathMenuState] = useState<{
@@ -1026,6 +1045,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                   <LatestPaneFileCardContext.Provider value={latestFileCards}>
                   <TranscriptFileScopeContext.Provider value={fileScopes}>
                     {content}
+                    {pendingRetryId && candidate?.resultId === pendingRetryId ? <p role="status">Sending retry…</p> : null}
                     {filePathMenuState ? (
                       <FilePathActionsMenu
                         anchor={filePathMenuState.anchor}

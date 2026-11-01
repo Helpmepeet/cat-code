@@ -1,0 +1,34 @@
+.routing-storage-recovery {
+  border: 1px solid var(--color-tone-warn);
+  border-radius: 12px;
+  padding: 12px 16px;
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+.routing-storage-recovery p {
+  margin: 0 0 8px;
+}
+
+.routing-storage-recovery-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.routing-storage-recovery button {
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.routing-storage-recovery button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.routing-storage-recovery button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

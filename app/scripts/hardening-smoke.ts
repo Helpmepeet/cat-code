@@ -297,6 +297,9 @@ async function runProductionHardeningSmoke(
       // project. The renderer reads snapshots and returns a closed choice; it
       // cannot author a project path.
       'readProjectRoutes',
+      'readRoutingStorageHealth',
+      'inspectRoutingStorage',
+      'revalidateRoutingStorage',
       'resolveProjectRoute',
       'restoreSession',
       // PEER-SESSIONS §6 — the user's standing "don't let peers reopen this

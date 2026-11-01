@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { CH_GET_NOTIFICATION_PREFERENCES, CH_SET_NOTIFICATION_PREFERENCES, CH_RETRY_TURN, CH_NOTIFICATION_RETRY_BLOCKED } from '../shared/ipcChannels.js'
 import { registerNotificationPreferenceIpc, registerNotificationRetryIpc, registerNotificationRetryBlockedIpc } from './notificationPreferenceIpc.js'
+import type { TurnRetryResult } from '../shared/notificationNavigation.js'
 
 test('notification preference IPC accepts only the window sender and closed payloads', () => {
   const handlers = new Map<string, (event: boolean, ...args: unknown[]) => unknown>()
@@ -31,16 +32,16 @@ test('notification preference IPC accepts only the window sender and closed payl
 })
 
 test('Retry IPC accepts only a validated result selection from the window', () => {
-  let handler!: (event: boolean, ...args: unknown[]) => boolean
+  let handler!: (event: boolean, ...args: unknown[]) => TurnRetryResult
   const calls: string[][] = []
   registerNotificationRetryIpc({
     handle: (channel, listener) => { expect(channel).toBe(CH_RETRY_TURN); handler = listener },
     isTrustedSender: (event: boolean) => event,
-    retry: (sessionId, resultId) => { calls.push([sessionId, resultId]); return resultId === 'result:failed' },
+    retry: (sessionId, resultId) => { calls.push([sessionId, resultId]); return resultId === 'result:failed' ? { status: 'admitted' } : { status: 'refused', reason: 'stale' } },
   })
   const valid = { sessionId: '00000000-0000-4000-8000-000000000001', resultId: 'result:failed' }
-  expect(handler(true, valid)).toBe(true)
-  expect(handler(true, { ...valid, resultId: 'stale' })).toBe(false)
+  expect(handler(true, valid)).toEqual({ status: 'admitted' })
+  expect(handler(true, { ...valid, resultId: 'stale' })).toEqual({ status: 'refused', reason: 'stale' })
   const invalid = [null, [], {}, { ...valid, sessionId: '../bad' }, { ...valid, resultId: '' }, { ...valid, resultId: 'x'.repeat(1025) }, { ...valid, text: 'forged prompt' }]
   for (const raw of invalid) expect(() => handler(true, raw)).toThrow()
   expect(() => handler(false, valid)).toThrow()

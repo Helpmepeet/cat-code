@@ -2,10 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { basename } from 'node:path'
 import { isCreateProjectInput, isProjectDraftId, type CreateProjectResult, type PickProjectResult, type ProjectFolder } from '../shared/projects.js'
-import { DuplicateProjectError, type ProjectStore } from './projectStore.js'
+import { DuplicateProjectError, ProjectCommitUncertainError, type ProjectStore } from './projectStore.js'
 
 export type ProjectCreationDeps = {
-  store: Pick<ProjectStore, 'create'>
+  store: Pick<ProjectStore, 'create'> & Partial<Pick<ProjectStore, 'takeWarning'>>
   pick: () => Promise<string | null>
   validateCwd: (cwd: string) => { ok: true; realpath: string } | { ok: false }
   inspectTrustRoot: (cwd: string) => Promise<string>
@@ -70,12 +70,15 @@ export class ProjectCreationController {
         }
       } : undefined)
       if (this.draft === draft) this.draft = undefined
-      return { ok: true, project }
+      const warning = this.deps.store.takeWarning?.(project.id)
+      const result = { ok: true as const, project, ...(warning ? { warning } : {}) }
+      return result
     } catch (error) {
+      if (error instanceof ProjectCommitUncertainError && this.draft === draft) this.draft = undefined
       this.deps.log?.(`Project creation failed for ${draft.folder.cwd}`, error)
       return { ok: false, error: trustFailed
         ? 'Could not save folder trust. The project was not created. Choose the folder again to retry, or untick Trust this folder.'
-        : error instanceof DuplicateProjectError ? error.message : 'Could not save the project. Check folder access and try again.' }
+        : error instanceof DuplicateProjectError || error instanceof ProjectCommitUncertainError ? error.message : 'Could not save the project. Check folder access and try again.' }
     } finally { draft.creating = false }
   }
 }

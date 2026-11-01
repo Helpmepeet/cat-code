@@ -1,8 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { fsyncSync, renameSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ProjectStore } from './projectStore.js'
+import { ProjectCommitUncertainError, ProjectStore } from './projectStore.js'
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function setup() {
@@ -39,6 +39,67 @@ test('lock and IO failures surface without a project', async () => {
   const store = new ProjectStore(join(root, 'registry'), { acquireLock: async () => { throw new Error('held lock') } })
   await expect(store.create({ cwd, name: 'New' })).rejects.toThrow('held lock')
   expect(store.list()).toEqual([])
+})
+test('durable commit survives failed lock release with a cleanup warning', async () => {
+  const { root, cwd } = setup()
+  const store = new ProjectStore(join(root, 'registry'), { acquireLock: async () => async () => { throw new Error('release failed') } })
+  const project = await store.create({ cwd, name: 'Saved' })
+  expect(store.list()).toEqual([project])
+  expect(store.takeWarning(project.id)).toContain('lock could not be released')
+  expect(store.takeWarning(project.id)).toBeUndefined()
+  await expect(store.create({ cwd, name: 'Retry' })).rejects.toThrow('already belongs')
+})
+test('pre-rename fsync failure keeps primary cause despite release failure', async () => {
+  const { root, cwd } = setup()
+  const primary = new Error('file fsync failed')
+  const store = new ProjectStore(join(root, 'registry'), {
+    fsync: () => { throw primary },
+    acquireLock: async () => async () => { throw new Error('release failed') },
+  })
+  try { await store.create({ cwd, name: 'Not saved' }); throw new Error('expected failure') } catch (error) { expect(error).toBe(primary) }
+  expect(store.list()).toEqual([])
+  expect(primary).toHaveProperty('cleanupError')
+})
+test.skipIf(process.platform === 'win32')('post-rename fsync failure reconciles stable identity without retrying write', async () => {
+  const { root, cwd } = setup()
+  let flushes = 0
+  const store = new ProjectStore(join(root, 'registry'), {
+    fsync: fd => { if (++flushes === 2) throw new Error('directory fsync failed'); fsyncSync(fd) },
+  })
+  const project = await store.create({ cwd, name: 'Visible' })
+  expect(store.list()).toEqual([project])
+  expect(store.takeWarning(project.id)).toContain('durability could not be confirmed')
+  expect(flushes).toBe(2)
+})
+test('rename that commits before throwing is reconciled by generated project ID', async () => {
+  const { root, cwd } = setup()
+  const store = new ProjectStore(join(root, 'registry'), {
+    rename: (source, target) => { renameSync(source, target); throw new Error('ambiguous rename') },
+  })
+  const project = await store.create({ cwd, name: 'Visible' })
+  expect(store.list()).toEqual([project])
+  expect(store.takeWarning(project.id)).toContain('durability could not be confirmed')
+})
+test('failed reconciliation preserves stable identity and primary cause without repeating rename', async () => {
+  const { root, cwd } = setup()
+  const primary = new Error('ambiguous rename')
+  let renames = 0
+  const store = new ProjectStore(join(root, 'registry'), {
+    rename: (source, target) => {
+      renames++
+      renameSync(source, target)
+      writeFileSync(target, '{')
+      throw primary
+    },
+  })
+  let failure: unknown
+  try { await store.create({ cwd, name: 'Uncertain' }) } catch (error) { failure = error }
+  expect(failure).toBeInstanceOf(ProjectCommitUncertainError)
+  const uncertain = failure as ProjectCommitUncertainError
+  expect(uncertain.cause).toBe(primary)
+  expect(uncertain.project.cwd).toBe(cwd)
+  expect(uncertain.project.id).toBeString()
+  expect(renames).toBe(1)
 })
 test('legacy duplicate detection canonicalizes aliases and tolerates missing legacy folders', async () => {
   const { root, cwd, store } = setup()
