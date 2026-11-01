@@ -8,6 +8,9 @@ import type { ToolUseContext } from '../Tool.js'
 import { getProjectRoot, setProjectRoot } from '../bootstrap/state.js'
 import { clearCommandsCache } from '../commands.js'
 import { SkillTool } from '../tools/SkillTool/SkillTool.js'
+import { FileEditTool } from '../tools/FileEditTool/FileEditTool.js'
+import { FilePatchTool } from '../tools/FilePatchTool/FilePatchTool.js'
+import { FileWriteTool } from '../tools/FileWriteTool/FileWriteTool.js'
 import { TEAM_LEAD_NAME } from './swarm/constants.js'
 import {
   readTeamSnapshot,
@@ -28,6 +31,7 @@ import {
   _attachmentsForTest,
   createAttachmentMessage,
   getAttachments,
+  getAutoModeAttachments,
   getQueuedCommandAttachments,
   getSkillListingAttachments,
   getTaskReminderAttachments,
@@ -71,6 +75,48 @@ test('queued attachment missing or explicitly null binding never recaptures', as
     ])
     expect(normalizeAttachmentForAPI(attachment!)[0]!.priorAssistantContext).toBeNull()
   }
+})
+
+describe('auto mode file-editing tool availability', () => {
+  function context(tools: ToolUseContext['options']['tools'], mode = 'auto'): ToolUseContext {
+    return {
+      agentId: 'worker',
+      options: { tools },
+      getAppState: () => ({ toolPermissionContext: { mode } }),
+    } as unknown as ToolUseContext
+  }
+
+  for (const editTool of [FileEditTool, FilePatchTool]) {
+    test(`reminder captures the resolved ${editTool.name} worker toolset`, async () => {
+      const [attachment] = await getAutoModeAttachments(
+        undefined,
+        context([editTool, FileWriteTool, SkillTool]),
+      )
+      expect(attachment).toEqual({
+        type: 'auto_mode',
+        reminderType: 'full',
+        fileEditingTools: [editTool.name, 'Write'],
+      })
+      const [message] = normalizeAttachmentForAPI(attachment!)
+      expect(String(message?.message.content)).toContain(`Use ${editTool.name}`)
+    })
+  }
+
+  test('read-only workers do not advertise editing tools', async () => {
+    const [attachment] = await getAutoModeAttachments(undefined, context([]))
+    expect(attachment?.type === 'auto_mode' && attachment.fileEditingTools).toEqual([])
+    const [message] = normalizeAttachmentForAPI(attachment!)
+    expect(String(message?.message.content)).not.toContain('Use Write')
+    expect(String(message?.message.content)).not.toContain('Use Edit')
+    expect(String(message?.message.content)).not.toContain('Use apply_patch')
+  })
+
+  test('ordinary permission mode does not receive the auto mode preference', async () => {
+    expect(await getAutoModeAttachments(
+      undefined,
+      context([FilePatchTool, FileWriteTool], 'default'),
+    )).toEqual([])
+  })
 })
 
 type FakeAppState = {

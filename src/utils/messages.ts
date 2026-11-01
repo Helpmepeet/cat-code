@@ -3636,22 +3636,35 @@ Answer the user's query comprehensively. If you need clarification, report the u
 
 function getAutoModeInstructions(attachment: {
   reminderType: 'full' | 'sparse'
+  fileEditingTools?: string[]
 }): UserMessage[] {
   if (attachment.reminderType === 'sparse') {
     return getAutoModeSparseInstructions()
   }
-  return getAutoModeFullInstructions()
+  return getAutoModeFullInstructions(attachment.fileEditingTools)
 }
 
-// Adapted from Claude Code's auto mode block. The edit tool follows the same
-// session provider the tool registry uses (getProviderFileEditTool in tools.ts).
-function getAutoModeShellWorkInstruction(): string {
-  const editToolName =
-    getAPIProvider() === 'openai' ? FILE_PATCH_TOOL_NAME : FileEditTool.name
-  return `You can do much of your work through the ${BashTool.name} tool when it is the simpler route: read files with cat, head, or sed -n, search with grep and find, and make small, mechanical file changes with sed, heredocs, or short scripts instead of the dedicated ${FileReadTool.name}, ${editToolName}, or ${FileWriteTool.name} tools. The choice is yours: prefer ${editToolName} or ${FileWriteTool.name} when a shell edit would be fragile, such as exact or multi-line replacements, or sed/awk flags that differ between GNU and BSD/macOS.`
+function getAutoModeFileEditingInstruction(
+  fileEditingTools: readonly string[] = [],
+): string {
+  const editToolName = [FILE_PATCH_TOOL_NAME, FileEditTool.name]
+    .find(name => fileEditingTools.includes(name))
+  const toolGuidance = [
+    editToolName ? `Use ${editToolName} for changes to existing files.` : '',
+    fileEditingTools.includes(FileWriteTool.name)
+      ? `Use ${FileWriteTool.name} for new files or complete rewrites.`
+      : '',
+  ].filter(Boolean).join(' ')
+  return [
+    'For authorized file modifications in Auto Mode, strongly prefer available native file-editing tools over shell-based edits.',
+    toolGuidance,
+    'Shell-based edits, including Python scripts run through Bash, may incur additional security-review latency.',
+    'Use scripts or commands when they significantly reduce the number of operations or better fit the task, such as bulk transformations, formatters, or generated files.',
+    'Avoid unnecessary shell invocations for file modifications.',
+  ].filter(Boolean).join(' ')
 }
 
-function getAutoModeFullInstructions(): UserMessage[] {
+function getAutoModeFullInstructions(fileEditingTools?: string[]): UserMessage[] {
   const content = `## Auto Mode Active
 
 Auto mode is active. The user chose continuous, autonomous execution. You should:
@@ -3663,7 +3676,7 @@ Auto mode is active. The user chose continuous, autonomous execution. You should
 5. **Do not take overly destructive actions** — Auto mode is not a license to destroy. Anything that deletes data or modifies shared or production systems still needs explicit user confirmation. If you reach such a decision point, ask and wait, or course correct to a safer method instead.
 6. **Avoid data exfiltration** — Post even routine messages to chat platforms or work tickets only if the user has directed you to. You must not share secrets (e.g. credentials, internal documentation) unless the user has explicitly authorized both that specific secret and its destination.
 
-${getAutoModeShellWorkInstruction()}`
+${getAutoModeFileEditingInstruction(fileEditingTools)}`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),
@@ -3671,7 +3684,7 @@ ${getAutoModeShellWorkInstruction()}`
 }
 
 function getAutoModeSparseInstructions(): UserMessage[] {
-  const content = `Auto mode still active (see full instructions earlier in conversation). Execute autonomously, minimize interruptions, prefer action over planning.`
+  const content = `Auto mode still active (see full instructions earlier in conversation). Execute autonomously, minimize interruptions, prefer action over planning. For authorized file modifications, prefer available native editing tools; use scripts or commands when they offer a substantial advantage.`
 
   return wrapMessagesInSystemReminder([
     createUserMessage({ content, isMeta: true }),

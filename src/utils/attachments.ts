@@ -28,6 +28,9 @@ import { TODO_WRITE_TOOL_NAME } from '../tools/TodoWriteTool/constants.js'
 import { TASK_CREATE_TOOL_NAME } from '../tools/TaskCreateTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from '../tools/TaskUpdateTool/constants.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
+import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
+import { FILE_WRITE_TOOL_NAME } from '../tools/FileWriteTool/prompt.js'
 import { SKILL_TOOL_NAME } from '../tools/SkillTool/constants.js'
 import type { TodoList } from './todo/types.js'
 import {
@@ -598,6 +601,7 @@ export type Attachment =
   | {
       type: 'auto_mode'
       reminderType: 'full' | 'sparse'
+      fileEditingTools?: string[]
     }
   | {
       type: 'auto_mode_exit'
@@ -1431,7 +1435,7 @@ function countAutoModeAttachmentsSinceLastExit(messages: Message[]): number {
   return count
 }
 
-async function getAutoModeAttachments(
+export async function getAutoModeAttachments(
   messages: Message[] | undefined,
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
@@ -1469,7 +1473,15 @@ async function getAutoModeAttachments(
       ? 'full'
       : 'sparse'
 
-  return [{ type: 'auto_mode', reminderType }]
+  const fileEditingTools = toolUseContext.options.tools
+    .map(tool => tool.name)
+    .filter(name =>
+      name === FILE_EDIT_TOOL_NAME ||
+      name === FILE_PATCH_TOOL_NAME ||
+      name === FILE_WRITE_TOOL_NAME,
+    )
+
+  return [{ type: 'auto_mode', reminderType, fileEditingTools }]
 }
 
 /**

@@ -463,31 +463,67 @@ describe('normalizeMessages preserves errorDetails', () => {
   })
 })
 
-describe('auto mode shell-work guidance', () => {
-  const shellLine = 'You can do much of your work through the Bash tool when it is the simpler route'
+describe('auto mode file-editing guidance', () => {
+  const preference = 'For authorized file modifications in Auto Mode, strongly prefer available native file-editing tools over shell-based edits.'
 
   for (const [provider, editTool] of [
     ['firstParty', 'Edit'],
     ['openai', 'apply_patch'],
   ] as const) {
     test(`full reminder names the ${provider} edit tool`, () => {
-      const original = getSessionProvider()
-      setSessionProvider(provider)
-      try {
-        const [message] = normalizeAttachmentForAPI({ type: 'auto_mode', reminderType: 'full' })
-        const content = String(message?.message.content)
-        expect(content).toContain(shellLine)
-        expect(content).toContain(`instead of the dedicated Read, ${editTool}, or Write tools`)
-        expect(content).toContain(`The choice is yours: prefer ${editTool} or Write`)
-      } finally {
-        setSessionProvider(original)
-      }
+      const [message] = normalizeAttachmentForAPI({
+        type: 'auto_mode',
+        reminderType: 'full',
+        fileEditingTools: [editTool, 'Write'],
+      })
+      const content = String(message?.message.content)
+      expect(content).toContain(preference)
+      expect(content).toContain(`Use ${editTool} for changes to existing files.`)
+      expect(content).toContain('Use Write for new files or complete rewrites.')
+      expect(content).toContain('may incur additional security-review latency')
+      expect(content).toContain('bulk transformations, formatters, or generated files')
+      expect(content).not.toContain('You can do much of your work through the Bash tool')
+      expect(content).not.toContain(editTool === 'Edit' ? 'apply_patch' : 'Use Edit')
     })
   }
 
-  test('sparse reminder stays one line', () => {
+  test('does not advertise unavailable tools to restricted or restored contexts', () => {
+    for (const fileEditingTools of [undefined, [], ['Write'], ['apply_patch']]) {
+      const [message] = normalizeAttachmentForAPI({
+        type: 'auto_mode',
+        reminderType: 'full',
+        fileEditingTools,
+      })
+      const content = String(message?.message.content)
+      expect(content).toContain(preference)
+      expect(content.includes('Use Write')).toBe(fileEditingTools?.includes('Write') ?? false)
+      expect(content.includes('Use apply_patch')).toBe(fileEditingTools?.includes('apply_patch') ?? false)
+      expect(content).not.toContain('Use Edit')
+    }
+  })
+
+  test('uses the resolved worker toolset rather than the parent session provider', () => {
+    const original = getSessionProvider()
+    setSessionProvider('firstParty')
+    try {
+      const [message] = normalizeAttachmentForAPI({
+        type: 'auto_mode',
+        reminderType: 'full',
+        fileEditingTools: ['apply_patch'],
+      })
+      expect(String(message?.message.content)).toContain('Use apply_patch')
+      expect(String(message?.message.content)).not.toContain('Use Edit')
+    } finally {
+      setSessionProvider(original)
+    }
+  })
+
+  test('sparse reminder retains the preference and exception without the full explanation', () => {
     const [message] = normalizeAttachmentForAPI({ type: 'auto_mode', reminderType: 'sparse' })
-    expect(String(message?.message.content)).not.toContain(shellLine)
+    const content = String(message?.message.content)
+    expect(content).toContain('For authorized file modifications, prefer available native editing tools')
+    expect(content).toContain('use scripts or commands when they offer a substantial advantage')
+    expect(content).not.toContain('security-review latency')
   })
 })
 
