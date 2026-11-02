@@ -254,6 +254,10 @@ export type CodexPoolObservationOptions = Readonly<{
 export async function loadPoolForObservation(
   options: CodexPoolObservationOptions = {},
 ): Promise<void> {
+  const localAccountId = pool.initialized
+    ? pool.accounts[pool.activeIndex]?.accountId
+    : undefined
+  const wasInitialized = pool.initialized
   const vaultPath = options.vaultPath === undefined ? readVaultPath() : options.vaultPath
   const vaultInventory = vaultPath
     ? loadCodexProfileInventory(vaultPath, { lifecycle: options.lifecycle })
@@ -281,14 +285,16 @@ export async function loadPoolForObservation(
     duplicateVaultIdentities: [...vaultInventory.duplicateVaultIdentities],
   }
 
-  const savedActiveAccountId = getGlobalConfig().activeCodexAccountId
+  const savedActiveAccountId = wasInitialized
+    ? localAccountId
+    : getGlobalConfig().activeCodexAccountId
   if (savedActiveAccountId) {
     const idx = pool.accounts.findIndex(
-      (a) => a.accountId === savedActiveAccountId && a.status === 'healthy',
+      (a) => a.accountId === savedActiveAccountId && isCodexAccountSwitchable(a),
     )
-    pool.activeIndex = idx >= 0 ? idx : pool.accounts.findIndex((a) => a.status === 'healthy')
+    pool.activeIndex = idx >= 0 ? idx : pool.accounts.findIndex(isCodexAccountSwitchable)
   } else {
-    pool.activeIndex = pool.accounts.findIndex((a) => a.status === 'healthy')
+    pool.activeIndex = pool.accounts.findIndex(isCodexAccountSwitchable)
   }
 
   pool.initialized = true
@@ -900,7 +906,10 @@ export function resolveCodexAccountByPrefix(
  * match, or no healthy alternative. Callers that want to surface the candidate
  * list on ambiguity should call `resolveCodexAccountByPrefix` first.
  */
-export function switchToAccount(idPrefix: string | null): PoolAccount | null {
+export function switchToAccount(
+  idPrefix: string | null,
+  options: { persistDefault?: boolean } = {},
+): PoolAccount | null {
   if (!pool.initialized || pool.accounts.length === 0) return null
 
   let targetIdx: number
@@ -918,6 +927,9 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
 
   if (targetIdx === pool.activeIndex) {
     const current = pool.accounts[targetIdx]!
+    if (options.persistDefault !== false) {
+      persistActiveCodexAccountId(current.accountId)
+    }
     logForDebugging(
       `[codex-profile] active-profile-change writer=switch-account account=${current.accountId} action=no-op`,
     )
@@ -934,7 +946,9 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
     pool.accounts[pool.activeIndex]!.lastUsedAt = Date.now()
   }
   pool.activeIndex = targetIdx
-  persistActiveCodexAccountId(pool.accounts[targetIdx]!.accountId)
+  if (options.persistDefault !== false) {
+    persistActiveCodexAccountId(pool.accounts[targetIdx]!.accountId)
+  }
   return to
 }
 

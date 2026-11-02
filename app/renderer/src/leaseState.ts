@@ -87,15 +87,25 @@ export function reduceLeaseState(
     }
   }
 
+  // Session accounts snapshots read the engine's local pool, including main
+  // failover updates. Global inventory refreshes arrive on a separate host feed.
   if (
-    frame.kind === 'account.result' &&
-    frame.verb === 'account.switch' &&
-    frame.ok &&
+    (frame.kind === 'accounts.snapshot' ||
+      frame.kind === 'ready' ||
+      (frame.kind === 'account.result' &&
+        frame.verb === 'account.switch' &&
+        frame.ok)) &&
     frame.sessionId in state.lastMainFailoverAccountIds
   ) {
     const lastMainFailoverAccountIds = { ...state.lastMainFailoverAccountIds }
     delete lastMainFailoverAccountIds[frame.sessionId]
-    return { ...state, lastMainFailoverAccountIds }
+    return {
+      ...state,
+      bySession: frame.kind === 'ready'
+        ? { ...state.bySession, [frame.sessionId]: undefined }
+        : state.bySession,
+      lastMainFailoverAccountIds,
+    }
   }
 
   // A dead session's leases are gone with its engine process (the lease map is

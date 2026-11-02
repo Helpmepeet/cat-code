@@ -229,6 +229,8 @@ export class Host implements HostApi {
   private branchSwitching = false
   private readonly workspaceTransitions = new Map<SessionId, { operationId: string; generation: string }>()
   private readonly workspaceObservations = new Map<SessionId, import('../shared/protocol.js').WorkspaceObservation>()
+  private readonly mainCodexAccounts = new Map<SessionId, string>()
+  private readonly unavailableCodexRoutes = new Set<SessionId>()
   private branchReplacement: { appSessionId: SessionId; reservation: SpawnReservation } | null = null
   /** One restore owns a registry id from validation through child registration. */
   private readonly restoring = new Set<SessionId>()
@@ -322,15 +324,47 @@ export class Host implements HostApi {
 
   private async onSupervisorEvent(event: SupervisorEvent): Promise<void> {
     const appSessionId = event.sessionId
-    if (event.type === 'exit') this.moveReadyTimes.delete(appSessionId)
+    if (event.type === 'exit') {
+      this.moveReadyTimes.delete(appSessionId)
+      this.mainCodexAccounts.delete(appSessionId)
+      this.unavailableCodexRoutes.delete(appSessionId)
+    }
 
     if (event.type === 'frame') {
+      // Null means no effective route, including an unavailable saved account.
+      // Keep the requested identity until an explicit successful switch reports
+      // a replacement. Bootstrap restores selections before publishing snapshots.
+      if (event.frame.kind === 'accounts.snapshot') {
+        const snapshot = event.frame.accounts
+        if (snapshot.initialized) {
+          if (snapshot.activeAccountId) this.unavailableCodexRoutes.delete(appSessionId)
+          else if (this.registry.findSession(appSessionId)?.accountSelection?.openai) {
+            this.unavailableCodexRoutes.add(appSessionId)
+            this.mainCodexAccounts.delete(appSessionId)
+          }
+        }
+        const codexId = snapshot.activeAccountId && (this.mainCodexAccounts.get(appSessionId) ?? snapshot.activeAccountId)
+        await this.registry.setAccountSelection(appSessionId, {
+          ...(snapshot.initialized && codexId ? { openai: codexId } : {}),
+          ...(snapshot.anthropicInitialized && snapshot.anthropicActiveAccountId ? { anthropic: snapshot.anthropicActiveAccountId } : {}),
+        })
+      }
+      if (event.frame.kind === 'lease.snapshot') {
+        const main = event.frame.leases.owners.find(owner => owner.ownerType === 'main' && owner.state === 'active')
+        if (main && !this.unavailableCodexRoutes.has(appSessionId)) this.mainCodexAccounts.set(appSessionId, main.accountId)
+        else this.mainCodexAccounts.delete(appSessionId)
+        if (main && !this.unavailableCodexRoutes.has(appSessionId)) {
+          await this.registry.setAccountSelection(appSessionId, { openai: main.accountId })
+        }
+      }
       if (event.frame.kind === 'ready') this.workspaceObservations.delete(appSessionId)
       if ((event.frame.kind === 'ready' || event.frame.kind === 'event' || event.frame.kind === 'activity') && event.frame.workspace) {
         this.workspaceObservations.set(appSessionId, event.frame.workspace)
       }
       if (event.frame.kind === 'ready') {
         this.moveReadyTimes.set(appSessionId, performance.now())
+        this.mainCodexAccounts.delete(appSessionId)
+        this.unavailableCodexRoutes.delete(appSessionId)
         this.runControls.delete(appSessionId)
         this.permissionModes.delete(appSessionId)
         this.prePlanModes.delete(appSessionId)
@@ -1049,6 +1083,7 @@ export class Host implements HostApi {
         this.emitRemoved(reapedId)
       }
       this.supervisor.spawnSession(appSessionId, {
+        accountSelection: this.registry.findSession(appSessionId)?.accountSelection,
         cwd,
         binding,
         forked,
@@ -2060,6 +2095,7 @@ export class Host implements HostApi {
       // Evict replay only after recovery succeeds, before replacing the child.
       this.evictReplay(appSessionId)
       await this.supervisor.restartSession(appSessionId, {
+        accountSelection: row.accountSelection,
         cwd: validatedCwd.realpath,
         binding: row.binding,
         forked: row.forked,

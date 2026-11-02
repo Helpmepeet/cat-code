@@ -1,4 +1,5 @@
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
+import { parseSessionAccountSelection, type SessionAccountSelection } from '../shared/sessionAccountSelection.js'
 /**
  * The desktop session registry (D1 — `decisions/REGISTRY.md`).
  *
@@ -130,6 +131,8 @@ export type RegistrySession = {
   appSessionId: string
   /** [D] transcript key — engine-minted; null until the first ready frame. */
   engineSessionId: string | null
+  /** [D] Engine-reported routing identities, independent for each provider. */
+  accountSelection?: SessionAccountSelection
   /** [D] session root — spawn input, not an engine echo. */
   cwd: string
   /** [D] workspace association, independent from the real cwd. */
@@ -1268,6 +1271,16 @@ export class SessionRegistry {
     })
   }
 
+  async setAccountSelection(appSessionId: string, selection: SessionAccountSelection): Promise<void> {
+    const validated = parseSessionAccountSelection(selection)
+    if (!validated) return
+    await this.mutate('setAccountSelection', appSessionId, row => {
+      if (Object.entries(validated).every(([provider, id]) =>
+        row.accountSelection?.[provider as keyof SessionAccountSelection] === id)) return false
+      row.accountSelection = { ...row.accountSelection, ...validated }
+    })
+  }
+
   /**
    * Update the app-owned title on rename (§4.5), stamping `titleUpdatedAt` with
    * the moment this intent was recorded so the renderer can tell an app rename
@@ -1727,6 +1740,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
   return (
     left.appSessionId === right.appSessionId &&
     left.engineSessionId === right.engineSessionId &&
+    JSON.stringify(left.accountSelection) === JSON.stringify(right.accountSelection) &&
     left.cwd === right.cwd &&
     JSON.stringify(left.binding) === JSON.stringify(right.binding) &&
     left.title === right.title &&
@@ -1769,6 +1783,12 @@ function mergeRegistryRow(
   const binding = baseline && JSON.stringify(local.binding) === JSON.stringify(baseline.binding)
     ? latest.binding
     : local.binding
+  const accountSelection = { ...latest.accountSelection }
+  for (const provider of ['anthropic', 'openai'] as const) {
+    if (local.accountSelection?.[provider] !== baseline?.accountSelection?.[provider]) {
+      accountSelection[provider] = local.accountSelection?.[provider]
+    }
+  }
   // The three peer fields are durable identity/intent, not runtime hints, so they
   // follow the `forked` rule: a writer that did not change a field from its own
   // baseline must not roll back a concurrent writer's newer value. That is what
@@ -1798,6 +1818,7 @@ function mergeRegistryRow(
 
   return {
     appSessionId: local.appSessionId,
+    ...(Object.keys(accountSelection).length ? { accountSelection } : {}),
     engineSessionId: runtime.engineSessionId,
     cwd: runtime.cwd,
     binding,
@@ -1896,6 +1917,8 @@ function validateRow(candidate: unknown): RegistrySession | null {
     shutdown,
   }
   if (typeof candidate.title === 'string') row.title = candidate.title
+  const accountSelection = parseSessionAccountSelection(candidate.accountSelection)
+  if (accountSelection) row.accountSelection = accountSelection
   // PEER-SESSIONS §2 — additive migration, the `forked` treatment: a row written
   // before peer names existed simply has none, and `fillMissingNames` gives it
   // one at the next launch — if it was attached inside `NAME_REPAIR_WINDOW_MS`;

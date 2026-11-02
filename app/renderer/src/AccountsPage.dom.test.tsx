@@ -80,6 +80,32 @@ test('healthy Anthropic rows keep switching and both provider add actions', asyn
   expect(sent[2]).toMatchObject({ type: 'account.login', provider: 'openai' })
 })
 
+test('Anthropic active badge and switch action follow the current chat, not the shared default', async () => {
+  const sent: AccountVerbMessage[] = []
+  const snapshot: AccountsSnapshot = {
+    ...emptySnapshot,
+    anthropicAccounts: ['a', 'b'].map(id => ({
+      id, alias: id, email: `${id}@example.com`, status: 'healthy',
+      isDefault: id === 'a', hasVaultProfile: true,
+      subscriptionType: 'pro', loginStale: false,
+    })),
+    anthropicActiveAccountId: 'a', anthropicPoolCount: 2, anthropicReadyCount: 2,
+  }
+  const tree = await harness.mount(
+    <AccountsPage snapshot={snapshot}
+      switchScope={{ provider: 'anthropic', accountId: 'b' }}
+      lastResult={null} onVerb={verb => sent.push(verb)} />,
+  )
+  const switches = [...tree.container.querySelectorAll('button')].filter(
+    button => button.textContent === 'Switch',
+  )
+  expect(switches).toHaveLength(1)
+  expect(switches[0]!.parentElement?.textContent).toContain('a@example.com')
+  expect(switches[0]!.parentElement?.textContent).not.toContain('active')
+  await act(async () => { switches[0]!.click() })
+  expect(sent[0]).toMatchObject({ type: 'account.switch', provider: 'anthropic', accountId: 'a' })
+})
+
 test('Refresh all shows the matched failure and retries before displaying new results', async () => {
   const sent: AccountVerbMessage[] = []
   const onVerb = (verb: AccountVerbMessage) => { sent.push(verb) }

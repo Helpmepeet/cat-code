@@ -12,7 +12,7 @@ import { clearPolicyLimitsCache } from '../../services/policyLimits/index.js';
 // flushTelemetry is loaded lazily to avoid pulling in ~1.1MB of OpenTelemetry at startup
 import { clearRemoteManagedSettingsCache } from '../../services/remoteManagedSettings/index.js';
 import { clearCodexOAuthTokens, clearPendingOAuthCredentials, getClaudeAIOAuthTokens, removeApiKey } from '../../utils/auth.js';
-import { getClaudePoolStatus, removeClaudeAccount, syncClaudeAccountToStorage } from '../../services/api/claudeAccountPool.js';
+import { getClaudePoolStatus, removeClaudeAccount } from '../../services/api/claudeAccountPool.js';
 import { clearBetasCaches } from '../../utils/betas.js';
 import { saveGlobalConfig } from '../../utils/config.js';
 import { gracefulShutdownSync } from '../../utils/gracefulShutdown.js';
@@ -115,7 +115,6 @@ export async function call(): Promise<React.ReactNode> {
       if (!removeClaudeAccount(active.accountUuid)) {
         return <Text>Failed to remove Claude account. Check logs for details.</Text>;
       }
-      syncClaudeAccountToStorage();
       await clearAuthRelatedCaches();
       const remaining = getClaudePoolStatus();
       const newActive = remaining.accounts[remaining.activeIndex];

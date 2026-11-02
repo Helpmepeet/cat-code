@@ -5,6 +5,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as codexPoolModule from '../../src/services/api/codexAccountPool.js'
+import * as claudePoolModule from '../../src/services/api/claudeAccountPool.js'
+import * as codexSwitchModule from '../../src/services/api/codexAccountSwitch.js'
+import * as configModule from '../../src/utils/config.js'
+import * as secureStorageModule from '../../src/utils/secureStorage/index.js'
+import * as logoutModule from '../../src/commands/logout/logout.js'
+import * as authModule from '../../src/utils/auth.js'
+import {
+  blockSessionAccountRoute,
+  clearSessionAccountRouteBlock,
+  getSessionAccountRouteBlock,
+} from '../../src/services/api/sessionAccountRouting.js'
 import {
   getPoolStatus,
   resetCodexAccountPoolForTest,
@@ -89,6 +100,8 @@ function poolAccount(overrides: Partial<PoolAccount> = {}): PoolAccount {
 }
 
 afterEach(() => {
+  clearSessionAccountRouteBlock('anthropic')
+  clearSessionAccountRouteBlock('openai')
   mock.restore()
   resetCodexAccountPoolForTest()
   resetClaudeAccountPoolForTest()
@@ -729,6 +742,74 @@ describe('real Codex switch executor', () => {
 })
 
 describe('real Anthropic switch executor', () => {
+  test.each(['session', 'default'] as const)('%s switching uses the correct credential ownership', async switchScope => {
+    const accounts: ClaudePoolAccount[] = ['a', 'b'].map(id => ({
+      accountUuid: `claude-${id}`,
+      emailAddress: `${id}@example.invalid`,
+      accessToken: `synthetic-access-${id}`,
+      refreshToken: `synthetic-refresh-${id}`,
+      expiresAt: Date.now() + 3_600_000,
+      status: 'healthy',
+      scopes: ['user:inference', 'user:profile'],
+    }))
+    seedClaudeAccountPoolForTest({ accounts, activeAccountUuid: 'claude-a' })
+    let savedConfig = {
+      activeClaudeAccountUuid: 'claude-a',
+      oauthAccount: { accountUuid: 'claude-a', emailAddress: 'a@example.invalid' },
+    } as ReturnType<typeof configModule.getGlobalConfig>
+    let stored: ReturnType<ReturnType<typeof secureStorageModule.getSecureStorage>['read']> = {}
+    const save = spyOn(configModule, 'saveGlobalConfig').mockImplementation(update => {
+      savedConfig = update(savedConfig)
+      return true
+    })
+    spyOn(configModule, 'getGlobalConfig').mockImplementation(() => savedConfig)
+    const storage = spyOn(secureStorageModule, 'getSecureStorage').mockReturnValue({
+      name: 'synthetic',
+      read: () => structuredClone(stored),
+      readAsync: async () => structuredClone(stored),
+      update: (data: Parameters<ReturnType<typeof secureStorageModule.getSecureStorage>['update']>[0]) => {
+        stored = structuredClone(data)
+        return { success: true }
+      },
+      delete: () => true,
+    })
+    spyOn(logoutModule, 'clearAuthRelatedCaches').mockResolvedValue(undefined)
+    spyOn(codexPoolModule, 'applyPostCodexAccountSwitchRefresh').mockImplementation(() => {})
+
+    const result = await createRealAccountsExecutor({ switchScope }).switchAnthropic('claude-b')
+
+    expect(result.ok).toBe(true)
+    if (switchScope === 'default') {
+      expect(savedConfig.activeClaudeAccountUuid).toBe('claude-b')
+      expect(savedConfig.oauthAccount?.accountUuid).toBe('claude-b')
+      expect(stored?.claudeAiOauth?.accountUuid).toBe('claude-b')
+      expect(storage).toHaveBeenCalled()
+    } else {
+      expect(savedConfig.activeClaudeAccountUuid).toBe('claude-a')
+      expect(savedConfig.oauthAccount?.accountUuid).toBe('claude-a')
+      expect(save).not.toHaveBeenCalled()
+      expect(storage).not.toHaveBeenCalled()
+    }
+  })
+
+  test('host default switching explicitly persists the Codex selection', async () => {
+    const commit = spyOn(codexSwitchModule, 'commitCodexAccountSwitch').mockResolvedValue(poolAccount())
+    expect((await createRealAccountsExecutor({ switchScope: 'default' }).switch('target')).ok).toBe(true)
+    expect(commit).toHaveBeenCalledWith('target', { persistDefault: true })
+  })
+
+  test.each(['anthropic', 'openai'] as const)('a thrown %s switch returns a correlated business failure', async provider => {
+    const fail = async () => { throw new Error('Account selection could not be saved.') }
+    const executor = createRealAccountsExecutor({
+      commitSwitch: fail,
+      commitAnthropicSwitch: fail,
+    })
+    const result = provider === 'anthropic'
+      ? await executor.switchAnthropic('synthetic-account')
+      : await executor.switch('synthetic-account')
+    expect(result).toEqual({ ok: false, message: 'Account selection could not be saved.' })
+  })
+
   test('awaits the session-local engine transaction before reporting success', async () => {
     let finish!: (account: ClaudePoolAccount) => void
     const pending = new Promise<ClaudePoolAccount>(resolve => { finish = resolve })
@@ -787,6 +868,84 @@ describe('real Anthropic switch executor', () => {
       message: 'Could not switch to that Anthropic account.',
     })
     expect(outcome.poolChanged).toBe(false)
+  })
+
+  test('explicit selection revalidates an older dead row before rejecting a newer login', async () => {
+    const account: ClaudePoolAccount = {
+      accountUuid: 'claude-new-login',
+      emailAddress: 'new-login@example.invalid',
+      accessToken: 'synthetic-access',
+      refreshToken: 'synthetic-refresh',
+      expiresAt: Date.now() + 3_600_000,
+      status: 'dead',
+    }
+    seedClaudeAccountPoolForTest({ accounts: [account], activeAccountUuid: account.accountUuid })
+    const current = { ...account, status: 'healthy' as const, lifecycleGeneration: 2 }
+    const prepare = spyOn(claudePoolModule, 'prepareClaudeAccountForSelection').mockReturnValue(current)
+    const domain = makeAccountsDomain({
+      executor: createRealAccountsExecutor({ commitAnthropicSwitch: async () => current }),
+    })
+
+    const outcome = await domain.runVerb({
+      type: 'account.switch', requestId: 'new-login-selection',
+      accountId: account.accountUuid, provider: 'anthropic',
+    })
+
+    expect(prepare).toHaveBeenCalledWith(account.accountUuid)
+    expect(outcome.result.ok).toBe(true)
+  })
+
+  test('a blocked saved Claude selection has no false active row and an explicit switch recovers it', async () => {
+    const account: ClaudePoolAccount = {
+      accountUuid: 'claude-replacement',
+      emailAddress: 'replacement@example.invalid',
+      accessToken: 'synthetic-access',
+      refreshToken: 'synthetic-refresh',
+      expiresAt: Date.now() + 3_600_000,
+      status: 'healthy',
+    }
+    seedClaudeAccountPoolForTest({ accounts: [account], activeAccountUuid: account.accountUuid })
+    spyOn(authModule, 'hasAnthropicCredentials').mockReturnValue(true)
+    spyOn(authModule, 'isClaudeAISubscriber').mockReturnValue(true)
+    blockSessionAccountRoute('anthropic', 'missing-saved-account')
+    const domain = makeAccountsDomain({
+      executor: createRealAccountsExecutor({
+        commitAnthropicSwitch: async () => account,
+      }),
+    })
+
+    expect(domain.getSnapshot()?.anthropicActiveAccountId).toBeNull()
+    expect(domain.getSnapshot()?.anthropicAccounts.every(row => !row.isDefault)).toBe(true)
+    expect(getSessionAccountRouteBlock('anthropic')).not.toBeNull()
+
+    const outcome = await domain.runVerb({
+      type: 'account.switch', requestId: 'restore-selection',
+      accountId: account.accountUuid, provider: 'anthropic',
+    })
+
+    expect(outcome.result.ok).toBe(true)
+    expect(getSessionAccountRouteBlock('anthropic')).toBeNull()
+    expect(domain.getSnapshot()?.anthropicActiveAccountId).toBe(account.accountUuid)
+  })
+
+  test('a refused Codex replacement retains its route block until a successful explicit switch', async () => {
+    const account = poolAccount({ accountId: 'codex-replacement' })
+    seedCodexAccountPoolForTest({ accounts: [account], activeAccountId: account.accountId })
+    blockSessionAccountRoute('openai', 'missing-saved-account')
+    let allowed = false
+    const domain = makeAccountsDomain({
+      executor: createRealAccountsExecutor({ commitSwitch: async () => allowed ? account : null }),
+    })
+    expect(domain.getSnapshot()?.activeAccountId).toBeNull()
+    expect(domain.getSnapshot()?.accounts.every(row => !row.isDefault)).toBe(true)
+    const verb = { type: 'account.switch' as const, requestId: 'recover', accountId: account.accountId }
+
+    expect((await domain.runVerb(verb)).result.ok).toBe(false)
+    expect(getSessionAccountRouteBlock('openai')).not.toBeNull()
+    allowed = true
+    expect((await domain.runVerb(verb)).result.ok).toBe(true)
+    expect(getSessionAccountRouteBlock('openai')).toBeNull()
+    expect(domain.getSnapshot()?.activeAccountId).toBe(account.accountId)
   })
 })
 

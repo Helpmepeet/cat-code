@@ -34,9 +34,13 @@ import {
   updateClaudeAccountTokens,
   reloadActiveClaudeAccountCredentials,
   reloadClaudeAccountCredentials,
+  isClaudeAccountDeleted,
+  getClaudeCredentialGeneration,
+  withClaudeCredentialGeneration,
   retryClaudeAccountTokenPersistence,
 } from '../services/api/claudeAccountPool.js'
 import { getActiveAccount, hasAnyPoolAccount } from '../services/api/codexAccountPool.js'
+import { getSessionAccountRouteBlock } from '../services/api/sessionAccountRouting.js'
 import {
   getApiKeyFromFileDescriptor,
   getOAuthTokenFromFileDescriptor,
@@ -1223,10 +1227,16 @@ async function maybeRemoveApiKeyFromMacOSKeychain(): Promise<void> {
 }
 
 // Function to store OAuth tokens in secure storage
-export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
+export function saveOAuthTokensIfNeeded(tokens: OAuthTokens, expectedGeneration?: number): {
   success: boolean
   warning?: string
 } {
+  if (expectedGeneration !== undefined) {
+    const accountUuid = tokens.accountUuid
+    if (!accountUuid) return { success: false }
+    return withClaudeCredentialGeneration(accountUuid, expectedGeneration,
+      () => saveOAuthTokensIfNeeded(tokens)) ?? { success: false }
+  }
   if (!shouldUseClaudeAIAuth(tokens.scopes)) {
     logEvent('tengu_oauth_tokens_not_claude_ai', {})
     return { success: true }
@@ -1297,13 +1307,21 @@ export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
 }
 
 // Secure-storage failures retain only process-local account-bound credentials.
-const pendingSecureOAuth = new Map<string | undefined, { tokens: OAuthTokens; superseded: Set<string> }>()
+const pendingSecureOAuth = new Map<string | undefined, { tokens: OAuthTokens; superseded: Set<string>; generation: number }>()
 export function clearPendingOAuthCredentials(): void {
   pendingSecureOAuth.clear()
 }
 function retainPendingSecureOAuth(disk: OAuthTokens | null): OAuthTokens | null {
   const accountUuid = getGlobalConfig().oauthAccount?.accountUuid
+  if (accountUuid && isClaudeAccountDeleted(accountUuid)) {
+    pendingSecureOAuth.delete(accountUuid)
+    return null
+  }
   const pending = pendingSecureOAuth.get(accountUuid)
+  if (pending && accountUuid && getClaudeCredentialGeneration(accountUuid) !== pending.generation) {
+    pendingSecureOAuth.delete(accountUuid)
+    return disk
+  }
   if (!pending) return disk
   if (disk && disk.accountUuid === accountUuid && disk.accessToken !== pending.tokens.accessToken &&
       !pending.superseded.has(disk.accessToken) && (disk.expiresAt ?? 0) > (pending.tokens.expiresAt ?? 0)) {
@@ -1313,7 +1331,7 @@ function retainPendingSecureOAuth(disk: OAuthTokens | null): OAuthTokens | null 
   return pending.tokens
 }
 
-export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
+const getCachedClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
   // --bare: API-key-only. No OAuth env tokens, no keychain, no credentials file.
   if (isBareMode()) return null
 
@@ -1372,12 +1390,29 @@ export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
     if (oauthData.accountUuid !== undefined &&
         oauthData.accountUuid !== getGlobalConfig().oauthAccount?.accountUuid) return null
 
-    return retainPendingSecureOAuth(oauthData)
+    return retainPendingSecureOAuth({
+      ...oauthData,
+      accountUuid: oauthData.accountUuid ?? getGlobalConfig().oauthAccount?.accountUuid,
+    })
   } catch (error) {
     logError(error)
     return retainPendingSecureOAuth(null)
   }
 })
+
+export const getClaudeAIOAuthTokens = Object.assign((): OAuthTokens | null => {
+  if (getSessionAccountRouteBlock('anthropic')) return null
+  if (shouldUseClaudePoolTokenSource() &&
+      !process.env.CLAUDE_CODE_OAUTH_TOKEN && !getOAuthTokenFromFileDescriptor()) {
+    const account = getActiveClaudeAccount()
+    if (!account) return null
+  }
+  const tokens = getCachedClaudeAIOAuthTokens()
+  const accountUuid = tokens?.accountUuid ?? getGlobalConfig().oauthAccount?.accountUuid
+  if (accountUuid && !process.env.CLAUDE_CODE_OAUTH_TOKEN &&
+      !getOAuthTokenFromFileDescriptor() && isClaudeAccountDeleted(accountUuid)) return null
+  return tokens
+}, { cache: getCachedClaudeAIOAuthTokens.cache })
 
 /**
  * Clears all OAuth token caches. Call this on 401 errors to ensure
@@ -1794,7 +1829,7 @@ async function recoverOAuth401ErrorImpl(
     }
     const pending = poolAccount ? undefined : pendingSecureOAuth.get(accountUuid)
     if (pending) {
-      if (!saveOAuthTokensIfNeeded(pending.tokens).success) return result('persistence_pending')
+      if (!saveOAuthTokensIfNeeded(pending.tokens, pending.generation).success) return result('persistence_pending')
       pendingSecureOAuth.delete(accountUuid)
     }
     return result('adopted_newer')
@@ -1813,8 +1848,10 @@ async function recoverOAuth401ErrorImpl(
     const locked = await read()
     if (adopted(locked)) return adoptionResult()
     if (!locked?.refreshToken) return result('unavailable')
+    const generation = accountUuid ? getClaudeCredentialGeneration(accountUuid) : null
+    if (generation === null) return result('unavailable')
     const refreshedResponse = await refreshOAuthToken(locked.refreshToken, {
-      persistProfile: !poolAccount,
+      persistProfile: false,
       scopes: shouldUseClaudeAIAuth(locked.scopes ?? undefined) ? undefined : locked.scopes ?? undefined,
     })
     const refreshed = { ...refreshedResponse, refreshToken: refreshedResponse.refreshToken ?? locked.refreshToken }
@@ -1835,13 +1872,14 @@ async function recoverOAuth401ErrorImpl(
         return adopted(current) ? adoptionResult() : result('transient_failure')
       }
       durable = getGlobalConfig().oauthAccount?.accountUuid === accountUuid &&
-        saveOAuthTokensIfNeeded({ ...refreshed, accountUuid }).success
+        saveOAuthTokensIfNeeded({ ...refreshed, accountUuid }, generation).success
     }
     if (!durable && !poolAccount) {
       const previous = pendingSecureOAuth.get(accountUuid)
       const superseded = previous?.superseded ?? new Set<string>()
       superseded.add(locked.accessToken)
-      pendingSecureOAuth.set(accountUuid, { tokens: { ...refreshed, accountUuid }, superseded })
+      if (!accountUuid || getClaudeCredentialGeneration(accountUuid) !== generation) return result('unavailable')
+      pendingSecureOAuth.set(accountUuid, { tokens: { ...refreshed, accountUuid }, superseded, generation })
     }
     clearOAuthTokenCache()
     if (!durable) {
@@ -1870,6 +1908,7 @@ async function recoverOAuth401ErrorImpl(
  * (which don't hit the keychain), and only uses async for storage reads.
  */
 export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null> {
+  if (getSessionAccountRouteBlock('anthropic')) return null
   if (isBareMode()) return null
 
   // Env var and FD tokens are sync and don't hit the keychain
@@ -1903,15 +1942,19 @@ export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null>
   try {
     const secureStorage = getSecureStorage()
     const storageData = await secureStorage.readAsync()
+    if (getSessionAccountRouteBlock('anthropic')) return null
     const oauthData = storageData?.claudeAiOauth
     if (!oauthData?.accessToken) {
       return retainPendingSecureOAuth(null)
     }
     if (oauthData.accountUuid !== undefined &&
         oauthData.accountUuid !== getGlobalConfig().oauthAccount?.accountUuid) return null
-    return retainPendingSecureOAuth(oauthData)
+    const accountUuid = oauthData.accountUuid ?? getGlobalConfig().oauthAccount?.accountUuid
+    if (accountUuid && isClaudeAccountDeleted(accountUuid)) return null
+    return retainPendingSecureOAuth({ ...oauthData, accountUuid })
   } catch (error) {
     logError(error)
+    if (getSessionAccountRouteBlock('anthropic')) return null
     return retainPendingSecureOAuth(null)
   }
 }
@@ -1926,7 +1969,7 @@ export async function checkAndRefreshOAuthTokenIfNeeded(
   const pending = shouldUseClaudePoolTokenSource()
     ? undefined
     : pendingSecureOAuth.get(getGlobalConfig().oauthAccount?.accountUuid)
-  if (pending && !saveOAuthTokensIfNeeded(pending.tokens).success) return false
+  if (pending && !saveOAuthTokensIfNeeded(pending.tokens, pending.generation).success) return false
   const tokens = getClaudeAIOAuthTokens()
   if (!tokens?.refreshToken || (!force && !isOAuthTokenExpired(tokens.expiresAt))) return false
   const result = await recoverOAuth401Error(tokens.accessToken, tokens.accountUuid)

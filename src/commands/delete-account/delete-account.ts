@@ -9,7 +9,6 @@ import {
   getClaudePoolStatus,
   removeClaudeAccount,
   resolveClaudeAccountByPrefix,
-  syncClaudeAccountToStorage,
 } from '../../services/api/claudeAccountPool.js'
 import { clearOAuthTokenCache } from '../../utils/auth.js'
 import { stripSignatureBlocks } from '../../utils/messages.js'
@@ -202,11 +201,7 @@ export const call: LocalCommandCall = async (args, context) => {
       return { type: 'text', value: 'Failed to delete account. Check logs for details.' }
     }
 
-    if (getClaudePoolStatus().activeIndex >= 0) {
-      syncClaudeAccountToStorage()
-    } else {
-      clearOAuthTokenCache()
-    }
+    clearOAuthTokenCache()
     await clearAuthRelatedCaches()
     applyPostDeleteAccountStateRefresh(context)
 

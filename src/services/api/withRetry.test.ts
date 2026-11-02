@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
-import { APIError } from '@anthropic-ai/sdk'
+import { APIConnectionError, APIError } from '@anthropic-ai/sdk'
 import * as auth from '../../utils/auth.js'
 import * as sleep from '../../utils/sleep.js'
 import * as debug from '../../utils/debug.js'
@@ -121,6 +121,31 @@ describe('Claude OAuth retry identity', () => {
     401, { error: { type: 'authentication_error', message: 'Unauthorized' } },
     'Unauthorized', new Headers(),
   )
+
+  test('a cached client cannot retry after its credential generation is deleted', async () => {
+    const pool = await import('./claudeAccountPool.js')
+    let generation: number | null = 0
+    spyOn(pool, 'getClaudeCredentialGeneration').mockImplementation(() => generation)
+    let attempts = 0
+    let clients = 0
+    let failure: unknown
+    try {
+      for await (const _message of withRetry(async () => {
+        clients++
+        return clientForSelectedAccount()
+      }, async () => {
+        attempts++
+        generation = null
+        throw new APIConnectionError({ message: 'synthetic connection failure' })
+      }, options)) {}
+    } catch (error) {
+      failure = error
+    }
+    expect(attempts).toBe(1)
+    expect(clients).toBe(1)
+    expect(failure).toBeInstanceOf(CannotRetryError)
+    expect((failure as Error).message).toContain('account is no longer available')
+  })
 
   test.each(['transient_failure', 'persistence_pending', 'unavailable'] as const)(
     '%s does not mark an account dead or fail over',

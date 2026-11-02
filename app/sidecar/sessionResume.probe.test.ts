@@ -67,7 +67,8 @@ async function waitForExit(pid: number): Promise<void> {
   }
   throw new Error(`Owned recovery probe process ${pid} did not exit`)
 }
-async function startRecovery(configHome: string, cwd: string, engineSessionId: string) {
+async function startRecovery(configHome: string, cwd: string, engineSessionId: string,
+  accountSelection?: import('../shared/sessionAccountSelection.js').SessionAccountSelection) {
   const appSessionId = randomUUID()
   const frames: ServerFrame[] = [], logs: string[] = []
   const exits: Array<{ code: number | null; signal: string | null }> = []
@@ -93,7 +94,7 @@ async function startRecovery(configHome: string, cwd: string, engineSessionId: s
     }
     throw new Error(`Recovery sidecar did not produce its expected frame: ${logs.slice(-12).join('\n')}`)
   }
-  supervisor.spawnSession(appSessionId, { cwd, resumeEngineSessionId: engineSessionId })
+  supervisor.spawnSession(appSessionId, { cwd, resumeEngineSessionId: engineSessionId, accountSelection })
   const pid = supervisor.getSessionProcessId(appSessionId)
   if (pid !== undefined) owned.pids.push(pid)
   const ready = await wait(frame => frame.kind === 'ready')
@@ -143,6 +144,34 @@ function assertNotOrdinaryHistory(frames: ServerFrame[], ids: string[]): void {
   }
   expect(frames.some(frame => frame.kind === 'event' && frame.event.type === 'turn.status' && frame.event.activeTurn)).toBe(false)
 }
+
+test('unavailable saved accounts boot valid history with actionable diagnostics and account management', async () => {
+  const configHome = tmp('catcode-account-restore-cfg-'), cwd = tmp('catcode-account-restore-cwd-')
+  const engineSessionId = randomUUID(), marker = `account-restore-${randomUUID()}`
+  await run([minter, engineSessionId, marker], cwd, configHome)
+  const selection = { anthropic: randomUUID(), openai: randomUUID() }
+  for (let replacement = 0; replacement < 2; replacement++) {
+    const restored = await startRecovery(configHome, cwd, engineSessionId, selection)
+    const accounts = await restored.wait(frame => frame.kind === 'accounts.snapshot')
+    expect(accounts).toMatchObject({ accounts: { activeAccountId: null, anthropicActiveAccountId: null } })
+    for (const provider of ['anthropic', 'openai'] as const) {
+      const diagnostic = await restored.wait(frame => frame.kind === 'event' && frame.event.type === 'message' &&
+        frame.event.message.type === 'system' && frame.event.message.subtype === 'cat_code_account_diagnostic' &&
+        frame.event.message.provider === provider)
+      expect(JSON.stringify(diagnostic)).toContain('Open Accounts')
+      expect(JSON.stringify(diagnostic)).not.toContain(selection[provider])
+    }
+    // Account management remains served rather than turning a valid transcript
+    // into a resume failure. An unknown target is an ordinary verb error.
+    const requestId = randomUUID()
+    restored.send({ type: 'account.switch', requestId, accountId: selection.openai, provider: 'openai' })
+    const response = await restored.wait(frame => 'requestId' in frame && frame.requestId === requestId)
+    expect(response).toMatchObject({ kind: 'account.result', ok: false })
+    expect(restored.ready).toMatchObject({ engineSessionId })
+    expect(JSON.stringify(restored.frames)).toContain(marker)
+    await restored.stop()
+  }
+}, TEST_TIMEOUT_MS)
 
 test('production restore copies waiting text/media safely and persists only explicit removal across restart', async () => {
   const configHome = tmp('catcode-review-cfg-'), cwd = tmp('catcode-review-cwd-')

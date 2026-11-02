@@ -386,8 +386,8 @@ function DeleteAccountDialog({
         {target.isDefault ? (
           <span className="text-tone-warn">
             {hasOtherSwitchable
-              ? ' This is the active account, so another will be activated.'
-              : ' This is the active account, and no other usable account remains. You’ll have none active until you sign in.'}
+              ? ' This is the default for new chats, so another account will become the default.'
+              : ' This is the default for new chats, and no other usable account remains. Sign in or switch accounts before starting a new chat.'}
           </span>
         ) : null}
       </div>
@@ -437,11 +437,11 @@ function LogoutAccountDialog({
         {account.isDefault ? (
           <>
             {hasOtherSwitchable
-              ? 'Another usable account will become active.'
-              : 'No other usable account remains, so no account will be active.'}
+              ? 'Another usable account will become the default for new chats.'
+              : 'No other usable account remains. Sign in or switch accounts before starting a new chat.'}
           </>
         ) : (
-          <>Your active account will not change.</>
+          <>The default account for new chats will not change.</>
         )}
       </div>
     </ALDialog>
@@ -895,11 +895,13 @@ type Pending = {
 
 export function AccountsPage({
   snapshot,
+  switchScope,
   lastResult,
   signOutOverlays = {},
   onVerb,
 }: {
   snapshot: AccountsSnapshot | null
+  switchScope?: { provider: 'openai' | 'anthropic'; accountId: string | null }
   lastResult: AccountResultFrame | null
   signOutOverlays?: Record<string, AccountSignOutOverlay>
   onVerb: (verb: AccountVerbMessage) => void
@@ -922,14 +924,33 @@ export function AccountsPage({
     }
   }, [lastResult])
 
-  const rows = selectAccountRows(snapshot)
-  const active = selectActiveAccount(snapshot)
+  const switchSnapshot = snapshot && switchScope ? {
+    ...snapshot,
+    accounts: snapshot.accounts.map(account => ({
+      ...account,
+      isDefault: switchScope.provider === 'openai'
+        ? account.id === switchScope.accountId : account.isDefault,
+      // The shared pool suppresses switching to its own default. That account
+      // is still a valid destination when this chat is using another account.
+      switchable: switchScope.provider === 'openai'
+        ? account.id !== switchScope.accountId &&
+          (account.switchable || (account.isDefault && account.availability !== 'blocked'))
+        : account.switchable,
+    })),
+    anthropicAccounts: snapshot.anthropicAccounts.map(account => ({
+      ...account,
+      isDefault: switchScope.provider === 'anthropic'
+        ? account.id === switchScope.accountId : account.isDefault,
+    })),
+  } : snapshot
+  const rows = selectAccountRows(switchSnapshot)
+  const active = selectActiveAccount(switchSnapshot)
   const capAccount = selectCapAccount(snapshot)
   const readyLabel = selectReadyLabel(snapshot)
   const anthropicReadyLabel = selectAnthropicReadyLabel(snapshot)
   const rest = rows.filter(a => a.id !== active?.id)
   const capSwitchTarget = capAccount
-    ? rows.find(a => a.id !== capAccount.id && a.switchable) ?? null
+    ? rows.find(a => a.id !== capAccount.id && !a.isDefault && a.switchable) ?? null
     : null
   const capKey = capIncidentKey(capAccount)
 
@@ -970,6 +991,8 @@ export function AccountsPage({
       submit(switchVerb(account.id))
       return
     }
+    // Destructive actions affect the shared pool, not the retained chat.
+    account = snapshot?.accounts.find(row => row.id === account.id) ?? account
     if (key === 'retry_logout') {
       const overlay = signOutOverlays[account.id]
       if (!overlay || overlay.phase !== 'checking') return
@@ -1017,6 +1040,12 @@ export function AccountsPage({
             </h1>
             <p className="mt-1 text-[13px] text-text-faint">
               Anthropic and Codex subscription accounts available to Cat Code.
+            </p>
+            <p className="mt-1 text-[13px] text-text-faint">
+              {switchScope
+                ? `Switching ${switchScope.provider === 'anthropic' ? 'Anthropic' : 'Codex'} accounts changes your current chat. Other account switches set the default for new chats.`
+                : 'Switching accounts sets the default for new chats.'}
+              {' Sign-out and deletion apply everywhere.'}
             </p>
           </div>
           {active && active.status === 'healthy' ? (
@@ -1107,7 +1136,7 @@ export function AccountsPage({
               </div>
             ) : (
               <div className="flex flex-col gap-1.5">
-                {snapshot.anthropicAccounts.map(account => (
+                {switchSnapshot!.anthropicAccounts.map(account => (
                   <div
                     key={account.id}
                     data-window-card

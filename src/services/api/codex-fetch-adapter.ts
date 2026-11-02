@@ -16,6 +16,7 @@
  */
 
 import { APIConnectionError } from '@anthropic-ai/sdk'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'crypto'
 import { rm } from 'fs/promises'
 import {
@@ -3860,6 +3861,16 @@ type CodexFetchResolvedTokens = CodexCredentialHandle & {
   source?: 'pool' | 'config'
 }
 
+const requestAccountObserver = new AsyncLocalStorage<(accountId: string) => void>()
+
+/** Attribute failures to credentials resolved for this attempt, not the later lease. */
+export function runWithCodexRequestAccount<T>(
+  onAccount: (accountId: string) => void,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return requestAccountObserver.run(onAccount, operation)
+}
+
 export type CodexFetchOptions = {
   resolveTokensForRequest?: () => Promise<CodexFetchResolvedTokens | null>
   credentialUse?: CodexCredentialUseOptions
@@ -3912,6 +3923,7 @@ export function createCodexFetch(
     const currentCredential = resolvedTokens ?? credential
     const currentToken = currentCredential.accessToken
     const currentAccountId = currentCredential.accountId
+    requestAccountObserver.getStore()?.(currentAccountId)
     const poolManagedCredentials = resolvedTokens?.source === 'pool'
 
     // Translate to Codex format

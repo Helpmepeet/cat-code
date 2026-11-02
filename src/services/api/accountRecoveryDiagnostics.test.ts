@@ -46,6 +46,7 @@ const {
 type PoolAccount = import('./codexAccountPool.js').PoolAccount
 const { getAnthropicClient } = await import('./client.js')
 const auth = await import('../../utils/auth.js')
+const codexAccounts = await import('../../codex-core/accounts.js')
 const { getClaudeAIOAuthTokens, isClaudeAISubscriber } = auth
 const { _resetKeepAliveForTesting } = await import('../../utils/proxy.js')
 const {
@@ -659,6 +660,150 @@ describe('account recovery diagnostics', () => {
     const codes = diagnostics.map(diagnostic => diagnostic.code)
     expect(codes).not.toContain('quota.exhausted')
     expect(codes).not.toContain('account.failover.succeeded')
+  })
+
+  test('blocked session routing refuses fallback credentials', async () => {
+    const routing = await import('./sessionAccountRouting.js')
+    const { resolveCodexOAuthTokensForLeaseOwner } = await import('./client.js')
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-two',
+      accounts: [buildPoolAccount({ accountId: 'account-two' })],
+    })
+    routing.blockSessionAccountRoute('openai', 'missing-account')
+    try {
+      await expect(resolveCodexOAuthTokensForLeaseOwner({
+        codexLeaseOwnerType: 'main',
+      })).rejects.toThrow("This chat's saved Codex account is unavailable.")
+      await expect(getAnthropicClient({
+        maxRetries: 0, provider: 'openai', model: 'gpt-5.6-luna',
+      })).rejects.toThrow("This chat's saved Codex account is unavailable.")
+    } finally {
+      routing.clearSessionAccountRouteBlock('openai')
+    }
+  })
+
+  test('observation reload preserves session selection when the shared default differs', async () => {
+    const poolModule = await import('./codexAccountPool.js')
+    const config = await import('../../utils/config.js')
+    config.saveGlobalConfig(value => ({ ...value, activeCodexAccountId: 'account-two' }))
+    const dir = mkdtempSync(join(tmpdir(), 'codex-reload-selection-'))
+    mkdirSync(join(dir, 'accounts'))
+    writeFileSync(join(dir, 'accounts', 'backup.json'), JSON.stringify({
+      tokens: {
+        access_token: buildCodexToken('account-two'),
+        refresh_token: 'synthetic-backup',
+        account_id: 'account-two',
+      },
+    }))
+    writeFileSync(join(dir, 'accounts', 'local.json'), JSON.stringify({
+      tokens: {
+        access_token: buildCodexToken('account-one'),
+        refresh_token: 'synthetic-local',
+        account_id: 'account-one',
+      },
+    }))
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-one',
+      accounts: [buildPoolAccount({ accountId: 'account-one' })],
+    })
+    try {
+      await poolModule.loadPoolForObservation({
+        vaultPath: dir,
+        configAccount: buildPoolAccount({ accountId: 'account-one' }),
+        lifecycle: accountRecoveryLifecycle,
+      })
+      expect(poolModule.getActiveAccount()?.accountId).toBe('account-one')
+      expect(poolModule.switchToAccount('missing', { persistDefault: false })).toBeNull()
+      expect(poolModule.getActiveAccount()?.accountId).toBe('account-one')
+      expect(config.getGlobalConfig().activeCodexAccountId).toBe('account-two')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test.each(['already-dead', 'switch-during-refresh'])(
+    'auth recovery uses fresh replacement state: %s',
+    async scenario => {
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'account-one',
+        accounts: [
+          buildPoolAccount({ accountId: 'account-one' }),
+          buildPoolAccount({ accountId: 'account-two' }),
+        ],
+      })
+      const seed = (accountId: string) => seedCodexLeaseForTest({
+        ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main',
+        accountId, strategy: 'follow-main',
+      })
+      seed('account-one')
+      const poolModule = await import('./codexAccountPool.js')
+      if (scenario === 'already-dead') {
+        poolModule.markPoolAccountStatus('account-one', 'dead', 'synthetic sibling failure', { rerollActive: false })
+      }
+      spyOn(codexAccounts, 'maybeRefreshAccount').mockImplementation(async () => {
+        await Promise.resolve()
+        if (scenario === 'switch-during-refresh') {
+          poolModule.switchToAccount('account-two', { persistDefault: false })
+          seed('account-two')
+        }
+        throw new Error('synthetic refresh transport failure')
+      })
+      let attempts = 0
+      const retry = withRetry(
+        async () => ({}) as never,
+        async () => {
+          if (++attempts === 1) throw new CodexAccountAuthError('account-one', 401)
+          return getCodexLeaseForOwner('main-thread')?.accountId
+        },
+        { model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' },
+          ownerId: 'main-thread', isCodexRequest: true, maxRetries: 2 },
+      )
+      let result
+      for (;;) {
+        const next = await retry.next()
+        if (next.done) { result = next.value; break }
+      }
+      expect(result).toBe('account-two')
+      expect(attempts).toBe(2)
+      expect(getPoolStatus().accounts.find(a => a.accountId === 'account-two')?.status).toBe('healthy')
+    },
+  )
+
+  test('a delayed connection error cannot undo a newer manual switch', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'account-one',
+      accounts: [
+        buildPoolAccount({ accountId: 'account-one' }),
+        buildPoolAccount({ accountId: 'account-two' }),
+      ],
+    })
+    const seed = (accountId: string) => seedCodexLeaseForTest({
+      ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main',
+      accountId, strategy: 'follow-main',
+    })
+    seed('account-one')
+    spyOn(codexAccounts, 'maybeRefreshAccount').mockImplementation(async account => account)
+    const poolModule = await import('./codexAccountPool.js')
+    let attempts = 0
+    for await (const _message of withRetry(
+      async () => ({}) as never,
+      async () => {
+        attempts++
+        if (attempts === 1) throw new CodexAccountAuthError('account-one', 401)
+        if (attempts === 2) {
+          poolModule.switchToAccount('account-two', { persistDefault: false })
+          seed('account-two')
+          throw new APIConnectionError({ message: 'delayed request-one failure' })
+        }
+        return 'ok'
+      },
+      { model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' },
+        ownerId: 'main-thread', isCodexRequest: true, maxRetries: 3 },
+    )) {}
+    expect(attempts).toBe(3)
+    expect(getCodexLeaseForOwner('main-thread')?.accountId).toBe('account-two')
+    expect(poolModule.getActiveAccount()?.accountId).toBe('account-two')
+    expect(getPoolStatus().accounts.every(a => a.lastError === undefined)).toBe(true)
   })
 
   test('recovers from transient Codex connection failover without capping the failed account', async () => {

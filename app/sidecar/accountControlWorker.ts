@@ -6,7 +6,7 @@ import { serveAccountControl } from './accountControlSession.js'
 process.env.CLAUDE_CODE_SIMPLE = ''
 
 async function main(): Promise<void> {
-  const [{ createSidecarAccountsDomain }, codex, anthropic, providers] = await Promise.all([
+  const [{ createSidecarAccountsDomain, createRealAccountsExecutor }, codex, anthropic, providers] = await Promise.all([
     import('./accountsDomain.js'),
     import('../../src/services/api/codexAccountPool.js'),
     import('../../src/services/api/claudeAccountPool.js'),
@@ -16,6 +16,7 @@ async function main(): Promise<void> {
   await codex.loadPoolForObservation()
   anthropic.loadClaudePoolForObservation()
   const domain = createSidecarAccountsDomain({
+    executor: createRealAccountsExecutor({ switchScope: 'default' }),
     onProviderActivated: provider => providers.persistStartupProviderPreference(
       provider === 'openai' ? 'openai' : providers.getConfiguredAnthropicProvider(),
     ),

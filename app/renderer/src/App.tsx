@@ -2117,6 +2117,30 @@ export function App() {
   // Account management stays session-free. A same-provider switch also belongs
   // to the retained chat: changing only the worker's default leaves its live
   // sidecar on the old account until the chat is reopened.
+  const retainedAccountSession = activeSessionId
+    ? shell.byId[activeSessionId]
+    : undefined
+  const retainedAccountProvider = retainedAccountSession &&
+    !isSessionDismissed(shell.dismissals ?? [], retainedAccountSession) &&
+    selectConnection(connection, activeSessionId).status === 'ready'
+    ? selectRunControlsSnapshot(runControls, activeSessionId)?.model.provider
+    : undefined
+  const retainedAccounts = selectAccountsSnapshot(accounts, activeSessionId)
+  const accountSwitchScope = retainedAccountProvider === 'openai' ||
+    retainedAccountProvider === 'anthropic'
+    ? {
+      provider: retainedAccountProvider,
+      accountId: retainedAccountProvider === 'openai'
+        ? selectSessionCodexAccount({
+          roster: selectGlobalAccountsSnapshot(accounts),
+          leases: selectLeaseSnapshot(leases, activeSessionId),
+          lastMainFailoverAccountId: selectLastMainFailoverAccountId(leases, activeSessionId),
+          accounts,
+          sessionId: activeSessionId,
+        })?.id ?? null
+        : selectActiveAnthropicAccount(retainedAccounts)?.id ?? null,
+    }
+    : undefined
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
       if (verb.type === 'account.switch') {
@@ -5178,6 +5202,7 @@ export function App() {
           ) : activeView === 'accounts' ? (
             <AccountsPage
               snapshot={selectGlobalAccountsSnapshot(accounts)}
+              switchScope={accountSwitchScope}
               lastResult={accounts.lastResult}
               signOutOverlays={accounts.signOutOverlays}
               onVerb={sendAccountVerb}

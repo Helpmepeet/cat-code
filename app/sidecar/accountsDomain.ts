@@ -70,9 +70,16 @@ import {
 import {
   getClaudePoolStatus,
   loadClaudePoolForObservation,
+  prepareClaudeAccountForSelection,
+  switchToClaudeAccount,
+  syncClaudeAccountToStorage,
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
 import { commitClaudeAccountSwitch } from '../../src/services/api/claudeAccountSwitch.js'
+import {
+  clearSessionAccountRouteBlock,
+  getSessionAccountRouteBlock,
+} from '../../src/services/api/sessionAccountRouting.js'
 import type { ClaudeAccountUsage } from '../../src/services/api/claudePoolUsage.js'
 import type { CodexAccountDisplayUsage } from '../../src/services/api/codexUsageDisplayCache.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
@@ -110,6 +117,7 @@ import {
 import { OAuthService } from '../../src/services/oauth/index.js'
 import { runCodexOAuthFlow, type CodexTokens } from '../../src/services/oauth/codex-client.js'
 import {
+  clearOAuthTokenCache,
   hasAnthropicCredentials,
   isClaudeAISubscriber,
   validateForceLoginOrgForToken,
@@ -635,6 +643,8 @@ export function buildAccountsSnapshot(
 
 export function createRealAccountsExecutor(
   options: {
+    /** Host account management changes new-chat defaults; chat controls do not. */
+    switchScope?: 'session' | 'default'
     /**
      * The engine's own switch transaction, behind the same injection idiom the
      * domain seams use, so a test can prove the executor runs the WHOLE
@@ -650,9 +660,27 @@ export function createRealAccountsExecutor(
     ) => Promise<CodexAccountSignOutResult>
   } = {},
 ): AccountsCommandExecutor {
-  const commitSwitch = options.commitSwitch ?? commitCodexAccountSwitch
+  const commitSwitch = options.commitSwitch ?? (accountId =>
+    commitCodexAccountSwitch(accountId, {
+      persistDefault: options.switchScope === 'default',
+    }))
   const commitAnthropicSwitch =
-    options.commitAnthropicSwitch ?? commitClaudeAccountSwitch
+    options.commitAnthropicSwitch ?? (options.switchScope === 'default'
+      ? async accountId => {
+          const previous = getClaudePoolStatus()
+          const previousId = previous.accounts[previous.activeIndex]?.accountUuid
+          const account = switchToClaudeAccount(accountId, { persistDefault: false })
+          if (!account) return null
+          try {
+            syncClaudeAccountToStorage()
+          } catch (error) {
+            if (previousId) switchToClaudeAccount(previousId, { persistDefault: false })
+            throw error
+          }
+          await clearAuthRelatedCaches()
+          return account
+        }
+      : commitClaudeAccountSwitch)
   const deleteTransaction = options.deleteTransaction ?? deleteCodexAccount
   const signOutTransaction = options.signOutTransaction ?? signOutCodexAccount
   return {
@@ -663,22 +691,36 @@ export function createRealAccountsExecutor(
     // main-thread lease self-healed on the next turn (it is registered and
     // released per turn, `src/query.ts`), the worker leases did not.
     async switch(accountId) {
-      const account = await commitSwitch(accountId)
-      return account
-        ? { ok: true, message: `Switched to ${account.alias ?? 'account'}` }
-        : { ok: false, message: 'Could not switch to that account.' }
+      try {
+        const account = await commitSwitch(accountId)
+        return account
+          ? { ok: true, message: `Switched to ${account.alias ?? 'account'}` }
+          : { ok: false, message: 'Could not switch to that account.' }
+      } catch (error) {
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : 'Could not switch to that account.',
+        }
+      }
     },
     async switchAnthropic(accountId) {
-      const account = await commitAnthropicSwitch(accountId)
-      if (!account) {
+      try {
+        const account = await commitAnthropicSwitch(accountId)
+        if (account) {
+          return {
+            ok: true,
+            message: `Switched to ${account.alias ?? account.emailAddress}`,
+          }
+        }
         return {
           ok: false,
           message: 'Could not switch to that Anthropic account.',
         }
-      }
-      return {
-        ok: true,
-        message: `Switched to ${account.alias ?? account.emailAddress}`,
+      } catch (error) {
+        return {
+          ok: false,
+          message: error instanceof Error ? error.message : 'Could not switch to that Anthropic account.',
+        }
       }
     },
     rename(accountId, alias) {
@@ -1150,7 +1192,7 @@ export function createSidecarAccountsDomain(
   return {
     getSnapshot() {
       try {
-        return buildAccountsSnapshot(
+        const snapshot = buildAccountsSnapshot(
           getPoolStatus(),
           Date.now(),
           getClaudePoolStatus(),
@@ -1158,6 +1200,23 @@ export function createSidecarAccountsDomain(
           undefined,
           readProfileInventory(),
         )
+        if (getSessionAccountRouteBlock('openai')) {
+          snapshot.activeAccountId = null
+          snapshot.accounts = snapshot.accounts.map(account => ({
+            ...account,
+            isDefault: false,
+            switchable: account.availability !== 'blocked',
+          }))
+        }
+        if (getSessionAccountRouteBlock('anthropic')) {
+          snapshot.anthropicActiveAccountId = null
+          snapshot.anthropicSubscriptionActive = false
+          snapshot.anthropicAccounts = snapshot.anthropicAccounts.map(account => ({
+            ...account,
+            isDefault: false,
+          }))
+        }
+        return snapshot
       } catch {
         return null
       }
@@ -1179,11 +1238,12 @@ export function createSidecarAccountsDomain(
       switch (verb.type) {
         case 'account.switch': {
           if (verb.provider === 'anthropic') {
-            const account = await resolveAnthropicAccountForWrite(verb.accountId)
-            if (!account) {
+            const knownAccount = await resolveAnthropicAccountForWrite(verb.accountId)
+            if (!knownAccount) {
               return notFound('account.switch')
             }
-            if (account.status !== 'healthy') {
+            const account = prepareClaudeAccountForSelection(knownAccount.accountUuid)
+            if (!account) {
               return {
                 verb: 'account.switch',
                 result: {
@@ -1193,11 +1253,18 @@ export function createSidecarAccountsDomain(
                 poolChanged: false,
               }
             }
+            const before = getClaudePoolStatus()
+            const beforeId = before.accounts[before.activeIndex]?.accountUuid
             const result = await executor.switchAnthropic(account.accountUuid)
+            if (result.ok) {
+              clearSessionAccountRouteBlock('anthropic')
+              clearOAuthTokenCache()
+            }
+            const after = getClaudePoolStatus()
             return {
               verb: 'account.switch',
               result,
-              poolChanged: result.ok,
+              poolChanged: result.ok || beforeId !== after.accounts[after.activeIndex]?.accountUuid,
             }
           }
           const account = await resolveAccountForWrite(verb.accountId)
@@ -1209,11 +1276,15 @@ export function createSidecarAccountsDomain(
           // what actually happened, as the Anthropic arm above already does:
           // an unconditional `true` re-broadcasts a pool change to every
           // connection for a switch that never took place.
+          const before = getPoolStatus()
+          const beforeId = before.accounts[before.activeIndex]?.accountId
           const result = await executor.switch(account.accountId)
+          if (result.ok) clearSessionAccountRouteBlock('openai')
+          const after = getPoolStatus()
           return {
             verb: 'account.switch',
             result,
-            poolChanged: result.ok,
+            poolChanged: result.ok || beforeId !== after.accounts[after.activeIndex]?.accountId,
           }
         }
         case 'account.rename': {

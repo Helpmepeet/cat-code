@@ -11,6 +11,7 @@ import {
   isCodexAccountSwitchable,
   markPoolAccountCapped,
   markPoolAccountLastError,
+  setActiveAccount,
   setActiveAccountPersisted,
   touchPoolAccountUsage,
   type PoolAccount,
@@ -342,7 +343,7 @@ export function repairCodexLeaseIfNonSelectable(
   codexLeasesByOwnerId.set(ownerId, repairedLease)
   touchPoolAccountUsage(selection.account.accountId)
   if (repairedLease.ownerType === 'main') {
-    setActiveAccountPersisted(repairedLease.accountId)
+    setActiveAccount(repairedLease.accountId)
   }
   notifyCodexLeaseChange()
   return repairedLease

@@ -61,6 +61,7 @@ import {
 } from './interruptedTurn.js'
 import { copyPlanForResume } from './plans.js'
 import { processSessionStartHooks } from './sessionStart.js'
+import { getSessionAccountRouteBlock } from '../services/api/sessionAccountRouting.js'
 import {
   checkResumeConsistency,
   getLastSessionLog,
@@ -786,7 +787,9 @@ export async function loadConversationForResume(
 
     const recoveryReviewRequired = !!tailRecovery?.reviewRequired || deserialized.turnInterruptionState.kind !== 'none'
     // Process session start hooks for resume
-    const hookMessages = recoveryReviewRequired ? [] : await processSessionStartHooks('resume', { sessionId })
+    // Account recovery needs the management server, not authenticated hooks.
+    const accountRouteBlocked = getSessionAccountRouteBlock('anthropic') || getSessionAccountRouteBlock('openai')
+    const hookMessages = recoveryReviewRequired || accountRouteBlocked ? [] : await processSessionStartHooks('resume', { sessionId })
 
     // Append hook messages to the conversation
     messages.push(...hookMessages)

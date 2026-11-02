@@ -10,7 +10,7 @@
  */
 
 import { chmodSync, readFileSync, readdirSync, existsSync, mkdirSync, unlinkSync } from 'fs'
-import { join } from 'path'
+import { dirname, join } from 'path'
 import { homedir } from 'os'
 
 import { logForDebugging } from '../../utils/debug.js'
@@ -46,6 +46,7 @@ export interface ClaudePoolAccount {
   accountCreatedAt?: string
   subscriptionCreatedAt?: string
   vaultFilePath?: string
+  lifecycleGeneration?: number
 }
 
 interface ClaudePoolState {
@@ -60,6 +61,67 @@ export type ClaudeAccountResolutionMatchType = 'exact' | 'prefix'
 
 const DEFAULT_VAULT_PATH = join(homedir(), 'claude-vault')
 const VAULT_LOCK_WAIT_MS = 10_000
+
+// Keep this authority after unlinking credentials. The vault mutation lock
+// serializes its generation with deletion, refresh publication and explicit login.
+function readLifecycle(filePath: string): { generation: number; deleted: boolean } {
+  try {
+    const value = JSON.parse(readFileSync(`${filePath}.lifecycle`, 'utf8'))
+    if (!Number.isSafeInteger(value.generation) || value.generation < 0 ||
+        typeof value.deleted !== 'boolean') throw new Error('Invalid Claude credential lifecycle')
+    return value
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { generation: 0, deleted: false }
+    throw error
+  }
+}
+
+function isCredentialCurrent(account: ClaudePoolAccount): boolean {
+  const filePath = account.vaultFilePath ?? join(getVaultAccountsDir(), `${account.accountUuid}.json`)
+  try {
+    const lifecycle = readLifecycle(filePath)
+    return !lifecycle.deleted && lifecycle.generation === (account.lifecycleGeneration ?? 0) &&
+      (!account.vaultFilePath || existsSync(filePath))
+  } catch {
+    return false
+  }
+}
+
+/** Shared fallback must not bypass a durable deletion fence. */
+export function isClaudeAccountDeleted(accountUuid: string): boolean {
+  try {
+    return readLifecycle(join(getVaultAccountsDir(), `${accountUuid}.json`)).deleted
+  } catch {
+    return true
+  }
+}
+
+export function getClaudeCredentialGeneration(accountUuid: string): number | null {
+  try {
+    const lifecycle = readLifecycle(join(getVaultAccountsDir(), `${accountUuid}.json`))
+    return lifecycle.deleted ? null : lifecycle.generation
+  } catch {
+    return null
+  }
+}
+
+/** Serialize legacy refresh publication with deletion and explicit login. */
+export function withClaudeCredentialGeneration<T>(
+  accountUuid: string,
+  generation: number,
+  publish: () => T,
+): T | null {
+  const filePath = join(getVaultAccountsDir(), `${accountUuid}.json`)
+  mkdirSync(getVaultAccountsDir(), { recursive: true, mode: 0o700 })
+  const release = acquireVaultMutationLockSync(filePath)
+  try {
+    if (getClaudeCredentialGeneration(accountUuid) !== generation) return null
+    return publish()
+  } finally {
+    release()
+  }
+}
 
 function acquireVaultMutationLockSync(filePath: string): () => void {
   return acquireMutationLockSync(filePath, {
@@ -100,6 +162,10 @@ export function loadClaudePoolForObservation(): void {
   for (const account of pool.accounts) {
     const superseded = pendingTokenWrites.get(account.accountUuid)
     if (!superseded) continue
+    if (!isCredentialCurrent(account)) {
+      pendingTokenWrites.delete(account.accountUuid)
+      continue
+    }
     const index = vaultAccounts.findIndex(candidate => candidate.accountUuid === account.accountUuid)
     const disk = vaultAccounts[index]
     if (disk && disk.accessToken !== account.accessToken && !superseded.has(disk.accessToken) &&
@@ -117,9 +183,6 @@ export function loadClaudePoolForObservation(): void {
     pool.activeIndex = pool.accounts.findIndex(
       account => account.accountUuid === selectedUuid && account.status === 'healthy',
     )
-    if (pool.activeIndex < 0) {
-      pool.activeIndex = pool.accounts.findIndex(account => account.status === 'healthy')
-    }
   } else {
     restoreActiveClaudeAccountPointer()
   }
@@ -196,7 +259,7 @@ export function isClaudePoolActive(): boolean {
  * Exhaustion must not fall back to another session's shared credentials.
  */
 export function shouldUseClaudePoolTokenSource(): boolean {
-  return pool.initialized && pool.accounts.length > 0
+  return pool.initialized
 }
 
 export type ClaudeTokenPersistenceResult = 'durable' | 'pending'
@@ -207,6 +270,7 @@ const pendingTokenWrites = new Map<string, Set<string>>()
 export function retryClaudeAccountTokenPersistence(accountUuid: string): ClaudeTokenPersistenceResult {
   const account = pool.accounts.find(candidate => candidate.accountUuid === accountUuid)
   if (!account) return 'pending'
+  if (!isCredentialCurrent(account)) return 'pending'
   if (!pendingTokenWrites.has(accountUuid)) return 'durable'
   const result = saveClaudeTokenToVault(account) ? 'durable' : 'pending'
   clearOAuthTokenCache()
@@ -215,6 +279,12 @@ export function retryClaudeAccountTokenPersistence(accountUuid: string): ClaudeT
 
 export function reloadClaudeAccountCredentials(accountUuid: string): void {
   const account = pool.accounts.find(candidate => candidate.accountUuid === accountUuid)
+  if (account && !isCredentialCurrent(account)) {
+    account.status = 'dead'
+    pendingTokenWrites.delete(accountUuid)
+    clearOAuthTokenCache()
+    return
+  }
   if (!account?.vaultFilePath) return
   const fresh = loadVaultAccounts().find(candidate => candidate.accountUuid === accountUuid)
   if (!fresh) return
@@ -241,6 +311,9 @@ export function reloadActiveClaudeAccountCredentials(): void {
 export function getActiveClaudeAccount(): ClaudePoolAccount | null {
   if (!pool.initialized || pool.activeIndex < 0) return null
   const acct = pool.accounts[pool.activeIndex]
+  if (acct && !isCredentialCurrent(acct)) {
+    return null
+  }
   if (!acct || acct.status !== 'healthy') {
     const idx = pool.accounts.findIndex((a) => a.status === 'healthy')
     if (idx < 0) return null
@@ -331,6 +404,35 @@ export function resolveClaudeAccountByPrefix(
 }
 
 /**
+ * Validate a known target for an intentional account selection. Only explicit
+ * selection may adopt a newer login generation; ordinary credential reads deny it.
+ * A same-generation local health failure is not reset by selecting it again.
+ */
+export function prepareClaudeAccountForSelection(accountUuid: string): ClaudePoolAccount | null {
+  const account = pool.accounts.find(candidate => candidate.accountUuid === accountUuid)
+  if (!account) return null
+  if (isCredentialCurrent(account)) return account.status === 'healthy' ? account : null
+  const generation = getClaudeCredentialGeneration(accountUuid)
+  if (generation === null || generation <= (account.lifecycleGeneration ?? 0)) return null
+  const filePath = account.vaultFilePath ?? join(getVaultAccountsDir(), `${accountUuid}.json`)
+  let release: (() => void) | undefined
+  try {
+    release = acquireVaultMutationLockSync(filePath)
+    const fresh = loadVaultAccounts(accountUuid).find(candidate => candidate.accountUuid === accountUuid)
+    if (!fresh || (fresh.lifecycleGeneration ?? 0) <= (account.lifecycleGeneration ?? 0) ||
+        !isCredentialCurrent(fresh)) return null
+    pendingTokenWrites.delete(accountUuid)
+    Object.assign(account, fresh)
+    clearOAuthTokenCache()
+    return account
+  } catch {
+    return null
+  } finally {
+    release?.()
+  }
+}
+
+/**
  * Manually switch to a specific Claude account by alias, email, or UUID prefix.
  * Pass null to rotate to the next account.
  * Returns the new active account, or null if no match, ambiguous match, or no
@@ -349,8 +451,9 @@ export function switchToClaudeAccount(
 
   let targetIdx: number
   if (idPrefix) {
-    const resolution = resolveClaudeAccountByPrefix(idPrefix, { onlyHealthy: true })
+    const resolution = resolveClaudeAccountByPrefix(idPrefix)
     if (resolution.kind !== 'unique') return null
+    if (!prepareClaudeAccountForSelection(resolution.account.accountUuid)) return null
     targetIdx = pool.accounts.indexOf(resolution.account)
     if (targetIdx < 0) return null
   } else {
@@ -359,7 +462,7 @@ export function switchToClaudeAccount(
     targetIdx = -1
     for (let i = 1; i < pool.accounts.length; i++) {
       const idx = (pool.activeIndex + i) % pool.accounts.length
-      if (pool.accounts[idx]!.status === 'healthy') {
+      if (prepareClaudeAccountForSelection(pool.accounts[idx]!.accountUuid)) {
         targetIdx = idx
         break
       }
@@ -493,7 +596,15 @@ export function appendClaudeAccount(account: {
   if (vaultFilePath) acct.vaultFilePath = vaultFilePath
 
   // Sync to keychain + config (also persists activeClaudeAccountUuid)
-  syncClaudeAccountToStorage()
+  if (vaultFilePath) syncClaudeAccountToStorage()
+  // Explicit login can retain the existing bound secure-storage recovery path
+  // when the vault is unavailable. It does not remove a durable deletion fence.
+  else {
+    if (!isCredentialCurrent(acct)) {
+      throw new Error('Failed to save Claude sign-in. Restore vault access and sign in again.')
+    }
+    syncClaudeAccountToStorageLocked(acct)
+  }
 }
 
 /**
@@ -503,7 +614,18 @@ export function appendClaudeAccount(account: {
 export function syncClaudeAccountToStorage(): void {
   const acct = getActiveClaudeAccount()
   if (!acct) return
+  const filePath = acct.vaultFilePath ?? join(getVaultAccountsDir(), `${acct.accountUuid}.json`)
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
+  const release = acquireVaultMutationLockSync(filePath)
+  try {
+    if (!isCredentialCurrent(acct)) throw new Error('Claude account credentials are no longer available.')
+    syncClaudeAccountToStorageLocked(acct)
+  } finally {
+    release()
+  }
+}
 
+function syncClaudeAccountToStorageLocked(acct: ClaudePoolAccount): void {
   // Update keychain
   try {
     const secureStorage = getSecureStorage()
@@ -536,7 +658,7 @@ export function syncClaudeAccountToStorage(): void {
   // Update config: oauthAccount profile metadata + active account pointer.
   // We write directly to GlobalConfig instead of using storeOAuthAccountInfo
   // because storeOAuthAccountInfo drops organizationName/organizationRole/workspaceRole.
-  saveGlobalConfig(current => ({
+  if (!saveGlobalConfig(current => ({
     ...current,
     activeClaudeAccountUuid: acct.accountUuid,
     oauthAccount: {
@@ -552,7 +674,7 @@ export function syncClaudeAccountToStorage(): void {
       accountCreatedAt: acct.accountCreatedAt,
       subscriptionCreatedAt: acct.subscriptionCreatedAt,
     },
-  }))
+  }))) throw new Error('Failed to save Claude account selection. Try again.')
 }
 
 /**
@@ -576,6 +698,7 @@ export function updateClaudeAccountTokens(
   if (!pool.initialized) return 'unavailable'
   const acct = pool.accounts.find(account => account.accountUuid === accountUuid)
   if (!acct || acct.status !== 'healthy') return 'unavailable'
+  if (!isCredentialCurrent(acct)) return 'unavailable'
   if (expected && (acct.accessToken !== expected.accessToken ||
       acct.refreshToken !== expected.refreshToken)) return 'superseded'
 
@@ -591,6 +714,7 @@ export function updateClaudeAccountTokens(
   // Write updated tokens to vault
   const saved = saveClaudeTokenToVault(acct)
   clearOAuthTokenCache()
+  if (!isCredentialCurrent(acct)) return 'unavailable'
   return saved ? 'durable' : 'pending'
 }
 
@@ -610,6 +734,7 @@ export function updateClaudeAccountRoles(
   try {
     releaseLock = acquireVaultMutationLockSync(account.vaultFilePath)
     const existing = JSON.parse(readFileSync(account.vaultFilePath, 'utf8'))
+    if (!isCredentialCurrent(account)) return
     if (existing.profile?.account_uuid !== accountUuid ||
         existing.profile?.organization_uuid !== organizationUuid) return
     existing.profile = {
@@ -631,7 +756,25 @@ export function deleteClaudeVaultFile(filePath: string): boolean {
   let releaseLock: (() => void) | undefined
   try {
     releaseLock = acquireVaultMutationLockSync(filePath)
-    unlinkSync(filePath)
+    return deleteClaudeVaultFileLocked(filePath)
+  } catch (error) {
+    logForDebugging(`[claude-pool] Vault deletion failed: ${error}`, { level: 'warn' })
+    return false
+  } finally {
+    releaseLock?.()
+  }
+}
+
+function deleteClaudeVaultFileLocked(filePath: string): boolean {
+  try {
+    const lifecycle = readLifecycle(filePath)
+    if (!lifecycle.deleted) writeFileAtomicDurableSync(`${filePath}.lifecycle`, JSON.stringify({
+      generation: lifecycle.generation + 1,
+      deleted: true,
+    }), { encoding: 'utf-8', mode: 0o600 })
+    try { unlinkSync(filePath) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
     for (const account of pool.accounts) {
       if (account.vaultFilePath === filePath) pendingTokenWrites.delete(account.accountUuid)
     }
@@ -642,8 +785,6 @@ export function deleteClaudeVaultFile(filePath: string): boolean {
       { level: 'warn' },
     )
     return false
-  } finally {
-    releaseLock?.()
   }
 }
 
@@ -652,6 +793,31 @@ export function deleteClaudeVaultFile(filePath: string): boolean {
  * If the removed account was active, switches to the next healthy one.
  */
 export function removeClaudeAccount(accountUuid: string): boolean {
+  const account = pool.accounts.find(candidate => candidate.accountUuid === accountUuid)
+  if (!account) return false
+  const filePath = account.vaultFilePath ?? join(getVaultAccountsDir(), `${accountUuid}.json`)
+  let release: (() => void) | undefined
+  try {
+    mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 })
+    release = acquireVaultMutationLockSync(filePath)
+    const lifecycle = readLifecycle(filePath)
+    const generation = account.lifecycleGeneration ?? 0
+    const retryDeletion = lifecycle.deleted && lifecycle.generation === generation + 1
+    if (!retryDeletion && !isCredentialCurrent(account)) return false
+    if (existsSync(filePath)) {
+      const existing = JSON.parse(readFileSync(filePath, 'utf8'))
+      if (existing.profile?.account_uuid !== accountUuid) return false
+    }
+    return removeClaudeAccountLocked(accountUuid)
+  } catch (error) {
+    logForDebugging(`[claude-pool] Account deletion failed: ${error}`, { level: 'warn' })
+    return false
+  } finally {
+    release?.()
+  }
+}
+
+function removeClaudeAccountLocked(accountUuid: string): boolean {
   const idx = pool.accounts.findIndex((a) => a.accountUuid === accountUuid)
   if (idx < 0) return false
 
@@ -689,16 +855,17 @@ export function removeClaudeAccount(accountUuid: string): boolean {
     oauthAccount: current.oauthAccount?.accountUuid === accountUuid
       ? undefined
       : current.oauthAccount,
-    activeClaudeAccountUuid: remaining[nextActiveIndex]?.accountUuid,
+    activeClaudeAccountUuid: current.activeClaudeAccountUuid === accountUuid
+      ? undefined
+      : current.activeClaudeAccountUuid,
   }))) {
     logForDebugging('[claude-pool] Failed to persist deleted account profile cleanup', { level: 'warn' })
     return false
   }
 
   // Delete vault file
-  if (acct.vaultFilePath && existsSync(acct.vaultFilePath)) {
-    if (!deleteClaudeVaultFile(acct.vaultFilePath)) return false
-  }
+  const filePath = acct.vaultFilePath ?? join(getVaultAccountsDir(), `${accountUuid}.json`)
+  if (!deleteClaudeVaultFileLocked(filePath)) return false
 
   // Remove from pool
   pendingTokenWrites.delete(accountUuid)
@@ -721,6 +888,7 @@ export function setClaudeAccountAlias(accountUuid: string, alias: string): boole
   try {
     releaseLock = acquireVaultMutationLockSync(acct.vaultFilePath)
     const existing = JSON.parse(readFileSync(acct.vaultFilePath, 'utf-8')) as Record<string, unknown>
+    if (!isCredentialCurrent(acct)) return false
     existing.alias = alias
     writeFileAtomicDurableSync(
       acct.vaultFilePath,
@@ -764,6 +932,13 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount, explicitLogin = fals
 
     const filePath = join(accountsDir, `${account.accountUuid}.json`)
     releaseLock = acquireVaultMutationLockSync(filePath)
+    const lifecycle = readLifecycle(filePath)
+    const generation = explicitLogin ? lifecycle.generation + 1 : lifecycle.generation
+    if (!explicitLogin && (lifecycle.deleted || lifecycle.generation !== (account.lifecycleGeneration ?? 0) ||
+        (account.vaultFilePath && !existsSync(filePath)))) {
+      pendingTokenWrites.delete(account.accountUuid)
+      return null
+    }
     const existing = existsSync(filePath)
       ? (JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>)
       : {}
@@ -790,6 +965,7 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount, explicitLogin = fals
     }
     const data: Record<string, unknown> = {
       ...existing,
+      lifecycle_generation: generation,
       tokens: {
         access_token: account.accessToken,
         refresh_token: account.refreshToken,
@@ -831,6 +1007,13 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount, explicitLogin = fals
       // credentials pending until a later local durable write completes.
       return null
     }
+    if (explicitLogin) {
+      writeFileAtomicDurableSync(`${filePath}.lifecycle`, JSON.stringify({
+        generation,
+        deleted: false,
+      }), { encoding: 'utf-8', mode: 0o600 })
+      account.lifecycleGeneration = generation
+    }
     pendingTokenWrites.delete(account.accountUuid)
     logForDebugging(`[claude-pool] Saved account ${account.emailAddress} to vault`)
     return filePath
@@ -845,7 +1028,7 @@ function saveClaudeTokenToVault(account: ClaudePoolAccount, explicitLogin = fals
   }
 }
 
-function loadVaultAccounts(): ClaudePoolAccount[] {
+function loadVaultAccounts(accountUuid?: string): ClaudePoolAccount[] {
   const accountsDir = getVaultAccountsDir()
 
   if (!existsSync(accountsDir)) {
@@ -864,7 +1047,9 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
   const results: ClaudePoolAccount[] = []
   let files: string[]
   try {
-    files = readdirSync(accountsDir).filter((f) => f.endsWith('.json'))
+    files = readdirSync(accountsDir).filter((f) =>
+      f.endsWith('.json') && (accountUuid === undefined || f === `${accountUuid}.json`),
+    )
   } catch {
     return []
   }
@@ -874,6 +1059,8 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
       const filePath = join(accountsDir, file)
       const raw = readFileSync(filePath, 'utf-8')
       const data = JSON.parse(raw) as Record<string, unknown>
+      const lifecycle = readLifecycle(filePath)
+      if (lifecycle.deleted || (data.lifecycle_generation ?? 0) !== lifecycle.generation) continue
       try {
         chmodSync(filePath, 0o600)
       } catch (err) {
@@ -911,6 +1098,7 @@ function loadVaultAccounts(): ClaudePoolAccount[] {
         accountCreatedAt: typeof profile.account_created_at === 'string' ? profile.account_created_at : undefined,
         subscriptionCreatedAt: typeof profile.subscription_created_at === 'string' ? profile.subscription_created_at : undefined,
         vaultFilePath: filePath,
+        lifecycleGeneration: lifecycle.generation,
       })
     } catch (err) {
       logForDebugging(
@@ -941,11 +1129,14 @@ function loadConfigAccount(requireBoundIdentity = false): ClaudePoolAccount | nu
     const config = getGlobalConfig()
     const profile = config.oauthAccount
     if (!profile?.accountUuid || !profile?.emailAddress) return null
+    const lifecycleGeneration = getClaudeCredentialGeneration(profile.accountUuid)
+    if (lifecycleGeneration === null) return null
     if (requireBoundIdentity && !oauthData.accountUuid) return null
     if (oauthData.accountUuid !== undefined && oauthData.accountUuid !== profile.accountUuid) return null
 
     return {
       accountUuid: profile.accountUuid,
+      lifecycleGeneration,
       emailAddress: profile.emailAddress,
       accessToken: oauthData.accessToken,
       refreshToken: oauthData.refreshToken,

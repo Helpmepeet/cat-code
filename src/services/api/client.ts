@@ -1,5 +1,6 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
+import { assertSessionAccountRouteAvailable } from './sessionAccountRouting.js'
 import {
   getActiveAccount,
   getPoolStatus,
@@ -322,6 +323,7 @@ export async function resolveCodexOAuthTokensForLeaseOwner({
   codexLeaseOwnerId,
   codexLeaseOwnerType,
 }: CodexLeaseOwnerOptions): Promise<ResolvedCodexOAuthTokens | null> {
+  assertSessionAccountRouteAvailable('openai')
   if (!poolManagesCredentials()) {
     const configAccount = loadConfigAccount()
     return configAccount ? resolveConfigAccount(configAccount) : null
@@ -349,7 +351,7 @@ export async function resolveCodexOAuthTokensForLeaseOwner({
     ? poolAccountById.get(leasedAccountId)
     : null
   const repairedLease =
-    leaseOwnerId && leasedAccount && !isCodexAccountSwitchable(leasedAccount)
+    leaseOwnerId && lease && (!leasedAccount || !isCodexAccountSwitchable(leasedAccount))
       ? repairCodexLeaseIfNonSelectable(leaseOwnerId)
       : undefined
   const repairedAccount = repairedLease
@@ -360,7 +362,9 @@ export async function resolveCodexOAuthTokensForLeaseOwner({
       ? repairedAccount
       : leasedAccount && isCodexAccountSwitchable(leasedAccount)
       ? leasedAccount
-      : getActiveAccount() ?? poolStatus.accounts.find((account) => isCodexAccountSwitchable(account)) ?? null
+      : lease
+        ? null
+        : getActiveAccount() ?? poolStatus.accounts.find((account) => isCodexAccountSwitchable(account)) ?? null
 
   if (poolAccount) {
     return resolvePoolManagedAccount(poolAccount)
@@ -433,6 +437,9 @@ export async function getAnthropicClient({
   }
 
   const resolvedProvider = resolveRequestProvider(model, provider)
+  if (resolvedProvider === 'openai' || resolvedProvider === 'firstParty') {
+    assertSessionAccountRouteAvailable(resolvedProvider === 'openai' ? 'openai' : 'anthropic')
+  }
   emitProviderMismatchDiagnostic(provider, resolvedProvider, model)
   const resolvedFetch = buildFetch(fetchOverride, source, resolvedProvider)
 

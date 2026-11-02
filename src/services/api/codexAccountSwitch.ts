@@ -23,8 +23,11 @@ import { resetCodexCacheContext } from './codex-fetch-adapter.js'
  */
 export async function commitCodexAccountSwitch(
   idPrefix: string | null,
+  options: { persistDefault?: boolean } = {},
 ): Promise<PoolAccount | null> {
-  const account = switchToAccount(idPrefix)
+  const account = switchToAccount(idPrefix, {
+    persistDefault: options.persistDefault ?? false,
+  })
   if (!account) return null
 
   // switchToAccount only updates pool.activeIndex; a lease pins its accountId at
@@ -48,7 +51,7 @@ export async function commitCodexAccountSwitch(
 
   // Mirror the Claude switch path: clear all auth-sensitive caches so stale
   // rate-limit state, memoized tokens, and tool schema caches don't carry over.
-  await clearAuthRelatedCaches()
+  await clearAuthRelatedCaches({ persistConfig: options.persistDefault === true })
   applyPostCodexAccountSwitchRefresh()
 
   return account

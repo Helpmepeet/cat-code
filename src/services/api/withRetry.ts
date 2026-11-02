@@ -11,6 +11,7 @@ import {
   CodexAccountAuthError,
   CodexAccountCapError,
   CodexResponseFailedError,
+  runWithCodexRequestAccount,
 } from './codex-fetch-adapter.js'
 import {
   failoverCodexLease,
@@ -30,16 +31,16 @@ import {
   markPoolAccountQuarantined,
   markPoolAccountLastError,
   markPoolAccountStatus,
-  setActiveAccountPersisted,
+  setActiveAccount,
   switchToAccount,
 } from './codexAccountPool.js'
 import { maybeRefreshAccount } from '../../codex-core/accounts.js'
 import { CodexCoreError } from '../../codex-core/errors.js'
 import type { CodexLease } from './codexAccountLeaseManager.js'
 
-function persistMainLeaseActiveAccount(lease: CodexLease | undefined): void {
+function syncMainLeaseActiveAccount(lease: CodexLease | undefined): void {
   if (lease?.ownerType === 'main') {
-    setActiveAccountPersisted(lease.accountId)
+    setActiveAccount(lease.accountId)
   }
 }
 import { isAwsCredentialsProviderError } from 'src/utils/aws.js'
@@ -88,12 +89,14 @@ import type { DeferredTerminalFailureV1 } from '../../types/message.js'
 import { ReauthenticationRequiredError } from './codexTokenRefresh.js'
 import {
   failoverClaudeAccount,
+  getClaudeCredentialGeneration,
   getClaudePoolStatus,
 } from './claudeAccountPool.js'
 
 type ClaudeOAuthClientCredential = Readonly<{
   accessToken: string
   accountUuid?: string
+  credentialGeneration?: number | null
 }>
 const claudeOAuthClientCredentials = new WeakMap<object, ClaudeOAuthClientCredential>()
 
@@ -102,7 +105,12 @@ export function recordClaudeOAuthClientCredential(
   client: object,
   credential: ClaudeOAuthClientCredential,
 ): void {
-  claudeOAuthClientCredentials.set(client, Object.freeze({ ...credential }))
+  claudeOAuthClientCredentials.set(client, Object.freeze({
+    ...credential,
+    credentialGeneration: credential.accountUuid
+      ? getClaudeCredentialGeneration(credential.accountUuid)
+      : undefined,
+  }))
 }
 
 const abortError = () => new APIUserAbortError()
@@ -413,6 +421,7 @@ export async function* withRetry<T, Client = Anthropic>(
   // succession is the signal that the *network* is down, not the accounts.
   const codexConnectionFailureAccounts = new Set<string>()
   let codexNetworkOutageHandled = false
+  let requestCodexAccountId: string | undefined
 
   const throwRetryExhausted = (
     originalError: unknown,
@@ -502,6 +511,7 @@ export async function* withRetry<T, Client = Anthropic>(
   }
 
   for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    requestCodexAccountId = undefined
     if (options.signal?.aborted) {
       throw new APIUserAbortError()
     }
@@ -627,9 +637,25 @@ export async function* withRetry<T, Client = Anthropic>(
           (typeof client === 'object' || typeof client === 'function')
           ? claudeOAuthClientCredentials.get(client)
           : undefined
+        if (requestCredential?.accountUuid &&
+            (requestCredential.credentialGeneration === null ||
+              getClaudeCredentialGeneration(requestCredential.accountUuid) !== requestCredential.credentialGeneration)) {
+          throw new CannotRetryError(new Error(
+            "This chat's Claude account is no longer available. Open Accounts and select an account to continue.",
+          ), retryContext)
+        }
+        let attemptAccountId = options.isCodexRequest
+            ? (getCurrentCodexLease() ??
+                (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined))?.accountId ??
+              getActiveAccount()?.accountId
+            : undefined
         try {
-          return await operation(client, attempt, retryContext)
+          return await runWithCodexRequestAccount(
+            accountId => { attemptAccountId = accountId },
+            () => operation(client!, attempt, retryContext),
+          )
         } catch (error) {
+          requestCodexAccountId = attemptAccountId
           failedClaudeCredential = requestCredential
           throw error
         }
@@ -705,7 +731,7 @@ export async function* withRetry<T, Client = Anthropic>(
             `current lease account was unavailable after delayed failure from ${error.accountId}`,
             { markAccountCapped: false },
           )
-          persistMainLeaseActiveAccount(nextLease)
+          syncMainLeaseActiveAccount(nextLease)
           emitCodexFailoverSucceeded(
             retryContext.model,
             nextLease.accountId,
@@ -724,7 +750,7 @@ export async function* withRetry<T, Client = Anthropic>(
               error.accountId,
               error.message,
             )
-            persistMainLeaseActiveAccount(nextLease)
+            syncMainLeaseActiveAccount(nextLease)
             emitCodexFailoverSucceeded(
               retryContext.model,
               nextLease.accountId,
@@ -769,7 +795,7 @@ export async function* withRetry<T, Client = Anthropic>(
           // No active lease — this is a main-session (no subagent) request.
           // Directly rotate the pool's active account and retry when possible.
           if (!currentLease && hasReplacement) {
-            const next = switchToAccount(null)
+            const next = switchToAccount(null, { persistDefault: false })
             if (next) {
               emitCodexFailoverSucceeded(
                 retryContext.model,
@@ -804,20 +830,15 @@ export async function* withRetry<T, Client = Anthropic>(
       }
 
       if (error instanceof CodexAccountAuthError) {
-        const currentLease =
-          getCurrentCodexLease() ??
-          (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
         // Recovery targets the account that actually made the failed request,
         // NOT the lease's current account. A delayed 401 can arrive after the
         // owner's lease already moved on (concurrent failover); refreshing or
         // dead-marking whatever the lease now points at would condemn the wrong
         // (possibly healthy) account.
         const accountId = error.accountId
-        const leaseStillOnFailedAccount = currentLease?.accountId === accountId
         const currentAccount = getPoolStatus().accounts.find(
           account => account.accountId === accountId,
         )
-        const canRotateBeforeAuthBlock = canFailover()
 
         let refreshRecovered = false
         let refreshFailure: unknown
@@ -854,6 +875,12 @@ export async function* withRetry<T, Client = Anthropic>(
             // (vault refresh machine / raw-with-ledger).
           }
         }
+
+        const currentLease =
+          getCurrentCodexLease() ??
+          (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
+        const leaseStillOnFailedAccount = currentLease?.accountId === accountId
+        const canRotateBeforeAuthBlock = hasSelectableAccountOtherThan(accountId)
 
         if (refreshRecovered) {
           client = null
@@ -908,7 +935,7 @@ export async function* withRetry<T, Client = Anthropic>(
                 'Codex account authentication failed',
                 { markAccountCapped: false },
               )
-              persistMainLeaseActiveAccount(nextLease)
+              syncMainLeaseActiveAccount(nextLease)
               emitCodexFailoverSucceeded(
                 retryContext.model,
                 nextLease.accountId,
@@ -945,13 +972,15 @@ export async function* withRetry<T, Client = Anthropic>(
           // 401 landed. We dead-marked the failed account above; retry on the
           // lease's current (healthy) account instead of touching it or
           // declaring exhaustion.
-          if (currentLease && !leaseStillOnFailedAccount) {
+          if (currentLease && !leaseStillOnFailedAccount &&
+              getPoolStatus().accounts.some(account =>
+                account.accountId === currentLease.accountId && isCodexAccountSwitchable(account))) {
             client = null
             continue
           }
 
           if (!currentLease && canRotateBeforeAuthBlock) {
-            const next = switchToAccount(null)
+            const next = switchToAccount(null, { persistDefault: false })
             if (next) {
               emitCodexFailoverSucceeded(
                 retryContext.model,
@@ -993,11 +1022,7 @@ export async function* withRetry<T, Client = Anthropic>(
         options.isCodexRequest === true &&
         poolManagesCredentials()
       ) {
-        const trackingLease =
-          getCurrentCodexLease() ??
-          (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
-        const trackingAccountId =
-          trackingLease?.accountId ?? getActiveAccount()?.accountId
+        const trackingAccountId = requestCodexAccountId
         if (trackingAccountId) {
           codexConnectionFailureAccounts.add(trackingAccountId)
         }
@@ -1015,7 +1040,8 @@ export async function* withRetry<T, Client = Anthropic>(
         const currentLease =
           getCurrentCodexLease() ??
           (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
-        const accountId = currentLease?.accountId ?? getActiveAccount()?.accountId
+        const accountId = requestCodexAccountId
+        const liveAccountId = currentLease?.accountId ?? getActiveAccount()?.accountId
         if (accountId) {
           emitCodexDiagnostic({
             code: 'account.transient_failure',
@@ -1065,6 +1091,12 @@ export async function* withRetry<T, Client = Anthropic>(
           }
 
           const failoverBackoffMs = getRetryDelay(attempt, null)
+          if (liveAccountId !== accountId &&
+              getPoolStatus().accounts.some(account =>
+                account.accountId === liveAccountId && isCodexAccountSwitchable(account))) {
+            client = null
+            continue
+          }
           if (currentLease) {
             try {
               assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
@@ -1074,7 +1106,7 @@ export async function* withRetry<T, Client = Anthropic>(
                 error.message,
                 { markAccountCapped: false },
               )
-              persistMainLeaseActiveAccount(nextLease)
+              syncMainLeaseActiveAccount(nextLease)
               emitCodexFailoverSucceeded(
                 retryContext.model,
                 nextLease.accountId,
@@ -1105,7 +1137,7 @@ export async function* withRetry<T, Client = Anthropic>(
             }
           } else {
             markPoolAccountLastError(accountId)
-            const next = switchToAccount(null)
+            const next = switchToAccount(null, { persistDefault: false })
             if (next) {
               emitCodexFailoverSucceeded(
                 retryContext.model,

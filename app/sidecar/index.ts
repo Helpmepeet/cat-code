@@ -52,6 +52,9 @@ import {
   projectResumedHistory,
 } from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
+import { readSessionAccountSelection, restoreSessionAccountSelection } from './sessionAccountBootstrap.js'
+import { getSessionAccountRouteBlock } from '../../src/services/api/sessionAccountRouting.js'
+import { buildAccountDiagnosticMessage } from '../../src/services/api/accountDiagnostics.js'
 import {
   createSidecarSessionController,
   loadAgentDefinitionsForRuntime,
@@ -374,6 +377,7 @@ async function main(): Promise<void> {
   if (!args.probeOnAttach) {
     await timing.span(timingIdentity, 'startup_validation', () => validateWorkspaceJumpStartup(args.sessionId, args.cwd, args.resumeEngineSessionId ?? args.freshEngineSessionId, args.binding))
     await timing.span(timingIdentity, 'runtime_initialize_body', () => initializeSidecarRuntime())
+    await restoreSessionAccountSelection(readSessionAccountSelection(process.env.CATCODE_SIDECAR_ACCOUNT_SELECTION))
     // Process age includes pre-entrypoint module loading and startup validation;
     // it is not the duration of initializeSidecarRuntime (measured above).
     timing.write(timingIdentity, 'replacement_to_runtime_init', 'completed', process.uptime() * 1000)
@@ -465,7 +469,8 @@ async function main(): Promise<void> {
   // `processSessionStartHooks` already applies (`src/utils/sessionStart.ts:131`)
   // reports the same "no agent" the CLI reports for a launch without `--agent`.
   let startupHookMessages: Message[] | undefined
-  if (!args.probeOnAttach && resumed === undefined) {
+  if (!args.probeOnAttach && resumed === undefined &&
+      !getSessionAccountRouteBlock('anthropic') && !getSessionAccountRouteBlock('openai')) {
     // The exact value this session's model resolution selects moments from now:
     // `initializeSidecarModelProvider` takes the spawn model first and falls
     // back to `getUserSpecifiedModelSetting()` for a non-resumed session, so a
@@ -597,6 +602,17 @@ async function main(): Promise<void> {
   }
 
   const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
+  for (const provider of ['anthropic', 'openai'] as const) {
+    const block = getSessionAccountRouteBlock(provider)
+    if (!block) continue
+    historyEvents = [...(historyEvents ?? []), buildAccountDiagnosticMessage({
+      code: 'account.pool.unavailable',
+      severity: 'error',
+      provider,
+      recoverable: true,
+      user_message: block.message,
+    }, { sessionId: engineSessionId })]
+  }
   const exitCleanly = sidecarCleanup.exit
 
   const server = new SidecarServer({

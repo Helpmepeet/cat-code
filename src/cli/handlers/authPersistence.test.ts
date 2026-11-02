@@ -363,6 +363,31 @@ describe('Claude process account isolation', () => {
     expect(pool.getClaudePoolStatus().accounts.find(account => account.accountUuid === a.accountUuid)?.accessToken).toBe('fresh-a')
   })
 
+  test('deletion during token redemption denies the late refresh and retains the local identity hold', async () => {
+    const { a, b } = seedAccounts()
+    expect(pool.updateClaudeAccountTokens(a.accountUuid, { accessToken: a.accessToken })).toBe('durable')
+    const vaultFilePath = join(directory, 'accounts', `${a.accountUuid}.json`)
+    spyOn(envUtils, 'getClaudeConfigHomeDir').mockReturnValue(directory)
+    spyOn(lockfile, 'lock').mockResolvedValue(async () => {})
+    let finish!: (value: typeof tokens) => void
+    let started!: () => void
+    const starting = new Promise<void>(resolve => { started = resolve })
+    spyOn(oauth, 'refreshOAuthToken').mockImplementation(async () => {
+      started()
+      return new Promise(resolve => { finish = resolve as typeof finish })
+    })
+    const pending = auth.recoverOAuth401Error(a.accessToken, a.accountUuid)
+    await starting
+    expect(pool.deleteClaudeVaultFile(vaultFilePath)).toBe(true)
+    finish({ ...tokens, accessToken: 'late-deleted-access', expiresAt: Date.now() + 3600_000 })
+    expect((await pending).status).toBe('unavailable')
+    expect(pool.getClaudePoolStatus().accounts.find(account => account.accountUuid === b.accountUuid)?.status).toBe('healthy')
+    expect(pool.getActiveClaudeAccount()).toBeNull()
+    expect(auth.getClaudeAIOAuthTokens()).toBeNull()
+    expect(await auth.getClaudeAIOAuthTokensAsync()).toBeNull()
+    expect(() => readFileSync(vaultFilePath, 'utf8')).toThrow()
+  })
+
   test('pool refresh suppresses shared profile writes inside the OAuth client', async () => {
     seedAccounts()
     spyOn(auth, 'isAnthropicAuthEnabled').mockReturnValue(true)

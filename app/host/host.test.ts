@@ -61,6 +61,7 @@ import { readWorkspaceJump, writeWorkspaceJump, type WorkspaceJumpStateV2 } from
  * ------------------------------------------------------------------------- */
 
 type FakeRecord = {
+  accountSelection?: import('../shared/sessionAccountSelection.js').SessionAccountSelection
   sessionId: SessionId
   generation: string
   status: SidecarStatus
@@ -79,6 +80,7 @@ type FakeRecord = {
 
 /** The peer half of the real `SpawnConfig` (`app/supervisor/supervisor.ts`). */
 type FakeSpawnConfig = {
+  accountSelection?: import('../shared/sessionAccountSelection.js').SessionAccountSelection
   cwd: string
   resumeEngineSessionId?: string
   recreatedFolderNotice?: boolean
@@ -127,6 +129,7 @@ class FakeSupervisor {
       pid: ++this.pidSeq,
       socketPath: `/tmp/fake/s${this.sockSeq++}.sock`,
       cwd: config?.cwd ?? '',
+      accountSelection: config?.accountSelection,
       ...(config?.resumeEngineSessionId !== undefined
         ? { resumeEngineSessionId: config.resumeEngineSessionId }
         : {}),
@@ -168,6 +171,7 @@ class FakeSupervisor {
     record.socketPath = `/tmp/fake/s${this.sockSeq++}.sock`
     record.status = 'spawning'
     record.cwd = config?.cwd ?? record.cwd
+    record.accountSelection = config?.accountSelection
     record.recreatedFolderNotice = config?.recreatedFolderNotice
     if (config?.resumeEngineSessionId !== undefined) {
       record.resumeEngineSessionId = config.resumeEngineSessionId
@@ -2496,6 +2500,8 @@ test('intentional move replacement does not prepare retained-session recovery', 
   const created = await h.host.createManagedChat()
   if (!created.ok) throw new Error(created.error.message)
   const id = created.value.appSessionId
+  const selection = { anthropic: 'claude-move', openai: 'codex-move' }
+  await h.registry.setAccountSelection(id, selection)
   const engineId = randomUUID()
   writeTranscript(h.storageDir, engineId)
   h.supervisor.emitReady(id, engineId)
@@ -2511,6 +2517,7 @@ test('intentional move replacement does not prepare retained-session recovery', 
   expect((await moving).ok).toBe(true)
   expect(h.supervisor.records.get(id)?.cwd).toBe(h.cwd)
   expect(recoveries).toEqual([])
+  expect(h.supervisor.records.get(id)?.accountSelection).toEqual(selection)
 })
 
 test.each(['restore', 'restart'] as const)('%s refuses recovery errors without spawning or consuming capacity', async operation => {
@@ -4946,4 +4953,78 @@ test('peerOpenedAt: stamped by a peer create and each peer wake, untouched by a 
   const woken = await reopen({ openedByPeer: true })
   expect(typeof woken).toBe('number')
   expect(await reopen()).toBe(woken)
+})
+
+test('each chat retains both account identities across restart, close/restore and parked wake', async () => {
+  const h = makeHost()
+  for (const chat of ['a', 'b']) {
+    const engineId = `engine-accounts-${chat}`
+    writeTranscript(h.storageDir, engineId)
+    const created = await h.host.createSession({ cwd: h.cwd, resumeEngineSessionId: engineId })
+    if (!created.ok) throw new Error(created.error.message)
+    const id = created.value.appSessionId
+    const selection = { anthropic: `claude-${chat}`, openai: `codex-${chat}` }
+    expect(h.supervisor.records.get(id)?.accountSelection).toBeUndefined()
+    h.supervisor.emit({
+      type: 'frame', sessionId: id,
+      frame: { kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+        accounts: { initialized: true, activeAccountId: selection.openai,
+          anthropicInitialized: true, anthropicActiveAccountId: selection.anthropic } as never },
+    })
+    await settle(() => h.registry.findSession(id)?.accountSelection?.anthropic === selection.anthropic)
+    expect((await h.host.restartSession(id)).ok).toBe(true)
+    expect(h.supervisor.records.get(id)?.accountSelection).toEqual(selection)
+    h.supervisor.emit({
+      type: 'frame', sessionId: id,
+      frame: { kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+        accounts: { initialized: true, activeAccountId: null,
+          anthropicInitialized: true, anthropicActiveAccountId: null } as never },
+    })
+    expect((await h.host.closeSession(id)).ok).toBe(true)
+    expect((await h.host.restoreSession(id)).ok).toBe(true)
+    expect(h.supervisor.records.get(id)?.accountSelection).toEqual(selection)
+    h.supervisor.emitReady(id, engineId)
+    h.supervisor.emitPark(id)
+    await settle(() => h.registry.findSession(id)?.shutdown === 'parked')
+    expect((await h.host.restoreSession(id)).ok).toBe(true)
+    expect(h.supervisor.records.get(id)?.accountSelection).toEqual(selection)
+    expect(h.registry.findSession(id)?.engineSessionId).toBe(engineId)
+  }
+})
+
+test('main holding lease records actual Codex account without adopting subagent accounts', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  h.supervisor.emit({
+    type: 'frame', sessionId: id,
+    frame: { kind: 'lease.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+      leases: { strategy: 'sticky', accounts: [], owners: [
+        { ownerType: 'subagent', state: 'active', accountId: 'worker-account' },
+        { ownerType: 'main', state: 'active', accountId: 'main-account' },
+      ] } as never },
+  })
+  await settle(() => h.registry.findSession(id)?.accountSelection?.openai === 'main-account')
+  expect(h.registry.findSession(id)?.accountSelection).toEqual({ openai: 'main-account' })
+  const snapshot = (activeAccountId: string | null) => h.supervisor.emit({
+    type: 'frame', sessionId: id,
+    frame: { kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+      accounts: { initialized: true, activeAccountId } as never },
+  })
+  snapshot('pool-pointer')
+  await drain()
+  expect(h.registry.findSession(id)?.accountSelection?.openai).toBe('main-account')
+  snapshot(null)
+  h.supervisor.emit({
+    type: 'frame', sessionId: id,
+    frame: { kind: 'lease.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+      leases: { strategy: 'sticky', accounts: [], owners: [
+        { ownerType: 'main', state: 'active', accountId: 'fallback-while-blocked' },
+      ] } as never },
+  })
+  await drain()
+  expect(h.registry.findSession(id)?.accountSelection?.openai).toBe('main-account')
+  snapshot('explicit-recovery-account')
+  await settle(() => h.registry.findSession(id)?.accountSelection?.openai === 'explicit-recovery-account')
 })

@@ -2146,3 +2146,26 @@ test.each(['recycled-command', 'missing-socket'])('empty pruning does not retain
   expect(registry.restorable()).toEqual([])
   expect(killed).toEqual([])
 })
+
+test('account selection survives registry reload and old rows migrate without selection', async () => {
+  const h = makeRegistry()
+  await h.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: '/workspace' })
+  await h.registry.upsertOnSpawn({ appSessionId: 'legacy', cwd: '/workspace' })
+  await h.registry.setAccountSelection('selected', { anthropic: 'claude-a', openai: 'codex-b' })
+  await h.registry.setAccountSelection('selected', { openai: 'codex-c' })
+  const reloaded = makeRegistry({ storageDir: h.storageDir }).registry
+  await reloaded.launch()
+  expect(reloaded.findSession('selected')?.accountSelection).toEqual({ anthropic: 'claude-a', openai: 'codex-c' })
+  expect(reloaded.findSession('legacy')?.accountSelection).toBeUndefined()
+})
+
+test('concurrent registry writers preserve independent provider selections', async () => {
+  const first = makeRegistry()
+  await first.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: '/workspace' })
+  const second = makeRegistry({ storageDir: first.storageDir })
+  await second.registry.launch()
+  await first.registry.setAccountSelection('selected', { anthropic: 'claude-a' })
+  await second.registry.setAccountSelection('selected', { openai: 'codex-b' })
+  expect(readDoc(first.registryPath).sessions.find(row => row.appSessionId === 'selected')?.accountSelection)
+    .toEqual({ anthropic: 'claude-a', openai: 'codex-b' })
+})

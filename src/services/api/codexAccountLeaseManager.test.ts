@@ -419,6 +419,25 @@ describe('codexAccountLeaseManager', () => {
     )
   })
 
+  test('repairs a missing lease target before returning replacement credentials', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'backup',
+      accounts: [buildPoolAccount({ accountId: 'backup' })],
+    })
+    moduleUnderTest.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: 'removed',
+      strategy: 'follow-main',
+    })
+    const tokens = await resolveCodexOAuthTokensForLeaseOwner({
+      codexLeaseOwnerType: 'main',
+    })
+    expect(tokens?.accountId).toBe('backup')
+    expect(moduleUnderTest.getCodexLeaseForOwner('main-thread')?.accountId).toBe('backup')
+  })
+
   test('single-account token resolution prefers pool token over stale config token', async () => {
     saveCodexOAuthTokens({
       accessToken: buildCodexToken('solo-account'),
@@ -2445,7 +2464,7 @@ describe('codexAccountLeaseManager', () => {
 
     expect(attempts).toBe(2)
     expect(secondAttemptActiveAccountId).toBe('account-b')
-    expect(getGlobalConfig().activeCodexAccountId).toBe('account-b')
+    expect(getGlobalConfig().activeCodexAccountId).toBeUndefined()
   })
 
   test('withRetry bounds repeated Codex connection-error failovers across accounts', async () => {

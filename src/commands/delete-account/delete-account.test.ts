@@ -8,6 +8,7 @@ import * as claudePoolModule from '../../services/api/claudeAccountPool.js'
 import * as codexPoolModule from '../../services/api/codexAccountPool.js'
 import * as deletionModule from '../../services/api/codexAccountSignOut.js'
 import * as secureStorageModule from '../../utils/secureStorage/index.js'
+import * as configModule from '../../utils/config.js'
 import {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
@@ -60,6 +61,8 @@ describe('/delete-account', () => {
   const tempDirs: string[] = []
 
   beforeEach(() => {
+    spyOn(configModule, 'getGlobalConfig').mockReturnValue({} as ReturnType<typeof configModule.getGlobalConfig>)
+    spyOn(configModule, 'saveGlobalConfig').mockReturnValue(true)
     spyOn(secureStorageModule, 'removeMatchingClaudeOAuthCredentials').mockReturnValue(true)
     spyOn(secureStorageModule, 'getSecureStorage').mockReturnValue({
       name: 'test',
@@ -78,6 +81,34 @@ describe('/delete-account', () => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  test('inactive Claude deletion never republishes the local selection as the shared default', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'delete-inactive-claude-'))
+    tempDirs.push(dir)
+    claudePoolModule.setClaudeVaultPathForTest(dir)
+    claudePoolModule.seedClaudeAccountPoolForTest({
+      activeAccountUuid: 'local',
+      accounts: [
+        createClaudeAccount('local', 'local', join(dir, 'local.json')),
+        createClaudeAccount('inactive', 'inactive', join(dir, 'inactive.json')),
+      ],
+    })
+    const remove = spyOn(claudePoolModule, 'removeClaudeAccount').mockReturnValue(true)
+    const sync = spyOn(claudePoolModule, 'syncClaudeAccountToStorage').mockImplementation(() => {
+      throw new Error('must not republish local credentials')
+    })
+    const logoutModule = await import('../logout/logout.js')
+    spyOn(logoutModule, 'clearAuthRelatedCaches').mockResolvedValue(undefined)
+    spyOn(codexPoolModule, 'applyPostCodexAccountSwitchRefresh').mockImplementation(() => {})
+    const result = await call('inactive --confirm', {
+      onChangeAPIKey: mock(() => {}),
+      setMessages: mock(() => {}),
+      setAppState: mock(() => {}),
+    } as unknown as Parameters<typeof call>[1])
+    expect(result).toEqual({ type: 'text', value: 'Deleted inactive.' })
+    expect(remove).toHaveBeenCalledWith('inactive')
+    expect(sync).not.toHaveBeenCalled()
   })
 
   test('confirmed Codex delete repairs leases, clears caches, and bumps account UI state', async () => {
@@ -215,7 +246,10 @@ describe('/delete-account', () => {
     const codexPath = join(dir, 'workbench.json')
     const claudePath = join(dir, 'work.json')
     writeFileSync(codexPath, '{}\n', 'utf-8')
-    writeFileSync(claudePath, '{}\n', 'utf-8')
+    writeFileSync(claudePath, JSON.stringify({
+      profile: { account_uuid: 'claude-work', email_address: 'claude-work@example.com' },
+      tokens: { access_token: 'claude-work-access', refresh_token: 'claude-work-refresh' },
+    }), 'utf-8')
 
     codexPoolModule.seedCodexAccountPoolForTest({
       activeAccountId: 'codex-workbench',

@@ -8,6 +8,7 @@ import type {
   LeaseSnapshot,
   LeaseSnapshotFrame,
   LifecycleFrame,
+  ServerFrame,
 } from '../../shared/protocol.js'
 import {
   createAccountsState,
@@ -713,6 +714,45 @@ test('a successful idle manual switch supersedes the retained main failover', ()
     })?.id,
   ).toBe('acct-c')
 })
+
+test.each(['ready', 'accounts.snapshot'] as const)(
+  '%s supersedes failover identity from an exited process',
+  kind => {
+    let state = reduceLeaseState(createLeaseState(), {
+      type: 'frame',
+      frame: frame('s1', snapshot({ owners: [owner({
+        ownerId: 'main-thread', ownerType: 'main', accountId: 'acct-b',
+        selectionKind: 'failover',
+      })] })),
+    })
+    state = reduceLeaseState(state, { type: 'frame', frame: {
+      kind: 'lifecycle', protocolVersion: PROTOCOL_VERSION,
+      sessionId: 's1', status: 'exited',
+    } })
+    expect(selectLastMainFailoverAccountId(state, 's1')).toBe('acct-b')
+    const authoritative = accountsSnapshot([
+      poolRow({ id: 'acct-a', isDefault: true }),
+      poolRow({ id: 'acct-b' }),
+    ])
+    const replacement = kind === 'accounts.snapshot' ? {
+      kind, protocolVersion: PROTOCOL_VERSION, sessionId: 's1',
+      accounts: authoritative,
+    } : {
+      kind, protocolVersion: PROTOCOL_VERSION, sessionId: 's1',
+      engineSessionId: 'replacement',
+      payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true,
+        activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null,
+        pendingPermissionRequests: [] },
+    }
+    state = reduceLeaseState(state, { type: 'frame', frame: replacement as ServerFrame })
+    expect(selectLastMainFailoverAccountId(state, 's1')).toBeNull()
+    expect(selectSessionCodexAccount({
+      roster: ROSTER, leases: selectLeaseSnapshot(state, 's1'),
+      lastMainFailoverAccountId: selectLastMainFailoverAccountId(state, 's1'),
+      accounts: accountsStateWithSession('s1', authoritative), sessionId: 's1',
+    })?.id).toBe('acct-a')
+  },
+)
 
 test('a parked session retains its last successful main failover account', () => {
   let leaseStore = createLeaseState()

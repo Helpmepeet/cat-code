@@ -200,6 +200,8 @@ export type SpawnConfig = {
   createdByName?: string
   /** Model and reasoning effort the created session starts on (PEER-SESSIONS R7). */
   model?: string | null
+  /** Host-owned saved account IDs, never credential material. */
+  accountSelection?: import('../shared/sessionAccountSelection.js').SessionAccountSelection
   effort?: string
   /** Host-restored session mode; empty when no mode is supplied. */
   permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'dontAsk' | 'auto'
@@ -455,6 +457,7 @@ export class SidecarSupervisor {
         CATCODE_SIDECAR_CREATED_BY: config?.createdBy ?? '',
         CATCODE_SIDECAR_CREATED_BY_NAME: config?.createdByName ?? '',
         CATCODE_SIDECAR_MODEL: config?.model ?? '',
+        CATCODE_SIDECAR_ACCOUNT_SELECTION: JSON.stringify(config?.accountSelection ?? {}),
         CATCODE_SIDECAR_EFFORT: config?.effort ?? '',
         CATCODE_SIDECAR_PERMISSION_MODE: config?.permissionMode ?? '',
         CATCODE_SIDECAR_PRE_PLAN_MODE: config?.prePlanMode ?? '',

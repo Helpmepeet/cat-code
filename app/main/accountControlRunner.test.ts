@@ -142,12 +142,21 @@ test('the reusable production worker rereads both inventories before each login'
     const anthropic = await import(${JSON.stringify(anthropicPath)});
     mock.module(${JSON.stringify(codexPath)}, () => ({ ...codex, loadPoolForObservation: async () => { codexReads++; } }));
     mock.module(${JSON.stringify(anthropicPath)}, () => ({ ...anthropic, loadClaudePoolForObservation: () => { anthropicReads++; } }));
-    mock.module(${JSON.stringify(domainPath)}, () => ({ createSidecarAccountsDomain: () => ({
+    mock.module(${JSON.stringify(domainPath)}, () => ({
+      createRealAccountsExecutor: options => {
+        if (options.switchScope !== 'default') throw new Error('Host switches must update defaults');
+        return { scope: 'default' };
+      },
+      createSidecarAccountsDomain: options => {
+        if (options.executor.scope !== 'default') throw new Error('Host default executor was not installed');
+        return {
       setOAuthProgressSink() {},
       async runVerb(verb) {
         return { verb: verb.type, result: { ok: true, message: 'Observed ' + codexReads + '/' + anthropicReads }, poolChanged: false };
       }
-    }) }));
+        };
+      }
+    }));
   `)
   const plan = resolveSidecarLaunch({ packaged: false, mainDir: new URL('.', import.meta.url).pathname, bunBin: process.execPath })
   const diagnostics: string[] = []

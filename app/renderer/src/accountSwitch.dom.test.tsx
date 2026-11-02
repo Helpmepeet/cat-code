@@ -87,8 +87,115 @@ async function mountApp(provider: RunControlProvider = 'openai', status: 'ready'
     if (!button) throw new Error(`missing ${label}; tabs: ${[...tree.container.querySelectorAll('[role="tab"]')].map(tab => tab.getAttribute('aria-label')).join(', ')}`)
     await act(async () => { button.click() })
   }
-  return { tree, click, emit, sessionSwitches, managed, submits, lifecycle }
+  const emitPool = async (value: AccountsSnapshot) => {
+    await act(async () => { host({ type: 'accounts-pool', pool: value }) })
+  }
+  return { tree, click, emit, emitPool, sessionSwitches, managed, submits, lifecycle }
 }
+
+test('Accounts shows the retained chat selection while keeping global inventory fresh', async () => {
+  const app = await mountApp()
+  await app.emit({
+    kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+    sessionId: 'limited-chat',
+    accounts: {
+      ...pool,
+      activeAccountId: 'replacement',
+      accounts: pool.accounts.map(account => ({
+        ...account, isDefault: account.id === 'replacement',
+        status: 'healthy', availability: 'available', availabilityLabel: 'Ready',
+        usageLimitReached: false, switchable: true,
+      })),
+    },
+  })
+  await app.click('Accounts')
+  expect(app.tree.container.textContent).toContain('changes your current chat')
+  // Global inventory still reports the old account capped, so it cannot be
+  // switched to. The healthy current selection must not offer a redundant switch.
+  expect([...app.tree.container.querySelectorAll('button')].filter(
+    button => button.textContent?.trim() === 'Switch',
+  )).toHaveLength(0)
+  await app.emitPool({
+    ...pool,
+    accounts: pool.accounts.map(account => ({
+      ...account, status: 'healthy', availability: 'available',
+      availabilityLabel: 'Ready', usageLimitReached: false, switchable: !account.isDefault,
+    })),
+  })
+  await app.click('Account actions')
+  expect(app.tree.container.textContent).not.toContain('Switch to this account')
+  await app.click('Sign out')
+  expect(app.tree.container.querySelector('[role="dialog"]')?.textContent)
+    .toContain('The default account for new chats will not change.')
+  await app.click('Cancel')
+  const menus = app.tree.container.querySelectorAll<HTMLButtonElement>(
+    'button[aria-label="Account actions"]',
+  )
+  await act(async () => { menus[1]!.click() })
+  await app.click('Switch to this account')
+  expect(app.sessionSwitches).toEqual([{
+    sessionId: 'limited-chat',
+    verb: expect.objectContaining({ accountId: 'limited' }),
+  }])
+  expect(app.managed).toEqual([])
+})
+
+test('Accounts retains the main failover identity after lease release without an accounts refresh', async () => {
+  const app = await mountApp()
+  const healthyPool: AccountsSnapshot = {
+    ...pool,
+    accounts: pool.accounts.map(account => ({
+      ...account, status: 'healthy', availability: 'available',
+      availabilityLabel: 'Ready', usageLimitReached: false,
+      switchable: !account.isDefault,
+    })),
+  }
+  await app.emitPool(healthyPool)
+  await app.emit({
+    kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+    sessionId: 'limited-chat', accounts: healthyPool,
+  }, {
+    kind: 'lease.snapshot', protocolVersion: PROTOCOL_VERSION,
+    sessionId: 'limited-chat',
+    leases: { strategy: 'spread', accounts: [], owners: [{
+      leaseId: 'main', ownerId: 'main-thread', ownerType: 'main',
+      ownerLabel: 'Main', accountId: 'replacement', accountAlias: 'replacement',
+      strategy: 'spread', state: 'active', createdAt: 1, updatedAt: 2,
+      failoverCount: 1, selectionKind: 'failover', selectionReason: 'Account unavailable',
+    }] },
+  })
+  await app.emit({
+    kind: 'lease.snapshot', protocolVersion: PROTOCOL_VERSION,
+    sessionId: 'limited-chat',
+    leases: { strategy: 'spread', accounts: [], owners: [] },
+  })
+  await app.click('Accounts')
+  const menus = app.tree.container.querySelectorAll<HTMLButtonElement>(
+    'button[aria-label="Account actions"]',
+  )
+  expect(menus[0]!.closest('[data-window-card]')?.textContent ??
+    menus[0]!.parentElement?.parentElement?.textContent).toContain('replacementactive')
+  await act(async () => { menus[0]!.click() })
+  expect(app.tree.container.textContent).not.toContain('Switch to this account')
+  await act(async () => { menus[0]!.click(); menus[1]!.click() })
+  await app.click('Switch to this account')
+  expect(app.sessionSwitches[0]?.verb.accountId).toBe('limited')
+  expect(app.managed).toEqual([])
+})
+
+test('a ready chat with no selected account can switch to a healthy replacement', async () => {
+  const app = await mountApp()
+  await app.emit({
+    kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+    sessionId: 'limited-chat',
+    accounts: { ...pool, activeAccountId: null,
+      accounts: pool.accounts.map(account => ({ ...account, isDefault: false })) },
+  })
+  await app.click('Accounts')
+  await app.click('Switch')
+  expect(app.sessionSwitches[0]?.verb.accountId).toBe('replacement')
+  expect(app.managed).toEqual([])
+})
 
 test('Accounts switch after a usage limit changes the existing chat before continuing with a dot', async () => {
   const app = await mountApp()

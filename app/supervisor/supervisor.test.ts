@@ -1236,6 +1236,7 @@ test('carries the peer spawn-env keys and CLEARS the ones the host did not suppl
     'CATCODE_SIDECAR_CREATED_BY',
     'CATCODE_SIDECAR_CREATED_BY_NAME',
     'CATCODE_SIDECAR_MODEL',
+    'CATCODE_SIDECAR_ACCOUNT_SELECTION',
     'CATCODE_SIDECAR_EFFORT',
   ]
   const script = [
@@ -1256,6 +1257,7 @@ test('carries the peer spawn-env keys and CLEARS the ones the host did not suppl
       CATCODE_SIDECAR_CREATED_BY: 'inherited-creator-id',
       CATCODE_SIDECAR_CREATED_BY_NAME: 'InheritedCreator',
       CATCODE_SIDECAR_MODEL: 'inherited-model',
+      CATCODE_SIDECAR_ACCOUNT_SELECTION: '{"openai":"another-chat"}',
       CATCODE_SIDECAR_EFFORT: 'inherited-effort',
     },
     socketDir,
@@ -1279,8 +1281,19 @@ test('carries the peer spawn-env keys and CLEARS the ones the host did not suppl
     CATCODE_SIDECAR_CREATED_BY: 'creator-app-session-id',
     CATCODE_SIDECAR_CREATED_BY_NAME: 'Quartz',
     CATCODE_SIDECAR_MODEL: '',
+    CATCODE_SIDECAR_ACCOUNT_SELECTION: '{}',
     CATCODE_SIDECAR_EFFORT: '',
   })
+  supervisor.spawnSession('restored-account-session', {
+    cwd: sessionCwd,
+    accountSelection: { anthropic: 'claude-chat', openai: 'codex-chat' },
+  })
+  await waitFor(() => {
+    const observed = JSON.parse(readFileSync(observedPath, 'utf8'))
+    return observed.CATCODE_SIDECAR_ACCOUNT_SELECTION !== '{}'
+  }, 'replacement did not receive its saved account selection')
+  expect(JSON.parse(JSON.parse(readFileSync(observedPath, 'utf8')).CATCODE_SIDECAR_ACCOUNT_SELECTION))
+    .toEqual({ anthropic: 'claude-chat', openai: 'codex-chat' })
 })
 
 test('project names follow the saved folder mapping and never leak into plain Chats or unnamed folders', async () => {

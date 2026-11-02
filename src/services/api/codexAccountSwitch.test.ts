@@ -2,6 +2,7 @@ import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 
 import * as codexFetchAdapterModule from './codex-fetch-adapter.js'
 import * as codexPoolModule from './codexAccountPool.js'
+import * as configModule from '../../utils/config.js'
 import type { PoolAccount } from './codexAccountPool.js'
 import {
   getCodexLeaseSnapshotForTest,
@@ -69,6 +70,41 @@ describe('commitCodexAccountSwitch', () => {
     mock.restore()
     codexPoolModule.resetCodexAccountPoolForTest()
     resetCodexLeaseManagerForTest()
+  })
+
+  test.each([false, true])('writes the shared default only with explicit persistence: %s', async persistDefault => {
+    await stubSwitchSideEffects()
+    const save = spyOn(configModule, 'saveGlobalConfig').mockReturnValue(true)
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount('codex-one', 'main'),
+        buildPoolAccount('codex-two', 'backup'),
+      ],
+      activeAccountId: 'codex-one',
+    })
+    await commitCodexAccountSwitch('backup', persistDefault ? { persistDefault: true } : undefined)
+    expect(save).toHaveBeenCalledTimes(persistDefault ? 1 : 0)
+    expect(codexPoolModule.getActiveAccount()?.accountId).toBe('codex-two')
+  })
+
+  test('a default switch repairs a stale worker default even when its local choice is unchanged', async () => {
+    const stubs = await stubSwitchSideEffects()
+    let config = { activeCodexAccountId: 'codex-two' } as ReturnType<typeof configModule.getGlobalConfig>
+    spyOn(configModule, 'saveGlobalConfig').mockImplementation(update => {
+      config = update(config)
+      return true
+    })
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [buildPoolAccount('codex-one', 'main'), buildPoolAccount('codex-two', 'backup')],
+      activeAccountId: 'codex-one',
+    })
+
+    await commitCodexAccountSwitch('main')
+    expect(config.activeCodexAccountId).toBe('codex-two')
+    expect(stubs.clearAuthRelatedCaches).toHaveBeenLastCalledWith({ persistConfig: false })
+    await commitCodexAccountSwitch('main', { persistDefault: true })
+    expect(config.activeCodexAccountId).toBe('codex-one')
+    expect(stubs.clearAuthRelatedCaches).toHaveBeenLastCalledWith({ persistConfig: true })
   })
 
   test('moves live follow-main leases onto the newly selected account', async () => {
