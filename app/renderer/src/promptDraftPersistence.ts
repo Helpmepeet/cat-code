@@ -37,6 +37,11 @@ import {
 } from './viewPreference.js'
 
 export const PROMPT_DRAFTS_STORAGE_KEY = 'catcode.promptDrafts.v1'
+export const PROMPT_DRAFT_RECOVERY_STORAGE_KEY = 'catcode.promptDraftRecovery.v1'
+
+export type PromptDraftProtection =
+  | { status: 'saved'; text: string }
+  | { status: 'stale' | 'unsaved'; text: string; reason: 'length' | 'capacity' | 'storage' }
 
 /**
  * Persistence bounds. Drafts are kept for sessions that are not currently open
@@ -97,6 +102,28 @@ export function readPromptDraftsFromStorage(
   )
 }
 
+export function readOlderPromptDraftsFromStorage(
+  storage: ViewPreferenceStorage | null,
+): PromptDraftState {
+  const markers = readViewPreference(storage, PROMPT_DRAFT_RECOVERY_STORAGE_KEY, 'olderCopies', value => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    return value as Record<string, unknown>
+  })
+  const drafts = readPromptDraftsFromStorage(storage) ?? {}
+  return Object.fromEntries(Object.entries(drafts).filter(([id, text]) =>
+    markers?.[id] === draftFingerprint(text),
+  )) as PromptDraftState
+}
+
+// Bind a marker to the last-good copy without storing a second copy of its text.
+function draftFingerprint(text: string): string {
+  let hash = 2166136261
+  for (let index = 0; index < text.length; index++) {
+    hash = Math.imul(hash ^ text.charCodeAt(index), 16777619)
+  }
+  return `${text.length}:${hash >>> 0}`
+}
+
 export function writePromptDraftsToStorage(
   storage: ViewPreferenceStorage | null,
   drafts: PromptDraftState,
@@ -104,8 +131,9 @@ export function writePromptDraftsToStorage(
   recovery: {
     pendingSubmits?: PendingSubmitState
     historyNavigation?: Partial<Record<SessionId, HistoryNav>>
+    olderRestoredDrafts?: PromptDraftState
   } = {},
-): Record<string, { status: 'saved' | 'stale' | 'unsaved'; text: string }> {
+): Record<string, PromptDraftProtection> {
   // Paste pills depend on volatile entries. Persist their text so restoring a
   // draft after a reload never leaves a pill whose contents no longer exist.
   const expanded: Record<string, string> = {}
@@ -148,8 +176,26 @@ export function writePromptDraftsToStorage(
     next,
   )
   const protectedDrafts = written ? next : previous
-  return Object.fromEntries(Object.entries(expanded).filter(([, text]) => text.length > 0).map(([key, text]) => [
-    key,
-    { status: protectedDrafts[key] === text ? 'saved' : protectedDrafts[key] ? 'stale' : 'unsaved', text },
-  ]))
+  const protection: Record<string, PromptDraftProtection> = {}
+  const olderCopies: Record<string, string> = {}
+  for (const [key, text] of Object.entries(expanded)) {
+    if (!text) continue
+    if (protectedDrafts[key] === text) {
+      protection[key] = { status: 'saved', text }
+      if (recovery.olderRestoredDrafts?.[key as SessionId] === text) olderCopies[key] = draftFingerprint(text)
+    } else {
+      protection[key] = {
+        status: protectedDrafts[key] ? 'stale' : 'unsaved',
+        text,
+        reason: text.length > MAX_PERSISTED_PROMPT_DRAFT_CHARS
+          ? 'length'
+          : next[key] !== text ? 'capacity' : 'storage',
+      }
+      if (protectedDrafts[key]) olderCopies[key] = draftFingerprint(protectedDrafts[key])
+    }
+  }
+  // Separate metadata keeps the existing draft format unchanged. This is
+  // best-effort too: a store refusing every write cannot retain a recovery marker.
+  writeViewPreference(storage, PROMPT_DRAFT_RECOVERY_STORAGE_KEY, 'olderCopies', olderCopies)
+  return protection
 }

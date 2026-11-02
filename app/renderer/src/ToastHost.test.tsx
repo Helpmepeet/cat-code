@@ -18,6 +18,14 @@ test('add enqueues a toast', () => {
   expect(state.map(t => t.id)).toEqual(['a'])
 })
 
+test('add preserves the optional action without invoking it', () => {
+  let calls = 0
+  const onAction = () => { calls++ }
+  const state = toastReducer([], { type: 'add', toast: { ...mkToast('action'), onAction } })
+  expect(state[0]!.onAction).toBe(onAction)
+  expect(calls).toBe(0)
+})
+
 test('dismiss removes the addressed toast; an unknown id is a no-op (same ref)', () => {
   const start = [mkToast('a'), mkToast('b')]
   expect(toastReducer(start, { type: 'dismiss', id: 'a' }).map(t => t.id)).toEqual([

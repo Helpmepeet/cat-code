@@ -1,11 +1,28 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { getBridge } from './bridge.js'
 import { selectedTextInside } from './transcriptPaneFiles.js'
-import { UnsavedTextProtection } from './UnsavedTextProtection.js'
+import { useToast } from './toastContext.js'
 
 export function ExternalLinkRecovery() {
-  const [failedExternalUrl, setFailedExternalUrl] = useState<string | null>(null)
+  const toast = useToast()
   useEffect(() => {
+    const copyLink = (url: string) => {
+      void (async () => {
+        try {
+          await navigator.clipboard.writeText(url)
+          toast('Link copied.', { tone: 'success' })
+        } catch {
+          toast('Could not copy this link. Click to try again.', {
+            tone: 'warn', duration: 0, onAction: () => copyLink(url),
+          })
+        }
+      })()
+    }
+    const failedLink = (url: string) => {
+      toast('Could not open this link. Click to copy it.', {
+        tone: 'warn', duration: 0, onAction: () => copyLink(url),
+      })
+    }
     const openDocumentLink = (event: MouseEvent) => {
       if (event.defaultPrevented || (event.type === 'auxclick' ? event.button !== 1 : event.button !== 0) || !(event.target instanceof Element)) return
       const anchor = event.target.closest<HTMLAnchorElement>('a[href]')
@@ -22,9 +39,8 @@ export function ExternalLinkRecovery() {
       // accepts this fixed method only from the app's main frame.
       void (async () => {
         try {
-          if (!await bridge.openExternalUrl(url.href)) setFailedExternalUrl(url.href)
-          else setFailedExternalUrl(current => current === url.href ? null : current)
-        } catch { setFailedExternalUrl(url.href) }
+          if (!await bridge.openExternalUrl(url.href)) failedLink(url.href)
+        } catch { failedLink(url.href) }
       })()
     }
     document.addEventListener('click', openDocumentLink)
@@ -33,6 +49,6 @@ export function ExternalLinkRecovery() {
       document.removeEventListener('click', openDocumentLink)
       document.removeEventListener('auxclick', openDocumentLink)
     }
-  }, [])
-  return failedExternalUrl ? <UnsavedTextProtection key={failedExternalUrl} message="Could not open this link." text={failedExternalUrl} label="Copy link" /> : null
+  }, [toast])
+  return null
 }

@@ -1,7 +1,6 @@
 import { ExternalLinkRecovery } from './ExternalLinkRecovery.js'
 import { RoutingStorageRecovery } from './RoutingStorageRecovery.js'
 import type { RoutingStorageHealth } from '../../shared/projectRouting.js'
-import { UnsavedTextProtection } from './UnsavedTextProtection.js'
 import { isDefiniteLocalSendRefusal } from './localSendFailure.js'
 import { useContext } from 'react'
 import { isTurnRunning } from './appModel.js'
@@ -440,6 +439,7 @@ import {
   type PromptDraftState,
 } from './appModel.js'
 import {
+  readOlderPromptDraftsFromStorage,
   readPromptDraftsFromStorage,
   writePromptDraftsToStorage,
 } from './promptDraftPersistence.js'
@@ -582,7 +582,18 @@ export function App() {
   const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>(
     () => readPromptDraftsFromStorage(defaultPromptDraftStorage()) ?? {},
   )
-  const [recoveredDrafts, setRecoveredDrafts] = useState(() => promptDrafts)
+  const [olderRestoredDrafts, setOlderRestoredDrafts] = useState(
+    () => readOlderPromptDraftsFromStorage(defaultPromptDraftStorage()),
+  )
+  const olderRestoredDraftsRef = useRef(olderRestoredDrafts)
+  olderRestoredDraftsRef.current = olderRestoredDrafts
+  const clearOlderDraftNotice = useCallback((sessionId: SessionId) => {
+    if (!olderRestoredDraftsRef.current[sessionId]) return
+    const next = { ...olderRestoredDraftsRef.current }
+    delete next[sessionId]
+    olderRestoredDraftsRef.current = next
+    setOlderRestoredDrafts(next)
+  }, [])
   const promptDraftsRef = useRef(promptDrafts)
   promptDraftsRef.current = promptDrafts
   const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
@@ -597,8 +608,13 @@ export function App() {
   const pendingSubmitsRef = useRef(pendingSubmits)
   pendingSubmitsRef.current = pendingSubmits
   const updatePromptDrafts = useCallback(
-    (update: (current: PromptDraftState) => PromptDraftState): void => {
+    (update: (current: PromptDraftState) => PromptDraftState, preserveOlderNotice = false): void => {
       const next = update(promptDraftsRef.current)
+      if (!preserveOlderNotice) {
+        for (const [id, text] of Object.entries(olderRestoredDraftsRef.current)) {
+          if (next[id as SessionId] !== text) clearOlderDraftNotice(id as SessionId)
+        }
+      }
       promptDraftsRef.current = next
       setPromptDrafts(next)
     },
@@ -611,9 +627,9 @@ export function App() {
   // Persist the bounded record and refresh protection health for every edit.
   useEffect(() => {
     setDraftProtection(writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDrafts, pasteState, {
-      pendingSubmits, historyNavigation,
+      pendingSubmits, historyNavigation, olderRestoredDrafts,
     }))
-  }, [promptDrafts, pasteState, pendingSubmits, historyNavigation])
+  }, [promptDrafts, pasteState, pendingSubmits, historyNavigation, olderRestoredDrafts])
   // A reload or a quit can precede the save effect. `pagehide` still allows a
   // synchronous write, so the pending one is flushed there.
   useEffect(() => {
@@ -623,6 +639,7 @@ export function App() {
       storage, promptDraftsRef.current, pasteStateRef.current, {
         pendingSubmits: pendingSubmitsRef.current,
         historyNavigation: historyNavigationRef.current,
+        olderRestoredDrafts: olderRestoredDraftsRef.current,
       },
     )
     window.addEventListener('pagehide', flush)
@@ -3695,7 +3712,8 @@ export function App() {
       reason: DraftWriteReason = 'edit',
     ) => {
       if (branchSwitchSourcesRef.current.has(sessionId)) return
-      updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
+      if (reason === 'edit') clearOlderDraftNotice(sessionId)
+      updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value), reason === 'history-nav')
       // Prune only on a genuine edit; a transient ↑/↓ history-nav write must NOT
       // drop a live, uncommitted paste that ↓ is about to restore.
       setPasteState(prev =>
@@ -4358,6 +4376,15 @@ export function App() {
 	            }}
 	            planReview={sessionPlanReview}
 	            prompt={selectPromptDraft(promptDrafts, sessionId)}
+	            draftProtection={draftProtection[sessionId] ?? null}
+	            olderDraftRestored={Boolean(olderRestoredDrafts[sessionId])}
+	            onRetryDraftSave={() => setDraftProtection(writePromptDraftsToStorage(
+	              defaultPromptDraftStorage(), promptDraftsRef.current, pasteStateRef.current, {
+	                pendingSubmits: pendingSubmitsRef.current,
+	                historyNavigation: historyNavigationRef.current,
+	                olderRestoredDrafts: olderRestoredDraftsRef.current,
+	              },
+	            ))}
 	            restorePermission={requestId => {
 	              dispatchPermission({
 	                type: 'restored',
@@ -4815,26 +4842,6 @@ export function App() {
          * the panel's top edge whether or not the notice is showing. */}
         <div className="lid-frame shell-frame flex min-h-0 min-w-0 flex-1" data-window-frame>
         <div className="lid-content shell-panel relative flex min-h-0 min-w-0 flex-1 flex-col" data-window-panel>
-          <div className="draft-recovery-notices">
-            {activeView === 'chat' && shownPane && recoveredDrafts[shownPane.sessionId] &&
-              recoveredDrafts[shownPane.sessionId] === promptDrafts[shownPane.sessionId] ? (
-              <section role="status" className="draft-restored-notice" aria-label="Restored draft">
-                <p>Saved draft restored. Review it before sending; newer unsaved changes may not be included.</p>
-                <button type="button" onClick={() => setRecoveredDrafts(current => {
-                  const next = { ...current }
-                  delete next[shownPane.sessionId]
-                  return next
-                })}>Dismiss</button>
-              </section>
-            ) : null}
-            {Object.entries(draftProtection).filter(([, draft]) => draft.status !== 'saved').map(([id, draft]) =>
-              <UnsavedTextProtection key={id} message={draft.status === 'stale' ? 'Your latest draft is not saved. Copy it before closing or reloading; only an older copy is saved.' : 'This draft is not saved. Copy it before closing or reloading.'} text={draft.text} />)}
-            {Object.values(draftProtection).some(draft => draft.status !== 'saved') ? <button className="draft-recovery-retry" type="button" onClick={() => {
-              setDraftProtection(writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDraftsRef.current, pasteStateRef.current, {
-                pendingSubmits: pendingSubmitsRef.current, historyNavigation: historyNavigationRef.current,
-              }))
-            }}>Try saving drafts again</button> : null}
-          </div>
           <LidClosedNotice />
           {/* Startup overlays must not cover machine-wide recovery actions. */}
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

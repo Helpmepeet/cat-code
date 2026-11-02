@@ -27,6 +27,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react'
 import { RecoveredInputReview } from './RecoveredInputReview.js'
+import { DraftProtectionNotice } from './DraftProtectionNotice.js'
+import type { PromptDraftProtection } from './promptDraftPersistence.js'
 import { createPortal } from 'react-dom'
 import { getBridge } from './bridge.js'
 import { InlineCommandProvider } from './InlineCommandProvider.js'
@@ -325,6 +327,9 @@ export function SessionPane({
   snoozePermission,
   planReview,
   prompt,
+  draftProtection = null,
+  olderDraftRestored = false,
+  onRetryDraftSave = () => {},
   releasePendingSubmit,
   restorePermission,
   revealHidden = false,
@@ -2358,6 +2363,7 @@ export function SessionPane({
           submit(event)
         }}
       >
+        <DraftProtectionNotice protection={draftProtection} olderCopy={olderDraftRestored} onRetry={onRetryDraftSave} />
         {images.length > 0 || fileAttachment ? (
           <div
             aria-label="Attachments"
@@ -3046,6 +3052,9 @@ type SessionPaneProps = {
   onCancelQuestions: () => void
   onChatQuestions?: (message: string) => void
   prompt: string
+  draftProtection?: PromptDraftProtection | null
+  olderDraftRestored?: boolean
+  onRetryDraftSave?: () => void
   restorePermission: (requestId: string) => void
   /**
    * P4-36 transcript mode: show THIS pane's hidden tier (`isSynthetic` rows),

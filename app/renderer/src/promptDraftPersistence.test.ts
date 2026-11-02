@@ -11,6 +11,8 @@ import {
   MAX_PERSISTED_PROMPT_DRAFTS,
   MAX_PERSISTED_PROMPT_DRAFT_CHARS,
   PROMPT_DRAFTS_STORAGE_KEY,
+  PROMPT_DRAFT_RECOVERY_STORAGE_KEY,
+  readOlderPromptDraftsFromStorage,
   readPromptDraftsFromStorage,
   writePromptDraftsToStorage,
 } from './promptDraftPersistence.js'
@@ -173,7 +175,7 @@ test('overflow reports every unsaved full draft without evicting the existing 32
   const first = Object.fromEntries(Array.from({ length: MAX_PERSISTED_PROMPT_DRAFTS }, (_, index) => [`s${index}`, `text ${index}`]))
   writePromptDraftsToStorage(storage, draftsOf(first))
   const outcomes = writePromptDraftsToStorage(storage, draftsOf({ extra: 'full new draft', ...first }))
-  expect(outcomes.extra).toEqual({ status: 'unsaved', text: 'full new draft' })
+  expect(outcomes.extra).toEqual({ status: 'unsaved', text: 'full new draft', reason: 'capacity' })
   expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf(first))
 })
 
@@ -182,8 +184,8 @@ test('quota refusal reports stale full text and does not replace the last-good c
   writePromptDraftsToStorage(storage, draftsOf({ a: 'old' }))
   const refusing = { getItem: storage.getItem, setItem: () => { throw new Error('quota') } }
   const outcomes = writePromptDraftsToStorage(refusing, draftsOf({ a: 'latest', b: 'never saved' }))
-  expect(outcomes.a).toEqual({ status: 'stale', text: 'latest' })
-  expect(outcomes.b).toEqual({ status: 'unsaved', text: 'never saved' })
+  expect(outcomes.a).toEqual({ status: 'stale', text: 'latest', reason: 'storage' })
+  expect(outcomes.b).toEqual({ status: 'unsaved', text: 'never saved', reason: 'storage' })
   expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf({ a: 'old' }))
 })
 
@@ -192,7 +194,7 @@ test('expanded oversized paste and unavailable storage return full actionable te
   const content = 'full context\n'.repeat(2000)
   const pasted = reducePasteAdded(createPasteState(), sessionId, content)
   const outcomes = writePromptDraftsToStorage(null, draftsOf({ [sessionId]: pasted.token }), pasted.state)
-  expect(outcomes[sessionId]).toEqual({ status: 'unsaved', text: content })
+  expect(outcomes[sessionId]).toEqual({ status: 'unsaved', text: content, reason: 'length' })
 })
 
 test('a later successful save replaces stale health and recovers the latest complete text', () => {
@@ -202,4 +204,62 @@ test('a later successful save replaces stale health and recovers the latest comp
   expect(writePromptDraftsToStorage(refusal, draftsOf({ a: 'new' })).a!.status).toBe('stale')
   expect(writePromptDraftsToStorage(storage, draftsOf({ a: 'new' })).a!.status).toBe('saved')
   expect(readPromptDraftsFromStorage(storage)).toEqual(draftsOf({ a: 'new' }))
+})
+
+test('only a refused replacement marks an older copy for restoration', () => {
+  const storage = fakeStorage()
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'last good', b: 'normal saved draft' }))
+  expect(readOlderPromptDraftsFromStorage(storage)).toEqual({})
+  const result = writePromptDraftsToStorage(storage, draftsOf({
+    a: 'x'.repeat(MAX_PERSISTED_PROMPT_DRAFT_CHARS + 1), b: 'normal saved draft',
+  }))
+  expect(result.a).toEqual({ status: 'stale', text: 'x'.repeat(20001), reason: 'length' })
+  const restored = readOlderPromptDraftsFromStorage(storage)
+  expect(restored).toEqual(draftsOf({ a: 'last good' }))
+  writePromptDraftsToStorage(storage, readPromptDraftsFromStorage(storage)!, {}, { olderRestoredDrafts: restored })
+  expect(readOlderPromptDraftsFromStorage(storage)).toEqual(restored)
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'edited draft', b: 'normal saved draft' }))
+  expect(readOlderPromptDraftsFromStorage(storage)).toEqual({})
+})
+
+test('storage refusal can retain an older-copy marker when metadata writes still work', () => {
+  const storage = fakeStorage()
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'saved' }))
+  const refusingDrafts = {
+    getItem: storage.getItem,
+    setItem: (key: string, value: string) => {
+      if (key === PROMPT_DRAFTS_STORAGE_KEY) throw new Error('quota')
+      storage.setItem(key, value)
+    },
+  }
+  expect(writePromptDraftsToStorage(refusingDrafts, draftsOf({ a: 'unsaved edit' })).a!.status).toBe('stale')
+  expect(readOlderPromptDraftsFromStorage(storage)).toEqual(draftsOf({ a: 'saved' }))
+  writePromptDraftsToStorage(storage, draftsOf({}))
+  expect(readOlderPromptDraftsFromStorage(storage)).toEqual({})
+})
+
+test('recovery metadata never creates a draft or trusts malformed markers', () => {
+  const storage = fakeStorage()
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'saved', b: 'saved too' }))
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'x'.repeat(20001), b: 'saved too' }))
+  const marker = JSON.parse(storage.getItem(PROMPT_DRAFT_RECOVERY_STORAGE_KEY)!).olderCopies.a
+  storage.setItem(PROMPT_DRAFT_RECOVERY_STORAGE_KEY, JSON.stringify({
+    version: 1, olderCopies: { a: marker, b: true, missing: marker },
+  }))
+  expect(readOlderPromptDraftsFromStorage(storage)).toEqual(draftsOf({ a: 'saved' }))
+})
+
+test('a successful new draft is not called an older copy if clearing its previous marker fails', () => {
+  const storage = fakeStorage()
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'saved' }))
+  writePromptDraftsToStorage(storage, draftsOf({ a: 'x'.repeat(20001) }))
+  const refusingMetadata = {
+    getItem: storage.getItem,
+    setItem: (key: string, value: string) => {
+      if (key === PROMPT_DRAFT_RECOVERY_STORAGE_KEY) throw new Error('quota')
+      storage.setItem(key, value)
+    },
+  }
+  expect(writePromptDraftsToStorage(refusingMetadata, draftsOf({ a: 'latest' })).a!.status).toBe('saved')
+  expect(readOlderPromptDraftsFromStorage(storage)).toEqual({})
 })

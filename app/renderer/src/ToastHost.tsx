@@ -58,7 +58,7 @@ export function ToastHost({ children }: { children?: ReactNode }) {
       const duration = options?.duration ?? DEFAULT_TOAST_DURATION
       dispatch({
         type: 'add',
-        toast: { id, message, tone: options?.tone ?? 'default', duration },
+        toast: { id, message, tone: options?.tone ?? 'default', duration, onAction: options?.onAction },
       })
       if (duration > 0 && typeof setTimeout === 'function') {
         timers.current.set(
@@ -131,7 +131,10 @@ function ToastViewport({
           <button
             key={toast.id}
             type="button"
-            onClick={() => onDismiss(toast.id)}
+            onClick={() => {
+              onDismiss(toast.id)
+              toast.onAction?.()
+            }}
             className={
               'animate-toast-in pointer-events-auto flex items-center gap-2.5 rounded-lg border bg-surface-raised px-[13px] py-2 text-left text-[12.5px] font-medium text-text-primary shadow-[var(--elev-toast)] ' +
               t.softBorder

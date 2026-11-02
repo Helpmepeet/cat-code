@@ -3,6 +3,7 @@ export type ToastTone = 'default' | 'success' | 'danger' | 'warn' | 'info'
 export type ToastOptions = {
   tone?: ToastTone
   duration?: number
+  onAction?: () => void
 }
 
 export type Toast = {
@@ -10,6 +11,7 @@ export type Toast = {
   message: string
   tone: ToastTone
   duration: number
+  onAction?: () => void
 }
 
 export type ToastFn = (message: string, options?: ToastOptions) => void
