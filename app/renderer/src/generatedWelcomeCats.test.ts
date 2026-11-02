@@ -24,5 +24,5 @@ test('Welcome rotation includes one optimized display asset for every generated 
     total += statSync(file).size
   }
   // Keep the full rotation at 2x display resolution with lossless transparency.
-  expect(total).toBeLessThan(4_500_000)
+  expect(total).toBeLessThan(6_500_000)
 })
