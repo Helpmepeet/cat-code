@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import './UnsavedTextProtection.css'
 
 export function UnsavedTextProtection({ message, text, label = 'Copy full text' }: {
   message: string; text: string; label?: string
@@ -7,7 +8,7 @@ export function UnsavedTextProtection({ message, text, label = 'Copy full text' 
   const currentText = useRef(text)
   currentText.current = text
   useEffect(() => { setCopyState('') }, [text])
-  return <section role="alert" className="border border-warning/40 bg-shell-hover p-3 text-text-primary">
+  return <section role="alert" className="unsaved-text-protection">
     <p>{message}</p>
     <button type="button" onClick={async () => {
       try {

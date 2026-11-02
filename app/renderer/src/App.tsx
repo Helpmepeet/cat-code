@@ -4714,17 +4714,6 @@ export function App() {
             if (!result.ok) throw new Error('Could not show the saved message file')
           }}
         />
-        {Object.keys(recoveredDrafts).length ? <section role="alert" className="border border-warning/40 bg-shell-hover p-3">
-          <p>Recovered last-good draft copies, not any newer unsaved text. Check these saved copies before sending.</p>
-          <button type="button" onClick={() => setRecoveredDrafts({})}>I have checked my drafts</button>
-        </section> : null}
-        {Object.entries(draftProtection).filter(([, draft]) => draft.status !== 'saved').map(([id, draft]) =>
-          <UnsavedTextProtection key={id} message={draft.status === 'stale' ? 'Your latest draft is not saved. Only an older copy will survive a reload. Copy the full text before leaving.' : 'This draft is not saved. Copy the full text before leaving.'} text={draft.text} />)}
-        {Object.values(draftProtection).some(draft => draft.status !== 'saved') ? <button type="button" onClick={() => {
-          setDraftProtection(writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDraftsRef.current, pasteStateRef.current, {
-            pendingSubmits: pendingSubmitsRef.current, historyNavigation: historyNavigationRef.current,
-          }))
-        }}>Try saving drafts again</button> : null}
         {createProjectOpen ? (
           <CreateProjectDialog
             bridge={getBridge()}
@@ -4826,6 +4815,26 @@ export function App() {
          * the panel's top edge whether or not the notice is showing. */}
         <div className="lid-frame shell-frame flex min-h-0 min-w-0 flex-1" data-window-frame>
         <div className="lid-content shell-panel relative flex min-h-0 min-w-0 flex-1 flex-col" data-window-panel>
+          <div className="draft-recovery-notices">
+            {activeView === 'chat' && shownPane && recoveredDrafts[shownPane.sessionId] &&
+              recoveredDrafts[shownPane.sessionId] === promptDrafts[shownPane.sessionId] ? (
+              <section role="status" className="draft-restored-notice" aria-label="Restored draft">
+                <p>Saved draft restored. Review it before sending; newer unsaved changes may not be included.</p>
+                <button type="button" onClick={() => setRecoveredDrafts(current => {
+                  const next = { ...current }
+                  delete next[shownPane.sessionId]
+                  return next
+                })}>Dismiss</button>
+              </section>
+            ) : null}
+            {Object.entries(draftProtection).filter(([, draft]) => draft.status !== 'saved').map(([id, draft]) =>
+              <UnsavedTextProtection key={id} message={draft.status === 'stale' ? 'Your latest draft is not saved. Copy it before closing or reloading; only an older copy is saved.' : 'This draft is not saved. Copy it before closing or reloading.'} text={draft.text} />)}
+            {Object.values(draftProtection).some(draft => draft.status !== 'saved') ? <button className="draft-recovery-retry" type="button" onClick={() => {
+              setDraftProtection(writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDraftsRef.current, pasteStateRef.current, {
+                pendingSubmits: pendingSubmitsRef.current, historyNavigation: historyNavigationRef.current,
+              }))
+            }}>Try saving drafts again</button> : null}
+          </div>
           <LidClosedNotice />
           {/* Startup overlays must not cover machine-wide recovery actions. */}
           <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">

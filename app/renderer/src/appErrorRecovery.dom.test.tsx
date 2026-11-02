@@ -30,18 +30,42 @@ test('App protects full 20,001-character text before reload and labels the recov
   const saved = 'x'.repeat(20000)
   window.localStorage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: { existing: saved } }))
   const tree = await harness.mount(<App />)
-  expect(tree.container.textContent).toContain('Recovered last-good draft copies')
+  const restored = tree.container.querySelector('[aria-label="Restored draft"]')!
+  expect(restored.textContent).toContain('Saved draft restored.')
+  expect(restored.closest('[data-window-panel]')).not.toBeNull()
   const composer = tree.container.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]')!
   expect(composer).not.toBeNull()
   await act(async () => { composer.textContent = saved + 'y'; composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'y' })) })
+  expect(tree.container.querySelector('[aria-label="Restored draft"]')).toBeNull()
   expect(tree.container.textContent).toContain('Your latest draft is not saved.')
+  expect(tree.container.querySelector('.unsaved-text-protection')!.closest('[data-window-panel]')).not.toBeNull()
   expect(tree.container.querySelector('textarea')!.value).toBe(saved + 'y')
   await act(async () => { window.dispatchEvent(new Event('pagehide')) })
   expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts.existing).toBe(saved)
   await tree.unmount()
   const reloaded = await harness.mount(<App />)
-  expect(reloaded.container.textContent).toContain('Recovered last-good draft copies')
+  expect(reloaded.container.textContent).toContain('Saved draft restored.')
   expect(reloaded.container.querySelector('[role="textbox"]')!.textContent).toBe(saved)
+})
+
+test('drafts from old chats do not show a global recovery warning', async () => {
+  bridge()
+  window.localStorage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: { 'old-chat': 'old saved draft' } }))
+  const tree = await harness.mount(<App />)
+  expect(tree.container.querySelector('[aria-label="Restored draft"]')).toBeNull()
+  expect(tree.container.textContent).not.toContain('Recovered last-good draft copies')
+  expect(tree.container.textContent).not.toContain('I have checked my drafts')
+  expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts['old-chat']).toBe('old saved draft')
+})
+
+test('restored draft notice can be dismissed without deleting the saved text', async () => {
+  bridge()
+  window.localStorage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: { existing: 'saved draft' } }))
+  const tree = await harness.mount(<App />)
+  await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Restored draft"] button')!.click() })
+  expect(tree.container.querySelector('[aria-label="Restored draft"]')).toBeNull()
+  expect(tree.container.querySelector('[role="textbox"]')!.textContent).toBe('saved draft')
+  expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts.existing).toBe('saved draft')
 })
 
 test('global routing health recovery is visible without a session route and clears only after revalidation', async () => {
