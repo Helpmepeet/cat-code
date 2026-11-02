@@ -268,7 +268,7 @@ describe('LogoV2', () => {
         companyAnnouncements: ['An announcement'],
       } as ReturnType<typeof settingsModule.getInitialSettings>)
       spyOn(logoV2UtilsModule, 'getLogoDisplayData').mockReturnValue({
-        cwd: '/repo', billingType: null, agentName: '',
+        version: 'test', cwd: '/repo', billingType: null, agentName: '',
       })
       spyOn(usageModule, 'fetchUtilization').mockResolvedValue({})
       seedClaudeAccountPoolForTest({
