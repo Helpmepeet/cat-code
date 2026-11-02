@@ -1685,6 +1685,15 @@ function isCommandReadOnly(command: string): boolean {
     testCommand = testCommand.slice(0, -5).trim()
   }
 
+  // `git -c core.fsmonitor=false` can only remove a way for repository config
+  // to run code, and the engine passes it itself (context.ts). Drop exactly
+  // that literal pair so the rest is validated as plain git; any other `-c`
+  // still fails the guard below.
+  testCommand = testCommand.replace(
+    /^git[ \t]+-c[ \t]+core\.fsmonitor=false[ \t]+/,
+    'git ',
+  )
+
   // Check for Windows UNC paths that could be vulnerable to WebDAV attacks
   // Do this early to prevent any command with UNC paths from being marked as read-only
   if (containsVulnerableUncPath(testCommand)) {

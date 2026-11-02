@@ -1,4 +1,12 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from 'bun:test'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import {
   ensureParserInitialized,
@@ -22,16 +30,31 @@ beforeEach(async () => {
   await mock.module('src/utils/bash/parser.js', () => ({
     ...actualParser,
     parseCommandRaw: async (command: string) =>
-      command ? parserModule.parse(command) : null,
+      command && !legacyParse ? parserModule.parse(command) : null,
   }))
 })
 
-function toolUseContext(allowRules: string[] = []): ToolUseContext {
+// filesystem.ts reads MACRO.VERSION when it builds the bundled-skills root,
+// and that global only exists in a built bundle.
+beforeAll(() => {
+  ;(
+    globalThis as typeof globalThis & { MACRO?: { VERSION: string } }
+  ).MACRO ??= { VERSION: 'test-version' }
+})
+
+// Dev builds run tree-sitter in shadow mode, so the legacy shell-quote path
+// decides there. Tests that must hold on both paths flip this.
+let legacyParse = false
+
+function toolUseContext(
+  allowRules: string[] = [],
+  denyRules: string[] = [],
+): ToolUseContext {
   const toolPermissionContext: ToolPermissionContext = {
     mode: 'default',
     additionalWorkingDirectories: new Map(),
     alwaysAllowRules: allowRules.length > 0 ? { localSettings: allowRules } : {},
-    alwaysDenyRules: {},
+    alwaysDenyRules: denyRules.length > 0 ? { localSettings: denyRules } : {},
     alwaysAskRules: {},
     isBypassPermissionsModeAvailable: false,
   }
@@ -236,3 +259,84 @@ describe('bashToolHasPermission lookup-altering assignments', () => {
     expect(decision.behavior).toBe('allow')
   })
 })
+
+// Agents call `/bin/ls` when a shell alias breaks `ls`, and the engine itself
+// passes `git -c core.fsmonitor=false`. Both reached Auto review on every call
+// while their plain forms were allowed outright.
+for (const parser of ['tree-sitter', 'legacy'] as const) {
+  describe(`bashToolHasPermission spelled-out read-only commands (${parser})`, () => {
+    beforeEach(() => {
+      legacyParse = parser === 'legacy'
+    })
+    afterEach(() => {
+      legacyParse = false
+    })
+
+    test('a system-path read-only binary is allowed like its bare name', async () => {
+      expect((await decide('/bin/ls -la src')).behavior).toBe('allow')
+      expect(
+        (await decide("/usr/bin/sed -n '1,5p' src/context.ts")).behavior,
+      ).toBe('allow')
+      expect((await decide('/bin/ls src | head -5')).behavior).toBe('allow')
+      expect(
+        (await decide('git status --short && /bin/ls docs')).behavior,
+      ).toBe('allow')
+    })
+
+    test('a system-path binary still has its paths checked', async () => {
+      expect((await decide('/bin/ls /etc')).behavior).toBe('ask')
+      expect((await decide('/bin/cat /etc/hosts | head -1')).behavior).toBe(
+        'ask',
+      )
+    })
+
+    test('a system-path binary still meets deny rules for its bare name', async () => {
+      const decision = await bashToolHasPermission(
+        { command: '/bin/ls src' },
+        toolUseContext([], ['Bash(ls:*)']),
+      )
+      expect(decision.behavior).toBe('deny')
+    })
+
+    test('a system-path binary still gets its own command checks', async () => {
+      expect(
+        (await decide("/usr/bin/sed -i '' 's/a/b/' src/context.ts")).behavior,
+      ).not.toBe('allow')
+    })
+
+    test('other locations and other binaries keep their full path', async () => {
+      expect((await decide('/usr/local/bin/ls src')).behavior).not.toBe('allow')
+      expect((await decide('/opt/homebrew/bin/cat src/context.ts')).behavior).not.toBe('allow')
+      expect((await decide('/bin/rm -rf build')).behavior).not.toBe('allow')
+      expect((await decide('/bin/lsx src')).behavior).not.toBe('allow')
+    })
+
+    test('disabling fsmonitor leaves a read-only git command allowed', async () => {
+      expect(
+        (await decide('git -c core.fsmonitor=false diff --check')).behavior,
+      ).toBe('allow')
+      expect(
+        (await decide('git -c core.fsmonitor=false status --short')).behavior,
+      ).toBe('allow')
+    })
+
+    test('any other git -c still needs review', async () => {
+      for (const command of [
+        'git -c core.fsmonitor=true diff --check',
+        'git -c core.fsmonitor=/tmp/hook diff --check',
+        'git -c core.fsmonitor=no diff --check',
+        'git -c core.pager=evil diff',
+        'git -c core.fsmonitor=false -c core.pager=evil diff',
+        'git -c core.fsmonitor=false diff -c core.pager=evil',
+        "git -c 'core.fsmonitor=false' -c diff.external=evil diff",
+        'git -c core.fsmonitor=false push',
+        'git -c core.fsmonitor=false commit -m x',
+      ]) {
+        expect({ command, behavior: (await decide(command)).behavior }).not.toEqual({
+          command,
+          behavior: 'allow',
+        })
+      }
+    })
+  })
+}

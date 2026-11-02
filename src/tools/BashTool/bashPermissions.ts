@@ -1446,8 +1446,38 @@ function checkSandboxAutoAllow(
   }
 }
 
+// Read-only tools that agents call by absolute path, often because a shell
+// alias shadows the bare name. /bin and /usr/bin are root-owned (and
+// SIP-protected on macOS), so `/bin/ls` is the same program `ls` checks
+// assume. Anything else keeps its full path and is judged as written.
+const SYSTEM_BINARY_PREFIX =
+  /^\/(?:usr\/)?bin\/(ls|cat|head|tail|wc|grep|sed|find|stat|file|du|sort|uniq|cut|diff)(?=[ \t]|$)/
+
+function normalizeSystemBinary(
+  cmd: string,
+  astCommand: SimpleCommand | undefined,
+): { cmd: string; astCommand: SimpleCommand | undefined } {
+  if (!SYSTEM_BINARY_PREFIX.test(cmd)) return { cmd, astCommand }
+  const normalized = cmd.replace(SYSTEM_BINARY_PREFIX, '$1')
+  if (!astCommand) return { cmd: normalized, astCommand }
+  // Path checks read argv when it exists. Renaming only the text would hide
+  // the paths from them, so both change together or neither does.
+  const argv0 = astCommand.argv[0]?.match(SYSTEM_BINARY_PREFIX)
+  if (!argv0) return { cmd, astCommand }
+  return {
+    cmd: normalized,
+    astCommand: {
+      ...astCommand,
+      argv: [argv0[1]!, ...astCommand.argv.slice(1)],
+      text: astCommand.text.replace(SYSTEM_BINARY_PREFIX, '$1'),
+    },
+  }
+}
+
 /**
- * Filter out `cd ${cwd}` prefix subcommands, keeping astCommands aligned.
+ * Filter out `cd ${cwd}` prefix subcommands, keeping astCommands aligned, and
+ * name system read-only binaries by their bare command so rules, path checks,
+ * and read-only validation all see one name.
  * Extracted to keep bashToolHasPermission under Bun's feature() DCE
  * complexity threshold — inlining this breaks pendingClassifierCheck
  * attachment in ~10 classifier tests.
@@ -1461,10 +1491,11 @@ function filterCdCwdSubcommands(
   const subcommands: string[] = []
   const astCommandsByIdx: (SimpleCommand | undefined)[] = []
   for (let i = 0; i < rawSubcommands.length; i++) {
-    const cmd = rawSubcommands[i]!
-    if (cmd === `cd ${cwd}` || cmd === `cd ${cwdMingw}`) continue
+    const raw = rawSubcommands[i]!
+    if (raw === `cd ${cwd}` || raw === `cd ${cwdMingw}`) continue
+    const { cmd, astCommand } = normalizeSystemBinary(raw, astCommands?.[i])
     subcommands.push(cmd)
-    astCommandsByIdx.push(astCommands?.[i])
+    astCommandsByIdx.push(astCommand)
   }
   return { subcommands, astCommandsByIdx }
 }
