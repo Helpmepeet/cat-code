@@ -3,7 +3,6 @@ import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { ExternalLinkRecovery } from './ExternalLinkRecovery.js'
-import { DraftProtectionNotice } from './DraftProtectionNotice.js'
 import { RemoteSettingsPage } from './RemoteSettingsPage.js'
 import { ToastContext } from './toastContext.js'
 import { ToastHost } from './ToastHost.js'
@@ -85,32 +84,12 @@ test('external links intercept middle clicks but leave unsafe, download, selecte
   expect(opened).toEqual(['https://example.test/middle'])
 })
 
-test('last-good draft survives oversized replacement and its complete replacement can be copied', async () => {
+test('last-good draft survives oversized replacement', () => {
   const storage = memoryStorage()
   writePromptDraftsToStorage(storage, { session: 'last good' } as PromptDraftState)
-  const text = 'x'.repeat(20001)
-  const result = writePromptDraftsToStorage(storage, { session: text } as PromptDraftState)
+  const result = writePromptDraftsToStorage(storage, { session: 'x'.repeat(20001) } as PromptDraftState)
   expect(result.session!.status).toBe('stale')
   expect(readPromptDraftsFromStorage(storage)).toEqual({ session: 'last good' })
-  const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
-  const copied: string[] = []
-  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (value: string) => { copied.push(value) } } })
-  try {
-    const tree = await harness.mount(<DraftProtectionNotice protection={result.session!} olderCopy={false} onRetry={() => { throw new Error('length cannot retry') }} />)
-    expect(tree.container.querySelector('textarea, details, [role="alert"]')).toBeNull()
-    expect(tree.container.querySelector('[role="status"]')).not.toBeNull()
-    expect(tree.container.textContent).not.toContain('Try again')
-    await act(async () => { tree.container.querySelector('button')!.click() })
-    expect(copied).toEqual([text])
-    expect(tree.container.textContent).toContain('Copied')
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('denied') } } })
-    await act(async () => { tree.container.querySelector('button')!.click() })
-    expect(tree.container.textContent).toContain('Could not copy. Select and copy the draft in the composer.')
-    expect(tree.container.querySelector('button')!.textContent).toBe('Copy draft')
-  } finally {
-    if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
-    else Reflect.deleteProperty(navigator, 'clipboard')
-  }
 })
 
 test('local remote-settings refusal settles both pending controls and preserves server input', async () => {

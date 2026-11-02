@@ -556,7 +556,6 @@ export function App() {
   )
   const toast = useToast()
   const [routingStorageHealth, setRoutingStorageHealth] = useState<RoutingStorageHealth>({ status: 'healthy', code: null })
-  const [draftProtection, setDraftProtection] = useState<ReturnType<typeof writePromptDraftsToStorage>>({})
   const [pendingQuestions, dispatchPendingQuestions] = useReducer(reducePendingQuestionsStateBatched, undefined, createPendingQuestionsState)
   const [questionDrafts, setQuestionDrafts] = useState<Partial<Record<SessionId, Record<string, AskQuestionDraft>>>>({})
   useEffect(() => {
@@ -624,11 +623,11 @@ export function App() {
     const navigation = historyNavigationRef.current[sessionId]
     return navigation?.index != null ? navigation.savedDraft : selectPromptDraft(drafts, sessionId)
   }, [])
-  // Persist the bounded record and refresh protection health for every edit.
+  // Persist the bounded record for every edit.
   useEffect(() => {
-    setDraftProtection(writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDrafts, pasteState, {
+    writePromptDraftsToStorage(defaultPromptDraftStorage(), promptDrafts, pasteState, {
       pendingSubmits, historyNavigation, olderRestoredDrafts,
-    }))
+    })
   }, [promptDrafts, pasteState, pendingSubmits, historyNavigation, olderRestoredDrafts])
   // A reload or a quit can precede the save effect. `pagehide` still allows a
   // synchronous write, so the pending one is flushed there.
@@ -4376,15 +4375,7 @@ export function App() {
 	            }}
 	            planReview={sessionPlanReview}
 	            prompt={selectPromptDraft(promptDrafts, sessionId)}
-	            draftProtection={draftProtection[sessionId] ?? null}
 	            olderDraftRestored={Boolean(olderRestoredDrafts[sessionId])}
-	            onRetryDraftSave={() => setDraftProtection(writePromptDraftsToStorage(
-	              defaultPromptDraftStorage(), promptDraftsRef.current, pasteStateRef.current, {
-	                pendingSubmits: pendingSubmitsRef.current,
-	                historyNavigation: historyNavigationRef.current,
-	                olderRestoredDrafts: olderRestoredDraftsRef.current,
-	              },
-	            ))}
 	            restorePermission={requestId => {
 	              dispatchPermission({
 	                type: 'restored',

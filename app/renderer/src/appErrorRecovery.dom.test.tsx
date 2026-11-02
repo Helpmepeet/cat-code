@@ -25,7 +25,7 @@ function bridge(sessions: SessionDescriptor[] = [session]) {
   return { receive: (event: HostEvent) => receiveHost(event), frames: (frames: ServerFrame[]) => receiveFrames(frames) }
 }
 
-test('App protects full 20,001-character text before reload and labels the recovered last-good copy afterward', async () => {
+test('App keeps the last-good copy of an oversized draft without warning and labels it after reload', async () => {
   bridge()
   const saved = 'x'.repeat(20000)
   window.localStorage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: { existing: saved } }))
@@ -35,23 +35,8 @@ test('App protects full 20,001-character text before reload and labels the recov
   const composer = tree.container.querySelector<HTMLElement>('[contenteditable="true"][role="textbox"]')!
   expect(composer).not.toBeNull()
   await act(async () => { composer.textContent = saved + 'y'; composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: 'y' })) })
-  const warning = tree.container.querySelector('[aria-label="Draft saving"]')!
-  expect(warning.textContent).toContain('This draft is too long to keep if the app closes.')
-  expect(warning.closest('[aria-label="Composer"]')).not.toBeNull()
-  expect(warning.getAttribute('role')).toBe('status')
-  expect(warning.querySelector('textarea, details')).toBeNull()
-  expect(warning.textContent).not.toContain('Try again')
-  const clipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
-  const copied: string[] = []
-  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied.push(text) } } })
-  try {
-    await act(async () => { warning.querySelector<HTMLButtonElement>('button')!.click() })
-    expect(copied).toEqual([saved + 'y'])
-    expect(warning.textContent).toContain('Copied')
-  } finally {
-    if (clipboard) Object.defineProperty(navigator, 'clipboard', clipboard)
-    else Reflect.deleteProperty(navigator, 'clipboard')
-  }
+  expect(tree.container.querySelector('[aria-label="Draft saving"]')).toBeNull()
+  expect(tree.container.textContent).not.toContain('too long')
   await act(async () => { window.dispatchEvent(new Event('pagehide')) })
   expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts.existing).toBe(saved)
   await tree.unmount()
@@ -101,29 +86,7 @@ test('older-copy notice clears on send without being shown for a normal saved dr
   expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFT_RECOVERY_STORAGE_KEY)!).olderCopies).toEqual({})
 })
 
-test('an unsaved draft warns only in its own chat, never on another chat or page', async () => {
-  const host = bridge([session, { ...session, appSessionId: 'second', title: 'Second chat' }])
-  const tree = await harness.mount(<App />)
-  await act(async () => {
-    const input = tree.container.querySelector<HTMLElement>('[role="textbox"]')!
-    input.textContent = 'x'.repeat(20001)
-    input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
-  })
-  expect(tree.container.querySelector('[aria-label="Draft saving"]')).not.toBeNull()
-  await sessionsPage(tree, host)
-  expect(tree.container.querySelector('[aria-label="Draft saving"]')).toBeNull()
-  await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Pin sidebar open"]')!.click() })
-  const second = [...tree.container.querySelectorAll('button')].find(button => button.textContent?.includes('Second chat'))!
-  await act(async () => { second.click() })
-  expect(tree.container.querySelector('[aria-label="Draft saving"]')).toBeNull()
-  const original = tree.container.querySelector<HTMLElement>('[role="tab"][aria-label^="Session Fixture chat,"]')!
-  await act(async () => { original.click() })
-  expect(tree.container.querySelector('[aria-label="Draft saving"]')).not.toBeNull()
-  await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Settings"]')!.click() })
-  expect(tree.container.querySelector('[aria-label="Draft saving"]')).toBeNull()
-})
-
-test('a count-limited draft has copy protection but no ineffective retry', async () => {
+test('a count-limited draft shows no warning and evicts no other draft', async () => {
   bridge()
   const drafts = Object.fromEntries(Array.from({ length: 32 }, (_, index) => [`old-${index}`, 'saved']))
   window.localStorage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts }))
@@ -133,14 +96,11 @@ test('a count-limited draft has copy protection but no ineffective retry', async
     input.textContent = 'new draft'
     input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
   })
-  const warning = tree.container.querySelector('[aria-label="Draft saving"]')!
-  expect(warning.textContent).toContain('This draft cannot be kept if the app closes.')
-  expect(warning.textContent).not.toContain('too long')
-  expect(warning.textContent).not.toContain('Try again')
+  expect(tree.container.querySelector('[aria-label="Draft saving"]')).toBeNull()
   expect(Object.keys(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts)).toHaveLength(32)
 })
 
-test('storage refusal offers a working retry only beside the affected composer', async () => {
+test('storage refusal shows no warning and the next edit saves once storage recovers', async () => {
   bridge()
   window.localStorage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify({ version: 1, drafts: { existing: 'saved draft' } }))
   const storage = window.localStorage
@@ -157,14 +117,15 @@ test('storage refusal offers a working retry only beside the affected composer',
       input.textContent = 'new draft'
       input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }))
     })
-    const warning = tree.container.querySelector('[aria-label="Draft saving"]')!
-    expect(warning.textContent).toContain('This draft could not be saved.')
-    expect(warning.closest('[aria-label="Composer"]')).not.toBeNull()
-    const retry = [...warning.querySelectorAll('button')].find(button => button.textContent === 'Try again')!
-    refusing = false
-    await act(async () => { retry.click() })
     expect(tree.container.querySelector('[aria-label="Draft saving"]')).toBeNull()
-    expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts.existing).toBe('new draft')
+    expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts.existing).toBe('saved draft')
+    refusing = false
+    await act(async () => {
+      const input = tree.container.querySelector<HTMLElement>('[role="textbox"]')!
+      input.textContent = 'new draft!'
+      input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '!' }))
+    })
+    expect(JSON.parse(window.localStorage.getItem(PROMPT_DRAFTS_STORAGE_KEY)!).drafts.existing).toBe('new draft!')
   } finally {
     Object.defineProperty(storage, 'setItem', { configurable: true, writable: true, value: setItem })
   }
