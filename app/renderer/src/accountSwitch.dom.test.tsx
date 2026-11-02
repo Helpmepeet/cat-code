@@ -34,7 +34,11 @@ const pool: AccountsSnapshot = {
   anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true,
 }
 
-async function mountApp(provider: RunControlProvider = 'openai', status: 'ready' | 'exited' | 'none' = 'ready') {
+async function mountApp(
+  provider: RunControlProvider = 'openai',
+  status: 'ready' | 'exited' | 'none' = 'ready',
+  providerSwitchLocked = true,
+) {
   window.localStorage.clear()
   let host: (event: HostEvent) => void = () => {}
   let frames: (values: ServerFrame[]) => void = () => {}
@@ -74,7 +78,7 @@ async function mountApp(provider: RunControlProvider = 'openai', status: 'ready'
       payload: { type: 'app.ready' as const, protocolVersion: 1 as const, inputEnabled: true, activeTurn: false, abort: { status: 'idle' as const }, goalSnapshot: null, pendingPermissionRequests: [] },
     })), {
       kind: 'run-controls.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: 'limited-chat', runControls: {
-        model: { current: 'gpt-6.1-sol', currentLabel: 'GPT-6.1 Sol', contextWindow: 372000, selected: 'gpt-6.1-sol', provider, providerSwitchLocked: true, options: [] },
+        model: { current: 'gpt-6.1-sol', currentLabel: 'GPT-6.1 Sol', contextWindow: 372000, selected: 'gpt-6.1-sol', provider, providerSwitchLocked, options: [] },
         effort: { current: 'high', selected: 'high', supported: true, options: ['high'] },
         fast: { active: false, supportedByModel: false, available: false, unavailableReason: null },
         autoCompact: { enabled: true, threshold: null, warningThreshold: null },
@@ -94,6 +98,44 @@ async function mountApp(provider: RunControlProvider = 'openai', status: 'ready'
     emitHost: async (event: HostEvent) => { await act(async () => { host(event) }) },
     sessionSwitches, managed, submits, lifecycle }
 }
+
+test.each([false, true])(
+  'the GPT composer allows a Claude account only before the provider lock: %s',
+  async locked => {
+    const app = await mountApp('openai', 'ready', locked)
+    const inventory: AccountsSnapshot = {
+      ...pool,
+      anthropicAccounts: [{
+        id: 'claude-main', alias: 'Claude account', email: 'claude@example.test',
+        status: 'healthy', isDefault: true, hasVaultProfile: true, subscriptionType: 'max',
+      }],
+      anthropicActiveAccountId: 'claude-main', anthropicReadyCount: 1, anthropicPoolCount: 1,
+    }
+    await app.emitPool(inventory)
+    await app.emit({
+      kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+      sessionId: 'limited-chat', accounts: inventory,
+    })
+    const trigger = app.tree.container.querySelector<HTMLButtonElement>('[data-composer-face="account"]')!
+    expect(trigger).not.toBeNull()
+    await act(async () => { trigger.click() })
+    await act(async () => { await harness.nextFrame() })
+    const menu = document.querySelector('[role="menu"][aria-label="Accounts"]')!
+    const claude = [...menu.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.includes('Claude account'))!
+    expect(claude.getAttribute('aria-disabled')).toBe(String(locked))
+    await act(async () => { claude.click() })
+    expect(app.sessionSwitches).toEqual(locked ? [] : [{
+      sessionId: 'limited-chat',
+      verb: expect.objectContaining({
+        type: 'account.switch', provider: 'anthropic', accountId: 'claude-main',
+      }),
+    }])
+    expect(app.managed).toEqual([])
+    expect(app.submits).toEqual([])
+    expect(app.lifecycle).toEqual([])
+  },
+)
 
 test('the chat reports unsaved account authority until the host confirms recovery', async () => {
   const app = await mountApp()

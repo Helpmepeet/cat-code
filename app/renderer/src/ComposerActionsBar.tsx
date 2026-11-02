@@ -886,7 +886,7 @@ function AccountUsageBar({
  * marker, switchable-vs-capped, usage bars — is unit-testable without jsdom (the
  * open panel never reaches static markup otherwise; same reason
  * `selectShellDescriptors` is extracted). Clicking a switchable non-active row
- * calls `onSwitch(id)`; the
+ * calls `onSwitch(id, provider)`; the
  * renderer only NAMES the id — the sidecar re-resolves it against the live pool (T6).
  */
 export function AccountSwitcherPanel({
@@ -894,6 +894,7 @@ export function AccountSwitcherPanel({
   pool,
   anthropicPool = [],
   provider = 'openai',
+  allowProviderSwitch = false,
   onSwitch,
   onManage,
 }: {
@@ -901,7 +902,8 @@ export function AccountSwitcherPanel({
   pool: AccountStatus[]
   anthropicPool?: AnthropicAccountStatus[]
   provider?: 'openai' | 'anthropic'
-  onSwitch: (accountId: string) => void
+  allowProviderSwitch?: boolean
+  onSwitch: (accountId: string, provider: 'openai' | 'anthropic') => void
   onManage?: () => void
 }) {
   const sections = [
@@ -937,8 +939,10 @@ export function AccountSwitcherPanel({
               const poolDefault = !routing && acct.isDefault
               const capped = claude ? anthropicAccountCapped(claude) : false
               const unavailable = acct.status !== 'healthy' || capped
-              const clickable = routing && !isActive && (
-                codex ? codex.switchable : claude ? canSwitchAnthropicAccount(claude, active.id) : false
+              const clickable = (routing || allowProviderSwitch) && !isActive && (
+                codex
+                  ? codex.switchable || (!routing && codex.isDefault && codex.availability !== 'blocked')
+                  : claude ? canSwitchAnthropicAccount(claude, routing ? active.id : '') : false
               )
               const rowAlias = acct.alias ?? claude?.email ?? '(unnamed)'
               const dotTone = codex
@@ -965,7 +969,7 @@ export function AccountSwitcherPanel({
                   // announced via aria-disabled — native `disabled` would drop it
                   // from the tab order, hiding its state from keyboard users.
                   aria-disabled={!clickable}
-                  onClick={clickable ? () => onSwitch(acct.id) : undefined}
+                  onClick={clickable ? () => onSwitch(acct.id, section.provider) : undefined}
                   title={clickable ? `Switch to ${rowAlias}` : undefined}
                   className={`flex w-full items-center gap-3 border-l-2 border-t border-t-shell-seam px-3.5 py-2 text-left transition-colors ${
                     isActive ? 'border-l-accent bg-accent/[0.06]' : poolDefault ? 'border-l-text-faint' : 'border-l-transparent'
@@ -1041,6 +1045,7 @@ function AccountChip({
   active,
   accounts,
   anthropicAccounts,
+  allowProviderSwitch,
   onSwitch,
   onManage,
   onOpen,
@@ -1051,7 +1056,8 @@ function AccountChip({
   active: AccountStatus | AnthropicAccountStatus
   accounts: AccountStatus[]
   anthropicAccounts: AnthropicAccountStatus[]
-  onSwitch: (accountId: string) => void
+  allowProviderSwitch: boolean
+  onSwitch: (accountId: string, provider: 'openai' | 'anthropic') => void
   onManage?: () => void
   onOpen?: () => void
   faceProps?: ComposerFaceProps
@@ -1098,8 +1104,9 @@ function AccountChip({
           pool={pool}
           anthropicPool={anthropicPool}
           provider={provider}
-          onSwitch={accountId => {
-            onSwitch(accountId)
+          allowProviderSwitch={allowProviderSwitch}
+          onSwitch={(accountId, targetProvider) => {
+            onSwitch(accountId, targetProvider)
             close()
           }}
           onManage={
@@ -1592,7 +1599,7 @@ export function ComposerActionsBar({
   /** Global Claude pool rows include the usage omitted by session snapshots. */
   anthropicAccounts?: AnthropicAccountStatus[]
   /** Switch the active session to `accountId` (the engine's `account.switch` verb). */
-  onSwitchAccount?: (accountId: string) => void
+  onSwitchAccount?: (accountId: string, provider: 'openai' | 'anthropic') => void
   /** Open the full Accounts page (the popover's "Manage accounts →"). */
   onManageAccounts?: () => void
   /** Re-read the global account pool when the switcher opens. */
@@ -1823,6 +1830,7 @@ export function ComposerActionsBar({
               active={activeAccount}
               accounts={accounts ?? []}
               anthropicAccounts={anthropicAccounts}
+              allowProviderSwitch={runControls?.model.providerSwitchLocked === false}
               onSwitch={onSwitchAccount}
               onManage={onManageAccounts}
               onOpen={onOpenAccountSwitcher}

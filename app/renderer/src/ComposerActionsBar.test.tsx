@@ -484,7 +484,7 @@ function pool(): AccountStatus[] {
   ]
 }
 
-test('both account pools show usage, with only the routing provider switchable', () => {
+test('both account pools show usage, with cross-provider switching locked by default', () => {
   const rows = pool()
   const claude = [
     anthropicAccount({ usageFiveHour: 35, usageWeekly: 18 }),
@@ -517,6 +517,27 @@ test('both account pools show usage, with only the routing provider switchable',
   expect(claudeHtml).not.toContain('Switch to yoxrent')
   expect(claudeHtml).not.toContain('Switch to capped')
   expect(claudeHtml).not.toContain('Switch to dead')
+})
+
+test('an unlocked account picker permits healthy destinations in either provider', () => {
+  const rows = pool()
+  const claude = anthropicAccount({ usageFiveHour: 35, usageWeekly: 18 })
+  const codexHtml = renderToStaticMarkup(
+    <AccountSwitcherPanel
+      active={rows[0]!} pool={rows} anthropicPool={[claude]}
+      allowProviderSwitch onSwitch={() => {}}
+    />,
+  )
+  expect(codexHtml).toContain('Switch to claude-main')
+  const claudeHtml = renderToStaticMarkup(
+    <AccountSwitcherPanel
+      provider="anthropic" active={claude} pool={rows} anthropicPool={[claude]}
+      allowProviderSwitch onSwitch={() => {}}
+    />,
+  )
+  expect(claudeHtml).toContain('Switch to hiby')
+  expect(claudeHtml).toContain('Switch to yoxrent')
+  expect(claudeHtml).not.toContain('Switch to oldcap')
 })
 
 test('Claude faces share the account trigger and retain a health dot when read-only', () => {

@@ -6453,6 +6453,99 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
   ).toEqual(['provider-a-model', 'provider-b-model'])
 })
 
+test('same-provider account switch preserves the model', async () => {
+  seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
+  const baseAccounts = makeAccountsDomain({ executor: fakeExecutor() })
+  const accounts: SidecarAccountsDomain = {
+    ...baseAccounts,
+    async runVerb() {
+      return { verb: 'account.switch', result: { ok: true, message: 'Switched.' }, poolChanged: false }
+    },
+  }
+  const { domain: runControls, calls } = fakeRunControlsDomain()
+  runControls.lockProviderSwitches()
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts, runControls })
+  server.handleData(conn, accountFrame({
+    type: 'account.switch', requestId: 'same-provider', accountId: 'claude-a', provider: 'anthropic',
+  }))
+  await flush()
+  const result = received.find(frame => frame.kind === 'account.result' && frame.requestId === 'same-provider')
+  expect(result?.kind === 'account.result' && result.ok).toBe(true)
+  expect(calls).toEqual([])
+})
+
+test.each(['success', 'already active', 'account failure', 'locked', 'unsupported', 'model failure', 'throw'])(
+  'cross-provider account switch reserves the conversation: %s',
+  async scenario => {
+    seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
+    const baseAccounts = makeAccountsDomain({ executor: fakeExecutor() })
+    let finish!: () => void
+    const pending = new Promise<void>(resolve => { finish = resolve })
+    let accountCalls = 0
+    const accounts: SidecarAccountsDomain = {
+      ...baseAccounts,
+      async runVerb() {
+        accountCalls++
+        await pending
+        if (scenario === 'throw') throw new Error('Account failed.')
+        return {
+          verb: 'account.switch',
+          result: { ok: scenario !== 'account failure', message: 'Account outcome.' },
+          poolChanged: scenario !== 'already active',
+        }
+      },
+    }
+    const { domain: runControls, calls } = fakeRunControlsDomain()
+    const snapshot = runControls.getSnapshot()
+    runControls.getSnapshot = () => ({
+      ...snapshot,
+      model: {
+        ...snapshot.model,
+        provider: 'openai',
+        providerSwitchLocked: scenario === 'locked',
+        options: scenario === 'unsupported' ? [] : snapshot.model.options,
+      },
+    })
+    if (scenario === 'model failure') {
+      runControls.setModel = () => ({ ok: false, changed: false, message: 'Model failed.' })
+    }
+    const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts, runControls })
+    const sendSwitch = (requestId: string) => server.handleData(conn, accountFrame({
+      type: 'account.switch', requestId, accountId: 'claude-a', provider: 'anthropic',
+    }))
+    sendSwitch('switch')
+    if (scenario === 'locked' || scenario === 'unsupported') {
+      expect(accountCalls).toBe(0)
+    } else {
+      expect(accountCalls).toBe(1)
+      sendSwitch('racing-account')
+      server.handleData(conn, rawFrame({ type: 'model.set', requestId: 'racing-model', model: 'opus' }))
+      server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'racing-submit', prompt: 'first message' }))
+      expect(accountCalls).toBe(1)
+      expect(calls).toEqual([])
+      expect(received.some(frame => frame.kind === 'error' && frame.requestId === 'racing-submit')).toBe(true)
+      const blocked = received.find(frame => frame.kind === 'run-control.result' && frame.requestId === 'racing-model')
+      expect(blocked?.kind === 'run-control.result' && blocked.ok).toBe(false)
+    }
+    finish()
+    await flush()
+    if (scenario === 'throw') {
+      expect(received.some(frame => frame.kind === 'error' && frame.requestId === 'switch')).toBe(true)
+    } else {
+      const result = received.find(frame => frame.kind === 'account.result' && frame.requestId === 'switch')
+      expect(result?.kind === 'account.result' && result.ok).toBe(
+        scenario === 'success' || scenario === 'already active',
+      )
+    }
+    expect(calls).toEqual(
+      scenario === 'success' || scenario === 'already active' ? ['model:claude-opus-4-6'] : [],
+    )
+    server.handleData(conn, rawFrame({ type: 'effort.set', requestId: 'after', effort: 'high' }))
+    const after = received.find(frame => frame.kind === 'run-control.result' && frame.requestId === 'after')
+    expect(after?.kind === 'run-control.result' && after.ok).toBe(true)
+  },
+)
+
 test.each(['anthropic identity', 'unavailable identity'])('a successful account switch clears expiry for %s', async scenario => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
   const baseAccounts = makeAccountsDomain({ executor: fakeExecutor() })

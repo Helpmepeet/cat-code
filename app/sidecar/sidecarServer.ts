@@ -3948,12 +3948,54 @@ export class SidecarServer {
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
     const verb = parsed as AccountSwitchMessage
+    const model = this.runControls?.getSnapshot().model
+    const crossProvider = verb.provider !== undefined && model !== undefined &&
+      verb.provider !== (model.provider === 'openai' ? 'openai' : 'anthropic')
+    const targetModel = crossProvider
+      ? model?.options.find(option => option.value !== null && option.provider === verb.provider)?.value
+      : undefined
+    let refusal: string | undefined
+    if (this.conversationMutationInFlight) {
+      refusal = 'Another conversation change is in progress.'
+    } else if (crossProvider) {
+      if (model?.providerSwitchLocked) {
+        refusal = 'The provider cannot be changed after the first message.'
+      } else if (this.manualCloseRequested || this.parking || this.activeTurn ||
+        this.controller.isTurnActive() || this.inlineCommandActive ||
+        this.inFlightDurableWrites > 0 || this.questionWritesInFlight > 0 ||
+        this.controller.getHandoffReservation()) {
+        refusal = 'Wait for the current operation to finish before changing providers.'
+      } else if (targetModel === undefined) {
+        refusal = 'No supported model is available for this provider.'
+      }
+    }
+    if (refusal) {
+      this.send(connection, {
+        kind: 'account.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: verb.requestId,
+        verb: verb.type,
+        ok: false,
+        message: refusal,
+      })
+      return
+    }
     const accountsBefore = accounts.getSnapshot()
+    if (crossProvider) this.conversationMutationInFlight = true
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
     void accounts
       .runVerb(verb)
       .then(({ verb: verbType, result, poolChanged }) => {
+        if (result.ok && targetModel !== undefined) {
+          try {
+            const modelResult = this.runControls!.setModel(targetModel)
+            if (!modelResult.ok) result = { ...result, ok: false, message: modelResult.message }
+          } catch (error) {
+            result = { ...result, ok: false, message: error instanceof Error ? error.message : String(error) }
+          }
+        }
         this.send(connection, {
           kind: 'account.result',
           protocolVersion: PROTOCOL_VERSION,
@@ -3992,6 +4034,10 @@ export class SidecarServer {
       })
       .finally(() => {
         this.inFlightDurableWrites -= 1
+        if (crossProvider) {
+          this.conversationMutationInFlight = false
+          this.scheduleBoundaryDrain()
+        }
       })
   }
 
@@ -4212,6 +4258,18 @@ export class SidecarServer {
     if (!runControls) return
 
     const verb = parsed as RunControlVerbMessage
+    if (this.conversationMutationInFlight) {
+      this.send(connection, {
+        kind: 'run-control.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: verb.requestId,
+        verb: verb.type,
+        ok: false,
+        message: 'Another conversation change is in progress.',
+      })
+      return
+    }
     let result: { ok: boolean; message: string; changed: boolean }
     switch (verb.type) {
       case 'model.set':

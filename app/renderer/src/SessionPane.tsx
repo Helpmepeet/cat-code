@@ -452,8 +452,8 @@ export function SessionPane({
     }
   }, [accountsLastResult, activeSessionId, toast])
   const handleSwitchAccount = onSwitchAccount
-    ? (accountId: string) => {
-        const verb = switchVerb(accountId, activeAnthropicAccount ? 'anthropic' : 'openai')
+    ? (accountId: string, provider: 'openai' | 'anthropic') => {
+        const verb = switchVerb(accountId, provider)
         pendingAccountSwitchRef.current = verb.requestId
         onSwitchAccount(verb)
       }

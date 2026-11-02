@@ -400,6 +400,13 @@ test('/account in a Claude pane opens both pools and sends a Claude switch verb'
   const pane = await mountPane('/account ', {
     activeAccount: null,
     activeAnthropicAccount: active,
+    runControls: {
+      ...runControls(),
+      model: {
+        ...runControls().model, current: 'opus', selected: 'opus',
+        provider: 'anthropic', providerSwitchLocked: true,
+      },
+    },
     accountsSnapshot: {
       ...idleSessionPaneProps().accountsSnapshot!,
       accounts: [account({ switchable: true })],
