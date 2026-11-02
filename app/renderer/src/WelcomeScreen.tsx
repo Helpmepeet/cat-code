@@ -50,13 +50,7 @@ import {
   handleMenuRovingKeyDown,
   usePopover,
 } from './composerPopover.js'
-import catBase from './assets/mascot-100/base.png'
-import catCoding from './assets/mascot-100/coding.png'
-import sleepingCat from './assets/mascot-100/sleeping.png'
-import catStretching from './assets/mascot-100/stretching.png'
-import catThinking from './assets/mascot-100/thinking.png'
-import catWaving from './assets/mascot-100/waving.png'
-import { generatedWelcomeCats } from './generatedWelcomeCats.js'
+import { welcomeCatPoses, welcomeCatActions } from './welcomeCatCollections.js'
 import { basename } from './pathUtils.js'
 import { ProviderLogo } from './ProviderLogo.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
@@ -66,13 +60,8 @@ import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 import type { HostResult, WorkspaceBranches } from '../../shared/hostApi.js'
 
 const welcomeCats = [
-  catBase,
-  sleepingCat,
-  catCoding,
-  catStretching,
-  catThinking,
-  catWaving,
-  ...generatedWelcomeCats,
+  ...welcomeCatPoses,
+  ...welcomeCatActions,
 ] as const
 
 // Pick once per renderer load so every Welcome surface in the window shares its cat.
