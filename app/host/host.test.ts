@@ -5028,3 +5028,65 @@ test('main holding lease records actual Codex account without adopting subagent 
   snapshot('explicit-recovery-account')
   await settle(() => h.registry.findSession(id)?.accountSelection?.openai === 'explicit-recovery-account')
 })
+
+test('restart reads routing authority after an ownership claim replaces the captured row', async () => {
+  const h = makeHost()
+  const engineId = randomUUID()
+  writeTranscript(h.storageDir, engineId)
+  const created = await h.host.createSession({ cwd: h.cwd, resumeEngineSessionId: engineId })
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  await h.registry.setAccountSelection(id, { openai: 'codex-a' })
+  const claim = h.registry.claimForRestore.bind(h.registry)
+  let entered!: () => void
+  let release!: () => void
+  const paused = new Promise<void>(resolve => { entered = resolve })
+  const gate = new Promise<void>(resolve => { release = resolve })
+  h.registry.claimForRestore = async (...args) => {
+    const result = await claim(...args)
+    entered()
+    await gate
+    return result
+  }
+  const restarting = h.host.restartSession(id)
+  await paused
+  h.supervisor.emit({
+    type: 'frame', sessionId: id,
+    frame: { kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+      accounts: { initialized: true, activeAccountId: 'codex-b' } as never },
+  })
+  await settle(() => h.registry.getAccountSelection(id)?.openai === 'codex-b' &&
+    !h.registry.hasUnsavedAccountSelection(id))
+  release()
+  expect((await restarting).ok).toBe(true)
+  expect(h.supervisor.records.get(id)?.accountSelection?.openai).toBe('codex-b')
+})
+
+test('failed account authority persistence is visible and identical snapshots can recover it', async () => {
+  const storageDir = tempDir()
+  let fail = false
+  const registry = new SessionRegistry({
+    storageDir, log: () => {},
+    acquireLock: async () => {
+      if (fail) throw new Error('synthetic account storage failure')
+      return async () => {}
+    },
+  })
+  const h = makeHost({ registry })
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  const snapshot = () => h.supervisor.emit({
+    type: 'frame', sessionId: id,
+    frame: { kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+      accounts: { initialized: true, activeAccountId: 'codex-b' } as never },
+  })
+  fail = true
+  snapshot()
+  await settle(() => h.host.listSessions().find(row => row.appSessionId === id)?.accountSelectionUnsaved === true)
+  fail = false
+  snapshot()
+  await settle(() => h.host.listSessions().find(row => row.appSessionId === id)?.accountSelectionUnsaved === false)
+  expect(registry.hasUnsavedAccountSelection(id)).toBe(false)
+  expect(registry.getAccountSelection(id)?.openai).toBe('codex-b')
+})

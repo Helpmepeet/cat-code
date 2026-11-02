@@ -18,6 +18,7 @@ import {
   getCodexLeaseExhaustedMessage,
   getCodexLeaseForOwner,
   getCurrentCodexLease,
+  repairCodexLeaseIfNonSelectable,
   runWithCodexLeaseOwner,
 } from './codexAccountLeaseManager.js'
 import {
@@ -35,6 +36,7 @@ import {
   switchToAccount,
 } from './codexAccountPool.js'
 import { maybeRefreshAccount } from '../../codex-core/accounts.js'
+import { SessionAccountRouteUnavailableError } from './sessionAccountRouting.js'
 import { CodexCoreError } from '../../codex-core/errors.js'
 import type { CodexLease } from './codexAccountLeaseManager.js'
 
@@ -107,9 +109,9 @@ export function recordClaudeOAuthClientCredential(
 ): void {
   claudeOAuthClientCredentials.set(client, Object.freeze({
     ...credential,
-    credentialGeneration: credential.accountUuid
-      ? getClaudeCredentialGeneration(credential.accountUuid)
-      : undefined,
+    credentialGeneration: credential.credentialGeneration !== undefined
+      ? credential.credentialGeneration
+      : credential.accountUuid ? getClaudeCredentialGeneration(credential.accountUuid) : undefined,
   }))
 }
 
@@ -301,7 +303,8 @@ function unwrapCodexAccountError(error: unknown): unknown {
   }
   return error.cause instanceof CodexAccountAuthError ||
     error.cause instanceof CodexAccountCapError ||
-    error.cause instanceof CodexResponseFailedError
+    error.cause instanceof CodexResponseFailedError ||
+    error.cause instanceof SessionAccountRouteUnavailableError
     ? error.cause
     : error
 }
@@ -663,6 +666,9 @@ export async function* withRetry<T, Client = Anthropic>(
     } catch (caughtError) {
       const error = unwrapCodexAccountError(caughtError)
       lastError = error
+      if (error instanceof SessionAccountRouteUnavailableError) {
+        throw new CannotRetryError(error, retryContext)
+      }
       logForDebugging(
         `API error (attempt ${attempt}/${maxRetries + 1}): ${error instanceof APIError ? `${error.status} ${error.message}` : errorMessage(error)}`,
         { level: 'error' },
@@ -972,14 +978,41 @@ export async function* withRetry<T, Client = Anthropic>(
           // 401 landed. We dead-marked the failed account above; retry on the
           // lease's current (healthy) account instead of touching it or
           // declaring exhaustion.
-          if (currentLease && !leaseStillOnFailedAccount &&
-              getPoolStatus().accounts.some(account =>
-                account.accountId === currentLease.accountId && isCodexAccountSwitchable(account))) {
-            client = null
-            continue
+          if (currentLease && !leaseStillOnFailedAccount) {
+            const currentIsUsable = getPoolStatus().accounts.some(account =>
+              account.accountId === currentLease.accountId && isCodexAccountSwitchable(account))
+            if (currentIsUsable) {
+              client = null
+              continue
+            }
+            // A newer selection can itself disappear while refresh is awaiting.
+            // Repair that lease rather than treating the old request as proof
+            // that every remaining account is unavailable.
+            try {
+              assertCodexLeaseFailoverBudget(error, attempt, accountId)
+              const repaired = repairCodexLeaseIfNonSelectable(currentLease.ownerId)
+              if (repaired) {
+                syncMainLeaseActiveAccount(repaired)
+                emitCodexFailoverSucceeded(retryContext.model, repaired.accountId, 'authentication recovery repaired an unavailable lease')
+                options.onCodexAccountSwitch?.()
+                client = null
+                noteCodexLeaseFailover()
+                continue
+              }
+            } catch (repairError) {
+              if (repairError instanceof CannotRetryError) throw repairError
+              logForDebugging(`[codex-pool] Authentication lease repair failed: ${errorMessage(repairError)}`, { level: 'warn' })
+            }
           }
 
           if (!currentLease && canRotateBeforeAuthBlock) {
+            const active = getActiveAccount()
+            if (active && active.accountId !== accountId && isCodexAccountSwitchable(active)) {
+              emitCodexFailoverSucceeded(retryContext.model, active.accountId, 'authentication recovery continued on current account')
+              options.onCodexAccountSwitch?.()
+              client = null
+              continue
+            }
             const next = switchToAccount(null, { persistDefault: false })
             if (next) {
               emitCodexFailoverSucceeded(

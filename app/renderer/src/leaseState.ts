@@ -205,8 +205,8 @@ export type SessionCodexAccountSources = {
  * turn and releases it in a `finally`, and the sidecar drops synthesised leases.
  * So step 1 coming up empty is the ORDINARY case and step 2 carries it.
  *
- * An id the roster does not contain falls through to the next step rather than
- * rendering an invented or empty row: a wrong account is worse than a stale one.
+ * An authoritative empty route must not borrow the global default. A stale
+ * removed row still follows the display-only roster fallback.
  */
 export function selectSessionCodexAccount(
   sources: SessionCodexAccountSources,
@@ -215,6 +215,8 @@ export function selectSessionCodexAccount(
   const rows = roster?.accounts ?? []
   const rosterRow = (accountId: string): AccountStatus | null =>
     rows.find(row => row.id === accountId) ?? null
+  const ownSnapshot = selectLastAccountsSnapshot(accounts, sessionId)
+  if (ownSnapshot?.initialized && ownSnapshot.activeAccountId === null) return null
 
   const mainLease = selectLeaseForOwner(leases, MAIN_LEASE_OWNER_ID)
   if (mainLease && LEASE_STATE_ROLE[mainLease.state] === 'holding') {
@@ -227,7 +229,7 @@ export function selectSessionCodexAccount(
     if (failedOver) return failedOver
   }
 
-  const own = selectActiveAccount(selectLastAccountsSnapshot(accounts, sessionId))
+  const own = selectActiveAccount(ownSnapshot)
   if (own) {
     const owned = rosterRow(own.id)
     if (owned) return owned

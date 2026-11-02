@@ -107,6 +107,38 @@ describe('commitCodexAccountSwitch', () => {
     expect(stubs.clearAuthRelatedCaches).toHaveBeenLastCalledWith({ persistConfig: true })
   })
 
+  test.each(['main', 'backup'])('failed durable default selection leaves local routing unchanged: %s', async target => {
+    const stubs = await stubSwitchSideEffects()
+    spyOn(configModule, 'saveGlobalConfig').mockReturnValue(false)
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [buildPoolAccount('codex-one', 'main'), buildPoolAccount('codex-two', 'backup')],
+      activeAccountId: 'codex-one',
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main thread',
+      accountId: 'codex-one',
+    })
+
+    await expect(commitCodexAccountSwitch(target, { persistDefault: true })).rejects.toThrow('Could not save')
+    expect(codexPoolModule.getActiveAccount()?.accountId).toBe('codex-one')
+    expect(leaseAccountFor('main-thread')).toBe('codex-one')
+    expect(stubs.clearAuthRelatedCaches).not.toHaveBeenCalled()
+  })
+
+  test('an already durable default succeeds when the config updater correctly skips a no-op', async () => {
+    await stubSwitchSideEffects()
+    const config = { activeCodexAccountId: 'codex-one' } as ReturnType<typeof configModule.getGlobalConfig>
+    spyOn(configModule, 'saveGlobalConfig').mockImplementation(update => {
+      expect(update(config)).toBe(config)
+      return false
+    })
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [buildPoolAccount('codex-one', 'main')],
+      activeAccountId: 'codex-one',
+    })
+    expect((await commitCodexAccountSwitch('main', { persistDefault: true }))?.accountId).toBe('codex-one')
+  })
+
   test('moves live follow-main leases onto the newly selected account', async () => {
     const stubs = await stubSwitchSideEffects()
     codexPoolModule.seedCodexAccountPoolForTest({

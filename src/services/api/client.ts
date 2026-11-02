@@ -1,6 +1,7 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
-import { assertSessionAccountRouteAvailable } from './sessionAccountRouting.js'
+import { assertSessionAccountRouteAvailable, SessionAccountRouteUnavailableError } from './sessionAccountRouting.js'
+import { createClaudeCredentialFetch } from './claudeCredentialUse.js'
 import {
   getActiveAccount,
   getPoolStatus,
@@ -10,6 +11,7 @@ import {
   type PoolAccount,
 } from './codexAccountPool.js'
 import {
+  captureClaudeCredentialGeneration,
   getActiveClaudeAccount,
   getClaudePoolStatus,
   isClaudePoolActive,
@@ -398,6 +400,10 @@ export async function getAnthropicClient({
   codexConversationIdOverride?: string
   codexCredentialUse?: CodexCredentialUseOptions
 }): Promise<Anthropic> {
+  const resolvedProvider = resolveRequestProvider(model, provider)
+  if (resolvedProvider === 'openai' || resolvedProvider === 'firstParty') {
+    assertSessionAccountRouteAvailable(resolvedProvider === 'openai' ? 'openai' : 'anthropic')
+  }
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
@@ -436,10 +442,6 @@ export async function getAnthropicClient({
     await configureApiKeyHeaders(defaultHeaders, getIsNonInteractiveSession())
   }
 
-  const resolvedProvider = resolveRequestProvider(model, provider)
-  if (resolvedProvider === 'openai' || resolvedProvider === 'firstParty') {
-    assertSessionAccountRouteAvailable(resolvedProvider === 'openai' ? 'openai' : 'anthropic')
-  }
   emitProviderMismatchDiagnostic(provider, resolvedProvider, model)
   const resolvedFetch = buildFetch(fetchOverride, source, resolvedProvider)
 
@@ -668,12 +670,29 @@ export async function getAnthropicClient({
     ...(isDebugToStdErr() && { logger: createStderrLogger() }),
   }
 
+  let credentialGeneration: number | undefined
+  if (oauthTokens?.accountUuid &&
+      !Object.keys(defaultHeaders).some(name => name.toLowerCase() === 'authorization')) {
+    const captured = captureClaudeCredentialGeneration(oauthTokens.accountUuid, oauthTokens.accessToken)
+    if (captured === null) {
+      throw new SessionAccountRouteUnavailableError(
+        "This chat's Claude account changed while preparing the request. Select an account and try again.",
+      )
+    }
+    credentialGeneration = captured
+    clientConfig.fetch = buildFetch(
+      createClaudeCredentialFetch(fetchOverride ?? globalThis.fetch, oauthTokens.accountUuid, captured),
+      source,
+      resolvedProvider,
+    )
+  }
   const client = new Anthropic(clientConfig)
   if (oauthTokens?.accessToken &&
       !Object.keys(defaultHeaders).some(name => name.toLowerCase() === 'authorization')) {
     recordClaudeOAuthClientCredential(client, {
       accessToken: oauthTokens.accessToken,
       accountUuid: oauthTokens.accountUuid,
+      credentialGeneration,
     })
   }
   return client

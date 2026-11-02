@@ -30,6 +30,7 @@ import { parseSessionAccountSelection, type SessionAccountSelection } from '../s
  */
 
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   closeSync,
   constants,
@@ -474,6 +475,7 @@ export class SessionRegistry {
    * (HostErrorCode) as a NON-fatal degraded-persistence signal.
    */
   private writeFailed = false
+  private readonly unsavedAccountSelections = new Map<string, SessionAccountSelection>()
 
   private removedEmptySessionIds: string[] = []
   private readonly ownedSessionIds = new Set<string>()
@@ -1271,14 +1273,121 @@ export class SessionRegistry {
     })
   }
 
-  async setAccountSelection(appSessionId: string, selection: SessionAccountSelection): Promise<void> {
+  getAccountSelection(appSessionId: string): SessionAccountSelection | undefined {
+    const row = this.find(appSessionId)
+    if (!row) return undefined
+    try {
+      return parseSessionAccountSelection({
+        ...row.accountSelection,
+        ...this.readSavedAccountSelection(row),
+        ...this.unsavedAccountSelections.get(appSessionId),
+      })
+    } catch (error) {
+      this.log(`[registry] account selection could not be read: ${errText(error)}`)
+      throw new Error('The saved account selection could not be read. Check storage access and retry.')
+    }
+  }
+
+  hasUnsavedAccountSelection(appSessionId: string): boolean {
+    return this.unsavedAccountSelections.has(appSessionId)
+  }
+
+  async setAccountSelection(appSessionId: string, selection: SessionAccountSelection): Promise<boolean> {
     const validated = parseSessionAccountSelection(selection)
-    if (!validated) return
-    await this.mutate('setAccountSelection', appSessionId, row => {
-      if (Object.entries(validated).every(([provider, id]) =>
-        row.accountSelection?.[provider as keyof SessionAccountSelection] === id)) return false
-      row.accountSelection = { ...row.accountSelection, ...validated }
+    if (!validated) return true
+    const row = this.find(appSessionId)
+    if (!row) return false
+    for (const id of this.unsavedAccountSelections.keys()) {
+      if (!this.find(id)) this.unsavedAccountSelections.delete(id)
+    }
+    try {
+      const saved = this.readSavedAccountSelection(row)
+      if (!this.unsavedAccountSelections.has(appSessionId) && saved &&
+          Object.entries(validated).every(([provider, id]) =>
+            saved[provider as keyof SessionAccountSelection] === id)) {
+        row.accountSelection = { ...row.accountSelection, ...saved }
+        return true
+      }
+    } catch (error) {
+      this.log(`[registry] account selection could not be read: ${errText(error)}`)
+    }
+    row.accountSelection = { ...row.accountSelection, ...validated }
+    this.unsavedAccountSelections.set(appSessionId, {
+      ...this.unsavedAccountSelections.get(appSessionId), ...validated,
     })
+    // The companion is authoritative. Older installed registry writers rebuild
+    // rows through a whitelist, so the row field alone is only a cache.
+    if (!await this.persistAccountSelection(appSessionId)) return false
+    await this.persist()
+    return true
+  }
+
+  private accountSelectionFile(row: RegistrySession, appFallback = false): string {
+    const key = row.engineSessionId && !appFallback
+      ? `engine:${row.engineSessionId}` : `app:${row.appSessionId}`
+    return join(this.dir, 'account-selections', `${createHash('sha256').update(key).digest('hex')}.json`)
+  }
+
+  private readSavedAccountSelection(row: RegistrySession): SessionAccountSelection | undefined {
+    const paths = [this.accountSelectionFile(row)]
+    if (row.engineSessionId) paths.push(this.accountSelectionFile(row, true))
+    for (const path of paths) {
+      let raw: string
+      try {
+        const stat = lstatSync(path)
+        if (!stat.isFile() || stat.size > 4096) throw new Error('Invalid saved account selection file')
+        raw = readFileSync(path, 'utf8')
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
+      }
+      const record: unknown = JSON.parse(raw)
+      if (!isRecord(record) || record.version !== 1 ||
+          typeof record.appSessionId !== 'string' || record.appSessionId.length > 200 ||
+          Object.keys(record).some(key => !['version', 'appSessionId', 'engineSessionId', 'accountSelection'].includes(key)) ||
+          (record.engineSessionId !== null && record.engineSessionId !== row.engineSessionId) ||
+          (record.engineSessionId === null && record.appSessionId !== row.appSessionId)) {
+        throw new Error('Saved account selection does not match this chat')
+      }
+      const selection = parseSessionAccountSelection(record.accountSelection)
+      if (!selection || !isRecord(record.accountSelection) ||
+          Object.entries(record.accountSelection).some(([provider, id]) =>
+            selection[provider as keyof SessionAccountSelection] !== id)) {
+        throw new Error('Invalid saved account selection')
+      }
+      return selection
+    }
+    return undefined
+  }
+
+  private async persistAccountSelection(appSessionId: string): Promise<boolean> {
+    let release: (() => Promise<void>) | undefined
+    try {
+      ensureDir(this.dir)
+      release = await this.acquireLock(this.path)
+      // Ownership claims replace row objects while releasing their lock.
+      const row = this.find(appSessionId)
+      const pending = this.unsavedAccountSelections.get(appSessionId)
+      if (!row || !pending) return !pending
+      const accountSelection = {
+        ...(this.readSavedAccountSelection(row) ?? row.accountSelection), ...pending,
+      }
+      const path = this.accountSelectionFile(row)
+      ensureDir(dirname(path))
+      atomicWriteJson(path, {
+        version: 1, appSessionId: row.appSessionId,
+        engineSessionId: row.engineSessionId, accountSelection,
+      })
+      row.accountSelection = accountSelection
+      this.unsavedAccountSelections.delete(appSessionId)
+      return true
+    } catch (error) {
+      this.writeFailed = true
+      this.log(`[registry] account selection could not be saved: ${errText(error)}`)
+      return false
+    } finally {
+      try { await release?.() } catch { /* Keep the durable publication result. */ }
+    }
   }
 
   /**
@@ -2017,8 +2126,11 @@ function atomicWriteJson(filePath: string, data: unknown): void {
   try {
     dirFd = openSync(dir, 'r')
     fsyncSync(dirFd)
-  } catch {
-    // ignore
+  } catch (error) {
+    // Some platforms cannot fsync directory descriptors. Actual storage errors
+    // must remain failures, including after the rename became visible.
+    const code = (error as NodeJS.ErrnoException).code
+    if (!['EINVAL', 'ENOTSUP', 'EBADF', 'EISDIR', 'EPERM'].includes(code ?? '')) throw error
   } finally {
     if (dirFd !== undefined) closeSync(dirFd)
   }

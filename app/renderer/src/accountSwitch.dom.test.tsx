@@ -90,8 +90,25 @@ async function mountApp(provider: RunControlProvider = 'openai', status: 'ready'
   const emitPool = async (value: AccountsSnapshot) => {
     await act(async () => { host({ type: 'accounts-pool', pool: value }) })
   }
-  return { tree, click, emit, emitPool, sessionSwitches, managed, submits, lifecycle }
+  return { tree, click, emit, emitPool,
+    emitHost: async (event: HostEvent) => { await act(async () => { host(event) }) },
+    sessionSwitches, managed, submits, lifecycle }
 }
+
+test('the chat reports unsaved account authority until the host confirms recovery', async () => {
+  const app = await mountApp()
+  const message = 'Your account selection was not saved.'
+  await app.emitHost({
+    type: 'session-status',
+    session: sessionDescriptor('limited-chat', { accountSelectionUnsaved: true }),
+  })
+  expect(app.tree.container.textContent).toContain(message)
+  await app.emitHost({
+    type: 'session-status',
+    session: sessionDescriptor('limited-chat', { accountSelectionUnsaved: false }),
+  })
+  expect(app.tree.container.textContent).not.toContain(message)
+})
 
 test('Accounts shows the retained chat selection while keeping global inventory fresh', async () => {
   const app = await mountApp()
@@ -194,6 +211,29 @@ test('a ready chat with no selected account can switch to a healthy replacement'
   await app.click('Accounts')
   await app.click('Switch')
   expect(app.sessionSwitches[0]?.verb.accountId).toBe('replacement')
+  expect(app.managed).toEqual([])
+})
+
+test('a blocked chat can explicitly choose the sole healthy new-chat default', async () => {
+  const app = await mountApp()
+  const replacement = { ...pool.accounts[1]!, isDefault: true, switchable: false }
+  const global = { ...pool, accounts: [replacement], activeAccountId: replacement.id, poolCount: 1 }
+  await app.emitPool(global)
+  await app.emit({
+    kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+    sessionId: 'limited-chat',
+    accounts: {
+      ...global, activeAccountId: null,
+      accounts: [{ ...replacement, isDefault: false, switchable: true }],
+    },
+  })
+  await app.click('Accounts')
+  const menu = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label="Account actions"]')!
+  expect(menu.closest('[data-window-card]')?.textContent ??
+    menu.parentElement?.parentElement?.textContent).not.toContain('replacementactive')
+  await act(async () => { menu.click() })
+  await app.click('Switch to this account')
+  expect(app.sessionSwitches[0]?.verb.accountId).toBe(replacement.id)
   expect(app.managed).toEqual([])
 })
 

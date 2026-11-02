@@ -77,12 +77,16 @@ function readLifecycle(filePath: string): { generation: number; deleted: boolean
   }
 }
 
-function isCredentialCurrent(account: ClaudePoolAccount): boolean {
+function isCredentialCurrent(account: Pick<ClaudePoolAccount, 'accountUuid' | 'lifecycleGeneration' | 'vaultFilePath'>): boolean {
   const filePath = account.vaultFilePath ?? join(getVaultAccountsDir(), `${account.accountUuid}.json`)
   try {
     const lifecycle = readLifecycle(filePath)
-    return !lifecycle.deleted && lifecycle.generation === (account.lifecycleGeneration ?? 0) &&
-      (!account.vaultFilePath || existsSync(filePath))
+    if (lifecycle.deleted || lifecycle.generation !== (account.lifecycleGeneration ?? 0)) return false
+    if (!existsSync(filePath)) return !account.vaultFilePath && lifecycle.generation === 0
+    // Explicit login publishes the vault and lifecycle separately. A visible
+    // vault from the next generation is not a successfully committed login.
+    const vault = JSON.parse(readFileSync(filePath, 'utf8'))
+    return (vault.lifecycle_generation ?? 0) === lifecycle.generation
   } catch {
     return false
   }
@@ -100,13 +104,34 @@ export function isClaudeAccountDeleted(accountUuid: string): boolean {
 export function getClaudeCredentialGeneration(accountUuid: string): number | null {
   try {
     const lifecycle = readLifecycle(join(getVaultAccountsDir(), `${accountUuid}.json`))
-    return lifecycle.deleted ? null : lifecycle.generation
+    return lifecycle.deleted || !isCredentialCurrent({ accountUuid, lifecycleGeneration: lifecycle.generation })
+      ? null : lifecycle.generation
   } catch {
     return null
   }
 }
 
-/** Serialize legacy refresh publication with deletion and explicit login. */
+/** Bind a captured token to its supplying generation, not a later login. */
+export function captureClaudeCredentialGeneration(accountUuid: string, accessToken: string): number | null {
+  const account = pool.accounts.find(candidate => candidate.accountUuid === accountUuid)
+  if (pool.initialized) {
+    return account && account.accessToken === accessToken && isCredentialCurrent(account)
+      ? account.lifecycleGeneration ?? 0
+      : null
+  }
+  const generation = getClaudeCredentialGeneration(accountUuid)
+  if (generation === null || !isCredentialCurrent({ accountUuid, lifecycleGeneration: generation })) return null
+  const filePath = join(getVaultAccountsDir(), `${accountUuid}.json`)
+  if (!existsSync(filePath)) return generation === 0 ? generation : null
+  try {
+    const vault = JSON.parse(readFileSync(filePath, 'utf8'))
+    return vault.tokens?.access_token === accessToken ? generation : null
+  } catch {
+    return null
+  }
+}
+
+/** Serialize credential publication or send initiation with deletion and login. */
 export function withClaudeCredentialGeneration<T>(
   accountUuid: string,
   generation: number,
@@ -116,7 +141,7 @@ export function withClaudeCredentialGeneration<T>(
   mkdirSync(getVaultAccountsDir(), { recursive: true, mode: 0o700 })
   const release = acquireVaultMutationLockSync(filePath)
   try {
-    if (getClaudeCredentialGeneration(accountUuid) !== generation) return null
+    if (!isCredentialCurrent({ accountUuid, lifecycleGeneration: generation })) return null
     return publish()
   } finally {
     release()

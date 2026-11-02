@@ -769,6 +769,61 @@ describe('account recovery diagnostics', () => {
     },
   )
 
+  test.each(['unleased', 'unleased-three', 'unavailable-lease'] as const)(
+    'auth recovery uses fresh selectable routing after refresh: %s',
+    async scenario => {
+      const poolModule = await import('./codexAccountPool.js')
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'account-one',
+        accounts: [
+          buildPoolAccount({ accountId: 'account-one' }),
+          buildPoolAccount({ accountId: 'account-two' }),
+          ...(scenario !== 'unleased' ? [buildPoolAccount({ accountId: 'account-three' })] : []),
+        ],
+      })
+      const leased = scenario === 'unavailable-lease'
+      if (leased) seedCodexLeaseForTest({
+        ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main',
+        accountId: 'account-one', strategy: 'follow-main',
+      })
+      spyOn(codexAccounts, 'maybeRefreshAccount').mockImplementation(async () => {
+        await Promise.resolve()
+        poolModule.switchToAccount('account-two', { persistDefault: false })
+        if (leased) {
+          seedCodexLeaseForTest({
+            ownerId: 'main-thread', ownerType: 'main', ownerLabel: 'Main',
+            accountId: 'account-two', strategy: 'follow-main',
+          })
+          poolModule.markPoolAccountStatus('account-two', 'dead', 'synthetic deletion', { rerollActive: false })
+        }
+        throw new Error('synthetic refresh failure')
+      })
+      let attempts = 0
+      const retry = withRetry(
+        async () => ({}) as never,
+        async () => {
+          if (++attempts === 1) throw new CodexAccountAuthError('account-one', 401)
+          return leased
+            ? getCodexLeaseForOwner('main-thread')?.accountId
+            : poolModule.getActiveAccount()?.accountId
+        },
+        {
+          model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' },
+          ...(leased ? { ownerId: 'main-thread' } : {}),
+          isCodexRequest: true, maxRetries: 2,
+        },
+      )
+      let routed: unknown
+      for (;;) {
+        const next = await retry.next()
+        if (next.done) { routed = next.value; break }
+      }
+      expect(routed).toBe(leased ? 'account-three' : 'account-two')
+      expect(attempts).toBe(2)
+      expect(diagnostics.some(item => item.code === 'account.pool.unavailable')).toBe(false)
+    },
+  )
+
   test('a delayed connection error cannot undo a newer manual switch', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'account-one',

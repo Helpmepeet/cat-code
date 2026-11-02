@@ -1045,7 +1045,7 @@ export function AccountsPage({
               {switchScope
                 ? `Switching ${switchScope.provider === 'anthropic' ? 'Anthropic' : 'Codex'} accounts changes your current chat. Other account switches set the default for new chats.`
                 : 'Switching accounts sets the default for new chats.'}
-              {' Sign-out and deletion apply everywhere.'}
+              {' Close older Cat Code versions before signing out or deleting accounts.'}
             </p>
           </div>
           {active && active.status === 'healthy' ? (

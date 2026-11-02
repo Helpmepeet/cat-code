@@ -231,6 +231,7 @@ export class Host implements HostApi {
   private readonly workspaceObservations = new Map<SessionId, import('../shared/protocol.js').WorkspaceObservation>()
   private readonly mainCodexAccounts = new Map<SessionId, string>()
   private readonly unavailableCodexRoutes = new Set<SessionId>()
+  private readonly unsavedAccountSelections = new Set<SessionId>()
   private branchReplacement: { appSessionId: SessionId; reservation: SpawnReservation } | null = null
   /** One restore owns a registry id from validation through child registration. */
   private readonly restoring = new Set<SessionId>()
@@ -338,13 +339,13 @@ export class Host implements HostApi {
         const snapshot = event.frame.accounts
         if (snapshot.initialized) {
           if (snapshot.activeAccountId) this.unavailableCodexRoutes.delete(appSessionId)
-          else if (this.registry.findSession(appSessionId)?.accountSelection?.openai) {
+          else {
             this.unavailableCodexRoutes.add(appSessionId)
             this.mainCodexAccounts.delete(appSessionId)
           }
         }
         const codexId = snapshot.activeAccountId && (this.mainCodexAccounts.get(appSessionId) ?? snapshot.activeAccountId)
-        await this.registry.setAccountSelection(appSessionId, {
+        await this.recordAccountSelection(appSessionId, {
           ...(snapshot.initialized && codexId ? { openai: codexId } : {}),
           ...(snapshot.anthropicInitialized && snapshot.anthropicActiveAccountId ? { anthropic: snapshot.anthropicActiveAccountId } : {}),
         })
@@ -354,7 +355,7 @@ export class Host implements HostApi {
         if (main && !this.unavailableCodexRoutes.has(appSessionId)) this.mainCodexAccounts.set(appSessionId, main.accountId)
         else this.mainCodexAccounts.delete(appSessionId)
         if (main && !this.unavailableCodexRoutes.has(appSessionId)) {
-          await this.registry.setAccountSelection(appSessionId, { openai: main.accountId })
+          await this.recordAccountSelection(appSessionId, { openai: main.accountId })
         }
       }
       if (event.frame.kind === 'ready') this.workspaceObservations.delete(appSessionId)
@@ -1082,8 +1083,10 @@ export class Host implements HostApi {
       for (const reapedId of reaped) {
         this.emitRemoved(reapedId)
       }
+      const savedAccounts = this.registry.getAccountSelection(appSessionId)
+      if (savedAccounts) await this.recordAccountSelection(appSessionId, savedAccounts)
       this.supervisor.spawnSession(appSessionId, {
-        accountSelection: this.registry.findSession(appSessionId)?.accountSelection,
+        accountSelection: this.registry.getAccountSelection(appSessionId),
         cwd,
         binding,
         forked,
@@ -2091,11 +2094,14 @@ export class Host implements HostApi {
     }
     const creatorName = this.creatorNameFor(row.createdBy, row.createdByName)
     try {
+      const savedAccounts = this.registry.getAccountSelection(appSessionId)
+      if (savedAccounts) await this.recordAccountSelection(appSessionId, savedAccounts)
+      const accountSelection = this.registry.getAccountSelection(appSessionId)
       this.prepareSessionRecovery?.(appSessionId)
       // Evict replay only after recovery succeeds, before replacing the child.
       this.evictReplay(appSessionId)
       await this.supervisor.restartSession(appSessionId, {
-        accountSelection: row.accountSelection,
+        accountSelection,
         cwd: validatedCwd.realpath,
         binding: row.binding,
         forked: row.forked,
@@ -2426,6 +2432,7 @@ export class Host implements HostApi {
       cwd: row?.cwd ?? '',
       binding: row?.binding ?? { kind: 'project' },
       moving: row ? this.moving.has(row.appSessionId) : false,
+      accountSelectionUnsaved: row ? this.unsavedAccountSelections.has(row.appSessionId) : false,
       canMoveBack: row?.binding.kind === 'project' && this.hasMoveOrigin(row.engineSessionId),
       contextTransitions: this.contextTransitionsFor(row),
       workspaceMove: row ? this.workspaceMoveFor(row) : null,
@@ -2514,6 +2521,18 @@ export class Host implements HostApi {
    * HostEvent emit helpers
    * --------------------------------------------------------------------- */
 
+  private async recordAccountSelection(
+    appSessionId: SessionId,
+    selection: NonNullable<RegistrySession['accountSelection']>,
+  ): Promise<void> {
+    await this.registry.setAccountSelection(appSessionId, selection)
+    const before = this.unsavedAccountSelections.has(appSessionId)
+    const after = this.registry.hasUnsavedAccountSelection(appSessionId)
+    if (after) this.unsavedAccountSelections.add(appSessionId)
+    else this.unsavedAccountSelections.delete(appSessionId)
+    if (before !== after) this.emitStatus(appSessionId)
+  }
+
   private emit(event: HostEvent): void {
     if (event.type === 'session-removed') this.workspaceMoves.delete(event.appSessionId)
     for (const listener of this.listeners) {
@@ -2530,6 +2549,7 @@ export class Host implements HostApi {
   }
 
   private emitRemoved(appSessionId: SessionId): void {
+    this.unsavedAccountSelections.delete(appSessionId)
     this.emit({ type: 'session-removed', appSessionId })
   }
 

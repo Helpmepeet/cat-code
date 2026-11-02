@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, spyOn, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import {
@@ -2168,4 +2168,85 @@ test('concurrent registry writers preserve independent provider selections', asy
   await second.registry.setAccountSelection('selected', { openai: 'codex-b' })
   expect(readDoc(first.registryPath).sessions.find(row => row.appSessionId === 'selected')?.accountSelection)
     .toEqual({ anthropic: 'claude-a', openai: 'codex-b' })
+})
+
+test('account authority survives an older registry writer and follows the saved engine conversation', async () => {
+  const h = makeRegistry()
+  await h.registry.upsertOnSpawn({ appSessionId: 'selected', engineSessionId: 'saved-engine', cwd: h.storageDir })
+  writeTranscript(h.storageDir, 'saved-engine')
+  const selection = { anthropic: 'claude-a', openai: 'codex-b' }
+  expect(await h.registry.setAccountSelection('selected', selection)).toBe(true)
+  await h.registry.markClean('selected')
+  // The installed cc5d0291 validator was observed rebuilding rows without this
+  // field. Its rewrite must not erase the separately owned routing authority.
+  const oldWriter = readDoc(h.registryPath)
+  for (const row of oldWriter.sessions) delete row.accountSelection
+  writeFileSync(h.registryPath, JSON.stringify(oldWriter))
+
+  const restored = makeRegistry({ storageDir: h.storageDir }).registry
+  await restored.launch()
+  expect(restored.findSession('selected')?.accountSelection).toBeUndefined()
+  expect(restored.getAccountSelection('selected')).toEqual(selection)
+  await restored.upsertOnSpawn({
+    appSessionId: 'reopened-history-row', engineSessionId: 'saved-engine', cwd: h.storageDir,
+  })
+  expect(restored.getAccountSelection('reopened-history-row')).toEqual(selection)
+})
+
+test('an identical authoritative pin retries failed persistence after the lock recovers', async () => {
+  let fail = false
+  const h = makeRegistry({
+    acquireLock: async () => {
+      if (fail) throw new Error('synthetic lock failure')
+      return async () => {}
+    },
+  })
+  await h.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: h.storageDir })
+  expect(await h.registry.setAccountSelection('selected', { openai: 'codex-a' })).toBe(true)
+  fail = true
+  expect(await h.registry.setAccountSelection('selected', { openai: 'codex-b' })).toBe(false)
+  expect(h.registry.hasUnsavedAccountSelection('selected')).toBe(true)
+  expect(readDoc(h.registryPath).sessions[0]?.accountSelection?.openai).toBe('codex-a')
+  fail = false
+  expect(await h.registry.setAccountSelection('selected', { openai: 'codex-b' })).toBe(true)
+  expect(h.registry.hasUnsavedAccountSelection('selected')).toBe(false)
+  const restored = makeRegistry({ storageDir: h.storageDir }).registry
+  await restored.launch()
+  expect(restored.getAccountSelection('selected')?.openai).toBe('codex-b')
+})
+
+test('visible pin publication remains unsaved when directory durability fails', async () => {
+  const h = makeRegistry()
+  await h.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: h.storageDir })
+  await h.registry.setAccountSelection('selected', { openai: 'codex-a' })
+  const fs = await import('node:fs')
+  const sync = fs.fsyncSync
+  let fail = true
+  const spy = spyOn(fs, 'fsyncSync').mockImplementation(fd => {
+    if (fail && fs.fstatSync(fd).isDirectory()) {
+      throw Object.assign(new Error('synthetic directory durability failure'), { code: 'EIO' })
+    }
+    return sync(fd)
+  })
+  try {
+    expect(await h.registry.setAccountSelection('selected', { openai: 'codex-b' })).toBe(false)
+    expect(h.registry.hasUnsavedAccountSelection('selected')).toBe(true)
+    fail = false
+    expect(await h.registry.setAccountSelection('selected', { openai: 'codex-b' })).toBe(true)
+    expect(h.registry.hasUnsavedAccountSelection('selected')).toBe(false)
+  } finally {
+    spy.mockRestore()
+  }
+})
+
+test('corrupt account authority fails closed instead of falling back to cached defaults', async () => {
+  const h = makeRegistry()
+  await h.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: h.storageDir })
+  await h.registry.setAccountSelection('selected', { openai: 'codex-a' })
+  const folder = join(h.storageDir, 'account-selections')
+  const file = join(folder, readdirSync(folder)[0]!)
+  writeFileSync(file, '{broken')
+  expect(() => h.registry.getAccountSelection('selected')).toThrow('could not be read')
+  expect(await h.registry.setAccountSelection('selected', { openai: 'codex-b' })).toBe(false)
+  expect(h.registry.hasUnsavedAccountSelection('selected')).toBe(true)
 })

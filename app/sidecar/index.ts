@@ -53,7 +53,7 @@ import {
 } from './historyProjection.js'
 import { initializeSidecarRuntime } from './initializeRuntime.js'
 import { readSessionAccountSelection, restoreSessionAccountSelection } from './sessionAccountBootstrap.js'
-import { getSessionAccountRouteBlock } from '../../src/services/api/sessionAccountRouting.js'
+import { blockSessionAccountRoute, getSessionAccountRouteBlock } from '../../src/services/api/sessionAccountRouting.js'
 import { buildAccountDiagnosticMessage } from '../../src/services/api/accountDiagnostics.js'
 import {
   createSidecarSessionController,
@@ -375,9 +375,16 @@ async function main(): Promise<void> {
   })
   activeSidecarCleanup = sidecarCleanup
   if (!args.probeOnAttach) {
+    const savedAccounts = readSessionAccountSelection(process.env.CATCODE_SIDECAR_ACCOUNT_SELECTION)
+    // Runtime initialization can start authenticated profile/refresh work.
+    // Establish authority before it can capture a shared default credential.
+    for (const provider of ['anthropic', 'openai'] as const) {
+      const id = savedAccounts?.[provider]
+      if (id) blockSessionAccountRoute(provider, id)
+    }
     await timing.span(timingIdentity, 'startup_validation', () => validateWorkspaceJumpStartup(args.sessionId, args.cwd, args.resumeEngineSessionId ?? args.freshEngineSessionId, args.binding))
     await timing.span(timingIdentity, 'runtime_initialize_body', () => initializeSidecarRuntime())
-    await restoreSessionAccountSelection(readSessionAccountSelection(process.env.CATCODE_SIDECAR_ACCOUNT_SELECTION))
+    await restoreSessionAccountSelection(savedAccounts)
     // Process age includes pre-entrypoint module loading and startup validation;
     // it is not the duration of initializeSidecarRuntime (measured above).
     timing.write(timingIdentity, 'replacement_to_runtime_init', 'completed', process.uptime() * 1000)

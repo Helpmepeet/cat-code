@@ -3,6 +3,10 @@ export type SessionAccountRouteBlock = { requestedAccountId: string; message: st
 
 const blocks = new Map<SessionAccountProvider, SessionAccountRouteBlock>()
 
+export class SessionAccountRouteUnavailableError extends Error {
+  override name = 'SessionAccountRouteUnavailableError'
+}
+
 /** Process-local admission hold. Account identifiers never enter the message. */
 export function blockSessionAccountRoute(provider: SessionAccountProvider, requestedAccountId: string): void {
   const label = provider === 'anthropic' ? 'Claude' : 'Codex'
@@ -23,5 +27,5 @@ export function getSessionAccountRouteBlock(provider: SessionAccountProvider): S
 
 export function assertSessionAccountRouteAvailable(provider: SessionAccountProvider): void {
   const block = blocks.get(provider)
-  if (block) throw new Error(block.message)
+  if (block) throw new SessionAccountRouteUnavailableError(block.message)
 }

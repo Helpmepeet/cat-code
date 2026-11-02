@@ -166,9 +166,11 @@ let profileInventory: CodexProfileInventory = {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-function persistActiveCodexAccountId(accountId: string | undefined): void {
-  saveGlobalConfig(current => {
+function persistActiveCodexAccountId(accountId: string | undefined): boolean {
+  let alreadySelected = false
+  const saved = saveGlobalConfig(current => {
     if (current.activeCodexAccountId === accountId) {
+      alreadySelected = true
       return current
     }
     return {
@@ -176,6 +178,7 @@ function persistActiveCodexAccountId(accountId: string | undefined): void {
       activeCodexAccountId: accountId,
     }
   })
+  return saved || alreadySelected
 }
 
 function countPoolStatuses(): Record<string, number> {
@@ -927,8 +930,8 @@ export function switchToAccount(
 
   if (targetIdx === pool.activeIndex) {
     const current = pool.accounts[targetIdx]!
-    if (options.persistDefault !== false) {
-      persistActiveCodexAccountId(current.accountId)
+    if (options.persistDefault !== false && !persistActiveCodexAccountId(current.accountId)) {
+      throw new Error('Could not save the default account. Check disk space and try again.')
     }
     logForDebugging(
       `[codex-profile] active-profile-change writer=switch-account account=${current.accountId} action=no-op`,
@@ -938,6 +941,11 @@ export function switchToAccount(
 
   const from = pool.accounts[pool.activeIndex]
   const to = pool.accounts[targetIdx]!
+  // Do not publish local selection or move leases when the requested
+  // new-chat default could not be saved.
+  if (options.persistDefault !== false && !persistActiveCodexAccountId(to.accountId)) {
+    throw new Error('Could not save the default account. Check disk space and try again.')
+  }
   logForDebugging(
     `[codex-profile] active-profile-change writer=switch-account before_account=${from?.accountId ?? '?'} before_alias=${from?.alias ?? 'none'} after_account=${to.accountId} after_alias=${to.alias ?? 'none'}`,
   )
@@ -946,9 +954,6 @@ export function switchToAccount(
     pool.accounts[pool.activeIndex]!.lastUsedAt = Date.now()
   }
   pool.activeIndex = targetIdx
-  if (options.persistDefault !== false) {
-    persistActiveCodexAccountId(pool.accounts[targetIdx]!.accountId)
-  }
   return to
 }
 

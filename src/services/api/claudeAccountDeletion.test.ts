@@ -9,6 +9,7 @@ import { plainTextStorage } from '../../utils/secureStorage/plainTextStorage.js'
 import { clearOAuthTokenCache, getClaudeAIOAuthTokens, getClaudeAIOAuthTokensAsync } from '../../utils/auth.js'
 import * as pool from './claudeAccountPool.js'
 import * as atomic from '../../utils/atomicFile.js'
+import * as auth from '../../utils/auth.js'
 import { blockSessionAccountRoute, clearSessionAccountRouteBlock } from './sessionAccountRouting.js'
 
 let dir: string
@@ -17,6 +18,7 @@ let settings: any
 let failStorage: boolean
 let failConfig: boolean
 let previousConfigDir: string | undefined
+let previousCustomHeaders: string | undefined
 const account = {
   accountUuid: 'deleted', emailAddress: 'deleted@example.com',
   accessToken: 'access-deleted', refreshToken: 'refresh-deleted',
@@ -26,6 +28,8 @@ const account = {
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'claude-delete-'))
   previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+  previousCustomHeaders = process.env.ANTHROPIC_CUSTOM_HEADERS
+  delete process.env.ANTHROPIC_CUSTOM_HEADERS
   process.env.CLAUDE_CONFIG_DIR = dir
   mkdirSync(join(dir, 'accounts'))
   writeFileSync(join(dir, 'accounts/deleted.json'), JSON.stringify({
@@ -69,6 +73,8 @@ afterEach(() => {
   pool.resetClaudeAccountPoolForTest()
   if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+  if (previousCustomHeaders === undefined) delete process.env.ANTHROPIC_CUSTOM_HEADERS
+  else process.env.ANTHROPIC_CUSTOM_HEADERS = previousCustomHeaders
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -314,4 +320,151 @@ test('explicit re-login reports failure instead of publishing fallback when the 
     ...account, accessToken: 'retried-login', refreshToken: 'retried-login-refresh',
   })
   expect(pool.getActiveClaudeAccount()?.accessToken).toBe('retried-login')
+})
+
+test('live-account re-login cannot publish fallback after only the new vault generation is visible', async () => {
+  const before = structuredClone({ settings, data })
+  const write = atomic.writeFileAtomicDurableSync
+  spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((path, contents, options) => {
+    if (String(path).endsWith('.lifecycle')) throw new Error('synthetic lifecycle publication failure')
+    return write(path, contents, options)
+  })
+  expect(() => pool.appendClaudeAccount({
+    ...account, accessToken: 'partial-login-access', refreshToken: 'partial-login-refresh',
+  })).toThrow('Restore vault access and sign in again')
+  expect(settings).toEqual(before.settings)
+  expect(data).toEqual(before.data)
+  expect(pool.getActiveClaudeAccount()).toBeNull()
+  expect(pool.getClaudeCredentialGeneration(account.accountUuid)).toBeNull()
+  expect(pool.captureClaudeCredentialGeneration(account.accountUuid, account.accessToken)).toBeNull()
+})
+
+test.each(['sdk-retry', 'direct-cached', 'request-signing', 'storage-denied', 'unlock-after-send'] as const)('the production client fences each physical HTTP send: %s', async scenario => {
+  const { getAnthropicClient } = await import('./client.js')
+  const http = await import('../../utils/http.js')
+  spyOn(http, 'getUserAgent').mockReturnValue('synthetic-credential-test')
+  spyOn(auth, 'isClaudeAISubscriber').mockReturnValue(true)
+  spyOn(auth, 'checkAndRefreshOAuthTokenIfNeeded').mockResolvedValue(false)
+  spyOn(auth, 'getClaudeAIOAuthTokens').mockReturnValue({
+    ...account, scopes: ['user:inference'], subscriptionType: null, rateLimitTier: null,
+  })
+  const capture = spyOn(pool, 'captureClaudeCredentialGeneration')
+  let authorizationCalls = 0
+  if (scenario === 'storage-denied') {
+    spyOn(pool, 'withClaudeCredentialGeneration').mockImplementation(() => {
+      authorizationCalls++
+      throw new Error('synthetic storage access failure')
+    })
+  } else if (scenario === 'unlock-after-send') {
+    const authorize = pool.withClaudeCredentialGeneration
+    spyOn(pool, 'withClaudeCredentialGeneration').mockImplementation((id, generation, send) => {
+      authorizationCalls++
+      const started = authorize(id, generation, send)
+      if (started !== null) throw new Error('synthetic unlock failure after send')
+      return started
+    })
+  }
+  let calls = 0
+  const client = await getAnthropicClient({
+    maxRetries: 1, model: 'claude-sonnet-4-6', provider: 'firstParty',
+    fetchOverride: async () => {
+      calls++
+      if (calls === 1 && scenario === 'sdk-retry') {
+        await Promise.resolve()
+        expect(pool.deleteClaudeVaultFile(join(dir, 'accounts/deleted.json'))).toBe(true)
+        return new Response(JSON.stringify({ error: { type: 'api_error', message: 'synthetic overload' } }), {
+          status: 503, headers: { 'content-type': 'application/json', 'retry-after-ms': '1' },
+        })
+      }
+      return new Response(JSON.stringify({
+        id: 'synthetic', type: 'message', role: 'assistant', content: [],
+        model: 'claude-sonnet-4-6', stop_reason: 'end_turn', stop_sequence: null,
+        usage: { input_tokens: 0, output_tokens: 0 },
+      }), { headers: { 'content-type': 'application/json' } })
+    },
+  })
+  expect(client.authToken).toBe(account.accessToken)
+  expect(capture).toHaveBeenCalledTimes(1)
+  if (scenario === 'direct-cached') expect(pool.deleteClaudeVaultFile(join(dir, 'accounts/deleted.json'))).toBe(true)
+  if (scenario === 'request-signing') {
+    const cch = await import('../../utils/cch.js')
+    spyOn(cch, 'computeCch').mockImplementation(async () => {
+      expect(pool.deleteClaudeVaultFile(join(dir, 'accounts/deleted.json'))).toBe(true)
+      return '12345'
+    })
+  }
+  let failure: unknown
+  let response: unknown
+  try {
+    response = await client.messages.create({
+      model: 'claude-sonnet-4-6', max_tokens: 1,
+      ...(scenario === 'request-signing' ? { system: 'synthetic billing header cch=00000' } : {}),
+      messages: [{ role: 'user', content: 'synthetic' }],
+    })
+  } catch (error) {
+    failure = error
+  }
+  expect(calls).toBe(scenario === 'sdk-retry' || scenario === 'unlock-after-send' ? 1 : 0)
+  if (scenario === 'storage-denied' || scenario === 'unlock-after-send') expect(authorizationCalls).toBeGreaterThan(0)
+  if (scenario === 'unlock-after-send') {
+    expect(failure).toBeUndefined()
+    expect(response).toMatchObject({ id: 'synthetic' })
+  } else {
+    expect(failure).toBeDefined()
+    if (scenario === 'storage-denied') {
+      expect((failure as Error & { cause?: Error }).cause?.message).toContain('storage access')
+    } else {
+      expect(pool.getClaudeCredentialGeneration(account.accountUuid)).toBeNull()
+    }
+  }
+})
+
+test('client capture cannot stamp an old token with a newer login generation', async () => {
+  const { getAnthropicClient } = await import('./client.js')
+  const http = await import('../../utils/http.js')
+  spyOn(http, 'getUserAgent').mockReturnValue('synthetic-credential-test')
+  spyOn(auth, 'isClaudeAISubscriber').mockReturnValue(true)
+  spyOn(auth, 'checkAndRefreshOAuthTokenIfNeeded').mockResolvedValue(false)
+  const staleGetter = Object.assign(() => {
+    const captured = {
+      ...account, scopes: ['user:inference'], subscriptionType: null, rateLimitTier: null,
+    }
+    pool.appendClaudeAccount({
+      ...account, accessToken: 'new-generation-access', refreshToken: 'new-generation-refresh',
+    })
+    return captured
+  }, { cache: auth.getClaudeAIOAuthTokens.cache })
+  spyOn(auth, 'getClaudeAIOAuthTokens').mockImplementation(staleGetter)
+  let sends = 0
+  let failure: unknown
+  try {
+    await getAnthropicClient({
+      model: 'claude-sonnet-4-6', provider: 'firstParty', maxRetries: 0,
+      fetchOverride: async () => { sends++; return new Response('{}') },
+    })
+  } catch (error) {
+    failure = error
+  }
+  expect(failure).toBeDefined()
+  expect(sends).toBe(0)
+  expect(pool.getActiveClaudeAccount()?.lifecycleGeneration).toBe(1)
+})
+
+test('a blocked route is rejected before refresh or fallback credential discovery', async () => {
+  const { getAnthropicClient } = await import('./client.js')
+  const http = await import('../../utils/http.js')
+  spyOn(http, 'getUserAgent').mockReturnValue('synthetic-credential-test')
+  blockSessionAccountRoute('anthropic', 'unavailable-saved-account')
+  const refresh = spyOn(auth, 'checkAndRefreshOAuthTokenIfNeeded').mockResolvedValue(false)
+  const key = spyOn(auth, 'getApiKeyFromApiKeyHelper').mockResolvedValue('synthetic-fallback')
+  let failure: unknown
+  try {
+    await getAnthropicClient({ model: 'claude-sonnet-4-6', provider: 'firstParty', maxRetries: 0 })
+  } catch (error) {
+    failure = error
+  }
+  expect(failure).toBeDefined()
+  expect((failure as Error).message).toContain('Open Accounts')
+  expect(refresh).not.toHaveBeenCalled()
+  expect(key).not.toHaveBeenCalled()
 })

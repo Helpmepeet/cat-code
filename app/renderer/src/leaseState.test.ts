@@ -592,6 +592,19 @@ function accountsStateWithSession(
   })
 }
 
+test('an authoritative unavailable route never borrows the sole healthy global default', () => {
+  const roster = accountsSnapshot([poolRow({ id: 'healthy-default', isDefault: true })])
+  const own = accountsSnapshot([poolRow({ id: 'healthy-default', isDefault: false })])
+  for (const leases of [null, snapshot({ owners: [owner({
+    ownerId: 'main-thread', ownerType: 'main', accountId: 'healthy-default',
+  })] })]) {
+    expect(selectSessionCodexAccount({
+      roster, leases, lastMainFailoverAccountId: 'healthy-default',
+      accounts: accountsStateWithSession('blocked', own), sessionId: 'blocked',
+    })).toBeNull()
+  }
+})
+
 test('the main lease outranks the pool default, so a failover renames the face', () => {
   // The pool still persists A as active; this session failed over to B.
   const resolved = selectSessionCodexAccount({

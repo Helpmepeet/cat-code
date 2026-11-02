@@ -113,6 +113,8 @@ export type SessionDescriptor = {
   /** Explicit association. Absent only in old external fixtures; host always sets it. */
   binding?: SessionBinding
   moving?: boolean
+  /** The live choice works, but its durable account affinity still needs saving. */
+  accountSelectionUnsaved?: boolean
   workspaceMove?: WorkspaceMoveDisplay | null
   canMoveBack?: boolean
   /** Persisted move seams, ordered as the conversation crossed contexts. */

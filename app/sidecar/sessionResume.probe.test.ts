@@ -1,6 +1,6 @@
 /** Cold production startup proof: saved input is review-only, never user history or an executable queue. */
 import { afterEach, expect, test } from 'bun:test'
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +33,7 @@ function tmp(prefix: string): string {
 }
 function isolatedEnv(configHome: string) {
   const launch = Object.fromEntries(Object.keys(process.env).filter(key => key.startsWith('CATCODE_')).map(key => [key, '']))
-  return { ...launch, CLAUDE_CONFIG_DIR: configHome, CODEX_HOME: join(configHome, 'codex'),
+  return { ...launch, HOME: configHome, CLAUDE_CONFIG_DIR: configHome, CODEX_HOME: join(configHome, 'codex'),
     NODE_ENV: 'development', TEST_ENABLE_SESSION_PERSISTENCE: '1',
     ANTHROPIC_API_KEY: 'isolated-recovery-probe', OPENAI_API_KEY: 'isolated-recovery-probe',
     ANTHROPIC_AUTH_TOKEN: '', CLAUDE_CODE_USE_BEDROCK: '', CLAUDE_CODE_USE_VERTEX: '', CLAUDE_CODE_USE_FOUNDRY: '',
@@ -68,7 +68,8 @@ async function waitForExit(pid: number): Promise<void> {
   throw new Error(`Owned recovery probe process ${pid} did not exit`)
 }
 async function startRecovery(configHome: string, cwd: string, engineSessionId: string,
-  accountSelection?: import('../shared/sessionAccountSelection.js').SessionAccountSelection) {
+  accountSelection?: import('../shared/sessionAccountSelection.js').SessionAccountSelection,
+  bootstrapObserver?: string) {
   const appSessionId = randomUUID()
   const frames: ServerFrame[] = [], logs: string[] = []
   const exits: Array<{ code: number | null; signal: string | null }> = []
@@ -76,7 +77,7 @@ async function startRecovery(configHome: string, cwd: string, engineSessionId: s
   const readAudit = () => existsSync(audit) ? readFileSync(audit, 'utf8') : ''
   const auditBefore = readAudit()
   const supervisor = new SidecarSupervisor({ sidecarCommand: process.execPath,
-    sidecarArgs: [`--preload=${networkGuard}`, ...SIDECAR_RUNTIME_ARGS, entry], sidecarEnv: isolatedEnv(configHome),
+    sidecarArgs: [`--preload=${networkGuard}`, ...(bootstrapObserver ? [`--preload=${bootstrapObserver}`] : []), ...SIDECAR_RUNTIME_ARGS, entry], sidecarEnv: isolatedEnv(configHome),
     killGraceMs: 1000, log: message => logs.push(message) })
   const owned = { supervisor, pids: [] as number[] }
   running.push(owned)
@@ -144,6 +145,52 @@ function assertNotOrdinaryHistory(frames: ServerFrame[], ids: string[]): void {
   }
   expect(frames.some(frame => frame.kind === 'event' && frame.event.type === 'turn.status' && frame.event.activeTurn)).toBe(false)
 }
+
+test('saved holds precede authenticated runtime bootstrap with an expired synthetic default', async () => {
+  const configHome = tmp('catcode-early-account-cfg-'), cwd = tmp('catcode-early-account-cwd-')
+  const engineSessionId = randomUUID(), marker = `early-account-${randomUUID()}`
+  await run([minter, engineSessionId, marker], cwd, configHome)
+  const observer = join(configHome, 'observe-bootstrap.ts')
+  const runtimePath = join(here, 'initializeRuntime.ts')
+  const authPath = join(here, '../../src/utils/auth.ts')
+  const securePath = join(here, '../../src/utils/secureStorage/index.ts')
+  const configPath = join(here, '../../src/utils/config.ts')
+  const routingPath = join(here, '../../src/services/api/sessionAccountRouting.ts')
+  writeFileSync(observer, `
+    import { mock } from 'bun:test';
+    import { writeFileSync } from 'node:fs';
+    const secure = await import(${JSON.stringify(securePath)});
+    const routing = await import(${JSON.stringify(routingPath)});
+    const config = await import(${JSON.stringify(configPath)});
+    config.saveGlobalConfig(current => ({ ...current,
+      activeClaudeAccountUuid: 'synthetic-default',
+      oauthAccount: {accountUuid: 'synthetic-default', emailAddress: 'default@example.invalid'}
+    }));
+    let data = { claudeAiOauth: {
+      accountUuid: 'synthetic-default', accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+      expiresAt: 1, scopes: ['user:inference', 'user:profile']
+    }};
+    mock.module(${JSON.stringify(securePath)}, () => ({ ...secure, getSecureStorage: () => ({
+      name: 'synthetic', read: () => structuredClone(data), readAsync: async () => structuredClone(data),
+      update: next => { data = structuredClone(next); return {success: true}; }, delete: () => true
+    }) }));
+    const auth = await import(${JSON.stringify(authPath)});
+    const runtime = await import(${JSON.stringify(runtimePath)});
+    const initialize = runtime.initializeSidecarRuntime;
+    mock.module(${JSON.stringify(runtimePath)}, () => ({ ...runtime, initializeSidecarRuntime: async () => {
+      if (!routing.getSessionAccountRouteBlock('anthropic')) throw Error('Saved route authority was installed too late');
+      if (auth.getClaudeAIOAuthTokens() !== null || await auth.getClaudeAIOAuthTokensAsync() !== null) {
+        throw Error('Bootstrap borrowed the synthetic default');
+      }
+      writeFileSync(${JSON.stringify(join(configHome, 'held-before-init'))}, 'held');
+      return initialize();
+    }}));
+  `)
+  const restored = await startRecovery(configHome, cwd, engineSessionId, { anthropic: randomUUID() }, observer)
+  expect(readFileSync(join(configHome, 'held-before-init'), 'utf8')).toBe('held')
+  expect(JSON.stringify(restored.frames)).toContain(marker)
+  await restored.stop()
+}, TEST_TIMEOUT_MS)
 
 test('unavailable saved accounts boot valid history with actionable diagnostics and account management', async () => {
   const configHome = tmp('catcode-account-restore-cfg-'), cwd = tmp('catcode-account-restore-cwd-')

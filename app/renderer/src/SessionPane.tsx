@@ -2244,6 +2244,11 @@ export function SessionPane({
       {transportError ? (
         <div className="text-sm text-tone-danger">{transportError}</div>
       ) : null}
+      {activeDescriptor?.accountSelectionUnsaved ? (
+        <div className="text-sm text-tone-warn" role="alert">
+          Your account selection was not saved. Keep this chat open and choose the account again in Accounts.
+        </div>
+      ) : null}
       {transportErrorFromImage ? (
         <div className="text-sm text-tone-danger">{transportErrorFromImage}</div>
       ) : null}
