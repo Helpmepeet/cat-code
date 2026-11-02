@@ -190,10 +190,12 @@ export async function searchOpenAI(
     () => resolveAuth(context),
     async auth => {
       if (signal.aborted) throw new AbortError('WebSearch was cancelled.')
+      let sentCredential: Pick<typeof auth, 'accessToken' | 'credentialGeneration'> = auth
       let response: Response
       try {
         response = await startCodexCredentialSend(auth, authorized => {
           if (signal.aborted) throw new AbortError('WebSearch was cancelled.')
+          sentCredential = authorized
           return globalThis.fetch(SEARCH_URL, {
             ...getProxyFetchOptions(),
             method: 'POST',
@@ -219,7 +221,7 @@ export async function searchOpenAI(
       }
       if (!response.ok) {
         await response.body?.cancel().catch(() => {})
-        if (response.status === 401) throw new CodexAccountAuthError(auth.accountId, 401)
+        if (response.status === 401) throw new CodexAccountAuthError(auth.accountId, 401, sentCredential)
         // A search-specific rate limit does not establish an inference quota cap.
         throw APIError.generate(response.status, undefined,
           'OpenAI web search request failed.', response.headers)

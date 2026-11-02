@@ -372,22 +372,38 @@ export class CodexAccountCapError extends Error {
   }
 }
 
+type CodexAuthCredential = Readonly<Pick<CodexCredentialHandle, 'accessToken' | 'credentialGeneration'>>
+
 export class CodexAccountAuthError extends Error {
   public readonly status: 401 | 403
+  readonly #credential?: CodexAuthCredential
 
   constructor(
     public readonly accountId: string,
     status: 401 | 403,
+    credential?: CodexAuthCredential,
   ) {
     super(`Codex account ${accountId} authentication failed (${status})`)
     this.name = 'CodexAccountAuthError'
     this.status = status
+    this.#credential = credential && Object.freeze({
+      accessToken: credential.accessToken,
+      credentialGeneration: credential.credentialGeneration,
+    })
+  }
+
+  matchesCredential(credential: CodexAuthCredential): boolean {
+    return !this.#credential || (
+      this.#credential.credentialGeneration === credential.credentialGeneration &&
+      this.#credential.accessToken === credential.accessToken
+    )
   }
 }
 
 function normalizeCodexCredentialUseError(
   error: unknown,
   accountId: string,
+  credential?: CodexAuthCredential,
 ): Error {
   if (!(error instanceof CodexCredentialUseError)) {
     return error instanceof Error
@@ -400,7 +416,7 @@ function normalizeCodexCredentialUseError(
     error.code === 'generation_mismatch' ||
     error.code === 'profile_mismatch'
   ) {
-    return new CodexAccountAuthError(accountId, 401)
+    return new CodexAccountAuthError(accountId, 401, credential)
   }
   return new APIConnectionError({
     message: error.message,
@@ -526,6 +542,7 @@ function classifyCodexHttpAccountError(
   body: string,
   headers: Headers,
   accountId: string,
+  credential?: CodexAuthCredential,
 ): CodexAccountCapError | CodexAccountAuthError | null {
   if (codexErrorTextIndicatesUsageCap(status, body)) {
     return new CodexAccountCapError(accountId)
@@ -537,7 +554,7 @@ function classifyCodexHttpAccountError(
       codexHttpBodyIndicatesRevokedAuth(body) ||
       codexErrorTextIndicatesRevokedAuth(authStatus, body))
   ) {
-    return new CodexAccountAuthError(accountId, authStatus)
+    return new CodexAccountAuthError(accountId, authStatus, credential)
   }
   return null
 }
@@ -617,7 +634,7 @@ function createCodexResponseFailedError(
     return new CodexAccountCapError(requestCacheMetadata.accountId)
   }
   if (isAccountAuth && requestCacheMetadata) {
-    return new CodexAccountAuthError(requestCacheMetadata.accountId, 401)
+    return new CodexAccountAuthError(requestCacheMetadata.accountId, 401, codexRequestCredentials.get(requestCacheMetadata))
   }
   return new CodexResponseFailedError(failure)
 }
@@ -1718,6 +1735,9 @@ interface CodexRequestCacheMetadata {
   cacheContextKey: string
   conversationId: string
 }
+
+// Keep request credentials out of diagnostic metadata and serialized errors.
+const codexRequestCredentials = new WeakMap<CodexRequestCacheMetadata, CodexAuthCredential>()
 
 type CodexStreamTransport = 'websocket' | 'http'
 
@@ -3481,7 +3501,7 @@ function normalizeCodexStreamError(
       `original_msg="${error.message}"`,
       { level: 'warn' },
     )
-    return new CodexAccountAuthError(requestCacheMetadata.accountId, 401)
+    return new CodexAccountAuthError(requestCacheMetadata.accountId, 401, codexRequestCredentials.get(requestCacheMetadata))
   }
 
   if (error instanceof CodexWebSocketIdleTimeoutError) {
@@ -3796,6 +3816,7 @@ function normalizeInitialWebSocketError(
   error: unknown,
   accountId: string,
   conversationId?: string,
+  credential?: CodexAuthCredential,
 ): Error {
   if (error instanceof CodexAccountCapError) {
     return error
@@ -3822,7 +3843,7 @@ function normalizeInitialWebSocketError(
       `original_msg="${error.message}"`,
       { level: 'warn' },
     )
-    return new CodexAccountAuthError(accountId, 401)
+    return new CodexAccountAuthError(accountId, 401, credential)
   }
 
   if (error instanceof Error) {
@@ -3967,6 +3988,13 @@ export function createCodexFetch(
       cacheContextKey,
       conversationId,
     }
+    const recordCredentialUse = (authorizedCredential: CodexAuthCredential): void => {
+      codexRequestCredentials.set(requestCacheMetadata, Object.freeze({
+        accessToken: authorizedCredential.accessToken,
+        credentialGeneration: authorizedCredential.credentialGeneration,
+      }))
+    }
+    recordCredentialUse(currentCredential)
 
     // Which transport this request dispatches on. Resolved once, here, so the
     // start marker below names the same transport the dispatch further down
@@ -4010,6 +4038,7 @@ export function createCodexFetch(
         codexResponse = await startCodexCredentialSend(
           currentCredential,
           authorizedCredential => {
+            recordCredentialUse(authorizedCredential)
             requestStartedAtMs = Date.now()
             return globalThis.fetch(CODEX_BASE_URL, {
               method: 'POST',
@@ -4034,6 +4063,7 @@ export function createCodexFetch(
         const normalizedError = normalizeCodexCredentialUseError(
           error,
           currentAccountId,
+          codexRequestCredentials.get(requestCacheMetadata),
         )
         if (normalizedError !== error) {
           throw normalizedError
@@ -4109,6 +4139,7 @@ export function createCodexFetch(
             errorText,
             codexResponse.headers,
             currentAccountId,
+            codexRequestCredentials.get(requestCacheMetadata),
           )
           if (accountError) {
             throw accountError
@@ -4164,6 +4195,7 @@ export function createCodexFetch(
             {
               credential: currentCredential,
               credentialUse: options.credentialUse,
+              onCredentialUse: recordCredentialUse,
             } satisfies CodexWebSocketCredentialContext,
           )
           const wsSourceWithAbortCleanup: AsyncIterable<Record<string, unknown>> = {
@@ -4212,6 +4244,7 @@ export function createCodexFetch(
             wsError,
             currentAccountId,
             conversationId,
+            codexRequestCredentials.get(requestCacheMetadata),
           )
           // Item 3 rules 2a/4: distinguish rotation from transient failure.
           //   - Cap error → withRetry fails over to another account; the
@@ -4267,6 +4300,7 @@ export function createCodexFetch(
           errorText,
           codexResponse.headers,
           currentAccountId,
+          codexRequestCredentials.get(requestCacheMetadata),
         )
         if (accountError) {
           throw accountError

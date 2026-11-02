@@ -846,9 +846,16 @@ export async function* withRetry<T, Client = Anthropic>(
           account => account.accountId === accountId,
         )
 
+        if (currentAccount && !error.matchesCredential(currentAccount) &&
+            isCodexAccountSwitchable(currentAccount)) {
+          if (attempt > maxRetries) throwRetryExhausted(error, attempt, accountId, 'account_recovery')
+          client = null
+          continue
+        }
         let refreshRecovered = false
         let refreshFailure: unknown
-        if (poolManagesCredentials() && currentAccount?.refreshToken) {
+        if (poolManagesCredentials() && currentAccount?.refreshToken &&
+            error.matchesCredential(currentAccount)) {
           try {
             // Route post-401 recovery through the single refresh entry point,
             // forced past the local expiry gate (the 401 may be a server-side
@@ -882,6 +889,18 @@ export async function* withRetry<T, Client = Anthropic>(
           }
         }
 
+        const latestAccount = getPoolStatus().accounts.find(account => account.accountId === accountId)
+        const recoveryCredentialIsCurrent = currentAccount !== undefined && latestAccount !== undefined &&
+          currentAccount.credentialGeneration === latestAccount.credentialGeneration &&
+          currentAccount.accessToken === latestAccount.accessToken &&
+          error.matchesCredential(latestAccount)
+        // A login or another refresh can finish while recovery is awaiting.
+        // Its credentials did not cause this failure and must keep their health.
+        if (!refreshRecovered && latestAccount && !recoveryCredentialIsCurrent && isCodexAccountSwitchable(latestAccount)) {
+          if (attempt > maxRetries) throwRetryExhausted(error, attempt, accountId, 'account_recovery')
+          client = null
+          continue
+        }
         const currentLease =
           getCurrentCodexLease() ??
           (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
@@ -908,28 +927,30 @@ export async function* withRetry<T, Client = Anthropic>(
             refreshFailure && !refreshFailureIsAuth
               ? 'transient_network'
               : 'account_recovery'
-          if (refreshFailure && !refreshFailureIsAuth) {
-            markPoolAccountQuarantined(
-              accountId,
-              'connection problem during token refresh; retrying',
-              { rerollActive: false },
-            )
-          } else {
-            markPoolAccountStatus(
-              accountId,
-              'dead',
-              'Codex account authentication failed',
-              { rerollActive: false },
-            )
+          if (recoveryCredentialIsCurrent) {
+            if (refreshFailure && !refreshFailureIsAuth) {
+              markPoolAccountQuarantined(
+                accountId,
+                'connection problem during token refresh; retrying',
+                { rerollActive: false },
+              )
+            } else {
+              markPoolAccountStatus(
+                accountId,
+                'dead',
+                'Codex account authentication failed',
+                { rerollActive: false },
+              )
+            }
+            emitCodexDiagnostic({
+              code: 'account.token_refresh.failed',
+              severity: 'warning',
+              recoverable: true,
+              account_ref: accountId,
+              reason: 'Codex account authentication failed and refresh did not recover it',
+              model: retryContext.model,
+            })
           }
-          emitCodexDiagnostic({
-            code: 'account.token_refresh.failed',
-            severity: 'warning',
-            recoverable: true,
-            account_ref: accountId,
-            reason: 'Codex account authentication failed and refresh did not recover it',
-            model: retryContext.model,
-          })
 
           // Fail over the lease ONLY if it still points at the failed account.
           if (currentLease && leaseStillOnFailedAccount && canRotateBeforeAuthBlock) {

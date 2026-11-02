@@ -979,10 +979,12 @@ async function generateWithCodexBackend(
 
   const referenceImage = await loadReferenceImage(input)
   const conversationId = randomUUID()
+  let sentCredential: Pick<ImageAuth, 'accessToken' | 'credentialGeneration'> = auth
   const response = await startCodexCredentialSend(
     auth,
-    authorizedAuth =>
-      globalThis.fetch(CODEX_IMAGE_GENERATIONS_URL, {
+    authorizedAuth => {
+      sentCredential = authorizedAuth
+      return globalThis.fetch(CODEX_IMAGE_GENERATIONS_URL, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${authorizedAuth.accessToken}`,
@@ -1004,7 +1006,8 @@ async function generateWithCodexBackend(
           ),
         ),
         signal,
-      }),
+      })
+    },
     credentialUse,
   )
   const responseText = await response.text()
@@ -1014,7 +1017,7 @@ async function generateWithCodexBackend(
       throw new CodexAccountCapError(auth.accountId)
     }
     if (response.status === 401) {
-      throw new CodexAccountAuthError(auth.accountId, 401)
+      throw new CodexAccountAuthError(auth.accountId, 401, sentCredential)
     }
     const failure = getCodexImageFailure(
       parseCodexImageResponseValues(responseText),

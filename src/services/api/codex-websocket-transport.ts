@@ -123,6 +123,7 @@ export function _setWebSocketFactoryForTest(factory: WebSocketFactory | null): v
 export type CodexWebSocketCredentialContext = Readonly<{
   credential: CodexCredentialHandle
   credentialUse?: CodexCredentialUseOptions
+  onCredentialUse?: (credential: CodexCredentialHandle) => void
 }>
 
 type ResolvedCredentialContext = {
@@ -718,6 +719,7 @@ async function openSession(
         ) {
           throw new Error('WebSocket credential retired before connect')
         }
+        context.onCredentialUse?.(authorizedCredential)
         ws = webSocketFactory(CODEX_WS_URL, {
           headers: {
             ...authHeaders,
@@ -1815,7 +1817,7 @@ async function* _streamTurnAttempt(
   try {
     await startCredentialSend(
       session.credential,
-      () => {
+      authorizedCredential => {
         if (
           sessions.get(conversationId) !== session ||
           session.retireAfterStream ||
@@ -1827,6 +1829,7 @@ async function* _streamTurnAttempt(
         ) {
           throw new Error('WebSocket credential generation is retired')
         }
+        resolvedContext.onCredentialUse?.(authorizedCredential)
         sendTs = Date.now()
         session.phase = 'streaming'
         session.ws.send(JSON.stringify(requestBody))

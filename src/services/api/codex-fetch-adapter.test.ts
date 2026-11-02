@@ -39,6 +39,8 @@ import {
   type CodexPartialStreamFailureV1,
 } from './errorUtils.js'
 import {
+  appendAccount,
+  getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
 } from './codexAccountPool.js'
@@ -470,12 +472,90 @@ describe('codex-fetch-adapter', () => {
         expect((thrown as CodexAccountAuthError).status).toBe(
           testCase.expectedStatus,
         )
+        expect((thrown as CodexAccountAuthError).matchesCredential({ accessToken, credentialGeneration: 1 })).toBe(true)
+        expect((thrown as CodexAccountAuthError).matchesCredential({ accessToken, credentialGeneration: 2 })).toBe(false)
+        expect((thrown as CodexAccountAuthError).matchesCredential({ accessToken: 'new-token', credentialGeneration: 1 })).toBe(false)
+        expect(JSON.stringify(thrown)).not.toContain(accessToken)
       }
     } finally {
       globalThis.fetch = originalFetch
       resetCodexCacheContext()
     }
   })
+
+  test.each(['http-status', 'response.failed'] as const)(
+    'a real late auth response retries the newer login without refreshing it: %s',
+    async failureKind => {
+      const { withRetry } = await import('./withRetry.js')
+      const core = await import('../../codex-core/accounts.js')
+      const accountId = 'acct_relogin_during_request'
+      const oldToken = createAccessToken(accountId)
+      const newToken = oldToken.replace(/signature$/, 'new-signature')
+      const oldCredential = createTestCredentialHandle(oldToken)
+      const newCredential = createCodexCredentialHandle({ ...oldCredential, accessToken: newToken, credentialGeneration: 2 })
+      seedCodexAccountPoolForTest({
+        activeAccountId: accountId,
+        accounts: [{
+          ...oldCredential, source: 'config', status: 'healthy', lastUsedAt: 0,
+          credentialGenerationState: 'lifecycle_bound',
+        }],
+      })
+      const lifecycle = {
+        ...allowTestCredentialLifecycle,
+        read(id: string) {
+          const result = allowTestCredentialLifecycle.read(id)
+          if (result.status !== 'valid') return result
+          return { ...result, record: { ...result.record, credentialGeneration: getPoolStatus().accounts[0]!.credentialGeneration } }
+        },
+      } as CodexCredentialLifecycle
+      const refresh = spyOn(core, 'maybeRefreshAccount').mockRejectedValue(new Error('must not refresh the newer login'))
+      const originalFetch = globalThis.fetch
+      const sends: string[] = []
+      globalThis.fetch = withFetchPreconnect(async (_input, init) => {
+        sends.push(new Headers(init?.headers).get('Authorization') ?? '')
+        if (sends.length === 1) {
+          appendAccount(newCredential, { activate: true })
+          if (failureKind === 'http-status') return new Response('invalid token', { status: 401 })
+          return new Response(`data: ${JSON.stringify({
+            type: 'response.failed',
+            response: { error: { code: 'token_invalidated', message: 'old token invalidated' } },
+          })}\n\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+        }
+        return new Response(
+          `data: ${JSON.stringify({ type: 'response.output_text.delta', delta: 'new login works' })}\n\n` +
+          `data: ${JSON.stringify(completedWsResponse('resp_new_login'))}\n\n`, {
+            headers: { 'Content-Type': 'text/event-stream' },
+          },
+        )
+      })
+      try {
+        for await (const _ of withRetry(
+          async () => createCodexFetchProduction(oldCredential, undefined, {
+            resolveTokensForRequest: async () => ({
+              ...(getPoolStatus().accounts[0]!.credentialGeneration === 1 ? oldCredential : newCredential),
+              source: 'pool',
+            }),
+            credentialUse: { lifecycle },
+          }),
+          async fetch => (await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            body: JSON.stringify({
+              model: 'gpt-5.6-luna',
+              _openaiInstructionAssembly: { instructions: 'Be precise.', inputMessages: [] },
+            }),
+          })).text(),
+          { model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' }, isCodexRequest: true, maxRetries: 2 },
+        )) {}
+        expect(sends).toEqual([`Bearer ${oldToken}`, `Bearer ${newToken}`])
+        expect(refresh).not.toHaveBeenCalled()
+        expect(getPoolStatus().accounts[0]).toMatchObject({ status: 'healthy', credentialGeneration: 2 })
+      } finally {
+        globalThis.fetch = originalFetch
+        refresh.mockRestore()
+        resetCodexCacheContext()
+      }
+    },
+  )
 
   test('classifies header-only auth errors from deferred HTTP fallback', async () => {
     const accountId = 'acct_deferred_header_auth'
@@ -540,6 +620,7 @@ describe('codex-fetch-adapter', () => {
       expect(thrown).toBeInstanceOf(CodexAccountAuthError)
       expect((thrown as CodexAccountAuthError).accountId).toBe(accountId)
       expect((thrown as CodexAccountAuthError).status).toBe(401)
+      expect((thrown as CodexAccountAuthError).matchesCredential({ accessToken, credentialGeneration: 2 })).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
       _setWebSocketFactoryForTest(null)
@@ -3669,8 +3750,9 @@ describe('codex-fetch-adapter', () => {
     ]
 
     try {
-      await expect(
-        createCodexFetch(accessToken, 'conv_ws_token_invalidated')(
+      let thrown: unknown
+      try {
+        await createCodexFetch(accessToken, 'conv_ws_token_invalidated')(
           'https://api.anthropic.com/v1/messages',
           {
             method: 'POST',
@@ -3683,8 +3765,11 @@ describe('codex-fetch-adapter', () => {
               },
             }),
           },
-        ),
-      ).rejects.toBeInstanceOf(CodexAccountAuthError)
+        )
+      } catch (error) { thrown = error }
+      expect(thrown).toBeInstanceOf(CodexAccountAuthError)
+      expect((thrown as CodexAccountAuthError).matchesCredential({ accessToken, credentialGeneration: 2 })).toBe(false)
+      expect((thrown as CodexAccountAuthError).matchesCredential({ accessToken: 'rotated-token', credentialGeneration: 1 })).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
       _setWebSocketFactoryForTest(null)

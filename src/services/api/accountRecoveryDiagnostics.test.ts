@@ -824,6 +824,123 @@ describe('account recovery diagnostics', () => {
     },
   )
 
+  test.each(['new-login', 'same-generation-refresh'] as const)(
+    'a delayed auth failure adopts superseding credentials without refreshing them: %s',
+    async scenario => {
+      const poolModule = await import('./codexAccountPool.js')
+      const rejected = buildPoolAccount({ accountId: 'account-one', credentialGeneration: 1 })
+      seedCodexAccountPoolForTest({ activeAccountId: rejected.accountId, accounts: [rejected] })
+      const refresh = spyOn(codexAccounts, 'maybeRefreshAccount').mockRejectedValue(new Error('must not refresh the newer credential'))
+      let attempts = 0
+      const retry = withRetry(
+        async () => ({}) as never,
+        async () => {
+          if (++attempts === 1) {
+            poolModule.appendAccount({
+              ...rejected,
+              accessToken: 'new-access-token',
+              credentialGeneration: scenario === 'new-login' ? 2 : 1,
+            }, { activate: true })
+            throw new CodexAccountAuthError(rejected.accountId, 401, rejected)
+          }
+          return poolModule.getActiveAccount()?.accessToken
+        },
+        { model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' }, isCodexRequest: true, maxRetries: 2 },
+      )
+      let result
+      for (;;) {
+        const next = await retry.next()
+        if (next.done) { result = next.value; break }
+      }
+      expect(result).toBe('new-access-token')
+      expect(attempts).toBe(2)
+      expect(refresh).not.toHaveBeenCalled()
+      expect(poolModule.getActiveAccount()?.status).toBe('healthy')
+      expect(diagnostics.some(item => item.code === 'account.token_refresh.failed')).toBe(false)
+    },
+  )
+
+  test.each(['transport', 'auth'] as const)(
+    'a failed refresh cannot penalize a login completed during its await: %s',
+    async failure => {
+      const poolModule = await import('./codexAccountPool.js')
+      const rejected = buildPoolAccount({ accountId: 'account-one', credentialGeneration: 1 })
+      seedCodexAccountPoolForTest({ activeAccountId: rejected.accountId, accounts: [rejected] })
+      const refresh = spyOn(codexAccounts, 'maybeRefreshAccount').mockImplementation(async () => {
+        await Promise.resolve()
+        poolModule.appendAccount({ ...rejected, accessToken: 'new-login-token', credentialGeneration: 2 }, { activate: true })
+        if (failure === 'auth') {
+          const { CodexCoreError } = await import('../../codex-core/errors.js')
+          throw new CodexCoreError('auth', 'old refresh rejected')
+        }
+        throw new Error('old refresh transport failure')
+      })
+      let attempts = 0
+      for await (const _ of withRetry(
+        async () => ({}) as never,
+        async () => {
+          if (++attempts === 1) throw new CodexAccountAuthError(rejected.accountId, 401, rejected)
+          return 'ok'
+        },
+        { model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' }, isCodexRequest: true, maxRetries: 2 },
+      )) {}
+      expect(attempts).toBe(2)
+      expect(refresh).toHaveBeenCalledTimes(1)
+      expect(poolModule.getActiveAccount()).toMatchObject({
+        accessToken: 'new-login-token', credentialGeneration: 2, status: 'healthy',
+      })
+      expect(diagnostics.some(item => item.code === 'account.token_refresh.failed')).toBe(false)
+    },
+  )
+
+  test('stale recovery preserves a newer blocked verdict and a matching failure still quarantines', async () => {
+    const poolModule = await import('./codexAccountPool.js')
+    const rejected = buildPoolAccount({ accountId: 'account-one', credentialGeneration: 1 })
+    seedCodexAccountPoolForTest({ activeAccountId: rejected.accountId, accounts: [rejected] })
+    const refresh = spyOn(codexAccounts, 'maybeRefreshAccount').mockImplementation(async () => {
+      poolModule.appendAccount({ ...rejected, accessToken: 'new-login-token', credentialGeneration: 2 }, { activate: true })
+      poolModule.markPoolAccountStatus(rejected.accountId, 'dead', 'new-generation verdict', { rerollActive: false })
+      throw new Error('old refresh transport failure')
+    })
+    const run = async (credential: typeof rejected) => {
+      try {
+        for await (const _ of withRetry(
+          async () => ({}) as never,
+          async () => { throw new CodexAccountAuthError(rejected.accountId, 401, credential) },
+          { model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' }, isCodexRequest: true, maxRetries: 0 },
+        )) {}
+      } catch (error) { expect(error).toBeInstanceOf(CannotRetryError) }
+    }
+    await run(rejected)
+    expect(getPoolStatus().accounts[0]).toMatchObject({ status: 'dead', lastError: 'new-generation verdict', credentialGeneration: 2 })
+    refresh.mockImplementation(async () => { throw new Error('matching refresh transport failure') })
+    const latest = getPoolStatus().accounts[0]!
+    await run(latest)
+    expect(getPoolStatus().accounts[0]).toMatchObject({ status: 'quarantined', credentialGeneration: 2 })
+  })
+
+  test('adopting newer credentials cannot bypass the retry budget', async () => {
+    const rejected = buildPoolAccount({ accountId: 'account-one', credentialGeneration: 1 })
+    seedCodexAccountPoolForTest({
+      activeAccountId: rejected.accountId,
+      accounts: [{ ...rejected, accessToken: 'new-login-token', credentialGeneration: 2 }],
+    })
+    const refresh = spyOn(codexAccounts, 'maybeRefreshAccount').mockRejectedValue(new Error('must not refresh'))
+    let attempts = 0
+    let thrown
+    try {
+      for await (const _ of withRetry(
+        async () => ({}) as never,
+        async () => { attempts++; throw new CodexAccountAuthError(rejected.accountId, 401, rejected) },
+        { model: 'gpt-5.6-luna', thinkingConfig: { type: 'disabled' }, isCodexRequest: true, maxRetries: 1 },
+      )) {}
+    } catch (error) { thrown = error }
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect(attempts).toBe(2)
+    expect(refresh).not.toHaveBeenCalled()
+    expect(getPoolStatus().accounts[0]?.status).toBe('healthy')
+  })
+
   test('a delayed connection error cannot undo a newer manual switch', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'account-one',
@@ -1313,7 +1430,7 @@ describe('account recovery diagnostics', () => {
       for await (const _message of withRetry(
         async () => ({}) as never,
         async () => {
-          throw new CodexAccountAuthError('account-one')
+          throw new CodexAccountAuthError('account-one', 401)
         },
         {
           maxRetries: 0,

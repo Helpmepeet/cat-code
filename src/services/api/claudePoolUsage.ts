@@ -137,7 +137,10 @@ export async function fetchClaudePoolUsage(
     now?: number
     cacheFile?: string
     cachedOnly?: boolean
-    fetchUsage?: (accessToken: string) => Promise<Utilization>
+    fetchUsage?: (
+      accessToken: string,
+      credential: { accountUuid: string; lifecycleGeneration: number },
+    ) => Promise<Utilization>
   } = {},
 ): Promise<Map<string, ClaudeAccountUsage>> {
   const now = options.now ?? Date.now()
@@ -159,7 +162,10 @@ export async function fetchClaudePoolUsage(
       const stale = !entry || now - entry.fetchedAt >= CLAUDE_USAGE_FRESH_MS
       if (!options.cachedOnly && stale && canRead(account, now)) {
         try {
-          const data = await fetchUsage(account.accessToken)
+          const data = await fetchUsage(account.accessToken, {
+            accountUuid: account.accountUuid,
+            lifecycleGeneration: account.lifecycleGeneration ?? 0,
+          })
           entry = {
             credentialKey,
             fetchedAt: now,

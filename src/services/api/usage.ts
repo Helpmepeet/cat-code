@@ -1,4 +1,8 @@
 import axios from 'axios'
+import http from 'node:http'
+import https from 'node:https'
+import { logForDebugging } from '../../utils/debug.js'
+import { withClaudeCredentialGeneration } from './claudeAccountPool.js'
 import { getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
@@ -37,10 +41,38 @@ export type Utilization = {
  */
 export async function fetchUtilizationForToken(
   accessToken: string,
+  credential: { accountUuid: string; lifecycleGeneration: number },
 ): Promise<Utilization> {
   const response = await axios.get<Utilization>(
     `${getOauthConfig().BASE_API_URL}/api/oauth/usage`,
     {
+      // The HTTP adapter may defer after interceptors. Authorize request()
+      // itself, not axios.get() or adapter entry. Do not follow redirects with
+      // credentials outside this boundary.
+      adapter: 'http',
+      maxRedirects: 0,
+      transport: {
+        request(options: http.RequestOptions, callback: (response: http.IncomingMessage) => void) {
+          let started: http.ClientRequest | undefined
+          try {
+            withClaudeCredentialGeneration(
+              credential.accountUuid,
+              credential.lifecycleGeneration,
+              () => {
+                started = (options.protocol === 'https:' ? https : http).request(options, callback)
+                return started
+              },
+            )
+          } catch (error) {
+            // Unlock failure must not turn an already initiated send into a
+            // failed attempt that a caller might repeat.
+            if (!started) throw error
+            logForDebugging(`Claude usage credential lock cleanup failed after send: ${error instanceof Error ? error.message : String(error)}`, { level: 'warn' })
+          }
+          if (!started) throw new Error('Claude usage credential is no longer available')
+          return started
+        },
+      },
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': getClaudeCodeUserAgent(),
