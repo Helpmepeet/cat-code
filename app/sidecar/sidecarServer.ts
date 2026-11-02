@@ -961,6 +961,9 @@ export class SidecarServer {
         } else queueMicrotask(() => {
           this.publishHandoffReady()
           this.scheduleDiagnostics()
+          // Late tool receipts can reopen admission after the turn finalizer's
+          // drain already observed the unresolved-effects fence.
+          this.scheduleBoundaryDrain()
         })
       }
       this.observeTurnEvent(event, turnOwned)

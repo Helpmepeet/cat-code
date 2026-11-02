@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { z } from '../../node_modules/zod/v4'
 import type { AssistantMessage } from '../../src/types/message.js'
 import type { AppState } from '../../src/state/AppStateStore.js'
 import type { Tool } from '../../src/Tool.js'
@@ -30,6 +31,7 @@ const { getTaskOutputPath } = await import('../../src/utils/task/diskOutput.js')
 const { AgentTool } = await import('../../src/tools/AgentTool/AgentTool.js')
 const { isAgentLifecycleOwned } = await import('../../src/tools/AgentTool/agentLifecycleOwnership.js')
 const { BashTool } = await import('../../src/tools/BashTool/BashTool.js')
+const { buildTool } = await import('../../src/Tool.js')
 const { getBuiltInAgents } = await import('../../src/tools/AgentTool/builtInAgents.js')
 const { stopTask } = await import('../../src/tasks/stopTask.js')
 const { getCommandQueueSnapshot, resetCommandQueue } = await import('../../src/utils/messageQueueManager.js')
@@ -322,6 +324,61 @@ test.each((['startup', 'explicit-startup', 'early', 'registered'] as const).flat
     if (spawned?.status === 'running') spawned.kill()
   }
 }, 15_000)
+
+test.each([false, true])('force-send resumes only after a retained effect receipt settles (streaming=%s)', async streaming => {
+  streamingEnabled = streaming
+  const started = deferred()
+  const complete = deferred()
+  let effects = 0
+  let mainCalls = 0
+  let forcedMessages = ''
+  const tool = buildTool({
+    name: 'HeldEffect',
+    inputSchema: z.object({}),
+    description: async () => 'Isolated held effect',
+    prompt: async () => 'Isolated held effect',
+    maxResultSizeChars: 1000,
+    renderToolUseMessage: () => null,
+    async call() {
+      effects++
+      started.resolve()
+      await complete.promise
+      return { data: 'retained effect receipt' }
+    },
+    mapToolResultToToolResultBlockParam: (data, id) => ({ type: 'tool_result', tool_use_id: id, content: data }),
+  })
+  providerSpy = spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages }) {
+    if (++mainCalls === 1) {
+      yield assistant([{ type: 'tool_use', id: 'held-effect', name: 'HeldEffect', input: {} }])
+    } else {
+      forcedMessages = JSON.stringify(messages)
+      yield assistant([{ type: 'text', text: 'handling new direction' }])
+    }
+  })
+  const h = harness([tool])
+  try {
+    h.send({ type: 'app.submit', requestId: 'start', prompt: 'start held effect' })
+    await started.promise
+    await h.force()
+    await waitFor(() => !h.controller.isTurnActive(), 'Interrupted foreground turn did not return')
+    expect(mainCalls).toBe(1)
+    expect(h.controller.canStartQueuedTurn()).toBe(false)
+    expect(getCommandQueueSnapshot().filter(command => command.mode === 'prompt')).toHaveLength(1)
+    complete.resolve()
+    await waitFor(() => mainCalls === 2 && !h.controller.isTurnActive(), 'Settled receipt did not wake the queued prompt')
+    expect(effects).toBe(1)
+    expect(forcedMessages).toContain('retained effect receipt')
+    expect(forcedMessages).toContain('new direction')
+    await flushCurrentTranscriptDurably()
+    const rows = readFileSync(getTranscriptPath(), 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    expect(rows.filter(row => row.type === 'user' && Array.isArray(row.message.content) &&
+      row.message.content.some((block: { type: string; tool_use_id?: string }) =>
+        block.type === 'tool_result' && block.tool_use_id === 'held-effect'))).toHaveLength(1)
+    expect(getCommandQueueSnapshot().filter(command => command.mode === 'prompt')).toHaveLength(0)
+  } finally {
+    complete.resolve()
+  }
+})
 
 test('Bash completion racing force-send returns its output without a duplicate task notification', async () => {
   const command = 'printf "completed-at-cut"'
