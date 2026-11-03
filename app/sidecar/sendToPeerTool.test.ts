@@ -328,9 +328,10 @@ test('the argument descriptions do not send the model to the roster', async () =
   // A model composing a call reads these at the moment it writes the field, and
   // the imperative here beat the prose above it: sessions listed peers before
   // every send, including sends to the peer that created them. The advice
-  // survives where it applies, in the `no_such_peer` result.
+  // survives where it applies, in the `no_such_peer` result. The same pull is
+  // used on purpose for content: the text rule sits where the text is written.
   expect(shape.peers.description).toBe('Peer names to message.')
-  expect(shape.text.description).toBe('What to say.')
+  expect(shape.text.description).toBe('What to say: only what changes what each recipient does next.')
 
   const notFound = await send(
     failing({ code: 'session_not_found', message: 'no row' }).requestHost,
@@ -370,8 +371,12 @@ test('the prompt separates status a peer can check from what it needs to be told
   // status notices woke a finished session for about 643k uncached tokens.
   // Naming only what to skip would also silence the bug reports and hand-offs
   // those sessions depended on, so both halves are pinned.
-  expect(prompt).toContain("Don't message a peer just to report a commit")
+  // 2026-11-03: status also rode inside messages sent for a real reason, so
+  // the skip list applies to every message and results travel as outcomes.
+  expect(prompt).toContain("Don't tell a peer about a commit")
   expect(prompt).toContain('an empty index')
+  expect(prompt).toContain('When you report a result, send the outcome')
+  expect(prompt).toContain('Message it only when you need something from it')
   expect(prompt).toContain('when you find a problem in its work')
   expect(prompt).toContain('reprocess its whole conversation')
   expect(prompt).not.toContain('Share progress')

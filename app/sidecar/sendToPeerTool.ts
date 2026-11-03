@@ -59,7 +59,7 @@ const inputSchema = lazySchema(() =>
     // advice applies.
     peers: z.array(z.string().trim().min(1).max(MAX_HOST_REQUEST_ARG_CHARS))
       .min(1).max(MAX_PEER_SEND_RECIPIENTS).describe('Peer names to message.'),
-    text: z.string().min(1).describe('What to say.'),
+    text: z.string().min(1).describe('What to say: only what changes what each recipient does next.'),
   }),
 )
 
@@ -146,7 +146,7 @@ function describeOutcome(
         to,
         delivery: 'queued',
         outcome: 'queued',
-        summary: `Queued for ${to}. It is already working and reads this at its next step, which may be a while if that step is long. It has not read it yet.`,
+        summary: `Queued for ${to}. It reads this at its next step, which may be a while. If you asked something, wait for the answer before following up.`,
       }
     case 'queued_wake':
       return {
@@ -451,26 +451,30 @@ export function createSendToPeerTool(
         'your own turn for up to half a minute. Don\'t be afraid to send a message,',
         'but send it smart. A smart message prevents the next message: think it',
         'through first, since you may find you don\'t need to ask;',
-        'combine related questions and updates into one; propose an answer rather',
-        'than asking an open question; include what they will need next; and say',
-        'whether you need a reply.',
+        'combine related questions and updates into one, holding any that can wait',
+        'for your next necessary message; propose an answer rather than asking an',
+        'open question; include only what changes what each of them does next; and',
+        'say whether you need a reply.',
         '',
-        'Don\'t message a peer just to report a commit, staged files, an empty index,',
-        'passing tests, or that you left its work alone; it can check or assume those.',
-        'Message it when it is waiting on you, when your change affects something it',
-        'relies on, or when you find a problem in its work. An idle peer has to',
+        'Don\'t tell a peer about a commit, staged files, an empty index, passing',
+        'tests, work still in progress, or that you left its work alone; it can',
+        'check or assume those. When you report a result, send the outcome; test',
+        'counts, hashes and other evidence stay in your tab unless the peer asked',
+        'for them. Message it only when you need something from it, when it is',
+        'waiting on you, when your change affects something it relies on, or',
+        'when you find a problem in its work. An idle peer has to',
         'reprocess its whole conversation to read your message.',
         '',
         'Peers are reached only here; SendMessage reaches subagents you started',
         'and, with Agent Teams on, teammates, never a peer.',
         '',
+        // What "queued" means lives in the queued result itself, where it is
+        // read at the moment the sender decides whether to follow up.
         'Each recipient has its own result, with three possible delivery states.',
-        'If it says the message is queued, it is waiting for them and they have',
-        'not read it yet; a busy peer reads it at its next step, so do not expect',
-        'an answer at once. If it says the message was not delivered, it was not',
-        'delivered: do not carry on as if they have it. If it says the message is',
-        'not confirmed, nobody knows either way and it may still arrive, so ask',
-        'them whether it reached them rather than sending the same text again.',
+        'If it says the message was not delivered, it was not delivered: do not',
+        'carry on as if they have it. If it says the message is not confirmed,',
+        'nobody knows either way and it may still arrive, so ask them whether it',
+        'reached them rather than sending the same text again.',
       ].join('\n')
     },
 

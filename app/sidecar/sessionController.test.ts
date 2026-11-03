@@ -933,7 +933,7 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   // whole guideline, including the create-only-when-asked rule. Coordination
   // is judged by total time lost, so silence is not the goal in itself.
   expect(unnamed).toContain(
-    'Agreeing on a plan once and then working independently often saves more time',
+    'Agree on a plan or contract once, then work independently, without restating it',
   )
   expect(unnamed).toContain('you can go quiet until it messages you')
   expect(unnamed).toContain("The goal isn't silence")
