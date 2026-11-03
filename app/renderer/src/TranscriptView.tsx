@@ -270,8 +270,10 @@ import {
 import {
   logLineClass,
   narrationRowIds,
+  recoveredResponseCopyByRowId,
   resolveToolCardExpanded,
   selectPeekLines,
+  withoutRecoveredRetryNotices,
 } from './transcriptViewModel.js'
 import {
   askUserQuestionTranscriptPresentation,
@@ -800,7 +802,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   )
   const faceRegistry = inheritedFaces ?? ownFaces
   const moveView = useWorkspaceMoveView(workspaceMove, boundaryRows, restorePhase === null && !loadEarlierPending)
-  const displayRows = useMemo(() => withoutReplacedMoveNotice(withoutWorkspaceTools(rows), workspaceMove), [rows, workspaceMove])
+  const recoveredCopies = useMemo(() => recoveredResponseCopyByRowId(rows), [rows])
+  const displayRows = useMemo(() => withoutRecoveredRetryNotices(
+    withoutReplacedMoveNotice(withoutWorkspaceTools(rows), workspaceMove),
+  ), [rows, workspaceMove])
   const moveTransition = useMemo(() => workspaceMove ? {
     id: workspaceMove.id,
     afterFrameId: moveView.anchorFrameId,
@@ -1044,6 +1049,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
                   <LatestPaneFileCardContext.Provider value={latestFileCards}>
                   <TranscriptFileScopeContext.Provider value={fileScopes}>
+                  <RecoveredResponseCopyContext.Provider value={recoveredCopies}>
                     {content}
                     {pendingRetryId && candidate?.resultId === pendingRetryId ? <p role="status">Sending retry…</p> : null}
                     {filePathMenuState ? (
@@ -1056,6 +1062,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                         onClose={closeFilePathMenu}
                       />
                     ) : null}
+                  </RecoveredResponseCopyContext.Provider>
                   </TranscriptFileScopeContext.Provider>
                   </LatestPaneFileCardContext.Provider>
                   </FilePathMenuContext.Provider>
@@ -1742,7 +1749,8 @@ function NestedRowList({
   childGap?: number
 }) {
   const { mode } = useContext(ReasoningLayoutContext)
-  const items = groupUserImages(groupToolRuns(groupDisplayItems(toDisplayItems(rows), mode)))
+  const visibleRows = useMemo(() => withoutRecoveredRetryNotices(rows), [rows])
+  const items = groupUserImages(groupToolRuns(groupDisplayItems(toDisplayItems(visibleRows), mode)))
   const keys = useMemo(() => items.map(displayItemKey), [items])
   const narration = useMemo(() => narrationRowIds(items), [items])
   return (
@@ -2015,6 +2023,7 @@ const REMARK_PLUGINS = [remarkGfm]
  * overflow, so the reply copy chip cannot use the transcript's right gutter.
  */
 const ReplyCopyInsetContext = createContext(false)
+const RecoveredResponseCopyContext = createContext<ReadonlyMap<string, string>>(new Map())
 
 function AssistantProse({
   content,
@@ -2087,6 +2096,7 @@ function AssistantProse({
   // 2026-09-29): only the turn's closing text is a reply worth copying whole.
   const copyable = !streaming && !narration && content.trim().length > 0
   const inset = useContext(ReplyCopyInsetContext)
+  const recoveredCopy = useContext(RecoveredResponseCopyContext).get(sourceId)
   // Component types must survive streamed source updates, or React remounts
   // their text and restarts any arrival fades inside them.
   const components = useMemo(
@@ -2185,7 +2195,7 @@ function AssistantProse({
         }
       />
       {copyable ? (
-        <BubbleCopyChip content={content} subject="response" inset={inset} />
+        <BubbleCopyChip content={recoveredCopy ?? content} subject="response" inset={inset} />
       ) : null}
     </div>
   )

@@ -3,6 +3,49 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
 
+/** Recovery is transient UI, not a permanent seam in the answer. Keep stored rows intact. */
+export function withoutRecoveredRetryNotices(
+  rows: readonly NestedTranscriptRow[],
+): readonly NestedTranscriptRow[] {
+  const recovered = (row: NestedTranscriptRow) =>
+    row.kind === 'system-notice' && row.noticeType === 'api_retry' && row.retry?.state === 'success'
+  return rows.some(recovered) ? rows.filter(row => !recovered(row)) : rows
+}
+
+/** Copy a continued answer together without merging rows or changing code-block provenance. */
+export function recoveredResponseCopyByRowId(
+  rows: readonly NestedTranscriptRow[],
+): ReadonlyMap<string, string> {
+  const copies = new Map<string, string>()
+  const visit = (scope: readonly NestedTranscriptRow[]) => {
+    let prose: Extract<NestedTranscriptRow, { kind: 'assistant-text' }>[] = []
+    let recovered = false
+    const flush = () => {
+      if (recovered && prose.length > 1 && !prose.at(-1)!.isStreaming) {
+        copies.set(prose.at(-1)!.id, prose.map(row => row.content).join('\n\n'))
+      }
+      prose = []
+      recovered = false
+    }
+    for (const row of scope) {
+      if (row.kind === 'assistant-text') {
+        if (prose.length > 0 && prose[0]!.phase !== row.phase) flush()
+        prose.push(row)
+      } else if (row.kind === 'system-notice' && row.noticeType === 'api_retry' && row.retry?.state === 'success') {
+        if (prose.length > 0) recovered = true
+      } else if (recovered && (row.kind === 'thinking' || row.kind === 'redacted-thinking')) {
+        // A continuation can reason before resuming prose. Copy only the answer.
+      } else {
+        flush()
+      }
+      if (row.children.length > 0) visit(row.children)
+    }
+    flush()
+  }
+  visit(rows)
+  return copies
+}
+
 export function findNestedToolUseRow(
   rows: NestedTranscriptRow[],
   id: string,

@@ -13,6 +13,7 @@ import {
   logLineClass,
   narrationRowIds,
   resolveToolCardExpanded,
+  recoveredResponseCopyByRowId,
   groupGrepLines,
   selectPeekLines,
   splitGrepLine,
@@ -4341,9 +4342,16 @@ test('renders curated auth and execution failures without raw errors', () => {
   expect(execution).not.toContain('provider stack trace')
 })
 
-test('settled retry notices omit the retry glyph and metadata', () => {
-  for (const state of ['success', 'failure', 'stopped'] as const) {
-    const content = state === 'success' ? 'Overloaded. Went through on try 3.' : 'Overloaded. Stopped after 3 tries.'
+test('recovered retry notices leave no transcript entry, while failed and stopped retries stay visible', () => {
+  const recovered = render({
+    ...frameSource, id: 'recovered-retry', kind: 'system-notice', noticeType: 'api_retry',
+    content: 'Overloaded. Went through on try 3.',
+    retry: { reason: 'Overloaded', attempt: 2, delayMs: 1000, state: 'success', updateId: 'last-retry', replay: false },
+  })
+  expect(recovered).not.toContain('Overloaded')
+  expect(recovered).not.toContain('data-transcript-entry=')
+  for (const state of ['failure', 'stopped'] as const) {
+    const content = 'Overloaded. Stopped after 3 tries.'
     const html = render({
       ...frameSource, id: 'retry', kind: 'system-notice', noticeType: 'api_retry', content,
       retry: { reason: 'Overloaded', attempt: 2, delayMs: 1000, state, updateId: 'last-retry', replay: false },
@@ -4352,6 +4360,61 @@ test('settled retry notices omit the retry glyph and metadata', () => {
     expect(html).not.toContain('↻')
     expect(html).not.toContain(' in ')
   }
+})
+
+test('nested transcripts also hide recovered retries without hiding unfinished ones', () => {
+  const notice: NestedTranscriptRow = {
+    ...frameSource, id: 'nested-retry', kind: 'system-notice', noticeType: 'api_retry',
+    content: 'Connection interrupted. Went through on try 2.',
+    retry: { reason: 'Connection interrupted', attempt: 1, delayMs: 0, state: 'success', updateId: 'nested-retry', replay: true },
+  }
+  const html = renderExpanded(toolRow({
+    toolName: 'Read', toolFamily: 'read', input: { file_path: '/work/notes.txt' },
+    status: 'success',
+    children: [
+      notice,
+      { ...notice, id: 'waiting-retry', content: 'Overloaded. Retrying.', retry: { ...notice.retry!, state: 'waiting' } },
+    ],
+  }))
+  expect(html).not.toContain('Connection interrupted')
+  expect(html).toContain('Overloaded. Retrying.')
+})
+
+test('recovered response copying respects turn boundaries and omits continuation reasoning', () => {
+  const before: Extract<NestedTranscriptRow, { kind: 'assistant-text' }> = {
+    ...blockSource, id: 'before', kind: 'assistant-text', role: 'assistant', content: 'Preserved part',
+  }
+  const after: Extract<NestedTranscriptRow, { kind: 'assistant-text' }> = {
+    ...before, id: 'after', content: 'Continued part',
+  }
+  const notice: NestedTranscriptRow = {
+    ...frameSource, id: 'retry', kind: 'system-notice', noticeType: 'api_retry',
+    content: 'Connection interrupted. Went through on try 2.',
+    retry: { reason: 'Connection interrupted', attempt: 1, delayMs: 0, state: 'success', updateId: 'retry', replay: false },
+  }
+  expect(recoveredResponseCopyByRowId([before, notice, after]).get('after')).toBe('Preserved part\n\nContinued part')
+  const barriers: NestedTranscriptRow[] = [
+    { ...blockSource, id: 'user', kind: 'user-text', role: 'user', content: 'New question', isReplay: false },
+    { ...frameSource, id: 'result', kind: 'result', subtype: 'success', isError: false, errors: [] },
+    { ...frameSource, id: 'stop', kind: 'turn-stopped' },
+    toolRow({ toolName: 'Read', toolFamily: 'read' }),
+    { ...notice, noticeType: 'account_diagnostic', content: 'Account changed', retry: undefined },
+    ...(['waiting', 'failure', 'stopped'] as const).map(state => ({ ...notice, retry: { ...notice.retry!, state } })),
+  ]
+  for (const barrier of barriers) {
+    expect(recoveredResponseCopyByRowId([before, notice, barrier, after]).size).toBe(0)
+  }
+  const thinking: NestedTranscriptRow = { ...blockSource, id: 'thinking', kind: 'thinking', content: 'Thinking' }
+  expect(recoveredResponseCopyByRowId([before, notice, thinking, after]).get('after')).toBe('Preserved part\n\nContinued part')
+  expect(recoveredResponseCopyByRowId([before, thinking, notice, after]).size).toBe(0)
+  expect(recoveredResponseCopyByRowId([before, notice, { ...after, isStreaming: true }]).size).toBe(0)
+  expect(recoveredResponseCopyByRowId([
+    { ...before, kind: 'assistant-text', phase: 'commentary' }, notice,
+    { ...after, kind: 'assistant-text', phase: 'final_answer' },
+  ]).size).toBe(0)
+  expect(recoveredResponseCopyByRowId([toolRow({
+    toolName: 'Read', toolFamily: 'read', children: [before, notice, after],
+  })]).get('after')).toBe('Preserved part\n\nContinued part')
 })
 
 test('failed turns show one tailored card and Retry only on the latest idle plain text turn', () => {

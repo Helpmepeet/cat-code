@@ -5,6 +5,7 @@ import { ConnectionRecovery } from './SessionPane.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { createTranscriptState, projectServerFrame, selectNestedTranscriptRows } from './transcriptProjector.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../../shared/protocol.js'
+import { TranscriptModeContext } from './transcriptMode.js'
 
 let harness: DomTestHarness
 let previousBridge: typeof window.catcode | undefined
@@ -35,14 +36,17 @@ function readyState() {
   })
 }
 
-test('live retry metadata is a countdown for the next call; settlement removes glyph and countdown', async () => {
+test('live retry metadata is a countdown for the next call; recovery removes the notice', async () => {
   let state = projectServerFrame(readyState(), frame(retry))
   const tree = await harness.mount(<TranscriptView state={state} activeSessionId="session" turnLive />)
   expect(tree.container.textContent).toContain('Overloaded. Retrying.')
   expect(tree.container.textContent).toContain('try 4 in 12s')
   state = projectServerFrame(state, frame({ type: 'result', subtype: 'success', uuid: 'success', is_error: false }))
   await tree.render(<TranscriptView state={state} activeSessionId="session" turnLive={false} />)
-  expect(tree.container.textContent).toContain('Went through on try 4.')
+  expect(tree.container.textContent).not.toContain('Overloaded')
+  expect(tree.container.textContent).not.toContain('Went through')
+  expect(tree.container.querySelectorAll('[data-transcript-entry]')).toHaveLength(1)
+  expect(tree.container.querySelector('[data-row-key*="api_retry"]')).toBeNull()
   expect(tree.container.textContent).not.toContain('↻')
   expect(tree.container.textContent).not.toContain(' in ')
 })
@@ -67,6 +71,77 @@ test('restored retry history never starts a countdown even while the session is 
   const tree = await harness.mount(<TranscriptView state={state} activeSessionId="session" turnLive />)
   expect(tree.container.textContent).toContain('Overloaded. Retrying.')
   expect(tree.container.textContent).not.toContain(' in ')
+})
+
+for (const replay of [false, true]) {
+  test(`${replay ? 'restored' : 'live'} connection notice disappears as soon as response text resumes`, async () => {
+    let state = projectServerFrame(readyState(), frame({
+      type: 'assistant', uuid: 'before-disconnect', parent_tool_use_id: null,
+      message: { id: 'before', role: 'assistant', content: [{ type: 'text', text: 'Before the interruption.' }] },
+    }, replay))
+    state = projectServerFrame(state, frame({
+      ...retry, error_status: null,
+      error: { type: 'assistant_error', error: 'connection_error', message: 'Connection interrupted. Continuing automatically.' },
+    }, replay))
+    const tree = await harness.mount(<TranscriptView state={state} activeSessionId="session" turnLive />)
+    expect(tree.container.textContent).toContain('Connection interrupted. Retrying.')
+    state = projectServerFrame(state, frame({
+      type: 'stream_event', uuid: 'resumed-start',
+      event: { type: 'message_start', message: { id: 'resumed' } },
+    }, replay))
+    state = projectServerFrame(state, frame({
+      type: 'stream_event', uuid: 'resumed-text',
+      event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'After the interruption.' } },
+    }, replay))
+    await tree.render(<TranscriptView state={state} activeSessionId="session" turnLive />)
+    expect(tree.container.textContent).toContain('Before the interruption.')
+    expect(tree.container.textContent).toContain('After the interruption.')
+    expect(tree.container.textContent).not.toContain('Connection interrupted')
+    expect(tree.container.textContent).not.toContain('Went through')
+    expect(tree.container.querySelectorAll('[data-transcript-entry]')).toHaveLength(2)
+    expect(selectNestedTranscriptRows(state, 'session').find(row => row.kind === 'system-notice')).toMatchObject({
+      retry: { state: 'success' },
+    })
+  })
+}
+
+test.each([
+  [false, 'full'], [true, 'full'], [false, 'focused'], [true, 'focused'],
+] as const)('Copy response includes all parts after repeated disconnects (replay=%s, mode=%s)', async (replay, mode) => {
+  const writes: string[] = []
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (text: string) => { writes.push(text) } },
+  })
+  try {
+    let state = readyState()
+    const parts = ['First **part**.', 'Second part.', 'Last part.\n\n```sh\npwd\n```']
+    for (let index = 0; index < parts.length; index++) {
+      if (index > 0) state = projectServerFrame(state, frame({
+        ...retry, uuid: `disconnect-${index}`, attempt: index, error_status: null,
+        error: { type: 'assistant_error', error: 'connection_error', message: 'Connection interrupted. Continuing automatically.' },
+      }, replay))
+      state = projectServerFrame(state, frame({
+        type: 'assistant', uuid: `part-${index}`, parent_tool_use_id: null,
+        message: { id: `reply-${index}`, role: 'assistant', content: [{ type: 'text', text: parts[index] }] },
+      }, replay))
+    }
+    state = projectServerFrame(state, frame({ type: 'result', subtype: 'success', uuid: 'finished', is_error: false }, replay))
+    const tree = await harness.mount(
+      <TranscriptModeContext.Provider value={{ mode, setMode: () => {} }}>
+        <TranscriptView state={state} activeSessionId="session" turnLive={false} />
+      </TranscriptModeContext.Provider>,
+    )
+    expect(tree.container.textContent).not.toContain('Connection interrupted')
+    expect(tree.container.querySelectorAll('[aria-label="Copy response"]')).toHaveLength(1)
+    const copy = tree.container.querySelector<HTMLButtonElement>('[aria-label="Copy response"]')!
+    await act(async () => { copy.click() })
+    expect(writes).toEqual([parts.join('\n\n')])
+  } finally {
+    if (descriptor) Object.defineProperty(navigator, 'clipboard', descriptor)
+    else delete (navigator as unknown as { clipboard?: unknown }).clipboard
+  }
 })
 
 test('Retry sends the failed turn text to the submit callback and disappears while running', async () => {
