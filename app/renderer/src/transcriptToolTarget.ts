@@ -24,6 +24,19 @@ export function peerTargetFragment(value: string): string {
     : oneLine
 }
 
+export function peerSendNames(input: Record<string, unknown>): string[] {
+  const raw = Array.isArray(input['peers']) ? input['peers'] : [input['to']]
+  const seen = new Set<string>()
+  return raw.flatMap(value => {
+    if (typeof value !== 'string' || !value.trim()) return []
+    const name = value.trim()
+    const key = name.toLowerCase()
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [name]
+  })
+}
+
 /**
  * A peer call's target, split so the NAME can read as a name.
  *
@@ -54,8 +67,8 @@ export function derivePeerTargetParts(
     case 'SendToPeer': {
       // Only reached if the speech row is somehow bypassed; a send is drawn as
       // speech, not as a card (`PeerSpeechRow`).
-      const to = str('to')
-      return to === null ? null : { name: to, detail: null, detailMono: false }
+      const names = peerSendNames(input)
+      return names.length === 0 ? null : { name: peerTargetFragment(names.join(', ')), detail: null, detailMono: false }
     }
     case 'ReadPeer': {
       // A call missing its required field still projects before the tool

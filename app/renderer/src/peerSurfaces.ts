@@ -154,8 +154,10 @@ export function peerActivityText(
   }
   switch (toolName) {
     case 'SendToPeer': {
-      const to = str('to')
-      return to === null ? 'sending a message' : `messaging ${to}`
+      const raw = Array.isArray(input['peers']) ? input['peers'] : [input['to']]
+      const names = raw.filter((value): value is string => typeof value === 'string' && value.trim().length > 0).map(value => value.trim())
+      const label = names.join(', ')
+      return label ? `messaging ${label.length > 160 ? `${label.slice(0, 160)}…` : label}` : 'sending a message'
     }
     case 'ReadPeer': {
       const peer = str('peer')

@@ -343,6 +343,9 @@ export const MAX_HOST_REQUEST_FRAMES_PER_WINDOW = 240
  */
 export const MAX_HOST_REQUEST_ARG_CHARS = 256
 
+export const MAX_PEER_SEND_RECIPIENTS = 8
+export const PEER_SEND_BATCH_CONCURRENCY = 3
+
 /**
  * How many times main will re-send one held peer message before giving up on it.
  *

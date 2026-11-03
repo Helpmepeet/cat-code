@@ -2291,13 +2291,30 @@ test('an unconfirmed send is drawn as unconfirmed, not as a failure', () => {
   expect(unconfirmed).not.toContain('ask Bear whether it got it')
 })
 
-/**
- * The guarantee the reader is written around: a result whose shape this row
- * does not recognise is NOT a failure. It draws as an ordinary delivered send,
- * with no state word at all, because the alternative is telling the user a
- * message failed on the strength of an unparsed string.
- */
-test('an unreadable send result renders as delivered with no state word', () => {
+/** A batch associates evidence by name, and cannot infer missing outcomes. */
+test('batch results are matched by identity and retain independent evidence', () => {
+  const result = (results: unknown[], status: 'success' | 'error' | 'cancelled' = 'success') => render(
+    toolRow({
+      toolName: 'SendToPeer', toolFamily: 'other',
+      input: { peers: ['Bear', 'Otter', 'Fox'], text: 'one shared body' }, status,
+      result: { isError: status === 'error', diff: null, content: JSON.stringify({ results }) },
+    }),
+  )
+  const queued = { peer: ' bear ', delivery: 'queued', outcome: 'queued', summary: 'queued' }
+  const refused = { peer: 'Otter', delivery: 'not_delivered', outcome: 'blocked_by_user', summary: 'refused' }
+  const html = result([refused, queued], 'error')
+  expect(html.match(/one shared body/g)).toHaveLength(1)
+  expect(html).toContain('queued')
+  expect(html).toContain('not delivered')
+  expect(html).toContain('not confirmed')
+  const duplicate = result([queued, { ...queued, delivery: 'not_delivered', outcome: 'blocked_by_user' }, refused], 'cancelled')
+  expect(duplicate).not.toContain('queued')
+  expect(duplicate.match(/not confirmed/g)).toHaveLength(2)
+  expect(duplicate).toContain('not delivered')
+  expect(result([{ peer: 'Bear', delivery: 'queued', outcome: 'send_failed' }])).not.toContain('queued')
+})
+
+test('an unreadable send result renders as unconfirmed', () => {
   for (const [id, content] of [
     ['not-json', 'delivered'],
     ['no-delivery-field', JSON.stringify({ to: 'Bear', outcome: 'delivered' })],
@@ -2314,7 +2331,7 @@ test('an unreadable send result renders as delivered with no state word', () => 
       }),
     )
     expect(html).not.toContain('not delivered')
-    expect(html).not.toContain('not confirmed')
+    expect(html).toContain('not confirmed')
     expect(html).not.toContain('sending')
     expect(html).not.toContain('text-tone-danger')
   }
@@ -2372,16 +2389,8 @@ test('a row recorded before the three-valued field keeps its old verdict on repl
   expect(arrived).not.toContain('not confirmed')
 })
 
-/**
- * The tool never throws, so its own refusals all arrive as `success` and are
- * read off the result. An ENGINE-level error is the other thing entirely: the
- * call returned no result of this tool's shape, so there is no delivery field,
- * and nothing was ever put on the wire. Reachable with no exotic setup, e.g. an
- * empty `text` failing the input schema. It used to fall through every arm to
- * the arrival rendering, drawing a message that was never sent as one that
- * landed, in a row whose own contract is that arrival is the only undrawn state.
- */
-test('a send that failed before it left is drawn as not sent, not as delivered', () => {
+/** A tool error alone does not establish which sends were dispatched. */
+test('a tool error without delivery evidence is drawn as unconfirmed', () => {
   const errored = render(
     toolRow({
       toolName: 'SendToPeer',
@@ -2396,8 +2405,8 @@ test('a send that failed before it left is drawn as not sent, not as delivered',
       id: 'engine-error',
     }),
   )
-  expect(errored).toContain('not sent')
-  expect(errored).toContain('text-tone-danger')
+  expect(errored).toContain('not confirmed')
+  expect(errored).not.toContain('text-tone-danger')
 })
 
 test('a send in flight and a stopped send do not read as delivered', () => {

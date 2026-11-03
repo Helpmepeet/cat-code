@@ -29,11 +29,11 @@
 // and parses fine through 4.3.6); it is the typecheck that breaks.
 import { z } from '../../node_modules/zod/v4'
 
-import { buildTool, type ToolDef } from '../../src/Tool.js'
+import { buildTool, type ToolDef, type ToolUseContext } from '../../src/Tool.js'
 import { lazySchema } from '../../src/utils/lazySchema.js'
 import { jsonStringify } from '../../src/utils/slowOperations.js'
 
-import { MAX_PEER_TEXT_BYTES } from '../shared/limits.js'
+import { MAX_HOST_REQUEST_ARG_CHARS, MAX_PEER_SEND_RECIPIENTS, MAX_PEER_TEXT_BYTES, PEER_SEND_BATCH_CONCURRENCY } from '../shared/limits.js'
 import {
   PEER_DELIVER_REFUSAL_REASONS,
   type HostRequestError,
@@ -57,7 +57,8 @@ const inputSchema = lazySchema(() =>
     // including sends to the peer that created them, whose name they already
     // had. The `no_such_peer` result keeps the sentence, which is the moment the
     // advice applies.
-    to: z.string().min(1).describe('Name of the peer to message.'),
+    peers: z.array(z.string().trim().min(1).max(MAX_HOST_REQUEST_ARG_CHARS))
+      .min(1).max(MAX_PEER_SEND_RECIPIENTS).describe('Peer names to message.'),
     text: z.string().min(1).describe('What to say.'),
   }),
 )
@@ -111,6 +112,8 @@ export type SendToPeerResult = {
   outcome: SendToPeerOutcome
   summary: string
 }
+
+type BatchResult = { results: Array<Omit<SendToPeerResult, 'to'> & { peer: string }> }
 
 /**
  * Every outcome the wire can actually carry, as a lookup rather than a type
@@ -281,7 +284,7 @@ function describeError(
         to,
         delivery: 'not_delivered',
         outcome: 'send_failed',
-        summary: `Not delivered. ${error.message}`,
+        summary: `Not delivered. ${error.message.length > MAX_HOST_REQUEST_ARG_CHARS ? `${error.message.slice(0, MAX_HOST_REQUEST_ARG_CHARS)}...` : error.message}`,
       }
     case 'too_large':
       return {
@@ -346,14 +349,42 @@ function creatorIdFor(to: string, identity: PeerIdentity): string | null {
   return nameKey(to) === nameKey(createdByName) ? createdById : null
 }
 
+function uniquePeers(peers: string[]): string[] {
+  const seen = new Set<string>()
+  return peers.map(peer => peer.trim()).filter(peer => {
+    const key = nameKey(peer)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+async function sendOne(to: string, text: string, requestHost: PeerHostRequester, identity: PeerIdentity): Promise<SendToPeerResult> {
+  const expectCreatorId = creatorIdFor(to, identity)
+  try {
+    const answer = await requestHost('peer.deliver', {
+      to, text, ...(expectCreatorId !== null ? { expectCreatorId } : {}),
+    })
+    if (!answer.ok) return describeError(to, answer.error, expectCreatorId !== null)
+    const outcome = DELIVER_OUTCOMES.get(String(answer.value.outcome))
+    if (outcome !== undefined) return describeOutcome(to, outcome)
+  } catch {
+    // An exception can occur after the request was handed off.
+  }
+  return {
+    to, delivery: 'unconfirmed', outcome: 'send_failed',
+    summary: 'Not confirmed. The app did not say what happened. Ask the peer whether it received the message rather than sending it again.',
+  }
+}
+
 export function createSendToPeerTool(
   requestHost: PeerHostRequester = requestPeerHost,
   identity: PeerIdentity = readPeerIdentity(),
 ) {
   return buildTool({
     name: SEND_TO_PEER_TOOL_NAME,
-    searchHint: 'message a peer session in this workspace by name',
-    maxResultSizeChars: 10_000,
+    searchHint: 'message peer sessions in this workspace by name',
+    maxResultSizeChars: 100_000,
 
     get inputSchema(): InputSchema {
       return inputSchema()
@@ -393,11 +424,11 @@ export function createSendToPeerTool(
      * if a second kind ever returns.
      */
     toAutoClassifierInput(input: Input) {
-      return `request to ${input.to}: ${input.text}`
+      return `request to ${uniquePeers(input.peers).join(', ')}: ${input.text}`
     },
 
     async description() {
-      return 'Send a message to a peer in this workspace'
+      return 'Send a message to peers in this workspace'
     },
 
     async prompt() {
@@ -443,46 +474,38 @@ export function createSendToPeerTool(
       ].join('\n')
     },
 
-    async call(input: Input) {
-      const to = input.to.trim()
+    async call(input: Input, context?: ToolUseContext) {
+      const peers = uniquePeers(input.peers)
       // Measured in UTF-8 bytes, matching the bound main enforces, and refused
       // with a result rather than truncated: a silently shortened message is the
       // false belief §7 exists to prevent.
       if (Buffer.byteLength(input.text, 'utf8') > MAX_PEER_TEXT_BYTES) {
         return {
           data: {
-            to,
-            delivery: 'not_delivered',
-            outcome: 'text_too_large' as const,
-            summary: `Not sent. The message is bigger than one message can carry. Send a shorter one, or split it in two.`,
+            results: peers.map(peer => ({
+              peer, delivery: 'not_delivered' as const, outcome: 'text_too_large' as const,
+              summary: 'Not sent. The message is bigger than one message can carry. Send a shorter one, or split it in two.',
+            })),
           },
         }
       }
 
-      const expectCreatorId = creatorIdFor(to, identity)
-      const answer = await requestHost('peer.deliver', {
-        to,
-        text: input.text,
-        ...(expectCreatorId !== null ? { expectCreatorId } : {}),
-      })
-      if (!answer.ok) {
-        return { data: describeError(to, answer.error, expectCreatorId !== null) }
-      }
-      // Checked, not trusted: see `DELIVER_OUTCOMES`. An outcome outside the
-      // closed list is reported as an unconfirmed send, never as a delivery,
-      // and never as a non-delivery either: nothing here knows which it was.
-      const outcome = DELIVER_OUTCOMES.get(String(answer.value.outcome))
-      if (outcome === undefined) {
-        return {
-          data: {
-            to,
-            delivery: 'unconfirmed' as const,
-            outcome: 'send_failed' as const,
-            summary: `Not confirmed. The app did not say what happened to this message, so it is not known whether it reached ${to}.`,
-          },
+      const results: BatchResult['results'] = new Array(peers.length)
+      let next = 0
+      async function worker() {
+        while (next < peers.length) {
+          const index = next++
+          const peer = peers[index]!
+          if (context?.abortController.signal.aborted) {
+            results[index] = { peer, delivery: 'not_delivered', outcome: 'send_failed', summary: 'Not sent. The batch stopped before this send began.' }
+            continue
+          }
+          const { to: _, ...result } = await sendOne(peer, input.text, requestHost, identity)
+          results[index] = { peer, ...result }
         }
       }
-      return { data: describeOutcome(to, outcome) }
+      await Promise.all(Array.from({ length: Math.min(peers.length, PEER_SEND_BATCH_CONCURRENCY) }, () => worker()))
+      return { data: { results } }
     },
 
     mapToolResultToToolResultBlockParam(data, toolUseID) {
@@ -496,5 +519,5 @@ export function createSendToPeerTool(
     renderToolUseMessage() {
       return null
     },
-  } satisfies ToolDef<InputSchema, SendToPeerResult>)
+  } satisfies ToolDef<InputSchema, BatchResult>)
 }

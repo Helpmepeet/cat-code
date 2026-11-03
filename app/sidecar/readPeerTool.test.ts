@@ -859,6 +859,24 @@ test('a notebook edit and an outgoing message are findable by what they named', 
   expect(sent.turns?.length).toBe(1)
 })
 
+test('batch recipients and the shared body are searchable beyond the displayed target', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', 'send an update'),
+    { role: 'assistant', content: [{
+      type: 'tool_use', id: 'batch', name: 'SendToPeer',
+      input: { peers: ['A'.repeat(130), 'LaterRecipient'], text: 'a distant body fragment' },
+    }] },
+  ])
+  const fake = listing(peerRow('Bear', engineSessionId))
+  const tail = await read(fake.requestHost, { peer: 'Bear' })
+  expect(whole(tail)).not.toContain('LaterRecipient')
+  for (const query of ['LaterRecipient', 'distant body fragment']) {
+    const found = await read(fake.requestHost, { peer: 'Bear', query })
+    expect(found.turns?.length).toBe(1)
+  }
+})
+
 test('a secret in a tool target is removed before the cap, never fragmented by it', async () => {
   const workspace = isolatedWorkspace()
   // The key starts at character 110 of the command and runs past the 120-char

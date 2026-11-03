@@ -423,6 +423,11 @@ function targetFieldValues(name: string, input: unknown): string[] {
   const parsed = toolInputSchema().safeParse(input)
   if (!parsed.success) return []
   const values: string[] = []
+  if (name === 'SendToPeer' && Array.isArray(parsed.data['peers'])) {
+    for (const peer of parsed.data['peers']) {
+      if (typeof peer === 'string' && peer.length > 0) values.push(peer)
+    }
+  }
   for (const field of fields) {
     const value = parsed.data[field]
     if (typeof value === 'string' && value.length > 0) values.push(value)

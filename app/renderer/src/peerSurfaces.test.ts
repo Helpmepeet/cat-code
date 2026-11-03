@@ -6,7 +6,18 @@ import {
   announceCardView,
   isPeerSpeechCall,
   peerToolPresentation,
+  peerActivityText,
 } from './peerSurfaces.js'
+import { derivePeerTargetParts } from './transcriptToolTarget.js'
+
+test('send activity and fallback targets support bounded plural and legacy names', () => {
+  expect(peerActivityText('SendToPeer', { peers: ['Bear', 'Otter'] })).toBe('messaging Bear, Otter')
+  expect(peerActivityText('SendToPeer', { to: 'Bear' })).toBe('messaging Bear')
+  const input = { peers: ['A'.repeat(200), 'Otter'] }
+  expect(peerActivityText('SendToPeer', input)!.length).toBeLessThan(180)
+  const target = derivePeerTargetParts('SendToPeer', () => null, input)
+  expect(target?.name?.length).toBeLessThanOrEqual(161)
+})
 
 describe('peerToolPresentation', () => {
   /**

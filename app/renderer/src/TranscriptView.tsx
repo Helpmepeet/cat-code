@@ -190,7 +190,7 @@ import {
   type FaceAxes,
 } from './agentFace.js'
 import { AgentFace } from './AgentChrome.js'
-import { deriveTarget, derivePeerTargetParts, peerTargetFragment, toolCardFilePath, displayFilePath, toolSearchCardView, type PeerTargetParts } from './transcriptToolTarget.js'
+import { deriveTarget, derivePeerTargetParts, peerTargetFragment, peerSendNames, toolCardFilePath, displayFilePath, toolSearchCardView, type PeerTargetParts } from './transcriptToolTarget.js'
 import type { LeaseSnapshot } from '../../shared/protocol.js'
 import { AgentPanelContext, AgentRevealContext, containsAgentTool, type AgentRevealRequest } from './transcriptAgentReveal.js'
 import { agentToolSourceOf, agentActivityOf, agentProgressBadge, agentModelOf, agentAccountLabel } from './transcriptAgent.js'
@@ -3457,13 +3457,31 @@ function AskUserQuestionAnswerRow({
  */
 function peerSendDelivery(
   row: ToolUseNestedRow,
+  peer: string,
 ): 'queued' | 'delivered' | 'not_delivered' | 'unconfirmed' | null {
   const content = row.result?.content
   if (typeof content !== 'string' || content.length === 0) return null
   try {
     const parsed: unknown = JSON.parse(content)
     if (typeof parsed !== 'object' || parsed === null) return null
-    const fields = parsed as Record<string, unknown>
+    let fields = parsed as Record<string, unknown>
+    if (Array.isArray(row.input['peers'])) {
+      if (!Array.isArray(fields['results'])) return null
+      const matches = fields['results'].filter((entry: unknown) =>
+        typeof entry === 'object' && entry !== null &&
+        typeof (entry as Record<string, unknown>)['peer'] === 'string' &&
+        ((entry as Record<string, unknown>)['peer'] as string).trim().toLowerCase() === peer.trim().toLowerCase(),
+      )
+      if (matches.length !== 1) return null
+      fields = matches[0] as Record<string, unknown>
+      if (typeof fields['summary'] !== 'string') return null
+      const outcome = fields['outcome']
+      const delivery = fields['delivery']
+      const knownRefusals = ['blocked_by_user', 'loop_stopped', 'chain_too_long', 'too_many_messages', 'already_sent', 'peer_queue_full', 'peer_did_not_start', 'peer_did_not_take_it', 'no_such_peer', 'creator_reissued', 'text_too_large', 'send_failed']
+      if (!((delivery === 'queued' && (outcome === 'queued' || outcome === 'queued_on_start')) ||
+        (delivery === 'not_delivered' && typeof outcome === 'string' && knownRefusals.includes(outcome)) ||
+        (delivery === 'unconfirmed' && outcome === 'send_failed'))) return null
+    }
     const value = fields['delivery']
     if (
       value === 'queued' ||
@@ -3509,62 +3527,29 @@ function peerSendDelivery(
  * nobody established.
  */
 function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
-  const to = typeof row.input['to'] === 'string' ? row.input['to'] : null
+  const peers = peerSendNames(row.input)
   const text = typeof row.input['text'] === 'string' ? row.input['text'] : ''
-  const delivery = peerSendDelivery(row)
-  // An engine-level error is the one case the tool's own result cannot speak
-  // for: the call never returned a result of its documented shape, so there is
-  // no delivery field to read. It is a confirmed non-send (the frame was never
-  // built), and it is reachable without anything exotic, e.g. an empty `text`
-  // failing the input schema. Left out, it fell through every arm below to the
-  // arrival rendering, drawing a message that was never sent as one that landed.
-  const failed = delivery === 'not_delivered' || row.status === 'error'
-  const state =
-    row.status === 'cancelled'
-      ? 'stopped'
-      : row.status === 'error'
-        ? 'not sent'
-        : failed
-          ? 'not delivered'
-          : delivery === 'unconfirmed'
-            ? 'not confirmed'
-            : delivery === null && row.result == null
-              ? 'sending'
-              : null
   return (
     <div className="flex w-full gap-2.5">
       <span
-        className={`w-4 shrink-0 text-center text-[17px] leading-[1.35] ${
-          failed
-            ? 'text-tone-danger'
-            : state === null
-              ? to
-                ? PEER_TONE_CLASS
-                : 'text-text-ghost'
-              : 'text-text-ghost'
-        }`}
+        className={`w-4 shrink-0 text-center text-[17px] leading-[1.35] ${peers.length ? PEER_TONE_CLASS : 'text-text-ghost'}`}
         aria-hidden
       >
         &ldquo;
       </span>
       <div className="min-w-0 flex-1">
         <div className="text-[11px] text-text-subtle">
-          {to ? (
-            <>
-              <span className="font-normal">To </span>
-              <PeerNameLink name={to} />
-            </>
-          ) : (
-            'To peer'
-          )}
-          {state === null ? null : (
-            <span
-              className={failed ? 'text-tone-danger' : 'text-text-subtle/70'}
-            >
-              {' · '}
-              {state}
-            </span>
-          )}
+          {peers.length === 0 ? 'To peer' : <><span className="font-normal">To </span>{peers.map((peer, index) => {
+            const delivery = peerSendDelivery(row, peer)
+            const state = delivery === 'not_delivered' ? 'not delivered'
+              : delivery === 'unconfirmed' ? 'not confirmed'
+              : delivery === 'queued' || delivery === 'delivered' ? 'queued'
+              : row.result == null && row.status === 'pending' ? 'sending' : 'not confirmed'
+            return <Fragment key={peer.toLowerCase()}>
+              {index > 0 ? ', ' : null}<PeerNameLink name={peer} />
+              <span className={delivery === 'not_delivered' ? 'text-tone-danger' : 'text-text-subtle/70'}>{' · '}{state}</span>
+            </Fragment>
+          })}</>}
         </div>
         <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-muted">
           {text}
