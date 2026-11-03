@@ -39,6 +39,7 @@ import { maybeRefreshAccount } from '../../codex-core/accounts.js'
 import { SessionAccountRouteUnavailableError } from './sessionAccountRouting.js'
 import { CodexCoreError } from '../../codex-core/errors.js'
 import type { CodexLease } from './codexAccountLeaseManager.js'
+import { readClaudeAccountAuthority } from './claudeAccountAuthority.js'
 
 function syncMainLeaseActiveAccount(lease: CodexLease | undefined): void {
   if (lease?.ownerType === 'main') {
@@ -99,8 +100,15 @@ type ClaudeOAuthClientCredential = Readonly<{
   accessToken: string
   accountUuid?: string
   credentialGeneration?: number | null
+  credentialRevision?: number
 }>
 const claudeOAuthClientCredentials = new WeakMap<object, ClaudeOAuthClientCredential>()
+function claudeCredentialRevisionKey(credential: ClaudeOAuthClientCredential): string | undefined {
+  return credential.accountUuid && credential.credentialGeneration != null &&
+    credential.credentialRevision !== undefined
+    ? JSON.stringify([credential.accountUuid, credential.credentialGeneration, credential.credentialRevision])
+    : undefined
+}
 
 /** A delayed auth failure belongs to the client's credential, not current selection. */
 export function recordClaudeOAuthClientCredential(
@@ -116,6 +124,22 @@ export function recordClaudeOAuthClientCredential(
 }
 
 const abortError = () => new APIUserAbortError()
+
+/** Stop this waiter without cancelling shared credential preparation or repair. */
+function waitForClientPreparation<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(new APIUserAbortError())
+    if (signal.aborted) {
+      // Attach rejection handling even when the caller was already cancelled.
+      work.catch(() => {})
+      abort()
+      return
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
+}
 
 const DEFAULT_MAX_RETRIES = 5
 const FLOOR_OUTPUT_TOKENS = 3000
@@ -411,6 +435,9 @@ export async function* withRetry<T, Client = Anthropic>(
   }
   let client: Client | null = null
   let failedClaudeCredential: ClaudeOAuthClientCredential | undefined
+  let claudeRecovery: Awaited<ReturnType<typeof recoverOAuth401Error>> | undefined
+  const rejectedClaudeTokens = new Set<string>()
+  const rejectedClaudeRevisions = new Set<string>()
   let consecutive529Errors = options.initialConsecutive529Errors ?? 0
   let lastError: unknown
   let persistentAttempt = 0
@@ -573,12 +600,7 @@ export async function* withRetry<T, Client = Anthropic>(
               isOAuthTokenRevokedError(lastError))
           ) {
             const rejectedCredential = failedClaudeCredential
-            const recovery = rejectedCredential
-              ? await recoverOAuth401Error(
-                  rejectedCredential.accessToken,
-                  rejectedCredential.accountUuid,
-                )
-              : undefined
+            const recovery = claudeRecovery
             if (recovery?.status === 'persistence_pending') {
               emitClaudeDiagnostic({
                 code: 'account.token_refresh.failed',
@@ -592,7 +614,15 @@ export async function* withRetry<T, Client = Anthropic>(
             const failedAccount = rejectedCredential?.accountUuid
               ? getClaudePoolStatus().accounts.find(account =>
                   account.accountUuid === rejectedCredential.accountUuid &&
-                  account.accessToken === rejectedCredential.accessToken)
+                  account.accessToken === rejectedCredential.accessToken &&
+                  (rejectedCredential.credentialRevision !== undefined
+                    ? (() => {
+                        const current = readClaudeAccountAuthority(account.accountUuid)
+                        return 'handle' in current &&
+                          current.handle.generation === rejectedCredential.credentialGeneration &&
+                          current.handle.revision === rejectedCredential.credentialRevision
+                      })()
+                    : getClaudeCredentialGeneration(account.accountUuid) === rejectedCredential.credentialGeneration))
               : undefined
 
             if (recovery?.status === 'reauth_required' && failedAccount) {
@@ -633,13 +663,20 @@ export async function* withRetry<T, Client = Anthropic>(
               }
             }
           }
-          client = await getClient()
+          if (options.signal?.aborted) throw new APIUserAbortError()
+          client = await waitForClientPreparation(getClient(), options.signal)
         }
 
+        if (options.signal?.aborted) throw new APIUserAbortError()
         const requestCredential = client !== null &&
           (typeof client === 'object' || typeof client === 'function')
           ? claudeOAuthClientCredentials.get(client)
           : undefined
+        if (options.isClaudeOAuthRequest && failedClaudeCredential &&
+            (!requestCredential || rejectedClaudeTokens.has(requestCredential.accessToken) ||
+              rejectedClaudeRevisions.has(claudeCredentialRevisionKey(requestCredential) ?? ''))) {
+          throw new CannotRetryError(lastError, retryContext)
+        }
         if (requestCredential?.accountUuid &&
             (requestCredential.credentialGeneration === null ||
               getClaudeCredentialGeneration(requestCredential.accountUuid) !== requestCredential.credentialGeneration)) {
@@ -664,8 +701,33 @@ export async function* withRetry<T, Client = Anthropic>(
         }
       })
     } catch (caughtError) {
+      if (caughtError instanceof APIUserAbortError) throw caughtError
       const error = unwrapCodexAccountError(caughtError)
       lastError = error
+      // Repair credential state even when retry policy forbids resending this
+      // request. Never infer the failed identity from the current selection.
+      if (options.isClaudeOAuthRequest && failedClaudeCredential &&
+          ((error instanceof APIError && error.status === 401) ||
+            isOAuthTokenRevokedError(error)) &&
+          !rejectedClaudeTokens.has(failedClaudeCredential.accessToken)) {
+        rejectedClaudeTokens.add(failedClaudeCredential.accessToken)
+        const rejectedRevision = claudeCredentialRevisionKey(failedClaudeCredential)
+        if (rejectedRevision) rejectedClaudeRevisions.add(rejectedRevision)
+        claudeRecovery = await waitForClientPreparation(recoverOAuth401Error(
+          failedClaudeCredential.accessToken,
+          failedClaudeCredential.accountUuid,
+          failedClaudeCredential.accountUuid &&
+          failedClaudeCredential.credentialGeneration != null &&
+          failedClaudeCredential.credentialRevision !== undefined
+            ? {
+                accountId: failedClaudeCredential.accountUuid,
+                generation: failedClaudeCredential.credentialGeneration,
+                revision: failedClaudeCredential.credentialRevision,
+              }
+            : undefined,
+        ), options.signal)
+        if (options.signal?.aborted) throw new APIUserAbortError()
+      }
       if (error instanceof SessionAccountRouteUnavailableError) {
         throw new CannotRetryError(error, retryContext)
       }

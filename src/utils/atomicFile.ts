@@ -186,27 +186,65 @@ function tempPathFor(
   )
 }
 
-async function syncDirectoryBestEffort(directory: string): Promise<void> {
+/**
+ * Publication succeeded, but its directory entry may not survive a crash.
+ * Callers must reconcile the published file rather than repeat a one-shot
+ * operation (such as redeeming a refresh token).
+ */
+export class AtomicWriteDurabilityUncertainError extends Error {
+  readonly code = 'ATOMIC_WRITE_DURABILITY_UNCERTAIN'
+  readonly published = true
+
+  constructor(
+    readonly destination: string,
+    cause: unknown,
+  ) {
+    super(`Published ${destination}, but directory sync failed`, { cause })
+    this.name = 'AtomicWriteDurabilityUncertainError'
+  }
+}
+
+function isDirectorySyncUnsupported(error: unknown): boolean {
+  // Do not treat permission, device I/O, or resource failures as capabilities.
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return (
+    code === 'EINVAL' ||
+    code === 'ENOTSUP' ||
+    code === 'EOPNOTSUPP' ||
+    code === 'ENOSYS'
+  )
+}
+
+async function syncDirectoryBestEffort(filePath: string): Promise<void> {
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
-    handle = await open(directory, 'r')
+    handle = await open(dirname(filePath), 'r')
     await handle.sync()
-  } catch {
-    // Directory fsync is unavailable on some supported filesystems.
+  } catch (error) {
+    if (!isDirectorySyncUnsupported(error)) {
+      throw new AtomicWriteDurabilityUncertainError(filePath, error)
+    }
   } finally {
     await handle?.close().catch(() => {})
   }
 }
 
-function syncDirectoryBestEffortSync(directory: string): void {
+function syncDirectoryBestEffortSync(filePath: string): void {
   let descriptor: number | undefined
   try {
-    descriptor = openSync(directory, 'r')
+    descriptor = openSync(dirname(filePath), 'r')
     fsyncSync(descriptor)
-  } catch {
-    // Directory fsync is unavailable on some supported filesystems.
+  } catch (error) {
+    if (!isDirectorySyncUnsupported(error)) {
+      throw new AtomicWriteDurabilityUncertainError(filePath, error)
+    }
   } finally {
-    if (descriptor !== undefined) closeSync(descriptor)
+    if (descriptor !== undefined) {
+      // Closing a read-only directory must not mask the sync failure.
+      try {
+        closeSync(descriptor)
+      } catch {}
+    }
   }
 }
 
@@ -254,7 +292,7 @@ export async function writeFileAtomicDurable(
     await unlink(tempPath).catch(() => {})
     throw error
   }
-  await syncDirectoryBestEffort(dirname(filePath))
+  await syncDirectoryBestEffort(filePath)
 }
 
 export async function writeFileAtomicDurableIfAbsent(
@@ -276,7 +314,7 @@ export async function writeFileAtomicDurableIfAbsent(
       }
       throw error
     }
-    await syncDirectoryBestEffort(dirname(filePath))
+    await syncDirectoryBestEffort(filePath)
     return true
   } finally {
     // link() leaves the temp under a second name, so it always needs removing.
@@ -320,7 +358,7 @@ export async function writeFileAtomicDurableIfContentMatches(
     if (currentContent !== expectedContent) return 'conflict'
 
     await rename(tempPath, filePath)
-    await syncDirectoryBestEffort(dirname(filePath))
+    await syncDirectoryBestEffort(filePath)
     return 'written'
   } finally {
     // A no-op after a successful rename; removes the staged file on conflict.
@@ -357,5 +395,5 @@ export function writeFileAtomicDurableSync(
     } catch {}
     throw error
   }
-  syncDirectoryBestEffortSync(dirname(filePath))
+  syncDirectoryBestEffortSync(filePath)
 }

@@ -2342,13 +2342,14 @@ export async function bridgeMain(args: string[]): Promise<void> {
   const machineName = hostname()
   const bridgeId = randomUUID()
 
-  const { handleOAuth401Error } = await import('../utils/auth.js')
+  const { handleOAuth401Error, captureClaudeOAuthRequestIdentity } = await import('../utils/auth.js')
   const api = createBridgeApiClient({
     baseUrl,
     getAccessToken: getBridgeAccessToken,
     runnerVersion: MACRO.VERSION,
     onDebug: logForDebugging,
     onAuth401: handleOAuth401Error,
+    captureAuthIdentity: captureClaudeOAuthRequestIdentity,
     getTrustedDeviceToken,
   })
 
@@ -2792,7 +2793,8 @@ export type HeadlessBridgeOpts = {
   sessionTimeoutMs?: number
   createSessionOnStart: boolean
   getAccessToken: () => string | undefined
-  onAuth401: (failedToken: string) => Promise<boolean>
+  onAuth401: (failedToken: string, identity?: import('./bridgeApi.js').BridgeOAuthIdentity) => Promise<boolean>
+  captureAuthIdentity?: (accessToken: string) => import('./bridgeApi.js').BridgeOAuthIdentity | null
   log: (s: string) => void
 }
 
@@ -2899,6 +2901,7 @@ export async function runBridgeHeadless(
     runnerVersion: MACRO.VERSION,
     onDebug: log,
     onAuth401: opts.onAuth401,
+    captureAuthIdentity: opts.captureAuthIdentity,
     getTrustedDeviceToken,
   })
 

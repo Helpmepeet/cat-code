@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { ClaudeCredentialHandle } from '../services/api/claudeAccountAuthority.js'
 
 import { debugBody, extractErrorDetail } from './debugUtils.js'
 import {
@@ -8,6 +9,8 @@ import {
   type PermissionResponseEvent,
   type WorkResponse,
 } from './types.js'
+
+export type BridgeOAuthIdentity = ClaudeCredentialHandle
 
 type BridgeApiDeps = {
   baseUrl: string
@@ -22,7 +25,9 @@ type BridgeApiDeps = {
    * (~1300 modules). Daemon callers using env-var tokens omit this — their
    * tokens don't refresh, so 401 goes straight to BridgeFatalError.
    */
-  onAuth401?: (staleAccessToken: string) => Promise<boolean>
+  onAuth401?: (staleAccessToken: string, identity?: BridgeOAuthIdentity) => Promise<boolean>
+  /** Required for repair: token-only handlers cannot bind a failed login/revision. */
+  captureAuthIdentity?: (accessToken: string) => BridgeOAuthIdentity | null
   /**
    * Returns the trusted device token to send as X-Trusted-Device-Token on
    * bridge API calls. Bridge sessions have SecurityTier=ELEVATED on the
@@ -108,23 +113,31 @@ export function createBridgeApiClient(deps: BridgeApiDeps): BridgeApiClient {
     context: string,
   ): Promise<{ status: number; data: T }> {
     const accessToken = resolveAuth()
+    const captured = deps.captureAuthIdentity?.(accessToken)
+    const identity = captured ? Object.freeze({ ...captured }) : null
     const response = await fn(accessToken)
 
     if (response.status !== 401) {
       return response
     }
 
-    if (!deps.onAuth401) {
-      debug(`[bridge:api] ${context}: 401 received, no refresh handler`)
+    if (!deps.onAuth401 || !identity) {
+      debug(`[bridge:api] ${context}: 401 received, no bound refresh handler`)
       return response
     }
 
     // Attempt token refresh — matches the pattern in withRetry.ts
     debug(`[bridge:api] ${context}: 401 received, attempting token refresh`)
-    const refreshed = await deps.onAuth401(accessToken)
+    const refreshed = await deps.onAuth401(accessToken, identity)
     if (refreshed) {
       debug(`[bridge:api] ${context}: Token refreshed, retrying request`)
       const newToken = resolveAuth()
+      const successor = deps.captureAuthIdentity?.(newToken)
+      if (!successor || successor.accountId !== identity.accountId ||
+          successor.generation !== identity.generation || successor.revision <= identity.revision) {
+        debug(`[bridge:api] ${context}: No same-login successor available`)
+        return response
+      }
       const retryResponse = await fn(newToken)
       if (retryResponse.status !== 401) {
         return retryResponse

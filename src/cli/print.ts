@@ -207,7 +207,7 @@ import {
 import { getLastCacheSafeParams } from 'src/utils/forkedAgent.js'
 import { getAccountInformation } from 'src/utils/auth.js'
 import { OAuthService } from 'src/services/oauth/index.js'
-import { installOAuthTokens } from 'src/cli/handlers/auth.js'
+import { installOAuthTokensAfterPolicyValidation, type OAuthLoginInstallationResult } from 'src/cli/handlers/auth.js'
 import { getAPIProvider } from 'src/utils/model/providers.js'
 import type { HookCallbackMatcher } from 'src/types/hooks.js'
 import { AwsAuthStatusManager } from 'src/utils/awsAuthStatusManager.js'
@@ -454,6 +454,36 @@ type PromptValue = string | ContentBlockParam[]
 
 function toBlocks(v: PromptValue): ContentBlockParam[] {
   return typeof v === 'string' ? [{ type: 'text', text: v }] : v
+}
+
+export type ClaudeOAuthControlInstallation = {
+  flow: Promise<OAuthLoginInstallationResult>
+  retry?: () => Promise<OAuthLoginInstallationResult>
+  committedNotified?: boolean
+}
+
+/** A repeated completion request retries only captured local installation. */
+export async function completeClaudeOAuthControlInstallation(
+  attempt: ClaudeOAuthControlInstallation,
+  onCommitted: () => void,
+): Promise<void> {
+  if (attempt.retry) {
+    const retry = attempt.retry
+    attempt.retry = undefined
+    attempt.flow = retry()
+  }
+  const result = await attempt.flow
+  if (result.valid === false) throw new Error(result.message)
+  if (result.installation !== 'committed') {
+    attempt.retry = result.retry
+    throw new Error(result.installation === 'persistence_pending'
+      ? 'Sign-in is not fully saved. Request completion again to retry saving locally without signing in again.'
+      : result.message)
+  }
+  if (!attempt.committedNotified) {
+    attempt.committedNotified = true
+    onCommitted()
+  }
 }
 
 /**
@@ -2995,14 +3025,12 @@ export function runHeadlessStreaming(
   const oauthAuthPromises = new Map<string, Promise<void>>()
 
   // In-flight Anthropic OAuth flow (claude_authenticate). Single-slot: a
-  // second authenticate request cleans up the first. The service holds the
-  // PKCE verifier + localhost listener; the promise settles after
-  // installOAuthTokens — after it resolves, the in-process memoized token
-  // cache is already cleared and the next API call picks up the new creds.
-  let claudeOAuth: {
+  // second authenticate request cleans up the first. Keep a pending installation
+  // until completion is requested again so retries never repeat OAuth.
+  let claudeOAuth: (ClaudeOAuthControlInstallation & {
     service: OAuthService
-    flow: Promise<void>
-  } | null = null
+    loginWithClaudeAi: boolean
+  }) | null = null
 
   // This is essentially spawning a parallel async task- we have two
   // running in parallel- one reading from stdin and adding to the
@@ -3775,25 +3803,12 @@ export function runHeadlessStreaming(
                 skipBrowserOpen: true,
               },
             )
-            .then(async tokens => {
-              // installOAuthTokens: performLogout (clear stale state) →
-              // store profile → saveOAuthTokensIfNeeded → clearOAuthTokenCache
-              // → clearAuthRelatedCaches. After this resolves, the memoized
-              // getClaudeAIOAuthTokens in this process is invalidated; the
-              // next API call re-reads keychain/file and works. No respawn.
-              await installOAuthTokens(tokens)
-              logEvent('tengu_oauth_success', {
-                loginWithClaudeAi: loginWithClaudeAi ?? true,
-              })
-            })
+            .then(tokens => installOAuthTokensAfterPolicyValidation(tokens))
             .finally(() => {
               service.cleanup()
-              if (claudeOAuth?.service === service) {
-                claudeOAuth = null
-              }
             })
 
-          claudeOAuth = { service, flow }
+          claudeOAuth = { service, flow, loginWithClaudeAi: loginWithClaudeAi ?? true }
 
           // Attach the rejection handler before awaiting so a synchronous
           // startOAuthFlow failure doesn't surface as an unhandled rejection.
@@ -3848,10 +3863,14 @@ export function runHeadlessStreaming(
             // Detach the await — the stdin reader is serial and blocking
             // here deadlocks claude_oauth_wait_for_completion: flow may
             // only resolve via a future claude_oauth_callback on stdin,
-            // which can't be read while we're parked. Capture the binding;
-            // claudeOAuth is nulled in flow's own .finally.
-            const { flow } = claudeOAuth
-            void flow.then(
+            // which can't be read while we're parked. Capture this attempt,
+            // including its same-operation local retry, not a later OAuth flow.
+            const attempt = claudeOAuth
+            void completeClaudeOAuthControlInstallation(attempt, () => {
+              logEvent('tengu_oauth_success', {
+                loginWithClaudeAi: attempt.loginWithClaudeAi,
+              })
+            }).then(
               () => {
                 const accountInfo = getAccountInformation()
                 sendControlResponseSuccess(message, {

@@ -43,7 +43,7 @@ import {
   optional,
 } from './narrow.js'
 
-export const ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION = 1
+export const ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION = 2
 
 /**
  * Reject any NDJSON result record larger than this BEFORE parse (parse-DoS
@@ -356,11 +356,19 @@ function parseAnthropicAccountStatus(
     hasVaultProfile: isBoolean,
     subscriptionType: isStringOrNull,
     loginStale: optional(isBoolean),
+    loginGeneration: optional(isSafeGeneration),
+    credentialRevision: optional(isSafeGeneration),
+    boundLoginGeneration: optional(isSafeGeneration),
+    credentialHealth: optional(oneOf(['ready', 'persistence_pending', 'refresh_uncertain', 'sign_in_required'] as const)),
     usageFiveHour: optional(isNonNegativeFiniteNumberOrNull),
     usageFiveHourResetAt: optional(isNonNegativeFiniteNumberOrNull),
     usageWeekly: optional(isNonNegativeFiniteNumberOrNull),
     usageWeeklyResetAt: optional(isNonNegativeFiniteNumberOrNull),
   })
+}
+
+function isSafeGeneration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 function isBoundedText(value: unknown): value is string {

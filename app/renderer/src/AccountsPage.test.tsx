@@ -269,8 +269,9 @@ test('an unhealthy active Anthropic account shows health over plan decoration', 
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
   expect(html).toContain('bg-tone-danger')
-  expect(html).toContain('>dead<')
+  expect(html).toContain('Sign-in is no longer valid. Sign in again.')
   expect(html).not.toContain('>max<')
+  expect(html).not.toContain('subscription expired')
 })
 
 /* ── (d) Delete dispatches account.delete with confirm:true ── */

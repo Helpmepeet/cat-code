@@ -106,7 +106,10 @@ export function shouldShowAnthropicPoolAccount(
 ): boolean {
   return (
     provider === 'anthropic' &&
-    snapshot?.anthropicSubscriptionActive === true
+    (snapshot?.anthropicSubscriptionActive === true ||
+      snapshot?.anthropicAccounts.some(account => account.isDefault &&
+        account.boundLoginGeneration !== undefined && account.loginGeneration !== undefined &&
+        account.boundLoginGeneration !== account.loginGeneration) === true)
   )
 }
 

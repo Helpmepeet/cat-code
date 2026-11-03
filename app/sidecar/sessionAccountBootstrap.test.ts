@@ -16,10 +16,10 @@ test('replacement processes restore distinct chat selections without changing de
   const defaults = { anthropic: 'default-claude', openai: 'default-codex' }
   for (const chat of ['a', 'b', 'a']) {
     const selected = { ...defaults }
-    await restoreSessionAccountSelection({ anthropic: `claude-${chat}`, openai: `codex-${chat}` }, {
+    await restoreSessionAccountSelection({ anthropic: `claude-${chat}`, anthropicLoginGeneration: 3, openai: `codex-${chat}` }, {
       load: async () => {},
       selectAnthropic: (id, options) => {
-        expect(options).toEqual({ persistDefault: false })
+        expect(options).toEqual({ persistDefault: false, expectedLoginGeneration: 3 })
         selected.anthropic = id
         return { accountUuid: id }
       },
@@ -86,4 +86,21 @@ test('spawn selection parsing is closed, bounded and backward compatible', () =>
   for (const raw of ['[]', 'null', '{"token":"secret"}', '{"openai":""}', '{"openai":12}']) {
     expect(() => readSessionAccountSelection(raw)).toThrow()
   }
+  expect(readSessionAccountSelection('{"anthropic":"account-a","anthropicLoginGeneration":0}'))
+    .toEqual({ anthropic: 'account-a', anthropicLoginGeneration: 0 })
+  for (const generation of [-1, 1.5, null, '1', Number.MAX_SAFE_INTEGER + 1]) {
+    expect(() => readSessionAccountSelection(JSON.stringify({ anthropic: 'account-a', anthropicLoginGeneration: generation }))).toThrow()
+  }
+  expect(() => readSessionAccountSelection('{"anthropicLoginGeneration":1}')).toThrow()
+})
+
+test('unversioned saved Claude identity is held to verified legacy generation zero', async () => {
+  const selected: unknown[] = []
+  await restoreSessionAccountSelection({ anthropic: 'legacy-account' }, {
+    load: async () => {},
+    selectAnthropic: (_id, options) => { selected.push(options); return null },
+    selectOpenai: () => null,
+  })
+  expect(selected).toEqual([{ persistDefault: false, expectedLoginGeneration: 0 }])
+  expect(getSessionAccountRouteBlock('anthropic')?.requestedAccountId).toBe('legacy-account')
 })

@@ -5,7 +5,11 @@ import {
   getInitialLoginState,
   isLoginDialogCancelActive,
   persistCodexOAuthLoginFromConsole,
+  applyAnthropicLoginInstallation,
 } from './ConsoleOAuthFlow.js'
+import { installOAuthTokensAfterPolicyValidation } from '../cli/handlers/auth.js'
+import { ClaudeLoginInstallationError } from '../services/api/claudeAccountAuthority.js'
+import type { OAuthTokens } from '../services/oauth/types.js'
 
 describe('getCodexAliasPrompt', () => {
   test('tells relogin users they can keep the existing account name', () => {
@@ -16,6 +20,53 @@ describe('getCodexAliasPrompt', () => {
       ),
     ).toBe('Already saved as yoxrent. Press Enter to keep this name, or type a new name.')
   })
+})
+
+test.each([false, true])('Anthropic UI keeps pending installation local and never notifies success before commit (typed error=%s)', async typedError => {
+  const states: Parameters<typeof applyAnthropicLoginInstallation>[1] extends (status: infer T) => void ? T[] : never = []
+  let notified = 0
+  let installations = 0
+  let exchanges = 0
+  const tokens: OAuthTokens = {
+    accessToken: 'captured-access', refreshToken: 'captured-refresh', expiresAt: 1,
+    scopes: ['user:inference'], subscriptionType: null, rateLimitTier: null,
+  }
+  const acquireAndInstall = async () => {
+    exchanges++
+    return installOAuthTokensAfterPolicyValidation(tokens, {
+      validateOrg: async () => ({ valid: true }), createOperationId: () => 'ui-operation',
+      installTokens: async (_tokens, options) => {
+        expect(options!.operationId).toBe('ui-operation')
+        installations++
+        if (typedError && installations === 1) throw new ClaudeLoginInstallationError({
+          outcome: 'persistence_pending', operationId: 'ui-operation', restartRecoverable: false,
+        })
+        return { outcome: installations === 1 ? 'persistence_pending' : 'committed',
+          operationId: 'ui-operation', restartRecoverable: true, selectionCommitted: installations > 1 }
+      },
+    })
+  }
+  await applyAnthropicLoginInstallation(acquireAndInstall, state => states.push(state), () => { notified++ })
+  expect(states.at(-1)).toMatchObject({ state: 'error', toRetry: { state: 'retrying_installation' } })
+  expect(notified).toBe(0)
+  const pending = states.at(-1)
+  if (pending?.state !== 'error' || pending.toRetry?.state !== 'retrying_installation') throw new Error('Missing local retry')
+  await applyAnthropicLoginInstallation(pending.toRetry.retry, state => states.push(state), () => { notified++ })
+  expect(states.at(-1)).toEqual({ state: 'success', provider: 'anthropic' })
+  expect(notified).toBe(1)
+  expect(exchanges).toBe(1)
+  expect(installations).toBe(2)
+})
+
+test('policy rejection never enters the Anthropic success state or notification path', async () => {
+  const states: unknown[] = []
+  let notifications = 0
+  await applyAnthropicLoginInstallation(
+    async () => ({ valid: false, message: 'Wrong organization.' }),
+    state => states.push(state), () => { notifications++ },
+  )
+  expect(states).toEqual([{ state: 'error', message: 'Wrong organization.', toRetry: { state: 'idle' } }])
+  expect(notifications).toBe(0)
 })
 
 describe('persistCodexOAuthLoginFromConsole', () => {

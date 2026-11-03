@@ -1286,14 +1286,14 @@ test('carries the peer spawn-env keys and CLEARS the ones the host did not suppl
   })
   supervisor.spawnSession('restored-account-session', {
     cwd: sessionCwd,
-    accountSelection: { anthropic: 'claude-chat', openai: 'codex-chat' },
+    accountSelection: { anthropic: 'claude-chat', anthropicLoginGeneration: 3, openai: 'codex-chat' },
   })
   await waitFor(() => {
     const observed = JSON.parse(readFileSync(observedPath, 'utf8'))
     return observed.CATCODE_SIDECAR_ACCOUNT_SELECTION !== '{}'
   }, 'replacement did not receive its saved account selection')
   expect(JSON.parse(JSON.parse(readFileSync(observedPath, 'utf8')).CATCODE_SIDECAR_ACCOUNT_SELECTION))
-    .toEqual({ anthropic: 'claude-chat', openai: 'codex-chat' })
+    .toEqual({ anthropic: 'claude-chat', anthropicLoginGeneration: 3, openai: 'codex-chat' })
 })
 
 test('project names follow the saved folder mapping and never leak into plain Chats or unnamed folders', async () => {

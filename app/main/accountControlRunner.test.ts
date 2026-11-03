@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAccountControlRunner } from './accountControlRunner.js'
-import type { AccountControlEvent } from '../shared/accountControlWorker.js'
+import { ACCOUNT_CONTROL_VERSION, type AccountControlEvent } from '../shared/accountControlWorker.js'
 import type { WorkerProcessLifecycle } from './ndjsonWorker.js'
 import { resolveSidecarLaunch } from './mainDecisions.js'
 
@@ -18,7 +18,11 @@ test('session-free account worker keeps one process through login and naming and
       setOAuthProgressSink(callback) { sink = callback; },
       async runVerb(verb) {
         if (verb.type === 'account.login') sink({ state: 'waiting_for_alias' });
-        if (verb.type === 'account.oauthAlias') sink({ state: 'success' });
+        if (verb.type === 'account.oauthAlias') sink({
+          state: 'success', loginRequestId: 'login',
+          receipt: { provider: 'anthropic', accountId: 'actual-account', operationId: 'engine-install',
+            outcome: 'committed', loginGeneration: 3 }
+        });
         return { verb: verb.type, result: { ok: true, message: 'Done' }, poolChanged: verb.type === 'account.oauthAlias' };
       }
     }, async event => { process.stdout.write(JSON.stringify(event) + '\\n'); });
@@ -39,6 +43,12 @@ test('session-free account worker keeps one process through login and naming and
     expect(saved.requestId).toBe('name')
     expect(saved.ok).toBe(true)
     expect(progress.map(event => event.type === 'progress' ? event.progress?.state : null)).toEqual(['waiting_for_alias', 'success'])
+    expect(progress.at(-1)).toMatchObject({
+      provider: 'anthropic', progress: {
+        state: 'success', loginRequestId: 'login',
+        receipt: { accountId: 'actual-account', operationId: 'engine-install', outcome: 'committed', loginGeneration: 3 },
+      },
+    })
     expect(runner.replay()).toBeNull()
     expect(refreshed).toBeGreaterThan(0)
     expect(lifecycle.filter(event => event.phase === 'started')).toHaveLength(1)
@@ -90,7 +100,7 @@ test.each(['wrong-request', 'unexpected-field'])('rejects %s from the worker bef
     import { createInterface } from 'node:readline';
     createInterface({ input: process.stdin }).on('line', line => {
       const verb = JSON.parse(line);
-      const result = { type: 'result', version: 1, requestId: ${mode === 'wrong-request' ? "'unknown'" : 'verb.requestId'}, verb: verb.type, ok: true, message: 'Done', changed: true ${mode === 'unexpected-field' ? ", accessToken: 'synthetic-secret'" : ''} };
+      const result = { type: 'result', version: ${ACCOUNT_CONTROL_VERSION}, requestId: ${mode === 'wrong-request' ? "'unknown'" : 'verb.requestId'}, verb: verb.type, ok: true, message: 'Done', changed: true ${mode === 'unexpected-field' ? ", accessToken: 'synthetic-secret'" : ''} };
       process.stdout.write(JSON.stringify(result) + '\\n');
     });
   `)

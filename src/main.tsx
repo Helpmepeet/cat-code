@@ -30,6 +30,7 @@ import { getOauthConfig } from './constants/oauth.js';
 import { getRemoteSessionUrl } from './constants/product.js';
 import { getSystemContext, getUserContext } from './context.js';
 import { init, initializeTelemetryAfterTrust } from './entrypoints/init.js';
+import { startProviderStartupServices } from './entrypoints/providerStartup.js';
 import { addToHistory } from './history.js';
 import type { Root } from './ink.js';
 import { launchRepl } from './replLauncher.js';
@@ -40,8 +41,8 @@ import { prefetchPassesEligibility } from './services/api/referral.js';
 import { installStreamJsonAccountDiagnosticHook } from './services/api/accountDiagnostics.js';
 import { prefetchOfficialMcpUrls } from './services/mcp/officialRegistry.js';
 import type { McpSdkServerConfig, McpServerConfig, ScopedMcpServerConfig } from './services/mcp/types.js';
-import { isPolicyAllowed, loadPolicyLimits, refreshPolicyLimits, waitForPolicyLimitsToLoad } from './services/policyLimits/index.js';
-import { loadRemoteManagedSettings, refreshRemoteManagedSettings } from './services/remoteManagedSettings/index.js';
+import { isPolicyAllowed, refreshPolicyLimits, waitForPolicyLimitsToLoad } from './services/policyLimits/index.js';
+import { refreshRemoteManagedSettings } from './services/remoteManagedSettings/index.js';
 import type { ToolInputJSONSchema } from './Tool.js';
 import { createSyntheticOutputTool, isSyntheticOutputToolEnabled } from './tools/SyntheticOutputTool/SyntheticOutputTool.js';
 import { getTools } from './tools.js';
@@ -948,20 +949,8 @@ async function run(): Promise<CommanderCommand> {
       setInlinePlugins(pluginDir);
       clearPluginCache('preAction: --plugin-dir inline plugins');
     }
-    // Load remote managed settings for enterprise customers (non-blocking)
-    // Fails open - if fetch fails, continues without remote settings
-    // Settings are applied via hot-reload when they arrive
-    // Must happen after init() to ensure config reading is allowed
-    void loadRemoteManagedSettings();
-    void loadPolicyLimits();
-    profileCheckpoint('preAction_after_remote_settings');
-
-    // Load settings sync (non-blocking, fail-open)
-    // CLI: uploads local settings to remote (CCR download is handled by print.ts)
-    if (feature('UPLOAD_USER_SETTINGS')) {
-      void import('./services/settingsSync/index.js').then(m => m.uploadUserSettingsInBackground());
-    }
-    profileCheckpoint('preAction_after_settings_sync');
+    // Cached managed settings and loading promises are initialized in init().
+    // Their authenticated background fetches wait for agent/model resolution.
   });
   program.name('cat-code').description(`Cat Code - starts an interactive session by default, use -p/--print for non-interactive output`).argument('[prompt]', 'Your prompt', String)
   // Subcommands inherit helpOption via commander's copyInheritedSettings —
@@ -2113,6 +2102,9 @@ async function run(): Promise<CommanderCommand> {
     // warning, the fast-mode default, the advisor gate) even though the actual
     // request re-resolves the alias correctly under the settled provider.
     resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
+
+    startProviderStartupServices(feature('UPLOAD_USER_SETTINGS') ? true : false);
+    profileCheckpoint('action_after_remote_settings');
 
     // Provider-sensitive tools must be selected only after the startup model has
     // resolved the session provider. In particular, OpenAI uses apply_patch's

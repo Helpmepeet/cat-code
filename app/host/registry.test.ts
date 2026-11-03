@@ -2151,11 +2151,11 @@ test('account selection survives registry reload and old rows migrate without se
   const h = makeRegistry()
   await h.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: '/workspace' })
   await h.registry.upsertOnSpawn({ appSessionId: 'legacy', cwd: '/workspace' })
-  await h.registry.setAccountSelection('selected', { anthropic: 'claude-a', openai: 'codex-b' })
+  await h.registry.setAccountSelection('selected', { anthropic: 'claude-a', anthropicLoginGeneration: 3, openai: 'codex-b' })
   await h.registry.setAccountSelection('selected', { openai: 'codex-c' })
   const reloaded = makeRegistry({ storageDir: h.storageDir }).registry
   await reloaded.launch()
-  expect(reloaded.findSession('selected')?.accountSelection).toEqual({ anthropic: 'claude-a', openai: 'codex-c' })
+  expect(reloaded.findSession('selected')?.accountSelection).toEqual({ anthropic: 'claude-a', anthropicLoginGeneration: 3, openai: 'codex-c' })
   expect(reloaded.findSession('legacy')?.accountSelection).toBeUndefined()
 })
 
@@ -2164,10 +2164,24 @@ test('concurrent registry writers preserve independent provider selections', asy
   await first.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: '/workspace' })
   const second = makeRegistry({ storageDir: first.storageDir })
   await second.registry.launch()
-  await first.registry.setAccountSelection('selected', { anthropic: 'claude-a' })
+  await first.registry.setAccountSelection('selected', { anthropic: 'claude-a', anthropicLoginGeneration: 3 })
   await second.registry.setAccountSelection('selected', { openai: 'codex-b' })
   expect(readDoc(first.registryPath).sessions.find(row => row.appSessionId === 'selected')?.accountSelection)
-    .toEqual({ anthropic: 'claude-a', openai: 'codex-b' })
+    .toEqual({ anthropic: 'claude-a', anthropicLoginGeneration: 3, openai: 'codex-b' })
+})
+
+test('an older OpenAI writer cannot roll back a newer Claude login generation', async () => {
+  const first = makeRegistry()
+  await first.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: '/workspace' })
+  await first.registry.setAccountSelection('selected', { anthropic: 'claude-a', anthropicLoginGeneration: 1 })
+  const stale = makeRegistry({ storageDir: first.storageDir })
+  await stale.registry.launch()
+  await first.registry.setAccountSelection('selected', { anthropic: 'claude-a', anthropicLoginGeneration: 2 })
+  await stale.registry.setAccountSelection('selected', { openai: 'codex-b' })
+  expect(stale.registry.getAccountSelection('selected'))
+    .toEqual({ anthropic: 'claude-a', anthropicLoginGeneration: 2, openai: 'codex-b' })
+  expect(readDoc(first.registryPath).sessions.find(row => row.appSessionId === 'selected')?.accountSelection)
+    .toEqual({ anthropic: 'claude-a', anthropicLoginGeneration: 2, openai: 'codex-b' })
 })
 
 test('account authority survives an older registry writer and follows the saved engine conversation', async () => {
@@ -2249,4 +2263,16 @@ test('corrupt account authority fails closed instead of falling back to cached d
   expect(() => h.registry.getAccountSelection('selected')).toThrow('could not be read')
   expect(await h.registry.setAccountSelection('selected', { openai: 'codex-b' })).toBe(false)
   expect(h.registry.hasUnsavedAccountSelection('selected')).toBe(true)
+})
+
+test('malformed saved Claude generation fails closed rather than dropping its fence', async () => {
+  const h = makeRegistry()
+  await h.registry.upsertOnSpawn({ appSessionId: 'selected', cwd: h.storageDir })
+  await h.registry.setAccountSelection('selected', { anthropic: 'claude-a', anthropicLoginGeneration: 1 })
+  const folder = join(h.storageDir, 'account-selections')
+  const file = join(folder, readdirSync(folder)[0]!)
+  const saved = JSON.parse(readFileSync(file, 'utf8'))
+  saved.accountSelection.anthropicLoginGeneration = -1
+  writeFileSync(file, JSON.stringify(saved))
+  expect(() => h.registry.getAccountSelection('selected')).toThrow('could not be read')
 })

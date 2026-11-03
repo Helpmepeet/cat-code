@@ -12,7 +12,6 @@ import { writeToStderr } from 'src/utils/process.js'
 import { getOauthConfig } from '../../constants/oauth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import {
-  getAuthHeaders,
   getUserAgent,
   withOAuth401Retry,
 } from '../../utils/http.js'
@@ -56,14 +55,14 @@ export const getGroveSettings = memoize(
       return { success: false }
     }
     try {
-      const response = await withOAuth401Retry(() => {
-        const authHeaders = getAuthHeaders()
+      const response = await withOAuth401Retry(authHeaders => {
         if (authHeaders.error) {
           throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
         }
         return axios.get<AccountSettings>(
           `${getOauthConfig().BASE_API_URL}/api/oauth/account/settings`,
           {
+            ...authHeaders.requestConfig,
             headers: {
               ...authHeaders.headers,
               'User-Agent': getClaudeCodeUserAgent(),
@@ -89,8 +88,7 @@ export const getGroveSettings = memoize(
  */
 export async function markGroveNoticeViewed(): Promise<void> {
   try {
-    await withOAuth401Retry(() => {
-      const authHeaders = getAuthHeaders()
+    await withOAuth401Retry(authHeaders => {
       if (authHeaders.error) {
         throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
       }
@@ -98,6 +96,7 @@ export async function markGroveNoticeViewed(): Promise<void> {
         `${getOauthConfig().BASE_API_URL}/api/oauth/account/grove_notice_viewed`,
         {},
         {
+          ...authHeaders.requestConfig,
           headers: {
             ...authHeaders.headers,
             'User-Agent': getClaudeCodeUserAgent(),
@@ -121,8 +120,7 @@ export async function updateGroveSettings(
   groveEnabled: boolean,
 ): Promise<void> {
   try {
-    await withOAuth401Retry(() => {
-      const authHeaders = getAuthHeaders()
+    await withOAuth401Retry(authHeaders => {
       if (authHeaders.error) {
         throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
       }
@@ -132,6 +130,7 @@ export async function updateGroveSettings(
           grove_enabled: groveEnabled,
         },
         {
+          ...authHeaders.requestConfig,
           headers: {
             ...authHeaders.headers,
             'User-Agent': getClaudeCodeUserAgent(),
@@ -236,14 +235,14 @@ export const getGroveNoticeConfig = memoize(
       return { success: false }
     }
     try {
-      const response = await withOAuth401Retry(() => {
-        const authHeaders = getAuthHeaders()
+      const response = await withOAuth401Retry(authHeaders => {
         if (authHeaders.error) {
           throw new Error(`Failed to get auth headers: ${authHeaders.error}`)
         }
         return axios.get<GroveConfig>(
           `${getOauthConfig().BASE_API_URL}/api/claude_code_grove`,
           {
+            ...authHeaders.requestConfig,
             headers: {
               ...authHeaders.headers,
               'User-Agent': getUserAgent(),

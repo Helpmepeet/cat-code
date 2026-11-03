@@ -1,5 +1,5 @@
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
-import { parseSessionAccountSelection, type SessionAccountSelection } from '../shared/sessionAccountSelection.js'
+import { mergeSessionAccountSelection, parseSessionAccountSelection, type SessionAccountSelection } from '../shared/sessionAccountSelection.js'
 /**
  * The desktop session registry (D1 — `decisions/REGISTRY.md`).
  *
@@ -1277,11 +1277,10 @@ export class SessionRegistry {
     const row = this.find(appSessionId)
     if (!row) return undefined
     try {
-      return parseSessionAccountSelection({
-        ...row.accountSelection,
-        ...this.readSavedAccountSelection(row),
-        ...this.unsavedAccountSelections.get(appSessionId),
-      })
+      return parseSessionAccountSelection(mergeSessionAccountSelection(
+        mergeSessionAccountSelection(row.accountSelection, this.readSavedAccountSelection(row)),
+        this.unsavedAccountSelections.get(appSessionId),
+      ))
     } catch (error) {
       this.log(`[registry] account selection could not be read: ${errText(error)}`)
       throw new Error('The saved account selection could not be read. Check storage access and retry.')
@@ -1294,7 +1293,7 @@ export class SessionRegistry {
 
   async setAccountSelection(appSessionId: string, selection: SessionAccountSelection): Promise<boolean> {
     const validated = parseSessionAccountSelection(selection)
-    if (!validated) return true
+    if (!validated) return Object.keys(selection).length === 0
     const row = this.find(appSessionId)
     if (!row) return false
     for (const id of this.unsavedAccountSelections.keys()) {
@@ -1305,16 +1304,15 @@ export class SessionRegistry {
       if (!this.unsavedAccountSelections.has(appSessionId) && saved &&
           Object.entries(validated).every(([provider, id]) =>
             saved[provider as keyof SessionAccountSelection] === id)) {
-        row.accountSelection = { ...row.accountSelection, ...saved }
+        row.accountSelection = mergeSessionAccountSelection(row.accountSelection, saved)
         return true
       }
     } catch (error) {
       this.log(`[registry] account selection could not be read: ${errText(error)}`)
     }
-    row.accountSelection = { ...row.accountSelection, ...validated }
-    this.unsavedAccountSelections.set(appSessionId, {
-      ...this.unsavedAccountSelections.get(appSessionId), ...validated,
-    })
+    row.accountSelection = mergeSessionAccountSelection(row.accountSelection, validated)
+    this.unsavedAccountSelections.set(appSessionId,
+      mergeSessionAccountSelection(this.unsavedAccountSelections.get(appSessionId), validated))
     // The companion is authoritative. Older installed registry writers rebuild
     // rows through a whitelist, so the row field alone is only a cache.
     if (!await this.persistAccountSelection(appSessionId)) return false
@@ -1369,9 +1367,8 @@ export class SessionRegistry {
       const row = this.find(appSessionId)
       const pending = this.unsavedAccountSelections.get(appSessionId)
       if (!row || !pending) return !pending
-      const accountSelection = {
-        ...(this.readSavedAccountSelection(row) ?? row.accountSelection), ...pending,
-      }
+      const accountSelection = mergeSessionAccountSelection(
+        this.readSavedAccountSelection(row) ?? row.accountSelection, pending)
       const path = this.accountSelectionFile(row)
       ensureDir(dirname(path))
       atomicWriteJson(path, {
@@ -1893,10 +1890,14 @@ function mergeRegistryRow(
     ? latest.binding
     : local.binding
   const accountSelection = { ...latest.accountSelection }
-  for (const provider of ['anthropic', 'openai'] as const) {
-    if (local.accountSelection?.[provider] !== baseline?.accountSelection?.[provider]) {
-      accountSelection[provider] = local.accountSelection?.[provider]
-    }
+  if (local.accountSelection?.anthropic !== baseline?.accountSelection?.anthropic ||
+    local.accountSelection?.anthropicLoginGeneration !== baseline?.accountSelection?.anthropicLoginGeneration) {
+    accountSelection.anthropic = local.accountSelection?.anthropic
+    if (local.accountSelection?.anthropicLoginGeneration === undefined) delete accountSelection.anthropicLoginGeneration
+    else accountSelection.anthropicLoginGeneration = local.accountSelection.anthropicLoginGeneration
+  }
+  if (local.accountSelection?.openai !== baseline?.accountSelection?.openai) {
+    accountSelection.openai = local.accountSelection?.openai
   }
   // The three peer fields are durable identity/intent, not runtime hints, so they
   // follow the `forked` rule: a writer that did not change a field from its own

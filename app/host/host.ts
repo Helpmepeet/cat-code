@@ -345,9 +345,14 @@ export class Host implements HostApi {
           }
         }
         const codexId = snapshot.activeAccountId && (this.mainCodexAccounts.get(appSessionId) ?? snapshot.activeAccountId)
+        const claudeBinding = snapshot.anthropicAccounts?.find(account =>
+          account.id === snapshot.anthropicActiveAccountId)?.boundLoginGeneration
         await this.recordAccountSelection(appSessionId, {
           ...(snapshot.initialized && codexId ? { openai: codexId } : {}),
-          ...(snapshot.anthropicInitialized && snapshot.anthropicActiveAccountId ? { anthropic: snapshot.anthropicActiveAccountId } : {}),
+          ...(snapshot.anthropicInitialized && snapshot.anthropicActiveAccountId ? {
+            anthropic: snapshot.anthropicActiveAccountId,
+            ...(claudeBinding === undefined ? {} : { anthropicLoginGeneration: claudeBinding }),
+          } : {}),
         })
       }
       if (event.frame.kind === 'lease.snapshot') {

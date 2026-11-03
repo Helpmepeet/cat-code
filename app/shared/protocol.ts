@@ -3,7 +3,7 @@ import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
 /**
- * CatCode desktop IPC protocol — v5.
+ * CatCode desktop IPC protocol — v6.
  *
  * This is the versioned engine/session protocol (PROGRAM-PLAN §5, layer 1): the
  * typed seam between the renderer, the Electron main process, the Electron-free
@@ -102,7 +102,7 @@ import type {
 /** v4 retires session metadata/stats/OAuth; see decisions/SESSION-PROTOCOL-V4.md. */
 /** Additive tool.activity v1 and queue submitId: decisions/FOCUSED-LIVE-ACTIVITY.md. */
 /** v5 accepts versioned V1/V2 resume evidence; see CHAT-RELOCATION's V2 amendment. */
-export const PROTOCOL_VERSION = 5 as const
+export const PROTOCOL_VERSION = 6 as const
 
 /**
  * A session address. In P1-0 there is exactly one sidecar and one sessionId,
@@ -233,6 +233,7 @@ export type AccountSwitchMessage = {
   accountId: string
   /** Pool containing the target account. Defaults to OpenAI for older clients. */
   provider?: AccountLoginProvider
+  expectedLoginGeneration?: number
 }
 
 /** Rename a vault-backed account's alias. Alias re-validated at the sidecar. */
@@ -2681,6 +2682,11 @@ export type AnthropicAccountStatus = {
   isDefault: boolean
   hasVaultProfile: boolean
   subscriptionType: string | null
+  loginGeneration?: number
+  credentialRevision?: number
+  credentialHealth?: 'ready' | 'persistence_pending' | 'refresh_uncertain' | 'sign_in_required'
+  /** Generation this chat selected, not the latest global login. */
+  boundLoginGeneration?: number
   /**
    * True for a non-active account whose stored login expired more than a week
    * ago without renewal, so nothing shows it still works. Absent means false.
@@ -2822,7 +2828,7 @@ export type OAuthLoginProgress =
   /** Tokens captured engine-side; awaiting the optional account alias (new account). */
   | { state: 'waiting_for_alias' }
   /** Token written; the host refreshes its global account pool. */
-  | { state: 'success' }
+  | { state: 'success'; loginRequestId?: string; receipt?: import('./accountControlWorker.js').AccountLoginReceipt }
   /** The flow failed; `message` is the redacted engine error (retryable). */
   | { state: 'error'; message: string }
 

@@ -1,12 +1,14 @@
 /* eslint-disable custom-rules/no-process-exit -- CLI subcommand handler intentionally exits */
 
 import { createInterface, type Interface } from 'readline'
+import { randomUUID } from 'crypto'
 
 import {
   clearAuthRelatedCaches,
   performLogout,
 } from '../../commands/logout/logout.js'
 import { appendClaudeAccount } from '../../services/api/claudeAccountPool.js'
+import { ClaudeLoginInstallationError, type ClaudeAuthorityResult } from '../../services/api/claudeAccountAuthority.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -36,7 +38,6 @@ import {
   isUsing3PServices,
   saveOAuthTokensIfNeeded,
   validateForceLoginOrgForToken,
-  type OrgValidationResult,
 } from '../../utils/auth.js'
 import { saveGlobalConfig } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -141,12 +142,20 @@ export function parseManualOAuthCallbackInput(
  * Shared post-token-acquisition logic. Saves tokens, fetches profile/roles,
  * and sets up the local auth state.
  */
-export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
+export type OAuthTokenInstallOptions = {
+  operationId?: string
+  /** Retain profile resolution across local persistence retries, without network. */
+  profileLookup?: ReturnType<typeof getOauthProfileFromOauthToken>
+}
+
+export async function installOAuthTokens(tokens: OAuthTokens, options: OAuthTokenInstallOptions = {}): Promise<ClaudeAuthorityResult | void> {
   const isAnthropicAuth = shouldUseClaudeAIAuth(tokens.scopes)
   const isAnthropicConsole = !isAnthropicAuth && hasAnyAnthropicScope(tokens.scopes)
   const isCodex = !isAnthropicAuth && !isAnthropicConsole
 
-  const storageResult = saveOAuthTokensIfNeeded(tokens)
+  // Subscription login commits its account authority before publishing mirrors.
+  const storageResult = isAnthropicAuth ? { success: true } : saveOAuthTokensIfNeeded(tokens)
+  let loginResult: ClaudeAuthorityResult | undefined
   clearOAuthTokenCache()
   if (storageResult.warning) {
     logEvent('tengu_oauth_storage_warning', {
@@ -160,8 +169,9 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
 
   // Reuse pre-fetched profile if available, otherwise fetch fresh
   const profile =
-    tokens.profile ?? (await getOauthProfileFromOauthToken(tokens.accessToken))
-  if (profile) {
+    tokens.profile ?? (await (options.profileLookup ??=
+      getOauthProfileFromOauthToken(tokens.accessToken)))
+  if (profile && !isAnthropicAuth) {
     storeOAuthAccountInfo({
       accountUuid: profile.account.uuid,
       emailAddress: profile.account.email_address,
@@ -174,7 +184,7 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
         profile.organization.subscription_created_at ?? undefined,
       accountCreatedAt: profile.account.created_at,
     })
-  } else if (tokens.tokenAccount) {
+  } else if (tokens.tokenAccount && !isAnthropicAuth) {
     // Fallback to token exchange account data when profile endpoint fails
     storeOAuthAccountInfo({
       accountUuid: tokens.tokenAccount.uuid,
@@ -194,7 +204,7 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
     const accountUuid = profile?.account.uuid ?? tokens.tokenAccount!.uuid
     const emailAddress =
       profile?.account.email_address ?? tokens.tokenAccount!.emailAddress
-    appendClaudeAccount({
+    loginResult = appendClaudeAccount({
       accountUuid,
       emailAddress,
       accessToken: tokens.accessToken,
@@ -209,8 +219,12 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
       hasExtraUsageEnabled: profile?.organization.has_extra_usage_enabled ?? undefined,
       accountCreatedAt: profile?.account.created_at,
       subscriptionCreatedAt: profile?.organization.subscription_created_at ?? undefined,
-    })
+    }, options)
   }
+  if (isAnthropicAuth && tokens.refreshToken && tokens.expiresAt && !loginResult) {
+    throw new Error('Claude sign-in did not provide an account identity and renewable credentials. Sign in again.')
+  }
+  if (loginResult && loginResult.outcome !== 'committed') return loginResult
 
   // Roles and first-token-date may fail for limited-scope tokens (e.g.
   // inference-only from setup-token). They're not required for core auth.
@@ -243,15 +257,28 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
     })
   }
 
+  return loginResult
 }
+
+export type OAuthLoginInstallationResult =
+  | { valid: false; message: string }
+  | { valid: true; installation: 'committed' }
+  | {
+      valid: true
+      installation: 'persistence_pending' | 'uncertain' | 'rejected'
+      operationId: string
+      message: string
+      retry?: () => Promise<OAuthLoginInstallationResult>
+    }
 
 export async function installOAuthTokensAfterPolicyValidation(
   tokens: OAuthTokens,
   dependencies: {
     validateOrg?: typeof validateForceLoginOrgForToken
     installTokens?: typeof installOAuthTokens
+    createOperationId?: () => string
   } = {},
-): Promise<OrgValidationResult> {
+): Promise<OAuthLoginInstallationResult> {
   const validateOrg =
     dependencies.validateOrg ?? validateForceLoginOrgForToken
   const installTokens = dependencies.installTokens ?? installOAuthTokens
@@ -259,8 +286,60 @@ export async function installOAuthTokensAfterPolicyValidation(
   if (orgResult.valid === false) {
     return orgResult
   }
-  await installTokens(tokens)
-  return orgResult
+  // Each captured exchange owns one installation operation. Retrying this
+  // closure reuses both tokens and operation, never a fresh OAuth exchange.
+  const options: OAuthTokenInstallOptions = {
+    operationId: (dependencies.createOperationId ?? randomUUID)(),
+  }
+  const attempt = async (): Promise<OAuthLoginInstallationResult> => {
+    let result: ClaudeAuthorityResult | void
+    try {
+      result = await installTokens(tokens, options)
+    } catch (error) {
+      // Only the engine's installation receipt authorizes a local save retry.
+      // Policy, profile, and arbitrary failures must retain their own meaning.
+      if (!(error instanceof ClaudeLoginInstallationError) ||
+        error.result.operationId !== options.operationId) throw error
+      result = error.result
+    }
+    if (!result || (result.outcome === 'committed' &&
+      result.credentialCommitted !== false && result.selectionCommitted !== false)) {
+      return { valid: true, installation: 'committed' }
+    }
+    const installation = result.outcome === 'committed' ? 'persistence_pending' : result.outcome
+    return {
+      valid: true, installation, operationId: result.operationId,
+      message: installation === 'persistence_pending'
+        ? 'Sign-in is not fully saved. Retry saving locally without signing in again.'
+        : 'Sign-in could not be confirmed. Start a new sign-in before continuing.',
+      ...(installation === 'persistence_pending' ? { retry: attempt } : {}),
+    }
+  }
+  return attempt()
+}
+
+/** Noninteractive callers fail closed; a terminal may retry only local saving. */
+export async function finishTerminalOAuthInstallation(
+  result: OAuthLoginInstallationResult,
+  confirmRetry: (message: string) => Promise<boolean> = async message => {
+    if (!process.stdin.isTTY) return false
+    process.stderr.write(`${message}\n`)
+    const input = createInterface({ input: process.stdin, output: process.stderr })
+    try {
+      return await new Promise<boolean>(resolve => {
+        input.question('Press Enter to retry saving, or type cancel: ', answer => resolve(answer.trim() === ''))
+        input.once('close', () => resolve(false))
+      })
+    } finally {
+      input.close()
+    }
+  },
+): Promise<OAuthLoginInstallationResult> {
+  while (result.valid && result.installation === 'persistence_pending' &&
+    result.retry && await confirmRetry(result.message)) {
+    result = await result.retry()
+  }
+  return result
 }
 
 export async function authLogin({
@@ -310,8 +389,12 @@ export async function authLogin({
 
       const tokens = await refreshOAuthToken(envRefreshToken, { scopes })
       const orgResult =
-        await installOAuthTokensAfterPolicyValidation(tokens)
+        await finishTerminalOAuthInstallation(await installOAuthTokensAfterPolicyValidation(tokens))
       if (orgResult.valid === false) {
+        process.stderr.write(orgResult.message + '\n')
+        process.exit(1)
+      }
+      if (orgResult.installation !== 'committed') {
         process.stderr.write(orgResult.message + '\n')
         process.exit(1)
       }
@@ -391,9 +474,14 @@ export async function authLogin({
       },
     )
 
+    cleanupManualInput()
     const orgResult =
-      await installOAuthTokensAfterPolicyValidation(result)
+      await finishTerminalOAuthInstallation(await installOAuthTokensAfterPolicyValidation(result))
     if (orgResult.valid === false) {
+      process.stderr.write(orgResult.message + '\n')
+      process.exit(1)
+    }
+    if (orgResult.installation !== 'committed') {
       process.stderr.write(orgResult.message + '\n')
       process.exit(1)
     }

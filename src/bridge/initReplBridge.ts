@@ -28,6 +28,8 @@ import {
 import type { Message } from '../types/message.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
+  captureClaudeOAuthRequestIdentity,
+  prepareClaudeOAuthRequest,
   getClaudeAIOAuthTokens,
   handleOAuth401Error,
 } from '../utils/auth.js'
@@ -448,6 +450,8 @@ export async function initReplBridge(
       title,
       getAccessToken: getBridgeAccessToken,
       onAuth401: handleOAuth401Error,
+      captureAuthIdentity: captureClaudeOAuthRequestIdentity,
+      prepareOAuth: prepareClaudeOAuthRequest,
       toSDKMessages,
       initialHistoryCap,
       initialMessages,
@@ -550,6 +554,7 @@ export async function initReplBridge(
     onUserMessage,
     toSDKMessages,
     onAuth401: handleOAuth401Error,
+    captureAuthIdentity: captureClaudeOAuthRequestIdentity,
     getPollIntervalConfig,
     initialHistoryCap,
     initialMessages,

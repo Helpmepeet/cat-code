@@ -1,7 +1,7 @@
 import { c as _c } from "react/compiler-runtime";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
-import { installOAuthTokensAfterPolicyValidation } from '../cli/handlers/auth.js';
+import { installOAuthTokensAfterPolicyValidation, type OAuthLoginInstallationResult } from '../cli/handlers/auth.js';
 import { useTerminalSize } from '../hooks/useTerminalSize.js';
 import { setClipboard } from '../ink/termio/osc.js';
 import { useTerminalNotification } from '../ink/useTerminalNotification.js';
@@ -47,6 +47,10 @@ type OAuthStatus = {
   state: 'creating_api_key';
 } // Got access token, creating API key
 | {
+  state: 'retrying_installation';
+  retry: () => Promise<OAuthLoginInstallationResult>;
+}
+| {
   state: 'about_to_retry';
   nextState: OAuthStatus;
 } | {
@@ -61,6 +65,25 @@ type OAuthStatus = {
   message: string;
   toRetry?: OAuthStatus;
 };
+
+export async function applyAnthropicLoginInstallation(
+  install: () => Promise<OAuthLoginInstallationResult>,
+  setStatus: (status: OAuthStatus) => void,
+  notifySuccess: () => void | Promise<unknown>,
+): Promise<void> {
+  const result = await install();
+  if (result.valid === false) {
+    setStatus({ state: 'error', message: result.message, toRetry: { state: 'idle' } });
+  } else if (result.installation !== 'committed') {
+    setStatus({
+      state: 'error', message: result.message,
+      toRetry: result.retry ? { state: 'retrying_installation', retry: result.retry } : { state: 'idle' },
+    });
+  } else {
+    setStatus({ state: 'success', provider: 'anthropic' });
+    void notifySuccess();
+  }
+}
 export function getInitialLoginState(
   mode: 'login' | 'setup-token',
   forceLoginMethod: 'claudeai' | 'console' | undefined,
@@ -166,6 +189,20 @@ export function ConsoleOAuthFlow({
   // copy the code from the browser and paste it in the terminal
   const [showPastePrompt, setShowPastePrompt] = useState(false);
   const [urlCopied, setUrlCopied] = useState(false);
+  const notifyAnthropicSuccess = useCallback(() => sendNotification({
+    message: 'Anthropic login successful',
+    notificationType: 'auth_success'
+  }, terminal), [terminal]);
+  useEffect(() => {
+    if (oauthStatus.state !== 'retrying_installation') return;
+    const retry = oauthStatus.retry;
+    void applyAnthropicLoginInstallation(retry, setOAuthStatus, notifyAnthropicSuccess).catch(error => {
+      setOAuthStatus({
+        state: 'error', message: getSSLErrorHint(error) ?? (error as Error).message,
+        toRetry: { state: 'retrying_installation', retry },
+      });
+    });
+  }, [oauthStatus, notifyAnthropicSuccess]);
   const textInputColumns = useTerminalSize().columns - PASTE_HERE_MSG.length - 1;
 
   // Log forced login method on mount
@@ -351,18 +388,10 @@ export function ConsoleOAuthFlow({
           provider: 'anthropic'
         });
       } else {
-        const orgResult = await installOAuthTokensAfterPolicyValidation(result);
-        if (orgResult.valid === false) {
-          throw new Error(orgResult.message);
-        }
-        setOAuthStatus({
-          state: 'success',
-          provider: 'anthropic'
-        });
-        void sendNotification({
-          message: 'Anthropic login successful',
-          notificationType: 'auth_success'
-        }, terminal);
+        await applyAnthropicLoginInstallation(
+          () => installOAuthTokensAfterPolicyValidation(result),
+          setOAuthStatus, notifyAnthropicSuccess,
+        );
       }
     } catch (err_0) {
       const errorMessage = (err_0 as Error).message;
@@ -379,7 +408,7 @@ export function ConsoleOAuthFlow({
         ssl_error: sslHint !== null
       });
     }
-  }, [oauthService, setShowPastePrompt, loginWithClaudeAi, mode, orgUUID]);
+  }, [oauthService, setShowPastePrompt, loginWithClaudeAi, mode, orgUUID, notifyAnthropicSuccess]);
 
   // Codex-specific OAuth flow — completely separate from the Anthropic OAuthService
   const startCodexOAuth = useCallback(async () => {
@@ -733,6 +762,8 @@ function OAuthStatusMessage(t0) {
         }
         return t4;
       }
+    case "retrying_installation":
+      return <Box><Text color="permission">Retrying local sign-in saving…</Text></Box>;
     case "creating_api_key":
       {
         let t1;

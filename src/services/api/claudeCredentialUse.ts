@@ -1,6 +1,7 @@
 import type { ClientOptions } from '@anthropic-ai/sdk'
 import { logForDebugging } from '../../utils/debug.js'
 import { withClaudeCredentialGeneration } from './claudeAccountPool.js'
+import { readClaudeAccountAuthority, withClaudeCredentialSend, type ClaudeCredentialHandle } from './claudeAccountAuthority.js'
 import {
   assertSessionAccountRouteAvailable,
   SessionAccountRouteUnavailableError,
@@ -13,17 +14,24 @@ export function createClaudeCredentialFetch(
   fetch: ClaudeFetch,
   accountUuid: string,
   credentialGeneration: number,
+  credentialRevision?: number,
 ): ClaudeFetch {
+  const authority = readClaudeAccountAuthority(accountUuid)
+  const captured: ClaudeCredentialHandle | null = authority.status === 'ready' && authority.handle.generation === credentialGeneration
+    ? Object.freeze({ accountId: accountUuid, generation: credentialGeneration, revision: credentialRevision ?? authority.handle.revision })
+    : null
   return async (input, init) => {
     assertSessionAccountRouteAvailable('anthropic')
     let initiating = false
     let started: ReturnType<ClaudeFetch> | null = null
     try {
-      withClaudeCredentialGeneration(accountUuid, credentialGeneration, () => {
+      const initiate = () => {
         initiating = true
         started = fetch(input, init)
         return started
-      })
+      }
+      if (captured) withClaudeCredentialSend(captured, initiate)
+      else if (authority.status === 'missing') withClaudeCredentialGeneration(accountUuid, credentialGeneration, initiate)
     } catch (error) {
       if (started !== null) {
         // Retrying a request because unlock failed would repeat a send that

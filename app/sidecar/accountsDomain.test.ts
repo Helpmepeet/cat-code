@@ -373,6 +373,7 @@ describe('P4-5 read-seam — projection semantics', () => {
         hasVaultProfile: true,
         subscriptionType: 'pro',
         loginStale: false,
+        boundLoginGeneration: 0,
       },
     ])
     const serialized = JSON.stringify(snapshot)
@@ -891,7 +892,7 @@ describe('real Anthropic switch executor', () => {
       accountId: account.accountUuid, provider: 'anthropic',
     })
 
-    expect(prepare).toHaveBeenCalledWith(account.accountUuid)
+    expect(prepare).toHaveBeenCalledWith(account.accountUuid, undefined)
     expect(outcome.result.ok).toBe(true)
   })
 
@@ -1697,6 +1698,85 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
 })
 
 describe('P4-15 OAuth login controller — the live sign-in back-channel', () => {
+  test.each(['committed', 'persistence_pending'] as const)('Anthropic receipt comes from the engine installation result: %s', async outcome => {
+    const runner = createRealAnthropicOAuthLoginRunner({
+      createService: () => ({
+        async startOAuthFlow() {
+          return {
+            accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
+            expiresAt: Date.now() + 60_000, scopes: ['user:inference'],
+            subscriptionType: 'pro', rateLimitTier: null,
+          }
+        },
+        handleManualAuthCodeInput() {}, cleanup() {},
+      }),
+      readSettings: () => ({}) as SettingsJson,
+      validateOrg: async () => ({ valid: true }),
+      installTokens: async () => ({
+        outcome, operationId: 'authority-login-operation', restartRecoverable: true,
+        handle: { accountId: 'engine-resolved-identity', generation: 7, revision: 0 },
+      }),
+    })
+    const pending = await runner.begin({
+      onWaitingForLogin: () => {}, waitForManualCode: async () => '',
+    })
+    expect(await pending.persist(undefined)).toEqual({
+      provider: 'anthropic', accountId: 'engine-resolved-identity',
+      operationId: 'authority-login-operation', outcome, loginGeneration: 7,
+    })
+  })
+
+  test.each([true, false])('success carries the actual installation receipt and original login request (existing=%s)', async existing => {
+    const captured: OAuthLoginProgress[] = []
+    const receipt = {
+      provider: 'anthropic' as const, accountId: 'actual-installed-account',
+      operationId: 'engine-install-operation', outcome: 'committed' as const, loginGeneration: 4,
+    }
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor(),
+      anthropicOAuthRunner: {
+        async begin() {
+          return {
+            isExistingAccount: existing, validateAlias: () => ({ ok: true }),
+            persist: async () => receipt,
+          }
+        },
+      },
+    })
+    domain.setOAuthProgressSink(progress => captured.push(progress))
+    await domain.runVerb({ type: 'account.login', provider: 'anthropic', requestId: 'origin-login' })
+    await flush()
+    if (!existing) await domain.runVerb({ type: 'account.oauthAlias', requestId: 'different-alias-request', alias: '' })
+    expect(captured.at(-1)).toEqual({ state: 'success', loginRequestId: 'origin-login', receipt })
+  })
+
+  test('pending installation never emits normal success or activates the provider', async () => {
+    const captured: OAuthLoginProgress[] = []
+    const activated: string[] = []
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor(), isFirstRunEligible: () => true,
+      onProviderActivated: provider => activated.push(provider),
+      anthropicOAuthRunner: {
+        async begin() {
+          return {
+            isExistingAccount: true, validateAlias: () => ({ ok: true }),
+            persist: async () => ({
+              provider: 'anthropic' as const, accountId: 'actual-account',
+              operationId: 'pending-operation', outcome: 'persistence_pending' as const,
+              loginGeneration: null,
+            }),
+          }
+        },
+      },
+    })
+    domain.setOAuthProgressSink(progress => captured.push(progress))
+    await domain.runVerb({ type: 'account.login', provider: 'anthropic', requestId: 'pending-login' })
+    await flush()
+    expect(captured.at(-1)).toMatchObject({ state: 'error' })
+    expect(captured.some(progress => progress.state === 'success')).toBe(false)
+    expect(activated).toEqual([])
+  })
+
   function makeDomain(runner: OAuthLoginRunner, captured: OAuthLoginProgress[]) {
     const domain = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: runner })
     domain.setOAuthProgressSink(p => captured.push(p))

@@ -17,10 +17,14 @@ import { createHash } from 'crypto'
 import { unlink } from 'fs/promises'
 import { getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import {
-  checkAndRefreshOAuthTokenIfNeeded,
+  prepareClaudeOAuthRequest,
   getAnthropicApiKeyWithSource,
+  getAuthTokenSource,
   getClaudeAIOAuthTokens,
 } from '../../utils/auth.js'
+import { hasSelectedStoredClaudeOAuthRoute } from '../api/claudeStoredOAuthRoute.js'
+import { claudeAxiosCredentialOptions } from '../api/claudeAxiosTransport.js'
+import type { ClaudeCredentialHandle } from '../api/claudeAccountAuthority.js'
 import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { classifyAxiosError, getErrnoCode } from '../../utils/errors.js'
@@ -34,11 +38,12 @@ import { jsonStringify } from '../../utils/slowOperations.js'
 import { writeFileAtomicDurable } from '../../utils/atomicFile.js'
 import { getClaudeCodeUserAgent } from '../../utils/userAgent.js'
 import { getRetryDelay } from '../api/withRetry.js'
+import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from '../../utils/model/providers.js'
 import {
   checkManagedSettingsSecurity,
   handleSecurityCheckResult,
 } from './securityCheck.jsx'
-import { isRemoteManagedSettingsEligible, resetSyncCache } from './syncCache.js'
+import { isRemoteManagedSettingsEligible as isCachedRemoteManagedSettingsEligible, resetSyncCache } from './syncCache.js'
 import {
   getRemoteManagedSettingsSyncFromCache,
   getSettingsPath,
@@ -146,6 +151,12 @@ export function isEligibleForRemoteManagedSettings(): boolean {
   return isRemoteManagedSettingsEligible()
 }
 
+function isRemoteManagedSettingsEligible(): boolean {
+  return isCachedRemoteManagedSettingsEligible() ||
+    (getAPIProvider() === 'firstParty' && isFirstPartyAnthropicBaseUrl() &&
+      !getClaudeAIOAuthTokens() && hasSelectedStoredClaudeOAuthRoute())
+}
+
 /**
  * Wait for the initial remote settings loading to complete
  * Returns immediately if:
@@ -164,10 +175,14 @@ export async function waitForRemoteManagedSettingsToLoad(): Promise<void> {
  * This avoids circular dependencies during settings loading
  * Supports both API key and OAuth authentication
  */
-function getRemoteSettingsAuthHeaders(): {
+async function getRemoteSettingsAuthHeaders(): Promise<{
   headers: Record<string, string>
+  handle?: ClaudeCredentialHandle
   error?: string
-} {
+}> {
+  if (getAPIProvider() !== 'firstParty' || !isFirstPartyAnthropicBaseUrl()) {
+    return { headers: {}, error: 'Remote settings require the Anthropic provider' }
+  }
   // Try API key first (for Console users)
   // Skip apiKeyHelper to avoid circular dependency with getSettings()
   // Wrap in try-catch because getAnthropicApiKeyWithSource throws in CI/test environments
@@ -187,13 +202,29 @@ function getRemoteSettingsAuthHeaders(): {
   }
 
   // Fall back to OAuth tokens (for Claude.ai users)
-  const oauthTokens = getClaudeAIOAuthTokens()
+  let oauthTokens
+  let handle: ClaudeCredentialHandle | undefined
+  if (hasSelectedStoredClaudeOAuthRoute()) {
+    const preparation = await prepareClaudeOAuthRequest()
+    if (preparation.status !== 'ready') {
+      return { headers: {}, error: `Claude credentials are not ready (${preparation.status})` }
+    }
+    oauthTokens = preparation.credentials
+    handle = preparation.handle
+  } else {
+    const source = getAuthTokenSource().source
+    if (source !== 'CLAUDE_CODE_OAUTH_TOKEN' && source !== 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR' && source !== 'CCR_OAUTH_TOKEN_FILE') {
+      return { headers: {}, error: 'No Claude OAuth account is selected' }
+    }
+    oauthTokens = getClaudeAIOAuthTokens()
+  }
   if (oauthTokens?.accessToken) {
     return {
       headers: {
         Authorization: `Bearer ${oauthTokens.accessToken}`,
         'anthropic-beta': OAUTH_BETA_HEADER,
       },
+      handle,
     }
   }
 
@@ -250,12 +281,8 @@ async function fetchRemoteManagedSettings(
   cachedChecksum?: string,
 ): Promise<RemoteManagedSettingsFetchResult> {
   try {
-    // Ensure OAuth token is fresh before fetching settings
-    // This prevents 401 errors from stale cached tokens
-    await checkAndRefreshOAuthTokenIfNeeded()
-
     // Use local auth header getter to avoid circular dependency with getSettings()
-    const authHeaders = getRemoteSettingsAuthHeaders()
+    const authHeaders = await getRemoteSettingsAuthHeaders()
     if (authHeaders.error) {
       // Auth errors should not be retried - return a special flag to skip retries
       return {
@@ -277,6 +304,7 @@ async function fetchRemoteManagedSettings(
     }
 
     const response = await axios.get(endpoint, {
+      ...(authHeaders.handle ? claudeAxiosCredentialOptions(authHeaders.handle) : {}),
       headers,
       timeout: SETTINGS_TIMEOUT_MS,
       // Allow 204, 304, and 404 responses without treating them as errors.

@@ -29,6 +29,12 @@ export function resetSyncCache(): void {
   resetLeafCache()
 }
 
+/** Re-evaluate a settled startup route without discarding last-good settings. */
+export function refreshRemoteManagedSettingsEligibility(): boolean {
+  cached = undefined
+  return isRemoteManagedSettingsEligible()
+}
+
 /**
  * Check if the current user is eligible for remote managed settings
  *

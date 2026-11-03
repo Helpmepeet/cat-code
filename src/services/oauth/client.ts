@@ -1,5 +1,7 @@
 // OAuth client for handling authentication flows with Claude services
 import axios from 'axios'
+import http from 'node:http'
+import https from 'node:https'
 import { updateClaudeAccountRoles } from '../api/claudeAccountPool.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -173,11 +175,17 @@ export async function exchangeCodeForTokens(
   return response.data
 }
 
+export type ClaudeRefreshInitiator = <T>(start: () => T) => T
+
 export async function refreshOAuthToken(
   refreshToken: string,
-  { scopes: requestedScopes, persistProfile = true }: {
+  { scopes: requestedScopes, persistProfile = true, skipProfile = false, initiateRequest }: {
     scopes?: string[]
     persistProfile?: boolean
+    /** Return successor credentials without a second network request or profile writes. */
+    skipProfile?: boolean
+    /** Authorize and initiate synchronously inside the caller's lifecycle boundary. */
+    initiateRequest?: ClaudeRefreshInitiator
   } = {},
 ): Promise<OAuthTokens> {
   const currentTokens = getClaudeAIOAuthTokens()
@@ -199,9 +207,39 @@ export async function refreshOAuthToken(
   }
 
   try {
-    const response = await axios.post(getOauthConfig().TOKEN_URL, requestBody, {
+    let initiated = false
+    const response = await axios.post<OAuthTokenExchangeResponse>(getOauthConfig().TOKEN_URL, requestBody, {
       headers: { 'Content-Type': 'application/json' },
       timeout: 15000,
+      ...(initiateRequest && {
+        // Authorization must run after interceptors and adapter preparation,
+        // immediately before the physical request. Never forward refresh tokens
+        // through an unfenced redirect.
+        maxRedirects: 0,
+        transport: {
+          request(options: http.RequestOptions, callback: (response: http.IncomingMessage) => void) {
+            let initiationOpen = true
+            let started: http.ClientRequest | undefined
+            const start = () => {
+              if (!initiationOpen || initiated) throw new Error('Claude refresh initiation must occur synchronously and exactly once')
+              initiated = true
+              started = (options.protocol === 'https:' ? https : http).request(options, callback)
+              return started
+            }
+            try {
+              const request = initiateRequest(start)
+              if (!started || request !== started) {
+                void Promise.resolve(request).catch(() => {})
+                started?.destroy()
+                throw new Error('Claude refresh initiation callback did not synchronously start the request')
+              }
+              return request
+            } finally {
+              initiationOpen = false
+            }
+          },
+        },
+      }),
     })
 
     if (response.status !== 200) {
@@ -214,6 +252,11 @@ export async function refreshOAuthToken(
       refresh_token: newRefreshToken = refreshToken,
       expires_in: expiresIn,
     } = data
+    if (typeof accessToken !== 'string' || !accessToken ||
+        typeof newRefreshToken !== 'string' || !newRefreshToken ||
+        typeof expiresIn !== 'number' || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+      throw new Error('Claude refresh returned invalid successor credentials')
+    }
 
     const expiresAt = Date.now() + expiresIn * 1000
     const scopes = parseScopes(data.scope)
@@ -240,7 +283,7 @@ export async function refreshOAuthToken(
       existing?.subscriptionType != null &&
       existing?.rateLimitTier != null
 
-    const profileInfo = haveProfileAlready
+    const profileInfo = skipProfile || haveProfileAlready
       ? null
       : await fetchProfileInfo(accessToken)
 

@@ -14,6 +14,7 @@ import {
 } from 'react'
 import {
   anthropicAccountCapped,
+  anthropicCredentialLabel,
   anthropicStatusDotTone,
   formatResetLabel,
   statusDotTone,
@@ -938,7 +939,8 @@ export function AccountSwitcherPanel({
               const isActive = routing && acct.id === active.id
               const poolDefault = !routing && acct.isDefault
               const capped = claude ? anthropicAccountCapped(claude) : false
-              const unavailable = acct.status !== 'healthy' || capped
+              const healthLabel = claude ? anthropicCredentialLabel(claude) : null
+              const unavailable = acct.status !== 'healthy' || capped || healthLabel !== null
               const clickable = (routing || allowProviderSwitch) && !isActive && (
                 codex
                   ? codex.switchable || (!routing && codex.isDefault && codex.availability !== 'blocked')
@@ -948,7 +950,7 @@ export function AccountSwitcherPanel({
               const dotTone = codex
                 ? statusDotTone({ ...codex, isDefault: routing && codex.isDefault })
                 : anthropicStatusDotTone({ ...claude!, isDefault: routing && acct.isDefault })
-              const availabilityLabel = codex?.availabilityLabel ??
+              const availabilityLabel = codex?.availabilityLabel ?? healthLabel ??
                 (claude?.status === 'dead' ? ANTHROPIC_STATUS_LABEL.dead : 'Capped')
               const showReset = codex ? codex.status === 'capped' : capped && claude?.status !== 'dead'
               const resetAt = codex ? codex.usageResetAt :
@@ -1026,6 +1028,17 @@ export function AccountSwitcherPanel({
           </div>
         ))}
       </div>
+      {provider === 'anthropic' && active.status === 'healthy' &&
+        (!('credentialHealth' in active) || active.credentialHealth === undefined || active.credentialHealth === 'ready') ? (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => onSwitch(active.id, 'anthropic')}
+          className="flex w-full items-center justify-center border-t border-shell-seam px-3.5 py-2.5 text-[11.5px] font-medium text-text-muted transition-colors hover:text-text-primary"
+        >
+          Reconnect this chat
+        </button>
+      ) : null}
       {onManage ? (
         <button
           type="button"
@@ -1074,7 +1087,7 @@ function AccountChip({
   const pool = accounts.length > 0 ? accounts : codex ? [codex] : []
   const anthropicPool = anthropicAccounts.length > 0 ? anthropicAccounts : claude ? [claude] : []
   const alias = active.alias ?? claude?.email ?? '(unnamed)'
-  const label = codex?.availabilityLabel ?? (
+  const label = codex?.availabilityLabel ?? (claude ? anthropicCredentialLabel(claude) : null) ?? (
     claude?.status === 'dead' ? ANTHROPIC_STATUS_LABEL.dead :
     anthropicAccountCapped(claude!) ? 'Capped' : ANTHROPIC_STATUS_LABEL.healthy
   )

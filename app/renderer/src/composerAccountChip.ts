@@ -7,6 +7,7 @@ export function canSwitchAnthropicAccount(
 ): boolean {
   return account.id !== activeId &&
     account.status === 'healthy' &&
+    (account.credentialHealth === undefined || account.credentialHealth === 'ready') &&
     account.loginStale !== true &&
     !anthropicAccountCapped(account)
 }

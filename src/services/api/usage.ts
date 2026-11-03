@@ -2,7 +2,15 @@ import axios from 'axios'
 import http from 'node:http'
 import https from 'node:https'
 import { logForDebugging } from '../../utils/debug.js'
-import { withClaudeCredentialGeneration } from './claudeAccountPool.js'
+import {
+  captureClaudeCredentialGeneration,
+  withClaudeCredentialGeneration,
+} from './claudeAccountPool.js'
+import {
+  captureClaudeCredentialHandle,
+  readClaudeAccountAuthority,
+  withClaudeCredentialSend,
+} from './claudeAccountAuthority.js'
 import { getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
@@ -41,7 +49,7 @@ export type Utilization = {
  */
 export async function fetchUtilizationForToken(
   accessToken: string,
-  credential: { accountUuid: string; lifecycleGeneration: number },
+  credential: { accountUuid: string; lifecycleGeneration: number; credentialRevision?: number },
 ): Promise<Utilization> {
   const response = await axios.get<Utilization>(
     `${getOauthConfig().BASE_API_URL}/api/oauth/usage`,
@@ -55,14 +63,24 @@ export async function fetchUtilizationForToken(
         request(options: http.RequestOptions, callback: (response: http.IncomingMessage) => void) {
           let started: http.ClientRequest | undefined
           try {
-            withClaudeCredentialGeneration(
-              credential.accountUuid,
-              credential.lifecycleGeneration,
-              () => {
-                started = (options.protocol === 'https:' ? https : http).request(options, callback)
-                return started
-              },
-            )
+            const initiate = () => {
+              started = (options.protocol === 'https:' ? https : http).request(options, callback)
+              return started
+            }
+            const authority = readClaudeAccountAuthority(credential.accountUuid)
+            if (authority.status === 'missing') {
+              withClaudeCredentialGeneration(
+                credential.accountUuid,
+                credential.lifecycleGeneration,
+                initiate,
+              )
+            } else {
+              const handle = captureClaudeCredentialHandle(credential.accountUuid, accessToken)
+              if (handle?.generation === credential.lifecycleGeneration &&
+                  handle.revision === (credential.credentialRevision ?? 0)) {
+                withClaudeCredentialSend(handle, initiate)
+              }
+            }
           } catch (error) {
             // Unlock failure must not turn an already initiated send into a
             // failed attempt that a caller might repeat.
@@ -96,13 +114,32 @@ export async function fetchUtilization(): Promise<Utilization | null> {
   // entry point every other authenticated surface uses (mcp/client,
   // teamMemorySync, policyLimits, voiceStreamSTT) instead of bailing, so /usage
   // self-heals rather than hanging on a stale token.
-  const tokens = getClaudeAIOAuthTokens()
+  let tokens = getClaudeAIOAuthTokens()
   if (tokens && isOAuthTokenExpired(tokens.expiresAt)) {
     await checkAndRefreshOAuthTokenIfNeeded()
-    const refreshed = getClaudeAIOAuthTokens()
-    if (!refreshed || isOAuthTokenExpired(refreshed.expiresAt)) {
+    tokens = getClaudeAIOAuthTokens()
+    if (!tokens || isOAuthTokenExpired(tokens.expiresAt)) {
       return null
     }
+  }
+
+  if (tokens?.accountUuid && tokens.accessToken) {
+    const authority = readClaudeAccountAuthority(tokens.accountUuid)
+    if (authority.status === 'missing') {
+      const generation = captureClaudeCredentialGeneration(tokens.accountUuid, tokens.accessToken)
+      if (generation === null) return null
+      return fetchUtilizationForToken(tokens.accessToken, {
+        accountUuid: tokens.accountUuid,
+        lifecycleGeneration: generation,
+      })
+    }
+    const handle = captureClaudeCredentialHandle(tokens.accountUuid, tokens.accessToken)
+    if (!handle) return null
+    return fetchUtilizationForToken(tokens.accessToken, {
+      accountUuid: handle.accountId,
+      lifecycleGeneration: handle.generation,
+      credentialRevision: handle.revision,
+    })
   }
 
   const authResult = getAuthHeaders()

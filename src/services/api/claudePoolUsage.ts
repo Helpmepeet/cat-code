@@ -139,7 +139,7 @@ export async function fetchClaudePoolUsage(
     cachedOnly?: boolean
     fetchUsage?: (
       accessToken: string,
-      credential: { accountUuid: string; lifecycleGeneration: number },
+      credential: { accountUuid: string; lifecycleGeneration: number; credentialRevision?: number },
     ) => Promise<Utilization>
   } = {},
 ): Promise<Map<string, ClaudeAccountUsage>> {
@@ -165,6 +165,7 @@ export async function fetchClaudePoolUsage(
           const data = await fetchUsage(account.accessToken, {
             accountUuid: account.accountUuid,
             lifecycleGeneration: account.lifecycleGeneration ?? 0,
+            credentialRevision: account.credentialRevision ?? 0,
           })
           entry = {
             credentialKey,

@@ -1,5 +1,5 @@
 import type { AccountControlVerb, AccountControlEvent } from '../shared/accountControlWorker.js'
-import { MAX_ACCOUNT_CONTROL_RECORD_BYTES, parseAccountControlEvent, parseAccountControlVerb } from '../shared/accountControlWorker.js'
+import { ACCOUNT_CONTROL_VERSION, MAX_ACCOUNT_CONTROL_RECORD_BYTES, parseAccountControlEvent, parseAccountControlVerb } from '../shared/accountControlWorker.js'
 import { PROTOCOL_VERSION, type AccountResultFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import { runNdjsonWorker, type NdjsonWorkerOptions } from './ndjsonWorker.js'
@@ -101,7 +101,7 @@ export function createAccountControlRunner(options: {
       for (const request of pending.values()) request.reject(new Error('account worker stopped'))
       pending.clear()
       finishRetirement()
-      if (loginActive && !disposed) progress({ type: 'progress', version: 1, provider: latest?.provider ?? 'openai', progress: { state: 'error', message: 'Sign-in stopped. Try again.' } })
+      if (loginActive && !disposed) progress({ type: 'progress', version: ACCOUNT_CONTROL_VERSION, provider: latest?.provider ?? 'openai', progress: { state: 'error', message: 'Sign-in stopped. Try again.' } })
       if (protocolError) options.launch().log?.('[account-control] worker output rejected')
     })
   }

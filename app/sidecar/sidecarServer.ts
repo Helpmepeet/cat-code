@@ -6981,7 +6981,7 @@ function checkStrictKeys(message: unknown): string | null {
     // `docs/migration/decisions/SECURITY-MINIMUM.md`. Each key set is the exact
     // renderer-facing contract; anything else is rejected before the Zod parse.
     // Global management uses host workers; only pane switching is accepted here.
-    ['account.switch', new Set(['type', 'requestId', 'accountId', 'provider'])],
+    ['account.switch', new Set(['type', 'requestId', 'accountId', 'provider', 'expectedLoginGeneration'])],
     ['account.profileDeleted', new Set(['type', 'requestId', 'accountId'])],
     [
       'account.profileSignedOut',
@@ -7397,6 +7397,7 @@ const accountVerbMessageSchema = z.object({
   requestId: accountRequestIdSchema,
   accountId: accountIdSchema,
   provider: z.enum(['anthropic', 'openai']).optional(),
+  expectedLoginGeneration: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
 })
 
 const accountProfileDeletedMessageSchema = z.object({

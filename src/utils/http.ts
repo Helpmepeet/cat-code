@@ -3,11 +3,17 @@
  */
 
 import axios from 'axios'
+import http from 'node:http'
+import https from 'node:https'
+import {
+  captureClaudeCredentialHandle, readClaudeAccountAuthority, withClaudeCredentialSend,
+  type ClaudeCredentialHandle,
+} from '../services/api/claudeAccountAuthority.js'
 import { OAUTH_BETA_HEADER } from '../constants/oauth.js'
 import {
   getAnthropicApiKey,
   getClaudeAIOAuthTokens,
-  handleOAuth401Error,
+  recoverOAuth401Error,
   isClaudeAISubscriber,
 } from './auth.js'
 import { getClaudeCodeUserAgent } from './userAgent.js'
@@ -60,6 +66,17 @@ export function getWebFetchUserAgent(): string {
 export type AuthHeaders = {
   headers: Record<string, string>
   error?: string
+  credential?: Readonly<{ accessToken: string; handle: ClaudeCredentialHandle }>
+  requestConfig?: { maxRedirects: number; transport: unknown }
+}
+
+export function getOAuthAuthHeaders(tokens: { accessToken: string; accountUuid?: string }): AuthHeaders {
+  const handle = tokens.accountUuid ? captureClaudeCredentialHandle(tokens.accountUuid, tokens.accessToken) : null
+  const auth: AuthHeaders = {
+    headers: { Authorization: `Bearer ${tokens.accessToken}`, 'anthropic-beta': OAUTH_BETA_HEADER },
+  }
+  if (handle) auth.credential = Object.freeze({ accessToken: tokens.accessToken, handle })
+  return auth
 }
 
 /**
@@ -75,12 +92,7 @@ export function getAuthHeaders(): AuthHeaders {
         error: 'No OAuth token available',
       }
     }
-    return {
-      headers: {
-        Authorization: `Bearer ${oauthTokens.accessToken}`,
-        'anthropic-beta': OAUTH_BETA_HEADER,
-      },
-    }
+    return getOAuthAuthHeaders(oauthTokens)
   }
   // TODO: this will fail if the API key is being set to an LLM Gateway key
   // should we try to query keychain / credentials for a valid Anthropic key?
@@ -103,8 +115,8 @@ export function getAuthHeaders(): AuthHeaders {
  * retrying once. Addresses clock drift scenarios where the local expiration
  * check disagrees with the server.
  *
- * The request closure is called again on retry, so it should re-read auth
- * (e.g., via getAuthHeaders()) to pick up the refreshed token.
+ * Each attempt receives its bound headers and physical-send configuration.
+ * Callers must use these rather than resolving another credential in the closure.
  *
  * Note: bridgeApi.ts has its own DI-injected version — handleOAuth401Error
  * transitively pulls in config.ts (~1300 modules), which breaks the SDK bundle.
@@ -113,11 +125,36 @@ export function getAuthHeaders(): AuthHeaders {
  *   revoked" body (some endpoints signal revocation this way instead of 401).
  */
 export async function withOAuth401Retry<T>(
-  request: () => Promise<T>,
-  opts?: { also403Revoked?: boolean },
+  request: (auth: AuthHeaders) => Promise<T>,
+  opts?: { also403Revoked?: boolean; getAuthHeaders?: () => AuthHeaders },
 ): Promise<T> {
+  const attempt = (auth: AuthHeaders) => {
+    const credential = auth.credential
+    if (credential) {
+      auth.requestConfig = {
+        maxRedirects: 0,
+        transport: {
+          request(options: http.RequestOptions, callback: (response: http.IncomingMessage) => void) {
+            const headers = options.headers as Record<string, unknown> | undefined
+            const bearer = Object.entries(headers ?? {}).find(([name]) => name.toLowerCase() === 'authorization')?.[1]
+            if (bearer !== `Bearer ${credential.accessToken}`) throw new Error('OAuth request credential changed before send')
+            const started = withClaudeCredentialSend(credential.handle, () =>
+              (options.protocol === 'https:' ? https : http).request(options, callback))
+            if (!started) throw new Error('OAuth request credential is no longer available')
+            return started
+          },
+        },
+      }
+    }
+    return request(auth)
+  }
+  const sent = (opts?.getAuthHeaders ?? getAuthHeaders)()
+  const failed = sent.credential ? Object.freeze({
+    accessToken: sent.credential.accessToken,
+    handle: Object.freeze({ ...sent.credential.handle }),
+  }) : undefined
   try {
-    return await request()
+    return await attempt(sent)
   } catch (err) {
     if (!axios.isAxiosError(err)) throw err
     const status = err.response?.status
@@ -128,9 +165,21 @@ export async function withOAuth401Retry<T>(
         typeof err.response?.data === 'string' &&
         err.response.data.includes('OAuth token has been revoked'))
     if (!isAuthError) throw err
-    const failedAccessToken = getClaudeAIOAuthTokens()?.accessToken
-    if (!failedAccessToken) throw err
-    await handleOAuth401Error(failedAccessToken)
-    return await request()
+    if (!failed) throw err
+    const rejectedHeader = err.config?.headers?.get?.('Authorization') ??
+      (err.config?.headers as Record<string, unknown> | undefined)?.Authorization
+    if (rejectedHeader !== `Bearer ${failed.accessToken}`) throw err
+    const recovered = await recoverOAuth401Error(failed.accessToken, failed.handle.accountId, failed.handle)
+    if (recovered.status !== 'refreshed' && recovered.status !== 'adopted_newer') throw err
+    const successor = readClaudeAccountAuthority(failed.handle.accountId)
+    if (successor.status !== 'ready' || successor.handle.generation !== failed.handle.generation ||
+        successor.handle.revision <= failed.handle.revision || !successor.record.credentials) throw err
+    return await attempt({
+      headers: {
+        Authorization: `Bearer ${successor.record.credentials.accessToken}`,
+        'anthropic-beta': OAUTH_BETA_HEADER,
+      },
+      credential: Object.freeze({ accessToken: successor.record.credentials.accessToken, handle: successor.handle }),
+    })
   }
 }

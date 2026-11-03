@@ -23,10 +23,14 @@ import {
   OAUTH_BETA_HEADER,
 } from '../../constants/oauth.js'
 import {
-  checkAndRefreshOAuthTokenIfNeeded,
+  prepareClaudeOAuthRequest,
   getAnthropicApiKeyWithSource,
+  getAuthTokenSource,
   getClaudeAIOAuthTokens,
 } from '../../utils/auth.js'
+import { hasSelectedStoredClaudeOAuthRoute } from '../api/claudeStoredOAuthRoute.js'
+import { claudeAxiosCredentialOptions } from '../api/claudeAxiosTransport.js'
+import type { ClaudeCredentialHandle } from '../api/claudeAccountAuthority.js'
 import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
@@ -191,7 +195,7 @@ export function isPolicyLimitsEligible(): boolean {
   // For OAuth users, check if they have Claude.ai tokens
   const tokens = getClaudeAIOAuthTokens()
   if (!tokens?.accessToken) {
-    return false
+    return hasSelectedStoredClaudeOAuthRoute()
   }
 
   // Must have Claude.ai inference scope
@@ -225,10 +229,14 @@ export async function waitForPolicyLimitsToLoad(): Promise<void> {
  * Get auth headers for policy limits without calling getSettings()
  * Supports both API key and OAuth authentication
  */
-function getAuthHeaders(): {
+async function getAuthHeaders(): Promise<{
   headers: Record<string, string>
+  handle?: ClaudeCredentialHandle
   error?: string
-} {
+}> {
+  if (getAPIProvider() !== 'firstParty' || !isFirstPartyAnthropicBaseUrl()) {
+    return { headers: {}, error: 'Policy limits require the Anthropic provider' }
+  }
   // Try API key first (for Console users)
   try {
     const { key: apiKey } = getAnthropicApiKeyWithSource({
@@ -246,13 +254,29 @@ function getAuthHeaders(): {
   }
 
   // Fall back to OAuth tokens (for Claude.ai users)
-  const oauthTokens = getClaudeAIOAuthTokens()
+  let oauthTokens
+  let handle: ClaudeCredentialHandle | undefined
+  if (hasSelectedStoredClaudeOAuthRoute()) {
+    const preparation = await prepareClaudeOAuthRequest()
+    if (preparation.status !== 'ready') {
+      return { headers: {}, error: `Claude credentials are not ready (${preparation.status})` }
+    }
+    oauthTokens = preparation.credentials
+    handle = preparation.handle
+  } else {
+    const source = getAuthTokenSource().source
+    if (source !== 'CLAUDE_CODE_OAUTH_TOKEN' && source !== 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR' && source !== 'CCR_OAUTH_TOKEN_FILE') {
+      return { headers: {}, error: 'No Claude OAuth account is selected' }
+    }
+    oauthTokens = getClaudeAIOAuthTokens()
+  }
   if (oauthTokens?.accessToken) {
     return {
       headers: {
         Authorization: `Bearer ${oauthTokens.accessToken}`,
         'anthropic-beta': OAUTH_BETA_HEADER,
       },
+      handle,
     }
   }
 
@@ -302,9 +326,7 @@ async function fetchPolicyLimits(
   cachedChecksum?: string,
 ): Promise<PolicyLimitsFetchResult> {
   try {
-    await checkAndRefreshOAuthTokenIfNeeded()
-
-    const authHeaders = getAuthHeaders()
+    const authHeaders = await getAuthHeaders()
     if (authHeaders.error) {
       return {
         success: false,
@@ -324,6 +346,7 @@ async function fetchPolicyLimits(
     }
 
     const response = await axios.get(endpoint, {
+      ...(authHeaders.handle ? claudeAxiosCredentialOptions(authHeaders.handle) : {}),
       headers,
       timeout: FETCH_TIMEOUT_MS,
       validateStatus: status =>

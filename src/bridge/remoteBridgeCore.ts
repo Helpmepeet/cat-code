@@ -63,6 +63,8 @@ import {
   logEvent,
 } from '../services/analytics/index.js'
 import type { ReplBridgeHandle, BridgeState } from './replBridge.js'
+import type { BridgeOAuthIdentity } from './bridgeApi.js'
+import type { ClaudeOAuthPreparationResult } from '../services/api/claudeTokenRefresh.js'
 import type { Message } from '../types/message.js'
 import type { SDKMessage } from '../entrypoints/agentSdkTypes.js'
 import type {
@@ -91,7 +93,9 @@ export type EnvLessBridgeParams = {
   orgUUID: string
   title: string
   getAccessToken: () => string | undefined
-  onAuth401?: (staleAccessToken: string) => Promise<boolean>
+  onAuth401?: (staleAccessToken: string, identity?: BridgeOAuthIdentity) => Promise<boolean>
+  captureAuthIdentity?: (accessToken: string) => BridgeOAuthIdentity | null
+  prepareOAuth?: () => Promise<ClaudeOAuthPreparationResult>
   /**
    * Converts internal Message[] → SDKMessage[] for writeMessages() and the
    * initial-flush/drain paths. Injected rather than imported — mappers.ts
@@ -146,6 +150,8 @@ export async function initEnvLessBridgeCore(
     title,
     getAccessToken,
     onAuth401,
+    captureAuthIdentity,
+    prepareOAuth,
     toSDKMessages,
     initialHistoryCap,
     initialMessages,
@@ -170,9 +176,37 @@ export async function initEnvLessBridgeCore(
     return null
   }
 
+  const initialIdentity = captureAuthIdentity?.(accessToken)
+  const sessionIdentity = initialIdentity ? Object.freeze({ ...initialIdentity }) : null
+  const sameLogin = (identity: BridgeOAuthIdentity | null | undefined) => !!(
+    sessionIdentity && identity && identity.accountId === sessionIdentity.accountId &&
+    identity.generation === sessionIdentity.generation
+  )
+  function currentOAuth() {
+    const token = getAccessToken()
+    if (!token) return null
+    const identity = captureAuthIdentity?.(token)
+    if (sessionIdentity ? !sameLogin(identity) : token !== accessToken) return null
+    return { token, identity: identity ? Object.freeze({ ...identity }) : null }
+  }
+  async function prepareSessionOAuth(): Promise<string | undefined> {
+    const current = currentOAuth()
+    if (!current) return undefined
+    // Unmanaged tokens cannot use account-authority repair. Keep their original
+    // token bound to this session without treating a JWT expiry as rejection.
+    if (!sessionIdentity || !prepareOAuth) return current.token
+    const prepared = await prepareOAuth()
+    if (prepared.status !== 'ready' || !sameLogin(prepared.handle)) return undefined
+    const latest = currentOAuth()
+    if (!latest || latest.token !== prepared.credentials.accessToken ||
+        latest.identity?.revision !== prepared.handle.revision) return undefined
+    return prepared.credentials.accessToken
+  }
+
   const createdSessionId = await withRetry(
-    () =>
-      createCodeSession(baseUrl, accessToken, title, cfg.http_timeout_ms, tags),
+    () => currentOAuth()?.token === accessToken
+      ? createCodeSession(baseUrl, accessToken, title, cfg.http_timeout_ms, tags)
+      : Promise.resolve(null),
     'createCodeSession',
     cfg,
   )
@@ -187,13 +221,13 @@ export async function initEnvLessBridgeCore(
 
   // ── 2. Fetch bridge credentials (POST /bridge → worker_jwt, expires_in, api_base_url) ──
   const credentials = await withRetry(
-    () =>
-      fetchRemoteCredentials(
+    () => currentOAuth()?.token === accessToken
+      ? fetchRemoteCredentials(
         sessionId,
         baseUrl,
         accessToken,
         cfg.http_timeout_ms,
-      ),
+      ) : Promise.resolve(null),
     'fetchRemoteCredentials',
     cfg,
   )
@@ -317,13 +351,7 @@ export async function initEnvLessBridgeCore(
   const refresh = createTokenRefreshScheduler({
     refreshBufferMs: cfg.token_refresh_buffer_ms,
     getAccessToken: async () => {
-      // Unconditionally refresh OAuth before calling /bridge — getAccessToken()
-      // returns expired tokens as non-null strings (doesn't check expiresAt),
-      // so truthiness doesn't mean valid. Pass the stale token to onAuth401
-      // so handleOAuth401Error's keychain-comparison can detect parallel refresh.
-      const stale = getAccessToken()
-      if (onAuth401) await onAuth401(stale ?? '')
-      return getAccessToken() ?? stale
+      return prepareSessionOAuth()
     },
     onRefresh: (sid, oauthToken) => {
       void (async () => {
@@ -340,13 +368,13 @@ export async function initEnvLessBridgeCore(
         authRecoveryInFlight = true
         try {
           const fresh = await withRetry(
-            () =>
-              fetchRemoteCredentials(
+            () => currentOAuth()?.token === oauthToken
+              ? fetchRemoteCredentials(
                 sid,
                 baseUrl,
                 oauthToken,
                 cfg.http_timeout_ms,
-              ),
+              ) : Promise.resolve(null),
             'fetchRemoteCredentials (proactive)',
             cfg,
           )
@@ -536,13 +564,8 @@ export async function initEnvLessBridgeCore(
     onStateChange?.('reconnecting', 'JWT expired — refreshing')
     logForDebugging('[remote-bridge] 401 on SSE — attempting JWT refresh')
     try {
-      // Unconditionally try OAuth refresh — getAccessToken() returns expired
-      // tokens as non-null strings, so !oauthToken doesn't catch expiry.
-      // Pass the stale token so handleOAuth401Error's keychain-comparison
-      // can detect if another tab already refreshed.
-      const stale = getAccessToken()
-      if (onAuth401) await onAuth401(stale ?? '')
-      const oauthToken = getAccessToken() ?? stale
+      // The SSE credential is a worker JWT, not the OAuth access revision.
+      const oauthToken = await prepareSessionOAuth()
       if (!oauthToken || tornDown) {
         if (!tornDown) {
           onStateChange?.('failed', 'JWT refresh failed: no OAuth token')
@@ -551,13 +574,13 @@ export async function initEnvLessBridgeCore(
       }
 
       const fresh = await withRetry(
-        () =>
-          fetchRemoteCredentials(
+        () => currentOAuth()?.token === oauthToken
+          ? fetchRemoteCredentials(
             sessionId,
             baseUrl,
             oauthToken,
             cfg.http_timeout_ms,
-          ),
+          ) : Promise.resolve(null),
         'fetchRemoteCredentials (recovery)',
         cfg,
       )
@@ -677,43 +700,32 @@ export async function initEnvLessBridgeCore(
     transport.reportState('idle')
     void transport.write(makeResultMessage(sessionId))
 
-    let token = getAccessToken()
-    let status = await archiveSession(
-      sessionId,
-      baseUrl,
-      token,
-      orgUUID,
-      cfg.teardown_archive_timeout_ms,
-    )
-
-    // Token is usually fresh (refresh scheduler runs 5min before expiry) but
-    // laptop-wake past the refresh window leaves getAccessToken() returning a
-    // stale string. Retry once on 401 — onAuth401 (= handleOAuth401Error)
-    // clears keychain cache + force-refreshes. No proactive refresh on the
-    // happy path: handleOAuth401Error force-refreshes even valid tokens,
-    // which would waste budget 99% of the time. try/catch mirrors
-    // recoverFromAuthFailure: keychain reads can throw (macOS locked after
-    // wake); an uncaught throw here would skip transport.close + telemetry.
-    if (status === 401 && onAuth401) {
-      try {
-        await onAuth401(token ?? '')
-        token = getAccessToken()
-        status = await archiveSession(
-          sessionId,
-          baseUrl,
-          token,
-          orgUUID,
-          cfg.teardown_archive_timeout_ms,
-        )
-      } catch (err) {
-        logForDebugging(
-          `[remote-bridge] Teardown 401 retry threw: ${errorMessage(err)}`,
-          { level: 'error' },
-        )
+    let status: ArchiveStatus = 'error'
+    try {
+      const sent = currentOAuth()
+      status = await archiveSession(
+        sessionId, baseUrl, sent?.token, orgUUID, cfg.teardown_archive_timeout_ms,
+      )
+      // Only this OAuth endpoint's rejection authorizes exact-revision repair.
+      if (status === 401 && sent?.identity && onAuth401 &&
+          await onAuth401(sent.token, sent.identity) === true) {
+        const successor = currentOAuth()
+        if (successor?.identity && successor.identity.accountId === sent.identity.accountId &&
+            successor.identity.generation === sent.identity.generation &&
+            successor.identity.revision > sent.identity.revision) {
+          status = await archiveSession(
+            sessionId, baseUrl, successor.token, orgUUID, cfg.teardown_archive_timeout_ms,
+          )
+        }
+      }
+    } catch {
+      // Auth storage and repair failures must not skip transport retirement.
+      logForDebugging('[remote-bridge] Teardown authentication unavailable', { level: 'error' })
+    } finally {
+      try { transport.close() } catch {
+        logForDebugging('[remote-bridge] Teardown transport cleanup failed', { level: 'error' })
       }
     }
-
-    transport.close()
 
     const archiveStatus: ArchiveTelemetryStatus =
       status === 'no_token'

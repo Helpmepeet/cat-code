@@ -8,6 +8,7 @@ import { removeMatchingClaudeOAuthFromStores } from '../../utils/secureStorage/c
 import { plainTextStorage } from '../../utils/secureStorage/plainTextStorage.js'
 import { clearOAuthTokenCache, getClaudeAIOAuthTokens, getClaudeAIOAuthTokensAsync } from '../../utils/auth.js'
 import * as pool from './claudeAccountPool.js'
+import * as authority from './claudeAccountAuthority.js'
 import * as atomic from '../../utils/atomicFile.js'
 import * as auth from '../../utils/auth.js'
 import { blockSessionAccountRoute, clearSessionAccountRouteBlock } from './sessionAccountRouting.js'
@@ -307,7 +308,7 @@ test('explicit re-login reports failure instead of publishing fallback when the 
   })
   expect(() => pool.appendClaudeAccount({
     ...account, accessToken: 'login-after-delete', refreshToken: 'login-after-delete-refresh',
-  })).toThrow('Restore vault access and sign in again')
+  })).toThrow('Restore vault access and retry saving')
   expect(settings).toEqual(before.settings)
   expect(data).toEqual(before.data)
   expect(pool.getActiveClaudeAccount()).toBeNull()
@@ -322,7 +323,7 @@ test('explicit re-login reports failure instead of publishing fallback when the 
   expect(pool.getActiveClaudeAccount()?.accessToken).toBe('retried-login')
 })
 
-test('live-account re-login cannot publish fallback after only the new vault generation is visible', async () => {
+test('interrupted migration during re-login retains only the original committed credentials', async () => {
   const before = structuredClone({ settings, data })
   const write = atomic.writeFileAtomicDurableSync
   spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((path, contents, options) => {
@@ -331,35 +332,42 @@ test('live-account re-login cannot publish fallback after only the new vault gen
   })
   expect(() => pool.appendClaudeAccount({
     ...account, accessToken: 'partial-login-access', refreshToken: 'partial-login-refresh',
-  })).toThrow('Restore vault access and sign in again')
+  })).toThrow('Restore vault access and retry saving')
   expect(settings).toEqual(before.settings)
   expect(data).toEqual(before.data)
-  expect(pool.getActiveClaudeAccount()).toBeNull()
-  expect(pool.getClaudeCredentialGeneration(account.accountUuid)).toBeNull()
-  expect(pool.captureClaudeCredentialGeneration(account.accountUuid, account.accessToken)).toBeNull()
+  expect(pool.getActiveClaudeAccount()?.accessToken).toBe(account.accessToken)
+  expect(pool.getClaudeCredentialGeneration(account.accountUuid)).toBe(0)
+  expect(pool.captureClaudeCredentialGeneration(account.accountUuid, account.accessToken)).toBe(0)
+  expect(pool.captureClaudeCredentialGeneration(account.accountUuid, 'partial-login-access')).toBeNull()
 })
 
 test.each(['sdk-retry', 'direct-cached', 'request-signing', 'storage-denied', 'unlock-after-send'] as const)('the production client fences each physical HTTP send: %s', async scenario => {
+  spyOn(auth, 'isAnthropicAuthEnabled').mockReturnValue(true)
+  spyOn(auth, 'getAnthropicApiKeyWithSource').mockReturnValue({ key: null, source: 'none' })
+  const migrated = authority.migrateClaudeAccountAuthority(account.accountUuid)
+  if (migrated.status !== 'ready') throw new Error('Expected isolated ready fixture')
   const { getAnthropicClient } = await import('./client.js')
   const http = await import('../../utils/http.js')
   spyOn(http, 'getUserAgent').mockReturnValue('synthetic-credential-test')
   spyOn(auth, 'isClaudeAISubscriber').mockReturnValue(true)
   spyOn(auth, 'checkAndRefreshOAuthTokenIfNeeded').mockResolvedValue(false)
+  const prepare = spyOn(auth, 'prepareClaudeOAuthRequest').mockResolvedValue({
+    status: 'ready', handle: migrated.handle, credentials: migrated.record.credentials!,
+  })
   spyOn(auth, 'getClaudeAIOAuthTokens').mockReturnValue({
     ...account, scopes: ['user:inference'], subscriptionType: null, rateLimitTier: null,
   })
-  const capture = spyOn(pool, 'captureClaudeCredentialGeneration')
   let authorizationCalls = 0
   if (scenario === 'storage-denied') {
-    spyOn(pool, 'withClaudeCredentialGeneration').mockImplementation(() => {
+    spyOn(authority, 'withClaudeCredentialSend').mockImplementation(() => {
       authorizationCalls++
       throw new Error('synthetic storage access failure')
     })
   } else if (scenario === 'unlock-after-send') {
-    const authorize = pool.withClaudeCredentialGeneration
-    spyOn(pool, 'withClaudeCredentialGeneration').mockImplementation((id, generation, send) => {
+    const authorize = authority.withClaudeCredentialSend
+    spyOn(authority, 'withClaudeCredentialSend').mockImplementation((handle, send) => {
       authorizationCalls++
-      const started = authorize(id, generation, send)
+      const started = authorize(handle, send)
       if (started !== null) throw new Error('synthetic unlock failure after send')
       return started
     })
@@ -384,7 +392,7 @@ test.each(['sdk-retry', 'direct-cached', 'request-signing', 'storage-denied', 'u
     },
   })
   expect(client.authToken).toBe(account.accessToken)
-  expect(capture).toHaveBeenCalledTimes(1)
+  expect(prepare).toHaveBeenCalledTimes(1)
   if (scenario === 'direct-cached') expect(pool.deleteClaudeVaultFile(join(dir, 'accounts/deleted.json'))).toBe(true)
   if (scenario === 'request-signing') {
     const cch = await import('../../utils/cch.js')
@@ -419,29 +427,31 @@ test.each(['sdk-retry', 'direct-cached', 'request-signing', 'storage-denied', 'u
   }
 })
 
-test('client capture cannot stamp an old token with a newer login generation', async () => {
+test('client cannot send a captured old token after a newer login generation', async () => {
+  spyOn(auth, 'isAnthropicAuthEnabled').mockReturnValue(true)
+  spyOn(auth, 'getAnthropicApiKeyWithSource').mockReturnValue({ key: null, source: 'none' })
   const { getAnthropicClient } = await import('./client.js')
   const http = await import('../../utils/http.js')
   spyOn(http, 'getUserAgent').mockReturnValue('synthetic-credential-test')
   spyOn(auth, 'isClaudeAISubscriber').mockReturnValue(true)
+  spyOn(auth, 'getAuthTokenSource').mockReturnValue({ source: 'claude.ai', hasToken: true })
   spyOn(auth, 'checkAndRefreshOAuthTokenIfNeeded').mockResolvedValue(false)
-  const staleGetter = Object.assign(() => {
-    const captured = {
-      ...account, scopes: ['user:inference'], subscriptionType: null, rateLimitTier: null,
-    }
+  const migrated = authority.migrateClaudeAccountAuthority(account.accountUuid)
+  if (migrated.status !== 'ready') throw new Error('Expected isolated ready fixture')
+  spyOn(auth, 'prepareClaudeOAuthRequest').mockImplementation(async () => {
     pool.appendClaudeAccount({
       ...account, accessToken: 'new-generation-access', refreshToken: 'new-generation-refresh',
     })
-    return captured
-  }, { cache: auth.getClaudeAIOAuthTokens.cache })
-  spyOn(auth, 'getClaudeAIOAuthTokens').mockImplementation(staleGetter)
+    return { status: 'ready', handle: migrated.handle, credentials: migrated.record.credentials! }
+  })
   let sends = 0
   let failure: unknown
   try {
-    await getAnthropicClient({
+    const client = await getAnthropicClient({
       model: 'claude-sonnet-4-6', provider: 'firstParty', maxRetries: 0,
       fetchOverride: async () => { sends++; return new Response('{}') },
     })
+    await client.messages.create({ model: 'claude-sonnet-4-6', max_tokens: 1, messages: [{ role: 'user', content: 'synthetic' }] })
   } catch (error) {
     failure = error
   }

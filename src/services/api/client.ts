@@ -27,7 +27,7 @@ import {
 } from 'src/utils/cch.js'
 import type { GoogleAuth } from 'google-auth-library'
 import {
-  checkAndRefreshOAuthTokenIfNeeded,
+  prepareClaudeOAuthRequest,
   getAnthropicApiKey,
   getApiKeyFromApiKeyHelper,
   getClaudeAIOAuthTokens,
@@ -65,6 +65,8 @@ import {
 import { CodexAccountUnavailableError, recordClaudeOAuthClientCredential } from './withRetry.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
 import { maybeRefreshAccount, type CodexCoreAccount } from '../../codex-core/accounts.js'
+import type { ClaudeOAuthPreparationResult } from './claudeTokenRefresh.js'
+import { hasSelectedStoredClaudeOAuthRoute } from './claudeStoredOAuthRoute.js'
 
 /**
  * Environment variables for different client types:
@@ -434,11 +436,36 @@ export async function getAnthropicClient({
     defaultHeaders['x-anthropic-additional-protection'] = 'true'
   }
 
-  logForDebugging('[API:auth] OAuth token check starting')
-  await checkAndRefreshOAuthTokenIfNeeded()
-  logForDebugging('[API:auth] OAuth token check complete')
-
-  if (!isClaudeAISubscriber()) {
+  // Resolve the request's auth route before touching Claude credentials.
+  // Auxiliary GPT requests can run inside a Claude session (and vice versa).
+  const hasAuthorizationHeader = Object.keys(defaultHeaders).some(
+    name => name.toLowerCase() === 'authorization',
+  )
+  const canUseClaudeOAuth =
+    resolvedProvider === 'firstParty' &&
+    isFirstPartyAnthropicBaseUrl() &&
+    !apiKey &&
+    !hasAuthorizationHeader
+  const usesStoredClaudeOAuth = canUseClaudeOAuth && hasSelectedStoredClaudeOAuthRoute()
+  const usesClaudeOAuth = canUseClaudeOAuth && (usesStoredClaudeOAuth || isClaudeAISubscriber())
+  let preparedOAuth: Extract<ClaudeOAuthPreparationResult, { status: 'ready' }> | undefined
+  if (usesStoredClaudeOAuth) {
+    logForDebugging('[API:auth] OAuth token check starting')
+    const preparation = await prepareClaudeOAuthRequest()
+    if (preparation.status !== 'ready') {
+      throw new SessionAccountRouteUnavailableError(
+        preparation.status === 'sign_in_required' || preparation.status === 'older_login'
+          ? 'Sign in to your Claude account again before continuing.'
+          : preparation.status === 'persistence_pending'
+            ? 'Claude credentials could not be saved. Restore storage access and try again.'
+            : preparation.status === 'refresh_uncertain'
+              ? 'Claude sign-in could not be confirmed. Open Accounts before trying again.'
+              : 'Claude credentials are not ready. Wait a moment and try again.',
+      )
+    }
+    preparedOAuth = preparation
+    logForDebugging('[API:auth] OAuth token check complete')
+  } else if (!usesClaudeOAuth && resolvedProvider === 'firstParty' && !apiKey && !hasAuthorizationHeader) {
     await configureApiKeyHeaders(defaultHeaders, getIsNonInteractiveSession())
   }
 
@@ -644,7 +671,7 @@ export async function getAnthropicClient({
   }
 
   // Determine authentication method based on available tokens
-  if (isClaudePoolActive()) {
+  if (usesClaudeOAuth && isClaudePoolActive()) {
     const activeClaudeAccount = getActiveClaudeAccount()
     if (activeClaudeAccount) {
       emitRouteSelectedDiagnostic({
@@ -657,7 +684,9 @@ export async function getAnthropicClient({
     }
   }
 
-  const oauthTokens = isClaudeAISubscriber() ? getClaudeAIOAuthTokens() : null
+  const oauthTokens = preparedOAuth
+    ? { ...preparedOAuth.credentials, accountUuid: preparedOAuth.handle.accountId }
+    : usesClaudeOAuth ? getClaudeAIOAuthTokens() : null
   const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {
     apiKey: oauthTokens ? null : apiKey || getAnthropicApiKey(),
     authToken: oauthTokens?.accessToken,
@@ -673,7 +702,8 @@ export async function getAnthropicClient({
   let credentialGeneration: number | undefined
   if (oauthTokens?.accountUuid &&
       !Object.keys(defaultHeaders).some(name => name.toLowerCase() === 'authorization')) {
-    const captured = captureClaudeCredentialGeneration(oauthTokens.accountUuid, oauthTokens.accessToken)
+    const captured = preparedOAuth?.handle.generation ??
+      captureClaudeCredentialGeneration(oauthTokens.accountUuid, oauthTokens.accessToken)
     if (captured === null) {
       throw new SessionAccountRouteUnavailableError(
         "This chat's Claude account changed while preparing the request. Select an account and try again.",
@@ -681,7 +711,7 @@ export async function getAnthropicClient({
     }
     credentialGeneration = captured
     clientConfig.fetch = buildFetch(
-      createClaudeCredentialFetch(fetchOverride ?? globalThis.fetch, oauthTokens.accountUuid, captured),
+      createClaudeCredentialFetch(fetchOverride ?? globalThis.fetch, oauthTokens.accountUuid, captured, preparedOAuth?.handle.revision),
       source,
       resolvedProvider,
     )
@@ -693,6 +723,7 @@ export async function getAnthropicClient({
       accessToken: oauthTokens.accessToken,
       accountUuid: oauthTokens.accountUuid,
       credentialGeneration,
+      credentialRevision: preparedOAuth?.handle.revision,
     })
   }
   return client

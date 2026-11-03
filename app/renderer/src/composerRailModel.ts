@@ -138,6 +138,7 @@ function railAccounts(
     anthropicAccounts: inventory.anthropicAccounts.map(account => ({
       ...account,
       isDefault: account.id === anthropicActiveAccountId,
+      boundLoginGeneration: session?.anthropicAccounts.find(row => row.id === account.id)?.boundLoginGeneration,
     })),
   }
 }
@@ -165,7 +166,10 @@ export function selectComposerRail(
     canSwitchAccount: ready && (
       last?.model.provider === 'openai' ||
       (last?.model.provider === 'anthropic' &&
-        accountsSnapshot?.anthropicSubscriptionActive === true)
+        (accountsSnapshot?.anthropicSubscriptionActive === true ||
+          accountsSnapshot?.anthropicAccounts.some(account => account.isDefault &&
+            account.boundLoginGeneration !== undefined && account.loginGeneration !== undefined &&
+            account.boundLoginGeneration !== account.loginGeneration) === true))
     ),
   }
 }

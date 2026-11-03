@@ -123,7 +123,19 @@ export function anthropicAccountCapped(account: AnthropicAccountStatus): boolean
   return (account.usageFiveHour ?? 0) >= 100 || (account.usageWeekly ?? 0) >= 100
 }
 
+export function anthropicCredentialLabel(account: AnthropicAccountStatus): string | null {
+  if (account.credentialHealth === 'persistence_pending') return 'Sign-in was not saved. Sign in again before reconnecting.'
+  if (account.credentialHealth === 'refresh_uncertain') return 'Sign-in renewal could not be confirmed. Sign in again.'
+  if (account.credentialHealth === 'sign_in_required' || account.status === 'dead') return 'Sign-in is no longer valid. Sign in again.'
+  if (account.boundLoginGeneration !== undefined && account.loginGeneration !== undefined &&
+    account.boundLoginGeneration !== account.loginGeneration) {
+    return 'Account is signed in. Reconnect this chat to use the new sign-in.'
+  }
+  return null
+}
+
 export function anthropicStatusDotTone(account: AnthropicAccountStatus): Tone {
+  if (anthropicCredentialLabel(account)) return 'warn'
   if (account.status === 'dead' || anthropicAccountCapped(account)) return 'warn'
   return account.isDefault ? 'accent' : 'good'
 }

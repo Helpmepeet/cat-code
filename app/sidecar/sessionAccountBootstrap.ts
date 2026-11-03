@@ -3,7 +3,7 @@ import { blockSessionAccountRoute, clearSessionAccountRouteBlock } from '../../s
 
 type RestoreDependencies = {
   load: () => Promise<void>
-  selectAnthropic: (id: string, options: { persistDefault: false }) => { accountUuid: string } | null
+  selectAnthropic: (id: string, options: { persistDefault: false; expectedLoginGeneration: number }) => { accountUuid: string } | null
   selectOpenai: (id: string, options: { persistDefault: false }) => { accountId: string } | null
 }
 
@@ -14,7 +14,8 @@ export function readSessionAccountSelection(raw: string | undefined): SessionAcc
   const selection = parseSessionAccountSelection(parsed)
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
       Object.entries(parsed).some(([provider, id]) =>
-        (provider !== 'anthropic' && provider !== 'openai') || selection?.[provider] !== id)) {
+        !['anthropic', 'anthropicLoginGeneration', 'openai'].includes(provider) ||
+          selection?.[provider as keyof SessionAccountSelection] !== id)) {
     throw new Error('Invalid saved account selection')
   }
   return selection
@@ -39,7 +40,10 @@ export async function restoreSessionAccountSelection(
       if (!id) continue
       try {
         const restored = provider === 'anthropic'
-          ? deps.selectAnthropic(id, { persistDefault: false })?.accountUuid
+          // An unversioned saved identity may use only verified legacy generation
+          // zero. It never authorizes adopting a committed newer login.
+          ? deps.selectAnthropic(id, { persistDefault: false,
+            expectedLoginGeneration: selection.anthropicLoginGeneration ?? 0 })?.accountUuid
           : deps.selectOpenai(id, { persistDefault: false })?.accountId
         if (restored === id) clearSessionAccountRouteBlock(provider)
       } catch {

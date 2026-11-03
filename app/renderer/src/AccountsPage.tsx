@@ -57,6 +57,7 @@ import {
 } from './accountsState.js'
 import {
   capIncidentKey,
+  anthropicCredentialLabel,
   deleteVerb,
   formatResetLabel,
   loginVerb,
@@ -899,12 +900,14 @@ export function AccountsPage({
   lastResult,
   signOutOverlays = {},
   onVerb,
+  onSignInAndReconnect,
 }: {
   snapshot: AccountsSnapshot | null
-  switchScope?: { provider: 'openai' | 'anthropic'; accountId: string | null }
+  switchScope?: { provider: 'openai' | 'anthropic'; accountId: string | null; boundLoginGeneration?: number }
   lastResult: AccountResultFrame | null
   signOutOverlays?: Record<string, AccountSignOutOverlay>
   onVerb: (verb: AccountVerbMessage) => void
+  onSignInAndReconnect?: (accountId: string) => void
 }): ReactElement {
   const toast = useToast()
   const [dialog, setDialog] = useState<DialogState>(null)
@@ -939,6 +942,8 @@ export function AccountsPage({
     })),
     anthropicAccounts: snapshot.anthropicAccounts.map(account => ({
       ...account,
+      boundLoginGeneration: switchScope.provider === 'anthropic' && account.id === switchScope.accountId
+        ? switchScope.boundLoginGeneration : undefined,
       isDefault: switchScope.provider === 'anthropic'
         ? account.id === switchScope.accountId : account.isDefault,
     })),
@@ -1166,12 +1171,13 @@ export function AccountsPage({
                         {account.email}
                       </div>
                     </div>
-                    <span className="text-[11.5px] capitalize text-text-muted">
-                      {account.status === 'healthy'
+                    <span className="text-[11.5px] text-text-muted">
+                      {anthropicCredentialLabel(account) ?? (account.status === 'healthy'
                         ? account.subscriptionType ?? account.status
-                        : account.status}
+                        : account.status)}
                     </span>
-                    {account.status !== 'healthy' || account.loginStale ? (
+                    {account.status !== 'healthy' || account.loginStale ||
+                      (account.credentialHealth !== undefined && account.credentialHealth !== 'ready') ? (
                       <div className="text-right">
                         <button
                           type="button"
@@ -1183,7 +1189,20 @@ export function AccountsPage({
                         <div className="mt-1 text-[11px] text-text-subtle">
                           Choose {account.email} in the browser to reconnect this account.
                         </div>
+                        {switchScope?.provider === 'anthropic' &&
+                          switchScope.accountId === account.id && onSignInAndReconnect ? (
+                          <button type="button"
+                            onClick={() => onSignInAndReconnect(account.id)}
+                            className="mt-1 rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary">
+                            Sign in and reconnect this chat
+                          </button>
+                        ) : null}
                       </div>
+                    ) : account.isDefault && switchScope?.provider === 'anthropic' ? (
+                      <button type="button" onClick={() => submit(switchVerb(account.id, 'anthropic'))}
+                        className="rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary">
+                        Reconnect this chat
+                      </button>
                     ) : !account.isDefault && account.status === 'healthy' ? (
                       <button
                         type="button"

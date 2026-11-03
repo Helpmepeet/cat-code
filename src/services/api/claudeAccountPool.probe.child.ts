@@ -49,13 +49,13 @@ if (role === 'terminal-holder') {
     }
   }
 
+  setClaudeVaultPathForTest(dirname(dirname(vaultPath)))
   if (action === 'delete') {
     if (!deleteClaudeVaultFile(vaultPath)) {
       throw new Error('desktop delete failed')
     }
   } else {
     const accountUuid = 'synthetic-account'
-    setClaudeVaultPathForTest(dirname(dirname(vaultPath)))
     seedClaudeAccountPoolForTest({
       activeAccountUuid: accountUuid,
       accounts: [

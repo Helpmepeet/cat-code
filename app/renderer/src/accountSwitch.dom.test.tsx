@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
 import { App } from './App.js'
+import { AccountSwitcherPanel } from './ComposerActionsBar.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { sessionDescriptor } from './sessionDescriptorFixture.js'
 import type { HostEvent } from '../../shared/hostApi.js'
@@ -33,6 +34,103 @@ const pool: AccountsSnapshot = {
   anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0,
   anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true,
 }
+
+test('a sole active Claude account has a deliberate reconnect action, not a clickable active row', async () => {
+  const active = {
+    id: 'claude-main', alias: 'Claude account', email: 'claude@example.test',
+    status: 'healthy' as const, isDefault: true, hasVaultProfile: true, subscriptionType: 'max',
+  }
+  const switches: unknown[] = []
+  const tree = await harness.mount(
+    <AccountSwitcherPanel active={active} pool={[]} anthropicPool={[active]}
+      provider="anthropic" onSwitch={(id, provider) => switches.push({ id, provider })} />,
+  )
+  const buttons = [...tree.container.querySelectorAll<HTMLButtonElement>('button')]
+  const row = buttons.find(button => button.textContent?.includes('Claude account'))!
+  expect(row.getAttribute('aria-disabled')).toBe('true')
+  await act(async () => { row.click() })
+  expect(switches).toEqual([])
+  const reconnect = buttons.find(button => button.textContent?.trim() === 'Reconnect this chat')!
+  expect(reconnect).toBeDefined()
+  await act(async () => { reconnect.click() })
+  expect(switches).toEqual([{ id: 'claude-main', provider: 'anthropic' }])
+})
+
+test.each(['persistence_pending', 'refresh_uncertain', 'sign_in_required', 'ready'] as const)(
+  'composer exposes actionable Claude health and only reconnects a valid login: %s',
+  async credentialHealth => {
+    const active = {
+      id: 'claude-main', alias: 'Claude account', email: 'claude@example.test',
+      status: 'healthy' as const, isDefault: true, hasVaultProfile: true, subscriptionType: 'max',
+      credentialHealth, loginGeneration: 2, boundLoginGeneration: 1,
+    }
+    const tree = await harness.mount(
+      <AccountSwitcherPanel active={active} pool={[]} anthropicPool={[active]}
+        provider="anthropic" onSwitch={() => {}} onManage={() => {}} />,
+    )
+    const text = tree.container.textContent!
+    expect(text).toContain(credentialHealth === 'ready' ? 'Account is signed in.' : 'Sign in again')
+    expect(text.includes('Reconnect this chat') || text.includes('Reconnect this chat'.toLowerCase())).toBe(credentialHealth === 'ready')
+    expect(text).toContain('Manage accounts')
+  },
+)
+
+test.each(['committed', 'wrong-account', 'wrong-provider', 'pending', 'wrong-request', 'legacy', 'chat-account-changed'] as const)(
+  'combined Claude sign-in reconnects only the originating chat with a matching committed receipt: %s',
+  async outcome => {
+    const app = await mountApp('anthropic')
+    const inventory: AccountsSnapshot = {
+      ...pool, anthropicAccounts: [{
+        id: 'claude-main', alias: 'Claude account', email: 'claude@example.test',
+        status: 'dead', isDefault: true, hasVaultProfile: true, subscriptionType: 'max',
+      }],
+      anthropicActiveAccountId: 'claude-main', anthropicPoolCount: 1,
+    }
+    await app.emitPool(inventory)
+    await app.emit({
+      kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+      sessionId: 'limited-chat', accounts: inventory,
+    })
+    await app.click('Accounts')
+    await app.click('Sign in and reconnect this chat')
+    const login = app.managed[0] as { requestId: string }
+    expect(login.requestId).toBeTruthy()
+    // Completion must not consult the tab that happens to be active now.
+    const otherTab = [...app.tree.container.querySelectorAll<HTMLElement>('[role="tab"]')]
+      .find(tab => tab.getAttribute('aria-label')?.includes('other-chat'))!
+    expect(otherTab).toBeDefined()
+    await act(async () => { otherTab.click() })
+    if (outcome === 'chat-account-changed') {
+      await app.emit({
+        kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
+        sessionId: 'limited-chat', accounts: {
+          ...inventory, anthropicAccounts: inventory.anthropicAccounts.map(account => ({
+            ...account, id: 'another-chat-selection',
+          })),
+        },
+      })
+    }
+    await app.emitHost({
+      type: 'account-oauth', provider: outcome === 'wrong-provider' ? 'openai' : 'anthropic',
+      progress: outcome === 'legacy' ? { state: 'success' } : {
+        state: 'success',
+        loginRequestId: outcome === 'wrong-request' ? 'unrelated' : login.requestId,
+        receipt: {
+          provider: outcome === 'wrong-provider' ? 'openai' : 'anthropic',
+          accountId: outcome === 'wrong-account' ? 'another-account' : 'claude-main',
+          operationId: 'installed-operation', loginGeneration: 2,
+          outcome: outcome === 'pending' ? 'persistence_pending' : 'committed',
+        },
+      },
+    })
+    expect(app.sessionSwitches).toEqual(outcome === 'committed' ? [{
+      sessionId: 'limited-chat',
+      verb: expect.objectContaining({ type: 'account.switch', provider: 'anthropic', accountId: 'claude-main', expectedLoginGeneration: 2 }),
+    }] : [])
+    expect(app.submits).toEqual([])
+    expect(app.lifecycle).toEqual([])
+  },
+)
 
 async function mountApp(
   provider: RunControlProvider = 'openai',

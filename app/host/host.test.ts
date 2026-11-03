@@ -4963,13 +4963,15 @@ test('each chat retains both account identities across restart, close/restore an
     const created = await h.host.createSession({ cwd: h.cwd, resumeEngineSessionId: engineId })
     if (!created.ok) throw new Error(created.error.message)
     const id = created.value.appSessionId
-    const selection = { anthropic: `claude-${chat}`, openai: `codex-${chat}` }
+    const selection = { anthropic: `claude-${chat}`, anthropicLoginGeneration: 2, openai: `codex-${chat}` }
     expect(h.supervisor.records.get(id)?.accountSelection).toBeUndefined()
     h.supervisor.emit({
       type: 'frame', sessionId: id,
       frame: { kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: id,
         accounts: { initialized: true, activeAccountId: selection.openai,
-          anthropicInitialized: true, anthropicActiveAccountId: selection.anthropic } as never },
+          anthropicInitialized: true, anthropicActiveAccountId: selection.anthropic,
+          anthropicAccounts: [{ id: selection.anthropic, loginGeneration: 9, boundLoginGeneration: 2 }],
+        } as never },
     })
     await settle(() => h.registry.findSession(id)?.accountSelection?.anthropic === selection.anthropic)
     expect((await h.host.restartSession(id)).ok).toBe(true)

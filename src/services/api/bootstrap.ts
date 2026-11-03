@@ -6,10 +6,10 @@ import {
   hasProfileScope,
 } from 'src/utils/auth.js'
 import { z } from 'zod'
-import { getOauthConfig, OAUTH_BETA_HEADER } from '../../constants/oauth.js'
+import { getOauthConfig } from '../../constants/oauth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
 import { logForDebugging } from '../../utils/debug.js'
-import { withOAuth401Retry } from '../../utils/http.js'
+import { getOAuthAuthHeaders, withOAuth401Retry, type AuthHeaders } from '../../utils/http.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { logError } from '../../utils/log.js'
 import { getAPIProvider } from '../../utils/model/providers.js'
@@ -65,28 +65,19 @@ async function fetchBootstrapAPI(): Promise<BootstrapResponse | null> {
   // withOAuth401Retry handles the refresh-and-retry. API key users fail
   // through on 401 (no refresh mechanism — no OAuth token to pass).
   try {
-    return await withOAuth401Retry(async () => {
-      // Re-read OAuth each call so the retry picks up the refreshed token.
-      const token = getClaudeAIOAuthTokens()?.accessToken
-      let authHeaders: Record<string, string>
-      if (token && hasProfileScope()) {
-        authHeaders = {
-          Authorization: `Bearer ${token}`,
-          'anthropic-beta': OAUTH_BETA_HEADER,
-        }
-      } else if (apiKey) {
-        authHeaders = { 'x-api-key': apiKey }
-      } else {
+    return await withOAuth401Retry(async auth => {
+      if (auth.error) {
         logForDebugging('[Bootstrap] No auth available on retry, aborting')
         return null
       }
 
       logForDebugging('[Bootstrap] Fetching')
       const response = await axios.get<unknown>(endpoint, {
+        ...auth.requestConfig,
         headers: {
           'Content-Type': 'application/json',
           'User-Agent': getClaudeCodeUserAgent(),
-          ...authHeaders,
+          ...auth.headers,
         },
         timeout: 5000,
       })
@@ -99,6 +90,12 @@ async function fetchBootstrapAPI(): Promise<BootstrapResponse | null> {
       }
       logForDebugging('[Bootstrap] Fetch ok')
       return parsed.data
+    }, {
+      getAuthHeaders: (): AuthHeaders => {
+        const token = getClaudeAIOAuthTokens()
+        if (token?.accessToken && hasProfileScope()) return getOAuthAuthHeaders(token)
+        return apiKey ? { headers: { 'x-api-key': apiKey } } : { headers: {}, error: 'No auth available' }
+      },
     })
   } catch (error) {
     logForDebugging(

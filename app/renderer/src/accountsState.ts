@@ -9,6 +9,27 @@ import type {
   SignedOutCodexProfileStatus,
 } from '../../shared/protocol.js'
 import { useEffect, useState } from 'react'
+import { parseAccountLoginReceipt } from '../../shared/accountControlWorker.js'
+
+export type ChatLoginReconnect = {
+  sessionId: SessionId
+  provider: 'anthropic'
+  accountId: string
+  loginRequestId: string
+}
+
+/** Completion is an installation receipt, never the current tab or pool default. */
+export function matchesChatLoginReconnect(
+  origin: ChatLoginReconnect,
+  provider: 'anthropic' | 'openai',
+  progress: import('../../shared/protocol.js').OAuthLoginProgress | null,
+): boolean {
+  if (progress?.state !== 'success' || progress.loginRequestId !== origin.loginRequestId) return false
+  const receipt = parseAccountLoginReceipt(progress.receipt)
+  return receipt !== null && receipt.outcome === 'committed' &&
+    provider === origin.provider && receipt.provider === origin.provider &&
+    receipt.accountId === origin.accountId
+}
 
 export type AccountSignOutOverlayPhase =
   | 'signed_out'

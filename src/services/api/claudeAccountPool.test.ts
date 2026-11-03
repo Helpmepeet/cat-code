@@ -1,10 +1,14 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { createHash } from 'crypto'
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 
 import * as atomic from '../../utils/atomicFile.js'
+import * as authority from './claudeAccountAuthority.js'
+import * as secure from '../../utils/secureStorage/index.js'
+import * as configuration from '../../utils/config.js'
 import { saveGlobalConfig } from '../../utils/config.js'
 import {
   getClaudePoolStatus,
@@ -19,6 +23,9 @@ import {
   getActiveClaudeAccount,
   reloadActiveClaudeAccountCredentials,
   retryClaudeAccountTokenPersistence,
+  appendClaudeAccount,
+  getSelectedClaudeAccountIdentity,
+  switchToClaudeAccount,
   type ClaudePoolAccount,
 } from './claudeAccountPool.js'
 
@@ -208,6 +215,158 @@ describe('updateClaudeAccountTokens', () => {
     rmSync(vaultDir, { recursive: true, force: true })
   })
 
+  test.each(['rejected', 'uncertain'] as const)('fresh inventory retains %s metadata without credential payloads', disposition => {
+    const installed = authority.commitClaudeLogin('metadata-account', 'login', {
+      accessToken: 'secret-access', refreshToken: 'secret-refresh', expiresAt: 100,
+    }, { account_uuid: 'metadata-account', email_address: 'metadata@example.com', alias: 'Saved' })
+    if (!installed.handle) throw new Error('Expected committed fixture')
+    if (disposition === 'rejected') authority.rejectClaudeCredential(installed.handle, 'reject')
+    else {
+      const claim = authority.claimClaudeRefresh(installed.handle, 'refresh', 'owner').claim!
+      authority.startClaudeRefreshDispatch(claim, () => true)
+      authority.markClaudeRefreshUncertain(claim)
+    }
+    setClaudeConfigAccountForTest({ active: true, value: null })
+    loadClaudePoolForObservation()
+    expect(getClaudePoolStatus().accounts).toHaveLength(1)
+    expect(getClaudePoolStatus().accounts[0]).toMatchObject({
+      accountUuid: 'metadata-account', emailAddress: 'metadata@example.com', alias: 'Saved',
+      status: 'dead', accessToken: '', refreshToken: '', expiresAt: 0,
+    })
+    expect(getActiveClaudeAccount()).toBeNull()
+  })
+
+  test('inventory reload preserves an old chat generation until an exact deliberate selection', () => {
+    const first = authority.commitClaudeLogin('pinned', 'first-login', {
+      accessToken: 'first', refreshToken: 'first-refresh', expiresAt: 100,
+    }, { account_uuid: 'pinned', email_address: 'pinned@example.com' })
+    seedClaudeAccountPoolForTest({ accounts: [{
+      ...buildClaudeAccount({ accountUuid: 'pinned', accessToken: 'first' }),
+      lifecycleGeneration: first.handle!.generation, credentialRevision: 0,
+    }], activeAccountUuid: 'pinned' })
+    const second = authority.commitClaudeLogin('pinned', 'second-login', {
+      accessToken: 'second', refreshToken: 'second-refresh', expiresAt: 100,
+    }, { account_uuid: 'pinned', email_address: 'pinned@example.com' })
+    setClaudeConfigAccountForTest({ active: true, value: null })
+    loadClaudePoolForObservation()
+    expect(getSelectedClaudeAccountIdentity()?.generation).toBe(first.handle!.generation)
+    expect(getActiveClaudeAccount()).toBeNull()
+    expect(switchToClaudeAccount('pinned', { persistDefault: false, expectedLoginGeneration: first.handle!.generation })).toBeNull()
+    expect(switchToClaudeAccount('pinned', { persistDefault: false, expectedLoginGeneration: second.handle!.generation })?.accessToken).toBe('second')
+  })
+
+  test('observation shows a new staged login using pending metadata only and hides plain tombstones', () => {
+    const original = atomic.writeFileAtomicDurableSync
+    const fail = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((path, data, options) => {
+      if (String(path).includes('authority-v1') && JSON.parse(String(data)).loginGeneration === 1) throw new Error('synthetic login commit failure')
+      return original(path, data, options)
+    })
+    try {
+      expect(authority.commitClaudeLogin('new-pending', 'staged-new', {
+        accessToken: 'issued-secret', refreshToken: 'issued-refresh', expiresAt: 100,
+      }, { account_uuid: 'new-pending', email_address: 'pending@example.com', alias: 'Pending' }).outcome).toBe('persistence_pending')
+    } finally { fail.mockRestore() }
+    expect(authority.readClaudeAccountAuthority('new-pending')).toMatchObject({
+      status: 'persistence_pending', record: { state: 'deleted' },
+    })
+    setClaudeConfigAccountForTest({ active: true, value: null })
+    const writes = spyOn(atomic, 'writeFileAtomicDurableSync')
+    try {
+      loadClaudePoolForObservation()
+      expect(writes).not.toHaveBeenCalled()
+      expect(getClaudePoolStatus().accounts).toHaveLength(1)
+      expect(getClaudePoolStatus().accounts[0]).toMatchObject({
+        accountUuid: 'new-pending', emailAddress: 'pending@example.com', alias: 'Pending',
+        accessToken: '', refreshToken: '', expiresAt: 0, status: 'dead',
+      })
+      expect(getActiveClaudeAccount()).toBeNull()
+    } finally { writes.mockRestore() }
+    const staged = authority.readClaudeAccountAuthority('new-pending')
+    if (!('handle' in staged)) throw new Error('Missing pending handle')
+    expect(authority.deleteClaudeAccountAuthority(staged.handle).outcome).toBe('committed')
+    loadClaudePoolForObservation()
+    expect(getClaudePoolStatus().accounts).toHaveLength(0)
+  })
+
+  test('production init can finish a staged login without moving an existing chat to its new generation', () => {
+    const account = buildClaudeAccount({ accountUuid: 'pinned-init' })
+    const profile = { account_uuid: account.accountUuid, email_address: account.emailAddress }
+    const first = authority.commitClaudeLogin(account.accountUuid, 'first', account, profile)
+    seedClaudeAccountPoolForTest({ accounts: [{ ...account, lifecycleGeneration: first.handle!.generation }], activeAccountUuid: account.accountUuid })
+    const original = atomic.writeFileAtomicDurableSync
+    const fail = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((path, data, options) => {
+      if (String(path).includes('authority-v1') && JSON.parse(String(data)).loginGeneration === 2) throw new Error('synthetic login commit failure')
+      return original(path, data, options)
+    })
+    try { authority.commitClaudeLogin(account.accountUuid, 'staged', { ...account, accessToken: 'new-login' }, profile) } finally { fail.mockRestore() }
+    const save = spyOn(configuration, 'saveGlobalConfig').mockReturnValue(true)
+    setClaudeConfigAccountForTest({ active: true, value: null })
+    try {
+      initClaudeAccountPool()
+      expect(authority.readClaudeAccountAuthority(account.accountUuid)).toMatchObject({ status: 'ready', handle: { generation: 2 } })
+      expect(getSelectedClaudeAccountIdentity()?.generation).toBe(1)
+      expect(getActiveClaudeAccount()).toBeNull()
+    } finally { save.mockRestore() }
+  })
+
+  test.each(['stage', 'commit'] as const)('append retains the typed receipt after a failed login %s and retries the original operation', phase => {
+    const account = buildClaudeAccount({ accountUuid: 'typed-install', accessToken: 'original' })
+    const profile = { account_uuid: account.accountUuid, email_address: account.emailAddress }
+    authority.commitClaudeLogin(account.accountUuid, 'original', account, profile)
+    let config: any = {}
+    const storage = spyOn(secure, 'getSecureStorage').mockImplementation(() => { throw new Error('isolated unavailable mirror') })
+    const getConfig = spyOn(configuration, 'getGlobalConfig').mockImplementation(() => config)
+    const saveConfig = spyOn(configuration, 'saveGlobalConfig').mockImplementation(update => { config = update(config); return true })
+    const original = atomic.writeFileAtomicDurableSync
+    const fail = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((path, data, options) => {
+      const state = String(path).includes('authority-v1') ? JSON.parse(String(data)) : undefined
+      if (state && (phase === 'stage' ? state.pendingLogin?.operationId === 'captured-install' : state.loginGeneration === 2)) throw new Error('synthetic disk failure')
+      return original(path, data, options)
+    })
+    try {
+      let error: unknown
+      try { appendClaudeAccount({ ...account, accessToken: 'issued-secret' }, { operationId: 'captured-install' }) } catch (caught) { error = caught }
+      expect(error).toBeInstanceOf(authority.ClaudeLoginInstallationError)
+      const receipt = (error as authority.ClaudeLoginInstallationError).result
+      expect(receipt).toMatchObject({
+        operationId: 'captured-install', outcome: 'persistence_pending', restartRecoverable: phase === 'commit',
+      })
+      expect(JSON.stringify(error)).not.toContain('issued-secret')
+      fail.mockRestore()
+      expect(appendClaudeAccount({ ...account, accessToken: 'issued-secret' }, { operationId: receipt.operationId }))
+        .toMatchObject({ outcome: 'committed', handle: { generation: 2 } })
+      expect(appendClaudeAccount({ ...account, accessToken: 'issued-secret' }, { operationId: receipt.operationId }))
+        .toMatchObject({ outcome: 'committed', handle: { generation: 2 } })
+    } finally { fail.mockRestore(); storage.mockRestore(); getConfig.mockRestore(); saveConfig.mockRestore() }
+  })
+
+  test('a newly issued login does not reuse a failed login operation for the same account', () => {
+    const first = buildClaudeAccount({ accountUuid: 'new-login' })
+    authority.commitClaudeLogin(first.accountUuid, 'original', first, {
+      account_uuid: first.accountUuid, email_address: first.emailAddress,
+    })
+    let stored: any = {}
+    let config: any = {}
+    const storage = spyOn(secure, 'getSecureStorage').mockReturnValue({
+      name: 'test', read: () => stored, readAsync: async () => stored,
+      update: data => { stored = data; return { success: true } }, delete: () => true,
+    })
+    const getConfig = spyOn(configuration, 'getGlobalConfig').mockImplementation(() => config)
+    const saveConfig = spyOn(configuration, 'saveGlobalConfig').mockImplementation(update => { config = update(config); return true })
+    const fail = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('synthetic staging failure') })
+    try {
+      expect(() => appendClaudeAccount({ ...first, accessToken: 'issued-a' }, { operationId: 'issued-a-op' })).toThrow('Failed to save Claude sign-in')
+      fail.mockRestore()
+      const second = appendClaudeAccount({ ...first, accessToken: 'issued-b' })
+      expect(second).toMatchObject({ outcome: 'committed', handle: { generation: 2 } })
+      expect(second.operationId).not.toBe('issued-a-op')
+      expect(() => appendClaudeAccount({ ...first, accessToken: 'issued-a' }, { operationId: 'issued-a-op' })).toThrow('Failed to save Claude sign-in')
+      expect(authority.readClaudeAccountAuthority(first.accountUuid)).toMatchObject({
+        status: 'ready', record: { credentials: { accessToken: 'issued-b' } },
+      })
+    } finally { fail.mockRestore(); storage.mockRestore(); getConfig.mockRestore(); saveConfig.mockRestore() }
+  })
+
   test('inventory reload cannot regress pending credentials and local retry preserves account identity', () => {
     const account = buildClaudeAccount({ accountUuid: 'pending-account' })
     seedClaudeAccountPoolForTest({ accounts: [account], activeAccountUuid: account.accountUuid })
@@ -222,7 +381,8 @@ describe('updateClaudeAccountTokens', () => {
       expect(retryClaudeAccountTokenPersistence(account.accountUuid)).toBe('pending')
     } finally { write.mockRestore() }
     expect(retryClaudeAccountTokenPersistence(account.accountUuid)).toBe('durable')
-    expect(JSON.parse(readFileSync(join(vaultDir, 'accounts', 'pending-account.json'), 'utf8')).tokens.access_token).toBe('new')
+    expect(JSON.parse(readFileSync(join(vaultDir, 'authority-v1', 'pending-account.json'), 'utf8')).credentials.accessToken).toBe('new')
+    expect(JSON.parse(readFileSync(join(vaultDir, 'accounts', 'pending-account.json'), 'utf8')).tokens).toBeUndefined()
   })
 
   test('updates the refresh source account when another account is active', () => {
@@ -435,18 +595,18 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
     expect(existsSync(filePath)).toBe(true)
     expect(status.accounts[0]?.vaultFilePath).toBe(filePath)
 
-    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as {
-      tokens: { access_token: string }
+    const written = JSON.parse(readFileSync(join(vaultDir, 'authority-v1', 'resurrection-uuid.json'), 'utf-8')) as {
+      credentials: { accessToken: string }
       profile: { account_uuid: string }
     }
-    expect(written.tokens.access_token).toBe(configOnly.accessToken)
+    expect(written.credentials.accessToken).toBe(configOnly.accessToken)
     expect(written.profile.account_uuid).toBe('resurrection-uuid')
     expect(statSync(accountsDir()).mode & 0o777).toBe(0o700)
     expect(statSync(filePath).mode & 0o777).toBe(0o600)
     expect(readdirSync(accountsDir()).filter(name => name.endsWith('.tmp'))).toEqual([])
   })
 
-  test('loadClaudePoolForObservation repairs permissive vault file and directory modes', () => {
+  test('observation does not write permission repairs; initialization does', () => {
     const account = buildClaudeAccount({ accountUuid: 'repair-uuid' })
     writeVaultAccountFile(account)
     const filePath = vaultFilePathFor(account.accountUuid)
@@ -455,6 +615,9 @@ describe('loadClaudePoolForObservation vs initClaudeAccountPool (disk-write boun
 
     loadClaudePoolForObservation()
 
+    expect(statSync(accountsDir()).mode & 0o777).toBe(0o755)
+    expect(statSync(filePath).mode & 0o777).toBe(0o644)
+    initClaudeAccountPool()
     expect(statSync(accountsDir()).mode & 0o777).toBe(0o700)
     expect(statSync(filePath).mode & 0o777).toBe(0o600)
   })
@@ -487,6 +650,7 @@ describe('Claude vault cross-process mutations', () => {
         import.meta.dir,
         'claudeAccountPool.probe.child.ts',
       )
+      const original = JSON.parse(readFileSync(vaultPath, 'utf8'))
       const children = ['terminal-holder', 'desktop-mutator'].map(role =>
         Bun.spawn(
           [process.execPath, childPath, role, action, vaultPath, readyPath],
@@ -528,10 +692,16 @@ describe('Claude vault cross-process mutations', () => {
           expect(existsSync(vaultPath)).toBe(false)
         } else {
           const value = JSON.parse(readFileSync(vaultPath, 'utf8'))
-          expect(value.terminal_marker).toBe(action)
           if (action === 'save') {
-            expect(value.tokens.access_token).toBe('desktop-access')
+            const record = JSON.parse(readFileSync(join(dir, 'authority-v1', 'synthetic-account.json'), 'utf8'))
+            expect(record.credentials.accessToken).toBe('desktop-access')
+            expect(record.migration.legacyHash).toBe(createHash('sha256')
+              .update(JSON.stringify({ ...original, terminal_marker: action }, (_key, item) =>
+                item && typeof item === 'object' && !Array.isArray(item)
+                  ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item)).digest('hex'))
+            expect(value.tokens).toBeUndefined()
           } else {
+            expect(value.terminal_marker).toBe(action)
             expect(value.alias).toBe('desktop-alias')
           }
         }

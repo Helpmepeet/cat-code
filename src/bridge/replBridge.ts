@@ -5,6 +5,7 @@ import {
   BridgeFatalError,
   isExpiredErrorType,
   isSuppressible403,
+  type BridgeOAuthIdentity,
 } from './bridgeApi.js'
 import type { BridgeConfig, BridgeApiClient } from './types.js'
 import { logForDebugging } from '../utils/debug.js'
@@ -153,7 +154,8 @@ export type BridgeCoreParams = {
    * registry via config.ts → file.ts → permissions/filesystem.ts →
    * sessionStorage.ts → commands.ts.
    */
-  onAuth401?: (staleAccessToken: string) => Promise<boolean>
+  onAuth401?: (staleAccessToken: string, identity?: BridgeOAuthIdentity) => Promise<boolean>
+  captureAuthIdentity?: (accessToken: string) => BridgeOAuthIdentity | null
   /**
    * Poll interval config getter for the work-poll heartbeat loop. REPL
    * wrapper passes the GrowthBook-backed getPollIntervalConfig (allows ops
@@ -279,6 +281,7 @@ export async function initBridgeCore(
       )
     },
     onAuth401,
+    captureAuthIdentity,
     getPollIntervalConfig = () => DEFAULT_POLL_CONFIG,
     initialHistoryCap = 200,
     initialMessages,
@@ -322,6 +325,7 @@ export async function initBridgeCore(
     runnerVersion: MACRO.VERSION,
     onDebug: logForDebugging,
     onAuth401,
+    captureAuthIdentity,
     getTrustedDeviceToken,
   })
   // Ant-only: interpose so /bridge-kick can inject poll/register/heartbeat

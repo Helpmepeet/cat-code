@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AccountsSnapshot, AccountStatus, AnthropicAccountStatus } from '../../shared/protocol.js'
 import {
   anthropicStatusDotTone,
+  anthropicCredentialLabel,
   formatAccountsNeedingSignIn,
   logoutVerb,
   selectAccountMenuItems,
@@ -18,6 +19,19 @@ test('Claude account dots prioritize dead and capped windows over the default ma
   expect(anthropicStatusDotTone({ ...account, isDefault: true, status: 'dead' })).toBe('warn')
   expect(anthropicStatusDotTone({ ...account, isDefault: true, usageFiveHour: 100 })).toBe('warn')
   expect(anthropicStatusDotTone({ ...account, isDefault: true, usageWeekly: 110 })).toBe('warn')
+})
+
+test('Claude health distinguishes account validity from an older chat binding', () => {
+  const account: AnthropicAccountStatus = {
+    id: 'claude', alias: null, email: 'test@example.com', status: 'healthy',
+    isDefault: true, hasVaultProfile: true, subscriptionType: 'max',
+    credentialHealth: 'ready', loginGeneration: 2, boundLoginGeneration: 1,
+  }
+  expect(anthropicCredentialLabel(account)).toBe('Account is signed in. Reconnect this chat to use the new sign-in.')
+  expect(anthropicCredentialLabel({ ...account, credentialHealth: 'persistence_pending' })).toContain('Sign in again')
+  expect(anthropicCredentialLabel({ ...account, credentialHealth: 'refresh_uncertain' })).toContain('Sign in again')
+  expect(anthropicCredentialLabel({ ...account, credentialHealth: 'sign_in_required' })).toBe('Sign-in is no longer valid. Sign in again.')
+  expect(anthropicCredentialLabel({ ...account, boundLoginGeneration: 2 })).toBeNull()
 })
 
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {

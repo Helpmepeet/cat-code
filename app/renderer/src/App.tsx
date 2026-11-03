@@ -265,6 +265,8 @@ import {
   selectGlobalAccountsSnapshot,
   useAccountsPoolPresentationState,
   hasCompleteAccountsUsage,
+  matchesChatLoginReconnect,
+  type ChatLoginReconnect,
 } from './accountsState.js'
 import { selectAccountHealthBanner } from './accountHealthBanner.js'
 import { BannerStack, type BannerNotice } from './BannerStack.js'
@@ -1024,6 +1026,7 @@ export function App() {
   const [oauthContext, setOauthContext] = useState<OAuthContext>(null)
   const [oauthStarting, setOauthStarting] = useState(false)
   const [appOAuthProgress, setAppOAuthProgress] = useState<import('../../shared/protocol.js').OAuthLoginProgress | null>(null)
+  const chatLoginReconnectRef = useRef<ChatLoginReconnect | null>(null)
   const [oauthProvider, setOauthProvider] = useState<'anthropic' | 'openai'>(
     'anthropic',
   )
@@ -2130,6 +2133,8 @@ export function App() {
     retainedAccountProvider === 'anthropic'
     ? {
       provider: retainedAccountProvider,
+      boundLoginGeneration: retainedAccountProvider === 'anthropic'
+        ? selectActiveAnthropicAccount(retainedAccounts)?.boundLoginGeneration : undefined,
       accountId: retainedAccountProvider === 'openai'
         ? selectSessionCodexAccount({
           roster: selectGlobalAccountsSnapshot(accounts),
@@ -2195,6 +2200,9 @@ export function App() {
         return
       }
       if (verb.type === 'account.login') {
+        if (chatLoginReconnectRef.current?.loginRequestId !== verb.requestId) {
+          chatLoginReconnectRef.current = null
+        }
         setAppOAuthProgress(null)
         setOauthProvider(verb.provider ?? 'openai')
         // AccountsPage starts login through this generic verb callback rather
@@ -2207,6 +2215,7 @@ export function App() {
         setOauthCodeStatus({ state: 'idle' })
         setOauthAliasStatus({ state: 'idle' })
       }
+      if (verb.type === 'account.oauthCancel') chatLoginReconnectRef.current = null
       void getBridge().manageAccount(verb).then(frame => {
         dispatchAccounts({ type: 'frame', frame })
         if (verb.type === 'account.login' && !frame.ok) {
@@ -2223,6 +2232,49 @@ export function App() {
     },
     [connection, runControls],
   )
+
+  const signInAndReconnectChat = useCallback((accountId: string) => {
+    const sessionId = activeSessionIdRef.current
+    if (!sessionId || accountSwitchScope?.provider !== 'anthropic' ||
+      accountSwitchScope.accountId !== accountId) return
+    const verb = loginVerb('anthropic')
+    chatLoginReconnectRef.current = {
+      sessionId, provider: 'anthropic', accountId, loginRequestId: verb.requestId,
+    }
+    sendAccountVerb(verb)
+  }, [accountSwitchScope, sendAccountVerb])
+
+  useEffect(() => {
+    const origin = chatLoginReconnectRef.current
+    if (!origin || !appOAuthProgress ||
+      !['success', 'error'].includes(appOAuthProgress.state)) return
+    // Consume once, including mismatches. Never retry against a newly active tab.
+    chatLoginReconnectRef.current = null
+    if (!matchesChatLoginReconnect(origin, oauthProvider, appOAuthProgress)) {
+      if (appOAuthProgress.state === 'success') {
+        toast('Sign-in finished without reconnecting this chat. Check the account and try again.', { tone: 'warn' })
+      }
+      return
+    }
+    const session = shellRef.current.byId[origin.sessionId]
+    if (!session || isSessionDismissed(shellRef.current.dismissals ?? [], session) ||
+      selectConnection(connection, origin.sessionId).status !== 'ready' ||
+      selectRunControlsSnapshot(runControls, origin.sessionId)?.model.provider !== origin.provider ||
+      selectActiveAnthropicAccount(selectAccountsSnapshot(accounts, origin.sessionId))?.id !== origin.accountId) {
+      toast('Account signed in. Open the original chat to reconnect it.', { tone: 'warn' })
+      return
+    }
+    try {
+      getBridge().accountVerb(origin.sessionId, {
+        type: 'account.switch', requestId: `reconnect-${origin.loginRequestId}`,
+        accountId: origin.accountId, provider: origin.provider,
+        expectedLoginGeneration: appOAuthProgress.state === 'success'
+          ? appOAuthProgress.receipt!.loginGeneration! : undefined,
+      })
+    } catch (error) {
+      toast(errorMessage(error), { tone: 'warn' })
+    }
+  }, [appOAuthProgress, oauthProvider, connection, runControls, accounts, toast])
 
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
   // scroll away inside it. Session-free by construction: it reads the global pool
@@ -5206,6 +5258,7 @@ export function App() {
               lastResult={accounts.lastResult}
               signOutOverlays={accounts.signOutOverlays}
               onVerb={sendAccountVerb}
+              onSignInAndReconnect={signInAndReconnectChat}
             />
           ) : activeView === 'sessions' ? (
             <SessionsPage

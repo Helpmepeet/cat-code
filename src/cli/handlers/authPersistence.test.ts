@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
+import * as authority from '../../services/api/claudeAccountAuthority.js'
+import nodeHttp from 'node:http'
+import nodeHttps from 'node:https'
+import { Readable, Writable } from 'node:stream'
 
 const analytics = await import('../../services/analytics/index.js')
 const debug = await import('../../utils/debug.js')
@@ -16,6 +21,7 @@ const oauth = await import('../../services/oauth/client.js')
 const profile = await import('../../services/oauth/getOauthProfile.js')
 const firstToken = await import('../../services/api/firstTokenDate.js')
 const auth = await import('../../utils/auth.js')
+const httpUtils = await import('../../utils/http.js')
 const pool = await import('../../services/api/claudeAccountPool.js')
 const envUtils = await import('../../utils/envUtils.js')
 const lockfile = await import('../../utils/lockfile.js')
@@ -25,7 +31,7 @@ const authFd = await import('../../utils/authFileDescriptor.js')
 const logout = await import('../../commands/logout/logout.js')
 const codexPool = await import('../../services/api/codexAccountPool.js')
 const { commitClaudeAccountSwitch } = await import('../../services/api/claudeAccountSwitch.js')
-const { installOAuthTokens } = await import('./auth.js')
+const { authLogin, installOAuthTokens, installOAuthTokensAfterPolicyValidation } = await import('./auth.js')
 
 const tokens = {
   accessToken: 'test-access', refreshToken: 'test-refresh', expiresAt: 123456,
@@ -175,12 +181,14 @@ describe('role persistence', () => {
     // Another process can publish B even when this process only switched locally.
     savedConfig.oauthAccount = { accountUuid: 'account-b', emailAddress: 'b@example.com', organizationName: 'OrgB' }
     const before = structuredClone(stored)
-    const bPath = join(directory, 'accounts', 'account-b.json')
+    const bPath = join(directory, 'authority-v1', 'account-b.json')
     const bVault = readFileSync(bPath, 'utf8')
-    const aPath = join(directory, 'accounts', 'test-account.json')
+    const aPath = join(directory, 'authority-v1', 'test-account.json')
     const refreshedA = JSON.parse(readFileSync(aPath, 'utf8'))
-    refreshedA.tokens.access_token = 'fresh-a'
-    refreshedA.tokens.refresh_token = 'rotated-a'
+    refreshedA.credentials.accessToken = 'fresh-a'
+    refreshedA.credentials.refreshToken = 'rotated-a'
+    refreshedA.credentialRevision++
+    refreshedA.stateSequence++
     writeFileSync(aPath, JSON.stringify(refreshedA))
     resolve({ status: 200, data: { organization_role: 'admin', workspace_role: {}, organization_name: 'OrgA' } })
     await login
@@ -192,8 +200,8 @@ describe('role persistence', () => {
     expect(a.profile.organization_role).toBe('admin')
     expect(a.profile.workspace_role).toBeNull()
     expect(a.profile.organization_name).toBe('OrgA')
-    expect(a.tokens.access_token).toBe('fresh-a')
-    expect(a.tokens.refresh_token).toBe('rotated-a')
+    expect(a.credentials.accessToken).toBe('fresh-a')
+    expect(a.credentials.refreshToken).toBe('rotated-a')
   })
 })
 
@@ -338,54 +346,63 @@ describe('Claude process account isolation', () => {
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
-  test('refresh pending across a switch writes only the original vault account', async () => {
+  function persistSeedAccounts() {
     const { a, b } = seedAccounts()
+    pool.appendClaudeAccount(a)
+    pool.appendClaudeAccount(b)
+    pool.switchToClaudeAccount(a.accountUuid, { persistDefault: false })
+    return { a, b }
+  }
+
+  test('refresh pending across a switch writes only the original vault account', async () => {
+    const { a, b } = persistSeedAccounts()
     spyOn(envUtils, 'getClaudeConfigHomeDir').mockReturnValue(directory)
-    spyOn(lockfile, 'lock').mockResolvedValue(async () => {})
     stored = { claudeAiOauth: { ...b } }
     const before = structuredClone(stored)
     let resolveRefresh!: (value: typeof tokens) => void
     let started!: () => void
     const starting = new Promise<void>(resolve => { started = resolve })
-    const refresh = spyOn(oauth, 'refreshOAuthToken').mockImplementation(async () => {
+    const refresh = spyOn(oauth, 'refreshOAuthToken').mockImplementation(async (_token, options) => options!.initiateRequest!(() => {
       started()
       return new Promise(resolve => { resolveRefresh = resolve as typeof resolveRefresh })
-    })
+    }))
     const pending = auth.checkAndRefreshOAuthTokenIfNeeded()
     await starting
     pool.switchToClaudeAccount(b.accountUuid, { persistDefault: false })
     resolveRefresh({ ...tokens, accessToken: 'fresh-a', expiresAt: Date.now() + 3600_000 })
     expect(await pending).toBe(true)
-    expect(refresh).toHaveBeenCalledWith(a.refreshToken, { persistProfile: false, scopes: undefined })
+    expect(refresh).toHaveBeenCalledWith(a.refreshToken, {
+      persistProfile: false, skipProfile: true, scopes: a.scopes, initiateRequest: expect.any(Function),
+    })
     expect(stored).toEqual(before)
     expect(savedConfig.oauthAccount?.accountUuid).toBe(b.accountUuid)
     expect(pool.getActiveClaudeAccount()?.accountUuid).toBe(b.accountUuid)
-    expect(pool.getClaudePoolStatus().accounts.find(account => account.accountUuid === a.accountUuid)?.accessToken).toBe('fresh-a')
+    expect(readAuthority(a.accountUuid).record.credentials?.accessToken).toBe('fresh-a')
   })
 
   test('deletion during token redemption denies the late refresh and retains the local identity hold', async () => {
-    const { a, b } = seedAccounts()
+    const { a, b } = persistSeedAccounts()
     expect(pool.updateClaudeAccountTokens(a.accountUuid, { accessToken: a.accessToken })).toBe('durable')
     const vaultFilePath = join(directory, 'accounts', `${a.accountUuid}.json`)
     spyOn(envUtils, 'getClaudeConfigHomeDir').mockReturnValue(directory)
-    spyOn(lockfile, 'lock').mockResolvedValue(async () => {})
     let finish!: (value: typeof tokens) => void
     let started!: () => void
     const starting = new Promise<void>(resolve => { started = resolve })
-    spyOn(oauth, 'refreshOAuthToken').mockImplementation(async () => {
+    spyOn(oauth, 'refreshOAuthToken').mockImplementation(async (_token, options) => options!.initiateRequest!(() => {
       started()
       return new Promise(resolve => { finish = resolve as typeof finish })
-    })
+    }))
     const pending = auth.recoverOAuth401Error(a.accessToken, a.accountUuid)
     await starting
     expect(pool.deleteClaudeVaultFile(vaultFilePath)).toBe(true)
     finish({ ...tokens, accessToken: 'late-deleted-access', expiresAt: Date.now() + 3600_000 })
-    expect((await pending).status).toBe('unavailable')
+    expect((await pending).status).toBe('reauth_required')
     expect(pool.getClaudePoolStatus().accounts.find(account => account.accountUuid === b.accountUuid)?.status).toBe('healthy')
     expect(pool.getActiveClaudeAccount()).toBeNull()
     expect(auth.getClaudeAIOAuthTokens()).toBeNull()
     expect(await auth.getClaudeAIOAuthTokensAsync()).toBeNull()
-    expect(() => readFileSync(vaultFilePath, 'utf8')).toThrow()
+    expect(readAuthority(a.accountUuid).status).toBe('deleted')
+    expect(JSON.parse(readFileSync(vaultFilePath, 'utf8')).tokens).toBeUndefined()
   })
 
   test('pool refresh suppresses shared profile writes inside the OAuth client', async () => {
@@ -410,38 +427,61 @@ describe('Claude process account isolation', () => {
       ...tokens, accountUuid: 'account-a', emailAddress: 'a@example.com',
     })
     const account = pool.getActiveClaudeAccount()!
-    const vault = JSON.parse(readFileSync(account.vaultFilePath!, 'utf8'))
-    vault.tokens.access_token = 'other-process-fresh-a'
-    vault.tokens.expires_at = Date.now() + 3600_000
-    writeFileSync(account.vaultFilePath!, JSON.stringify(vault))
+    replaceAuthorityCredentials(account.accountUuid, 'other-process-fresh-a')
     spyOn(envUtils, 'getClaudeConfigHomeDir').mockReturnValue(directory)
     const refresh = spyOn(oauth, 'refreshOAuthToken').mockRejectedValue(new Error('Unexpected refresh'))
     auth.clearOAuthTokenCache()
     expect(await auth.checkAndRefreshOAuthTokenIfNeeded()).toBe(false)
     expect(refresh).not.toHaveBeenCalled()
     expect(auth.getClaudeAIOAuthTokens()?.accessToken).toBe('other-process-fresh-a')
-    expect(pool.getActiveClaudeAccount()).toBe(account)
+    pool.reloadClaudeAccountCredentials(account.accountUuid)
+    expect(pool.getActiveClaudeAccount()?.accountUuid).toBe(account.accountUuid)
   })
 })
+
+function readAuthority(accountId: string) {
+  const read = authority.readClaudeAccountAuthority(accountId)
+  if (!('record' in read)) throw new Error(`Missing isolated account authority: ${read.status}`)
+  return read
+}
+
+function replaceAuthorityCredentials(accountId: string, accessToken = 'external-new') {
+  const current = readAuthority(accountId)
+  const intent = current.record.refreshIntent
+  const claim = intent ? { handle: current.handle, operationId: intent.operationId, ownerNonce: intent.ownerNonce }
+    : authority.claimClaudeRefresh(current.handle, randomUUID(), randomUUID()).claim!
+  expect(claim).toBeDefined()
+  if (!intent || intent.phase === 'prepared') expect(authority.startClaudeRefreshDispatch(claim, () => true).result.outcome).toBe('committed')
+  expect(authority.completeClaudeRefresh(claim, {
+    ...current.record.credentials!, accessToken, refreshToken: 'external-refresh', expiresAt: Date.now() + 10800_000,
+  }).outcome).toBe('committed')
+}
+
+function failIssuedCredentials(code = 'ENOSPC', afterPublication = false) {
+  const original = atomic.writeFileAtomicDurableSync
+  return spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((...args) => {
+    const record = JSON.parse(String(args[1]))
+    if (record.credentialRevision > 0 && /^(fresh-|pending-)/.test(record.credentials?.accessToken ?? '')) {
+      if (afterPublication) original(...args)
+      throw Object.assign(new Error('Isolated successor persistence failure'), { code })
+    }
+    return original(...args)
+  })
+}
 
 describe('bound Claude OAuth recovery', () => {
   function setup() {
     storageSuccess = true
     pool.appendClaudeAccount({ ...tokens, accountUuid: 'test-account', emailAddress: 'test@example.com', expiresAt: Date.now() + 3600_000 })
     spyOn(envUtils, 'getClaudeConfigHomeDir').mockReturnValue(directory)
-    spyOn(lockfile, 'lock').mockResolvedValue(async () => {})
     auth.clearOAuthTokenCache()
-    const refresh = spyOn(oauth, 'refreshOAuthToken').mockResolvedValue({
+    const refresh = spyOn(oauth, 'refreshOAuthToken').mockImplementation(async (_token, options) => options!.initiateRequest!(() => Promise.resolve({
       ...tokens, accessToken: 'fresh-access', refreshToken: 'fresh-refresh', expiresAt: Date.now() + 7200_000,
-    })
-    return { account: pool.getActiveClaudeAccount()!, refresh }
+    })))
+    return { account: pool.getActiveClaudeAccount()!, handle: readAuthority('test-account').handle, refresh }
   }
   function replaceDisk(account: NonNullable<ReturnType<typeof pool.getActiveClaudeAccount>>, accessToken = 'external-new') {
-    const data = JSON.parse(readFileSync(account.vaultFilePath!, 'utf8'))
-    data.tokens.access_token = accessToken
-    data.tokens.refresh_token = 'external-refresh'
-    data.tokens.expires_at = Date.now() + 10800_000
-    writeFileSync(account.vaultFilePath!, JSON.stringify(data))
+    replaceAuthorityCredentials(account.accountUuid, accessToken)
   }
 
   test('rejected future-expiry token refreshes exactly once for concurrent callers', async () => {
@@ -450,6 +490,152 @@ describe('bound Claude OAuth recovery', () => {
     expect(results.map(result => result.status)).toEqual(Array(5).fill('refreshed'))
     expect(refresh).toHaveBeenCalledTimes(1)
     expect((await auth.getClaudeAIOAuthTokensAsync())?.accessToken).toBe('fresh-access')
+  })
+
+  test('preflight repairs the bound rejected account instead of borrowing the shared default', async () => {
+    const { account, handle, refresh } = setup()
+    pool.appendClaudeAccount({
+      ...tokens, accountUuid: 'shared-default', emailAddress: 'shared@example.com', accessToken: 'shared-access',
+    })
+    pool.switchToClaudeAccount(account.accountUuid, { persistDefault: false })
+    savedConfig.oauthAccount = { accountUuid: 'shared-default', emailAddress: 'shared@example.com' }
+    expect(authority.rejectClaudeCredential(handle, randomUUID(), 'access_rejected').outcome).toBe('committed')
+    expect(pool.getActiveClaudeAccount()).toBeNull()
+    const prepared = await auth.prepareClaudeOAuthRequest()
+    expect(prepared.status).toBe('ready')
+    expect(prepared.handle?.accountId).toBe(account.accountUuid)
+    expect(refresh).toHaveBeenCalledWith(tokens.refreshToken, expect.any(Object))
+    expect(readAuthority('shared-default').record.credentials?.accessToken).toBe('shared-access')
+  })
+
+  test('preflight holds the selected older login rather than adopting the new generation', async () => {
+    const { account, handle, refresh } = setup()
+    expect(authority.commitClaudeLogin(account.accountUuid, randomUUID(), {
+      accessToken: 'new-login', refreshToken: 'new-login-refresh', expiresAt: Date.now() + 3600_000,
+    }, { account_uuid: account.accountUuid }).outcome).toBe('committed')
+    expect(pool.getSelectedClaudeAccountIdentity()).toEqual({ accountId: handle.accountId, generation: handle.generation })
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('older_login')
+    expect(refresh).not.toHaveBeenCalled()
+    expect(auth.getClaudeAIOAuthTokens()).toBeNull()
+  })
+
+  test('persisted staged login remains persistence-pending when storage cannot commit it', async () => {
+    const { account, handle, refresh } = setup()
+    const original = atomic.writeFileAtomicDurableSync
+    const writes = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((...args) => {
+      const record = JSON.parse(String(args[1]))
+      if (record.credentials?.accessToken === 'pending-login-new' && !record.pendingLogin) {
+        throw Object.assign(new Error('Isolated staged login cannot commit'), { code: 'ENOSPC' })
+      }
+      return original(...args)
+    })
+    const operationId = randomUUID()
+    try {
+      expect(authority.commitClaudeLogin(account.accountUuid, operationId, {
+        accessToken: 'pending-login-new', refreshToken: 'pending-login-refresh', expiresAt: Date.now() + 3600_000,
+      }, { account_uuid: account.accountUuid }).outcome).toBe('persistence_pending')
+      expect(authority.retryClaudeAuthorityPersistence(account.accountUuid, operationId).outcome).toBe('persistence_pending')
+      const staged = readAuthority(account.accountUuid)
+      expect(staged.status).toBe('persistence_pending')
+      expect(staged.record.pendingLogin?.operationId).toBe(operationId)
+      expect(staged.handle).toEqual(handle)
+      expect((await auth.prepareClaudeOAuthRequest()).status).toBe('persistence_pending')
+      expect(authority.isClaudeCredentialReady(handle)).toBe(false)
+      expect(auth.getClaudeAIOAuthTokens()).toBeNull()
+      expect(refresh).not.toHaveBeenCalled()
+    } finally { writes.mockRestore() }
+  })
+
+  test('an initialized pool without a local selection never borrows the shared default', async () => {
+    const { account, refresh } = setup()
+    savedConfig.oauthAccount = { accountUuid: account.accountUuid, emailAddress: account.emailAddress }
+    pool.seedClaudeAccountPoolForTest({ accounts: [] })
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('sign_in_required')
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  test.each(['revision', 'selection', 'login', 'api-key', 'pending-save'])(
+    'delayed physical 401 keeps its sent credential identity across %s',
+    async change => {
+      const { account, handle, refresh } = setup()
+      const sent: string[] = []
+      let release!: () => void
+      let started!: () => void
+      const starting = new Promise<void>(resolve => { started = resolve })
+      const physical = (options: nodeHttp.RequestOptions, callback: (response: nodeHttp.IncomingMessage) => void) => {
+        const headers = options.headers as Record<string, string>
+        sent.push(headers.Authorization ?? headers['x-api-key'])
+        const request = new Writable({ autoDestroy: false, write(_chunk, _encoding, done) { done() } }) as Writable & Record<string, unknown>
+        request.setTimeout = request.setNoDelay = request.setSocketKeepAlive = () => request
+        request.on('finish', () => {
+          const respond = (status: number) => {
+            const response = Readable.from([JSON.stringify({ ok: status === 200 })]) as Readable & Record<string, unknown>
+            response.statusCode = status
+            response.headers = {}
+            response.req = request
+            callback(response as unknown as nodeHttp.IncomingMessage)
+          }
+          if (sent.length === 1) { release = () => respond(401); started() }
+          else respond(200)
+        })
+        return request as unknown as nodeHttp.ClientRequest
+      }
+      spyOn(nodeHttp, 'request').mockImplementation(physical as typeof nodeHttp.request)
+      spyOn(nodeHttps, 'request').mockImplementation(physical as typeof nodeHttps.request)
+      const pending = httpUtils.withOAuth401Retry(
+        captured => axios.get('https://isolated.invalid/account', { ...captured.requestConfig, headers: captured.headers }),
+        { getAuthHeaders: () => change === 'api-key' ? { headers: { 'x-api-key': 'isolated-api-key' } }
+          : httpUtils.getOAuthAuthHeaders({ accessToken: tokens.accessToken, accountUuid: account.accountUuid }) },
+      )
+      await Promise.race([starting, pending.then(() => { throw new Error('Request completed without reaching the physical gate') })])
+      let failedWrite: ReturnType<typeof failIssuedCredentials> | undefined
+      if (change === 'revision') replaceAuthorityCredentials(account.accountUuid, 'newer-revision')
+      if (change === 'selection') pool.appendClaudeAccount({
+        ...tokens, accountUuid: 'other', emailAddress: 'other@example.com', accessToken: 'other-access', refreshToken: 'other-refresh',
+      })
+      if (change === 'login') pool.appendClaudeAccount({
+        ...tokens, accountUuid: account.accountUuid, emailAddress: account.emailAddress,
+      })
+      if (change === 'pending-save') failedWrite = failIssuedCredentials()
+      release()
+      try {
+        if (['login', 'api-key', 'pending-save'].includes(change)) {
+          await expect(pending).rejects.toMatchObject({ response: { status: 401 } })
+          expect(sent).toHaveLength(1)
+        } else {
+          expect((await pending).status).toBe(200)
+          expect(sent).toEqual([`Bearer ${tokens.accessToken}`, `Bearer ${change === 'revision' ? 'newer-revision' : 'fresh-access'}`])
+        }
+        const observed = readAuthority(account.accountUuid)
+        expect(observed.handle.generation).toBe(change === 'login' ? handle.generation + 1 : handle.generation)
+        expect(authority.isClaudeCredentialReady(observed.handle)).toBe(change !== 'pending-save')
+        if (change === 'selection') {
+          const other = readAuthority('other')
+          expect(other.record.credentials?.accessToken).toBe('other-access')
+          expect(authority.isClaudeCredentialReady(other.handle)).toBe(true)
+          expect(refresh).toHaveBeenCalledWith(tokens.refreshToken, expect.any(Object))
+        }
+        expect(refresh).toHaveBeenCalledTimes(change === 'selection' || change === 'pending-save' ? 1 : 0)
+      } finally { failedWrite?.mockRestore() }
+    },
+  )
+
+  test('async header substitution cannot relabel the captured credential at the physical send', async () => {
+    const { account, refresh } = setup()
+    const physical = spyOn(nodeHttps, 'request').mockImplementation(() => { throw new Error('Unexpected physical send') })
+    const interceptor = axios.interceptors.request.use(async config => {
+      await Promise.resolve()
+      config.headers.set('Authorization', 'Bearer unrelated')
+      return config
+    })
+    try {
+      await expect(httpUtils.withOAuth401Retry(
+        captured => axios.get('https://isolated.invalid/account', { ...captured.requestConfig, headers: captured.headers }),
+        { getAuthHeaders: () => httpUtils.getOAuthAuthHeaders({ accessToken: tokens.accessToken, accountUuid: account.accountUuid }) },
+      )).rejects.toThrow('credential changed before send')
+      expect(physical).not.toHaveBeenCalled()
+      expect(refresh).not.toHaveBeenCalled()
+    } finally { axios.interceptors.request.eject(interceptor) }
   })
 
   test('unbound recovery never adopts the newly selected unrelated account', async () => {
@@ -468,11 +654,11 @@ describe('bound Claude OAuth recovery', () => {
 
   test('normal token checks retry pending local persistence without another refresh', async () => {
     const { account, refresh } = setup()
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('full') })
+    const write = failIssuedCredentials()
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
     write.mockRestore()
     await auth.checkAndRefreshOAuthTokenIfNeeded()
-    expect(JSON.parse(readFileSync(account.vaultFilePath!, 'utf8')).tokens.access_token).toBe('fresh-access')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('fresh-access')
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
@@ -481,10 +667,10 @@ describe('bound Claude OAuth recovery', () => {
     let finish!: (value: typeof tokens) => void
     let started!: () => void
     const starting = new Promise<void>(resolve => { started = resolve })
-    refresh.mockImplementation(async () => {
+    refresh.mockImplementation(async (_token, options) => options!.initiateRequest!(() => {
       started()
       return new Promise(resolve => { finish = resolve as typeof finish })
-    })
+    }))
     const pending = auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)
     await starting
     if (operation === 'login') {
@@ -496,37 +682,41 @@ describe('bound Claude OAuth recovery', () => {
       expect(pool.removeClaudeAccount(account.accountUuid)).toBe(true)
     }
     finish({ ...tokens, accessToken: 'late-refresh', expiresAt: Date.now() + 7200_000 })
-    expect((await pending).status).toBe(operation === 'login' ? 'adopted_newer' : 'unavailable')
+    expect((await pending).status).toBe('reauth_required')
     expect(pool.getActiveClaudeAccount()?.accessToken).toBe(operation === 'login' ? 'new-login' : undefined)
   })
 
-  test.each([null, 'fresh-refresh'])('shared secure-storage failure retains credentials with refresh token %s', async refreshToken => {
+  test.each([null, 'fresh-refresh'])('secure-storage mirror failure cannot lose authoritative refresh credentials with refresh token %s', async refreshToken => {
     spyOn(envUtils, 'getClaudeConfigHomeDir').mockReturnValue(directory)
-    spyOn(lockfile, 'lock').mockResolvedValue(async () => {})
     savedConfig.oauthAccount = { accountUuid: 'test-account', emailAddress: 'test@example.com' }
     stored = { claudeAiOauth: { ...tokens, accountUuid: 'test-account', expiresAt: Date.now() + 3600_000 } }
-    const refresh = spyOn(oauth, 'refreshOAuthToken').mockResolvedValue({ ...tokens, refreshToken, accessToken: 'fresh-shared', expiresAt: Date.now() + 7200_000 })
+    pool.appendClaudeAccount({ ...tokens, accountUuid: 'test-account', emailAddress: 'test@example.com' })
+    const refresh = spyOn(oauth, 'refreshOAuthToken').mockImplementation(async (_token, options) => options!.initiateRequest!(() =>
+      Promise.resolve({ ...tokens, refreshToken, accessToken: 'fresh-shared', expiresAt: Date.now() + 7200_000 })))
     auth.clearOAuthTokenCache()
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, 'test-account')).status).toBe('persistence_pending')
+    expect((await auth.recoverOAuth401Error(tokens.accessToken, 'test-account')).status).toBe('refreshed')
     expect((await auth.getClaudeAIOAuthTokensAsync())?.accessToken).toBe('fresh-shared')
     expect(auth.getClaudeAIOAuthTokens()?.accessToken).toBe('fresh-shared')
     storageSuccess = true
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, 'test-account')).status).toBe('adopted_newer')
-    expect(stored?.claudeAiOauth?.accessToken).toBe('fresh-shared')
-    expect(stored?.claudeAiOauth?.refreshToken).toBe(refreshToken ?? tokens.refreshToken)
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('ready')
+    expect(stored?.claudeAiOauth?.accessToken).toBe(tokens.accessToken)
+    expect(readAuthority('test-account').record.credentials?.refreshToken).toBe(refreshToken ?? tokens.refreshToken)
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
-  test('logout discards process-local pending secure credentials', async () => {
+  test('logout tombstone discards pending issued credentials without secure-mirror resurrection', async () => {
     spyOn(envUtils, 'getClaudeConfigHomeDir').mockReturnValue(directory)
-    spyOn(lockfile, 'lock').mockResolvedValue(async () => {})
     savedConfig.oauthAccount = { accountUuid: 'test-account', emailAddress: 'test@example.com' }
     stored = { claudeAiOauth: { ...tokens, accountUuid: 'test-account', expiresAt: Date.now() + 3600_000 } }
-    spyOn(oauth, 'refreshOAuthToken').mockResolvedValue({
+    pool.appendClaudeAccount({ ...tokens, accountUuid: 'test-account', emailAddress: 'test@example.com' })
+    spyOn(oauth, 'refreshOAuthToken').mockImplementation(async (_token, options) => options!.initiateRequest!(() => Promise.resolve({
       ...tokens, accessToken: 'pending-secure', expiresAt: Date.now() + 7200_000,
-    })
+    })))
+    const write = failIssuedCredentials()
     auth.clearOAuthTokenCache()
     expect((await auth.recoverOAuth401Error(tokens.accessToken, 'test-account')).status).toBe('persistence_pending')
+    write.mockRestore()
+    expect(pool.removeClaudeAccount('test-account')).toBe(true)
     stored = {}
     auth.clearPendingOAuthCredentials()
     auth.clearOAuthTokenCache()
@@ -546,78 +736,87 @@ describe('bound Claude OAuth recovery', () => {
   })
 
   test.each(['before', 'fresh', 'locked'])('adopts external replacement at %s read without refresh', async phase => {
-    const { account, refresh } = setup()
+    const { account, handle, refresh } = setup()
     if (phase === 'before') replaceDisk(account)
     if (phase === 'fresh') {
-      const reload = pool.reloadClaudeAccountCredentials
+      const read = authority.readClaudeAccountAuthority
       let reads = 0
-      spyOn(pool, 'reloadClaudeAccountCredentials').mockImplementation(uuid => {
+      spyOn(authority, 'readClaudeAccountAuthority').mockImplementation(uuid => {
         if (++reads === 2) replaceDisk(account)
-        reload(uuid)
+        return read(uuid)
       })
     }
-    if (phase === 'locked') spyOn(lockfile, 'lock').mockImplementation(async () => {
+    const realLock = lockfile.lock
+    if (phase === 'locked') spyOn(lockfile, 'lock').mockImplementation(async (...args) => {
+      const release = await realLock(...args)
       replaceDisk(account)
-      return async () => {}
+      return release
     })
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('adopted_newer')
+    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid, handle)).status).toBe('adopted_newer')
     expect(refresh).not.toHaveBeenCalled()
-    expect(account.accessToken).toBe('external-new')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('external-new')
   })
 
   test.each(['ENOSPC', 'EACCES'])('%s retains fresh credentials and retries only local persistence', async code => {
-    const { account, refresh } = setup()
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw Object.assign(new Error(code), { code }) })
+    const { account, handle, refresh } = setup()
+    const write = failIssuedCredentials(code)
     expect(await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).toEqual({ status: 'persistence_pending', accountUuid: account.accountUuid })
-    expect((await auth.getClaudeAIOAuthTokensAsync())?.accessToken).toBe('fresh-access')
-    expect(JSON.parse(readFileSync(account.vaultFilePath!, 'utf8')).tokens.access_token).toBe(tokens.accessToken)
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('persistence_pending')
+    expect(await auth.getClaudeAIOAuthTokensAsync()).toBeNull()
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe(tokens.accessToken)
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
     write.mockRestore()
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('adopted_newer')
-    expect(JSON.parse(readFileSync(account.vaultFilePath!, 'utf8')).tokens.access_token).toBe('fresh-access')
+    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid, handle)).status).toBe('adopted_newer')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('fresh-access')
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   test('pending recovery accepts newer external credentials instead of overwriting them', async () => {
-    const { account, refresh } = setup()
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('full') })
+    const { account, handle, refresh } = setup()
+    const write = failIssuedCredentials()
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
     write.mockRestore()
     replaceDisk(account)
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('adopted_newer')
-    expect(account.accessToken).toBe('external-new')
+    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid, handle)).status).toBe('adopted_newer')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('external-new')
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   test('malformed external credentials cannot displace a pending refresh', async () => {
     const { account, refresh } = setup()
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('full') })
+    const write = failIssuedCredentials()
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
     write.mockRestore()
-    const data = JSON.parse(readFileSync(account.vaultFilePath!, 'utf8'))
-    data.tokens = { access_token: 'malformed', expires_at: Date.now() + 10800_000 }
-    writeFileSync(account.vaultFilePath!, JSON.stringify(data))
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
-    expect(account.accessToken).toBe('fresh-access')
+    const authorityPath = join(directory, 'authority-v1', `${account.accountUuid}.json`)
+    const valid = readFileSync(authorityPath, 'utf8')
+    const data = JSON.parse(valid)
+    data.credentials = { accessToken: 'malformed', expiresAt: Date.now() + 10800_000 }
+    writeFileSync(authorityPath, JSON.stringify(data))
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('temporarily_unavailable')
+    expect(JSON.parse(readFileSync(authorityPath, 'utf8')).credentials.accessToken).toBe('malformed')
+    writeFileSync(authorityPath, valid)
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('ready')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('fresh-access')
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   test('explicit login supersedes pending credentials even with a shorter expiry', async () => {
-    const { account } = setup()
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('full') })
+    const { account, handle } = setup()
+    const write = failIssuedCredentials()
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
+    write.mockRestore()
     pool.appendClaudeAccount({ ...tokens, accountUuid: account.accountUuid, emailAddress: account.emailAddress,
       accessToken: 'explicit-login', expiresAt: Date.now() + 60_000 })
     pool.loadClaudePoolForObservation()
     expect(pool.getActiveClaudeAccount()?.accessToken).toBe('explicit-login')
-    write.mockRestore()
     expect(pool.retryClaudeAccountTokenPersistence(account.accountUuid)).toBe('durable')
-    expect(JSON.parse(readFileSync(account.vaultFilePath!, 'utf8')).tokens.access_token).toBe('explicit-login')
+    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid, handle)).status).toBe('reauth_required')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('explicit-login')
   })
 
   test('confirmed removal clears pending credentials without profile resurrection', async () => {
     const { account } = setup()
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('full') })
+    const write = failIssuedCredentials()
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
     write.mockRestore()
     expect(pool.removeClaudeAccount(account.accountUuid)).toBe(true)
@@ -626,59 +825,69 @@ describe('bound Claude OAuth recovery', () => {
     expect(pool.retryClaudeAccountTokenPersistence(account.accountUuid)).toBe('pending')
   })
 
-  test('ambiguous external ordering preserves pending memory and does not overwrite disk', async () => {
+  test('incompatible legacy writer preserves pending credentials and is never ordered by expiry', async () => {
     const { account, refresh } = setup()
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('full') })
+    const write = failIssuedCredentials()
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
     write.mockRestore()
     const data = JSON.parse(readFileSync(account.vaultFilePath!, 'utf8'))
-    data.tokens.access_token = 'ambiguous-external'
-    data.tokens.expires_at = account.expiresAt
+    const barrier = JSON.stringify(data)
+    data.tokens = { access_token: 'ambiguous-external', expires_at: account.expiresAt }
     writeFileSync(account.vaultFilePath!, JSON.stringify(data))
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
-    expect(account.accessToken).toBe('fresh-access')
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('temporarily_unavailable')
     expect(JSON.parse(readFileSync(account.vaultFilePath!, 'utf8')).tokens.access_token).toBe('ambiguous-external')
     expect(refresh).toHaveBeenCalledTimes(1)
+    writeFileSync(account.vaultFilePath!, barrier)
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('ready')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('fresh-access')
   })
 
   test('publication followed by an exception stays pending until a local durable retry', async () => {
-    const { account, refresh } = setup()
-    const original = atomic.writeFileAtomicDurableSync
-    const write = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((...args) => {
-      original(...args)
-      throw new Error('cleanup failed after publication')
-    })
+    const { account, handle, refresh } = setup()
+    const write = failIssuedCredentials('EIO', true)
     expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('persistence_pending')
-    expect((await auth.getClaudeAIOAuthTokensAsync())?.accessToken).toBe('fresh-access')
+    expect((await auth.prepareClaudeOAuthRequest()).status).toBe('persistence_pending')
     write.mockRestore()
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe('adopted_newer')
+    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid, handle)).status).toBe('adopted_newer')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('fresh-access')
     expect(refresh).toHaveBeenCalledTimes(1)
   })
 
   test.each(['network', 'lock', 'invalid_grant'])('classifies %s without mistaking future expiry for recovery', async failure => {
     const { account, refresh } = setup()
-    if (failure === 'lock') spyOn(lockfile, 'lock').mockRejectedValue(Object.assign(new Error('locked'), { code: 'ELOCKED' }))
-    else refresh.mockRejectedValue(failure === 'invalid_grant' ? { response: { data: { error: 'invalid_grant' } } } : new Error('timeout'))
-    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status).toBe(failure === 'invalid_grant' ? 'reauth_required' : 'transient_failure')
-    expect(account.accessToken).toBe(tokens.accessToken)
-  })
+    let release: (() => Promise<void>) | undefined
+    if (failure === 'lock') release = await lockfile.lock(authority.getClaudeRefreshLockPath(account.accountUuid), { realpath: false })
+    else refresh.mockImplementation(async (_token, options) => options!.initiateRequest!(() =>
+      Promise.reject(failure === 'invalid_grant' ? { response: { data: { error: 'invalid_grant' } } } : new Error('timeout'))))
+    try {
+      expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)).status)
+        .toBe(failure === 'invalid_grant' ? 'reauth_required' : failure === 'network' ? 'refresh_uncertain' : 'transient_failure')
+      expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe(tokens.accessToken)
+      expect(authority.isClaudeCredentialReady(readAuthority(account.accountUuid).handle)).toBe(false)
+    } finally { await release?.() }
+  }, 15_000)
 
   test.each([false, true])('pending refresh stays bound while account changes (global=%s)', async persistDefault => {
-    const { account, refresh } = setup()
+    const { account, handle, refresh } = setup()
     pool.appendClaudeAccount({ ...tokens, accountUuid: 'other', emailAddress: 'other@example.com', accessToken: 'other-access' })
     let finish!: (value: typeof tokens) => void
     let start!: () => void
     const started = new Promise<void>(resolve => { start = resolve })
-    refresh.mockImplementation(async () => { start(); return new Promise(resolve => { finish = resolve as typeof finish }) })
+    refresh.mockImplementation(async (_token, options) => options!.initiateRequest!(() => {
+      start(); return new Promise(resolve => { finish = resolve as typeof finish })
+    }))
     const pending = auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid)
     await started
     pool.switchToClaudeAccount('other', { persistDefault })
-    spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation(() => { throw new Error('full') })
+    const write = failIssuedCredentials()
     finish({ ...tokens, accessToken: 'fresh-access', expiresAt: Date.now() + 7200_000 })
     expect((await pending).status).toBe('persistence_pending')
     expect(pool.getActiveClaudeAccount()?.accessToken).toBe('other-access')
-    pool.reloadClaudeAccountCredentials(account.accountUuid)
-    expect(account.accessToken).toBe('fresh-access')
+    expect(authority.isClaudeCredentialReady(readAuthority(account.accountUuid).handle)).toBe(false)
+    write.mockRestore()
+    expect((await auth.recoverOAuth401Error(tokens.accessToken, account.accountUuid, handle)).status).toBe('adopted_newer')
+    expect(readAuthority(account.accountUuid).record.credentials?.accessToken).toBe('fresh-access')
+    expect(pool.getActiveClaudeAccount()?.accountUuid).toBe('other')
   })
 })
 
@@ -722,7 +931,7 @@ describe('Claude account vault path', () => {
   test('does not invent a vault path on failed writes', () => {
     failVault()
     storageSuccess = true
-    pool.appendClaudeAccount({ ...tokens, ...tokens.tokenAccount, accountUuid: tokens.tokenAccount.uuid })
+    expect(() => pool.appendClaudeAccount({ ...tokens, ...tokens.tokenAccount, accountUuid: tokens.tokenAccount.uuid })).toThrow('Failed to save Claude sign-in')
     expect(pool.getActiveClaudeAccount()?.vaultFilePath).toBeUndefined()
   })
 })
@@ -765,13 +974,124 @@ describe('Claude credential mirror', () => {
 })
 
 describe('OAuth installation', () => {
-  test('rejects unusable vault-only recovery when secure storage throws', async () => {
+  test('real precommit vault failure stays pending and retries captured installation after local storage repair', async () => {
+    storageSuccess = true
+    const vault = join(directory, 'unavailable-vault')
+    writeFileSync(vault, 'not a directory')
+    pool.setClaudeVaultPathForTest(vault)
+    const lookup = spyOn(profile, 'getOauthProfileFromOauthToken').mockResolvedValue(null)
+    const exchange = spyOn(oauth, 'refreshOAuthToken').mockRejectedValue(new Error('OAuth exchange forbidden during local retry'))
+    let validations = 0
+    const pending = await installOAuthTokensAfterPolicyValidation(tokens, {
+      validateOrg: async () => { validations++; return { valid: true } },
+      createOperationId: () => 'precommit-local-retry',
+    })
+    expect(pending).toMatchObject({
+      valid: true, installation: 'persistence_pending', operationId: 'precommit-local-retry',
+    })
+    expect(savedConfig.activeClaudeAccountUuid).not.toBe(tokens.tokenAccount.uuid)
+    if (!pending.valid || pending.installation !== 'persistence_pending' || !pending.retry) throw new Error('Missing captured local retry')
+    rmSync(vault)
+    mkdirSync(vault)
+    expect(await pending.retry()).toEqual({ valid: true, installation: 'committed' })
+    expect(savedConfig.activeClaudeAccountUuid).toBe(tokens.tokenAccount.uuid)
+    expect(authority.readClaudeAccountAuthority(tokens.tokenAccount.uuid)).toMatchObject({
+      handle: { generation: 1, revision: 0 },
+      record: { operations: { 'precommit-local-retry': { kind: 'login', generation: 1 } } },
+    })
+    expect(lookup).toHaveBeenCalledTimes(1)
+    expect(validations).toBe(1)
+    expect(exchange).not.toHaveBeenCalled()
+  })
+
+  test('policy wrapper keeps a failed new-account pointer pending, then retries locally with the same operation', async () => {
+    storageSuccess = true
+    pool.appendClaudeAccount({ ...tokens, accountUuid: 'previous', emailAddress: 'previous@example.com',
+      accessToken: 'previous-access', refreshToken: 'previous-refresh' })
+    const save = spyOn(config, 'saveGlobalConfig').mockReturnValue(false)
+    const lookup = spyOn(profile, 'getOauthProfileFromOauthToken').mockResolvedValue(null)
+    const pending = await installOAuthTokensAfterPolicyValidation(tokens, {
+      validateOrg: async () => ({ valid: true }), createOperationId: () => 'terminal-local-retry',
+    })
+    expect(pending).toMatchObject({ valid: true, installation: 'persistence_pending', operationId: 'terminal-local-retry' })
+    expect(savedConfig.activeClaudeAccountUuid).toBe('previous')
+    if (!pending.valid || pending.installation !== 'persistence_pending' || !pending.retry) throw new Error('Missing local retry')
+    save.mockImplementation(update => { savedConfig = update(savedConfig); return true })
+    const completed = await pending.retry()
+    expect(completed).toEqual({ valid: true, installation: 'committed' })
+    expect(savedConfig.activeClaudeAccountUuid).toBe(tokens.tokenAccount.uuid)
+    expect(authority.readClaudeAccountAuthority(tokens.tokenAccount.uuid)).toMatchObject({ handle: { generation: 1 } })
+    expect(lookup).toHaveBeenCalledTimes(1)
+  })
+
+  test.each(['refresh-env', 'browser'] as const)('terminal %s login never prints success or exits zero for pending installation', async mode => {
+    const { OAuthService } = await import('../../services/oauth/index.js')
+    const oldRefresh = process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+    const oldScopes = process.env.CLAUDE_CODE_OAUTH_SCOPES
+    const tty = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY')
+    Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true })
+    if (mode === 'refresh-env') {
+      process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = 'synthetic-refresh'
+      process.env.CLAUDE_CODE_OAUTH_SCOPES = 'user:inference'
+    } else {
+      delete process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+    }
+    const stdout: string[] = [], stderr: string[] = [], exits: number[] = []
+    spyOn(process.stdout, 'write').mockImplementation(value => { stdout.push(String(value)); return true })
+    spyOn(process.stderr, 'write').mockImplementation(value => { stderr.push(String(value)); return true })
+    spyOn(process, 'exit').mockImplementation(code => { exits.push(Number(code)); throw new Error('isolated-cli-exit') })
+    spyOn(auth, 'validateForceLoginOrgForToken').mockResolvedValue({ valid: true })
+    spyOn(oauth, 'refreshOAuthToken').mockResolvedValue(tokens)
+    spyOn(OAuthService.prototype, 'startOAuthFlow').mockResolvedValue(tokens)
+    spyOn(pool, 'appendClaudeAccount').mockReturnValue({
+      outcome: 'persistence_pending', operationId: 'pending-cli', restartRecoverable: true,
+      credentialCommitted: true, selectionCommitted: false,
+    })
+    try {
+      await expect(authLogin({ claudeai: true })).rejects.toThrow('isolated-cli-exit')
+      expect(exits.length).toBeGreaterThan(0)
+      expect(exits.every(code => code === 1)).toBe(true)
+      expect(stdout.join('')).not.toContain('Login successful')
+      expect(stderr.join('')).toContain('Retry saving locally without signing in again')
+    } finally {
+      if (oldRefresh === undefined) delete process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+      else process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = oldRefresh
+      if (oldScopes === undefined) delete process.env.CLAUDE_CODE_OAUTH_SCOPES
+      else process.env.CLAUDE_CODE_OAUTH_SCOPES = oldScopes
+      if (tty) Object.defineProperty(process.stdin, 'isTTY', tty)
+      else delete (process.stdin as { isTTY?: boolean }).isTTY
+    }
+  })
+
+  test('committed credentials with a failed default pointer retry the same operation without another generation', async () => {
+    storageSuccess = true
+    pool.appendClaudeAccount({ ...tokens, accountUuid: 'previous', emailAddress: 'previous@example.com',
+      accessToken: 'previous-access', refreshToken: 'previous-refresh' })
+    const save = spyOn(config, 'saveGlobalConfig').mockReturnValue(false)
+    const pending = await installOAuthTokens(tokens, { operationId: 'selection-retry' })
+    expect(pending).toMatchObject({ outcome: 'persistence_pending', credentialCommitted: true,
+      selectionCommitted: false, operationId: 'selection-retry', handle: { generation: 1 } })
+    expect(savedConfig.activeClaudeAccountUuid).toBe('previous')
+    pool.resetClaudeAccountPoolForTest()
+    pool.setClaudeVaultPathForTest(directory)
+    pool.loadClaudePoolForObservation()
+    expect(pool.getActiveClaudeAccount()?.accountUuid).toBe('previous')
+    save.mockImplementation(update => { savedConfig = update(savedConfig); return true })
+    const retried = await installOAuthTokens(tokens, { operationId: 'selection-retry' })
+    expect(retried).toMatchObject({ outcome: 'committed', selectionCommitted: true, handle: { generation: 1 } })
+    pool.resetClaudeAccountPoolForTest()
+    pool.setClaudeVaultPathForTest(directory)
+    pool.loadClaudePoolForObservation()
+    expect(auth.getClaudeAIOAuthTokens()?.accountUuid).toBe(tokens.tokenAccount.uuid)
+  })
+  test('committed authority remains usable when secure storage throws', async () => {
     storageThrows = true
-    await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save OAuth tokens')
-    expect(pool.getActiveClaudeAccount()).toBeNull()
+    await expect(installOAuthTokens(tokens)).resolves.toMatchObject({ outcome: 'committed', handle: { accountId: tokens.tokenAccount.uuid } })
+    expect(pool.getActiveClaudeAccount()?.accessToken).toBe(tokens.accessToken)
+    expect(auth.getClaudeAIOAuthTokens()?.accessToken).toBe(tokens.accessToken)
   })
   for (const hasVaultAccount of [false, true]) {
-    test(`accepts bound plaintext fallback when the vault fails (existing vault: ${hasVaultAccount})`, async () => {
+    test(`does not publish mirror-only login when authority fails (existing vault: ${hasVaultAccount})`, async () => {
       storageSuccess = true
       if (hasVaultAccount) {
         pool.appendClaudeAccount({
@@ -779,29 +1099,29 @@ describe('OAuth installation', () => {
           accessToken: 'previous-access', refreshToken: 'previous-refresh',
         })
       }
+      const before = structuredClone(stored)
       failVault()
-      await expect(installOAuthTokens(tokens)).resolves.toBeUndefined()
-      expect(stored?.claudeAiOauth?.accessToken).toBe(tokens.accessToken)
-      expect(stored?.claudeAiOauth?.refreshToken).toBe(tokens.refreshToken)
+      await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save Claude sign-in')
+      expect(stored).toEqual(before)
       pool.setClaudeVaultPathForTest(directory)
       pool.loadClaudePoolForObservation()
-      expect(pool.getActiveClaudeAccount()?.accountUuid).toBe(tokens.tokenAccount.uuid)
-      expect(pool.getActiveClaudeAccount()?.accessToken).toBe(tokens.accessToken)
+      expect(pool.getActiveClaudeAccount()?.accountUuid).toBe(hasVaultAccount ? 'previous' : undefined)
     })
   }
   test('rejects when all durable writes fail', async () => {
     failVault()
-    await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save OAuth tokens')
+    await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save Claude sign-in')
   })
-  test('rejects a reported successful write with stale effective credentials', async () => {
+  test('committed authority is readable despite a stale secure-storage mirror', async () => {
     storageSuccess = true
     staleRead = true
     stored = { claudeAiOauth: { ...tokens, accessToken: 'old-access', refreshToken: 'old-refresh' } }
     expect(auth.saveOAuthTokensIfNeeded(tokens)).toEqual({
       success: false, warning: 'Saved OAuth tokens could not be read back',
     })
-    await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save OAuth tokens')
+    await expect(installOAuthTokens(tokens)).resolves.toMatchObject({ outcome: 'committed' })
     expect(stored?.claudeAiOauth?.accessToken).toBe('old-access')
+    expect(auth.getClaudeAIOAuthTokens()?.accessToken).toBe(tokens.accessToken)
   })
   test('compares the refresh token as well as the access token', () => {
     storageSuccess = true
@@ -814,12 +1134,14 @@ describe('OAuth installation', () => {
     pool.seedClaudeAccountPoolForTest({ activeAccountUuid: 'existing', accounts: [account] })
     savedConfig.oauthAccount = { accountUuid: 'existing', emailAddress: 'existing@example.com' }
     const previous = structuredClone(savedConfig)
-    await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save OAuth tokens')
+    failVault()
+    await expect(installOAuthTokens(tokens)).rejects.toThrow('Failed to save Claude sign-in')
+    pool.setClaudeVaultPathForTest(directory)
     expect(savedConfig).toEqual(previous)
     expect(pool.getActiveClaudeAccount()?.accountUuid).toBe('existing')
     expect(pool.getClaudePoolStatus().accounts).toHaveLength(1)
     expect(oauth.storeOAuthAccountInfo).not.toHaveBeenCalled()
-    expect(profile.getOauthProfileFromOauthToken).not.toHaveBeenCalled()
+    expect(profile.getOauthProfileFromOauthToken).toHaveBeenCalledWith(tokens.accessToken)
   })
   test('leaves inference-only tokens unpersisted', async () => {
     const update = spyOn(secureStorage, 'getSecureStorage')

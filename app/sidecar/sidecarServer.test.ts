@@ -6456,9 +6456,11 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
 test('same-provider account switch preserves the model', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
   const baseAccounts = makeAccountsDomain({ executor: fakeExecutor() })
+  const selections: unknown[] = []
   const accounts: SidecarAccountsDomain = {
     ...baseAccounts,
-    async runVerb() {
+    async runVerb(verb) {
+      selections.push(verb)
       return { verb: 'account.switch', result: { ok: true, message: 'Switched.' }, poolChanged: false }
     },
   }
@@ -6466,12 +6468,32 @@ test('same-provider account switch preserves the model', async () => {
   runControls.lockProviderSwitches()
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts, runControls })
   server.handleData(conn, accountFrame({
-    type: 'account.switch', requestId: 'same-provider', accountId: 'claude-a', provider: 'anthropic',
+    type: 'account.switch', requestId: 'same-provider', accountId: 'claude-a', provider: 'anthropic', expectedLoginGeneration: 3,
   }))
   await flush()
   const result = received.find(frame => frame.kind === 'account.result' && frame.requestId === 'same-provider')
   expect(result?.kind === 'account.result' && result.ok).toBe(true)
   expect(calls).toEqual([])
+  expect(selections).toEqual([expect.objectContaining({ expectedLoginGeneration: 3 })])
+})
+
+test.each([-1, 1.5, Number.MAX_SAFE_INTEGER + 1, '3', null])('account selection rejects invalid login generation: %s', async generation => {
+  const baseAccounts = makeAccountsDomain({ executor: fakeExecutor() })
+  let dispatched = false
+  const accounts: SidecarAccountsDomain = {
+    ...baseAccounts,
+    async runVerb(verb) {
+      dispatched = true
+      return { verb: verb.type, result: { ok: true, message: 'Switched.' }, poolChanged: false }
+    },
+  }
+  const { server, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
+  server.handleData(conn, rawFrame({
+    type: 'account.switch', requestId: 'invalid-generation', accountId: 'claude-a',
+    provider: 'anthropic', expectedLoginGeneration: generation,
+  }))
+  await flush()
+  expect(dispatched).toBe(false)
 })
 
 test.each(['success', 'already active', 'account failure', 'locked', 'unsupported', 'model failure', 'throw'])(

@@ -383,9 +383,24 @@ describe('session-independent targeted account sign-out boundary', () => {
 })
 
 describe('parseAccountsPoolWorkerResult — fails closed', () => {
+  test('redacted Claude health has closed counters and dispositions', () => {
+    const snapshot = pool()
+    Object.assign(snapshot.anthropicAccounts[0]!, {
+      loginGeneration: 3, credentialRevision: 2, credentialHealth: 'refresh_uncertain',
+    })
+    expect(parseAccountsPoolWorkerResult(record(snapshot))?.type).toBe('pool')
+    for (const invalid of [
+      { loginGeneration: -1 }, { credentialRevision: 1.5 },
+      { credentialHealth: 'unknown' }, { refreshIntent: {} },
+    ]) {
+      const changed = { ...snapshot, anthropicAccounts: [{ ...snapshot.anthropicAccounts[0]!, ...invalid }] }
+      expect(parseAccountsPoolWorkerResult({ type: 'pool', version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION, pool: changed })).toBeNull()
+    }
+  })
+
   test('a wrong boundary version is rejected', () => {
     expect(
-      parseAccountsPoolWorkerResult({ ...(record(pool()) as object), version: 2 }),
+      parseAccountsPoolWorkerResult({ ...(record(pool()) as object), version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION + 1 }),
     ).toBeNull()
   })
 
