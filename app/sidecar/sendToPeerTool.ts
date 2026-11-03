@@ -402,7 +402,7 @@ export function createSendToPeerTool(
 
     async prompt() {
       return [
-        'Message a peer in this workspace, by name.',
+        'Message peers by name with the same text.',
         '',
         // The created→creator direction was carved out on 2026-09-04; the
         // creator→created one was not, so a session writing to a peer it had
@@ -433,7 +433,7 @@ export function createSendToPeerTool(
         'Peers are reached only here; SendMessage reaches subagents you started',
         'and, with Agent Teams on, teammates, never a peer.',
         '',
-        'The result says what actually happened, and it separates three things.',
+        'Each recipient has its own result, with three possible delivery states.',
         'If it says the message is queued, it is waiting for them and they have',
         'not read it yet; a busy peer reads it at its next step, so do not expect',
         'an answer at once. If it says the message was not delivered, it was not',
