@@ -242,6 +242,7 @@ export type AccountRenameMessage = {
   requestId: string
   accountId: string
   alias: string
+  provider?: AccountLoginProvider
 }
 
 /**
@@ -255,6 +256,7 @@ export type AccountDeleteMessage = {
   accountId: string
   expectedCredentialGeneration: number
   confirm: true
+  provider?: AccountLoginProvider
 }
 
 /**
@@ -268,12 +270,15 @@ export type AccountLogoutMessage = {
   requestId: string
   accountId: string
   expectedCredentialGeneration: number
+  provider?: AccountLoginProvider
 }
 
 /** Refresh OAuth tokens for every unlocked vault account (per-account result). */
 export type AccountTouchAllMessage = {
   type: 'account.touchAll'
   requestId: string
+  provider?: AccountLoginProvider
+  accountId?: string
 }
 
 /** Begin the engine's real OAuth login flow (engine owns the token write). */
@@ -282,6 +287,7 @@ export type AccountLoginMessage = {
   requestId: string
   /** Defaults to OpenAI for backward compatibility with older renderer calls. */
   provider?: AccountLoginProvider
+  makeDefault?: boolean
 }
 
 /**
@@ -2602,6 +2608,7 @@ export type SessionActionResultFrame = {
 
 /** Redacted per-account status. NO token, NO vault path — see `secretGuard`. */
 export type AccountStatus = {
+  email?: string | null
   /**
    * The pool's `accountId` (an OpenAI account UUID) — an identifier, NOT a
    * secret (`secretGuard` does not block it); it is the addressing key the
@@ -2675,6 +2682,19 @@ export type AccountStatus = {
 
 /** Redacted Anthropic subscription account. Tokens and vault paths never cross IPC. */
 export type AnthropicAccountStatus = {
+  organizationName?: string | null
+  organizationRole?: string | null
+  workspaceRole?: string | null
+  rateLimitTier?: string | null
+  billingType?: string | null
+  hasExtraUsageEnabled?: boolean
+  usageWeeklyOpus?: number | null
+  usageWeeklyOpusResetAt?: number | null
+  usageWeeklySonnet?: number | null
+  usageWeeklySonnetResetAt?: number | null
+  extraUsage?: { usedCredits: number | null; monthlyLimit: number | null; isEnabled: boolean | null }
+  usageCheckedAt?: number
+  usageStale?: boolean
   id: string
   alias: string | null
   email: string
@@ -2711,6 +2731,10 @@ export type AnthropicAccountStatus = {
  * `docs/migration/decisions/SECURITY-MINIMUM.md`)
  */
 export type SignedOutCodexProfileStatus = {
+  email?: string | null
+  recoveryReason?: 'duplicate_identity' | 'invalid_generation' |
+    'lifecycle_unavailable' | 'generation_mismatch' |
+    'lifecycle_not_credentialed' | 'profile_recovery_required'
   id: string
   alias: string | null
   state: 'signed_out' | 'recovery_required'
@@ -2726,7 +2750,23 @@ export type SignedOutCodexProfileStatus = {
   lifecycleReadStatus: 'absent' | 'valid' | 'malformed' | 'unreadable'
 }
 
+export type SignedOutAnthropicProfileStatus = {
+  id: string
+  email: string
+  alias: string | null
+  loginGeneration: number
+}
+
 export type AccountsSnapshot = {
+  anthropicSignedOutProfiles?: SignedOutAnthropicProfileStatus[]
+  savedDefaultAccountId?: string | null
+  effectiveDefaultAccountId?: string | null
+  anthropicSavedDefaultAccountId?: string | null
+  anthropicEffectiveDefaultAccountId?: string | null
+  anthropicCredentialSource?: {
+    kind: 'claude_subscription' | 'environment_api_key' | 'api_key_helper' | 'bedrock' | 'vertex' | 'foundry' | 'environment_token' | 'file_descriptor' | 'managed_api_key' | 'none'
+    variableName?: string
+  }
   /** Redacted account rows, pool order (the pool's `activeIndex` account first-class via `isDefault`). */
   accounts: AccountStatus[]
   /** Redacted vault profiles without routable credentials, kept outside pool counts. */

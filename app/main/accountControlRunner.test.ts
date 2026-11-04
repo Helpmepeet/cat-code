@@ -137,7 +137,7 @@ test('the production account worker boots without a session or credentials', asy
   } finally { await runner.dispose(); rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('the reusable production worker rereads both inventories before each login', async () => {
+test('the reusable production worker rereads both inventories before naming and login writes', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'catcode-account-control-inventory-'))
   const preload = join(directory, 'inventory-probe.ts')
   const domainPath = new URL('../sidecar/accountsDomain.ts', import.meta.url).pathname
@@ -179,8 +179,9 @@ test('the reusable production worker rereads both inventories before each login'
   })
   try {
     const run = (verb: Parameters<typeof runner.run>[0]) => runner.run(verb).catch(error => { throw new Error(diagnostics.join('\n'), { cause: error }) })
-    expect((await run({ type: 'account.rename', requestId: 'warm', accountId: 'a', alias: 'work' })).message).toBe('Observed 1/1')
-    expect((await run({ type: 'account.login', requestId: 'first', provider: 'anthropic' })).message).toBe('Observed 2/2')
-    expect((await run({ type: 'account.login', requestId: 'second', provider: 'openai' })).message).toBe('Observed 3/3')
+    expect((await run({ type: 'account.rename', requestId: 'warm', accountId: 'a', alias: 'work' })).message).toBe('Observed 2/2')
+    expect((await run({ type: 'account.login', requestId: 'first', provider: 'anthropic' })).message).toBe('Observed 3/3')
+    expect((await run({ type: 'account.login', requestId: 'second', provider: 'openai' })).message).toBe('Observed 4/4')
+    expect((await run({ type: 'account.oauthAlias', requestId: 'name', alias: 'personal' })).message).toBe('Observed 5/5')
   } finally { await runner.dispose(); rmSync(directory, { recursive: true, force: true }) }
 })

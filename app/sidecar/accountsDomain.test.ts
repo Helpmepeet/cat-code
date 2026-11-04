@@ -372,6 +372,8 @@ describe('P4-5 read-seam — projection semantics', () => {
         isDefault: true,
         hasVaultProfile: true,
         subscriptionType: 'pro',
+        loginGeneration: 0,
+        credentialRevision: 0,
         loginStale: false,
         boundLoginGeneration: 0,
       },
@@ -1695,6 +1697,48 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(out.poolChanged).toBe(true)
   })
 
+  test('Claude deletion rejects config-only credentials at the receiving boundary', async () => {
+    seedClaudeAccountPoolForTest({ accounts: [{
+      accountUuid: 'config-claude', emailAddress: 'fixture@example.test',
+      accessToken: 'synthetic', refreshToken: 'synthetic-refresh',
+      expiresAt: Date.now() + 3600_000, status: 'healthy',
+    }] })
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        deleteAnthropic: () => { throw new Error('Config-only credentials are not saved profiles') },
+      }),
+    })
+    const out = await domain.runVerb({
+      type: 'account.delete', provider: 'anthropic', requestId: 'delete-config',
+      accountId: 'config-claude', expectedCredentialGeneration: 0, confirm: true,
+    })
+    expect(out.result).toEqual({ ok: false, message: 'Only saved account profiles can be deleted.' })
+    expect(out.poolChanged).toBe(false)
+  })
+
+  test('Claude check one and check all never dispatch the Codex refresh command', async () => {
+    const targets: Array<string | undefined> = []
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        touchAll: async () => { throw new Error('Wrong provider refresh') },
+        checkAnthropic: async accountId => {
+          targets.push(accountId)
+          return { ok: false, message: 'Sign in again.', touchAllResults: [{ alias: 'personal', result: 'FAILED' }] }
+        },
+      }),
+    })
+    for (const accountId of ['idle-account', undefined]) {
+      const out = await domain.runVerb({
+        type: 'account.touchAll', provider: 'anthropic', requestId: accountId ?? 'all',
+        ...(accountId ? { accountId } : {}),
+      })
+      expect(out.result.ok).toBe(false)
+      expect(out.result.touchAllResults).toEqual([{ alias: 'personal', result: 'FAILED' }])
+      expect(out.poolChanged).toBe(true)
+    }
+    expect(targets).toEqual(['idle-account', undefined])
+  })
+
 })
 
 describe('P4-15 OAuth login controller — the live sign-in back-channel', () => {
@@ -1706,6 +1750,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
             accessToken: 'synthetic-access', refreshToken: 'synthetic-refresh',
             expiresAt: Date.now() + 60_000, scopes: ['user:inference'],
             subscriptionType: 'pro', rateLimitTier: null,
+            tokenAccount: { uuid: 'engine-resolved-identity', emailAddress: 'fixture@example.test', organizationUuid: 'fixture-org' },
           }
         },
         handleManualAuthCodeInput() {}, cleanup() {},
@@ -2098,11 +2143,10 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
       },
     })
 
-    const pending = await runner.begin({
+    await expect(runner.begin({
       onWaitingForLogin: () => {},
       waitForManualCode: async () => '',
-    })
-    await expect(pending.persist(undefined)).rejects.toThrow(
+    })).rejects.toThrow(
       'Wrong managed organization.',
     )
     expect(installs).toBe(0)

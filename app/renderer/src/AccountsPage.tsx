@@ -40,6 +40,7 @@ import type {
   AccountResultFrame,
   AccountsSnapshot,
   AccountStatus,
+  AnthropicAccountStatus,
   AccountVerbMessage,
   SignedOutCodexProfileStatus,
 } from '../../shared/protocol.js'
@@ -52,11 +53,13 @@ import {
   selectCapAccount,
   selectHasOtherSwitchable,
   selectReadyLabel,
-  selectTakenAliases,
   useAccountsPoolPresentationState,
 } from './accountsState.js'
 import {
   capIncidentKey,
+  accountRecoveryReason,
+  accountTakenAliases,
+  claudeRateLimitTier,
   anthropicAccountName,
   anthropicCredentialLabel,
   deleteVerb,
@@ -251,12 +254,15 @@ function ALDialog({
 
 /* ── lifecycle dialogs ── */
 
+type Provider = 'anthropic' | 'openai'
 type AccountLabel = Pick<AccountStatus, 'id' | 'alias'>
+type LogoutTarget = AccountLabel & Pick<AccountStatus, 'hasVaultProfile' | 'isDefault' | 'credentialGeneration'>
 
 type DeleteTarget = AccountLabel & {
   expectedCredentialGeneration: number
   isDefault: boolean
   signedOut: boolean
+  provider?: Provider
 }
 
 /**
@@ -290,7 +296,7 @@ function RelinkAccountDialog({
       }
     >
       <p className="text-[12.5px] leading-relaxed text-text-muted">
-        Pick the same ChatGPT account. A different one is added as a new
+        Pick the same account in the browser. A different one is added as a new
         account.
       </p>
     </ALDialog>
@@ -303,7 +309,7 @@ function RenameAccountDialog({
   onSubmit,
   onClose,
 }: {
-  account: AccountStatus
+  account: AccountLabel
   takenAliases: string[]
   onSubmit: (alias: string) => void
   onClose: () => void
@@ -403,7 +409,7 @@ function LogoutAccountDialog({
   onConfirm,
   onClose,
 }: {
-  account: AccountStatus
+  account: LogoutTarget
   hasOtherSwitchable: boolean
   onConfirm: () => void
   onClose: () => void
@@ -653,7 +659,7 @@ function PoolRow({
           </span>
           {account.isDefault ? (
             <span className="shrink-0 rounded bg-accent/[0.12] px-[5px] py-[1.5px] text-[8px] font-bold uppercase tracking-[0.06em] text-accent">
-              active
+              Saved default
             </span>
           ) : null}
         </div>
@@ -671,6 +677,7 @@ function PoolRow({
           ) : null}
         </div>
       </div>
+      {account.email && account.email !== alias ? <div className="text-[11px] text-text-faint">{account.email}</div> : null}
       {usable ? (
         <div className={`flex flex-1 flex-col ${hero ? 'gap-[7px]' : 'gap-1.5'}`}>
           <HeadroomBar
@@ -781,7 +788,7 @@ function SignedOutProfileRow({
       <span className="h-2 w-2 shrink-0 rounded-full bg-text-ghost" />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-semibold text-text-primary">
-          {profile.alias ?? profile.id}
+          {profile.alias ?? profile.email ?? profile.id}
         </div>
         <div className="mt-[1px] text-[11px] text-text-faint">
           {profile.state === 'recovery_required'
@@ -789,6 +796,8 @@ function SignedOutProfileRow({
             : 'Signed out'}
         </div>
       </div>
+      {profile.email && profile.alias && profile.email !== profile.alias ? <div className="text-[11px] text-text-faint">{profile.email}</div> : null}
+      {profile.recoveryReason ? <div className="text-[11px] text-text-faint">{accountRecoveryReason(profile.recoveryReason)}</div> : null}
       <SignedOutProfileMenu
         profile={profile}
         onRelink={onRelink}
@@ -810,7 +819,7 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
           {account.alias ?? account.id}
         </span>
         <span className="rounded bg-accent/[0.12] px-[5px] py-[1.5px] text-[8.5px] font-bold uppercase tracking-[0.06em] text-accent">
-          active
+          Saved default
         </span>
         <span
           title={account.usageStale ? 'Showing the last successful usage check.' : undefined}
@@ -882,12 +891,55 @@ function WaitingState({ onRetry, onSignIn }: {
 
 /* ── page ── */
 
+function SignInDialog({ provider, onAuthorize, onClose }: {
+  provider: Provider
+  onAuthorize: (makeDefault: boolean) => void
+  onClose: () => void
+}) {
+  const [makeDefault, setMakeDefault] = useState(false)
+  return <ALDialog title={`Sign in to ${provider === 'anthropic' ? 'Claude' : 'Codex'}`} onClose={onClose}
+    footer={<><GhostBtn onClick={onClose}>Cancel</GhostBtn><PrimaryBtn onClick={() => onAuthorize(makeDefault)}>Sign in</PrimaryBtn></>}>
+    <label className="flex items-center gap-2 text-[12.5px] text-text-muted">
+      <input type="checkbox" checked={makeDefault} onChange={event => setMakeDefault(event.target.checked)} />
+      Make default for new chats
+    </label>
+  </ALDialog>
+}
+
+function ClaudeRowMenu({ account, onAction }: {
+  account: AnthropicAccountStatus
+  onAction: (key: string) => void
+}) {
+  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const items = [
+    ...(!account.isDefault && account.status === 'healthy' ? [{ key: 'switch', label: 'Make default for new chats' }] : []),
+    { key: 'check', label: 'Check sign-in' },
+    { key: 'relink', label: 'Sign in again' },
+    ...(account.hasVaultProfile ? [{ key: 'rename', label: 'Rename' }] : []),
+    ...(account.loginGeneration !== undefined ? [
+      { key: 'logout', label: 'Sign out' },
+      ...(account.hasVaultProfile ? [{ key: 'delete', label: 'Delete' }] : []),
+    ] : []),
+  ]
+  return <div ref={ref} className="relative shrink-0">
+    <button ref={triggerRef} type="button" aria-label="Account actions" aria-haspopup="menu" aria-expanded={open}
+      onClick={() => setOpen(value => !value)} className="h-7 w-7 rounded-[7px] text-text-muted hover:bg-shell-hover">⋯</button>
+    {open ? <div role="menu" aria-label="Account actions" onKeyDown={handleMenuRovingKeyDown}
+      className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-shell-seam bg-surface-panel p-[5px] shadow-[var(--elev-menu)]">
+      {items.map(item => <button key={item.key} type="button" role="menuitem"
+        className="block w-full rounded-[7px] px-2.5 py-[7px] text-left text-[12.5px] text-text-primary hover:bg-shell-hover"
+        onClick={() => { close(); onAction(item.key) }}>{item.label}</button>)}
+    </div> : null}
+  </div>
+}
+
 type DialogState =
-  | { kind: 'relink'; account: AccountLabel }
+  | { kind: 'login'; provider: Provider }
+  | { kind: 'relink'; account: AccountLabel; provider?: Provider }
   | { kind: 'touchall' }
-  | { kind: 'rename'; account: AccountStatus }
+  | { kind: 'rename'; account: AccountLabel; provider?: Provider }
   | { kind: 'delete'; target: DeleteTarget }
-  | { kind: 'logout'; account: AccountStatus }
+  | { kind: 'logout'; account: LogoutTarget; provider?: Provider }
   | null
 
 type Pending = {
@@ -897,11 +949,9 @@ type Pending = {
 
 export function AccountsPage({
   snapshot,
-  switchScope,
   lastResult,
   signOutOverlays = {},
   onVerb,
-  onSignInAndReconnect,
 }: {
   snapshot: AccountsSnapshot | null
   switchScope?: { provider: 'openai' | 'anthropic'; accountId: string | null; boundLoginGeneration?: number }
@@ -928,27 +978,18 @@ export function AccountsPage({
     }
   }, [lastResult])
 
-  const switchSnapshot = snapshot && switchScope ? {
+  const switchSnapshot = snapshot ? {
     ...snapshot,
-    accounts: snapshot.accounts.map(account => ({
-      ...account,
-      isDefault: switchScope.provider === 'openai'
-        ? account.id === switchScope.accountId : account.isDefault,
-      // The shared pool suppresses switching to its own default. That account
-      // is still a valid destination when this chat is using another account.
-      switchable: switchScope.provider === 'openai'
-        ? account.id !== switchScope.accountId &&
-          (account.switchable || (account.isDefault && account.availability !== 'blocked'))
-        : account.switchable,
+    accounts: snapshot.accounts.map(account => ({ ...account,
+      isDefault: account.id === (snapshot.savedDefaultAccountId !== undefined ? snapshot.savedDefaultAccountId : snapshot.activeAccountId),
+      switchable: account.switchable || (account.id === snapshot.effectiveDefaultAccountId &&
+        account.id !== snapshot.savedDefaultAccountId && account.availability !== 'blocked'),
     })),
-    anthropicAccounts: snapshot.anthropicAccounts.map(account => ({
-      ...account,
-      boundLoginGeneration: switchScope.provider === 'anthropic' && account.id === switchScope.accountId
-        ? switchScope.boundLoginGeneration : undefined,
-      isDefault: switchScope.provider === 'anthropic'
-        ? account.id === switchScope.accountId : account.isDefault,
+    anthropicAccounts: snapshot.anthropicAccounts.map(account => ({ ...account,
+      boundLoginGeneration: undefined,
+      isDefault: account.id === (snapshot.anthropicSavedDefaultAccountId !== undefined ? snapshot.anthropicSavedDefaultAccountId : snapshot.anthropicActiveAccountId),
     })),
-  } : snapshot
+  } : null
   const rows = selectAccountRows(switchSnapshot)
   const active = selectActiveAccount(switchSnapshot)
   const capAccount = selectCapAccount(snapshot)
@@ -980,9 +1021,13 @@ export function AccountsPage({
   // Start a sign-in. The app-level sign-in surface takes over at once and shows
   // its progress, so a started sign-in needs no toast; a refused one still gets
   // one, since nothing else would say so.
-  function beginSignIn(provider: 'anthropic' | 'openai'): void {
+  function beginSignIn(provider: Provider): void {
+    setDialog({ kind: 'login', provider })
+  }
+
+  function authorize(provider: Provider, makeDefault = false): void {
     setDialog(null)
-    const verb = loginVerb(provider)
+    const verb = loginVerb(provider, makeDefault)
     pendingRef.current = {
       requestId: verb.requestId,
       onDone: result => {
@@ -1028,6 +1073,18 @@ export function AccountsPage({
     setDialog({ kind: key, account })
   }
 
+  function claudeAction(key: string, account: AnthropicAccountStatus): void {
+    if (key === 'switch') { submit(switchVerb(account.id, 'anthropic')); return }
+    if (key === 'check') { submit(touchAllVerb('anthropic', account.id)); return }
+    if (key === 'relink') { setDialog({ kind: 'relink', account: { ...account, alias: account.alias ?? account.email }, provider: 'anthropic' }); return }
+    if (key === 'rename') { setDialog({ kind: 'rename', account, provider: 'anthropic' }); return }
+    if (account.loginGeneration === undefined) return
+    if (key === 'delete') setDialog({ kind: 'delete', target: { ...account, expectedCredentialGeneration: account.loginGeneration, signedOut: false, provider: 'anthropic' } })
+    if (key === 'logout') setDialog({ kind: 'logout', provider: 'anthropic', account: {
+      ...account, credentialGeneration: account.loginGeneration,
+    } })
+  }
+
   function signOutStateFor(
     accountId: string,
   ): 'submitting' | 'checking' | 'refreshing' | undefined {
@@ -1048,12 +1105,20 @@ export function AccountsPage({
               Anthropic and Codex subscription accounts available to Cat Code.
             </p>
             <p className="mt-1 text-[13px] text-text-faint">
-              {switchScope
-                ? `Switching ${switchScope.provider === 'anthropic' ? 'Anthropic' : 'Codex'} accounts changes your current chat. Other account switches set the default for new chats.`
-                : 'Switching accounts sets the default for new chats.'}
+              {'Account choices here set the default for new chats.'}
               {' Close older Cat Code versions before signing out or deleting accounts.'}
             </p>
           </div>
+          {snapshot ? <div className="text-[11.5px] text-text-subtle">{(['openai', 'anthropic'] as const).map(provider => {
+            const saved = provider === 'openai' ? snapshot.savedDefaultAccountId : snapshot.anthropicSavedDefaultAccountId
+            const effective = provider === 'openai' ? snapshot.effectiveDefaultAccountId : snapshot.anthropicEffectiveDefaultAccountId
+            const legacy = provider === 'openai' ? snapshot.activeAccountId : snapshot.anthropicActiveAccountId
+            const actual = effective !== undefined ? effective : legacy
+            if (saved === undefined || saved === actual) return null
+            const pool = provider === 'openai' ? snapshot.accounts : snapshot.anthropicAccounts
+            const name = (id: string | null) => { const account = pool.find(a => a.id === id); return account?.alias ?? account?.email ?? id ?? 'none' }
+            return <p key={provider}>{provider === 'openai' ? 'Codex' : 'Claude'}: Saved default: {name(saved)}; New chats: {name(actual)}</p>
+          })}</div> : null}
           {active && active.status === 'healthy' ? (
             <ActiveHeadroom account={active} />
           ) : null}
@@ -1125,6 +1190,7 @@ export function AccountsPage({
                   {anthropicReadyLabel}
                 </span>
               </div>
+              <button type="button" onClick={() => submit(touchAllVerb('anthropic'))} className="text-[12px] text-text-muted">Check all sign-ins</button>
               <button
                 type="button"
                 onClick={() => beginSignIn('anthropic')}
@@ -1166,7 +1232,7 @@ export function AccountsPage({
                         </span>
                         {account.isDefault ? (
                           <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-accent">
-                            active
+                            Saved default
                           </span>
                         ) : null}
                       </div>
@@ -1176,54 +1242,42 @@ export function AccountsPage({
                         </div>
                       ) : null}
                     </div>
+                    <div className="text-[11px] text-text-subtle" title={[
+                      account.organizationName, account.organizationRole, account.workspaceRole,
+                      claudeRateLimitTier(account.rateLimitTier), account.billingType,
+                      account.usageCheckedAt ? `Usage checked ${new Date(account.usageCheckedAt).toLocaleString()}` : null,
+                    ].filter(Boolean).join(' · ')}>
+                      {[account.organizationName, account.organizationRole, account.workspaceRole, claudeRateLimitTier(account.rateLimitTier), account.billingType].filter(Boolean).join(' · ')}
+                      {account.usageStale ? <div>Stale usage</div> : null}
+                      {account.extraUsage ? <div>Extra usage: {account.extraUsage.usedCredits ?? '–'} / {account.extraUsage.monthlyLimit ?? '–'} credits ({account.extraUsage.isEnabled === null ? 'unavailable' : account.extraUsage.isEnabled ? 'enabled' : 'disabled'})</div> : account.hasExtraUsageEnabled ? <div>Extra usage enabled</div> : null}
+                    </div>
+                    <div className="min-w-[130px]">
+                      <HeadroomBar label="5h" pct={account.usageFiveHour ?? null} resetAt={account.usageFiveHourResetAt} showReset />
+                      <HeadroomBar label="wk" pct={account.usageWeekly ?? null} resetAt={account.usageWeeklyResetAt} showReset />
+                      {account.usageWeeklyOpus != null ? <HeadroomBar label="Opus" pct={account.usageWeeklyOpus} resetAt={account.usageWeeklyOpusResetAt} showReset /> : null}
+                      {account.usageWeeklySonnet != null ? <HeadroomBar label="Sonnet" pct={account.usageWeeklySonnet} resetAt={account.usageWeeklySonnetResetAt} showReset /> : null}
+                    </div>
                     <span className="text-[11.5px] text-text-muted">
                       {anthropicCredentialLabel(account) ?? (account.status === 'healthy'
                         ? account.subscriptionType ?? account.status
                         : account.status)}
                     </span>
-                    {account.status !== 'healthy' || account.loginStale ||
-                      (account.credentialHealth !== undefined && account.credentialHealth !== 'ready') ? (
-                      <div className="text-right">
-                        <button
-                          type="button"
-                          onClick={() => beginSignIn('anthropic')}
-                          className="rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary"
-                        >
-                          Sign in again
-                        </button>
-                        <div className="mt-1 text-[11px] text-text-subtle">
-                          Choose {account.email} in the browser to reconnect this account.
-                        </div>
-                        {switchScope?.provider === 'anthropic' &&
-                          switchScope.accountId === account.id && onSignInAndReconnect ? (
-                          <button type="button"
-                            onClick={() => onSignInAndReconnect(account.id)}
-                            className="mt-1 rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary">
-                            Sign in and reconnect this chat
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : account.isDefault && switchScope?.provider === 'anthropic' ? (
-                      <button type="button" onClick={() => submit(switchVerb(account.id, 'anthropic'))}
-                        className="rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary">
-                        Reconnect this chat
-                      </button>
-                    ) : !account.isDefault && account.status === 'healthy' ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          submit(switchVerb(account.id, 'anthropic'))
-                        }
-                        className="rounded-md border border-shell-seam px-2.5 py-1 text-[11px] font-semibold text-text-subtle hover:bg-shell-hover hover:text-text-primary"
-                      >
-                        Switch
-                      </button>
-                    ) : null}
+                    <ClaudeRowMenu account={account} onAction={key => claudeAction(key, account)} />
                   </div>
                   )
                 })}
               </div>
             )}
+            {snapshot.anthropicCredentialSource && !['claude_subscription', 'none'].includes(snapshot.anthropicCredentialSource.kind) ? <p className="mt-2 text-[11.5px] text-text-subtle">Credential source: {snapshot.anthropicCredentialSource.variableName ?? snapshot.anthropicCredentialSource.kind.replaceAll('_', ' ')}</p> : null}
+            {(snapshot.anthropicSignedOutProfiles ?? []).length > 0 ? <div className="mt-3 border-t border-shell-seam pt-3">
+              <div className="mb-2 text-[10.5px] font-semibold uppercase text-text-ghost">Signed out</div>
+              {snapshot.anthropicSignedOutProfiles!.map(profile => <SignedOutProfileRow key={profile.id}
+                profile={{ ...profile, credentialGeneration: profile.loginGeneration, lifecycleGeneration: profile.loginGeneration,
+                  state: 'signed_out', credentialGenerationState: null, lifecycleState: 'signed_out', lifecycleReadStatus: 'valid' }}
+                onRelink={() => setDialog({ kind: 'relink', provider: 'anthropic', account: { ...profile, alias: profile.alias ?? profile.email } })}
+                onDelete={() => setDialog({ kind: 'delete', target: { ...profile, provider: 'anthropic',
+                  expectedCredentialGeneration: profile.loginGeneration, signedOut: true, isDefault: false } })} />)}
+            </div> : null}
           </section>
 
           <section className="mb-[22px]">
@@ -1326,10 +1380,11 @@ export function AccountsPage({
         )}
       </div>
 
+      {dialog?.kind === 'login' ? <SignInDialog provider={dialog.provider} onAuthorize={makeDefault => authorize(dialog.provider, makeDefault)} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'relink' ? (
         <RelinkAccountDialog
           account={dialog.account}
-          onAuthorize={() => beginSignIn('openai')}
+          onAuthorize={() => authorize(dialog.provider ?? 'openai')}
           onClose={() => setDialog(null)}
         />
       ) : null}
@@ -1343,20 +1398,23 @@ export function AccountsPage({
       {dialog?.kind === 'rename' ? (
         <RenameAccountDialog
           account={dialog.account}
-          takenAliases={selectTakenAliases(snapshot)}
-          onSubmit={alias => submit(renameVerb(dialog.account.id, alias))}
+          takenAliases={accountTakenAliases(snapshot)}
+          onSubmit={alias => submit(renameVerb(dialog.account.id, alias, dialog.provider))}
           onClose={() => setDialog(null)}
         />
       ) : null}
       {dialog?.kind === 'delete' ? (
         <DeleteAccountDialog
           target={dialog.target}
-          hasOtherSwitchable={selectHasOtherSwitchable(snapshot, dialog.target.id)}
+          hasOtherSwitchable={dialog.target.provider === 'anthropic'
+            ? !!snapshot?.anthropicAccounts.some(a => a.id !== dialog.target.id && a.status === 'healthy')
+            : selectHasOtherSwitchable(snapshot, dialog.target.id)}
           onConfirm={() =>
             submit(
               deleteVerb(
                 dialog.target.id,
                 dialog.target.expectedCredentialGeneration,
+                dialog.target.provider,
               ),
               dialog.target.id,
             )
@@ -1367,7 +1425,9 @@ export function AccountsPage({
       {dialog?.kind === 'logout' ? (
         <LogoutAccountDialog
           account={dialog.account}
-          hasOtherSwitchable={selectHasOtherSwitchable(
+          hasOtherSwitchable={dialog.provider === 'anthropic'
+            ? !!snapshot?.anthropicAccounts.some(a => a.id !== dialog.account.id && a.status === 'healthy')
+            : selectHasOtherSwitchable(
             snapshot,
             dialog.account.id,
           )}
@@ -1376,6 +1436,8 @@ export function AccountsPage({
               logoutVerb(
                 dialog.account.id,
                 dialog.account.credentialGeneration,
+                undefined,
+                dialog.provider,
               ),
               dialog.account.id,
             )

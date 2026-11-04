@@ -17,6 +17,35 @@ import type { Tone } from './tone.js'
 
 const newRequestId = (): string => crypto.randomUUID()
 
+export function accountRecoveryReason(reason: string): string {
+  switch (reason) {
+    case 'duplicate_identity': return 'This account is saved more than once. Sign in again to restore it.'
+    case 'invalid_generation': return 'The saved sign-in is incomplete. Sign in again.'
+    case 'lifecycle_unavailable': return 'The saved sign-in could not be checked. Try again or sign in again.'
+    case 'generation_mismatch': return 'The saved sign-in has changed. Sign in again to restore this profile.'
+    case 'lifecycle_not_credentialed': return 'This profile has no usable sign-in. Sign in again.'
+    case 'profile_recovery_required': return 'This saved profile needs a fresh sign-in.'
+    default: return 'This account needs attention. Sign in again.'
+  }
+}
+
+export function claudeRateLimitTier(tier: string | null | undefined): string | null {
+  if (!tier) return null
+  if (tier === 'default_claude_max_5x') return 'Max 5x'
+  if (tier === 'default_claude_max_20x') return 'Max 20x'
+  return 'Claude subscription'
+}
+
+export function accountTakenAliases(snapshot: AccountsSnapshot | null): string[] {
+  if (!snapshot) return []
+  return [
+    ...snapshot.accounts,
+    ...snapshot.signedOutProfiles,
+    ...snapshot.anthropicAccounts,
+    ...(snapshot.anthropicSignedOutProfiles ?? []),
+  ].flatMap(account => account.alias ? [account.alias] : [])
+}
+
 export function selectAnthropicReadyLabel(
   snapshot: AccountsSnapshot | null,
 ): string {
@@ -45,13 +74,15 @@ export function switchVerb(
 export function renameVerb(
   accountId: string,
   alias: string,
+  provider?: 'anthropic' | 'openai',
 ): AccountRenameMessage {
-  return { type: 'account.rename', requestId: newRequestId(), accountId, alias }
+  return { type: 'account.rename', requestId: newRequestId(), accountId, alias, ...(provider ? { provider } : {}) }
 }
 
 export function deleteVerb(
   accountId: string,
   expectedCredentialGeneration: number,
+  provider?: 'anthropic' | 'openai',
 ): AccountDeleteMessage {
   return {
     type: 'account.delete',
@@ -59,6 +90,7 @@ export function deleteVerb(
     accountId,
     expectedCredentialGeneration,
     confirm: true,
+    ...(provider ? { provider } : {}),
   }
 }
 
@@ -66,26 +98,30 @@ export function logoutVerb(
   accountId: string,
   expectedCredentialGeneration: number,
   requestId = newRequestId(),
+  provider?: 'anthropic' | 'openai',
 ): AccountLogoutMessage {
   return {
     type: 'account.logout',
     requestId,
     accountId,
     expectedCredentialGeneration,
+    ...(provider ? { provider } : {}),
   }
 }
 
-export function touchAllVerb(): AccountTouchAllMessage {
-  return { type: 'account.touchAll', requestId: newRequestId() }
+export function touchAllVerb(provider?: 'anthropic' | 'openai', accountId?: string): AccountTouchAllMessage {
+  return { type: 'account.touchAll', requestId: newRequestId(), ...(provider ? { provider } : {}), ...(accountId ? { accountId } : {}) }
 }
 
 export function loginVerb(
   provider: 'anthropic' | 'openai' = 'openai',
+  makeDefault?: boolean,
 ): AccountLoginMessage {
   return {
     type: 'account.login',
     requestId: newRequestId(),
     provider,
+    ...(makeDefault !== undefined ? { makeDefault } : {}),
   }
 }
 
@@ -227,7 +263,7 @@ export function selectAccountMenuItems(
   }
   const items: AccountMenuItem[] = []
   if (account.switchable) {
-    items.push({ key: 'switch', label: 'Switch to this account' })
+    items.push({ key: 'switch', label: 'Make default for new chats' })
   }
   if (isRelinkable(account)) {
     items.push({ key: 'relink', label: 'Sign in again' })

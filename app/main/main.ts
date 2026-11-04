@@ -4563,7 +4563,7 @@ function registerHostControlPlane(): void {
           return failure('Could not delete that account.')
         }
         sendHostEvent({ type: 'accounts-pool', pool: delivered.pool })
-        if (delivered.ok) {
+        if (delivered.ok && verb.provider !== 'anthropic') {
           notifySidecarsOfAccountDeletion(
             verb.accountId,
             delivered.requestId,
@@ -4617,7 +4617,7 @@ function registerHostControlPlane(): void {
       if (!isMainWindowSender(event)) {
         return failure('Account sign-out request refused.', '')
       }
-      if (!verb) return failure('Invalid account sign-out request.', '')
+      if (!verb || verb.provider === 'anthropic') return failure('Invalid account sign-out request.', '')
       if (accountProfileMutationInFlight) {
         return failure('Another account change is already in progress.')
       }

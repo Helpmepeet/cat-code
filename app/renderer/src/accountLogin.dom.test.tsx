@@ -64,7 +64,21 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [],
     if (!button) throw new Error(`missing button ${label}`)
     await act(async () => { button.click() })
   }
-  return { calls, lifecycleCalls, toasts, tree, click, pool, hostEvent: (event: HostEvent) => hostEvent(event),
+  const confirmCodexLogin = async () => {
+    const confirmation = tree.container.querySelector<HTMLElement>('[role="dialog"][aria-label="Sign in to Codex"]')!
+    expect(confirmation).not.toBeNull()
+    const makeDefault = confirmation.querySelector<HTMLInputElement>('input[type="checkbox"]')!
+    expect(makeDefault.checked).toBe(false)
+    expect(makeDefault.closest('label')?.textContent).toContain('Make default for new chats')
+    const before = calls.length
+    await click('Sign in')
+    expect(calls.slice(before)).toEqual([expect.objectContaining({
+      type: 'account.login', provider: 'openai', makeDefault: false,
+    })])
+    expect(tree.container.querySelector('[role="dialog"][aria-label="Sign in to Codex"]')).toBeNull()
+    expect(tree.container.querySelector('[role="dialog"][aria-label="Sign in"]')).not.toBeNull()
+  }
+  return { calls, lifecycleCalls, toasts, tree, click, confirmCodexLogin, pool, hostEvent: (event: HostEvent) => hostEvent(event),
     frames: (values: ServerFrame[]) => frames(values), lidCommands,
     lidUpdate: (view: Partial<LidModeView>) => lidUpdate({ ...lidView, ...view }) }
 }
@@ -81,6 +95,12 @@ test.each(['trust', 'first-run', 'add-account', 'orphan'] as const)(
     } else if (surface === 'add-account') {
       await app.click('Accounts')
       await app.click('+ Add account')
+      expect(app.calls).toEqual([])
+      expect(app.tree.container.querySelector('.lid-notice')?.textContent).toContain("Couldn't restore normal sleep")
+      const retry = [...app.tree.container.querySelectorAll<HTMLButtonElement>('.lid-notice button')]
+        .find(button => button.textContent === 'Retry')!
+      expect(retry.disabled).toBe(false)
+      await app.confirmCodexLogin()
     } else if (surface === 'orphan') {
       await act(async () => {
         app.hostEvent({ type: 'accounts-pool', pool: { ...app.pool, anthropicRouteAvailable: true } })
@@ -233,27 +253,37 @@ test('Settings remains accessible while first-run completion waits for inventory
 })
 
 test('Accounts starts login, cancels, and reaches naming with no open sessions', async () => {
-  const { calls, toasts, tree, click, hostEvent } = await mountAccountsApp()
+  const { calls, lifecycleCalls, toasts, tree, click, confirmCodexLogin, hostEvent } = await mountAccountsApp()
   await click('Accounts')
   await click('+ Add account')
+  expect(calls).toEqual([])
+  await click('Cancel')
+  expect(calls).toEqual([])
+  await click('+ Add account')
+  await confirmCodexLogin()
   expect(calls.map(verb => verb.type)).toEqual(['account.login'])
   expect(toasts).toEqual([])
   await click('Cancel')
   expect(calls.map(verb => verb.type)).toEqual(['account.login', 'account.oauthCancel'])
   await click('+ Add account')
+  expect(calls.map(verb => verb.type)).toEqual(['account.login', 'account.oauthCancel'])
+  await confirmCodexLogin()
   await act(async () => { hostEvent({ type: 'account-oauth', provider: 'openai', progress: { state: 'waiting_for_alias' } }) })
   expect(tree.container.querySelector('input[aria-label="Account name"]')).not.toBeNull()
   expect([...tree.container.querySelectorAll('button')].some(button => button.textContent === 'Cancel')).toBe(false)
   // No tab or sidecar frame was needed to reach the account-name step.
   await click('Skip')
   expect(calls.at(-1)?.type).toBe('account.oauthAlias')
+  expect(lifecycleCalls).toEqual([])
 })
 
 test.each(['anthropic', 'openai'] as const)('%s sign-in receives the host link and shows refused code and alias results inline', async provider => {
-  const { calls, tree, click, hostEvent } = await mountAccountsApp(['account.oauthPasteCode', 'account.oauthAlias'])
+  const { calls, lifecycleCalls, tree, click, confirmCodexLogin, hostEvent } = await mountAccountsApp(['account.oauthPasteCode', 'account.oauthAlias'])
   if (provider === 'openai') {
     await click('Accounts')
     await click('+ Add account')
+    expect(calls).toEqual([])
+    await confirmCodexLogin()
   } else {
     // Exercise the first-run mount as well as the in-app modal mount.
     const choice = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.includes('Claude subscription'))!
@@ -299,4 +329,5 @@ test.each(['anthropic', 'openai'] as const)('%s sign-in receives the host link a
     expect(dialog().classList.contains('bg-scrim')).toBe(true)
     expect(dialog().querySelector('[role="alert"]')?.textContent).toBe('That name is taken.')
   }
+  expect(lifecycleCalls).toEqual([])
 })

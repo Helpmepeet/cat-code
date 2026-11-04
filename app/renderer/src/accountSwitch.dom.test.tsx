@@ -91,10 +91,19 @@ test.each(['committed', 'wrong-account', 'wrong-provider', 'pending', 'wrong-req
       kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
       sessionId: 'limited-chat', accounts: inventory,
     })
-    await app.click('Accounts')
-    await app.click('Sign in and reconnect this chat')
+    // Host inventory may have forgotten the signed-out selection entirely.
+    await app.emitPool({ ...inventory, anthropicAccounts: [], anthropicPoolCount: 0 })
+    const trigger = app.tree.container.querySelector<HTMLButtonElement>('[data-composer-face="account"]')!
+    expect(trigger).not.toBeNull()
+    await act(async () => { trigger.click() })
+    await act(async () => { await harness.nextFrame() })
+    const reconnect = [...document.querySelectorAll<HTMLButtonElement>('[role="menu"] button')]
+      .find(button => button.textContent?.trim() === 'Sign in again & reconnect')!
+    expect(reconnect).toBeDefined()
+    await act(async () => { reconnect.click() })
     const login = app.managed[0] as { requestId: string }
     expect(login.requestId).toBeTruthy()
+    expect(app.managed[0]).toEqual(expect.objectContaining({ makeDefault: false }))
     // Completion must not consult the tab that happens to be active now.
     const otherTab = [...app.tree.container.querySelectorAll<HTMLElement>('[role="tab"]')]
       .find(tab => tab.getAttribute('aria-label')?.includes('other-chat'))!
@@ -250,7 +259,7 @@ test('the chat reports unsaved account authority until the host confirms recover
   expect(app.tree.container.textContent).not.toContain(message)
 })
 
-test('Accounts shows the retained chat selection while keeping global inventory fresh', async () => {
+test('Accounts ignores the retained chat selection and keeps global defaults', async () => {
   const app = await mountApp()
   await app.emit({
     kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,
@@ -266,12 +275,10 @@ test('Accounts shows the retained chat selection while keeping global inventory 
     },
   })
   await app.click('Accounts')
-  expect(app.tree.container.textContent).toContain('changes your current chat')
-  // Global inventory still reports the old account capped, so it cannot be
-  // switched to. The healthy current selection must not offer a redundant switch.
+  expect(app.tree.container.textContent).toContain('default for new chats')
   expect([...app.tree.container.querySelectorAll('button')].filter(
     button => button.textContent?.trim() === 'Switch',
-  )).toHaveLength(0)
+  )).toHaveLength(1)
   await app.emitPool({
     ...pool,
     accounts: pool.accounts.map(account => ({
@@ -283,21 +290,18 @@ test('Accounts shows the retained chat selection while keeping global inventory 
   expect(app.tree.container.textContent).not.toContain('Switch to this account')
   await app.click('Sign out')
   expect(app.tree.container.querySelector('[role="dialog"]')?.textContent)
-    .toContain('The default account for new chats will not change.')
+    .toContain('Sign out')
   await app.click('Cancel')
   const menus = app.tree.container.querySelectorAll<HTMLButtonElement>(
     'button[aria-label="Account actions"]',
   )
   await act(async () => { menus[1]!.click() })
-  await app.click('Switch to this account')
-  expect(app.sessionSwitches).toEqual([{
-    sessionId: 'limited-chat',
-    verb: expect.objectContaining({ accountId: 'limited' }),
-  }])
-  expect(app.managed).toEqual([])
+  await app.click('Make default for new chats')
+  expect(app.sessionSwitches).toEqual([])
+  expect(app.managed).toEqual([expect.objectContaining({ accountId: 'replacement' })])
 })
 
-test('Accounts retains the main failover identity after lease release without an accounts refresh', async () => {
+test('Accounts does not confuse a main failover identity with the default', async () => {
   const app = await mountApp()
   const healthyPool: AccountsSnapshot = {
     ...pool,
@@ -326,18 +330,24 @@ test('Accounts retains the main failover identity after lease release without an
     sessionId: 'limited-chat',
     leases: { strategy: 'spread', accounts: [], owners: [] },
   })
+  // The released main-thread failover remains this chat's identity, not a
+  // mutation of the saved new-chat default.
+  expect(app.tree.container.querySelector('[data-composer-face="account"]')?.textContent)
+    .toContain('replacement')
   await app.click('Accounts')
   const menus = app.tree.container.querySelectorAll<HTMLButtonElement>(
     'button[aria-label="Account actions"]',
   )
   expect(menus[0]!.closest('[data-window-card]')?.textContent ??
-    menus[0]!.parentElement?.parentElement?.textContent).toContain('replacementactive')
+    menus[0]!.parentElement?.parentElement?.textContent).toContain('limitedSaved default')
+  expect(app.tree.container.textContent).not.toContain('replacementSaved default')
+  expect(app.tree.container.textContent).not.toContain('replacementNext chat')
   await act(async () => { menus[0]!.click() })
   expect(app.tree.container.textContent).not.toContain('Switch to this account')
   await act(async () => { menus[0]!.click(); menus[1]!.click() })
-  await app.click('Switch to this account')
-  expect(app.sessionSwitches[0]?.verb.accountId).toBe('limited')
-  expect(app.managed).toEqual([])
+  await app.click('Make default for new chats')
+  expect(app.sessionSwitches).toEqual([])
+  expect(app.managed).toEqual([expect.objectContaining({ accountId: 'replacement' })])
 })
 
 test('a ready chat with no selected account can switch to a healthy replacement', async () => {
@@ -350,11 +360,11 @@ test('a ready chat with no selected account can switch to a healthy replacement'
   })
   await app.click('Accounts')
   await app.click('Switch')
-  expect(app.sessionSwitches[0]?.verb.accountId).toBe('replacement')
-  expect(app.managed).toEqual([])
+  expect(app.sessionSwitches).toEqual([])
+  expect(app.managed).toEqual([expect.objectContaining({ accountId: 'replacement' })])
 })
 
-test('a blocked chat can explicitly choose the sole healthy new-chat default', async () => {
+test('a blocked chat does not change the sole healthy new-chat default on Accounts', async () => {
   const app = await mountApp()
   const replacement = { ...pool.accounts[1]!, isDefault: true, switchable: false }
   const global = { ...pool, accounts: [replacement], activeAccountId: replacement.id, poolCount: 1 }
@@ -368,26 +378,21 @@ test('a blocked chat can explicitly choose the sole healthy new-chat default', a
     },
   })
   await app.click('Accounts')
-  const menu = app.tree.container.querySelector<HTMLButtonElement>('button[aria-label="Account actions"]')!
-  expect(menu.closest('[data-window-card]')?.textContent ??
-    menu.parentElement?.parentElement?.textContent).not.toContain('replacementactive')
-  await act(async () => { menu.click() })
-  await app.click('Switch to this account')
-  expect(app.sessionSwitches[0]?.verb.accountId).toBe(replacement.id)
+  await app.click('Account actions')
+  expect(app.tree.container.textContent).not.toContain('Make default for new chats')
+  expect(app.sessionSwitches).toEqual([])
   expect(app.managed).toEqual([])
 })
 
-test('Accounts switch after a usage limit changes the existing chat before continuing with a dot', async () => {
+test('Accounts switch after a usage limit changes only the default, even with a focused chat', async () => {
   const app = await mountApp()
   await app.emit({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'limited-chat', event: {
     type: 'message', message: { type: 'result', subtype: 'error_during_execution', is_error: true, errors: ['Usage limit reached'], uuid: 'limited-result' },
   } } as ServerFrame)
   await app.click('Accounts')
   await app.click('Switch')
-  expect(app.managed).toEqual([])
-  expect(app.sessionSwitches).toEqual([{ sessionId: 'limited-chat', verb: expect.objectContaining({ type: 'account.switch', accountId: 'replacement', provider: 'openai' }) }])
-  const { verb } = app.sessionSwitches[0]!
-  await app.emit({ kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: 'limited-chat', requestId: verb.requestId, verb: 'account.switch', ok: true, message: 'Switched to replacement' })
+  expect(app.managed).toEqual([expect.objectContaining({ type: 'account.switch', accountId: 'replacement', provider: 'openai' })])
+  expect(app.sessionSwitches).toEqual([])
   await app.click('Session limited-chat, live, last turn failed')
   const composer = app.tree.container.querySelector<HTMLElement>('[contenteditable="true"]')!
   expect(composer).not.toBeNull()

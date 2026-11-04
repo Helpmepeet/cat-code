@@ -898,6 +898,7 @@ export function AccountSwitcherPanel({
   allowProviderSwitch = false,
   onSwitch,
   onManage,
+  onSignInAndReconnect,
 }: {
   active: AccountStatus | AnthropicAccountStatus
   pool: AccountStatus[]
@@ -906,6 +907,7 @@ export function AccountSwitcherPanel({
   allowProviderSwitch?: boolean
   onSwitch: (accountId: string, provider: 'openai' | 'anthropic') => void
   onManage?: () => void
+  onSignInAndReconnect?: (accountId: string) => void
 }) {
   const sections = [
     { provider: 'openai' as const, rows: pool },
@@ -934,7 +936,7 @@ export function AccountSwitcherPanel({
             </div>
             {section.rows.map(acct => {
               const codex = 'availabilityLabel' in acct ? acct : null
-              const claude = 'email' in acct ? acct : null
+              const claude = 'subscriptionType' in acct ? acct : null
               const routing = section.provider === provider
               const isActive = routing && acct.id === active.id
               const poolDefault = !routing && acct.isDefault
@@ -1039,6 +1041,15 @@ export function AccountSwitcherPanel({
           Reconnect this chat
         </button>
       ) : null}
+      {provider === 'anthropic' && onSignInAndReconnect &&
+        (active.status !== 'healthy' ||
+          ('credentialHealth' in active && active.credentialHealth !== undefined && active.credentialHealth !== 'ready')) ? (
+        <button type="button" role="menuitem"
+          onClick={() => onSignInAndReconnect(active.id)}
+          className="flex w-full items-center justify-center border-t border-shell-seam px-3.5 py-2.5 text-[11.5px] font-medium text-text-muted transition-colors hover:text-text-primary">
+          Sign in again &amp; reconnect
+        </button>
+      ) : null}
       {onManage ? (
         <button
           type="button"
@@ -1061,6 +1072,7 @@ function AccountChip({
   allowProviderSwitch,
   onSwitch,
   onManage,
+  onSignInAndReconnect,
   onOpen,
   faceProps,
   onFocusComposer,
@@ -1072,6 +1084,7 @@ function AccountChip({
   allowProviderSwitch: boolean
   onSwitch: (accountId: string, provider: 'openai' | 'anthropic') => void
   onManage?: () => void
+  onSignInAndReconnect?: (accountId: string) => void
   onOpen?: () => void
   faceProps?: ComposerFaceProps
   onFocusComposer?: () => void
@@ -1082,7 +1095,7 @@ function AccountChip({
     if (target === 'account' && !open) setOpen(toggleAccountChip(open, onOpen))
   })
   const codex = 'availabilityLabel' in active ? active : null
-  const claude = 'email' in active ? active : null
+  const claude = 'subscriptionType' in active ? active : null
   const provider = codex ? 'openai' : 'anthropic'
   const pool = accounts.length > 0 ? accounts : codex ? [codex] : []
   const anthropicPool = anthropicAccounts.length > 0 ? anthropicAccounts : claude ? [claude] : []
@@ -1122,6 +1135,10 @@ function AccountChip({
             onSwitch(accountId, targetProvider)
             close()
           }}
+          onSignInAndReconnect={onSignInAndReconnect ? accountId => {
+            onSignInAndReconnect(accountId)
+            setOpen(false)
+          } : undefined}
           onManage={
             onManage
               ? () => {
@@ -1558,6 +1575,7 @@ export function ComposerActionsBar({
   accounts,
   anthropicAccounts = [],
   onSwitchAccount,
+  onSignInAndReconnect,
   onManageAccounts,
   onOpenAccountSwitcher,
   contextUsage,
@@ -1613,6 +1631,7 @@ export function ComposerActionsBar({
   anthropicAccounts?: AnthropicAccountStatus[]
   /** Switch the active session to `accountId` (the engine's `account.switch` verb). */
   onSwitchAccount?: (accountId: string, provider: 'openai' | 'anthropic') => void
+  onSignInAndReconnect?: (accountId: string) => void
   /** Open the full Accounts page (the popover's "Manage accounts →"). */
   onManageAccounts?: () => void
   /** Re-read the global account pool when the switcher opens. */
@@ -1845,6 +1864,7 @@ export function ComposerActionsBar({
               anthropicAccounts={anthropicAccounts}
               allowProviderSwitch={runControls?.model.providerSwitchLocked === false}
               onSwitch={onSwitchAccount}
+              onSignInAndReconnect={onSignInAndReconnect}
               onManage={onManageAccounts}
               onOpen={onOpenAccountSwitcher}
               faceProps={faceProps('account')}

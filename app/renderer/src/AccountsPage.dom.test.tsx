@@ -24,86 +24,139 @@ const emptySnapshot: AccountsSnapshot = {
   anthropicInitialized: true, anthropicRouteAvailable: false,
 }
 
-test('Claude-only accounts stay optional for Codex and recover through Anthropic sign-in', async () => {
-  const sent: AccountVerbMessage[] = []
-  const snapshot: AccountsSnapshot = {
-    ...emptySnapshot,
-    anthropicAccounts: [{
-      id: 'claude', alias: 'Personal', email: 'claude@example.com',
-      status: 'dead', isDefault: true, hasVaultProfile: true,
-      subscriptionType: 'pro', loginStale: false,
-    }],
-    anthropicPoolCount: 1, anthropicActiveAccountId: 'claude',
-  }
-  const tree = await harness.mount(
-    <AccountsPage snapshot={snapshot} lastResult={null} onVerb={verb => sent.push(verb)} />,
-  )
-  expect(tree.container.textContent).toContain('No Codex accounts are signed in.')
-  expect(tree.container.textContent).not.toContain('Add one to continue')
-  expect(tree.container.textContent).toContain('Choose claude@example.com in the browser')
-  const recovery = [...tree.container.querySelectorAll('button')]
-    .find(button => button.textContent === 'Sign in again')!
-  await act(async () => { recovery.click() })
-  expect(sent).toHaveLength(1)
-  expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic' })
-  expect(sent[0]).not.toHaveProperty('accountId')
+const claudeSnapshot: AccountsSnapshot = {
+  ...emptySnapshot,
+  anthropicAccounts: [{ id: 'claude', alias: 'Personal', email: 'claude@example.com',
+    status: 'healthy', isDefault: false, hasVaultProfile: true, subscriptionType: 'pro', loginGeneration: 7,
+    organizationName: 'Workspace', usageWeeklyOpus: 42, usageWeeklySonnet: 12,
+    extraUsage: { usedCredits: 2, monthlyLimit: 20, isEnabled: true }, usageStale: true }],
+  anthropicPoolCount: 1, anthropicReadyCount: 1,
+}
 
-  await tree.render(<AccountsPage snapshot={{
-    ...snapshot,
-    anthropicAccounts: [{ ...snapshot.anthropicAccounts[0]!, status: 'healthy', isDefault: false, loginStale: true }],
-  }} lastResult={null} onVerb={verb => sent.push(verb)} />)
-  expect([...tree.container.querySelectorAll('button')].some(button => button.textContent === 'Sign in again')).toBe(true)
+function buttonIn(container: HTMLElement, label: string): HTMLButtonElement {
+  const button = [...container.querySelectorAll('button')].find(item => item.textContent === label)
+  expect(button).toBeDefined()
+  return button!
+}
+
+test('Claude menu emits provider-aware generation-bound actions and correlates results', async () => {
+  for (const action of ['Rename', 'Delete', 'Sign out', 'Check sign-in', 'Make default for new chats']) {
+    const sent: AccountVerbMessage[] = []
+    const onVerb = (verb: AccountVerbMessage) => sent.push(verb)
+    const tree = await harness.mount(<AccountsPage snapshot={claudeSnapshot} lastResult={null} onVerb={onVerb} />)
+    expect(tree.container.textContent).toContain('Personal')
+    expect(tree.container.textContent).toContain('Workspace')
+    expect(tree.container.textContent).toContain('42%')
+    expect(tree.container.textContent).toContain('Extra usage: 2 / 20 credits')
+    expect(tree.container.textContent).toContain('Stale usage')
+    expect(tree.container.textContent).not.toContain('Reconnect this chat')
+    await act(async () => { buttonIn(tree.container, '⋯').click() })
+    await act(async () => { buttonIn(tree.container, action).click() })
+    const hasDialog = ['Rename', 'Delete', 'Sign out'].includes(action)
+    if (hasDialog) await act(async () => { buttonIn(tree.container, action === 'Delete' ? 'Delete account' : action).click() })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ provider: 'anthropic', accountId: 'claude' })
+    expect(sent[0]!.requestId).toBeTruthy()
+    if (action === 'Delete' || action === 'Sign out') expect(sent[0]).toHaveProperty('expectedCredentialGeneration', 7)
+    if (hasDialog) {
+      expect(tree.container.querySelector('[role="dialog"]')).not.toBeNull()
+      const result: AccountResultFrame = { kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '', requestId: 'other', verb: sent[0]!.type, ok: true, message: 'Done' }
+      await tree.render(<AccountsPage snapshot={claudeSnapshot} lastResult={result} onVerb={onVerb} />)
+      expect(tree.container.querySelector('[role="dialog"]')).not.toBeNull()
+      await tree.render(<AccountsPage snapshot={claudeSnapshot} lastResult={{ ...result, requestId: sent[0]!.requestId }} onVerb={onVerb} />)
+      expect(tree.container.querySelector('[role="dialog"]')).toBeNull()
+    }
+    await harness.unmountAll()
+  }
 })
 
-test('healthy Anthropic rows keep switching and both provider add actions', async () => {
+test('page defaults ignore chat scope and sign-in defaults are opt-in', async () => {
   const sent: AccountVerbMessage[] = []
-  const snapshot: AccountsSnapshot = {
-    ...emptySnapshot,
-    anthropicAccounts: [{
-      id: 'claude', alias: null, email: 'claude@example.com',
-      status: 'healthy', isDefault: false, hasVaultProfile: true,
-      subscriptionType: 'pro', loginStale: false,
-    }],
-    anthropicPoolCount: 1, anthropicReadyCount: 1,
-  }
-  const tree = await harness.mount(
-    <AccountsPage snapshot={snapshot} lastResult={null} onVerb={verb => sent.push(verb)} />,
-  )
-  const button = (label: string) => [...tree.container.querySelectorAll('button')]
-    .find(item => item.textContent === label)!
-  expect(button('Sign in again')).toBeUndefined()
-  await act(async () => { button('Switch').click() })
-  expect(sent[0]).toMatchObject({ type: 'account.switch', accountId: 'claude', provider: 'anthropic' })
-  await act(async () => { button('+ Add Anthropic').click() })
-  await act(async () => { button('+ Add account').click() })
-  expect(sent[1]).toMatchObject({ type: 'account.login', provider: 'anthropic' })
-  expect(sent[2]).toMatchObject({ type: 'account.login', provider: 'openai' })
+  const tree = await harness.mount(<AccountsPage snapshot={{ ...claudeSnapshot,
+    anthropicSavedDefaultAccountId: 'missing', anthropicEffectiveDefaultAccountId: 'claude',
+  }} switchScope={{ provider: 'anthropic', accountId: 'other' }} lastResult={null} onVerb={v => sent.push(v)} />)
+  expect(tree.container.textContent).toContain('Saved default: missing; New chats: Personal')
+  await act(async () => { buttonIn(tree.container, '⋯').click() })
+  await act(async () => { buttonIn(tree.container, 'Make default for new chats').click() })
+  expect(sent.pop()).toMatchObject({ type: 'account.switch', provider: 'anthropic', accountId: 'claude' })
+  await act(async () => { buttonIn(tree.container, '+ Add Anthropic').click() })
+  expect(sent).toHaveLength(0)
+  expect((tree.container.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(false)
+  await act(async () => { (tree.container.querySelector('input[type="checkbox"]') as HTMLInputElement).click() })
+  await act(async () => { buttonIn(tree.container, 'Sign in').click() })
+  expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic', makeDefault: true })
+  await act(async () => { buttonIn(tree.container, '+ Add account').click() })
+  await act(async () => { buttonIn(tree.container, 'Sign in').click() })
+  expect(sent[1]).toMatchObject({ type: 'account.login', provider: 'openai', makeDefault: false })
+  await act(async () => { buttonIn(tree.container, 'Check all sign-ins').click() })
+  expect(sent[2]).toMatchObject({ type: 'account.touchAll', provider: 'anthropic' })
+  expect(sent[2]).not.toHaveProperty('accountId')
 })
 
-test('Anthropic active badge and switch action follow the current chat, not the shared default', async () => {
+test('signed-out Claude profiles keep their names and delete with login generation', async () => {
   const sent: AccountVerbMessage[] = []
-  const snapshot: AccountsSnapshot = {
-    ...emptySnapshot,
-    anthropicAccounts: ['a', 'b'].map(id => ({
-      id, alias: id, email: `${id}@example.com`, status: 'healthy',
-      isDefault: id === 'a', hasVaultProfile: true,
-      subscriptionType: 'pro', loginStale: false,
-    })),
-    anthropicActiveAccountId: 'a', anthropicPoolCount: 2, anthropicReadyCount: 2,
-  }
-  const tree = await harness.mount(
-    <AccountsPage snapshot={snapshot}
-      switchScope={{ provider: 'anthropic', accountId: 'b' }}
-      lastResult={null} onVerb={verb => sent.push(verb)} />,
-  )
-  const switches = [...tree.container.querySelectorAll('button')].filter(
-    button => button.textContent === 'Switch',
-  )
-  expect(switches).toHaveLength(1)
-  expect(switches[0]!.parentElement?.textContent).toContain('a@example.com')
-  expect(switches[0]!.parentElement?.textContent).not.toContain('active')
-  await act(async () => { switches[0]!.click() })
-  expect(sent[0]).toMatchObject({ type: 'account.switch', provider: 'anthropic', accountId: 'a' })
+  const snapshot = { ...emptySnapshot, anthropicSignedOutProfiles: [{ id: 'old', alias: 'Home', email: 'home@example.com', loginGeneration: 9 }] }
+  const tree = await harness.mount(<AccountsPage snapshot={snapshot} lastResult={null} onVerb={v => sent.push(v)} />)
+  expect(tree.container.textContent).toContain('Home')
+  expect(tree.container.textContent).toContain('home@example.com')
+  await act(async () => { buttonIn(tree.container, '⋯').click() })
+  await act(async () => { buttonIn(tree.container, 'Sign in again').click() })
+  await act(async () => { buttonIn(tree.container, 'Sign in').click() })
+  expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic', makeDefault: false })
+  await act(async () => { buttonIn(tree.container, '⋯').click() })
+  await act(async () => { buttonIn(tree.container, 'Delete account').click() })
+  await act(async () => { buttonIn(tree.container, 'Delete account').click() })
+  expect(sent[1]).toMatchObject({ type: 'account.delete', provider: 'anthropic', accountId: 'old', expectedCredentialGeneration: 9, confirm: true })
+  expect(tree.container.querySelector('[role="dialog"]')).not.toBeNull()
+})
+
+test('Claude rename rejects aliases held by a signed-out Codex profile', async () => {
+  const sent: AccountVerbMessage[] = []
+  const tree = await harness.mount(<AccountsPage snapshot={{ ...claudeSnapshot,
+    signedOutProfiles: [{ id: 'codex', alias: 'Reserved', state: 'signed_out', credentialGeneration: 1,
+      lifecycleGeneration: 1, credentialGenerationState: 'lifecycle_bound', lifecycleState: 'signed_out', lifecycleReadStatus: 'valid' }],
+  }} lastResult={null} onVerb={v => sent.push(v)} />)
+  await act(async () => { buttonIn(tree.container, '⋯').click() })
+  await act(async () => { buttonIn(tree.container, 'Rename').click() })
+  await act(async () => {
+    const input = tree.container.querySelector('input')!
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'reserved')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(tree.container.textContent).toContain('That alias is already in use')
+  expect(buttonIn(tree.container, 'Rename').disabled).toBe(true)
+  expect(sent).toHaveLength(0)
+})
+
+test('effective Codex fallback can be explicitly selected as the saved default', async () => {
+  const sent: AccountVerbMessage[] = []
+  const tree = await harness.mount(<AccountsPage snapshot={{ ...emptySnapshot,
+    savedDefaultAccountId: 'missing', effectiveDefaultAccountId: 'fallback', activeAccountId: 'fallback',
+    accounts: [{ id: 'fallback', alias: 'Backup', credentialGeneration: 1, status: 'healthy',
+      statusReason: null, availability: 'available', availabilityLabel: 'Ready',
+      isDefault: true, hasVaultProfile: true, source: 'vault', usagePrimary: null, usageWeekly: null,
+      usageLimitReached: false, usageResetAt: null, lastRefreshIso: null, lastError: null,
+      planType: null, switchable: false }],
+  }} lastResult={null} onVerb={v => sent.push(v)} />)
+  expect(tree.container.textContent).toContain('Saved default: missing; New chats: Backup')
+  await act(async () => { buttonIn(tree.container, '⋯').click() })
+  await act(async () => { buttonIn(tree.container, 'Make default for new chats').click() })
+  expect(sent[0]).toMatchObject({ type: 'account.switch', provider: 'openai', accountId: 'fallback' })
+  expect(sent[0]!.requestId).toBeTruthy()
+  expect(tree.container.textContent).toContain('Saved default: missing; New chats: Backup')
+})
+
+test('Claude tiers and Codex recovery reasons are readable without internal codes', async () => {
+  const tree = await harness.mount(<AccountsPage snapshot={{ ...claudeSnapshot,
+    anthropicAccounts: [{ ...claudeSnapshot.anthropicAccounts[0]!, rateLimitTier: 'default_claude_max_20x' }],
+    signedOutProfiles: [{ id: 'codex', alias: 'Work', state: 'recovery_required', recoveryReason: 'generation_mismatch',
+      credentialGeneration: 1, lifecycleGeneration: 1, credentialGenerationState: 'lifecycle_bound',
+      lifecycleState: 'reauth_required', lifecycleReadStatus: 'valid' }],
+  }} lastResult={null} onVerb={() => {}} />)
+  expect(tree.container.textContent).toContain('Max 20x')
+  expect(tree.container.textContent).toContain('The saved sign-in has changed.')
+  expect(tree.container.innerHTML).not.toContain('default_claude_max_20x')
+  expect(tree.container.innerHTML).not.toContain('generation_mismatch')
 })
 
 test('Refresh all shows the matched failure and retries before displaying new results', async () => {
@@ -162,8 +215,10 @@ test('unloaded accounts expose sign-in, a bounded failure and a working retry', 
     const button = (label: string) => [...tree.container.querySelectorAll('button')]
       .find(item => item.textContent === label)!
     await act(async () => { button('+ Add Anthropic').click() })
+    await act(async () => { button('Sign in').click() })
     expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic' })
     await act(async () => { button('+ Add account').click() })
+    await act(async () => { button('Sign in').click() })
     expect(sent[1]).toMatchObject({ type: 'account.login', provider: 'openai' })
     expect(deadlines).toHaveLength(1)
     await act(async () => { deadlines[0]!() })

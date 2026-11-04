@@ -44,6 +44,7 @@
  */
 
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 
 import {
   describeCodexAccountAvailability,
@@ -56,7 +57,6 @@ import {
   reconcileCodexAccountSignOut,
   resolveCodexAccountForTargetedSignOut,
   setAccountAlias,
-  validateCodexAccountAlias,
   type CodexProfileInventory,
   type CodexTargetedSignOutResolution,
   type PoolAccount,
@@ -69,6 +69,12 @@ import {
 } from '../../src/services/api/codexLoginPersistence.js'
 import {
   getClaudePoolStatus,
+  getClaudeProfileInventory,
+  removeClaudeAccount,
+  setClaudeAccountAlias,
+  signOutClaudeAccount,
+  checkClaudeAccountSignIn,
+  reloadClaudeAccountCredentials,
   loadClaudePoolForObservation,
   prepareClaudeAccountForSelection,
   switchToClaudeAccount,
@@ -76,11 +82,15 @@ import {
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
 import { commitClaudeAccountSwitch } from '../../src/services/api/claudeAccountSwitch.js'
+import { validateAccountAlias } from '../../src/services/api/accountAlias.js'
+import { getOauthProfileFromOauthToken } from '../../src/services/oauth/getOauthProfile.js'
+import { shouldUseClaudeAIAuth } from '../../src/services/oauth/client.js'
 import {
   clearSessionAccountRouteBlock,
   getSessionAccountRouteBlock,
 } from '../../src/services/api/sessionAccountRouting.js'
 import type { ClaudeAccountUsage } from '../../src/services/api/claudePoolUsage.js'
+import { fetchClaudePoolUsage } from '../../src/services/api/claudePoolUsage.js'
 import type { CodexAccountDisplayUsage } from '../../src/services/api/codexUsageDisplayCache.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import {
@@ -165,6 +175,10 @@ export type AccountsCommandExecutor = {
   switchAnthropic(accountId: string, expectedLoginGeneration?: number): Promise<AccountVerbResult>
   /** Rename a vault account. `alias` already re-validated against the live pool. */
   rename(accountId: string, alias: string): AccountVerbResult
+  renameAnthropic?(accountId: string, alias: string): AccountVerbResult
+  deleteAnthropic?(accountId: string, generation: number): AccountVerbResult | Promise<AccountVerbResult>
+  logoutAnthropic?(accountId: string, generation: number): AccountVerbResult | Promise<AccountVerbResult>
+  checkAnthropic?(accountId?: string): Promise<AccountVerbResult>
   /** Delete one exact vault profile generation after engine-owned resolution. */
   delete(
     accountId: string,
@@ -280,7 +294,7 @@ export type OAuthPendingLogin = {
   /** Validate a proposed alias with the engine's OWN rule; empty = skip (ok). */
   validateAlias(alias: string): { ok: true } | { ok: false; message: string }
   /** Persist the captured tokens (engine credential write). Empty alias = keep/anon. */
-  persist(alias: string | undefined): void | import('../shared/accountControlWorker.js').AccountLoginReceipt |
+  persist(alias: string | undefined, options?: { makeDefault?: boolean }): void | import('../shared/accountControlWorker.js').AccountLoginReceipt |
     Promise<void | import('../shared/accountControlWorker.js').AccountLoginReceipt>
 }
 
@@ -310,6 +324,9 @@ export type AnthropicOAuthRunnerDependencies = {
   installTokens?: typeof installOAuthTokens
   validateOrg?: typeof validateForceLoginOrgForToken
   readSettings?: typeof getInitialSettings
+  readProfileInventory?: typeof getClaudeProfileInventory
+  lookupProfile?: typeof getOauthProfileFromOauthToken
+  createOperationId?: () => string
 }
 
 /**
@@ -355,12 +372,13 @@ export function createRealOAuthLoginRunner(
         validateAlias(alias) {
           const trimmed = alias.trim()
           if (!trimmed) return { ok: true }
-          return validateCodexAccountAlias(trimmed, tokens.accountId)
+          return validateAccountAlias(trimmed, 'openai', tokens.accountId)
         },
-        async persist(alias) {
+        async persist(alias, options) {
           const trimmed = alias?.trim() || undefined
           await persistLogin(tokens, {
             operationId,
+            makeDefault: options?.makeDefault ?? false,
             ...(trimmed ? { alias: trimmed } : {}),
           })
         },
@@ -383,6 +401,7 @@ export function createRealAnthropicOAuthLoginRunner(
   const validateOrg =
     dependencies.validateOrg ?? validateForceLoginOrgForToken
   const readSettings = dependencies.readSettings ?? getInitialSettings
+  const readProfileInventory = dependencies.readProfileInventory ?? getClaudeProfileInventory
   let activeService: AnthropicOAuthService | null = null
   return {
     validateManualCode(rawInput) {
@@ -419,20 +438,33 @@ export function createRealAnthropicOAuthLoginRunner(
             orgUUID: settings.forceLoginOrgUUID,
           },
         )
-        // Keep tokens captured inside the pending handle. The domain performs
-        // the generation/cancellation check before invoking this commit.
+        const orgResult = await validateOrg(tokens.accessToken)
+        if (orgResult.valid === false) throw new Error(orgResult.message)
+        const subscriptionLogin = settings.forceLoginMethod !== 'console' && shouldUseClaudeAIAuth(tokens.scopes ?? undefined)
+        const profileLookup = Promise.resolve(tokens.profile ??
+          (tokens.tokenAccount || !subscriptionLogin ? undefined :
+            await (dependencies.lookupProfile ?? getOauthProfileFromOauthToken)(tokens.accessToken)))
+        const profile = await profileLookup
+        const accountId = tokens.profile?.account.uuid ?? profile?.account.uuid ?? tokens.tokenAccount?.uuid
+        if (subscriptionLogin && !accountId) throw new Error('Sign-in did not return an account identity. Sign in again.')
+        const inventory = readProfileInventory()
+        const existing = inventory.accounts.some(account => account.accountUuid === accountId) ||
+          inventory.signedOutProfiles.some(account => account.accountUuid === accountId)
+        const installationOptions = {
+          operationId: (dependencies.createOperationId ?? randomUUID)(),
+          profileLookup,
+        }
         return {
-          isExistingAccount: true,
-          validateAlias: () => ({ ok: true }),
-          async persist() {
-            // Managed-org validation is a PRE-COMMIT gate. Installing first
-            // leaves a rejected token active in the pool/keychain/vault even
-            // though the UI reports failure.
-            const orgResult = await validateOrg(tokens.accessToken)
-            if (orgResult.valid === false) {
-              throw new Error(orgResult.message)
-            }
-            const installation = await installTokens(tokens)
+          isExistingAccount: !subscriptionLogin || existing,
+          validateAlias: alias => alias.trim()
+            ? validateAccountAlias(alias.trim(), 'anthropic', accountId)
+            : { ok: true },
+          async persist(alias, options) {
+            const installation = await installTokens(tokens, {
+              ...installationOptions,
+              ...(alias?.trim() ? { alias: alias.trim() } : {}),
+              makeDefault: options?.makeDefault ?? false,
+            })
             // Console/API-key login has no subscription account authority.
             if (!installation) return
             if (installation.outcome === 'rejected' || installation.outcome === 'uncertain') {
@@ -482,6 +514,7 @@ export function buildAccountStatus(
     id: account.accountId,
     credentialGeneration: account.credentialGeneration,
     alias: account.alias ?? null,
+    ...(account.accountEmail ? { email: account.accountEmail } : {}),
     status: account.status,
     statusReason: account.statusReason ?? null,
     availability,
@@ -513,6 +546,8 @@ export function buildSignedOutCodexProfileStatus(
   return {
     id: profile.accountId,
     alias: profile.alias ?? null,
+    ...(profile.accountEmail ? { email: profile.accountEmail } : {}),
+    ...(profile.recoveryReason ? { recoveryReason: profile.recoveryReason } : {}),
     state: profile.profileState,
     credentialGeneration: profile.credentialGeneration ?? null,
     lifecycleGeneration: profile.lifecycleGeneration ?? null,
@@ -536,7 +571,10 @@ export function buildAnthropicAccountStatus(
   usage?: ClaudeAccountUsage,
   now = Date.now(),
 ): AnthropicAccountStatus {
-  const health = projectClaudeAccountHealth(readClaudeAccountAuthority(account.accountUuid))
+  const authority = readClaudeAccountAuthority(account.accountUuid)
+  const health: ReturnType<typeof projectClaudeAccountHealth> = authority.status === 'missing'
+    ? { loginGeneration: account.lifecycleGeneration ?? 0, credentialRevision: account.credentialRevision ?? 0 }
+    : projectClaudeAccountHealth(authority)
   return {
     id: account.accountUuid,
     alias: account.alias ?? null,
@@ -546,6 +584,13 @@ export function buildAnthropicAccountStatus(
     isDefault,
     hasVaultProfile: Boolean(account.vaultFilePath),
     subscriptionType: account.subscriptionType ?? null,
+    ...(account.organizationName !== undefined ? { organizationName: account.organizationName } : {}),
+    ...(account.organizationRole !== undefined ? { organizationRole: account.organizationRole } : {}),
+    ...(account.workspaceRole !== undefined ? { workspaceRole: account.workspaceRole } : {}),
+    ...(account.rateLimitTier !== undefined ? { rateLimitTier: account.rateLimitTier } : {}),
+    ...(account.billingType !== undefined ? { billingType: account.billingType } : {}),
+    ...(account.hasExtraUsageEnabled !== undefined
+      ? { hasExtraUsageEnabled: account.hasExtraUsageEnabled } : {}),
     ...health,
     loginStale:
       !isDefault && account.expiresAt + CLAUDE_LOGIN_STALE_AFTER_MS < now,
@@ -555,6 +600,13 @@ export function buildAnthropicAccountStatus(
           usageFiveHourResetAt: usage.fiveHour?.resetAt ?? null,
           usageWeekly: usage.weekly?.percent ?? null,
           usageWeeklyResetAt: usage.weekly?.resetAt ?? null,
+          usageWeeklyOpus: usage.weeklyOpus?.percent ?? null,
+          usageWeeklyOpusResetAt: usage.weeklyOpus?.resetAt ?? null,
+          usageWeeklySonnet: usage.weeklySonnet?.percent ?? null,
+          usageWeeklySonnetResetAt: usage.weeklySonnet?.resetAt ?? null,
+          ...(usage.extraUsage ? { extraUsage: usage.extraUsage } : {}),
+          ...(usage.checkedAt !== undefined ? { usageCheckedAt: usage.checkedAt } : {}),
+          usageStale: usage.stale ?? false,
         }
       : {}),
   }
@@ -765,6 +817,49 @@ export function createRealAccountsExecutor(
       return ok
         ? { ok: true, message: `Renamed to ${alias}` }
         : { ok: false, message: 'Could not rename that account.' }
+    },
+    renameAnthropic(accountId, alias) {
+      return setClaudeAccountAlias(accountId, alias)
+        ? { ok: true, message: `Renamed to ${alias}` }
+        : { ok: false, message: 'Could not rename that account.' }
+    },
+    async deleteAnthropic(accountId, generation) {
+      const ok = removeClaudeAccount(accountId, generation)
+      if (ok) await clearAuthRelatedCaches({ refreshGrowthBook: false, persistConfig: false })
+      return { ok, message: ok ? 'Account deleted.' : 'Could not delete that account. Refresh Accounts and try again.' }
+    },
+    async logoutAnthropic(accountId, generation) {
+      const ok = signOutClaudeAccount(accountId, generation)
+      if (ok) await clearAuthRelatedCaches({ refreshGrowthBook: false, persistConfig: false })
+      return { ok, message: ok ? 'Signed out. The saved profile is kept.' : 'Could not sign out that account. Refresh Accounts and try again.' }
+    },
+    async checkAnthropic(accountId) {
+      const targets = getClaudePoolStatus().accounts.filter(account =>
+        accountId === undefined || account.accountUuid === accountId)
+      if (!targets.length) return { ok: false, message: 'That account is no longer signed in.' }
+      const outcomes = await Promise.all(targets.map(async account => {
+        const result = await checkClaudeAccountSignIn(account.accountUuid)
+        reloadClaudeAccountCredentials(account.accountUuid)
+        return { alias: account.alias ?? account.emailAddress, status: result.status }
+      }))
+      loadClaudePoolForObservation()
+      await fetchClaudePoolUsage(getClaudePoolStatus().accounts, {
+        force: true, ...(accountId ? { accountIds: [accountId] } : {}),
+      })
+      const needsBrowser = outcomes.filter(outcome => outcome.status === 'sign_in_required' ||
+        outcome.status === 'refresh_uncertain' || outcome.status === 'older_login').length
+      const ready = outcomes.every(outcome => outcome.status === 'ready')
+      return {
+        ok: ready,
+        message: ready ? 'Sign-in checked.' :
+          needsBrowser ? 'Some accounts need a browser sign-in. Choose Sign in again.' :
+            'Sign-in could not be checked. Try again when the connection is available.',
+        touchAllResults: outcomes.map(outcome => ({
+          alias: outcome.alias,
+          result: outcome.status === 'ready' ? 'OK' as const :
+            outcome.status === 'waiting' ? 'LOCKED' as const : 'FAILED' as const,
+        })),
+      }
     },
     async delete(accountId, expectedCredentialGeneration) {
       const result = await deleteTransaction({
@@ -1079,13 +1174,14 @@ export function createSidecarAccountsDomain(
   let activeOAuthRunner: OAuthLoginRunner | null = null
   let pendingProviderActivation: AccountLoginProvider | null = null
   let loginRequestId = ''
+  let makeDefault = false
 
   function emit(gen: number, progress: OAuthLoginProgress): void {
     if (gen !== generation) return
     progressSink?.(progress)
   }
 
-  function beginLogin(provider: AccountLoginProvider, requestId: string): AccountVerbResult {
+  function beginLogin(provider: AccountLoginProvider, requestId: string, defaultRequested = false): AccountVerbResult {
     if (phase === 'persisting') {
       return {
         ok: false,
@@ -1095,6 +1191,7 @@ export function createSidecarAccountsDomain(
     activeOAuthRunner?.cancel?.()
     const gen = ++generation
     loginRequestId = requestId
+    makeDefault = defaultRequested
     pending = null
     pendingProviderActivation = isFirstRunEligible() ? provider : null
     resolveManualCode = null
@@ -1121,7 +1218,7 @@ export function createSidecarAccountsDomain(
           // Reauth / re-link: keep the existing name, no naming step. `success`
           // drives the accounts re-broadcast (server), which clears the banner.
           phase = 'persisting'
-          const receipt = await login.persist(undefined)
+          const receipt = await login.persist(undefined, { makeDefault })
           if (gen !== generation) return
           if (receipt && receipt.outcome === 'persistence_pending') {
             pendingProviderActivation = null
@@ -1188,7 +1285,7 @@ export function createSidecarAccountsDomain(
     let receipt: import('../shared/accountControlWorker.js').AccountLoginReceipt | void
     phase = 'persisting'
     try {
-      receipt = await login.persist(alias.trim() || undefined)
+      receipt = await login.persist(alias.trim() || undefined, { makeDefault })
     } catch (error) {
       if (gen === generation) {
         pending = login
@@ -1204,10 +1301,10 @@ export function createSidecarAccountsDomain(
     }
     if (receipt && receipt.outcome === 'persistence_pending') {
       pendingProviderActivation = null
-      pending = null
-      phase = 'idle'
-      const message = 'Sign-in could not be saved. Try signing in again before reconnecting this chat.'
-      emit(gen, { state: 'error', message })
+      pending = login
+      phase = 'waiting_for_alias'
+      const message = 'Sign-in could not be saved. Retry saving this account.'
+      emit(gen, { state: 'waiting_for_alias' })
       return { ok: false, message }
     }
     if (pendingProviderActivation && (!receipt || receipt.outcome === 'committed')) {
@@ -1353,6 +1450,16 @@ export function createSidecarAccountsDomain(
           }
         }
         case 'account.rename': {
+          if (verb.provider === 'anthropic') {
+            const account = await resolveAnthropicAccountForWrite(verb.accountId)
+            if (!account) return notFound(verb.type)
+            const valid = validateAccountAlias(verb.alias, 'anthropic', account.accountUuid)
+            if (!valid.ok) return { verb: verb.type, result: { ok: false, message: valid.message }, poolChanged: false }
+            const result = account.vaultFilePath && executor.renameAnthropic
+              ? executor.renameAnthropic(account.accountUuid, verb.alias)
+              : { ok: false, message: 'Only saved account profiles can be renamed.' }
+            return { verb: verb.type, result, poolChanged: result.ok }
+          }
           const account = await resolveAccountForWrite(verb.accountId)
           if (!account) {
             return notFound('account.rename')
@@ -1365,7 +1472,7 @@ export function createSidecarAccountsDomain(
             }
           }
           // T6 — re-validate against the LIVE pool (uniqueness), not a renderer claim.
-          const valid = validateCodexAccountAlias(verb.alias, account.accountId)
+          const valid = validateAccountAlias(verb.alias, 'openai', account.accountId)
           if (!valid.ok) {
             return {
               verb: 'account.rename',
@@ -1377,6 +1484,24 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.rename', result, poolChanged: result.ok }
         }
         case 'account.delete': {
+          if (verb.provider === 'anthropic') {
+            await reloadAnthropicPool()
+            const inventory = getClaudeProfileInventory()
+            const target = inventory.accounts.find(account => account.accountUuid === verb.accountId)
+              ?? inventory.signedOutProfiles.find(profile => profile.accountUuid === verb.accountId)
+            if (!target) return notFound(verb.type)
+            if (!('loginGeneration' in target) && !target.vaultFilePath) {
+              return { verb: verb.type, result: { ok: false, message: 'Only saved account profiles can be deleted.' }, poolChanged: false }
+            }
+            const observed = 'loginGeneration' in target ? target.loginGeneration : target.lifecycleGeneration ?? 0
+            if (observed !== verb.expectedCredentialGeneration) {
+              return { verb: verb.type, result: { ok: false, message: 'That account changed before deletion started.' }, poolChanged: false }
+            }
+            const result = executor.deleteAnthropic
+              ? await executor.deleteAnthropic(verb.accountId, observed)
+              : { ok: false, message: 'Account deletion is not available.' }
+            return { verb: verb.type, result, poolChanged: result.ok }
+          }
           const target = await resolveDeletionTargetForWrite(verb.accountId)
           if (target.kind !== 'credentialed' && target.kind !== 'signed_out') {
             return notFound('account.delete')
@@ -1420,6 +1545,17 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.delete', result, poolChanged: result.ok }
         }
         case 'account.logout': {
+          if (verb.provider === 'anthropic') {
+            const account = await resolveAnthropicAccountForWrite(verb.accountId)
+            if (!account) return notFound(verb.type)
+            if ((account.lifecycleGeneration ?? 0) !== verb.expectedCredentialGeneration) {
+              return { verb: verb.type, result: { ok: false, message: 'That sign-in changed. Refresh Accounts and try again.' }, poolChanged: false }
+            }
+            const result = executor.logoutAnthropic
+              ? await executor.logoutAnthropic(verb.accountId, verb.expectedCredentialGeneration)
+              : { ok: false, message: 'Account sign-out is not available.' }
+            return { verb: verb.type, result, poolChanged: result.ok }
+          }
           const result = await executor.logout(
             verb.accountId,
             verb.expectedCredentialGeneration,
@@ -1427,6 +1563,13 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.logout', result, poolChanged: result.ok }
         }
         case 'account.touchAll': {
+          if (verb.provider === 'anthropic') {
+            await reloadAnthropicPool()
+            const result = executor.checkAnthropic
+              ? await executor.checkAnthropic(verb.accountId)
+              : { ok: false, message: 'Sign-in checks are not available.' }
+            return { verb: verb.type, result, poolChanged: true }
+          }
           const result = await executor.touchAll()
           return { verb: 'account.touchAll', result, poolChanged: true }
         }
@@ -1435,7 +1578,7 @@ export function createSidecarAccountsDomain(
           // and refreshes its pool only after the real engine flow succeeds.
           return {
             verb: 'account.login',
-            result: beginLogin(verb.provider ?? 'openai', verb.requestId),
+            result: beginLogin(verb.provider ?? 'openai', verb.requestId, verb.makeDefault ?? false),
             poolChanged: false,
           }
         }

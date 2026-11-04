@@ -6,6 +6,41 @@ const receipt = {
   outcome: 'committed' as const, loginGeneration: 2,
 }
 
+test('provider-aware control fields stay optional and exact', () => {
+  for (const verb of [
+    { type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'work' },
+    { type: 'account.login', requestId: 'r' },
+    { type: 'account.touchAll', requestId: 'r' },
+  ] as const) {
+    expect(parseAccountControlVerb(verb)).toEqual(verb)
+    const rich = { ...verb, provider: 'anthropic' as const,
+      ...(verb.type === 'account.login' ? { makeDefault: false } : {}),
+      ...(verb.type === 'account.touchAll' ? { accountId: 'a' } : {}),
+    }
+    expect(parseAccountControlVerb(rich)).toEqual(rich)
+    expect(parseAccountControlVerb({ ...rich, unknown: true })).toBeNull()
+    expect(parseAccountControlVerb({ ...rich, provider: 'other' })).toBeNull()
+  }
+  expect(parseAccountControlVerb({ type: 'account.login', requestId: 'r', makeDefault: 'true' })).toBeNull()
+  expect(parseAccountControlVerb({ type: 'account.touchAll', requestId: 'r', accountId: '' })).toBeNull()
+})
+
+test('control logout is exclusively Anthropic and generation guarded', () => {
+  const verb = { type: 'account.logout', requestId: 'r', accountId: 'a', provider: 'anthropic', expectedCredentialGeneration: 2 } as const
+  expect(parseAccountControlVerb(verb)).toEqual(verb)
+  for (const provider of [undefined, 'openai', 'other']) {
+    const { provider: _, ...rest } = verb
+    expect(parseAccountControlVerb(provider === undefined ? rest : { ...rest, provider })).toBeNull()
+  }
+  for (const expectedCredentialGeneration of [undefined, null, -1, 1.5, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    expect(parseAccountControlVerb({ ...verb, expectedCredentialGeneration })).toBeNull()
+  }
+  expect(parseAccountControlVerb({ ...verb, accessToken: 'secret' })).toBeNull()
+  const result = { type: 'result', version: ACCOUNT_CONTROL_VERSION, requestId: 'r', verb: 'account.logout', ok: true, changed: true, message: 'Signed out' } as const
+  expect(parseAccountControlEvent(result)).toEqual(result)
+  expect(parseAccountControlEvent({ ...result, receipt: {} })).toBeNull()
+})
+
 test('selection generation is optional but must be a safe nonnegative integer', () => {
   const verb = { type: 'account.switch', requestId: 'select', accountId: 'account', provider: 'anthropic' }
   expect(parseAccountControlVerb(verb)).not.toBeNull()

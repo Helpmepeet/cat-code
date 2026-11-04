@@ -97,13 +97,16 @@ async function main(): Promise<void> {
   if (signOutRecovery && !signOutRequest) {
     throw new Error('account sign-out recovery requires account sign-out mode')
   }
+  if (signOutRequest?.verb.provider === 'anthropic') {
+    throw new Error('Claude sign-out uses the account-control worker')
+  }
 
   // Engine imports happen only after SIMPLE is fixed for the process. The static
   // imports above are engine-free (shared boundary + secretGuard), so the
   // ~189 MB engine import is paid only here, per run.
   const [
-    { getCodexProfileInventory, getPoolStatus, loadPoolForObservation },
-    { getClaudePoolStatus, loadClaudePoolForObservation },
+    { getCodexProfileInventory, getCodexDefaultSelection, getPoolStatus, loadPoolForObservation },
+    { getClaudePoolStatus, getClaudeProfileInventory, getClaudeDefaultSelection, loadClaudePoolForObservation },
     { buildAccountsSnapshot, createSidecarAccountsDomain },
     { recoverCodexAccountSignOut, signOutCodexAccount },
   ] = await Promise.all([
@@ -245,6 +248,19 @@ async function main(): Promise<void> {
       anthropicUsage,
       codexDisplayUsage,
     )
+    const codexDefaults = getCodexDefaultSelection()
+    const claudeDefaults = getClaudeDefaultSelection()
+    pool.savedDefaultAccountId = codexDefaults.savedAccountId
+    pool.effectiveDefaultAccountId = codexDefaults.effectiveAccountId
+    pool.anthropicSavedDefaultAccountId = claudeDefaults.savedAccountId
+    pool.anthropicEffectiveDefaultAccountId = claudeDefaults.effectiveAccountId
+    pool.anthropicCredentialSource = anthropic.credentialSource
+    pool.anthropicSignedOutProfiles = getClaudeProfileInventory().signedOutProfiles.map(profile => ({
+      id: profile.accountUuid,
+      email: profile.emailAddress,
+      alias: profile.alias ?? null,
+      loginGeneration: profile.loginGeneration,
+    }))
   } catch (error) {
     // A read failure degrades to "no pool" — main keeps its last good snapshot
     // (the renderer never blanks). Report it explicitly so the runner
@@ -319,11 +335,13 @@ async function main(): Promise<void> {
 async function readAnthropicRouteFacts(): Promise<{
   routeAvailable: boolean
   subscriptionActive: boolean
+  credentialSource: import('../../src/services/api/anthropicCredentialSource.js').AnthropicCredentialSource
 }> {
-  const [{ clearOAuthTokenCache, hasAnthropicCredentials }, { resolveAnthropicSubscriptionActive }] =
+  const [{ clearOAuthTokenCache, hasAnthropicCredentials }, { resolveAnthropicSubscriptionActive }, { resolveAnthropicCredentialSource }] =
     await Promise.all([
       import('../../src/utils/auth.js'),
       import('./accountsDomain.js'),
+      import('../../src/services/api/anthropicCredentialSource.js'),
     ])
   // `isBareMode()` reads BOTH the env var and argv (`src/utils/envUtils.ts`),
   // and main launches this worker with `--bare` on the command line, so lifting
@@ -338,12 +356,13 @@ async function readAnthropicRouteFacts(): Promise<{
     return {
       routeAvailable: hasAnthropicCredentials(),
       subscriptionActive: resolveAnthropicSubscriptionActive(),
+      credentialSource: resolveAnthropicCredentialSource(),
     }
   } catch (error) {
     process.stderr.write(
       `[accounts-worker] anthropic route read failed: ${errorText(error)}\n`,
     )
-    return { routeAvailable: false, subscriptionActive: false }
+    return { routeAvailable: false, subscriptionActive: false, credentialSource: { kind: 'none' } }
   } finally {
     if (minimal !== undefined) process.env.CLAUDE_CODE_SIMPLE = minimal
     process.argv = argv

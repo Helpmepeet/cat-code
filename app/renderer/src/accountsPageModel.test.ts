@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { AccountsSnapshot, AccountStatus, AnthropicAccountStatus } from '../../shared/protocol.js'
 import {
+  accountRecoveryReason,
+  accountTakenAliases,
+  claudeRateLimitTier,
+  renameError,
   anthropicStatusDotTone,
   anthropicCredentialLabel,
   formatAccountsNeedingSignIn,
@@ -8,6 +12,29 @@ import {
   selectAccountMenuItems,
   selectAccountsNeedingSignIn,
 } from './accountsPageModel.js'
+
+test('account details map known reasons and tiers without exposing unknown codes', () => {
+  for (const reason of ['duplicate_identity', 'invalid_generation', 'lifecycle_unavailable',
+    'generation_mismatch', 'lifecycle_not_credentialed', 'profile_recovery_required']) {
+    expect(accountRecoveryReason(reason)).not.toContain(reason)
+    expect(accountRecoveryReason(reason).toLowerCase()).toContain('sign')
+  }
+  expect(accountRecoveryReason('internal_unknown')).not.toContain('internal_unknown')
+  expect(claudeRateLimitTier('default_claude_max_5x')).toBe('Max 5x')
+  expect(claudeRateLimitTier('default_claude_max_20x')).toBe('Max 20x')
+  expect(claudeRateLimitTier('future_internal_code')).toBe('Claude subscription')
+  expect(claudeRateLimitTier(null)).toBeNull()
+})
+
+test('rename reserves aliases across both providers and both profile inventories', () => {
+  const aliases = accountTakenAliases({
+    accounts: [{ alias: 'Codex' }], signedOutProfiles: [{ alias: 'CodexOld' }],
+    anthropicAccounts: [{ alias: 'Claude' }], anthropicSignedOutProfiles: [{ alias: 'ClaudeOld' }],
+  } as AccountsSnapshot)
+  expect(aliases).toEqual(['Codex', 'CodexOld', 'Claude', 'ClaudeOld'])
+  for (const alias of aliases) expect(renameError(alias.toLowerCase(), 'Original', aliases)).toBe('That alias is already in use')
+  expect(renameError('Original', 'Original', [...aliases, 'Original'])).toBeNull()
+})
 
 test('Claude account dots prioritize dead and capped windows over the default marker', () => {
   const account: AnthropicAccountStatus = {

@@ -95,6 +95,66 @@ function record(snapshot: AccountsSnapshot): unknown {
   }
 }
 
+test('rich optional account metadata round-trips with closed nested redaction', () => {
+  const base = pool()
+  const snapshot: AccountsSnapshot = {
+    ...base,
+    accounts: [account({ email: 'codex@example.com' })],
+    signedOutProfiles: [signedOutProfile({ email: null, recoveryReason: 'lifecycle_not_credentialed' })],
+    savedDefaultAccountId: 'acct-1', effectiveDefaultAccountId: null,
+    anthropicSavedDefaultAccountId: 'anth-1', anthropicEffectiveDefaultAccountId: null,
+    anthropicSignedOutProfiles: [{ id: 'old', email: 'old@example.com', alias: null, loginGeneration: 2 }],
+    anthropicCredentialSource: { kind: 'environment_api_key', variableName: 'ANTHROPIC_API_KEY' },
+    anthropicAccounts: [{
+      ...base.anthropicAccounts[0]!,
+      organizationName: 'Work', organizationRole: 'admin', workspaceRole: null,
+      rateLimitTier: 'tier-1', billingType: null, hasExtraUsageEnabled: true,
+      usageWeeklyOpus: 40, usageWeeklyOpusResetAt: 100,
+      usageWeeklySonnet: null, usageWeeklySonnetResetAt: null,
+      extraUsage: { usedCredits: 2, monthlyLimit: null, isEnabled: true },
+      usageCheckedAt: 100, usageStale: false,
+    }],
+  }
+  expect(parseAccountsSnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot)
+  expect(parseAccountsPoolWorkerResult(record(snapshot))).not.toBeNull()
+  for (const key of ['accessToken', 'refreshToken', 'idToken', 'vaultFilePath', 'credentials']) {
+    const extra = { [key]: 'forbidden' }
+    for (const invalid of [
+      { ...snapshot, ...extra },
+      { ...snapshot, accounts: [{ ...snapshot.accounts[0], ...extra }] },
+      { ...snapshot, signedOutProfiles: [{ ...snapshot.signedOutProfiles[0], ...extra }] },
+      { ...snapshot, anthropicAccounts: [{ ...snapshot.anthropicAccounts[0], ...extra }] },
+      { ...snapshot, anthropicSignedOutProfiles: [{ ...snapshot.anthropicSignedOutProfiles![0], ...extra }] },
+      { ...snapshot, anthropicCredentialSource: { ...snapshot.anthropicCredentialSource, ...extra } },
+      { ...snapshot, anthropicAccounts: [{ ...snapshot.anthropicAccounts[0], extraUsage: { ...snapshot.anthropicAccounts[0]!.extraUsage, ...extra } }] },
+    ]) expect(parseAccountsSnapshot(invalid)).toBeNull()
+  }
+  for (const invalid of [
+    { ...snapshot, anthropicCredentialSource: { kind: 'unknown' } },
+    { ...snapshot, anthropicSignedOutProfiles: [{ ...snapshot.anthropicSignedOutProfiles![0], loginGeneration: -1 }] },
+    { ...snapshot, anthropicAccounts: [{ ...snapshot.anthropicAccounts[0], usageCheckedAt: Infinity }] },
+    { ...snapshot, anthropicAccounts: [{ ...snapshot.anthropicAccounts[0], usageWeeklyOpus: -1 }] },
+    { ...snapshot, anthropicAccounts: [{ ...snapshot.anthropicAccounts[0], extraUsage: { usedCredits: null, monthlyLimit: null, isEnabled: 'yes' } }] },
+    { ...snapshot, signedOutProfiles: [{ ...signedOutProfile(), recoveryReason: '' }] },
+  ]) expect(parseAccountsSnapshot(invalid)).toBeNull()
+})
+
+test('delete and dedicated signout accept optional provider but no unknown fields', () => {
+  for (const [parse, verb] of [
+    [parseAccountDeleteMessage, { type: 'account.delete', requestId: 'r', accountId: 'a', expectedCredentialGeneration: 2, confirm: true }],
+    [parseAccountLogoutMessage, { type: 'account.logout', requestId: 'r', accountId: 'a', expectedCredentialGeneration: 2 }],
+  ] as const) {
+    expect(parse(verb)).toEqual(verb)
+    for (const provider of ['anthropic', 'openai'] as const) {
+      expect(parse({ ...verb, provider })).toEqual({ ...verb, provider })
+      expect(parse({ ...verb, provider, unknown: true })).toBeNull()
+      const { expectedCredentialGeneration: _, ...withoutGeneration } = verb
+      expect(parse({ ...withoutGeneration, provider })).toBeNull()
+    }
+    expect(parse({ ...verb, provider: 'other' })).toBeNull()
+  }
+})
+
 describe('parseAccountsPoolWorkerResult — accepts', () => {
   test('a well-formed pool record round-trips field-for-field', () => {
     const snapshot = pool()

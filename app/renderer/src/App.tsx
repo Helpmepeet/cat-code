@@ -2117,59 +2117,11 @@ export function App() {
     })
   }, [deliberatelyReopen, captureBeforePaneSwitch])
 
-  // Account management stays session-free. A same-provider switch also belongs
-  // to the retained chat: changing only the worker's default leaves its live
-  // sidecar on the old account until the chat is reopened.
-  const retainedAccountSession = activeSessionId
-    ? shell.byId[activeSessionId]
-    : undefined
-  const retainedAccountProvider = retainedAccountSession &&
-    !isSessionDismissed(shell.dismissals ?? [], retainedAccountSession) &&
-    selectConnection(connection, activeSessionId).status === 'ready'
-    ? selectRunControlsSnapshot(runControls, activeSessionId)?.model.provider
-    : undefined
-  const retainedAccounts = selectAccountsSnapshot(accounts, activeSessionId)
-  const accountSwitchScope = retainedAccountProvider === 'openai' ||
-    retainedAccountProvider === 'anthropic'
-    ? {
-      provider: retainedAccountProvider,
-      boundLoginGeneration: retainedAccountProvider === 'anthropic'
-        ? selectActiveAnthropicAccount(retainedAccounts)?.boundLoginGeneration : undefined,
-      accountId: retainedAccountProvider === 'openai'
-        ? selectSessionCodexAccount({
-          roster: selectGlobalAccountsSnapshot(accounts),
-          leases: selectLeaseSnapshot(leases, activeSessionId),
-          lastMainFailoverAccountId: selectLastMainFailoverAccountId(leases, activeSessionId),
-          accounts,
-          sessionId: activeSessionId,
-        })?.id ?? null
-        : selectActiveAnthropicAccount(retainedAccounts)?.id ?? null,
-    }
-    : undefined
+  // Accounts page actions always manage defaults, never the focused chat.
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
-      if (verb.type === 'account.switch') {
-        const sessionId = activeSessionIdRef.current
-        const session = sessionId ? shellRef.current.byId[sessionId] : undefined
-        if (
-          sessionId && session &&
-          !isSessionDismissed(shellRef.current.dismissals ?? [], session) &&
-          selectConnection(connection, sessionId).status === 'ready' &&
-          selectRunControlsSnapshot(runControls, sessionId)?.model.provider === (verb.provider ?? 'openai')
-        ) {
-          try {
-            getBridge().accountVerb(sessionId, verb)
-          } catch (error) {
-            dispatchAccounts({ type: 'frame', frame: {
-              kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId,
-              requestId: verb.requestId, verb: verb.type, ok: false,
-              message: errorMessage(error),
-            } })
-          }
-          return
-        }
-      }
-      if (verb.type === 'account.delete' || verb.type === 'account.logout') {
+      if (verb.type === 'account.delete' ||
+        (verb.type === 'account.logout' && verb.provider !== 'anthropic')) {
         const request =
           verb.type === 'account.delete'
             ? getBridge().deleteAccount(verb)
@@ -2230,19 +2182,20 @@ export function App() {
         if (verb.type === 'account.login') setAppOAuthProgress({ state: 'error', message })
       })
     },
-    [connection, runControls],
+    [],
   )
 
-  const signInAndReconnectChat = useCallback((accountId: string) => {
-    const sessionId = activeSessionIdRef.current
-    if (!sessionId || accountSwitchScope?.provider !== 'anthropic' ||
-      accountSwitchScope.accountId !== accountId) return
-    const verb = loginVerb('anthropic')
+  const signInAndReconnectChat = useCallback((sessionId: SessionId, accountId: string) => {
+    if (selectConnection(connection, sessionId).status !== 'ready' ||
+      selectRunControlsSnapshot(runControls, sessionId)?.model.provider !== 'anthropic' ||
+      selectComposerRail({ accounts, runControls, permissions, connectionStatus: 'ready', sessionId })
+        .accountsSnapshot?.anthropicActiveAccountId !== accountId) return
+    const verb = { ...loginVerb('anthropic'), makeDefault: false }
     chatLoginReconnectRef.current = {
       sessionId, provider: 'anthropic', accountId, loginRequestId: verb.requestId,
     }
     sendAccountVerb(verb)
-  }, [accountSwitchScope, sendAccountVerb])
+  }, [accounts, runControls, permissions, connection, sendAccountVerb])
 
   useEffect(() => {
     const origin = chatLoginReconnectRef.current
@@ -2274,7 +2227,7 @@ export function App() {
     } catch (error) {
       toast(errorMessage(error), { tone: 'warn' })
     }
-  }, [appOAuthProgress, oauthProvider, connection, runControls, accounts, toast])
+  }, [appOAuthProgress, oauthProvider, connection, runControls, permissions, accounts, toast])
 
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
   // scroll away inside it. Session-free by construction: it reads the global pool
@@ -4157,6 +4110,7 @@ export function App() {
               }
             } : undefined}
             onManageAccounts={() => openPage('accounts')}
+            onSignInAndReconnect={accountId => signInAndReconnectChat(sessionId, accountId)}
             onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
@@ -5254,11 +5208,9 @@ export function App() {
           ) : activeView === 'accounts' ? (
             <AccountsPage
               snapshot={selectGlobalAccountsSnapshot(accounts)}
-              switchScope={accountSwitchScope}
               lastResult={accounts.lastResult}
               signOutOverlays={accounts.signOutOverlays}
               onVerb={sendAccountVerb}
-              onSignInAndReconnect={signInAndReconnectChat}
             />
           ) : activeView === 'sessions' ? (
             <SessionsPage

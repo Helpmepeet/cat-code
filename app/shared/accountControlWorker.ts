@@ -3,14 +3,14 @@ import type { AccountVerbMessage, AccountResultFrame, AccountLoginProvider, OAut
 import { MAX_TEXT_FIELD_CHARS } from './limits.js'
 import { isBoolean, isRecord, isStringOrNull, narrowExact, oneOf, optional } from './narrow.js'
 
-export type AccountControlVerb = Exclude<AccountVerbMessage, { type: 'account.delete' | 'account.logout' }>
+export type AccountControlVerb = Exclude<AccountVerbMessage, { type: 'account.delete' }>
 export const MAX_ACCOUNT_CONTROL_RECORD_BYTES = 256 * 1024
 export const ACCOUNT_CONTROL_VERSION = 2
 export type AccountControlEvent =
   | { type: 'progress'; version: 2; provider: AccountLoginProvider; progress: OAuthLoginProgress | null }
   | { type: 'result'; version: 2; requestId: string; verb: AccountControlVerb['type']; ok: boolean; message: string; changed: boolean; touchAllResults?: AccountResultFrame['touchAllResults'] }
 
-const types = ['account.switch', 'account.rename', 'account.touchAll', 'account.login', 'account.oauthPasteCode', 'account.oauthAlias', 'account.oauthCancel'] as const
+const types = ['account.switch', 'account.rename', 'account.logout', 'account.touchAll', 'account.login', 'account.oauthPasteCode', 'account.oauthAlias', 'account.oauthCancel'] as const
 const provider = oneOf(['openai', 'anthropic'] as const)
 const text = (value: unknown): value is string => typeof value === 'string' && value.length <= MAX_TEXT_FIELD_CHARS
 const nonempty = (value: unknown): value is string => text(value) && value.length > 0
@@ -39,12 +39,13 @@ export function parseAccountControlVerb(value: unknown): AccountControlVerb | nu
   if (!isRecord(value)) return null
   switch (value.type) {
     case 'account.switch': return narrowExact(value, { type: oneOf(['account.switch'] as const), requestId: nonempty, accountId: nonempty, provider: optional(provider), expectedLoginGeneration: optional((v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) })
-    case 'account.rename': return narrowExact(value, { type: oneOf(['account.rename'] as const), requestId: nonempty, accountId: nonempty, alias: nonempty })
-    case 'account.login': return narrowExact(value, { type: oneOf(['account.login'] as const), requestId: nonempty, provider: optional(provider) })
+    case 'account.rename': return narrowExact(value, { type: oneOf(['account.rename'] as const), requestId: nonempty, accountId: nonempty, alias: nonempty, provider: optional(provider) })
+    case 'account.login': return narrowExact(value, { type: oneOf(['account.login'] as const), requestId: nonempty, provider: optional(provider), makeDefault: optional(isBoolean) })
+    case 'account.logout': return narrowExact(value, { type: oneOf(['account.logout'] as const), requestId: nonempty, accountId: nonempty, provider: oneOf(['anthropic'] as const), expectedCredentialGeneration: (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 })
     case 'account.oauthPasteCode': return narrowExact(value, { type: oneOf(['account.oauthPasteCode'] as const), requestId: nonempty, code: nonempty })
     case 'account.oauthAlias': return narrowExact(value, { type: oneOf(['account.oauthAlias'] as const), requestId: nonempty, alias: text })
-    case 'account.touchAll':
-    case 'account.oauthCancel': return narrowExact(value, { type: oneOf(['account.touchAll', 'account.oauthCancel'] as const), requestId: nonempty })
+    case 'account.touchAll': return narrowExact(value, { type: oneOf(['account.touchAll'] as const), requestId: nonempty, provider: optional(provider), accountId: optional(nonempty) })
+    case 'account.oauthCancel': return narrowExact(value, { type: oneOf(['account.oauthCancel'] as const), requestId: nonempty })
     default: return null
   }
 }

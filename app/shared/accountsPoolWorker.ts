@@ -28,6 +28,7 @@ import type {
   AccountsSnapshot,
   AnthropicAccountStatus,
   SignedOutCodexProfileStatus,
+  SignedOutAnthropicProfileStatus,
 } from './protocol.js'
 import { MAX_TEXT_FIELD_CHARS } from './limits.js'
 import {
@@ -110,6 +111,7 @@ export function parseAccountDeleteMessage(
     accountId: isBoundedText,
     expectedCredentialGeneration: isSafeNonnegativeInteger,
     confirm: oneOf([true] as const),
+    provider: optional(oneOf(['openai', 'anthropic'] as const)),
   })
 }
 
@@ -121,6 +123,7 @@ export function parseAccountLogoutMessage(
     requestId: isBoundedText,
     accountId: isBoundedText,
     expectedCredentialGeneration: isSafeNonnegativeInteger,
+    provider: optional(oneOf(['openai', 'anthropic'] as const)),
   })
 }
 
@@ -249,6 +252,19 @@ export function parseAccountsPoolWorkerResult(
  */
 export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
   const snapshot = narrowExact(value, {
+    anthropicSignedOutProfiles: optional((v: unknown): v is SignedOutAnthropicProfileStatus[] =>
+      Array.isArray(v) && v.every(row => narrowExact(row, {
+        id: isBoundedText, email: isString, alias: isStringOrNull, loginGeneration: isSafeGeneration,
+      }) !== null)),
+    savedDefaultAccountId: optional(isStringOrNull),
+    effectiveDefaultAccountId: optional(isStringOrNull),
+    anthropicSavedDefaultAccountId: optional(isStringOrNull),
+    anthropicEffectiveDefaultAccountId: optional(isStringOrNull),
+    anthropicCredentialSource: optional((v: unknown): v is NonNullable<AccountsSnapshot['anthropicCredentialSource']> =>
+      narrowExact(v, {
+        kind: oneOf(['claude_subscription', 'environment_api_key', 'api_key_helper', 'bedrock', 'vertex', 'foundry', 'environment_token', 'file_descriptor', 'managed_api_key', 'none'] as const),
+        variableName: optional(isBoundedText),
+      }) !== null),
     accounts: isUnknownArray,
     signedOutProfiles: isUnknownArray,
     activeAccountId: isStringOrNull,
@@ -292,6 +308,7 @@ export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
 
 function parseAccountStatus(value: unknown): AccountStatus | null {
   return narrowExact(value, {
+    email: optional(isStringOrNull),
     id: isBoundedText,
     credentialGeneration: isSafeNonnegativeInteger,
     alias: isStringOrNull,
@@ -321,6 +338,11 @@ function parseSignedOutCodexProfileStatus(
   value: unknown,
 ): SignedOutCodexProfileStatus | null {
   return narrowExact(value, {
+    email: optional(isStringOrNull),
+    recoveryReason: optional(oneOf([
+      'duplicate_identity', 'invalid_generation', 'lifecycle_unavailable',
+      'generation_mismatch', 'lifecycle_not_credentialed', 'profile_recovery_required',
+    ] as const)),
     id: isBoundedText,
     alias: isStringOrNull,
     state: oneOf(['signed_out', 'recovery_required'] as const),
@@ -348,6 +370,24 @@ function parseAnthropicAccountStatus(
   value: unknown,
 ): AnthropicAccountStatus | null {
   return narrowExact(value, {
+    organizationName: optional(isStringOrNull),
+    organizationRole: optional(isStringOrNull),
+    workspaceRole: optional(isStringOrNull),
+    rateLimitTier: optional(isStringOrNull),
+    billingType: optional(isStringOrNull),
+    hasExtraUsageEnabled: optional(isBoolean),
+    usageWeeklyOpus: optional(isNonNegativeFiniteNumberOrNull),
+    usageWeeklyOpusResetAt: optional(isNonNegativeFiniteNumberOrNull),
+    usageWeeklySonnet: optional(isNonNegativeFiniteNumberOrNull),
+    usageWeeklySonnetResetAt: optional(isNonNegativeFiniteNumberOrNull),
+    extraUsage: optional((v: unknown): v is NonNullable<AnthropicAccountStatus['extraUsage']> =>
+      narrowExact(v, {
+        usedCredits: isNonNegativeFiniteNumberOrNull,
+        monthlyLimit: isNonNegativeFiniteNumberOrNull,
+        isEnabled: (v: unknown): v is boolean | null => v === null || isBoolean(v),
+      }) !== null),
+    usageCheckedAt: optional((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0),
+    usageStale: optional(isBoolean),
     id: isString,
     alias: isStringOrNull,
     email: isString,

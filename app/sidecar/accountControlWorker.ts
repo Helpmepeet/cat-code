@@ -24,7 +24,9 @@ async function main(): Promise<void> {
   await serveAccountControl(process.stdin, {
     setOAuthProgressSink: sink => domain.setOAuthProgressSink(sink),
     async runVerb(verb) {
-      if (verb.type === 'account.login') {
+      if (verb.type === 'account.login' || verb.type === 'account.rename' ||
+          verb.type === 'account.oauthAlias' || verb.type === 'account.switch' ||
+          verb.type === 'account.logout' || verb.type === 'account.touchAll') {
         // Dedicated delete/sign-out workers can change inventory while idle.
         await codex.loadPoolForObservation()
         anthropic.loadClaudePoolForObservation()

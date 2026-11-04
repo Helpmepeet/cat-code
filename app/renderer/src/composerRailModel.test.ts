@@ -359,6 +359,24 @@ function identityPool(active: string, usage = 10): AccountsSnapshot {
   })
 }
 
+test('a selected Claude row missing from inventory survives only as dead recovery metadata', () => {
+  const selected = identityPool('a')
+  selected.anthropicSubscriptionActive = false
+  const inventory = identityPool('b')
+  inventory.anthropicAccounts = inventory.anthropicAccounts.filter(row => row.id !== 'a')
+  const accounts = { ...createAccountsState(), pool: inventory, sessions: { [SID]: selected } }
+  const runControls = reduceRunControlsState(createRunControlsState(), frame({
+    kind: 'run-controls.snapshot', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    runControls: { ...SNAPSHOT, model: { ...SNAPSHOT.model, provider: 'anthropic' } },
+  } as ServerFrame))
+  const rail = selectComposerRail(sources({ accounts, runControls }))
+  expect(rail.accountsSnapshot?.anthropicAccounts.find(row => row.id === 'a')).toMatchObject({
+    isDefault: true, status: 'dead', credentialHealth: 'sign_in_required',
+  })
+  expect(rail.canSwitchAccount).toBe(true)
+  expect(rail.accountsSnapshot?.anthropicAccounts.find(row => row.id === 'b')?.status).toBe('healthy')
+})
+
 function reportAccounts(state: AccountsState, sessionId: string, snapshot: AccountsSnapshot) {
   return reduceAccountsState(state, frame({
     kind: 'accounts.snapshot', protocolVersion: PROTOCOL_VERSION,

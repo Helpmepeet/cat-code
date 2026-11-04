@@ -93,7 +93,7 @@ test('renders the pool rows and the ready label from a snapshot', () => {
   expect(html).toContain('2 of 2 ready')
   expect(html).toContain('primary')
   expect(html).toContain('backup')
-  expect(html).toContain('active') // default-account badge
+  expect(html).toContain('Saved default')
   expect(html).not.toContain('MOCK')
 })
 

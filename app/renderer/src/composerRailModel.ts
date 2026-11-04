@@ -123,6 +123,12 @@ function railAccounts(
   if (!inventory) return null
   const activeAccountId = session?.activeAccountId ?? null
   const anthropicActiveAccountId = session?.anthropicActiveAccountId ?? null
+  const missingSelected = session?.anthropicAccounts.find(row =>
+    row.id === anthropicActiveAccountId &&
+    !inventory.anthropicAccounts.some(account => account.id === row.id))
+  const anthropicInventory = missingSelected
+    ? [...inventory.anthropicAccounts, { ...missingSelected, status: 'dead' as const, credentialHealth: 'sign_in_required' as const }]
+    : inventory.anthropicAccounts
   return {
     ...inventory,
     activeAccountId,
@@ -135,7 +141,7 @@ function railAccounts(
       // The host's active row is not switchable only because it is active there.
       switchable: account.id !== activeAccountId && account.availability !== 'blocked',
     })),
-    anthropicAccounts: inventory.anthropicAccounts.map(account => ({
+    anthropicAccounts: anthropicInventory.map(account => ({
       ...account,
       isDefault: account.id === anthropicActiveAccountId,
       boundLoginGeneration: session?.anthropicAccounts.find(row => row.id === account.id)?.boundLoginGeneration,
@@ -167,9 +173,7 @@ export function selectComposerRail(
       last?.model.provider === 'openai' ||
       (last?.model.provider === 'anthropic' &&
         (accountsSnapshot?.anthropicSubscriptionActive === true ||
-          accountsSnapshot?.anthropicAccounts.some(account => account.isDefault &&
-            account.boundLoginGeneration !== undefined && account.loginGeneration !== undefined &&
-            account.boundLoginGeneration !== account.loginGeneration) === true))
+          accountsSnapshot?.anthropicAccounts.some(account => account.isDefault) === true))
     ),
   }
 }

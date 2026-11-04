@@ -238,6 +238,7 @@ export function SessionPane({
   activeAccount,
   activeAnthropicAccount,
   onSwitchAccount,
+  onSignInAndReconnect,
   onManageAccounts,
   onOpenAccountSwitcher,
   accountsLastResult,
@@ -2624,6 +2625,7 @@ export function SessionPane({
           accounts={accountsSnapshot?.accounts ?? []}
           anthropicAccounts={accountsSnapshot?.anthropicAccounts ?? []}
           onSwitchAccount={handleSwitchAccount}
+          onSignInAndReconnect={onSignInAndReconnect}
           onManageAccounts={onManageAccounts}
           onOpenAccountSwitcher={onOpenAccountSwitcher}
           contextUsage={contextUsage}
@@ -2912,6 +2914,7 @@ type SessionPaneProps = {
    * SessionPane, ACCT-5) to this session's sidecar. Absent → the account face
    * stays read-only. */
   onSwitchAccount?: (verb: AccountSwitchMessage) => void
+  onSignInAndReconnect?: (accountId: string) => void
   /** Open the Accounts page (the profile popover's "Manage accounts →"). */
   onManageAccounts?: () => void
   /** Request a fresh host-owned account pool when the composer switcher opens. */
