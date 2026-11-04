@@ -1274,10 +1274,15 @@ export function createCompactCanUseTool(): CanUseToolFn {
   })
 }
 
-function isCompleteCompactSummary(text: string): boolean {
+function isCompleteCompactSummary(
+  text: string,
+  requireSummaryBlock = false,
+): boolean {
   // Older/plain-text summaries remain valid, but tagged output must contain a
   // complete nonempty summary rather than a drafting block or continuation tail.
-  if (!/<\/?(?:analysis|summary)>/.test(text)) return text.trim().length > 0
+  if (!/<\/?(?:analysis|summary)>/.test(text)) {
+    return !requireSummaryBlock && text.trim().length > 0
+  }
   return /^(?:<analysis>[\s\S]*?<\/analysis>\s*)?<summary>\s*\S[\s\S]*<\/summary>\s*$/.test(
     text.trim(),
   )
@@ -1285,6 +1290,7 @@ function isCompleteCompactSummary(text: string): boolean {
 
 function assembleCompactSummaryResponse(
   messages: Message[],
+  requireSummaryBlock = false,
 ): AssistantMessage | undefined {
   const response = getLastAssistantMessage(messages)
   // A failed continuation must not turn an earlier partial summary into success.
@@ -1292,7 +1298,7 @@ function assembleCompactSummaryResponse(
   const lastTextBlock = response.message.content.findLast(
     block => block.type === 'text',
   )
-  if (!lastTextBlock) return response
+  if (!lastTextBlock) return undefined
 
   const lastText = response.message.content
     .filter(block => block.type === 'text')
@@ -1318,7 +1324,7 @@ function assembleCompactSummaryResponse(
           .filter(block => block.type === 'text')
           .map(block => block.text)
           .join('')
-  if (!isCompleteCompactSummary(text)) return undefined
+  if (!isCompleteCompactSummary(text, requireSummaryBlock)) return undefined
 
   // Query yields one message per content block, including sealed partial text
   // before a transport continuation. Keep those bytes, not just the final block.
@@ -1354,6 +1360,35 @@ export async function streamCompactSummary({
   preCompactTokenCount: number
   cacheSafeParams: CacheSafeParams
 }): Promise<AssistantMessage> {
+  if (context.abortController.signal.aborted) {
+    throw new APIUserAbortError()
+  }
+  const requestContent = summaryRequest.message.content
+  const requireSummaryBlock =
+    typeof requestContent === 'string'
+      ? requestContent.includes('<summary>')
+      : requestContent.some(
+          block => block.type === 'text' && block.text.includes('<summary>'),
+        )
+  let correctionRequested = false
+  const requestSummaryCorrection = () => {
+    correctionRequested = true
+    logForDebugging(
+      'Compact: missing or malformed summary; requesting one corrective retry',
+    )
+    const correction = {
+      type: 'text' as const,
+      text: 'Your previous response did not contain a complete, nonempty summary. Summarize the conversation provided above inside <summary></summary> tags. Do not answer the conversation’s latest request or continue its work. Return only the summary.',
+    }
+    summaryRequest = createUserMessage({
+      content: [
+        ...(typeof requestContent === 'string'
+          ? [{ type: 'text' as const, text: requestContent }]
+          : requestContent),
+        correction,
+      ],
+    })
+  }
   // When prompt cache sharing is enabled, use forked agent to reuse the
   // main conversation's cached prefix (system prompt, tools, context messages).
   // Falls back to regular streaming path on failure.
@@ -1404,7 +1439,10 @@ export async function streamCompactSummary({
           // `signal: context.abortController.signal` below.
           overrides: { abortController: context.abortController },
         })
-        const assistantMsg = assembleCompactSummaryResponse(result.messages)
+        const assistantMsg = assembleCompactSummaryResponse(
+          result.messages,
+          requireSummaryBlock,
+        )
         const assistantText = assistantMsg
           ? getAssistantMessageText(assistantMsg)
           : null
@@ -1434,6 +1472,14 @@ export async function streamCompactSummary({
           }
           return assistantMsg
         }
+        if (context.abortController.signal.aborted) {
+          throw new APIUserAbortError()
+        }
+        if (!assistantMsg && requireSummaryBlock) {
+          // The streaming fallback is the single corrective retry, not the
+          // start of another malformed-summary retry ladder.
+          requestSummaryCorrection()
+        }
         logForDebugging(
           `Compact cache sharing: no text in response, falling back. Response: ${jsonStringify(assistantMsg)}`,
           { level: 'warn' },
@@ -1444,6 +1490,9 @@ export async function streamCompactSummary({
           preCompactTokenCount,
         })
       } catch (error) {
+        if (context.abortController.signal.aborted) {
+          throw error
+        }
         logError(error)
         logEvent('tengu_compact_cache_sharing_fallback', {
           reason:
@@ -1458,9 +1507,15 @@ export async function streamCompactSummary({
       'tengu_compact_streaming_retry',
       false,
     )
-    const maxAttempts = retryEnabled ? MAX_COMPACT_STREAMING_RETRIES : 1
+    const maxAttempts =
+      !correctionRequested && (retryEnabled || requireSummaryBlock)
+        ? MAX_COMPACT_STREAMING_RETRIES
+        : 1
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (context.abortController.signal.aborted) {
+        throw new APIUserAbortError()
+      }
       // Reset state for retry
       let hasStartedStreaming = false
       const responseMessages: AssistantMessage[] = []
@@ -1585,12 +1640,24 @@ export async function streamCompactSummary({
         next = await streamIter.next()
       }
 
-      const response = assembleCompactSummaryResponse(responseMessages)
+      const response = assembleCompactSummaryResponse(
+        responseMessages,
+        requireSummaryBlock,
+      )
       if (response) {
         return response
       }
 
-      if (attempt < maxAttempts) {
+      if (
+        requireSummaryBlock &&
+        !correctionRequested &&
+        attempt < maxAttempts
+      ) {
+        requestSummaryCorrection()
+        continue
+      }
+
+      if (!requireSummaryBlock && attempt < maxAttempts) {
         logEvent('tengu_compact_streaming_retry', {
           attempt,
           preCompactTokenCount,

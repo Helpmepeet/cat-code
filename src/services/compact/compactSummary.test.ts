@@ -11,7 +11,11 @@ import { formatCompactSummary, getCompactUserSummaryMessage } from './prompt.js'
 let forkMessages: Message[]
 let fallbackMessages: AssistantMessage[]
 let cacheSharing: boolean
+let streamingRetries: boolean
 let fallbackCalls: number
+let forkRequests: Parameters<typeof realForkedAgent.runForkedAgent>[0][]
+let fallbackRequests: Parameters<typeof realClaudeApi.queryModelWithStreaming>[0][]
+let fallbackResponses: AssistantMessage[][] | undefined
 
 const summaryStart = '<analysis>Drafting notes.</analysis>\n<summary>\n1. Constraints: never publish.\n2. Files: important.ts\n5. Tests: '
 const summaryEnd = '36 passed.\n6. User requests\n7. Pending tasks\n8. Current work\n9. Next step\n</summary>'
@@ -20,7 +24,7 @@ function response(text: string): AssistantMessage {
   return createAssistantMessage({ content: [{ type: 'text', text, citations: [] }] })
 }
 
-function request() {
+function request(requireSummaryBlock = false) {
   const context = {
     options: {
       tools: [],
@@ -33,8 +37,12 @@ function request() {
     getAppState: () => ({ toolPermissionContext: { mode: 'default' } }),
   } as unknown as ToolUseContext
   return {
-    messages: [],
-    summaryRequest: createUserMessage({ content: 'Summarize the conversation.' }),
+    messages: [] as Message[],
+    summaryRequest: createUserMessage({
+      content: requireSummaryBlock
+        ? 'Summarize the conversation inside <summary></summary> tags.'
+        : 'Summarize the conversation.',
+    }),
     appState: context.getAppState(),
     context,
     preCompactTokenCount: 100,
@@ -54,25 +62,38 @@ function recoveryNotice(): Message {
 
 beforeEach(() => {
   cacheSharing = true
+  streamingRetries = false
   fallbackCalls = 0
+  forkRequests = []
+  fallbackRequests = []
+  fallbackResponses = undefined
   forkMessages = []
   fallbackMessages = []
   mock.module('../analytics/growthbook.js', () => ({
     getFeatureValue_CACHED_MAY_BE_STALE: (key: string, fallback: unknown) =>
-      key === 'tengu_compact_cache_prefix' ? cacheSharing : fallback,
+      key === 'tengu_compact_cache_prefix'
+        ? cacheSharing
+        : key === 'tengu_compact_streaming_retry'
+          ? streamingRetries
+          : fallback,
   }))
   mock.module('../../utils/forkedAgent.js', () => ({
     ...realForkedAgent,
-    runForkedAgent: async () => ({
-      messages: forkMessages,
-      totalUsage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-    }),
+    runForkedAgent: async (params: Parameters<typeof realForkedAgent.runForkedAgent>[0]) => {
+      forkRequests.push(params)
+      return {
+        messages: forkMessages,
+        totalUsage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      }
+    },
   }))
   mock.module('../api/claude.js', () => ({
     ...realClaudeApi,
-    queryModelWithStreaming: async function* () {
+    queryModelWithStreaming: async function* (params: Parameters<typeof realClaudeApi.queryModelWithStreaming>[0]) {
+      fallbackRequests.push(params)
+      const responses = fallbackResponses?.[fallbackCalls] ?? fallbackMessages
       fallbackCalls++
-      yield* fallbackMessages
+      yield* responses
     },
   }))
 })
@@ -186,6 +207,108 @@ describe('compaction summary response assembly', () => {
     forkMessages = [response('A plain-text summary with the pending work.')]
     const { streamCompactSummary } = await import('./compact.js')
     expect(getAssistantMessageText(await streamCompactSummary(request()))).toBe('A plain-text summary with the pending work.')
+    expect(fallbackCalls).toBe(0)
+  })
+
+  test.each([
+    "I'll continue fixing the bug.",
+    '<summary>Only the prefix.',
+    '<summary>   </summary>',
+  ])('corrects a malformed tagged-request fork once: %s', async text => {
+    forkMessages = [response(text)]
+    fallbackMessages = [response('<summary>Tests passed. Report the result.</summary>')]
+    const params = request(true)
+    const originalRequest = params.summaryRequest
+    const { streamCompactSummary } = await import('./compact.js')
+
+    const result = await streamCompactSummary(params)
+
+    expect(getAssistantMessageText(result)).toContain('Tests passed.')
+    expect(forkRequests).toHaveLength(1)
+    expect(fallbackCalls).toBe(1)
+    expect(JSON.stringify(fallbackRequests[0]!.messages)).toContain(
+      'Your previous response did not contain a complete, nonempty summary.',
+    )
+    expect(params.summaryRequest).toBe(originalRequest)
+    expect(JSON.stringify(originalRequest)).not.toContain('Your previous response')
+  })
+
+  test('corrects a direct streaming response once without enabling transport retries', async () => {
+    cacheSharing = false
+    fallbackResponses = [
+      [response("I'll continue fixing the bug.")],
+      [response('<summary>Fix complete. Tests pending.</summary>')],
+    ]
+    const { streamCompactSummary } = await import('./compact.js')
+    expect(getAssistantMessageText(await streamCompactSummary(request(true)))).toBe(
+      '<summary>Fix complete. Tests pending.</summary>',
+    )
+    expect(fallbackCalls).toBe(2)
+    expect(JSON.stringify(fallbackRequests[0]!.messages)).not.toContain('Your previous response')
+    expect(JSON.stringify(fallbackRequests[1]!.messages)).toContain('Your previous response')
+  })
+
+  test.each([true, false])('fails closed after one correction with cache sharing %s', async sharing => {
+    cacheSharing = sharing
+    streamingRetries = true
+    forkMessages = [response("I'll keep working.")]
+    fallbackMessages = [response('<summary></summary>')]
+    const params = request(true)
+    params.messages.push(createUserMessage({ content: 'Never publish the credentials.' }))
+    const originalMessages = [...params.messages]
+    const { streamCompactSummary, ERROR_MESSAGE_INCOMPLETE_RESPONSE } = await import('./compact.js')
+
+    await expect(streamCompactSummary(params)).rejects.toThrow(ERROR_MESSAGE_INCOMPLETE_RESPONSE)
+    expect(fallbackCalls).toBe(sharing ? 1 : 2)
+    expect(params.messages).toEqual(originalMessages)
+    expect(JSON.stringify(params.messages)).toContain('Never publish the credentials.')
+  })
+
+  test('accepts a complete tagged summary without a retry', async () => {
+    forkMessages = [response('<analysis>Notes.</analysis><summary>Tests passed.</summary>')]
+    const { streamCompactSummary } = await import('./compact.js')
+    expect(getAssistantMessageText(await streamCompactSummary(request(true)))).toContain(
+      '<summary>Tests passed.</summary>',
+    )
+    expect(forkRequests).toHaveLength(1)
+    expect(fallbackCalls).toBe(0)
+  })
+
+  test.each([true, false])('corrects text-free output with cache sharing %s', async sharing => {
+    cacheSharing = sharing
+    const thinkingOnly = createAssistantMessage({
+      content: [{ type: 'thinking', thinking: 'Drafting.', signature: 'sig' }],
+    })
+    forkMessages = [thinkingOnly]
+    fallbackResponses = sharing
+      ? [[response('<summary>Tests pending.</summary>')]]
+      : [[thinkingOnly], [response('<summary>Tests pending.</summary>')]]
+    const { streamCompactSummary } = await import('./compact.js')
+    expect(getAssistantMessageText(await streamCompactSummary(request(true)))).toBe(
+      '<summary>Tests pending.</summary>',
+    )
+    expect(fallbackCalls).toBe(sharing ? 1 : 2)
+    expect(JSON.stringify(fallbackRequests.at(-1)!.messages)).toContain('Your previous response')
+  })
+
+  test('does not retry a typed API error as a malformed summary', async () => {
+    cacheSharing = false
+    const failure = response('Request timed out')
+    failure.isApiErrorMessage = true
+    fallbackMessages = [failure]
+    const { streamCompactSummary } = await import('./compact.js')
+    expect((await streamCompactSummary(request(true))).isApiErrorMessage).toBe(true)
+    expect(fallbackCalls).toBe(1)
+    expect(JSON.stringify(fallbackRequests[0]!.messages)).not.toContain('Your previous response')
+  })
+
+  test.each([true, false])('does not start requests after cancellation with cache sharing %s', async sharing => {
+    cacheSharing = sharing
+    const params = request(true)
+    params.context.abortController.abort()
+    const { streamCompactSummary } = await import('./compact.js')
+    await expect(streamCompactSummary(params)).rejects.toThrow()
+    expect(forkRequests).toHaveLength(0)
     expect(fallbackCalls).toBe(0)
   })
 })

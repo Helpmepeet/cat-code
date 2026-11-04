@@ -613,7 +613,7 @@ ${formattedSummary}`
   }
 
   if (recentMessagesPreserved) {
-    baseSummary += `\n\nRecent messages are preserved verbatim.`
+    baseSummary += `\n\nRecent messages are preserved verbatim after this summary. They may contain updates not covered by the summary, including completed work it describes as pending. Use those messages to determine the current state before continuing.`
   }
 
   if (suppressFollowUpQuestions) {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   formatCompactSummary,
   getCompactPrompt,
+  getCompactUserSummaryMessage,
   getPartialCompactPrompt,
 } from './prompt.js'
 
@@ -71,4 +72,20 @@ Remember the credential-handling rule.
 6. All user messages:
 - The user said never to expose credentials in logs.`)
   })
+
+  test.each(['firstParty', 'openai'] as const)(
+    '%s distinguishes the older summary from preserved recent messages',
+    provider => {
+      const summary = 'Run the tests next.'
+      const withRecent = getCompactUserSummaryMessage(
+        summary, false, undefined, true, provider,
+      )
+      expect(withRecent).toContain('updates not covered by the summary')
+      expect(withRecent).toContain('completed work it describes as pending')
+      expect(withRecent).toContain('Use those messages to determine the current state')
+      expect(getCompactUserSummaryMessage(
+        summary, false, undefined, false, provider,
+      )).not.toContain('updates not covered by the summary')
+    },
+  )
 })
