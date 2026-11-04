@@ -974,6 +974,138 @@ describe('Claude credential mirror', () => {
 })
 
 describe('OAuth installation', () => {
+  function conflictingClaudeLogin() {
+    storageSuccess = true
+    pool.appendClaudeAccount({
+      ...tokens, accountUuid: tokens.tokenAccount.uuid, emailAddress: tokens.tokenAccount.emailAddress,
+      accessToken: 'before-migration-access', refreshToken: 'before-migration-refresh',
+    }, { operationId: 'before-migration-login' })
+    const previous = readAuthority(tokens.tokenAccount.uuid)
+    pool.appendClaudeAccount({
+      ...tokens, accountUuid: 'unaffected-account', emailAddress: 'unaffected@example.com',
+      accessToken: 'unaffected-access', refreshToken: 'unaffected-refresh',
+    })
+    const legacyPath = join(directory, 'accounts', `${tokens.tokenAccount.uuid}.json`)
+    writeFileSync(legacyPath, JSON.stringify({
+      claude_authority_version: 1,
+      lifecycle_generation: Number.MAX_SAFE_INTEGER + 1,
+      tokens: { access_token: 'legacy-writer-access', refresh_token: 'legacy-writer-refresh' },
+      profile: { account_uuid: tokens.tokenAccount.uuid, email_address: tokens.tokenAccount.emailAddress },
+    }))
+    writeFileSync(`${legacyPath}.lifecycle`, JSON.stringify({
+      generation: Number.MAX_SAFE_INTEGER + 1, deleted: false,
+    }))
+    expect(authority.readClaudeAccountAuthority(tokens.tokenAccount.uuid).status).toBe('incompatible_writer')
+    return { previous, legacyPath }
+  }
+
+  test('fresh OAuth installation recovers a conflicting account without changing another account', async () => {
+    const { previous } = conflictingClaudeLogin()
+    const unaffectedPath = join(directory, 'authority-v1', 'unaffected-account.json')
+    const unaffected = readFileSync(unaffectedPath, 'utf8')
+    pool.loadClaudePoolForObservation()
+    expect(pool.getClaudePoolStatus().accounts.some(account => account.accountUuid === tokens.tokenAccount.uuid)).toBe(false)
+
+    expect(await installOAuthTokensAfterPolicyValidation(tokens, {
+      validateOrg: async () => ({ valid: true }), createOperationId: () => 'recovery-oauth-login',
+    })).toEqual({ valid: true, installation: 'committed' })
+    const recovered = readAuthority(tokens.tokenAccount.uuid)
+    expect(recovered.record.credentials?.accessToken).toBe(tokens.accessToken)
+    expect(recovered.handle.generation).toBeGreaterThan(previous.handle.generation)
+    expect(authority.withClaudeCredentialSend(previous.handle, () => 'sent')).toBeNull()
+    expect(readFileSync(unaffectedPath, 'utf8')).toBe(unaffected)
+    expect(savedConfig.activeClaudeAccountUuid).toBe(tokens.tokenAccount.uuid)
+    expect(stored?.claudeAiOauth?.accessToken).toBe(tokens.accessToken)
+    pool.resetClaudeAccountPoolForTest()
+    pool.setClaudeVaultPathForTest(directory)
+    pool.loadClaudePoolForObservation()
+    expect(pool.getActiveClaudeAccount()?.accessToken).toBe(tokens.accessToken)
+  })
+
+  test('policy rejection leaves conflicting vault records and credential mirrors unchanged', async () => {
+    const { legacyPath } = conflictingClaudeLogin()
+    const authorityPath = join(directory, 'authority-v1', `${tokens.tokenAccount.uuid}.json`)
+    const before = [legacyPath, `${legacyPath}.lifecycle`, authorityPath].map(path => readFileSync(path, 'utf8'))
+    const mirrors = structuredClone({ stored, savedConfig })
+
+    expect(await installOAuthTokensAfterPolicyValidation(tokens, {
+      validateOrg: async () => ({ valid: false, message: 'Organization is not allowed.' }),
+    })).toEqual({ valid: false, message: 'Organization is not allowed.' })
+    expect([legacyPath, `${legacyPath}.lifecycle`, authorityPath].map(path => readFileSync(path, 'utf8'))).toEqual(before)
+    expect({ stored, savedConfig }).toEqual(mirrors)
+    expect(authority.readClaudeAccountAuthority(tokens.tokenAccount.uuid).status).toBe('incompatible_writer')
+    expect(profile.getOauthProfileFromOauthToken).not.toHaveBeenCalled()
+  })
+
+  test.each(['before-migration', 'legacy-writer'])('conflict recovery cannot reinstall %s credentials under a new login operation', async source => {
+    const { legacyPath } = conflictingClaudeLogin()
+    const authorityPath = join(directory, 'authority-v1', `${tokens.tokenAccount.uuid}.json`)
+    const before = [legacyPath, `${legacyPath}.lifecycle`, authorityPath].map(path => readFileSync(path, 'utf8'))
+    const mirrors = structuredClone({ stored, savedConfig })
+    const result = await installOAuthTokensAfterPolicyValidation({
+      ...tokens, accessToken: `${source}-access`, refreshToken: `${source}-refresh`,
+    }, {
+      validateOrg: async () => ({ valid: true }), createOperationId: () => 'cached-credential-replay',
+    })
+    expect(result).toMatchObject({ valid: true, installation: 'rejected' })
+    expect([legacyPath, `${legacyPath}.lifecycle`, authorityPath].map(path => readFileSync(path, 'utf8'))).toEqual(before)
+    expect({ stored, savedConfig }).toEqual(mirrors)
+    expect(authority.readClaudeAccountAuthority(tokens.tokenAccount.uuid).status).toBe('incompatible_writer')
+  })
+
+  test('interrupted conflict recovery retries captured OAuth credentials before publishing mirrors', async () => {
+    const { previous, legacyPath } = conflictingClaudeLogin()
+    const mirrors = structuredClone({ stored, savedConfig })
+    const exchange = spyOn(oauth, 'refreshOAuthToken').mockRejectedValue(new Error('OAuth exchange forbidden during local retry'))
+    const original = atomic.writeFileAtomicDurableSync
+    const failure = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((target, data, options) => {
+      if (String(target) === `${legacyPath}.lifecycle`) throw new Error('synthetic recovery fence failure')
+      return original(target, data, options)
+    })
+    let pending
+    try {
+      pending = await installOAuthTokensAfterPolicyValidation(tokens, {
+        validateOrg: async () => ({ valid: true }), createOperationId: () => 'interrupted-recovery-login',
+      })
+      expect(pending).toMatchObject({ valid: true, installation: 'persistence_pending' })
+      expect({ stored, savedConfig }).toEqual(mirrors)
+      expect(authority.withClaudeCredentialSend(previous.handle, () => 'sent')).toBeNull()
+    } finally { failure.mockRestore() }
+    if (!pending?.valid || pending.installation !== 'persistence_pending' || !pending.retry) throw new Error('Missing captured recovery retry')
+    expect(await pending.retry()).toEqual({ valid: true, installation: 'committed' })
+    const recovered = readAuthority(tokens.tokenAccount.uuid)
+    expect(recovered.record.credentials?.accessToken).toBe(tokens.accessToken)
+    expect(recovered.record.operations['interrupted-recovery-login']?.generation).toBe(recovered.handle.generation)
+    expect(authority.withClaudeCredentialSend(previous.handle, () => 'sent')).toBeNull()
+    expect(profile.getOauthProfileFromOauthToken).toHaveBeenCalledTimes(1)
+    expect(exchange).not.toHaveBeenCalled()
+  })
+
+  test('startup finishes an interrupted recovery without replacing another account as the default', async () => {
+    const { previous, legacyPath } = conflictingClaudeLogin()
+    const mirrors = structuredClone({ stored, savedConfig })
+    const original = atomic.writeFileAtomicDurableSync
+    const failure = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((target, data, options) => {
+      if (String(target) === `${legacyPath}.lifecycle`) throw new Error('synthetic recovery fence failure')
+      return original(target, data, options)
+    })
+    try {
+      expect(await installOAuthTokensAfterPolicyValidation(tokens, {
+        validateOrg: async () => ({ valid: true }), createOperationId: () => 'restart-recovery-login',
+      })).toMatchObject({ valid: true, installation: 'persistence_pending' })
+    } finally { failure.mockRestore() }
+    pool.resetClaudeAccountPoolForTest()
+    pool.setClaudeVaultPathForTest(directory)
+    pool.initClaudeAccountPool()
+    const recovered = readAuthority(tokens.tokenAccount.uuid)
+    expect(recovered.status).toBe('ready')
+    expect(recovered.record.credentials?.accessToken).toBe(tokens.accessToken)
+    expect(recovered.record.operations['restart-recovery-login']?.generation).toBe(recovered.handle.generation)
+    expect(authority.withClaudeCredentialSend(previous.handle, () => 'sent')).toBeNull()
+    expect(pool.getActiveClaudeAccount()?.accountUuid).toBe('unaffected-account')
+    expect({ stored, savedConfig }).toEqual(mirrors)
+  })
+
   test('real precommit vault failure stays pending and retries captured installation after local storage repair', async () => {
     storageSuccess = true
     const vault = join(directory, 'unavailable-vault')

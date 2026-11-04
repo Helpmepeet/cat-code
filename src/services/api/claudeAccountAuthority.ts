@@ -21,7 +21,11 @@ export type ClaudeAuthorityResult = {
 export class ClaudeLoginInstallationError extends Error {
   readonly result: Readonly<ClaudeAuthorityResult>
   constructor(result: ClaudeAuthorityResult) {
-    super('Failed to save Claude sign-in. Restore vault access and retry saving.')
+    super(result.reason === 'recovery_in_progress'
+      ? 'A previous sign-in still needs to finish saving. Restart Cat Code, then try again.'
+      : result.reason === 'stale_credentials'
+        ? 'These sign-in credentials are no longer usable. Start a new sign-in.'
+        : 'Failed to save Claude sign-in. Restore vault access and retry saving.')
     this.name = 'ClaudeLoginInstallationError'
     this.result = Object.freeze({ ...result, handle: result.handle && Object.freeze({ ...result.handle }) })
   }
@@ -37,7 +41,7 @@ export type ClaudeAuthorityRecord = {
   rejection?: 'access_rejected' | 'refresh_rejected'
   credentials?: ClaudeAuthorityCredentials; profile?: Record<string, unknown>
   operations: Record<string, { kind: string; generation: number; revision: number; fingerprint: string }>
-  pendingLogin?: { operationId: string; generation: number; credentials: ClaudeAuthorityCredentials; profile: Record<string, unknown> }
+  pendingLogin?: { operationId: string; generation: number; credentials: ClaudeAuthorityCredentials; profile: Record<string, unknown>; repairBarriers?: true }
   migration?: { legacyHash: string; lifecycleHash: string; complete: boolean }
   refreshIntent?: { operationId: string; ownerNonce: string; phase: 'prepared' | 'dispatched' | 'uncertain'; generation: number; revision: number }
 }
@@ -109,6 +113,13 @@ function validRecord(r: ClaudeAuthorityRecord, id: string): boolean {
   if (pending !== undefined && (!pending || typeof pending !== 'object' || typeof pending.operationId !== 'string' || !pending.operationId ||
       pending.generation !== r.loginGeneration + 1 || !validCredentials(pending.credentials) ||
       !pending.profile || typeof pending.profile !== 'object' || Array.isArray(pending.profile))) return false
+  if (pending?.repairBarriers !== undefined && (pending.repairBarriers !== true || r.state !== 'deleted' ||
+      r.refreshIntent || r.credentials || r.credentialDisposition !== 'rejected')) return false
+  if (pending?.repairBarriers) {
+    const receipt = r.operations[pending.operationId]
+    if (receipt?.kind !== 'login_pending' || receipt.generation !== pending.generation || receipt.revision !== 0 ||
+        receipt.fingerprint !== fingerprint({ credentials: pending.credentials, profile: pending.profile })) return false
+  }
   if (r.migration !== undefined && (!r.migration || typeof r.migration !== 'object' || typeof r.migration.legacyHash !== 'string' || typeof r.migration.lifecycleHash !== 'string' ||
       typeof r.migration.complete !== 'boolean')) return false
   return true
@@ -208,12 +219,20 @@ function blank(id: string, generation = 0): ClaudeAuthorityRecord {
   return { formatVersion: 1, accountId: id, stateSequence: 0, loginGeneration: generation, credentialRevision: 0,
     state: 'deleted', credentialDisposition: 'rejected', operations: {} }
 }
-/** Rollout requires old writers stopped. Resume cleanup only for a known migration. */
+/** Rollout requires old writers stopped. Resume only known migration or login cleanup. */
 export function migrateClaudeAccountAuthority(accountId: string, configOnly?: { credentials: ClaudeAuthorityCredentials; profile: Record<string, unknown> }): ClaudeAuthorityRead {
   return locked(accountId, () => {
     const p = paths(accountId)
     if (existsSync(p.authority)) {
       const r = parse(p.authority) as ClaudeAuthorityRecord
+      if (r.formatVersion === 1 && validRecord(r, accountId) && r.pendingLogin?.repairBarriers) {
+        // A visible rename is not proof that the denial survived a crash.
+        // Re-sync it before startup repairs either legacy barrier, under this
+        // existing account lock rather than recursively acquiring another one.
+        write(r)
+        barrier(accountId)
+        return readUnlocked(accountId)
+      }
       if (r.formatVersion === 1 && validRecord(r, accountId) && r.migration && !r.migration.complete) {
         const legacy = existsSync(p.legacy) ? parse(p.legacy) : null
         const lifecycle = existsSync(`${p.legacy}.lifecycle`) ? parse(`${p.legacy}.lifecycle`) : null
@@ -407,8 +426,90 @@ export function reconcileClaudeRefresh(accountId: string, operationId: string,
   })
   return result(operationId, 'uncertain', read.record, 'No committed refresh receipt')
 }
+/** Only explicit fresh sign-in may retire a generation hidden by a legacy conflict.
+ * The tombstone contains no old credentials; its pending login holds only fresh
+ * credentials. It must be durable before either compatibility fence moves.
+ */
+function prepareLoginRecovery(accountId: string, operationId: string,
+  supplied?: { credentials: ClaudeAuthorityCredentials; profile: Record<string, unknown> }): ClaudeAuthorityResult | undefined {
+  try {
+    return locked(accountId, () => {
+      const read = readUnlocked(accountId)
+      const remembered = pendingMutations.get(`${accountId}:${operationId}`)
+      const reservation = remembered?.pendingLogin?.repairBarriers ? remembered : undefined
+      if (reservation && supplied && reservation.operations[operationId]?.fingerprint !== fingerprint(supplied)) {
+        return result(operationId, 'rejected', undefined, 'operation_conflict')
+      }
+      if (reservation && 'record' in read && (read.record.loginGeneration > reservation.loginGeneration ||
+          (read.record.loginGeneration === reservation.loginGeneration && read.record.pendingLogin?.operationId !== operationId))) {
+        return result(operationId, 'rejected', undefined, 'superseded')
+      }
+      if (read.status !== 'incompatible_writer' && !('record' in read && read.record.pendingLogin?.repairBarriers)) return
+      let r = parse(paths(accountId).authority) as ClaudeAuthorityRecord
+      if (r.formatVersion !== 1 || !validRecord(r, accountId)) return result(operationId, 'rejected', undefined, 'invalid_state')
+      if (reservation) {
+        if (r.loginGeneration === reservation.loginGeneration - 1) r = structuredClone(reservation)
+        else if (r.loginGeneration !== reservation.loginGeneration || r.pendingLogin?.operationId !== operationId) {
+          return result(operationId, 'rejected', undefined, 'superseded')
+        }
+      }
+      if (!supplied && r.pendingLogin?.operationId !== operationId) return result(operationId, 'rejected', undefined, 'superseded')
+      // Retired credentials are intentionally absent from this record. Until the
+      // reserved fresh login finishes, do not admit another payload whose
+      // freshness can no longer be checked against those retired credentials.
+      if (supplied && r.pendingLogin?.repairBarriers && r.pendingLogin.operationId !== operationId) {
+        return result(operationId, 'rejected', undefined, 'recovery_in_progress')
+      }
+      const digest = supplied && fingerprint(supplied)
+      const prior = r.operations[operationId]
+      if (supplied && prior && (prior.kind !== 'login_pending' ||
+          r.pendingLogin?.operationId !== operationId || !r.pendingLogin.repairBarriers || prior.fingerprint !== digest)) {
+        return result(operationId, 'rejected', undefined, 'operation_conflict')
+      }
+      if (!r.pendingLogin?.repairBarriers) {
+        if (!supplied) return result(operationId, 'rejected', undefined, 'incompatible_writer')
+        let legacyAccessToken: unknown
+        try { legacyAccessToken = parse(paths(accountId).legacy)?.tokens?.access_token } catch { /* A damaged legacy file is not imported. */ }
+        if (supplied.credentials.accessToken === r.credentials?.accessToken ||
+            supplied.credentials.accessToken === legacyAccessToken) {
+          return result(operationId, 'rejected', undefined, 'stale_credentials')
+        }
+        r.loginGeneration++; r.credentialRevision = 0
+        r.state = 'deleted'; r.credentialDisposition = 'rejected'
+        delete r.credentials; delete r.profile; delete r.refreshIntent; delete r.rejection
+        r.pendingLogin = { operationId, generation: r.loginGeneration + 1, ...supplied, repairBarriers: true }
+        r.operations[operationId] = { kind: 'login_pending', generation: r.pendingLogin.generation, revision: 0, fingerprint: digest! }
+        r.stateSequence++
+      }
+      if (!validRecord(r, accountId)) return result(operationId, 'rejected', undefined, 'invalid_state')
+      // Also re-sync an already visible reservation after an after-rename error.
+      // Never repair fences based only on a successful read of that rename.
+      try {
+        write(r)
+        barrier(accountId)
+      } catch (error) {
+        pendingMutations.set(`${accountId}:${r.pendingLogin!.operationId}`, structuredClone(r))
+        throw error
+      }
+      pendingMutations.delete(`${accountId}:${r.pendingLogin!.operationId}`)
+      // Keep the reservation until the ordinary login transaction publishes it.
+      // A crash here exposes only a deleted generation, never the old tokens.
+    })
+  } catch {
+    const read = readClaudeAccountAuthority(accountId)
+    let recoverable = false
+    try {
+      const r = parse(paths(accountId).authority) as ClaudeAuthorityRecord
+      recoverable = r.formatVersion === 1 && validRecord(r, accountId) && r.pendingLogin?.operationId === operationId &&
+        r.pendingLogin.repairBarriers === true
+    } catch { /* The failed reservation may not have reached disk. */ }
+    return { ...result(operationId, 'persistence_pending', 'record' in read ? read.record : undefined), restartRecoverable: recoverable }
+  }
+}
 export function commitClaudeLogin(accountId: string, operationId: string, credentials: ClaudeAuthorityCredentials, profile: Record<string, unknown>): ClaudeAuthorityResult {
   if (!operationId || !validCredentials(credentials)) return result(operationId, 'rejected', undefined, 'invalid_input')
+  const recovery = prepareLoginRecovery(accountId, operationId, { credentials, profile })
+  if (recovery) return recovery
   const pending = pendingMutations.get(`${accountId}:${operationId}`)
   if (pending) {
     const receipt = pending.operations[operationId]
@@ -439,6 +540,8 @@ export function commitClaudeLogin(accountId: string, operationId: string, creden
   return retryClaudeAuthorityPersistence(accountId, operationId)
 }
 export function retryClaudeAuthorityPersistence(accountId: string, operationId: string): ClaudeAuthorityResult {
+  const recovery = prepareLoginRecovery(accountId, operationId)
+  if (recovery) return recovery
   const pending = pendingMutations.get(`${accountId}:${operationId}`)
   if (pending) {
     const receipt = pending.operations[operationId]

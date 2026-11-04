@@ -96,6 +96,182 @@ test('detects incompatible legacy writer instead of importing credentials', asyn
   expect((await child('read')).status).toBe('incompatible_writer')
   expect((await child('migrate')).status).toBe('incompatible_writer')
 })
+test('fresh login retires overflow-conflicted generation and old operation replays across restart', async () => {
+  await child('login', 'old-login', 'first')
+  const old = authority.captureClaudeCredentialHandle(id, 'first')!
+  const claim = authority.claimClaudeRefresh(old, 'old-refresh', 'owner').claim!
+  authority.markClaudeRefreshDispatched(claim)
+  legacy(Number.MAX_SAFE_INTEGER + 1)
+  expect(authority.readClaudeAccountAuthority(id).status).toBe('incompatible_writer')
+  expect(authority.commitClaudeLogin(id, 'old-login', credentials, profile).outcome).toBe('rejected')
+  expect((await child('login', 'fresh-login', 'fresh')).outcome).toBe('committed')
+  const fresh = await child('read')
+  expect(fresh.status).toBe('ready')
+  expect(fresh.record.credentials.accessToken).toBe('fresh')
+  expect(fresh.handle.generation).toBe(old.generation + 2)
+  expect(authority.isClaudeCredentialReady(old)).toBe(false)
+  expect(authority.completeClaudeRefresh(claim, credentials).outcome).toBe('rejected')
+  expect((await child('login', 'old-login', 'first')).outcome).toBe('rejected')
+  expect((await child('login', 'fresh-login', 'fresh')).handle).toEqual(fresh.handle)
+})
+for (const failure of ['reservation', 'reservation-after-rename', 'legacy', 'lifecycle', 'publication']) {
+  test(`recovery retries ${failure} failure without an old-token ready window`, async () => {
+    await child('login', 'old-login', 'first')
+    const freshCredentials = { ...credentials, accessToken: 'fresh', refreshToken: 'refresh-fresh' }
+    const old = authority.captureClaudeCredentialHandle(id, 'first')!
+    legacy(Number.MAX_SAFE_INTEGER + 1)
+    const original = atomic.writeFileAtomicDurableSync
+    let failed = false
+    const spy = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((target, data, options) => {
+      const record = String(target) === path() ? JSON.parse(String(data)) : undefined
+      const hit = !failed && (
+        ((failure === 'reservation' || failure === 'reservation-after-rename') && record?.pendingLogin?.repairBarriers) ||
+        (failure === 'legacy' && String(target).endsWith(`/accounts/${id}.json`)) ||
+        (failure === 'lifecycle' && String(target).endsWith('.lifecycle')) ||
+        (failure === 'publication' && record?.state === 'active'))
+      if (hit) {
+        failed = true
+        if (failure === 'reservation-after-rename') original(target, data, options)
+        throw new Error('synthetic recovery failure')
+      }
+      const out = original(target, data, options)
+      expect(authority.isClaudeCredentialReady(old)).toBe(false)
+      return out
+    })
+    try {
+      expect(authority.commitClaudeLogin(id, 'recovery', freshCredentials, profile).outcome).toBe('persistence_pending')
+      expect(failed).toBe(true)
+    } finally { spy.mockRestore() }
+    expect(authority.isClaudeCredentialReady(old)).toBe(false)
+    // An old writer may overwrite the barriers again before the retry.
+    if (failure !== 'reservation') legacy(Number.MAX_SAFE_INTEGER + 1)
+    expect((await child('login', 'recovery', 'fresh')).outcome).toBe('committed')
+    expect((await child('read')).record.credentials.accessToken).toBe('fresh')
+    expect(authority.isClaudeCredentialReady(old)).toBe(false)
+  })
+}
+test('interrupted recovery fences competing payloads and old refresh until its reservation finishes', async () => {
+  await child('login', 'old-login', 'first')
+  const freshCredentials = { ...credentials, accessToken: 'fresh', refreshToken: 'refresh-fresh' }
+  const old = authority.captureClaudeCredentialHandle(id, 'first')!
+  const claim = authority.claimClaudeRefresh(old, 'refresh-race', 'owner').claim!
+  authority.markClaudeRefreshDispatched(claim)
+  legacy(Number.MAX_SAFE_INTEGER + 1)
+  const original = atomic.writeFileAtomicDurableSync
+  const spy = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((target, data, options) => {
+    if (String(target).endsWith('.lifecycle')) throw new Error('synthetic fence failure')
+    return original(target, data, options)
+  })
+  try {
+    expect(authority.commitClaudeLogin(id, 'interrupted', freshCredentials, profile).outcome).toBe('persistence_pending')
+  } finally { spy.mockRestore() }
+  expect(authority.retryClaudeAuthorityPersistence(id, 'old-login').outcome).toBe('rejected')
+  expect(authority.completeClaudeRefresh(claim, credentials).outcome).toBe('rejected')
+  const targets = [path(), join(root, 'accounts', `${id}.json`), join(root, 'accounts', `${id}.json.lifecycle`)]
+  const before = targets.map(target => readFileSync(target, 'utf8'))
+  for (const accessToken of ['first', 'old', 'different-fresh']) {
+    expect(authority.commitClaudeLogin(id, `competing-${accessToken}`, { ...credentials, accessToken }, profile))
+      .toMatchObject({ outcome: 'rejected', reason: 'recovery_in_progress' })
+    expect(targets.map(target => readFileSync(target, 'utf8'))).toEqual(before)
+  }
+  expect((await child('retry', 'interrupted')).outcome).toBe('committed')
+  expect((await child('login', 'winner', 'winner-token')).outcome).toBe('committed')
+  expect((await child('retry', 'interrupted')).outcome).toBe('rejected')
+  expect(authority.commitClaudeLogin(id, 'interrupted', freshCredentials, profile).outcome).toBe('rejected')
+  expect((await child('read')).record.credentials.accessToken).toBe('winner-token')
+})
+for (const failedBarrier of ['legacy', 'lifecycle']) {
+  test(`production init finishes reserved fresh login after ${failedBarrier} recovery failure`, async () => {
+    await child('login', 'old-login', 'first')
+    const old = authority.captureClaudeCredentialHandle(id, 'first')!
+    legacy(Number.MAX_SAFE_INTEGER + 1)
+    const fresh = { ...credentials, accessToken: 'fresh', refreshToken: 'refresh-fresh' }
+    const original = atomic.writeFileAtomicDurableSync
+    const target = join(root, 'accounts', `${id}.json${failedBarrier === 'lifecycle' ? '.lifecycle' : ''}`)
+    const spy = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((destination, data, options) => {
+      if (String(destination) === target) throw new Error('synthetic barrier failure')
+      return original(destination, data, options)
+    })
+    try {
+      expect(authority.commitClaudeLogin(id, 'startup-recovery', fresh, profile).outcome).toBe('persistence_pending')
+    } finally { spy.mockRestore() }
+    const reserved = JSON.parse(readFileSync(path(), 'utf8')).pendingLogin
+    expect(reserved.operationId).toBe('startup-recovery')
+    expect(authority.readClaudeAccountAuthority(id).status).toBe('incompatible_writer')
+    // Even a visible denial rewrite followed by a durability error must stop
+    // startup before either barrier is repaired.
+    const before = readFileSync(target, 'utf8')
+    const resync = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((destination, data, options) => {
+      const out = original(destination, data, options)
+      if (String(destination) === path()) throw new Error('synthetic after-rename denial sync failure')
+      return out
+    })
+    try { expect(() => authority.migrateClaudeAccountAuthority(id)).toThrow('synthetic after-rename denial sync failure') }
+    finally { resync.mockRestore() }
+    expect(readFileSync(target, 'utf8')).toBe(before)
+    expect(authority.isClaudeCredentialReady(old)).toBe(false)
+    const initialized = await child('init')
+    expect(initialized.authority.status).toBe('ready')
+    expect(initialized.authority.record.credentials.accessToken).toBe('fresh')
+    expect(initialized.authority.handle.generation).toBe(reserved.generation)
+    expect(initialized.authority.record.operations['startup-recovery']).toMatchObject({ kind: 'login', generation: reserved.generation })
+    expect(initialized.authority.record.pendingLogin).toBeUndefined()
+    expect((await child('init')).authority.handle).toEqual(initialized.authority.handle)
+    expect(authority.isClaudeCredentialReady(old)).toBe(false)
+  })
+}
+test('recovery installation errors give actionable instructions', () => {
+  const receipt = { outcome: 'rejected' as const, operationId: 'login', restartRecoverable: false }
+  expect(new authority.ClaudeLoginInstallationError({ ...receipt, reason: 'recovery_in_progress' }).message)
+    .toBe('A previous sign-in still needs to finish saving. Restart Cat Code, then try again.')
+  expect(new authority.ClaudeLoginInstallationError({ ...receipt, reason: 'stale_credentials' }).message)
+    .toBe('These sign-in credentials are no longer usable. Start a new sign-in.')
+  expect(new authority.ClaudeLoginInstallationError(receipt).message)
+    .toBe('Failed to save Claude sign-in. Restore vault access and retry saving.')
+})
+test('recovery refuses known stale access tokens under new operations without disk mutation', async () => {
+  await child('login', 'old-login', 'first')
+  legacy(Number.MAX_SAFE_INTEGER + 1)
+  const targets = [path(), join(root, 'accounts', `${id}.json`), join(root, 'accounts', `${id}.json.lifecycle`)]
+  const before = targets.map(target => readFileSync(target, 'utf8'))
+  for (const accessToken of ['first', 'old']) {
+    expect(authority.commitClaudeLogin(id, `stale-${accessToken}`, { ...credentials, accessToken }, profile))
+      .toMatchObject({ outcome: 'rejected', reason: 'stale_credentials' })
+    expect(targets.map(target => readFileSync(target, 'utf8'))).toEqual(before)
+  }
+})
+test('pre-rename recovery reservation cannot become a later login after a winner', async () => {
+  await child('login', 'old-login', 'first')
+  legacy(Number.MAX_SAFE_INTEGER + 1)
+  const freshCredentials = { ...credentials, accessToken: 'fresh', refreshToken: 'refresh-fresh' }
+  const before = readFileSync(path(), 'utf8')
+  const original = atomic.writeFileAtomicDurableSync
+  const spy = spyOn(atomic, 'writeFileAtomicDurableSync').mockImplementation((target, data, options) => {
+    if (String(target) === path()) throw new Error('synthetic pre-rename reservation failure')
+    return original(target, data, options)
+  })
+  try {
+    expect(authority.commitClaudeLogin(id, 'failed-reservation', freshCredentials, profile).outcome).toBe('persistence_pending')
+  } finally { spy.mockRestore() }
+  expect(readFileSync(path(), 'utf8')).toBe(before)
+  expect(authority.commitClaudeLogin(id, 'winner', { ...freshCredentials, accessToken: 'winner' }, profile).outcome).toBe('committed')
+  const winner = readFileSync(path(), 'utf8')
+  expect(authority.commitClaudeLogin(id, 'failed-reservation', freshCredentials, profile).outcome).toBe('rejected')
+  expect(authority.retryClaudeAuthorityPersistence(id, 'failed-reservation').outcome).toBe('rejected')
+  expect(readFileSync(path(), 'utf8')).toBe(winner)
+  expect((await child('login', 'failed-reservation', 'fresh')).outcome).toBe('rejected')
+})
+test('fresh recovery refuses unsupported and corrupt authority records', async () => {
+  await child('login')
+  const record = JSON.parse(readFileSync(path(), 'utf8'))
+  legacy(Number.MAX_SAFE_INTEGER + 1)
+  for (const bad of [{ ...record, formatVersion: 2 }, { ...record, operations: null }]) {
+    writeFileSync(path(), JSON.stringify(bad))
+    expect(authority.commitClaudeLogin(id, 'fresh', credentials, profile).outcome).toBe('rejected')
+    expect(JSON.parse(readFileSync(path(), 'utf8'))).toEqual(bad)
+    expect(JSON.parse(readFileSync(join(root, 'accounts', `${id}.json`), 'utf8')).tokens.access_token).toBe('old')
+  }
+})
 test('unsupported and malformed nested versions fail closed', async () => {
   await child('login')
   const record = JSON.parse(readFileSync(path(), 'utf8'))
