@@ -11,6 +11,7 @@ import {
   AccountsPage,
 } from './AccountsPage.js'
 import {
+  anthropicAccountName,
   capIncidentKey,
   deleteVerb,
   loginVerb,
@@ -232,6 +233,44 @@ test('renders the redacted Anthropic pool alongside Codex', () => {
   expect(html).toContain('claude@example.com')
   expect(html).toContain('personal')
   expect(html).toContain('1 of 1 ready')
+})
+
+test('a Claude nickname leads its row and an unnamed account shows its email once', () => {
+  const snap = snapshot([])
+  const claude = {
+    status: 'healthy' as const,
+    isDefault: false,
+    hasVaultProfile: true,
+    subscriptionType: 'pro',
+  }
+  snap.anthropicAccounts = [
+    { ...claude, id: 'named', alias: 'work', email: 'named@example.com' },
+    { ...claude, id: 'unnamed', alias: null, email: 'unnamed@example.com' },
+  ]
+  snap.anthropicPoolCount = 2
+  snap.anthropicReadyCount = 2
+
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).toContain('>work<')
+  expect(html).toContain('>named@example.com<')
+  expect(html.split('unnamed@example.com').length - 1).toBe(1)
+})
+
+test('anthropicAccountName prefers a nickname and never repeats the email', () => {
+  expect(anthropicAccountName({ alias: 'work', email: 'a@example.com' })).toEqual({
+    title: 'work', detail: 'a@example.com',
+  })
+  expect(anthropicAccountName({ alias: null, email: 'a@example.com' })).toEqual({
+    title: 'a@example.com', detail: null,
+  })
+  expect(anthropicAccountName({ alias: '  ', email: 'a@example.com' })).toEqual({
+    title: 'a@example.com', detail: null,
+  })
+  expect(anthropicAccountName({ alias: 'a@example.com', email: 'a@example.com' })).toEqual({
+    title: 'a@example.com', detail: null,
+  })
 })
 
 test('presents a configured non-pool Anthropic route honestly', () => {

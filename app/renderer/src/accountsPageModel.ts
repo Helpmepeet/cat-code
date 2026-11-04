@@ -123,6 +123,16 @@ export function anthropicAccountCapped(account: AnthropicAccountStatus): boolean
   return (account.usageFiveHour ?? 0) >= 100 || (account.usageWeekly ?? 0) >= 100
 }
 
+/** A nickname leads with the email beneath it; without one the email shows once. */
+export function anthropicAccountName(
+  account: Pick<AnthropicAccountStatus, 'alias' | 'email'>,
+): { title: string; detail: string | null } {
+  const alias = account.alias?.trim()
+  return alias && alias !== account.email
+    ? { title: alias, detail: account.email }
+    : { title: account.email, detail: null }
+}
+
 export function anthropicCredentialLabel(account: AnthropicAccountStatus): string | null {
   if (account.credentialHealth === 'persistence_pending') return 'Sign-in was not saved. Sign in again before reconnecting.'
   if (account.credentialHealth === 'refresh_uncertain') return 'Sign-in renewal could not be confirmed. Sign in again.'

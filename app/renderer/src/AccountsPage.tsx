@@ -57,6 +57,7 @@ import {
 } from './accountsState.js'
 import {
   capIncidentKey,
+  anthropicAccountName,
   anthropicCredentialLabel,
   deleteVerb,
   formatResetLabel,
@@ -1141,7 +1142,9 @@ export function AccountsPage({
               </div>
             ) : (
               <div className="flex flex-col gap-1.5">
-                {switchSnapshot!.anthropicAccounts.map(account => (
+                {switchSnapshot!.anthropicAccounts.map(account => {
+                  const name = anthropicAccountName(account)
+                  return (
                   <div
                     key={account.id}
                     data-window-card
@@ -1157,19 +1160,21 @@ export function AccountsPage({
                       }`}
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-[13px] text-text-primary">
-                          {account.alias ?? account.email}
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate font-mono text-[13px] text-text-primary">
+                          {name.title}
                         </span>
                         {account.isDefault ? (
-                          <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-accent">
+                          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-accent">
                             active
                           </span>
                         ) : null}
                       </div>
-                      <div className="mt-0.5 text-[11.5px] text-text-subtle">
-                        {account.email}
-                      </div>
+                      {name.detail ? (
+                        <div className="mt-0.5 truncate text-[11.5px] text-text-subtle">
+                          {name.detail}
+                        </div>
+                      ) : null}
                     </div>
                     <span className="text-[11.5px] text-text-muted">
                       {anthropicCredentialLabel(account) ?? (account.status === 'healthy'
@@ -1215,7 +1220,8 @@ export function AccountsPage({
                       </button>
                     ) : null}
                   </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </section>
