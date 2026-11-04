@@ -21,6 +21,7 @@ function fixture() {
   let refuseAdmission = false
   let failRestore = false
   let transitionPending = false
+  const busy: string[] = []
   let sleepResult: Partial<LidNativeSnapshot['record']> = {}
   let pulseGate: ReturnType<typeof deferred> | undefined
   let helperUnavailable = false
@@ -68,6 +69,7 @@ function fixture() {
       calls.push(input.op)
       if (input.op === 'renew-work' || input.op === 'pulse') await pulseGate?.promise
       if (helperUnavailable) throw new Error('Helper unavailable')
+      if (busy[0] === input.op) { busy.shift(); return { ok: false, error: 'transition-pending', snapshot: structuredClone(snapshot) } }
       if (input.op === 'start-work' || input.op === 'start') {
         expect(JSON.parse(readFileSync(marker, 'utf8')).pending).toBe(true)
         await startGate?.promise
@@ -126,6 +128,7 @@ function fixture() {
     refuseNextAdmission() { refuseAdmission = true },
     failRestore(value: boolean) { failRestore = value },
     transitionPending(value: boolean) { transitionPending = value },
+    busyOnce(...ops: string[]) { busy.push(...ops) },
     sleepResult(record: Partial<LidNativeSnapshot['record']>) { sleepResult = record },
     watchdogRestored(record: Partial<LidNativeSnapshot['record']>) {
       snapshot = { ...snapshot, record: { ...snapshot.record, phase: 'ended', needsRestore: false, reason: 'supervision-lost', ...record },
@@ -829,4 +832,37 @@ test('a leftover note without a helper clears only when normal sleep is observed
       expect(f.calls).toEqual([])
     } finally { await f.cleanup() }
   }
+})
+
+// 2026-11-04: the recovery watcher held the shared journal lock as a pulse
+// arrived. One refused heartbeat ended the run, the stop was refused the same
+// way, and the silent app let the helper force Sleep five seconds later.
+for (const target of [30, 'work'] as const) {
+  test(`a busy helper refusal is retried without ending a ${target === 'work' ? 'work' : 'timed'} run`, async () => {
+    const f = fixture()
+    try {
+      await f.mode.initialize()
+      await f.mode.command({ action: 'set', target })
+      expect(f.mode.read().phase).toBe('active')
+      const op = target === 'work' ? 'renew-work' : 'pulse'
+      f.busyOnce(op, op)
+      await until(() => f.calls.filter(call => call === op).length >= 4)
+      expect(f.mode.read()).toMatchObject({ phase: 'active', mode: target === 'work' ? 'work' : 'timed' })
+      expect(f.calls).not.toContain('stop')
+      expect(f.phases).not.toContain('restoring')
+    } finally { await f.cleanup() }
+  })
+}
+
+test('a stop refused while the helper is busy is retried and restores sleep', async () => {
+  const f = fixture()
+  try {
+    await f.mode.initialize(); await f.mode.command({ action: 'set', target: 30 })
+    f.busyOnce('stop')
+    await f.mode.command({ action: 'set', target: 'off' })
+    expect(f.mode.read()).toMatchObject({ phase: 'ended', reason: 'stopped' })
+    expect(f.mode.read().error).toBeUndefined()
+    expect(f.calls.filter(call => call === 'stop')).toHaveLength(2)
+    expect(JSON.parse(readFileSync(f.marker, 'utf8')).pending).toBe(false)
+  } finally { await f.cleanup() }
 })
