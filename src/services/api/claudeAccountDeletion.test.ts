@@ -11,6 +11,7 @@ import * as pool from './claudeAccountPool.js'
 import * as authority from './claudeAccountAuthority.js'
 import * as atomic from '../../utils/atomicFile.js'
 import * as auth from '../../utils/auth.js'
+import * as oauth from '../oauth/client.js'
 import { blockSessionAccountRoute, clearSessionAccountRouteBlock } from './sessionAccountRouting.js'
 
 let dir: string
@@ -77,6 +78,224 @@ afterEach(() => {
   if (previousCustomHeaders === undefined) delete process.env.ANTHROPIC_CUSTOM_HEADERS
   else process.env.ANTHROPIC_CUSTOM_HEADERS = previousCustomHeaders
   rmSync(dir, { recursive: true, force: true })
+})
+
+test('signout preserves inventory and nickname through reload and relogin, with stale-generation fencing', () => {
+  pool.appendClaudeAccount({ ...account, alias: 'legacy nickname' })
+  const generation = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in generation)) throw new Error('missing authority')
+  expect(pool.signOutClaudeAccount(account.accountUuid, generation.handle.generation + 1)).toBe(false)
+  expect(pool.signOutClaudeAccount(account.accountUuid, generation.handle.generation)).toBe(true)
+  expect(settings.activeClaudeAccountUuid).toBe(account.accountUuid)
+  pool.resetClaudeAccountPoolForTest()
+  pool.setClaudeVaultPathForTest(dir)
+  pool.loadClaudePoolForObservation()
+  const signedOut = pool.getClaudeProfileInventory().signedOutProfiles
+  expect(signedOut).toHaveLength(1)
+  expect(signedOut[0]?.alias).toBe('legacy nickname')
+  pool.appendClaudeAccount(account, { makeDefault: false })
+  expect(pool.getClaudePoolStatus().accounts[0]?.alias).toBe('legacy nickname')
+  expect(pool.getClaudeProfileInventory().signedOutProfiles).toHaveLength(0)
+  expect(pool.removeClaudeAccount(account.accountUuid, signedOut[0]!.loginGeneration)).toBe(false)
+})
+
+test('signed out metadata can be deleted by its observed generation', () => {
+  pool.appendClaudeAccount(account)
+  const read = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in read)) throw new Error('missing authority')
+  expect(pool.signOutClaudeAccount(account.accountUuid, read.handle.generation)).toBe(true)
+  const profile = pool.getClaudeProfileInventory().signedOutProfiles[0]!
+  expect(pool.removeClaudeAccount(profile.accountUuid, profile.loginGeneration)).toBe(true)
+  expect(pool.getClaudeProfileInventory().signedOutProfiles).toHaveLength(0)
+})
+
+test('idle sign-in check uses account authority without changing default or exposing credentials', async () => {
+  pool.appendClaudeAccount(account)
+  pool.appendClaudeAccount({ ...account, accountUuid: 'idle' }, { makeDefault: false })
+  const before = pool.getClaudeDefaultSelection()
+  expect(await pool.checkClaudeAccountSignIn('idle')).toEqual({ status: 'ready' })
+  expect(pool.getClaudeDefaultSelection()).toEqual(before)
+  expect(await pool.checkClaudeAccountSignIn('unknown')).toEqual({ status: 'temporarily_unavailable' })
+})
+
+test('expired idle account refreshes through its generation-bound authority without selecting it', async () => {
+  pool.appendClaudeAccount(account)
+  pool.appendClaudeAccount({ ...account, accountUuid: 'expired-idle', refreshToken: 'idle-refresh', expiresAt: Date.now() - 3 * 86400_000 }, { makeDefault: false })
+  const before = pool.getClaudeDefaultSelection()
+  const refresh = spyOn(oauth, 'refreshOAuthToken').mockImplementation(async (_token, options) =>
+    options!.initiateRequest!(() => Promise.resolve({
+      accessToken: 'idle-successor', refreshToken: 'idle-successor-refresh', expiresAt: Date.now() + 3600_000,
+      scopes: ['user:inference'], subscriptionType: null, rateLimitTier: null,
+    })))
+  expect(await pool.checkClaudeAccountSignIn('expired-idle')).toEqual({ status: 'ready' })
+  expect(refresh).toHaveBeenCalledWith('idle-refresh', expect.any(Object))
+  expect(pool.getClaudeDefaultSelection()).toEqual(before)
+  const read = authority.readClaudeAccountAuthority('expired-idle')
+  expect('record' in read && read.record.credentials?.accessToken).toBe('idle-successor')
+})
+
+test('explicit desktop default opt-out preserves saved choice and restart uses healthy fallback', () => {
+  pool.appendClaudeAccount(account)
+  pool.appendClaudeAccount({ ...account, accountUuid: 'other', emailAddress: 'other@example.com' }, { makeDefault: false })
+  expect(pool.getClaudeDefaultSelection()).toEqual({ savedAccountId: account.accountUuid, effectiveAccountId: account.accountUuid })
+  const read = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in read)) throw new Error('missing authority')
+  authority.rejectClaudeCredential(read.handle)
+  // The in-memory selected identity still names the now-rejected account.
+  expect(pool.getClaudeDefaultSelection()).toEqual({ savedAccountId: account.accountUuid, effectiveAccountId: 'other' })
+  pool.appendClaudeAccount({ ...account, accountUuid: 'z-not-default' }, { makeDefault: false })
+  expect(settings.activeClaudeAccountUuid).toBe(account.accountUuid)
+  pool.resetClaudeAccountPoolForTest()
+  pool.setClaudeVaultPathForTest(dir)
+  pool.loadClaudePoolForObservation()
+  expect(pool.getClaudeDefaultSelection()).toEqual({ savedAccountId: account.accountUuid, effectiveAccountId: 'other' })
+  pool.appendClaudeAccount({ ...account, accountUuid: 'third' }, { makeDefault: true })
+  expect(settings.activeClaudeAccountUuid).toBe('third')
+  settings.activeClaudeAccountUuid = undefined
+  const implicitDefault = pool.getClaudeDefaultSelection().effectiveAccountId
+  pool.appendClaudeAccount({ ...account, accountUuid: 'fourth' }, { makeDefault: false })
+  expect(settings.activeClaudeAccountUuid).toBeUndefined()
+  expect(pool.getClaudeDefaultSelection().effectiveAccountId).toBe(implicitDefault)
+})
+
+test('desktop login replaces broken saved default only when no usable fallback exists', () => {
+  pool.appendClaudeAccount(account)
+  const read = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in read)) throw new Error('missing authority')
+  authority.rejectClaudeCredential(read.handle)
+  expect(pool.getClaudeDefaultSelection()).toEqual({ savedAccountId: account.accountUuid, effectiveAccountId: null })
+  pool.appendClaudeAccount({ ...account, accountUuid: 'replacement' }, { makeDefault: false })
+  expect(pool.getClaudeDefaultSelection()).toEqual({ savedAccountId: 'replacement', effectiveAccountId: 'replacement' })
+})
+
+test('inventory is memory-only and reset clears cached signed-out profiles', () => {
+  pool.appendClaudeAccount(account)
+  const read = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in read)) throw new Error('missing authority')
+  expect(pool.signOutClaudeAccount(account.accountUuid, read.handle.generation)).toBe(true)
+  const diskRead = spyOn(authority, 'readClaudeAccountAuthority').mockImplementation(() => {
+    throw new Error('Inventory must not read authority')
+  })
+  expect(pool.getClaudeProfileInventory().signedOutProfiles).toHaveLength(1)
+  expect(diskRead).not.toHaveBeenCalled()
+  pool.resetClaudeAccountPoolForTest()
+  expect(pool.getClaudeProfileInventory()).toEqual({ accounts: [], signedOutProfiles: [] })
+})
+
+function reloadIsolatedPool(): void {
+  pool.resetClaudeAccountPoolForTest()
+  pool.setClaudeVaultPathForTest(dir)
+  pool.setClaudeConfigAccountForTest({ active: true, value: null })
+  pool.loadClaudePoolForObservation()
+}
+
+test('failed signout retains non-routable cleanup evidence across restart and profile deletion', () => {
+  pool.appendClaudeAccount(account)
+  const read = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in read)) throw new Error('missing authority')
+  failStorage = true
+  expect(pool.signOutClaudeAccount(account.accountUuid, read.handle.generation)).toBe(false)
+  reloadIsolatedPool()
+  expect(pool.getClaudePoolStatus().accounts).toHaveLength(0)
+  expect(getClaudeAIOAuthTokens()).toBeNull()
+  const profile = pool.getClaudeProfileInventory().signedOutProfiles[0]!
+  expect(profile.accountUuid).toBe(account.accountUuid)
+  failStorage = false
+  expect(pool.removeClaudeAccount(profile.accountUuid, profile.loginGeneration)).toBe(true)
+  expect(data.claudeAiOauth).toBeUndefined()
+  expect(data.otherProvider).toEqual({ token: 'keep' })
+  const deleted = authority.readClaudeAccountAuthority(account.accountUuid)
+  expect('record' in deleted && deleted.record.deletionCleanup).toBeUndefined()
+  reloadIsolatedPool()
+  expect(pool.getClaudeProfileInventory().signedOutProfiles).toHaveLength(0)
+})
+
+test('repeated cleanup failure and restart retain the signed-out profile for retry', () => {
+  pool.appendClaudeAccount(account)
+  const read = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in read)) throw new Error('missing authority')
+  failStorage = true
+  expect(pool.signOutClaudeAccount(account.accountUuid, read.handle.generation)).toBe(false)
+  for (let attempt = 0; attempt < 2; attempt++) {
+    reloadIsolatedPool()
+    const profile = pool.getClaudeProfileInventory().signedOutProfiles[0]!
+    expect(profile.emailAddress).toBe(account.emailAddress)
+    expect(pool.removeClaudeAccount(profile.accountUuid, profile.loginGeneration)).toBe(false)
+    expect(data.claudeAiOauth.accessToken).toBe(account.accessToken)
+  }
+  reloadIsolatedPool()
+  expect(pool.getClaudeProfileInventory().signedOutProfiles).toHaveLength(1)
+})
+
+test('cleanup retry after restart preserves newer same-account credentials', () => {
+  pool.appendClaudeAccount(account)
+  const read = authority.readClaudeAccountAuthority(account.accountUuid)
+  if (!('handle' in read)) throw new Error('missing authority')
+  failStorage = true
+  expect(pool.signOutClaudeAccount(account.accountUuid, read.handle.generation)).toBe(false)
+  reloadIsolatedPool()
+  data.claudeAiOauth = { ...account, accessToken: 'new-access', refreshToken: 'new-refresh' }
+  failStorage = false
+  const profile = pool.getClaudeProfileInventory().signedOutProfiles[0]!
+  expect(pool.removeClaudeAccount(profile.accountUuid, profile.loginGeneration)).toBe(true)
+  expect(data.claudeAiOauth.accessToken).toBe('new-access')
+  expect(data.otherProvider).toEqual({ token: 'keep' })
+})
+
+for (const expired of [false, true]) {
+  test(`legacy observed ${expired ? 'days-expired' : 'valid'} account can be checked without changing default`, async () => {
+    writeFileSync(join(dir, 'accounts/deleted.json'), JSON.stringify({
+      profile: { account_uuid: account.accountUuid, email_address: account.emailAddress },
+      tokens: { access_token: account.accessToken, refresh_token: account.refreshToken,
+        expires_at: Date.now() + (expired ? -3 * 86400_000 : 3600_000) },
+    }))
+    reloadIsolatedPool()
+    pool.appendClaudeAccount({ ...account, accountUuid: 'default-other' })
+    const before = pool.getClaudeDefaultSelection()
+    const refresh = spyOn(oauth, 'refreshOAuthToken').mockImplementation(async (_token, options) =>
+      options!.initiateRequest!(() => Promise.resolve({
+        accessToken: 'legacy-successor', refreshToken: 'legacy-refresh', expiresAt: Date.now() + 3600_000,
+        scopes: ['user:inference'], subscriptionType: null, rateLimitTier: null,
+      })))
+    expect(await pool.checkClaudeAccountSignIn(account.accountUuid)).toEqual({ status: 'ready' })
+    expect(refresh).toHaveBeenCalledTimes(expired ? 1 : 0)
+    expect(pool.getClaudeDefaultSelection()).toEqual(before)
+    expect(authority.readClaudeAccountAuthority(account.accountUuid).status).toBe('ready')
+  })
+}
+
+test('malformed legacy account check reports retryable unavailability', async () => {
+  writeFileSync(join(dir, 'accounts/deleted.json'), '{malformed')
+  expect(await pool.checkClaudeAccountSignIn(account.accountUuid)).toEqual({ status: 'temporarily_unavailable' })
+})
+
+test('malformed authority account check reports retryable unavailability', async () => {
+  pool.appendClaudeAccount(account)
+  writeFileSync(join(dir, 'authority-v1/deleted.json'), '{malformed')
+  expect(await pool.checkClaudeAccountSignIn(account.accountUuid)).toEqual({ status: 'temporarily_unavailable' })
+})
+
+test('config-only observed account check and signout migrate metadata and preserve nickname', async () => {
+  rmSync(join(dir, 'accounts/deleted.json'))
+  pool.seedClaudeAccountPoolForTest({
+    accounts: [{ ...account, alias: 'saved-nickname' }], activeAccountUuid: account.accountUuid,
+  })
+  expect(await pool.checkClaudeAccountSignIn(account.accountUuid)).toEqual({ status: 'ready' })
+  expect(pool.signOutClaudeAccount(account.accountUuid, 0)).toBe(true)
+  reloadIsolatedPool()
+  expect(pool.getClaudeProfileInventory().signedOutProfiles[0]).toMatchObject({
+    accountUuid: account.accountUuid, emailAddress: account.emailAddress, alias: 'saved-nickname',
+  })
+})
+
+test('config-only observed account can sign out directly without a prior check', () => {
+  rmSync(join(dir, 'accounts/deleted.json'))
+  pool.seedClaudeAccountPoolForTest({
+    accounts: [{ ...account, alias: 'saved-nickname' }], activeAccountUuid: account.accountUuid,
+  })
+  expect(pool.signOutClaudeAccount(account.accountUuid, 0)).toBe(true)
+  reloadIsolatedPool()
+  expect(pool.getClaudeProfileInventory().signedOutProfiles[0]?.alias).toBe('saved-nickname')
 })
 
 test('final deletion removes matching fallback and cannot resurrect through observation or init', () => {

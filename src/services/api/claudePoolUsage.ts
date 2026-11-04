@@ -28,6 +28,16 @@ export type ClaudeUsageWindow = {
 export type ClaudeAccountUsage = {
   fiveHour: ClaudeUsageWindow | null
   weekly: ClaudeUsageWindow | null
+  weeklyOpus?: ClaudeUsageWindow | null
+  weeklySonnet?: ClaudeUsageWindow | null
+  extraUsage?: {
+    usedCredits: number | null
+    monthlyLimit: number | null
+    isEnabled: boolean | null
+  } | null
+  /** Epoch milliseconds of the last successful observation. */
+  checkedAt?: number
+  stale?: boolean
 }
 
 /** A cached reading younger than this is reused instead of asking again. */
@@ -45,6 +55,15 @@ const entrySchema = z
     fetchedAt: z.number().finite().min(0),
     fiveHour: windowSchema.nullable(),
     weekly: windowSchema.nullable(),
+    weeklyOpus: windowSchema.nullable().optional(),
+    weeklySonnet: windowSchema.nullable().optional(),
+    extraUsage: z.object({
+      usedCredits: z.number().finite().min(0).nullable(),
+      monthlyLimit: z.number().finite().min(0).nullable(),
+      isEnabled: z.boolean().nullable(),
+    }).strict().nullable().optional(),
+    checkedAt: z.number().finite().min(0).optional(),
+    stale: z.boolean().optional(),
   })
   .strict()
 const cacheSchema = z
@@ -55,7 +74,7 @@ const cacheSchema = z
   .strict()
 // Declared rather than inferred: without root strict mode zod infers every
 // field optional, though the schema requires each one.
-type CacheEntry = {
+type CacheEntry = ClaudeAccountUsage & {
   credentialKey: string
   fetchedAt: number
   fiveHour: ClaudeUsageWindow | null
@@ -137,6 +156,10 @@ export async function fetchClaudePoolUsage(
     now?: number
     cacheFile?: string
     cachedOnly?: boolean
+    /** Bypass observation freshness, but never credential eligibility or cachedOnly. */
+    force?: boolean
+    /** Restrict network reads only; all supplied accounts retain cached results. */
+    accountIds?: readonly string[]
     fetchUsage?: (
       accessToken: string,
       credential: { accountUuid: string; lifecycleGeneration: number; credentialRevision?: number },
@@ -147,6 +170,8 @@ export async function fetchClaudePoolUsage(
   const cacheFile = options.cacheFile ?? defaultCacheFile()
   const fetchUsage = options.fetchUsage ?? fetchUtilizationForToken
   const cached = readCache(cacheFile)
+  const refreshIds = options.accountIds === undefined
+    ? undefined : new Set(options.accountIds)
   const credentialKeys = new Map(accounts.map(account => [
     account.accountUuid,
     createHash('sha256').update(JSON.stringify([account.accountUuid, account.accessToken])).digest('hex'),
@@ -160,7 +185,10 @@ export async function fetchClaudePoolUsage(
       const credentialKey = credentialKeys.get(account.accountUuid)!
       if (entry?.credentialKey !== credentialKey) entry = undefined
       const stale = !entry || now - entry.fetchedAt >= CLAUDE_USAGE_FRESH_MS
-      if (!options.cachedOnly && stale && canRead(account, now)) {
+      if (!options.cachedOnly &&
+          (options.force || stale) &&
+          (refreshIds === undefined || refreshIds.has(account.accountUuid)) &&
+          canRead(account, now)) {
         try {
           const data = await fetchUsage(account.accessToken, {
             accountUuid: account.accountUuid,
@@ -172,6 +200,16 @@ export async function fetchClaudePoolUsage(
             fetchedAt: now,
             fiveHour: toWindow(data.five_hour),
             weekly: toWindow(data.seven_day),
+            weeklyOpus: toWindow(data.seven_day_opus),
+            weeklySonnet: toWindow(data.seven_day_sonnet),
+            extraUsage: data.extra_usage ? {
+              usedCredits: nonnegative(data.extra_usage.used_credits),
+              monthlyLimit: nonnegative(data.extra_usage.monthly_limit),
+              isEnabled: typeof data.extra_usage.is_enabled === 'boolean'
+                ? data.extra_usage.is_enabled : null,
+            } : null,
+            checkedAt: now,
+            stale: false,
           }
           changed = true
         } catch {
@@ -225,7 +263,21 @@ export async function fetchClaudePoolUsage(
     if (entry.credentialKey !== credentialKeys.get(id)) continue
     const fiveHour = current(entry.fiveHour, now, entry.fetchedAt)
     const weekly = current(entry.weekly, now, entry.fetchedAt)
-    if (fiveHour || weekly) usage.set(id, { fiveHour, weekly })
+    const weeklyOpus = current(entry.weeklyOpus ?? null, now, entry.fetchedAt)
+    const weeklySonnet = current(entry.weeklySonnet ?? null, now, entry.fetchedAt)
+    if (fiveHour || weekly || weeklyOpus || weeklySonnet || entry.extraUsage) {
+      usage.set(id, {
+        fiveHour, weekly, weeklyOpus, weeklySonnet,
+        extraUsage: entry.extraUsage ?? null,
+        checkedAt: entry.checkedAt ?? entry.fetchedAt,
+        stale: now - entry.fetchedAt >= CLAUDE_USAGE_FRESH_MS,
+      })
+    }
   }
   return usage
+}
+
+function nonnegative(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value : null
 }

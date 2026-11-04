@@ -118,11 +118,15 @@ export function extractCodexAccountId(accessToken: string): string | null {
   return typeof accountId === 'string' && accountId.length > 0 ? accountId : null
 }
 
-function extractCodexAccountEmail(...tokens: Array<string | undefined>): string | null {
+export function extractCodexAccountEmail(...tokens: Array<string | undefined>): string | null {
   for (const token of tokens) {
     if (!token) continue
     const payload = decodeJwtPayload(token)
-    const email = payload?.email ?? payload?.email_address
+    const profile = payload?.['https://api.openai.com/profile']
+    const email = payload?.email ?? payload?.email_address ??
+      (profile && typeof profile === 'object'
+        ? (profile as Record<string, unknown>).email
+        : undefined)
     if (typeof email === 'string' && email.length > 0) return email
   }
   return null

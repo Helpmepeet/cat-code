@@ -242,6 +242,7 @@ export type GlobalConfig = {
     refreshToken: string
     expiresAt: number
     accountId: string
+    accountEmail?: string
     credentialGeneration: number
   }
   /**

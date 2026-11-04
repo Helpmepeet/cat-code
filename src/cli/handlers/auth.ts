@@ -144,6 +144,8 @@ export function parseManualOAuthCallbackInput(
  */
 export type OAuthTokenInstallOptions = {
   operationId?: string
+  makeDefault?: boolean
+  alias?: string
   /** Retain profile resolution across local persistence retries, without network. */
   profileLookup?: ReturnType<typeof getOauthProfileFromOauthToken>
 }

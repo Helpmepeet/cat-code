@@ -40,6 +40,8 @@ export type ClaudeAuthorityRecord = {
   credentialDisposition: 'usable' | 'rejected' | 'uncertain'
   rejection?: 'access_rejected' | 'refresh_rejected'
   credentials?: ClaudeAuthorityCredentials; profile?: Record<string, unknown>
+  /** Exact-match cleanup evidence only; deleted generations can never send it. */
+  deletionCleanup?: { accessToken: string; refreshToken: string }
   operations: Record<string, { kind: string; generation: number; revision: number; fingerprint: string }>
   pendingLogin?: { operationId: string; generation: number; credentials: ClaudeAuthorityCredentials; profile: Record<string, unknown>; repairBarriers?: true }
   migration?: { legacyHash: string; lifecycleHash: string; complete: boolean }
@@ -94,6 +96,9 @@ function validRecord(r: ClaudeAuthorityRecord, id: string): boolean {
       !['usable', 'rejected', 'uncertain'].includes(r.credentialDisposition)) return false
   if (r.state === 'active' && !validCredentials(r.credentials)) return false
   if (r.state !== 'active' && r.credentials) return false
+  if (r.deletionCleanup !== undefined && (r.state !== 'deleted' ||
+      typeof r.deletionCleanup.accessToken !== 'string' || !r.deletionCleanup.accessToken ||
+      typeof r.deletionCleanup.refreshToken !== 'string' || !r.deletionCleanup.refreshToken)) return false
   if (r.rejection !== undefined && !['access_rejected', 'refresh_rejected'].includes(r.rejection)) return false
   if (r.state === 'active' && r.credentialDisposition === 'rejected' && !r.rejection) return false
   if (r.profile !== undefined && (!r.profile || typeof r.profile !== 'object' || Array.isArray(r.profile))) return false
@@ -595,7 +600,7 @@ export function retryClaudeAuthorityPersistence(accountId: string, operationId: 
     const pending = r.pendingLogin
     if (!pending || pending.operationId !== operationId || pending.generation !== r.loginGeneration + 1) return 'superseded'
     r.loginGeneration = pending.generation; r.credentialRevision = 0; r.state = 'active'; r.credentialDisposition = 'usable'
-    r.credentials = pending.credentials; r.profile = pending.profile; delete r.refreshIntent; delete r.pendingLogin; delete r.rejection
+    r.credentials = pending.credentials; r.profile = pending.profile; delete r.refreshIntent; delete r.pendingLogin; delete r.rejection; delete r.deletionCleanup
     r.operations[operationId] = { kind: 'login', generation: r.loginGeneration, revision: 0,
       fingerprint: fingerprint({ credentials: pending.credentials, profile: pending.profile }) }
   })
@@ -605,13 +610,24 @@ export function retryClaudeAuthorityPersistence(accountId: string, operationId: 
   }
   return out
 }
-export function deleteClaudeAccountAuthority(h: ClaudeCredentialHandle, operationId: string = randomUUID()): ClaudeAuthorityResult {
+export function deleteClaudeAccountAuthority(h: ClaudeCredentialHandle, operationId: string = randomUUID(), preserveProfile = false): ClaudeAuthorityResult {
   return mutate(h.accountId, operationId, r => {
     if (r.operations[operationId]?.kind === 'delete') return r.operations[operationId]!.generation === r.loginGeneration ? undefined : 'superseded'
     if (!matches(r, h)) return 'superseded'
+    if (preserveProfile && r.credentials) r.deletionCleanup = {
+      accessToken: r.credentials.accessToken, refreshToken: r.credentials.refreshToken,
+    }
     r.loginGeneration++; r.credentialRevision = 0; r.state = 'deleted'; r.credentialDisposition = 'rejected'
-    delete r.credentials; delete r.profile; delete r.refreshIntent; delete r.pendingLogin; delete r.rejection
+    delete r.credentials; if (!preserveProfile) delete r.profile; delete r.refreshIntent; delete r.pendingLogin; delete r.rejection
     r.operations[operationId] = { kind: 'delete', generation: r.loginGeneration, revision: 0, fingerprint: '' }
+  })
+}
+/** Called only after exact-match secure-store cleanup and config cleanup succeed. */
+export function completeClaudeAccountDeletionCleanup(h: ClaudeCredentialHandle, preserveProfile: boolean): ClaudeAuthorityResult {
+  return mutate(h.accountId, randomUUID(), r => {
+    if (!matches(r, h) || r.state !== 'deleted') return 'superseded'
+    delete r.deletionCleanup
+    if (!preserveProfile) delete r.profile
   })
 }
 export function updateClaudeAuthorityProfile(h: ClaudeCredentialHandle, updates: Record<string, unknown>): ClaudeAuthorityResult {

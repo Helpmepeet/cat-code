@@ -415,7 +415,7 @@ describe('targeted Codex account sign-out', () => {
       targetWasActive: true,
       replacementActiveAccountId: ACCOUNT_B,
     })
-    expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_B)
+    expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_A)
     expect(getCodexOAuthTokens()).toMatchObject({
       accountId: ACCOUNT_B,
       accessToken: 'replacement-access',
@@ -502,7 +502,7 @@ describe('targeted Codex account sign-out', () => {
     )
 
     expect(result.replacementActiveAccountId).toBe(ACCOUNT_C)
-    expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_C)
+    expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_A)
   })
 
   test('concurrent stale processes do not deadlock while replacing different active accounts', async () => {
@@ -632,7 +632,7 @@ describe('targeted Codex account sign-out', () => {
     expect(lifecycleRecord(lifecycleB, ACCOUNT_B).state).toBe('signed_out')
   })
 
-  test('persists no active account when no candidate is switchable', async () => {
+  test('retains the saved preference when no candidate is switchable', async () => {
     const vaultPath = mkdtempSync(join(tmpdir(), 'codex-signout-vault-'))
     const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-signout-lifecycle-'))
     scratchDirectories.push(vaultPath, lifecyclePath)
@@ -665,7 +665,7 @@ describe('targeted Codex account sign-out', () => {
     )
 
     expect(result.replacementActiveAccountId).toBeNull()
-    expect(getGlobalConfigForTest().activeCodexAccountId).toBeUndefined()
+    expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_A)
     expect(getCodexOAuthTokens()).toBeNull()
   })
 
@@ -884,7 +884,7 @@ describe('targeted Codex account sign-out', () => {
       replacementActiveAccountId: ACCOUNT_B,
     })
     expect(lifecycleRecord(lifecycle, ACCOUNT_A).cleanup).toBe('complete')
-    expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_B)
+    expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_A)
   })
 
   test('recovery never touches a newer login generation', async () => {

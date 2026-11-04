@@ -52,10 +52,48 @@ test('reads each account with its own token and maps both windows', async () => 
   expect(usage.get('a')).toEqual({
     fiveHour: { percent: 12, resetAt: (NOW + 2 * HOUR) / 1000 },
     weekly: { percent: 40, resetAt: (NOW + 72 * HOUR) / 1000 },
+    weeklyOpus: null, weeklySonnet: null, extraUsage: null,
+    checkedAt: NOW, stale: false,
   })
   expect(usage.get('b')?.fiveHour?.percent).toBe(100)
   expect(statSync(cacheFile).mode & 0o777).toBe(0o600)
   expect(readFileSync(cacheFile, 'utf8')).not.toContain('token-')
+})
+
+test('caches model windows and extra credits, marking failed reads stale', async () => {
+  const accounts = [account({ accountUuid: 'a' })]
+  const data: Utilization = {
+    ...reading(10, 20),
+    seven_day_opus: reading(0, 31).seven_day,
+    seven_day_sonnet: reading(0, 42).seven_day,
+    extra_usage: { used_credits: 123, monthly_limit: 500, is_enabled: false, utilization: 24.6 },
+  }
+  const fresh = await fetchClaudePoolUsage(accounts, {
+    now: NOW, cacheFile, fetchUsage: async () => data,
+  })
+  expect(fresh.get('a')?.weeklyOpus?.percent).toBe(31)
+  expect(fresh.get('a')?.weeklySonnet?.percent).toBe(42)
+  expect(fresh.get('a')?.extraUsage).toEqual({
+    usedCredits: 123, monthlyLimit: 500, isEnabled: false,
+  })
+  const stale = await fetchClaudePoolUsage(accounts, {
+    now: NOW + CLAUDE_USAGE_FRESH_MS, cacheFile,
+    fetchUsage: async () => { throw new Error('offline') },
+  })
+  expect(stale.get('a')).toEqual({ ...fresh.get('a'), stale: true })
+
+  // A version-2 observation from before these optional fields is still usable.
+  const cache = JSON.parse(readFileSync(cacheFile, 'utf8'))
+  for (const key of ['weeklyOpus', 'weeklySonnet', 'extraUsage', 'checkedAt', 'stale']) {
+    delete cache.accounts.a[key]
+  }
+  writeFileSync(cacheFile, JSON.stringify(cache))
+  const legacy = await fetchClaudePoolUsage(accounts, {
+    now: NOW + 1, cacheFile, cachedOnly: true,
+  })
+  expect(legacy.get('a')?.checkedAt).toBe(NOW)
+  expect(legacy.get('a')?.stale).toBe(false)
+  expect(legacy.get('a')?.weekly?.percent).toBe(20)
 })
 
 test('never sends an expired or dead account token, and reuses its last reading', async () => {
@@ -109,6 +147,38 @@ test('a fresh cached reading is reused instead of asking again', async () => {
   expect(refreshed.get('a')?.fiveHour?.percent).toBe(2)
 })
 
+test('forced fresh reads target only requested accounts and preserve all cached results', async () => {
+  const accounts = [account({ accountUuid: 'a' }), account({ accountUuid: 'b' })]
+  await fetchClaudePoolUsage(accounts, {
+    now: NOW, cacheFile, fetchUsage: async () => reading(10, 20),
+  })
+  const originalB = JSON.parse(readFileSync(cacheFile, 'utf8')).accounts.b
+  const seen: string[] = []
+  const fetchUsage = async (token: string) => {
+    seen.push(token)
+    return reading(30, 40)
+  }
+  const refreshed = await fetchClaudePoolUsage(accounts, {
+    now: NOW + 1, cacheFile, fetchUsage, force: true, accountIds: ['a'],
+  })
+  expect(seen).toEqual(['token-a'])
+  expect(refreshed.get('a')?.fiveHour?.percent).toBe(30)
+  expect(refreshed.get('a')?.checkedAt).toBe(NOW + 1)
+  expect(refreshed.get('b')?.fiveHour?.percent).toBe(10)
+  expect(JSON.parse(readFileSync(cacheFile, 'utf8')).accounts.b).toEqual(originalB)
+
+  const stale = await fetchClaudePoolUsage(accounts, {
+    now: NOW + CLAUDE_USAGE_FRESH_MS + 1, cacheFile, fetchUsage, accountIds: [],
+  })
+  expect(seen).toEqual(['token-a'])
+  expect(stale.size).toBe(2)
+  expect(stale.get('b')?.stale).toBe(true)
+  await fetchClaudePoolUsage(accounts, {
+    now: NOW + 2, cacheFile, fetchUsage, force: true, cachedOnly: true,
+  })
+  expect(seen).toEqual(['token-a'])
+})
+
 test('a changed credential cannot reuse usage attributed to the old token', async () => {
   await fetchClaudePoolUsage([account({ accountUuid: 'a', accessToken: 'wrong-account-token' })], {
     now: NOW, cacheFile, fetchUsage: async () => reading(100, 20),
@@ -144,6 +214,8 @@ test('a window past its reset time is dropped rather than shown as current', asy
   expect(usage.get('a')).toEqual({
     fiveHour: null,
     weekly: { percent: 60, resetAt: (NOW + 72 * HOUR) / 1000 },
+    weeklyOpus: null, weeklySonnet: null, extraUsage: null,
+    checkedAt: NOW, stale: true,
   })
 })
 
@@ -168,6 +240,8 @@ test('cached-only reads never use the network, including on a stale or missing c
   expect(saved.get('a')).toEqual({
     fiveHour: null,
     weekly: { percent: 9, resetAt: (NOW + 72 * HOUR) / 1000 },
+    weeklyOpus: null, weeklySonnet: null, extraUsage: null,
+    checkedAt: NOW, stale: true,
   })
 })
 

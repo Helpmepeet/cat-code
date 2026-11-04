@@ -551,9 +551,11 @@ function metadataProfile(
   accountId: string,
   alias: string | undefined,
   record: CodexCredentialLifecycleRecord,
+  accountEmail?: string,
 ): Record<string, unknown> {
   return {
     account_id: accountId,
+    ...(accountEmail ? { account_email: accountEmail } : {}),
     ...(safeAlias(alias) ? { alias: safeAlias(alias) } : {}),
     profile_state: 'signed_out',
     credential_generation: record.credentialGeneration,
@@ -715,7 +717,12 @@ function cleanVaultPass(
 
       writeFileAtomicDurableSync(
         observation.filePath,
-        `${JSON.stringify(metadataProfile(accountId, alias, record), null, 2)}\n`,
+        `${JSON.stringify(metadataProfile(
+          accountId,
+          alias,
+          record,
+          typeof data.account_email === 'string' ? data.account_email : undefined,
+        ), null, 2)}\n`,
         { encoding: 'utf8', mode: 0o600 },
       )
       chmodSync(observation.filePath, 0o600)
@@ -1209,6 +1216,7 @@ function codexTokensForAccount(account: PoolAccount): CodexTokens {
     refreshToken: account.refreshToken,
     expiresAt: account.expiresAt,
     accountId: account.accountId,
+    ...(account.accountEmail ? { accountEmail: account.accountEmail } : {}),
     credentialGeneration: account.credentialGeneration,
   }
 }
@@ -1252,6 +1260,7 @@ async function replaceActiveAccount(
   input: NormalizedInput,
   targetWasActive: boolean,
   dependencies: CodexAccountSignOutDependencies,
+  preserveDefault: boolean,
 ): Promise<ActiveReplacement> {
   if (!targetWasActive) {
     return { status: 'unchanged', activeAccountId: null }
@@ -1325,6 +1334,7 @@ async function replaceActiveAccount(
           const replacement = replace(
             activeAccountId,
             codexTokensForAccount(latest),
+            { preserveDefault },
           )
           if (replacement.status === 'pointer_changed') {
             return {
@@ -1340,7 +1350,7 @@ async function replaceActiveAccount(
           }
           return {
             status: 'replaced' as const,
-            activeAccountId: replacement.activeAccountId,
+            activeAccountId: preserveDefault ? latest.accountId : replacement.activeAccountId,
           }
         },
       )
@@ -1401,7 +1411,7 @@ async function replaceActiveAccount(
   }
 
   try {
-    const replacement = replace(activeAccountId, null)
+    const replacement = replace(activeAccountId, null, { preserveDefault })
     if (replacement.status === 'failed') {
       return {
         status: 'retryable_unknown',
@@ -1409,7 +1419,7 @@ async function replaceActiveAccount(
       }
     }
     const replacedActiveId = activeIdAfterPointerChange(
-      replacement.activeAccountId,
+      preserveDefault && replacement.status === 'replaced' ? null : replacement.activeAccountId,
       dependencies,
       lifecycle,
     )
@@ -1526,7 +1536,7 @@ async function applyPostCleanupEffects(
         }
 
         const activeReplacement = targetWasActive
-          ? await replaceActiveAccount(normalized, targetWasActive, dependencies)
+          ? await replaceActiveAccount(normalized, targetWasActive, dependencies, operationKind === 'sign_out')
           : { status: 'unchanged' as const, activeAccountId: null }
         if (activeReplacement.status === 'retryable_unknown') {
           sideEffectFailed = true

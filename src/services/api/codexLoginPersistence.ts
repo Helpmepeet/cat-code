@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import {
   appendAccount,
   getCodexProfileInventory,
+  getCodexDefaultSelection,
   saveCodexTokenToVault,
   validateCodexAccountAlias,
   type CodexProfileInventory,
@@ -22,6 +23,8 @@ export type CodexOAuthLoginPersistenceOptions = Readonly<{
    */
   operationId: string
   alias?: string
+  /** False keeps an existing usable default; an unusable default is replaced. */
+  makeDefault?: boolean
   /**
    * When present, the OAuth identity must be the identity being re-linked.
    * A mismatch is rejected without creating a lifecycle record or moving the
@@ -69,6 +72,7 @@ export type CodexOAuthLoginPersistenceDependencies = Readonly<{
     options?: Parameters<typeof saveCodexTokenToVault>[1],
   ) => VaultSaveResult
   installPoolAccount?: typeof appendAccount
+  readDefaultSelection?: typeof getCodexDefaultSelection
 }>
 
 function messageForErrorCode(
@@ -179,6 +183,8 @@ export async function persistCodexOAuthLogin(
   const saveVault = dependencies.saveVault ?? saveCodexTokenToVault
   const installPoolAccount =
     dependencies.installPoolAccount ?? appendAccount
+  const makeDefault = options.makeDefault !== false ||
+    !(dependencies.readDefaultSelection ?? getCodexDefaultSelection)().effectiveAccountId
 
   return lifecycle.withTransaction(
     tokens.accountId,
@@ -244,7 +250,8 @@ export async function persistCodexOAuthLogin(
             writer: 'codexLoginPersistence',
             source: savedVault ? 'vault' : 'config',
             vaultFilePath: savedVault?.filePath,
-            activate: true,
+            activate: makeDefault,
+            persistDefault: makeDefault,
           },
         )
       } catch {

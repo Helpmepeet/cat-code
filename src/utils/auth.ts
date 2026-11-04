@@ -1478,6 +1478,7 @@ export function saveCodexOAuthTokens(tokens: CodexTokens): boolean {
       refreshToken: tokens.refreshToken,
       expiresAt: tokens.expiresAt,
       accountId: tokens.accountId,
+      ...(tokens.accountEmail ? { accountEmail: tokens.accountEmail } : {}),
       credentialGeneration,
     },
   }))
@@ -1511,6 +1512,9 @@ export function getCodexOAuthTokens(): CodexTokens | null {
     refreshToken: stored.refreshToken,
     expiresAt: stored.expiresAt,
     accountId: stored.accountId,
+    ...(typeof stored.accountEmail === 'string' && stored.accountEmail
+      ? { accountEmail: stored.accountEmail }
+      : {}),
     credentialGeneration,
   }
 }
@@ -1635,17 +1639,20 @@ export function clearCodexOAuthTokensForAccount(
 
 export type CodexOAuthActiveAccountReplacementResult = Readonly<{
   status: 'replaced' | 'pointer_changed' | 'failed'
+  /** The saved preference, which can differ from the effective replacement. */
   activeAccountId: string | null
 }>
 
 /**
  * Change the persisted active Codex account and its config mirror as one
  * conditional config update. A caller must validate replacement credentials
- * before entering this updater.
+ * before entering this updater. preserveDefault changes only the credential
+ * mirror, leaving the saved preference intact for sign-out recovery.
  */
 export function replaceCodexOAuthActiveAccountIfCurrent(
   expectedActiveAccountId: string | null,
   replacement: CodexTokens | null,
+  options: { preserveDefault?: boolean } = {},
 ): CodexOAuthActiveAccountReplacementResult {
   if (
     expectedActiveAccountId !== null &&
@@ -1685,13 +1692,16 @@ export function replaceCodexOAuthActiveAccountIfCurrent(
 
       const next = {
         ...current,
-        activeCodexAccountId: replacement?.accountId,
+        activeCodexAccountId: options.preserveDefault
+          ? current.activeCodexAccountId
+          : replacement?.accountId,
         codexOAuth: replacement
           ? {
               accessToken: replacement.accessToken,
               refreshToken: replacement.refreshToken,
               expiresAt: replacement.expiresAt,
               accountId: replacement.accountId,
+              ...(replacement.accountEmail ? { accountEmail: replacement.accountEmail } : {}),
               credentialGeneration: replacement.credentialGeneration ?? 0,
             }
           : undefined,
@@ -1735,7 +1745,9 @@ export function replaceCodexOAuthActiveAccountIfCurrent(
           (replacement.credentialGeneration ?? 0)
 
   if (
-    persistedActiveAccountId !== (replacement?.accountId ?? null) ||
+    persistedActiveAccountId !== (options.preserveDefault
+      ? expectedActiveAccountId
+      : replacement?.accountId ?? null) ||
     !mirrorMatches
   ) {
     return {
