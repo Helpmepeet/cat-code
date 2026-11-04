@@ -4,6 +4,7 @@ import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, writeFile, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { LidTrace } from './lidTrace.js'
 
 const run = promisify(execFile)
 declare const __CATCODE_LID_ASSET_SHA256__: Record<string, string> | undefined
@@ -98,6 +99,7 @@ export type LidNativeCommand =
   | { op: 'stop' | 'sleep'; identity: string }
   | { op: 'retry' | 'dismiss' }
 
+export type LidNativeTrace = Pick<LidTrace, 'command' | 'bridge'>
 export class LidNativeClient {
   private child: ChildProcessWithoutNullStreams | undefined
   private pending: { resolve(value: LidNativeReply): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> } | undefined
@@ -105,24 +107,50 @@ export class LidNativeClient {
   private chain: Promise<unknown> = Promise.resolve()
   private stopped = false
   private readonly closing = new Map<ChildProcessWithoutNullStreams, Promise<boolean>>()
+  private lastClose = ''
+  constructor(private readonly trace?: LidNativeTrace) {}
   command(value: LidNativeCommand): Promise<LidNativeReply> {
-    if (this.stopped) return Promise.reject(new Error('Helper unavailable'))
-    const call = this.chain.catch(() => {}).then(() => this.request(value))
+    if (this.stopped) {
+      this.trace?.command(value.op, 0, 0, 'unavailable')
+      return Promise.reject(new Error('Helper unavailable'))
+    }
+    const queued = performance.now()
+    const call = this.chain.catch(() => {}).then(async () => {
+      const started = performance.now()
+      this.lastClose = ''
+      try {
+        const reply = await this.request(value)
+        this.trace?.command(value.op, started - queued, performance.now() - started, reply.ok ? 'ok' : 'refused', reply, this.child?.pid)
+        return reply
+      } catch (error) {
+        const outcome = this.lastClose === 'timeout' ? 'timeout'
+          : error instanceof Error && error.message === 'Invalid helper response' ? 'invalid' : 'unavailable'
+        this.trace?.command(value.op, started - queued, performance.now() - started, outcome)
+        throw error
+      }
+    })
     this.chain = call
     return call
   }
-  async close(permanent = false): Promise<boolean> {
+  private shut(reason: string): void {
+    this.lastClose = reason
+    void this.close(false, reason)
+  }
+  async close(permanent = false, reason = permanent ? 'shutdown' : 'requested'): Promise<boolean> {
     if (permanent) this.stopped = true
     const child = this.child; this.child = undefined; this.buffer = ''
+    if (child) this.trace?.bridge('closing', { reason, pid: child.pid })
     if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(new Error('Helper unavailable')); this.pending = undefined }
     // A failed spawn has no PID and emits error/close, not a process exit.
     if (child && child.pid !== undefined && child.pid > 0 &&
         !this.closing.has(child) && child.exitCode === null && child.signalCode === null) {
+      const closingAt = performance.now()
       const exited = new Promise<boolean>(resolve => {
         let killTimer: ReturnType<typeof setTimeout>
         let deadline: ReturnType<typeof setTimeout>
         const finish = (confirmed: boolean) => {
           clearTimeout(killTimer); clearTimeout(deadline)
+          this.trace?.bridge(confirmed ? 'close-confirmed' : 'close-unconfirmed', { pid: child.pid, durationMs: performance.now() - closingAt })
           // Keep the captured child's confirmation observer after the deadline.
           // A late exit may release only this generation's claim.
           if (confirmed) {
@@ -142,39 +170,50 @@ export class LidNativeClient {
     return (await Promise.all([...this.closing.values()])).every(Boolean)
   }
   private async request(value: object): Promise<LidNativeReply> {
-    if (!(await Promise.all([...this.closing.values()])).every(Boolean) || this.stopped) throw new Error('Helper unavailable')
+    if (!(await Promise.all([...this.closing.values()])).every(Boolean) || this.stopped) {
+      this.lastClose = this.stopped ? 'shutdown' : 'close-unconfirmed'
+      throw new Error('Helper unavailable')
+    }
     return new Promise((resolve, reject) => {
       if (!this.child) {
         const child = spawn(LID_HELPER, ['--client'], { env: { PATH: '/usr/bin:/bin', LANG: 'C' }, stdio: 'pipe' })
+        const spawnedAt = performance.now()
         this.child = child
+        if (child.pid) this.trace?.bridge('spawned', { pid: child.pid })
         child.stdout.setEncoding('utf8')
         child.stdout.on('data', (chunk: string) => {
           if (this.child !== child) return
           this.buffer += chunk
-          if (Buffer.byteLength(this.buffer) > 16_384) { this.close(); return }
+          if (Buffer.byteLength(this.buffer) > 16_384) { this.shut('oversized-reply'); return }
           const end = this.buffer.indexOf('\n')
           if (end < 0) return
           const line = this.buffer.slice(0, end); this.buffer = this.buffer.slice(end + 1)
           const pending = this.pending
-          if (!pending || this.buffer.length) { this.close(); return }
+          if (!pending || this.buffer.length) { this.shut(pending ? 'extra-reply' : 'unexpected-reply'); return }
           this.pending = undefined; clearTimeout(pending.timer)
           try {
             const reply = parseLidNativeReply(JSON.parse(line))
             pending.resolve(reply)
             // An invalidated XPC connection cannot recover in the same bridge.
-            if (!reply.snapshot) this.close()
+            if (!reply.snapshot) this.shut(`no-snapshot:${reply.error ?? 'none'}`)
           }
-          catch { pending.reject(new Error('Invalid helper response')); this.close() }
+          catch { pending.reject(new Error('Invalid helper response')); this.shut('invalid-reply') }
         })
         child.stderr.resume()
-        child.on('error', () => { if (this.child === child) this.close() })
-        child.on('exit', () => { if (this.child === child) this.close() })
-        child.stdin.on('error', () => { if (this.child === child) this.close() })
+        child.on('error', error => {
+          if (!child.pid) this.trace?.bridge('spawn-failed', { reason: (error as NodeJS.ErrnoException).code ?? 'error' })
+          if (this.child === child) this.shut('process-error')
+        })
+        child.on('exit', (exitCode, signal) => {
+          this.trace?.bridge('exited', { pid: child.pid, exitCode, signal, durationMs: performance.now() - spawnedAt })
+          if (this.child === child) this.shut('process-exited')
+        })
+        child.stdin.on('error', () => { if (this.child === child) this.shut('stdin-error') })
       }
-      const timer = setTimeout(() => this.close(), 2000)
+      const timer = setTimeout(() => this.shut('timeout'), 2000)
       this.pending = { resolve, reject, timer }
       try { this.child.stdin.write(JSON.stringify(value) + '\n') }
-      catch { this.close() }
+      catch { this.shut('write-failed') }
     })
   }
 }

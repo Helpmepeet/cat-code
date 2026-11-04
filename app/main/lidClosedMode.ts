@@ -14,6 +14,7 @@ type Dependencies = {
   marker: string
   changed(view: LidModeView): void
   work: Pick<import('./lidWorkObserver.js').LidWorkObserver, 'start' | 'read' | 'refresh' | 'verify' | 'subscribe' | 'stop' | 'probe'>
+  trace?: Pick<import('./lidTrace.js').LidTrace, 'tick' | 'failure'>
 }
 const empty = (): LidModeView => ({ phase: 'off', mode: null, allowance: 0, remainingSeconds: 0, workAvailable: false, activeSessions: 0, activeSubagents: 0, waitingForApproval: false, installed: false, sleepRequested: false })
 
@@ -103,7 +104,8 @@ export class LidClosedMode {
           this.set({ phase: 'off' })
         }
         else this.set({ phase: this.needsRecovery ? 'unresolved' : 'unavailable', error: 'Normal sleep could not be confirmed.' })
-      } catch {
+      } catch (error) {
+        this.deps.trace?.failure('initialize', error)
         this.needsRecovery = true
         try { this.mark(true) } catch { /* Unwritable intent remains unresolved in memory. */ }
         this.set({ phase: 'unresolved', repairRequired: true, error: 'The sleep helper needs administrator repair.' })
@@ -113,7 +115,9 @@ export class LidClosedMode {
       catch (error) { this.set({ phase: 'unavailable', error: message(error) }) }
     }
     this.timer = setInterval(() => {
-      if (this.ticking || this.busy || this.stopped) return
+      if (this.stopped) return
+      if (this.ticking || this.busy) { this.deps.trace?.tick(this.ticking ? 'skip-ticking' : 'skip-busy'); return }
+      this.deps.trace?.tick('run')
       this.ticking = true
       void this.enqueue(() => this.tick()).finally(() => { this.ticking = false })
     }, 1000)
@@ -169,6 +173,7 @@ export class LidClosedMode {
             }
         }
       } catch (error) {
+        this.deps.trace?.failure(`command:${command.action}`, error)
         if (this.view.phase !== 'active') this.disarmWork()
         if (this.needsRecovery) { this.set({ error: message(error) }); await this.end('monitoring-unavailable') }
         else if (error instanceof LidSetupCancelled) this.set({ phase: 'off', error: undefined })
@@ -316,7 +321,8 @@ export class LidClosedMode {
         this.disarmWork()
         await this.finishWork('work-finished')
       })
-    } catch {
+    } catch (error) {
+      this.deps.trace?.failure('verify-work', error)
       this.finalizing = false
       this.workChanged(this.deps.work.read())
     }
@@ -345,7 +351,8 @@ export class LidClosedMode {
       }
       this.snapshot = snapshot
       throw new Error(reply.error ?? 'The sleep helper could not confirm work completion.')
-    } catch {
+    } catch (error) {
+      this.deps.trace?.failure('finish-work', error)
       this.ending = { reason: 'monitoring-unavailable', sleep: false }
       await this.end('monitoring-unavailable')
     }
@@ -574,7 +581,10 @@ export class LidClosedMode {
         throw new Error('The sleep helper could not confirm the activation.')
       }
       this.accept(reply.snapshot)
-    } catch { this.set({ phase: 'unresolved', repairRequired: true }) }
+    } catch (error) {
+      this.deps.trace?.failure(`end:${reason}`, error)
+      this.set({ phase: 'unresolved', repairRequired: true })
+    }
   }
   private async tick(): Promise<void> {
     if (!['active','unresolved','restoring'].includes(this.view.phase)) return
@@ -615,7 +625,8 @@ export class LidClosedMode {
       } else {
         this.accept((await this.deps.native.command({ op: 'status' })).snapshot)
       }
-    } catch {
+    } catch (error) {
+      this.deps.trace?.failure('tick', error)
       this.disarmWork()
       const snapshot = this.snapshot
       if (snapshot?.record.mode === 'work' && snapshot.record.identity === this.identity &&

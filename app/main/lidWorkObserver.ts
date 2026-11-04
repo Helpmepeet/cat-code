@@ -54,6 +54,7 @@ type Dependencies = {
   now(): number
   timers: TimerApi
   uuid(): string
+  onLost(loss: import('./lidTrace.js').LidWorkLoss): void
 }
 
 const realTimers: TimerApi = {
@@ -560,6 +561,7 @@ export class LidWorkObserver {
     const now = this.now()
     if (this.overflow && this.overflowSince !== undefined &&
         now >= this.overflowSince + WORK_FRESHNESS_MS) {
+      this.deps.onLost?.({ reason: 'overflow', ageMs: now - this.overflowSince, awaitingReply: false, sessions: this.records.size })
       this.lost = true
       this.revision++
       this.notify()
@@ -567,6 +569,11 @@ export class LidWorkObserver {
     }
     for (const record of this.records.values()) {
       if (now >= (record.receivedAt ?? record.introducedAt) + WORK_FRESHNESS_MS) {
+        this.deps.onLost?.({
+          reason: 'stale-session', sessionId: record.session.sessionId,
+          ageMs: now - (record.receivedAt ?? record.introducedAt), status: record.session.status,
+          awaitingReply: record.outstanding !== undefined, sessions: this.records.size,
+        })
         this.lost = true
         this.revision++
         this.notify()

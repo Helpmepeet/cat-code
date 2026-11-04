@@ -16,6 +16,7 @@ import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
 import { lidClosedMenu } from './lidClosedMenu.js'
 import { LidNativeClient, inspectLidHardware, installLidHelper, lidHelperCurrent } from './lidClosedNative.js'
 import { LidWorkObserver, type LidWorkSession } from './lidWorkObserver.js'
+import { LidTrace } from './lidTrace.js'
 import { isWorkStatusRequest, type WorkStatusRequest } from '../shared/workStatus.js'
 import { isLidModeCommand } from '../shared/lidClosed.js'
 import { DesktopPower } from './desktopPower.js'
@@ -3653,12 +3654,24 @@ function ensureDesktopPower(): DesktopPower | undefined {
 }
 let lidReady: Promise<void> = Promise.resolve()
 const updateLidMenu = lidClosedMenu(async () => { await lidReady; return lidMode?.readPresence() }, command => { void lidReady.then(() => lidMode?.command(command)).catch(() => {}) })
+const lidTrace = new LidTrace((event, level, fields, appSessionId) => logOperational(event, level, fields, appSessionId))
+let lidPowerEventsWired = false
+function wireLidPowerEvents(): void {
+  if (lidPowerEventsWired || process.platform !== 'darwin') return
+  lidPowerEventsWired = true
+  for (const event of ['suspend', 'resume', 'lock-screen', 'unlock-screen', 'on-ac', 'on-battery', 'speed-limit-change', 'shutdown'] as const) {
+    powerMonitor.on(event as 'suspend', () => lidTrace.power(event))
+  }
+  powerMonitor.on('thermal-state-change', details => lidTrace.power(`thermal-state-change:${details.state}`))
+}
 function ensureLidMode(): void {
   if (lidMode) return
+  wireLidPowerEvents()
   const previous = lidReady
   const assets = lidAssetsDirectory()
   const mode = new LidClosedMode({
-    native: new LidNativeClient(),
+    native: new LidNativeClient(lidTrace),
+    trace: lidTrace,
     marker: join(defaultRegistryDir(), 'lid-closed-recovery.json'),
     installed: lidHelperInstalled,
     current: () => lidHelperCurrent(assets),
@@ -3666,6 +3679,9 @@ function ensureLidMode(): void {
     install: recoveryOnly => installLidHelper(assets, recoveryOnly),
     work: lidWorkObserver!,
     changed: view => {
+      // Quit clears `lidMode` before the old owner restores sleep; that
+      // restoration still belongs in the log.
+      if (lidMode === mode || lidMode === undefined) lidTrace.view(view)
       if (lidMode !== mode) return
       updateLidMenu(view)
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(CH_LID_CHANGED, view)
@@ -5302,6 +5318,7 @@ function ensureHost(): Host {
       if (!isWorkStatusRequest(message)) return
       currentSupervisor.send(sessionId, message)
     },
+    onLost: loss => lidTrace.workLost(loss),
   })
   const currentWorkObserver = lidWorkObserver
   ensureLidMode()

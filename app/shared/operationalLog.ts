@@ -95,6 +95,16 @@ export const OPERATIONAL_EVENTS = [
   'peer.message.routed',
   'log.coverage.incomplete',
   'log.suppressed',
+  // Lid-closed runs (`app/main/lidTrace.ts`). The root helper ends a run on a
+  // five-second heartbeat gap and these records say which link went quiet.
+  'lid.mode.changed',
+  'lid.native.command',
+  'lid.bridge.changed',
+  'lid.heartbeat.summary',
+  'lid.flight_recorder',
+  'lid.failure',
+  'lid.work.lost',
+  'lid.power.event',
 ] as const
 
 export type OperationalEvent = (typeof OPERATIONAL_EVENTS)[number]
@@ -113,6 +123,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
   'signal', 'expected', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB', 'rendersCommitted', 'phase',
   'from', 'to', 'kind', 'messageId', 'outcome',
   'operationId', 'generation', 'invocationId',
+  'error', 'queueMs', 'gapMs', 'ageMs', 'maxMs', 'skipped', 'suppressed',
 ])
 
 /**
@@ -211,6 +222,17 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'peer.message.routed': ['from', 'to', 'kind', 'messageId', 'outcome'],
   'log.coverage.incomplete': ['source', 'reason', 'expected'],
   'log.suppressed': ['count', 'reason', 'category'],
+  // Lid-closed fields are closed enums, product status text, and timings.
+  // `error` is the app's own fixed status or failure message, never helper
+  // output beyond its short error code, which travels as `code`.
+  'lid.mode.changed': ['phase', 'kind', 'reason', 'error', 'outcome', 'count', 'sessions', 'elapsedMs'],
+  'lid.native.command': ['kind', 'outcome', 'code', 'durationMs', 'queueMs', 'phase', 'reason', 'gapMs', 'ageMs', 'pid'],
+  'lid.bridge.changed': ['phase', 'reason', 'pid', 'exitCode', 'signal', 'durationMs'],
+  'lid.heartbeat.summary': ['kind', 'phase', 'count', 'missed', 'skipped', 'maxMs', 'gapMs', 'eventLoopLagMs', 'sessions', 'elapsedMs', 'suppressed'],
+  'lid.flight_recorder': ['reason', 'count', 'samples', 'elapsedMs', 'eventLoopLagMs', 'ageMs'],
+  'lid.failure': ['reason', 'error', 'phase', 'kind', 'elapsedMs'],
+  'lid.work.lost': ['reason', 'ageMs', 'phase', 'outcome', 'sessions'],
+  'lid.power.event': ['reason', 'phase', 'elapsedMs'],
 }
 
 export type OperationalRecord = Readonly<{

@@ -49,6 +49,16 @@ const DEDUPE_EXEMPT_EVENTS: ReadonlySet<string> = new Set([
   'peer.message.routed',
   // Distinct bounded stages and worker invocations collide on the same key.
   'workspace.jump.timing',
+  // A lid ending writes restoring and ended with one reason in the same
+  // millisecond. `lidTrace.ts` bounds its own volume per minute instead.
+  'lid.mode.changed',
+  'lid.native.command',
+  'lid.bridge.changed',
+  'lid.heartbeat.summary',
+  'lid.flight_recorder',
+  'lid.failure',
+  'lid.work.lost',
+  'lid.power.event',
 ])
 
 export type OperationalLogSink = {
