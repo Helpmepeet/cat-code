@@ -1051,7 +1051,7 @@ test('the collapsed rail keeps the account glyph below the destinations like the
 
 test('an account needing sign-in is marked on the Accounts destination, in both nav variants', () => {
   const rail = renderSidebar({ accountsNeedingSignIn: 1 })
-  expect(rail).toContain('title="Accounts, 1 Codex account needs sign-in"')
+  expect(rail).toContain('aria-label="Accounts, 1 Codex account needs sign-in"')
   expect(rail).toContain('data-sidebar-nav-badge="accounts"')
 
   const expanded = renderSidebar({

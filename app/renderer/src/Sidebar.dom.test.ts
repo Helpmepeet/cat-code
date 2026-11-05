@@ -348,7 +348,7 @@ test('the open footer stays the same one-line strip across pointer movement, wit
     expect(footer.firstElementChild?.className).toContain('flex items-center')
     expect(footer.firstElementChild?.firstElementChild?.textContent).toContain('main')
     expect(destinations.map(button => button.textContent)).toEqual(['', '', '', '', ''])
-    expect(destinations.map(button => button.title)).toEqual([
+    expect(destinations.map(button => button.getAttribute('aria-label'))).toEqual([
       'Scheduled', 'Goals', 'Accounts, 2 Codex accounts need sign-in', 'Analytics', 'Settings',
     ])
     expect(destinations[1]!.getAttribute('aria-current')).toBe('page')
@@ -396,7 +396,7 @@ test('every collapsed destination stays put under mouse hover and dispatches onl
         })
         expect(aside.className).toContain('w-12')
         expect(aside.querySelector(`[data-sidebar-nav-id="${id}"]`)).toBe(destination)
-        expect(destination.title).not.toBe('')
+        expect(destination.title).toBe('')
         await act(async () => {
           // happy-dom does not perform native press-to-focus. Model that default
           // only when mousedown was not cancelled, then release at the same node.

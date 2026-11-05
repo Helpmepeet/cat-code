@@ -20,6 +20,9 @@ import {
   type SessionActionsAnchor,
 } from './sessionActions.js'
 import { tabLabel } from './tabBarModel.js'
+import { basename } from './pathUtils.js'
+import { HoverTooltip } from './hoverTooltip.js'
+import { useHoverTooltip } from './useHoverTooltip.js'
 import { targetKey, type NavigationTarget, type PageTab } from './pageTabNavigation.js'
 import type { TabVisualState } from './tabStatus.js'
 import { SESSION_WORK_MARK_LABEL, SessionWorkMarksContext } from './sessionWorkState.js'
@@ -395,12 +398,15 @@ function Tab({
   const id = descriptor.appSessionId
   const title = tabLabel(descriptor)
   const workMark = useContext(SessionWorkMarksContext).get(id) ?? null
+  const tooltip = useHoverTooltip('tab', 350)
   // First-nine jump-key hint. App's chord handler accepts ⌘ OR Ctrl; the label
   // is ⌘ (mac-first desktop app) — no clean renderer-side platform signal to
   // vary it (S3), so the primary accelerator is shown.
-  const shortcut = index < 9 ? `  ⌘${index + 1}` : ''
+  const shortcut = index < 9 ? `⌘${index + 1}` : ''
+  const folder = descriptor.binding?.kind === 'managed' ? '' : basename(descriptor.cwd)
 
   return (
+    <>
     <div
       ref={ref}
       onAnimationEnd={onArrivalAnimationEnd}
@@ -418,10 +424,19 @@ function Tab({
       // the first tab when nothing is active — never a focus dead-end); arrows
       // move focus among the rest (handled in TabBar).
       tabIndex={isTabbable ? 0 : -1}
-      title={`${descriptor.binding?.kind === 'managed' ? title : descriptor.cwd}${descriptor.forked ? ' (forked session)' : ''}${shortcut}`}
       aria-label={`Session ${title}, ${visual.label}${descriptor.forked ? ', forked session' : ''}${tab.unopened ? ', not opened yet' : ''}${workMark ? `, ${SESSION_WORK_MARK_LABEL[workMark]}` : ''}`}
+      onMouseEnter={event => tooltip.show(event.currentTarget)}
+      onMouseLeave={tooltip.hide}
+      onFocus={event => {
+        if (event.target === event.currentTarget) tooltip.show(event.currentTarget, true)
+      }}
+      onBlur={tooltip.hide}
+      onClickCapture={tooltip.hide}
       onClick={() => onSelect(id)}
-      onKeyDown={onKeyDown}
+      onKeyDown={event => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) tooltip.hide()
+        onKeyDown(event)
+      }}
     >
       {/* The same work mark as the session's sidebar row (`sessionWorkState.ts`
        * picks it), in a lane every tab reserves so a mark appearing never shifts
@@ -510,5 +525,15 @@ function Tab({
         ×
       </button>
     </div>
+    <HoverTooltip anchor={tooltip.anchor} placement="tab">
+      <div className="break-words">{title}</div>
+      {folder || shortcut || descriptor.forked ? (
+        <div className="mt-1 flex items-center justify-between gap-4 text-[11px] text-text-subtle">
+          <span>{[folder, descriptor.forked ? 'Forked session' : ''].filter(Boolean).join(' · ')}</span>
+          {shortcut ? <span className="font-mono text-[10px] text-text-ghost">{shortcut}</span> : null}
+        </div>
+      ) : null}
+    </HoverTooltip>
+    </>
   )
 }

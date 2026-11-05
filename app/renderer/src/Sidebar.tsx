@@ -120,6 +120,8 @@ import { WorkMarkGlyph } from './SessionWorkMarkGlyph.js'
 import { ProviderLogo } from './ProviderLogo.js'
 import { modelMarkProvider } from '../../shared/modelProvider.js'
 import { formatAccountsNeedingSignIn } from './accountsPageModel.js'
+import { HoverTooltip } from './hoverTooltip.js'
+import { useHoverTooltip } from './useHoverTooltip.js'
 import { usePopoverFocus } from './overlayFocus.js'
 import {
   SESSION_ACTIONS_MENU_WIDTH,
@@ -2055,6 +2057,7 @@ function NavItemRail({
 }) {
   const active = item.enabled && item.id === activeView
   const signInLabel = formatAccountsNeedingSignIn(needsSignIn)
+  const tooltip = useHoverTooltip('rail', 100)
   if (!item.enabled) {
     return (
       <button
@@ -2072,22 +2075,27 @@ function NavItemRail({
     )
   }
   return (
+    <>
     <button
       ref={buttonRef}
       type="button"
       aria-current={active ? 'page' : undefined}
       aria-label={signInLabel ? `${item.label}, ${signInLabel}` : item.label}
       data-sidebar-nav-id={item.id}
-      title={signInLabel ? `${item.label}, ${signInLabel}` : item.label}
+      onMouseEnter={event => tooltip.show(event.currentTarget)}
+      onMouseLeave={tooltip.hide}
+      onFocus={event => tooltip.show(event.currentTarget, true)}
+      onBlur={tooltip.hide}
       onClick={() => {
+        tooltip.hide()
         const view = resolveNavSelection(item)
         if (view) onSelectView(view)
       }}
       className={
-        'relative flex h-8 w-8 items-center justify-center rounded-md ' +
+        'relative flex h-8 w-8 items-center justify-center rounded-md transition-colors duration-[var(--motion-fast)] ' +
         (active
           ? 'bg-accent/[0.12] text-accent-soft'
-          : 'text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]')
+          : 'text-text-subtle hover:bg-accent/10 hover:text-accent-soft focus-visible:bg-accent/10 focus-visible:text-accent-soft')
       }
     >
       {item.icon}
@@ -2101,6 +2109,10 @@ function NavItemRail({
         />
       ) : null}
     </button>
+    <HoverTooltip anchor={tooltip.anchor} placement="rail">
+      {signInLabel ? `${item.label}, ${signInLabel}` : item.label}
+    </HoverTooltip>
+    </>
   )
 }
 

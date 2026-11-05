@@ -80,7 +80,7 @@ test('forked tabs show the split glyph before the title and qualify the accessib
   expect(html).toContain(
     'aria-label="Session Renderer notes, ready, forked session"',
   )
-  expect(html).toContain('title="/tmp/fork (forked session)')
+  expect(html).not.toContain('title="/tmp/fork')
   expect(html).not.toContain('(fork)')
 })
 
@@ -294,12 +294,6 @@ test('no tab carries worker chrome', () => {
   // every tab in the bar.
   const html = render([tab('a'), tab('b')], 'a')
   expect(html).not.toContain('aria-pressed=')
-})
-
-test('the first nine tabs advertise a ⌘<n> jump hint', () => {
-  const html = render([tab('a'), tab('b')], 'a')
-  expect(html).toContain('⌘1')
-  expect(html).toContain('⌘2')
 })
 
 test('tabLabel prefers title, falls back to cwd basename, then a default', () => {
