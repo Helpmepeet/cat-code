@@ -221,7 +221,6 @@ import {
   CH_HOST_ACCOUNT_DELETE,
   CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
-  CH_HOST_VISIBLE_SESSIONS,
 } from '../shared/ipcChannels.js'
 import {
   AttachmentGate,
@@ -246,7 +245,6 @@ import {
   createStartupTimers,
   createWindowVisibilityTracker,
   isTerminalLifecycleFrame,
-  parseVisibleSessions,
   RENDERER_RECOVERY_MAX_ATTEMPTS,
   selectRendererWorkingSetKiB,
   type RendererDeathReason,
@@ -343,10 +341,6 @@ import { resolveSettingsInventoryCwd, settingsInventoryScopeArgs, settingsWriteM
 import { runSettingsWriteWorker } from './settingsWriteRunner.js'
 import { runWorkspaceTrustWorker } from './workspaceTrustRunner.js'
 import { parseSettingsWriteWorkerRequest } from '../shared/settingsWriteWorker.js'
-import {
-  createIdleParkDriver,
-  type IdleParkDriver,
-} from './idleParkDriver.js'
 import {
   atomicWriteJson0600,
   createDebouncedAction,
@@ -923,26 +917,6 @@ let settingsWritePending = 0
 let settingsWriteGeneration = 0
 
 /**
- * IDLE-PARK (decisions/IDLE-PARK.md §4) — one main-supervised policy driver per
- * app process, mirroring `sessionsCatalogDriver`'s lifecycle: armed after first
- * paint, torn down with the window, re-armable on reactivate. It parks idle /
- * over-cap engines via a host-initiated `app.park`. Null until armed.
- */
-let idleParkDriver: IdleParkDriver | null = null
-
-/**
- * IDLE-PARK §4(b) — the sessions the renderer currently shows in a workspace
- * pane, as last reported over `CH_HOST_VISIBLE_SESSIONS`. The park driver reads
- * this to keep an on-screen session off its victim list.
- *
- * Latest-wins and never accumulates: each report REPLACES the set, so a closed
- * pane stops being protected on the very next report rather than lingering. Ids
- * are shape-validated on arrival and matched against the live set only at
- * selection time, so a stale id protects nothing.
- */
-let visibleSessions: ReadonlySet<SessionId> = new Set()
-
-/**
  * Where a session's engine transcript lives, or null when the row is gone.
  *
  * The cwd is the row's, never a renderer string, and the row survives every
@@ -1372,41 +1346,6 @@ function notifySidecarsOfAccountSignOut(
 
 function flushAccountInvalidationNotices(sessionId: SessionId): void {
   accountInvalidation.flush(sessionId)
-}
-
-/**
- * IDLE-PARK (decisions/IDLE-PARK.md §4) — arm the policy driver after first paint
- * (alongside the catalog refresh), off the launch critical path. It captures the
- * CURRENT host + supervisor (both rebuilt as a unit on reactivate), reads the
- * live set from `host.listSessions()`, and sends a gated `app.park` to each idle/
- * over-cap victim via `supervisor.send` — the same send path `forward` uses, but
- * ORIGINATED by main's policy loop, never any renderer IPC channel (no preload
- * sender exists). A victim that raced to exit makes `supervisor.send` throw; the
- * driver catches it. Re-evaluates on each host event (cap) + on a timer (TTL).
- */
-function startIdleParkDriver(): void {
-  if (idleParkDriver) return
-  const activeHost = host
-  const activeSupervisor = supervisor
-  if (!activeHost || !activeSupervisor) return
-  idleParkDriver = createIdleParkDriver({
-    listSessions: () => activeHost.listSessions(),
-    canResume: appSessionId => activeHost.canResume(appSessionId),
-    park: appSessionId => {
-      if (workspaceJump?.isReserved(appSessionId)) return
-      // Host-originated, gated at the sidecar. No renderer authored this — the
-      // requestId is minted here purely to satisfy the frame contract (there is
-      // no ack; the sidecar's PARKED_EXIT_CODE self-exit is the truth signal).
-      activeSupervisor.send(appSessionId, {
-        type: 'app.park',
-        requestId: randomUUID(),
-      })
-    },
-    subscribeHostEvents: listener => activeHost.subscribe(() => listener()),
-    protectedSessions: () => visibleSessions,
-    log: line => process.stderr.write(`${line}\n`),
-  })
-  idleParkDriver.start()
 }
 
 // Perf (2026-07-08, F3): send the whole batch as ONE `webContents.send`, not one
@@ -2400,10 +2339,6 @@ function createWindow(): void {
     // Accounts owner (decisions/ACCOUNTS-OWNERSHIP.md): arm the pool refresh the
     // same way, so the Accounts page has live data with no session open.
     startupTimers.schedule(startAccountsPoolRefresh)
-    // IDLE-PARK (decisions/IDLE-PARK.md §4): arm the RAM-reclaim policy driver
-    // here too, off the launch critical path; it self-reschedules its TTL sweep
-    // and re-evaluates the cap on host events.
-    startupTimers.schedule(startIdleParkDriver)
   })
 
   let rendererLoadGeneration = 0
@@ -3564,16 +3499,6 @@ function registerIpcHandlers(): void {
     }),
   )
 
-  // IDLE-PARK §4(b) — the renderer reports which sessions are on screen so the
-  // park policy skips them. Validated HERE, at the boundary, not at the preload
-  // (`parseVisibleSessions` in mainDecisions.ts carries the trust reasoning). A
-  // malformed payload yields an empty set, which protects nothing and parks
-  // normally: this hint may only ever SUPPRESS a park, never cause one, and never
-  // reaches a sidecar.
-  ipcMain.on(CH_HOST_VISIBLE_SESSIONS, (event, payload: unknown) => {
-    if (!isMainWindowSender(event)) return
-    visibleSessions = parseVisibleSessions(payload)
-  })
   registerNotificationVisibilityIpc<IpcMainEvent>({
     on: (channel, listener) => ipcMain.on(channel, listener),
     isTrustedSender: event => isMainWindowSender(event) &&
@@ -5781,11 +5706,6 @@ function stopBackgroundDrivers(): void {
   accountProfileMutationAbort?.abort()
   accountProfileMutationAbort = null
   accountInvalidation.clearAll()
-  idleParkDriver?.stop()
-  idleParkDriver = null
-  // The window that reported them is going away; a stale visible set must not
-  // outlive it and protect sessions in a re-armed driver after reactivate.
-  visibleSessions = new Set()
 }
 
 let applicationShutdown: Promise<void> | undefined

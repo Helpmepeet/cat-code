@@ -161,7 +161,7 @@ async function mountApp(
     subscribe: listener => { frames = listener; return () => {} },
     subscribeHost: listener => { host = listener; return () => {} },
     listSessions: async () => sessions, readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    rendererReady: () => {}, recordRenderCommit: () => {}, reportVisibleSessions: () => {},
+    rendererReady: () => {}, recordRenderCommit: () => {},
     refreshAccountsPool: () => {},
     previewSession: async () => null,
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),

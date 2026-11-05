@@ -27,7 +27,6 @@ import { basename, join } from 'node:path'
 import {
   type AttachmentFileTokenSelection,
   type AttachmentImageMediaType,
-  MAX_LIVE_SESSIONS,
   type SaveTextErrorCode,
   type SessionDescriptor,
 } from '../shared/hostApi.js'
@@ -1036,54 +1035,6 @@ export function validateSaveTextRequest(payload: unknown): SaveTextValidation {
   }
   return { ok: true, text, fileName }
 }
-
-/* ------------------------------------------------------------------------- *
- * IDLE-PARK visible-pane hint (decisions/IDLE-PARK.md §4, option (b), resolved
- * 2026-08-05).
- *
- * The one fact the park policy needs and main structurally cannot derive: which
- * sessions the user is looking at. Workspace panels are renderer state by design
- * (`shellState.ts` keeps `activeSessionId` out of the roster so a background frame
- * can never steal focus), and switching panes bumps no registry stamp, so main's
- * only view of "visible" is what the renderer tells it.
- *
- * Trust posture — this is a HINT, and a deliberately weak one. It names sessions
- * to EXEMPT from an optimisation; it can start nothing, address nothing, and
- * carries no path, policy, permission id, or engine object. Ids that match no live
- * session are inert. The worst a hostile renderer achieves by naming every id it
- * can invent is that main declines to park sessions it would otherwise park — it
- * retains its own RAM, recoverable by closing a tab or relaunching. That is why
- * this rides the host control plane and never becomes sidecar vocabulary: no
- * inbound frame kind, no engine reachability, no `checkStrictKeys` entry.
- * ------------------------------------------------------------------------- */
-
-/**
- * Validate a renderer-supplied visible-pane hint at MAIN, the trust boundary.
- *
- * Shape-only by intent: ids are matched against the live set at USE time by the
- * driver, so this rejects the things that would make the payload dangerous as a
- * data structure rather than trying to authenticate its contents. Non-array,
- * non-string entries, and anything past `MAX_LIVE_SESSIONS` (already the ceiling
- * on live engines, so a longer list cannot protect anything real) are dropped
- * rather than throwing — a malformed hint degrades to less protection, never to a
- * failed IPC or a park that skips its own gate.
- */
-export function parseVisibleSessions(payload: unknown): Set<SessionId> {
-  const ids = new Set<SessionId>()
-  if (typeof payload !== 'object' || payload === null) return ids
-  const { sessionIds } = payload as Record<string, unknown>
-  if (!Array.isArray(sessionIds)) return ids
-  for (const candidate of sessionIds) {
-    if (ids.size >= MAX_LIVE_SESSIONS) break
-    if (typeof candidate !== 'string' || candidate.length === 0) continue
-    if (candidate.length > MAX_SESSION_ID_CHARS) continue
-    ids.add(candidate)
-  }
-  return ids
-}
-
-/** A UUID is 36 chars; the bound just stops an unbounded string being retained. */
-const MAX_SESSION_ID_CHARS = 128
 
 export type TranscriptBackfillCandidateSources = {
   sessions: SessionDescriptor[]

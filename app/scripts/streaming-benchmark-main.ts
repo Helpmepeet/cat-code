@@ -168,7 +168,6 @@ ipcMain.on(channels.CH_DELIVERY_ACK, (_event, payload: { acknowledgements?: Deli
 ipcMain.on(channels.CH_RENDERER_FAULT, (_event, payload) => {
   throw new Error(`renderer fault: ${typeof payload?.kind === 'string' ? payload.kind : 'unknown'}`)
 })
-ipcMain.on(channels.CH_HOST_VISIBLE_SESSIONS, () => {})
 ipcMain.on(channels.CH_SET_APPEARANCE, () => {})
 ipcMain.on(channels.CH_SET_GLASS_MODE, () => {})
 

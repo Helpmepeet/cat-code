@@ -17,7 +17,7 @@ function bridge(sessions: SessionDescriptor[] = [session]) {
   window.catcode = {
     subscribe: listener => { receiveFrames = listener; return () => {} }, subscribeHost: listener => { receiveHost = listener; return () => {} }, rendererReady: () => {},
     listSessions: async () => sessions, listProjects: async () => [], readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    reportVisibleSessions: () => {}, recordRenderCommit: () => {}, getSessionFolderState: async () => ({ ok: true, value: 'available' }),
+    recordRenderCommit: () => {}, getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
     readRoutingStorageHealth: async () => ({ status: 'healthy', code: null }),
     revalidateRoutingStorage: async () => ({ status: 'healthy', code: null }), inspectRoutingStorage: async () => ({ ok: true, value: undefined }),

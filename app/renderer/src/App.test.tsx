@@ -376,45 +376,6 @@ test('wiring tripwire: the usage popover asks no engine that is not there', () =
   expect(gateBody).toContain('contextBreakdownVerb(sessionId')
 })
 
-test('wiring tripwire: the park policy is told which panes are on screen', () => {
-  // IDLE-PARK §4(b) — main cannot derive this (workspace panels are renderer
-  // state and switching panes bumps no registry stamp), so if this effect stops
-  // reporting, sessions silently become parkable while the user is reading them
-  // and nothing else in the suite notices. SSR cannot run the effect, so the
-  // wiring is pinned as source.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const start = source.indexOf('  const reportedVisibleRef = useRef')
-  expect(start).toBeGreaterThan(-1)
-  // Comments are STRIPPED before asserting. The first version of this test
-  // checked for `activeView === 'chat'`, which the explanatory comment directly
-  // above the code also contains — so replacing the real condition with `true`
-  // left every assertion green. A tripwire that cannot fail is worse than none.
-  // The visible set is a memo shared with the sidebar's seen-turn tracking, so
-  // the slice runs through the effect that REPORTS it, not the memo's close.
-  const reportAt = source.indexOf('getBridge().reportVisibleSessions(sessionIds)', start)
-  expect(reportAt).toBeGreaterThan(-1)
-  const body = source
-    .slice(start, source.indexOf('\n  }, [', reportAt))
-    .split('\n')
-    .filter(line => !line.trim().startsWith('//'))
-    .join('\n')
-
-  // The visible set is the shown pane, not the tab bar: every live session has
-  // a tab, so reporting tabs would exempt every possible park victim.
-  expect(body).toContain('if (shownSessionId) visible.add(shownSessionId)')
-  // Panes only exist under the chat view; a non-chat page protects nothing.
-  expect(body).toContain("if (activeView === 'chat') {")
-  expect(body).toContain('getBridge().reportVisibleSessions(sessionIds)')
-  // The report sends that same memoized set.
-  expect(body).toContain('const sessionIds = [...onScreenSessions].sort()')
-  // The dedupe key is recorded only AFTER a delivered send, so a call throttled
-  // by the preload's shared rate guard retries instead of pinning main to a
-  // stale set.
-  const sendIndex = body.indexOf('reportVisibleSessions(sessionIds)')
-  const recordIndex = body.indexOf('reportedVisibleRef.current = key')
-  expect(recordIndex).toBeGreaterThan(sendIndex)
-})
-
 test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing a dead pane', () => {
   // The defect this pins: `sessionActions.ts` labels a non-live registry row
   // "Restore", but the menu's handler ran `selectTab(targetId)` — pure UI focus

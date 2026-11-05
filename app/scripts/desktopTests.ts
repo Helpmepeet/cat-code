@@ -24,7 +24,7 @@ export const slowDesktopTests = {
     'app/sidecar/usageSummary.integration.test.ts',
   ],
   runtime: [
-    'app/main/idleParkLifecycle.probe.test.ts',
+    'app/main/parkLifecycle.probe.test.ts',
     'app/main/scheduledTaskRunner.process.test.ts',
     'app/sidecar/accountsPoolWorker.probe.test.ts',
     'app/sidecar/diagnosticsDomain.test.ts',

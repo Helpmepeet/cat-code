@@ -3831,7 +3831,7 @@ export type HostRequestFrame = {
  * What this session is doing right now (HOST-REQUEST-PLANE §4 step 4a, the half
  * that survived the §0a cut).
  *
- * It exists because main knows only RECENCY (`idleParkDriver.ts` `recencyOf`)
+ * It exists because main knows only registry recency
  * and deliberately does not read the engine's `turn.status` vocabulary, so
  * without this frame `peers.list` could not tell a creator "Bear is running"
  * from "Bear is stuck on a permission prompt" from "Bear is done". The same
@@ -4389,19 +4389,6 @@ export type CatCodeBridge = {
   pickAttachmentFile(
     appSessionId: SessionId,
   ): Promise<AttachmentFileSelection | null>
-  /**
-   * IDLE-PARK (decisions/IDLE-PARK.md §4, option (b)) — report which sessions the
-   * user can currently SEE, so main's park policy never reclaims an engine out
-   * from under a pane on screen. Sent on every change to the visible set; main
-   * keeps only the latest.
-   *
-   * The weakest possible sender by construction: it names sessions to EXEMPT from
-   * an optimisation, so it can start nothing, address nothing, and carries no
-   * path, permission id, or engine object. It stays on the host control plane and
-   * never becomes sidecar vocabulary — no inbound frame kind, no engine
-   * reachability. Ids main does not recognise are inert.
-   */
-  reportVisibleSessions(sessionIds: SessionId[]): void
 
   /* ----------------------------------------------------------------------- *
    * Control plane (P3-3 — REGISTRY §6.1 / SECURITY-MINIMUM Addendum HC1–HC4).

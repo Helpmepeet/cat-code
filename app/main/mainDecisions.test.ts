@@ -15,7 +15,6 @@ import {
   MAX_SAVE_TEXT_BYTES,
   PARKED_EXIT_CODE,
 } from '../shared/limits.js'
-import { MAX_LIVE_SESSIONS } from '../shared/hostApi.js'
 import {
   MAX_OPERATIONAL_FIELDS,
   MAX_OPERATIONAL_STRING_BYTES,
@@ -41,7 +40,6 @@ import {
   createWindowVisibilityTracker,
   frameMutatedAccountsPool,
   isTerminalLifecycleFrame,
-  parseVisibleSessions,
   selectRendererWorkingSetKiB,
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
@@ -685,42 +683,6 @@ describe('supervisorEventToServerFrame', () => {
         supervisorEventToServerFrame({ type: 'status', sessionId: SID, status }),
       ).toBeNull()
     }
-  })
-})
-
-describe('parseVisibleSessions — the IDLE-PARK visible-pane hint at the boundary', () => {
-  test('keeps the reported ids', () => {
-    expect([...parseVisibleSessions({ sessionIds: ['a', 'b'] })]).toEqual([
-      'a',
-      'b',
-    ])
-  })
-
-  test('a malformed payload protects nothing instead of throwing', () => {
-    // Degrading to "protect nothing" is the safe direction: this hint may only
-    // ever SUPPRESS a park, so an empty set means the policy runs exactly as it
-    // did before the hint existed.
-    for (const payload of [null, undefined, 'x', 42, [], {}, { sessionIds: 'a' }]) {
-      expect(parseVisibleSessions(payload).size).toBe(0)
-    }
-  })
-
-  test('drops non-string, empty, and absurdly long entries but keeps the rest', () => {
-    const ids = parseVisibleSessions({
-      sessionIds: [1, null, '', 'x'.repeat(500), { evil: true }, 'good'],
-    })
-    expect([...ids]).toEqual(['good'])
-  })
-
-  test('cannot be used to retain an unbounded set', () => {
-    const ids = parseVisibleSessions({
-      sessionIds: Array.from({ length: MAX_LIVE_SESSIONS * 10 }, (_v, i) => `s${i}`),
-    })
-    expect(ids.size).toBe(MAX_LIVE_SESSIONS)
-  })
-
-  test('a duplicated id is one protection, not many', () => {
-    expect(parseVisibleSessions({ sessionIds: ['a', 'a', 'a'] }).size).toBe(1)
   })
 })
 

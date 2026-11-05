@@ -28,7 +28,7 @@ async function setup(projects: DesktopProject[] = []) {
     subscribe: () => () => {}, subscribeHost: () => () => {}, rendererReady: () => {},
     listSessions: async () => [session], listProjects: async () => projects,
     readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    reportVisibleSessions: () => {}, recordRenderCommit: () => {},
+    recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     listWorkspaceBranches: async () => ({ ok: false, error: { code: 'invalid_cwd', message: 'No repository in this fixture' } }),
     beginProjectDraft: async () => 'draft', pickProjectFolder, createProject, cancelProjectDraft,

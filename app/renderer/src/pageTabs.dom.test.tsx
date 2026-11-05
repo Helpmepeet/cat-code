@@ -40,7 +40,6 @@ async function mountApp(sessions: SessionDescriptor[] = [], strict = false) {
   let hostListener: (event: HostEvent) => void = () => {}
   let frameListener: (frames: ServerFrame[]) => void = () => {}
   const lifecycle: string[] = []
-  const visible: string[][] = []
   const notificationVisibility: NotificationVisibility[] = []
   const inventoryCwds: (string | null)[] = []
   const usageRefreshes: string[] = []
@@ -50,7 +49,6 @@ async function mountApp(sessions: SessionDescriptor[] = [], strict = false) {
     listSessions: async () => sessions, readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
     rendererReady: () => {}, recordRenderCommit: () => {},
     refreshUsageDashboard: () => { usageRefreshes.push('refresh') },
-    reportVisibleSessions: ids => { visible.push([...ids]) },
     reportNotificationVisibility: value => { notificationVisibility.push(value) },
     previewSession: async () => null,
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
@@ -80,7 +78,7 @@ async function mountApp(sessions: SessionDescriptor[] = [], strict = false) {
   const key = async (key: string) => { await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key, metaKey: true, bubbles: true })) }) }
   const tabs = () => [...tree.container.querySelectorAll<HTMLElement>('[role="tab"]')]
   const selected = () => tabs().filter(t => t.getAttribute('aria-selected') === 'true').map(t => t.getAttribute('aria-label'))
-  return { tree, host, frames, click, key, tabs, selected, lifecycle, visible, notificationVisibility, inventoryCwds, usageRefreshes }
+  return { tree, host, frames, click, key, tabs, selected, lifecycle, notificationVisibility, inventoryCwds, usageRefreshes }
 }
 
 test('dismissing a message log warning survives tab switches but not a new error', async () => {
@@ -405,7 +403,7 @@ test('page close and numeric selection focus the matching conversation instead o
   await app.key('2')
   await app.click('Goals')
   await app.key('1')
-  expect(app.visible.at(-1)).toEqual(['a'])
+  expect(app.notificationVisibility.at(-1)).toEqual({ sessionId: 'a', visible: true })
   await app.key('3')
   for (const [key, label] of [['ArrowLeft', 'Session b,'], ['Home', 'Session a,'], ['End', 'Goals page']]) {
     const selected = app.tabs().find(t => t.getAttribute('aria-selected') === 'true')!
@@ -415,7 +413,7 @@ test('page close and numeric selection focus the matching conversation instead o
   }
   await app.key('w')
   expect(app.selected()[0]).toContain('Session b,')
-  expect(app.visible.at(-1)).toEqual(['b'])
+  expect(app.notificationVisibility.at(-1)).toEqual({ sessionId: 'b', visible: true })
 })
 
 test('session close immediately selects a page neighbor, stays dismissed on refusal, and late close preserves newer selection', async () => {
@@ -430,7 +428,7 @@ test('session close immediately selects a page neighbor, stays dismissed on refu
   await app.key('w')
   expect(app.selected()).toEqual(['Goals page'])
   expect(app.tabs().some(tab => tab.getAttribute('aria-label')?.startsWith('Session b,'))).toBe(false)
-  expect(app.visible.at(-1)).toEqual([])
+  expect(app.notificationVisibility.at(-1)).toEqual({ sessionId: null, visible: true })
   await act(async () => { closing.resolve({ ok: false, error: { code: 'session_unreachable', message: 'Synthetic close refusal' } }) })
   await app.host({ type: 'session-status', session: sessionDescriptor('b') })
   expect(app.selected()).toEqual(['Goals page'])
@@ -465,7 +463,7 @@ test('hidden conversation keeps draft, receives messages and permission attentio
   await app.frames({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'permission.requested', request: { requestId: 'perm', request: { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'date' }, tool_use_id: 'tool' } } } },
     { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'message', message: { type: 'assistant', uuid: 'message-1', message: { role: 'assistant', content: [{ type: 'text', text: 'arrived while hidden' }] } } } } as ServerFrame)
   expect(app.tabs()[0]?.getAttribute('aria-label')).toContain('waiting for you')
-  expect(app.visible.at(-1)).toEqual([])
+  expect(app.notificationVisibility.at(-1)).toEqual({ sessionId: null, visible: true })
   await app.key('1')
   expect(app.selected()[0]).toContain('Session a,')
   expect(app.tree.container.textContent).toContain('arrived while hidden')
@@ -534,10 +532,10 @@ test('page navigation hides the pane and Settings loses removed session context'
   await app.click('General')
   await app.click('Project: a')
   expect(app.inventoryCwds.at(-1)).toBe('/tmp/a')
-  expect(app.visible.at(-1)).toEqual([])
+  expect(app.notificationVisibility.at(-1)).toEqual({ sessionId: null, visible: true })
   await app.key('2')
   expect(app.selected()[0]).toContain('Session b,')
-  expect(app.visible.at(-1)).toEqual(['b'])
+  expect(app.notificationVisibility.at(-1)).toEqual({ sessionId: 'b', visible: true })
   await app.click('Settings')
   await app.host({ type: 'session-removed', appSessionId: 'a' })
   await app.host({ type: 'session-removed', appSessionId: 'b' })

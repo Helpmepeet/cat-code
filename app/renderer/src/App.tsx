@@ -3625,19 +3625,6 @@ export function App() {
     }
   }, [connection, pendingSubmits, releasePendingSubmit, restoreParkedSession])
 
-  // IDLE-PARK §4(b) — tell main which sessions are on screen so its park policy
-  // leaves them alone. The shown pane IS the visible set; `activeSessionId` rides
-  // along for the window between a focus change and the pane catching up.
-  // Latest-wins at main, so closing a pane un-protects it immediately.
-  //
-  // Sent only when the SET changes, so re-renders that keep the same sessions on
-  // screen do not burn the preload's shared rate budget (`rendererIpcGuard`) to
-  // re-state a fact main already has.
-  // `null`, not `''`: the empty set is a real, reportable state (every pane
-  // closed, or the user on a non-chat page) and its key IS the empty string, so
-  // seeding with `''` would make the one report that un-protects everything the
-  // one report that can never be sent.
-  const reportedVisibleRef = useRef<string | null>(null)
   const notificationRetryBlockedIds = useMemo(() => new Set(
     selectShellDescriptors(shell).filter(descriptor => {
       const id = descriptor.appSessionId
@@ -3665,12 +3652,8 @@ export function App() {
       console.warn('Notification retry state could not be delivered', error)
     }
   }, [notificationRetryBlockedIds])
-  // Panes render only under the chat view (`activeView === 'chat'` below), so
-  // while the user is on Settings/Sessions/Accounts nothing is on screen and
-  // nothing is protected. Without this, leaving the app parked on a non-chat
-  // page would exempt every session from the TTL indefinitely, which is the
-  // abandoned-tab case the TTL exists for. The same set decides which sessions'
-  // finished turns count as seen.
+  // Only chat panes count finished turns and peer-opened sessions as seen.
+  // Include the active session while the shown pane catches up to a focus change.
   const onScreenSessions = useMemo(() => {
     const visible = new Set<SessionId>()
     if (activeView === 'chat') {
@@ -3687,31 +3670,6 @@ export function App() {
   useEffect(() => {
     dispatchShell({ type: 'peer-opens-seen', sessionIds: [...onScreenSessions] })
   }, [onScreenSessions, shell.byId])
-  useEffect(() => {
-    const sessionIds = [...onScreenSessions].sort()
-    const key = sessionIds.join(' ')
-    if (key === reportedVisibleRef.current) return
-    try {
-      getBridge().reportVisibleSessions(sessionIds)
-      // Recorded only once the send actually returned. `reportVisibleSessions`
-      // throws through the preload's SHARED rate guard, and marking the key sent
-      // before the call meant a throttled call was remembered as delivered — so
-      // main stayed pinned to the previous set even after the user settled on a
-      // new pane, which is the precise failure this hint exists to prevent.
-      reportedVisibleRef.current = key
-    } catch {
-      // A hint, not a dependency: if it cannot be delivered the policy simply
-      // runs as it did before this existed. Never break the render for it.
-      //
-      // Leaving the ref alone means the NEXT visible-set change re-sends; it is
-      // not a retry of this one, because the effect re-runs only on its deps. A
-      // report lost to the rate guard therefore leaves main on the previous set
-      // until the user next moves. Accepted rather than papered over with a
-      // timer: the guard is 120 renderer sends per second and every one of them
-      // is a deliberate user action, so this is a bound, not a working regime,
-      // and the failure direction is less protection, never a wrongful park.
-    }
-  }, [onScreenSessions])
 
   // The work mark each sidebar row and tab shows, for every session any store knows about.
   const sessionWorkMarks = useMemo(() => {

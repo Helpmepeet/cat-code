@@ -23,7 +23,7 @@ test('Enter shows the Focused queue before any sidecar reply, reconciles once, a
   window.catcode = {
     subscribe: listener => { receive = listener; return () => {} }, subscribeHost: () => () => {},
     rendererReady() {}, listSessions: async () => [descriptor], readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    reportVisibleSessions() {}, recordRenderCommit() {}, getSessionFolderState: async () => ({ ok: true, value: 'available' }),
+    recordRenderCommit() {}, getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
     submit: (_id, _prompt, options) => { submits.push(options!) },
   } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge

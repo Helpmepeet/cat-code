@@ -19,7 +19,7 @@ beforeAll(async () => {
   const bridge: Pick<typeof window.catcode,
     'recordRenderCommit' | 'subscribe' | 'rendererReady' | 'subscribeHost' |
     'readProjectRoutes' | 'listSessions' | 'readSessionsCatalog' |
-    'reportVisibleSessions' | 'readSettingsInventory' | 'saveDiagnosticsBundle'
+    'readSettingsInventory' | 'saveDiagnosticsBundle'
   > = {
     recordRenderCommit() {},
     subscribe: () => () => {},
@@ -28,7 +28,6 @@ beforeAll(async () => {
     readProjectRoutes: async () => [],
     listSessions: async () => [],
     readSessionsCatalog: async () => null,
-    reportVisibleSessions() {},
     readSettingsInventory: async () => ({
       ok: true,
       inventory: {

@@ -156,7 +156,6 @@ import {
   CH_HOST_ACCOUNT_DELETE,
   CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
-  CH_HOST_VISIBLE_SESSIONS,
 } from '../shared/ipcChannels.js'
 import { createRendererIpcGuard } from './rendererIpcGuard.js'
 import { DeliveryAckQueue } from './deliveryAckQueue.js'
@@ -729,15 +728,6 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   getExternalAppIcon(request) {
     sendGuard.assertAllowed(request)
     return ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)
-  },
-  reportVisibleSessions(sessionIds: SessionId[]): void {
-    // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park
-    // policy skips them. Fixed channel, guarded like every other sender; main
-    // re-validates shape + bounds (`parseVisibleSessions`) because the preload
-    // runs in the renderer's process and is never the boundary.
-    const payload = { sessionIds }
-    sendGuard.assertAllowed(payload)
-    ipcRenderer.send(CH_HOST_VISIBLE_SESSIONS, payload)
   },
   reportNotificationVisibility(value: NotificationVisibility): void {
     sendGuard.assertAllowed(value)

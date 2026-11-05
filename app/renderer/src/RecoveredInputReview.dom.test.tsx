@@ -27,7 +27,7 @@ async function mountReview() {
   window.catcode = {
     subscribe: listener => { receive = listener; return () => {} }, subscribeHost: () => () => {},
     rendererReady() {}, listSessions: async () => [descriptor], readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    reportVisibleSessions() {}, recordRenderCommit() {}, getSessionFolderState: async () => ({ ok: true, value: 'available' }),
+    recordRenderCommit() {}, getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),
     recallPrompts: (_sessionId, message) => { recalls.push(message) },
     submit() { submits++ },

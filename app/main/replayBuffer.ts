@@ -81,14 +81,9 @@ import { MAX_OUTBOUND_FRAME_BYTES } from '../shared/limits.js'
  *
  * The bound this costs is the ELECTRON MAIN process, not an engine process: the
  * engines are N separate processes, while `FrameReplayBuffer.sessions` is one
- * Map in main. The transcript-ring ceiling is therefore `MAX_LIVE_ENGINES`
- * (`app/main/idleParkDriver.ts`) × `DEFAULT_MAX_BUFFERED_BYTES`, which at the
- * current live-engine cap of 4 is 64 MiB of serialized JSON held as parsed
- * objects, all in main; a cap of 8 would be 128 MiB. (`MAX_LIVE_SESSIONS` 32 is
- * the ROSTER bound, not the live-engine bound, and the 256 MiB figure this
- * comment used to quote assumed 32 buffers that no cap ever allows.) Generated
- * images use the separately bounded 32 MiB preview tier below. Steady state is
- * far below either ceiling because idle-park frees a parked session's buffer.
+ * Map in main. Each open session can retain 16 MiB of serialized ring JSON held
+ * as parsed objects, plus the separately bounded 32 MiB generated-image preview
+ * tier below. The number of live sessions is bounded by `MAX_LIVE_SESSIONS`.
  */
 export const DEFAULT_MAX_BUFFERED_FRAMES = 8_000
 /**

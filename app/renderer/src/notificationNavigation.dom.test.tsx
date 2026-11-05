@@ -6,6 +6,7 @@ import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
 import { PROTOCOL_VERSION, type CatCodeBridge, type ServerFrame } from '../../shared/protocol.js'
 import { createTranscriptState, projectServerFrames, selectNestedTranscriptRows } from './transcriptProjector.js'
 import { retryableTurn } from './turnFailure.js'
+import type { NotificationVisibility, NotificationVisibilityBridge } from '../../shared/notificationVisibility.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -27,7 +28,7 @@ function descriptor(id: string): SessionDescriptor {
 
 test.each([false, true])('notification activation opens an offscreen session and accounts=%s', async accounts => {
   let receiveHost!: (event: HostEvent) => void
-  const visible: string[][] = []
+  const notificationVisibility: NotificationVisibility[] = []
   window.catcode = {
     subscribe: () => () => {},
     subscribeHost: receive => { receiveHost = receive; return () => {} },
@@ -35,11 +36,11 @@ test.each([false, true])('notification activation opens an offscreen session and
     listSessions: async () => [descriptor('first')],
     readProjectRoutes: async () => [],
     readSessionsCatalog: async () => null,
-    reportVisibleSessions: ids => { visible.push([...ids]) },
+    reportNotificationVisibility: value => { notificationVisibility.push(value) },
     recordRenderCommit: () => {},
     refreshAccountsPool: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
-  } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
+  } satisfies Partial<CatCodeBridge> & NotificationVisibilityBridge as unknown as CatCodeBridge
   const tree = await harness.mount(<App />)
   await act(async () => {
     receiveHost({ type: 'session-status', session: { ...descriptor('offscreen'), appSessionId: '00000000-0000-4000-8000-000000000001' } })
@@ -47,8 +48,10 @@ test.each([false, true])('notification activation opens an offscreen session and
   })
   const selected = tree.container.querySelector('[role="tab"][aria-selected="true"]')
   expect(selected?.textContent).toContain(accounts ? 'Accounts' : 'offscreen')
-  if (!accounts) expect(visible.at(-1)).toEqual(['00000000-0000-4000-8000-000000000001'])
-  else expect(visible.at(-1)).toEqual([])
+  expect(notificationVisibility.at(-1)).toEqual({
+    sessionId: accounts ? null : '00000000-0000-4000-8000-000000000001',
+    visible: true,
+  })
 })
 
 test('the live card selects the same projected result through the shared Retry gate', async () => {
@@ -65,7 +68,6 @@ test('the live card selects the same projected result through the shared Retry g
     listSessions: async () => [{ ...descriptor('Retry target'), appSessionId: sessionId }],
     readProjectRoutes: async () => [],
     readSessionsCatalog: async () => null,
-    reportVisibleSessions: () => {},
     recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     listWorkspaceBranches: async () => ({ ok: true, value: { current: null, branches: [], dirty: false } }),

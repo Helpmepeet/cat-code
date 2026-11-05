@@ -66,7 +66,6 @@ test.each([
     listSessions: async () => context === 'none' ? [] : [active],
     readProjectRoutes: async () => [],
     readSessionsCatalog: async () => null,
-    reportVisibleSessions: () => {},
     recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     createManagedChat: async () => {
@@ -156,7 +155,6 @@ test.each(['button', 'shortcut', 'sidebar'] as const)(
       listSessions: async () => [descriptor('existing-chat', true)],
       readProjectRoutes: async () => [],
       readSessionsCatalog: async () => null,
-      reportVisibleSessions: () => {},
       recordRenderCommit: () => {},
       getSessionFolderState: () => folder.promise,
       createManagedChat: async () => {
@@ -222,7 +220,7 @@ test.each(['empty', 'history', 'existing'] as const)('startup opens a composer a
     subscribeHost: receive => { host = receive; return () => {} },
     rendererReady: () => {}, listSessions: () => roster.promise,
     readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    reportVisibleSessions: () => {}, recordRenderCommit: () => {},
+    recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     createManagedChat: async () => {
       creates.push('managed')
@@ -271,7 +269,7 @@ test('startup preserves roster and sign-in gates and retries failed creation onl
       return retriedRoster.promise
     },
     readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    reportVisibleSessions: () => {}, recordRenderCommit: () => {},
+    recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     createManagedChat: async () => {
       if (++creates === 1) throw new Error('Chat unavailable')
@@ -329,7 +327,7 @@ async function mountCommands({
     subscribeHost: receive => { host = receive; return () => {} },
     rendererReady: () => {}, listSessions: async () => sessions,
     readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
-    reportVisibleSessions: () => {}, recordRenderCommit: () => {},
+    recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
     createManagedChat: () => create(null), createSessionInWorkspace: id => create(id),
     listWorkspaceBranches: async () => ({ ok: true, value: { current: 'main', branches: ['main'], dirty: false } }),

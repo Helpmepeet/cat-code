@@ -31,7 +31,7 @@ async function mountAccountsApp(refusedVerbs: AccountVerbMessage['type'][] = [],
     listSessions: async () => recovery ? [sessionDescriptor('recovery-chat')] : [],
     readProjectRoutes: async () => [],
     readSessionsCatalog: async () => null,
-    rendererReady: () => {}, recordRenderCommit: () => {}, reportVisibleSessions: () => {},
+    rendererReady: () => {}, recordRenderCommit: () => {},
     refreshUsageDashboard: () => {},
     ...(recovery ? { lidClosed: {
       read: async () => lidView,

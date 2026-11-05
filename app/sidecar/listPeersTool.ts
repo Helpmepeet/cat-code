@@ -62,10 +62,9 @@ type Input = z.infer<InputSchema>
  * How many CLOSED peers an ordinary call carries.
  *
  * The live and parked parts of a roster are bounded by things outside this
- * file: a live row costs a process (`MAX_LIVE_SESSIONS`) and the idle-park
- * driver holds the number far below that, and a parked row is a tab somebody
- * has open. The closed tail has no such bound. Names are write-once and a row
- * survives until the registry reaps at `MAX_REGISTRY_SESSIONS`, so on a
+ * file: a live row costs a process (`MAX_LIVE_SESSIONS`), and a parked row is a
+ * tab somebody has open. The closed tail has no such bound. Names are write-once
+ * and a row survives until the registry reaps at `MAX_REGISTRY_SESSIONS`, so on a
  * workspace that has been worked in for a while it is the whole cost of the
  * answer: measured against a real 53-row workspace, 52 rows of roster spent
  * about 1,500 tokens to say that nothing was open.

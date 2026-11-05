@@ -78,7 +78,7 @@ async function mountApp(initial: ServerFrame[] = [ready(), ready('other-session'
     listSessions: async () => [descriptor(SID), descriptor('other-session')],
     readProjectRoutes: async () => [], readSessionsCatalog: async () => null,
     listWorkspaceBranches: async () => ({ ok: true, value: { current: 'main', branches: ['main'], dirty: false } }),
-    reportVisibleSessions: () => {}, recordRenderCommit: () => {},
+    recordRenderCommit: () => {},
     getSessionFolderState: async () => ({ ok: true, value: 'available' }),
   } satisfies Partial<CatCodeBridge> as unknown as CatCodeBridge
   const tree = await harness.mount(<App />)

@@ -127,12 +127,6 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // session-independent deleteAccount).
   // subscribe / subscribeHost register a listener and send no payload, so they do
   // NOT (and must not) call the guard.
-  // IDLE-PARK §4(b) — the visible-pane hint is a fixed one-way sender like the
-  // rest, guarded here and re-validated at main (`parseVisibleSessions`).
-  expect(channels).toContain(
-    "export const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
-  )
-  expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
   // The appearance sender (2026-08-27). Fixed and one-way like the rest,
   // narrowed here to the three-value choice and re-validated at main, which is
   // the boundary (`app/main/appearanceChannel.test.ts`).
@@ -154,7 +148,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain('setPeerWakeBlocked(')
   expect(channels).toContain("export const CH_NOTIFICATION_VISIBILITY = 'catcode:notification-visibility'")
   expect(source).toContain('reportNotificationVisibility(value: NotificationVisibility): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(96)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(95)
   expect(channels).toContain("export const CH_HOST_EXTERNAL_APP_ICON = 'catcode:host:external-app-icon'")
   expect(source).toContain('ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)')
   expect(channels).toContain("export const CH_QUESTION_VERB = 'catcode:question-verb'")
@@ -213,7 +207,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(102)
+  expect(names.length).toBe(101)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")

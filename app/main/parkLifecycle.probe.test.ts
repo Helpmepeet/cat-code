@@ -1,9 +1,9 @@
 /**
- * IDLE-PARK end-to-end lifecycle probe — a REAL sidecar parked and unparked, with
+ * Park-for-move lifecycle probe: a REAL sidecar parked and unparked, with
  * the renderer's own connection reducer folded over the REAL frame stream.
  *
  * Every hop of park was unit-tested in isolation before this
- * (`idleParkDriver.test.ts`: victim selection; `sidecarServer.test.ts`: the gate +
+ * (`sidecarServer.test.ts`: the gate +
  * latch + exit; `host.test.ts`: exit-code classification; `connectionState.test.ts`:
  * how a park frame reads). What was NOT tested is the CHAIN — and the defect this
  * file exists to pin lived entirely in the chain:
@@ -20,13 +20,13 @@
  *
  * What is real here: the engine's own transcript persistence (`mintTranscript`),
  * the real `SessionRegistry`, `SidecarSupervisor`, `Host`, a real Bun sidecar
- * process, the real `createIdleParkDriver` policy, the real `app.park` frame over
+ * process, the same host-originated `app.park` frame used by moves over
  * the real socket, the real `supervisorEventToServerFrame` main uses, and the real
  * `reduceConnectionState` / `selectComposerGate` / `resolvePendingSubmit` the
  * renderer uses. Nothing is stubbed but `validateCwd` (a `realpathSync` on a temp
  * dir) and the registry's transcript-existence predicate.
  *
- * Run: `bun test app/main/idleParkLifecycle.probe.test.ts`
+ * Run: `bun test ./app/main/parkLifecycle.probe.test.ts`
  */
 
 import { afterEach, expect, test } from 'bun:test'
@@ -54,7 +54,6 @@ import {
   resolvePendingSubmit,
   selectComposerGate,
 } from '../renderer/src/composerState.js'
-import { createIdleParkDriver } from './idleParkDriver.js'
 import { supervisorEventToServerFrame } from './mainDecisions.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -123,7 +122,7 @@ function waitFor(
 }
 
 test(
-  'a real idle-park reads as parked (not as an unexpected stop), holds the queued prompt, and unparks on it',
+  'a real park reads as parked (not as an unexpected stop), holds the queued prompt, and restores on it',
   async () => {
     const configHome = tmp('catcode-park-cfg-')
     const cwd = tmp('catcode-park-cwd-')
@@ -199,37 +198,8 @@ test(
       'the sidecar to go ready',
     )
 
-    // ── The real policy driver, with the TTL wide open so this idle session is a
-    // victim on the first sweep. `visible` is the renderer's visible-pane hint.
-    let visible = new Set<string>([appSessionId])
-    const driver = createIdleParkDriver({
-      listSessions: () => host.listSessions(),
-      canResume: id => host.canResume(id),
-      park: id => {
-        supervisor.send(id, { type: 'app.park', requestId: randomUUID() })
-      },
-      protectedSessions: () => visible,
-      idleTtlMs: 0,
-      now: () => Date.now() + 1_000,
-      log: () => {},
-    })
-
-    // ── Requirement 2: a session the user is looking at is not parked under them.
-    // The driver is asked to sweep repeatedly against a REAL live engine, and the
-    // engine is still there afterwards.
-    driver.evaluate()
-    driver.evaluate()
-    await Bun.sleep(750)
-    expect(exits).toBe(0)
-    expect(selectConnection(connection, appSessionId).status).toBe('ready')
-    expect(
-      host.listSessions().find(s => s.appSessionId === appSessionId)?.status,
-    ).toBe('ready')
-
-    // ── The user moves on; the pane is no longer visible, so the same sweep now
-    // reclaims the engine for real.
-    visible = new Set()
-    driver.evaluate()
+    // Send the same gated park request used by Host.parkForMove.
+    supervisor.send(appSessionId, { type: 'app.park', requestId: randomUUID() })
     await waitFor(() => exits > 0, 'the sidecar to self-exit')
     expect(exitCode).toBe(PARKED_EXIT_CODE)
 
@@ -263,7 +233,7 @@ test(
     expect(lifecycleFrames[0]?.exit?.code).toBe(PARKED_EXIT_CODE)
 
     // ── The tab is kept and the row is restorable: the host's own view, unchanged
-    // by any of this (IDLE-PARK §1 — park projects as the crash descriptor).
+    // by any of this: park projects as a restorable crash descriptor.
     const descriptor = host
       .listSessions()
       .find(s => s.appSessionId === appSessionId)
@@ -302,8 +272,6 @@ test(
     for (const frame of readyFrames) {
       if (frame.kind === 'ready') expect(frame.engineSessionId).toBe(engineSessionId)
     }
-
-    driver.stop()
   },
   TEST_TIMEOUT_MS,
 )
