@@ -3790,6 +3790,7 @@ Read the team config to discover your teammates' names. Check the task list peri
     case 'file': {
       const fileContent = attachment.content as FileReadToolOutput
       switch (fileContent.type) {
+        case 'not_found':
         case 'image': {
           return wrapMessagesInSystemReminder([
             createToolUseMessage(FileReadTool.name, {

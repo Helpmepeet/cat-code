@@ -203,6 +203,38 @@ describe('tool results separated by context', () => {
   })
 })
 
+describe('missing-file attachment normalization', () => {
+  test.each([{ suggestions: [] }, { suggestions: ['/workspace/shared/missing.ts'] }])(
+    'preserves neutral lookup results and suggestions: %j',
+    ({ suggestions }) => {
+      const messages = normalizeAttachmentForAPI({
+        type: 'file',
+        filename: '/workspace/main/missing.ts',
+        displayPath: 'main/missing.ts',
+        content: {
+          type: 'not_found',
+          requestedPath: '/workspace/main/missing.ts',
+          suggestions: [...suggestions],
+        },
+      })
+      expect(messages).toHaveLength(2)
+      const toolUse = messages[0]?.message.content
+      expect(toolUse).toContain('Called the Read tool with the following input:')
+      expect(toolUse).toContain('"file_path":"/workspace/main/missing.ts"')
+      const content = messages[1]?.message.content
+      expect(typeof content).toBe('string')
+      expect(content).toContain('Result of calling the Read tool:')
+      expect(content).toContain('was not found.')
+      expect(content).toContain('No file was read.')
+      for (const suggestion of suggestions) {
+        expect(content).toContain(suggestion)
+      }
+      expect(messages.every(message => message.type === 'user' && message.isMeta)).toBe(true)
+      expect(JSON.stringify(messages)).not.toContain('<tool_use_error>')
+    },
+  )
+})
+
 describe('peer roster snapshot rendering', () => {
   for (const omittedCount of [undefined, 0, 3]) {
     test(`renders one meta reminder with omitted count ${omittedCount}`, () => {

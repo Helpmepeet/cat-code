@@ -25,6 +25,43 @@ describe('suggestMissingPath', () => {
     expect((await suggest('app/main/operationalLog.ts')).sort()).toEqual([a, b].sort())
   })
 
+  test('preserves dropped workspace-prefix corrections even when the requested parent is absent', async () => {
+    const candidate = await file('repo/src/example.ts')
+    const cwd = join(root, 'repo')
+    const requested = join(root, 'src/example.ts')
+    expect(await suggestMissingPath(requested, { cwd, canInspect: () => true })).toEqual([candidate])
+    expect(await suggestMissingPath(requested, {
+      cwd,
+      canInspect: path => path === cwd || path.startsWith(`${cwd}/`),
+    })).toEqual([candidate])
+    expect(await suggestMissingPath(requested, {
+      cwd, canInspect: path => path !== candidate,
+    })).toEqual([])
+    expect(await suggestMissingPath(requested, {
+      cwd, canInspect: path => path !== join(cwd, 'src'),
+    })).toEqual([])
+  })
+
+  test('cwd-prefix corrections do not follow a candidate or ancestor symlink', async () => {
+    await file('outside/example.ts')
+    await mkdir(join(root, 'repo/src'), { recursive: true })
+    const candidate = join(root, 'repo/src/example.ts')
+    await symlink(join(root, 'outside/example.ts'), candidate)
+    expect(await suggestMissingPath(join(root, 'src/example.ts'), {
+      cwd: join(root, 'repo'), canInspect: () => true,
+    })).toEqual([])
+    await symlink(join(root, 'outside'), join(root, 'repo/linked'))
+    expect(await suggestMissingPath(join(root, 'linked/example.ts'), {
+      cwd: join(root, 'repo'), canInspect: () => true,
+    })).toEqual([])
+  })
+
+  test('finds nearby siblings below the workspace-wide depth bound', async () => {
+    await mkdir(join(root, 'a/b/c/d/e/main'), { recursive: true })
+    const candidate = await file('a/b/c/d/e/shared/match.ts')
+    expect(await suggest('a/b/c/d/e/main/match.ts')).toEqual([candidate])
+  })
+
   test('same-stem matches stay in the requested directory; only filenames are returned', async () => {
     const a = await file('src/example.tsx')
     await file('other/example.js')

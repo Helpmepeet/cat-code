@@ -13,10 +13,62 @@ const within = (root: string, path: string) => {
   return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`))
 }
 
-/** Filename hints only. Never opens candidate files or substitutes a requested path. */
+type SuggestionOptions = {
+  cwd: string
+  canInspect: (absolutePath: string) => boolean
+  signal?: AbortSignal
+}
+
+/** Filename hints only. Never reads candidate contents or substitutes a requested path. */
 export async function suggestMissingPath(
   requestedPath: string,
-  options: { cwd: string; canInspect: (absolutePath: string) => boolean; signal?: AbortSignal },
+  options: SuggestionOptions,
+): Promise<string[]> {
+  options.signal?.throwIfAborted()
+  if (isUNC(requestedPath) || isUNC(options.cwd)) return []
+  const correction = await suggestCwdPrefixCorrection(requestedPath, options)
+  const nearby = await suggestNearbyPaths(requestedPath, options)
+  return [...new Set([...(correction ? [correction] : []), ...nearby])].slice(0, 5)
+}
+
+async function suggestCwdPrefixCorrection(
+  requestedPath: string,
+  { cwd: workingDirectory, canInspect, signal }: SuggestionOptions,
+): Promise<string | undefined> {
+  const cwd = resolve(workingDirectory)
+  const requested = resolve(cwd, requestedPath)
+  const parent = dirname(cwd)
+  if (!within(parent, requested) || within(cwd, requested) || requested === parent) return
+  const corrected = join(cwd, relative(parent, requested))
+  let contained: ContainedFs | undefined
+  try {
+    if (!canInspect(cwd) || !canInspect(corrected)) return
+    let directory = dirname(corrected)
+    while (within(cwd, directory)) {
+      signal?.throwIfAborted()
+      if (!canInspect(directory)) return
+      if (directory === cwd) break
+      directory = dirname(directory)
+    }
+    // A correction inside cwd never inherits approval of the missing outside path.
+    contained = await openContainedFs(cwd)
+    signal?.throwIfAborted()
+    if (contained.canonicalRoot !== cwd || !canInspect(contained.canonicalRoot)) return
+    const entry = await contained.lstat(relative(cwd, corrected).split(sep).join('/'))
+    signal?.throwIfAborted()
+    if (!entry.isSymbolicLink() && (entry.isFile() || entry.isDirectory()) && canInspect(corrected)) {
+      return corrected
+    }
+  } catch {
+    signal?.throwIfAborted()
+  } finally {
+    if (contained) await contained.close()
+  }
+}
+
+async function suggestNearbyPaths(
+  requestedPath: string,
+  options: SuggestionOptions,
 ): Promise<string[]> {
   const { canInspect, signal } = options
   const checkAbort = () => signal?.throwIfAborted()
@@ -69,12 +121,12 @@ export async function suggestMissingPath(
     if (contained.canonicalRoot !== root || !canInspect(contained.canonicalRoot)) return []
     const rootRelative = (path: string) => relative(root, path).split(sep).join('/')
 
-    const queue: string[] = []
+    const queue: { directory: string; depth: number }[] = []
     const queued = new Set<string>()
-    const enqueue = (directory: string) => {
+    const enqueue = (directory: string, depth = 0) => {
       if (queued.size >= MAX_DIRECTORIES || queued.has(directory)) return
       queued.add(directory)
-      queue.push(directory)
+      queue.push({ directory, depth })
     }
     // Seed nearby ancestors first, then process their children breadth-first.
     // A large unrelated subtree must not hide a sibling such as app/shared.
@@ -88,7 +140,7 @@ export async function suggestMissingPath(
       }
       enqueue(cwd)
     }
-    const scan = async (directory: string): Promise<void> => {
+    const scan = async (directory: string, depth: number): Promise<void> => {
       checkAbort()
       if (directories >= MAX_DIRECTORIES || entries >= MAX_ENTRIES || exact.length >= 5) return
       try {
@@ -118,10 +170,9 @@ export async function suggestMissingPath(
               const results = entryName === name ? exact : sameStem
               if (results.length < 5 && !results.includes(path)) results.push(path)
             }
-          } else if (inWorkspace && entry.isDirectory() &&
-              relative(cwd, path).split(sep).length <= MAX_DEPTH &&
+          } else if (inWorkspace && entry.isDirectory() && depth < MAX_DEPTH &&
               !entryName.startsWith('.') && !SKIP.has(entryName)) {
-            enqueue(path)
+            enqueue(path, depth + 1)
           }
         }
       } catch {
@@ -131,7 +182,8 @@ export async function suggestMissingPath(
     }
     for (let index = 0; index < queue.length; index++) {
       if (entries >= MAX_ENTRIES || exact.length >= 5) break
-      await scan(queue[index]!)
+      const next = queue[index]!
+      await scan(next.directory, next.depth)
     }
     checkAbort()
     return [...exact, ...sameStem].slice(0, 5)
