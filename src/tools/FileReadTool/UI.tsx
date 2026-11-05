@@ -77,6 +77,10 @@ export function renderToolUseTag({
 export function renderToolResultMessage(output: Output): React.ReactNode {
   // TODO: Render recursively
   switch (output.type) {
+    case 'not_found':
+      return <MessageResponse>
+        <Text dimColor>File not found{output.suggestions.length > 0 ? ` · ${output.suggestions.length} suggested paths` : ''}</Text>
+      </MessageResponse>;
     case 'image':
       {
         const {

@@ -35,9 +35,8 @@ import { getErrnoCode, isENOENT } from '../../utils/errors.js'
 import {
   addLineNumbers,
   fileIdentitiesEqual,
-  FILE_NOT_FOUND_CWD_NOTE,
-  suggestPathUnderCwd,
 } from '../../utils/file.js'
+import { formatMissingPathResult, suggestMissingPath } from '../../utils/missingPathSuggestions.js'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
 import { formatFileSize } from '../../utils/format.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
@@ -150,28 +149,6 @@ function isBlockedDevicePath(filePath: string): boolean {
   )
     return true
   return false
-}
-
-async function findSimilarPreparedFile(
-  prepared: NonNullable<ReturnType<typeof getPreparedFileRead>>,
-): Promise<string | undefined> {
-  try {
-    const files = await prepared.readSiblingNames()
-    const fileBaseName = path.basename(
-      prepared.canonicalPath,
-      path.extname(prepared.canonicalPath),
-    )
-    const match = files.find(
-      name =>
-        path.basename(name, path.extname(name)) === fileBaseName &&
-        name !== path.basename(prepared.canonicalPath),
-    )
-    return match
-      ? path.join(path.dirname(prepared.canonicalPath), match)
-      : undefined
-  } catch {
-    return undefined
-  }
 }
 
 function checkReadPermissionForBoundPath(
@@ -411,6 +388,11 @@ const outputSchema = lazySchema(() => {
   ])
 
   return z.discriminatedUnion('type', [
+    z.object({
+      type: z.literal('not_found'),
+      requestedPath: z.string(),
+      suggestions: z.array(z.string()),
+    }),
     z.object({
       type: z.literal('text'),
       file: z.object({
@@ -998,15 +980,22 @@ export const FileReadTool = buildTool({
           )
           if (resolved) return { data: resolved }
         }
-        const similarFilename = await findSimilarPreparedFile(prepared)
-        const cwdSuggestion = await suggestPathUnderCwd(fullFilePath)
-        let message = `File does not exist. ${FILE_NOT_FOUND_CWD_NOTE} ${getCwd()}.`
-        if (cwdSuggestion) {
-          message += ` Did you mean ${cwdSuggestion}?`
-        } else if (similarFilename) {
-          message += ` Did you mean ${similarFilename}?`
-        }
-        throw new Error(message)
+        context.abortController.signal.throwIfAborted()
+        const permissions = context.getAppState().toolPermissionContext
+        const suggestions = getAskRuleForTool(permissions, FileReadTool) ||
+          getDenyRuleForTool(permissions, FileReadTool)
+          ? []
+          : await suggestMissingPath(fullFilePath, {
+              cwd: getCwd(),
+              signal: context.abortController.signal,
+              canInspect: candidate =>
+                checkReadPermissionForTool(
+                  FileReadTool,
+                  { file_path: candidate },
+                  permissions,
+                ).behavior === 'allow',
+            })
+        return { data: { type: 'not_found', requestedPath: fullFilePath, suggestions } }
       }
       throw error
     } finally {
@@ -1017,6 +1006,12 @@ export const FileReadTool = buildTool({
   },
   mapToolResultToToolResultBlockParam(data, toolUseID) {
     switch (data.type) {
+      case 'not_found':
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result',
+          content: formatMissingPathResult(data.requestedPath, data.suggestions, 'read'),
+        }
       case 'image': {
         return {
           tool_use_id: toolUseID,

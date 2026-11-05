@@ -25,6 +25,7 @@ import {
 } from '../../utils/fileStateCache.js'
 import { createAssistantMessage } from '../../utils/messages.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
+import { hasPermissionsToUseTool } from '../../utils/permissions/permissions.js'
 import {
   checkApprovedUncReadTarget,
   FileReadTool,
@@ -60,6 +61,7 @@ mock.module('../../services/tools/toolHooks.js', () => ({
   },
 }))
 const { runToolUse } = await import('../../services/tools/toolExecution.js')
+const { GrepTool } = await import('../GrepTool/GrepTool.js')
 
 let tmpDir: string
 let priorSimple: string | undefined
@@ -119,7 +121,7 @@ describe('approved deferred UNC reads', () => {
 
 beforeAll(() => {
   macroState.MACRO = { VERSION: 'test-version' }
-  tmpDir = mkdtempSync(join(tmpdir(), 'file-read-tool-'))
+  tmpDir = realpathSync(mkdtempSync(join(tmpdir(), 'file-read-tool-')))
   // Skips skill discovery in call(), which would hit the real filesystem.
   priorSimple = process.env.CLAUDE_CODE_SIMPLE
   priorFixturesRoot = process.env.CLAUDE_CODE_TEST_FIXTURES_ROOT
@@ -214,9 +216,13 @@ function createLifecycleContext(
 }
 
 async function runRealToolUse(
-  tool: typeof FileReadTool | typeof FileWriteTool,
+  tool: typeof FileReadTool | typeof FileWriteTool | typeof GrepTool,
   input: Record<string, unknown>,
   context: ToolUseContext,
+  canUseTool: Parameters<typeof runToolUse>[2] = async (_tool, authorizedInput) => ({
+    behavior: 'allow',
+    updatedInput: authorizedInput,
+  }),
 ): Promise<unknown[]> {
   const updates: unknown[] = []
   for await (const _update of runToolUse(
@@ -228,10 +234,7 @@ async function runRealToolUse(
       caller: { type: 'direct' },
     },
     createAssistantMessage({ content: [] }),
-    async (_tool, authorizedInput) => ({
-      behavior: 'allow',
-      updatedInput: authorizedInput,
-    }),
+    canUseTool,
     context,
   )) {
     updates.push(_update.message)
@@ -267,6 +270,99 @@ describe('missing-file exact function recovery', () => {
       ),
     )
   }
+
+  async function expectNotFound(result: ReturnType<typeof recover>) {
+    const { data } = await result
+    expect(data.type).toBe('not_found')
+    expect(FileReadTool.outputSchema.safeParse(data).success).toBe(true)
+    const block = FileReadTool.mapToolResultToToolResultBlockParam(data, 'missing-read')
+    expect(block.is_error).not.toBe(true)
+    expect(block.content).toContain('not found')
+    expect(block.content).not.toContain('<tool_use_error>')
+  }
+
+  test('missing reads suggest an exact filename elsewhere without reading it', async () => {
+    const entry = fixture('filename-suggestions', 'function Unrelated() {}')
+    mkdirSync(join(entry.directory, 'app/main'), { recursive: true })
+    mkdirSync(join(entry.directory, 'app/shared'), { recursive: true })
+    const candidate = join(entry.directory, 'app/shared/operationalLog.ts')
+    writeFileSync(candidate, 'export const secret = "DO NOT RETURN FILE CONTENT";\n')
+    entry.requested = join(entry.directory, 'app/main/operationalLog.ts')
+    const { data } = await recover(entry)
+    expect(data).toEqual({
+      type: 'not_found',
+      requestedPath: entry.requested,
+      suggestions: [candidate],
+    })
+    const result = FileReadTool.mapToolResultToToolResultBlockParam(data, 'missing')
+    expect(result.is_error).not.toBe(true)
+    expect(result.content).toContain('No file was read.')
+    expect(result.content).not.toContain('DO NOT RETURN FILE CONTENT')
+    expect(entry.context.readFileState.size).toBe(0)
+    const updates = await runWithCwdOverride(entry.directory, () =>
+      runRealToolUse(FileReadTool, { file_path: entry.requested }, entry.context),
+    )
+    expect(JSON.stringify(updates)).toContain('No file was read.')
+    expect(JSON.stringify(updates)).not.toContain('"is_error":true')
+    expect(JSON.stringify(updates)).not.toContain('<tool_use_error>')
+  })
+
+  test.each(['alwaysDenyRules', 'alwaysAskRules'] as const)(
+    'does not suggest filenames excluded by %s',
+    async rules => {
+      const entry = fixture(`filename-permissions-${rules}`, 'function Unrelated() {}')
+      const candidate = join(entry.directory, 'TasksStrip.ts')
+      writeFileSync(candidate, 'export const secret = 1')
+      entry.context.getAppState().toolPermissionContext[rules] = {
+        session: [`Read(//${candidate.replace(/^\/+/, '')})`],
+      }
+      const { data } = await recover(entry)
+      expect(data).toEqual({
+        type: 'not_found',
+        requestedPath: entry.requested,
+        suggestions: [],
+      })
+      expect(entry.context.readFileState.size).toBe(0)
+    },
+  )
+
+  test.each([FileReadTool, GrepTool])(
+    '$name keeps missing targets neutral through the real tool lifecycle',
+    async tool => {
+      const entry = fixture(`lifecycle-not-found-${tool.name}`, 'function Unrelated() {}')
+      const context = createLifecycleContext([tool]) as ToolUseContext
+      context.getAppState().toolPermissionContext.additionalWorkingDirectories.set(entry.directory, entry.directory)
+      const input = tool.name === FileReadTool.name
+        ? { file_path: entry.requested }
+        : { path: entry.requested, pattern: 'anything' }
+      const updates = await runWithCwdOverride(entry.directory, () =>
+        runRealToolUse(tool, input, context, hasPermissionsToUseTool),
+      )
+      expect(JSON.stringify(updates)).toContain('was not found.')
+      expect(JSON.stringify(updates)).not.toContain('"is_error":true')
+      expect(JSON.stringify(updates)).not.toContain('<tool_use_error>')
+    },
+  )
+
+  test.each([FileReadTool, GrepTool])(
+    '$name keeps permission-denied missing targets as errors',
+    async tool => {
+      const entry = fixture(`lifecycle-denied-${tool.name}`, 'function Unrelated() {}')
+      const context = createLifecycleContext([tool], {
+        alwaysDenyRules: { session: [tool.name] },
+      }) as ToolUseContext
+      context.getAppState().toolPermissionContext.additionalWorkingDirectories.set(entry.directory, entry.directory)
+      const input = tool.name === FileReadTool.name
+        ? { file_path: entry.requested }
+        : { path: entry.requested, pattern: 'anything' }
+      const updates = await runWithCwdOverride(entry.directory, () =>
+        runRealToolUse(tool, input, context, hasPermissionsToUseTool),
+      )
+      expect(JSON.stringify(updates)).toContain('"is_error":true')
+      expect(JSON.stringify(updates)).not.toContain('No file was read.')
+      expect(JSON.stringify(updates)).not.toContain('No search was performed.')
+    },
+  )
 
   test('returns only the complete exact function with real path and lines', async () => {
     const entry = fixture('success')
@@ -316,24 +412,24 @@ describe('missing-file exact function recovery', () => {
     { pages: '1' },
   ])('does not reinterpret original range or page parameters: %j', async extra => {
     const entry = fixture(`range-${JSON.stringify(extra)}`)
-    await expect(recover(entry, extra)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry, extra))
   })
 
-  test('ambiguous definitions in separate direct files keep the missing-file error', async () => {
+  test('ambiguous definitions in separate direct files return not found', async () => {
     const entry = fixture('ambiguous-files')
     writeFileSync(join(entry.directory, 'Other.tsx'), 'const TasksStrip = () => <div />;')
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
-  test('ambiguous definitions in a single file keep the missing-file error', async () => {
+  test('ambiguous definitions in a single file return not found', async () => {
     const entry = fixture('ambiguous-symbol', 'function TasksStrip() {}\n{\nconst TasksStrip = () => 42;\n}')
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
   test('does not guess prefixes or factory names', async () => {
     const entry = fixture('no-fuzzy', 'function createModelCallRecorder() {}')
     entry.requested = join(entry.directory, 'modelCallRecorder.ts')
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
   test('does not search subdirectories or parent directories', async () => {
@@ -341,7 +437,7 @@ describe('missing-file exact function recovery', () => {
     mkdirSync(join(entry.directory, 'nested'))
     writeFileSync(join(entry.directory, 'nested', 'Nested.ts'), 'function TasksStrip() {}')
     writeFileSync(join(tmpDir, 'Outside.ts'), 'function TasksStrip() {}')
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
   test.each(['TasksStrip.py', 'TasksStrip.txt', 'TasksStrip.test.tsx', 'TasksStrip.d.ts'])(
@@ -349,7 +445,7 @@ describe('missing-file exact function recovery', () => {
     async name => {
       const entry = fixture(`unsupported-${name}`)
       entry.requested = join(entry.directory, name)
-      await expect(recover(entry)).rejects.toThrow('File does not exist.')
+      await expectNotFound(recover(entry))
     },
   )
 
@@ -365,7 +461,7 @@ describe('missing-file exact function recovery', () => {
       state.toolPermissionContext[rules] = {
         session: [`Read(//${entry.actual.replace(/^\/+/, '')})`],
       }
-      await expect(recover(entry)).rejects.toThrow('File does not exist.')
+      await expectNotFound(recover(entry))
       expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
     },
   )
@@ -377,7 +473,7 @@ describe('missing-file exact function recovery', () => {
         toolPermissionContext: { additionalWorkingDirectories: Map<string, string> }
       }
     }).getAppState().toolPermissionContext.additionalWorkingDirectories.clear()
-    await expect(
+    await expectNotFound(
       callFileReadToolWithPreparedCapability(
         { file_path: entry.requested },
         entry.context,
@@ -385,7 +481,7 @@ describe('missing-file exact function recovery', () => {
         undefined,
         { userMentioned: true },
       ),
-    ).rejects.toThrow('File does not exist.')
+    )
   })
 
   test('skips denied definitions when establishing uniqueness among permitted files', async () => {
@@ -405,7 +501,7 @@ describe('missing-file exact function recovery', () => {
     const outside = join(tmpDir, 'SymlinkOutside.ts')
     writeFileSync(outside, 'function TasksStrip() {}')
     symlinkSync(outside, join(entry.directory, 'Link.ts'))
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
   test('does not resolve through an ancestor symlink retargeted after preparation', async () => {
@@ -437,7 +533,7 @@ describe('missing-file exact function recovery', () => {
       expect((await FileReadTool.checkPermissions(input, context)).behavior).toBe('allow')
       unlinkSync(alias)
       symlinkSync(outside, alias)
-      await expect(FileReadTool.call(input, context)).rejects.toThrow('File does not exist.')
+      await expectNotFound(FileReadTool.call(input, context))
       expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
     } finally {
       await prepared.cleanup()
@@ -467,7 +563,7 @@ describe('missing-file exact function recovery', () => {
       }
     }
     try {
-      await expect(FileReadTool.call(input, context)).rejects.toThrow('File does not exist.')
+      await expectNotFound(FileReadTool.call(input, context))
       expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
     } finally {
       await prepared.cleanup()
@@ -497,7 +593,7 @@ describe('missing-file exact function recovery', () => {
       return ['App.tsx', 'Other.ts']
     }
     try {
-      await expect(FileReadTool.call(input, context)).rejects.toThrow('File does not exist.')
+      await expectNotFound(FileReadTool.call(input, context))
       expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
     } finally {
       await prepared.cleanup()
@@ -549,14 +645,14 @@ describe('missing-file exact function recovery', () => {
   test('refuses oversized recovery rather than returning an incomplete function', async () => {
     const entry = fixture('bounded-function')
     Object.assign(entry.context, { fileReadingLimits: { maxTokens: 100 } })
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
     expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
   })
 
   test('refuses recovery when the returned definition cannot fit the byte allowance', async () => {
     const entry = fixture('bounded-source')
     Object.assign(entry.context, { fileReadingLimits: { maxSizeBytes: 10 } })
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
   test('refuses line-capped definitions instead of mislabeling a prefix as complete', async () => {
@@ -564,7 +660,7 @@ describe('missing-file exact function recovery', () => {
       'bounded-lines',
       `function TasksStrip() {\n${'  // body\n'.repeat(MAX_LINES_TO_READ)}  return 1;\n}`,
     )
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
     expect((entry.context as unknown as ReturnType<typeof createContext>).readFileState.size).toBe(0)
   })
 
@@ -573,7 +669,7 @@ describe('missing-file exact function recovery', () => {
     for (let index = 0; index < 1000; index++) {
       writeFileSync(join(entry.directory, `Other${index}.ts`), 'function Other() {}')
     }
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
   test('recovers in a renderer-sized directory with a large nonmatching source', async () => {
@@ -593,7 +689,7 @@ describe('missing-file exact function recovery', () => {
   test('keeps recovery bounded when a sibling is too large to establish uniqueness', async () => {
     const entry = fixture('oversized-sibling')
     writeFileSync(join(entry.directory, 'Large.ts'), `// ${'x'.repeat(512 * 1024)}\n`)
-    await expect(recover(entry)).rejects.toThrow('File does not exist.')
+    await expectNotFound(recover(entry))
   })
 
   test('uses the large-context budget for complete recovered definitions', async () => {
@@ -834,10 +930,14 @@ describe('default line limit', () => {
   })
 
   test('a missing prepared path keeps the similar-file suggestion', async () => {
-    writeLines('missing-neighbor.ts', 1)
-    await expect(
-      readWith(createContext(), join(tmpDir, 'missing-neighbor.js')),
-    ).rejects.toThrow('missing-neighbor.ts')
+    const candidate = writeLines('missing-neighbor.ts', 1)
+    const context = createLifecycleContext([FileReadTool]) as ToolUseContext
+    context.getAppState().toolPermissionContext.additionalWorkingDirectories.set(tmpDir, tmpDir)
+    const { data } = await callFileReadToolWithPreparedCapability(
+      { file_path: join(tmpDir, 'missing-neighbor.js') }, context,
+    )
+    expect(data.type).toBe('not_found')
+    expect(data).toHaveProperty('suggestions', [candidate])
   })
 
   test('a missing screenshot path still reads its space-variant alternate', async () => {

@@ -1,12 +1,8 @@
 import { z } from 'zod/v4'
-import type { ValidationResult } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { getCwd } from '../../utils/cwd.js'
 import { isENOENT } from '../../utils/errors.js'
-import {
-  FILE_NOT_FOUND_CWD_NOTE,
-  suggestPathUnderCwd,
-} from '../../utils/file.js'
+import { formatMissingPathResult, suggestMissingPath } from '../../utils/missingPathSuggestions.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { expandPath, toRelativePath } from '../../utils/path.js'
@@ -16,6 +12,7 @@ import {
   normalizePatternsToPath,
 } from '../../utils/permissions/filesystem.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
+import { getAskRuleForTool, getDenyRuleForTool } from '../../utils/permissions/permissions.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { getGlobExclusionsForPluginCache } from '../../utils/plugins/orphanedPluginFilter.js'
 import { ripGrep } from '../../utils/ripgrep.js'
@@ -151,6 +148,8 @@ const outputSchema = lazySchema(() =>
     numMatches: z.number().optional(), // For count mode
     appliedLimit: z.number().optional(), // The limit that was applied (if any)
     appliedOffset: z.number().optional(), // The offset that was applied
+    missingPath: z.string().optional(),
+    suggestions: z.array(z.string()).optional(),
   }),
 )
 type OutputSchema = ReturnType<typeof outputSchema>
@@ -198,38 +197,6 @@ export const GrepTool = buildTool({
   async preparePermissionMatcher({ pattern }) {
     return rulePattern => matchWildcardPattern(rulePattern, pattern)
   },
-  async validateInput({ path }): Promise<ValidationResult> {
-    // If path is provided, validate that it exists
-    if (path) {
-      const fs = getFsImplementation()
-      const absolutePath = expandPath(path)
-
-      // SECURITY: Skip filesystem operations for UNC paths to prevent NTLM credential leaks.
-      if (absolutePath.startsWith('\\\\') || absolutePath.startsWith('//')) {
-        return { result: true }
-      }
-
-      try {
-        await fs.stat(absolutePath)
-      } catch (e: unknown) {
-        if (isENOENT(e)) {
-          const cwdSuggestion = await suggestPathUnderCwd(absolutePath)
-          let message = `Path does not exist: ${path}. ${FILE_NOT_FOUND_CWD_NOTE} ${getCwd()}.`
-          if (cwdSuggestion) {
-            message += ` Did you mean ${cwdSuggestion}?`
-          }
-          return {
-            result: false,
-            message,
-            errorCode: 1,
-          }
-        }
-        throw e
-      }
-    }
-
-    return { result: true }
-  },
   async checkPermissions(input, context): Promise<PermissionDecision> {
     const appState = context.getAppState()
     return checkReadPermissionForTool(
@@ -261,9 +228,18 @@ export const GrepTool = buildTool({
       numMatches,
       appliedLimit,
       appliedOffset,
+      missingPath,
+      suggestions,
     },
     toolUseID,
   ) {
+    if (missingPath !== undefined) {
+      return {
+        tool_use_id: toolUseID,
+        type: 'tool_result',
+        content: formatMissingPathResult(missingPath, suggestions ?? [], 'search'),
+      }
+    }
     if (mode === 'content') {
       const limitInfo = formatLimitInfo(appliedLimit, appliedOffset)
       const resultContent = content || 'No matches found'
@@ -327,6 +303,36 @@ export const GrepTool = buildTool({
     { abortController, getAppState },
   ) {
     const absolutePath = path ? expandPath(path) : getCwd()
+    // Run after permission approval, not in validation before authorization.
+    try {
+      await getFsImplementation().stat(absolutePath)
+    } catch (error) {
+      if (!isENOENT(error)) throw error
+      abortController.signal.throwIfAborted()
+      const permissions = getAppState().toolPermissionContext
+      const suggestions = getAskRuleForTool(permissions, GrepTool) ||
+        getDenyRuleForTool(permissions, GrepTool)
+        ? []
+        : await suggestMissingPath(absolutePath, {
+            cwd: getCwd(),
+            signal: abortController.signal,
+            canInspect: candidate =>
+              checkReadPermissionForTool(
+                GrepTool,
+                { pattern, path: candidate },
+                permissions,
+              ).behavior === 'allow',
+          })
+      return {
+        data: {
+          mode: output_mode,
+          numFiles: 0,
+          filenames: [],
+          missingPath: absolutePath,
+          suggestions,
+        },
+      }
+    }
     const args = ['--hidden']
 
     // Exclude VCS directories to avoid noise from version control metadata

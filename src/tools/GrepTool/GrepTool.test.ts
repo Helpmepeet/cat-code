@@ -1,28 +1,32 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { ToolUseContext } from '../../Tool.js'
 import { toRelativePath } from '../../utils/path.js'
+import { runWithCwdOverride } from '../../utils/cwd.js'
 
 // Initialize the tool registry before loading tools whose UI shares renderers.
 await import('../../tools.js')
 const { GrepTool } = await import('./GrepTool.js')
 
 let directory: string
+const permissions = {
+  additionalWorkingDirectories: new Map<string, string>(),
+  alwaysAllowRules: {},
+  alwaysDenyRules: {},
+  alwaysAskRules: {},
+}
 const context = {
   abortController: new AbortController(),
   getAppState: () => ({
-    toolPermissionContext: {
-      alwaysAllowRules: {},
-      alwaysDenyRules: {},
-      alwaysAskRules: {},
-    },
+    toolPermissionContext: permissions,
   }),
 } as unknown as ToolUseContext
 
 beforeAll(() => {
   directory = realpathSync(mkdtempSync(join(tmpdir(), 'grep-count-test-')))
+  permissions.additionalWorkingDirectories.set(directory, directory)
   writeFileSync(join(directory, 'first.txt'), 'needle needle\nneedle\nother\n')
   writeFileSync(join(directory, 'second.txt'), 'needle\nother\n')
 })
@@ -79,5 +83,46 @@ describe('Grep count mode with real ripgrep', () => {
     expect(data.content).toBe('')
     expect(data.numMatches).toBe(0)
     expect(data.numFiles).toBe(0)
+  })
+})
+
+describe('missing search targets', () => {
+  test.each(['content', 'files_with_matches', 'count'] as const)(
+    '%s returns a normal not-found result with suggestions, without searching them',
+    async output_mode => {
+      const workspace = join(directory, output_mode)
+      mkdirSync(join(workspace, 'app/main'), { recursive: true })
+      mkdirSync(join(workspace, 'app/shared'), { recursive: true })
+      const candidate = join(workspace, 'app/shared/operationalLog.ts')
+      writeFileSync(candidate, 'needle SECRET CONTENT')
+      await runWithCwdOverride(workspace, async () => {
+        const missing = join(workspace, 'app/main/operationalLog.ts')
+        const { data } = await GrepTool.call(
+          { pattern: 'needle', path: missing, output_mode },
+          context, undefined as never, {} as never,
+        )
+        expect(data.missingPath).toBe(missing)
+        expect(data.suggestions).toEqual([candidate])
+        expect(data.filenames).toEqual([])
+        expect(data.content).toBeUndefined()
+        expect(GrepTool.outputSchema.safeParse(data).success).toBe(true)
+        const result = GrepTool.mapToolResultToToolResultBlockParam(data, 'missing')
+        expect(result.is_error).not.toBe(true)
+        expect(result.content).toContain('No search was performed.')
+        expect(result.content).toContain(candidate)
+        expect(result.content).not.toContain('SECRET CONTENT')
+        expect(result.content).not.toContain('<tool_use_error>')
+      })
+    },
+  )
+
+  test('not-found results without suggestions remain distinct from no matches', async () => {
+    const missing = join(directory, 'missing-directory/absent.txt')
+    const { data } = await count(missing)
+    expect(data.missingPath).toBe(missing)
+    expect(data.suggestions).toEqual([])
+    const result = GrepTool.mapToolResultToToolResultBlockParam(data, 'missing')
+    expect(result.content).toContain('not found')
+    expect(result.content).not.toContain('No matches found')
   })
 })

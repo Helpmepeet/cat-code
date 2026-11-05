@@ -480,10 +480,13 @@ async function openWindowsContainedFsWithApi(
 
   return {
     canonicalRoot,
-    async readdir(relativePath = '') {
+    async readdir(relativePath = '', maxEntries = Infinity) {
+      if (maxEntries !== Infinity && (!Number.isInteger(maxEntries) || maxEntries < 0)) {
+        throw new RangeError('maxEntries must be a nonnegative integer')
+      }
       const directory = openDirectory(relativePath)
       try {
-        return queryDirectory(api, directory)
+        return queryDirectory(api, directory, maxEntries)
       } finally {
         if (directory !== rootHandle) api.symbols.ntClose(directory)
       }
@@ -1150,11 +1153,12 @@ function isWindowsAlreadyExists(error: unknown): boolean {
 async function queryDirectory(
   api: WindowsNativeApi,
   handle: WinHandle,
+  maxEntries = Infinity,
 ): Promise<string[]> {
   const names: string[] = []
   let restart = true
   let capacity = 64 * 1024
-  while (true) {
+  while (names.length < maxEntries) {
     const buffer = Buffer.alloc(capacity)
     const statusBlock = Buffer.alloc(16)
     const status = api.symbols.ntQueryDirectoryFile(
@@ -1187,6 +1191,7 @@ async function queryDirectory(
       const nameLength = buffer.readUInt32LE(offset + 8)
       const name = buffer.toString('utf16le', offset + 12, offset + 12 + nameLength)
       if (name !== '.' && name !== '..') names.push(name)
+      if (names.length >= maxEntries) return names
       if (next === 0) break
       offset += next
     }

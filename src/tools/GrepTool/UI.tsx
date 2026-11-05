@@ -117,6 +117,8 @@ function SearchResultSummary(t0) {
   return t6;
 }
 type Output = {
+  missingPath?: string;
+  suggestions?: string[];
   mode?: 'content' | 'files_with_matches' | 'count';
   numFiles: number;
   filenames: string[];
@@ -168,12 +170,19 @@ export function renderToolResultMessage({
   numFiles,
   content,
   numLines,
-  numMatches
+  numMatches,
+  missingPath,
+  suggestions
 }: Output, _progressMessagesForMessage: ProgressMessage<ToolProgressData>[], {
   verbose
 }: {
   verbose: boolean;
 }): React.ReactNode {
+  if (missingPath !== undefined) {
+    return <MessageResponse>
+      <Text dimColor>Path not found{suggestions?.length ? ` · ${suggestions.length} suggested paths` : ''}</Text>
+    </MessageResponse>;
+  }
   if (mode === 'content') {
     return <SearchResultSummary count={numLines ?? 0} countLabel="lines" content={content} verbose={verbose} />;
   }

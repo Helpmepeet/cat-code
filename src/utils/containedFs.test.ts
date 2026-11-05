@@ -32,6 +32,25 @@ afterEach(async () => {
 })
 
 describe('openContainedFs', () => {
+  test('bounds directory enumeration without changing default listing', async () => {
+    const root = await makeTempDir('contained-fs-bounded-')
+    await mkdir(join(root, 'nested'))
+    for (let i = 0; i < 20; i++) await writeFile(join(root, 'nested', `${i}.txt`), '')
+    const contained = await openContainedFs(root)
+    try {
+      expect(await contained.readdir('nested', 0)).toEqual([])
+      const bounded = await contained.readdir('nested', 3)
+      expect(bounded).toHaveLength(3)
+      const all = await contained.readdir('nested')
+      expect(all).toHaveLength(20)
+      expect(bounded.every(name => all.includes(name))).toBe(true)
+      await expect(contained.readdir('nested', -1)).rejects.toBeInstanceOf(RangeError)
+      await expect(contained.readdir('nested', NaN)).rejects.toBeInstanceOf(RangeError)
+    } finally {
+      await contained.close()
+    }
+  })
+
   test('reports the retained directory identity and remains bound after its alias swaps', async () => {
     const allowed = await makeTempDir('contained-fs-allowed-')
     const outside = await makeTempDir('contained-fs-outside-')

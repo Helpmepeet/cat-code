@@ -130,6 +130,11 @@ export function AttachmentMessage({
         </Line>;
     case 'file':
     case 'already_read_file':
+      if (attachment.content.type === 'not_found') {
+        return <Line>
+            File not found: <Text bold>{attachment.displayPath}</Text>
+          </Line>;
+      }
       if (attachment.content.type === 'notebook') {
         return <Line>
             Read <Text bold>{attachment.displayPath}</Text> (

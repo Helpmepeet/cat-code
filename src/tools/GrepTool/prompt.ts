@@ -5,7 +5,7 @@ export const GREP_TOOL_NAME = 'Grep'
 
 export function getDescription(provider: APIProvider = getAPIProvider()): string {
   if (isGPTPromptStyle(provider)) {
-    return `A powerful search tool built on ripgrep
+    return `A powerful search tool built on ripgrep. A missing target returns a normal not-found result, possibly with suggested paths. No search is performed on suggested paths; choose one explicitly for a subsequent call.
 
 WHEN TO USE:
 - ${GREP_TOOL_NAME}: structured content searches with regex and file filters.
@@ -21,7 +21,7 @@ SEARCH CONSTRAINTS:
 5. Patterns match within a single line by default. For cross-line matching such as \`struct \\{[\\s\\S]*?field\`, set \`multiline: true\`.`
   }
 
-  return `A powerful search tool built on ripgrep
+  return `A powerful search tool built on ripgrep. A missing target returns a normal not-found result, possibly with suggested paths. No search is performed on suggested paths; choose one explicitly for a subsequent call.
 
   Usage:
   - Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+")

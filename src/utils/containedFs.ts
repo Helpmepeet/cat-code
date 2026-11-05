@@ -60,7 +60,7 @@ export type ContainedFile = {
 
 export type ContainedFs = {
   readonly canonicalRoot: string
-  readdir(relativePath?: string): Promise<string[]>
+  readdir(relativePath?: string, maxEntries?: number): Promise<string[]>
   statDir(relativePath?: string): Promise<Awaited<ReturnType<typeof stat>>>
   lstat(relativePath: string): Promise<ContainedEntryStat>
   readFile(relativePath: string): Promise<ContainedFile>
@@ -308,7 +308,7 @@ export async function openContainedFs(
     name === undefined
       ? `${fdPath}/${fd}`
       : `${fdPath}/${fd}/${name}`
-  const readDirectory = (fd: number): string[] => {
+  const readDirectory = (fd: number, maxEntries = Infinity): string[] => {
     const copyFd = ffi.symbols.openat(fd, '.', DIRECTORY_FLAGS, 0)
     if (copyFd < 0) throw new Error('Unable to duplicate contained directory')
     const directory = ffi.symbols.fdopendir(copyFd)
@@ -319,7 +319,7 @@ export async function openContainedFs(
     try {
       const names: string[] = []
       const nameOffset = process.platform === 'darwin' ? 21 : 19
-      while (true) {
+      while (names.length < maxEntries) {
         const entry = ffi.symbols.readdir(directory)
         if (!entry) break
         const name = ffi.CString(entry, nameOffset)
@@ -633,11 +633,14 @@ export async function openContainedFs(
 
   return {
     canonicalRoot,
-    async readdir(relativePath = '') {
+    async readdir(relativePath = '', maxEntries = Infinity) {
+      if (maxEntries !== Infinity && (!Number.isInteger(maxEntries) || maxEntries < 0)) {
+        throw new RangeError('maxEntries must be a nonnegative integer')
+      }
       const parts = normalizedParts(relativePath.split('/'))
       const dirFd = openDirectory(parts)
       try {
-        return readDirectory(dirFd)
+        return readDirectory(dirFd, maxEntries)
       } finally {
         if (dirFd !== rootFd) ffi.symbols.close(dirFd)
       }
