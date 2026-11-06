@@ -330,8 +330,9 @@ test('the creation guidance says what to share and makes hearing back a choice',
     'Write from yourself to the recipient so the roles are unambiguous',
   )
   expect(prompt).toContain(
-    'quoting exact wording only where it matters to the remaining work',
+    "Convey the user's intent and constraints in your own words",
   )
+  expect(prompt).not.toContain('quoting exact wording')
   expect(prompt).toContain('Leave the approach to it.')
   expect(prompt).not.toContain('the goal, what done looks like, the files in scope')
 
@@ -384,8 +385,9 @@ test('the prompt argument says what to put in and what to leave out', () => {
     'do not prescribe repository inspection, scoring criteria, analysis of alternatives, or supporting evidence unless the user requested them',
   )
   expect(description).toContain(
-    "the user's intent, quoting exact wording only where it matters to the remaining work",
+    "Convey the user's intent and constraints in your own words",
   )
+  expect(description).not.toContain('quoting exact wording')
   expect(description).toContain('Leave out what it already has')
   expect(description).toContain('restated rules, verification commands and commit conventions add nothing')
   expect(description).toContain('a step list or a report format turns a colleague into a worker')
