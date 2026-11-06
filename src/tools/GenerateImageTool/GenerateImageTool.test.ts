@@ -496,7 +496,25 @@ describe('GenerateImageTool', () => {
     expect(result.data.filePath).toBe(outputPath)
   })
 
-  test('uses Codex auth from the account pool and reports its returned model identifier', async () => {
+  test.each([
+    ['gpt-6-luna', 'gpt-6-luna'],
+    ['gpt-6.1-terra', 'gpt-6.1-terra'],
+    ['gpt-6.1-sol', 'gpt-6.1-sol'],
+    ['gpt-6-astra', 'gpt-6-astra'],
+    ['gpt-5.6-terra', 'gpt-6.1-terra'],
+    ['gpt-6-sol', 'gpt-6.1-sol'],
+    ['claude-haiku-5-5', 'gpt-6-luna'],
+    ['claude-sonnet-5-5', 'gpt-6.1-terra'],
+    ['claude-opus-5-5', 'gpt-6.1-sol'],
+    ['haiku', 'gpt-6-luna'],
+    ['sonnet[1m]', 'gpt-6.1-terra'],
+    ['opus', 'gpt-6.1-sol'],
+    ['us.anthropic.claude-3-5-haiku-20241022-v1:0', 'gpt-6-luna'],
+    ['claude-sonnet-4-5@20250929', 'gpt-6.1-terra'],
+    ['eu.anthropic.claude-opus-4-6-v1[1m]', 'gpt-6.1-sol'],
+    ['custom-deployment', 'gpt-6.1-terra'],
+    [undefined, 'gpt-6.1-terra'],
+  ])('routes image generation from %s through %s with Codex auth and reports the image model', async (chatModel, expectedResponseModel) => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -553,7 +571,7 @@ describe('GenerateImageTool', () => {
       },
       imageToolContext({
         abortController: new AbortController(),
-        options: { mainLoopModel: 'gpt-5.6-terra' },
+        options: { mainLoopModel: chatModel },
       }),
     )
 
@@ -561,7 +579,7 @@ describe('GenerateImageTool', () => {
     expect(authorization).toBe('Bearer access-main-account')
     expect(accountId).toBe('main-account')
     expect(requestBody).toMatchObject({
-      model: 'gpt-6.1-terra',
+      model: expectedResponseModel,
       tools: [{ type: 'image_generation' }],
     })
     expect(

@@ -14,6 +14,7 @@ import {
 import {
   CodexAccountAuthError,
   CodexAccountCapError,
+  isCodexModel,
 } from '../../services/api/codex-fetch-adapter.js'
 import { registerCodexLease } from '../../services/api/codexAccountLeaseManager.js'
 import {
@@ -24,7 +25,7 @@ import { poolManagesCredentials } from '../../services/api/codexAccountPool.js'
 import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { hasCodexTokens } from '../../utils/auth.js'
-import { remapRetiredGptModel } from '../../utils/model/model.js'
+import { getCanonicalName, remapRetiredGptModel } from '../../utils/model/model.js'
 import { PNG } from 'pngjs'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { expandPath } from '../../utils/path.js'
@@ -50,6 +51,20 @@ const TERMINAL_PREVIEW_WIDTH_COLUMNS = 48
 const TERMINAL_PREVIEW_HEIGHT_ROWS = 16
 const DEFAULT_GENERATED_IMAGE_DIR = 'generated-images'
 const ITERM2_FILE_PART_CHARS = 1_000_000
+
+function resolveImageResponseModel(model: string | undefined): string {
+  const canonical = getCanonicalName(model ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\[1m\]$/, '')
+  const responseModel = remapRetiredGptModel(canonical)
+  if (isCodexModel(responseModel)) return responseModel
+
+  // Claude chats still need a GPT orchestrator: Haiku/Luna, Sonnet/Terra, Opus/Sol.
+  if (canonical.includes('haiku')) return 'gpt-6-luna'
+  if (canonical.includes('opus')) return 'gpt-6.1-sol'
+  return DEFAULT_CODEX_RESPONSE_MODEL
+}
 
 // Cat Code does not send a requested size, so report the dimensions in the returned bytes.
 function readImageDimensions(bytes: Buffer): string | undefined {
@@ -1311,7 +1326,7 @@ For transparency, omit background and choose PNG or WebP. The interface displays
       input,
       outputFormat,
       context,
-      remapRetiredGptModel(context.options?.mainLoopModel ?? DEFAULT_CODEX_RESPONSE_MODEL),
+      resolveImageResponseModel(context.options?.mainLoopModel),
     )
 
     const bytes = Buffer.from(generation.b64, 'base64')
