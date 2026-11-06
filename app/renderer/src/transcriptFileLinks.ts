@@ -3,8 +3,10 @@ import { stripLineSuffix } from './filePathActions.js'
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { localFileUrlPath } from '../../shared/localFileUrl.js'
 
-const FILE_PATH_RE =
-  /(?:(?:\/|(?:\.{1,2}\/)|(?:[A-Za-z0-9_@.+-]+\/))(?:[A-Za-z0-9_@.+-]+\/)*[A-Za-z0-9_@.+-]+|[A-Za-z_@.][A-Za-z0-9_@.+-]*)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?::\d+(?::\d+)?)?/g
+const PATH_SEGMENT = String.raw`(?:[A-Za-z0-9_@.+-]+|\([A-Za-z0-9_@.+-]+\)|\[(?:\.\.\.)?[A-Za-z0-9_@.+-]+\])`
+const FILE_PATH_RE = new RegExp(
+  String.raw`(?:~/|/|\.{1,2}/)?(?:${PATH_SEGMENT}/)*(?:\[(?:\.\.\.)?[A-Za-z0-9_@.+-]+\]|[A-Za-z0-9_@.+-]+)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?::\d+(?::\d+)?)?`, 'g',
+)
 const WEB_PATH_RE =
   /^(?:www\.|(?:[A-Za-z0-9-]+\.)+(?:(?:com|org|net|io|dev|app|ai|co|edu|gov|me|xyz)(?:[/:]|$)|[A-Za-z]{2,}\/))/i
 
@@ -95,7 +97,8 @@ function filePathMatches(text: string): RegExpExecArray[] {
     return !schemeTokens.some(url => match.index >= url.index && match.index < url.index + url[0].length) &&
       !urls.some(url => match.index >= url.index && match.index < url.index + url.text.length) &&
       !text.slice(0, match.index).endsWith(':/') && !path.startsWith('//') &&
-      !WEB_PATH_RE.test(path) && hasLetteredExtension(stripLineSuffix(path))
+      !WEB_PATH_RE.test(path) && hasLetteredExtension(stripLineSuffix(path)) &&
+      (path.includes('/') || !stripLineSuffix(path).split('.').every(part => /^[A-Za-z]$/.test(part)))
   })
   const localUrls = schemeTokens.map(match => {
     match[0] = trimProseUrlToken(match[0])

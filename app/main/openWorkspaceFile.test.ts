@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { join, relative } from 'node:path'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
@@ -274,6 +274,12 @@ test('relocated conversations refuse ambiguous relative links while allowing abs
     expect(await openWorkspaceFile({ appSessionId, path: newReport }, [relocated], openPath)).toBe(true)
     expect(await openWorkspaceFile({ appSessionId, path: oldReport }, [relocated], openPath)).toBe(true)
     expect(opened).toEqual([realpathSync(newReport), realpathSync(oldReport)])
+    const homePath = `~/${relative(homedir(), oldReport)}`
+    for (const chat of [session(destination), relocated]) {
+      expect(await openWorkspaceFile({ appSessionId: chat.appSessionId, path: `${homePath}:12:3` }, [chat], openPath)).toBe(true)
+      expect(opened.at(-1)).toBe(realpathSync(oldReport))
+      expect(await openWorkspaceFile({ appSessionId: chat.appSessionId, path: '~someone/report.md' }, [chat], openPath)).toBe(false)
+    }
   } finally {
     if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = previousConfigDir

@@ -108,7 +108,7 @@ export function resolveFilePathParts({
 
   let absolutePath: string | null = null
   if (
-    cleanPath.startsWith('/') ||
+    cleanPath.startsWith('/') || cleanPath.startsWith('~/') ||
     WINDOWS_ABSOLUTE_PATH_PATTERN.test(cleanPath) ||
     isAbsoluteUrlLike(cleanPath)
   ) {

@@ -1,5 +1,6 @@
 import { isAbsolute, resolve } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
 import { localFileUrlPath } from '../shared/localFileUrl.js'
 
@@ -54,6 +55,8 @@ export async function resolveWorkspaceFile(
   } else if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawPath)) {
     return null
   }
+
+  if (rawPath.startsWith('~/')) rawPath = resolve(homedir(), rawPath.slice(2))
 
   const validTarget = target as OpenWorkspaceFileTarget | undefined
   const session = sessions.find(item => item.appSessionId === appSessionId)
