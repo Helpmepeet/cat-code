@@ -40,14 +40,14 @@ test('rail labels show account sign-in details, hide on leave, and follow focus'
   expect(tip()).toBeNull()
 })
 
-test('tab tooltips show full title, folder, shortcut and fork state; managed chats omit folder', async () => {
+test('tab tooltips show full title, session name, folder, shortcut and fork state; managed chats omit folder', async () => {
   const normal: TabModel = {
-    descriptor: sessionDescriptor('normal', { title: 'A long full session title', cwd: '/work/project-name', forked: true }),
+    descriptor: sessionDescriptor('normal', { title: 'A long full session title', cwd: '/work/project-name', forked: true, name: 'Bear' }),
     visual: { label: 'ready', tone: 'live', restartable: false, needsAttention: false },
   }
   const managed: TabModel = {
     ...normal,
-    descriptor: sessionDescriptor('managed', { title: 'Managed chat', cwd: '/secret/storage-name', binding: { kind: 'managed', storageRootId: 'root', storageId: 'id' } }),
+    descriptor: sessionDescriptor('managed', { title: 'Managed chat', cwd: '/secret/storage-name', name: 'Otter', binding: { kind: 'managed', storageRootId: 'root', storageId: 'id' } }),
   }
   const tree = await harness.mount(createElement(TabBar, {
     tabs: [normal, managed], activeSessionId: 'normal', onSelect: noop, onClose: noop, onRestart: noop, onNewTab: noop,
@@ -64,13 +64,13 @@ test('tab tooltips show full title, folder, shortcut and fork state; managed cha
     tabs[0]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
   })
   await act(async () => { await wait(370) })
-  expect(tip()?.textContent).toBe('A long full session titleproject-name · Forked session⌘1')
+  expect(tip()?.textContent).toBe('A long full session titleBear · project-name · Forked session⌘1')
   expect(tip()?.parentElement).toBe(document.body)
   await act(async () => {
     tabs[0]!.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
     tabs[1]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
   })
-  expect(tip()?.textContent).toBe('Managed chat⌘2')
+  expect(tip()?.textContent).toBe('Managed chatOtter⌘2')
   await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
   expect(tip()).toBeNull()
   await act(async () => { tabs[0]!.focus() })
