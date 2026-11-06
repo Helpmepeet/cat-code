@@ -382,8 +382,6 @@ const write = (
 for (const [key, nextValue] of [
   ['includeCoAuthoredBy', false],
   ['autoModeFastMode', true],
-  ['imageGenerationModel', 'gpt-5.6-luna'],
-  ['imageGenerationReasoningEffort', 'none'],
 ] as const) {
   test(`runVerb persists ${key} and the re-read reflects value + provenance`, () => {
     const settingsFile = useTempConfigHome()

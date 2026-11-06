@@ -729,14 +729,6 @@ export const SettingsSchema = lazySchema(() =>
         .describe(
           'How to display reasoning from Codex/GPT models: off, summary (default), or raw provider trace.',
         ),
-      imageGenerationModel: z
-        .enum(['auto', 'gpt-5.6-luna', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra'])
-        .optional()
-        .describe('GPT model for image requests. Auto follows the chat model or matching GPT tier.'),
-      imageGenerationReasoningEffort: z
-        .enum(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'])
-        .optional()
-        .describe('GPT reasoning effort for image requests. Auto uses the model default; none requires Luna or Terra.'),
       reasoningSummaryDetail: z
         .enum(['auto', 'concise', 'detailed', 'none'])
         .optional()

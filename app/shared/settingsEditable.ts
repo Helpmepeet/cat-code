@@ -268,42 +268,6 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
     },
   },
   {
-    key: 'imageGenerationModel',
-    pane: 'model',
-    label: 'Image generation model',
-    description:
-      'Uses your saved ChatGPT login. Auto follows the chat model or matching GPT tier.',
-    control: {
-      kind: 'enum',
-      options: ['auto', 'gpt-5.6-luna', 'gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra'],
-      optionLabels: {
-        auto: 'Auto',
-        'gpt-5.6-luna': 'GPT-5.6 Luna',
-        'gpt-6-luna': 'GPT-6 Luna',
-        'gpt-6.1-terra': 'GPT-6.1 Terra',
-        'gpt-6.1-sol': 'GPT-6.1 Sol',
-        'gpt-6-astra': 'GPT-6 Astra',
-      },
-      default: 'auto',
-    },
-  },
-  {
-    key: 'imageGenerationReasoningEffort',
-    pane: 'model',
-    label: 'Image reasoning',
-    description:
-      'None disables GPT reasoning for Luna and Terra. Auto uses the model default.',
-    control: {
-      kind: 'enum',
-      options: ['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'],
-      optionLabels: {
-        auto: 'Auto', none: 'None (Luna or Terra)', low: 'Low', medium: 'Medium',
-        high: 'High', xhigh: 'Extra high', max: 'Max',
-      },
-      default: 'auto',
-    },
-  },
-  {
     key: 'promptSuggestionEnabled',
     pane: 'model',
     label: 'Prompt suggestions',

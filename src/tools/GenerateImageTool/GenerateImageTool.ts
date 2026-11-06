@@ -14,7 +14,6 @@ import {
 import {
   CodexAccountAuthError,
   CodexAccountCapError,
-  isCodexModel,
 } from '../../services/api/codex-fetch-adapter.js'
 import { registerCodexLease } from '../../services/api/codexAccountLeaseManager.js'
 import {
@@ -25,7 +24,6 @@ import { poolManagesCredentials } from '../../services/api/codexAccountPool.js'
 import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { hasCodexTokens } from '../../utils/auth.js'
-import { getCanonicalName, remapRetiredGptModel } from '../../utils/model/model.js'
 import { PNG } from 'pngjs'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { expandPath } from '../../utils/path.js'
@@ -38,55 +36,18 @@ import { getDisplayPath } from '../../utils/file.js'
 import { formatFileSize } from '../../utils/format.js'
 import { prepareImageBufferForModel } from '../../utils/imageResizer.js'
 import { getDefaultFileReadingLimits } from '../FileReadTool/limits.js'
-import { getInitialSettings } from '../../utils/settings/settings.js'
-import type { SettingsJson } from '../../utils/settings/types.js'
+import { getImageProcessor } from '../FileReadTool/imageProcessor.js'
 
 const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
-const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
-const DEFAULT_CODEX_RESPONSE_MODEL = 'gpt-6.1-terra'
+const CODEX_IMAGES_URL = 'https://chatgpt.com/backend-api/codex/images'
+const BACKEND_SELECTED_MODEL = 'backend-selected'
 // Image generation is an auxiliary tool call, so keep retries bounded locally
 // instead of inheriting the main conversation's retry budget.
 const MAX_CODEX_IMAGE_RETRIES = 2
-const CODEX_IMAGE_GENERATION_INSTRUCTIONS =
-  'Generate the requested image using the image_generation tool.'
 const TERMINAL_PREVIEW_WIDTH_COLUMNS = 48
 const TERMINAL_PREVIEW_HEIGHT_ROWS = 16
 const DEFAULT_GENERATED_IMAGE_DIR = 'generated-images'
 const ITERM2_FILE_PART_CHARS = 1_000_000
-
-function resolveImageResponseModel(model: string | undefined): string {
-  const canonical = getCanonicalName(model ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\[1m\]$/, '')
-  const responseModel = remapRetiredGptModel(canonical)
-  if (isCodexModel(responseModel)) return responseModel
-
-  // Claude chats still need a GPT orchestrator: Haiku/Luna, Sonnet/Terra, Opus/Sol.
-  if (canonical.includes('haiku')) return 'gpt-6-luna'
-  if (canonical.includes('opus')) return 'gpt-6.1-sol'
-  return DEFAULT_CODEX_RESPONSE_MODEL
-}
-
-type ImageReasoningEffort = Exclude<SettingsJson['imageGenerationReasoningEffort'], 'auto' | undefined>
-
-function resolveImageRequestOptions(chatModel: string | undefined): {
-  responseModel: string
-  reasoningEffort: ImageReasoningEffort | undefined
-} {
-  const settings = getInitialSettings()
-  // An image-specific selection is explicit, including the older Luna option.
-  const responseModel = settings.imageGenerationModel && settings.imageGenerationModel !== 'auto'
-    ? settings.imageGenerationModel
-    : resolveImageResponseModel(chatModel)
-  const reasoningEffort = settings.imageGenerationReasoningEffort === 'auto'
-    ? undefined
-    : settings.imageGenerationReasoningEffort
-  if (reasoningEffort === 'none' && !['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6.1-terra'].includes(responseModel)) {
-    throw new Error('Image reasoning None requires Luna or Terra. Choose an image generation model in Settings or change image reasoning to Auto.')
-  }
-  return { responseModel, reasoningEffort }
-}
 
 // Cat Code does not send a requested size, so report the dimensions in the returned bytes.
 function readImageDimensions(bytes: Buffer): string | undefined {
@@ -183,7 +144,7 @@ type Input = z.infer<InputSchema>
 const outputSchema = lazySchema(() =>
   z.object({
     filePath: z.string().describe('Path where the generated image was saved'),
-    model: z.string().describe('Image model identifier returned by Codex'),
+    model: z.string().describe('Reported image model, or backend-selected when the provider omits it'),
     size: z.string().describe('Pixel dimensions of the image that was written'),
     outputFormat: z.enum(outputFormats).describe('Image format written'),
     bytes: z.number().describe('Number of bytes written'),
@@ -500,7 +461,7 @@ function getCachedTerminalImagePreview(
 
 function GeneratedImageResult({ output }: { output: Output }): React.ReactNode {
   const displayPath = getDisplayPath(output.filePath)
-  const details = `${output.model} · ${output.size} · ${output.outputFormat.toUpperCase()} · ${formatFileSize(output.bytes)}`
+  const details = `${output.model === BACKEND_SELECTED_MODEL ? 'Backend selected' : output.model} · ${output.size} · ${output.outputFormat.toUpperCase()} · ${formatFileSize(output.bytes)}`
 
   return React.createElement(
     MessageResponse,
@@ -612,56 +573,15 @@ async function loadReferenceImage(input: Input): Promise<ReferenceImage | undefi
   }
 }
 
-function buildCodexImageGenerationBody(
-  input: Input,
-  outputFormat: OutputFormat,
-  responseModel: string,
-  referenceImage?: ReferenceImage,
-  reasoningEffort?: ImageReasoningEffort,
-) {
-  const content = [
-    {
-      type: 'input_text',
-      text: input.prompt,
-    },
-    ...(referenceImage
-      ? [
-          {
-            type: 'input_image',
-            image_url: referenceImage.imageUrl,
-          },
-        ]
-      : []),
-  ]
-
+function buildCodexImageRequest(input: Input, referenceImage?: ReferenceImage) {
   return {
-    model: responseModel,
-    ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
-    instructions: CODEX_IMAGE_GENERATION_INSTRUCTIONS,
-    store: false,
-    stream: true,
-    input: [
-      {
-        role: 'user',
-        content,
-      },
-    ],
-    tools: [
-      {
-        type: 'image_generation',
-        // The private Codex endpoint ignored even an invalid requested model
-        // in 2026-09-27 probes. Leave selection to the backend.
-        moderation: input.moderation ?? 'auto',
-        output_format: outputFormat,
-        action: input.action ?? (input.reference_image_path ? 'edit' : 'auto'),
-        ...(input.output_compression !== undefined
-          ? { output_compression: input.output_compression }
-          : {}),
-        ...(input.background ? { background: input.background } : {}),
-      },
-    ],
-    tool_choice: 'required',
-    parallel_tool_calls: false,
+    prompt: input.prompt,
+    n: 1,
+    // The direct backend currently returns PNG; encode JPEG/WebP locally.
+    output_format: 'png',
+    moderation: input.moderation ?? 'auto',
+    ...(referenceImage ? { images: [{ image_url: referenceImage.imageUrl }] } : {}),
+    ...(input.background ? { background: input.background } : {}),
   }
 }
 
@@ -788,6 +708,12 @@ function summarizeCodexImageResponse(text: string): string {
 // Codex chooses the image model. Report the identifier it returns in
 // response.created without treating it as a version guarantee.
 function extractCodexImageModel(text: string): string | undefined {
+  try {
+    const response = JSON.parse(text) as { model?: unknown }
+    if (typeof response.model === 'string' && response.model) return response.model
+  } catch {
+    // Also handle streamed response envelopes.
+  }
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
     if (!trimmed.startsWith('data: ')) continue
@@ -1004,15 +930,25 @@ function parseCodexImageGenerationResponse(text: string): string {
   return b64
 }
 
+function readDirectImageMetadata(text: string): { revisedPrompt?: string; usage?: unknown } {
+  try {
+    const response = JSON.parse(text) as { data?: { revised_prompt?: unknown }[]; usage?: unknown }
+    const revisedPrompt = response.data?.[0]?.revised_prompt
+    return {
+      ...(typeof revisedPrompt === 'string' ? { revisedPrompt } : {}),
+      ...(response.usage ? { usage: response.usage } : {}),
+    }
+  } catch {
+    return {}
+  }
+}
+
 async function generateWithCodexBackend(
   input: Input,
-  outputFormat: OutputFormat,
   auth: ImageAuth,
-  responseModel: string,
   signal: AbortSignal,
   credentialUse?: CodexCredentialUseOptions,
-  reasoningEffort?: ImageReasoningEffort,
-): Promise<{ b64: string; model: string }> {
+): Promise<{ b64: string; model: string; revisedPrompt?: string; usage?: unknown }> {
   if (!auth.accountId) {
     throw new Error('Codex image generation requires a ChatGPT account ID.')
   }
@@ -1024,28 +960,20 @@ async function generateWithCodexBackend(
     auth,
     authorizedAuth => {
       sentCredential = authorizedAuth
-      return globalThis.fetch(CODEX_IMAGE_GENERATIONS_URL, {
+      return globalThis.fetch(`${CODEX_IMAGES_URL}/${referenceImage ? 'edits' : 'generations'}`, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           Authorization: `Bearer ${authorizedAuth.accessToken}`,
           'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
+          Accept: 'application/json',
           'chatgpt-account-id': authorizedAuth.accountId,
           originator: 'codex_cli_rs',
           'conversation-id': conversationId,
           session_id: conversationId,
           'x-client-request-id': conversationId,
-          'OpenAI-Beta': 'responses=experimental',
         },
-        body: JSON.stringify(
-          buildCodexImageGenerationBody(
-            input,
-            outputFormat,
-            responseModel,
-            referenceImage,
-            reasoningEffort,
-          ),
-        ),
+        body: JSON.stringify(buildCodexImageRequest(input, referenceImage)),
         signal,
       })
     },
@@ -1073,33 +1001,28 @@ async function generateWithCodexBackend(
 
   return {
     b64: parseCodexImageGenerationResponse(responseText),
-    model: extractCodexImageModel(responseText) ?? 'unknown',
+    model: extractCodexImageModel(responseText) ?? BACKEND_SELECTED_MODEL,
+    ...readDirectImageMetadata(responseText),
   }
 }
 
 async function generateWithCodexRetries(
   input: Input,
-  outputFormat: OutputFormat,
   context: ToolUseContext,
-  responseModel: string,
-  reasoningEffort?: ImageReasoningEffort,
-): Promise<{ b64: string; model: string }> {
+): Promise<{ b64: string; model: string; revisedPrompt?: string; usage?: unknown }> {
   const credentialUse = (context as ImageToolContext).codexCredentialUse
   const generator = withRetry(
     () => getImageAuth(context),
     async auth =>
       generateWithCodexBackend(
         input,
-        outputFormat,
         auth,
-        responseModel,
         context.abortController.signal,
         credentialUse,
-        reasoningEffort,
       ),
     {
       maxRetries: MAX_CODEX_IMAGE_RETRIES,
-      model: responseModel,
+      model: BACKEND_SELECTED_MODEL,
       thinkingConfig: { type: 'disabled' },
       signal: context.abortController.signal,
       ownerId: context.agentId ?? 'main-thread',
@@ -1263,12 +1186,7 @@ For transparency, omit background and choose PNG or WebP. The interface displays
       output,
     })
   },
-  async validateInput(input, context) {
-    try {
-      resolveImageRequestOptions(context?.options?.mainLoopModel)
-    } catch (error) {
-      return { result: false, message: errorMessage(error), errorCode: 9 }
-    }
+  async validateInput(input) {
     const filePath = ensureOutputPath(input)
     if (!isAbsolute(filePath)) {
       return {
@@ -1355,18 +1273,22 @@ For transparency, omit background and choose PNG or WebP. The interface displays
       throw new Error('output_path must end in .png, .jpg, .jpeg, or .webp.')
     }
 
-    const { responseModel, reasoningEffort } = resolveImageRequestOptions(context.options?.mainLoopModel)
     const generation = await generateWithCodexRetries(
       input,
-      outputFormat,
       context,
-      responseModel,
-      reasoningEffort,
     )
 
-    const bytes = Buffer.from(generation.b64, 'base64')
+    let bytes = Buffer.from(generation.b64, 'base64')
     if (bytes.length === 0) {
       throw new Error('OpenAI image generation returned an empty image.')
+    }
+
+    if (outputFormat !== 'png') {
+      const sharp = await getImageProcessor()
+      const options = input.output_compression === undefined
+        ? undefined
+        : { quality: Math.max(1, input.output_compression) }
+      bytes = await sharp(bytes)[outputFormat](options).toBuffer()
     }
 
     await mkdir(dirname(filePath), { recursive: true })
@@ -1425,7 +1347,7 @@ For transparency, omit background and choose PNG or WebP. The interface displays
   extractSearchText(output) {
     return [
       `Generated image: ${output.filePath}`,
-      `${output.model} · ${output.size} · ${output.outputFormat.toUpperCase()} · ${formatFileSize(output.bytes)}`,
+      `${output.model === BACKEND_SELECTED_MODEL ? 'Backend selected' : output.model} · ${output.size} · ${output.outputFormat.toUpperCase()} · ${formatFileSize(output.bytes)}`,
     ].join('\n')
   },
 } satisfies ToolDef<InputSchema, Output>)
@@ -1433,7 +1355,7 @@ For transparency, omit background and choose PNG or WebP. The interface displays
 export function formatGenerateImageResult(output: Output): string {
   const lines = [
     `Generated image: ${output.filePath}`,
-    `Reported model: ${output.model}`,
+    output.model === BACKEND_SELECTED_MODEL ? 'Image model: Backend selected' : `Reported model: ${output.model}`,
     `Size: ${output.size}`,
     `Format: ${output.outputFormat}`,
     `Bytes: ${output.bytes}`,
@@ -1447,7 +1369,6 @@ export function formatGenerateImageResult(output: Output): string {
 export const _generateImageToolInternalsForTest = {
   buildTerminalImagePreview,
   buildIterm2InlineImage,
-  buildCodexImageGenerationBody,
   parseCodexImageGenerationResponse,
   readImageDimensions,
   extractCodexImageModel,

@@ -255,12 +255,7 @@ describe('GenerateImageTool', () => {
       )
       expect(result.data.filePath).toBe(outputPath)
       expect((await readFile(outputPath!)).equals(generatedBytes)).toBe(true)
-      expect(
-        (
-          (requestBody?.input as { content: { image_url?: string }[] }[])[0]
-            ?.content[1]
-        )?.image_url,
-      ).toBe(
+      expect((requestBody?.images as { image_url?: string }[])[0]?.image_url      ).toBe(
         `data:image/png;base64,${Buffer.from('mock reference image').toString('base64')}`,
       )
     } finally {
@@ -300,38 +295,6 @@ describe('GenerateImageTool', () => {
     })
   })
 
-  test('keeps the Codex response model while leaving image model selection to the backend', () => {
-    const body =
-      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
-        {
-          prompt: 'a watercolor cat',
-          output_path: join(tempDir!, 'generated.png'),
-        },
-        'png',
-        'gpt-5.6-terra',
-      )
-
-    expect(body).toMatchObject({
-      model: 'gpt-5.6-terra',
-      instructions: 'Generate the requested image using the image_generation tool.',
-      stream: true,
-      input: [
-        {
-          role: 'user',
-          content: [{ type: 'input_text', text: 'a watercolor cat' }],
-        },
-      ],
-      tools: [
-        {
-          type: 'image_generation',
-          output_format: 'png',
-        },
-      ],
-      tool_choice: 'required',
-    })
-    expect(body.tools[0]).not.toHaveProperty('model')
-  })
-
   test('accepts the Codex image-generation request parameters in the input schema', () => {
     const result = GenerateImageTool.inputSchema.safeParse({
       prompt: 'a watercolor cat',
@@ -342,66 +305,6 @@ describe('GenerateImageTool', () => {
     })
 
     expect(result.success).toBe(true)
-  })
-
-  test('passes optional Codex image-generation request parameters to the built-in tool', () => {
-    const body =
-      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
-        {
-          prompt: 'a watercolor cat',
-          output_path: join(tempDir!, 'generated.webp'),
-          output_compression: 80,
-          action: 'generate',
-        },
-        'webp',
-        'gpt-5.6-terra',
-      )
-    const tool = body.tools[0] as Record<string, unknown>
-
-    expect(tool.output_compression).toBe(80)
-    expect(tool.action).toBe('generate')
-  })
-
-  test('does not invent an image model when the Codex response omits one', () => {
-    expect(
-      _generateImageToolInternalsForTest.extractCodexImageModel(
-        'data: {"type":"response.created","response":{}}',
-      ),
-    ).toBeUndefined()
-  })
-
-  test('defaults Codex action to auto without a reference image', () => {
-    const body =
-      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
-        {
-          prompt: 'a watercolor cat',
-          output_path: join(tempDir!, 'generated.png'),
-        },
-        'png',
-        'gpt-5.6-terra',
-      )
-    const tool = body.tools[0] as Record<string, unknown>
-
-    expect(tool.action).toBe('auto')
-  })
-
-  test('defaults Codex action to edit with a reference image', () => {
-    const body =
-      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
-        {
-          prompt: 'a watercolor cat',
-          output_path: join(tempDir!, 'generated.png'),
-          reference_image_path: join(tempDir!, 'reference.png'),
-        },
-        'png',
-        'gpt-5.6-terra',
-        {
-          imageUrl: 'data:image/png;base64,cmVmZXJlbmNl',
-        },
-      )
-    const tool = body.tools[0] as Record<string, unknown>
-
-    expect(tool.action).toBe('edit')
   })
 
   test('rejects output compression for PNG output', async () => {
@@ -419,30 +322,6 @@ describe('GenerateImageTool', () => {
       message: 'output_compression is only supported for jpeg and webp output.',
       errorCode: 8,
     })
-  })
-
-  test('includes a reference image in Codex Responses requests', () => {
-    const body =
-      _generateImageToolInternalsForTest.buildCodexImageGenerationBody(
-        {
-          prompt: 'a watercolor cat',
-          output_path: join(tempDir!, 'generated.png'),
-          reference_image_path: join(tempDir!, 'reference.png'),
-        },
-        'png',
-        'gpt-5.6-terra',
-        {
-          imageUrl: 'data:image/png;base64,cmVmZXJlbmNl',
-        },
-      )
-
-    expect(body.input[0]?.content).toEqual([
-      { type: 'input_text', text: 'a watercolor cat' },
-      {
-        type: 'input_image',
-        image_url: 'data:image/png;base64,cmVmZXJlbmNl',
-      },
-    ])
   })
 
   test('uses the subagent lease account for Codex image requests', async () => {
@@ -503,142 +382,54 @@ describe('GenerateImageTool', () => {
     expect(result.data.filePath).toBe(outputPath)
   })
 
-  test.each([
-    ['gpt-6-luna', 'gpt-6-luna', undefined, undefined],
-    ['gpt-6.1-terra', 'gpt-6.1-terra', undefined, undefined],
-    ['gpt-6.1-sol', 'gpt-6.1-sol', undefined, undefined],
-    ['gpt-6-astra', 'gpt-6-astra', undefined, undefined],
-    ['gpt-5.6-terra', 'gpt-6.1-terra', undefined, undefined],
-    ['gpt-6-sol', 'gpt-6.1-sol', undefined, undefined],
-    ['claude-haiku-5-5', 'gpt-6-luna', undefined, undefined],
-    ['claude-sonnet-5-5', 'gpt-6.1-terra', undefined, undefined],
-    ['claude-opus-5-5', 'gpt-6.1-sol', undefined, undefined],
-    ['haiku', 'gpt-6-luna', undefined, undefined],
-    ['sonnet[1m]', 'gpt-6.1-terra', undefined, undefined],
-    ['opus', 'gpt-6.1-sol', undefined, undefined],
-    ['us.anthropic.claude-3-5-haiku-20241022-v1:0', 'gpt-6-luna', undefined, undefined],
-    ['claude-sonnet-4-5@20250929', 'gpt-6.1-terra', undefined, undefined],
-    ['eu.anthropic.claude-opus-4-6-v1[1m]', 'gpt-6.1-sol', undefined, undefined],
-    ['custom-deployment', 'gpt-6.1-terra', undefined, undefined],
-    [undefined, 'gpt-6.1-terra', undefined, undefined],
-    ['claude-opus-5-5', 'gpt-5.6-luna', {
-      imageGenerationModel: 'gpt-5.6-luna', imageGenerationReasoningEffort: 'none',
-    }, 'none'],
-    ['gpt-6-astra', 'gpt-6.1-terra', {
-      imageGenerationModel: 'gpt-6.1-terra', imageGenerationReasoningEffort: 'low',
-    }, 'low'],
-    ['claude-haiku-5-5', 'gpt-6-luna', {
-      imageGenerationModel: 'auto', imageGenerationReasoningEffort: 'high',
-    }, 'high'],
-    ['gpt-6.1-terra', 'gpt-6.1-terra', {
-      imageGenerationModel: 'auto', imageGenerationReasoningEffort: 'auto',
-    }, undefined],
-  ] as [string | undefined, string, Record<string, string>?, string?][])('routes image generation from %s through %s with Codex auth and reports the image model', async (chatModel, expectedResponseModel, imageSettings, expectedEffort) => {
-    if (imageSettings) {
-      await mkdir(getClaudeConfigHomeDir(), { recursive: true })
-      await writeFile(join(getClaudeConfigHomeDir(), 'settings.json'), JSON.stringify(imageSettings))
-      resetSettingsCache()
-    }
-    seedCodexAccountPoolForTest({
-      activeAccountId: 'main-account',
-      accounts: [
-        buildPoolAccount('main-account'),
-        buildPoolAccount('backup-account'),
-      ],
-    })
-
-    const outputPath = join(tempDir!, 'generated.png')
-    const generatedBytes = Buffer.from('generated image')
-    let requestBody: Record<string, unknown> | undefined
-    let requestUrl: string | undefined
-    let authorization: string | null = null
-    let accountId: string | null = null
-
-    globalThis.fetch = (async (input, init) => {
-      requestUrl = String(input)
-      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
-      const headers = new Headers(init?.headers)
-      authorization = headers.get('authorization')
-      accountId = headers.get('chatgpt-account-id')
-      return new Response(
-        [
-          'event: response.created',
-          `data: ${JSON.stringify({
-            type: 'response.created',
-            response: {
-              tools: [
-                {
-                  type: 'image_generation',
-                  model: 'gpt-image-2-codex',
-                },
-              ],
-            },
-          })}`,
-          'event: response.output_item.done',
-          `data: ${JSON.stringify({
-            type: 'response.output_item.done',
-            item: {
-              type: 'image_generation_call',
-              result: generatedBytes.toString('base64'),
-            },
-          })}`,
-          '',
-        ].join('\n'),
-        { status: 200 },
-      )
-    }) as typeof fetch
-
-    const result = await GenerateImageTool.call(
-      {
-        prompt: 'prefer codex when available',
-        output_path: outputPath,
-      },
-      imageToolContext({
-        abortController: new AbortController(),
-        options: { mainLoopModel: chatModel },
-      }),
-    )
-
-    expect(requestUrl).toBe('https://chatgpt.com/backend-api/codex/responses')
-    expect(authorization).toBe('Bearer access-main-account')
-    expect(accountId).toBe('main-account')
-    expect(requestBody).toMatchObject({
-      model: expectedResponseModel,
-      tools: [{ type: 'image_generation' }],
-    })
-    expect(requestBody?.reasoning).toEqual(expectedEffort ? { effort: expectedEffort } : undefined)
-    expect(
-      (requestBody as { tools: Record<string, unknown>[] }).tools[0],
-    ).not.toHaveProperty('model')
-    expect(await readFile(outputPath)).toEqual(generatedBytes)
-    expect(result.data.filePath).toBe(outputPath)
-    expect(result.data.model).toBe('gpt-image-2-codex')
-    expect(formatGenerateImageResult(result.data)).toContain(
-      'Reported model: gpt-image-2-codex',
-    )
-  })
-
-  test.each(['gpt-6.1-sol', 'gpt-6-astra', 'auto'])('rejects image reasoning none for %s before sending a request', async model => {
+  test('uses direct subscription generation with backend model selection and ignores stale GPT image settings', async () => {
     await mkdir(getClaudeConfigHomeDir(), { recursive: true })
     await writeFile(join(getClaudeConfigHomeDir(), 'settings.json'), JSON.stringify({
-      imageGenerationModel: model, imageGenerationReasoningEffort: 'none',
+      imageGenerationModel: 'gpt-5.6-luna', imageGenerationReasoningEffort: 'none',
     }))
     resetSettingsCache()
-    let requests = 0
-    globalThis.fetch = (async () => {
-      requests++
-      throw new Error('Unexpected request')
+    seedCodexAccountPoolForTest({ activeAccountId: 'main-account', accounts: [buildPoolAccount('main-account')] })
+    const generatedBytes = PNG.sync.write(new PNG({ width: 4, height: 4 }))
+    const outputPath = join(tempDir!, 'generated.png')
+    let requestUrl = ''
+    let requestBody: Record<string, unknown> | undefined
+    let requestHeaders: Headers | undefined
+    globalThis.fetch = (async (url, init) => {
+      requestUrl = String(url)
+      requestBody = JSON.parse(String(init?.body))
+      requestHeaders = new Headers(init?.headers)
+      return Response.json({ data: [{ b64_json: generatedBytes.toString('base64') }], usage: { output_tokens: 12 } })
     }) as typeof fetch
-    const context = imageToolContext({
-      abortController: new AbortController(),
-      options: { mainLoopModel: 'claude-opus-5-5' },
-    })
-    const input = { prompt: 'a cat', output_path: join(tempDir!, 'generated.png') }
-    expect(await GenerateImageTool.validateInput?.(input, context)).toMatchObject({
-      result: false, message: expect.stringContaining('Luna or Terra'),
-    })
-    await expect(GenerateImageTool.call(input, context)).rejects.toThrow('Luna or Terra')
-    expect(requests).toBe(0)
+    const result = await GenerateImageTool.call({ prompt: 'a watercolor cat', output_path: outputPath }, imageToolContext({
+      abortController: new AbortController(), options: { mainLoopModel: 'claude-opus-5-5' },
+    }))
+    expect(requestUrl).toBe('https://chatgpt.com/backend-api/codex/images/generations')
+    expect(requestHeaders?.get('authorization')).toBe('Bearer access-main-account')
+    expect(requestHeaders?.get('chatgpt-account-id')).toBe('main-account')
+    expect(requestHeaders?.get('accept')).toBe('application/json')
+    expect(requestBody).toEqual({ prompt: 'a watercolor cat', n: 1, output_format: 'png', moderation: 'auto' })
+    expect(await readFile(outputPath)).toEqual(generatedBytes)
+    expect(result.data.model).toBe('backend-selected')
+    expect(result.data.usage).toEqual({ output_tokens: 12 })
+    expect(formatGenerateImageResult(result.data)).toContain('Image model: Backend selected')
+  })
+
+  test.each(['png', 'jpeg', 'webp'] as const)('writes real %s bytes when the direct backend returns PNG', async format => {
+    seedCodexAccountPoolForTest({ activeAccountId: 'main-account', accounts: [buildPoolAccount('main-account')] })
+    const png = PNG.sync.write(new PNG({ width: 4, height: 3 }))
+    globalThis.fetch = (async () => Response.json({ data: [{ b64_json: png.toString('base64') }] })) as typeof fetch
+    const outputPath = join(tempDir!, `generated.${format}`)
+    const result = await GenerateImageTool.call({
+      prompt: 'a small rectangle', output_path: outputPath,
+      ...(format === 'png' ? {} : { output_compression: 0 }),
+    }, imageToolContext({ abortController: new AbortController(), options: { mainLoopModel: 'gpt-6-luna' } }))
+    const { getImageProcessor } = await import('../FileReadTool/imageProcessor.js')
+    const sharp = await getImageProcessor()
+    const bytes = await readFile(outputPath)
+    expect((await sharp(bytes).metadata()).format).toBe(format)
+    expect(result.data.outputFormat).toBe(format)
+    expect(result.data.bytes).toBe(bytes.length)
+    expect(result.data.size).toBe('4x3')
   })
 
   test('does not send an image request with a retained credential generation', async () => {
@@ -1155,7 +946,7 @@ const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
         })
       }
 
-      if (requestUrl === 'https://chatgpt.com/backend-api/codex/responses') {
+      if (requestUrl === 'https://chatgpt.com/backend-api/codex/images/generations') {
         const headers = new Headers(init?.headers)
         authorization = headers.get('authorization')
         requestAccountId = headers.get('chatgpt-account-id')
@@ -1283,9 +1074,11 @@ const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     const generatedBytes = Buffer.from('generated image')
     await writeFile(referencePath, referenceBytes)
     let requestBody: Record<string, unknown> | undefined
+    let requestUrl = ''
     let accountId: string | null = null
 
     globalThis.fetch = (async (_input, init) => {
+      requestUrl = String(_input)
       requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
       accountId = new Headers(init?.headers).get('chatgpt-account-id')
       return new Response(
@@ -1317,20 +1110,9 @@ const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     )
 
     expect(accountId).toBe('main-account')
-    expect(requestBody?.input).toEqual([
-      {
-        role: 'user',
-        content: [
-          { type: 'input_text', text: 'use this reference' },
-          {
-            type: 'input_image',
-            image_url: `data:image/png;base64,${referenceBytes.toString('base64')}`,
-          },
-        ],
-      },
-    ])
-    expect(await readFile(outputPath)).toEqual(generatedBytes)
-    expect(result.data.filePath).toBe(outputPath)
+    expect(requestUrl).toBe('https://chatgpt.com/backend-api/codex/images/edits')
+    expect(requestBody?.images).toEqual([{ image_url: `data:image/png;base64,${referenceBytes.toString('base64')}` }])
+
   })
 
   test('rejects missing reference image paths', async () => {
