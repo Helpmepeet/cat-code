@@ -84,12 +84,15 @@ test('a missing announcing session is not described as a missing named peer', as
   expect(tool.mapToolResultToToolResultBlockParam(result.data, 'tu').is_error).toBe(true)
 })
 
-test('scope guidance keeps posting optional, replaces only for a new task, and treats omitted notices as unavailable', async () => {
+test('scope guidance keeps posting optional, accepts read-only notices, and treats omitted notices as unavailable', async () => {
   const doctrine = buildPeerDoctrine({ name: 'Bear', createdByName: null, createdById: null })
   expect(doctrine).toContain('Post a scope notice with Announce when it would save peers asking what you are doing')
   expect(doctrine).not.toContain('especially before you edit files')
   expect(doctrine).toContain('Read a peer\'s notice in ListPeers before asking what it is working on')
-  expect(doctrine).toContain('the notice is unavailable and you are about to edit near its work')
+  expect(doctrine).toContain('Ask about edit ownership only when your planned edits could conflict with the peer\'s announced edits')
+  expect(doctrine).toContain('A read-only notice needs no confirmation unless newer evidence contradicts it')
+  expect(doctrine).not.toContain('your scope overlaps the notice')
+  expect(doctrine).toContain('If the notice is unavailable, ask before editing near its work')
   expect(doctrine).toContain('Subagents have no peer tools, so give them any peer context they need')
   const prompt = await createAnnounceTool().prompt()
   expect(prompt).toContain('when it would save peers asking what you are doing')
