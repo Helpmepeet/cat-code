@@ -19,6 +19,7 @@ import {
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getCwd } from '../../utils/cwd.js'
 import { getGlobalConfig } from '../../utils/config.js'
+import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import {
   clearCodexOAuthTokens,
   saveCodexOAuthTokens,
@@ -34,6 +35,7 @@ import {
 } from './GenerateImageTool.js'
 
 const originalFetch = globalThis.fetch
+const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 let tempDir: string | undefined
 const lifecycleRecordPaths: string[] = []
 
@@ -121,6 +123,8 @@ function clearCodexOAuthTokensForTest(): void {
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'cat-code-image-gen-'))
+  process.env.CLAUDE_CONFIG_DIR = join(tempDir!, '.cat-code')
+  resetSettingsCache()
   resetCodexLeaseManagerForTest()
   resetCodexAccountPoolForTest()
   clearCodexOAuthTokensForTest()
@@ -139,6 +143,9 @@ afterEach(async () => {
   clearCodexOAuthTokensForTest()
   resetCodexLeaseManagerForTest()
   resetCodexAccountPoolForTest()
+  if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  resetSettingsCache()
 })
 
 describe('GenerateImageTool', () => {
@@ -497,24 +504,41 @@ describe('GenerateImageTool', () => {
   })
 
   test.each([
-    ['gpt-6-luna', 'gpt-6-luna'],
-    ['gpt-6.1-terra', 'gpt-6.1-terra'],
-    ['gpt-6.1-sol', 'gpt-6.1-sol'],
-    ['gpt-6-astra', 'gpt-6-astra'],
-    ['gpt-5.6-terra', 'gpt-6.1-terra'],
-    ['gpt-6-sol', 'gpt-6.1-sol'],
-    ['claude-haiku-5-5', 'gpt-6-luna'],
-    ['claude-sonnet-5-5', 'gpt-6.1-terra'],
-    ['claude-opus-5-5', 'gpt-6.1-sol'],
-    ['haiku', 'gpt-6-luna'],
-    ['sonnet[1m]', 'gpt-6.1-terra'],
-    ['opus', 'gpt-6.1-sol'],
-    ['us.anthropic.claude-3-5-haiku-20241022-v1:0', 'gpt-6-luna'],
-    ['claude-sonnet-4-5@20250929', 'gpt-6.1-terra'],
-    ['eu.anthropic.claude-opus-4-6-v1[1m]', 'gpt-6.1-sol'],
-    ['custom-deployment', 'gpt-6.1-terra'],
-    [undefined, 'gpt-6.1-terra'],
-  ])('routes image generation from %s through %s with Codex auth and reports the image model', async (chatModel, expectedResponseModel) => {
+    ['gpt-6-luna', 'gpt-6-luna', undefined, undefined],
+    ['gpt-6.1-terra', 'gpt-6.1-terra', undefined, undefined],
+    ['gpt-6.1-sol', 'gpt-6.1-sol', undefined, undefined],
+    ['gpt-6-astra', 'gpt-6-astra', undefined, undefined],
+    ['gpt-5.6-terra', 'gpt-6.1-terra', undefined, undefined],
+    ['gpt-6-sol', 'gpt-6.1-sol', undefined, undefined],
+    ['claude-haiku-5-5', 'gpt-6-luna', undefined, undefined],
+    ['claude-sonnet-5-5', 'gpt-6.1-terra', undefined, undefined],
+    ['claude-opus-5-5', 'gpt-6.1-sol', undefined, undefined],
+    ['haiku', 'gpt-6-luna', undefined, undefined],
+    ['sonnet[1m]', 'gpt-6.1-terra', undefined, undefined],
+    ['opus', 'gpt-6.1-sol', undefined, undefined],
+    ['us.anthropic.claude-3-5-haiku-20241022-v1:0', 'gpt-6-luna', undefined, undefined],
+    ['claude-sonnet-4-5@20250929', 'gpt-6.1-terra', undefined, undefined],
+    ['eu.anthropic.claude-opus-4-6-v1[1m]', 'gpt-6.1-sol', undefined, undefined],
+    ['custom-deployment', 'gpt-6.1-terra', undefined, undefined],
+    [undefined, 'gpt-6.1-terra', undefined, undefined],
+    ['claude-opus-5-5', 'gpt-5.6-luna', {
+      imageGenerationModel: 'gpt-5.6-luna', imageGenerationReasoningEffort: 'none',
+    }, 'none'],
+    ['gpt-6-astra', 'gpt-6.1-terra', {
+      imageGenerationModel: 'gpt-6.1-terra', imageGenerationReasoningEffort: 'low',
+    }, 'low'],
+    ['claude-haiku-5-5', 'gpt-6-luna', {
+      imageGenerationModel: 'auto', imageGenerationReasoningEffort: 'high',
+    }, 'high'],
+    ['gpt-6.1-terra', 'gpt-6.1-terra', {
+      imageGenerationModel: 'auto', imageGenerationReasoningEffort: 'auto',
+    }, undefined],
+  ] as [string | undefined, string, Record<string, string>?, string?][])('routes image generation from %s through %s with Codex auth and reports the image model', async (chatModel, expectedResponseModel, imageSettings, expectedEffort) => {
+    if (imageSettings) {
+      await mkdir(getClaudeConfigHomeDir(), { recursive: true })
+      await writeFile(join(getClaudeConfigHomeDir(), 'settings.json'), JSON.stringify(imageSettings))
+      resetSettingsCache()
+    }
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
       accounts: [
@@ -582,6 +606,7 @@ describe('GenerateImageTool', () => {
       model: expectedResponseModel,
       tools: [{ type: 'image_generation' }],
     })
+    expect(requestBody?.reasoning).toEqual(expectedEffort ? { effort: expectedEffort } : undefined)
     expect(
       (requestBody as { tools: Record<string, unknown>[] }).tools[0],
     ).not.toHaveProperty('model')
@@ -591,6 +616,29 @@ describe('GenerateImageTool', () => {
     expect(formatGenerateImageResult(result.data)).toContain(
       'Reported model: gpt-image-2-codex',
     )
+  })
+
+  test.each(['gpt-6.1-sol', 'gpt-6-astra', 'auto'])('rejects image reasoning none for %s before sending a request', async model => {
+    await mkdir(getClaudeConfigHomeDir(), { recursive: true })
+    await writeFile(join(getClaudeConfigHomeDir(), 'settings.json'), JSON.stringify({
+      imageGenerationModel: model, imageGenerationReasoningEffort: 'none',
+    }))
+    resetSettingsCache()
+    let requests = 0
+    globalThis.fetch = (async () => {
+      requests++
+      throw new Error('Unexpected request')
+    }) as typeof fetch
+    const context = imageToolContext({
+      abortController: new AbortController(),
+      options: { mainLoopModel: 'claude-opus-5-5' },
+    })
+    const input = { prompt: 'a cat', output_path: join(tempDir!, 'generated.png') }
+    expect(await GenerateImageTool.validateInput?.(input, context)).toMatchObject({
+      result: false, message: expect.stringContaining('Luna or Terra'),
+    })
+    await expect(GenerateImageTool.call(input, context)).rejects.toThrow('Luna or Terra')
+    expect(requests).toBe(0)
   })
 
   test('does not send an image request with a retained credential generation', async () => {
@@ -626,6 +674,7 @@ describe('GenerateImageTool', () => {
 
     const outputPath = join(tempDir!, 'stale.png')
     const originalFetch = globalThis.fetch
+const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
     let fetchCount = 0
     globalThis.fetch = (async () => {
       fetchCount += 1

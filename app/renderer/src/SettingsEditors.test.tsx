@@ -80,6 +80,30 @@ test('Fast Auto mode reviews are visible in model settings and default off indep
   }
 })
 
+test('image generation controls show Auto defaults and the saved Luna non-reasoning choice', () => {
+  for (const saved of [false, true]) {
+    const values = saved ? [
+      { key: 'imageGenerationModel', value: 'gpt-5.6-luna', source: 'userSettings' as const },
+      { key: 'imageGenerationReasoningEffort', value: 'none', source: 'userSettings' as const },
+    ] : []
+    const html = renderToStaticMarkup(
+      <SettingsPane
+        layer="userSettings"
+        onWrite={noop}
+        pane="model"
+        keys={['imageGenerationModel', 'imageGenerationReasoningEffort']}
+        snapshot={snapshot({
+          layers: [{ source: 'userSettings', origin: '/u/settings.json', keys: values.map(row => row.key) }],
+          resolved: values.map(row => ({ key: row.key, source: row.source, editable: true, managed: false })),
+          editableValues: values,
+        })}
+      />,
+    )
+    expect(selectedOption(html, 'Image generation model')).toBe(saved ? 'gpt-5.6-luna' : 'auto')
+    expect(selectedOption(html, 'Image reasoning')).toBe(saved ? 'none' : 'auto')
+  }
+})
+
 /** React escapes apostrophes; compare against prose after decoding. */
 function decode(html: string): string {
   return html

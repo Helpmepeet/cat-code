@@ -38,6 +38,8 @@ import { getDisplayPath } from '../../utils/file.js'
 import { formatFileSize } from '../../utils/format.js'
 import { prepareImageBufferForModel } from '../../utils/imageResizer.js'
 import { getDefaultFileReadingLimits } from '../FileReadTool/limits.js'
+import { getInitialSettings } from '../../utils/settings/settings.js'
+import type { SettingsJson } from '../../utils/settings/types.js'
 
 const GENERATE_IMAGE_TOOL_NAME = 'GenerateImage'
 const CODEX_IMAGE_GENERATIONS_URL = 'https://chatgpt.com/backend-api/codex/responses'
@@ -64,6 +66,26 @@ function resolveImageResponseModel(model: string | undefined): string {
   if (canonical.includes('haiku')) return 'gpt-6-luna'
   if (canonical.includes('opus')) return 'gpt-6.1-sol'
   return DEFAULT_CODEX_RESPONSE_MODEL
+}
+
+type ImageReasoningEffort = Exclude<SettingsJson['imageGenerationReasoningEffort'], 'auto' | undefined>
+
+function resolveImageRequestOptions(chatModel: string | undefined): {
+  responseModel: string
+  reasoningEffort: ImageReasoningEffort | undefined
+} {
+  const settings = getInitialSettings()
+  // An image-specific selection is explicit, including the older Luna option.
+  const responseModel = settings.imageGenerationModel && settings.imageGenerationModel !== 'auto'
+    ? settings.imageGenerationModel
+    : resolveImageResponseModel(chatModel)
+  const reasoningEffort = settings.imageGenerationReasoningEffort === 'auto'
+    ? undefined
+    : settings.imageGenerationReasoningEffort
+  if (reasoningEffort === 'none' && !['gpt-5.6-luna', 'gpt-6-luna', 'gpt-6.1-terra'].includes(responseModel)) {
+    throw new Error('Image reasoning None requires Luna or Terra. Choose an image generation model in Settings or change image reasoning to Auto.')
+  }
+  return { responseModel, reasoningEffort }
 }
 
 // Cat Code does not send a requested size, so report the dimensions in the returned bytes.
@@ -595,6 +617,7 @@ function buildCodexImageGenerationBody(
   outputFormat: OutputFormat,
   responseModel: string,
   referenceImage?: ReferenceImage,
+  reasoningEffort?: ImageReasoningEffort,
 ) {
   const content = [
     {
@@ -613,6 +636,7 @@ function buildCodexImageGenerationBody(
 
   return {
     model: responseModel,
+    ...(reasoningEffort ? { reasoning: { effort: reasoningEffort } } : {}),
     instructions: CODEX_IMAGE_GENERATION_INSTRUCTIONS,
     store: false,
     stream: true,
@@ -987,6 +1011,7 @@ async function generateWithCodexBackend(
   responseModel: string,
   signal: AbortSignal,
   credentialUse?: CodexCredentialUseOptions,
+  reasoningEffort?: ImageReasoningEffort,
 ): Promise<{ b64: string; model: string }> {
   if (!auth.accountId) {
     throw new Error('Codex image generation requires a ChatGPT account ID.')
@@ -1018,6 +1043,7 @@ async function generateWithCodexBackend(
             outputFormat,
             responseModel,
             referenceImage,
+            reasoningEffort,
           ),
         ),
         signal,
@@ -1056,6 +1082,7 @@ async function generateWithCodexRetries(
   outputFormat: OutputFormat,
   context: ToolUseContext,
   responseModel: string,
+  reasoningEffort?: ImageReasoningEffort,
 ): Promise<{ b64: string; model: string }> {
   const credentialUse = (context as ImageToolContext).codexCredentialUse
   const generator = withRetry(
@@ -1068,6 +1095,7 @@ async function generateWithCodexRetries(
         responseModel,
         context.abortController.signal,
         credentialUse,
+        reasoningEffort,
       ),
     {
       maxRetries: MAX_CODEX_IMAGE_RETRIES,
@@ -1235,7 +1263,12 @@ For transparency, omit background and choose PNG or WebP. The interface displays
       output,
     })
   },
-  async validateInput(input) {
+  async validateInput(input, context) {
+    try {
+      resolveImageRequestOptions(context?.options?.mainLoopModel)
+    } catch (error) {
+      return { result: false, message: errorMessage(error), errorCode: 9 }
+    }
     const filePath = ensureOutputPath(input)
     if (!isAbsolute(filePath)) {
       return {
@@ -1322,11 +1355,13 @@ For transparency, omit background and choose PNG or WebP. The interface displays
       throw new Error('output_path must end in .png, .jpg, .jpeg, or .webp.')
     }
 
+    const { responseModel, reasoningEffort } = resolveImageRequestOptions(context.options?.mainLoopModel)
     const generation = await generateWithCodexRetries(
       input,
       outputFormat,
       context,
-      resolveImageResponseModel(context.options?.mainLoopModel),
+      responseModel,
+      reasoningEffort,
     )
 
     const bytes = Buffer.from(generation.b64, 'base64')
