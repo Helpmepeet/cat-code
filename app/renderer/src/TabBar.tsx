@@ -406,7 +406,6 @@ function Tab({
   const folder = descriptor.binding?.kind === 'managed' ? '' : basename(descriptor.cwd)
   // The peer name (PEER-SESSIONS), the same one the sidebar row tooltip leads with.
   const name = descriptor.name?.trim() || ''
-  const detail = [folder, descriptor.forked ? 'Forked session' : ''].filter(Boolean).join(' · ')
 
   return (
     <>
@@ -531,13 +530,16 @@ function Tab({
     <HoverTooltip anchor={tooltip.anchor} placement="tab">
       <div className="break-words">{title}</div>
       {name || folder || shortcut || descriptor.forked ? (
-        <div className="mt-[5px] flex items-center justify-between gap-4 text-[11px] text-text-subtle">
-          <span>
-            {name ? <span className="font-medium text-text-primary">{name}</span> : null}
-            {name && detail ? ' · ' : ''}
-            {detail}
+        <div className="mt-1.5 flex items-center justify-between gap-4 text-[11px] text-text-subtle">
+          {/* Each fact is its own chip so name, folder and fork state read as
+           * separate fields: the name in the accent (it is who the session IS),
+           * the folder as plain text, the fork state as a neutral tag. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+            {name ? <span className="rounded bg-accent/15 px-1.5 font-medium leading-[17px] text-accent">{name}</span> : null}
+            {folder ? <span>{folder}</span> : null}
+            {descriptor.forked ? <span className="rounded bg-shell-active px-1.5 leading-[17px] text-text-primary">Forked session</span> : null}
           </span>
-          {shortcut ? <span className="rounded border border-frame-seam px-[5px] font-mono text-[10px] leading-[15px] text-text-ghost">{shortcut}</span> : null}
+          {shortcut ? <span className="shrink-0 rounded border border-frame-seam bg-shell-hover px-[5px] font-mono text-[10px] leading-[15px] text-text-subtle">{shortcut}</span> : null}
         </div>
       ) : null}
     </HoverTooltip>

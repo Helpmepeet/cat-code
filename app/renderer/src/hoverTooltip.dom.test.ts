@@ -64,7 +64,7 @@ test('tab tooltips show full title, session name, folder, shortcut and fork stat
     tabs[0]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
   })
   await act(async () => { await wait(370) })
-  expect(tip()?.textContent).toBe('A long full session titleBear · project-name · Forked session⌘1')
+  expect(tip()?.textContent).toBe('A long full session titleBearproject-nameForked session⌘1')
   expect(tip()?.parentElement).toBe(document.body)
   await act(async () => {
     tabs[0]!.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }))
