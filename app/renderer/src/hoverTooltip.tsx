@@ -45,7 +45,7 @@ export function HoverTooltip({ anchor, placement, children }: {
       role="tooltip"
       className={`pointer-events-none fixed z-[71] text-text-primary shadow-[var(--elev-popover)] ${placement === 'rail'
         ? '-translate-y-1/2 whitespace-nowrap rounded-md border border-shell-seam bg-surface-raised px-2 py-1 text-xs'
-        : "min-w-[168px] max-w-[min(300px,calc(100vw-16px))] rounded-lg border border-frame-seam bg-surface-raised px-3 py-2 text-xs [overflow-wrap:anywhere] before:absolute before:-top-[6px] before:left-[var(--tooltip-caret)] before:size-2.5 before:-translate-x-1/2 before:rotate-45 before:border-l before:border-t before:border-frame-seam before:bg-surface-raised before:content-['']"}`}
+        : "min-w-[168px] max-w-[min(300px,calc(100vw-16px))] rounded-lg border border-accent/35 bg-surface-raised px-3 py-2 text-xs [overflow-wrap:anywhere] before:absolute before:-top-[6px] before:left-[var(--tooltip-caret)] before:size-2.5 before:-translate-x-1/2 before:rotate-45 before:border-l before:border-t before:border-accent/35 before:bg-surface-raised before:content-['']"}`}
       style={style}
     >
       {children}

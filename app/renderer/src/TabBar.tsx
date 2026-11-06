@@ -535,11 +535,11 @@ function Tab({
            * separate fields: the name in the accent (it is who the session IS),
            * the folder as plain text, the fork state as a neutral tag. */}
           <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {name ? <span className="rounded bg-accent/15 px-1.5 font-medium leading-[17px] text-accent">{name}</span> : null}
+            {name ? <span className="rounded bg-accent/20 px-1.5 font-medium leading-[17px] text-accent">{name}</span> : null}
             {folder ? <span>{folder}</span> : null}
             {descriptor.forked ? <span className="rounded bg-shell-active px-1.5 leading-[17px] text-text-primary">Forked session</span> : null}
           </span>
-          {shortcut ? <span className="shrink-0 rounded border border-frame-seam bg-shell-hover px-[5px] font-mono text-[10px] leading-[15px] text-text-subtle">{shortcut}</span> : null}
+          {shortcut ? <span className="shrink-0 rounded border border-accent/30 bg-accent/10 px-[5px] font-mono text-[10px] leading-[15px] text-accent">{shortcut}</span> : null}
         </div>
       ) : null}
     </HoverTooltip>
