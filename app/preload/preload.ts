@@ -1,7 +1,7 @@
 import { CH_OPEN_EXTERNAL_URL } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_CAPTURE } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
-import { CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMIT, CH_FILE_PREVIEW_RELEASE, CH_FILE_PREVIEW_EVENT, CH_FILE_PREVIEW_SCROLL_READ, CH_FILE_PREVIEW_SCROLL_RESTORE, CH_FILE_PREVIEW_APPLICATIONS, CH_FILE_PREVIEW_APPLICATION_CHOOSE } from '../shared/ipcChannels.js'
+import { CH_FILE_PREVIEW_DOCUMENT_READ, CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMIT, CH_FILE_PREVIEW_RELEASE, CH_FILE_PREVIEW_EVENT, CH_FILE_PREVIEW_SCROLL_READ, CH_FILE_PREVIEW_SCROLL_RESTORE, CH_FILE_PREVIEW_APPLICATIONS, CH_FILE_PREVIEW_APPLICATION_CHOOSE } from '../shared/ipcChannels.js'
 import { CH_LID_READ, CH_LID_COMMAND, CH_LID_CHANGED } from '../shared/ipcChannels.js'
 import type { LidModeView } from '../shared/lidClosed.js'
 /**
@@ -153,6 +153,7 @@ import {
   CH_HOST_SAVE_TEXT,
   CH_HOST_OPEN_WORKSPACE_FILE,
   CH_HOST_WORKSPACE_FILE_AVAILABILITY,
+  CH_HOST_WORKSPACE_FILE_AVAILABILITY_CHECK,
   CH_HOST_ACCOUNT_DELETE,
   CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
@@ -669,9 +670,14 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     const payload = { id, target }; sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_PREVIEW_BLOCKED_NAVIGATION_OPEN, payload)
   },
-  prepareFilePreview(appSessionId, path, source) {
-    const payload = { appSessionId, path, ...(source !== undefined ? { source } : {}) }; sendGuard.assertAllowed(payload)
+  prepareFilePreview(appSessionId, path, source, textWindow) {
+    const payload = { appSessionId, path, ...(source !== undefined ? { source } : {}), ...(textWindow !== undefined ? { textWindow } : {}) }; sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_FILE_PREVIEW_PREPARE, payload)
+  },
+  readFilePreviewDocument(id, revision, request) {
+    const payload = { id, revision, request }
+    sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_FILE_PREVIEW_DOCUMENT_READ, payload)
   },
   refreshFilePreview(id) {
     const payload = { id }; sendGuard.assertAllowed(payload)
@@ -724,6 +730,11 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     const payload = { appSessionId, path }
     sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_HOST_WORKSPACE_FILE_AVAILABILITY, payload) as Promise<boolean>
+  },
+  checkWorkspaceFileAvailability(appSessionId, path) {
+    const payload = { appSessionId, path }
+    sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_HOST_WORKSPACE_FILE_AVAILABILITY_CHECK, payload)
   },
   getExternalAppIcon(request) {
     sendGuard.assertAllowed(request)

@@ -30,6 +30,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -44,6 +45,8 @@ import {
   selectRowIsPinned,
   selectIsMeasured,
   selectLineWindow,
+  selectLineTop,
+  selectLineAtOffset,
   selectVisualChunk,
   type LineMeasureEntry,
 } from './lineWindow.js'
@@ -59,10 +62,22 @@ export function VirtualLineList({
   className,
   label,
   renderBeforeIndex,
+  activeRequest,
+  align = 'center',
+  initialTopLine,
+  initialScrollLeft,
+  onPosition,
+  scrollerRef,
   renderLine,
 }: {
   lines: readonly string[]
   activeIndex: number | null
+  activeRequest?: number
+  align?: 'center' | 'start'
+  initialTopLine?: number
+  initialScrollLeft?: number
+  onPosition?: (position: { x: number; y: number; topLine: number }) => void
+  scrollerRef?: React.RefObject<HTMLDivElement | null>
   className: string
   /**
    * Names the scroller and makes it a focusable region. A list that IS the body
@@ -74,6 +89,9 @@ export function VirtualLineList({
   renderLine: (line: string, index: number) => ReactNode
 }): ReactNode {
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const position = useRef({ topLine: initialTopLine ?? 1, atBottom: false })
+  const previousLines = useRef(lines)
+  const initialized = useRef(false)
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(INITIAL_VIEWPORT_HEIGHT)
   const [contentWidth, setContentWidth] = useState(0)
@@ -113,6 +131,7 @@ export function VirtualLineList({
     const revision = layoutRevisionRef.current
     const entries: LineMeasureEntry[] = []
     for (const [index, node] of rowNodes.current) {
+      if (node.scrollHeight === 0) continue
       const chromeNode = chromeNodes.current.get(index)
       entries.push({
         index,
@@ -232,17 +251,18 @@ export function VirtualLineList({
     setCommitted(state =>
       reduceLineGeometryState(state, { kind: 'centre', index: activeIndex }),
     )
-  }, [activeIndex])
+  }, [activeIndex, activeRequest])
 
   useEffect(() => {
     const root = rootRef.current
     const index = geometry.pendingCentreIndex
     if (!root || index === null) return
-    root.scrollTop = selectCentredScrollTop(
-      geometry,
-      index,
-      root.clientHeight || viewportHeight,
+    root.scrollTop = align === 'start' ? selectLineTop(geometry, index) : selectCentredScrollTop(
+      geometry, index, root.clientHeight || viewportHeight,
     )
+    if (align === 'start') root.scrollLeft = 0
+    setScrollTop(root.scrollTop)
+    position.current = { topLine: selectLineAtOffset(geometry, root.scrollTop) + 1, atBottom: root.scrollHeight - root.scrollTop - root.clientHeight <= 2 }
     // Fixed geometry is exact on the first pass; measured geometry needs the
     // target mounted and measured first, and this is the one correction.
     if (
@@ -251,17 +271,38 @@ export function VirtualLineList({
     ) {
       setCommitted(state => reduceLineGeometryState(state, { kind: 'centred', index }))
     }
-  }, [geometry, viewportHeight])
+  }, [geometry, viewportHeight, align])
 
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    if (!initialized.current) {
+      initialized.current = true
+      root.scrollLeft = initialScrollLeft ?? 0
+      if (activeIndex === null && initialTopLine !== undefined) root.scrollTop = selectLineTop(geometry, initialTopLine - 1)
+    } else if (previousLines.current !== lines && root.clientHeight > 0) {
+      root.scrollTop = position.current.atBottom ? root.scrollHeight : selectLineTop(geometry, position.current.topLine - 1)
+    }
+    if (!initialized.current || previousLines.current === lines && root.clientHeight > 0) position.current = { topLine: selectLineAtOffset(geometry, root.scrollTop) + 1, atBottom: root.scrollHeight - root.scrollTop - root.clientHeight <= 2 }
+    previousLines.current = lines
+    setScrollTop(root.scrollTop)
+  }, [lines, geometry, activeIndex, initialTopLine, initialScrollLeft])
 
   return (
     <div
-      ref={rootRef}
+      ref={element => { rootRef.current = element; if (scrollerRef) scrollerRef.current = element }}
       className={className}
       role={label === undefined ? undefined : 'region'}
       aria-label={label}
       tabIndex={label === undefined ? undefined : 0}
-      onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
+      onScroll={event => {
+        const root = event.currentTarget
+        if (root.clientHeight === 0) return
+        setScrollTop(root.scrollTop)
+        const topLine = selectLineAtOffset(geometry, root.scrollTop) + 1
+        position.current = { topLine, atBottom: root.scrollHeight - root.scrollTop - root.clientHeight <= 2 }
+        onPosition?.({ x: root.scrollLeft, y: root.scrollTop, topLine })
+      }}
     >
       {lineWindow.topSpacerHeight > 0 ? (
         <div aria-hidden style={{ height: `${lineWindow.topSpacerHeight}px` }} />

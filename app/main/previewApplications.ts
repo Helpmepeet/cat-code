@@ -1,4 +1,4 @@
-import { filePreviewKind, normalizeLocalhostPreviewUrl, type FilePreviewApplications } from '../shared/filePreview.js'
+import { filePreviewKind, normalizeLocalhostPreviewUrl, type FilePreviewApplications, type FilePreviewKind, type FilePreviewLocation } from '../shared/filePreview.js'
 import type { OpenWorkspaceFileTarget } from '../shared/protocol.js'
 import { resolveWorkspaceFile } from './openWorkspaceFile.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
@@ -8,12 +8,15 @@ const LABELS: Record<OpenWorkspaceFileTarget, string> = {
   default: 'Default application', chrome: 'Google Chrome', safari: 'Safari',
   vscode: 'Visual Studio Code', zed: 'Zed', cursor: 'Cursor', finder: 'Reveal in Finder',
 }
-const TARGETS: Record<string, OpenWorkspaceFileTarget[]> = {
+const TARGETS: Record<FilePreviewKind, OpenWorkspaceFileTarget[]> = {
   html: ['default', 'chrome', 'safari', 'vscode', 'zed', 'cursor'],
   markdown: ['default', 'vscode', 'zed', 'cursor'],
   image: ['default', 'chrome', 'safari'],
   svg: ['default', 'chrome', 'safari', 'vscode', 'zed'],
   localhost: ['chrome', 'safari'],
+  text: ['vscode', 'cursor', 'zed', 'default'],
+  pdf: ['default', 'chrome', 'safari'],
+  xlsx: ['default'],
 }
 const PREFERENCE_FILE = 'file-preview-applications.json'
 
@@ -21,7 +24,7 @@ export function createPreviewApplications(deps: {
   userData: string
   sessions: () => readonly SessionDescriptor[]
   installed: (target: OpenWorkspaceFileTarget, path: string) => Promise<boolean>
-  open: (path: string, target: OpenWorkspaceFileTarget) => Promise<boolean | string>
+  open: (path: string, target: OpenWorkspaceFileTarget, location?: FilePreviewLocation) => Promise<boolean | string>
   localAllowed?: (url: string) => string | null
 }) {
   const choices = readPreferenceFile(deps.userData, PREFERENCE_FILE, raw => {
@@ -59,7 +62,7 @@ export function createPreviewApplications(deps: {
       if (!resolved || !kind) return fallback
       const applications = (await Promise.all([...TARGETS[kind], 'finder' as const].map(async target =>
         await deps.installed(target, resolved.path).catch(() => false) ? { target, label: LABELS[target] } : null))).filter(item => item !== null)
-      return { applications, selected: applications.some(app => app.target === choices[kind]) ? choices[kind] : 'default' }
+      return { applications, selected: applications.some(app => app.target === choices[kind]) ? choices[kind] : kind === 'text' ? applications.find(app => app.target !== 'finder')?.target ?? 'default' : 'default' }
     },
     async choose(input: unknown): Promise<boolean> {
       const sequence = ++choiceSequence
@@ -80,7 +83,7 @@ export function createPreviewApplications(deps: {
       if (resolved.target !== 'finder') registerChoice(kind, sequence)
       if (!await deps.installed(resolved.target, resolved.path).catch(() => false)) return false
       try {
-        const outcome = await deps.open(resolved.path, resolved.target)
+        const outcome = await deps.open(resolved.path, resolved.target, resolved.location)
         const ok = typeof outcome === 'boolean' ? outcome : outcome === ''
         if (ok && resolved.target !== 'finder' && latestChoice.get(kind) === sequence) {
           choices[kind] = resolved.target

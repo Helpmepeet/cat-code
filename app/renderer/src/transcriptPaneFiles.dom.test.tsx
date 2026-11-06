@@ -3,6 +3,7 @@ import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import { FilePaneContext } from './filePaneContext.js'
+import { disposeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { LatestPaneFileCardContext, latestPaneFileCards } from './transcriptPaneFiles.js'
 import { ToolCardStyleContext, type ToolCardStyle } from './toolCardStyle.js'
 import { TranscriptModeContext } from './transcriptMode.js'
@@ -14,6 +15,7 @@ let oldBridge: PropertyDescriptor | undefined
 beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => {
   await harness.unmountAll()
+  disposeWorkspaceFileAvailability(base.sessionId)
   window.getSelection()?.removeAllRanges()
   if (oldBridge) Object.defineProperty(window, 'catcode', oldBridge)
   else Reflect.deleteProperty(window, 'catcode')
@@ -32,14 +34,14 @@ function installBridge(external: string[]) {
   oldBridge = Object.getOwnPropertyDescriptor(window, 'catcode')
   Object.defineProperty(window, 'catcode', { configurable: true, value: {
     openWorkspaceFile: async (_id: string, path: string) => { external.push(path); return true },
-    getWorkspaceFileAvailability: async () => true,
+    checkWorkspaceFileAvailability: async () => 'available',
   } })
 }
 function openButtons(root: ParentNode): HTMLButtonElement[] {
   return [...root.querySelectorAll<HTMLButtonElement>('button[aria-label^="Open "]')]
 }
 
-test('all reply path forms send modifier intent to the pane while other file types retain their existing opener', async () => {
+test('all reply path forms and source files send modifier intent to the pane', async () => {
   const external: string[] = []
   installBridge(external)
   const requests: Array<{ sessionId: string; path: string; external: boolean }> = []
@@ -61,8 +63,9 @@ test('all reply path forms send modifier intent to the pane while other file typ
   }
   const tree = await harness.mount(<FilePaneContext.Provider value={opener}><TranscriptRowsView rows={[prose('`source.ts:12`')]} /></FilePaneContext.Provider>)
   await act(async () => { openButtons(tree.container)[0]!.click() })
-  expect(external).toEqual(['source.ts:12'])
-  expect(requests).toHaveLength(3)
+  expect(external).toEqual([])
+  expect(requests).toHaveLength(4)
+  expect(requests.at(-1)).toEqual({ sessionId: base.sessionId, path: 'source.ts:12', external: false })
 })
 
 test('main transcript uses the same shortened, width-bounded file labels as worker replies', async () => {
@@ -125,7 +128,7 @@ test('new relative HTML links after a move open in their recorded project in eve
 test('a relative link menu uses the same recorded workspace as its click', async () => {
   installBridge([])
   const checked: string[] = []
-  window.catcode.getWorkspaceFileAvailability = async (_id, path) => { checked.push(path); return true }
+  window.catcode.checkWorkspaceFileAvailability = async (_id, path) => { checked.push(path); return 'available' }
   const boundary = { ...prose('Moving'), id: 'move', frameId: 'move-frame' }
   const tree = await harness.mount(<TranscriptRowsView rows={[boundary, prose('`docs/report.html`')]} cwd="/repo"
     contextTransitions={[{ id: 'move', afterFrameId: 'move-frame', cwd: '/repo', binding: { kind: 'project' } }]} />)
@@ -137,7 +140,7 @@ test('a relative link menu uses the same recorded workspace as its click', async
 test('single and grouped tool filename menus use their originating row workspace', async () => {
   installBridge([])
   const checked: string[] = []
-  window.catcode.getWorkspaceFileAvailability = async (_id, path) => { checked.push(path); return true }
+  window.catcode.checkWorkspaceFileAvailability = async (_id, path) => { checked.push(path); return 'available' }
   const boundary = { ...prose('Moving'), id: 'move', frameId: 'move-frame' }
   const read = (id: string): NestedToolUseRow => ({
     ...fileCard(id, 'write', `docs/${id}.html`), toolName: 'Read', toolFamily: 'read',
@@ -292,4 +295,57 @@ test('a session-level newest-card map also applies inside a worker transcript vi
   </FilePaneContext.Provider>)
   expect(openButtons(tree.container)).toHaveLength(1)
   expect(tree.container.querySelector('[aria-label="Worker transcript"]')?.contains(openButtons(tree.container)[0]!)).toBe(true)
+})
+
+test('weak prose waits for settlement and confirmation, then a write retries a missing name', async () => {
+  installBridge([])
+  const checked: string[] = []
+  let exists = false
+  window.catcode.checkWorkspaceFileAvailability = async (_id, path) => {
+    checked.push(path)
+    return path === '/repo/README.md' || exists ? 'available' : 'missing'
+  }
+  const reply = prose('Node.js README.md object.property and `Makefile`, `.env`, `src/a.ts`.')
+  const tree = await harness.mount(<TranscriptRowsView rows={[{ ...reply, isStreaming: true } as NestedTranscriptRow]} cwd="/repo" />)
+  expect(checked).toEqual([])
+  expect(openButtons(tree.container).some(button => button.title === 'Node.js')).toBe(false)
+  const env = openButtons(tree.container).find(button => button.title === '.env')!
+  expect(env.textContent).toBe('.env↗')
+  expect(env.querySelector('svg')).toBeNull()
+  await tree.render(<TranscriptRowsView rows={[reply]} cwd="/repo" />)
+  expect(checked.sort()).toEqual(['/repo/Node.js', '/repo/README.md'])
+  expect(openButtons(tree.container).some(button => button.title === 'README.md')).toBe(true)
+  expect(openButtons(tree.container).some(button => button.title === 'Node.js')).toBe(false)
+  exists = true
+  const write = fileCard('node-write', 'write', '/repo/Node.js')
+  await tree.render(<TranscriptRowsView rows={[reply, write]} cwd="/repo" />)
+  expect(openButtons(tree.container).some(button => button.title === 'Node.js')).toBe(true)
+  expect(checked.filter(path => path === '/repo/Node.js')).toHaveLength(2)
+})
+
+test('weak names in moved history use a proven origin and leave unknown origins unlinked', async () => {
+  installBridge([])
+  const checked: string[] = []
+  window.catcode.checkWorkspaceFileAvailability = async (_id, path) => { checked.push(path); return 'available' }
+  const before = { ...prose('Node.js'), id: 'before', frameId: 'before' }
+  const after = { ...prose('Node.js'), id: 'after', frameId: 'after' }
+  const tree = await harness.mount(<TranscriptRowsView rows={[before, after]} cwd="/current"
+    contextTransitions={[{ id: 'move', afterFrameId: 'before', cwd: '/original', binding: { kind: 'project' } }]} />)
+  expect(checked).toEqual(['/original/Node.js'])
+  expect(openButtons(tree.container).filter(button => button.title === 'Node.js')).toHaveLength(1)
+})
+
+test('newest edit Open lands on the first changed line after hunk context', async () => {
+  installBridge([])
+  const requests: string[] = []
+  const edit = { ...fileCard('changed-line', 'edit', '/repo/source.ts'), status: 'success' as const,
+    result: { content: '', isError: false, diff: { filePath: '/repo/source.ts', hunks: [
+      { oldStart: 10, oldLines: 3, newStart: 10, newLines: 3, lines: [' same', ' same', '-old', '+new'] },
+    ] } },
+  }
+  const tree = await harness.mount(<FilePaneContext.Provider value={async (_id, path) => { requests.push(path); return { ok: true } }}>
+    <TranscriptRowsView rows={[edit]} cwd="/repo" />
+  </FilePaneContext.Provider>)
+  await act(async () => { openButtons(tree.container)[0]!.click() })
+  expect(requests).toEqual(['/repo/source.ts:12'])
 })

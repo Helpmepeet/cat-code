@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { NestedTranscriptRow, NestedToolUseRow } from './transcriptProjector.js'
-import { latestPaneFileCards, newestPaneFilePath, sameFileCards } from './transcriptPaneFiles.js'
+import { latestPaneFileCards, newestPaneFilePath, paneFileIndex, sameFileCards } from './transcriptPaneFiles.js'
 import { transcriptFileScopes } from './transcriptFileScope.js'
 import { mergeMountedMarkdownLeaves, planMarkdownLeaves, renderMarkdownTree } from './markdownRenderPlan.js'
 
@@ -12,7 +12,7 @@ test('rebuilt file cards with the same contents count as unchanged', () => {
   expect(sameFileCards(cards, new Map([['/a.html', 'one']]))).toBe(false)
 })
 
-function prose(id: string, content: string): NestedTranscriptRow {
+function prose(id: string, content: string): Extract<NestedTranscriptRow, { kind: 'assistant-text' }> {
   return { id, sessionId: 's', frameId: id, messageId: id, blockIndex: 0, parentToolUseId: null,
     kind: 'assistant-text', role: 'assistant', content, children: [] }
 }
@@ -26,7 +26,7 @@ test('reopen discovery follows rendered reply forms and ignores fenced code and 
   for (const content of ['[Report](notes.MD:12)', 'See notes.MD:12', '`notes.MD:12`', '[Report][n]\n\n[n]: notes.MD:12']) {
     expect(newestPaneFilePath([prose('reply', content)])).toBe('notes.MD:12')
   }
-  expect(newestPaneFilePath([prose('reply', 'See first.html\n\n```\nignore.md\n```\n\n[Outside](https://example.com/later.md)')])).toBe('first.html')
+  expect(newestPaneFilePath([prose('reply', 'See ./first.html\n\n```\nignore.md\n```\n\n[Outside](https://example.com/later.md)')])).toBe('./first.html')
   expect(newestPaneFilePath([prose('reply', '`script.ts` [Outside](https://example.com)')])).toBeNull()
   expect(newestPaneFilePath([prose('reply', 'http://[::1]:4000/server-only.md [Server](http://localhost:4000/not-a-file.md) `http://localhost:4000/code-only.md`')])).toBeNull()
   const read = { ...edit('read', '/repo/latest.svg:8'), toolName: 'Read', toolFamily: 'read' as const }
@@ -39,8 +39,8 @@ test('newest cards and reopen candidates use original arrival order across neste
   const late = edit('late-worker', '/repo/report.md')
   const early = edit('early-parent', 'report.md')
   const worker = { ...edit('agent', 'ignored.ts'), toolName: 'Agent', toolFamily: 'agent' as const,
-    children: [late, prose('worker-reply', 'worker-last.svg')] }
-  const rows = [worker, early, prose('parent-reply', 'parent.html')]
+    children: [late, prose('worker-reply', '`worker-last.svg`')] }
+  const rows = [worker, early, prose('parent-reply', '`parent.html`')]
   const arrival = ['agent', 'early-parent', 'parent-reply', 'late-worker', 'worker-reply']
   expect(latestPaneFileCards(rows, '/repo', arrival).get('/repo/report.md')).toBe('late-worker')
   expect(newestPaneFilePath(rows, arrival)).toBe('worker-last.svg')
@@ -77,4 +77,33 @@ test('safe filename source locations survive Markdown URL normalization while ex
   expect(html).not.toContain('href="javascript:')
   expect(html).not.toContain('href="data:')
   expect(html.match(/href=""/g)).toHaveLength(3)
+})
+
+
+test('shortcut prefers a rendered report and never volunteers a merely mentioned text file', () => {
+  expect(newestPaneFilePath([prose('report', '`report.md`'), edit('source', 'src/new.ts'), prose('mention', '`src/cited.ts`')])).toBe('report.md')
+  expect(newestPaneFilePath([edit('source', 'src/new.ts'), prose('mention', '`src/cited.ts`')])).toBe('src/new.ts')
+  expect(newestPaneFilePath([prose('weak', 'Node.js README.md report.md')])).toBeNull()
+  expect(newestPaneFilePath([{ ...prose('live', '`report.md`'), isStreaming: true }])).toBeNull()
+})
+
+test('file index ranks opened and changed files, scopes workers, and admits only confirmed weak names', () => {
+  const rows = [
+    edit('change', '/repo/src/file.ts'),
+    prose('reply', '`src/file.ts` README.md Node.js object.property `output/archive.zip`'),
+    { ...edit('read', '/repo/internal/config.json'), toolFamily: 'read' as const },
+    { ...edit('worker', 'src/file.ts'), agentCwd: '/worker' },
+    { ...prose('stream', '`future.md`'), isStreaming: true as const },
+  ]
+  const opened = new Map([['/private/tmp/plan.md', { path: '/private/tmp/plan.md', scroll: { x: 0, y: 12 }, aliases: ['/private/tmp/plan.md', '/tmp/plan.md'] }]])
+  rows.push(prose('alias', '`/tmp/plan.md`'))
+  const index = paneFileIndex({ rows, cwd: '/repo', opened, available: path => path === '/repo/README.md' ? true : undefined })
+  expect(index.map(entry => [entry.key, entry.group])).toEqual([
+    ['/private/tmp/plan.md', 'Opened'], ['/worker/src/file.ts', 'Changed'], ['/repo/src/file.ts', 'Changed'],
+    ['/repo/output/archive.zip', 'Mentioned'], ['/repo/README.md', 'Mentioned'], ['/repo/internal/config.json', 'Read'],
+  ])
+  expect(index.find(entry => entry.filename === 'archive.zip')?.external).toBe(true)
+  expect(index.find(entry => entry.filename === 'config.json')?.searchOnly).toBe(true)
+  const missing = paneFileIndex({ rows: [prose('reply', '`missing.md`')], cwd: '/repo', available: () => false })
+  expect(missing).toEqual([])
 })

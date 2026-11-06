@@ -28,6 +28,7 @@ const MODES = {
   'account-control': () => import('./accountControlWorker.js'),
   'settings-inventory': () => import('./settingsInventoryWorker.js'),
   'settings-write': () => import('./settingsWriteWorker.js'),
+  'preview-document': () => import('./previewDocumentWorker.js'),
   'workspace-listing': () => import('./workspaceListingWorker.js'),
   'workspace-trust': () => import('./workspaceTrustWorker.js'),
   'workspace-observation': () => import('./workspaceObservationWorker.js'),
@@ -57,7 +58,7 @@ if (!isMode(requested)) {
 
 // A GUI launch has only the system PATH. Restore the user's tool directories
 // and keep the bundled rg available after user tools before engine discovery.
-process.env.PATH = await resolvePackagedSidecarPath(process.execPath, process.env)
+if (requested !== 'preview-document') process.env.PATH = await resolvePackagedSidecarPath(process.execPath, process.env)
 
 // Normalize argv to the shape the entry modules already see under `bun run`.
 // A compiled binary starts at ["bun", "/$bunfs/root/<binary>", ...args], so the

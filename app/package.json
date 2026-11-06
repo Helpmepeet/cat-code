@@ -32,6 +32,7 @@
     "@happy-dom/global-registrator": "^20.0.0",
     "@tailwindcss/vite": "4.2.2",
     "@types/d3-sankey": "^0.12.5",
+    "@types/papaparse": "5.5.2",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.3",
     "@typescript-eslint/parser": "^8.65.0",
@@ -56,6 +57,9 @@
     "vite": "7.3.2"
   },
   "dependencies": {
-    "d3-sankey": "^0.12.3"
+    "d3-sankey": "^0.12.3",
+    "papaparse": "5.5.3",
+    "pdfjs-dist": "6.5.438",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }

@@ -318,6 +318,7 @@ async function runProductionHardeningSmoke(
       'openExternalUrl',
       // Display-only previews use fixed main-frame channels and scoped capabilities.
       'prepareFilePreview',
+      'readFilePreviewDocument',
       'prepareLocalhostPreview',
       'captureLocalhostPreview',
       'navigateLocalhostPreview',
@@ -332,6 +333,7 @@ async function runProductionHardeningSmoke(
       'chooseFilePreviewApplication',
       // Same validated regular-file policy, boolean metadata only; no OS action.
       'getWorkspaceFileAvailability',
+      'checkWorkspaceFileAvailability',
       'getExternalAppIcon',
       // P4-35 — the file sink (operator ruling 2026-07-30). The renderer requests
       // main's native save dialog and cannot name a destination (HC1/HC3).

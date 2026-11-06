@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement } from 'react'
 import { ExternalAppIcon } from './ExternalAppIcon.js'
 import { SessionActionIcon } from './SessionActionIcons.js'
+import { disposeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 
@@ -14,6 +15,7 @@ beforeAll(async () => {
 })
 afterEach(async () => {
   await harness.unmountAll()
+  disposeWorkspaceFileAvailability('session')
   if (original) Object.defineProperty(window, 'catcode', original)
   else Reflect.deleteProperty(window, 'catcode')
 })
@@ -70,7 +72,7 @@ test('file menu requests each destination icon and keeps the original open targe
   const opened: unknown[] = []
   Object.defineProperty(window, 'catcode', { configurable: true, value: {
     getExternalAppIcon: async (request: unknown) => { requests.push(request); return { dataUrl: png } },
-    getWorkspaceFileAvailability: async () => true,
+    checkWorkspaceFileAvailability: async () => 'available',
     openWorkspaceFile: async (...args: unknown[]) => { opened.push(args); return true },
   } })
   const tree = await harness.mount(createElement(FilePathActionsMenu, {

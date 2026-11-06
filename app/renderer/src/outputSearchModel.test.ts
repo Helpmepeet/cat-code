@@ -235,3 +235,15 @@ describe('selectOutputLineChunk', () => {
     ])
   })
 })
+
+
+test('case folding preserves offsets and highlighted source after expanding Unicode letters', () => {
+  const source = 'İx İX';
+  expect(describeOutputSearch(source, 'x', 1).activeOffset).toBe(4)
+  expect(splitLineByQuery(source, 'x')).toEqual([
+    { text: 'İ', match: false }, { text: 'x', match: true },
+    { text: ' İ', match: false }, { text: 'X', match: true },
+  ])
+  const long = 'İ'.repeat(5000) + 'needle'
+  expect(selectOutputLineChunk(long, 'needle', { anchorToMatch: true }).segments.find(part => part.match)?.text).toBe('needle')
+})

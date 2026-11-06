@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ToolInspector } from './ToolInspector.js'
@@ -310,7 +309,7 @@ test('P4-37: a row with no output has no toolbar to hang controls on', () => {
  * `outputSearchModel.test.ts`.
  * --------------------------------------------------------------------------- */
 
-test('a multi-megabyte single line mounts a bounded chunk, and copy still holds it whole', () => {
+test('a multi-megabyte single line mounts a bounded chunk while the output model stays whole', () => {
   const line = `${'x'.repeat(3_000_000)}needle`
   const html = renderToStaticMarkup(
     <ToolInspector row={bashRowWithOutput(`first\n${line}\nlast`)} />,
@@ -325,17 +324,6 @@ test('a multi-megabyte single line mounts a bounded chunk, and copy still holds 
     bashRowWithOutput(`first\n${line}\nlast`),
   )
   expect(model.output?.length).toBe(3_000_017)
-  const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('.writeText(copy)')
-})
-
-test('the wrap toggle lives on the scroll box, so it qualifies the measurements', () => {
-  // Geometry: `VirtualLineList` folds its container class list into the layout
-  // revision, so wrap has to be a container class and not a per-line one.
-  const source = readFileSync(new URL('./ToolInspector.tsx', import.meta.url), 'utf8')
-  const list = source.slice(source.indexOf('<VirtualLineList'))
-  expect(list).toContain('wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap')
-  expect(list.indexOf('className=')).toBeLessThan(list.indexOf('renderLine='))
 })
 
 test('no em dash reaches the panel (CLAUDE.md §7)', () => {

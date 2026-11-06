@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { CatCodeBridge, SessionId } from '../../shared/protocol.js'
 import { sessionDescriptorFixture } from '../../shared/sessionDescriptor.fixture.js'
 import { workspaceFileAvailability } from '../../main/workspaceFileAvailability.js'
+import { disposeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { FilePathActionsMenu } from './FilePathActionsMenu.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import type { FilePathActionsAnchor, FilePathMenuExtras } from './filePathActions.js'
@@ -37,6 +38,8 @@ beforeAll(async () => {
 beforeEach(() => { previousBridge = Object.getOwnPropertyDescriptor(window, 'catcode') })
 afterEach(async () => {
   await harness.unmountAll()
+  disposeWorkspaceFileAvailability(sessionId)
+  disposeWorkspaceFileAvailability('unknown-session')
   if (previousBridge) Object.defineProperty(window, 'catcode', previousBridge)
   else Reflect.deleteProperty(window, 'catcode')
 })
@@ -54,11 +57,11 @@ function availability(id: SessionId, path: string): Promise<boolean> {
 
 function bridge(read: (id: SessionId, path: string) => Promise<boolean>, opened: unknown[] = []) {
   const pending: Promise<boolean>[] = []
-  const api: Pick<CatCodeBridge, 'getWorkspaceFileAvailability' | 'openWorkspaceFile'> = {
-    getWorkspaceFileAvailability: (id, path) => {
+  const api: Pick<CatCodeBridge, 'checkWorkspaceFileAvailability' | 'openWorkspaceFile'> = {
+    checkWorkspaceFileAvailability: (id, path) => {
       const result = read(id, path)
       pending.push(result)
-      return result
+      return result.then(value => value ? 'available' as const : 'missing' as const)
     },
     openWorkspaceFile: async (...args) => { opened.push(args); return true },
   }

@@ -19,8 +19,9 @@ import type { SessionId, SlashCatalogEntry } from '../../shared/protocol.js'
 import { sessionStatusVisual } from './sessionStatusVisual.js'
 import type { TabTone } from './tabStatus.js'
 import { tabLabel } from './tabBarModel.js'
+import type { PaneFileEntry } from './transcriptPaneFiles.js'
 
-export type PaletteItemKind = 'action' | 'session'
+export type PaletteItemKind = 'action' | 'session' | 'file'
 
 export type PaletteItem = {
   id: string
@@ -54,6 +55,7 @@ export type PaletteHandlers = {
   restoreSession: (sessionId: SessionId) => void
   openTasks: () => void
   navigatePage: (page: PalettePage) => void
+  openFile?: (path: string, external: boolean) => void
 }
 
 export type PaletteInput = {
@@ -63,6 +65,7 @@ export type PaletteInput = {
   slashCatalog?: readonly SlashCatalogEntry[]
   /** Most-recently invoked real palette item ids, newest first. */
   recentItemIds?: readonly string[]
+  files?: readonly PaneFileEntry[]
   handlers: PaletteHandlers
 }
 
@@ -210,6 +213,12 @@ export function buildPaletteItems(input: PaletteInput): PaletteItem[] {
     })
   }
 
+  if (handlers.openFile) for (const file of input.files ?? []) items.push({
+    id: `file:${file.key}`, kind: 'file', group: 'Files', label: `${file.filename}${file.external ? ' ↗' : ''}`,
+    detail: file.parent, ariaLabel: `Open ${file.path}`, keywords: file.path,
+    run: () => handlers.openFile?.(file.path, file.external),
+  })
+
   // Cosmetic recents stay session-local renderer state: a projection of real
   // invocations, never a fabricated fixture or persistence layer. Like the
   // prototype, the Recent rows duplicate their canonical rows above a divider.
@@ -234,7 +243,7 @@ export function filterPaletteItems(
   query: string,
 ): PaletteItem[] {
   const q = query.trim().toLowerCase()
-  if (q.length === 0) return items
+  if (q.length === 0) return items.filter(item => item.kind !== 'file')
 
   const ranked: Array<{ item: PaletteItem; rank: number; order: number }> = []
   items.forEach((item, order) => {

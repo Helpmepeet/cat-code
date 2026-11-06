@@ -84,6 +84,7 @@ export function CommandPalette({
   }
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (event.nativeEvent.isComposing) return
     const count = filtered.length
     switch (event.key) {
       case 'ArrowDown':
@@ -156,7 +157,7 @@ export function CommandPalette({
               // groups interleave — a per-run header would repeat "Actions".
               // Flat-when-searching matches the prototype and avoids that.
               const showHeader =
-                query.trim().length === 0 &&
+                (query.trim().length === 0 || item.kind === 'file') &&
                 (index === 0 || filtered[index - 1]?.group !== item.group)
               const previous = filtered[index - 1]
               const showRecentDivider =
@@ -242,13 +243,13 @@ function PaletteRow({
         className={
           'shrink-0 truncate text-[13px] ' +
           (isActive ? 'text-text-primary' : 'text-text-muted') +
-          (item.kind === 'session' ? ' max-w-[45%]' : '')
+          (item.kind === 'session' || item.kind === 'file' ? ' max-w-[45%]' : '')
         }
       >
         {item.label}
       </span>
 
-      {item.kind === 'session' && item.detail ? (
+      {(item.kind === 'session' || item.kind === 'file') && item.detail ? (
         <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-subtle">
           {item.detail}
         </span>
@@ -262,7 +263,7 @@ function PaletteRow({
         >
           {item.state}
         </span>
-      ) : item.detail ? (
+      ) : item.kind !== 'file' && item.detail ? (
         <kbd className="shrink-0 rounded bg-shell-hover px-1.5 py-0.5 font-mono text-[10px] text-text-subtle">
           {item.detail}
         </kbd>

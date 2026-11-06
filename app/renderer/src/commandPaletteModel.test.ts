@@ -175,3 +175,19 @@ test('buildPaletteItems derives real navigation commands and session-local recen
     'command:/accounts',
   ])
 })
+
+
+test('file palette results appear only after typing and rank filename matches before parent paths', () => {
+  const opened: string[] = []
+  const items = buildPaletteItems({ rows: [], activeSessionId: 'a', handlers: { ...noopHandlers(), openFile: path => opened.push(path) },
+    files: [
+      { key: '/repo/report/notes.ts', path: '/repo/report/notes.ts', filename: 'notes.ts', parent: '/repo/report', group: 'Changed', external: false, searchOnly: false, availabilityPath: null },
+      { key: '/repo/report.md', path: '/repo/report.md', filename: 'report.md', parent: '/repo', group: 'Mentioned', external: false, searchOnly: false, availabilityPath: null },
+    ],
+  })
+  expect(filterPaletteItems(items, '').some(item => item.kind === 'file')).toBe(false)
+  const found = filterPaletteItems(items, 'report').filter(item => item.kind === 'file')
+  expect(found.map(item => item.label)).toEqual(['report.md', 'notes.ts'])
+  found[0]!.run()
+  expect(opened).toEqual(['/repo/report.md'])
+})

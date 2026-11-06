@@ -516,12 +516,12 @@ test('right-clicking a generated image offers the image and its file outside the
   const sessions = [sessionDescriptorFixture({ appSessionId: blockSource.sessionId, cwd })]
   const reads: Promise<boolean>[] = []
   const requests: Array<{ appSessionId: string; path: string }> = []
-  const bridge: Pick<CatCodeBridge, 'getWorkspaceFileAvailability'> = {
-    getWorkspaceFileAvailability(appSessionId, path) {
+  const bridge: Pick<CatCodeBridge, 'checkWorkspaceFileAvailability'> = {
+    checkWorkspaceFileAvailability(appSessionId, path) {
       requests.push({ appSessionId, path })
       const read = workspaceFileAvailability({ appSessionId, path }, sessions)
       reads.push(read)
-      return read
+      return read.then(value => value ? 'available' as const : 'missing' as const)
     },
   }
   const previousBridge = Object.getOwnPropertyDescriptor(window, 'catcode')

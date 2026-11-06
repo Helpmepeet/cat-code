@@ -4,7 +4,8 @@ import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, normalize, relative, resolve as resolvePath, sep } from 'node:path'
 import { resolveWorkspaceFile } from './openWorkspaceFile.js'
-import { FILE_PREVIEW_SCHEME, filePreviewKind, type FilePreviewDescriptor, type FilePreviewEvent } from '../shared/filePreview.js'
+import { BinaryPreviewError, credentialPreviewPath, readTextPreview, type TextSnapshot } from './filePreviewText.js'
+import { FILE_PREVIEW_SCHEME, filePreviewKind, type FilePreviewDescriptor, type FilePreviewEvent, type FilePreviewPrepareResult, type FilePreviewTextWindowSide } from '../shared/filePreview.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { MAX_REGISTRY_SESSIONS } from '../host/registry.js'
 
@@ -32,7 +33,7 @@ const MIME: Record<string, string> = {
 }
 const PAGE_CSP = "default-src * data: blob: cat-preview:; script-src * 'unsafe-inline' 'unsafe-eval' data: blob: cat-preview:; style-src * 'unsafe-inline' data: blob: cat-preview:; img-src * data: blob: cat-preview:; connect-src * data: blob: cat-preview:; frame-src 'none'; object-src 'none'; form-action 'none'; sandbox allow-scripts allow-same-origin"
 
-type Snapshot = { revision: number; files: Map<string, Buffer>; absent: Set<string>; failed: boolean }
+type Snapshot = { revision: number; files: Map<string, Buffer>; absent: Set<string>; failed: boolean; text?: string; textWindow?: TextSnapshot['textWindow'] }
 type Preview = {
   id: string
   appSessionId: string
@@ -45,6 +46,8 @@ type Preview = {
   watched: Map<string, string | null>
   watchers: Map<string, FSWatcher>
   timer?: ReturnType<typeof setTimeout>
+  dirtySince?: number
+  textSide: FilePreviewTextWindowSide
   poll: ReturnType<typeof setInterval>
   polling: boolean
   busy: boolean
@@ -147,6 +150,7 @@ export function createFilePreviewService(deps: {
   sessions: () => readonly SessionDescriptor[]
   publish: (event: FilePreviewEvent) => void
   home?: string
+  isVisible?: (appSessionId: string) => boolean
 }) {
   const previews = new Map<string, Preview>()
   let cachedBytes = 0
@@ -155,17 +159,23 @@ export function createFilePreviewService(deps: {
   let activeReads = 0
   const waitingReads: Array<() => void> = []
   const assetReads = new Map<string, Promise<Buffer | null>>()
-  async function read(path: string): Promise<Buffer> {
+  async function admitted<T>(operation: () => Promise<T>): Promise<T> {
     if (activeReads >= 2) {
       if (waitingReads.length >= MAX_PENDING_ASSET_READS) throw new Error('Preview busy')
       await new Promise<void>(resolve => waitingReads.push(resolve))
     } else activeReads++
-    try { return await stableRead(path) }
+    try { return await operation() }
     finally {
       const next = waitingReads.shift()
       if (next) next()
       else activeReads--
     }
+  }
+  const read = (path: string) => admitted(() => stableRead(path))
+  const readContent = async (path: string, kind: Preview['kind'], side: FilePreviewTextWindowSide): Promise<{ bytes: Buffer; text?: string; textWindow?: TextSnapshot['textWindow'] }> => {
+    if (kind === 'text') return admitted(() => readTextPreview(path, side))
+    const bytes = await read(path)
+    return { bytes, ...(kind === 'markdown' ? { text: bytes.toString('utf8') } : {}) }
   }
   function authorized(preview: Preview): boolean {
     return deps.sessions().some(session => session.appSessionId === preview.appSessionId && session.cwd === preview.authorityCwd && !session.moving)
@@ -178,7 +188,8 @@ export function createFilePreviewService(deps: {
       kind: preview.kind, revision: snapshot.revision,
       ...(preview.watchFailed ? { watchError: true } : {}),
       url: resourceUrl(preview, snapshot.revision, preview.path),
-      ...(preview.kind === 'markdown' ? { markdown: snapshot.files.get(preview.path)!.toString('utf8') } : {}),
+      ...(snapshot.text !== undefined ? { text: snapshot.text } : {}),
+      ...(snapshot.textWindow ? { textWindow: snapshot.textWindow } : {}),
     }
   }
   function dropSnapshot(preview: Preview, revision: number) {
@@ -213,8 +224,14 @@ export function createFilePreviewService(deps: {
   function schedule(preview: Preview) {
     if (preview.released) return
     preview.dirty = true
+    if (preview.kind === 'text' && deps.isVisible?.(preview.appSessionId) === false) return
+    preview.dirtySince ??= Date.now()
     if (preview.timer) clearTimeout(preview.timer)
-    preview.timer = setTimeout(() => { preview.timer = undefined; void refresh(preview.id) }, QUIET_MS)
+    preview.timer = setTimeout(() => {
+      preview.timer = undefined
+      if (preview.kind === 'text' && deps.isVisible?.(preview.appSessionId) === false) { preview.dirty = true; return }
+      void refresh(preview.id)
+    }, Math.max(0, Math.min(QUIET_MS, 1500 - (Date.now() - preview.dirtySince))))
     preview.timer.unref?.()
   }
   async function resolve(preview: Pick<Preview, 'appSessionId' | 'assetRoot'>, path: string) {
@@ -241,6 +258,7 @@ export function createFilePreviewService(deps: {
     if (preview.busy) { preview.dirty = true; return null }
     preview.busy = true
     preview.dirty = false
+    preview.dirtySince = undefined
     try {
       const resolved = await resolve(preview, preview.path)
       if (!resolved) {
@@ -248,16 +266,21 @@ export function createFilePreviewService(deps: {
         preview.removed = true
         return null
       }
-      const bytes = await read(resolved.path)
+      if (await credentialPreviewPath(resolved.path, home)) throw new Error('File refused')
+      const content = await readContent(resolved.path, preview.kind, preview.textSide)
+      const { bytes } = content
+      if (await credentialPreviewPath(resolved.path, home) || preview.released || !authorized(preview)) return null
+      const prior = preview.snapshots.get(preview.nextRevision)
+      if (preview.kind === 'text' && prior?.files.get(preview.path)?.equals(bytes) && prior.textWindow?.truncated === content.textWindow?.truncated) return descriptor(preview, prior)
       const total = bytes.length
       if (cachedBytes + total > MAX_CACHE_BYTES) {
         deps.publish({ id, kind: 'update-error' }); return null
       }
       const files = new Map([[preview.path, bytes]])
-      if (preview.released || !authorized(preview)) return null
+      if (await credentialPreviewPath(resolved.path, home) || preview.released || !authorized(preview)) return null
       preview.removed = false
       for (const revision of preview.snapshots.keys()) if (revision !== preview.committed) dropSnapshot(preview, revision)
-      const snapshot: Snapshot = { revision: ++preview.nextRevision, files, absent: new Set(), failed: false }
+      const snapshot: Snapshot = { revision: ++preview.nextRevision, files, absent: new Set(), failed: false, text: content.text, textWindow: content.textWindow }
       preview.snapshots.set(snapshot.revision, snapshot)
       cachedBytes += total
       for (const path of [...preview.watched.keys()]) {
@@ -288,54 +311,67 @@ export function createFilePreviewService(deps: {
     watchedFiles -= preview.watched.size
     previews.delete(id)
   }
+  async function documentAuthorized(id: string, revision: number): Promise<boolean> {
+    const preview = previews.get(id)
+    if (!preview?.snapshots.has(revision) || !authorized(preview) ||
+      !(['pdf', 'xlsx'].includes(preview.kind) || preview.kind === 'text' && ['.csv', '.tsv'].includes(extname(preview.path).toLowerCase()))) return false
+    return !await credentialPreviewPath(preview.path, home) && previews.get(id) === preview && preview.snapshots.has(revision) && authorized(preview)
+  }
   return {
-    async prepare(input: unknown): Promise<FilePreviewDescriptor | null> {
-      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['appSessionId', 'path', 'source'].includes(key)) || !Object.hasOwn(input, 'appSessionId') || !Object.hasOwn(input, 'path')) return null
-      if (pendingPrepares >= 4) return null
+    async prepare(input: unknown): Promise<FilePreviewPrepareResult> {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['appSessionId', 'path', 'source', 'textWindow'].includes(key)) || !Object.hasOwn(input, 'appSessionId') || !Object.hasOwn(input, 'path')) return { ok: false, reason: 'refused' }
+      if (pendingPrepares >= 4) return { ok: false, reason: 'busy' }
+      if (Object.hasOwn(input, 'textWindow') && (input as { textWindow: unknown }).textWindow !== 'start' && (input as { textWindow: unknown }).textWindow !== 'end') return { ok: false, reason: 'refused' }
       pendingPrepares++
       try {
-        const { appSessionId, path } = input as { appSessionId: string; path: string }
+        const { appSessionId, path, textWindow } = input as { appSessionId: string; path: string; textWindow?: FilePreviewTextWindowSide }
         let source: { preview: Preview; revision: number } | null = null
         if (Object.hasOwn(input, 'source')) {
           const value = (input as { source: unknown }).source
-          if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return { ok: false, reason: 'refused' }
           const record = value as Record<string, unknown>
-          if (Object.keys(record).length !== 2 || !Object.hasOwn(record, 'id') || !Object.hasOwn(record, 'revision') || typeof record.id !== 'string' || typeof record.revision !== 'number' || !Number.isSafeInteger(record.revision) || record.revision < 1) return null
+          if (Object.keys(record).length !== 2 || !Object.hasOwn(record, 'id') || !Object.hasOwn(record, 'revision') || typeof record.id !== 'string' || typeof record.revision !== 'number' || !Number.isSafeInteger(record.revision) || record.revision < 1) return { ok: false, reason: 'refused' }
           const preview = previews.get(record.id)
-          if (!preview) return null
+          if (!preview) return { ok: false, reason: 'refused' }
           source = { preview, revision: record.revision }
         }
         const sourceCurrent = () => !source || source.preview.appSessionId === appSessionId &&
           previews.get(source.preview.id) === source.preview && source.preview.snapshots.has(source.revision) && authorized(source.preview)
         const authority = deps.sessions().find(session => session.appSessionId === appSessionId)
-        if (!authority || authority.moving || !sourceCurrent()) return null
+        if (!authority || authority.moving || !sourceCurrent()) return { ok: false, reason: 'refused' }
         const authorityCwd = authority.cwd
         const workspaceRoot = await realpath(authorityCwd)
         const resolved = await resolveWorkspaceFile({ appSessionId, path }, deps.sessions())
         // Page navigation retains its source scope, even though explicit clicks
         // may open any local file. Resolve symlinks before applying that scope.
-        if (!resolved || !sourceCurrent() || source && !isWithin(source.preview.assetRoot, resolved.path)) return null
+        if (!resolved) return { ok: false, reason: 'missing' }
+        if (!sourceCurrent() || source && !isWithin(source.preview.assetRoot, resolved.path)) return { ok: false, reason: 'refused' }
+        if (await credentialPreviewPath(resolved.path, home)) return { ok: false, reason: source ? 'refused' : 'external' }
+        if (!sourceCurrent() || !deps.sessions().some(session => session.appSessionId === appSessionId && session.cwd === authorityCwd && !session.moving)) return { ok: false, reason: 'refused' }
         const kind = filePreviewKind(resolved.path)
-        if (!kind) return null
+        if (!kind) return { ok: false, reason: source ? 'refused' : 'external' }
+        const side = resolved.location ? 'start' : textWindow ?? (extname(resolved.path).toLowerCase() === '.log' ? 'end' : 'start')
+        const success = (descriptor: FilePreviewDescriptor): FilePreviewPrepareResult => ({ ok: true, descriptor, ...(resolved.location ? { location: resolved.location } : {}) })
         const assetRoot = source?.preview.assetRoot ?? (isWithin(workspaceRoot, resolved.path) ? workspaceRoot : dirname(resolved.path))
         for (const [id, preview] of previews) if (!authorized(preview)) release(id)
-        const existing = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path && preview.assetRoot === assetRoot)
-        if (existing) return descriptor(existing, existing.snapshots.get(existing.committed)!)
+        const existing = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path && preview.assetRoot === assetRoot && (kind !== 'text' || preview.textSide === side))
+        if (existing) return success(descriptor(existing, existing.snapshots.get(existing.committed)!))
         const sessionHandles = () => [...previews.values()].filter(preview => preview.appSessionId === appSessionId).length
-        if (previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
-        const bytes = await read(resolved.path)
-        if (!sourceCurrent() || !deps.sessions().some(session => session.appSessionId === appSessionId && session.cwd === authorityCwd && !session.moving)) return null
-        const raced = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path && preview.assetRoot === assetRoot)
-        if (raced) return descriptor(raced, raced.snapshots.get(raced.committed)!)
-        if (cachedBytes + bytes.length > MAX_CACHE_BYTES || previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return null
+        if (previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return { ok: false, reason: 'busy' }
+        const content = await readContent(resolved.path, kind, side)
+        const { bytes } = content
+        if (await credentialPreviewPath(resolved.path, home) || !sourceCurrent() || !deps.sessions().some(session => session.appSessionId === appSessionId && session.cwd === authorityCwd && !session.moving)) return { ok: false, reason: 'refused' }
+        const raced = [...previews.values()].find(preview => preview.appSessionId === appSessionId && preview.path === resolved.path && preview.assetRoot === assetRoot && (kind !== 'text' || preview.textSide === side))
+        if (raced) return success(descriptor(raced, raced.snapshots.get(raced.committed)!))
+        if (cachedBytes + bytes.length > MAX_CACHE_BYTES || previews.size >= MAX_PREVIEWS || sessionHandles() >= MAX_PREVIEWS_PER_SESSION) return { ok: false, reason: 'busy' }
         const preview: Preview = {
           id: randomBytes(24).toString('hex'), appSessionId, authorityCwd,
           assetRoot,
-          path: resolved.path, kind,
+          path: resolved.path, kind, textSide: side,
           snapshots: new Map(), committed: 1, nextRevision: 1,
           watched: new Map(), watchers: new Map(), polling: false, busy: false, dirty: false, removed: false, watchFailed: false, released: false,
           poll: setInterval(() => {
-            if (preview.polling || preview.released) return
+            if (preview.polling || preview.released || preview.kind === 'text' && deps.isVisible?.(preview.appSessionId) === false) return
             preview.polling = true
             void Promise.all([...preview.watched].map(async ([path, old]) => {
               const current = await signature(path)
@@ -344,13 +380,13 @@ export function createFilePreviewService(deps: {
           }, 1500),
         }
         preview.poll.unref?.()
-        const snapshot: Snapshot = { revision: 1, files: new Map([[preview.path, bytes]]), absent: new Set(), failed: false }
+        const snapshot: Snapshot = { revision: 1, files: new Map([[preview.path, bytes]]), absent: new Set(), failed: false, text: content.text, textWindow: content.textWindow }
         preview.snapshots.set(1, snapshot)
         cachedBytes += bytes.length
         previews.set(preview.id, preview)
         track(preview, preview.path)
-        return descriptor(preview, snapshot)
-      } catch { return null }
+        return success(descriptor(preview, snapshot))
+      } catch (error) { return { ok: false, reason: error instanceof BinaryPreviewError ? 'binary' : 'refused' } }
       finally { pendingPrepares-- }
     },
     refresh,
@@ -388,12 +424,20 @@ export function createFilePreviewService(deps: {
       const preview = previews.get(id), snapshot = preview?.snapshots.get(revision)
       return preview && snapshot ? descriptor(preview, snapshot) : null
     },
+    documentAuthorized,
+    async documentBytes(id: string, revision: number): Promise<Uint8Array | null> {
+      if (!await documentAuthorized(id, revision)) return null
+      const preview = previews.get(id)
+      const bytes = preview?.snapshots.get(revision)?.files.get(preview.path)
+      return bytes ? new Uint8Array(bytes) : null
+    },
     async respond(request: Request): Promise<Response> {
       const parsed = parseFilePreviewUrl(request.url)
       const preview = parsed && previews.get(parsed.id)
       const snapshot = parsed && preview?.snapshots.get(parsed.revision)
       if (!parsed || !preview || !snapshot || !['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 404 })
       if (!authorized(preview)) { release(preview.id); return new Response(null, { status: 403 }) }
+      if (preview.kind === 'text' || preview.kind === 'pdf' || preview.kind === 'xlsx') return new Response(null, { status: 403 })
       const path = resourcePath(preview, parsed)
       if (!path) return new Response(null, { status: 403 })
       // The snapshot survives deletion, but new assets still require current policy.

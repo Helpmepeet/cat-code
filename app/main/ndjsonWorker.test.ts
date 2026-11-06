@@ -118,3 +118,30 @@ test('default escalation bounds a stuck request and releases the caller single-f
   await done
   expect(runs).toBe(2)
 })
+
+test('an isolated worker receives only its explicit environment and cannot exceed an unmonitored RSS budget', async () => {
+  const previous = process.env.PREVIEW_DOCUMENT_TEST_SECRET
+  process.env.PREVIEW_DOCUMENT_TEST_SECRET = 'must-not-reach-parser'
+  try {
+    let observed: unknown = null
+    const isolated = await runNdjsonWorker(options({
+      timeoutMs: 1000, inheritEnv: false, env: { PREVIEW_ALLOWED: 'yes' },
+      args: ['-e', 'console.log(JSON.stringify({secret:process.env.PREVIEW_DOCUMENT_TEST_SECRET,allowed:process.env.PREVIEW_ALLOWED}))'],
+      onRecord: line => { observed = JSON.parse(line.toString()); return 'continue' },
+    }))
+    expect(isolated.code).toBe(0)
+    expect(observed).toEqual({ allowed: 'yes' })
+    const limit = await runNdjsonWorker(options({
+      timeoutMs: 5_000, maxRssBytes: 64 * 1024 * 1024,
+      args: ['-e', 'const retained=Buffer.alloc(128*1024*1024,1);setInterval(()=>console.log(retained[0]),500)'],
+    }))
+    expect(limit.memoryExceeded || limit.memoryCheckFailed).toBe(true)
+    expect(limit.timedOut).toBe(false)
+    expect(limit.signal).toBe('SIGKILL')
+    expect(limit.termination).toBe('confirmed')
+    expect(() => process.kill(limit.pid!,0)).toThrow()
+  } finally {
+    if(previous === undefined) delete process.env.PREVIEW_DOCUMENT_TEST_SECRET
+    else process.env.PREVIEW_DOCUMENT_TEST_SECRET=previous
+  }
+})

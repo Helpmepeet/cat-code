@@ -49,7 +49,9 @@ import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
 import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, paneTargetLabel, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
-import { newestPaneFilePath } from './transcriptPaneFiles.js'
+import { newestPaneFilePath, paneFileIndex } from './transcriptPaneFiles.js'
+import { FilePaneFilesContext } from './filePaneFilesContext.js'
+import { peekWorkspaceFileAvailability, requestWorkspaceFileAvailability, subscribeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { selectNestedTranscriptRows } from './transcriptProjector.js'
 import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
@@ -3831,8 +3833,10 @@ export function App() {
       if (event.shiftKey && (event.key === 'b' || event.key === 'B')) {
         if (!activeSessionId) return
         event.preventDefault()
-        const rows = selectNestedTranscriptRows(transcript, activeSessionId, true)
-        const order = selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id)
+        const paneTranscript = selectPaneTranscript({ previewState: previewTranscriptRef.current, sessionId: activeSessionId,
+          previewOpen: shellRef.current.previews[activeSessionId] === true, liveTranscript: transcript }).transcript
+        const rows = selectNestedTranscriptRows(paneTranscript, activeSessionId, true)
+        const order = selectTranscriptRows(paneTranscript, activeSessionId, true).map(row => row.id)
         const candidate = newestPaneFilePath(rows, order, shellRef.current.byId[activeSessionId]?.contextTransitions)
         const hasFile = getFilePaneSession(activeSessionId).lastPath ?? candidate
         void toggleFilePane(activeSessionId, candidate).then(result => {
@@ -4039,6 +4043,7 @@ export function App() {
 	        descriptor,
 	        connection: sessionConnection,
 	        content: (
+          <FilePaneFilesContext.Provider value={{ transcript: panelTranscript.transcript, cwd: descriptor?.cwd ?? null, contextTransitions: descriptor?.contextTransitions }}>
 	          <SessionPane
 	            projects={projects}
 	            /* P4-32b read seam, reused: the agent card names the Codex account
@@ -4528,6 +4533,7 @@ export function App() {
 	            transportError={selectTransportError(transportErrors, sessionId)}
 	            releasePendingSubmit={() => releasePendingSubmit(sessionId)}
 	          />
+          </FilePaneFilesContext.Provider>
 	        ),
 	      }
 	    })
@@ -4540,13 +4546,46 @@ export function App() {
   // palette is open: the palette owns its own query state, so App re-renders come
   // only from streaming frames / composer keystrokes — rebuilding the inventory
   // (and its closures) on those while the palette is closed is pure waste.
+  const [, updatePaletteFileAvailability] = useState(0)
+  useEffect(() => paletteOpen ? subscribeWorkspaceFileAvailability(() => updatePaletteFileAvailability(value => value + 1)) : undefined, [paletteOpen])
+  const paletteTranscript = paletteOpen && activeSessionId ? selectPaneTranscript({ previewState: previewTranscript, sessionId: activeSessionId,
+    previewOpen: shell.previews[activeSessionId] === true, liveTranscript: transcript }).transcript : null
+  const paletteFiles = paletteTranscript && activeSessionId ? paneFileIndex({
+    rows: selectNestedTranscriptRows(paletteTranscript, activeSessionId, true),
+    order: selectTranscriptRows(paletteTranscript, activeSessionId, true).map(row => row.id),
+    cwd: shell.byId[activeSessionId]?.cwd ?? null, transitions: shell.byId[activeSessionId]?.contextTransitions,
+    opened: getFilePaneSession(activeSessionId).opened, available: path => peekWorkspaceFileAvailability(activeSessionId, path), includeUnconfirmed: true,
+  }) : []
+  const paletteWeakPaths = JSON.stringify(paletteFiles.filter(file => file.weak && file.availabilityPath && activeSessionId && peekWorkspaceFileAvailability(activeSessionId, file.availabilityPath) === undefined).map(file => file.availabilityPath!))
+  useEffect(() => {
+    if (!paletteOpen || !activeSessionId) return
+    let active = true
+    const timers = new Set<ReturnType<typeof setTimeout>>()
+    const check = (path: string) => {
+      void requestWorkspaceFileAvailability(activeSessionId, path).then(value => {
+        if (active && value === null) {
+          const timer = setTimeout(() => { timers.delete(timer); check(path) }, 500)
+          timers.add(timer)
+        }
+      })
+    }
+    for (const path of JSON.parse(paletteWeakPaths) as string[]) check(path)
+    return () => { active = false; for (const timer of timers) clearTimeout(timer) }
+  }, [paletteOpen, activeSessionId, paletteWeakPaths])
   const paletteItems = paletteOpen
     ? buildPaletteItems({
         rows: visibleShellDescriptors,
         activeSessionId: selectedNavigationSessionId,
         slashCatalog: selectSlashCatalog(slashCatalog, activeSessionId) ?? [],
         recentItemIds: recentPaletteItemIds,
+        files: paletteFiles.filter(file => !file.weak || file.availabilityPath && activeSessionId && peekWorkspaceFileAvailability(activeSessionId, file.availabilityPath) === true),
         handlers: {
+          openFile: (path, external) => {
+            if (!activeSessionId) return
+            const opening = external ? window.catcode.openWorkspaceFile(activeSessionId, path).then(ok => ok ? { ok: true as const } : { ok: false as const, message: 'Could not open this file' })
+              : requestOpenFile(activeSessionId, path, { focus: 'viewer' })
+            void opening.then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) })
+          },
           // Labelled ⌘T in the palette, so it must match the chord exactly.
           newSession: () => void newChat(),
           closeActiveSession: () => {
@@ -4837,8 +4876,10 @@ export function App() {
                 )
                 if (!targetRow) return null
                 const targetId = targetRow.appSessionId ?? targetRow.sessionId
-                const fileRows = selectNestedTranscriptRows(transcript, targetId, true)
-                const fileOrder = selectTranscriptRows(transcript, targetId, true).map(row => row.id)
+                const menuTranscript = selectPaneTranscript({ previewState: previewTranscript, sessionId: targetId,
+                  previewOpen: shell.previews[targetId] === true, liveTranscript: transcript }).transcript
+                const fileRows = selectNestedTranscriptRows(menuTranscript, targetId, true)
+                const fileOrder = selectTranscriptRows(menuTranscript, targetId, true).map(row => row.id)
                 const showFilePath = fileMenuPane.lastPath ?? newestPaneFilePath(fileRows, fileOrder, shell.byId[targetId]?.contextTransitions)
                 return (
                   <SessionActionsMenu

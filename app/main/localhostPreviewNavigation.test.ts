@@ -165,8 +165,9 @@ test('file preview root-relative links pass request guards and navigate to works
     await mkdir(join(root, 'pages'))
     await writeFile(join(root, 'pages/report.html'), '<a href="/next%20%23.html">Next</a>')
     await writeFile(join(root, 'next #.html'), '<h1>Next</h1>')
-    const preview = await service.prepare({ appSessionId: 's1', path: 'pages/report.html' })
-    expect(preview).not.toBeNull()
+    const prepared = await service.prepare({ appSessionId: 's1', path: 'pages/report.html' })
+    if (!prepared.ok) throw new Error(prepared.reason)
+    const preview = prepared.descriptor
     const f = fixture(service)
     const file = f.frame(preview!.url, f.main)
     const target = new URL('/next%20%23.html', preview!.url).href
@@ -175,8 +176,10 @@ test('file preview root-relative links pass request guards and navigate to works
     expect(f.navigate(file, target)).toBe(true)
     const source = { id: preview!.id, revision: preview!.revision }
     expect(f.sent).toEqual([{ id: preview!.id, kind: 'navigate', path: join(root, 'next #.html'), source }])
-    const next = await service.prepare({ appSessionId: 's1', path: join(root, 'next #.html'), source })
-    expect(next?.path).toBe(join(root, 'next #.html'))
+    const nextResult = await service.prepare({ appSessionId: 's1', path: join(root, 'next #.html'), source })
+    if (!nextResult.ok) throw new Error(nextResult.reason)
+    const next = nextResult.descriptor
+    expect(next.path).toBe(join(root, 'next #.html'))
     expect(f.navigate(file, new URL('/%2e%2e%2fsecret.html', preview!.url).href)).toBe(true)
     expect(f.sent).toHaveLength(1)
     expect(f.navigate(file, next!.url, false, f.main)).toBe(false)
@@ -201,14 +204,17 @@ test('file-page navigation retains source authority when a lexical target is an 
     await writeFile(join(root, 'report.html'), '<script>location.href="/escape.md"</script>')
     await writeFile(join(outside, 'secret.md'), '# Private notes')
     await symlink(join(outside, 'secret.md'), join(root, 'escape.md'))
-    const preview = await service.prepare({ appSessionId: 's1', path: 'report.html' })
+    const prepared = await service.prepare({ appSessionId: 's1', path: 'report.html' })
+    if (!prepared.ok) throw new Error(prepared.reason)
+    const preview = prepared.descriptor
     const f = fixture(service)
     const frame = f.frame(preview!.url, f.main)
     expect(f.navigate(frame, new URL('/escape.md', preview!.url).href)).toBe(true)
     const event = f.sent[0] as Extract<FilePreviewEvent, { kind: 'navigate' }>
     expect(event.source).toEqual({ id: preview!.id, revision: preview!.revision })
-    expect(await service.prepare({ appSessionId: 's1', path: event.path, source: event.source })).toBeNull()
-    expect((await service.prepare({ appSessionId: 's1', path: event.path }))?.markdown).toBe('# Private notes')
+    expect(await service.prepare({ appSessionId: 's1', path: event.path, source: event.source })).toEqual({ ok: false, reason: 'refused' })
+    const explicit = await service.prepare({ appSessionId: 's1', path: event.path })
+    expect(explicit.ok && explicit.descriptor.text).toBe('# Private notes')
   } finally {
     service.dispose()
     await rm(base, { recursive: true, force: true })

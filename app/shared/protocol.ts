@@ -1,4 +1,5 @@
-import type { FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewSource, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
+import type { FilePreviewDocumentRequest, FilePreviewDocumentResult } from './previewDocument.js'
+import type { FilePreviewPrepareResult, FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewSource, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
 import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
@@ -87,6 +88,7 @@ import type {
   SessionDescriptor,
   SwitchWorkspaceBranchResult,
   WorkspaceBranches,
+  WorkspaceFileAvailabilityResult,
   WorkspaceBranchObservation,
 } from './hostApi.js'
 import type { SessionBinding } from './sessionBinding.js'
@@ -4099,12 +4101,13 @@ export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
   openExternalUrl(url: string): Promise<boolean>
-  prepareFilePreview(appSessionId: SessionId, path: string, source?: FilePreviewSource): Promise<FilePreviewDescriptor | null>
+  prepareFilePreview(appSessionId: SessionId, path: string, source?: FilePreviewSource, textWindow?: 'start' | 'end'): Promise<FilePreviewPrepareResult>
   prepareLocalhostPreview(appSessionId: SessionId, url: string): Promise<LocalhostPreviewResult>
   captureLocalhostPreview(id: string): Promise<void>
   navigateLocalhostPreview(id: string, routeKey: string, scroll: FilePreviewScroll): Promise<FilePreviewDescriptor | null>
   openBlockedPreviewNavigation(id: string, target: PreviewBrowserTarget): Promise<boolean>
   refreshFilePreview(id: string): Promise<FilePreviewDescriptor | null>
+  readFilePreviewDocument(id: string, revision: number, request: FilePreviewDocumentRequest): Promise<FilePreviewDocumentResult>
   commitFilePreview(id: string, revision: number): Promise<boolean>
   releaseFilePreview(id: string): void
   subscribeFilePreview(callback: (event: FilePreviewEvent) => void): () => void
@@ -4380,6 +4383,8 @@ export type CatCodeBridge = {
   ): Promise<boolean>
   /** Read whether the same file-opening policy accepts a target, without opening it. */
   getWorkspaceFileAvailability(appSessionId: SessionId, path: string): Promise<boolean>
+  /** Distinguishes temporary host capacity from a file refused by the opening policy. */
+  checkWorkspaceFileAvailability(appSessionId: SessionId, path: string): Promise<WorkspaceFileAvailabilityResult>
   /** Main-owned installed-app imagery; default file association uses the same file policy. */
   getExternalAppIcon(request: ExternalAppIconRequest): Promise<ExternalAppIcon>
   /**

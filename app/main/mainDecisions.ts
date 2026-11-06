@@ -143,6 +143,7 @@ export const SIDECAR_MODE_ENTRIES = {
   'account-control': { file: 'accountControlWorker.ts', runtimeFlags: false },
   'settings-inventory': { file: 'settingsInventoryWorker.ts', runtimeFlags: false },
   'settings-write': { file: 'settingsWriteWorker.ts', runtimeFlags: false },
+  'preview-document': { file: 'previewDocumentWorker.ts', runtimeFlags: false },
   'workspace-listing': { file: 'workspaceListingWorker.ts', runtimeFlags: false },
   'workspace-trust': { file: 'workspaceTrustWorker.ts', runtimeFlags: false },
   'workspace-observation': { file: 'workspaceObservationWorker.ts', runtimeFlags: false },

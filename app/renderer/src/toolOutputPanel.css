@@ -70,3 +70,7 @@
   .tool-output-panel { flex:1; width:auto; min-width:0; max-width:none; border-left:0; border-top:1px solid var(--shell-seam); }
   .tool-output-resize { display:none; }
 }
+
+.source-text-view { display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; }
+.source-chunk-control { padding:0 7px; color:var(--accent); cursor:pointer; font:inherit; }
+.source-chunk-control:hover { background:var(--shell-hover); }

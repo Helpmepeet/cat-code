@@ -1059,6 +1059,21 @@ html[data-glass='on'] [data-window-frame] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.transcript-file-link:is(:hover, :focus-visible) .transcript-file-link-label {
+  text-decoration-color: currentColor;
+}
+
+.transcript-file-link-external {
+  flex: none;
+  color: var(--color-text-faint);
+  font: 12px var(--font-sans);
+  margin-left: 2px;
 }
 
 .file-link-pending {
@@ -1750,6 +1765,14 @@ html[data-glass='on'] [data-window-frame] {
 
   .md-prose a {
     color: var(--color-accent);
+    text-decoration-line: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+    text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  }
+
+  .md-prose a:is(:hover, :focus-visible) {
+    text-decoration-color: currentColor;
   }
 }
 

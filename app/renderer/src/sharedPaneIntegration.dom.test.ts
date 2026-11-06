@@ -20,7 +20,7 @@ const image = (id: string, path: string): FilePreviewDescriptor => ({ id: `${id}
 beforeAll(async () => {
   harness = await createDomTestHarness()
   originalBridge = window.catcode
-  window.catcode = { prepareFilePreview: async (id: string, path: string) => image(id, path), releaseFilePreview: (id: string) => { releases.push(id) } } as unknown as Window['catcode']
+  window.catcode = { prepareFilePreview: async (id: string, path: string) => ({ok: true, descriptor: image(id, path)}), releaseFilePreview: (id: string) => { releases.push(id) } } as unknown as Window['catcode']
 })
 afterEach(async () => {
   await harness.unmountAll()

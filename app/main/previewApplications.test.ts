@@ -72,3 +72,21 @@ test('offers and opens external local files while rejecting remote file hosts an
     await rm(outside, { recursive: true, force: true })
   }
 })
+
+
+test('text defaults to the first installed editor and preserves requested source locations', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cat-preview-editor-')))
+  try {
+    await writeFile(join(root, 'source.ts'), 'const value = 1')
+    await writeFile(join(root, 'notes.md'), '# Notes')
+    const opened: unknown[][] = []
+    const service = createPreviewApplications({
+      userData: root, sessions: () => [sessionDescriptorFixture({ appSessionId: 's', cwd: root })],
+      installed: async target => ['default', 'cursor', 'zed', 'finder'].includes(target),
+      open: async (...args) => { opened.push(args); return true },
+    })
+    expect((await service.list({ appSessionId: 's', path: 'source.ts:12:3' })).selected).toBe('cursor')
+    expect(await service.choose({ appSessionId: 's', path: 'notes.md:12:3', target: 'cursor' })).toBe(true)
+    expect(opened).toEqual([[join(root, 'notes.md'), 'cursor', { line: 12, column: 3 }]])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

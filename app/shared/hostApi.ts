@@ -1,4 +1,5 @@
 import type { UsageCollectionResult } from './usageDashboard.js'
+
 import type { SettingsInventory } from './settingsInventoryWorker.js'
 import type { ProjectRouteSnapshot, RoutingStorageHealth } from './projectRouting.js'
 import type { DesktopProject } from './projects.js'
@@ -36,6 +37,8 @@ import type {
   SessionsCatalogSnapshot,
 } from './protocol.js'
 import type { SessionBinding } from './sessionBinding.js'
+
+export type WorkspaceFileAvailabilityResult = 'available' | 'missing' | 'busy'
 
 /* ------------------------------------------------------------------------- *
  * Requests / responses (REGISTRY.md §6.1)

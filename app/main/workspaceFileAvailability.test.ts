@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
-import { workspaceFileAvailability } from './workspaceFileAvailability.js'
+import { createWorkspaceFileAvailabilityChecker, workspaceFileAvailability } from './workspaceFileAvailability.js'
 
 test('availability returns only a boolean for canonical regular files inside and outside the workspace', async () => {
   const root = mkdtempSync(join(tmpdir(), 'catcode-file-availability-'))
@@ -58,4 +58,21 @@ test('availability rejects malformed or expanded read payloads even when the fil
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('bounded availability distinguishes capacity from missing files and accepts a retry after readers settle', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'catcode-file-availability-capacity-'))
+  try {
+    writeFileSync(join(root, 'present.ts'), 'source')
+    const appSessionId = 'availability-capacity-session'
+    const sessions = [sessionDescriptorFixture({ appSessionId, cwd: root })]
+    const check = createWorkspaceFileAvailabilityChecker(() => sessions)
+    const input = { appSessionId, path: 'present.ts' }
+    const pending = Array.from({ length: 8 }, () => check(input))
+    expect(await check(input)).toBe('busy')
+    expect(await Promise.all(pending)).toEqual(Array(8).fill('available'))
+    expect(await check(input)).toBe('available')
+    expect(await check({ appSessionId, path: 'absent.ts' })).toBe('missing')
+    expect(await check({ ...input, target: 'finder' })).toBe('missing')
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

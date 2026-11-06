@@ -75,6 +75,29 @@ export type OutputSearchModel = {
   searching: boolean
 }
 
+/** Case folding can expand a character; every reported span still names the original source. */
+function* matchingSpans(line: string, needle: string): Generator<{ start: number; end: number }> {
+  const folded = line.toLowerCase()
+  let boundaries: number[] | null = null
+  if (folded.length !== line.length) {
+    boundaries = []
+    let offset = 0
+    for (const character of line) {
+      const lower = character.toLowerCase()
+      for (let index = 0; index < lower.length; index++) boundaries.push(offset)
+      offset += character.length
+    }
+    boundaries.push(line.length)
+  }
+  for (let at = folded.indexOf(needle); at !== -1; at = folded.indexOf(needle, at + needle.length)) {
+    const start = boundaries?.[at] ?? at
+    const foldedEnd = at + needle.length
+    let end = boundaries?.[foldedEnd] ?? foldedEnd
+    if (end === start) end = start + (line.codePointAt(start)! > 0xffff ? 2 : 1)
+    yield { start, end }
+  }
+}
+
 export function describeOutputSearch(
   text: string,
   query: string,
@@ -104,11 +127,8 @@ export function describeOutputSearch(
   const occurrencesPerLine: number[] = []
   let matchCount = 0
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].toLowerCase()
     let count = 0
-    for (let at = line.indexOf(needle); at !== -1; at = line.indexOf(needle, at + needle.length)) {
-      count++
-    }
+    for (const _match of matchingSpans(lines[i]!, needle)) count++
     if (count > 0) {
       matches.push(i + 1)
       occurrencesPerLine.push(count)
@@ -138,9 +158,11 @@ export function describeOutputSearch(
     matchingLine++
   }
   const activeLine = matches[matchingLine]!
-  const line = lines[activeLine - 1]!.toLowerCase()
-  let activeOffset = line.indexOf(needle)
-  while (remaining-- > 0) activeOffset = line.indexOf(needle, activeOffset + needle.length)
+  let activeOffset = 0
+  for (const match of matchingSpans(lines[activeLine - 1]!, needle)) {
+    activeOffset = match.start
+    if (remaining-- === 0) break
+  }
   return {
     lines,
     ...counts,
@@ -183,18 +205,16 @@ export function splitLineByQuery(
     return [{ text: line, match: false }]
   }
   const limit = Math.max(1, Math.floor(maxSegments))
-  const haystack = line.toLowerCase()
   const segments: OutputSegment[] = []
   let from = 0
-  let at = haystack.indexOf(needle, from)
-  while (at !== -1) {
+  for (const match of matchingSpans(line, needle)) {
+    const at = match.start
     // One match can add two runs, and the remainder always needs a slot of its
     // own, so stop while there is room for all three.
     if (segments.length + 2 >= limit) break
     if (at > from) segments.push({ text: line.slice(from, at), match: false })
-    segments.push({ text: line.slice(at, at + needle.length), match: true })
-    from = at + needle.length
-    at = haystack.indexOf(needle, from)
+    segments.push({ text: line.slice(at, match.end), match: true })
+    from = match.end
   }
   if (segments.length === 0) return [{ text: line, match: false }]
   if (from < line.length) segments.push({ text: line.slice(from), match: false })
@@ -216,7 +236,7 @@ export function selectOutputLineChunk(
   const needle = query.toLowerCase()
   const anchor = options.anchorOffset ?? (
     options.anchorToMatch === true && needle.length > 0
-      ? line.toLowerCase().indexOf(needle)
+      ? matchingSpans(line, needle).next().value?.start ?? -1
       : -1
   )
   const chunk = selectVisualChunk(

@@ -396,6 +396,7 @@ async function main(): Promise<void> {
   copyPayload()
   await buildSidecar()
   copyRipgrep()
+  cpSync(join(appRoot, 'licenses'), join(RESOURCES, 'licenses', 'file-previews'), { recursive: true })
   console.log(`[package] verified macOS ${MINIMUM_MACOS_VERSION}+ deployment targets for ${verifyMacOSCompatibility(CONTENTS)} native images`)
   scan()
   await sealApplication()

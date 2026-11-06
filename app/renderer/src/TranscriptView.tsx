@@ -56,10 +56,11 @@ import { MARKDOWN_COMPONENTS } from './markdownComponents.js'
 import { childrenToText } from './markdownText.js'
 import { FileLinkTicker } from './FileLinkTicker.js'
 import { useFilePaneOpener } from './filePaneContext.js'
-import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
+import { filePreviewKind, normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { isPaneFilePath } from './filePaneState.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, paneFileKey, selectedTextInside } from './transcriptPaneFiles.js'
 import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, localhostMarkdownHref, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
+import { recordWorkspaceFileWrite, useWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { TranscriptFileScopeContext, scopedTranscriptFilePath, transcriptFileScopes } from './transcriptFileScope.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
@@ -216,7 +217,6 @@ import {
   ActionBranchIcon,
   ActionCloseIcon,
   ActionCopyIcon,
-  ActionFileIcon,
   ActionRewindIcon,
 } from './SessionActionIcons.js'
 import { parseToolAck, type ToolAck } from './toolAck.js'
@@ -758,10 +758,28 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     [cwd, openFilePathMenu],
   )
   const inheritedFileScopes = useContext(TranscriptFileScopeContext)
+  const inheritedFileAvailabilityFallback = useContext(FileAvailabilityFallbackContext)
+  const fileAvailabilityFallback = inheritedFileAvailabilityFallback && contextTransitions.length === 0
   const fileScopes = useMemo(
     () => inheritedFileScopes ?? transcriptFileScopes(boundaryRows, contextTransitions),
     [boundaryRows, contextTransitions, inheritedFileScopes],
   )
+  useEffect(() => {
+    const visit = (items: readonly NestedTranscriptRow[]) => {
+      for (const row of items) {
+        if (row.kind === 'tool-use') {
+          const paths = row.toolFamily === 'write' || row.toolFamily === 'edit'
+            ? [toolCardFilePath(row), ...(row.result?.fileDiffs?.map(diff => diff.filePath) ?? [])] : []
+          if (row.result?.generatedImage) paths.push(row.result.generatedImage.filePath)
+          for (const path of paths) if (path) {
+            recordWorkspaceFileWrite(row.sessionId, paneFileKey(path, fileScopes.get(row.id) ?? (fileAvailabilityFallback ? cwd : null)), `${row.id}:${row.status}`)
+          }
+        }
+        visit(row.children)
+      }
+    }
+    visit(rows)
+  }, [rows, cwd, fileScopes, fileAvailabilityFallback])
   const latestFileCards = useMemo(
     () => inheritedFileCards ?? latestPaneFileCards(rows, cwd ?? null, undefined, fileScopes),
     [inheritedFileCards, rows, cwd, fileScopes],
@@ -1049,6 +1067,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
                   <LatestPaneFileCardContext.Provider value={latestFileCards}>
                   <TranscriptFileScopeContext.Provider value={fileScopes}>
+                  <FileAvailabilityFallbackContext.Provider value={fileAvailabilityFallback}>
                   <RecoveredResponseCopyContext.Provider value={recoveredCopies}>
                     {content}
                     {pendingRetryId && candidate?.resultId === pendingRetryId ? <p role="status">Sending retry…</p> : null}
@@ -1063,6 +1082,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
                       />
                     ) : null}
                   </RecoveredResponseCopyContext.Provider>
+                  </FileAvailabilityFallbackContext.Provider>
                   </TranscriptFileScopeContext.Provider>
                   </LatestPaneFileCardContext.Provider>
                   </FilePathMenuContext.Provider>
@@ -2023,6 +2043,7 @@ const REMARK_PLUGINS = [remarkGfm]
  * overflow, so the reply copy chip cannot use the transcript's right gutter.
  */
 const ReplyCopyInsetContext = createContext(false)
+const FileAvailabilityFallbackContext = createContext(true)
 const RecoveredResponseCopyContext = createContext<ReadonlyMap<string, string>>(new Map())
 
 function AssistantProse({
@@ -2067,6 +2088,8 @@ function AssistantProse({
   const paneOpener = useFilePaneOpener()
   const fileCwd = useContext(TranscriptFileScopeContext)?.get(sourceId)
   const displayCwd = fileCwd ?? filePathContext?.cwd ?? null
+  const fileAvailabilityFallback = useContext(FileAvailabilityFallbackContext)
+  const availabilityCwd = fileCwd ?? (fileAvailabilityFallback ? filePathContext?.cwd : null) ?? null
   const openFile = useCallback(
     (rawPath: string, external = false): void => {
       const path = scopedTranscriptFilePath(rawPath, fileCwd)
@@ -2102,10 +2125,10 @@ function AssistantProse({
   const components = useMemo(
     () => ({
       ...MARKDOWN_COMPONENTS,
-      a: createPathAwareAnchor(openFile, onContextMenu, displayCwd),
+      a: createPathAwareAnchor(openFile, onContextMenu, displayCwd, sessionId, !streaming, availabilityCwd),
       code: createPathAwareCode(openFile, onContextMenu, sourceAtOffset, displayCwd),
     }),
-    [openFile, onContextMenu, sourceAtOffset, displayCwd],
+    [openFile, onContextMenu, sourceAtOffset, displayCwd, sessionId, streaming, availabilityCwd],
   )
   const { arrival } = useContext(ProseArrivalContext)
   const { freshProse } = useContext(TranscriptMotionContext)
@@ -2201,7 +2224,7 @@ function AssistantProse({
   )
 }
 
-function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: string } | undefined): ((event: ReactMouseEvent<HTMLButtonElement>) => void) | null {
+function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: string; line?: number } | undefined): ((event: ReactMouseEvent<HTMLButtonElement>) => void) | null {
   const opener = useFilePaneOpener()
   const latest = useContext(LatestPaneFileCardContext)
   const scopes = useContext(TranscriptFileScopeContext)
@@ -2210,7 +2233,8 @@ function usePaneCardOpen(file: { path: string; sessionId: SessionId; cardId: str
   if (!file || !opener || !isPaneFilePath(file.path) || latest?.get(paneFileKey(file.path, scopes?.get(file.cardId) ?? cwd)) !== file.cardId) return null
   return event => {
     event.stopPropagation()
-    void opener(file.sessionId, scopedTranscriptFilePath(file.path, scopes?.get(file.cardId)), { external: event.metaKey }).then(result => {
+    const path = file.line && filePreviewKind(file.path) === 'text' ? `${file.path}:${file.line}` : file.path
+    void opener(file.sessionId, scopedTranscriptFilePath(path, scopes?.get(file.cardId)), { external: event.metaKey }).then(result => {
       if (!result.ok) toast(result.message, { tone: 'warn' })
     }).catch(() => toast('Could not open this file', { tone: 'warn' }))
   }
@@ -2243,6 +2267,9 @@ function createPathAwareAnchor(
   openFile: (path: string, external?: boolean) => void,
   onContextMenu?: (anchor: FilePathActionsAnchor, path: string) => void,
   cwd: string | null = null,
+  sessionId = '',
+  settled = true,
+  availabilityCwd: string | null = null,
 ) {
   return function PathAwareAnchor({
     children,
@@ -2250,11 +2277,13 @@ function createPathAwareAnchor(
     node,
     'data-pending-destination': _pendingDestination,
     'data-bare-file-path': _bareFilePath,
+    'data-weak-file-path': _weakFilePath,
     ...props
   }: ComponentPropsWithoutRef<'a'> & {
     node?: HastElement
     'data-pending-destination'?: string
     'data-bare-file-path'?: boolean
+    'data-weak-file-path'?: boolean
   }) {
     const canPreview = useFilePaneOpener() !== null
     const local = canPreview ? localhostMarkdownHref(href) : null
@@ -2262,6 +2291,10 @@ function createPathAwareAnchor(
     const pending = typeof destination === 'string'
     const path = pending ? pendingFileHref(destination, href) : workspaceFileHref(href)
     const bare = node?.properties.dataBareFilePath === true
+    const weak = node?.properties.dataWeakFilePath === true
+    const available = useWorkspaceFileAvailability(sessionId, weak && typeof path === 'string' && availabilityCwd
+      ? scopedTranscriptFilePath(path, availabilityCwd) : null, settled && weak)
+    if (weak && available !== true) return <>{children}</>
     const label = <FileLinkLabelContext.Provider value>{children}</FileLinkLabelContext.Provider>
     if (local) return <button type="button" className="inline-flex items-center rounded-sm align-baseline text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent"
       aria-label={pending ? undefined : `Open ${local}`} disabled={pending || undefined}
@@ -2305,8 +2338,8 @@ function createPathAwareAnchor(
           )
         }}
       >
-        <ActionFileIcon />
         <span className="transcript-file-link-label">{pathLabel}</span>
+        {!pending && !filePreviewKind(path) ? <span className="transcript-file-link-external" aria-hidden>↗</span> : null}
         {pending ? <FileLinkTicker destination={destination} /> : null}
       </button>
     )
@@ -2346,8 +2379,8 @@ function createPathAwareCode(
             )
           }}
         >
-          {local ? null : <ActionFileIcon />}
           <code className={local ? undefined : 'transcript-file-link-label'}>{local ? children : displayFilePath(text, cwd)}</code>
+          {!local && !filePreviewKind(text) ? <span className="transcript-file-link-external" aria-hidden>↗</span> : null}
         </button>
       )
     }
@@ -2594,7 +2627,7 @@ function ToolCardShell({
    */
   targetHover?: string
   targetFilePath?: { rawPath: string; sessionId: SessionId; rowId: string }
-  fileOpen?: { path: string; sessionId: SessionId; cardId: string }
+  fileOpen?: { path: string; sessionId: SessionId; cardId: string; line?: number }
   localhostOpen?: { url: string; sessionId: SessionId }
   collapsedExtra?: ReactNode
   failureOutput?: string
@@ -3199,7 +3232,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
-        fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id } : undefined}
+        fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id, line: editLocationLabel(row)?.line } : undefined}
         localhostOpen={localhostOpen}
         failureOutput={row.result?.content}
         status={row.status}
@@ -3273,7 +3306,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         status={row.status}
         sub={deriveSub(row)}
         localhostOpen={localhostOpen}
-        fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id } : undefined}
+        fileOpen={(row.toolFamily === 'write' || row.toolFamily === 'edit') && filePath ? { path: filePath, sessionId: row.sessionId, cardId: row.id, line: editLocationLabel(row)?.line } : undefined}
         headerBadge={headerBadge}
         targetHover={deriveTargetHover(row)}
         headerless={row.toolFamily === 'bash' && row.status !== 'pending' && namedCallId === row.toolUseId}
@@ -3349,7 +3382,7 @@ function PatchFileCard({
       family="edit"
       target={displayFilePath(diff.filePath, filePathContext?.cwd ?? null)}
       targetFilePath={{ rawPath: diff.filePath, sessionId: row.sessionId, rowId: row.id }}
-      fileOpen={{ path: diff.filePath, sessionId: row.sessionId, cardId: row.id }}
+      fileOpen={{ path: diff.filePath, sessionId: row.sessionId, cardId: row.id, line: firstChangedLine(diff.hunks[0]) }}
       failureOutput={row.result?.content}
       status={row.status}
       headerBadge={diffCountsBadge(countDiff(diff))}
@@ -3764,7 +3797,7 @@ function ToolRunCard({
           : { rawPath: head.filePath, sessionId: members[0].sessionId, rowId: members[0].id }
       }
       status={status}
-      fileOpen={family === 'edit' && head.filePath && members.at(-1) ? { path: head.filePath, sessionId: members.at(-1)!.sessionId, cardId: members.at(-1)!.id } : undefined}
+      fileOpen={family === 'edit' && head.filePath && members.at(-1) ? { path: head.filePath, sessionId: members.at(-1)!.sessionId, cardId: members.at(-1)!.id, line: editLocationLabel(members.at(-1)!)?.line } : undefined}
       sub={head.sub}
       headerBadge={head.badge}
       reviewSummary={summarizeAutoModeReviews(members.map(member => member.autoModeReview))}
@@ -4177,13 +4210,16 @@ function editLocationLabel(
   const hunks = selectToolDiffs(row.result)[0]?.hunks ?? []
   const first = hunks[0]
   if (first === undefined) return null
-  const leadingContext = first.lines.findIndex(
-    line => line.startsWith('+') || line.startsWith('-'),
-  )
   return {
-    line: first.newStart + Math.max(0, leadingContext),
+    line: firstChangedLine(first)!,
     more: hunks.length > 1 ? ` and ${hunks.length - 1} more` : null,
   }
+}
+
+function firstChangedLine(hunk: ToolDiffProjection['hunks'][number] | undefined): number | undefined {
+  if (!hunk) return
+  const leading = hunk.lines.findIndex(line => line.startsWith('+') || line.startsWith('-'))
+  return Math.max(1, hunk.newStart + Math.max(0, leading))
 }
 
 /** The first non-blank line of the text an edit was asked to replace. */

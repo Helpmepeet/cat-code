@@ -252,10 +252,7 @@ test('renders an assistant text row as markdown, not raw source', () => {
     />,
   )
 
-  expect(html).toContain(
-    '<strong><button class="transcript-file-link inline-flex items-center gap-0.5 rounded-sm align-baseline font-mono text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent" type="button" aria-label="Open package.json" title="package.json"><svg',
-  )
-  expect(html).toContain('</svg><span class="transcript-file-link-label">package.json</span></button></strong>')
+  expect(html).toContain('<strong>package.json</strong>')
   expect(html).not.toContain('**package.json**')
 })
 
@@ -269,24 +266,15 @@ test('renders workspace file paths as open-file controls without linkifying web 
       'Created at:docs/reports/2026-08-13-session-label-flow.md. Read README.md, **package.json**, `src/main.ts`, and `docs/My Report.md`. See https://example.com/readme.md, example.com/readme.md, and www.example.com/readme.md.',
   })
 
-  expect(html).toContain(
-    '<button class="transcript-file-link inline-flex items-center gap-0.5 rounded-sm align-baseline font-mono text-accent hover:text-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent" type="button" aria-label="Open docs/reports/2026-08-13-session-label-flow.md" title="docs/reports/2026-08-13-session-label-flow.md"><svg',
-  )
+  expect(html).toContain('aria-label="Open docs/reports/2026-08-13-session-label-flow.md"')
   expect(html).toContain('https://example.com/readme.md')
   expect(html).not.toContain('aria-label="Open /example.com/readme.md"')
-  expect(html).toContain(
-    'aria-label="Open src/main.ts" title="src/main.ts"><svg',
-  )
-  expect(html).toContain('</svg><code class="transcript-file-link-label">src/main.ts</code>')
-  expect(html).toContain('aria-label="Open README.md" title="README.md"><svg')
-  expect(html).toContain('</svg><span class="transcript-file-link-label">README.md</span></button>')
-  expect(html).toContain(
-    'aria-label="Open package.json" title="package.json"><svg',
-  )
-  expect(html).toContain(
-    'aria-label="Open docs/My Report.md" title="docs/My Report.md"><svg',
-  )
-  expect(html).toContain('</svg><code class="transcript-file-link-label">docs/My Report.md</code>')
+  expect(html).toContain('aria-label="Open src/main.ts" title="src/main.ts"')
+  expect(html).toContain('<code class="transcript-file-link-label">src/main.ts</code>')
+  expect(html).not.toContain('aria-label="Open README.md"')
+  expect(html).not.toContain('aria-label="Open package.json"')
+  expect(html).toContain('aria-label="Open docs/My Report.md" title="docs/My Report.md"')
+  expect(html).toContain('<code class="transcript-file-link-label">docs/My Report.md</code>')
   expect(html).not.toContain('aria-label="Open example.com/readme.md"')
   expect(html).not.toContain('aria-label="Open www.example.com/readme.md"')
 })
@@ -301,11 +289,11 @@ test('a markdown workspace link keeps its suffix for host resolution', () => {
       'See [foo.ts](src/utils/foo.ts) and [Bar.tsx:42](app/components/Bar.tsx:42), plus [the docs](https://example.com/readme.md).',
   })
 
-  expect(html).toContain('aria-label="Open src/utils/foo.ts" title="src/utils/foo.ts"><svg')
-  expect(html).toContain('</svg><span class="transcript-file-link-label">foo.ts</span></button>')
+  expect(html).toContain('aria-label="Open src/utils/foo.ts" title="src/utils/foo.ts"')
+  expect(html).toContain('<span class="transcript-file-link-label">foo.ts</span>')
   // Main prefers a literal :number filename before parsing a location suffix.
-  expect(html).toContain('aria-label="Open app/components/Bar.tsx:42" title="app/components/Bar.tsx:42"><svg')
-  expect(html).toContain('</svg><span class="transcript-file-link-label">Bar.tsx:42</span></button>')
+  expect(html).toContain('aria-label="Open app/components/Bar.tsx:42" title="app/components/Bar.tsx:42"')
+  expect(html).toContain('<span class="transcript-file-link-label">Bar.tsx:42</span>')
   // An external link stays an anchor, never an open-file control, and carries
   // the target that routes it to the OS browser through the window-open policy.
   expect(html).toContain(
@@ -327,7 +315,7 @@ test('a version number is not a file path', () => {
   expect(html).not.toContain('aria-label="Open .1.238"')
   expect(html).not.toContain('aria-label="Open 2.1.234"')
   expect(html).toContain('2.1.238')
-  expect(html).toContain('aria-label="Open src/main.ts" title="src/main.ts"><svg')
+  expect(html).toContain('aria-label="Open src/main.ts" title="src/main.ts"')
 })
 
 test('P4-18c: a fenced code block renders framed + copyable with syntax highlight tokens', () => {

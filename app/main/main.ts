@@ -1,3 +1,6 @@
+import { createPreviewDocumentHost } from './previewDocumentHost.js'
+import { createPreviewDocumentRunner } from './previewDocumentRunner.js'
+import { CH_FILE_PREVIEW_DOCUMENT_READ } from '../shared/ipcChannels.js'
 import { createLocalhostPopups } from './localhostPopups.js'
 import { createLocalhostSnapshots } from './localhostSnapshot.js'
 import { installLocalFormTracking } from './localhostFormIntent.js'
@@ -218,6 +221,7 @@ import {
   CH_HOST_SAVE_TEXT,
   CH_HOST_OPEN_WORKSPACE_FILE,
   CH_HOST_WORKSPACE_FILE_AVAILABILITY,
+  CH_HOST_WORKSPACE_FILE_AVAILABILITY_CHECK,
   CH_HOST_ACCOUNT_DELETE,
   CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
@@ -304,7 +308,7 @@ import { createExternalAppIconService } from './externalAppIcons.js'
 import { createExternalAppIconHandler } from './externalAppIconRequest.js'
 import { CH_HOST_EXTERNAL_APP_ICON } from '../shared/ipcChannels.js'
 import { launchEditorApp } from './editorLauncher.js'
-import { workspaceFileAvailability } from './workspaceFileAvailability.js'
+import { createWorkspaceFileAvailabilityChecker } from './workspaceFileAvailability.js'
 import {
   persistTranscriptBackfillResult,
   runTranscriptBackfill,
@@ -732,11 +736,12 @@ let pendingNotificationOpen: Extract<HostEvent, { type: 'notification-open' }> |
 let notificationScreenSuspended = false
 let notificationScreenLocked = false
 let notificationUserInactive = false
+let visiblePreviewSessionId: string | null = null
 const notificationVisibility = createNotificationVisibility({
   hasSession: id => host?.getSessionDescriptor(id) !== undefined,
   screenAvailable: () => !notificationScreenSuspended && !notificationScreenLocked &&
     !notificationUserInactive && powerMonitor.getSystemIdleState(1) !== 'locked',
-  changed: id => desktopNotifications?.onScreenChanged(id),
+  changed: id => { visiblePreviewSessionId = id; desktopNotifications?.onScreenChanged(id) },
 })
 
 function openNotificationSession(sessionId: SessionId, accounts = false): void {
@@ -1537,9 +1542,28 @@ const readinessLatch = createReadinessLatch(() => {
 
 const filePreviews = createFilePreviewService({
   sessions: () => host?.listSessions() ?? [],
+  isVisible: id => id === visiblePreviewSessionId,
   publish: event => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.mainFrame.send(CH_FILE_PREVIEW_EVENT, event)
   },
+})
+let previewDocumentRunner: ReturnType<typeof createPreviewDocumentRunner> | null = null
+const previewDocuments = createPreviewDocumentHost({
+  snapshot: async (id, revision) => {
+    const descriptor = filePreviews.descriptor(id, revision)
+    const bytes = descriptor && await filePreviews.documentBytes(id, revision)
+    return descriptor && bytes ? { descriptor, bytes } : null
+  },
+  authorized: (id, revision) => filePreviews.documentAuthorized(id, revision),
+  table: (input, signal) => {
+    if (!previewDocumentRunner) {
+      const launch = sidecarLaunch()
+      previewDocumentRunner = createPreviewDocumentRunner({ command: launch.command,
+        args: launch.argsFor('preview-document'), cwd: process.cwd() })
+    }
+    return previewDocumentRunner.read(input, signal)
+  },
+  abort: () => previewDocumentRunner?.abort(),
 })
 let localhostSnapshots: ReturnType<typeof createLocalhostSnapshots> | null = null
 const localFrameBindings = new Map<number, { id: string; revision: number }>()
@@ -1701,6 +1725,7 @@ async function previewRenderReady(id: string, revision: number): Promise<boolean
 }
 /** Preview handles are owned by the renderer store, which a window close or document load discards. */
 function retirePreviews(): void {
+  previewDocuments.abort()
   const live = localhostPreviews.bindings().map(binding => binding.id)
   filePreviews.dispose()
   localhostPreviews.dispose()
@@ -4715,8 +4740,9 @@ function registerHostControlPlane(): void {
     if(opened===true||opened==='')localhostPreviews.clearBlocked(value.id)
     return opened===true||opened===''
   })
+  ipcMain.handle(CH_FILE_PREVIEW_DOCUMENT_READ, (event, input: unknown) => trustedPreviewSender(event) ? previewDocuments.read(input) : { ok: false, reason: 'refused' })
   protocol.handle(FILE_PREVIEW_SCHEME, request => { const parsed=parseFilePreviewUrl(request.url); return parsed&&localhostPreviews.has(parsed.id) ? localhostPreviews.respond(parsed.id,parsed.revision,parsed.path) ?? new Response(null,{status:404}) : filePreviews.respond(request) })
-  ipcMain.handle(CH_FILE_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? filePreviews.prepare(input) : null)
+  ipcMain.handle(CH_FILE_PREVIEW_PREPARE, (event, input: unknown) => trustedPreviewSender(event) ? filePreviews.prepare(input) : { ok: false, reason: 'refused' })
   ipcMain.handle(CH_FILE_PREVIEW_REFRESH, async (event, input: unknown) => {
     const value = previewIdentity(input)
     if (!trustedPreviewSender(event) || !value) return null
@@ -4749,6 +4775,7 @@ function registerHostControlPlane(): void {
   ipcMain.on(CH_FILE_PREVIEW_RELEASE, (event, input: unknown) => {
     const value = previewIdentity(input)
     if (trustedPreviewSender(event) && value) {
+      previewDocuments.abort(value.id as string)
       filePreviews.release(value.id as string)
       localhostPreviews.release(value.id as string)
       localhostSnapshots?.release(value.id as string)
@@ -4795,21 +4822,20 @@ function registerHostControlPlane(): void {
     userData: app.getPath('userData'), sessions: () => host?.listSessions() ?? [],
     installed: (target, path) => externalAppIcons.installed(target, path),
     localAllowed: url => localhostPreviews.allowed(url),
-    open: (path, target) => launchTargetOpener(path, target),
+    open: (path, target, location) => launchTargetOpener(path, target, location),
   })
   ipcMain.handle(CH_FILE_PREVIEW_APPLICATIONS, (event, input: unknown) => trustedPreviewSender(event) ? previewApplications.list(input) : { applications: [], selected: 'default' })
   ipcMain.handle(CH_FILE_PREVIEW_APPLICATION_CHOOSE, (event, input: unknown) => trustedPreviewSender(event) ? previewApplications.choose(input) : false)
   // docs/decisions/2026-10-11-workspace-file-availability.md: metadata only,
   // with the same canonical regular-file policy and no operating-system action.
-  let availabilityReads = 0
+  const checkAvailability = createWorkspaceFileAvailabilityChecker(() => host?.listSessions() ?? [])
   ipcMain.handle(CH_HOST_WORKSPACE_FILE_AVAILABILITY, async (event, input: unknown): Promise<boolean> => {
-    if (!host || !isMainWindowSender(event) || availabilityReads >= 8) return false
-    availabilityReads++
-    try {
-      return await workspaceFileAvailability(input, host.listSessions())
-    } finally {
-      availabilityReads--
-    }
+    if (!host || !trustedPreviewSender(event)) return false
+    return await checkAvailability(input) === 'available'
+  })
+  ipcMain.handle(CH_HOST_WORKSPACE_FILE_AVAILABILITY_CHECK, (event, input: unknown) => {
+    if (!host || !trustedPreviewSender(event)) return 'missing'
+    return checkAvailability(input)
   })
 }
 
@@ -5714,10 +5740,11 @@ function finishApplicationShutdown(reason: 'sigint' | 'sigterm' | 'before-quit')
   if (applicationShutdown) return applicationShutdown
   runtimeStopping = true
   logOperational('app.shutdown.started', 'info', { reason })
+  const documentsStopped = previewDocuments.abort()
   filePreviews.dispose()
   localhostPreviews.dispose()
   localhostSnapshots?.dispose()
-  applicationShutdown = Promise.resolve().then(() => shutdownRuntime()).then(result => {
+  applicationShutdown = Promise.resolve(documentsStopped).then(() => shutdownRuntime()).then(result => {
     cancelAllReplayFlushes()
     liveFrameDelivery?.dispose()
     disposeRendererRecovery?.()

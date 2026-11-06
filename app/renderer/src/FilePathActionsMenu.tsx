@@ -1,3 +1,4 @@
+import { requestWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 /**
  * File path right-click context menu component.
  *
@@ -129,14 +130,14 @@ export function FilePathActionsMenu({
     void (async () => {
       let available = false
       try {
-        available = (await window.catcode?.getWorkspaceFileAvailability(request.sessionId, request.rawPath)) === true
+        available = (await requestWorkspaceFileAvailability(request.sessionId, parts.absolutePath ?? request.rawPath, { fresh: true })) === true
       } catch {
         // Copy remains usable when the host cannot answer this read.
       }
       if (active) setAvailability({ request, available })
     })()
     return () => { active = false }
-  }, [request])
+  }, [request, parts.absolutePath])
 
   const canOpen = request.allowOpen && availability?.request === request && availability.available
   const items = resolveFilePathActionItems(

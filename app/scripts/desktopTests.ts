@@ -14,6 +14,7 @@ export const slowDesktopTests = {
     'app/sidecar/workspaceJumpStartup.process.test.ts',
   ],
   native: [
+    'app/main/previewDocumentRunner.test.ts',
     'app/main/lidClosedMode.test.ts',
     'app/native/lid-closed/native.test.ts',
     'app/native/lid-closed/powerObservation.test.ts',

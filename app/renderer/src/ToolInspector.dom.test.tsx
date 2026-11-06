@@ -325,3 +325,18 @@ test('a stored width outside the panel range is ignored', async () => {
   const tree = await harness.mount(<ToolInspector row={longBash('one', 'cmd-one')} />)
   expect(outputPanel(tree.container)?.style.getPropertyValue('--tool-output-width')).toBe('560px')
 })
+
+
+test('Wrap changes the measured scroller layout and remains shared across newly opened output views', async () => {
+  const tree = await harness.mount(<ToolInspector row={toolRow({result: {content: 'a'.repeat(400),isError: false,diff: null}})} />)
+  const scroller = tree.container.querySelector<HTMLElement>('[aria-label="Output"]')!
+  const wrap = tree.container.querySelector<HTMLButtonElement>('.tool-output-tool[aria-pressed]')!
+  const original = wrap.getAttribute('aria-pressed') === 'true'
+  await act(async () => { wrap.click() })
+  expect(wrap.getAttribute('aria-pressed')).toBe(String(!original))
+  expect(scroller.classList.contains('is-wrapped')).toBe(!original)
+  const second = await harness.mount(<ToolInspector row={toolRow({result: {content: 'other output',isError: false,diff: null}})} />)
+  expect(second.container.querySelector('[aria-label="Output"]')?.classList.contains('is-wrapped')).toBe(!original)
+  await act(async () => { wrap.click() })
+  expect(scroller.classList.contains('is-wrapped')).toBe(original)
+})

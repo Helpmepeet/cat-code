@@ -13,7 +13,7 @@
  * the ladder stays where it can be read next to the rules it enforces.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 
 /** Every runner capped its worker's stderr at the same 64 KiB. */
 const MAX_WORKER_STDERR_BYTES = 64 * 1024
@@ -38,6 +38,9 @@ export type NdjsonWorkerOptions = {
   args: string[]
   cwd: string
   env?: NodeJS.ProcessEnv
+  /** Parsers receive only explicitly allowed environment variables. */
+  inheritEnv?: boolean
+  maxRssBytes?: number
   /** Inventory reads need the full user/project command and agent catalogs. */
   simpleMode?: boolean
   signal?: AbortSignal
@@ -79,6 +82,8 @@ export type NdjsonWorkerOutcome = {
   signal: NodeJS.Signals | null
   aborted: boolean
   timedOut: boolean
+  memoryExceeded: boolean
+  memoryCheckFailed: boolean
   termination: 'confirmed' | 'unconfirmed'
   pid: number | undefined
   killError: unknown
@@ -105,7 +110,7 @@ export async function runNdjsonWorker(
   const child = spawnWorker(options.command, options.args, {
     cwd: options.cwd,
     env: {
-      ...process.env,
+      ...(options.inheritEnv === false ? {} : process.env),
       ...options.env,
       // Existing disposable workers stay in SIMPLE mode. The Settings
       // inventory opts out to read user/project skills and agents; its worker
@@ -120,6 +125,8 @@ export async function runNdjsonWorker(
   let stderr = Buffer.alloc(0)
   let timedOut = false
   let aborted = false
+  let memoryExceeded = false
+  let memoryCheckFailed = false
   let stdinError: unknown = null
   let stopped = false
   let childClosed = false
@@ -168,6 +175,23 @@ export async function runNdjsonWorker(
       }, options.escalateKillAfterMs ?? 2_000)
     }
   }
+  let sampling = false
+  const memoryTimer = options.maxRssBytes && child.pid ? setInterval(() => {
+    if (sampling || processExited || terminationRequested) return
+    sampling = true
+    const failed = () => { sampling = false; if (!processExited && !terminationRequested) { memoryCheckFailed = true; terminate(true) } }
+    try {
+      execFile('/bin/ps', ['-o', 'rss=', '-p', String(child.pid)], { timeout: 1_000 }, (error, stdout) => {
+        sampling = false
+        if (processExited || terminationRequested) return
+        if (error) { failed(); return }
+        const rss = Number(stdout.trim()) * 1024
+        if (!Number.isFinite(rss) || rss <= 0) { failed(); return }
+        if (rss > options.maxRssBytes!) { memoryExceeded = true; terminate(true) }
+      })
+    } catch { failed() }
+  }, 100) : null
+  memoryTimer?.unref()
   const timeout = setTimeout(() => {
     timedOut = true
     terminate()
@@ -245,6 +269,7 @@ export async function runNdjsonWorker(
     options.onWorkerLifecycle?.({ phase: reportedUnconfirmed ? 'termination-unconfirmed' : 'exited', pid: child.pid ?? 0, code, signal })
   } finally {
     clearTimeout(timeout)
+    if (memoryTimer) clearInterval(memoryTimer)
     if (forceKillTimer !== null) clearTimeout(forceKillTimer)
     if (finalTimer !== null) clearTimeout(finalTimer)
     options.signal?.removeEventListener('abort', onAbort)
@@ -273,6 +298,8 @@ export async function runNdjsonWorker(
     signal,
     aborted,
     timedOut,
+    memoryExceeded,
+    memoryCheckFailed,
     termination: childClosed || processExited ? 'confirmed' : 'unconfirmed',
     pid: child.pid,
     killError,

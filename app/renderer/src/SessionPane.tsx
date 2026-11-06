@@ -1,3 +1,4 @@
+import { closeFilePane, getFilePaneSession } from './filePaneState.js'
 import type { TurnRetryResult } from '../../shared/notificationNavigation.js'
 import type { DesktopProject } from '../../shared/projects.js'
 /**
@@ -1415,6 +1416,7 @@ export function SessionPane({
     const releaseGeometry = observePaneScroll(el, () => {
       const nextContentHeight = el.scrollHeight
       const nextViewportHeight = el.clientHeight
+      if (nextViewportHeight === 0) return
       if (nextContentHeight === contentHeight && nextViewportHeight === viewportHeight) return
       contentHeight = nextContentHeight
       viewportHeight = nextViewportHeight
@@ -1706,6 +1708,11 @@ export function SessionPane({
     // focus leaves the composer, and a focused permission card consumes Escape
     // as its own dismiss. The always-visible mount is the send-slot Stop below.
     // Mirrors the TUI Ctrl+C/Esc cancel.
+    if (event.key === 'Escape' && activeSessionId && getFilePaneSession(activeSessionId).open && getFilePaneSession(activeSessionId).visible === 'file') {
+      event.preventDefault()
+      closeFilePane(activeSessionId)
+      return
+    }
     if (event.key === 'Escape' && (generating || routeCancellable)) {
       event.preventDefault()
       stopTurn()

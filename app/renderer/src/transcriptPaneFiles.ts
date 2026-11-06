@@ -4,28 +4,17 @@ import remarkParse from 'remark-parse'
 import type { RootContent } from 'mdast'
 import type { NestedTranscriptRow, NestedToolUseRow } from './transcriptProjector.js'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
-import { bareFilePaths, isInlineFilePath, workspaceFileHref } from './transcriptFileLinks.js'
+import { filePathMentions, isInlineFilePath, workspaceFileHref } from './transcriptFileLinks.js'
 import { scopedTranscriptFilePath, transcriptFileScopes } from './transcriptFileScope.js'
-import { resolveFilePathParts } from './filePathActions.js'
+import { paneFileKey } from './paneFileKey.js'
 import { isPaneFilePath } from './filePaneState.js'
 import { toolCardFilePath } from './transcriptToolTarget.js'
+import { filePreviewKind, isKnownFileMention } from '../../shared/filePreview.js'
+import type { OpenedPaneFiles } from './filePaneOpened.js'
 
 export const LatestPaneFileCardContext = createContext<ReadonlyMap<string, string> | null>(null)
 
-export function paneFileKey(path: string, cwd: string | null): string {
-  const parts = resolveFilePathParts({ rawPath: path, cwd })
-  const resolved = (parts.absolutePath ?? parts.cleanPath).replace(/:\d+(?::\d+)?$/, '')
-  const windows = /^[A-Za-z]:[\\/]/.test(resolved)
-  const rooted = windows || resolved.startsWith('/')
-  const prefix = windows ? resolved.slice(0, 2) : rooted ? '/' : ''
-  const normalized: string[] = []
-  for (const part of resolved.slice(windows ? 2 : 0).split(windows ? /[\\/]+/ : /\/+/)) {
-    if (!part || part === '.') continue
-    if (part === '..' && normalized.length && normalized.at(-1) !== '..') normalized.pop()
-    else if (part !== '..' || !rooted) normalized.push(part)
-  }
-  return `${prefix}${windows ? '/' : ''}${normalized.join('/')}`
-}
+export { paneFileKey } from './paneFileKey.js'
 
 export function paneCardPaths(row: NestedToolUseRow): string[] {
   if (row.toolFamily !== 'write' && row.toolFamily !== 'edit') return []
@@ -69,27 +58,25 @@ export function sameFileCards(left: ReadonlyMap<string, string>, right: Readonly
 }
 
 const parser = unified().use(remarkParse)
-const replyPaths = new WeakMap<object, string[]>()
+export type ReplyFileMention = { path: string; strength: 'strong' | 'weak' }
+const replyPaths = new WeakMap<object, ReplyFileMention[]>()
 
-function pathsInReply(row: Extract<NestedTranscriptRow, {kind: 'assistant-text'}>): string[] {
+export function pathsInReply(row: Extract<NestedTranscriptRow, {kind: 'assistant-text'}>): readonly ReplyFileMention[] {
+  if (row.isStreaming) return []
   const cached = replyPaths.get(row)
   if (cached) return cached
-  const paths: string[] = []
+  const paths: ReplyFileMention[] = []
   const document = parser.parse(row.content)
   const definitions = new Map(document.children.filter(node => node.type === 'definition').map(node => [node.identifier.toLowerCase(), node.url]))
+  const addStrong = (path: string | null) => { if (path !== null && isKnownFileMention(path)) paths.push({ path, strength: 'strong' }) }
   const visit = (nodes: readonly RootContent[]) => {
     for (const node of nodes) {
-      if (node.type === 'link') {
-        const path = workspaceFileHref(node.url)
-        if (path !== null && isPaneFilePath(path)) paths.push(path)
-      } else if (node.type === 'linkReference') {
-        const path = workspaceFileHref(definitions.get(node.identifier.toLowerCase()))
-        if (path !== null && isPaneFilePath(path)) paths.push(path)
-      } else if (node.type === 'inlineCode') {
-        if (workspaceFileHref(node.value) !== null && isInlineFilePath(node.value) && isPaneFilePath(node.value)) paths.push(node.value)
-      } else if (node.type === 'text') {
-        paths.push(...bareFilePaths(node.value).filter(isPaneFilePath))
-      } else if ('children' in node) visit(node.children as RootContent[])
+      if (node.type === 'link') addStrong(workspaceFileHref(node.url))
+      else if (node.type === 'linkReference') addStrong(workspaceFileHref(definitions.get(node.identifier.toLowerCase())))
+      else if (node.type === 'inlineCode') {
+        if (workspaceFileHref(node.value) !== null && isInlineFilePath(node.value)) addStrong(node.value)
+      } else if (node.type === 'text') paths.push(...filePathMentions(node.value).filter(mention => isKnownFileMention(mention.path)))
+      else if ('children' in node) visit(node.children as RootContent[])
     }
   }
   visit(document.children)
@@ -97,25 +84,93 @@ function pathsInReply(row: Extract<NestedTranscriptRow, {kind: 'assistant-text'}
   return paths
 }
 
-/** Read-time discovery only. Resolving or opening still requires the user's action. */
+/** Volunteer rendered documents first, then only text the agent changed. */
 export function newestPaneFilePath(
   rows: readonly NestedTranscriptRow[],
   order?: readonly string[],
   transitions?: SessionDescriptor['contextTransitions'],
 ): string | null {
-  let newest: string | null = null
+  let rendered: string | null = null
+  let writtenText: string | null = null
   const ordered = orderedPaneRows(rows, order)
   const scopes = transcriptFileScopes(ordered, transitions)
   for (const row of ordered) {
-    const paths = row.kind === 'assistant-text' ? pathsInReply(row)
+    const paths = row.kind === 'assistant-text' ? pathsInReply(row).filter(mention => mention.strength === 'strong').map(mention => mention.path)
       : row.kind === 'tool-use' ? [...new Set([
-          ...paneCardPaths(row),
-          toolCardFilePath(row),
-          row.result?.generatedImage?.filePath,
+          ...paneCardPaths(row), toolCardFilePath(row), row.result?.generatedImage?.filePath,
         ].filter((path): path is string => typeof path === 'string' && isPaneFilePath(path)))] : []
-    if (paths.length) newest = scopedTranscriptFilePath(paths[paths.length - 1]!, scopes.get(row.id))
+    for (const path of paths) {
+      const kind = filePreviewKind(path)
+      if (!kind) continue
+      const scoped = scopedTranscriptFilePath(path, scopes.get(row.id))
+      if (kind !== 'text') rendered = scoped
+      else if (row.kind === 'tool-use' && (row.toolFamily === 'write' || row.toolFamily === 'edit')) writtenText = scoped
+    }
   }
-  return newest
+  return rendered ?? writtenText
+}
+
+export type PaneFileGroup = 'Opened' | 'Changed' | 'Mentioned' | 'Read'
+export type PaneFileEntry = {
+  key: string
+  path: string
+  filename: string
+  parent: string
+  group: PaneFileGroup
+  external: boolean
+  searchOnly: boolean
+  availabilityPath: string | null
+  weak?: boolean
+}
+
+/** Build only for an open chooser; settled reply parsing is cached by row identity. */
+export function paneFileIndex(input: {
+  rows: readonly NestedTranscriptRow[]
+  cwd: string | null
+  opened?: OpenedPaneFiles
+  order?: readonly string[]
+  transitions?: SessionDescriptor['contextTransitions']
+  available?: (path: string) => boolean | undefined
+  includeUnconfirmed?: boolean
+}): PaneFileEntry[] {
+  const { rows, cwd, opened = new Map(), order, transitions, available } = input
+  const ordered = orderedPaneRows(rows, order)
+  const scopes = transcriptFileScopes(ordered, transitions)
+  const aliases = new Map<string, string>()
+  for (const [key, entry] of opened) for (const alias of entry.aliases) aliases.set(alias, key)
+  const entries = new Map<string, PaneFileEntry>()
+  const rowScope = (id: string) => scopes.get(id) ?? (transitions?.length ? null : cwd)
+  const add = (path: string, scope: string | null, group: PaneFileGroup, searchOnly = false, weak = false) => {
+    if (!isKnownFileMention(path)) return
+    const openingPath = scopedTranscriptFilePath(path, scope ?? undefined)
+    const availabilityPath = scope || /^(?:\/|~\/|file:|[A-Za-z]:[\\/])/.test(openingPath) ? paneFileKey(openingPath) : null
+    const known = availabilityPath ? available?.(availabilityPath) : undefined
+    if (weak && known !== true && !input.includeUnconfirmed || group === 'Mentioned' && known === false) return
+    const lexicalKey = paneFileKey(path, scope)
+    const key = aliases.get(lexicalKey) ?? lexicalKey
+    if (entries.has(key)) return
+    const clean = path.replace(/:\d+(?::\d+)?$/, '')
+    const slash = clean.lastIndexOf('/')
+    entries.set(key, { key, path: openingPath, filename: clean.slice(slash + 1), parent: clean.slice(0, Math.max(0, slash)), group,
+      external: filePreviewKind(path) === null, searchOnly, availabilityPath, ...(weak ? { weak: true } : {}) })
+  }
+  const openedRows = [...opened.values()].reverse()
+  for (const entry of openedRows.slice(0, 5)) add(entry.path, null, 'Opened')
+  for (const row of [...ordered].reverse()) {
+    if (row.kind !== 'tool-use' || row.toolFamily !== 'write' && row.toolFamily !== 'edit' && row.toolFamily !== 'imagegen') continue
+    const path = toolCardFilePath(row)
+    const paths = [...new Set([path, ...(row.result?.fileDiffs?.map(diff => diff.filePath) ?? []), row.result?.generatedImage?.filePath].filter((path): path is string => !!path))]
+    for (const target of paths) add(target, rowScope(row.id), 'Changed')
+  }
+  for (const row of [...ordered].reverse()) if (row.kind === 'assistant-text') {
+    for (const mention of [...pathsInReply(row)].reverse()) add(mention.path, rowScope(row.id), 'Mentioned', false, mention.strength === 'weak')
+  }
+  for (const row of [...ordered].reverse()) if (row.kind === 'tool-use' && row.toolFamily === 'read') {
+    const path = toolCardFilePath(row)
+    if (path) add(path, rowScope(row.id), 'Read', true)
+  }
+  for (const entry of openedRows.slice(5)) add(entry.path, null, 'Opened', true)
+  return [...entries.values()]
 }
 
 export function selectedTextInside(element: Element): boolean {

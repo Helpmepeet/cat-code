@@ -810,8 +810,8 @@ async function openAppFilePreview(sessionId: string) {
   const releases: string[] = []
   const path = `/tmp/${sessionId}/notes.md`
   const descriptor = { id: `file-preview-${sessionId}`, appSessionId: sessionId, path, displayPath: path,
-    kind: 'markdown' as const, url: `cat-preview://file-preview-${sessionId}/r1${path}`, revision: 1, markdown: '# Retained notes' }
-  window.catcode.prepareFilePreview = async () => descriptor
+    kind: 'markdown' as const, url: `cat-preview://file-preview-${sessionId}/r1${path}`, revision: 1, text: '# Retained notes' }
+  window.catcode.prepareFilePreview = async () => ({ ok: true, descriptor })
   window.catcode.refreshFilePreview = async () => null
   window.catcode.commitFilePreview = async () => true
   window.catcode.releaseFilePreview = id => { releases.push(id) }

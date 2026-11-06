@@ -52,6 +52,9 @@ async function click(root: ParentNode, label: string) {
   expect(button, `Missing ${label}: ${[...root.querySelectorAll('a,button')].map(node => node.outerHTML).join('\n')}`).not.toBeNull()
   await act(async () => { button!.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
   await settle()
+  for (let frame = 0; frame < 30 && root.querySelector('.file-pane-staging.file-pane-markdown, .file-pane-staging.file-pane-text'); frame++) {
+    await act(async () => { await harness.nextFrame() })
+  }
 }
 function mockPathLayout() {
   const previousObserver = globalThis.ResizeObserver
@@ -149,13 +152,13 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
     return resume
   }
   Object.defineProperty(window, 'catcode', { configurable: true, value: {
-    prepareFilePreview: async (appSessionId: string, path: string, source?: FilePreviewSource) => {
+    prepareFilePreview: async (appSessionId: string, path: string, source?: FilePreviewSource, textWindow?: 'start'|'end') => {
       const gate = prepareGate
       prepareGate = null
       if (gate) await gate
-      const descriptor = await service.prepare({ appSessionId, path, ...(source ? { source } : {}) })
-      if (descriptor) ids.add(descriptor.id)
-      return descriptor
+      const result = await service.prepare({ appSessionId, path, ...(source ? { source } : {}), ...(textWindow ? { textWindow } : {}) })
+      if (result.ok) ids.add(result.descriptor.id)
+      return result
     },
     openWorkspaceFile: (appSessionId: string, path: string) => openWorkspaceFile({ appSessionId, path }, sessions, async (resolved, target, location) => { external.push({ path: resolved, target, ...(location ? { location } : {}) }); return true }),
     prepareLocalhostPreview: (appSessionId: string, url: string) => localhost.prepare({ appSessionId, url }),
@@ -178,7 +181,7 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
     },
     readFilePreviewScroll: async (id: string, revision: number) => positions.get(`${id}:${revision}`) ?? { x: 0, y: 0 },
     restoreFilePreviewScroll: async (id: string, revision: number, scroll: { x: number; y: number }) => { positions.set(`${id}:${revision}`, scroll) },
-    getWorkspaceFileAvailability: (appSessionId: string, path: string) => workspaceFileAvailability({ appSessionId, path }, sessions),
+    checkWorkspaceFileAvailability: async (appSessionId: string, path: string) => await workspaceFileAvailability({ appSessionId, path }, sessions) ? 'available' : 'unavailable',
     refreshFilePreview: refreshPreview,
     commitFilePreview: async (id: string, revision: number) => {
       const gate = commitGates.shift()
@@ -304,7 +307,7 @@ test('a reply click opens workspace and outside files through the real host boun
   expect(document.activeElement?.getAttribute('aria-label')).toBe('Composer')
   expect(toasts).toEqual([])
   await click(tree.container, `Open ${missingPath}`)
-  expect(toasts).toEqual(['Could not open this file'])
+  expect(toasts).toEqual(['Could not find missing.md'])
   expect(getFilePaneSession(sessionId).file?.path).toBe(outsidePath)
   expect(tree.container.querySelectorAll('.subagent-shared-slot')).toHaveLength(1)
 })
@@ -502,7 +505,7 @@ test('a retained file removal survives a failed different-file candidate without
   await click(tree.container, 'Open broken.png')
   rmSync(firstPath)
   await act(async () => { await service.refresh(retained.id) })
-  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).not.toBe(firstPath)
+  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
   expect(tree.container.querySelector('.file-pane-note')).toBeNull()
   await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('error')) })
   await settle()
@@ -1094,7 +1097,7 @@ test.each([false, true])('overlapping canonical file opens keep the winning capa
   const replies: Array<{ id: string; resume: () => void }> = []
   window.catcode.prepareFilePreview = async (...args) => {
     const descriptor = await prepare(...args)
-    await new Promise<void>(resolve => { replies.push({ id: descriptor!.id, resume: resolve }) })
+    await new Promise<void>(resolve => { replies.push({ id: descriptor.ok ? descriptor.descriptor.id : 'refused', resume: resolve }) })
     return descriptor
   }
   const button = tree.container.querySelector<HTMLButtonElement>('[aria-label="Open ./notes.md:12"]')!
@@ -1192,4 +1195,196 @@ test('late actual localhost refresh events and replies cannot downgrade the newe
     expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)')).toBe(frame)
     expect(tree.container.querySelector('.file-pane-staging')).toBeNull()
   } finally { await act(async () => { resume(); await new Promise(resolve => setTimeout(resolve, 20)) }); await web.server.stop(true) }
+})
+
+test('a text file retains its mounted search through updates, re-jumps a repeated citation, and remembers its position after close', async () => {
+  const { pane, firstPath, sessionId, service } = setup()
+  const path = join(dirname(firstPath), 'source.ts')
+  writeFileSync(path, Array.from({ length: 600 }, (_, index) => `const value${index + 1} = ${index + 1}`).join('\n'))
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, `${path}:300`) })
+  await settle()
+  const source = tree.container.querySelector<HTMLElement>('[aria-label="File contents"]')!
+  expect(source).not.toBeNull()
+  Object.defineProperties(source, { clientHeight: { configurable: true, value: 200 }, scrollHeight: { configurable: true, value: 12000 } })
+  expect(source.scrollTop).toBe(5980)
+  await act(async () => { source.scrollTop = 100; source.dispatchEvent(new Event('scroll')) })
+  await act(async () => { await requestOpenFile(sessionId, `${path}:300`) })
+  expect(source.scrollTop).toBe(5980)
+  const input = tree.container.querySelector<HTMLInputElement>('[aria-label="Search file"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, 'value')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  writeFileSync(path, Array.from({ length: 601 }, (_, index) => `const value${index + 1} = ${index + 1}`).join('\n'))
+  await act(async () => { await service.refresh(getFilePaneSession(sessionId).file!.id) })
+  await settle()
+  expect(tree.container.querySelector('[aria-label="Search file"]')).toBe(input)
+  expect(input.value).toBe('value')
+  expect(tree.container.textContent).toContain('1/601')
+  await act(async () => { source.scrollTop = 400; source.dispatchEvent(new Event('scroll')) })
+  await act(async () => { closeFilePane(sessionId) })
+  expect([...getFilePaneSession(sessionId).opened.values()].find(file => file.path === path)?.scroll.topLine).toBe(21)
+  await act(async () => { await requestOpenFile(sessionId, path) })
+  await settle()
+  expect(tree.container.querySelector<HTMLElement>('[aria-label="File contents"]')!.scrollTop).toBe(400)
+})
+
+test.each([false, true])('viewer readiness and late failure respect focus ownership (focus moved: %s)', async moved => {
+  const { pane, sessionId, firstPath, imagePath, badImagePath } = setup()
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, firstPath) })
+  await settle()
+  const composer = tree.container.querySelector<HTMLInputElement>('[aria-label="Composer"]')!
+  composer.focus()
+  await act(async () => { await requestOpenFile(sessionId, imagePath, { focus: 'viewer' }) })
+  expect(document.activeElement).toBe(composer)
+  await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event('load')) })
+  await settle()
+  expect(document.activeElement).toBe(tree.container.querySelector('.file-pane-image:not(.file-pane-staging)'))
+  composer.focus()
+  await act(async () => { await requestOpenFile(sessionId, badImagePath, { focus: 'viewer' }) })
+  const outside = document.createElement('button')
+  outside.textContent = 'Other control'
+  tree.container.append(outside)
+  if (moved) outside.focus()
+  await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event('error')) })
+  await settle()
+  expect(getFilePaneSession(sessionId).committedFile?.path).toBe(imagePath)
+  expect(document.activeElement).toBe(moved ? outside : tree.container.querySelector('[aria-label="Files"]'))
+})
+
+test('switching a large log window and citing its start retains the new live capability until it paints', async () => {
+  const { pane, firstPath, sessionId, service } = setup()
+  const path = join(dirname(firstPath), 'server.log')
+  writeFileSync(path, 'record\n'.repeat(400000))
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, path) })
+  await settle()
+  const tail = getFilePaneSession(sessionId).committedFile!
+  expect(tail.textWindow?.side).toBe('end')
+  await act(async () => { await requestOpenFile(sessionId, path, { textWindow: 'start' }) })
+  const start = getFilePaneSession(sessionId).file!
+  expect(start.id).not.toBe(tail.id)
+  expect(start.textWindow?.side).toBe('start')
+  expect(service.has(start.id)).toBe(true)
+  expect(service.has(tail.id)).toBe(true)
+  await settle()
+  expect(getFilePaneSession(sessionId).committedFile?.id).toBe(start.id)
+  await act(async () => { await requestOpenFile(sessionId, path, { textWindow: 'end' }) })
+  await settle()
+  const secondTail = getFilePaneSession(sessionId).committedFile!
+  expect(secondTail.textWindow?.side).toBe('end')
+  await act(async () => { await requestOpenFile(sessionId, `${path}:2`) })
+  const cited = getFilePaneSession(sessionId).file!
+  expect(cited.textWindow?.side).toBe('start')
+  expect(service.has(cited.id)).toBe(true)
+  await settle()
+  expect(getFilePaneSession(sessionId).committedFile?.id).toBe(cited.id)
+  expect(getFilePaneSession(sessionId).lineTarget?.line).toBe(2)
+})
+
+test('a slow document candidate keeps the painted file header and app choice until its first useful paint', async () => {
+  const { pane, sessionId, firstPath, imagePath, external } = setup()
+  const lookups: string[] = []
+  let releaseLookup!: () => void
+  let reachedLookup!: () => void
+  let finishedLookup!: () => void
+  const lookupGate = new Promise<void>(resolve => { releaseLookup = resolve })
+  const lookupReached = new Promise<void>(resolve => { reachedLookup = resolve })
+  const lookupFinished = new Promise<void>(resolve => { finishedLookup = resolve })
+  const list = window.catcode.getFilePreviewApplications
+  window.catcode.getFilePreviewApplications = async (id, path) => {
+    lookups.push(path)
+    if (path === imagePath) { reachedLookup(); await lookupGate }
+    const result = await list(id, path)
+    if (path === imagePath) finishedLookup()
+    return { ...result, selected: path === firstPath ? 'vscode' : 'default' }
+  }
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, firstPath) })
+  await settle()
+  expect(tree.container.querySelector('[aria-label="Open in Visual Studio Code"]')).not.toBeNull()
+  lookups.length = 0
+  await act(async () => { await requestOpenFile(sessionId, imagePath) })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 320)) })
+  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
+  expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('Opening image.png')
+  expect(lookups).toEqual([])
+  await click(tree.container, 'Open in Visual Studio Code')
+  expect(external.at(-1)).toMatchObject({path: firstPath,target: 'vscode'})
+  await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event('load')) })
+  await settle()
+  expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(imagePath)
+  await lookupReached
+  expect(lookups).toEqual([imagePath])
+  expect(tree.container.querySelector('[aria-label="Open in Visual Studio Code"]')).toBeNull()
+  expect(tree.container.querySelector<HTMLButtonElement>('[aria-label="Open in Default application"]')?.disabled).toBe(true)
+  expect(tree.container.querySelector<HTMLButtonElement>('[aria-label="Choose an app"]')?.disabled).toBe(true)
+  await act(async () => { releaseLookup(); await lookupFinished })
+  expect(tree.container.querySelector<HTMLButtonElement>('[aria-label="Open in Default application"]')?.disabled).toBe(false)
+})
+
+test.each(['commit', 'failure', 'close'] as const)('Opened retains the painted file position while a replacement stages (%s)', async outcome => {
+  const { pane, sessionId, brokenPath, imagePath, badImagePath } = setup()
+  writeFileSync(brokenPath, '<!doctype html><p>Outgoing page</p>')
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, brokenPath) })
+  await settle()
+  await paintLocalFrame(tree.container)
+  const outgoing = getFilePaneSession(sessionId).committedFile!
+  await window.catcode.restoreFilePreviewScroll(outgoing.id, outgoing.revision, { x: 10, y: 500 })
+  await act(async () => { await requestOpenFile(sessionId, outcome === 'failure' ? badImagePath : imagePath) })
+  const openedPosition = () => [...getFilePaneSession(sessionId).opened.values()].find(file => file.path === brokenPath)?.scroll
+  expect(openedPosition()).toMatchObject({ x: 10, y: 500 })
+  await window.catcode.restoreFilePreviewScroll(outgoing.id, outgoing.revision, { x: 12, y: 650 })
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 280)) })
+  expect(openedPosition()).toMatchObject({ x: 12, y: 650 })
+  if (outcome === 'close') await act(async () => { closeFilePane(sessionId) })
+  else {
+    await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event(outcome === 'failure' ? 'error' : 'load')) })
+    await settle()
+    if (outcome === 'commit') {
+      await click(tree.container, 'Back')
+      await paintLocalFrame(tree.container)
+      expect(getFilePaneSession(sessionId).scroll).toMatchObject({ x: 12, y: 650 })
+    }
+    await act(async () => { closeFilePane(sessionId) })
+  }
+  expect(openedPosition()).toMatchObject({ x: 12, y: 650 })
+  await act(async () => { await requestOpenFile(sessionId, brokenPath) })
+  await settle()
+  await paintLocalFrame(tree.container)
+  const reopened = getFilePaneSession(sessionId).committedFile!
+  expect(await window.catcode.readFilePreviewScroll(reopened.id, reopened.revision)).toEqual({ x: 12, y: 650 })
+})
+
+test.each(['ts', 'csv'])('text restores its horizontal reading position through file switches and close while a line citation resets it (%s)', async extension => {
+  const { pane, firstPath, secondPath, sessionId } = setup()
+  const path = join(dirname(firstPath), `wide.${extension}`)
+  writeFileSync(path, Array.from({ length: 100 }, (_, index) => `const row${index} = "${'x'.repeat(300)}"`).join('\n'))
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, extension === 'csv' ? `${path}:1` : path) })
+  await settle()
+  const source = tree.container.querySelector<HTMLElement>('[aria-label="File contents"]')!
+  Object.defineProperties(source, { clientHeight: { configurable: true, value: 200 }, scrollHeight: { configurable: true, value: 2000 } })
+  await act(async () => { source.scrollLeft = 240; source.scrollTop = 200; source.dispatchEvent(new Event('scroll')) })
+  Object.defineProperty(source, 'clientHeight', { configurable: true, value: 0 })
+  await act(async () => { source.scrollLeft = 0; source.scrollTop = 0; source.dispatchEvent(new Event('scroll')) })
+  expect(getFilePaneSession(sessionId).scroll).toMatchObject({ x: 240, y: 200, topLine: 11 })
+  await act(async () => { await requestOpenFile(sessionId, secondPath) })
+  await settle()
+  await act(async () => { await requestOpenFile(sessionId, path) })
+  await settle()
+  let restored = tree.container.querySelector<HTMLElement>('[aria-label="File contents"]')!
+  expect(restored.scrollLeft).toBe(240)
+  expect(restored.scrollTop).toBe(200)
+  await act(async () => { closeFilePane(sessionId) })
+  await act(async () => { await requestOpenFile(sessionId, path) })
+  await settle()
+  restored = tree.container.querySelector<HTMLElement>('[aria-label="File contents"]')!
+  expect(restored.scrollLeft).toBe(240)
+  await act(async () => { await requestOpenFile(sessionId, `${path}:30`) })
+  expect(restored.scrollLeft).toBe(0)
+  expect(restored.scrollTop).toBe(580)
 })

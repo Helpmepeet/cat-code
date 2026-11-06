@@ -1,11 +1,12 @@
 import type { ElementContent, Root, RootContent, Text } from 'hast'
 import { stripLineSuffix } from './filePathActions.js'
-import { normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
+import { FILE_PREVIEW_KNOWN_NAMES, isKnownFileMention, normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { localFileUrlPath } from '../../shared/localFileUrl.js'
 
 const PATH_SEGMENT = String.raw`(?:[A-Za-z0-9_@.+-]+|\([A-Za-z0-9_@.+-]+\)|\[(?:\.\.\.)?[A-Za-z0-9_@.+-]+\])`
+const KNOWN_NAME_RE = FILE_PREVIEW_KNOWN_NAMES.map(name => name.replace(/[^A-Za-z0-9_]/g, '\\$&')).join('|')
 const FILE_PATH_RE = new RegExp(
-  String.raw`(?:~/|/|\.{1,2}/)?(?:${PATH_SEGMENT}/)*(?:\[(?:\.\.\.)?[A-Za-z0-9_@.+-]+\]|[A-Za-z0-9_@.+-]+)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?(?::\d+(?::\d+)?)?`, 'g',
+  String.raw`^(?:~/|/|\.{1,2}/)?(?:${PATH_SEGMENT}/)*(?:(?:\[(?:\.\.\.)?[A-Za-z0-9_@.+-]+\]|[A-Za-z0-9_@.+-]+)\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?|${KNOWN_NAME_RE})(?::\d+(?::\d+)?)?$`,
 )
 const WEB_PATH_RE =
   /^(?:www\.|(?:[A-Za-z0-9-]+\.)+(?:(?:com|org|net|io|dev|app|ai|co|edu|gov|me|xyz)(?:[/:]|$)|[A-Za-z]{2,}\/))/i
@@ -22,8 +23,10 @@ export function isInlineFilePath(rawPath: string): boolean {
   return (
     path.length > 0 && path.length <= 4_096 && path === path.trim() &&
     !path.includes('\n') && !path.includes('\0') &&
-    !WEB_PATH_RE.test(path) && hasLetteredExtension(path) &&
-    /(?:^|\/)[^/]+\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(path)
+    !WEB_PATH_RE.test(path) && (
+      (FILE_PREVIEW_KNOWN_NAMES as readonly string[]).includes(path.split('/').at(-1)!) || hasLetteredExtension(path) &&
+      /(?:^|\/)[^/]+\.[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(path)
+    )
   )
 }
 
@@ -89,26 +92,48 @@ function httpTextLinks(text: string): HttpTextLink[] {
   })
 }
 
-function filePathMatches(text: string): RegExpExecArray[] {
-  const urls = httpTextLinks(text)
-  const schemeTokens = [...text.matchAll(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s<>"'`]+/g)]
-  const paths = [...text.matchAll(FILE_PATH_RE)].filter(match => {
-    const path = match[0]
-    return !schemeTokens.some(url => match.index >= url.index && match.index < url.index + url[0].length) &&
-      !urls.some(url => match.index >= url.index && match.index < url.index + url.text.length) &&
-      !text.slice(0, match.index).endsWith(':/') && !path.startsWith('//') &&
-      !WEB_PATH_RE.test(path) && hasLetteredExtension(stripLineSuffix(path)) &&
-      (path.includes('/') || !stripLineSuffix(path).split('.').every(part => /^[A-Za-z]$/.test(part)))
-  })
-  const localUrls = schemeTokens.map(match => {
-    match[0] = trimProseUrlToken(match[0])
-    return match
-  }).filter(match => localFileUrlPath(match[0]) !== null)
-  return [...paths, ...localUrls]
-    .sort((left, right) => left.index - right.index)
+type FilePathMatch = { 0: string; index: number }
+function filePathMatches(text: string): FilePathMatch[] {
+  const paths: FilePathMatch[] = []
+  // Bound regex work to a single admissible path, rather than restarting a
+  // backtracking path grammar at every character in an unbounded prose token.
+  for (const token of text.matchAll(/[^\s<>"'`]+/g)) {
+    if (token[0].length > 4_096) continue
+    let path = trimProseUrlToken(token[0])
+    let index = token.index
+    const prefix = /^[([{]+/.exec(path)?.[0]
+    if (prefix && !FILE_PATH_RE.test(path)) {
+      path = trimProseUrlToken(path.slice(prefix.length))
+      index += prefix.length
+    }
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(path)) {
+      if (localFileUrlPath(path) !== null) paths.push({ 0: path, index })
+      continue
+    }
+    if (!FILE_PATH_RE.test(path)) {
+      const label = /^[A-Za-z][A-Za-z0-9_-]*:/.exec(path)?.[0]
+      if (label) { path = path.slice(label.length); index += label.length }
+    }
+    if (!path.includes('.') && !(FILE_PREVIEW_KNOWN_NAMES as readonly string[]).some(name => path.endsWith(`/${name}`))) continue
+    if (!FILE_PATH_RE.test(path) || path.startsWith('//') || WEB_PATH_RE.test(path)) continue
+    const strong = path.includes('/') || /:\d+(?::\d+)?$/.test(path)
+    const clean = stripLineSuffix(path)
+    if (!strong && (!isKnownFileMention(path) || (FILE_PREVIEW_KNOWN_NAMES as readonly string[]).includes(clean) ||
+      clean.split('.').every(part => /^[A-Za-z]$/.test(part)))) continue
+    paths.push({ 0: path, index })
+  }
+  return paths
 }
 
-export function bareFilePaths(text: string): string[] { return filePathMatches(text).map(match => match[0]) }
+export type FilePathMention = { path: string; strength: 'strong' | 'weak' }
+export function filePathMentions(text: string): FilePathMention[] {
+  return filePathMatches(text).map(match => ({ path: match[0],
+    strength: match[0].includes('/') || /:\d+(?::\d+)?$/.test(match[0]) || /^file:/i.test(match[0]) ? 'strong' : 'weak' }))
+}
+export function bareFilePaths(text: string): string[] { return filePathMentions(text).map(mention => mention.path) }
+export function strongFilePaths(text: string): string[] {
+  return filePathMentions(text).filter(mention => mention.strength === 'strong').map(mention => mention.path)
+}
 
 /** Discover only addresses actually reported by this tool's output. */
 export function firstLocalhostUrlInOutput(output: string): string | null {
@@ -122,14 +147,14 @@ function linkifyText(node: Text): ElementContent[] {
   const out: ElementContent[] = []
   let cursor = 0
   const links = [
-    ...filePathMatches(node.value).map(match => ({ index: match.index, text: match[0], href: match[0], file: true })),
-    ...httpTextLinks(node.value).filter(link => link.localhost !== null).map(link => ({ ...link, href: link.localhost!, file: false })),
+    ...filePathMatches(node.value).map(match => ({ index: match.index, text: match[0], href: match[0], file: true, weak: !match[0].includes('/') && !/:\d+(?::\d+)?$/.test(match[0]) })),
+    ...httpTextLinks(node.value).filter(link => link.localhost !== null).map(link => ({ ...link, href: link.localhost!, file: false, weak: false })),
   ].sort((left, right) => left.index - right.index)
   for (const link of links) {
     if (link.index > cursor) out.push(sliceText(node, cursor, link.index))
     const text = sliceText(node, link.index, link.index + link.text.length)
     out.push({ type: 'element', tagName: 'a',
-      properties: { href: link.href, ...(link.file ? { dataBareFilePath: true } : {}) },
+      properties: { href: link.href, ...(link.file ? { dataBareFilePath: true, ...(link.weak ? { dataWeakFilePath: true } : {}) } : {}) },
       children: [text], position: text.position })
     cursor = link.index + link.text.length
   }

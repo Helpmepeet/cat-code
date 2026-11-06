@@ -82,3 +82,5 @@ iframe.file-pane-content { background:white; }
   .subagent-shared-resize { display:none; }
   .subagent-shared-slot :is(.subagent-side-panel,.tool-output-panel) { border-top:0; }
 }
+
+.file-pane-text { display:flex; flex-direction:column; min-height:0; }

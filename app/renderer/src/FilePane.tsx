@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type ComponentPropsWithoutRef } from 'react'
 import { createPortal } from 'react-dom'
 import { normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewApplications, type FilePreviewDescriptor, type FilePreviewEvent } from '../../shared/filePreview.js'
 import type { OpenWorkspaceFileTarget } from '../../shared/protocol.js'
@@ -14,9 +14,15 @@ import { ExternalAppIcon } from './ExternalAppIcon.js'
 import { ActionCheckIcon, ActionChevronIcon, ActionCloseIcon, ActionCopyIcon } from './SessionActionIcons.js'
 import { useToast } from './toastContext.js'
 import {
-  closeFilePane, getFilePaneSession, registerFilePaneScroll, rememberFilePaneScroll,
+  closeFilePane, getFilePaneSession, registerFilePaneScroll, registerFilePaneViewerFocus, commitOpenedFilePane, failFilePaneOpen, rememberFilePaneScroll,
   isPaneFilePath, paneTargetLabel, previewDescriptorNote, recordLocalhostRoute, samePaneRevision, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession, type FilePaneScroll,
 } from './filePaneState.js'
+import { SourceTextView } from './SourceTextView.js'
+import { useSourceWrap } from './sourceWrap.js'
+import { readSourceLanguage } from './readSource.js'
+import { FilePaneFiles } from './FilePaneFiles.js'
+const PdfDocumentView = lazy(() => import('./PdfDocumentView.js').then(module => ({ default: module.PdfDocumentView })))
+import { TableDocumentView } from './TableDocumentView.js'
 import './filePane.css'
 
 type PaintedFile = { descriptor: FilePreviewDescriptor; key: string }
@@ -35,7 +41,10 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const readyKeys = useRef(new Set<string>())
   const renderGeneration = useRef(0)
   const [reload, setReload] = useState(0)
-  const [apps, setApps] = useState<FilePreviewApplications | null>(null)
+  const [slowOpen, setSlowOpen] = useState(false)
+  const visiblePath = painted?.descriptor.path ?? descriptor?.path
+  const [appChoices, setAppChoices] = useState<{ path: string; value: FilePreviewApplications } | null>(null)
+  const apps = appChoices && appChoices.path === visiblePath ? appChoices.value : null
   const [appMenu, setAppMenu] = useState(false)
   const [pathMenu, setPathMenu] = useState<FilePathActionsAnchor | null>(null)
   const [copied, setCopied] = useState(false)
@@ -47,6 +56,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   const headerPath = useRef<HTMLDivElement>(null)
   const pathScroll = useRef<HTMLSpanElement>(null)
   const activeBody = useRef<HTMLDivElement>(null)
+  const paneRef = useRef<HTMLElement>(null)
   const mounted = useRef(true)
   const paintedRef = useRef(painted)
   const descriptorRef = useRef(descriptor)
@@ -57,7 +67,11 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   paintedRef.current = painted
   descriptorRef.current = descriptor
   const stagingDescriptor = !painted && state.committedFile && descriptor?.kind !== 'localhost' ? state.committedFile : descriptor
-  const candidateKey = stagingDescriptor ? `${stagingDescriptor.id}:${stagingDescriptor.revision}:${stagingDescriptor.url}:${reload}` : ''
+  const inPlaceText = descriptor?.kind === 'text' && (!/\.(?:csv|tsv)$/i.test(descriptor.path) || state.scroll.table?.mode === 'source' || state.lineTarget !== null)
+  const stagingText = stagingDescriptor?.kind === 'text' && (!/\.(?:csv|tsv)$/i.test(stagingDescriptor.path) || state.scroll.table?.mode === 'source' || state.lineTarget !== null)
+  const reusableKey = painted && stagingDescriptor && painted.descriptor.id === stagingDescriptor.id && painted.descriptor.textWindow?.side === stagingDescriptor.textWindow?.side && painted.key.endsWith(`:${reload}`) ? painted.key : null
+  const candidateKey = stagingDescriptor ? stagingText ? reusableKey ?? `${stagingDescriptor.id}:text:${stagingDescriptor.textWindow?.side ?? 'start'}:${reload}` : `${stagingDescriptor.id}:${stagingDescriptor.revision}:${stagingDescriptor.url}:${reload}` : ''
+  const activeFile = painted && inPlaceText && descriptor && painted.descriptor.id === descriptor.id && painted.descriptor.textWindow?.side === descriptor.textWindow?.side ? descriptor : painted?.descriptor
   const retainCommit = committing && descriptor?.id === committing.descriptor.id &&
     (descriptor.kind === 'localhost' || descriptor.path === committing.descriptor.path) && descriptor.revision >= committing.descriptor.revision
   const candidate = !previewHydrated ? null : retainCommit ? committing : stagingDescriptor && painted?.key !== candidateKey ? { descriptor: stagingDescriptor, key: candidateKey } : null
@@ -65,6 +79,26 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     mounted.current = true
     return () => { mounted.current = false }
   }, [])
+  useEffect(() => {
+    setSlowOpen(false)
+    if (!descriptor || !painted || descriptor.path === painted.descriptor.path) return
+    const timer = setTimeout(() => setSlowOpen(true), 300)
+    return () => clearTimeout(timer)
+  }, [descriptor?.path, painted?.descriptor.path])
+  useEffect(() => registerFilePaneViewerFocus(appSessionId, () => activeBody.current?.focus({ preventScroll: true }), () => paneRef.current?.querySelector<HTMLButtonElement>('[aria-label="Files"]')?.focus({ preventScroll: true })), [appSessionId])
+  useLayoutEffect(() => {
+    if (!painted || !descriptor || !inPlaceText || painted.descriptor.id !== descriptor.id || painted.descriptor.textWindow?.side !== descriptor.textWindow?.side || samePaneRevision(painted.descriptor, descriptor)) return
+    let cancelled = false
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => {
+      void window.catcode.commitFilePreview(descriptor.id, descriptor.revision).then(ok => {
+        if (cancelled || !mounted.current || !samePaneRevision(getFilePaneSession(appSessionId).file, descriptor)) return
+        if (!ok) { failed({ descriptor, key: painted.key }); return }
+        updateFilePaneSession(appSessionId, { committedFile: descriptor, checkpoint: null })
+        setPainted({ ...painted, descriptor })
+      }).catch(() => {})
+    }) })
+    return () => { cancelled = true; cancelAnimationFrame(frame) }
+  }, [descriptor?.id, descriptor?.revision, painted?.descriptor.revision, inPlaceText])
   useLayoutEffect(() => {
     const element = pathScroll.current
     if (!element) return
@@ -85,18 +119,18 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
 
   const readScroll = async (): Promise<FilePaneScroll> => {
     const showing = paintedRef.current?.descriptor
-    if (!showing) return getFilePaneSession(appSessionId).scroll
+    const current = getFilePaneSession(appSessionId)
+    const isShowing = (file: FilePreviewDescriptor | null) => samePaneRevision(file, showing) && file?.path === showing?.path && file?.routeKey === showing?.routeKey
+    const bookmark = current.checkpoint && (isShowing(current.checkpoint.file) || isShowing(current.checkpoint.committedFile)) ? current.checkpoint.scroll : current.scroll
+    if (!showing) return bookmark
     if (showing.kind === 'html' || showing.kind === 'svg' || showing.kind === 'localhost') {
-      try { return await window.catcode.readFilePreviewScroll(showing.id, showing.revision) } catch { return getFilePaneSession(appSessionId).scroll }
+      try { return await window.catcode.readFilePreviewScroll(showing.id, showing.revision) } catch { return bookmark }
     }
-    if (showing.kind === 'markdown' && activeBody.current?.clientHeight === 0) return getFilePaneSession(appSessionId).scroll
-    return activeBody.current ? { x: activeBody.current.scrollLeft, y: activeBody.current.scrollTop, ...(showing.kind === 'markdown' ? { markdown: captureMarkdownReadingPosition(activeBody.current) } : {}) } : getFilePaneSession(appSessionId).scroll
+    if ((showing.kind === 'markdown' || showing.kind === 'text') && activeBody.current?.clientHeight === 0) return bookmark
+    return activeBody.current ? { ...(showing.kind === 'text' || showing.kind === 'pdf' || showing.kind === 'xlsx' ? bookmark : {}), x: activeBody.current.scrollLeft, y: activeBody.current.scrollTop, ...(showing.kind === 'markdown' ? { markdown: captureMarkdownReadingPosition(activeBody.current) } : {}) } : bookmark
   }
   useEffect(() => registerFilePaneScroll(appSessionId, () => {
-    const current = getFilePaneSession(appSessionId)
-    const showing = paintedRef.current?.descriptor
-    return samePaneRevision(current.file, showing) && current.file?.path === showing?.path && current.file?.routeKey === showing?.routeKey
-      ? readScroll() : Promise.resolve(current.scroll)
+    return readScroll()
   }), [appSessionId])
   useEffect(() => {
     const timer = setInterval(() => {
@@ -113,13 +147,14 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   }, [appSessionId])
 
   useEffect(() => {
-    if (!descriptor) return
+    if (!visiblePath) return
     let current = true
     const choice = ++appChoice.current
-    void window.catcode.getFilePreviewApplications(appSessionId, descriptor.path)
-      .then(value => { if (current && choice === appChoice.current) setApps(value) }).catch(() => { if (current && choice === appChoice.current) setApps(null) })
+    void window.catcode.getFilePreviewApplications(appSessionId, visiblePath)
+      .then(value => { if (current && choice === appChoice.current) setAppChoices({ path: visiblePath, value }) }).catch(() => { if (current && choice === appChoice.current) setAppChoices({ path: visiblePath, value: { applications: [], selected: normalizeLocalhostPreviewUrl(visiblePath) ? 'chrome' : 'default' } }) })
     return () => { current = false }
-  }, [appSessionId, descriptor?.path])
+  }, [appSessionId, visiblePath])
+  useEffect(() => { setAppMenu(false) }, [visiblePath])
 
   useEffect(() => {
     if (!descriptor) return
@@ -212,7 +247,8 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   }, [appMenu])
 
   const failed = (next: PaintedFile) => {
-    if (!mounted.current) return
+    if (!mounted.current || !samePaneRevision(getFilePaneSession(appSessionId).file, next.descriptor)) return
+    failFilePaneOpen(appSessionId)
     const stopped = getFilePaneSession(appSessionId).note === 'server-stopped'
     if (rejectFilePaneCandidate(appSessionId, next.descriptor)) toast(next.descriptor.kind === 'localhost'
       ? stopped ? `Nothing is running at ${localhostPreviewHostPort(next.descriptor.path)}` : 'Could not open this page'
@@ -263,34 +299,39 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       }
     }
   }
+  useLayoutEffect(() => { if (painted) commitOpenedFilePane(appSessionId, painted.descriptor) }, [painted, appSessionId])
   useLayoutEffect(() => {
     if (!painted || painted.descriptor.kind === 'markdown' || !activeBody.current) return
     const scroll = getFilePaneSession(appSessionId).scroll
     activeBody.current.scrollLeft = scroll.x
-    activeBody.current.scrollTop = scroll.y
+    if (painted.descriptor.kind !== 'text') activeBody.current.scrollTop = scroll.y
   }, [painted, appSessionId])
 
   if (!descriptor) return null
-  const isLocalhost = descriptor.kind === 'localhost'
-  const name = paneTargetLabel(descriptor.path)
-  const displayed = isLocalhost ? descriptor.path : descriptor.displayPath
+  const showing = painted?.descriptor ?? descriptor
+  const isLocalhost = showing.kind === 'localhost'
+  const name = paneTargetLabel(showing.path)
+  const displayed = isLocalhost ? showing.path : showing.displayPath
   const split = isLocalhost ? 'http://'.length : displayed.lastIndexOf('/') + 1
   const selected = apps?.selected ?? (isLocalhost ? 'chrome' : 'default')
   const selectedLabel = apps?.applications.find(app => app.target === selected)?.label ?? (isLocalhost ? 'Google Chrome' : 'Default application')
-  const openApp = async (target: OpenWorkspaceFileTarget, path = descriptor.path) => {
+  const openApp = async (target: OpenWorkspaceFileTarget, path = showing.path) => {
     setAppMenu(false)
     const choice = ++appChoice.current
-    const isCurrentChoice = () => mounted.current && choice === appChoice.current && samePaneRevision(descriptorRef.current, descriptor) &&
-      descriptorRef.current?.path === descriptor.path && descriptorRef.current?.routeKey === descriptor.routeKey
+    const isCurrentChoice = () => {
+      const currentShowing = paintedRef.current?.descriptor ?? descriptorRef.current
+      return mounted.current && choice === appChoice.current && currentShowing?.id === showing.id &&
+        currentShowing.path === showing.path && currentShowing.routeKey === showing.routeKey
+    }
     try {
       const opened = await window.catcode.chooseFilePreviewApplication(appSessionId, path, target)
       if (!isCurrentChoice()) return
       if (!opened) toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' })
-      else if (target !== 'finder') setApps(current => current ? { ...current, selected: target } : current)
+      else if (target !== 'finder') setAppChoices(current => current?.path === showing.path ? { ...current, value: { ...current.value, selected: target } } : current)
     } catch { if (isCurrentChoice()) toast(isLocalhost ? 'Could not open this page' : 'Could not open this file', { tone: 'warn' }) }
   }
   const copyPath = () => {
-    void navigator.clipboard?.writeText(descriptor.path).then(() => {
+    void navigator.clipboard?.writeText(showing.path).then(() => {
       setCopied(true)
       if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
       feedbackTimer.current = setTimeout(() => setCopied(false), 1400)
@@ -317,16 +358,17 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       if (mounted.current && generation === renderGeneration.current) updateFilePaneSession(appSessionId, { note: isLocalhost ? 'server-stopped' : 'update-error' })
     }
   }
-  return <aside className="file-pane" aria-label={`File preview: ${name}`} onKeyDown={event => {
+  return <aside ref={paneRef} className="file-pane" aria-label={`File preview: ${name}`} onKeyDown={event => {
     if (event.key === 'Escape' && !event.defaultPrevented && !pathMenu && !appMenu) { event.preventDefault(); event.stopPropagation(); closeFilePane(appSessionId); onFocusComposer?.() }
   }}>
     <header className="file-pane-header">
+      <FilePaneFiles appSessionId={appSessionId} cwd={cwd} currentPath={showing.path} />
       <button type="button" className="file-pane-icon" aria-label="Back" title="Back" disabled={!state.history.length}
         onClick={() => { void stepFilePaneHistory(appSessionId, 'back').then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}><PaneArrow back /></button>
       <button type="button" className="file-pane-icon" aria-label="Forward" title="Forward" disabled={!state.forward.length}
         onClick={() => { void stepFilePaneHistory(appSessionId, 'forward').then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}><PaneArrow /></button>
       <button type="button" className="file-pane-icon" aria-label="Reload" title="Reload" onClick={() => { void reloadFile() }}><ReloadIcon /></button>
-      <div ref={headerPath} className="file-pane-path" tabIndex={0} role="button" title={descriptor.path}
+      <div ref={headerPath} className="file-pane-path" tabIndex={0} role="button" title={showing.path}
         data-scrollable={pathScrollable || undefined} data-dragging={pathDragging || undefined}
         aria-description={pathScrollable ? 'Drag or use arrow keys to scroll the path. Hold Shift to select text.' : undefined}
         onPointerDown={event => {
@@ -391,13 +433,14 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       <button type="button" className="file-pane-copy" aria-label="Copy full path" title="Copy full path" data-copied={copied || undefined}
         onClick={copyPath}>{copied ? <ActionCheckIcon /> : <ActionCopyIcon />}</button>
       <div className="file-pane-app-split">
-        <button type="button" className="file-pane-open-app" title={`Open in ${selectedLabel}`} aria-label={`Open in ${selectedLabel}`} onClick={() => { void openApp(selected) }}>
-          <ExternalAppIcon request={selected === 'default' ? { target: selected, appSessionId, path: descriptor.path } : { target: selected }} />
+        <button type="button" className="file-pane-open-app" disabled={!apps} title={`Open in ${selectedLabel}`} aria-label={`Open in ${selectedLabel}`} onClick={() => { void openApp(selected) }}>
+          <ExternalAppIcon request={selected === 'default' ? { target: selected, appSessionId, path: showing.path } : { target: selected }} />
         </button>
-        <button ref={appTrigger} type="button" className="file-pane-choose-app" aria-label="Choose an app" aria-haspopup="menu" aria-expanded={appMenu} onClick={() => setAppMenu(value => !value)}><ActionChevronIcon /></button>
+        <button ref={appTrigger} type="button" className="file-pane-choose-app" aria-label="Choose an app" aria-haspopup="menu" aria-expanded={appMenu} disabled={!apps} onClick={() => setAppMenu(value => !value)}><ActionChevronIcon /></button>
       </div>
       <button type="button" className="file-pane-icon" aria-label="Close file" title="Close  ⇧⌘B" onClick={() => { closeFilePane(appSessionId); onFocusComposer?.() }}><ActionCloseIcon /></button>
     </header>
+    {slowOpen && painted && painted.descriptor.path !== descriptor.path ? <div className="file-pane-note" role="status">Opening {paneTargetLabel(descriptor.path)}</div> : null}
     {state.note ? <div className="file-pane-note" role="status"><span>{state.note === 'server-stopped' ? 'The server stopped. Showing the last version.'
       : state.note === 'leave' ? `This page wants to open ${descriptor.blockedHost ?? ''}`
       : state.note === 'browser-required' ? 'This page needs a browser to continue.'
@@ -418,10 +461,10 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
       }}>Open in {selectedLabel}</button> : null}
     </div> : null}
     <div className="file-pane-host">
-      {painted ? <FileContent key={painted.key} file={painted.descriptor} active bodyRef={activeBody} appSessionId={appSessionId} /> : null}
+      {painted ? <FileContent key={painted.key} file={activeFile ?? painted.descriptor} active bodyRef={activeBody} appSessionId={appSessionId} /> : null}
       {candidate ? <FileContent key={candidate.key} file={candidate.descriptor} active={false} appSessionId={appSessionId} onReady={scroll => { void ready(candidate, scroll) }} onFailure={() => failed(candidate)} /> : null}
     </div>
-    {pathMenu ? <FilePathActionsMenu anchor={pathMenu} rawPath={descriptor.path} cwd={cwd} sessionId={appSessionId} onClose={() => setPathMenu(null)} /> : null}
+    {pathMenu ? <FilePathActionsMenu anchor={pathMenu} rawPath={showing.path} cwd={cwd} sessionId={appSessionId} onClose={() => setPathMenu(null)} /> : null}
     {appMenu ? createPortal(<>
       <div className="file-pane-menu-scrim" onClick={() => setAppMenu(false)} />
       <div ref={menuRef} className="file-pane-app-menu" role="menu" aria-label="Open file in" onKeyDown={event => {
@@ -434,7 +477,7 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
         }
       }}>
         {apps?.applications.filter(app => app.target !== 'finder').map(app => <button key={app.target} type="button" className="file-pane-app-row" role="menuitem" onClick={() => { void openApp(app.target) }}>
-          <ExternalAppIcon request={app.target === 'default' ? { target: app.target, appSessionId, path: descriptor.path } : { target: app.target }} />
+          <ExternalAppIcon request={app.target === 'default' ? { target: app.target, appSessionId, path: showing.path } : { target: app.target }} />
           <span>{app.label}</span>{selected === app.target ? <ActionCheckIcon /> : null}
         </button>)}
         {!isLocalhost ? <><div className="file-pane-menu-seam" />
@@ -476,7 +519,16 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
   const className = `file-pane-content${active ? '' : ' file-pane-staging'}`
   if (file.kind === 'html' || file.kind === 'svg' || file.kind === 'localhost') return <iframe className={className} src={file.url} name={file.frameName} title={paneTargetLabel(file.path)}
     sandbox={file.kind === 'localhost' ? 'allow-scripts allow-same-origin allow-forms allow-popups' : 'allow-scripts allow-same-origin'} onLoad={loaded} />
-  if (file.kind === 'image') return <div ref={bodyRef} className={`${className} file-pane-image`}><img src={file.url} alt={file.path.split('/').at(-1)} onLoad={loaded} onError={onFailure} draggable={false} /></div>
+  if (file.kind === 'image') return <div ref={bodyRef} className={`${className} file-pane-image`} tabIndex={active ? 0 : -1}><img src={file.url} alt={file.path.split('/').at(-1)} onLoad={loaded} onError={onFailure} draggable={false} /></div>
+  if (file.kind === 'pdf') return <Suspense fallback={null}><PdfDocumentView file={file} active={active} className={className} bodyRef={bodyRef} initialPosition={initialScroll.current.pdf}
+    onReady={loaded} onFailure={onFailure} onExternal={() => { void requestOpenFile(appSessionId, file.path, { external: true }).then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }).catch(() => toast('Could not open this file', { tone: 'warn' })) }}
+    onPosition={pdf => { if (active) rememberFilePaneScroll(appSessionId, { ...getFilePaneSession(appSessionId).scroll, pdf }, file) }} /></Suspense>
+  if (file.kind === 'xlsx' || file.kind === 'text' && /\.(?:csv|tsv)$/i.test(file.path)) return <TableDocumentView file={file} active={active} className={className} bodyRef={bodyRef}
+    initialPosition={initialScroll.current.table} initialTopLine={initialScroll.current.topLine} lineTarget={getFilePaneSession(appSessionId).lineTarget ?? undefined}
+    onReady={loaded} onFailure={onFailure} onPosition={position => { if (active) rememberFilePaneScroll(appSessionId, { ...getFilePaneSession(appSessionId).scroll, ...position, textWindow: file.textWindow?.side }, file) }}
+    onTextWindow={side => { void requestOpenFile(appSessionId, file.path, { textWindow: side, focus: 'viewer' }) }} />
+  if (file.kind === 'text') return <TextFileContent file={file} active={active} className={className} bodyRef={bodyRef} appSessionId={appSessionId} onReady={onReady} />
+  if (file.kind !== 'markdown') return null
   const openLocal = (href: string, external = false) => {
     const path = href.startsWith('/') ? href : `${file.path.slice(0, file.path.lastIndexOf('/') + 1)}${href}`
     const opening = isPaneFilePath(path) ? requestOpenFile(appSessionId, path, { external }) : window.catcode.openWorkspaceFile(appSessionId, path).then(ok => ok ? { ok: true as const } : { ok: false as const, message: 'Could not open this file' })
@@ -508,7 +560,7 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
   }} className={`${className} file-pane-markdown`} tabIndex={active ? 0 : -1}
     onScroll={event => { if (active) rememberFilePaneScroll(appSessionId, { x: event.currentTarget.scrollLeft, y: event.currentTarget.scrollTop, markdown: captureMarkdownReadingPosition(event.currentTarget) }, file) }}>
     <div className="file-pane-markdown-column">
-      <BoundedMarkdown sourceId={`file:${file.path}`} source={file.markdown ?? ''} scrollContainerRef={scrollElement}
+      <BoundedMarkdown sourceId={`file:${file.path}`} source={file.text ?? ''} scrollContainerRef={scrollElement}
         rehypePlugins={REHYPE_PLUGINS} recognizeCallouts
         initialReadingPosition={initialScroll.current.markdown} initialScrollOffset={initialScroll.current.y} renderLeaf={leaf =>
         <div className="md-prose">{leaf.kind === 'code'
@@ -518,6 +570,44 @@ function FileContent({ file, active, bodyRef, appSessionId, onReady, onFailure }
     </div>
   </div>
 }
+function TextFileContent({ file, active, className, bodyRef, appSessionId, onReady }: {
+  file: FilePreviewDescriptor; active: boolean; className: string; bodyRef?: React.RefObject<HTMLDivElement | null>; appSessionId: string; onReady?: (scroll?: FilePaneScroll) => void
+}) {
+  const [wrap, setWrap] = useSourceWrap()
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const scroller = bodyRef ?? scrollRef
+  const initialScroll = useRef(getFilePaneSession(appSessionId).scroll)
+  const ready = useRef(onReady)
+  ready.current = onReady
+  const text = file.text ?? ''
+  const lines = useRef<{ text: string; lines: string[] } | null>(null)
+  if (!lines.current || lines.current.text !== text) lines.current = { text, lines: text.split('\n') }
+  const target = useFilePaneSession(appSessionId).lineTarget
+  useEffect(() => {
+    if (active) return
+    let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => ready.current?.({ ...initialScroll.current, textWindow: file.textWindow?.side })) })
+    return () => cancelAnimationFrame(frame)
+  }, [file.id, active])
+  const windowed = file.textWindow
+  const outside = target && target.line > lines.current.lines.length
+  return <div className={`${className} file-pane-text`} ref={text.length === 0 ? bodyRef : undefined} tabIndex={text.length === 0 && active ? 0 : undefined}>
+    {windowed?.truncated ? <div className="file-pane-note"><span>Showing the {windowed.side === 'start' ? 'first' : 'last'} {formatBytes(windowed.shownBytes)} of {formatBytes(windowed.totalBytes)}.</span><button type="button" className="file-pane-note-action" onClick={() => {
+      void requestOpenFile(appSessionId, file.path, { textWindow: windowed.side === 'start' ? 'end' : 'start', focus: 'viewer' })
+    }}>{windowed.side === 'start' ? 'Show end' : 'Show start'}</button></div> : null}
+    {windowed?.invalidUtf8 ? <div className="file-pane-note">Some bytes are not valid UTF-8.</div> : null}
+    {outside ? <div className="file-pane-note">Line {target.line} is outside what is shown.</div> : null}
+    {text.length === 0 ? <p className="tool-output-empty">This file is empty.</p> : <SourceTextView lines={lines.current.lines} body={text} copy={text} gutter={index => windowed?.firstLine === null ? '' : index + 1}
+      language={readSourceLanguage(file.path)} diffRows={null} wrap={wrap} onWrap={setWrap} subject="file" scrollerRef={scroller}
+      lineTarget={outside ? undefined : target ?? undefined} initialTopLine={initialScroll.current.topLine} initialScrollLeft={initialScroll.current.x}
+      onScroll={position => { if (active) rememberFilePaneScroll(appSessionId, { ...position, textWindow: file.textWindow?.side }, file) }} />}
+  </div>
+}
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Number((bytes / (1024 * 1024)).toFixed(1))} MiB`
+  if (bytes >= 1024) return `${Number((bytes / 1024).toFixed(1))} KiB`
+  return `${bytes} B`
+}
+
 function PaneArrow({ back = false }: { back?: boolean }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={back ? 'M20 12H4m7-7-7 7 7 7' : 'M4 12h16m-7-7 7 7-7 7'} /></svg>
 }

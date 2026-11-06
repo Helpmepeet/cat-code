@@ -6,6 +6,14 @@ import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import type { FilePreviewEvent } from '../shared/filePreview.js'
 
+function previewService(deps: Parameters<typeof createFilePreviewService>[0]) {
+  const service = createFilePreviewService(deps)
+  return { ...service, async prepare(input: unknown) {
+    const result = await service.prepare(input)
+    return result.ok ? result.descriptor : null
+  } }
+}
+
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'cat-preview-'))
   const root = await realpath(directory)
@@ -16,7 +24,7 @@ async function fixture() {
   await writeFile(join(outside, 'secret.css'), 'secret')
   let sessions = [sessionDescriptorFixture({ appSessionId: 's1', cwd: root })]
   const events: FilePreviewEvent[] = []
-  const service = createFilePreviewService({ sessions: () => sessions, publish: event => events.push(event), home: root })
+  const service = previewService({ sessions: () => sessions, publish: event => events.push(event), home: root })
   const preview = await service.prepare({ appSessionId: 's1', path: 'REPORT.HTML:14' })
   if (!preview) throw new Error('Expected preview')
   return { root, outside, service, preview, events,
@@ -38,7 +46,9 @@ test('serves immutable contained files while refusing forged and escaping resour
     expect(await (await f.service.respond(new Request(asset))).text()).toBe('body {color:red}')
     await symlink(join(f.outside, 'secret.css'), join(f.root, 'assets/escape.css'))
     expect((await f.service.respond(new Request(new URL('assets/escape.css', f.preview.url)))).status).toBe(403)
-    expect(await f.service.prepare({ appSessionId: 's1', path: join(f.outside, 'secret.css') })).toBeNull()
+    const source = await f.service.prepare({ appSessionId: 's1', path: join(f.outside, 'secret.css') })
+    expect(source?.kind).toBe('text')
+    f.service.release(source!.id)
     expect(await f.service.prepare({ appSessionId: 's1', path: 'REPORT.HTML', extra: true })).toBeNull()
     expect((await f.service.respond(new Request(f.preview.url.replace(f.preview.id, '0'.repeat(48))))).status).toBe(404)
     await writeFile(join(f.root, 'REPORT.HTML'), '<h1>Second</h1>')
@@ -64,7 +74,7 @@ test('explicit external previews open HTML, SVG, Markdown, and images without a 
       const response = await f.service.respond(new Request(preview!.url))
       expect(response.status).toBe(200)
       expect(await response.text()).toBe(content)
-      if (kind === 'markdown') expect(preview?.markdown).toBe(content)
+      if (kind === 'markdown') expect(preview?.text).toBe(content)
       f.service.release(preview!.id)
     }
   } finally { await f.cleanup() }
@@ -105,10 +115,10 @@ test('page navigation rejects outside symlinks while explicit opening remains av
     const path = f.service.pathForUrl(url.href)
     const source = { id: f.preview.id, revision: f.preview.revision }
     const explicit = await f.service.prepare({ appSessionId: 's1', path })
-    expect(explicit?.markdown).toBe('# Private notes')
+    expect(explicit?.text).toBe('# Private notes')
     expect(await f.service.prepare({ appSessionId: 's1', path, source })).toBeNull()
     const next = await f.service.prepare({ appSessionId: 's1', path: 'next.md', source })
-    expect(next?.markdown).toBe('# Next page')
+    expect(next?.text).toBe('# Next page')
   } finally { await f.cleanup() }
 })
 
@@ -297,7 +307,7 @@ test('previewed Markdown loads from its snapshot but cannot read another Markdow
       await writeFile(join(f.root, name), '# Snapshot notes')
       const markdown = await f.service.prepare({ appSessionId: 's1', path: name })
       expect(markdown?.kind).toBe('markdown')
-      expect(markdown?.markdown).toBe('# Snapshot notes')
+      expect(markdown?.text).toBe('# Snapshot notes')
       await rm(join(f.root, name))
       const response = await f.service.respond(new Request(markdown!.url))
       expect(response.status).toBe(200)
@@ -403,7 +413,7 @@ test('does not mint a capability when session authority changes while the root i
     await mkdir(join(root, 'old')); await mkdir(join(root, 'new'))
     await writeFile(join(root, 'old/report.html'), '<h1>Old workspace</h1>')
     let session = sessionDescriptorFixture({ appSessionId: 'moving', cwd: join(root, 'old') })
-    const service = createFilePreviewService({ sessions: () => [session], publish: () => {} })
+    const service = previewService({ sessions: () => [session], publish: () => {} })
     try {
       const pending = service.prepare({ appSessionId: 'moving', path: 'report.html' })
       await Bun.sleep(10)
@@ -418,7 +428,7 @@ test.skipIf(process.getuid?.() === 0)('a watcher failure before subscription is 
   const directory = await mkdtemp(join(tmpdir(), 'cat-preview-watch-error-')), root = await realpath(directory)
   const locked = join(root, 'locked')
   await mkdir(locked)
-  const service = createFilePreviewService({
+  const service = previewService({
     sessions: () => [sessionDescriptorFixture({ appSessionId: 'watch-failure', cwd: root })],
     publish: () => {},
   })
@@ -441,7 +451,7 @@ test.skipIf(process.getuid?.() === 0)('a watcher failure before subscription is 
 test('retained saved sessions leave same-file reuse and foreground replacement available', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'cat-preview-capacity-')), root = await realpath(directory)
   const sessions = Array.from({ length: 33 }, (_, index) => sessionDescriptorFixture({ appSessionId: `saved-${index}`, cwd: root, status: 'exited', restorable: true }))
-  const service = createFilePreviewService({ sessions: () => sessions, publish: () => {} })
+  const service = previewService({ sessions: () => sessions, publish: () => {} })
   try {
     await writeFile(join(root, 'report.html'), '<h1>Current report</h1>')
     await writeFile(join(root, 'replacement.html'), '<h1>Replacement report</h1>')
