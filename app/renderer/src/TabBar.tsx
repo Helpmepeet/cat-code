@@ -398,7 +398,7 @@ function Tab({
   const id = descriptor.appSessionId
   const title = tabLabel(descriptor)
   const workMark = useContext(SessionWorkMarksContext).get(id) ?? null
-  const tooltip = useHoverTooltip('tab', 350)
+  const tooltip = useHoverTooltip('tab', 100)
   // First-nine jump-key hint. App's chord handler accepts ⌘ OR Ctrl; the label
   // is ⌘ (mac-first desktop app) — no clean renderer-side platform signal to
   // vary it (S3), so the primary accelerator is shown.
