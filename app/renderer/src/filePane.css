@@ -1,4 +1,4 @@
-.file-pane { display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; background:var(--surface-panel); color:var(--text-primary); }
+.file-pane { container-type:inline-size; container-name:file-pane; display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; background:var(--surface-panel); color:var(--text-primary); }
 .file-pane-header { display:flex; flex:none; align-items:center; gap:2px; height:40px; padding:0 8px 0 10px; border-bottom:1px solid var(--shell-seam); }
 .file-pane-icon { display:flex; flex:none; align-items:center; justify-content:center; width:26px; height:26px; border-radius:5px; color:var(--text-subtle); cursor:pointer; }
 .file-pane-icon:hover { color:var(--text-primary); background:var(--shell-hover); }
@@ -84,3 +84,9 @@ iframe.file-pane-content { background:white; }
 }
 
 .file-pane-text { display:flex; flex-direction:column; min-height:0; }
+
+@container file-pane (width < 440px) {
+  .file-pane .tool-output-toolbar:has(.file-preview-window-control) .source-text-copy-label { display:none; }
+  .file-pane .tool-output-toolbar:has(.file-preview-window-control) .tool-output-search { gap:4px; padding-left:7px; }
+  .file-pane .tool-output-toolbar:has(.file-preview-window-control) .tool-output-count { max-width:62px; overflow:hidden; text-overflow:ellipsis; }
+}

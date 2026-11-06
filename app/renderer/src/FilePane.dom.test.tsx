@@ -1263,6 +1263,13 @@ test('switching a large log window and citing its start retains the new live cap
   await settle()
   const tail = getFilePaneSession(sessionId).committedFile!
   expect(tail.textWindow?.side).toBe('end')
+  const windowAction = () => tree.container.querySelector<HTMLButtonElement>('.file-pane-text:not(.file-pane-staging) .tool-output-toolbar button[aria-label^="Show "]')
+  expect(windowAction()).not.toBeNull()
+  expect(windowAction()!.textContent).toBe('Start')
+  expect(windowAction()!.title).toContain('Showing the last')
+  expect(windowAction()!.title).toContain(`${tail.textWindow!.shownBytes.toLocaleString('en-US')} of 2,800,000 bytes`)
+  expect(windowAction()!.getAttribute('aria-description')).toContain('Search and Copy use only this window.')
+  expect(tree.container.querySelector('.file-pane-text:not(.file-pane-staging) .file-pane-note')).toBeNull()
   await act(async () => { await requestOpenFile(sessionId, path, { textWindow: 'start' }) })
   const start = getFilePaneSession(sessionId).file!
   expect(start.id).not.toBe(tail.id)
@@ -1271,7 +1278,9 @@ test('switching a large log window and citing its start retains the new live cap
   expect(service.has(tail.id)).toBe(true)
   await settle()
   expect(getFilePaneSession(sessionId).committedFile?.id).toBe(start.id)
-  await act(async () => { await requestOpenFile(sessionId, path, { textWindow: 'end' }) })
+  expect(windowAction()!.textContent).toBe('End')
+  expect(windowAction()!.title).toContain('Showing the first')
+  await act(async () => { windowAction()!.click(); await new Promise(resolve => setTimeout(resolve, 70)) })
   await settle()
   const secondTail = getFilePaneSession(sessionId).committedFile!
   expect(secondTail.textWindow?.side).toBe('end')
@@ -1387,4 +1396,23 @@ test.each(['ts', 'csv'])('text restores its horizontal reading position through 
   await act(async () => { await requestOpenFile(sessionId, `${path}:30`) })
   expect(restored.scrollLeft).toBe(0)
   expect(restored.scrollTop).toBe(580)
+})
+
+test('text window controls keep decoding warnings, unreachable-line warnings, and empty-file messages visible', async () => {
+  const { pane, firstPath, sessionId } = setup()
+  const path = join(dirname(firstPath), 'invalid.log')
+  const empty = join(dirname(firstPath), 'empty.txt')
+  writeFileSync(path, Buffer.concat([Buffer.from([0xff]), Buffer.from('record\n'.repeat(400000))]))
+  writeFileSync(empty, '')
+  const tree = await harness.mount(pane())
+  await act(async () => { await requestOpenFile(sessionId, `${path}:900000`) })
+  await settle()
+  const source = tree.container.querySelector('.file-pane-text:not(.file-pane-staging)')!
+  expect([...source.querySelectorAll('.file-pane-note')].map(note => note.textContent)).toEqual([
+    'Some bytes are not valid UTF-8.', 'Line 900000 is outside what is shown.',
+  ])
+  expect(source.querySelector('[aria-label="Show end"]')?.closest('.tool-output-toolbar')).not.toBeNull()
+  await act(async () => { await requestOpenFile(sessionId, empty) })
+  await settle()
+  expect(tree.container.querySelector('.file-pane-text:not(.file-pane-staging)')?.textContent).toBe('This file is empty.')
 })

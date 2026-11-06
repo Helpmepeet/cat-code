@@ -44,11 +44,18 @@ async function key(element: Element, value: string) {
 test('keyboard crosses row pages and reaches the last of 100 columns without mounting more than 5,000 cells', async () => {
   const model = table(101, 100)
   model.rowOffset = 100
+  model.sourceTruncated = true
   install(async () => ({ ok: true, kind: 'table', table: model }))
   const positions: unknown[] = []
   const tree = await harness.mount(<TableDocumentView file={descriptor} active initialPosition={{ row: 149, column: 99 }} onPosition={value => positions.push(value)} />)
   const grid = tree.container.querySelector<HTMLElement>('[role="grid"]')!
   expect(grid).not.toBeNull()
+  const partial = tree.container.querySelector<HTMLElement>('[aria-label="Partial table"]')!
+  expect(partial).not.toBeNull()
+  expect(partial.textContent).toBe('Partial')
+  expect(partial.title).toContain('101 rows and 100 columns from part of the file')
+  expect(partial.getAttribute('aria-description')).toContain('More cells are outside this view')
+  expect(tree.container.textContent).not.toContain('More cells are outside this view')
   expect(tree.container.querySelector('.table-document-coordinate')?.textContent).toBe('CV150')
   expect(tree.container.querySelectorAll('[role="gridcell"]')).toHaveLength(5_000)
   await key(grid, 'ArrowDown')
@@ -137,12 +144,15 @@ test('a CSV line citation opens Source and notifies readiness without parsing a 
   expect(requests).toBe(0)
   expect(ready).toBe(1)
   const windows: string[] = []
-  await tree.render(<TableDocumentView file={{ ...descriptor, textWindow: { side: 'end', truncated: true, totalBytes: 3_000_000, shownBytes: 2_000_000, invalidUtf8: false, firstLine: null } }} active
+  await tree.render(<TableDocumentView file={{ ...descriptor, textWindow: { side: 'end', truncated: true, totalBytes: 3_000_000, shownBytes: 2_000_000, invalidUtf8: true, firstLine: null } }} active
     onTextWindow={side => windows.push(side)} />)
   const tableButton = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Table')!
   expect(tableButton.disabled).toBe(true)
   expect(requests).toBe(0)
-  await act(async () => { [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Show start')!.click() })
+  expect(tree.container.textContent).toContain('Some bytes are not valid UTF-8.')
+  expect(tree.container.textContent).not.toContain('Showing the last')
+  expect(tree.container.textContent).not.toContain('Table view starts')
+  await act(async () => { tree.container.querySelector<HTMLButtonElement>('button[aria-label="Show start"]')!.click() })
   expect(windows).toEqual(['start'])
 })
 

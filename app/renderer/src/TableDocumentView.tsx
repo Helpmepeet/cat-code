@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type RefO
 import type { FilePreviewDescriptor, FilePreviewTextWindowSide } from '../../shared/filePreview.js'
 import type { PreviewDocumentCell, PreviewDocumentTable } from '../../shared/previewDocument.js'
 import { SourceTextView } from './SourceTextView.js'
+import { FilePreviewWindowControl } from './FilePreviewWindowControl.js'
 import { useSourceWrap } from './sourceWrap.js'
 import { useToast } from './toastContext.js'
 import './tableDocumentView.css'
@@ -159,21 +160,20 @@ export function TableDocumentView({
           {loaded.sheets.map(sheet => <option key={sheet.name} value={sheet.name}>{sheet.name}</option>)}
         </select>
       </label> : null}
+      {mode === 'table' && loaded && (loaded.truncated || loaded.sourceTruncated) ? <span className="table-document-partial" role="note" tabIndex={0} aria-label="Partial table"
+        title={partialTableDescription(loaded)} aria-description={partialTableDescription(loaded)}>Partial</span> : null}
     </div>
     {mode === 'source' ? <>
-      {file.textWindow?.truncated ? <div className="table-document-note"><span>Showing the {file.textWindow.side === 'end' ? 'last' : 'first'} {formatBytes(file.textWindow.shownBytes)} of {formatBytes(file.textWindow.totalBytes)}.</span>
-        {onTextWindow ? <button type="button" onClick={() => onTextWindow(file.textWindow!.side === 'start' ? 'end' : 'start')}>Show {file.textWindow.side === 'start' ? 'end' : 'start'}</button> : null}</div> : null}
       {file.textWindow?.invalidUtf8 ? <div className="table-document-note">Some bytes are not valid UTF-8.</div> : null}
-      {endWindow ? <div className="table-document-note">Table view starts at the beginning of the file.</div> : null}
       {lineTarget && lineTarget.line > lines.length ? <div className="table-document-note">Line {lineTarget.line} is outside what is shown.</div> : null}
       {text.length === 0 ? <div className="table-document-empty">This file is empty.</div> : <SourceTextView lines={lines} body={text} copy={text}
         gutter={index => file.textWindow?.firstLine === null ? '' : index + 1} language={null} diffRows={null} wrap={wrap} onWrap={setWrap} subject="file"
+        toolbarActions={onTextWindow ? <FilePreviewWindowControl window={file.textWindow} onSelect={onTextWindow} /> : null}
         lineTarget={lineTarget} initialTopLine={initialTopLine} scrollerRef={sourceScroller} onScroll={value => { if (active) reportPosition.current?.(value) }} />}
     </> : <>
       {slow ? <div className="table-document-note" role="status">Opening {requestedSheet ?? file.path.split('/').at(-1)}</div> : null}
       {tableError ? <div className="table-document-note" role="status">Could not update this table. Showing the last version.</div> : null}
       {loaded ? <>
-        {loaded.truncated || loaded.sourceTruncated ? <div className="table-document-note">Showing {loaded.rows.length.toLocaleString()} rows and {loaded.columnCount.toLocaleString()} columns. More cells are outside this view.</div> : null}
         <div className="table-document-formula">
           <span className="table-document-coordinate">{hasCells ? `${columnLabel(position.column)}${position.row + 1}` : ''}</span>
           <div className="table-document-value" tabIndex={hasCells ? 0 : -1} aria-label="Cell value">
@@ -240,8 +240,6 @@ function columnLabel(column: number): string {
   while (value > 0) { value--; label = String.fromCharCode(65 + value % 26) + label; value = Math.floor(value / 26) }
   return label
 }
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${Number((bytes / (1024 * 1024)).toFixed(1))} MiB`
-  if (bytes >= 1024) return `${Number((bytes / 1024).toFixed(1))} KiB`
-  return `${bytes} B`
+function partialTableDescription(table: PreviewDocumentTable): string {
+  return `Showing ${table.rows.length.toLocaleString()} rows and ${table.columnCount.toLocaleString()} columns${table.sourceTruncated ? ' from part of the file' : ''}. More cells are outside this view.`
 }

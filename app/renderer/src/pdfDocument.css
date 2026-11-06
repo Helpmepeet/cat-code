@@ -8,6 +8,7 @@
 .pdf-document-toolbar input::-webkit-inner-spin-button, .pdf-document-toolbar input::-webkit-outer-spin-button { appearance:none; margin:0; }
 .pdf-document-page-count { min-width:18px; white-space:nowrap; font-variant-numeric:tabular-nums; }
 .pdf-document-toolbar select { min-width:64px; margin-left:auto; background:var(--surface-panel); color:var(--text-primary); }
+.pdf-document-zoom-limit { flex:none; color:var(--text-faint); font-size:10.5px; white-space:nowrap; }
 .pdf-document-pages { flex:1; min-height:0; overflow:auto; padding:16px; background:color-mix(in srgb,var(--text-faint) 7%,var(--surface-panel)); }
 .pdf-document-page { position:relative; width:var(--pdf-page-width); height:var(--pdf-page-height); margin:0 auto; background:white; color:black; --scale-round-x:1px; --scale-round-y:1px; }
 .pdf-document-page[hidden] { display:none; }

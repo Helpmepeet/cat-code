@@ -126,9 +126,9 @@ export function PdfDocumentView({ file, active, className = '', bodyRef, initial
         <select aria-label="Zoom" value={zoom} disabled={!pdf} onChange={event => { setZoom(Number(event.target.value)); setFitWidth(false) }}>
           {ZOOMS.map(value => <option key={value} value={value}>{value * 100}%</option>)}
         </select>
+        {limited ? <span className="pdf-document-zoom-limit" role="status" title="Zoom is limited for this page." aria-label="Zoom is limited for this page.">Limited</span> : null}
       </div>
       {pageError ? <div className="file-pane-note" role="status"><span>Could not show this page.</span>{onExternal ? <button type="button" className="file-pane-note-action" onClick={onExternal}>Open externally</button> : null}</div> : null}
-      {limited ? <div className="file-pane-note" role="status">Zoom is limited for this page.</div> : null}
       <div className="pdf-document-pages" ref={element => { viewportRef.current = element; if (bodyRef) bodyRef.current = element }} tabIndex={active ? 0 : -1} aria-label="PDF">
         {pdf && width > 0 ? <>
           <PdfPage key={`${file.id}:${page}`} pdf={pdf} number={page} width={width} zoom={zoom} fitWidth={fitWidth} onReady={pageReady} onFailure={pageFailed} onLimited={setLimited} />

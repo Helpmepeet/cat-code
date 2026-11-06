@@ -44,6 +44,7 @@ export function SourceTextView({
   initialTopLine,
   initialScrollLeft,
   scrollerRef,
+  toolbarActions,
 }: {
   lines: readonly string[]
   body: string
@@ -54,6 +55,7 @@ export function SourceTextView({
   wrap: boolean
   onWrap: (wrap: boolean) => void
   subject?: 'output' | 'file'
+  toolbarActions?: ReactNode
   lineTarget?: { line: number; token: number }
   initialTopLine?: number
   initialScrollLeft?: number
@@ -83,6 +85,7 @@ export function SourceTextView({
     setMatchIndex(index => stepMatchIndex(index, delta, matchCount))
   }
 
+  const copyLabel = subject === 'file' ? copied ? 'File copied' : 'Copy file' : copied ? 'Output copied' : 'Copy output'
   const copyOutput = (): void => {
     const clipboard =
       typeof navigator !== 'undefined' ? navigator.clipboard : undefined
@@ -134,7 +137,7 @@ export function SourceTextView({
           />
           {search.searching ? (
             <>
-              <span className="tool-output-count">{search.label}</span>
+              <span className="tool-output-count" title={search.label}>{search.label}</span>
               <button
                 type="button"
                 className="tool-output-step"
@@ -156,6 +159,7 @@ export function SourceTextView({
             </>
           ) : null}
         </label>
+        {toolbarActions}
         <button
           type="button"
           className="tool-output-tool"
@@ -169,10 +173,11 @@ export function SourceTextView({
           className="tool-output-tool"
           data-copied={copied ? '' : undefined}
           onClick={copyOutput}
-          aria-label={subject === 'file' ? copied ? 'File copied' : 'Copy file' : copied ? 'Output copied' : 'Copy output'}
+          aria-label={copyLabel}
+          title={copyLabel}
         >
           {copied ? <ActionCheckIcon /> : <ActionCopyIcon />}
-          {copied ? 'Copied' : 'Copy'}
+          <span className="source-text-copy-label">{copied ? 'Copied' : 'Copy'}</span>
         </button>
       </div>
       <VirtualLineList

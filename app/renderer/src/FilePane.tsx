@@ -18,6 +18,7 @@ import {
   isPaneFilePath, paneTargetLabel, previewDescriptorNote, recordLocalhostRoute, samePaneRevision, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession, type FilePaneScroll,
 } from './filePaneState.js'
 import { SourceTextView } from './SourceTextView.js'
+import { FilePreviewWindowControl } from './FilePreviewWindowControl.js'
 import { useSourceWrap } from './sourceWrap.js'
 import { readSourceLanguage } from './readSource.js'
 import { FilePaneFiles } from './FilePaneFiles.js'
@@ -591,23 +592,15 @@ function TextFileContent({ file, active, className, bodyRef, appSessionId, onRea
   const windowed = file.textWindow
   const outside = target && target.line > lines.current.lines.length
   return <div className={`${className} file-pane-text`} ref={text.length === 0 ? bodyRef : undefined} tabIndex={text.length === 0 && active ? 0 : undefined}>
-    {windowed?.truncated ? <div className="file-pane-note"><span>Showing the {windowed.side === 'start' ? 'first' : 'last'} {formatBytes(windowed.shownBytes)} of {formatBytes(windowed.totalBytes)}.</span><button type="button" className="file-pane-note-action" onClick={() => {
-      void requestOpenFile(appSessionId, file.path, { textWindow: windowed.side === 'start' ? 'end' : 'start', focus: 'viewer' })
-    }}>{windowed.side === 'start' ? 'Show end' : 'Show start'}</button></div> : null}
     {windowed?.invalidUtf8 ? <div className="file-pane-note">Some bytes are not valid UTF-8.</div> : null}
     {outside ? <div className="file-pane-note">Line {target.line} is outside what is shown.</div> : null}
     {text.length === 0 ? <p className="tool-output-empty">This file is empty.</p> : <SourceTextView lines={lines.current.lines} body={text} copy={text} gutter={index => windowed?.firstLine === null ? '' : index + 1}
       language={readSourceLanguage(file.path)} diffRows={null} wrap={wrap} onWrap={setWrap} subject="file" scrollerRef={scroller}
+      toolbarActions={<FilePreviewWindowControl window={windowed} onSelect={side => { void requestOpenFile(appSessionId, file.path, { textWindow: side, focus: 'viewer' }) }} />}
       lineTarget={outside ? undefined : target ?? undefined} initialTopLine={initialScroll.current.topLine} initialScrollLeft={initialScroll.current.x}
       onScroll={position => { if (active) rememberFilePaneScroll(appSessionId, { ...position, textWindow: file.textWindow?.side }, file) }} />}
   </div>
 }
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${Number((bytes / (1024 * 1024)).toFixed(1))} MiB`
-  if (bytes >= 1024) return `${Number((bytes / 1024).toFixed(1))} KiB`
-  return `${bytes} B`
-}
-
 function PaneArrow({ back = false }: { back?: boolean }) {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={back ? 'M20 12H4m7-7-7 7 7 7' : 'M4 12h16m-7-7 7 7-7 7'} /></svg>
 }
