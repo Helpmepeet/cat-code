@@ -55,7 +55,8 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   const opener = useRef<HTMLElement | null>(null)
   const outputRow = output ? findNestedToolUseRow(outputRows, output.id) : null
   const [dragging, setDragging] = useState(false)
-  const drag = useRef<{ startX: number; startWidth: number } | null>(null)
+  const drag = useRef<{ pointerId: number; startX: number; startWidth: number; width: number; layoutWidth: number | null } | null>(null)
+  const dragFrame = useRef<number | null>(null)
   const focusComposer = useRef(onFocusComposer)
   focusComposer.current = onFocusComposer
   useLayoutEffect(() => registerFilePaneFocus(sessionId, () => focusComposer.current?.()), [sessionId])
@@ -76,6 +77,11 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   useLayoutEffect(() => {
     if (state.width !== null) slot.current?.style.setProperty('--shared-slot-width', `${state.width}px`)
   }, [state.width])
+  useLayoutEffect(() => () => {
+    if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current)
+    dragFrame.current = null
+    drag.current = null
+  }, [sessionId])
   const openOutput = useCallback<OpenToolOutput>((row, fileIndex = 0) => {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const current = getFilePaneSession(sessionId)
@@ -117,8 +123,20 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   ]
   const resize = (width: number) => {
     const clamped = clampToolOutputWidth(width, workspace.current?.clientWidth || null)
+    slot.current?.style.setProperty('--shared-slot-width', `${clamped}px`)
+    slot.current?.querySelector('[role="separator"]')?.setAttribute('aria-valuenow', String(clamped))
     rememberSlotWidth(sessionId, clamped)
     if (!state.open && outputRow) writeToolOutputWidth(clamped)
+  }
+  const finishDrag = (event: { pointerId: number }) => {
+    const current = drag.current
+    if (!current || current.pointerId !== event.pointerId) return
+    if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current)
+    dragFrame.current = null
+    drag.current = null
+    // Persist once, including a final pointer move that has not painted yet.
+    resize(current.width)
+    setDragging(false)
   }
   return <FilePaneContext.Provider value={appSessionId ? requestOpenFile : null}><ToolOutputContext.Provider value={openOutput}>
     <div ref={workspace} className="subagent-workspace" data-resizing={dragging || undefined}>
@@ -133,12 +151,25 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
           <div className="subagent-shared-resize" role="separator" aria-orientation="vertical" aria-label="Resize side panel"
             aria-valuenow={state.width ?? 560} aria-valuemin={TOOL_OUTPUT_MIN_WIDTH} tabIndex={0} data-dragging={dragging || undefined}
             onPointerDown={event => {
-              if (event.button !== 0) return
+              if (event.button !== 0 || drag.current) return
               event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId)
-              drag.current = { startX: event.clientX, startWidth: slot.current?.getBoundingClientRect().width || state.width || 560 }
+              const width = slot.current?.getBoundingClientRect().width || state.width || 560
+              drag.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: width, width, layoutWidth: workspace.current?.clientWidth || null }
               setDragging(true)
-            }} onPointerMove={event => { if (drag.current) resize(drag.current.startWidth + drag.current.startX - event.clientX) }}
-            onPointerUp={() => { drag.current = null; setDragging(false) }} onPointerCancel={() => { drag.current = null; setDragging(false) }}
+            }} onPointerMove={event => {
+              const current = drag.current
+              if (!current || current.pointerId !== event.pointerId) return
+              current.width = clampToolOutputWidth(current.startWidth + current.startX - event.clientX, current.layoutWidth)
+              if (dragFrame.current !== null) return
+              const handle = event.currentTarget
+              dragFrame.current = requestAnimationFrame(() => {
+                dragFrame.current = null
+                if (!drag.current) return
+                slot.current?.style.setProperty('--shared-slot-width', `${drag.current.width}px`)
+                handle.setAttribute('aria-valuenow', String(drag.current.width))
+              })
+            }}
+            onPointerUp={finishDrag} onPointerCancel={finishDrag} onLostPointerCapture={finishDrag}
             onDoubleClick={() => resize(state.open ? 620 : outputRow ? 560 : 480)}
             onKeyDown={event => {
               if (event.key === 'ArrowLeft') resize((state.width ?? 560) + TOOL_OUTPUT_WIDTH_STEP)
