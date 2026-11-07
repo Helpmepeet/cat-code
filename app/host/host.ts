@@ -210,6 +210,7 @@ export class Host implements HostApi {
   private readonly permissionModes = new Map<SessionId, string>()
   private readonly prePlanModes = new Map<SessionId, string>()
   private readonly permissionClassifierAvailable = new Map<SessionId, boolean>()
+  private readonly browserDirectories = new Map<SessionId, string[]>()
   private readonly evictReplay: (appSessionId: SessionId) => void
   private readonly log: (line: string) => void
   private readonly now: () => number
@@ -369,6 +370,7 @@ export class Host implements HostApi {
       }
       if (event.frame.kind === 'ready') {
         this.moveReadyTimes.set(appSessionId, performance.now())
+        this.browserDirectories.delete(appSessionId)
         this.mainCodexAccounts.delete(appSessionId)
         this.unavailableCodexRoutes.delete(appSessionId)
         this.runControls.delete(appSessionId)
@@ -385,6 +387,10 @@ export class Host implements HostApi {
         }, true)
       }
       if (event.frame.kind === 'permission.context') {
+        const directories = event.frame.context.additionalWorkingDirectories
+        if (Array.isArray(directories)) {
+          this.browserDirectories.set(appSessionId, directories.map(directory => directory.path))
+        } else this.browserDirectories.delete(appSessionId)
         this.permissionModes.set(appSessionId, event.frame.context.mode)
         if (event.frame.context.prePlanMode) this.prePlanModes.set(appSessionId, event.frame.context.prePlanMode)
         else this.prePlanModes.delete(appSessionId)
@@ -1367,6 +1373,7 @@ export class Host implements HostApi {
       // Evict replay so a reload never replays a dead session's frames (P3-0 carry
       // — the named eviction requirement; AttachmentGate.clearSession in main).
       this.workspaceTransitions.delete(appSessionId)
+      this.browserDirectories.delete(appSessionId)
       this.evictReplay(appSessionId)
       // Cleanup rechecks persisted input/history under the registry lock. Managed
       // identity alone makes an open blank Chat resumable, not worth archiving.
@@ -1430,6 +1437,13 @@ export class Host implements HostApi {
   /* --------------------------------------------------------------------- *
    * listSessions — live ∪ restorable (§6)
    * --------------------------------------------------------------------- */
+
+  getBrowserFolders(appSessionId: SessionId): readonly string[] | null {
+    const row = this.registry.findSession(appSessionId)
+    const directories = this.browserDirectories.get(appSessionId)
+    if (!row || !directories || this.isMoving(appSessionId)) return null
+    return [row.cwd, ...directories]
+  }
 
   listSessions(): SessionDescriptor[] {
     const byId = new Map<SessionId, SessionDescriptor>()
@@ -2554,6 +2568,7 @@ export class Host implements HostApi {
   }
 
   private emitRemoved(appSessionId: SessionId): void {
+    this.browserDirectories.delete(appSessionId)
     this.unsavedAccountSelections.delete(appSessionId)
     this.emit({ type: 'session-removed', appSessionId })
   }

@@ -9876,6 +9876,17 @@ test('IDLE-PARK — the other ordering needs no new gate: a delivered peer messa
   expect(parkCount()).toBe(0)
 })
 
+test('a pending browser screenshot larger than 128 KiB arrives intact', async () => {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+  const pending = server.requestHost('browser.screenshot', {}, { timeoutMs: 100 })
+  const sent = received.find(f => f.kind === 'host.request')!
+  const value = { data: 'a'.repeat(200_000), mimeType: 'image/png' as const, width: 800, height: 600 }
+  server.handleData(conn, hostPlaneFrame({
+    type: 'host.result', requestId: (sent as { requestId: string }).requestId, ok: true, value,
+  }))
+  expect(await pending).toEqual({ ok: true, value })
+})
+
 test('the request client mints an id, awaits its result, and resolves the caller', async () => {
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 

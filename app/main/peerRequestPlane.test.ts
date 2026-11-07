@@ -44,6 +44,29 @@ const CORAL = 'cccccccc-0000-4000-8000-000000000003'
 const DUNE = 'dddddddd-0000-4000-8000-000000000004'
 const WORKSPACE = '/w/one'
 
+test('browser requests have closed inputs and a separate 120-call window', async () => {
+  const calls: string[] = []
+  const h = harness({ browserRequests: { handleRequest: async (id) => {
+    calls.push(id)
+    return { ok: true, value: { description: 'read localhost:3000', url: 'http://localhost:3000/' } }
+  } } })
+  const frame = (verb: string, args: unknown, n: number) => ({
+    kind: 'host.request', protocolVersion: PROTOCOL_VERSION, sessionId: ALEX,
+    requestId: `browser-${n}`, verb, args,
+  })
+  await h.plane.handleRequest(ALEX, frame('browser.read', { unexpected: true }, 0))
+  expect(h.lastResult()).toMatchObject({ ok: false, error: { code: 'bad_request' } })
+  for (let i = 0; i < 120; i++) {
+    await h.plane.handleRequest(ALEX, frame('browser.describe', { operation: 'read' }, i + 1))
+    expect(h.lastResult()?.ok).toBe(true)
+  }
+  await h.plane.handleRequest(ALEX, frame('browser.read', {}, 121))
+  expect(h.lastResult()).toMatchObject({ ok: false, error: { code: 'rate_limited' } })
+  await h.plane.handleRequest(ALEX, frame('peers.list', {}, 122))
+  expect(h.lastResult()?.ok).toBe(true)
+  expect(calls).toEqual(Array(120).fill(ALEX))
+})
+
 /** Let every queued microtask run, so parked awaits reach their next step. */
 function settle(): Promise<void> {
   return new Promise<void>(resolve => {
@@ -101,6 +124,7 @@ function harness(
     moving?: Set<string>
     workspaceRequests?: PeerRequestPlaneDeps['workspaceRequests']
     workspaceTransitions?: PeerRequestPlaneDeps['workspaceTransitions']
+    browserRequests?: PeerRequestPlaneDeps['browserRequests']
     setPeerNotice?: PeerRequestPlaneDeps['setPeerNotice']
   } = {},
 ) {
@@ -130,6 +154,7 @@ function harness(
     isMoving: id => options.moving?.has(id) === true,
     workspaceRequests: options.workspaceRequests,
     workspaceTransitions: options.workspaceTransitions,
+    browserRequests: options.browserRequests,
     createSessionInWorkspace:
       options.createResult ??
       (async () => ({ ok: false, error: { code: 'session_limit', message: 'nope' } })),

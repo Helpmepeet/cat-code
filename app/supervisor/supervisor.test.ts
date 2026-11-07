@@ -455,6 +455,21 @@ test('ordinary oversized controls and image submit metadata are refused before w
   expect(h.writes()).toBe(0)
 })
 
+test('large browser results require a pending browser request on the same session', () => {
+  const h = sendTestHarness()
+  const result = { type: 'host.result' as const, requestId: 'capture', ok: true,
+    value: { data: 'a'.repeat(200_000), mimeType: 'image/png', width: 800, height: 600 } }
+  expect(() => h.supervisor.send('target', result as never)).toThrow('too large')
+  const emit = (h.supervisor as unknown as { emit: (event: SupervisorEvent) => void }).emit.bind(h.supervisor)
+  emit({ type: 'frame', sessionId: 'target', frame: {
+    kind: 'host.request', protocolVersion: PROTOCOL_VERSION, sessionId: 'target',
+    requestId: 'capture', verb: 'browser.screenshot', args: {},
+  } as never })
+  expect(() => h.supervisor.send('target', result as never)).not.toThrow()
+  expect(h.writes()).toBe(1)
+  expect(() => h.supervisor.send('target', result as never)).toThrow('too large')
+})
+
 test('question reply admission retains frame, byte-rate and socket backpressure bounds', () => {
   const h = sendTestHarness()
   const message = {

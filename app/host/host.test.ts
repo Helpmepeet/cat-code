@@ -474,6 +474,23 @@ function emitMoveReadyContext(supervisor: FakeSupervisor, appSessionId: SessionI
   } as never })
 }
 
+test('browser folders require live permission context and include engine additional directories', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId
+  expect(h.host.getBrowserFolders(id)).toBeNull()
+  h.supervisor.emit({ type: 'frame', sessionId: id, frame: {
+    kind: 'permission.context', protocolVersion: PROTOCOL_VERSION, sessionId: id,
+    context: { mode: 'default', permissionClassifierEnabled: false,
+      additionalWorkingDirectories: [{ path: h.storageDir, source: 'session' }] },
+  } as never })
+  await settle(() => h.host.getBrowserFolders(id) !== null)
+  expect(h.host.getBrowserFolders(id)).toEqual([h.cwd, h.storageDir])
+  h.supervisor.emitReady(id, randomUUID())
+  await settle(() => h.host.getBrowserFolders(id) === null)
+})
+
 test('workspace reservation rejects stale process authority and serializes manual move, restart, close and checkout', async () => {
   const storageRoot = tempDir()
   const managedStorage = new ManagedStorage({ appDataBase: join(storageRoot, 'user-data'), ownershipDir: join(storageRoot, 'ownership') })

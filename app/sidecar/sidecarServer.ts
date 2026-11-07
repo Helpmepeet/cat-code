@@ -103,8 +103,11 @@ import {
 } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import { parsePeerNotice } from '../shared/peerNotice.js'
+import { isBrowserVerb } from '../shared/browserPane.js'
 import {
   HOST_REQUEST_TIMEOUT_MS,
+  MAX_BROWSER_RESULT_BYTES,
+  MAX_BROWSER_RESULT_BYTES_PER_WINDOW,
   MAX_HOST_REQUEST_ARG_CHARS,
   HANDOFF_STATE_WINDOW_MS,
   MAX_ANSWER_QUESTIONS,
@@ -704,6 +707,7 @@ export class SidecarServer {
   private readonly pendingHostRequests = new Map<
     string,
     {
+      verb: HostRequestVerb
       settle: (result: HostRequestOutcome<HostRequestVerb>) => void
       timer: ReturnType<typeof setTimeout>
       /** The verb's own value schema, so the result is validated per verb (HR5). */
@@ -749,6 +753,8 @@ export class SidecarServer {
   private largeReceiveBytes = 0
   private questionReceiveWindowStart = 0
   private questionReceiveBytes = 0
+  private browserReceiveWindowStart = 0
+  private browserReceiveBytes = 0
   private bufferedReceiveWindowStart = 0
   private bufferedReceiveBytes = 0
   /** Last staged list actually published, for `broadcastQueuedPrompts`. */
@@ -1512,7 +1518,8 @@ export class SidecarServer {
       }
 
       const questionReply = (result.payload as { message?: { type?: unknown } } | null)?.message?.type === 'askUserQuestion.reply'
-      if (!this.checkRate(connection, result.byteLength, questionReply)) {
+      const browserResult = this.isPendingBrowserResult(result.payload)
+      if (!this.checkRate(connection, result.byteLength, questionReply, browserResult)) {
         this.rejectFrameWithSubmitAnswer(
           connection,
           result.payload,
@@ -1796,7 +1803,8 @@ export class SidecarServer {
     const inbound = frame.message
     const imageSubmit = inbound?.type === 'app.submit' && isImageSubmitPrompt(inbound.prompt)
     const questionReply = inbound?.type === 'askUserQuestion.reply'
-    if (byteLength > (questionReply ? MAX_QUESTION_REPLY_FRAME_BYTES : imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
+    const browserResult = this.isPendingBrowserResult(frame)
+    if (byteLength > (browserResult ? MAX_BROWSER_RESULT_BYTES : questionReply ? MAX_QUESTION_REPLY_FRAME_BYTES : imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
       this.rejectFrameWithSubmitAnswer(
         connection, payload, requestId, 'bad_request',
         'This request is too large to send.', false,
@@ -6032,6 +6040,7 @@ export class SidecarServer {
       }, options?.timeoutMs ?? HOST_REQUEST_TIMEOUT_MS)
       timer.unref?.()
       this.pendingHostRequests.set(requestId, {
+        verb,
         // Narrowing is safe and checked: the entry carries the schema for the
         // verb it was minted for, and `handleHostResult` parses `value` against
         // it before settling, so a result whose shape does not match the verb
@@ -6535,7 +6544,14 @@ export class SidecarServer {
     return true
   }
 
-  private checkRate(connection: Connection, byteLength: number, questionReply: boolean): boolean {
+  private isPendingBrowserResult(payload: unknown): boolean {
+    const message = (payload as { message?: { type?: unknown; requestId?: unknown } } | null)?.message
+    if (message?.type !== 'host.result' || typeof message.requestId !== 'string') return false
+    const pending = this.pendingHostRequests.get(message.requestId)
+    return !!pending && isBrowserVerb(pending.verb)
+  }
+
+  private checkRate(connection: Connection, byteLength: number, questionReply: boolean, browserResult = false): boolean {
     const now = Date.now()
     if (now < connection.rateWindowStart || now - connection.rateWindowStart >= RATE_WINDOW_MS) {
       connection.rateWindowStart = now
@@ -6543,7 +6559,15 @@ export class SidecarServer {
     }
     connection.rateCount += 1
     if (connection.rateCount > MAX_FRAMES_PER_WINDOW) return false
-    if (questionReply) {
+    if (browserResult) {
+      if (byteLength > MAX_BROWSER_RESULT_BYTES) return false
+      if (now < this.browserReceiveWindowStart || now - this.browserReceiveWindowStart >= RATE_WINDOW_MS) {
+        this.browserReceiveWindowStart = now
+        this.browserReceiveBytes = 0
+      }
+      if (this.browserReceiveBytes + byteLength > MAX_BROWSER_RESULT_BYTES_PER_WINDOW) return false
+      this.browserReceiveBytes += byteLength
+    } else if (questionReply) {
       if (now < this.questionReceiveWindowStart || now - this.questionReceiveWindowStart >= RATE_WINDOW_MS) {
         this.questionReceiveWindowStart = now
         this.questionReceiveBytes = 0
@@ -7286,6 +7310,13 @@ const peerDeliverOutcomeSchema = z.union([
 
 /** One schema per verb, keyed so the pending request selects its own. */
 const HOST_RESULT_VALUE_SCHEMAS = {
+  'browser.navigate': z.object({ url: z.string().max(8192) }).strict(),
+  'browser.read': z.object({ url: z.string().max(8192), text: z.string().max(512 * 1024),
+    snapshot: z.string().max(512 * 1024), truncated: z.boolean(), generation: z.number().int().nonnegative() }).strict(),
+  'browser.screenshot': z.object({ data: z.string().max(MAX_BROWSER_RESULT_BYTES), mimeType: z.literal('image/png'),
+    width: z.number().int().positive().max(4096), height: z.number().int().positive().max(4096) }).strict(),
+  'browser.act': z.object({ url: z.string().max(8192), description: z.string().max(8192) }).strict(),
+  'browser.describe': z.object({ description: z.string().max(8192), url: z.string().max(8192) }).strict(),
   'peers.list': z.object({
     peers: z.array(peerDescriptorSchema),
     nextCursor: z.string().min(1).max(MAX_HOST_REQUEST_ARG_CHARS).optional(),

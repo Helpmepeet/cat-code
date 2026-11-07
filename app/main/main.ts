@@ -271,6 +271,8 @@ import {
   createPeerRequestPlane,
   type PeerRequestPlane,
 } from './peerRequestPlane.js'
+import { BrowserPaneHost } from './browserPaneHost.js'
+import { createBrowserPaneElectronAdapter, registerBrowserPaneScheme } from './browserPaneElectron.js'
 import { applyGlassWindowBackground, readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import { readNotificationPreference, writeNotificationPreference } from './notificationPreference.js'
 import { registerNotificationPreferenceIpc, registerNotificationRetryIpc, registerNotificationRetryBlockedIpc } from './notificationPreferenceIpc.js'
@@ -462,7 +464,7 @@ function branchOpenSeed(engineSessionId: unknown): TrustedOpenHistorySeed | unde
 }
 
 const APP_ORIGIN_DEV = process.env.CATCODE_RENDERER_URL ?? 'http://localhost:5173'
-protocol.registerSchemesAsPrivileged([{ scheme: FILE_PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
+registerBrowserPaneScheme([{ scheme: FILE_PREVIEW_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }])
 
 const IS_DEV = !app.isPackaged
 if (IS_DEV) app.setName('Cat Code Dev')
@@ -767,6 +769,12 @@ let registryForDebug: SessionRegistry | null = null
  * with the window like the rest of the session state (SESSION-LIFETIME L1).
  */
 let peerPlane: PeerRequestPlane | null = null
+const browserPaneAdapter = createBrowserPaneElectronAdapter()
+const browserPaneHost = new BrowserPaneHost({
+  adapter: browserPaneAdapter,
+  folders: id => host?.getBrowserFolders(id) ?? null,
+  devOrigin: IS_DEV ? APP_ORIGIN_DEV : null,
+})
 let latestRendererSnapshot: DebugRendererSnapshot | null = null
 
 /**
@@ -805,7 +813,11 @@ const sessionCloseCoordinator = new SessionCloseCoordinator({
     if (workspaceJump?.isReserved(sessionId)) await workspaceJump.cancel(sessionId, undefined, 'close')
   },
   observe: sessionId => workspaceJump?.queryStatus(sessionId),
-  close: sessionId => host ? host.closeSession(sessionId) : Promise.resolve(closeHostUnavailable()),
+  close: async sessionId => {
+    const result = host ? await host.closeSession(sessionId) : closeHostUnavailable()
+    if (result.ok) await browserPaneHost.close(sessionId)
+    return result
+  },
   onFailure: (sessionId, error) => logLegacyDiagnostic(`close cleanup failed for ${sessionId}: ${String(error)}`, 'host', 'main'),
 })
 
@@ -2782,6 +2794,8 @@ function wireHostEvents(h: Host): void {
       // hygiene: it is what keeps a reused NAME from inheriting the previous
       // row's chain, rate bucket or pending messages.
       peerPlane?.onSessionRemoved(event.appSessionId)
+      void browserPaneHost.close(event.appSessionId).catch(error =>
+        logLegacyDiagnostic(`browser close failed: ${String(error)}`, 'host', 'main'))
     }
     scheduleDebugStateExport.schedule()
   })
@@ -5492,6 +5506,9 @@ function ensureHost(): Host {
   const liveHost = host
   const liveRegistry = registry
   peerPlane = createPeerRequestPlane({
+    browserRequests: {
+      handleRequest: (id, request) => browserPaneHost.handleRequest(id, request),
+    },
     workspaceTransitions: {
       begin: (id, operationId) => {
         const began = liveHost.beginWorkspaceTransition(id, operationId)
@@ -5624,8 +5641,9 @@ if (!gotSingleInstanceLock) {
     }
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     logOperational('app.ready', 'info')
+    await browserPaneAdapter.startup()
     powerMonitor.on('suspend', () => { notificationScreenSuspended = true; notificationVisibility.refresh() })
     powerMonitor.on('resume', () => { notificationScreenSuspended = false; notificationVisibility.refresh() })
     powerMonitor.on('lock-screen', () => { notificationScreenLocked = true; notificationVisibility.refresh() })
@@ -5683,7 +5701,9 @@ function shutdownRuntime(): Promise<ShutdownResult> {
     scheduledTasks = null
     const sidecars = host ? host.shutdownAll() : supervisor?.shutdown() ??
       Promise.resolve({ confirmed: true, unresolvedSessionIds: [] })
-    return settleShutdownTasks(sidecars, helperShutdown, ownedWorkers.waitForExit())
+    const browserCleanup = Promise.all([...browserPaneHost.records.keys()].map(id => browserPaneHost.close(id)))
+    const workersAndBrowser = Promise.all([ownedWorkers.waitForExit(), browserCleanup]).then(([confirmed]) => confirmed)
+    return settleShutdownTasks(sidecars, helperShutdown, workersAndBrowser)
   })
   return runtimeShutdown()
 }

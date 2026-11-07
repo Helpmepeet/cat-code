@@ -66,6 +66,8 @@ import {
 } from '../shared/limits.js'
 import type { SessionBinding } from '../shared/sessionBinding.js'
 import { parsePeerNoticeInput, type PeerNotice, type PeerNoticeInput } from '../shared/peerNotice.js'
+import { isBrowserVerb, parseBrowserArgs, type BrowserRequestArgs, type BrowserRequestValues } from '../shared/browserPane.js'
+import { MAX_BROWSER_REQUESTS_PER_WINDOW } from '../shared/limits.js'
 
 /* ------------------------------------------------------------------------- *
  * Injected dependencies — the narrowest slice of each collaborator, so this
@@ -92,6 +94,10 @@ export type PeerRegistryRow = {
 type NamedRow = PeerRegistryRow & { name: string }
 
 export type PeerRequestPlaneDeps = {
+  browserRequests?: {
+    handleRequest: (appSessionId: string, request: BrowserHostRequest) => Promise<
+      { ok: true; value: BrowserRequestValues[keyof BrowserRequestValues] } | { ok: false; error: HostRequestError }>
+  }
   workspaceTransitions?: {
     begin(appSessionId: SessionId, operationId: string): boolean
     finish(appSessionId: SessionId, operationId: string, cwd: string): boolean
@@ -224,6 +230,11 @@ const VERB_ARG_KEYS: Record<
   HostRequestVerb,
   { required: readonly string[]; optional: readonly string[] }
 > = {
+  'browser.navigate': { required: [], optional: [] },
+  'browser.read': { required: [], optional: [] },
+  'browser.screenshot': { required: [], optional: [] },
+  'browser.act': { required: [], optional: [] },
+  'browser.describe': { required: [], optional: [] },
   'peers.list': { required: [], optional: ['cursor'] },
   'peer.announce': { required: ['doing'], optional: ['touches', 'note'] },
   'peer.create': { required: ['prompt'], optional: ['model', 'effort'] },
@@ -289,6 +300,7 @@ function readRequestId(frame: unknown): string | null {
 
 /** The validated request, narrowed to one verb and its own arg shape. */
 export type ValidatedHostRequest =
+  | BrowserHostRequest
   | { verb: 'peers.list'; cursor?: string }
   | { verb: 'peer.announce'; notice: PeerNoticeInput }
   | { verb: 'peer.create'; prompt: string; model?: string; effort?: string }
@@ -307,6 +319,7 @@ export type ValidatedHostRequest =
   | { verb: 'workspace.transition.finish'; operationId: string; cwd: string }
 
 export type WorkspaceHostRequest = Extract<ValidatedHostRequest, { verb: 'workspaces.list' | 'workspace.jump' | 'workspace.ready' | 'workspace.cancel' }>
+export type BrowserHostRequest = { [V in keyof BrowserRequestArgs]: { verb: V; args: BrowserRequestArgs[V] } }[keyof BrowserRequestArgs]
 
 export type HostRequestValidation =
   | { ok: true; requestId: string; request: ValidatedHostRequest }
@@ -365,6 +378,14 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
   const args = frame.args ?? {}
   if (!isPlainObject(args)) {
     return { ok: false, requestId, error: fail('bad_request', 'args must be an object') }
+  }
+  if (isBrowserVerb(verb)) {
+    try {
+      const parsed = parseBrowserArgs(verb, args)
+      return { ok: true, requestId, request: { verb, args: parsed } as BrowserHostRequest }
+    } catch {
+      return { ok: false, requestId, error: fail('bad_request', 'Invalid browser arguments') }
+    }
   }
 
   // Read the shape by the verb STRING (the union narrowing comes from the switch
@@ -609,6 +630,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * would otherwise spend the recipient's budget and starve it off the plane.
    */
   const verbWindow = new Map<SessionId, number[]>()
+  const browserWindow = new Map<SessionId, number[]>()
   /**
    * HR1 / A6 — the flood bound, charged on EVERY frame before it is parsed or
    * serialized, valid or not, ack or not.
@@ -1546,7 +1568,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       validated.request.verb !== 'workspace.cancel' &&
       validated.request.verb !== 'workspace.transition.begin' &&
       validated.request.verb !== 'workspace.transition.finish' &&
-      !charge(verbWindow, sessionId, MAX_HOST_REQUESTS_PER_WINDOW)
+      !charge(isBrowserVerb(validated.request.verb) ? browserWindow : verbWindow, sessionId,
+        isBrowserVerb(validated.request.verb) ? MAX_BROWSER_REQUESTS_PER_WINDOW : MAX_HOST_REQUESTS_PER_WINDOW)
     ) {
       answer(sessionId, validated.requestId, {
         ok: false,
@@ -1566,6 +1589,18 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       return
     }
     const request = validated.request
+    if ('args' in request) {
+      if (!deps.browserRequests || isMoving(sessionId)) {
+        answer(sessionId, validated.requestId, { ok: false, error: fail('unavailable', 'The browser is unavailable.') })
+        return
+      }
+      try {
+        answer(sessionId, validated.requestId, await deps.browserRequests.handleRequest(sessionId, request))
+      } catch {
+        answer(sessionId, validated.requestId, { ok: false, error: fail('internal_error', 'The browser request could not be completed.') })
+      }
+      return
+    }
     if (request.verb === 'workspace.transition.begin' || request.verb === 'workspace.transition.finish') {
       const transitions = deps.workspaceTransitions
       const admitted = transitions && (request.verb === 'workspace.transition.begin'
@@ -1777,6 +1812,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       pending.delete(sessionId)
       reservations.delete(sessionId)
       verbWindow.delete(sessionId)
+      browserWindow.delete(sessionId)
       frameWindow.delete(sessionId)
       // The module header says every store is cleared on reap, and this one was
       // not: a reaped row's ready timestamp outlived it, so a later row reusing

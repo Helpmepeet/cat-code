@@ -1,6 +1,7 @@
 import type { FilePreviewDocumentRequest, FilePreviewDocumentResult } from './previewDocument.js'
 import type { FilePreviewPrepareResult, FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewSource, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
 import type { FocusedBashJob } from './focusedBashJobs.js'
+import type { BrowserRequestArgs, BrowserRequestValues } from './browserPane.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
 /**
@@ -639,6 +640,11 @@ export type HistoryLoadEarlierMessage = {
  * and it is unreachable from any tool.
  */
 export const HOST_REQUEST_VERBS = [
+  'browser.navigate',
+  'browser.read',
+  'browser.screenshot',
+  'browser.act',
+  'browser.describe',
   'peers.list',
   // Additive verb, not a new inbound kind. See design/2026-10-17-peer-announce.md.
   'peer.announce',
@@ -833,7 +839,7 @@ export type PeerDeliverOutcome =
  * one, because main resolves the name first and the id is compared against the
  * row that name already produced. See the field's own comment below.
  */
-export type HostRequestArgs = {
+export type HostRequestArgs = BrowserRequestArgs & {
   'workspaces.list': Record<string, never>
   'workspace.jump': { operationId: string; destinationHandle: string }
   /** Engine-authored readiness; the connection supplies process identity. */
@@ -865,7 +871,7 @@ export type HostRequestArgs = {
 }
 
 /** Per-verb `value` on a successful `host.result`. */
-export type HostRequestValues = {
+export type HostRequestValues = BrowserRequestValues & {
   'workspaces.list': { workspaces: Array<{ handle: string; name: string; path: string }>; eligible: boolean }
   'workspace.jump': { operationId: string; status: 'accepted' }
   'workspace.ready': { operationId: string; status: 'ready' }

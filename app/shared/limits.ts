@@ -329,7 +329,11 @@ export const HOST_REQUEST_WINDOW_MS = 60_000
  * for a full `MAX_PENDING_PEER_MESSAGES` backlog, plus redelivery after a
  * restore, is comfortably under it.
  */
-export const MAX_HOST_REQUEST_FRAMES_PER_WINDOW = 240
+export const MAX_HOST_REQUEST_FRAMES_PER_WINDOW = 360
+
+export const MAX_BROWSER_REQUESTS_PER_WINDOW = 120
+export const MAX_BROWSER_RESULT_BYTES = 4 * 1024 * 1024
+export const MAX_BROWSER_RESULT_BYTES_PER_WINDOW = 32 * 1024 * 1024
 
 /**
  * Max chars of any single free-form host-request ARG that is not a message body

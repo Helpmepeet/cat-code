@@ -45,6 +45,8 @@ import {
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import { isImageSubmitPrompt, validateSubmitPromptBudget } from '../shared/submitBudget.js'
+import { isBrowserVerb } from '../shared/browserPane.js'
+import { MAX_BROWSER_RESULT_BYTES, MAX_BROWSER_RESULT_BYTES_PER_WINDOW } from '../shared/limits.js'
 import {
   isServerFrameKind,
   PROTOCOL_VERSION,
@@ -142,6 +144,7 @@ type SidecarRecord = {
   /** Spawn config to re-apply on restart (per-session cwd + resume id). */
   config?: SpawnConfig
   operationalBuffer: string
+  browserRequests?: Map<string, number>
 }
 
 export type SupervisorEvent =
@@ -249,6 +252,8 @@ export class SidecarSupervisor {
   private readonly stopping = new Map<SessionId, Set<SidecarRecord>>()
   private largeSendWindowStart = 0
   private largeSendBytes = 0
+  private browserSendWindowStart = 0
+  private browserSendBytes = 0
   private questionSendWindowStart = 0
   private questionSendBytes = 0
   private readonly listeners = new Set<(event: SupervisorEvent) => void>()
@@ -608,7 +613,9 @@ export class SidecarSupervisor {
     const encoded = encodeFrame(frame)
     const payloadBytes = encoded.byteLength - 4
     const questionReply = message.type === 'askUserQuestion.reply'
-    if (payloadBytes > (questionReply ? MAX_QUESTION_REPLY_FRAME_BYTES : imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
+    const browserResult = message.type === 'host.result' &&
+      (record.browserRequests?.get(message.requestId) ?? 0) > Date.now()
+    if (payloadBytes > (browserResult ? MAX_BROWSER_RESULT_BYTES : questionReply ? MAX_QUESTION_REPLY_FRAME_BYTES : imageSubmit ? MAX_SUBMIT_FRAME_BYTES : MAX_FRAME_BYTES)) {
       throw new SidecarSendError('bad_request', 'That message is too large to send. Shorten it and try again.')
     }
     // write(false) already accepted the bytes. Admission must happen BEFORE
@@ -620,7 +627,17 @@ export class SidecarSupervisor {
         pending + encoded.byteLength > MAX_PENDING_HOST_INPUT_BYTES) {
       throw new SidecarSendError('bad_request', 'Messages are still being sent. Wait a moment and try again.')
     }
-    if (questionReply) {
+    if (browserResult) {
+      const now = Date.now()
+      if (now < this.browserSendWindowStart || now - this.browserSendWindowStart >= RATE_WINDOW_MS) {
+        this.browserSendWindowStart = now
+        this.browserSendBytes = 0
+      }
+      if (this.browserSendBytes + payloadBytes > MAX_BROWSER_RESULT_BYTES_PER_WINDOW) {
+        throw new SidecarSendError('bad_request', 'Browser images are being sent too quickly. Wait a moment and try again.')
+      }
+      this.browserSendBytes += payloadBytes
+    } else if (questionReply) {
       const now = Date.now()
       if (now < this.questionSendWindowStart || now - this.questionSendWindowStart >= RATE_WINDOW_MS) {
         this.questionSendWindowStart = now
@@ -642,6 +659,7 @@ export class SidecarSupervisor {
       this.largeSendBytes += payloadBytes
     }
     record.socket.write(encoded)
+    if (message.type === 'host.result') record.browserRequests?.delete(message.requestId)
   }
 
   /** Kill and deregister one session's sidecar. */
@@ -990,6 +1008,15 @@ export class SidecarSupervisor {
   }
 
   private emit(event: SupervisorEvent): void {
+    if (event.type === 'frame' && event.frame.kind === 'host.request' && isBrowserVerb(event.frame.verb)) {
+      const record = this.registry.get(event.sessionId)
+      if (record) {
+        const pending = record.browserRequests ??= new Map()
+        const now = Date.now()
+        for (const [id, expires] of pending) if (expires <= now) pending.delete(id)
+        if (pending.size < 120) pending.set(event.frame.requestId, now + 30_000)
+      }
+    }
     for (const listener of this.listeners) {
       listener(event)
     }
