@@ -24,7 +24,7 @@ import type { AssistantMessage } from '../../types/message.js'
 import { extractOutputRedirections } from '../bash/commands.js'
 import { getCwd } from '../cwd.js'
 import { logForDebugging } from '../debug.js'
-import { AbortError, toError } from '../errors.js'
+import { AbortError, errorMessage, toError } from '../errors.js'
 import { logError } from '../log.js'
 import { SandboxManager } from '../sandbox/sandbox-adapter.js'
 import {
@@ -884,9 +884,17 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // Run the auto mode classifier
       // Outcomes are no longer passed in here: they render inline, beneath the
       // call each one reports, so the classifier can correlate them by id.
+      let classifierInputForUse: unknown
+      try {
+        classifierInputForUse = tool.toAutoClassifierInputForUse?.(input, toolUseID)
+      } catch (e) {
+        logForDebugging(
+          `toAutoClassifierInputForUse failed for ${tool.name}: ${errorMessage(e)}`,
+        )
+      }
       const action = formatActionForClassifier(tool.name, input, {
         executionOrigin: getInlineCommandExecutionOrigin(tool.name, input, context, toolUseID),
-      })
+      }, classifierInputForUse)
       setClassifierChecking(toolUseID)
       let classifierResult
       try {

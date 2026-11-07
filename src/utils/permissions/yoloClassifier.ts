@@ -382,7 +382,14 @@ export const YOLO_CLASSIFIER_TOOL_SCHEMA = buildPortedYoloClassifierToolSchema()
 
 type TranscriptBlock =
   | { type: 'text'; text: string }
-  | { type: 'tool_use'; name: string; input: unknown; id?: string }
+  | {
+      type: 'tool_use'
+      name: string
+      input: unknown
+      id?: string
+      /** Engine-resolved projection for the pending action only; never set from history. */
+      classifierInput?: unknown
+    }
   /**
    * A completed call's recorded outcome, rendered on its own line beneath the
    * call it reports. Correlation is by id, so this block only ever follows the
@@ -687,7 +694,7 @@ function toCompactBlock(
     // single-encoded in the jsonStringify wrap below (no double-encode).
     let encoded: unknown
     try {
-      encoded = tool.toAutoClassifierInput(input) ?? input
+      encoded = block.classifierInput ?? tool.toAutoClassifierInput(input) ?? input
     } catch (e) {
       logForDebugging(
         `toAutoClassifierInput failed for ${block.name}: ${errorMessage(e)}`,
@@ -1908,10 +1915,16 @@ export function formatActionForClassifier(
   toolName: string,
   toolInput: unknown,
   autoModeMeta?: AutoModeMetaInput,
+  classifierInput?: unknown,
 ): TranscriptEntry {
   return {
     role: 'assistant',
-    content: [{ type: 'tool_use', name: toolName, input: toolInput }],
+    content: [{
+      type: 'tool_use',
+      name: toolName,
+      input: toolInput,
+      ...(classifierInput === undefined || classifierInput === '' ? {} : { classifierInput }),
+    }],
     autoModeMeta,
   }
 }

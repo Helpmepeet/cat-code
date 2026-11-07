@@ -675,6 +675,18 @@ export type Tool<
    * double-encoding when the caller JSON-wraps the value.
    */
   toAutoClassifierInput(input: z.infer<Input>): unknown
+  /**
+   * The classifier projection for the one call being judged. A tool whose
+   * input names something only its `checkPermissions` can resolve (an opaque
+   * handle or element ref) returns what that check resolved for this
+   * tool-use id. Earlier calls in the classifier transcript still use
+   * `toAutoClassifierInput`. `undefined` or `''` falls back to it, so this
+   * can never skip the classifier.
+   */
+  toAutoClassifierInputForUse?(
+    input: z.infer<Input>,
+    toolUseID: string,
+  ): unknown
   mapToolResultToToolResultBlockParam(
     content: Output,
     toolUseID: string,
