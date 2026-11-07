@@ -197,6 +197,48 @@ export function extractLastJsonStringField(
   return lastValue
 }
 
+type SessionDisplayMetadata = {
+  customTitle?: string
+  aiTitle?: string
+  summary?: string
+  lastPrompt?: string
+}
+
+/**
+ * Read display metadata only from its owning JSONL records. Tool payloads can
+ * contain the same field names, so a field search across a chunk is ambiguous.
+ * Partial head/tail records are ignored; callers retain their bounded reads.
+ */
+export function extractSessionDisplayMetadata(chunk: string): SessionDisplayMetadata {
+  const metadata: SessionDisplayMetadata = {}
+  for (const line of chunk.split('\n')) {
+    // Avoid parsing conversation bodies unless they might be metadata records.
+    if (!/"type"\s*:\s*"(?:custom-title|ai-title|summary|last-prompt)"/.test(line)) continue
+    try {
+      const entry: unknown = JSON.parse(line)
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
+      const record = entry as Record<string, unknown>
+      switch (record.type) {
+        case 'custom-title':
+          if (typeof record.customTitle === 'string') metadata.customTitle = record.customTitle
+          break
+        case 'ai-title':
+          if (typeof record.aiTitle === 'string') metadata.aiTitle = record.aiTitle
+          break
+        case 'summary':
+          if (typeof record.summary === 'string') metadata.summary = record.summary
+          break
+        case 'last-prompt':
+          if (typeof record.lastPrompt === 'string') metadata.lastPrompt = record.lastPrompt
+          break
+      }
+    } catch {
+      // A bounded window or an interrupted append may contain a partial record.
+    }
+  }
+  return metadata
+}
+
 // ---------------------------------------------------------------------------
 // First prompt extraction from head chunk
 // ---------------------------------------------------------------------------

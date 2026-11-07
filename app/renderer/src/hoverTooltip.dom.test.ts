@@ -79,6 +79,28 @@ test('tab tooltips show full title, session name, folder, shortcut and fork stat
   expect(tip()).toBeNull()
 })
 
+test('long tab tooltip titles are visually clamped without truncating accessible text or metadata', async () => {
+  const title = 'A long legitimate session title with detailed context. '.repeat(100)
+  const tab: TabModel = {
+    descriptor: sessionDescriptor('long-title', { title, cwd: '/work/project-name', forked: true, name: 'Bear' }),
+    visual: { label: 'ready', tone: 'live', restartable: false, needsAttention: false },
+  }
+  const tree = await harness.mount(createElement(TabBar, {
+    tabs: [tab], activeSessionId: 'long-title', onSelect: noop, onClose: noop, onRestart: noop, onNewTab: noop,
+  }))
+  await act(async () => { tree.container.querySelector<HTMLElement>('[role="tab"]')!.focus() })
+  const tooltip = tip()!
+  const titleElement = tooltip.firstElementChild!
+  expect(titleElement.classList.contains('line-clamp-4')).toBe(true)
+  expect(titleElement.classList.contains('break-words')).toBe(true)
+  expect(titleElement.textContent).toBe(title)
+  expect(titleElement.getAttribute('aria-hidden')).toBeNull()
+  expect(tooltip.children).toHaveLength(2)
+  const metadata = tooltip.children[1]!
+  expect(metadata.classList.contains('line-clamp-4')).toBe(false)
+  expect(metadata.textContent).toBe('Bearproject-nameForked session⌘1')
+})
+
 test('tabs after the ninth omit shortcuts and managed chats omit empty metadata', async () => {
   const tabs: TabModel[] = Array.from({ length: 10 }, (_, index) => ({
     descriptor: sessionDescriptor(`chat-${index}`, index === 9

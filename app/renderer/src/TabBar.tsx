@@ -528,7 +528,7 @@ function Tab({
       </button>
     </div>
     <HoverTooltip anchor={tooltip.anchor} placement="tab">
-      <div className="break-words">{title}</div>
+      <div className="line-clamp-4 break-words">{title}</div>
       {name || folder || shortcut || descriptor.forked ? (
         <div className="mt-1.5 flex items-center justify-between gap-4 text-[11px] text-text-subtle">
           {/* Each fact is its own chip so name, folder and fork state read as

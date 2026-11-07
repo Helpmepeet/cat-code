@@ -110,6 +110,7 @@ import {
 import {
   extractJsonStringField,
   extractLastJsonStringField,
+  extractSessionDisplayMetadata,
   LITE_READ_BUF_SIZE,
   readHeadAndTail,
   readTranscriptForLoad,
@@ -6717,6 +6718,8 @@ async function readLiteMetadata(
   const teamName = extractJsonStringField(head, 'teamName')
   const agentSetting = extractJsonStringField(head, 'agentSetting')
   const sessionBinding = relocation?.target.binding ?? extractSessionBinding(head)
+  const headDisplay = extractSessionDisplayMetadata(head)
+  const tailDisplay = extractSessionDisplayMetadata(tail)
 
   // Prefer the last-prompt tail entry — captured by extractFirstPrompt at
   // write time (filtered, authoritative) and shows what the user was most
@@ -6724,22 +6727,20 @@ async function readLiteMetadata(
   // last-prompt entries existed. Raw string scrapes of head are last resort
   // and catch array-format content blocks (VS Code <ide_selection> metadata).
   const firstPrompt =
-    extractLastJsonStringField(tail, 'lastPrompt') ||
+    tailDisplay.lastPrompt ||
     extractFirstPromptFromChunk(head) ||
     extractJsonStringFieldPrefix(head, 'content', 200) ||
     extractJsonStringFieldPrefix(head, 'text', 200) ||
     ''
 
-  // Extract tail metadata via string search (last occurrence wins).
-  // User titles (customTitle field, from custom-title entries) win over
-  // AI titles (aiTitle field, from ai-title entries). The distinct field
-  // names mean extractLastJsonStringField naturally disambiguates.
+  // Recorded user titles win over AI titles, even when only the head retains
+  // the user title. Within each window the latest owning record wins.
   const customTitle =
-    extractLastJsonStringField(tail, 'customTitle') ??
-    extractLastJsonStringField(head, 'customTitle') ??
-    extractLastJsonStringField(tail, 'aiTitle') ??
-    extractLastJsonStringField(head, 'aiTitle')
-  const summary = extractLastJsonStringField(tail, 'summary')
+    tailDisplay.customTitle ??
+    headDisplay.customTitle ??
+    tailDisplay.aiTitle ??
+    headDisplay.aiTitle
+  const summary = tailDisplay.summary
   const tag = extractLastJsonStringField(tail, 'tag')
   const gitBranch =
     extractLastJsonStringField(tail, 'gitBranch') ??

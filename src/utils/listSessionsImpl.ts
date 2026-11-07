@@ -17,6 +17,7 @@ import {
   extractFirstPromptFromHead,
   extractJsonStringField,
   extractLastJsonStringField,
+  extractSessionDisplayMetadata,
   findProjectDir,
   getProjectsDir,
   MAX_SANITIZED_LENGTH,
@@ -92,13 +93,14 @@ export function parseSessionInfoFromLite(
   ) {
     return null
   }
-  // User title (customTitle) wins over AI title (aiTitle); distinct
-  // field names mean extractLastJsonStringField naturally disambiguates.
+  const headDisplay = extractSessionDisplayMetadata(head)
+  const tailDisplay = extractSessionDisplayMetadata(tail)
+  // User titles win over AI titles; tool payload fields are not title records.
   const customTitle =
-    extractLastJsonStringField(tail, 'customTitle') ||
-    extractLastJsonStringField(head, 'customTitle') ||
-    extractLastJsonStringField(tail, 'aiTitle') ||
-    extractLastJsonStringField(head, 'aiTitle') ||
+    tailDisplay.customTitle ||
+    headDisplay.customTitle ||
+    tailDisplay.aiTitle ||
+    headDisplay.aiTitle ||
     undefined
   const firstPrompt = extractFirstPromptFromHead(head) || undefined
   // First entry's ISO timestamp → epoch ms. More reliable than
@@ -114,8 +116,8 @@ export function parseSessionInfoFromLite(
   // Head scan is fallback for sessions without a last-prompt entry.
   const summary =
     customTitle ||
-    extractLastJsonStringField(tail, 'lastPrompt') ||
-    extractLastJsonStringField(tail, 'summary') ||
+    tailDisplay.lastPrompt ||
+    tailDisplay.summary ||
     firstPrompt
 
   // Skip metadata-only sessions (no title, no summary, no prompt)

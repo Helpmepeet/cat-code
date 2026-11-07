@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readDisplayTranscriptTail } from './sessionStoragePortable.js'
+import { extractSessionDisplayMetadata, readDisplayTranscriptTail } from './sessionStoragePortable.js'
 
 let directory: string
 let path: string
@@ -13,6 +13,54 @@ beforeEach(() => {
 afterEach(() => rmSync(directory, { recursive: true, force: true }))
 
 const record = (uuid: string, text = '') => JSON.stringify({ uuid, text }) + '\n'
+
+test('display metadata ignores matching fields and nested metadata records in tool payloads', () => {
+  const tool = JSON.stringify({
+    type: 'user',
+    toolUseResult: {
+      summary: 'WebSearch summary',
+      customTitle: 'not a title',
+      aiTitle: 'not an AI title',
+      lastPrompt: 'not a human prompt',
+      nested: { type: 'summary', summary: 'nested metadata lookalike' },
+    },
+  })
+  expect(extractSessionDisplayMetadata(tool)).toEqual({})
+})
+
+test('display metadata reads top-level fields from owning records, latest string wins', () => {
+  const chunk = [
+    { type: 'summary', summary: 'old summary' },
+    { type: 'summary', summary: 'real summary', nested: { summary: 'not this' } },
+    { type: 'custom-title', customTitle: 'User "title"\nnext line' },
+    { type: 'ai-title', aiTitle: 'AI title' },
+    { type: 'last-prompt', lastPrompt: 'latest prompt' },
+    { type: 'summary', summary: { text: 'invalid value' } },
+    { type: 'custom-title', customTitle: null },
+  ].map(entry => JSON.stringify(entry)).join('\n')
+  expect(extractSessionDisplayMetadata(chunk)).toEqual({
+    summary: 'real summary',
+    customTitle: 'User "title"\nnext line',
+    aiTitle: 'AI title',
+    lastPrompt: 'latest prompt',
+  })
+})
+
+test('display metadata tolerates reordered fields, whitespace and truncated window edges', () => {
+  const chunk = [
+    'summary":"partial leading record"}',
+    '  { "customTitle": "older title", "type": "custom-title" }\r',
+    '{ "type" : "custom-title", "customTitle" : "" }',
+    '{"summary":"complete final record","type":"summary"}',
+    '{"type":"summary","summary":"incomplete',
+  ].join('\n')
+  expect(extractSessionDisplayMetadata(chunk)).toEqual({
+    customTitle: '',
+    summary: 'complete final record',
+  })
+  expect(extractSessionDisplayMetadata('{"type":"summary","summary":"no newline"}'))
+    .toEqual({ summary: 'no newline' })
+})
 
 test('scans a long reachable suffix once and stops before unrelated history', async () => {
   const prefix = record('old', 'x'.repeat(32 * 1024))

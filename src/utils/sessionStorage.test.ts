@@ -1769,6 +1769,43 @@ describe('session storage', () => {
     expect(logs[0]!.modified.getTime()).toBeLessThan(driftedMtime.getTime())
   })
 
+  test.each([false, true])('catalog display metadata ignores tool summaries (recorded metadata: %s)', async recorded => {
+    const transcript = [
+      {
+        type: 'user',
+        uuid: randomUUID(),
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        message: { role: 'user', content: 'Help deploy the shop app' },
+      },
+      ...(recorded ? [
+        { type: 'custom-title', sessionId, customTitle: 'Shop deployment' },
+        { type: 'summary', leafUuid: randomUUID(), summary: 'Real session summary' },
+        { type: 'last-prompt', sessionId, lastPrompt: 'What hosting is free?' },
+      ] : []),
+      {
+        type: 'user',
+        sessionId,
+        toolUseResult: {
+          summary: 'You can run a Gin server on Vercel. '.repeat(100),
+          customTitle: 'Tool title',
+          aiTitle: 'Tool AI title',
+          lastPrompt: 'Tool prompt',
+          nested: { type: 'summary', summary: 'Nested tool summary' },
+        },
+      },
+    ].map(entry => JSON.stringify(entry)).join('\n')
+    await writeFile(getTranscriptPathForSession(sessionId), `${transcript}\n`)
+
+    const { logs } = await enrichLogs(await getSessionFilesLite(tempDir), 0, 1)
+    expect(logs).toHaveLength(1)
+    expect(logs[0]?.customTitle).toBe(recorded ? 'Shop deployment' : undefined)
+    expect(logs[0]?.summary).toBe(recorded ? 'Real session summary' : undefined)
+    expect(logs[0]?.firstPrompt).toBe(recorded ? 'What hosting is free?' : 'Help deploy the shop app')
+  })
+
   test('enrichment retains the transcript entrypoint for catalog eligibility', async () => {
     const transcript = {
       type: 'user',
