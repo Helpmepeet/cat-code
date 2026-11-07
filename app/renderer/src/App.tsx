@@ -49,6 +49,7 @@ import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
 import { captureFilePaneScroll, disposeFilePaneSession, getFilePaneSession, paneTargetLabel, requestOpenFile, toggleFilePane, useFilePaneSession } from './filePaneState.js'
+import { installBrowserPaneSubscription } from './browserPaneState.js'
 import { newestPaneFilePath, paneFileIndex } from './transcriptPaneFiles.js'
 import { FilePaneFilesContext } from './filePaneFilesContext.js'
 import { peekWorkspaceFileAvailability, requestWorkspaceFileAvailability, subscribeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
@@ -526,6 +527,9 @@ function defaultPromptDraftStorage(): Pick<Storage, 'getItem' | 'setItem'> | nul
 }
 
 export function App() {
+  useEffect(() => {
+    if (typeof window.catcode.browserPaneSnapshot === 'function' && typeof window.catcode.onBrowserPane === 'function') return installBrowserPaneSubscription()
+  }, [])
   const { mode: transcriptMode } = useContext(TranscriptModeContext)
   const [usageDashboard, dispatchUsageDashboard] = useReducer(reduceUsageDashboard, initialUsageDashboardState)
   const [usageSelection, setUsageSelection] = useState(initialUsageSelection)

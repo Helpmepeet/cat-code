@@ -1,8 +1,10 @@
-import { app, protocol, session, WebContentsView } from 'electron'
+import { app, nativeImage, protocol, session, WebContentsView } from 'electron'
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { BROWSER_LOCAL_SCHEME } from './browserPanePolicy.js'
-import type { BrowserPaneAdapter, BrowserPaneViewHooks, BrowserNavigationOptions } from './browserPaneHost.js'
+import type { BrowserPaneAdapter, BrowserPaneView, BrowserPaneViewHooks, BrowserNavigationOptions } from './browserPaneHost.js'
+import type { BrowserPanePresentationNative } from './browserPanePresentation.js'
+import { BROWSER_SCREENSHOT_MAX_PIXELS } from './browserPaneCdp.js'
 
 /** Call before app.ready, alongside the application's other privileged schemes. */
 export function registerBrowserPaneScheme(otherSchemes: Electron.CustomScheme[] = []): void {
@@ -61,17 +63,18 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
       wc.debugger.on('message', (_event, method, params, sessionId) => hooks?.cdpEvent(method, params, sessionId))
       let requested: string | undefined
       ses.webRequest.onBeforeRequest((details, callback) => {
-        const explicit = details.resourceType === 'mainFrame' && details.url === requested
         const source = details.frame?.url || wc.getURL()
-        callback({ cancel: !policy.allowRequest(id, details.url, explicit ? '' : source) })
+        callback({ cancel: !policy.allowRequest(id, details.url, source, details.resourceType === 'mainFrame' ? requested : undefined) })
       })
       wc.setWindowOpenHandler(() => ({ action: 'deny' }))
       wc.on('select-bluetooth-device', (event, _devices, callback) => { event.preventDefault(); callback('') })
       wc.on('login', (event, _details, _auth, callback) => { event.preventDefault(); callback() })
       wc.on('certificate-error', (event, _url, _error, _cert, callback) => { event.preventDefault(); callback(false) })
-      wc.on('will-navigate', (event, url) => { if (!policy.allowRequest(id, url, wc.getURL())) event.preventDefault() })
-      wc.on('will-redirect', (event, url) => { if (!policy.allowRequest(id, url, wc.getURL())) event.preventDefault() })
+      wc.on('will-navigate', (event, url) => { if (!policy.allowRequest(id, url, wc.getURL(), requested)) event.preventDefault() })
+      wc.on('will-redirect', (event, url) => { if (!policy.allowRequest(id, url, wc.getURL(), event.isMainFrame ? requested : undefined)) event.preventDefault() })
       try {
+        // An unattached view has no page renderer until its first document is loaded.
+        await wc.loadURL('about:blank')
         wc.debugger.attach('1.3')
         await wc.debugger.sendCommand('Page.enable')
         await wc.debugger.sendCommand('Page.setInterceptFileChooserDialog', { enabled: true })
@@ -106,8 +109,10 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
         debugger: wc.debugger,
         setHooks: value => { hooks = value },
         getURL: () => wc.getURL(),
+        history: () => ({ canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward() }),
         capturePage: async maxPixels => {
-          let image = await wc.capturePage()
+          // Normalize Retina representations so these limits describe encoded pixels, not DIPs.
+          let image = nativeImage.createFromBuffer((await wc.capturePage()).toPNG(), { scaleFactor: 1 })
           let { width, height } = image.getSize()
           const scale = Math.min(1, Math.sqrt(maxPixels / (width * height)), 4096 / width, 4096 / height)
           if (scale < 1) image = image.resize({ width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) })
@@ -123,12 +128,58 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
           return { data, width, height }
         },
         navigate: (url, options) => navigation(async () => { requested = url; try { await wc.loadURL(url) } finally { requested = undefined } }, options),
-        back: options => navigation(async () => { if (wc.navigationHistory.canGoBack()) await historyNavigation(() => wc.navigationHistory.goBack()) }, options),
-        forward: options => navigation(async () => { if (wc.navigationHistory.canGoForward()) await historyNavigation(() => wc.navigationHistory.goForward()) }, options),
+        back: options => navigation(async () => {
+          if (!wc.navigationHistory.canGoBack()) return
+          requested = wc.navigationHistory.getEntryAtIndex(wc.navigationHistory.getActiveIndex() - 1).url
+          try { await historyNavigation(() => wc.navigationHistory.goBack()) } finally { requested = undefined }
+        }, options),
+        forward: options => navigation(async () => {
+          if (!wc.navigationHistory.canGoForward()) return
+          requested = wc.navigationHistory.getEntryAtIndex(wc.navigationHistory.getActiveIndex() + 1).url
+          try { await historyNavigation(() => wc.navigationHistory.goForward()) } finally { requested = undefined }
+        }, options),
         reload: options => navigation(() => historyNavigation(() => wc.reload()), options),
         destroy: () => { if (!wc.isDestroyed()) wc.close({ waitForBeforeUnload: false }) },
         clearData: () => ses.clearData(),
       }
+    },
+  }
+}
+
+/** Native operations kept outside the Electron-free presentation coordinator. */
+export function createBrowserPanePresentationNative(): BrowserPanePresentationNative {
+  const owners = new WeakMap<BrowserPaneView, Electron.BrowserWindow>()
+  const native = (view: import('./browserPaneHost.js').BrowserPaneView): Electron.WebContentsView => {
+    if (!view.nativeView) throw new Error('Browser native view is unavailable')
+    return view.nativeView as Electron.WebContentsView
+  }
+  return {
+    attach: (window, view) => {
+      const target = window as Electron.BrowserWindow
+      if (target.isDestroyed()) throw new Error('Browser window is closed')
+      target.contentView.addChildView(native(view))
+      owners.set(view, target)
+    },
+    detach: (window, view) => {
+      const target = window as Electron.BrowserWindow
+      if (!target.isDestroyed()) target.contentView.removeChildView(native(view))
+      owners.delete(view)
+    },
+    bounds: (view, rect) => {
+      const owner = owners.get(view)
+      if (!owner || owner.isDestroyed()) throw new Error('Browser window is closed')
+      // Renderer rectangles are CSS pixels; child-view bounds are device-independent pixels.
+      const zoom = owner.webContents.getZoomFactor()
+      const x = Math.round(rect.x * zoom), y = Math.round(rect.y * zoom)
+      native(view).setBounds({ x, y,
+        width: Math.round((rect.x + rect.width) * zoom) - x,
+        height: Math.round((rect.y + rect.height) * zoom) - y })
+    },
+    visible: (view, visible) => { if (!native(view).webContents.isDestroyed()) native(view).setVisible(visible) },
+    capture: async view => {
+      if (!view.capturePage) throw new Error('Browser capture is unavailable')
+      const image = await view.capturePage(BROWSER_SCREENSHOT_MAX_PIXELS)
+      return `data:image/png;base64,${image.data}`
     },
   }
 }

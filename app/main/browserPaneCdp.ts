@@ -55,15 +55,38 @@ export class BrowserPaneCdp {
   private nextRef = 0
   private refs = new Map<string, number>()
   private dialogs: string[] = []
+  private accent = { r: 244, g: 114, b: 182 }
+  private overlayEnabled = false
+  private marked = false
   constructor(private readonly deps: {
     command: BrowserCdpCommand
     url: () => string
+    displayUrl?: () => Promise<string>
     capture: (maxPixels: number) => Promise<BrowserCapturedPage>
     onDialog?: (report: { type: string; message: string; accepted: boolean }) => void
     onNativeDialog?: (open: boolean) => void
     nextGeneration?: () => number
   }) { this.generation = deps.nextGeneration?.() ?? 1 }
   navigated(): void { this.generation = this.deps.nextGeneration?.() ?? this.generation + 1; this.nextRef = 0; this.refs.clear() }
+  setAccent(accent: { r: number; g: number; b: number }): void {
+    if (Object.values(accent).every(value => Number.isInteger(value) && value >= 0 && value <= 255)) this.accent = { ...accent }
+  }
+  async clearMark(gate: BrowserDispatchGate): Promise<void> {
+    if (!this.marked) return
+    await this.send('Overlay.hideHighlight', {}, gate)
+    this.marked = false
+  }
+  private async markPoint(x: number, y: number, gate: BrowserDispatchGate): Promise<void> {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return
+    if (!this.overlayEnabled) {
+      await this.send('DOM.enable', {}, gate)
+      await this.send('Overlay.enable', {}, gate)
+      this.overlayEnabled = true
+    }
+    await this.send('Overlay.highlightRect', { x: Math.max(0, Math.round(x - 7)), y: Math.max(0, Math.round(y - 7)), width: 14, height: 14,
+      color: { ...this.accent, a: 0.16 }, outlineColor: { ...this.accent, a: 0.9 } }, gate)
+    this.marked = true
+  }
   private async send(method: string, params: any, gate: BrowserDispatchGate, sessionId?: string): Promise<any> {
     gate()
     const result = await this.deps.command(method, params, sessionId)
@@ -162,10 +185,10 @@ export class BrowserPaneCdp {
     if ((input.text?.length ?? 0) > 16_000 || (input.value?.length ?? 0) > 4_000) throw new Error('Browser input is too long')
     if (input.action === 'scroll' && input.deltaX === undefined && input.deltaY === undefined) throw new Error('Scroll needs a delta')
   }
-  private description(input: BrowserActInput, details?: any): string {
+  private async description(input: BrowserActInput, details?: any): Promise<string> {
     const target = details ? `${details.role || 'element'} ${JSON.stringify(details.name || '')}` : 'the next confirm'
     const action = input.action === 'type' ? `type ${JSON.stringify(input.text)} into` : input.action === 'key' ? `press ${input.key} on` : input.action === 'select' ? `select ${JSON.stringify(input.value)} in` : input.action === 'acceptConfirm' ? 'accept' : input.action
-    const description = `${action} ${target} on ${this.deps.url()}`
+    const description = `${action} ${target} on ${await this.deps.displayUrl?.() ?? this.deps.url()}`
     return description.length > 7800 ? `${description.slice(0, 7780)} [truncated]` : description
   }
   async describe(input: BrowserDescribeInput, gate: BrowserDispatchGate): Promise<BrowserRequestValues['browser.describe']> {
@@ -175,9 +198,9 @@ export class BrowserPaneCdp {
       this.validate(act)
       const target = act.action === 'acceptConfirm' ? undefined : await this.target(act, gate)
       if (target?.details.password && (act.action === 'type' || act.action === 'key')) throw new Error('Typing into password fields is refused; take over to type it')
-      description = this.description(act, target?.details)
-    } else if (input.operation === 'navigate') description = input.navigate!.action === 'navigate' ? `navigate to ${input.navigate!.target}` : `${input.navigate!.action} on ${this.deps.url()}`
-    else description = `${input.operation} on ${this.deps.url()}`
+      description = await this.description(act, target?.details)
+    } else if (input.operation === 'navigate') description = input.navigate!.action === 'navigate' ? `navigate to ${input.navigate!.target}` : `${input.navigate!.action} on ${await this.deps.displayUrl?.() ?? this.deps.url()}`
+    else description = `${input.operation} on ${await this.deps.displayUrl?.() ?? this.deps.url()}`
     gate()
     return { description: description.slice(0, 8192), url: this.deps.url() }
   }
@@ -186,13 +209,14 @@ export class BrowserPaneCdp {
     let description: string
     if (input.action === 'acceptConfirm') {
       await this.send('Runtime.evaluate', { expression: BROWSER_ARM_CONFIRM_SCRIPT }, gate)
-      description = this.description(input)
+      description = await this.description(input)
     } else {
       const generation = this.generation
       const target = await this.target(input, gate, input.action === 'click' || input.action === 'scroll')
       if (target.details.password && (input.action === 'type' || input.action === 'key')) throw new Error('Typing into password fields is refused; take over to type it')
-      description = this.description(input, target.details)
+      description = await this.description(input, target.details)
       const x = input.x ?? target.details.x, y = input.y ?? target.details.y
+      let markX = x, markY = y
       if ((input.action === 'click' || input.action === 'scroll') && (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0)) throw new Error('The browser target has no usable point')
       const actionGate = () => { gate(); if (generation !== this.generation) throw new Error('The page changed before the action completed') }
       const dispatch = (method: string, params: any) => { actionGate(); return this.send(method, params, gate) }
@@ -205,6 +229,7 @@ export class BrowserPaneCdp {
         await dispatch('Runtime.callFunctionOn', { objectId: target.objectId, functionDeclaration: 'function() { this.focus(); }' })
         // Focusing can run page code. Inspect the actual focused field before any typing.
         const focused = await this.target({ action: input.action }, actionGate)
+        markX = focused.details.x; markY = focused.details.y
         if (focused.details.password && (input.action === 'type' || input.action === 'key')) throw new Error('Typing into password fields is refused; take over to type it')
         if (input.action === 'type') await dispatch('Input.insertText', { text: input.text })
         if (input.action === 'key') {
@@ -214,6 +239,7 @@ export class BrowserPaneCdp {
         }
         if (input.action === 'select') await dispatch('Runtime.callFunctionOn', { objectId: target.objectId, functionDeclaration: `function(value) { if (this.tagName !== 'SELECT') throw new Error('Target is not a select'); if (![...this.options].some(o => o.value === value)) throw new Error('Select value is unavailable'); this.value = value; this.dispatchEvent(new Event('input', { bubbles: true })); this.dispatchEvent(new Event('change', { bubbles: true })); }`, arguments: [{ value: input.value }] })
       }
+      if (generation === this.generation) await this.markPoint(markX, markY, gate)
     }
     if (this.dialogs.length) description += `; ${this.dialogs.splice(0).join('; ')}`
     return { url: this.deps.url(), description: description.length > 8192 ? `${description.slice(0, 8170)} [truncated]` : description }

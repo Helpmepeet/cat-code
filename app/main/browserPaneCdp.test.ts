@@ -110,3 +110,23 @@ test('dialog reports reach the next read without opening or answering native dia
   expect((await cdp.read(() => {})).snapshot).toContain('[dialog] alert: Saved')
   expect((await cdp.read(() => {})).snapshot).not.toContain('[dialog]')
 })
+
+test('last action point uses one accent-colored highlightRect and local descriptions use the human path', async () => {
+  const calls: { method: string; params: any }[] = []
+  const cdp = new BrowserPaneCdp({
+    command: async (method, params: any) => {
+      calls.push({ method, params })
+      if (method === 'Runtime.evaluate') return { result: { objectId: 'target' } }
+      if (method === 'Runtime.callFunctionOn') return { result: { value: { x: 10, y: 20, role: 'button', name: 'Save' } } }
+      return {}
+    },
+    url: () => 'cat-browser-local://opaque/index.html', displayUrl: async () => '/project/index.html',
+    capture: async () => ({ data: '', width: 1, height: 1 }),
+  })
+  cdp.setAccent({ r: 100, g: 110, b: 120 })
+  expect((await cdp.act({ action: 'click', x: 10, y: 20 }, () => {})).description).toContain('/project/index.html')
+  const marks = calls.filter(call => call.method === 'Overlay.highlightRect')
+  expect(marks).toHaveLength(1)
+  expect(marks[0]!.params.outlineColor).toMatchObject({ r: 100, g: 110, b: 120 })
+  expect(calls.some(call => call.method === 'Overlay.highlightNode')).toBe(false)
+})

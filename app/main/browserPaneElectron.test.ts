@@ -1,0 +1,86 @@
+import { expect, test } from 'bun:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// Run the Electron mock in a child so its module binding cannot leak into other suites.
+async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), 'browser-renderer-start-'))
+  const source = `
+    import { mock } from 'bun:test';
+    import { EventEmitter } from 'node:events';
+    const events = [];
+    const bounds = [];
+    let started = false;
+    class Image {
+      constructor(width, height, scale = 1) { this.width = width; this.height = height; this.scale = scale; }
+      getSize() { return { width: this.width, height: this.height }; }
+      resize({width, height}) { return new Image(width, height, this.scale); }
+      toPNG() {
+        const png = Buffer.alloc(24);
+        png.writeUInt32BE(this.width * this.scale, 16);
+        png.writeUInt32BE(this.height * this.scale, 20);
+        return png;
+      }
+    }
+    class Contents extends EventEmitter {
+      debugger = Object.assign(new EventEmitter(), {
+        attach() {},
+        async sendCommand(method) {
+          events.push(method);
+          if (!started) throw new Error('CDP page command sent before renderer startup');
+          return {};
+        },
+      });
+      async loadURL(url) { events.push('load:' + url); started = true; }
+      async capturePage() { return new Image(1400, 1400, 2); }
+      getURL() { return 'about:blank'; }
+      setWindowOpenHandler() {}
+      isDestroyed() { return false; }
+      close() {}
+    }
+    const partition = new Proxy({ protocol: { handle() {} }, webRequest: { onBeforeRequest() {} } }, {
+      get(target, key) { return target[key] ?? (() => {}); },
+    });
+    mock.module('electron', () => ({
+      app: { getPath: () => process.env.BROWSER_RENDERER_TEST_ROOT },
+      protocol: { registerSchemesAsPrivileged() {} },
+      session: { fromPartition: () => partition },
+      nativeImage: { createFromBuffer: (png, options) => new Image(png.readUInt32BE(16), png.readUInt32BE(20), options?.scaleFactor ?? 1) },
+      WebContentsView: class { webContents = new Contents(); setBounds(rect) { bounds.push(rect); } setVisible() {} },
+    }));
+    const { createBrowserPaneElectronAdapter, createBrowserPanePresentationNative } = await import(${JSON.stringify(new URL('./browserPaneElectron.ts', import.meta.url).pathname)});
+    const { BrowserPanePolicy } = await import(${JSON.stringify(new URL('./browserPanePolicy.ts', import.meta.url).pathname)});
+    const view = await createBrowserPaneElectronAdapter().create('probe', new BrowserPanePolicy({ folders: () => null, devOrigin: null }));
+    const capture = await view.capturePage(2000000);
+    const png = Buffer.from(capture.data, 'base64');
+    const presentation = createBrowserPanePresentationNative();
+    presentation.attach({ isDestroyed: () => false, contentView: { addChildView() {} }, webContents: { getZoomFactor: () => 1.1 } }, view);
+    presentation.bounds(view, { x: 100, y: 50, width: 600, height: 400 });
+    console.log(JSON.stringify({ events, capture, pixels: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, bounds: bounds.at(-1) }));
+  `
+  try {
+    const child = Bun.spawn([process.execPath, '-e', source], {
+      stdout: 'pipe', stderr: 'pipe', env: { ...process.env, BROWSER_RENDERER_TEST_ROOT: root },
+    })
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+    expect(code, stderr).toBe(0)
+    return JSON.parse(stdout) as { events: string[]; capture: { width: number; height: number }; pixels: { width: number; height: number }; bounds: { x: number; y: number; width: number; height: number } }
+  } finally { await rm(root, { recursive: true, force: true }) }
+}
+
+test('a new browser view starts its blank renderer before sending CDP page commands', async () => {
+  const { events } = await fixture()
+  expect(events.indexOf('load:about:blank')).toBeGreaterThanOrEqual(0)
+  expect(events.indexOf('load:about:blank')).toBeLessThan(events.indexOf('Page.enable'))
+})
+
+test('native view bounds convert renderer CSS pixels using the app zoom factor', async () => {
+  expect((await fixture()).bounds).toEqual({ x: 110, y: 55, width: 660, height: 440 })
+})
+
+test('Retina screenshots are capped in encoded pixels with matching image dimensions', async () => {
+  const { capture, pixels } = await fixture()
+  expect(pixels).toEqual({ width: capture.width, height: capture.height })
+  expect(pixels.width * pixels.height).toBeLessThanOrEqual(2_000_000)
+})

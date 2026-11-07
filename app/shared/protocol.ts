@@ -2,6 +2,7 @@ import type { FilePreviewDocumentRequest, FilePreviewDocumentResult } from './pr
 import type { FilePreviewPrepareResult, FilePreviewDescriptor, FilePreviewEvent, FilePreviewScroll, FilePreviewSource, FilePreviewApplications, LocalhostPreviewResult, PreviewBrowserTarget } from './filePreview.js'
 import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { BrowserRequestArgs, BrowserRequestValues } from './browserPane.js'
+import type { BrowserPaneSnapshot, BrowserPaneEvent, BrowserPaneLayout, BrowserPaneCommand, BrowserPaneCommandResult } from './browserPanePresentation.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
 /**
@@ -4106,6 +4107,10 @@ export type OpenWorkspaceFileTarget =
 export type SaveDiagnosticsResult = 'saved' | 'cancelled' | 'failed'
 
 export type CatCodeBridge = {
+  browserPaneSnapshot(): Promise<BrowserPaneSnapshot[]>
+  onBrowserPane(callback: (event: BrowserPaneEvent) => void): () => void
+  browserPaneCommand(input: BrowserPaneCommand): Promise<BrowserPaneCommandResult>
+  reportBrowserPaneLayout(input: BrowserPaneLayout): void
   openExternalUrl(url: string): Promise<boolean>
   prepareFilePreview(appSessionId: SessionId, path: string, source?: FilePreviewSource, textWindow?: 'start' | 'end'): Promise<FilePreviewPrepareResult>
   prepareLocalhostPreview(appSessionId: SessionId, url: string): Promise<LocalhostPreviewResult>

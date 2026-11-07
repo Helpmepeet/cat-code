@@ -3,6 +3,8 @@ import { SubagentDock } from './SubagentDock.js'
 import { SubagentSidePanel } from './SubagentSidePanel.js'
 import { ToolInspector } from './ToolInspector.js'
 import { FilePane } from './FilePane.js'
+import { BrowserPane, BrowserGlobe } from './BrowserPane.js'
+import { browserPaneLabel } from './browserPaneState.js'
 import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OUTPUT_WIDTH_STEP, writeToolOutputWidth, type OpenToolOutput } from './toolOutputPanel.js'
 import { FilePaneContext } from './filePaneContext.js'
 import {
@@ -109,6 +111,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   }
   const occupants: Array<{ kind: SlotOccupant; label: string }> = [
     ...(state.open ? [{ kind: 'file' as const, label: state.file ? paneTargetLabel(state.file.path) : 'File' }] : []),
+    ...(state.browser ? [{ kind: 'browser' as const, label: browserPaneLabel(state.browser) }] : []),
     ...(worker ? [{ kind: 'worker' as const, label: worker.name || worker.task }] : []),
     ...(outputRow ? [{ kind: 'output' as const, label: 'Full output' }] : []),
   ]
@@ -143,6 +146,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
               else if (event.key === 'Escape') {
                 if (state.visible === 'file') { closeFilePane(sessionId); onFocusComposer?.() }
                 else if (state.visible === 'output') closeOutput()
+                else if (state.visible === 'browser') void window.catcode.browserPaneCommand({ appSessionId: sessionId, command: 'close' })
                 else closeWorker()
               } else return
               event.preventDefault()
@@ -158,7 +162,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
                 showSlotOccupant(sessionId, next.kind)
                 const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
                 tabs?.[occupants.findIndex(item => item.kind === next.kind)]?.focus()
-              }}>{occupant.kind === 'file' ? <ActionFileIcon /> : occupant.kind === 'worker' && worker ?
+              }}>{occupant.kind === 'file' ? <ActionFileIcon /> : occupant.kind === 'browser' ? <BrowserGlobe /> : occupant.kind === 'worker' && worker ?
                 <AgentFace axes={faces.faceFor(worker.agentId, worker.name).axes} fill={faces.faceFor(worker.agentId, worker.name).fill} size={13} /> : <span aria-hidden>▤</span>}<span>{occupant.label}</span></button>)}
           </nav> : null}
           {worker ? <div className="subagent-slot-content" hidden={state.visible !== 'worker'}><SubagentSidePanel key={worker.agentId} worker={worker}
@@ -167,6 +171,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
           {output && outputRow ? <div className="subagent-slot-content" hidden={state.visible !== 'output'}><ToolInspector key={`${output.id}:${output.request}`} row={outputRow} cwd={cwd}
             embedded initialFileIndex={output.fileIndex} onClose={closeOutput} /></div> : null}
           {state.open ? <div className="subagent-slot-content" hidden={state.visible !== 'file'}><FilePane appSessionId={sessionId} cwd={cwd} onFocusComposer={onFocusComposer} /></div> : null}
+          {state.browser ? <div className="subagent-slot-content" hidden={state.visible !== 'browser'}><BrowserPane state={state.browser} active={state.visible === 'browser'} /></div> : null}
         </div> : null}
       </div>
     </div>

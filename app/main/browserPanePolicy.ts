@@ -53,8 +53,13 @@ export class BrowserPanePolicy {
       return contains(dir, path) && await this.authorized(id, path) && (await stat(path)).isFile() ? path : null
     } catch { return null }
   }
-  allowRequest(id: string, target: string, source: string): boolean {
+  /** Revalidates canonical containment before exposing a local document externally. */
+  localPath(id: string, url: string): Promise<string | null> { return this.resolveLocal(id, url) }
+  async displayUrl(id: string, url: string): Promise<string> { return await this.localPath(id, url) ?? url }
+  allowRequest(id: string, target: string, source: string, navigationTarget?: string): boolean {
     try {
+      // Main supplies this only for an explicitly requested top-level navigation.
+      if (navigationTarget && (target === navigationTarget || this.loopback(navigationTarget) && this.loopback(target))) source = ''
       const url = new URL(target)
       const local = url.protocol === `${BROWSER_LOCAL_SCHEME}:` && !!this.directories.get(id)?.has(url.hostname)
       if (source.startsWith(`${BROWSER_LOCAL_SCHEME}:`)) return local && new URL(source).host === url.host

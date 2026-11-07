@@ -1,4 +1,5 @@
 import { CH_OPEN_EXTERNAL_URL } from '../shared/ipcChannels.js'
+import { CH_BROWSER_PANE_SNAPSHOT, CH_BROWSER_PANE_COMMAND, CH_BROWSER_PANE_LAYOUT, CH_BROWSER_PANE_EVENT } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_CAPTURE } from '../shared/ipcChannels.js'
 import { CH_LOCALHOST_PREVIEW_PREPARE, CH_LOCALHOST_PREVIEW_NAVIGATE, CH_PREVIEW_BLOCKED_NAVIGATION_OPEN } from '../shared/ipcChannels.js'
 import { CH_FILE_PREVIEW_DOCUMENT_READ, CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMIT, CH_FILE_PREVIEW_RELEASE, CH_FILE_PREVIEW_EVENT, CH_FILE_PREVIEW_SCROLL_READ, CH_FILE_PREVIEW_SCROLL_RESTORE, CH_FILE_PREVIEW_APPLICATIONS, CH_FILE_PREVIEW_APPLICATION_CHOOSE } from '../shared/ipcChannels.js'
@@ -653,6 +654,23 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
   captureLocalhostPreview(id) {
     const payload = { id }; sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_LOCALHOST_PREVIEW_CAPTURE, payload)
+  },
+  browserPaneSnapshot() {
+    sendGuard.assertAllowed({ browserPaneSnapshot: true })
+    return ipcRenderer.invoke(CH_BROWSER_PANE_SNAPSHOT)
+  },
+  browserPaneCommand(input) {
+    sendGuard.assertAllowed(input)
+    return ipcRenderer.invoke(CH_BROWSER_PANE_COMMAND, input)
+  },
+  reportBrowserPaneLayout(input) {
+    sendGuard.assertAllowed(input)
+    ipcRenderer.send(CH_BROWSER_PANE_LAYOUT, input)
+  },
+  onBrowserPane(callback) {
+    const listener = (_event: unknown, value: import('../shared/browserPanePresentation.js').BrowserPaneEvent) => callback(value)
+    ipcRenderer.on(CH_BROWSER_PANE_EVENT, listener)
+    return () => { ipcRenderer.removeListener(CH_BROWSER_PANE_EVENT, listener) }
   },
   openExternalUrl(url) {
     const payload = { url }; sendGuard.assertAllowed(payload)

@@ -6,8 +6,9 @@ import { defaultViewPreferenceStorage, readViewPreference, writeViewPreference }
 import { findOpenedFile, rememberOpenedFile, updateOpenedFileScroll, type OpenedPaneFiles } from './filePaneOpened.js'
 import { disposeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { readToolOutputWidth } from './toolOutputPanel.js'
+import type { BrowserPaneSnapshot } from '../../shared/browserPanePresentation.js'
 
-export type SlotOccupant = 'file' | 'worker' | 'output'
+export type SlotOccupant = 'file' | 'worker' | 'output' | 'browser'
 export type FilePaneScroll = FilePreviewScroll & { markdown?: MarkdownReadingPosition; topLine?: number; pdf?: { page: number; zoom: number; fitWidth: boolean }; table?: { row: number; column: number; sheet?: string; mode?: 'source' | 'table' }; textWindow?: 'start' | 'end' }
 export type PreviewOpenResult = { ok: true } | { ok: false; message: string }
 export type FilePaneHistoryEntry = { path: string; scroll: FilePaneScroll; routeKey?: string; baseUrl?: string; previewId?: string }
@@ -24,6 +25,7 @@ export type FilePaneSession = {
   visible: SlotOccupant | null
   worker: SubagentDockRow | null
   output: FilePaneOutput | null
+  browser: BrowserPaneSnapshot | null
   width: number | null
   history: FilePaneHistoryEntry[]
   forward: FilePaneHistoryEntry[]
@@ -33,7 +35,7 @@ export type FilePaneSession = {
 }
 const EMPTY: FilePaneSession = {
   opened: new Map(), requestedPath: null, lineTarget: null, open: false, file: null, committedFile: null, lastPath: null, visible: null,
-  worker: null, output: null, width: null, history: [], forward: [], scroll: { x: 0, y: 0 }, note: null, checkpoint: null,
+  worker: null, output: null, browser: null, width: null, history: [], forward: [], scroll: { x: 0, y: 0 }, note: null, checkpoint: null,
 }
 const sessions = new Map<string, FilePaneSession>()
 const listeners = new Map<string, Set<() => void>>()
@@ -86,9 +88,9 @@ export function useFilePaneSession(id: string): FilePaneSession {
 export function updateFilePaneSession(id: string, patch: Partial<FilePaneSession>): void {
   const previous = getFilePaneSession(id)
   const next = { ...previous, ...patch }
-  if (!next.open && !next.worker && !next.output) { next.visible = null; next.width = null }
-  else if (next.visible === 'file' && !next.open || next.visible === 'worker' && !next.worker || next.visible === 'output' && !next.output) {
-    next.visible = next.open ? 'file' : next.worker ? 'worker' : 'output'
+  if (!next.open && !next.worker && !next.output && !next.browser) { next.visible = null; next.width = null }
+  else if (next.visible === 'file' && !next.open || next.visible === 'worker' && !next.worker || next.visible === 'output' && !next.output || next.visible === 'browser' && !next.browser) {
+    next.visible = next.open ? 'file' : next.worker ? 'worker' : next.output ? 'output' : 'browser'
   }
   if ((Object.keys(next) as Array<keyof FilePaneSession>).every(key => Object.is(previous[key], next[key]))) return
   sessions.set(id, next)

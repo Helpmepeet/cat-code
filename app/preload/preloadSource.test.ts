@@ -9,6 +9,26 @@ function readChannelNames(): string {
   return readFileSync(new URL('../shared/ipcChannels.ts', import.meta.url), 'utf8')
 }
 
+test('browser pane controls and layout use fixed guarded channels with no renderer URL', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const sent: unknown[] = []
+  const guarded: unknown[] = []
+  for (const [method, channel] of [['browserPaneCommand', 'CH_BROWSER_PANE_COMMAND'], ['reportBrowserPaneLayout', 'CH_BROWSER_PANE_LAYOUT']] as const) {
+    const start = source.indexOf(`  ${method}(`)
+    const end = source.indexOf('\n  },', start)
+    if (start < 0 || end < 0) throw new Error(`Missing ${method} sender`)
+    const sender = new Function('ipcRenderer', 'sendGuard', channel, `return ({${source.slice(start, end + 4)}}).${method}`)(
+      { invoke: (_channel: string, value: unknown) => { sent.push(value) }, send: (_channel: string, value: unknown) => { sent.push(value) } },
+      { assertAllowed: (value: unknown) => { guarded.push(value) } }, channel)
+    const value = method === 'browserPaneCommand'
+      ? { appSessionId: 's', command: 'external' }
+      : { appSessionId: 's', rect: { x: 20, y: 30, width: 500, height: 400 }, overlay: false, accent: { r: 244, g: 114, b: 182 } }
+    sender(value)
+    expect(sent.at(-1)).toEqual(value)
+    expect(guarded.at(-1)).toEqual(value)
+  }
+})
+
 test('file preview preparation forwards optional navigation authority through the guarded sender', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
   const start = source.indexOf('  prepareFilePreview(')
@@ -150,7 +170,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain('setPeerWakeBlocked(')
   expect(channels).toContain("export const CH_NOTIFICATION_VISIBILITY = 'catcode:notification-visibility'")
   expect(source).toContain('reportNotificationVisibility(value: NotificationVisibility): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(97)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(100)
   expect(channels).toContain("export const CH_HOST_EXTERNAL_APP_ICON = 'catcode:host:external-app-icon'")
   expect(source).toContain('ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)')
   expect(channels).toContain("export const CH_QUESTION_VERB = 'catcode:question-verb'")
@@ -209,7 +229,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(103)
+  expect(names.length).toBe(107)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -305,8 +325,10 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(65)
+  expect(invokeChannels.length).toBe(67)
   const allowed = new Set([
+    'CH_BROWSER_PANE_SNAPSHOT',
+    'CH_BROWSER_PANE_COMMAND',
     'CH_OPEN_EXTERNAL_URL',
     'CH_LOCALHOST_PREVIEW_CAPTURE',
     'CH_LOCALHOST_PREVIEW_PREPARE',

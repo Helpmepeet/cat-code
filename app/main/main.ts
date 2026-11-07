@@ -272,8 +272,10 @@ import {
   type PeerRequestPlane,
 } from './peerRequestPlane.js'
 import { BrowserPaneHost } from './browserPaneHost.js'
+import { BrowserPanePresentation } from './browserPanePresentation.js'
+import { CH_BROWSER_PANE_SNAPSHOT, CH_BROWSER_PANE_COMMAND, CH_BROWSER_PANE_LAYOUT, CH_BROWSER_PANE_EVENT } from '../shared/ipcChannels.js'
 import { BrowserPaneControl, browserSubmitOptions } from './browserPaneControl.js'
-import { createBrowserPaneElectronAdapter, registerBrowserPaneScheme } from './browserPaneElectron.js'
+import { createBrowserPaneElectronAdapter, createBrowserPanePresentationNative, registerBrowserPaneScheme } from './browserPaneElectron.js'
 import { applyGlassWindowBackground, readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import { readNotificationPreference, writeNotificationPreference } from './notificationPreference.js'
 import { registerNotificationPreferenceIpc, registerNotificationRetryIpc, registerNotificationRetryBlockedIpc } from './notificationPreferenceIpc.js'
@@ -775,6 +777,22 @@ const browserPaneHost = new BrowserPaneHost({
   adapter: browserPaneAdapter,
   folders: id => host?.getBrowserFolders(id) ?? null,
   devOrigin: IS_DEV ? APP_ORIGIN_DEV : null,
+  onChange: (record, id) => {
+    void browserPanePresentation.onHostChange(record, id).catch(error =>
+      logLegacyDiagnostic(`browser state failed: ${String(error)}`, 'host', 'main'))
+  },
+})
+const browserPanePresentation = new BrowserPanePresentation({
+  host: browserPaneHost,
+  sessions: () => host?.listSessions() ?? [],
+  window: () => mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
+  native: createBrowserPanePresentationNative(),
+  publish: event => {
+    try { deliverableContents()?.send(CH_BROWSER_PANE_EVENT, event) }
+    catch (error) { handleRendererDeliveryFailure?.(error) }
+  },
+  openExternal: url => shell.openExternal(url),
+  onError: error => logLegacyDiagnostic(`browser presentation failed: ${String(error)}`, 'host', 'main'),
 })
 const browserPaneControl = new BrowserPaneControl(browserPaneHost)
 let latestRendererSnapshot: DebugRendererSnapshot | null = null
@@ -2258,6 +2276,7 @@ function createWindow(): void {
   // replay. `did-start-navigation` fires on the initial load and on reloads.
   window.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (isMainFrame && !isInPlace) {
+      browserPanePresentation.rendererLost()
       projectCreation?.reset()
       notificationVisibility.reset()
       rendererDocumentId = randomUUID()
@@ -2438,6 +2457,7 @@ function createWindow(): void {
     isDisposed: () => window.isDestroyed(),
     onUnavailable: () => {
       rendererGone = true
+      browserPanePresentation.rendererLost()
       stopRendererHealthTimer()
       cancelAllReplayFlushes()
       if (attachedFrameDelivery) attachedFrameDelivery.onNavigationStart()
@@ -2880,6 +2900,16 @@ const RELAYED_VERB_CHANNELS: ReadonlyArray<
  * double-registering listeners on `ipcMain`.
  */
 function registerIpcHandlers(): void {
+  ipcMain.handle(CH_BROWSER_PANE_SNAPSHOT, () => browserPanePresentation.snapshots())
+  ipcMain.handle(CH_BROWSER_PANE_COMMAND, (_event, input) => browserPanePresentation.command(input))
+  ipcMain.on(CH_BROWSER_PANE_LAYOUT, (_event, input) => {
+    if (!attachmentGate.isAttached || !deliverableContents()) {
+      browserPanePresentation.rendererLost()
+      return
+    }
+    void browserPanePresentation.layout(input).catch(error =>
+      logLegacyDiagnostic(`browser layout failed: ${String(error)}`, 'host', 'main'))
+  })
   // Renderer → supervisor: the four allowlisted channels. Main does light shape
   // coercion for UX, but the SIDECAR is the trust boundary (R2) — it re-validates
   // everything with the allowlist schema and applies T4/T6/T6b.
@@ -5690,6 +5720,7 @@ let windowlessShutdown: Promise<ShutdownResult> | undefined
 function shutdownRuntime(): Promise<ShutdownResult> {
   runtimeShutdown ??= createShutdownBarrier(() => {
     runtimeStopping = true
+    browserPanePresentation.rendererLost()
     stopBackgroundDrivers()
     workspaceJump?.dispose()
     if (workspaceStatusTimer) clearInterval(workspaceStatusTimer)

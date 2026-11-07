@@ -18,6 +18,7 @@ export interface BrowserPaneView {
   forward(options?: BrowserNavigationOptions): Promise<void>
   reload(options?: BrowserNavigationOptions): Promise<void>
   getURL?(): string
+  history?(): { canGoBack: boolean; canGoForward: boolean }
   setHooks?(hooks: BrowserPaneViewHooks): void
   capturePage?(maxPixels: number): Promise<BrowserCapturedPage>
   destroy(): void
@@ -53,6 +54,7 @@ export class BrowserPaneHost {
     const record = this.records.get(id)
     if (!record) return
     record.controller = 'user'
+    void record.cdp?.clearMark(() => {}).catch(error => console.error('[browser-pane] action mark could not be cleared', error))
     this.active.get(id)?.('The user is using the browser')
     this.publish(id)
   }
@@ -146,7 +148,9 @@ export class BrowserPaneHost {
             const navigation = (args as BrowserRequestArgs['browser.describe']).navigate!
             const url = navigation.action === 'navigate' ? await this.navigationTarget(id, navigation.target!) : this.records.get(id)?.url ?? ''
             gate()
-            return { ok: true, value: { description: (navigation.action === 'navigate' ? `navigate to ${url}` : `${navigation.action} on ${url}`).slice(0, 8192), url } }
+            const displayUrl = await this.policy.displayUrl(id, url)
+            gate()
+            return { ok: true, value: { description: (navigation.action === 'navigate' ? `navigate to ${displayUrl}` : `${navigation.action} on ${displayUrl}`).slice(0, 8192), url } }
           }
           gate()
           await (this.started ??= this.deps.adapter.startup())
@@ -173,6 +177,7 @@ export class BrowserPaneHost {
             if (view.debugger && view.capturePage) {
               record.cdp = new BrowserPaneCdp({ command: (method, params, sessionId) => view.debugger!.sendCommand(method, params, sessionId),
                 capture: maxPixels => view.capturePage!(maxPixels), url: () => view.getURL?.() || owned.url,
+                displayUrl: () => this.policy.displayUrl(id, view.getURL?.() || owned.url),
                 nextGeneration: () => ++this.pageGeneration,
                 onNativeDialog: nativeDialog, onDialog: report => { if (this.records.get(id) === owned) this.deps.onDialog?.(id, report) } })
             }
@@ -202,6 +207,7 @@ export class BrowserPaneHost {
           let value: any
           if (request.verb === 'browser.navigate') {
             const options = { ignoreBeforeUnload: header }
+            await record.cdp?.clearMark(gate)
             record.cdp?.navigated()
             gate()
             switch (input.action) {

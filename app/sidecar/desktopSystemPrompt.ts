@@ -37,6 +37,8 @@ export function buildKnownWorkspaceContext(workspaces: HostRequestValues['worksp
  */
 export const DESKTOP_SYSTEM_PROMPT_ADDENDUM = `Interface: Cat Code desktop app, in a session tab.
 
+For requested localhost pages and local HTML files in the session's folders, use BrowserNavigate, BrowserRead, BrowserAct and BrowserScreenshot in the session browser. The user can touch the page to take over; their next message hands it back.
+
 Write file references as markdown links, not as bare file_path:line_number, so the desktop app can open them: the href is the absolute file path, with an optional :line suffix. Relative links cannot be opened after a conversation moves. Use the current working directory to construct absolute links.` // §7-ok
 
 /**

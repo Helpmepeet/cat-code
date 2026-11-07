@@ -316,6 +316,10 @@ async function runProductionHardeningSmoke(
       // file. Traversal and symlink escape both fail closed.
       'openWorkspaceFile',
       'openExternalUrl',
+      'browserPaneSnapshot',
+      'browserPaneCommand',
+      'reportBrowserPaneLayout',
+      'onBrowserPane',
       // Display-only previews use fixed main-frame channels and scoped capabilities.
       'prepareFilePreview',
       'readFilePreviewDocument',
