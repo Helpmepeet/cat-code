@@ -20,6 +20,31 @@ function fixture() {
 }
 const request = { verb: 'browser.navigate' as const, args: { action: 'navigate' as const, target: 'http://localhost:3000' } }
 
+test('agent use is published before a browser operation completes, not for headers or status changes', async () => {
+  let finishNavigation!: () => void
+  const navigating = new Promise<void>(resolve => { finishNavigation = resolve })
+  const uses: number[] = []
+  const host = new BrowserPaneHost({ folders: () => null, devOrigin: null,
+    onChange: record => { if (record) uses.push(record.agentUseSequence) },
+    adapter: { startup: async () => {}, create: async () => ({
+      navigate: async () => { await navigating }, back: async () => {}, forward: async () => {}, reload: async () => {},
+      destroy: () => {}, clearData: async () => {},
+    }) },
+  })
+  const pending = host.handleRequest('a', request)
+  await new Promise<void>(resolve => { setImmediate(resolve) })
+  const announcedBeforeFinish = uses.some(sequence => sequence > 0)
+  const sequence = host.get('a')!.agentUseSequence
+  finishNavigation()
+  expect((await pending).ok).toBe(true)
+  expect(announcedBeforeFinish).toBe(true)
+  await host.headerNavigate('a', { action: 'reload' })
+  await host.handleRequest('a', { verb: 'browser.describe', args: { operation: 'navigate', navigate: { action: 'reload' } } })
+  host.takeOver('a'); host.handBack('a')
+  expect(host.get('a')!.agentUseSequence).toBe(sequence)
+  await host.dispose()
+})
+
 test('startup precedes creation; LRU protects visible and user-controlled views', async () => {
   const { host, events } = fixture()
   for (const id of ['a', 'b', 'c', 'd']) expect((await host.handleRequest(id, request)).ok).toBe(true)

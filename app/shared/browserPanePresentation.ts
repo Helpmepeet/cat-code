@@ -6,6 +6,8 @@ export type BrowserPaneSnapshot = {
   canGoBack: boolean
   canGoForward: boolean
   still: string | null
+  /** Advances on agent tool dispatch, not on navigation notifications, control or still updates. */
+  agentUseSequence?: number
 }
 export type BrowserPaneEvent = { appSessionId: string; state: BrowserPaneSnapshot | null }
 export type BrowserPaneCommand = {

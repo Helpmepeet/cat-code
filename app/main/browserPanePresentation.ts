@@ -72,7 +72,7 @@ export class BrowserPanePresentation {
       const local = await this.deps.host.policy.localPath(id, url)
       if (this.disposed || this.versions.get(id) !== version || this.records.get(id) !== record) return
       const history = record.view.history?.() ?? { canGoBack: false, canGoForward: false }
-      this.states.set(id, { appSessionId: id, url, displayUrl: local ?? url, controller: record.controller, ...history, still: this.states.get(id)?.still ?? null })
+      this.states.set(id, { appSessionId: id, url, displayUrl: local ?? url, controller: record.controller, ...history, still: this.states.get(id)?.still ?? null, agentUseSequence: record.agentUseSequence })
       this.emit(id)
       await this.reconcile()
     } catch (error) { this.hide(record); this.report(error) }

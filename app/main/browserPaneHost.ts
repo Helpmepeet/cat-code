@@ -31,7 +31,7 @@ export interface BrowserPaneAdapter {
   startup(): Promise<void>
   create(id: string, policy: BrowserPanePolicy): Promise<BrowserPaneView>
 }
-export type BrowserPaneRecord = { id: string; view: BrowserPaneView; url: string; visible: boolean; controller: 'agent' | 'user'; lastUsed: number; cdp?: BrowserPaneCdp; automationReady?: boolean; nativeDialog: boolean }
+export type BrowserPaneRecord = { id: string; view: BrowserPaneView; url: string; visible: boolean; controller: 'agent' | 'user'; lastUsed: number; agentUseSequence: number; cdp?: BrowserPaneCdp; automationReady?: boolean; nativeDialog: boolean }
 class BrowserUnavailable extends Error {}
 export class BrowserPaneHost {
   readonly records = new Map<string, BrowserPaneRecord>()
@@ -41,6 +41,7 @@ export class BrowserPaneHost {
   private disposed = false
   private clock = 0
   private pageGeneration = 0
+  private nextAgentUseSequence = 0
   private active = new Map<string, (message: string) => void>()
   constructor(private readonly deps: BrowserPanePolicyDependencies & {
     adapter: BrowserPaneAdapter
@@ -165,7 +166,7 @@ export class BrowserPaneHost {
             }
             const view = await this.deps.adapter.create(id, this.policy)
             try { gate() } catch (error) { view.destroy(); await view.clearData(); throw error }
-            record = { id, view, url: '', visible: false, controller: 'agent', lastUsed: ++this.clock, nativeDialog: false }
+            record = { id, view, url: '', visible: false, controller: 'agent', lastUsed: ++this.clock, agentUseSequence: 0, nativeDialog: false }
             this.records.set(id, record)
             const owned = record
             const nativeDialog = (open: boolean) => {
@@ -204,6 +205,10 @@ export class BrowserPaneHost {
           gate()
           if (record.cdp && !record.automationReady) return fail('unavailable', 'Browser automation could not start; close the browser and reopen it')
           record.lastUsed = ++this.clock
+          if (!header && request.verb !== 'browser.describe') {
+            record.agentUseSequence = ++this.nextAgentUseSequence
+            this.publish(id)
+          }
           let value: any
           if (request.verb === 'browser.navigate') {
             const options = { ignoreBeforeUnload: header }

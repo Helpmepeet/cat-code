@@ -2,9 +2,10 @@ import { useFilePaneSession, updateFilePaneSession, getFilePaneSession, showSlot
 import type { BrowserPaneEvent, BrowserPaneSnapshot } from '../../shared/browserPanePresentation.js'
 export function getBrowserPaneSnapshot(id: string): BrowserPaneSnapshot | null { return getFilePaneSession(id).browser }
 export function applyBrowserPaneEvent({ appSessionId, state }: BrowserPaneEvent): void {
-  const created = state !== null && getBrowserPaneSnapshot(appSessionId) === null
+  const previous = getBrowserPaneSnapshot(appSessionId)
+  const reveal = state !== null && (previous === null || (state.agentUseSequence ?? 0) > (previous.agentUseSequence ?? 0))
   updateFilePaneSession(appSessionId, { browser: state })
-  if (created) showSlotOccupant(appSessionId, 'browser')
+  if (reveal) showSlotOccupant(appSessionId, 'browser')
 }
 export function useBrowserPaneSnapshot(id: string): BrowserPaneSnapshot | null { return useFilePaneSession(id).browser }
 export function browserPaneLabel(state: BrowserPaneSnapshot): string {

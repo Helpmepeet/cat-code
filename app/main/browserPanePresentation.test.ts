@@ -55,6 +55,18 @@ test('publishes opening state before layout; only selected view is attached and 
   f.presentation.dispose(); await f.host.dispose()
 })
 
+test('latest presentation keeps agent-use intent when a status update supersedes its projection', async () => {
+  const f = fixture(); await f.open('a')
+  const record = f.host.get('a')!
+  record.agentUseSequence = 42
+  const first = f.presentation.onHostChange(record, 'a')
+  record.controller = 'user'
+  await f.presentation.onHostChange(record, 'a')
+  await first
+  expect(f.presentation.snapshots()[0]).toMatchObject({ agentUseSequence: 42, controller: 'user' })
+  f.presentation.dispose(); await f.host.dispose()
+})
+
 test('overlay capture swaps to still; takeover happens before showing live view; stale capture cannot resurrect view', async () => {
   const f = fixture(); await f.open('a'); await f.presentation.layout(f.layout())
   await f.presentation.layout(f.layout('a', true))
