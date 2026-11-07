@@ -33,8 +33,26 @@ function fixture(folders: readonly string[] = []) {
   })
   const open = async (id: string, target = 'http://localhost:3000/') => { await host.navigate(id, { action: 'navigate', target }); await presentation.onHostChange(host.get(id), id) }
   const layout = (id = 'a', overlay = false): BrowserPaneLayout => ({ appSessionId: id, rect: { x: 10, y: 20, width: 200, height: 100 }, overlay, accent: { r: 100, g: 120, b: 140 } })
-  return { host, presentation, open, layout, native, events, opened, errors, expire: () => { now += 1500; timer() }, capture: (value: () => Promise<string>) => { capture = value } }
+  return { host, presentation, open, layout, native, events, opened, errors, advance: (ms: number) => { now += ms; timer() }, expire: () => { now += 1500; timer() }, capture: (value: () => Promise<string>) => { capture = value } }
 }
+
+test('identical layout heartbeats renew freshness but still fail closed after reports stop and can recover', async () => {
+  const f = fixture(); await f.open('a')
+  await f.presentation.layout(f.layout())
+  f.advance(1000)
+  await f.presentation.layout(f.layout())
+  f.advance(1000)
+  expect(f.host.get('a')!.visible).toBe(true)
+  f.advance(500)
+  expect(f.host.get('a')!.visible).toBe(false)
+  await f.presentation.layout(f.layout())
+  expect(f.host.get('a')!.visible).toBe(true)
+  f.presentation.rendererLost()
+  expect(f.host.get('a')!.visible).toBe(false)
+  await f.presentation.layout(f.layout())
+  expect(f.host.get('a')!.visible).toBe(true)
+  f.presentation.dispose(); await f.host.dispose()
+})
 
 test('publishes opening state before layout; only selected view is attached and inset; stale/lost renderer hides all', async () => {
   const f = fixture(); await f.open('a'); await f.open('b')

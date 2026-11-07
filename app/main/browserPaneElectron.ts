@@ -149,6 +149,8 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
 /** Native operations kept outside the Electron-free presentation coordinator. */
 export function createBrowserPanePresentationNative(): BrowserPanePresentationNative {
   const owners = new WeakMap<BrowserPaneView, Electron.BrowserWindow>()
+  const bounds = new WeakMap<BrowserPaneView, Electron.Rectangle>()
+  const visibility = new WeakMap<BrowserPaneView, boolean>()
   const native = (view: import('./browserPaneHost.js').BrowserPaneView): Electron.WebContentsView => {
     if (!view.nativeView) throw new Error('Browser native view is unavailable')
     return view.nativeView as Electron.WebContentsView
@@ -158,12 +160,16 @@ export function createBrowserPanePresentationNative(): BrowserPanePresentationNa
       const target = window as Electron.BrowserWindow
       if (target.isDestroyed()) throw new Error('Browser window is closed')
       target.contentView.addChildView(native(view))
+      bounds.delete(view)
+      visibility.delete(view)
       owners.set(view, target)
     },
     detach: (window, view) => {
       const target = window as Electron.BrowserWindow
       if (!target.isDestroyed()) target.contentView.removeChildView(native(view))
       owners.delete(view)
+      bounds.delete(view)
+      visibility.delete(view)
     },
     bounds: (view, rect) => {
       const owner = owners.get(view)
@@ -171,11 +177,24 @@ export function createBrowserPanePresentationNative(): BrowserPanePresentationNa
       // Renderer rectangles are CSS pixels; child-view bounds are device-independent pixels.
       const zoom = owner.webContents.getZoomFactor()
       const x = Math.round(rect.x * zoom), y = Math.round(rect.y * zoom)
-      native(view).setBounds({ x, y,
+      const next = { x, y,
         width: Math.round((rect.x + rect.width) * zoom) - x,
-        height: Math.round((rect.y + rect.height) * zoom) - y })
+        height: Math.round((rect.y + rect.height) * zoom) - y }
+      const previous = bounds.get(view)
+      // Compare only after zoom conversion so unchanged CSS heartbeats still track zoom.
+      if (previous && previous.x === next.x && previous.y === next.y && previous.width === next.width && previous.height === next.height) return
+      bounds.delete(view)
+      native(view).setBounds(next)
+      bounds.set(view, next)
     },
-    visible: (view, visible) => { if (!native(view).webContents.isDestroyed()) native(view).setVisible(visible) },
+    visible: (view, visible) => {
+      const target = native(view)
+      if (target.webContents.isDestroyed()) { visibility.delete(view); return }
+      if (visibility.get(view) === visible) return
+      visibility.delete(view)
+      target.setVisible(visible)
+      visibility.set(view, visible)
+    },
     capture: async view => {
       if (!view.capturePage) throw new Error('Browser capture is unavailable')
       const image = await view.capturePage(BROWSER_SCREENSHOT_MAX_PIXELS)

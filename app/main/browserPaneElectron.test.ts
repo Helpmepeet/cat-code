@@ -8,9 +8,12 @@ async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'browser-renderer-start-'))
   const source = `
     import { mock } from 'bun:test';
+    import { strict as assert } from 'node:assert';
     import { EventEmitter } from 'node:events';
     const events = [];
     const bounds = [];
+    const visibility = [];
+    let failBounds = false, failVisible = false;
     let started = false;
     class Image {
       constructor(width, height, scale = 1) { this.width = width; this.height = height; this.scale = scale; }
@@ -47,7 +50,11 @@ async function fixture() {
       protocol: { registerSchemesAsPrivileged() {} },
       session: { fromPartition: () => partition },
       nativeImage: { createFromBuffer: (png, options) => new Image(png.readUInt32BE(16), png.readUInt32BE(20), options?.scaleFactor ?? 1) },
-      WebContentsView: class { webContents = new Contents(); setBounds(rect) { bounds.push(rect); } setVisible() {} },
+      WebContentsView: class {
+        webContents = new Contents();
+        setBounds(rect) { bounds.push(rect); if (failBounds) throw new Error('bounds failed'); }
+        setVisible(value) { visibility.push(value); if (failVisible) throw new Error('visible failed'); }
+      },
     }));
     const { createBrowserPaneElectronAdapter, createBrowserPanePresentationNative } = await import(${JSON.stringify(new URL('./browserPaneElectron.ts', import.meta.url).pathname)});
     const { BrowserPanePolicy } = await import(${JSON.stringify(new URL('./browserPanePolicy.ts', import.meta.url).pathname)});
@@ -55,9 +62,41 @@ async function fixture() {
     const capture = await view.capturePage(2000000);
     const png = Buffer.from(capture.data, 'base64');
     const presentation = createBrowserPanePresentationNative();
-    presentation.attach({ isDestroyed: () => false, contentView: { addChildView() {} }, webContents: { getZoomFactor: () => 1.1 } }, view);
-    presentation.bounds(view, { x: 100, y: 50, width: 600, height: 400 });
-    console.log(JSON.stringify({ events, capture, pixels: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, bounds: bounds.at(-1) }));
+    let zoom = 1.1;
+    const window = { isDestroyed: () => false, contentView: { addChildView() {}, removeChildView() {} }, webContents: { getZoomFactor: () => zoom } };
+    presentation.attach(window, view);
+    const rect = { x: 100, y: 50, width: 600, height: 400 };
+    presentation.bounds(view, rect);
+    const converted = bounds.at(-1);
+    presentation.visible(view, true);
+    const counts = [bounds.length, visibility.length];
+    presentation.bounds(view, { ...rect });
+    presentation.visible(view, true);
+    assert.deepEqual([bounds.length, visibility.length], counts);
+    presentation.bounds(view, { ...rect, width: 601 });
+    assert.equal(bounds.at(-1).width, 661);
+    zoom = 1.25;
+    presentation.bounds(view, rect);
+    assert.deepEqual(bounds.at(-1), { x: 125, y: 63, width: 750, height: 500 });
+    failBounds = true;
+    assert.throws(() => presentation.bounds(view, { ...rect, x: 101 }));
+    failBounds = false;
+    const failedBoundsCount = bounds.length;
+    presentation.bounds(view, { ...rect, x: 101 });
+    assert.equal(bounds.length, failedBoundsCount + 1);
+    failVisible = true;
+    assert.throws(() => presentation.visible(view, false));
+    failVisible = false;
+    const failedVisibleCount = visibility.length;
+    presentation.visible(view, false);
+    assert.equal(visibility.length, failedVisibleCount + 1);
+    presentation.detach(window, view);
+    presentation.attach(window, view);
+    const reattachCounts = [bounds.length, visibility.length];
+    presentation.bounds(view, { ...rect, x: 101 });
+    presentation.visible(view, false);
+    assert.deepEqual([bounds.length, visibility.length], reattachCounts.map(n => n + 1));
+    console.log(JSON.stringify({ events, capture, pixels: { width: png.readUInt32BE(16), height: png.readUInt32BE(20) }, bounds: converted }));
   `
   try {
     const child = Bun.spawn([process.execPath, '-e', source], {
@@ -75,7 +114,7 @@ test('a new browser view starts its blank renderer before sending CDP page comma
   expect(events.indexOf('load:about:blank')).toBeLessThan(events.indexOf('Page.enable'))
 })
 
-test('native view bounds convert renderer CSS pixels using the app zoom factor', async () => {
+test('native operations deduplicate effective bounds and visibility, track zoom and geometry, and retry after failures or reattach', async () => {
   expect((await fixture()).bounds).toEqual({ x: 110, y: 55, width: 660, height: 440 })
 })
 
