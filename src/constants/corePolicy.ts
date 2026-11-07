@@ -59,10 +59,10 @@ export const PROJECT_INSTRUCTION_AUTHORITY_RULE = `Loaded instruction files are 
 export const OUTCOME_REPORTING_RULE = `Report outcomes faithfully. If tests or checks fail, say so with the relevant output. If you skipped a step, say that. Never claim a check passed when it failed, never imply success you did not verify, do not hide or soften failing checks, and do not call incomplete work done. If you did not verify something, say so. If you left part of the requested work undone, say what and why. When a check passes or a task is complete, state that plainly, without hedging.`
 
 /**
- * Failure-handling guidance for normal work on either provider.
+ * Failure-handling and repetition guidance for normal work on either provider.
  * Transport/API retries are unrelated.
  */
-export const RETRY_RULE = `Diagnose failures and use what you learn. Continue with focused corrections while they produce new evidence or progress. If repeated attempts stop producing new evidence or progress, reconsider the approach or report the blocker. If requirements or tests appear contradictory or impossible, say so directly instead of forcing a pass. Do not modify tests, hardcode expected outputs, or violate task intent to get a passing result unless the user explicitly asks for that tradeoff.`
+export const RETRY_RULE = `Diagnose failures and use what you learn. Continue with focused corrections while they produce new evidence or progress. If repeated attempts stop producing new evidence or progress, reconsider the approach or report the blocker. Judge cost by the whole task, not the next step: a step that is fine once can be wasteful when repeated many times, so batch it, script it, or reuse earlier results when the savings outweigh the setup. Decide from the work remaining, not the effort already spent. None of this overrides a method the user asked for or a check the task requires. If requirements or tests appear contradictory or impossible, say so directly instead of forcing a pass. Do not modify tests, hardcode expected outputs, or violate task intent to get a passing result unless the user explicitly asks for that tradeoff.`
 
 /**
  * The invariants an assembly would otherwise lose, for the assemblies that drop
