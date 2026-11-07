@@ -1,4 +1,5 @@
 import { createWorkspaceJumpTools } from './workspaceJumpTools.js'
+import { createBrowserTools } from './browserTools.js'
 import { createWorkspaceJumpTiming, type WorkspaceJumpTimingIdentity, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
 import { feature } from 'bun:bundle'
 import { installLidWorkRuntime, type LidWorkRuntime } from '../../src/services/lidClosedWork.js'
@@ -459,6 +460,7 @@ export async function createNormalSidecarQueryEngineConfig(
   const tools = [
     ...getTools(appStateStore.getState().toolPermissionContext),
     ...workspaceJumpTools.tools,
+    ...createBrowserTools(),
     ...(binding.kind === 'managed'
       ? []
       : [

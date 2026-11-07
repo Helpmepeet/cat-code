@@ -2,7 +2,7 @@ import { app, protocol, session, WebContentsView } from 'electron'
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { BROWSER_LOCAL_SCHEME } from './browserPanePolicy.js'
-import type { BrowserPaneAdapter } from './browserPaneHost.js'
+import type { BrowserPaneAdapter, BrowserPaneViewHooks, BrowserNavigationOptions } from './browserPaneHost.js'
 
 /** Call before app.ready, alongside the application's other privileged schemes. */
 export function registerBrowserPaneScheme(otherSchemes: Electron.CustomScheme[] = []): void {
@@ -46,8 +46,19 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
         configured.add(ses)
       }
       const view = new WebContentsView({ webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, webSecurity: true, navigateOnDragDrop: false } })
+      view.setBounds({ x: 0, y: 0, width: 1024, height: 768 })
       view.setVisible(false)
       const wc = view.webContents
+      let hooks: BrowserPaneViewHooks | undefined
+      let ignoreBeforeUnload = false
+      wc.on('input-event', (_event, input) => hooks?.input(input as typeof input & { _modifiers?: number }))
+      wc.on('did-navigate', () => hooks?.navigated())
+      wc.on('did-navigate-in-page', (_event, _url, isMainFrame) => { if (isMainFrame) hooks?.navigated() })
+      wc.on('will-prevent-unload', event => {
+        if (ignoreBeforeUnload) event.preventDefault()
+        else hooks?.beforeUnload()
+      })
+      wc.debugger.on('message', (_event, method, params, sessionId) => hooks?.cdpEvent(method, params, sessionId))
       let requested: string | undefined
       ses.webRequest.onBeforeRequest((details, callback) => {
         const explicit = details.resourceType === 'mainFrame' && details.url === requested
@@ -78,7 +89,7 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
         const failed = (_event: Electron.Event, code: number, description: string, _url: string, mainFrame: boolean) => {
           if (mainFrame) { cleanup(); reject(new Error(`Navigation failed (${code}): ${description}`)) }
         }
-        const prevented = () => { cleanup(); reject(new Error('The page prevented navigation')) }
+        const prevented = () => { if (!ignoreBeforeUnload) { cleanup(); reject(new Error('The page prevented navigation')) } }
         const timer = setTimeout(() => { cleanup(); reject(new Error('Browser navigation timed out')) }, 30_000)
         wc.once('did-finish-load', finished)
         wc.once('did-navigate-in-page', finished)
@@ -86,14 +97,35 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
         wc.once('will-prevent-unload', prevented)
         try { action() } catch (error) { cleanup(); reject(error) }
       })
+      const navigation = async (action: () => Promise<void>, options?: BrowserNavigationOptions) => {
+        ignoreBeforeUnload = options?.ignoreBeforeUnload === true
+        try { await action() } finally { ignoreBeforeUnload = false }
+      }
       return {
         nativeView: view,
         debugger: wc.debugger,
+        setHooks: value => { hooks = value },
         getURL: () => wc.getURL(),
-        navigate: async url => { requested = url; try { await wc.loadURL(url) } finally { requested = undefined } },
-        back: async () => { if (wc.navigationHistory.canGoBack()) await historyNavigation(() => wc.navigationHistory.goBack()) },
-        forward: async () => { if (wc.navigationHistory.canGoForward()) await historyNavigation(() => wc.navigationHistory.goForward()) },
-        reload: () => historyNavigation(() => wc.reload()),
+        capturePage: async maxPixels => {
+          let image = await wc.capturePage()
+          let { width, height } = image.getSize()
+          const scale = Math.min(1, Math.sqrt(maxPixels / (width * height)), 4096 / width, 4096 / height)
+          if (scale < 1) image = image.resize({ width: Math.max(1, Math.floor(width * scale)), height: Math.max(1, Math.floor(height * scale)) })
+          // PNG entropy varies; keep the base64 result below the transport's 4 MiB cap.
+          let data = image.toPNG().toString('base64')
+          while (data.length > 3_900_000) {
+            const size = image.getSize()
+            if (size.width <= 1 || size.height <= 1) throw new Error('Browser screenshot exceeds the result limit')
+            image = image.resize({ width: Math.max(1, Math.floor(size.width * 0.75)), height: Math.max(1, Math.floor(size.height * 0.75)) })
+            data = image.toPNG().toString('base64')
+          }
+          ;({ width, height } = image.getSize())
+          return { data, width, height }
+        },
+        navigate: (url, options) => navigation(async () => { requested = url; try { await wc.loadURL(url) } finally { requested = undefined } }, options),
+        back: options => navigation(async () => { if (wc.navigationHistory.canGoBack()) await historyNavigation(() => wc.navigationHistory.goBack()) }, options),
+        forward: options => navigation(async () => { if (wc.navigationHistory.canGoForward()) await historyNavigation(() => wc.navigationHistory.goForward()) }, options),
+        reload: options => navigation(() => historyNavigation(() => wc.reload()), options),
         destroy: () => { if (!wc.isDestroyed()) wc.close({ waitForBeforeUnload: false }) },
         clearData: () => ses.clearData(),
       }

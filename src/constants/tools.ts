@@ -66,6 +66,10 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   'JumpToProject',
   'ListWorkspaces',
   'JumpWorkspace',
+  'BrowserNavigate',
+  'BrowserRead',
+  'BrowserScreenshot',
+  'BrowserAct',
 ])
 
 export const CUSTOM_AGENT_DISALLOWED_TOOLS = new Set([

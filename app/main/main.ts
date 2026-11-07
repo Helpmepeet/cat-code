@@ -272,6 +272,7 @@ import {
   type PeerRequestPlane,
 } from './peerRequestPlane.js'
 import { BrowserPaneHost } from './browserPaneHost.js'
+import { BrowserPaneControl, browserSubmitOptions } from './browserPaneControl.js'
 import { createBrowserPaneElectronAdapter, registerBrowserPaneScheme } from './browserPaneElectron.js'
 import { applyGlassWindowBackground, readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import { readNotificationPreference, writeNotificationPreference } from './notificationPreference.js'
@@ -775,6 +776,7 @@ const browserPaneHost = new BrowserPaneHost({
   folders: id => host?.getBrowserFolders(id) ?? null,
   devOrigin: IS_DEV ? APP_ORIGIN_DEV : null,
 })
+const browserPaneControl = new BrowserPaneControl(browserPaneHost)
 let latestRendererSnapshot: DebugRendererSnapshot | null = null
 
 /**
@@ -2687,6 +2689,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
         frame.accepted,
       )
     }
+    browserPaneControl.receive(frame)
     if (frame.kind === 'run-controls.snapshot') {
       // The roster's model/effort, from the row's OWN engine-resolved state
       // rather than from anything a create asked for. Read here for the same
@@ -2794,6 +2797,7 @@ function wireHostEvents(h: Host): void {
       // hygiene: it is what keeps a reused NAME from inheriting the previous
       // row's chain, rate bucket or pending messages.
       peerPlane?.onSessionRemoved(event.appSessionId)
+      browserPaneControl.forget(event.appSessionId)
       void browserPaneHost.close(event.appSessionId).catch(error =>
         logLegacyDiagnostic(`browser close failed: ${String(error)}`, 'host', 'main'))
     }
@@ -2886,7 +2890,7 @@ function registerIpcHandlers(): void {
     ) {
       return
     }
-    const options = sanitizeSubmitOptions(arg.options)
+    const options = browserSubmitOptions(sanitizeSubmitOptions(arg.options), randomUUID)
     if (sessionCloseCoordinator.isPending(arg.sessionId)) {
       answerUnforwardedSubmit(arg.sessionId, options?.submitId, 'session_not_ready')
       return
@@ -2980,6 +2984,7 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_QUESTION_VERB, (_e, arg: { sessionId: SessionId; verb: import('../shared/nonblockingQuestions.js').QuestionVerb }) => {
     if (typeof arg?.sessionId !== 'string' ||
       (arg.verb?.type !== 'askUserQuestion.reply' && arg.verb?.type !== 'askUserQuestion.dismiss')) return
+    if (arg.verb.type === 'askUserQuestion.reply') browserPaneControl.questionReply(arg.sessionId, arg.verb.requestId)
     forward(arg.sessionId, arg.verb)
   })
 
