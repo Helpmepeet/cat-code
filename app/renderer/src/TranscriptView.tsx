@@ -2550,7 +2550,7 @@ function PeerTargetLine({ parts }: { parts: PeerTargetParts }) {
 /** Uppercase micro-label under the header, real data only (byte/line counts
  * the prototype shows are not projected — §5 flag, not mocked). */
 function deriveSub(row: ToolUseNestedRow): string | undefined {
-  if (row.toolFamily === 'mcp') return row.toolName
+  if (row.toolFamily === 'mcp' || row.toolFamily === 'computer') return row.toolName
   return undefined
 }
 
@@ -3221,8 +3221,10 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
           row.input,
         )
   const peerTone = peerPresentation === null ? undefined : PEER_TONE_CLASS
+  // A computer-use title is a sentence, not a command or path, so it drops the mono face.
   const peerTargetNode =
-    peerParts === null ? undefined : <PeerTargetLine parts={peerParts} />
+    peerParts !== null ? <PeerTargetLine parts={peerParts} />
+      : row.toolFamily === 'computer' ? <span>{target}</span> : undefined
   if (row.status === 'cancelled') {
     return (
       <ToolCardShell
@@ -3312,12 +3314,14 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
         headerless={row.toolFamily === 'bash' && row.status !== 'pending' && namedCallId === row.toolUseId}
         expansionKey={row.toolUseId}
         defaultExpanded={
-          toolsExpanded || row.status === 'error' || isImageDone || hasResultImages
+          // Computer steps stay closed and show their screenshot or error line underneath.
+          toolsExpanded || (row.toolFamily !== 'computer' && (row.status === 'error' || isImageDone || hasResultImages))
         }
         animateCollapsedExtra={resolving}
         animateExpandedBody={resolving && (row.status === 'error' || isImageDone || hasResultImages)}
         entranceKey={row.id}
         collapsedExtra={
+          row.toolFamily === 'computer' ? <ComputerStepPeek row={row} /> :
           focused && row.status === 'error' && bashTail.length > 0 ? <BashTailPeek tail={bashTail} /> : focused && row.toolFamily === 'bash' && row.status === 'success' ? null : ack !== null ? (
             <AckPeek ack={ack} />
           ) : row.toolFamily === 'bash' && bashTail.length > 0 && (!focused || row.status === 'error') ? (
@@ -5256,6 +5260,35 @@ function BashTailPeek({ tail }: { tail: string[] }) {
           </div>
         ))}
       </pre>
+    </div>
+  )
+}
+
+/**
+ * What a closed computer-use step shows: the screen it left behind, or the
+ * first line of its failure. Clicking the screenshot enlarges it.
+ */
+function ComputerStepPeek({ row }: { row: ToolUseNestedRow }) {
+  const { style } = useContext(ToolCardStyleContext)
+  const [previewing, setPreviewing] = useState(false)
+  const image = row.result?.images?.at(-1)
+  if (image) {
+    const src = `data:${image.mediaType};base64,${image.data}`
+    return (
+      <div className={TOOL_CARD_BAND_CLASS[style]}>
+        <button type="button" className="block cursor-zoom-in" aria-label="Expand screenshot" onClick={() => setPreviewing(true)}>
+          <img alt="Screenshot" className="h-[92px] w-auto rounded border border-shell-seam" decoding="async" loading="lazy" src={src} />
+        </button>
+        {previewing ? <ImagePreview src={src} label="Screenshot preview" onClose={() => setPreviewing(false)} /> : null}
+      </div>
+    )
+  }
+  if (row.status !== 'error') return null
+  const failure = (row.result?.content ?? '').split('\n').find(line => line.trim().length > 0)
+  if (!failure) return null
+  return (
+    <div className={TOOL_CARD_BAND_CLASS[style]}>
+      <pre className="overflow-hidden text-ellipsis whitespace-pre font-mono text-[11px] leading-relaxed text-tone-danger">{failure}</pre>
     </div>
   )
 }

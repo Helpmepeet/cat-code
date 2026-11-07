@@ -367,3 +367,31 @@ test('a generated image leaves the closed live step as soon as it finishes', asy
   expect(tree.container.querySelector('.focused-step-head')?.getAttribute('aria-expanded')).toBe('false')
   expect(tree.container.querySelectorAll('.focused-deliverables img[alt="Generated image"]').length).toBe(1)
 })
+
+const computer = (id: string, title: string, status: 'success' | 'pending', image = false): NestedTranscriptRow => ({
+  ...source(id), kind: 'tool-use', toolUseId: id, toolName: 'mcp__codex-computer-use__js', toolFamily: 'computer',
+  input: { code: 'await safari.click(451)', title }, status, agentCompletion: null,
+  result: status === 'pending' ? null : { content: '', isError: false, diff: null, ...(image ? { images: [{ mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }] } : {}) },
+})
+
+test('computer steps read as their own titles, with the latest screenshot under the closed step', async () => {
+  const live = [user, computer('cu-1', 'Opening the order page', 'success', true), computer('cu-2', 'Checking the banner', 'pending')]
+  const tree = await harness.mount(view(live, true))
+  const step = tree.container.querySelector('.focused-step-head')!
+  expect(step.textContent).toContain('⌖')
+  expect(step.textContent).toContain('Used 1 computer step')
+  const calls = [...tree.container.querySelectorAll('.focused-call-row')].map(row => row.textContent ?? '')
+  expect(calls.some(line => line.includes('Opening the order page'))).toBe(true)
+  expect(calls.some(line => line.includes('Checking the banner'))).toBe(true)
+  expect(calls.every(line => !/Us(ed|ing) /.test(line))).toBe(true)
+  expect(tree.container.querySelector('.focused-shot img')).not.toBeNull()
+
+  await tree.render(view([user, computer('cu-1', 'Opening the order page', 'success', true), text('answer', 'Done.'), result], false))
+  await click(tree.container.querySelector('.focused-fold-head'))
+  const named = tree.container.querySelector('.focused-step-head')!
+  expect(named.textContent).toContain('Opening the order page')
+  expect(named.textContent).not.toContain('Used Opening')
+  await click(tree.container.querySelector('.focused-shot'))
+  expect(tree.container.querySelector('.focused-step-head')?.getAttribute('aria-expanded')).toBe('true')
+  expect(tree.container.querySelector('.focused-shot')).toBeNull()
+})

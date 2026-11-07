@@ -133,6 +133,11 @@ describe('focused transcript layout', () => {
     expect(focused([...rows.slice(0, -1), { ...text('answer'), phase: 'commentary' as const }, result()])
       .every(item => !item.completed)).toBe(true)
   })
+  test('computer steps are counted as computer steps', () => {
+    const summary = summarizeFocusedWork([tool('c1', 'computer'), tool('c2', 'computer')])
+    expect(summary.summary).toBe('used 2 computer steps')
+    expect(summary.compact).toBe('used 2')
+  })
   test('other actions use human-readable labels and parallel pending label uses first call', () => {
     const summary = summarizeFocusedWork(['agent', 'agent-control', 'web', 'mcp', 'skill', 'imagegen', 'other'].map((family, i) => tool(`${i}`, family as ToolFamily)))
     expect(summary.summary).toBe('delegated 1 task, sent 1 agent request, made 1 web request, made 1 MCP call, used 1 skill, requested 1 image, made 1 tool call')

@@ -42,6 +42,7 @@ export const FAMILY_STYLE: Record<
   // interpolated (the dynamic-class trap this map's header documents).
   'agent-control': { mark: '◇', word: 'Agent', color: 'text-[light-dark(#6d28d9,#a78bfa)]' },
   imagegen: { mark: '◰', word: 'Image', color: 'text-[light-dark(#a21caf,#e879f9)]' },
+  computer: { mark: '⌖', word: 'Computer', color: 'text-[light-dark(#7c3aed,#c084fc)]' },
   other: { mark: '•', word: 'Tool', color: 'text-text-muted' },
 }
 

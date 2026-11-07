@@ -3,7 +3,7 @@ import type { FocusedLiveState } from './transcriptProjector.js'
 import type { TasksSnapshot } from '../../shared/protocol.js'
 import { memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
-import { focusedNamedCall, isFocusedDeliverable, summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
+import { focusedNamedCall, isFocusedDeliverable, latestComputerScreenshot, summarizeFocusedWork, titleSpeaksForItself, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { FAMILY_STYLE } from './toolCardPalette.js'
 import { useToolCardExpanded } from './toolCardExpansion.js'
 import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
@@ -148,17 +148,23 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
   const named = !rollingNow && segment.activeLabel === null ? focusedNamedCall(segment.rows) : rollingNow && finished.length === calls.length ? focusedNamedCall(finished) : null
   const split = (label: string) => [label.slice(0, label.indexOf(' ')), label.slice(label.indexOf(' ') + 1)] as const
   // Streamed arguments grow in place; only a different call or phase replaces the line.
-  const [key, text] = active && headCall
-    ? [`run:${headCall.toolUseId}:${callVerb(headCall, liveState !== null)}`, <><span className={split(active)[0] === 'Queued' ? 'focused-queued-verb' : headCall?.preparing ? 'focused-step-verb focused-live-verb' : 'focused-step-verb'}>{split(active)[0]}</span>{' '}<span className="focused-step-target">{split(active)[1]}</span>{headCall?.additions ? <span className="focused-diff-add"> +{headCall.additions}</span> : null}{headCall?.preparing ? <span className="focused-caret" /> : null}</>]
+  const headVerb = headCall ? callVerb(headCall, liveState !== null) : ''
+  const [key, text] = active && headCall && titleSpeaksForItself(headCall.toolFamily, headVerb)
+    ? [`run:${headCall.toolUseId}:${headVerb}`, <span className="focused-step-verb">{callTarget(headCall)}</span>]
+    : active && headCall
+    ? [`run:${headCall.toolUseId}:${callVerb(headCall, liveState !== null)}`, <><span className={split(active)[0] === 'Queued' ? 'focused-queued-verb' : headCall?.preparing ? 'focused-step-verb focused-live-verb' : 'focused-step-verb'}>{split(active)[0]}</span>{' '}<span className={headCall.toolFamily === 'computer' ? 'focused-step-title' : 'focused-step-target'}>{split(active)[1]}</span>{headCall?.additions ? <span className="focused-diff-add"> +{headCall.additions}</span> : null}{headCall?.preparing ? <span className="focused-caret" /> : null}</>]
     : segment.activeLabel && !finishedHead && !live
       ? [`stop:${segment.activeLabel}`, `Stopped ${split(segment.activeLabel)[1]}`]
       : named
-        ? [`named:${named.verb}:${named.target}`, <>{named.verb} <span className="focused-step-target">{named.target}</span></>]
+        ? [`named:${named.verb}:${named.target}`, titleSpeaksForItself(named.family, named.verb)
+          ? <span className="focused-step-verb">{named.target}</span>
+          : <>{named.verb} <span className="focused-step-target">{named.target}</span></>]
         : [`sum:${summary.summary}`, capitalize(summary.summary)]
   const headNames = !active && !(segment.activeLabel && !finishedHead && !live) ? named : null
   const mainTool = headCall ?? (live ? segment.rows.find(row => row.kind === 'tool-use' && row.status === 'pending') : null)
     ?? segment.rows.find(row => row.kind === 'tool-use')
   const family = mainTool?.kind === 'tool-use' ? mainTool.toolFamily : null
+  const screenshot = latestComputerScreenshot(segment.rows)
   return (
     <div className="focused-step">
       <button type="button" className="focused-step-head" data-open={open ? '' : undefined} data-running={active && headCall && callVerb(headCall, liveState !== null) !== 'Queued' && !headCall.preparing ? '' : undefined}
@@ -175,6 +181,9 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
       </button>
       {live && headCall ? <LiveOutput call={headCall} now={now} className="focused-head-out" /> : null}
       <RollingCalls calls={rollingNow ? rollingCalls(calls.filter(call => call !== headCall)) : []} now={now} signalled={liveState !== null} />
+      {!open && screenshot ? <button type="button" className="focused-shot" aria-label="Open this step" onClick={() => setOpen(true)}>
+        <img alt="Latest screenshot" decoding="async" loading="lazy" src={`data:${screenshot.mediaType};base64,${screenshot.data}`} />
+      </button> : null}
       <FocusedDisclosure open={open} id={bodyId}>
         <FocusedNamedCallContext.Provider value={headNames?.toolUseId ?? null}>
           <div className="focused-step-body">{renderRows(segment.rows.filter(row => !isFocusedDeliverable(row)), false)}</div>
@@ -220,7 +229,7 @@ function RollingCalls({ calls, now, signalled }: { calls: FocusedCall[]; now: nu
     return <div key={call.toolUseId} className={`focused-call ${present ? 'focused-call-enter' : 'focused-call-leave'}`} aria-hidden={!present}>
       <div><div className="focused-call-row">
         <span className={`focused-call-mark ${FAMILY_STYLE[call.toolFamily].color}`} aria-hidden>{stepMark(call.toolFamily)}</span>
-        <FocusedTicker tickKey={`${call.toolUseId}:${verb}`} className=""><span className={verb === 'Queued' ? 'focused-queued-verb' : call.status === 'pending' ? 'focused-live-verb' : ''}>{verb}</span>{' '}<span className="focused-step-target">{target}</span>{call.additions ? <span className="focused-diff-add"> +{call.additions}</span> : null}{call.preparing ? <span className="focused-caret" /> : null}</FocusedTicker>
+        <FocusedTicker tickKey={`${call.toolUseId}:${verb}`} className="">{titleSpeaksForItself(call.toolFamily, verb) ? <span className={call.status === 'pending' ? 'focused-live-verb' : ''}>{target}</span> : <><span className={verb === 'Queued' ? 'focused-queued-verb' : call.status === 'pending' ? 'focused-live-verb' : ''}>{verb}</span>{' '}<span className={call.toolFamily === 'computer' ? 'focused-step-title' : 'focused-step-target'}>{target}</span></>}{call.additions ? <span className="focused-diff-add"> +{call.additions}</span> : null}{call.preparing ? <span className="focused-caret" /> : null}</FocusedTicker>
         <AutoModeReviewMark review={call.autoModeReview} />
         <CallMeta call={call} now={now} />
       </div><LiveOutput call={call} now={now} /></div>
@@ -239,9 +248,9 @@ function useLiveClock(live: boolean): number {
   return now
 }
 
-const STEP_MARK_COLORED: ReadonlySet<ToolFamily> = new Set(['bash', 'read', 'grep', 'edit', 'write', 'web', 'skill', 'agent'])
+const STEP_MARK_COLORED: ReadonlySet<ToolFamily> = new Set(['bash', 'read', 'grep', 'edit', 'write', 'web', 'skill', 'agent', 'computer'])
 function stepMark(family: ToolFamily): string {
-  return family === 'bash' ? '$' : family === 'grep' ? '⌕' : family === 'edit' || family === 'write' ? '±' : '≡'
+  return family === 'bash' ? '$' : family === 'grep' ? '⌕' : family === 'edit' || family === 'write' ? '±' : family === 'computer' ? '⌖' : '≡'
 }
 
 /** Text that changes in place leaves upward while its replacement rises in. */

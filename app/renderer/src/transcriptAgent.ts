@@ -103,6 +103,7 @@ export function agentActivityOf(row: ToolUseNestedRow): string | null {
     return (
       target === child.toolName ||
       child.toolFamily === 'mcp' ||
+      child.toolFamily === 'computer' ||
       child.toolFamily === 'bash'
     )
       ? target

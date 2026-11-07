@@ -177,6 +177,8 @@ export type ToolFamily =
    */
   | 'agent-control'
   | 'imagegen'
+  /** Codex computer use: every step is the same `js` tool, named by its own title. */
+  | 'computer'
   | 'other'
 
 export type ToolCardStatus = 'pending' | 'success' | 'error' | 'cancelled'
@@ -3434,6 +3436,7 @@ export function deriveToolFamily(toolName: string): ToolFamily {
     default:
       // `code_execution` (generic sandbox, no single-family fit) plus any
       // future/unrecognized name fall through to 'other'.
+      if (toolName.startsWith('mcp__codex-computer-use__')) return 'computer'
       if (toolName.startsWith('mcp__')) return 'mcp'
       return 'other'
   }

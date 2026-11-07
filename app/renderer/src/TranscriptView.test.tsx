@@ -31,6 +31,7 @@ import {
 } from './toolCardExpansion.js'
 import {
   createTranscriptState,
+  deriveToolFamily,
   projectServerFrame,
   selectNestedTranscriptRows,
 } from './transcriptProjector.js'
@@ -1461,23 +1462,23 @@ test('P4-18b: an MCP card frames the target as server › tool', () => {
   expect(html).toContain('gpt-agent › spawn') // server › tool framing
 })
 
-test('a Codex computer-use step is named by its own title, not server › tool', () => {
+test('a Codex computer-use step is a Computer card named by its own title', () => {
   const step = render(
     toolRow({
       toolName: 'mcp__codex-computer-use__js',
-      toolFamily: 'mcp',
+      toolFamily: deriveToolFamily('mcp__codex-computer-use__js'),
       input: { code: 'await safari.click(451)', title: 'Opening the Safari page' },
       status: 'pending',
     }),
   )
-  expect(step).toContain('Opening the Safari page')
+  expect(step).toContain('>Computer<')
+  expect(step).toContain('<span>Opening the Safari page</span>') // a sentence, not mono
   expect(step).not.toContain('codex-computer-use › js')
-  expect(step).toContain('mcp__codex-computer-use__js') // sub-label keeps the tool
 
   const done = render(
     toolRow({
       toolName: 'mcp__codex-computer-use__js_complete',
-      toolFamily: 'mcp',
+      toolFamily: 'computer',
       input: { completion_summary: 'Updated both profiles' },
       status: 'pending',
     }),
@@ -1487,12 +1488,41 @@ test('a Codex computer-use step is named by its own title, not server › tool',
   const untitled = render(
     toolRow({
       toolName: 'mcp__codex-computer-use__js',
-      toolFamily: 'mcp',
+      toolFamily: 'computer',
       input: { code: 'await cua.getState()' },
       status: 'pending',
     }),
   )
   expect(untitled).toContain('codex-computer-use › js')
+  expect(deriveToolFamily('mcp__other__js')).toBe('mcp')
+})
+
+test('a closed computer step shows its screenshot, or its first failure line, instead of opening', () => {
+  const shot = render(
+    toolRow({
+      toolName: 'mcp__codex-computer-use__js',
+      toolFamily: 'computer',
+      input: { code: 'await safari.getScreenshot()', title: 'Checking the banner' },
+      status: 'success',
+      result: { content: '', isError: false, diff: null, images: [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }] },
+    }),
+  )
+  expect(shot).toContain('alt="Screenshot"')
+  expect(shot).toContain('aria-expanded="false"')
+  expect(shot).not.toContain('Result image')
+
+  const failed = render(
+    toolRow({
+      toolName: 'mcp__codex-computer-use__js',
+      toolFamily: 'computer',
+      input: { code: 'await safari.setValue(429, "8")', title: 'Filling the quantity field' },
+      status: 'error',
+      result: { content: 'Computer Use server error -10005: The element ID is no longer valid.\nTry again.', isError: true, diff: null },
+    }),
+  )
+  expect(failed).toContain('aria-expanded="false"')
+  expect(failed).toContain('Computer Use server error -10005: The element ID is no longer valid.')
+  expect(failed).not.toContain('Try again.')
 })
 
 test('P4-18b: each tool family renders its own glyph + word header', () => {

@@ -159,6 +159,8 @@ export function deriveTarget(
     case 'notebook':
       return str('notebook_path') ?? str('path') ?? row.toolName
     case 'mcp':
+      return mcpServerTool(row.toolName)
+    case 'computer':
       return computerUseStepTitle(row.toolName, str) ?? mcpServerTool(row.toolName)
     case 'skill':
       return str('command') ?? str('skill') ?? row.toolName

@@ -56,12 +56,31 @@ export function isFocusedDeliverable(row: NestedTranscriptRow): boolean {
     row.result?.generatedImage !== undefined
 }
 
+/**
+ * A computer-use title already starts with its own verb ("Opening the page"),
+ * so the generic Using/Used in front of it is dropped. Queued, Reviewing and
+ * Preparing still say something the title does not.
+ */
+export function titleSpeaksForItself(family: ToolFamily, verb: string): boolean {
+  return family === 'computer' && (verb === 'Using' || verb === 'Used')
+}
+
+/** The newest screenshot a stretch's computer steps returned, for its closed line. */
+export function latestComputerScreenshot(rows: readonly NestedTranscriptRow[]): { mediaType: string; data: string } | null {
+  for (let index = rows.length - 1; index >= 0; index--) {
+    const row = rows[index]!
+    const image = row.kind === 'tool-use' && row.toolFamily === 'computer' ? row.result?.images?.at(-1) : undefined
+    if (image) return image
+  }
+  return null
+}
+
 /** A settled stretch of exactly one call is named by its target instead of counted. */
-export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: string; target: string; toolUseId: string } | null {
+export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: string; target: string; toolUseId: string; family: ToolFamily } | null {
   const calls = rows.filter(row => row.kind === 'tool-use')
   const call = calls[0]
   if (calls.length !== 1 || call?.kind !== 'tool-use' || call.status === 'pending') return null
-  return { verb: pastVerbs[call.toolFamily] ?? 'Used', target: deriveTarget(call), toolUseId: call.toolUseId }
+  return { verb: pastVerbs[call.toolFamily] ?? 'Used', target: deriveTarget(call), toolUseId: call.toolUseId, family: call.toolFamily }
 }
 
 function rowHasError(row: NestedTranscriptRow): boolean {
@@ -114,7 +133,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   const actions: Partial<Record<ToolFamily, readonly [string, string]>> = {
     agent: ['delegated', 'task'], 'agent-control': ['sent', 'agent request'],
     web: ['made', 'web request'], mcp: ['made', 'MCP call'], skill: ['used', 'skill'],
-    imagegen: ['requested', 'image'], notebook: ['edited', 'notebook'],
+    imagegen: ['requested', 'image'], notebook: ['edited', 'notebook'], computer: ['used', 'computer step'],
     lsp: ['made', 'code intelligence request'],
   }
   for (const family of Object.keys(other) as ToolFamily[]) {
