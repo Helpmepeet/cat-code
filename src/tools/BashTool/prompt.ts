@@ -215,7 +215,7 @@ export function getBashPrompt(
     "The main session's working directory persists between commands and is used by later tools. A foreground Bash command updates it to the command's final `pwd`, but shell state does not persist. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
 
   const instructionItems: Array<string | string[]> = [
-    'Always quote file paths that contain spaces. Prefer absolute paths over `cd`.',
+    'Always quote file paths that contain spaces. Relative paths are fine from the current working directory; prefer absolute paths for locations outside it. Do not `cd` to the directory you are already in. When a command needs a different working directory, use `cd <directory> && <command>`.',
     'If a command fails or returns no output, do not assume success: check the exit status and stderr, then retry with a corrected command or report the failure with its output. Empty output is a result to interpret, not a completion signal.',
     `You may specify an optional foreground timeout in milliseconds (up to ${getMaxTimeoutMs()}ms / ${getMaxTimeoutMs() / 60000} minutes; default ${getDefaultTimeoutMs()}ms). At that limit, foreground execution stops or the command moves to the background when auto-backgrounding is enabled. Background commands have no duration timeout, including services; stop them explicitly when no longer needed.`,
     ...(backgroundNote !== null ? [backgroundNote] : []),
