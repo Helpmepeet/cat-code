@@ -64,7 +64,9 @@ process per session, raw `AppSessionEvent` fidelity, and separate `appSessionId`
 
 `~/.cat-code/`, the account vault, and the running app hold real work; tests use
 isolated state. Get authorization for live logins, token refreshes, quota-consuming
-probes, GUI launches or driving, and `test:hardening`. GUI work uses **Cat Code Dev**.
+probes, launching the dev app, and `test:hardening`. Background GUI driving that does
+not take the cursor, focus, or frontmost window is pre-approved. GUI work uses
+**Cat Code Dev**.
 
 ## Code
 
