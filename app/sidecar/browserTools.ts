@@ -55,14 +55,14 @@ export function createBrowserTools(requestHost: PeerHostRequester = requestPeerH
         if (context.agentId) return { data: { ok: false, message: 'Only the main conversational agent may use the browser.' } }
         try {
           const result = await requestHost(verb, parseBrowserArgs(verb, input), { timeoutMs: 30_000 })
-          return { data: result.ok ? { ok: true, value: result.value } : { ok: false, message: result.error.message } }
+          return { data: result.ok === true ? { ok: true, value: result.value } : { ok: false, message: result.error.message } }
         } catch (error) { return { data: { ok: false, message: String(error) } } }
       },
       mapToolResultToToolResultBlockParam(data: Output, toolUseID: string) {
         return { type: 'tool_result' as const, tool_use_id: toolUseID,
-          content: data.ok && 'mimeType' in data.value
+          content: data.ok === true && 'mimeType' in data.value
             ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: data.value.mimeType, data: data.value.data } }]
-            : JSON.stringify(data.ok ? data.value : { error: data.message }),
+            : JSON.stringify(data.ok === true ? data.value : { error: data.message }),
           ...(data.ok ? {} : { is_error: true }) }
       },
       renderToolUseMessage() { return null },
@@ -70,7 +70,7 @@ export function createBrowserTools(requestHost: PeerHostRequester = requestPeerH
   }
   return [
     create('BrowserNavigate', 'browser.navigate', navigateSchema, 'Open a localhost page or local HTML file in the session browser, or go back, forward, or reload.'),
-    create('BrowserRead', 'browser.read', z.strictObject({}), 'Read the session browser page text and bounded accessibility snapshot. Use its current refs for browser actions.'),
+    create('BrowserRead', 'browser.read', z.strictObject({}), 'Read the session browser page text and accessibility tree. Use its current refs for browser actions.'),
     create('BrowserScreenshot', 'browser.screenshot', z.strictObject({}), 'Capture the session browser page as an image.'),
     create('BrowserAct', 'browser.act', actSchema, 'Click, type, press a key, scroll, or select in the session browser by current ref or point. Password typing is refused. acceptConfirm arms acceptance of the next confirm dialog.'),
   ]
