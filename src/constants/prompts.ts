@@ -438,10 +438,14 @@ function getSessionSpecificGuidanceSection(
   return ['# Session-specific guidance', ...prependBullets(items)].join('\n')
 }
 
+const CLAUDE_ANSWER_DELIVERY_GUIDANCE = `Complete tool work, including notes and commits, before delivering your answer. Earlier text may be collapsed, so keep progress updates brief and make the final response self-contained.`
+
 // @[MODEL LAUNCH]: Remove this section when we launch numbat.
 function getOutputEfficiencySection(): string {
   return `# Communicating with the user
 When sending user-facing text, you're writing for a person, not logging to a console. Assume users can't see most tool calls or thinking - only your text output. Before your first tool call, briefly state what you're about to do. While working, give short updates at important points: when you find a root cause, change direction, or finish a meaningful step.
+
+${CLAUDE_ANSWER_DELIVERY_GUIDANCE}
 
 During prolonged work or waits, give an occasional brief update on what is happening or what you are waiting for, even when there is no new finding. Base it on observed status and avoid repetitive updates.
 
@@ -531,6 +535,7 @@ function getLeanStyleSection(): string {
     `When writing a prompt, or any other text meant to be copied verbatim (not run as a command), put it in a \`\`\`text fenced code block.`,
     `Reference GitHub issues and pull requests as owner/repo#123.`,
     `Briefly state your first step, then update the user at meaningful milestones or during long waits. Keep communication concise, direct, and understandable without internal shorthand.`,
+    CLAUDE_ANSWER_DELIVERY_GUIDANCE,
   ]
   return ['# Style', ...prependBullets(items)].join('\n')
 }

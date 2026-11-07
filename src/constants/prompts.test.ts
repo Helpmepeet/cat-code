@@ -715,6 +715,20 @@ describe('lean Claude assembly', () => {
     expect(await build('gpt-5.6-terra', true)).toBe(gptOff)
   })
 
+  test('delivers the answer-after-tools guidance once in both Claude variants, not GPT', async () => {
+    const guidance = 'Complete tool work, including notes and commits, before delivering your answer. Earlier text may be collapsed, so keep progress updates brief and make the final response self-contained.'
+    for (const lean of [true, false]) {
+      for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5']) {
+        const prompt = await build(model, lean)
+        expect(prompt.split(guidance)).toHaveLength(2)
+        expect(prompt).toContain(prompt.includes('# Harness\n')
+          ? 'Briefly state your first step'
+          : 'Before your first tool call')
+      }
+      expect(await build('gpt-6.1-sol', lean)).not.toContain(guidance)
+    }
+  })
+
   // The session guidance section is cached; a key without the lean flag would
   // serve whichever variant was built first for the rest of the session.
   test('a warm section cache does not serve the other variant its session guidance', async () => {
