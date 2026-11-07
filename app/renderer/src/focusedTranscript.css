@@ -70,6 +70,7 @@
 .focused-diff-add { color: light-dark(#15803d, #86efac); }
 .focused-diff-remove { color: light-dark(#dc2626, #fca5a5); }
 .focused-fail-note { flex-shrink: 0; font-size: 10.5px; color: var(--tone-danger); }
+.focused-warn-note { flex-shrink: 0; font-size: 10.5px; color: var(--tone-warn); }
 .focused-status-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--text-ghost); }
 .focused-status-dot[data-failed] { background: var(--tone-danger); }
 
@@ -170,8 +171,11 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
 
 .focused-meta { margin-left: auto; flex-shrink: 0; padding-left: 12px; font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--text-faint); }
 .focused-meta-limit { color: var(--text-ghost); }
-.focused-meta-fail { font-family: var(--font-sans); color: var(--tone-danger); }
+.focused-meta-fail, .focused-meta-word, .focused-meta-warn { font-family: var(--font-sans); }
+.focused-meta-fail { color: var(--tone-danger); }
+.focused-meta-warn { color: var(--tone-warn); }
 .focused-queued-verb { color: var(--text-faint); }
+.focused-warn-verb { color: var(--tone-warn); }
 .focused-live-out { display: flex; min-width: 0; gap: 12px; padding: 1px 0 1px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--text-faint); }
 .focused-live-out > .focused-ticker { flex: 1; }
 .focused-calls .focused-live-out { padding-left: 20px; }

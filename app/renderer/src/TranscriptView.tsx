@@ -880,7 +880,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     if (entry.kind === 'transition') return renderTransition(entry.transition, entryKeys[index])
     if (entry.kind === 'focused') return (
       <div data-row-key={entry.turn.id} data-transcript-entry={entryKeys[index]} key={entry.turn.id}>
-        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} renderReasoning={renderFocusedReasoning} liveState={focusedLiveState} latestLive={liveFocusedEntry?.kind === 'focused' && liveFocusedEntry.turn.id === entry.turn.id} tasks={focusedTasks} />
+        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} renderReasoning={renderFocusedReasoning} liveState={focusedLiveState} latestLive={liveFocusedEntry?.kind === 'focused' && liveFocusedEntry.turn.id === entry.turn.id} tasks={focusedTasks} cwd={cwd} />
       </div>
     )
     const item = entry.item

@@ -1,12 +1,13 @@
-import { callVerb, callTarget, duration, firstWaitPhrase, preparingCalls, rollingCalls, type FocusedCall } from './focusedLive.js'
+import { duration, firstWaitPhrase, preparingCalls, rollingCalls, type FocusedCall } from './focusedLive.js'
+import { focusedCallLine, focusedCallMark, type FocusedCallContext, type FocusedCallLine } from './focusedCallText.js'
+import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { FocusedLiveState } from './transcriptProjector.js'
 import type { TasksSnapshot } from '../../shared/protocol.js'
 import { memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
-import { focusedNamedCall, isFocusedDeliverable, latestComputerScreenshot, summarizeFocusedWork, titleSpeaksForItself, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
-import { FAMILY_STYLE } from './toolCardPalette.js'
+import { focusedNamedCall, isFocusedDeliverable, latestComputerScreenshot, summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { useToolCardExpanded } from './toolCardExpansion.js'
-import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
+import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { AgentRevealContext, containsAgentTool } from './transcriptAgentReveal.js'
 import { TranscriptMotionContext } from './transcriptMotion.js'
 import { FocusedNamedCallContext } from './transcriptMode.js'
@@ -25,11 +26,13 @@ const CASCADE_MS = 1200
 /** The stylesheet's `.focused-tick-out` duration. */
 const TICK_OUT_MS = 180
 
-export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderRows, renderReasoning, liveState = null, tasks = null, latestLive = true }: {
+export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderRows, renderReasoning, liveState = null, tasks = null, cwd = null, latestLive = true }: {
   turn: FocusedTurnItem
   latestLive?: boolean
   liveState?: FocusedLiveState | null
   tasks?: TasksSnapshot | null
+  /** Project folder trimmed from path targets, as Full does. */
+  cwd?: string | null
   renderRows: RowRenderer
   renderReasoning: ReasoningRenderer
 }) {
@@ -72,6 +75,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
     (issuedCalls.has(job.toolUseId) || !!liveState?.activities[job.toolUseId]) &&
     (job.status === 'running' || (job.endTime !== undefined && now - job.endTime < 4000))) ?? [] : []
   const last = segments.at(-1)
+  const callContext: FocusedCallContext = { signalled: liveState !== null, cwd, tasks, turnRows: turn.rows }
   const deliverables = useMemo(() => turn.rows.filter(isFocusedDeliverable), [turn.rows])
   const latestUpdate = turn.live ? [...segments].reverse().find(segment => segment.kind === 'update')?.id : undefined
   const toggle = () => {
@@ -98,11 +102,11 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
               ? <div data-focused-update data-latest={segment.id === latestUpdate ? '' : undefined}>{renderRows(segment.rows, true)}</div>
               : segment.kind === 'speech' ? <div className="focused-lifted-speech">{renderRows(segment.rows, false)}</div>
               : segment.kind === 'reasoning' ? renderReasoning(segment.rows, turn.live && !turn.answering && segment === last)
-              : <FocusedStep segment={segment} live={turn.live} rolling={latestLive && segment === latestStretch && !turn.answering} preparing={segment === latestStretch ? preparing : []} liveState={liveState} now={now} renderRows={renderRows} />}
+              : <FocusedStep segment={segment} live={turn.live} rolling={latestLive && segment === latestStretch && !turn.answering} preparing={segment === latestStretch ? preparing : []} liveState={liveState} callContext={callContext} now={now} renderRows={renderRows} />}
           </FocusedSegmentBlock>)}
           {background.map(job => <div key={job.id} className={`focused-bg${job.status !== 'running' ? ' focused-bg-done' : ''}`}>
             <span className="focused-bg-mark" aria-hidden>&amp;</span><span className="focused-bg-text">{job.label}</span>
-            <span className={`focused-meta${job.status === 'failed' || job.status === 'killed' ? ' focused-meta-fail' : ''}`}>{job.status === 'running' ? duration(now - job.startTime) : job.status === 'completed' ? 'finished' : 'failed'}</span>
+            <span className={`focused-meta${job.status === 'failed' ? ' focused-meta-fail' : job.status === 'killed' ? ' focused-meta-warn' : ''}`}>{job.status === 'running' ? duration(now - job.startTime) : job.status === 'completed' ? 'finished' : job.status === 'killed' ? 'stopped' : 'failed'}</span>
           </div>)}
           {thinking ? <div className="focused-thinking">
             <span className="focused-reasoning-gutter" aria-hidden><span className="focused-reasoning-node" /></span>
@@ -124,8 +128,8 @@ function FocusedSegmentBlock({ segment, live, children }: { segment: FocusedSegm
   return <FocusedDisclosure open id={id} animateArrival={arriving} className="focused-segment">{children}</FocusedDisclosure>
 }
 
-function FocusedStep({ segment, live, rolling, preparing, liveState, now, renderRows }: {
-  segment: FocusedSegment; live: boolean; rolling: boolean; preparing: FocusedCall[]; liveState: FocusedLiveState | null; now: number; renderRows: RowRenderer
+function FocusedStep({ segment, live, rolling, preparing, liveState, callContext, now, renderRows }: {
+  segment: FocusedSegment; live: boolean; rolling: boolean; preparing: FocusedCall[]; liveState: FocusedLiveState | null; callContext: FocusedCallContext; now: number; renderRows: RowRenderer
 }) {
   const bodyId = useId()
   // A settled stretch that failed opens with its rows when the turn is reopened.
@@ -140,47 +144,54 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
   calls.sort((a, b) => messageOrder.get(a.messageId)! - messageOrder.get(b.messageId)! || a.blockIndex - b.blockIndex)
   const finished = calls.filter(call => call.status !== 'pending')
   const rollingNow = live && rolling && !open
-  const activeCall = calls.find(call => call.status === 'pending' && call.activity) ?? calls.find(call => call.status === 'pending')
+  const activeCall = calls.find(call => call.status === 'pending' && call.awaitingApproval) ?? calls.find(call => call.status === 'pending' && call.activity) ?? calls.find(call => call.status === 'pending')
   const finishedHead = live && rolling && finished.length > 0
   const headCall = finishedHead ? undefined : activeCall
-  const active = live ? headCall ? `${callVerb(headCall, liveState !== null)} ${callTarget(headCall)}` : null : null
+  const liveHead = live ? headCall : undefined
+  const headLine = liveHead ? focusedCallLine(liveHead, callContext) : null
   const summary = finishedHead ? summarizeFocusedWork(finished) : segment
-  const named = !rollingNow && segment.activeLabel === null ? focusedNamedCall(segment.rows) : rollingNow && finished.length === calls.length ? focusedNamedCall(finished) : null
-  const split = (label: string) => [label.slice(0, label.indexOf(' ')), label.slice(label.indexOf(' ') + 1)] as const
-  // Streamed arguments grow in place; only a different call or phase replaces the line.
-  const headVerb = headCall ? callVerb(headCall, liveState !== null) : ''
-  const [key, text] = active && headCall && titleSpeaksForItself(headCall.toolFamily, headVerb)
-    ? [`run:${headCall.toolUseId}:${headVerb}`, <span className="focused-step-verb">{callTarget(headCall)}</span>]
-    : active && headCall
-    ? [`run:${headCall.toolUseId}:${callVerb(headCall, liveState !== null)}`, <><span className={split(active)[0] === 'Queued' ? 'focused-queued-verb' : headCall?.preparing ? 'focused-step-verb focused-live-verb' : 'focused-step-verb'}>{split(active)[0]}</span>{' '}<span className={headCall.toolFamily === 'computer' ? 'focused-step-title' : 'focused-step-target'}>{split(active)[1]}</span>{headCall?.additions ? <span className="focused-diff-add"> +{headCall.additions}</span> : null}{headCall?.preparing ? <span className="focused-caret" /> : null}</>]
-    : segment.activeLabel && !finishedHead && !live
-      ? [`stop:${segment.activeLabel}`, `Stopped ${split(segment.activeLabel)[1]}`]
+  const named = !rollingNow && segment.activeCall === null ? focusedNamedCall(segment.rows, callContext) : rollingNow && finished.length === calls.length ? focusedNamedCall(finished, callContext) : null
+  // A turn stopped mid-call names the call it was making, from its row so the path is trimmed like any other.
+  const stopped = segment.activeCall && !finishedHead && !live ? segment.activeCall : null
+  const stoppedRow = stopped ? segment.rows.find(row => row.kind === 'tool-use' && row.toolUseId === stopped.toolUseId) : undefined
+  const stoppedLine = stoppedRow?.kind === 'tool-use' ? focusedCallLine(stoppedRow, callContext) : null
+  const [key, text] = liveHead && headLine
+    ? [`run:${liveHead.toolUseId}:${headLine.phase}:${headLine.verb}`, <CallWords line={headLine} call={liveHead} kind="head" />]
+    : stopped
+      ? [`stop:${stopped.toolUseId}`, <>Stopped <span className={(stoppedLine?.targetFace ?? 'mono') === 'mono' ? 'focused-step-target' : 'focused-step-title'}>{stoppedLine?.target ?? stopped.target}</span></>]
       : named
-        ? [`named:${named.verb}:${named.target}`, titleSpeaksForItself(named.family, named.verb)
-          ? <span className="focused-step-verb">{named.target}</span>
-          : <>{named.verb} <span className="focused-step-target">{named.target}</span></>]
+        ? [`named:${named.line.verb}:${named.line.target}`, <CallWords line={named.line} call={null} kind="named" />]
         : [`sum:${summary.summary}`, capitalize(summary.summary)]
-  const headNames = !active && !(segment.activeLabel && !finishedHead && !live) ? named : null
+  const headNames = !liveHead && !stopped ? named : null
   const mainTool = headCall ?? (live ? segment.rows.find(row => row.kind === 'tool-use' && row.status === 'pending') : null)
     ?? segment.rows.find(row => row.kind === 'tool-use')
-  const family = mainTool?.kind === 'tool-use' ? mainTool.toolFamily : null
+  const mainMark = mainTool?.kind === 'tool-use' ? focusedCallMark(mainTool) : null
   const screenshot = latestComputerScreenshot(segment.rows)
+  // A running agent's own newest calls show what it is doing; child calls get no activity reports, so none is "queued".
+  const agentHead = live && !open && liveHead?.toolFamily === 'agent' && liveHead.status === 'pending' ? liveHead : null
+  const childCalls: FocusedCall[] = agentHead ? agentHead.children
+    .filter((row): row is Extract<NestedTranscriptRow, { kind: 'tool-use' }> => row.kind === 'tool-use' && !isPeerSpeechCall(row.toolName))
+    .slice(-3).map(row => ({ ...row, activity: liveState?.activities[row.toolUseId], awaitingApproval: liveState?.awaitingApproval[row.toolUseId] })) : []
+  const rollingList = rollingNow ? rollingCalls(calls.filter(call => call !== headCall && call.toolUseId !== named?.toolUseId)) : []
+  const noteOmitted = headNames?.line.phase === 'stopped' ? 'stopped' : headNames?.line.phase === 'blocked' ? 'blocked'
+    : headNames?.line.phase === 'done' && headNames.line.background?.state === 'failed' ? 'failed' : null
   return (
     <div className="focused-step">
-      <button type="button" className="focused-step-head" data-open={open ? '' : undefined} data-running={active && headCall && callVerb(headCall, liveState !== null) !== 'Queued' && !headCall.preparing ? '' : undefined}
+      <button type="button" className="focused-step-head" data-open={open ? '' : undefined} data-running={headLine?.verbTone === 'live' && headLine.phase !== 'preparing' ? '' : undefined}
         aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
         <span className="focused-step-gutter" aria-hidden>
-          <span className={`focused-step-mark ${family !== null && STEP_MARK_COLORED.has(family) ? FAMILY_STYLE[family].color : ''}`}>{family === null ? '·' : stepMark(family)}</span>
+          <span className={`focused-step-mark ${mainMark?.markClass ?? ''}`}>{mainMark?.mark ?? '·'}</span>
           <span className="focused-step-chevron"><FocusedChevron /></span>
         </span>
         <FocusedTicker tickKey={key} className="focused-step-text">{text}</FocusedTicker>
         <AutoModeReviewMark summary={summarizeAutoModeReviews(calls.map(call => call.autoModeReview))} />
         <DiffTotals summary={summary} />
-        <FailureMark summary={summary} />
-        {live && headCall ? <CallMeta call={headCall} now={now} /> : null}
+        <FailureMark summary={summary} omit={noteOmitted} />
+        {liveHead && headLine ? <CallMeta call={liveHead} line={headLine} now={now} /> : headNames && headNames.line.phase !== 'failed' ? <BackgroundMeta background={headNames.line.background} /> : null}
       </button>
-      {live && headCall ? <LiveOutput call={headCall} now={now} className="focused-head-out" /> : null}
-      <RollingCalls calls={rollingNow ? rollingCalls(calls.filter(call => call !== headCall)) : []} now={now} signalled={liveState !== null} />
+      {liveHead ? <LiveOutput call={liveHead} now={now} className="focused-head-out" /> : null}
+      {agentHead ? <RollingCalls calls={childCalls} now={now} callContext={{ ...callContext, signalled: false }} /> : null}
+      <RollingCalls calls={rollingList} now={now} callContext={callContext} />
       {!open && screenshot ? <button type="button" className="focused-shot" aria-label="Open this step" onClick={() => setOpen(true)}>
         <img alt="Latest screenshot" decoding="async" loading="lazy" src={`data:${screenshot.mediaType};base64,${screenshot.data}`} />
       </button> : null}
@@ -193,15 +204,41 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, now, render
   )
 }
 
-/** Step marks keep Focused's compact set; the families named here take their tool colour. */
-function CallMeta({ call, now }: { call: FocusedCall; now: number }) {
-  if (call.status === 'error') return <span className="focused-meta focused-meta-fail">failed</span>
-  if (call.status !== 'pending' || !call.activity || call.preparing || call.awaitingApproval) return null
-  const elapsed = now - call.activity.startedAt
-  if (elapsed < 2000) return null
-  const timeout = call.activity.timeoutMs ?? (typeof call.input.timeout === 'number' ? call.input.timeout : null)
-  const limit = call.toolFamily === 'bash' && call.activity.phase === 'executing' && !call.input.run_in_background && timeout !== null && elapsed > timeout / 2
-  return <span className="focused-meta">{duration(elapsed)}{limit ? <span className="focused-meta-limit"> of {duration(timeout).replace(/ 0s$/, '')}</span> : null}</span>
+/** One call's words from its line; the verb is dressed by tone and never split from the target. */
+function CallWords({ line, call, kind }: { line: FocusedCallLine; call: FocusedCall | null; kind: 'head' | 'row' | 'named' }) {
+  const plain = kind === 'head' ? 'focused-step-verb' : ''
+  const verbClass = line.verbTone === 'live' ? kind === 'head' ? `focused-step-verb${call?.preparing ? ' focused-live-verb' : ''}` : 'focused-live-verb'
+    : line.verbTone === 'queued' ? 'focused-queued-verb' : line.verbTone === 'warn' ? 'focused-warn-verb' : plain
+  const targetClass = line.targetFace === 'mono' ? 'focused-step-target' : 'focused-step-title'
+  return <>
+    {line.verb === ''
+      ? <span className={verbClass || (kind === 'named' ? 'focused-step-verb' : '')}>{line.target}</span>
+      : <><span className={verbClass}>{line.verb}</span>{' '}<span className={targetClass}>{line.target}</span></>}
+    {line.detail ? <span className="focused-step-title"> · {line.detail}</span> : null}
+    {call?.additions ? <span className="focused-diff-add"> +{call.additions}</span> : null}
+    {call?.preparing ? <span className="focused-caret" /> : null}
+  </>
+}
+
+function CallMeta({ call, line, now }: { call: FocusedCall; line: FocusedCallLine; now: number }) {
+  if (line.phase === 'failed') return <span className="focused-meta focused-meta-fail">failed</span>
+  if (call.status === 'pending' && call.activity && !call.preparing && !call.awaitingApproval) {
+    const elapsed = now - call.activity.startedAt
+    if (elapsed >= 2000) {
+      const timeout = call.activity.timeoutMs ?? (typeof call.input.timeout === 'number' ? call.input.timeout : null)
+      const limit = call.toolFamily === 'bash' && call.activity.phase === 'executing' && !call.input.run_in_background && timeout !== null && elapsed > timeout / 2
+      return <span className="focused-meta">{duration(elapsed)}{limit ? <span className="focused-meta-limit"> of {duration(timeout).replace(/ 0s$/, '')}</span> : null}</span>
+    }
+  }
+  return <BackgroundMeta background={line.background} />
+}
+
+/** A launch outlives its tool result, so a finished call can still be working. */
+function BackgroundMeta({ background }: { background: FocusedCallLine['background'] }) {
+  if (background === null) return null
+  return background.state === 'running' ? <span className="focused-meta focused-meta-word">in background</span>
+    : background.state === 'failed' ? <span className="focused-meta focused-meta-fail">failed</span>
+    : <span className="focused-meta focused-meta-warn">stopped</span>
 }
 
 function LiveOutput({ call, now, className = '' }: { call: FocusedCall; now: number; className?: string }) {
@@ -213,7 +250,7 @@ function LiveOutput({ call, now, className = '' }: { call: FocusedCall; now: num
   return <div className={`focused-live-out ${className}`}><FocusedTicker tickKey={call.toolUseId} className="">{line}</FocusedTicker><span className="focused-live-count">{count} lines</span></div>
 }
 
-function RollingCalls({ calls, now, signalled }: { calls: FocusedCall[]; now: number; signalled: boolean }) {
+function RollingCalls({ calls, now, callContext }: { calls: FocusedCall[]; now: number; callContext: FocusedCallContext }) {
   const [retained, setRetained] = useState(calls)
   const ids = calls.map(call => call.toolUseId).join(':')
   useEffect(() => {
@@ -224,17 +261,27 @@ function RollingCalls({ calls, now, signalled }: { calls: FocusedCall[]; now: nu
   const ordered = [...calls, ...retained.filter(call => !calls.some(next => next.toolUseId === call.toolUseId))]
   return <div className="focused-calls">{ordered.map(call => {
     const present = calls.some(next => next.toolUseId === call.toolUseId)
-    const verb = callVerb(call, signalled)
-    const target = callTarget(call)
+    const line = focusedCallLine(call, callContext)
     return <div key={call.toolUseId} className={`focused-call ${present ? 'focused-call-enter' : 'focused-call-leave'}`} aria-hidden={!present}>
       <div><div className="focused-call-row">
-        <span className={`focused-call-mark ${FAMILY_STYLE[call.toolFamily].color}`} aria-hidden>{stepMark(call.toolFamily)}</span>
-        <FocusedTicker tickKey={`${call.toolUseId}:${verb}`} className="">{titleSpeaksForItself(call.toolFamily, verb) ? <span className={call.status === 'pending' ? 'focused-live-verb' : ''}>{target}</span> : <><span className={verb === 'Queued' ? 'focused-queued-verb' : call.status === 'pending' ? 'focused-live-verb' : ''}>{verb}</span>{' '}<span className={call.toolFamily === 'computer' ? 'focused-step-title' : 'focused-step-target'}>{target}</span></>}{call.additions ? <span className="focused-diff-add"> +{call.additions}</span> : null}{call.preparing ? <span className="focused-caret" /> : null}</FocusedTicker>
+        <span className={`focused-call-mark ${line.markClass}`} aria-hidden>{line.mark}</span>
+        <FocusedTicker tickKey={`${call.toolUseId}:${line.phase}:${line.verb}`} className=""><CallWords line={line} call={call} kind="row" /></FocusedTicker>
         <AutoModeReviewMark review={call.autoModeReview} />
-        <CallMeta call={call} now={now} />
-      </div><LiveOutput call={call} now={now} /></div>
+        <CallMeta call={call} line={line} now={now} />
+      </div><LiveOutput call={call} now={now} /><AgentLatest call={call} callContext={callContext} /></div>
     </div>
   })}</div>
+}
+
+/** An agent that is not the step's head still says what it is doing, on one line under its row. */
+function AgentLatest({ call, callContext }: { call: FocusedCall; callContext: FocusedCallContext }) {
+  if (call.toolFamily !== 'agent' || call.status !== 'pending') return null
+  const children = call.children.filter((row): row is Extract<NestedTranscriptRow, { kind: 'tool-use' }> => row.kind === 'tool-use' && !isPeerSpeechCall(row.toolName))
+  const latest = children.at(-1)
+  if (!latest) return null
+  const line = focusedCallLine(latest, { ...callContext, signalled: false })
+  return <div className="focused-live-out"><FocusedTicker tickKey={`${latest.toolUseId}:${line.phase}`} className="">{line.verb ? `${line.verb} ${line.target}` : line.target}</FocusedTicker>
+    <span className="focused-live-count">{children.length} {children.length === 1 ? 'call' : 'calls'}</span></div>
 }
 
 function useLiveClock(live: boolean): number {
@@ -246,11 +293,6 @@ function useLiveClock(live: boolean): number {
     return () => clearInterval(timer)
   }, [live])
   return now
-}
-
-const STEP_MARK_COLORED: ReadonlySet<ToolFamily> = new Set(['bash', 'read', 'grep', 'edit', 'write', 'web', 'skill', 'agent', 'computer'])
-function stepMark(family: ToolFamily): string {
-  return family === 'bash' ? '$' : family === 'grep' ? '⌕' : family === 'edit' || family === 'write' ? '±' : family === 'computer' ? '⌖' : '≡'
 }
 
 /** Text that changes in place leaves upward while its replacement rises in. */
@@ -290,9 +332,18 @@ function useSettling(live: boolean): boolean {
   return live || held
 }
 
-function FailureMark({ summary }: { summary: FocusedSummary }) {
-  if (summary.errorCount > 0) return <span className="focused-fail-note">{summary.errorCount} failed</span>
-  return summary.hasErrors ? <span className="focused-status-dot" data-failed role="img" aria-label="A tool failed" /> : null
+/** Failures, blocks and stops are told apart; `omit` drops the note a step's own verb already says. */
+function FailureMark({ summary, omit = null }: { summary: FocusedSummary; omit?: 'failed' | 'stopped' | 'blocked' | null }) {
+  const failed = omit === 'failed' ? 0 : summary.errorCount
+  const blocked = omit === 'blocked' ? 0 : summary.blockedCount
+  const stopped = omit === 'stopped' ? 0 : summary.stoppedCount
+  const dot = summary.hasErrors && summary.errorCount === 0 && summary.blockedCount === 0 && summary.stoppedCount === 0
+  return <>
+    {failed > 0 ? <span className="focused-fail-note">{failed} failed</span> : null}
+    {blocked > 0 ? <span className="focused-fail-note">{blocked} blocked</span> : null}
+    {stopped > 0 ? <span className="focused-warn-note">{stopped} stopped</span> : null}
+    {dot ? <span className="focused-status-dot" data-failed role="img" aria-label="A tool failed" /> : null}
+  </>
 }
 
 function DiffTotals({ summary }: { summary: FocusedSummary }) {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { NestedTranscriptRow, ToolDiffProjection, ToolFamily } from './transcriptProjector.js'
-import { deriveFocusedSegments, deriveFocusedTranscript, summarizeFocusedWork } from './focusedTranscriptLayout.js'
+import { deriveFocusedSegments, deriveFocusedTranscript, focusedNamedCall, isFocusedDeliverable, summarizeFocusedWork } from './focusedTranscriptLayout.js'
 
 const base = (id: string) => ({ id, frameId: id, sessionId: 's', messageId: id, blockIndex: 0, parentToolUseId: null, children: [] })
 const user = (id = 'u'): NestedTranscriptRow => ({ ...base(id), kind: 'user-text', role: 'user', content: 'Go', isReplay: false })
@@ -136,17 +136,17 @@ describe('focused transcript layout', () => {
   test('computer steps are counted as computer steps', () => {
     const summary = summarizeFocusedWork([tool('c1', 'computer'), tool('c2', 'computer')])
     expect(summary.summary).toBe('used 2 computer steps')
-    expect(summary.compact).toBe('used 2')
+    expect(summary.compact).toBe('computer 2')
   })
   test('other actions use human-readable labels and parallel pending label uses first call', () => {
     const summary = summarizeFocusedWork(['agent', 'agent-control', 'web', 'mcp', 'skill', 'imagegen', 'other'].map((family, i) => tool(`${i}`, family as ToolFamily)))
-    expect(summary.summary).toBe('delegated 1 task, sent 1 agent request, made 1 web request, made 1 MCP call, used 1 skill, requested 1 image, made 1 tool call')
+    expect(summary.summary).toBe('delegated 1 task, 1 agent message, 1 web request, 1 MCP call, 1 skill, 1 image, 1 other call')
     // The head's compact form keeps one short entry per category.
-    expect(summary.compact).toBe('delegated 1 · sent 1 · made 1 · made 1 · used 1 · requested 1 · made 1')
+    expect(summary.compact).toBe('delegated 1 · message 1 · web 1 · MCP 1 · skill 1 · image 1 · other 1')
     const first = tool('first', 'bash'), second = tool('second')
     if (first.kind !== 'tool-use' || second.kind !== 'tool-use') throw Error('tool')
     first.status = second.status = 'pending'
-    expect(summarizeFocusedWork([first, second]).activeLabel).toBe('Running bun test')
+    expect(summarizeFocusedWork([first, second]).activeCall).toEqual({ toolUseId: 'first', target: 'bun test' })
   })
   test('segments preserve reasoning and nested agent work without duplicated counts', () => {
     const agent = tool('agent', 'agent')
@@ -176,7 +176,7 @@ describe('focused transcript layout', () => {
     expect(summary.searchedPatterns).toEqual(['needle'])
     expect(summary.commands).toBe(1)
     edit.status = 'pending'
-    expect(summarizeFocusedWork([edit]).activeLabel).toBe('Editing /a')
+    expect(summarizeFocusedWork([edit]).activeCall).toEqual({ toolUseId: 'edit', target: '2 files' })
   })
   test('identity cache respects live state and never mutates frozen input', () => {
     const rows = Object.freeze([user(), text('update'), tool(), text('answer'), result()].map(row => Object.freeze(row)))
@@ -184,5 +184,91 @@ describe('focused transcript layout', () => {
     expect(deriveFocusedTranscript(rows, false)).toBe(deriveFocusedTranscript(rows, false))
     expect(deriveFocusedTranscript(rows, false)).not.toBe(deriveFocusedTranscript(rows, true))
     expect(JSON.stringify(rows)).toBe(before)
+  })
+  test('non-core families are nouns and only a leading noun takes its old verb', () => {
+    const named = (id: string, toolName: string, family: ToolFamily, input: Record<string, unknown> = {}): NestedTranscriptRow =>
+      ({ ...(tool(id, family) as Extract<NestedTranscriptRow, { kind: 'tool-use' }>), toolName, input })
+    const mixed = summarizeFocusedWork([tool('r1'), { ...tool('r2'), input: { file_path: '/b' } } as NestedTranscriptRow,
+      named('web', 'WebSearch', 'web'), named('search', 'ToolSearch', 'other'), named('peers', 'ListPeers', 'other'),
+      named('mcp', 'mcp__cua-driver__click', 'mcp'), named('skill', 'Skill', 'skill'), named('say', 'SendMessage', 'agent-control'),
+      named('wait', 'TaskOutput', 'other')])
+    expect(mixed.summary).toBe('read 2 files, 1 agent message, 1 web request, 1 MCP call, 1 skill, 3 other calls')
+    expect(mixed.compact).toBe('read 2 · message 1 · web 1 · MCP 1 · skill 1 · other 3')
+    const lone = (toolName: string, family: ToolFamily, n = 1) =>
+      summarizeFocusedWork(Array.from({ length: n }, (_, i) => named(`${toolName}${i}`, toolName, family)))
+    expect(lone('mcp__a__b', 'mcp', 2).summary).toBe('made 2 MCP calls')
+    expect(lone('mcp__codex-computer-use__js', 'computer').summary).toBe('used 1 computer step')
+    expect(lone('WebFetch', 'web').summary).toBe('made 1 web request')
+    expect(lone('Skill', 'skill').summary).toBe('used 1 skill')
+    expect(lone('GenerateImage', 'imagegen').summary).toBe('requested 1 image')
+    expect(lone('LSP', 'lsp').summary).toBe('made 1 code intelligence request')
+    expect(lone('SendMessage', 'agent-control').summary).toBe('sent 1 agent message')
+    expect(lone('AskUserQuestion', 'other').summary).toBe('asked 1 question')
+    expect(lone('AskUserQuestion', 'other').compact).toBe('question 1')
+    expect(lone('Mystery', 'other').summary).toBe('made 1 other call')
+    expect(lone('NotebookEdit', 'notebook').summary).toBe('edited 1 notebook')
+    expect(lone('NotebookEdit', 'notebook').compact).toBe('notebook 1')
+    const ask = summarizeFocusedWork([named('q', 'AskUserQuestion', 'other'), named('o', 'Mystery', 'other'), tool('bash', 'bash')])
+    expect(ask.summary).toBe('ran 1 command, 1 question, 1 other call')
+  })
+  test('cancelled calls count as stopped and refused calls as blocked, neither as errors', () => {
+    const cancelled = { ...tool('c', 'bash'), status: 'cancelled', result: { isError: true, isCancelled: true, content: '', diff: null } } as NestedTranscriptRow
+    const blocked = { ...tool('b', 'bash'), status: 'error', result: { isError: true, content: '', diff: null },
+      autoModeReview: { type: 'tool.review', toolUseId: 'b', attemptId: 'a', startedAt: 0, outcome: 'blocked' } } as NestedTranscriptRow
+    const failed = { ...tool('f', 'grep'), status: 'error' } as NestedTranscriptRow
+    const stopped = summarizeFocusedWork([cancelled])
+    expect(stopped).toMatchObject({ stoppedCount: 1, blockedCount: 0, errorCount: 0, hasErrors: false, toolCalls: 1, commands: 1 })
+    const refused = summarizeFocusedWork([blocked])
+    expect(refused).toMatchObject({ stoppedCount: 0, blockedCount: 1, errorCount: 0, hasErrors: false, toolCalls: 1, commands: 0 })
+    expect(refused.summary).toBe('blocked 1 call')
+    expect(refused.compact).toBe('')
+    expect(summarizeFocusedWork([blocked, { ...blocked, id: 'b2', toolUseId: 'b2' } as NestedTranscriptRow]).summary).toBe('blocked 2 calls')
+    const mixed = summarizeFocusedWork([blocked, failed, tool('ok', 'bash')])
+    expect(mixed).toMatchObject({ blockedCount: 1, errorCount: 1, commands: 1, toolCalls: 3, summary: 'searched 1 pattern, ran 1 command' })
+  })
+  test('a failed background agent launch is an error even though the launch succeeded', () => {
+    const agent = (completion: string | null) => ({ ...tool('agent', 'agent'), toolName: 'Agent', input: { description: 'd', run_in_background: true },
+      agentCompletion: completion === null ? null : { status: completion, summary: null, result: null, usage: null } }) as NestedTranscriptRow
+    expect(summarizeFocusedWork([agent('failed')])).toMatchObject({ errorCount: 1, hasErrors: true })
+    expect(summarizeFocusedWork([agent('completed')]).hasErrors).toBe(false)
+    expect(summarizeFocusedWork([agent(null)]).hasErrors).toBe(false)
+  })
+  test('patch headers name the files of a patch that left no diffs', () => {
+    const patch = (...paths: string[]) => ({ input: ['*** Begin Patch', ...paths.map(path => `*** Update File: ${path}`), '*** End Patch'].join('\n') })
+    const make = (input: Record<string, unknown>, status: 'success' | 'error', result: unknown = null) =>
+      ({ ...tool('p', 'edit'), toolName: 'apply_patch', input, status, result }) as NestedTranscriptRow
+    const failed = summarizeFocusedWork([make(patch('/a'), 'error', { isError: true, content: 'bad', diff: null })])
+    expect(failed).toMatchObject({ editedPaths: ['/a'], errorCount: 1, summary: 'edited 1 file' })
+    expect(summarizeFocusedWork([make(patch('/a', '/b'), 'error', { isError: true, content: 'bad', diff: null })]).editedPaths).toEqual(['/a', '/b'])
+    const diff = (filePath: string) => ({ filePath, hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-o', '+n'] }] })
+    const done = make(patch('a.ts', 'b.ts'), 'success', { isError: false, content: '', diff: diff('/r/a.ts'), fileDiffs: [diff('/r/a.ts'), diff('/r/b.ts')] })
+    expect(summarizeFocusedWork([done]).editedPaths).toEqual(['/r/a.ts', '/r/b.ts'])
+    expect(summarizeFocusedWork([make(patch('/a'), 'success', { isError: false, content: '', diff: diff('/a') })]).editedPaths).toEqual(['/a'])
+
+    // A relative header and an absolute diff are one file: a failed try then a retry, and a delete with no diff lines.
+    const retry = make(patch('app/x.ts'), 'success', { isError: false, content: '', diff: diff('/r/app/x.ts') })
+    expect(summarizeFocusedWork([make(patch('app/x.ts'), 'error', { isError: true, content: 'bad', diff: null }), retry]).editedPaths).toEqual(['/r/app/x.ts'])
+    const removed = make({ input: '*** Begin Patch\n*** Delete File: app/old.ts\n*** End Patch' }, 'success', { isError: false, content: '', diff: null, fileDiffs: [{ filePath: '/r/app/old.ts', hunks: [] }] })
+    expect(summarizeFocusedWork([removed]).editedPaths).toEqual(['/r/app/old.ts'])
+  })
+  test('an answered question stays outside the fold like a generated image', () => {
+    const questions = [{ question: 'Which port?', header: 'Port', options: [{ label: '1', description: 'a' }, { label: '2', description: 'b' }], multiSelect: false }]
+    const ask = (status: 'pending' | 'success' | 'error', askUserQuestion?: unknown) =>
+      ({ ...tool('q', 'other'), toolName: 'AskUserQuestion', input: { questions }, status,
+        result: status === 'pending' ? null : { isError: false, content: '', diff: null, ...(askUserQuestion ? { askUserQuestion } : {}) } }) as NestedTranscriptRow
+    expect(isFocusedDeliverable(ask('success', { answers: { 'Which port?': '2' }, notesByQuestion: {} }))).toBe(true)
+    expect(isFocusedDeliverable(ask('success'))).toBe(false)
+    expect(isFocusedDeliverable(ask('success', { answers: {}, notesByQuestion: {}, shown: true }))).toBe(false)
+    expect(isFocusedDeliverable(ask('pending'))).toBe(false)
+    expect(isFocusedDeliverable(ask('error'))).toBe(false)
+    expect(isFocusedDeliverable(tool('t'))).toBe(false)
+  })
+  test('a settled single call is named by its line', () => {
+    const ctx = { cwd: '/repo', tasks: null, turnRows: [] }
+    const read = { ...tool('r'), input: { file_path: '/repo/app/a.ts' } } as NestedTranscriptRow
+    const named = focusedNamedCall([read], ctx)
+    expect(named).toMatchObject({ toolUseId: 'r', line: { verb: 'Read', target: 'app/a.ts' } })
+    expect(focusedNamedCall([{ ...read, status: 'pending' } as NestedTranscriptRow], ctx)).toBeNull()
+    expect(focusedNamedCall([read, tool('t2')], ctx)).toBeNull()
   })
 })

@@ -32,8 +32,8 @@ function activity(state: TranscriptState, id: string, phase: 'reviewing' | 'exec
 function finish(state: TranscriptState, id: string, error = false, content = 'completed output') {
   return message(state, { type: 'user', uuid: `result-${id}`, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: error }] } })
 }
-function view(state: TranscriptState, mode: TranscriptMode = 'focused', tasks: TasksSnapshot | null = null, live = true) {
-  return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptView state={state} activeSessionId="live" turnLive={live} focusedTasks={tasks} /></TranscriptModeContext.Provider>
+function view(state: TranscriptState, mode: TranscriptMode = 'focused', tasks: TasksSnapshot | null = null, live = true, cwd: string | null = null) {
+  return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptView state={state} activeSessionId="live" turnLive={live} focusedTasks={tasks} cwd={cwd} /></TranscriptModeContext.Provider>
 }
 const visibleText = (node: Element | null) => node ? [...node.querySelectorAll(':scope > *:not([aria-hidden="true"])')].map(child => child.textContent).join('') : ''
 async function tick() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 270)) }) }
@@ -378,7 +378,222 @@ test('a replacement stream retires abandoned Preparing calls and manual approval
     requestId: 'manual-approval', request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: 'manual', input: { command: 'manual' } },
   } } })
   const tree = await harness.mount(view(state))
-  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Running manual')
+  expect(tree.container.querySelector('.focused-step-head')?.textContent).toContain('Waiting for approval manual')
+  expect(tree.container.querySelector('.focused-step-head .focused-warn-verb')?.textContent).toBe('Waiting for approval')
+  expect(tree.container.querySelector('.focused-step-head')?.hasAttribute('data-running')).toBe(false)
   expect(tree.container.querySelector('.focused-step-head .focused-meta')).toBeNull()
   expect(tree.container.querySelector('.focused-step-head')?.textContent).not.toContain('Reviewing')
+})
+
+
+type Call = { id: string; name: string; input: Record<string, unknown> }
+let sequence = 0
+function toolCalls(state: TranscriptState, list: Call[], parent: string | null = null) {
+  sequence++
+  return message(state, { type: 'assistant', uuid: `tc-${sequence}`, parent_tool_use_id: parent, message: { id: `tcm-${sequence}`, role: 'assistant', content: list.map(call => ({ type: 'tool_use', id: call.id, name: call.name, input: call.input })) } })
+}
+function answer(state: TranscriptState, id: string, content: string, options: { error?: boolean; result?: unknown; status?: string; parent?: string | null } = {}) {
+  sequence++
+  return message(state, { type: 'user', uuid: `tr-${sequence}`, parent_tool_use_id: options.parent ?? null,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error: options.error ?? false }] },
+    ...(options.result ? { tool_use_result: options.result } : {}), ...(options.status ? { tool_result_status: options.status } : {}) })
+}
+function endTurn(state: TranscriptState, answerText: string | null, isError = false) {
+  sequence++
+  if (answerText) state = message(state, { type: 'assistant', uuid: `at-${sequence}`, parent_tool_use_id: null, message: { id: `atm-${sequence}`, role: 'assistant', content: [{ type: 'text', text: answerText }] } })
+  return message(state, { type: 'result', uuid: `rs-${sequence}`, subtype: isError ? 'error_during_execution' : 'success', is_error: isError, duration_ms: 5000, result: answerText ?? '', errors: isError ? ['Turn stopped'] : [] })
+}
+const approval = (state: TranscriptState, id: string) => projectServerFrame(state, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'live',
+  event: { type: 'permission.requested', request: { requestId: `ask-${id}`, request: { subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: id, input: {} } } } } as ServerFrame)
+async function openTurn(tree: { container: HTMLElement }) {
+  const head = tree.container.querySelector('.focused-fold-head')!
+  if (head.getAttribute('aria-expanded') === 'false') await click(head)
+  await act(async () => { await harness.nextFrame() })
+}
+const read = (id: string, file = '/repo/app/x.ts'): Call => ({ id, name: 'Read', input: { file_path: file } })
+const bashCall = (id: string, command: string, extra: Record<string, unknown> = {}): Call => ({ id, name: 'Bash', input: { command, ...extra } })
+const stepHead = (tree: { container: HTMLElement }) => tree.container.querySelector('.focused-step-head')!
+const foldHead = (tree: { container: HTMLElement }) => tree.container.querySelector('.focused-fold-head')!
+
+test('paths read relative to the project and a finished single call is not repeated by the rolling rows', async () => {
+  const running = activity(toolCalls(start(), [read('r1')]), 'r1', 'executing')
+  let tree = await harness.mount(view(running, 'focused', null, true, '/repo'))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Reading app/x.ts')
+  expect(tree.container.querySelector('.focused-step-text .focused-step-target')?.textContent).toBe('app/x.ts')
+  await tree.render(view(answer(running, 'r1', 'text'), 'focused', null, true, '/repo'))
+  await tick()
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Read app/x.ts')
+  expect(tree.container.querySelectorAll('.focused-call:not([aria-hidden="true"])')).toHaveLength(0)
+  await tree.render(view(running, 'focused', null, true, null))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Reading /repo/app/x.ts')
+})
+
+test('a turn stopped mid-call names it with the project-relative path', async () => {
+  const state = endTurn(toolCalls(start(), [read('r1')]), null, true)
+  const tree = await harness.mount(view(state, 'focused', null, false, '/repo'))
+  await openTurn(tree)
+  expect(stepHead(tree).textContent).toContain('Stopped app/x.ts')
+})
+
+test('an apply_patch in flight is named by its file', async () => {
+  const patch = '*** Begin Patch\n*** Update File: app/y.ts\n@@\n-old\n+new\n*** End Patch'
+  const state = activity(toolCalls(start(), [{ id: 'p1', name: 'apply_patch', input: { input: patch } }]), 'p1', 'executing')
+  const tree = await harness.mount(view(state, 'focused', null, true, '/repo'))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Editing app/y.ts')
+})
+
+test('a running agent shows its latest three calls, and a child that has not reported activity reads as running', async () => {
+  let state = activity(toolCalls(start(), [{ id: 'agent', name: 'Agent', input: { description: 'Fix shell output', prompt: 'Fix it', subagent_type: 'implementor' } }]), 'agent', 'executing')
+  state = toolCalls(state, [bashCall('c0', 'bun run old')], 'agent')
+  state = answer(state, 'c0', 'ok', { parent: 'agent' })
+  state = toolCalls(state, [bashCall('c1', 'bun test src/shell')], 'agent')
+  state = answer(state, 'c1', '3 fail', { error: true, parent: 'agent' })
+  state = toolCalls(state, [read('c2', '/repo/src/shell.ts'), { id: 'c3', name: 'SendToPeer', input: { to: 'Ada', text: 'hi' } }], 'agent')
+  const tree = await harness.mount(view(state, 'focused', null, true, '/repo'))
+  await tick()
+  const rows = [...tree.container.querySelectorAll('.focused-call:not([aria-hidden="true"]) .focused-call-row')]
+  expect(rows.map(row => row.querySelector('.focused-ticker')?.textContent)).toEqual(['Ran bun run old', 'Ran bun test src/shell', 'Reading src/shell.ts'])
+  expect(rows[1]!.querySelector('.focused-meta-fail')?.textContent).toBe('failed')
+  expect(rows[2]!.textContent).not.toContain('Queued')
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toContain('Delegating')
+  await click(stepHead(tree))
+  await tick()
+  expect(tree.container.querySelectorAll('.focused-call:not([aria-hidden="true"])')).toHaveLength(0)
+})
+
+test('web, skill and MCP calls carry their family mark and colour', async () => {
+  for (const [call, mark, colour] of [
+    [{ id: 'w', name: 'WebFetch', input: { url: 'https://bun.sh/docs', prompt: 'x' } }, '↗', 'text-[light-dark(#0e7490,#22d3ee)]'],
+    [{ id: 's', name: 'Skill', input: { skill: 'design-html' } }, '§', 'text-[light-dark(#0f766e,#5eead4)]'],
+    [{ id: 'm', name: 'mcp__cua-driver__click', input: { element_index: 3 } }, '⧉', 'text-[light-dark(#7c3aed,#c084fc)]'],
+  ] as const) {
+    const tree = await harness.mount(view(answer(toolCalls(start(), [call]), call.id, 'ok')))
+    const glyph = tree.container.querySelector('.focused-step-mark')!
+    expect(glyph.textContent).toBe(mark)
+    expect(glyph.className).toContain(colour)
+    await tree.unmount()
+  }
+})
+
+test('SendMessage and ToolSearch read as their own sentences', async () => {
+  const state = answer(toolCalls(start(), [{ id: 'sm', name: 'SendMessage', input: { to: '@Shamir', summary: 'Transport confirmed', message: 'ok' } }]), 'sm', 'queued')
+  let tree = await harness.mount(view(state, 'focused', null, false))
+  await openTurn(tree)
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Messaged Shamir · Transport confirmed')
+  await tree.unmount()
+  const search = answer(toolCalls(start(), [{ id: 'ts', name: 'ToolSearch', input: { query: 'select:TaskOutput' } }]), 'ts', '', { result: { matches: ['TaskOutput'], query: 'select:TaskOutput', total_deferred_tools: 3 } })
+  tree = await harness.mount(view(endTurn(search, null), 'focused', null, false))
+  await openTurn(tree)
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Loaded TaskOutput')
+  expect(tree.container.querySelector('.focused-step-mark')?.textContent).toBe('⌕')
+})
+
+test('a call waiting for approval is warned, not shimmered', async () => {
+  const tree = await harness.mount(view(approval(toolCalls(start(), [bashCall('b', 'git push')]), 'b')))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Waiting for approval git push')
+  expect(tree.container.querySelector('.focused-step-text .focused-warn-verb')?.textContent).toBe('Waiting for approval')
+  expect(stepHead(tree).hasAttribute('data-running')).toBe(false)
+})
+
+test('a background command stays marked after it returns and follows its job', async () => {
+  const launched = answer(toolCalls(start(), [bashCall('b', 'bun run dev', { run_in_background: true })]), 'b', 'Command running in background with ID: job')
+  const job = (status: 'running' | 'failed' | 'killed') => ({ items: [], focusedBashJobs: [{ id: 'job', toolUseId: 'b', label: 'bun run dev', status, startTime: 10000, ...(status === 'running' ? {} : { endTime: now }) }] }) as TasksSnapshot
+  const tree = await harness.mount(view(launched, 'focused', job('running')))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Ran bun run dev')
+  expect(stepHead(tree).querySelector('.focused-meta-word')?.textContent).toBe('in background')
+  await tree.render(view(launched, 'focused', job('killed')))
+  expect(stepHead(tree).querySelector('.focused-meta-warn')?.textContent).toBe('stopped')
+  await tree.render(view(launched, 'focused', job('failed')))
+  expect(stepHead(tree).querySelector('.focused-meta-fail')?.textContent).toBe('failed')
+  expect(stepHead(tree).querySelector('.focused-meta-word')).toBeNull()
+})
+
+test('a background agent is in the background until its notification says it failed', async () => {
+  const input = { description: 'Mine transcripts', prompt: 'Research', subagent_type: 'general-purpose', run_in_background: true }
+  let state = answer(toolCalls(start(), [{ id: 'ag', name: 'Agent', input }]), 'ag', 'Async agent launched successfully.\nagentName: Moggridge', { result: { status: 'async_launched', agentId: 'a9bc', agentName: 'Moggridge' } })
+  let tree = await harness.mount(view(state))
+  expect(stepHead(tree).querySelector('.focused-meta-word')?.textContent).toBe('in background')
+  await tree.unmount()
+  sequence++
+  state = message(state, { type: 'user', uuid: `tn-${sequence}`, parent_tool_use_id: null, origin: { kind: 'task-notification', status: 'failed', toolUseId: 'ag', summary: 'Agent failed', result: 'Blocked.' }, message: { role: 'user', content: '<task-notification>failed</task-notification>' } })
+  state = endTurn(state, 'It was blocked.')
+  tree = await harness.mount(view(state, 'focused', null, false))
+  expect(foldHead(tree).querySelector('.focused-fail-note')?.textContent).toBe('1 failed')
+  await openTurn(tree)
+  expect(stepHead(tree).querySelector('.focused-meta-fail')?.textContent).toBe('failed')
+  expect(stepHead(tree).querySelector('.focused-fail-note')).toBeNull()
+  expect(stepHead(tree).querySelector('.focused-meta-word')).toBeNull()
+})
+
+test('a cancelled call is stopped, not failed', async () => {
+  const state = endTurn(answer(toolCalls(start(), [bashCall('b', 'bun test')]), 'b', '[Request interrupted by user]', { error: true, status: 'cancelled' }), null, true)
+  const tree = await harness.mount(view(state, 'focused', null, false))
+  await openTurn(tree)
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Stopped bun test')
+  expect(foldHead(tree).querySelector('.focused-warn-note')?.textContent).toBe('1 stopped')
+  expect(foldHead(tree).querySelector('.focused-fail-note')).toBeNull()
+  expect(foldHead(tree).querySelector('.focused-status-dot')).toBeNull()
+  expect(stepHead(tree).querySelector('.focused-warn-note, .focused-fail-note')).toBeNull()
+})
+
+test('a call auto mode refused is blocked, not failed', async () => {
+  let state = toolCalls(start(), [bashCall('b', 'rm -rf dist')])
+  state = projectServerFrame(state, { kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'live',
+    event: { type: 'tool.review', toolUseId: 'b', attemptId: 'att', startedAt: now - 1000, completedAt: now, outcome: 'blocked', reason: 'Deletes build output' } } as ServerFrame)
+  state = endTurn(answer(state, 'b', 'Permission for this action has been denied.', { error: true }), 'Skipped it.')
+  const tree = await harness.mount(view(state, 'focused', null, false))
+  expect(foldHead(tree).querySelector('.focused-fail-note')?.textContent).toBe('1 blocked')
+  await openTurn(tree)
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Blocked rm -rf dist')
+  expect(stepHead(tree).querySelector('.focused-fail-note, .focused-meta-fail')).toBeNull()
+  expect(stepHead(tree).querySelector('.auto-mode-review')).not.toBeNull()
+})
+
+test('AskUserQuestion waits quietly and an answered one leaves the fold with its answer on the step', async () => {
+  const questions = [{ question: 'Can I read the transcripts?', header: 'Transcripts', options: [{ label: 'Yes', description: 'a' }, { label: 'No', description: 'b' }], multiSelect: false }]
+  const asked = toolCalls(start(), [{ id: 'aq', name: 'AskUserQuestion', input: { questions } }])
+  let tree = await harness.mount(view(asked))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Waiting for your answer Can I read the transcripts?')
+  expect(tree.container.querySelector('.focused-step-text .focused-queued-verb')?.textContent).toBe('Waiting for your answer')
+  expect(stepHead(tree).hasAttribute('data-running')).toBe(false)
+  await tree.unmount()
+  const answered = endTurn(answer(asked, 'aq', 'User has answered your questions: "Can I read the transcripts?"="Yes".', { result: { questions, answers: { 'Can I read the transcripts?': 'Yes' } } }), 'Reading them.')
+  tree = await harness.mount(view(answered, 'focused', null, false))
+  await openTurn(tree)
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Asked Can I read the transcripts? · Yes')
+  expect(tree.container.querySelector('.focused-deliverables [data-tool-row]')).not.toBeNull()
+  expect(tree.container.querySelector('.focused-turn [data-tool-row]')).toBeNull()
+})
+
+test('a blocking question waits on the answer, not on an approval', async () => {
+  const questions = [{ question: 'Which port?', header: 'Port', options: [{ label: '1', description: 'a' }, { label: '2', description: 'b' }], multiSelect: false }]
+  const state = approval(toolCalls(start(), [{ id: 'q', name: 'AskUserQuestion', input: { questions } }]), 'q')
+  const tree = await harness.mount(view(state))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Waiting for your answer Which port?')
+  expect(stepHead(tree).querySelector('.focused-warn-verb')).toBeNull()
+  expect(stepHead(tree).hasAttribute('data-running')).toBe(false)
+})
+
+test('the call waiting for approval stays in view among many parallel calls', async () => {
+  const ids = ['c1', 'c2', 'c3', 'c4', 'push']
+  const state = approval(toolCalls(start(), ids.map(id => bashCall(id, id))), 'push')
+  const tree = await harness.mount(view(state))
+  expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Waiting for approval push')
+})
+
+test('an agent that is not the head call still says what it is doing', async () => {
+  let state = toolCalls(start(), [read('r'), { id: 'ag', name: 'Agent', input: { description: 'Fix the loader', prompt: 'Fix' } }])
+  state = answer(state, 'r', 'contents')
+  state = toolCalls(state, [bashCall('c1', 'bun test src/a'), read('c2', '/repo/src/shell.ts')], 'ag')
+  const tree = await harness.mount(view(state, 'focused', null, true, '/repo'))
+  const agentRow = [...tree.container.querySelectorAll('.focused-call:not([aria-hidden="true"])')].find(row => row.textContent?.includes('Fix the loader'))
+  expect(agentRow?.querySelector('.focused-live-out')?.textContent).toBe('Reading src/shell.ts2 calls')
+})
+
+test('a killed background job reads stopped on its job row, as on its step', async () => {
+  const launched = answer(toolCalls(start(), [bashCall('b', 'bun run dev', { run_in_background: true })]), 'b', 'Command running in background with ID: job')
+  const tasks: TasksSnapshot = { items: [], focusedBashJobs: [{ id: 'job', toolUseId: 'b', label: 'bun run dev', status: 'killed', startTime: now - 5000, endTime: now - 1000 }] }
+  const tree = await harness.mount(view(launched, 'focused', tasks))
+  expect(tree.container.querySelector('.focused-bg .focused-meta')?.textContent).toBe('stopped')
+  expect(stepHead(tree).querySelector('.focused-meta-warn')?.textContent).toBe('stopped')
 })

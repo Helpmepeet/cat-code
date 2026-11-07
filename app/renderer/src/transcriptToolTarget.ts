@@ -1,4 +1,5 @@
 import type { NestedToolUseRow as ToolUseNestedRow } from './transcriptProjector.js'
+import { ADD_FILE_PREFIX, DELETE_FILE_PREFIX, UPDATE_FILE_PREFIX, isFilePatchToolName } from '../../../src/tools/FilePatchTool/constants.js'
 
 /**
  * How much of a peer argument the one-line slot is allowed to carry.
@@ -149,7 +150,15 @@ export function deriveTarget(
     case 'read':
     case 'write':
     case 'edit': {
-      const filePath = toolCardFilePath(row)
+      const files = touchedFiles(row)
+      if (files.length > 1) {
+        if (row.status === 'pending') return `${files.length} files`
+        const names = files.map(fileBasename)
+        // Two files of one name would read as the same file twice.
+        return (new Set(names).size === names.length ? names : files.map(file => displayFilePath(file, cwd))).join(', ')
+      }
+      // The header names a patch's file for the line only: it is not a file the call is known to have written.
+      const filePath = toolCardFilePath(row) ?? singlePatchFile(row)
       return filePath === null ? row.toolName : displayFilePath(filePath, cwd)
     }
     case 'grep':
@@ -238,6 +247,37 @@ export function toolCardFilePath(row: ToolUseNestedRow): string | null {
   const filePath = row.input['file_path']
   if (typeof filePath === 'string' && filePath.length > 0) return filePath
   return row.toolFamily === 'edit' ? row.result?.diff?.filePath ?? null : null
+}
+
+/** The one file a single-file patch names in its header, whether or not it applied. */
+export function singlePatchFile(row: ToolUseNestedRow): string | null {
+  const headers = patchFilePaths(row)
+  return headers.length === 1 ? headers[0]! : null
+}
+
+const PATCH_HEADER_PREFIXES = [UPDATE_FILE_PREFIX, ADD_FILE_PREFIX, DELETE_FILE_PREFIX]
+
+/** Files named by an `apply_patch` call's `*** Update/Add/Delete File:` headers, in order. */
+export function patchFilePaths(row: ToolUseNestedRow): string[] {
+  const patch = row.input['input']
+  if (!isFilePatchToolName(row.toolName) || typeof patch !== 'string') return []
+  const paths = new Set<string>()
+  for (const line of patch.split('\n')) {
+    const prefix = PATCH_HEADER_PREFIXES.find(candidate => line.startsWith(candidate))
+    const path = prefix === undefined ? '' : line.slice(prefix.length).trim()
+    if (path) paths.add(path)
+  }
+  return [...paths]
+}
+
+/** Every file a call touched: the result's diffs once it has them, else the patch headers. */
+function touchedFiles(row: ToolUseNestedRow): string[] {
+  const diffs = row.result?.fileDiffs
+  return diffs !== undefined && diffs.length > 1 ? diffs.map(diff => diff.filePath) : patchFilePaths(row)
+}
+
+function fileBasename(filePath: string): string {
+  return filePath.split(/[/\\]/).filter(Boolean).at(-1) ?? filePath
 }
 
 export function displayFilePath(filePath: string, cwd: string | null): string {

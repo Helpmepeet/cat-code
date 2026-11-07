@@ -1,6 +1,8 @@
+import { askUserQuestionTranscriptPresentation } from './askUserQuestionTranscript.js'
+import { backgroundAgentState, focusedCallLine, isDeclinedQuestion, type FocusedCallContext, type FocusedCallLine } from './focusedCallText.js'
 import { isPeerSpeechCall } from './peerSurfaces.js'
-import type { NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
-import { deriveTarget, toolCardFilePath } from './transcriptToolTarget.js'
+import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
+import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
 import { selectToolDiffs } from './toolDiffs.js'
 
 export type FocusedSummary = {
@@ -15,10 +17,15 @@ export type FocusedSummary = {
   hasErrors: boolean
   /** Top-level rows that failed; zero when only the turn's result reported an error. */
   errorCount: number
+  /** Top-level calls the user or a stop cancelled; not failures. */
+  stoppedCount: number
+  /** Top-level calls auto mode refused before they ran; not failures and not in the per-family counts. */
+  blockedCount: number
   summary: string
   /** The same counts as `summary` in a short `verb n · verb n` form for the turn head. */
   compact: string
-  activeLabel: string | null
+  /** The first call still pending, with its Focus target, for naming what a stopped turn was doing. */
+  activeCall: { toolUseId: string; target: string } | null
 }
 export type FocusedSegment = {
   kind: 'update' | 'reasoning' | 'stretch' | 'speech'
@@ -38,31 +45,16 @@ export type FocusedTurnItem = {
 } & FocusedSummary
 export type FocusedTranscriptItem = { kind: 'rows'; rows: readonly NestedTranscriptRow[] } | FocusedTurnItem
 
-const verbs: Partial<Record<ToolFamily, string>> = {
-  read: 'Reading', edit: 'Editing', write: 'Writing', grep: 'Searching', bash: 'Running',
-  agent: 'Delegating', web: 'Fetching', notebook: 'Editing',
-}
-const pastVerbs: Partial<Record<ToolFamily, string>> = {
-  read: 'Read', edit: 'Edited', write: 'Wrote', grep: 'Searched', bash: 'Ran',
-  agent: 'Delegated', web: 'Fetched', notebook: 'Edited',
-}
-
 /**
  * A finished generated image is a result for the reader, like the answer, so it
  * stays outside the fold. It still counts toward its step's summary.
  */
 export function isFocusedDeliverable(row: NestedTranscriptRow): boolean {
-  return row.kind === 'tool-use' && row.toolFamily === 'imagegen' && row.status === 'success' &&
-    row.result?.generatedImage !== undefined
-}
-
-/**
- * A computer-use title already starts with its own verb ("Opening the page"),
- * so the generic Using/Used in front of it is dropped. Queued, Reviewing and
- * Preparing still say something the title does not.
- */
-export function titleSpeaksForItself(family: ToolFamily, verb: string): boolean {
-  return family === 'computer' && (verb === 'Using' || verb === 'Used')
+  if (row.kind !== 'tool-use' || row.status !== 'success') return false
+  if (row.toolFamily === 'imagegen') return row.result?.generatedImage !== undefined
+  // The user's answer is what the turn went on to act on, like a generated image.
+  return row.toolName === 'AskUserQuestion' &&
+    askUserQuestionTranscriptPresentation(row.toolName, row.input, row.status, row.result)?.state === 'answered'
 }
 
 /** The newest screenshot a stretch's computer steps returned, for its closed line. */
@@ -75,17 +67,20 @@ export function latestComputerScreenshot(rows: readonly NestedTranscriptRow[]): 
   return null
 }
 
-/** A settled stretch of exactly one call is named by its target instead of counted. */
-export function focusedNamedCall(rows: readonly NestedTranscriptRow[]): { verb: string; target: string; toolUseId: string; family: ToolFamily } | null {
+/** A settled stretch of exactly one call is named by its line instead of counted. */
+export function focusedNamedCall(rows: readonly NestedTranscriptRow[], ctx: Omit<FocusedCallContext, 'signalled'>): { line: FocusedCallLine; toolUseId: string } | null {
   const calls = rows.filter(row => row.kind === 'tool-use')
   const call = calls[0]
   if (calls.length !== 1 || call?.kind !== 'tool-use' || call.status === 'pending') return null
-  return { verb: pastVerbs[call.toolFamily] ?? 'Used', target: deriveTarget(call), toolUseId: call.toolUseId, family: call.toolFamily }
+  return { line: focusedCallLine(call, { ...ctx, signalled: false }), toolUseId: call.toolUseId }
 }
 
+const isBlocked = (row: NestedToolUseRow) => row.status === 'error' && row.autoModeReview?.outcome === 'blocked'
+
 function rowHasError(row: NestedTranscriptRow): boolean {
-  if (row.kind === 'tool-use' && isPeerSpeechCall(row.toolName)) return false
-  return (row.kind === 'tool-use' && (row.status === 'error' || row.result?.isError === true)) ||
+  if (row.kind === 'tool-use' && (isPeerSpeechCall(row.toolName) || isDeclinedQuestion(row))) return false
+  return (row.kind === 'tool-use' && row.status !== 'cancelled' && !isBlocked(row) &&
+      (row.status === 'error' || row.result?.isError === true || backgroundAgentState(row) === 'failed')) ||
     (row.kind === 'result' && row.isError) ||
     (row.kind === 'system-notice' && row.noticeType === 'provider_error') ||
     row.children.some(rowHasError)
@@ -95,24 +90,39 @@ function rowHasError(row: NestedTranscriptRow): boolean {
 export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): FocusedSummary {
   const reads = new Set<string>(), edits = new Set<string>(), searches = new Set<string>()
   const other: Partial<Record<ToolFamily, number>> = {}
-  let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0
-  let activeLabel: string | null = null
+  let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0, stoppedCount = 0, blockedCount = 0, questions = 0
+  let activeCall: FocusedSummary['activeCall'] = null
   for (const row of rows) {
     if (rowHasError(row)) errorCount++
     if (row.kind !== 'tool-use' || isPeerSpeechCall(row.toolName)) continue
     toolCalls++
-    if (row.status === 'pending' && activeLabel === null) activeLabel = `${verbs[row.toolFamily] ?? 'Using'} ${deriveTarget(row)}`
+    if (row.status === 'pending' && activeCall === null) {
+      activeCall = { toolUseId: row.toolUseId, target: focusedCallLine(row, { signalled: false, cwd: null, tasks: null, turnRows: rows }).target }
+    }
+    if (row.status === 'cancelled') stoppedCount++
+    // A refused call never ran, so it names no file, pattern or command.
+    if (isBlocked(row)) { blockedCount++; continue }
     const path = toolCardFilePath(row)
     switch (row.toolFamily) {
       case 'read': if (path) reads.add(path); break
-      case 'edit': case 'write': if (path) edits.add(path); break
+      case 'edit': case 'write': {
+        // Diffs name every file a call changed (added below). Without them, a patch's
+        // headers still say which files it was for, as a failed patch has none.
+        if (!selectToolDiffs(row.result).length) {
+          if (path) edits.add(path)
+          for (const header of patchFilePaths(row)) edits.add(header)
+        }
+        break
+      }
       case 'grep': {
         const pattern = row.input.pattern
         if (typeof pattern === 'string' && pattern) searches.add(pattern)
         break
       }
       case 'bash': commands++; break
-      default: other[row.toolFamily] = (other[row.toolFamily] ?? 0) + 1
+      default:
+        other[row.toolFamily] = (other[row.toolFamily] ?? 0) + 1
+        if (row.toolName === 'AskUserQuestion') questions++
     }
     for (const diff of selectToolDiffs(row.result)) {
       edits.add(diff.filePath)
@@ -122,6 +132,10 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
       }
     }
   }
+  // A patch header is relative and a diff path absolute; one file must not count twice.
+  for (const edited of [...edits]) {
+    if (!edited.startsWith('/') && [...edits].some(other => other.endsWith(`/${edited}`))) edits.delete(edited)
+  }
   const parts: string[] = [], compact: string[] = []
   const count = (verb: string, n: number, noun: string) => {
     if (!n) return
@@ -130,20 +144,27 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   }
   count('read', reads.size, 'file'); count('edited', edits.size, 'file')
   count('searched', searches.size, 'pattern'); count('ran', commands, 'command')
-  const actions: Partial<Record<ToolFamily, readonly [string, string]>> = {
-    agent: ['delegated', 'task'], 'agent-control': ['sent', 'agent request'],
-    web: ['made', 'web request'], mcp: ['made', 'MCP call'], skill: ['used', 'skill'],
-    imagegen: ['requested', 'image'], notebook: ['edited', 'notebook'], computer: ['used', 'computer step'],
-    lsp: ['made', 'code intelligence request'],
+  count('delegated', other.agent ?? 0, 'task')
+  // Everything else is a noun; only a lead noun gets its old verb so it still reads as a sentence.
+  const nouns: readonly (readonly [number, string, string, string])[] = [
+    [other['agent-control'] ?? 0, 'agent message', 'message', 'sent'], [other.web ?? 0, 'web request', 'web', 'made'],
+    [other.mcp ?? 0, 'MCP call', 'MCP', 'made'], [other.skill ?? 0, 'skill', 'skill', 'used'],
+    [other.imagegen ?? 0, 'image', 'image', 'requested'], [other.notebook ?? 0, 'notebook', 'notebook', 'edited'],
+    [other.computer ?? 0, 'computer step', 'computer', 'used'], [other.lsp ?? 0, 'code intelligence request', 'LSP', 'made'],
+    [questions, 'question', 'question', 'asked'], [(other.other ?? 0) - questions, 'other call', 'other', 'made'],
+  ]
+  for (const [n, noun, label, verb] of nouns) {
+    if (!n) continue
+    const leading = parts.length === 0 || label === 'notebook'
+    parts.push(`${leading ? `${verb} ` : ''}${n} ${noun}${n === 1 ? '' : 's'}`)
+    compact.push(`${label} ${n}`)
   }
-  for (const family of Object.keys(other) as ToolFamily[]) {
-    const [verb, noun] = actions[family] ?? ['made', 'tool call']
-    count(verb, other[family]!, noun)
-  }
-  const summary = parts.join(', ') || (toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned')
+  const refusedAll = blockedCount > 0 && blockedCount === toolCalls
+  const summary = parts.join(', ') || (refusedAll ? `blocked ${blockedCount} call${blockedCount === 1 ? '' : 's'}`
+    : toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned')
   return { readPaths: [...reads], editedPaths: [...edits], searchedPatterns: [...searches], commands,
-    otherFamilies: other, toolCalls, additions, deletions, hasErrors: errorCount > 0, errorCount, summary,
-    compact: compact.join(' · ') || summary, activeLabel }
+    otherFamilies: other, toolCalls, additions, deletions, hasErrors: errorCount > 0, errorCount, stoppedCount, blockedCount, summary,
+    compact: compact.join(' · ') || (refusedAll ? '' : summary), activeCall }
 }
 
 const segmentCache = new WeakMap<readonly NestedTranscriptRow[], readonly FocusedSegment[]>()

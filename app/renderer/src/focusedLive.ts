@@ -1,16 +1,7 @@
 import { deriveToolFamily, type FocusedLiveState, type NestedTranscriptRow } from './transcriptProjector.js'
-import { deriveTarget } from './transcriptToolTarget.js'
 import type { ToolActivity } from '../../../src/app-runtime/toolActivityContract.js'
 
 export type FocusedCall = Extract<NestedTranscriptRow, { kind: 'tool-use' }> & { preparing?: true; awaitingApproval?: true; additions?: number; activity?: ToolActivity }
-const verbs: Record<string, string> = { bash: 'Running', read: 'Reading', edit: 'Editing', write: 'Writing', grep: 'Searching', agent: 'Delegating', web: 'Fetching', notebook: 'Editing' }
-const past: Record<string, string> = { bash: 'Ran', read: 'Read', edit: 'Edited', write: 'Wrote', grep: 'Searched', agent: 'Delegated', web: 'Fetched', notebook: 'Edited' }
-export function callVerb(call: FocusedCall, signalled: boolean): string {
-  if (call.preparing) return 'Preparing'
-  if (call.status !== 'pending') return past[call.toolFamily] ?? 'Used'
-  if (call.awaitingApproval) return verbs[call.toolFamily] ?? 'Using'
-  return call.activity?.phase === 'reviewing' ? 'Reviewing' : call.activity?.phase === 'executing' || !signalled ? verbs[call.toolFamily] ?? 'Using' : 'Queued'
-}
 export function duration(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000))
   return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`
@@ -29,9 +20,9 @@ export function firstWaitPhrase(quietMs: number): string | null {
   }
   return phrase
 }
-export function callTarget(call: FocusedCall): string { return deriveTarget(call) }
 export function rollingCalls(calls: readonly FocusedCall[]): FocusedCall[] {
-  const rank = (c: FocusedCall) => c.status === 'pending' && c.activity ? 0 : c.preparing ? 1 : c.status !== 'pending' ? 2 : 3
+  // A call waiting on the user's approval is never the one left out.
+  const rank = (c: FocusedCall) => c.status === 'pending' && (c.activity || c.awaitingApproval) ? 0 : c.preparing ? 1 : c.status !== 'pending' ? 2 : 3
   const picked = calls.map((call, index) => ({ call, index })).sort((a, b) => rank(a.call) - rank(b.call) || (rank(a.call) === 2 ? b.index - a.index : a.index - b.index)).slice(0, 3)
   return picked.sort((a, b) => a.index - b.index).map(item => item.call)
 }
