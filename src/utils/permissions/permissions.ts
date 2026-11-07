@@ -1316,10 +1316,9 @@ export async function checkRuleBasedPermissions(
     }
   }
 
-  // 1b. Entire tool has an ask rule. The decision is held back until after
-  // step 1d: content-specific denies (e.g. Bash(curl:*)) only surface from
-  // tool.checkPermissions, and deny must outrank a tool-wide ask the same way
-  // step 1a outranks it.
+  // 1b. Entire tool has an ask rule. Hold it until tool.checkPermissions
+  // exposes content-specific denies and non-classifier-approvable safety
+  // checks, whose reasons must survive a generic ask.
   let toolWideAskDecision: PermissionAskDecision | null = null
   const askRule = getAskRuleForTool(appState.toolPermissionContext, tool)
   if (askRule) {
@@ -1363,7 +1362,17 @@ export async function checkRuleBasedPermissions(
     return toolPermissionResult
   }
 
-  // Tool-wide ask rule from step 1b, now that content denies are ruled out
+  // Preserve mandatory user approval so Auto cannot classify a generic ask
+  // in place of the tool's non-classifier-approvable safety decision.
+  if (
+    toolPermissionResult?.behavior === 'ask' &&
+    toolPermissionResult.decisionReason?.type === 'safetyCheck' &&
+    !toolPermissionResult.decisionReason.classifierApprovable
+  ) {
+    return toolPermissionResult
+  }
+
+  // Tool-wide ask rule from step 1b, after denies and mandatory safety checks
   if (toolWideAskDecision) {
     return toolWideAskDecision
   }
@@ -1418,10 +1427,9 @@ async function hasPermissionsToUseToolInner(
     }
   }
 
-  // 1b. Check if the entire tool should always ask for permission. The
-  // decision is held back until after step 1d: content-specific denies (e.g.
-  // Bash(curl:*)) only surface from tool.checkPermissions, and deny must
-  // outrank a tool-wide ask the same way step 1a outranks it.
+  // 1b. Check if the entire tool should always ask for permission. Hold the
+  // decision until tool.checkPermissions exposes content-specific denies and
+  // non-classifier-approvable safety checks, whose reasons must survive a generic ask.
   let toolWideAskDecision: PermissionDecision | null = null
   const askRule = getAskRuleForTool(appState.toolPermissionContext, tool)
   if (askRule) {
@@ -1469,7 +1477,17 @@ async function hasPermissionsToUseToolInner(
     return toolPermissionResult
   }
 
-  // Tool-wide ask rule from step 1b, now that content denies are ruled out
+  // Preserve mandatory user approval so Auto cannot classify a generic ask
+  // in place of the tool's non-classifier-approvable safety decision.
+  if (
+    toolPermissionResult?.behavior === 'ask' &&
+    toolPermissionResult.decisionReason?.type === 'safetyCheck' &&
+    !toolPermissionResult.decisionReason.classifierApprovable
+  ) {
+    return toolPermissionResult
+  }
+
+  // Tool-wide ask rule from step 1b, after denies and mandatory safety checks
   if (toolWideAskDecision) {
     return toolWideAskDecision
   }
