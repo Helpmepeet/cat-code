@@ -31,7 +31,7 @@ function getBackgroundUsageNote(): string | null {
   if (isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)) {
     return null
   }
-  return "You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You do not need to use '&' at the end of the command when using this parameter."
+  return "Use `run_in_background` when you don't need the result now. You are notified when it finishes, so don't poll for it or append `&`."
 }
 
 function getCommitAndPRInstructions(): string {
@@ -76,6 +76,7 @@ Use the gh command via the Bash tool for other GitHub-related tasks including wo
 - Prefer staging specific named paths over \`git add -A\` or \`git add .\`.
 - NEVER skip hooks (--no-verify, --no-gpg-sign) unless explicitly asked. A failed pre-commit hook means the commit did NOT happen: fix, re-stage, create a NEW commit, never --amend.
 - NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless explicitly asked.
+- Prefer a new commit over amending one, and never bypass signing with \`-c commit.gpgsign=false\` unless explicitly asked.
 - Interactive git flags (-i, e.g. git rebase -i, git add -i) are not supported.
 - Use the \`gh\` CLI for GitHub work (issues, PRs, checks, releases).`
 }
@@ -200,55 +201,26 @@ export function getBashPrompt(
   // Embedded builds use bfs for find, whose regex semantics need guidance.
   const embedded = hasEmbeddedSearchTools()
 
-  const multipleCommandsSubitems = [
-    `If the commands are independent and can run in parallel, make multiple ${BASH_TOOL_NAME} tool calls in a single message. Example: if you need to run "git status" and "git diff", send a single message with two ${BASH_TOOL_NAME} tool calls in parallel.`,
-    `If the commands depend on each other and must run sequentially, use a single ${BASH_TOOL_NAME} call with '&&' to chain them together.`,
-    "Use ';' only when you need to run commands sequentially but don't care if earlier commands fail.",
-    'DO NOT use newlines to separate commands (newlines are ok in quoted strings).',
-  ]
-
-  const gitSubitems = [
-    'Prefer to create a new commit rather than amending an existing commit.',
-    'Before running destructive operations (e.g., git reset --hard, git push --force, git checkout --), consider whether there is a safer alternative that achieves the same goal. Only use destructive operations when they are truly the best approach.',
-    'Never skip hooks (--no-verify) or bypass signing (--no-gpg-sign, -c commit.gpgsign=false) unless the user has explicitly asked for it. If a hook fails, investigate and fix the underlying issue.',
-  ]
-
-  const sleepSubitems = [
-    'Do not sleep between commands that can run immediately — just run them.',
+  const sleepItems = [
+    "Don't sleep between commands that can run now, and don't retry a failing command in a sleep loop; diagnose it instead.",
     ...(feature('MONITOR_TOOL')
       ? [
           'Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot "wait until done," use Bash with run_in_background instead.',
-        ]
-      : []),
-    'If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.',
-    'Do not retry failing commands in a sleep loop — diagnose the root cause.',
-    'If waiting for a background task you started with `run_in_background`, you will be notified when it completes — do not poll.',
-    ...(feature('MONITOR_TOOL')
-      ? [
           '`sleep N` as the first command with N ≥ 2 is blocked. If you need a delay (rate limiting, deliberate pacing), keep it under 2 seconds.',
         ]
-      : [
-          'If you must poll an external process, use a check command (e.g. `gh run view`) rather than sleeping first.',
-          'If you must sleep, keep the duration short (1-5 seconds) to avoid blocking the user.',
-        ]),
+      : []),
   ]
   const backgroundNote = getBackgroundUsageNote()
   const workingDirectoryNote =
     "The main session's working directory persists between commands and is used by later tools. A foreground Bash command updates it to the command's final `pwd`, but shell state does not persist. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
 
   const instructionItems: Array<string | string[]> = [
-    'If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.',
-    'Always quote file paths that contain spaces with double quotes in your command (e.g., cd "path with spaces/file.txt")',
-    'Try to maintain your current working directory throughout the session by using absolute paths and avoiding usage of `cd`. You may use `cd` if the User explicitly requests it.',
+    'Always quote file paths that contain spaces. Prefer absolute paths over `cd`.',
     'If a command fails or returns no output, do not assume success: check the exit status and stderr, then retry with a corrected command or report the failure with its output. Empty output is a result to interpret, not a completion signal.',
     `You may specify an optional foreground timeout in milliseconds (up to ${getMaxTimeoutMs()}ms / ${getMaxTimeoutMs() / 60000} minutes; default ${getDefaultTimeoutMs()}ms). At that limit, foreground execution stops or the command moves to the background when auto-backgrounding is enabled. Background commands have no duration timeout, including services; stop them explicitly when no longer needed.`,
     ...(backgroundNote !== null ? [backgroundNote] : []),
-    'When issuing multiple commands:',
-    multipleCommandsSubitems,
-    'For git commands:',
-    gitSubitems,
-    'Avoid unnecessary `sleep` commands:',
-    sleepSubitems,
+    `Send independent commands as parallel ${BASH_TOOL_NAME} calls in one message; chain dependent ones with \`&&\`.`,
+    ...sleepItems,
     ...(embedded
       ? [
           // bfs (which backs `find`) uses Oniguruma for -regex, which picks the

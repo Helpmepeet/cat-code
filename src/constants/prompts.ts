@@ -1248,18 +1248,7 @@ Paths:
 
 ${resolveInstruction}
 
-${queryExamples}The subagent sidecar .meta.json contains:
-
-    {
-      "agentType": "general-purpose",
-      "description": "audit your code",
-      "worktreePath": "...",
-      "parentSessionId": "...",
-      "parentToolUseId": "...",
-      "spawnedAt": "2026-04-16T15:45:25Z"
-    }
-
-Read .meta.json first when you want to know what a subagent was for or who spawned it.`
+${queryExamples}The subagent sidecar .meta.json holds agentType, description, worktreePath, parentSessionId, parentToolUseId and spawnedAt. Read .meta.json first when you want to know what a subagent was for or who spawned it.`
 }
 
 function getBriefSection(): string | null {

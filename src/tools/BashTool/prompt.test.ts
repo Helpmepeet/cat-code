@@ -15,7 +15,7 @@ test('managed chat Bash guidance adds no GPT-only change-inspection rule', () =>
     const prompt = getBashPrompt('openai')
     expect(prompt).not.toContain('inspect the changed files before moving on')
     expect(prompt).not.toContain('show the resulting git diff before moving on')
-    expect(prompt).toContain('Never skip hooks')
+    expect(prompt).toContain('NEVER skip hooks')
   } finally {
     setManagedSessionPolicy(null)
   }
