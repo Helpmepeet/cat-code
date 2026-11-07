@@ -159,7 +159,7 @@ export function deriveTarget(
     case 'notebook':
       return str('notebook_path') ?? str('path') ?? row.toolName
     case 'mcp':
-      return mcpServerTool(row.toolName)
+      return computerUseStepTitle(row.toolName, str) ?? mcpServerTool(row.toolName)
     case 'skill':
       return str('command') ?? str('skill') ?? row.toolName
     case 'imagegen':
@@ -244,6 +244,21 @@ export function displayFilePath(filePath: string, cwd: string | null): string {
   const separator = trimmedCwd.includes('\\') ? '\\' : '/'
   const prefix = `${trimmedCwd}${separator}`
   return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath
+}
+
+/**
+ * Codex computer use puts the step's own name in `title` ("Opening the Safari
+ * page") and the finishing note in `completion_summary`. Every call is the same
+ * `js` tool, so `server › tool` names none of them; the sub-label keeps the
+ * tool identity.
+ */
+function computerUseStepTitle(
+  toolName: string,
+  str: (key: string) => string | null,
+): string | null {
+  if (toolName === 'mcp__codex-computer-use__js') return str('title')
+  if (toolName === 'mcp__codex-computer-use__js_complete') return str('completion_summary')
+  return null
 }
 
 /** `mcp__server__tool` → `server › tool` (the prototype's MCP framing). */

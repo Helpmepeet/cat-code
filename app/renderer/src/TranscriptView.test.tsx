@@ -1461,6 +1461,40 @@ test('P4-18b: an MCP card frames the target as server › tool', () => {
   expect(html).toContain('gpt-agent › spawn') // server › tool framing
 })
 
+test('a Codex computer-use step is named by its own title, not server › tool', () => {
+  const step = render(
+    toolRow({
+      toolName: 'mcp__codex-computer-use__js',
+      toolFamily: 'mcp',
+      input: { code: 'await safari.click(451)', title: 'Opening the Safari page' },
+      status: 'pending',
+    }),
+  )
+  expect(step).toContain('Opening the Safari page')
+  expect(step).not.toContain('codex-computer-use › js')
+  expect(step).toContain('mcp__codex-computer-use__js') // sub-label keeps the tool
+
+  const done = render(
+    toolRow({
+      toolName: 'mcp__codex-computer-use__js_complete',
+      toolFamily: 'mcp',
+      input: { completion_summary: 'Updated both profiles' },
+      status: 'pending',
+    }),
+  )
+  expect(done).toContain('Updated both profiles')
+
+  const untitled = render(
+    toolRow({
+      toolName: 'mcp__codex-computer-use__js',
+      toolFamily: 'mcp',
+      input: { code: 'await cua.getState()' },
+      status: 'pending',
+    }),
+  )
+  expect(untitled).toContain('codex-computer-use › js')
+})
+
 test('P4-18b: each tool family renders its own glyph + word header', () => {
   const families: Array<{ family: ToolFamily; word: string }> = [
     { family: 'read', word: 'Read' },
