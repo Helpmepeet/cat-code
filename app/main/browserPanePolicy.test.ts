@@ -14,6 +14,24 @@ test('navigation rejects internet, dev origin and raw file URLs', async () => {
   expect(await policy.navigate('a', 'http://[::1]:3000')).toBe('http://[::1]:3000/')
 })
 
+test('the dev listener is excluded through every loopback alias for navigation and requests', async () => {
+  const hosts = ['localhost', '127.0.0.1', '127.0.0.2', '[::1]', '127.1', '2130706433', '[0:0:0:0:0:0:0:1]']
+  for (const devHost of ['localhost', '127.0.0.1', '[::1]']) {
+    const policy = new BrowserPanePolicy({ folders: () => [], devOrigin: `http://${devHost}:5173` })
+    for (const host of hosts) {
+      const target = `http://${host}:5173/index.html`
+      await expect(policy.navigate('a', target)).rejects.toThrow()
+      expect(policy.allowRequest('a', target, 'http://localhost:3000/')).toBe(false)
+      expect(policy.allowRequest('a', target, '', target)).toBe(false)
+      expect(policy.allowRequest('a', target, '', 'http://localhost:3000/')).toBe(false)
+      expect(await policy.navigate('a', `http://${host}:3000/`)).toBe(new URL(`http://${host}:3000/`).href)
+    }
+  }
+  const defaultPort = new BrowserPanePolicy({ folders: () => [], devOrigin: 'http://localhost:80' })
+  expect(defaultPort.loopback('http://127.0.0.1/')).toBe(false)
+  expect(new BrowserPanePolicy({ folders: () => [], devOrigin: null }).loopback('http://127.0.0.1:5173/')).toBe(true)
+})
+
 test('local origin is per canonical directory and reads cannot escape or reach network', async () => {
   const root = await mkdtemp(join(tmpdir(), 'browser-policy-'))
   try {

@@ -4,6 +4,9 @@ import { createHash } from 'node:crypto'
 
 export const BROWSER_LOCAL_SCHEME = 'cat-browser-local'
 export type BrowserPanePolicyDependencies = { folders: (id: string) => readonly string[] | null; devOrigin: string | null }
+function isLoopbackHost(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '[::1]' || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(hostname)
+}
 function contains(root: string, file: string): boolean {
   const rel = relative(root, file)
   return !isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`)
@@ -14,9 +17,12 @@ export class BrowserPanePolicy {
   loopback(value: string): boolean {
     try {
       const url = new URL(value)
+      const dev = this.deps.devOrigin ? new URL(this.deps.devOrigin) : null
+      // Host aliases can reach the same dev listener, so its port is reserved across loopback.
+      const isDev = dev && url.protocol === dev.protocol && url.port === dev.port &&
+        (url.hostname === dev.hostname || isLoopbackHost(dev.hostname))
       return url.protocol === 'http:' && !url.username && !url.password &&
-        (url.hostname === 'localhost' || url.hostname === '[::1]' || /^127\.(?:\d{1,3}\.){2}\d{1,3}$/.test(url.hostname)) &&
-        (!this.deps.devOrigin || url.origin !== new URL(this.deps.devOrigin).origin)
+        isLoopbackHost(url.hostname) && !isDev
     } catch { return false }
   }
   private async authorized(id: string, path: string): Promise<boolean> {
