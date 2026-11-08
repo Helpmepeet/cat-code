@@ -1843,7 +1843,7 @@ export function SessionPane({
       onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
       onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
       onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}
-      running={generating} runKey={turnStartedAt === null ? null : String(turnStartedAt)}
+      running={generating} stopped={activeConnection.userStopped} onStop={stopTurn} runKey={turnStartedAt === null ? null : String(turnStartedAt)}
       outputRows={revealHidden ? selectNestedTranscriptRows(transcript, activeSessionId, true) : nestedRows}>
     <main data-pending-question-owner={activeSessionId ?? undefined} className="session-pane relative flex min-h-0 flex-1 flex-col gap-4 overflow-hidden pb-8">
       {/* No chat header row: the prototype's ChatView has none (the session

@@ -7,7 +7,7 @@ import { BrowserPane, BrowserGlobe } from './BrowserPane.js'
 import { browserPaneLabel } from './browserPaneState.js'
 import { ComputerPane, ComputerScreenIcon } from './ComputerPane.js'
 import { ComputerPaneContext } from './computerPaneContext.js'
-import { selectComputerStep, selectComputerSteps } from './computerPaneModel.js'
+import { selectComputerStep, selectComputerSteps, selectCurrentComputerStepId } from './computerPaneModel.js'
 import { ScreenActivityChip } from './ScreenActivityChip.js'
 import { reduceScreenActivity, type ScreenKind } from './screenActivityState.js'
 import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OUTPUT_WIDTH_STEP, writeToolOutputWidth, type OpenToolOutput } from './toolOutputPanel.js'
@@ -28,9 +28,11 @@ import './filePane.css'
 
 const WORKSPACE_FIELDS = ['open', 'file', 'visible', 'worker', 'output', 'browser', 'computer', 'screenActivity', 'width'] as const
 
-export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, running = false, runKey = null, cwd, children }: {
+export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopped = false, dock, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, running = false, runKey = null, cwd, children }: {
   appSessionId?: string
   onFocusComposer?: () => void
+  onStop?: () => void
+  stopped?: boolean
   dock: DerivedSubagentDock
   collapsed: boolean
   onCollapsedChange: (collapsed: boolean) => void
@@ -261,7 +263,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
           {state.browser ? <div className="subagent-slot-content" hidden={state.visible !== 'browser'}><BrowserPane state={state.browser} active={state.visible === 'browser'} onHide={() => hideScreen('browser')} /></div> : null}
           {computerSteps.length ? <div className="subagent-slot-content" hidden={state.visible !== 'computer'}><ComputerPane steps={computerSteps}
             selectedId={state.computer?.selectedId ?? null} onSelect={openComputer} onClose={() => hideScreen('computer')} active={state.visible === 'computer'}
-            running={running && computerSteps.some(step => step.status === 'pending')} /></div> : null}
+            running={running} stopped={stopped} currentStepId={selectCurrentComputerStepId(rows)} onStop={computerSteps.some(step => step.nested) ? undefined : onStop} /></div> : null}
         </div> : null}
       </div>
     </div>

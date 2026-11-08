@@ -37,6 +37,7 @@ export type ConnectionSnapshot = {
     | 'parked'
     | LifecycleFrame['status']
   inputEnabled: boolean
+  userStopped?: boolean
 }
 
 export type ConnectionState = {
@@ -248,6 +249,7 @@ export function reduceConnectionState(
         [frame.sessionId]: {
           status: 'ready',
           inputEnabled: frame.payload.inputEnabled,
+          ...(frame.payload.abort.status === 'aborted' && frame.payload.abort.reason === 'user-stop' ? { userStopped: true } : {}),
         },
       },
     }
@@ -263,6 +265,14 @@ export function reduceConnectionState(
         },
       },
     }
+  }
+  if (frame.kind === 'event' && frame.event.type === 'abort.status') {
+    const existing = state.sessions[frame.sessionId]
+    if (!existing) return state
+    const userStopped = frame.event.abort.status === 'aborted' && frame.event.abort.reason === 'user-stop'
+    if (!!existing.userStopped === userStopped) return state
+    const { userStopped: _previous, ...rest } = existing
+    return { ...state, sessions: { ...state.sessions, [frame.sessionId]: { ...rest, ...(userStopped ? { userStopped: true } : {}) } } }
   }
   // The engine's live turn boundary (`AppSessionController.setActiveTurn`).
   // Without it `inputEnabled` would only ever hold the value the `ready`

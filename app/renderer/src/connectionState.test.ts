@@ -15,6 +15,21 @@ import { resolvePendingSubmit } from './composerState.js'
 import type { ServerFrame } from '../../shared/protocol.js'
 import { inlineCommandRefusalFrame } from '../../main/mainDecisions.js'
 
+test('stopped is engine-confirmed user-stop only and clears on the next abort lifecycle', () => {
+  let state = { sessions: { a: { status: 'ready' as const, inputEnabled: false } } }
+  const event = (abort: { status: 'requested' | 'aborted'; reason: string } | { status: 'idle' }): ServerFrame => ({
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'a', event: { type: 'abort.status', abort },
+  })
+  state = reduceConnectionState(state, event({ status: 'requested', reason: 'user-stop' })) as typeof state
+  expect(selectConnection(state, 'a').userStopped).toBeUndefined()
+  state = reduceConnectionState(state, event({ status: 'aborted', reason: 'user-stop' })) as typeof state
+  expect(selectConnection(state, 'a').userStopped).toBe(true)
+  state = reduceConnectionState(state, event({ status: 'idle' })) as typeof state
+  expect(selectConnection(state, 'a').userStopped).toBeUndefined()
+  state = reduceConnectionState(state, event({ status: 'aborted', reason: 'Session closed' })) as typeof state
+  expect(selectConnection(state, 'a').userStopped).toBeUndefined()
+})
+
 test('an aborted move refusal leaves the same live engine ready for composer input', () => {
   for (const message of [
     { type: 'inline-command.start', requestId: 'start', generation: 'same-generation',
