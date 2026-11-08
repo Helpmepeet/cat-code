@@ -1140,6 +1140,7 @@ export const bashToolCheckPermission = (
   toolPermissionContext: ToolPermissionContext,
   compoundCommandHasCd?: boolean,
   astCommand?: SimpleCommand,
+  originalCommand?: string,
 ): PermissionResult => {
   const command = input.command.trim()
 
@@ -1152,7 +1153,7 @@ export const bashToolCheckPermission = (
   // 1a. Deny/ask if exact command has a rule
   if (
     exactMatchResult.behavior === 'deny' ||
-    exactMatchResult.behavior === 'ask'
+    (exactMatchResult.behavior === 'ask' && originalCommand === undefined)
   ) {
     return exactMatchResult
   }
@@ -1166,6 +1167,19 @@ export const bashToolCheckPermission = (
     matchingRulesForInput(input, toolPermissionContext, 'prefix', {
       skipCompoundCheck: astCommand !== undefined,
     })
+  // Basename normalization must not erase rules for the executable as written.
+  // Merge before deciding so a deny in either spelling takes priority over ask.
+  if (originalCommand !== undefined && originalCommand !== input.command) {
+    const originalRules = matchingRulesForInput(
+      { ...input, command: originalCommand },
+      toolPermissionContext,
+      'prefix',
+      { skipCompoundCheck: astCommand !== undefined },
+    )
+    matchingDenyRules.push(...originalRules.matchingDenyRules)
+    matchingAskRules.push(...originalRules.matchingAskRules)
+    matchingAllowRules.push(...originalRules.matchingAllowRules)
+  }
 
   // 2a. Deny if command has a deny rule
   if (matchingDenyRules[0] !== undefined) {
@@ -1487,17 +1501,23 @@ function filterCdCwdSubcommands(
   astCommands: SimpleCommand[] | undefined,
   cwd: string,
   cwdMingw: string,
-): { subcommands: string[]; astCommandsByIdx: (SimpleCommand | undefined)[] } {
+): {
+  subcommands: string[]
+  originalSubcommands: string[]
+  astCommandsByIdx: (SimpleCommand | undefined)[]
+} {
   const subcommands: string[] = []
+  const originalSubcommands: string[] = []
   const astCommandsByIdx: (SimpleCommand | undefined)[] = []
   for (let i = 0; i < rawSubcommands.length; i++) {
     const raw = rawSubcommands[i]!
     if (raw === `cd ${cwd}` || raw === `cd ${cwdMingw}`) continue
     const { cmd, astCommand } = normalizeSystemBinary(raw, astCommands?.[i])
     subcommands.push(cmd)
+    originalSubcommands.push(raw)
     astCommandsByIdx.push(astCommand)
   }
-  return { subcommands, astCommandsByIdx }
+  return { subcommands, originalSubcommands, astCommandsByIdx }
 }
 
 /**
@@ -2298,12 +2318,8 @@ export async function bashToolHasPermission(
     getPlatform() === 'windows' ? windowsPathToPosixPath(cwd) : cwd
   const rawSubcommands =
     astSubcommands ?? shadowLegacySubs ?? splitCommand(input.command)
-  const { subcommands, astCommandsByIdx } = filterCdCwdSubcommands(
-    rawSubcommands,
-    astCommands,
-    cwd,
-    cwdMingw,
-  )
+  const { subcommands, originalSubcommands, astCommandsByIdx } =
+    filterCdCwdSubcommands(rawSubcommands, astCommands, cwd, cwdMingw)
 
   // CC-643: Cap subcommand fanout. Only the legacy splitCommand path can
   // explode — the AST path returns a bounded list (astSubcommands !== null)
@@ -2391,6 +2407,7 @@ export async function bashToolHasPermission(
       appState.toolPermissionContext,
       compoundCommandHasCd,
       astCommandsByIdx[i],
+      originalSubcommands[i],
     ),
   )
 

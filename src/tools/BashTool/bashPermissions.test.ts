@@ -49,13 +49,14 @@ let legacyParse = false
 function toolUseContext(
   allowRules: string[] = [],
   denyRules: string[] = [],
+  askRules: string[] = [],
 ): ToolUseContext {
   const toolPermissionContext: ToolPermissionContext = {
     mode: 'default',
     additionalWorkingDirectories: new Map(),
     alwaysAllowRules: allowRules.length > 0 ? { localSettings: allowRules } : {},
     alwaysDenyRules: denyRules.length > 0 ? { localSettings: denyRules } : {},
-    alwaysAskRules: {},
+    alwaysAskRules: askRules.length > 0 ? { localSettings: askRules } : {},
     isBypassPermissionsModeAvailable: false,
   }
   return {
@@ -302,6 +303,42 @@ for (const parser of ['tree-sitter', 'legacy'] as const) {
       expect(
         (await decide("/usr/bin/sed -i '' 's/a/b/' src/context.ts")).behavior,
       ).not.toBe('allow')
+    })
+
+    for (const command of [
+      '/bin/cat src/context.ts',
+      'echo ok && /bin/cat src/context.ts',
+      '/bin/cat src/context.ts | head -1',
+    ]) {
+      for (const rule of ['Bash(/bin/cat:*)', 'Bash(/bin/cat *)', 'Bash(cat:*)']) {
+        test(`${rule} denies ${command} despite basename normalization`, async () => {
+          const decision = await bashToolHasPermission(
+            { command },
+            toolUseContext(['Bash(cat:*)', 'Bash(echo:*)'], [rule]),
+          )
+          expect(decision.behavior).toBe('deny')
+        })
+      }
+    }
+
+    test('an absolute-path deny takes priority over a basename exact ask', async () => {
+      const decision = await bashToolHasPermission(
+        { command: 'echo ok && /bin/cat src/context.ts' },
+        toolUseContext(
+          [],
+          ['Bash(/bin/cat:*)'],
+          ['Bash(cat src/context.ts)'],
+        ),
+      )
+      expect(decision.behavior).toBe('deny')
+    })
+
+    test('an absolute-path ask is retained despite basename allow', async () => {
+      const decision = await bashToolHasPermission(
+        { command: 'echo ok && /bin/cat src/context.ts' },
+        toolUseContext(['Bash(cat:*)'], [], ['Bash(/bin/cat:*)']),
+      )
+      expect(decision.behavior).toBe('ask')
     })
 
     test('other locations and other binaries keep their full path', async () => {
