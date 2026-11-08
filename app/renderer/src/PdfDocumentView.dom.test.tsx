@@ -31,13 +31,15 @@ mock.module('./pdfDocumentRuntime.js', () => ({
 
 let widthDescriptor: PropertyDescriptor | undefined
 let contextDescriptor: PropertyDescriptor | undefined
+let bridgeDescriptor: PropertyDescriptor | undefined
 beforeAll(async () => {
   harness = await createDomTestHarness()
   widthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
   contextDescriptor = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')
+  bridgeDescriptor = Object.getOwnPropertyDescriptor(window, 'catcode')
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => 800 })
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: () => ({}) })
-  Object.defineProperty(window, 'catcode', { configurable: true, value: {
+  Object.defineProperty(window, 'catcode', { configurable: true, writable: true, value: {
     readFilePreviewDocument: async () => ({ ok: true, kind: 'pdf', bytes: new Uint8Array() }),
   } })
 })
@@ -47,6 +49,8 @@ afterAll(async () => {
   else Reflect.deleteProperty(HTMLElement.prototype, 'clientWidth')
   if (contextDescriptor) Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', contextDescriptor)
   else Reflect.deleteProperty(HTMLCanvasElement.prototype, 'getContext')
+  if (bridgeDescriptor) Object.defineProperty(window, 'catcode', bridgeDescriptor)
+  else Reflect.deleteProperty(window, 'catcode')
   mock.restore()
   await harness.teardown()
 })
