@@ -21,6 +21,7 @@ import {
 import {
   createCodexCredentialHandle,
 } from './codexCredentialUse.js'
+import { translateToCodexBody } from './codex-fetch-adapter.js'
 import type { CodexCredentialLifecycle } from './codexCredentialLifecycle.js'
 
 // ── Fake WebSocket ────────────────────────────────────────────────────────────
@@ -577,6 +578,91 @@ describe('streamTurnViaWebSocket', () => {
     // Second turn should use incremental delta
     expect(sent[1]!.previous_response_id).toBe('resp_001')
     expect(sent[1]!.input).toEqual([{ role: 'user', content: 'next' }])
+  })
+
+  test('discovering a deferred tool preserves the real transport signature and continuation', async () => {
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    const search = {
+      name: 'ToolSearch',
+      description: 'Find tools',
+      input_schema: { type: 'object', properties: {} },
+    }
+    const deferred = {
+      name: 'mcp__notes__read',
+      description: 'Read a note',
+      input_schema: { type: 'object', properties: {} },
+      defer_loading: true,
+    }
+    const initial = [{ role: 'user', content: 'Read the note.' }]
+    const searchCall = {
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: 'call_find_note',
+        name: 'ToolSearch',
+        input: { query: 'notes' },
+      }],
+    }
+    const searchResult = {
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: 'call_find_note',
+        content: [{ type: 'tool_reference', tool_name: deferred.name }],
+      }],
+    }
+    const translate = (messages: unknown[], tools: unknown[]) =>
+      translateToCodexBody({
+        model: 'gpt-6.1-sol',
+        tools,
+        _openaiInstructionAssembly: {
+          instructions: 'Help with notes.',
+          inputMessages: messages,
+        },
+      }).codexBody
+
+    fakeWs.responses = [
+      {
+        type: 'response.output_item.done',
+        item: {
+          type: 'function_call',
+          call_id: 'call_find_note',
+          name: 'ToolSearch',
+          arguments: '{"query":"notes"}',
+        },
+      },
+      completedEvent('resp_discovery'),
+    ]
+    await collectEvents(streamTurnViaWebSocket(
+      CONV_ID, translate(initial, [search]), AUTH, initial.length,
+    ))
+
+    const discovered = [...initial, searchCall, searchResult]
+    fakeWs.responses = [completedEvent('resp_loaded')]
+    await collectEvents(streamTurnViaWebSocket(
+      CONV_ID, translate(discovered, [search, deferred]), AUTH, discovered.length,
+    ))
+
+    const sent = fakeWs.getSent()
+    expect(sent[1]!.previous_response_id).toBe('resp_discovery')
+    expect(sent[1]!.tools).toEqual(sent[0]!.tools)
+    expect((sent[1]!.input as Record<string, unknown>[]).map(item => item.type))
+      .toEqual(['function_call_output', 'additional_tools'])
+
+    // Updating a declaration must not silently keep the old server-side schema.
+    fakeWs.responses = [completedEvent('resp_updated')]
+    await collectEvents(streamTurnViaWebSocket(
+      CONV_ID,
+      translate([...discovered, { role: 'user', content: 'Continue.' }], [
+        search,
+        { ...deferred, description: 'Updated note tool' },
+      ]),
+      AUTH,
+      discovered.length + 1,
+    ))
+    expect(fakeWs.getSent()[2]!.previous_response_id).toBeUndefined()
   })
 
   test('second turn normalizes prior function-call output items before continuation matching', async () => {

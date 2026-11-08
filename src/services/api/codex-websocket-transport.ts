@@ -1199,6 +1199,22 @@ export function reconcileCanonicalDelta(
     return { delta: null, mismatchReason: replacedToolResult }
   }
 
+  // Unlike harmless normalization drift, changing a historical declaration
+  // changes which tools the server sees. Never retain a removed or stale schema
+  // behind previous_response_id, even when the item counts still match.
+  for (let i = 0; i < previousInput.length; i++) {
+    if (
+      (previousInput[i]?.type === 'additional_tools' ||
+        currentInput[i]?.type === 'additional_tools') &&
+      !responseItemsEqual(previousInput[i]!, currentInput[i] ?? {})
+    ) {
+      return {
+        delta: null,
+        mismatchReason: `tool_declarations_changed index=${i}`,
+      }
+    }
+  }
+
   // Verify the output-items portion strictly, with Codex-specific exceptions.
   // Reasoning items are provider-managed continuation state. Some local
   // transcript paths preserve them as hidden thinking.signature blocks, while

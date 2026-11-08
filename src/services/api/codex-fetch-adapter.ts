@@ -737,6 +737,7 @@ interface AnthropicTool {
   description?: string
   input_schema?: Record<string, unknown>
   strict?: boolean
+  defer_loading?: boolean
   openai_tool_type?: 'function' | 'custom'
   openai_tool_format?: {
     type: 'grammar'
@@ -752,6 +753,15 @@ interface OpenAIInstructionAssemblyPayload {
   inputMessages: AnthropicMessage[]
   developerContext?: string
 }
+
+// These models use the additional_tools input contract in the Codex harness.
+// Keep older models on their existing top-level declaration path.
+const APPEND_ONLY_TOOL_MODELS = new Set([
+  'gpt-6-astra',
+  'gpt-6.1-sol',
+  'gpt-6.1-terra',
+  'gpt-6-luna',
+])
 
 // ── Tool translation: Anthropic → Codex ─────────────────────────────
 
@@ -1172,8 +1182,10 @@ function applyCodexToolOutputTruncation(
  */
 function translateMessages(
   anthropicMessages: AnthropicMessage[],
+  deferredTools: ReadonlyMap<string, Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
   const codexInput: Array<Record<string, unknown>> = []
+  const declaredDeferredTools = new Set<string>()
   // Track pending function_call call_ids so tool_result blocks reuse the
   // originating Codex call_id instead of inventing Claude-style positional state.
   let toolCallCounter = 0
@@ -1295,6 +1307,32 @@ function translateMessages(
             call_id: callId,
             output,
           })
+          // Keep the initial tool catalog stable as tools are discovered. Only
+          // structured references from ToolSearch may introduce declarations,
+          // and their schemas come from the current authorized tool pool.
+          if (
+            toolNameByCallId.get(callId) === TOOL_SEARCH_TOOL_NAME &&
+            block.is_error !== true &&
+            Array.isArray(block.content)
+          ) {
+            const declarations: Record<string, unknown>[] = []
+            for (const part of block.content) {
+              if (part.type !== 'tool_reference' || typeof part.tool_name !== 'string') {
+                continue
+              }
+              const declaration = deferredTools.get(part.tool_name)
+              if (!declaration || declaredDeferredTools.has(part.tool_name)) continue
+              declaredDeferredTools.add(part.tool_name)
+              declarations.push(declaration)
+            }
+            if (declarations.length > 0) {
+              codexInput.push({
+                type: 'additional_tools',
+                role: 'developer',
+                tools: declarations,
+              })
+            }
+          }
         } else if (block.type === 'text' && typeof block.text === 'string') {
           contentArr.push({ type: 'input_text', text: block.text })
         } else if (
@@ -1524,9 +1562,34 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
 
   const codexModel = mapClaudeModelToCodex(claudeModel)
   const instructions = openAIAssembly.instructions
+  const toolChoice = translateToolChoice(anthropicBody.tool_choice, anthropicTools)
+  const translatedTools = anthropicTools.length > 0
+    ? translateTools(anthropicTools)
+    : []
+  const deferredTools = new Map<string, Record<string, unknown>>()
+  if (APPEND_ONLY_TOOL_MODELS.has(codexModel)) {
+    const forcedToolName =
+      isRecord(toolChoice) && typeof toolChoice.name === 'string'
+        ? toolChoice.name
+        : undefined
+    const deferredNames = new Set(
+      anthropicTools
+        .filter(tool => tool.defer_loading === true && tool.name !== forcedToolName)
+        .map(tool => tool.name),
+    )
+    for (const tool of translatedTools) {
+      if (
+        (tool.type === 'function' || tool.type === 'custom') &&
+        typeof tool.name === 'string' &&
+        deferredNames.has(tool.name)
+      ) {
+        deferredTools.set(tool.name, tool)
+      }
+    }
+  }
 
   // Convert messages
-  const input = translateMessages(openAIAssembly.inputMessages)
+  const input = translateMessages(openAIAssembly.inputMessages, deferredTools)
   if (openAIAssembly.developerContext) {
     input.unshift({
       type: 'message',
@@ -1548,10 +1611,7 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     stream: true,
     instructions,
     input,
-    tool_choice: translateToolChoice(
-      anthropicBody.tool_choice,
-      anthropicTools,
-    ),
+    tool_choice: toolChoice,
     parallel_tool_calls: true,
   }
 
@@ -1561,14 +1621,24 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     logForDebugging(`[codex-cache] service_tier=priority (fast mode)`)
   }
 
-  // Add tools if present
-  const translatedTools = anthropicTools.length > 0
-    ? translateTools(anthropicTools)
-    : []
+  // A resumed/compacted history may no longer contain a discovery point.
+  // Keep those tools callable at the top level rather than silently losing them.
+  const declaredInHistory = new Set<string>()
+  for (const item of input) {
+    if (item.type !== 'additional_tools' || !Array.isArray(item.tools)) continue
+    for (const tool of item.tools) {
+      if (isRecord(tool) && typeof tool.name === 'string') {
+        declaredInHistory.add(tool.name)
+      }
+    }
+  }
+  const topLevelTools = translatedTools.filter(
+    tool => typeof tool.name !== 'string' || !declaredInHistory.has(tool.name),
+  )
   const hasHostedWebSearch = translatedTools.some(tool => tool.type === 'web_search')
 
-  if (translatedTools.length > 0) {
-    codexBody.tools = translatedTools
+  if (topLevelTools.length > 0) {
+    codexBody.tools = topLevelTools
   }
 
   const outputConfig = anthropicBody.output_config as
