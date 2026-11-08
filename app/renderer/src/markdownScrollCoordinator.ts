@@ -353,9 +353,11 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
 
 function isDocumentClamp(metrics: PaneScrollMetrics, pane: PaneRecord): boolean {
   const max = Math.max(0, metrics.contentHeight - metrics.viewportHeight)
+  // scrollTop, scrollHeight and clientHeight are rounded separately, so a
+  // clamped position can read a whole pixel past the integer maximum.
   return pane.anchor !== null &&
     metrics.contentHeight < pane.lastGeometry.contentHeight &&
-    pane.anchor.scrollTop > max && Math.abs(metrics.scrollTop - max) < 1
+    pane.anchor.scrollTop > max && Math.abs(metrics.scrollTop - max) <= 1
 }
 
 function readPaneMetrics(scroller: HTMLElement): PaneScrollMetrics {

@@ -18,6 +18,7 @@ export const slowDesktopTests = {
     'app/main/lidClosedMode.test.ts',
     'app/native/lid-closed/native.test.ts',
     'app/native/lid-closed/powerObservation.test.ts',
+    'app/scripts/transcriptScrollNative.test.ts',
   ],
   analytics: [
     'app/main/usageStatsRunner.test.ts',

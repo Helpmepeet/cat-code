@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import type { PluggableList } from 'unified'
 import {
   MAX_RETAINED_MARKDOWN_MEASUREMENTS,
@@ -18,6 +18,7 @@ import { restoreMarkdownReadingPosition, type MarkdownReadingPosition } from './
 import { REHYPE_PLUGINS, TRANSCRIPT_REHYPE_PLUGINS } from './markdownPlugins.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
+  flushPaneScrollCorrections,
   observePaneScroll,
   reportPaneHeightCorrection,
   reportPaneLayoutChange,
@@ -85,11 +86,7 @@ export function BoundedMarkdown({
     [leaves, unitHeights],
   )
   const measuredLeaves = useMemo(
-    () =>
-      leaves.map(leaf => ({
-        ...leaf,
-        estimatedHeight: measurement.heights.get(leaf.id) ?? leaf.estimatedHeight,
-      })),
+    () => withMeasuredHeights(leaves, measurement.heights),
     [leaves, measurement],
   )
   const [leafWindow, setLeafWindow] = useState<MarkdownLeafWindow>(() =>
@@ -98,6 +95,8 @@ export function BoundedMarkdown({
   const [copiedAtomicLeaf, setCopiedAtomicLeaf] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const measuredLeavesRef = useRef<readonly MarkdownRenderLeaf[]>(measuredLeaves)
+  const leavesRef = useRef(leaves)
+  const unitHeightsRef = useRef(unitHeights)
   const scheduleRef = useRef<() => void>(() => {})
   const scrollerRef = useRef<HTMLElement | null>(null)
   const geometryRef = useRef<{
@@ -117,6 +116,8 @@ export function BoundedMarkdown({
 
   useEffect(() => {
     measuredLeavesRef.current = measuredLeaves
+    leavesRef.current = leaves
+    unitHeightsRef.current = unitHeights
     scheduleRef.current()
   }, [measuredLeaves])
 
@@ -146,9 +147,27 @@ export function BoundedMarkdown({
       const rootRect = root.getBoundingClientRect()
       const scrollerRect = scroller.getBoundingClientRect()
       const scrollOffset = scrollerRect.top - rootRect.top
+      // A remounted body holds no measurements until ResizeObserver reports,
+      // a frame after its first window. Windowing on estimates then can unmount
+      // the units in view and collapse the body above the reader, moving the
+      // pane by the estimate's error and back. Mounted boxes are already laid
+      // out, so window on them whenever they differ from what is stored.
+      let liveHeights: Map<string, number> | null = null
+      for (const child of root.children) {
+        const key = child.getAttribute('data-markdown-leaf')
+        if (key === null) continue
+        const height = child.getBoundingClientRect().height
+        const stored = unitHeightsRef.current.get(key)
+        if (height <= 0 || (stored !== undefined && Math.abs(stored - height) < 0.5)) continue
+        liveHeights ??= new Map(unitHeightsRef.current)
+        liveHeights.set(key, height)
+      }
+      const windowLeaves = liveHeights === null
+        ? measuredLeavesRef.current
+        : withMeasuredHeights(leavesRef.current, resolveMarkdownMeasurements(leavesRef.current, liveHeights).heights)
       setLeafWindow(current => {
         const next = selectMarkdownLeafWindow(
-          measuredLeavesRef.current,
+          windowLeaves,
           scrollOffset,
           scroller.clientHeight || INITIAL_VIEWPORT_HEIGHT,
         )
@@ -178,17 +197,23 @@ export function BoundedMarkdown({
   // more frames after the commit that used the estimate, so no value in this
   // component's render inputs marks the commit where the document actually grew
   // or shrank; only the rendered box does. The pane decides what to do with it.
-  useEffect(() => {
+  // A layout effect, corrected before paint as `BoundedChildList` does: a
+  // window move can change this body's height by its estimates' error, and a
+  // passive report lets the browser paint the pane displaced by that much. The
+  // flush waits for a microtask so every body that moved in this commit has
+  // reported first, and the pane still makes one decision for all of them.
+  useLayoutEffect(() => {
     const root = rootRef.current
-    const scroller = scrollerRef.current
-    if (root === null || scroller === null) return
+    if (root === null) return
     const rect = root.getBoundingClientRect()
     const previous = geometryRef.current
     const nestedHeights = readNestedPaneHeights(root)
     geometryRef.current = { height: rect.height, topSpacer: leafWindow.topSpacerHeight, nestedHeights }
     // The first commit is where this body's box came into existence, which is
-    // layout rather than a correction of anything.
-    if (previous === null) return
+    // layout rather than a correction of anything. It also precedes the passive
+    // effect that finds the scroller.
+    const scroller = scrollerRef.current
+    if (previous === null || scroller === null) return
     if (rect.height > 0 || previous.height > 0) reportPaneLayoutChange(scroller)
     const delta = ownPaneHeightDelta(rect.height - previous.height, previous.nestedHeights, nestedHeights)
     if (delta === 0) return
@@ -202,6 +227,7 @@ export function BoundedMarkdown({
           scroller.scrollTop + unchangedPrefix
         : null,
     })
+    queueMicrotask(() => flushPaneScrollCorrections(scroller))
   })
 
   // Keyed on the mounted leaf identities rather than the numeric window, so a
@@ -318,6 +344,13 @@ function findScrollParent(element: HTMLElement): HTMLElement {
     current = current.parentElement
   }
   return document.documentElement
+}
+
+function withMeasuredHeights(
+  leaves: readonly MarkdownRenderLeaf[],
+  heights: ReadonlyMap<string, number>,
+): MarkdownRenderLeaf[] {
+  return leaves.map(leaf => ({ ...leaf, estimatedHeight: heights.get(leaf.id) ?? leaf.estimatedHeight }))
 }
 
 function sameWindow(left: MarkdownLeafWindow, right: MarkdownLeafWindow): boolean {

@@ -299,6 +299,77 @@ async function focusedAnswerBoundary() {
   return { scenario, anchorError: 0, writes: writes.length - start }
 }
 
+// A Markdown block is estimated from the larger of its source lines and its
+// characters at 120 per line, so an answer of headings and wrapped list items
+// is estimated far shorter than it renders. A
+// body remounted above the viewport must not window on those estimates: doing
+// so unmounts its visible units, shrinks the document above the reader, and
+// makes the pane write scrollTop by the estimate's error and back again.
+async function focusedListAnswerRemount() {
+  scenario = 'Focused list-heavy answer remounted above the viewport'
+  flushSync(() => root.render(null))
+  let state = projectServerFrame(createTranscriptState(), {
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', engineSessionId: 'synthetic-engine',
+    payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
+      abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
+  } as never)
+  const message = (message: unknown) => {
+    state = projectServerFrame(state, {
+      kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message },
+    } as never)
+  }
+  const answer = (turn: number) => Array.from({ length: 8 }, (_, section) =>
+    `## Option ${turn}-${section}\n\n` +
+    Array.from({ length: 6 }, (_, item) => `- **Paragraph point ${turn}-${section}-${item}.** ` +
+      'This option keeps the current service, moves the account checks next to the data they protect, and leaves billing where it is today.').join('\n') +
+    `\n\nParagraph ${turn}-${section}: one closing sentence for this option.`).join('\n\n')
+  for (const turn of [1, 2, 3]) {
+    message({ type: 'user', uuid: `user-${turn}`, session_id: 'synthetic-engine', parent_tool_use_id: null,
+      message: { role: 'user', content: `Synthetic message ${turn}: which option should we choose?` } })
+    message({ type: 'assistant', uuid: `answer-${turn}`, session_id: 'synthetic-engine', parent_tool_use_id: null,
+      message: { id: `answer-${turn}`, role: 'assistant', type: 'message', model: 'synthetic', stop_reason: 'end_turn',
+        content: [{ type: 'text', text: answer(turn) }], usage: { input_tokens: 10, output_tokens: 10 } } })
+    message({ type: 'result', uuid: `result-${turn}`, session_id: 'synthetic-engine', subtype: 'success',
+      is_error: false, errors: [], duration_ms: 1000, result: 'Complete' })
+  }
+  flushSync(() => root.render(createElement('div', { className: 'scroll-fixture-session' },
+    createElement(TranscriptModeContext.Provider, { value: { mode: 'focused', setMode() {} } },
+      createElement(SessionPane, { ...idleSessionPaneProps(), transcript: state })))))
+  const pane = document.querySelector<HTMLElement>('.focused-transcript-space')!.parentElement!
+  await settle(pane)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    pane.scrollTop = pane.scrollHeight
+    await settle(pane)
+  }
+  const answerRow = () => pane.querySelector('[data-row-key="session-1:answer-2:0:text"]')
+  // Visit the answer so the outer list retains its measured height, then leave
+  // its bottom just beyond the outer list's leading overscan.
+  for (let attempt = 0; attempt < 20 && !answerRow(); attempt++) {
+    pane.scrollTop -= 600
+    await settle(pane)
+  }
+  const visited = answerRow()
+  if (!visited) throw new Error('The list-heavy answer did not mount')
+  const bottom = visited.getBoundingClientRect().bottom - pane.getBoundingClientRect().top + pane.scrollTop
+  pane.scrollTop = bottom + 440
+  await settle(pane)
+  if (answerRow()) throw new Error('The list-heavy answer must start outside the mounted window')
+  let automaticWrites = 0
+  let step = 0
+  for (; step < 120 && !(answerRow() && step >= 40); step++) {
+    const tracked = track(pane)
+    const start = pane.scrollTop
+    await movePane(pane, -2)
+    const settled = writes.length
+    await settle(pane, 12, tracked, tracked.top + 2, inputMode === 'wheel' ? { start, delta: -2 } : undefined)
+    automaticWrites += writes.length - settled
+    assertClose(readTracked(pane, tracked), tracked.top + 2, scenario)
+  }
+  if (!answerRow()) throw new Error('Upward scrolling did not remount the list-heavy answer')
+  if (automaticWrites !== 0) throw new Error(`${scenario}: ${automaticWrites} automatic scroll writes`)
+  return { scenario, anchorError: 0, writes: automaticWrites }
+}
+
 async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 'wheel' } = {}) {
   const { nativeAnchoring = false } = options
   if (pendingWheel) throw new Error('The previous wheel run is still active')
@@ -473,6 +544,7 @@ async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 
   assertClose(readTracked(pane, tracked), tracked.top, 'released follow')
   release()
   results.push(await focusedAnswerBoundary())
+  results.push(await focusedListAnswerRemount())
   flushSync(() => root.render(null))
   if (observed.size !== 0) throw new Error(`Observers retained after unmount: ${observed.size}`)
   const peakAnchorError = samples.reduce((peak, sample) => Math.max(peak, Math.abs(sample.anchorError ?? 0)), 0)
