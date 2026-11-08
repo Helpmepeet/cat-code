@@ -2,6 +2,9 @@ import { useLayoutEffect, useRef } from 'react'
 import type { BrowserPaneCommand, BrowserPaneLayout, BrowserPaneSnapshot } from '../../shared/browserPanePresentation.js'
 import './browserPane.css'
 import { hideScreenPane } from './filePaneState.js'
+import codingCat from './assets/browser-header-cats/coding.png'
+import sleepingCat from './assets/browser-header-cats/sleeping.png'
+import stretchingCat from './assets/browser-header-cats/stretching.png'
 
 export function BrowserGlobe() {
   return <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></svg>
@@ -137,10 +140,11 @@ export function BrowserPane({ state, active, onHide }: { state: BrowserPaneSnaps
   return <aside className="file-pane browser-pane">
     <header className="file-pane-header">{action('back', 'Back', !state.canGoBack)}{action('forward', 'Forward', !state.canGoForward)}{action('reload', 'Reload')}
       <div className="file-pane-path" title={state.displayUrl}><span className="file-pane-path-text"><bdi><BrowserAddress state={state} /></bdi></span></div>
+      {state.controller === 'agent' ? <span className="browser-header-cat" aria-hidden="true"><img src={codingCat} alt="" /></span> :
+        <button type="button" className="browser-header-cat browser-header-cat-user" aria-label="Give back" title="Give back" onClick={() => command('handback')}><img className="browser-cat-sleeping" src={sleepingCat} alt="" /><img className="browser-cat-stretching" src={stretchingCat} alt="" /></button>}
       {action('external', 'Open in default browser')}
       <button type="button" className="file-pane-icon" aria-label="Hide browser" title="Hide browser" onClick={onHide ?? (() => hideScreenPane(state.appSessionId, 'browser'))}><svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d={paths.close} /></svg></button>
     </header>
-    {state.controller === 'user' ? <div className="file-pane-note"><span>You have the browser. Your next message hands it back.</span></div> : null}
     <div ref={host} className="file-pane-host browser-pane-host" data-agent={state.controller === 'agent' || undefined}>
       {state.still !== null ? <img className="browser-pane-still" src={state.still} alt="" onClick={() => command('takeover')} /> : null}
     </div>

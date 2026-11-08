@@ -48,7 +48,7 @@ async function resizeEvent() {
     await harness.nextFrame()
   })
 }
-test('approved file chrome has exactly five header actions and the touch takeover note', async () => {
+test('header cat is decorative for agent control and gives back user control', async () => {
   setup()
   const tree = await harness.mount(<BrowserPane state={state} active />)
   expect([...tree.container.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))).toEqual(['Back', 'Forward', 'Reload', 'Open in default browser', 'Hide browser'])
@@ -62,7 +62,11 @@ test('approved file chrome has exactly five header actions and the touch takeove
   expect(tree.container.querySelector('.file-pane-path')?.textContent).toBe('localhost:3000/profile')
   expect(tree.container.querySelector('.file-pane-path .file-pane-folder')?.textContent).toBe('/profile')
   await tree.render(<BrowserPane state={{ ...state, controller: 'user' }} active />)
-  expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('You have the browser. Your next message hands it back.')
+  expect(tree.container.querySelector('.file-pane-note')).toBeNull()
+  expect(tree.container.querySelector('.browser-cat-sleeping')).not.toBeNull()
+  expect(tree.container.querySelector('.browser-cat-stretching')).not.toBeNull()
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Give back"]')!.click())
+  expect(commands.at(-1)).toBe('handback')
   expect(tree.container.querySelector('[data-agent]')).toBeNull()
 })
 test('shell snapshot subscription survives pane remounts and event wins over late snapshot', async () => {
@@ -77,7 +81,7 @@ test('shell snapshot subscription survives pane remounts and event wins over lat
   const tree = await harness.mount(<BrowserPane state={getBrowserPaneSnapshot(state.appSessionId)!} active />)
   await tree.render(<div />)
   await tree.render(<BrowserPane state={getBrowserPaneSnapshot(state.appSessionId)!} active />)
-  expect(tree.container.textContent).toContain('Your next message hands it back.')
+  expect(tree.container.querySelector('[aria-label="Give back"]')).not.toBeNull()
   callback({ appSessionId: state.appSessionId, state: null })
   expect(getBrowserPaneSnapshot(state.appSessionId)).toBeNull()
   stop()
@@ -145,7 +149,7 @@ test('layout heartbeat reports host bounds, ignores the resize rail, detects ove
   document.body.append(overlay)
   await resizeEvent()
   expect(reports.at(-1)).toMatchObject({ rect: { x: 10, y: 20, width: 500, height: 400 }, overlay: true, accent: { r: 187, g: 62, b: 132 } })
-  await act(async () => tree.container.querySelector<HTMLImageElement>('img')!.click())
+  await act(async () => tree.container.querySelector<HTMLImageElement>('.browser-pane-still')!.click())
   expect(commands).toEqual(['takeover'])
   overlay.remove()
   await act(async () => { await new Promise(done => setTimeout(done, 450)) })

@@ -36,6 +36,21 @@ function fixture(folders: readonly string[] = []) {
   return { host, presentation, open, layout, native, events, opened, errors, advance: (ms: number) => { now += ms; timer() }, expire: () => { now += 1500; timer() }, capture: (value: () => Promise<string>) => { capture = value } }
 }
 
+test('handback validates closed input and session ownership before returning control', async () => {
+  const f = fixture()
+  await f.open('a')
+  f.host.takeOver('a')
+  expect((await f.presentation.command({ appSessionId: 'unknown', command: 'handback' })).ok).toBe(false)
+  expect((await f.presentation.command({ appSessionId: 'a', command: 'handback', extra: true } as never)).ok).toBe(false)
+  expect((await f.presentation.command({ appSessionId: 'b', command: 'handback' })).ok).toBe(false)
+  expect(f.host.get('a')!.controller).toBe('user')
+  expect(await f.presentation.command({ appSessionId: 'a', command: 'handback' })).toEqual({ ok: true })
+  expect(f.host.get('a')!.controller).toBe('agent')
+  expect(f.presentation.snapshots()[0]!.controller).toBe('agent')
+  f.presentation.dispose()
+  await f.host.dispose()
+})
+
 test('identical layout heartbeats renew freshness but still fail closed after reports stop and can recover', async () => {
   const f = fixture(); await f.open('a')
   await f.presentation.layout(f.layout())

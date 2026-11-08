@@ -181,12 +181,15 @@ export class BrowserPanePresentation {
   }
   async command(input: BrowserPaneCommand): Promise<BrowserPaneCommandResult> {
     const fail = (message: string): BrowserPaneCommandResult => ({ ok: false, message })
-    if (this.disposed || !closed(input, ['appSessionId', 'command']) || typeof input.appSessionId !== 'string' || !this.known(input.appSessionId) || !['back', 'forward', 'reload', 'external', 'close', 'takeover'].includes(input.command)) return fail('Invalid browser command')
+    if (this.disposed || !closed(input, ['appSessionId', 'command']) || typeof input.appSessionId !== 'string' || !this.known(input.appSessionId) || !['back', 'forward', 'reload', 'external', 'close', 'takeover', 'handback'].includes(input.command)) return fail('Invalid browser command')
     const id = input.appSessionId
     const record = this.deps.host.get(id)
     if (!record) return fail('No browser page is open')
     try {
       switch (input.command) {
+        case 'handback':
+          this.deps.host.handBack(id)
+          break
         case 'takeover':
           // Do not show the native view over an overlay. A fresh live layout may show it.
           this.deps.host.takeOver(id)

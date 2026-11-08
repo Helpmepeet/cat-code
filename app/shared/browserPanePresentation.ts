@@ -12,7 +12,7 @@ export type BrowserPaneSnapshot = {
 export type BrowserPaneEvent = { appSessionId: string; state: BrowserPaneSnapshot | null }
 export type BrowserPaneCommand = {
   appSessionId: string
-  command: 'back' | 'forward' | 'reload' | 'external' | 'close' | 'takeover'
+  command: 'back' | 'forward' | 'reload' | 'external' | 'close' | 'takeover' | 'handback'
 }
 export type BrowserPaneLayout = {
   appSessionId: string
