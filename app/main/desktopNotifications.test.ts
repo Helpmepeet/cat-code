@@ -9,6 +9,12 @@ import { retryableTurn } from '../renderer/src/turnFailure.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { buildPermissionOptions } from '../renderer/src/permissionPromptModel.js'
 import { turnFailureCopy } from '../renderer/src/turnFailure.js'
+import type { PendingQuestion, ResolvedQuestion } from '../shared/nonblockingQuestions.js'
+
+const pendingQuestion = (toolUseId = 'question-tool', questionIndex = 0): PendingQuestion => ({
+  toolUseId, questionIndex, sourceMessageUuid: 'question-message',
+  question: 'Which approach?', options: [{ label: 'First', description: 'First approach' }], multiSelect: false,
+})
 
 function cardRows(frames: ServerFrame[]) {
   const ready: ServerFrame = {
@@ -51,6 +57,109 @@ function harness(descriptor: Partial<SessionDescriptor> = {}, sendSuccess = true
 }
 
 describe('desktop notifications', () => {
+  test('offscreen nonblocking question badges during and after the turn, and viewing does not resolve it', () => {
+    const h = harness()
+    h.event({ type: 'turn.status', activeTurn: true })
+    h.event({ type: 'question.snapshot', snapshot: { pending: [pendingQuestion()], resolved: [] } })
+    expect(h.badge()).toBe('1')
+    expect(h.handles).toHaveLength(1)
+    h.message({ type: 'result', subtype: 'success' })
+    h.event({ type: 'turn.status', activeTurn: false })
+    expect(h.badge()).toBe('1')
+    expect(h.handles).toHaveLength(1)
+    h.coordinator.onScreenChanged('a')
+    expect(h.badge()).toBe('')
+    expect(h.handles[0]!.closed).toBe(true)
+    h.coordinator.onScreenChanged(null)
+    expect(h.badge()).toBe('1')
+    expect(h.handles).toHaveLength(1)
+    expect(h.sent).toHaveLength(0)
+  })
+  test.each(['answered', 'dismissed'] as const)('nonblocking question %s snapshot clears its badge and fences its notice', state => {
+    const h = harness()
+    h.event({ type: 'turn.status', activeTurn: true })
+    const question = pendingQuestion()
+    h.event({ type: 'question.snapshot', snapshot: { pending: [question], resolved: [] } })
+    const old = h.handles[0]!
+    const resolved: ResolvedQuestion = { ...question, state, ...(state === 'answered' ? { answer: 'First' } : {}) }
+    h.event({ type: 'question.snapshot', snapshot: { pending: [], resolved: [resolved] } })
+    expect(h.badge()).toBe('')
+    expect(old.closed).toBe(true)
+    old.emit('click')
+    expect(h.opened).toHaveLength(0)
+    h.coordinator.onScreenChanged('a')
+    h.coordinator.onScreenChanged(null)
+    expect(h.badge()).toBe('')
+  })
+  test('multiple nonblocking questions and permissions count once per session', () => {
+    const h = harness()
+    const questions = [pendingQuestion(), pendingQuestion('question-tool', 1), pendingQuestion('other-tool')]
+    const snapshot = (pending: PendingQuestion[], id = 'a') => h.event({ type: 'question.snapshot', snapshot: { pending, resolved: [] } }, false, id)
+    snapshot(questions)
+    h.permission()
+    expect(h.badge()).toBe('1')
+    snapshot([pendingQuestion()], 'b')
+    expect(h.badge()).toBe('2')
+    snapshot(questions.slice(1))
+    expect(h.badge()).toBe('2')
+    h.event({ type: 'permission.resolved', request: h.request() })
+    expect(h.badge()).toBe('2')
+    snapshot([])
+    expect(h.badge()).toBe('1')
+    snapshot([], 'b')
+    expect(h.badge()).toBe('')
+  })
+  test.each(['lifecycle', 'removed', 'parked', 'spawning', 'exited', 'disconnected', 'dispose'] as const)('nonblocking question %s cleanup retires badge and pending state', cleanup => {
+    const h = harness()
+    h.event({ type: 'turn.status', activeTurn: true })
+    h.event({ type: 'question.snapshot', snapshot: { pending: [pendingQuestion()], resolved: [] } })
+    const old = h.handles[0]!
+    expect(h.badge()).toBe('1')
+    if (cleanup === 'dispose') h.coordinator.dispose()
+    else if (cleanup === 'lifecycle') h.frame({ kind: 'lifecycle', status: 'exited' })
+    else if (cleanup === 'removed') h.coordinator.receiveHostEvent({ type: 'session-removed', appSessionId: 'a' })
+    else h.coordinator.receiveHostEvent({ type: 'session-status', session: sessionDescriptorFixture({ appSessionId: 'a', cwd: '/projects/cat-code', status: cleanup === 'parked' ? 'disconnected' : cleanup, parked: cleanup === 'parked' }) })
+    expect(h.badge()).toBe('')
+    expect(old.closed).toBe(true)
+    old.emit('click')
+    expect(h.opened).toHaveLength(0)
+    h.event({ type: 'turn.status', activeTurn: true })
+    h.coordinator.onScreenChanged('a')
+    h.coordinator.onScreenChanged(null)
+    expect(h.badge()).toBe('')
+  })
+  test.each(['all', 'waiting', 'off'] as const)('nonblocking questions respect on-screen suppression and independent Dock preference with notifications %s', notify => {
+    const h = harness()
+    h.prefs.notify = notify
+    h.coordinator.onScreenChanged('a')
+    h.event({ type: 'turn.status', activeTurn: true })
+    h.event({ type: 'question.snapshot', snapshot: { pending: [pendingQuestion()], resolved: [] } })
+    expect(h.badge()).toBe('')
+    expect(h.handles).toHaveLength(0)
+    h.coordinator.onScreenChanged(null)
+    expect(h.badge()).toBe('1')
+    expect(h.handles).toHaveLength(0)
+    h.prefs.dockBadge = false
+    h.coordinator.preferencesChanged()
+    expect(h.badge()).toBe('')
+    h.prefs.dockBadge = true
+    h.coordinator.preferencesChanged()
+    expect(h.badge()).toBe('1')
+    h.focus(true)
+    h.coordinator.focusChanged()
+    expect(h.badge()).toBe('1')
+
+    const offscreen = harness()
+    offscreen.prefs.notify = notify
+    offscreen.prefs.dockBadge = false
+    offscreen.event({ type: 'turn.status', activeTurn: true })
+    offscreen.event({ type: 'question.snapshot', snapshot: { pending: [pendingQuestion()], resolved: [] } })
+    expect(offscreen.handles).toHaveLength(notify === 'off' ? 0 : 1)
+    expect(offscreen.badge()).toBe('')
+    offscreen.prefs.dockBadge = true
+    offscreen.coordinator.preferencesChanged()
+    expect(offscreen.badge()).toBe('1')
+  })
   test.each(['Bash', 'AskUserQuestion', 'ExitPlanMode'])('on-screen %s stays pending and counts again off screen without replay', tool => {
     const h = harness()
     h.coordinator.onScreenChanged('a')

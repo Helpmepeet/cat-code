@@ -67,7 +67,7 @@ export function createDesktopNotifications(deps: DesktopNotificationDependencies
   const badge = () => {
     let waiting = 0
     if (!disposed && deps.getPreferences().dockBadge) {
-      for (const [id, s] of sessions) if (id !== onScreenSessionId && (s.pending.size || s.stopped) && deps.getSession(id)) waiting++
+      for (const [id, s] of sessions) if (id !== onScreenSessionId && (s.pending.size || pendingQuestions.get(id)?.size || s.stopped) && deps.getSession(id)) waiting++
     }
     const text = waiting ? String(waiting) : ''
     if (text === lastBadge) return
