@@ -18,6 +18,7 @@ afterAll(async () => { window.catcode = bridge; await harness.teardown() })
 function setup() {
   window.catcode = { getFilePreviewApplications: async () => ({ applications: [], selected: 'default' }), refreshFilePreview: async () => null, subscribeFilePreview: () => () => {}, releaseFilePreview: () => {}, browserPaneCommand: async ({ command }: { command: string }) => { commands.push(command); return { ok: true } }, reportBrowserPaneLayout: (layout: BrowserPaneLayout) => reports.push(layout) } as unknown as Window['catcode']
   applyBrowserPaneEvent({ appSessionId: state.appSessionId, state })
+  showSlotOccupant(state.appSessionId, 'browser')
 }
 function animationFrames() {
   const originalRequest = globalThis.requestAnimationFrame
@@ -50,11 +51,13 @@ async function resizeEvent() {
 test('approved file chrome has exactly five header actions and the touch takeover note', async () => {
   setup()
   const tree = await harness.mount(<BrowserPane state={state} active />)
-  expect([...tree.container.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))).toEqual(['Back', 'Forward', 'Reload', 'Open in default browser', 'Close browser'])
+  expect([...tree.container.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))).toEqual(['Back', 'Forward', 'Reload', 'Open in default browser', 'Hide browser'])
   expect(tree.container.querySelector('.file-pane-path')?.textContent).toBe(state.displayUrl)
   expect(tree.container.querySelector('button[aria-label="Forward"]')?.hasAttribute('disabled')).toBe(true)
   for (const button of tree.container.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')) await act(async () => button.click())
-  expect(commands).toEqual(['back', 'reload', 'external', 'close'])
+  expect(commands).toEqual(['back', 'reload', 'external'])
+  expect(getBrowserPaneSnapshot(state.appSessionId)).toEqual(state)
+  expect(getFilePaneSession(state.appSessionId).visible).toBeNull()
   await tree.render(<BrowserPane state={{ ...state, displayUrl: state.url }} active />)
   expect(tree.container.querySelector('.file-pane-path')?.textContent).toBe('localhost:3000/profile')
   expect(tree.container.querySelector('.file-pane-path .file-pane-folder')?.textContent).toBe('/profile')
@@ -102,13 +105,13 @@ test('ordinary browser updates preserve file selection and shared width', () => 
   expect(getFilePaneSession(state.appSessionId).visible).toBe('file')
   expect(getFilePaneSession(state.appSessionId).worker).not.toBeNull()
 })
-test('new agent browser use selects its pane again without changing another chat', () => {
+test('new agent browser use preserves user panel selection and does not change another chat', () => {
   setup()
   rememberSlotWidth(state.appSessionId, 690)
   updateFilePaneSession(state.appSessionId, { open: true, worker: {} as never, output: { id: 'output', fileIndex: 0, request: 1 } })
   showSlotOccupant(state.appSessionId, 'file')
   applyBrowserPaneEvent({ appSessionId: state.appSessionId, state: { ...state, agentUseSequence: 1 } })
-  expect(getFilePaneSession(state.appSessionId).visible).toBe('browser')
+  expect(getFilePaneSession(state.appSessionId).visible).toBe('file')
   expect(getFilePaneSession(state.appSessionId).width).toBe(690)
   expect(getFilePaneSession(state.appSessionId).open).toBe(true)
   expect(getFilePaneSession(state.appSessionId).worker).not.toBeNull()
@@ -117,11 +120,11 @@ test('new agent browser use selects its pane again without changing another chat
   applyBrowserPaneEvent({ appSessionId: state.appSessionId, state: { ...state, agentUseSequence: 1, controller: 'user' } })
   expect(getFilePaneSession(state.appSessionId).visible).toBe('worker')
   applyBrowserPaneEvent({ appSessionId: state.appSessionId, state: { ...state, agentUseSequence: 2 } })
-  expect(getFilePaneSession(state.appSessionId).visible).toBe('browser')
+  expect(getFilePaneSession(state.appSessionId).visible).toBe('worker')
   const before = getFilePaneSession(state.appSessionId)
   const otherId = 'browser-other-chat'
   applyBrowserPaneEvent({ appSessionId: otherId, state: { ...state, appSessionId: otherId, agentUseSequence: 2 } })
-  expect(getFilePaneSession(otherId).visible).toBe('browser')
+  expect(getFilePaneSession(otherId).visible).toBeNull()
   expect(getFilePaneSession(state.appSessionId)).toBe(before)
   disposeFilePaneSession(otherId)
 })
@@ -167,6 +170,11 @@ test('workspace renders the globe browser tab beside the file and hides its nati
   expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]')).not.toBeNull()
   expect(reports.at(-1)?.rect).toBeNull()
   await act(async () => applyBrowserPaneEvent({ appSessionId: state.appSessionId, state: { ...state, agentUseSequence: 1 } }))
+  expect(browser.getAttribute('aria-selected')).toBe('false')
+  expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]')).not.toBeNull()
+  const reopen = tree.container.querySelector<HTMLButtonElement>('.screen-activity-chip')!
+  expect(reopen.textContent).toContain('localhost:3000')
+  await act(async () => reopen.click())
   expect(browser.getAttribute('aria-selected')).toBe('true')
   expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]')).toBeNull()
   await tree.render(<div />)

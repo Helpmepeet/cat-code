@@ -37,6 +37,8 @@ import {
 import Markdown from 'react-markdown'
 import { extractInlineCommandFences, type InlineCommandRun, type InlineCommandSource } from '../../shared/inlineCommand.js'
 import { InlineCommandContext } from './inlineCommandState.js'
+import { ComputerPaneContext } from './computerPaneContext.js'
+import './computerPane.css'
 import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { AutoModeReviewContext, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
 import { createPortal } from 'react-dom'
@@ -4913,6 +4915,7 @@ function ToolCardBody({
       <ToolResultImagesBody
         content={content}
         images={row.result.images}
+        computerStepId={row.toolFamily === 'computer' ? row.id : undefined}
       />
     )
   }
@@ -4979,10 +4982,14 @@ function ToolCardBody({
 function ToolResultImagesBody({
   content,
   images,
+  computerStepId,
 }: {
   content: string
   images: ToolResultImageProjection[]
+  computerStepId?: string
 }) {
+  const computerPane = useContext(ComputerPaneContext)
+  const panel = computerStepId && computerPane ? computerPane : null
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
   const preview =
     previewIndex === null ? null : (images[previewIndex] ?? null)
@@ -4999,10 +5006,11 @@ function ToolResultImagesBody({
           return (
             <button
               type="button"
-              aria-label={`Expand ${label.toLowerCase()}`}
-              className="flex min-h-24 cursor-zoom-in items-center justify-center overflow-hidden rounded-lg border border-shell-seam bg-black/15 p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              aria-label={panel ? 'Show screenshot in Computer panel' : `Expand ${label.toLowerCase()}`}
+              aria-current={panel?.selectedStepId === computerStepId ? 'true' : undefined}
+              className={`flex min-h-24 cursor-zoom-in items-center justify-center overflow-hidden rounded-lg border border-shell-seam bg-black/15 p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent${panel ? ' computer-screenshot-to-panel' : ''}`}
               key={`${index}:${image.mediaType}`}
-              onClick={() => setPreviewIndex(index)}
+              onClick={() => panel ? panel.openStep(computerStepId!) : setPreviewIndex(index)}
             >
               <img
                 alt={label}
@@ -5279,13 +5287,14 @@ function BashTailPeek({ tail }: { tail: string[] }) {
  */
 function ComputerStepPeek({ row }: { row: ToolUseNestedRow }) {
   const { style } = useContext(ToolCardStyleContext)
+  const computerPane = useContext(ComputerPaneContext)
   const [previewing, setPreviewing] = useState(false)
   const image = row.result?.images?.at(-1)
   if (image) {
     const src = `data:${image.mediaType};base64,${image.data}`
     return (
       <div className={TOOL_CARD_BAND_CLASS[style]}>
-        <button type="button" className="block cursor-zoom-in" aria-label="Expand screenshot" onClick={() => setPreviewing(true)}>
+        <button type="button" className={computerPane ? 'block computer-screenshot-to-panel' : 'block cursor-zoom-in'} aria-label={computerPane ? 'Show screenshot in Computer panel' : 'Expand screenshot'} aria-current={computerPane?.selectedStepId === row.id ? 'true' : undefined} onClick={() => computerPane ? computerPane.openStep(row.id) : setPreviewing(true)}>
           <img alt="Screenshot" className="h-[92px] w-auto rounded border border-shell-seam" decoding="async" loading="lazy" src={src} />
         </button>
         {previewing ? <ImagePreview src={src} label="Screenshot preview" onClose={() => setPreviewing(false)} /> : null}

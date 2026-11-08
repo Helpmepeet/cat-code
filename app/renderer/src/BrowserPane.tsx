@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import type { BrowserPaneCommand, BrowserPaneLayout, BrowserPaneSnapshot } from '../../shared/browserPanePresentation.js'
 import './browserPane.css'
+import { hideScreenPane } from './filePaneState.js'
 
 export function BrowserGlobe() {
   return <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></svg>
@@ -36,7 +37,7 @@ function overlappingOverlay(host: HTMLElement, bounds: DOMRect, surfaces: readon
     return rect.width > 0 && rect.height > 0 && rect.left < bounds.right && rect.right > bounds.left && rect.top < bounds.bottom && rect.bottom > bounds.top
   })
 }
-export function BrowserPane({ state, active }: { state: BrowserPaneSnapshot; active: boolean }) {
+export function BrowserPane({ state, active, onHide }: { state: BrowserPaneSnapshot; active: boolean; onHide?: () => void }) {
   const host = useRef<HTMLDivElement>(null)
   const command = (command: BrowserPaneCommand['command']) => {
     void window.catcode.browserPaneCommand({ appSessionId: state.appSessionId, command }).then(result => {
@@ -136,7 +137,8 @@ export function BrowserPane({ state, active }: { state: BrowserPaneSnapshot; act
   return <aside className="file-pane browser-pane">
     <header className="file-pane-header">{action('back', 'Back', !state.canGoBack)}{action('forward', 'Forward', !state.canGoForward)}{action('reload', 'Reload')}
       <div className="file-pane-path" title={state.displayUrl}><span className="file-pane-path-text"><bdi><BrowserAddress state={state} /></bdi></span></div>
-      {action('external', 'Open in default browser')}{action('close', 'Close browser')}
+      {action('external', 'Open in default browser')}
+      <button type="button" className="file-pane-icon" aria-label="Hide browser" title="Hide browser" onClick={onHide ?? (() => hideScreenPane(state.appSessionId, 'browser'))}><svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d={paths.close} /></svg></button>
     </header>
     {state.controller === 'user' ? <div className="file-pane-note"><span>You have the browser. Your next message hands it back.</span></div> : null}
     <div ref={host} className="file-pane-host browser-pane-host" data-agent={state.controller === 'agent' || undefined}>

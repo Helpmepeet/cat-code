@@ -1,15 +1,20 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { SubagentDock } from './SubagentDock.js'
 import { SubagentSidePanel } from './SubagentSidePanel.js'
 import { ToolInspector } from './ToolInspector.js'
 import { FilePane } from './FilePane.js'
 import { BrowserPane, BrowserGlobe } from './BrowserPane.js'
 import { browserPaneLabel } from './browserPaneState.js'
+import { ComputerPane, ComputerScreenIcon } from './ComputerPane.js'
+import { ComputerPaneContext } from './computerPaneContext.js'
+import { selectComputerStep, selectComputerSteps } from './computerPaneModel.js'
+import { ScreenActivityChip } from './ScreenActivityChip.js'
+import { reduceScreenActivity, type ScreenKind } from './screenActivityState.js'
 import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OUTPUT_WIDTH_STEP, writeToolOutputWidth, type OpenToolOutput } from './toolOutputPanel.js'
 import { FilePaneContext } from './filePaneContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneFocus, rememberSlotWidth, requestOpenFile, paneTargetLabel,
-  showSlotOccupant, updateFilePaneSession, useFilePaneSession, type SlotOccupant,
+  hideScreenPane, showSlotOccupant, updateFilePaneSession, useFilePaneSession, type SlotOccupant,
 } from './filePaneState.js'
 import { findNestedToolUseRow } from './transcriptViewModel.js'
 import { canOpenSubagentPanel, selectSubagentPanelBranch, selectSubagentPanelRowForCard } from './subagentPanelState.js'
@@ -21,7 +26,7 @@ import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.j
 import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
 import './filePane.css'
 
-export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, cwd, children }: {
+export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, running = false, runKey = null, cwd, children }: {
   appSessionId?: string
   onFocusComposer?: () => void
   dock: DerivedSubagentDock
@@ -34,6 +39,8 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   onLoadMissingHistory?: () => void
   rows: NestedTranscriptRow[]
   outputRows?: NestedTranscriptRow[]
+  running?: boolean
+  runKey?: string | null
   cwd: string | null
   children: ReactNode
 }) {
@@ -41,6 +48,36 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   const localId = useId()
   const sessionId = appSessionId ?? `workspace:${localId}`
   const state = useFilePaneSession(sessionId)
+  const computerSteps = useMemo(() => selectComputerSteps(outputRows), [outputRows])
+  const computerStep = selectComputerStep(computerSteps, state.computer?.selectedId ?? null)
+  const latestComputerStep = selectComputerStep(computerSteps, null)
+  const latestComputerId = computerSteps.at(-1)?.id ?? null
+  const browserSequence = state.browser ? state.browser.agentUseSequence ?? 0 : null
+  useLayoutEffect(() => {
+    const current = getFilePaneSession(sessionId)
+    const activity = reduceScreenActivity(current.screenActivity, { runKey, running, computerId: latestComputerId, browserSequence })
+    updateFilePaneSession(sessionId, {
+      screenActivity: activity.state,
+      computer: latestComputerId ? current.computer ?? { selectedId: null } : null,
+    })
+    if (activity.reveal && current.visible === null) showSlotOccupant(sessionId, activity.reveal)
+  }, [sessionId, latestComputerId, browserSequence, runKey, running])
+  const openComputer = useCallback((selectedId: string | null) => {
+    updateFilePaneSession(sessionId, { computer: { selectedId } })
+    showSlotOccupant(sessionId, 'computer')
+  }, [sessionId])
+  const computerContext = useMemo(() => ({
+    openStep: openComputer,
+    selectedStepId: state.visible === 'computer' ? computerStep?.id ?? null : null,
+  }), [openComputer, state.visible, computerStep?.id])
+  const hideScreen = (kind: ScreenKind) => {
+    hideScreenPane(sessionId, kind)
+    requestAnimationFrame(() => {
+      const chip = parent.current?.querySelector<HTMLButtonElement>(`[data-screen-kind="${kind}"] button`)
+      if (chip) chip.focus({ preventScroll: true })
+      else focusComposer.current?.()
+    })
+  }
   const selected = state.worker
   const output = state.output
   const parent = useRef<HTMLDivElement>(null)
@@ -118,6 +155,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   const occupants: Array<{ kind: SlotOccupant; label: string }> = [
     ...(state.open ? [{ kind: 'file' as const, label: state.file ? paneTargetLabel(state.file.path) : 'File' }] : []),
     ...(state.browser ? [{ kind: 'browser' as const, label: browserPaneLabel(state.browser) }] : []),
+    ...(computerSteps.length ? [{ kind: 'computer' as const, label: 'Computer' }] : []),
     ...(worker ? [{ kind: 'worker' as const, label: worker.name || worker.task }] : []),
     ...(outputRow ? [{ kind: 'output' as const, label: 'Full output' }] : []),
   ]
@@ -138,16 +176,24 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
     resize(current.width)
     setDragging(false)
   }
-  return <FilePaneContext.Provider value={appSessionId ? requestOpenFile : null}><ToolOutputContext.Provider value={openOutput}>
+  return <FilePaneContext.Provider value={appSessionId ? requestOpenFile : null}><ToolOutputContext.Provider value={openOutput}><ComputerPaneContext.Provider value={computerContext}>
     <div ref={workspace} className="subagent-workspace" data-resizing={dragging || undefined}>
-      <div className="subagent-workspace-layout" data-file-open={state.open || undefined}>
+      <div className="subagent-workspace-layout" data-file-open={state.open && state.visible !== null || undefined}>
         <div ref={parent} className="subagent-parent">
+          {(computerSteps.length > 0 && state.visible !== 'computer' || state.browser && state.visible !== 'browser') ? <div className="screen-activity-chips">
+            {computerSteps.length > 0 && state.visible !== 'computer' ? <span data-screen-kind="computer"><ScreenActivityChip kind="computer" label="Computer"
+              imageUrl={latestComputerStep?.image ? `data:${latestComputerStep.image.mediaType};base64,${latestComputerStep.image.data}` : null}
+              running={running && computerSteps.some(step => step.status === 'pending')} onClick={() => openComputer(null)} /></span> : null}
+            {state.browser && state.visible !== 'browser' ? <span data-screen-kind="browser"><ScreenActivityChip kind="browser" label={browserPaneLabel(state.browser)}
+              imageUrl={state.browser.still} running={running && state.browser.controller === 'agent' && state.screenActivity.latest === 'browser'}
+              onClick={() => showSlotOccupant(sessionId, 'browser')} /></span> : null}
+          </div> : null}
           <SubagentDock state={dock} collapsed={collapsed} hidden={worker !== null && state.visible === 'worker'} onCollapsedChange={onCollapsedChange}
             onClearFinished={onClearFinished} onDetailsVisibleChange={onDetailsVisibleChange}
             onOpenWorker={open} onOpenWorkers={onOpenWorkers} />
           <AgentPanelContext.Provider value={openCard}>{children}</AgentPanelContext.Provider>
         </div>
-        {occupants.length ? <div ref={slot} className="subagent-shared-slot">
+        {occupants.length ? <div ref={slot} className="subagent-shared-slot" hidden={state.visible === null}>
           <div className="subagent-shared-resize" role="separator" aria-orientation="vertical" aria-label="Resize side panel"
             aria-valuenow={state.width ?? 560} aria-valuemin={TOOL_OUTPUT_MIN_WIDTH} tabIndex={0} data-dragging={dragging || undefined}
             onPointerDown={event => {
@@ -177,7 +223,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
               else if (event.key === 'Escape') {
                 if (state.visible === 'file') { closeFilePane(sessionId); onFocusComposer?.() }
                 else if (state.visible === 'output') closeOutput()
-                else if (state.visible === 'browser') void window.catcode.browserPaneCommand({ appSessionId: sessionId, command: 'close' })
+                else if (state.visible === 'browser' || state.visible === 'computer') hideScreen(state.visible)
                 else closeWorker()
               } else return
               event.preventDefault()
@@ -193,7 +239,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
                 showSlotOccupant(sessionId, next.kind)
                 const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
                 tabs?.[occupants.findIndex(item => item.kind === next.kind)]?.focus()
-              }}>{occupant.kind === 'file' ? <ActionFileIcon /> : occupant.kind === 'browser' ? <BrowserGlobe /> : occupant.kind === 'worker' && worker ?
+              }}>{occupant.kind === 'file' ? <ActionFileIcon /> : occupant.kind === 'browser' ? <BrowserGlobe /> : occupant.kind === 'computer' ? <ComputerScreenIcon /> : occupant.kind === 'worker' && worker ?
                 <AgentFace axes={faces.faceFor(worker.agentId, worker.name).axes} fill={faces.faceFor(worker.agentId, worker.name).fill} size={13} /> : <span aria-hidden>▤</span>}<span>{occupant.label}</span></button>)}
           </nav> : null}
           {worker ? <div className="subagent-slot-content" hidden={state.visible !== 'worker'}><SubagentSidePanel key={worker.agentId} worker={worker}
@@ -202,9 +248,12 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
           {output && outputRow ? <div className="subagent-slot-content" hidden={state.visible !== 'output'}><ToolInspector key={`${output.id}:${output.request}`} row={outputRow} cwd={cwd}
             embedded initialFileIndex={output.fileIndex} onClose={closeOutput} /></div> : null}
           {state.open ? <div className="subagent-slot-content" hidden={state.visible !== 'file'}><FilePane appSessionId={sessionId} cwd={cwd} onFocusComposer={onFocusComposer} /></div> : null}
-          {state.browser ? <div className="subagent-slot-content" hidden={state.visible !== 'browser'}><BrowserPane state={state.browser} active={state.visible === 'browser'} /></div> : null}
+          {state.browser ? <div className="subagent-slot-content" hidden={state.visible !== 'browser'}><BrowserPane state={state.browser} active={state.visible === 'browser'} onHide={() => hideScreen('browser')} /></div> : null}
+          {computerSteps.length ? <div className="subagent-slot-content" hidden={state.visible !== 'computer'}><ComputerPane steps={computerSteps}
+            selectedId={state.computer?.selectedId ?? null} onSelect={openComputer} onClose={() => hideScreen('computer')} active={state.visible === 'computer'}
+            running={running && computerSteps.some(step => step.status === 'pending')} /></div> : null}
         </div> : null}
       </div>
     </div>
-  </ToolOutputContext.Provider></FilePaneContext.Provider>
+  </ComputerPaneContext.Provider></ToolOutputContext.Provider></FilePaneContext.Provider>
 }

@@ -51,6 +51,7 @@ iframe.file-pane-content { background:white; }
 .file-pane-menu-seam { height:1px; margin:4px 6px; background:var(--shell-seam); }
 
 .subagent-shared-slot { position:relative; display:flex; flex:0 0 auto; flex-direction:column; width:var(--shared-slot-width,560px); min-width:360px; max-width:calc(100% - 440px); min-height:0; border-left:1px solid var(--shell-seam); background:var(--surface-panel); }
+.subagent-shared-slot[hidden] { display:none; }
 .subagent-slot-content { display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; }
 .subagent-slot-content[hidden] { display:none; }
 .subagent-shared-slot .subagent-side-panel, .subagent-shared-slot .tool-output-panel { flex:1; width:auto; min-width:0; max-width:none; border-left:0; }
