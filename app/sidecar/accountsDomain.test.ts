@@ -1817,9 +1817,63 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     domain.setOAuthProgressSink(progress => captured.push(progress))
     await domain.runVerb({ type: 'account.login', provider: 'anthropic', requestId: 'pending-login' })
     await flush()
-    expect(captured.at(-1)).toMatchObject({ state: 'error' })
+    expect(captured.at(-1)).toMatchObject({ state: 'error', retrySave: true })
     expect(captured.some(progress => progress.state === 'success')).toBe(false)
     expect(activated).toEqual([])
+  })
+
+  test.each(['pending', 'throw'] as const)('existing-account reauth retains the same installation for retry after %s', async failure => {
+    const captured: OAuthLoginProgress[] = []
+    const receipt = {
+      provider: 'anthropic' as const,
+      accountId: 'existing-account',
+      operationId: 'retained-installation-operation',
+      outcome: 'committed' as const,
+      loginGeneration: 7,
+    }
+    const persist = mock(async (_alias: string | undefined, _options?: { makeDefault?: boolean }) => {
+      if (persist.mock.calls.length < 3) {
+        if (failure === 'throw') throw new Error('Local credential save failed')
+        return { ...receipt, outcome: 'persistence_pending' as const, loginGeneration: null }
+      }
+      return receipt
+    })
+    const begin = mock(async () => ({
+      isExistingAccount: true,
+      validateAlias: () => ({ ok: false as const, message: 'Reauth must not rename the account' }),
+      persist,
+    }))
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor(),
+      anthropicOAuthRunner: { begin },
+    })
+    domain.setOAuthProgressSink(progress => captured.push(progress))
+    await domain.runVerb({
+      type: 'account.login', provider: 'anthropic', requestId: 'original-reauth', makeDefault: true,
+    })
+    await flush()
+    expect(captured.at(-1)).toMatchObject({ state: 'error', retrySave: true })
+    expect(captured.some(progress => progress.state === 'success')).toBe(false)
+    const retry = await domain.runVerb({
+      type: 'account.oauthAlias', requestId: 'retry-save', alias: 'must-not-rename',
+    })
+    expect(retry.result.ok).toBe(false)
+    const saved = await domain.runVerb({
+      type: 'account.oauthAlias', requestId: 'retry-save-again', alias: 'must-not-rename',
+    })
+    expect(saved.result.ok).toBe(true)
+    expect(begin).toHaveBeenCalledTimes(1)
+    expect(persist.mock.calls).toEqual([
+      [undefined, { makeDefault: true }],
+      [undefined, { makeDefault: true }],
+      [undefined, { makeDefault: true }],
+    ])
+    expect(captured.at(-1)).toEqual({
+      state: 'success', loginRequestId: 'original-reauth', receipt,
+    })
+    expect((await domain.runVerb({
+      type: 'account.oauthAlias', requestId: 'already-saved', alias: '',
+    })).result.ok).toBe(false)
   })
 
   function makeDomain(runner: OAuthLoginRunner, captured: OAuthLoginProgress[]) {

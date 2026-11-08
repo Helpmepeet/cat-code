@@ -42,7 +42,10 @@ export function createAccountControlRunner(options: {
   }
   const progress = (event: ProgressEvent) => {
     latest = event
-    loginActive = event.progress !== null && !['success', 'error'].includes(event.progress.state)
+    loginActive = event.progress !== null && (
+      !['success', 'error'].includes(event.progress.state) ||
+      (event.progress.state === 'error' && event.progress.retrySave === true)
+    )
     options.onProgress(event)
     if (event.progress?.state === 'success') options.onPoolChanged()
     idle()

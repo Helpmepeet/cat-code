@@ -2207,6 +2207,7 @@ export function App() {
     const origin = chatLoginReconnectRef.current
     if (!origin || !appOAuthProgress ||
       !['success', 'error'].includes(appOAuthProgress.state)) return
+    if (appOAuthProgress.state === 'error' && appOAuthProgress.retrySave) return
     // Consume once, including mismatches. Never retry against a newly active tab.
     chatLoginReconnectRef.current = null
     if (!matchesChatLoginReconnect(origin, oauthProvider, appOAuthProgress)) {
@@ -4650,7 +4651,7 @@ export function App() {
         : oauthProgress.state === 'success'
           ? { phase: 'success' }
           : oauthProgress.state === 'error'
-            ? { phase: 'error', message: oauthProgress.message }
+            ? { phase: 'error', message: oauthProgress.message, retrySave: oauthProgress.retrySave }
             : { phase: 'waiting', url: null } // 'starting' — url not minted yet
     : oauthStarting
       ? { phase: 'waiting', url: null }

@@ -53,7 +53,7 @@ export function parseAccountControlVerb(value: unknown): AccountControlVerb | nu
 function parseProgress(value: unknown): OAuthLoginProgress | null {
   if (!isRecord(value)) return null
   if (value.state === 'waiting_for_login') return narrowExact(value, { state: oneOf(['waiting_for_login'] as const), url: nonempty })
-  if (value.state === 'error') return narrowExact(value, { state: oneOf(['error'] as const), message: nonempty })
+  if (value.state === 'error') return narrowExact(value, { state: oneOf(['error'] as const), message: nonempty, retrySave: optional(isBoolean) })
   if (value.state === 'success') {
     const progress = narrowExact(value, {
       state: oneOf(['success'] as const), loginRequestId: optional(nonempty),

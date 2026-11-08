@@ -6,6 +6,18 @@ const receipt = {
   outcome: 'committed' as const, loginGeneration: 2,
 }
 
+test('local-save retry hint survives strict progress parsing without opening the error schema', () => {
+  const event = {
+    type: 'progress', version: ACCOUNT_CONTROL_VERSION, provider: 'anthropic',
+    progress: { state: 'error', message: 'Retry saving this account.', retrySave: true },
+  } as const
+  expect(parseAccountControlEvent(event)).toEqual(event)
+  expect(parseAccountControlEvent({ ...event, progress: { ...event.progress, retrySave: 'yes' } })).toBeNull()
+  expect(parseAccountControlEvent({ ...event, progress: { ...event.progress, tokens: {} } })).toBeNull()
+  const { retrySave: _, ...legacy } = event.progress
+  expect(parseAccountControlEvent({ ...event, progress: legacy })).not.toBeNull()
+})
+
 test('provider-aware control fields stay optional and exact', () => {
   for (const verb of [
     { type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'work' },

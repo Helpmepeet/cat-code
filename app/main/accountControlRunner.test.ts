@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,7 +7,10 @@ import { ACCOUNT_CONTROL_VERSION, type AccountControlEvent } from '../shared/acc
 import type { WorkerProcessLifecycle } from './ndjsonWorker.js'
 import { resolveSidecarLaunch } from './mainDecisions.js'
 
-test('session-free account worker keeps one process through login and naming and dies with its owner', async () => {
+test.each(['alias', 'retry-save'] as const)('session-free account worker keeps one process through login and %s and dies with its owner', async step => {
+  const waiting = step === 'alias'
+    ? { state: 'waiting_for_alias' as const }
+    : { state: 'error' as const, message: 'Retry saving this account.', retrySave: true }
   const directory = mkdtempSync(join(tmpdir(), 'catcode-account-control-'))
   const fixture = join(directory, 'worker.ts')
   const service = new URL('../sidecar/accountControlSession.ts', import.meta.url).pathname
@@ -17,7 +20,7 @@ test('session-free account worker keeps one process through login and naming and
     await serveAccountControl(process.stdin, {
       setOAuthProgressSink(callback) { sink = callback; },
       async runVerb(verb) {
-        if (verb.type === 'account.login') sink({ state: 'waiting_for_alias' });
+        if (verb.type === 'account.login') sink(${JSON.stringify(waiting)});
         if (verb.type === 'account.oauthAlias') sink({
           state: 'success', loginRequestId: 'login',
           receipt: { provider: 'anthropic', accountId: 'actual-account', operationId: 'engine-install',
@@ -34,15 +37,17 @@ test('session-free account worker keeps one process through login and naming and
     launch: () => ({ command: process.execPath, args: [fixture], cwd: directory, onWorkerLifecycle: event => lifecycle.push(event) }),
     onProgress: event => progress.push(event), onPoolChanged: () => { refreshed++ },
   })
+  const timers = spyOn(globalThis, 'setTimeout')
   try {
     const start = await runner.run({ type: 'account.login', requestId: 'login', provider: 'anthropic' })
     expect(start.ok).toBe(true)
     expect(start.sessionId).toBe('')
-    expect(runner.replay()).toMatchObject({ provider: 'anthropic', progress: { state: 'waiting_for_alias' } })
+    expect(runner.replay()).toMatchObject({ provider: 'anthropic', progress: waiting })
+    expect(timers.mock.calls.filter(call => call[1] === 30_000)).toHaveLength(0)
     const saved = await runner.run({ type: 'account.oauthAlias', requestId: 'name', alias: 'work' })
     expect(saved.requestId).toBe('name')
     expect(saved.ok).toBe(true)
-    expect(progress.map(event => event.type === 'progress' ? event.progress?.state : null)).toEqual(['waiting_for_alias', 'success'])
+    expect(progress.map(event => event.type === 'progress' ? event.progress?.state : null)).toEqual([waiting.state, 'success'])
     expect(progress.at(-1)).toMatchObject({
       provider: 'anthropic', progress: {
         state: 'success', loginRequestId: 'login',
@@ -53,6 +58,7 @@ test('session-free account worker keeps one process through login and naming and
     expect(refreshed).toBeGreaterThan(0)
     expect(lifecycle.filter(event => event.phase === 'started')).toHaveLength(1)
   } finally {
+    timers.mockRestore()
     await runner.dispose()
     rmSync(directory, { recursive: true, force: true })
   }

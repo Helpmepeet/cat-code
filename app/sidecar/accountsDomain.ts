@@ -471,7 +471,7 @@ export function createRealAnthropicOAuthLoginRunner(
               throw new Error('Could not confirm this sign-in. Sign in again before reconnecting this chat.')
             }
             if (!installation.handle) {
-              throw new Error('Sign-in could not be saved. Try signing in again before reconnecting this chat.')
+              throw new Error('Sign-in could not be saved. Retry saving this account.')
             }
             return {
               provider: 'anthropic' as const,
@@ -1217,13 +1217,14 @@ export function createSidecarAccountsDomain(
         if (login.isExistingAccount) {
           // Reauth / re-link: keep the existing name, no naming step. `success`
           // drives the accounts re-broadcast (server), which clears the banner.
+          pending = login
           phase = 'persisting'
           const receipt = await login.persist(undefined, { makeDefault })
           if (gen !== generation) return
           if (receipt && receipt.outcome === 'persistence_pending') {
             pendingProviderActivation = null
-            phase = 'idle'
-            emit(gen, { state: 'error', message: 'Sign-in could not be saved. Try signing in again before reconnecting this chat.' })
+            phase = 'waiting_for_alias'
+            emit(gen, { state: 'error', retrySave: true, message: 'Sign-in could not be saved. Retry saving this account.' })
             return
           }
           if (pendingProviderActivation && (!receipt || receipt.outcome === 'committed')) {
@@ -1240,12 +1241,14 @@ export function createSidecarAccountsDomain(
         }
       } catch (error) {
         if (gen !== generation) return
-        pending = null
+        // A captured login retains its installation operation for local-save retry.
+        // Failures before capture still require a fresh sign-in.
+        phase = pending ? 'waiting_for_alias' : 'idle'
         pendingProviderActivation = null
         resolveManualCode = null
-        phase = 'idle'
         emit(gen, {
           state: 'error',
+          ...(pending?.isExistingAccount ? { retrySave: true } : {}),
           message: error instanceof Error ? error.message : String(error),
         })
       } finally {
@@ -1275,7 +1278,7 @@ export function createSidecarAccountsDomain(
     if (phase !== 'waiting_for_alias' || !pending) {
       return { ok: false, message: 'No sign-in is waiting for a name.' }
     }
-    const check = pending.validateAlias(alias)
+    const check = pending.isExistingAccount ? { ok: true as const } : pending.validateAlias(alias)
     if (!check.ok) {
       // Stay in the alias step so the user can correct it (the engine's own rule).
       return { ok: false, message: check.message }
@@ -1285,7 +1288,7 @@ export function createSidecarAccountsDomain(
     let receipt: import('../shared/accountControlWorker.js').AccountLoginReceipt | void
     phase = 'persisting'
     try {
-      receipt = await login.persist(alias.trim() || undefined, { makeDefault })
+      receipt = await login.persist(login.isExistingAccount ? undefined : alias.trim() || undefined, { makeDefault })
     } catch (error) {
       if (gen === generation) {
         pending = login
@@ -1304,7 +1307,9 @@ export function createSidecarAccountsDomain(
       pending = login
       phase = 'waiting_for_alias'
       const message = 'Sign-in could not be saved. Retry saving this account.'
-      emit(gen, { state: 'waiting_for_alias' })
+      emit(gen, login.isExistingAccount
+        ? { state: 'error', retrySave: true, message }
+        : { state: 'waiting_for_alias' })
       return { ok: false, message }
     }
     if (pendingProviderActivation && (!receipt || receipt.outcome === 'committed')) {

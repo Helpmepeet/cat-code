@@ -73,15 +73,18 @@ function PrimaryButton({
   children,
   onClick,
   autoFocus,
+  disabled,
 }: {
   children: ReactNode
   onClick: () => void
   autoFocus?: boolean
+  disabled?: boolean
 }): ReactNode {
   return (
     <button
       type="button"
       autoFocus={autoFocus}
+      disabled={disabled}
       onClick={onClick}
       className="rounded-lg bg-accent px-[18px] py-2.5 text-[12.5px] font-semibold text-on-fill"
     >
@@ -93,13 +96,16 @@ function PrimaryButton({
 function SecondaryButton({
   children,
   onClick,
+  disabled,
 }: {
   children: ReactNode
   onClick: () => void
+  disabled?: boolean
 }): ReactNode {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       className="rounded-lg border border-shell-seam px-4 py-2.5 text-[12.5px] text-text-muted transition-colors hover:bg-shell-hover"
     >
@@ -266,7 +272,7 @@ export type StartupOAuthView =
   | { phase: 'waiting'; url: string | null }
   | { phase: 'alias' }
   | { phase: 'success' }
-  | { phase: 'error'; message: string }
+  | { phase: 'error'; message: string; retrySave?: boolean }
 
 type OAuthProvider = 'anthropic' | 'openai'
 
@@ -755,6 +761,8 @@ export function StartupOAuth({
   onSubmitAlias: (alias: string) => void
   onRetry: () => void
 }): ReactNode {
+  const saving = view.phase === 'error' && view.retrySave &&
+    (aliasStatus.state === 'pending' || aliasStatus.state === 'accepted')
   const shell = (children: ReactNode, onEscape: (() => void) | undefined) => (
     <StartupShell step="auth" presentation={presentation} onEscape={onEscape}>
       {children}
@@ -807,16 +815,20 @@ export function StartupOAuth({
             role="alert"
             className="-mt-3 break-words rounded-[10px] bg-tone-danger/[0.07] px-3.5 py-3 text-[12.5px] leading-relaxed text-tone-danger"
           >
-            {view.message}
+            {view.retrySave && aliasStatus.state === 'rejected' ? aliasStatus.message : view.message}
           </p>
           <OAuthFooter>
-            <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
-            <PrimaryButton autoFocus onClick={onRetry}>
-              Try again
+            <SecondaryButton onClick={onCancel} disabled={saving}>Cancel</SecondaryButton>
+            <PrimaryButton
+              autoFocus
+              disabled={saving}
+              onClick={view.retrySave ? () => onSubmitAlias('') : onRetry}
+            >
+              {view.retrySave ? (saving ? 'Saving…' : 'Retry saving') : 'Try again'}
             </PrimaryButton>
           </OAuthFooter>
         </>,
-        onCancel,
+        saving ? undefined : onCancel,
       )
 
     default: {

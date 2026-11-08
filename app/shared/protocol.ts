@@ -2878,8 +2878,8 @@ export type OAuthLoginProgress =
   | { state: 'waiting_for_alias' }
   /** Token written; the host refreshes its global account pool. */
   | { state: 'success'; loginRequestId?: string; receipt?: import('./accountControlWorker.js').AccountLoginReceipt }
-  /** The flow failed; `message` is the redacted engine error (retryable). */
-  | { state: 'error'; message: string }
+  /** `retrySave` retains captured credentials: retry oauthAlias, not browser OAuth. */
+  | { state: 'error'; message: string; retrySave?: boolean }
 
 /* ------------------------------------------------------------------------- *
  * Settings inventory metadata — read-only configuration snapshots
