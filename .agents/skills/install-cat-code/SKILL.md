@@ -37,11 +37,15 @@ For committed `HEAD` installation, the installer performs this build-and-verify 
 
 ## Install when requested
 
-Check whether `/Applications/Cat Code.app` is running. Do not stop a process you did not start. If the app is running, report that it must be quit before installation and wait for it to close. Use the maintained installer for every replacement; do not recreate its copy/move commands manually:
+Prepare the selected build while Cat Code remains open; do not ask the user to quit before downloading, building, or verifying it. Use the maintained installer below rather than recreating its copy/move commands. It verifies the installed build and skips replacement when the requested commit is already installed and intact, even while the app is running. An integrity failure must take the repair path, not be reported as already installed.
+
+If the installer reports a prepared build but refuses replacement because Cat Code is running, report "prepared, not installed" and retain the printed build/checkout paths and exact retry command. Ask the user to quit only then, and retry that same artifact without rebuilding or changing the selected commit. Temporary files can expire; if the retained artifact is gone, report that preparation must run again. Do not stop a process you did not start, bypass an install lock, or treat a nonzero installer exit as success.
 
 - To build committed `HEAD` and install without opening the app, run `bun run --cwd app install:local --no-launch`.
 - Omit `--no-launch` only when the user authorized reopening the app.
 - For the downloaded verified bundle, or a bundle already packaged and headless-smoke-tested from the selected clean source, run `bun run --cwd app install:local --bundle "/absolute/path/Cat Code.app" --commit FULL_SHA --no-launch` from the prepared checkout. This avoids rebuilding a different checkout. Omit `--no-launch` only with launch authorization.
+
+An ad-hoc signing warning explains why macOS may ask for file access again after an update; it is not an installation failure. These installer improvements do not preserve privacy approvals across changed builds. Do not re-sign the app, create certificates, reset privacy permissions, or bypass Gatekeeper as part of a routine installation.
 
 The install is complete only when `/Applications/Cat Code.app` is the sole visible production Cat Code app in `/Applications`, its signature and embedded SHA match the selected build, and the final app is registered with Launch Services. Development bundles have a separate identity and are outside this cleanup. The installer stages under `/Applications/.cat-code-install.noindex/` and retains one previous build in `~/Library/Application Support/Cat Code Install Backups.noindex/`; it retires older identified inactive installer backups only after the replacement verifies and registers. Never create visible `.staging-*.app` or `.rollback-*.app` siblings in `/Applications`.
 
