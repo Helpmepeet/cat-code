@@ -213,11 +213,13 @@ function PdfPage({ pdf, number, width, zoom, fitWidth, hidden = false, onReady, 
       current = false
       render?.cancel()
       layer?.cancel()
+      // TextLayer.cancel stops work but leaves its nodes in the shared container.
+      // Clear them before the next generation starts, not in the deferred release.
+      textElement.replaceChildren()
       const release = () => {
         if (renderGeneration.current === generation) {
           canvasElement.width = 0
           canvasElement.height = 0
-          textElement.replaceChildren()
         }
         page?.cleanup()
       }
