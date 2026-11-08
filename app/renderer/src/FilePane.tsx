@@ -15,7 +15,7 @@ import { ActionCheckIcon, ActionChevronIcon, ActionCloseIcon, ActionCopyIcon } f
 import { useToast } from './toastContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneScroll, registerFilePaneViewerFocus, commitOpenedFilePane, failFilePaneOpen, rememberFilePaneScroll,
-  isPaneFilePath, paneTargetLabel, previewDescriptorNote, recordLocalhostRoute, samePaneRevision, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession, type FilePaneScroll,
+  isPaneFilePath, paneTargetLabel, previewDescriptorNote, recordLocalhostRoute, samePaneRevision, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneFields, type FilePaneScroll,
 } from './filePaneState.js'
 import { SourceTextView } from './SourceTextView.js'
 import { FilePreviewWindowControl } from './FilePreviewWindowControl.js'
@@ -27,12 +27,14 @@ import { TableDocumentView } from './TableDocumentView.js'
 import './filePane.css'
 
 type PaintedFile = { descriptor: FilePreviewDescriptor; key: string }
+const FILE_FIELDS = ['file', 'committedFile', 'scroll', 'lineTarget', 'history', 'forward', 'note'] as const
+const TEXT_FIELDS = ['lineTarget'] as const
 export function FilePane({ appSessionId, cwd, onFocusComposer }: {
   appSessionId: string
   cwd: string | null
   onFocusComposer?: () => void
 }) {
-  const state = useFilePaneSession(appSessionId)
+  const state = useFilePaneFields(appSessionId, FILE_FIELDS)
   const descriptor = state.file
   const [painted, setPainted] = useState<PaintedFile | null>(null)
   const [previewHydrated, setPreviewHydrated] = useState(!descriptor)
@@ -583,7 +585,7 @@ function TextFileContent({ file, active, className, bodyRef, appSessionId, onRea
   const text = file.text ?? ''
   const lines = useRef<{ text: string; lines: string[] } | null>(null)
   if (!lines.current || lines.current.text !== text) lines.current = { text, lines: text.split('\n') }
-  const target = useFilePaneSession(appSessionId).lineTarget
+  const target = useFilePaneFields(appSessionId, TEXT_FIELDS).lineTarget
   useEffect(() => {
     if (active) return
     let frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => ready.current?.({ ...initialScroll.current, textWindow: file.textWindow?.side })) })

@@ -5,7 +5,9 @@ import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { useSubagentDock } from './subagentDockController.js'
 import { RendererErrorBoundary } from './RendererErrorBoundary.js'
 import { ToolOutputContext } from './toolOutputPanel.js'
-import { closeFilePane, disposeFilePaneSession, getFilePaneSession, registerFilePaneScroll, rejectFilePaneCandidate, rememberSlotWidth, requestOpenFile, showSlotOccupant, stepFilePaneHistory, updateFilePaneSession, useFilePaneSession } from './filePaneState.js'
+import { closeFilePane, disposeFilePaneSession, getFilePaneSession, registerFilePaneScroll, rejectFilePaneCandidate, rememberSlotWidth, requestOpenFile, showSlotOccupant, stepFilePaneHistory, updateFilePaneSession, useFilePaneFields, useFilePaneSession } from './filePaneState.js'
+import { ComputerPaneContext } from './computerPaneContext.js'
+import { selectSubagentPanelRowForCard } from './subagentPanelState.js'
 import type { FilePreviewDescriptor } from '../../shared/filePreview.js'
 import type { SubagentDockInput, SubagentDockRow } from './subagentDockState.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'
@@ -196,4 +198,77 @@ test('closing during held scroll capture cancels navigation and releases its can
     expect(getFilePaneSession(id).open).toBe(false)
     expect(releases.some(id => id.includes('/cancelled.png'))).toBe(true)
   } finally { unregister() }
+})
+
+test('field subscriptions ignore unrelated updates, follow selected changes, and switch sessions', async () => {
+  const first = session()
+  const second = session()
+  const fields = ['width', 'visible'] as const
+  let count = 0
+  function Selection({ id }: { id: string }) {
+    count++
+    const state = useFilePaneFields(id, fields)
+    return h('output', null, `${state.visible}:${state.width}`)
+  }
+  updateFilePaneSession(first, { output: { id: outputRow.id, fileIndex: 0, request: 1 }, visible: 'output', width: 560 })
+  updateFilePaneSession(second, { output: { id: outputRow.id, fileIndex: 0, request: 1 }, visible: 'output', width: 700 })
+  const tree = await harness.mount(h(Selection, { id: first }))
+  const mounted = count
+  await act(async () => { updateFilePaneSession(first, { scroll: { x: 20, y: 500 }, note: 'removed' }) })
+  expect(count).toBe(mounted)
+  await act(async () => { rememberSlotWidth(first, 620) })
+  expect(count).toBe(mounted + 1)
+  expect(tree.container.textContent).toBe('output:620')
+  await tree.render(h(Selection, { id: second }))
+  expect(tree.container.textContent).toBe('output:700')
+  const switched = count
+  await act(async () => { rememberSlotWidth(first, 800) })
+  expect(count).toBe(switched)
+  await act(async () => { disposeFilePaneSession(second) })
+  expect(tree.container.textContent).toBe('null:null')
+})
+
+test('side-panel tabs and resize retain bodies without rerendering worker content or parent screenshot consumers', async () => {
+  const id = session()
+  let workerReads = 0
+  let parentRenders = 0
+  const worker = { ...selectSubagentPanelRowForCard(launch, []), get model() { workerReads++; return null } }
+  const dock = { active: [], finished: [worker], chipFaces: [], nextUpdateAt: null }
+  function Parent() {
+    parentRenders++
+    useContext(ComputerPaneContext)
+    return h(OutputTrigger)
+  }
+  const props = {
+    appSessionId: id, dock, collapsed: false, onCollapsedChange() {}, onClearFinished() {},
+    onDetailsVisibleChange() {}, onFallback() {}, onOpenWorkers() {}, rows, cwd: null,
+    children: h(Parent),
+  }
+  updateFilePaneSession(id, { worker, visible: 'worker', width: 560 })
+  const tree = await harness.mount(h(SubagentWorkspace, props))
+  await act(async () => { tree.container.querySelector<HTMLButtonElement>('#open-output')!.click() })
+  const workerBody = tree.container.querySelector('.subagent-side-body')
+  const search = tree.container.querySelector<HTMLInputElement>('[aria-label="Search output"]')!
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(search, 'body')
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const reads = workerReads
+  const renders = parentRenders
+  expect(reads).toBeGreaterThan(0)
+  for (let index = 0; index < 5; index++) {
+    await act(async () => { showSlotOccupant(id, 'worker') })
+    await act(async () => { rememberSlotWidth(id, 600 + index * 20) })
+    await act(async () => { showSlotOccupant(id, 'output') })
+  }
+  expect(workerReads).toBe(reads)
+  expect(parentRenders).toBe(renders)
+  expect(tree.container.querySelector('.subagent-side-body')).toBe(workerBody)
+  expect(tree.container.querySelector('[aria-label="Search output"]')).toBe(search)
+  expect(search.value).toBe('body')
+  expect(tree.container.querySelector('.subagent-shared-slot')?.getAttribute('style')).toContain('680px')
+  const step = launch.children[0]!
+  if (step.kind !== 'assistant-text') throw new Error('Expected a prose fixture')
+  await tree.render(h(SubagentWorkspace, { ...props, rows: [{ ...launch, children: [...launch.children, { ...step, id: 'new-step', content: 'New worker content' }] }, outputRow] }))
+  expect(tree.container.querySelector('.subagent-side-body')?.textContent).toContain('New worker content')
 })

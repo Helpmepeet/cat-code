@@ -14,7 +14,7 @@ import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OU
 import { FilePaneContext } from './filePaneContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneFocus, rememberSlotWidth, requestOpenFile, paneTargetLabel,
-  hideScreenPane, showSlotOccupant, updateFilePaneSession, useFilePaneSession, type SlotOccupant,
+  hideScreenPane, showSlotOccupant, updateFilePaneSession, useFilePaneFields, type SlotOccupant,
 } from './filePaneState.js'
 import { findNestedToolUseRow } from './transcriptViewModel.js'
 import { canOpenSubagentPanel, selectSubagentPanelBranch, selectSubagentPanelRowForCard } from './subagentPanelState.js'
@@ -25,6 +25,8 @@ import { ActionFileIcon } from './SessionActionIcons.js'
 import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.js'
 import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
 import './filePane.css'
+
+const WORKSPACE_FIELDS = ['open', 'file', 'visible', 'worker', 'output', 'browser', 'computer', 'screenActivity', 'width'] as const
 
 export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, running = false, runKey = null, cwd, children }: {
   appSessionId?: string
@@ -47,7 +49,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   const faces = useAgentFaceRegistry()
   const localId = useId()
   const sessionId = appSessionId ?? `workspace:${localId}`
-  const state = useFilePaneSession(sessionId)
+  const state = useFilePaneFields(sessionId, WORKSPACE_FIELDS)
   const computerSteps = useMemo(() => selectComputerSteps(outputRows), [outputRows])
   const computerStep = selectComputerStep(computerSteps, state.computer?.selectedId ?? null)
   const latestComputerStep = selectComputerStep(computerSteps, null)
@@ -66,10 +68,11 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
     updateFilePaneSession(sessionId, { computer: { selectedId } })
     showSlotOccupant(sessionId, 'computer')
   }, [sessionId])
+  const selectedComputerStepId = state.visible === 'computer' ? computerStep?.id ?? null : null
   const computerContext = useMemo(() => ({
     openStep: openComputer,
-    selectedStepId: state.visible === 'computer' ? computerStep?.id ?? null : null,
-  }), [openComputer, state.visible, computerStep?.id])
+    selectedStepId: selectedComputerStepId,
+  }), [openComputer, selectedComputerStepId])
   const hideScreen = (kind: ScreenKind) => {
     hideScreenPane(sessionId, kind)
     requestAnimationFrame(() => {
@@ -83,14 +86,15 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
   const parent = useRef<HTMLDivElement>(null)
   const slot = useRef<HTMLDivElement>(null)
   const workspace = useRef<HTMLDivElement>(null)
-  const workers = [...dock.active, ...dock.finished]
+  const workers = useMemo(() => [...dock.active, ...dock.finished], [dock.active, dock.finished])
   const observed = selected ? workers.find(row => row.agentId === selected.agentId) : undefined
   const retained = useRef<{ selection: SubagentDockRow; row: SubagentDockRow } | null>(null)
   const candidate = observed ?? (retained.current?.selection === selected ? retained.current.row : selected)
   const worker = candidate && canOpenSubagentPanel(candidate, rows) ? candidate : null
-  const branch = selectSubagentPanelBranch(rows, worker?.toolUseId ?? null, worker?.runToolUseIds)
+  const branch = useMemo(() => selectSubagentPanelBranch(rows, worker?.toolUseId ?? null, worker?.runToolUseIds), [rows, worker?.toolUseId, worker?.runToolUseIds])
+  const panelWorkers = useMemo(() => worker && !workers.some(row => row.agentId === worker.agentId) ? [...workers, worker] : workers, [workers, worker])
   const opener = useRef<HTMLElement | null>(null)
-  const outputRow = output ? findNestedToolUseRow(outputRows, output.id) : null
+  const outputRow = useMemo(() => output ? findNestedToolUseRow(outputRows, output.id) : null, [outputRows, output?.id])
   const [dragging, setDragging] = useState(false)
   const drag = useRef<{ pointerId: number; startX: number; startWidth: number; width: number; layoutWidth: number | null } | null>(null)
   const dragFrame = useRef<number | null>(null)
@@ -125,24 +129,24 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
     updateFilePaneSession(sessionId, { output: { id: row.id, fileIndex, request: (current.output?.request ?? 0) + 1 } })
     showSlotOccupant(sessionId, 'output')
   }, [sessionId])
-  const closeOutput = () => {
+  const closeOutput = useCallback(() => {
     updateFilePaneSession(sessionId, { output: null })
     const target = opener.current
     opener.current = null
     requestAnimationFrame(() => { if (target?.isConnected) target.focus({ preventScroll: true }) })
-  }
-  const open = (row: SubagentDockRow) => {
+  }, [sessionId])
+  const open = useCallback((row: SubagentDockRow) => {
     if (!canOpenSubagentPanel(row, rows)) { onFallback(row); return }
     updateFilePaneSession(sessionId, { worker: row })
     showSlotOccupant(sessionId, 'worker')
     if (!rows.some(candidate =>
       candidate.kind === 'tool-use' && candidate.toolUseId === row.toolUseId ||
       candidate.kind === 'orphaned-agent' && candidate.missingToolUseId === row.toolUseId)) onLoadMissingHistory?.()
-  }
+  }, [sessionId, rows, onFallback, onLoadMissingHistory])
   const openCardRef = useRef((_card: NestedToolUseRow) => {})
   openCardRef.current = card => open(selectSubagentPanelRowForCard(card, workers))
   const openCard = useCallback((card: NestedToolUseRow) => openCardRef.current(card), [])
-  const closeWorker = () => {
+  const closeWorker = useCallback(() => {
     updateFilePaneSession(sessionId, { worker: null })
     requestAnimationFrame(() => {
       const dock = parent.current
@@ -151,7 +155,16 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
       const target = row ?? dock?.querySelector<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]), [data-finished-toggle]')
       target?.focus({ preventScroll: true })
     })
-  }
+  }, [sessionId, worker?.agentId])
+  // Switching the slot changes visibility, not the retained bodies or their
+  // search/scroll state. Keep expensive transcripts and documents out of that commit.
+  const workerPanel = useMemo(() => worker ? <SubagentSidePanel key={worker.agentId} worker={worker}
+    workers={panelWorkers} {...branch} cwd={cwd} onSwitch={open} onClose={closeWorker} /> : null,
+  [worker, panelWorkers, branch, cwd, open, closeWorker])
+  const outputPanel = useMemo(() => output && outputRow ? <ToolInspector key={`${output.id}:${output.request}`} row={outputRow} cwd={cwd}
+    embedded initialFileIndex={output.fileIndex} onClose={closeOutput} /> : null, [output, outputRow, cwd, closeOutput])
+  const filePanel = useMemo(() => state.open ? <FilePane appSessionId={sessionId} cwd={cwd} onFocusComposer={onFocusComposer} /> : null,
+    [state.open, sessionId, cwd, onFocusComposer])
   const occupants: Array<{ kind: SlotOccupant; label: string }> = [
     ...(state.open ? [{ kind: 'file' as const, label: state.file ? paneTargetLabel(state.file.path) : 'File' }] : []),
     ...(state.browser ? [{ kind: 'browser' as const, label: browserPaneLabel(state.browser) }] : []),
@@ -242,12 +255,9 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, dock, collaps
               }}>{occupant.kind === 'file' ? <ActionFileIcon /> : occupant.kind === 'browser' ? <BrowserGlobe /> : occupant.kind === 'computer' ? <ComputerScreenIcon /> : occupant.kind === 'worker' && worker ?
                 <AgentFace axes={faces.faceFor(worker.agentId, worker.name).axes} fill={faces.faceFor(worker.agentId, worker.name).fill} size={13} /> : <span aria-hidden>▤</span>}<span>{occupant.label}</span></button>)}
           </nav> : null}
-          {worker ? <div className="subagent-slot-content" hidden={state.visible !== 'worker'}><SubagentSidePanel key={worker.agentId} worker={worker}
-            workers={workers.some(row => row.agentId === worker.agentId) ? workers : [...workers, worker]}
-            {...branch} cwd={cwd} onSwitch={open} onClose={closeWorker} /></div> : null}
-          {output && outputRow ? <div className="subagent-slot-content" hidden={state.visible !== 'output'}><ToolInspector key={`${output.id}:${output.request}`} row={outputRow} cwd={cwd}
-            embedded initialFileIndex={output.fileIndex} onClose={closeOutput} /></div> : null}
-          {state.open ? <div className="subagent-slot-content" hidden={state.visible !== 'file'}><FilePane appSessionId={sessionId} cwd={cwd} onFocusComposer={onFocusComposer} /></div> : null}
+          {workerPanel ? <div className="subagent-slot-content" hidden={state.visible !== 'worker'}>{workerPanel}</div> : null}
+          {outputPanel ? <div className="subagent-slot-content" hidden={state.visible !== 'output'}>{outputPanel}</div> : null}
+          {filePanel ? <div className="subagent-slot-content" hidden={state.visible !== 'file'}>{filePanel}</div> : null}
           {state.browser ? <div className="subagent-slot-content" hidden={state.visible !== 'browser'}><BrowserPane state={state.browser} active={state.visible === 'browser'} onHide={() => hideScreen('browser')} /></div> : null}
           {computerSteps.length ? <div className="subagent-slot-content" hidden={state.visible !== 'computer'}><ComputerPane steps={computerSteps}
             selectedId={state.computer?.selectedId ?? null} onSelect={openComputer} onClose={() => hideScreen('computer')} active={state.visible === 'computer'}

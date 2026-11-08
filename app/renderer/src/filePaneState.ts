@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import { filePreviewKind, normalizeLocalhostPreviewUrl, localhostPreviewHostPort, type FilePreviewDescriptor, type FilePreviewScroll, type FilePreviewSource, type LocalhostPreviewNote } from '../../shared/filePreview.js'
 import type { MarkdownReadingPosition } from './markdownReadingPosition.js'
 import type { SubagentDockRow } from './subagentDockState.js'
@@ -80,14 +80,32 @@ function refusal(path: string): PreviewOpenResult {
 }
 
 export function getFilePaneSession(id: string): FilePaneSession { return sessions.get(id) ?? EMPTY }
-export function useFilePaneSession(id: string): FilePaneSession {
-  const subscribe = useCallback((listener: () => void) => {
+function useFilePaneSubscription(id: string) {
+  return useCallback((listener: () => void) => {
     let group = listeners.get(id)
     if (!group) { group = new Set(); listeners.set(id, group) }
     group.add(listener)
     return () => { group.delete(listener); if (!group.size) listeners.delete(id) }
   }, [id])
+}
+export function useFilePaneSession(id: string): FilePaneSession {
+  const subscribe = useFilePaneSubscription(id)
   const snapshot = useCallback(() => getFilePaneSession(id), [id])
+  return useSyncExternalStore(subscribe, snapshot, snapshot)
+}
+/** Keep scroll bookkeeping and other occupants' updates out of a panel's render path. */
+export function useFilePaneFields<K extends keyof FilePaneSession>(id: string, fields: readonly K[]): Pick<FilePaneSession, K> {
+  const subscribe = useFilePaneSubscription(id)
+  const snapshot = useMemo(() => {
+    let selected: Pick<FilePaneSession, K> | undefined
+    return () => {
+      const state = getFilePaneSession(id)
+      if (!selected || fields.some(key => !Object.is(selected![key], state[key]))) {
+        selected = Object.fromEntries(fields.map(key => [key, state[key]])) as Pick<FilePaneSession, K>
+      }
+      return selected
+    }
+  }, [id, fields])
   return useSyncExternalStore(subscribe, snapshot, snapshot)
 }
 export function updateFilePaneSession(id: string, patch: Partial<FilePaneSession>): void {

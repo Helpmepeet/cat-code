@@ -190,6 +190,7 @@ export function SourceTextView({
         onPosition={onScroll}
         scrollerRef={scrollerRef}
         className={wrap ? LINE_TEXT_CLASS.wrap : LINE_TEXT_CLASS.nowrap}
+        widthAffectsRowHeight={wrap}
         label={subject === 'file' ? 'File contents' : 'Output'}
         renderLine={(bounded, index) => {
           const position = index + 1

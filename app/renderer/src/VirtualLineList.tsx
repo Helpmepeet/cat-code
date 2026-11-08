@@ -8,7 +8,7 @@
  * - One `ResizeObserver` for the whole list, created once and never rebuilt for
  *   a source update, with mounted rows attached through per-index callback refs
  *   so a keyed replacement is observed immediately.
- * - A layout revision built from the container's width AND its class list. The
+ * - A layout revision built from the container's relevant width and class list. The
  *   class list carries the wrap mode (the inspector's Wrap button rewrites it),
  *   and a wrap toggle changes every row's height without changing one
  *   character of text, so both belong in the same revision.
@@ -69,6 +69,7 @@ export function VirtualLineList({
   onPosition,
   scrollerRef,
   renderLine,
+  widthAffectsRowHeight = true,
 }: {
   lines: readonly string[]
   activeIndex: number | null
@@ -79,6 +80,8 @@ export function VirtualLineList({
   onPosition?: (position: { x: number; y: number; topLine: number }) => void
   scrollerRef?: React.RefObject<HTMLDivElement | null>
   className: string
+  /** Opt out only when rows and interstitial chrome cannot wrap with width. */
+  widthAffectsRowHeight?: boolean
   /**
    * Names the scroller and makes it a focusable region. A list that IS the body
    * of its surface needs this so the keyboard can scroll it; one inline in a
@@ -95,11 +98,12 @@ export function VirtualLineList({
   const [scrollTop, setScrollTop] = useState(0)
   const [viewportHeight, setViewportHeight] = useState(INITIAL_VIEWPORT_HEIGHT)
   const [contentWidth, setContentWidth] = useState(0)
+  const dimensions = useRef({ width: 0, height: INITIAL_VIEWPORT_HEIGHT })
   const [committed, setCommitted] = useState(() =>
     createLineGeometryState(lines),
   )
 
-  const layoutRevision = `${contentWidth}|${className}`
+  const layoutRevision = `${widthAffectsRowHeight ? contentWidth : 'fixed-width'}|${className}`
   const layoutRevisionRef = useRef(layoutRevision)
   const linesRef = useRef(lines)
   useEffect(() => {
@@ -167,6 +171,9 @@ export function VirtualLineList({
     frameRef.current = requestAnimationFrame(flush)
   }, [flush])
 
+  // A mode change can invalidate measurements without resizing a mounted row.
+  useEffect(() => { schedule() }, [layoutRevision, schedule])
+
   // Created once for the life of the list: a streamed source update must not
   // rebuild the observer, only re-register the rows it replaced.
   useEffect(() => {
@@ -190,14 +197,25 @@ export function VirtualLineList({
     const root = rootRef.current
     if (!root || typeof ResizeObserver === 'undefined') return
     const apply = (): void => {
-      setViewportHeight(root.clientHeight || INITIAL_VIEWPORT_HEIGHT)
-      setContentWidth(root.clientWidth)
+      // display:none is not a new layout. Keep the last usable viewport and
+      // measurements until reveal supplies real dimensions again.
+      const height = root.clientHeight
+      const width = root.clientWidth
+      if (height <= 0 || width <= 0) return
+      if (height !== dimensions.current.height) {
+        dimensions.current.height = height
+        setViewportHeight(height)
+      }
+      if (widthAffectsRowHeight && width !== dimensions.current.width) {
+        dimensions.current.width = width
+        setContentWidth(width)
+      }
     }
     const observer = new ResizeObserver(apply)
     observer.observe(root)
     apply()
     return () => observer.disconnect()
-  }, [])
+  }, [widthAffectsRowHeight])
 
   const rowRefs = useRef(new Map<number, (node: HTMLDivElement | null) => void>())
   const chromeRefs = useRef(
