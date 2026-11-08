@@ -28,6 +28,7 @@ import { getFreshInputTokens, getTokenCountFromUsage } from '../../utils/tokens.
 import { logForDebugging } from '../../utils/debug.js';
 import { createSystemMessage } from '../../utils/messages.js';
 import type { TaskState } from '../types.js';
+import { isBlockedLocalAgent } from '../attention.js';
 export type ToolActivity = {
   toolName: string;
   input: Record<string, unknown>;
@@ -792,9 +793,26 @@ export function markAgentTaskResumed(taskId: string, setAppState: (f: (prev: App
     resumedAt: Date.now()
   }));
 }
-/**
- * Enqueue an agent notification to the message queue.
- */
+/** A finished run can still owe the parent a question rather than completed work. */
+function agentNotificationSummary(
+  task: LocalAgentTaskState,
+  description: string,
+  status: 'completed' | 'failed' | 'killed',
+  error?: string,
+): string {
+  const agentLabel = task.agentName ? `@${task.agentName}` : `"${description}"`
+  if (status === 'completed' && isBlockedLocalAgent(task)) {
+    const reason = task.blockReason?.trim()
+    return `Agent ${agentLabel} needs input${reason ? `: ${reason}` : ''}`
+  }
+  return status === 'completed'
+    ? `Agent ${agentLabel} completed`
+    : status === 'failed'
+      ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}`
+      : `Agent ${agentLabel} was stopped`
+}
+
+/** Enqueue unresolved instruction outcomes to their sending agents. */
 export function enqueueAgentMessageDeliveryReportsToOrigins({
   taskId,
   description,
@@ -831,15 +849,7 @@ export function enqueueAgentMessageDeliveryReportsToOrigins({
     group.push(message)
     originGroups.set(message.originAgentId, group)
   }
-  const agentLabel = taskSnapshot.agentName
-    ? `@${taskSnapshot.agentName}`
-    : `"${description}"`
-  const summary =
-    status === 'completed'
-      ? `Agent ${agentLabel} completed`
-      : status === 'failed'
-        ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}`
-        : `Agent ${agentLabel} was stopped`
+  const summary = agentNotificationSummary(taskSnapshot, description, status, error)
 
   for (const [originAgentId, records] of originGroups) {
     const deliveryReport = formatAgentMessageDeliveryRecords(records)
@@ -884,10 +894,7 @@ export function buildAgentNotificationDetails(
 ) {
   const mainDeliveryRecords = getUnresolvedAgentMessageDeliveries(taskSnapshot)
     .filter(message => !message.originAgentId)
-  const agentLabel = taskSnapshot.agentName
-    ? `@${taskSnapshot.agentName}`
-    : `"${description}"`;
-  const summary = status === 'completed' ? `Agent ${agentLabel} completed` : status === 'failed' ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}` : `Agent ${agentLabel} was stopped`;
+  const summary = agentNotificationSummary(taskSnapshot, description, status, error);
   const outputPath = getTaskOutputPath(taskId);
   const baseDetails = {
     taskId,

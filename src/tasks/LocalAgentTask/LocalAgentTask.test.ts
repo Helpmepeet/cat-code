@@ -23,6 +23,7 @@ import {
 import {
   appendLocalAgentSystemMessage,
   backgroundAgentTask,
+  buildAgentNotificationDetails,
   claimPendingMessagesForRequest,
   completeAgentTask,
   enqueueAgentNotification,
@@ -47,6 +48,7 @@ import {
   resetCommandQueue,
 } from '../../utils/messageQueueManager.js'
 import { generateTaskAttachments } from '../../utils/task/framework.js'
+import { parseTaskNotificationDetails } from '../../utils/taskNotification.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -414,6 +416,12 @@ describe('LocalAgentTask foreground cleanup', () => {
     expect(appState.tasks['blocker-fixture']).toMatchObject({
       handoffStatus: 'blocked', blockReason: expected,
     })
+    enqueueAgentNotification({
+      taskId: 'blocker-fixture', description: 'Fixture', status: 'completed', setAppState,
+    })
+    expect(parseTaskNotificationDetails(dequeue()!.value)).toMatchObject({
+      status: 'completed', summary: `Agent "Fixture" needs input: ${expected}`,
+    })
   })
 
   test('terminal notification reports an unresolved instruction outcome', () => {
@@ -449,6 +457,36 @@ describe('LocalAgentTask foreground cleanup', () => {
     expect(notification?.value).toContain('Undelivered:')
     expect(notification?.value).toContain('send the final note')
     expect(appState.tasks[agentId]?.notified).toBe(true)
+  })
+
+  test('a blocked worker alerts an instruction sender as well as the main parent', () => {
+    const agentId = 'blocked-sender-notification'
+    registerAsyncAgent({
+      agentId, description: 'Fixture', prompt: 'fixture', agentName: 'Wilkes',
+      selectedAgent: { name: 'general-purpose', prompt: 'fixture' }, setAppState,
+    })
+    queuePendingMessageIfRunning(agentId, 'Finish the change', setAppState, 'sender-worker' as never)
+    const handoff = formatBlockedHandoff({ kind: 'blocked', message: 'Which API version should I target?', evidence: [] })
+    completeAgentTask({
+      agentId, content: [{ type: 'text', text: handoff }],
+      totalToolUseCount: 0, totalDurationMs: 1, totalTokens: 1,
+    }, setAppState)
+    enqueueAgentNotification({
+      taskId: agentId, description: 'Fixture', status: 'completed', finalMessage: handoff, setAppState,
+    })
+    const notifications = [dequeue()!, dequeue()!]
+    const sender = notifications.find(notification => notification.agentId === 'sender-worker')!
+    const parent = notifications.find(notification => notification.agentId === undefined)!
+    expect(sender).toBeDefined()
+    expect(parent).toBeDefined()
+    expect(sender.agentId).toBe('sender-worker')
+    for (const notification of [sender, parent]) {
+      expect(notification.origin).toMatchObject({
+        status: 'completed', summary: 'Agent @Wilkes needs input: Which API version should I target?',
+      })
+    }
+    expect(sender.value).toContain('Finish the change')
+    expect(parent.agentId).toBeUndefined()
   })
 
   test('notification outcomes settle only the origin groups whose enqueue succeeds', () => {
@@ -558,6 +596,11 @@ describe('LocalAgentTask foreground cleanup', () => {
       setAppState,
     })
 
+    const handoff = formatBlockedHandoff({
+      kind: 'question',
+      message: 'Which components does Q to S cover?',
+      evidence: ['ToolSearch select:Agent returned nothing'],
+    })
     completeAgentTask(
       {
         agentId: 'sync-agent-escalated',
@@ -567,11 +610,7 @@ describe('LocalAgentTask foreground cleanup', () => {
         content: [
           {
             type: 'text',
-            text: formatBlockedHandoff({
-              kind: 'question',
-              message: 'Which components does Q to S cover?',
-              evidence: ['ToolSearch select:Agent returned nothing'],
-            }),
+            text: handoff,
           },
         ],
         totalToolUseCount: 1,
@@ -587,6 +626,43 @@ describe('LocalAgentTask foreground cleanup', () => {
       handoffStatus: 'blocked',
       blockReason: 'Which components does Q to S cover?',
     })
+    const task = appState.tasks['sync-agent-escalated']
+    if (task?.type !== 'local_agent') throw new Error('expected local agent')
+    const durable = buildAgentNotificationDetails(task, {
+      taskId: task.id, description: task.description, status: 'completed', finalMessage: handoff,
+    })
+    enqueueAgentNotification({
+      taskId: task.id, description: task.description, status: 'completed', finalMessage: handoff, setAppState,
+    })
+    const notification = dequeue()!
+    expect(notification.origin).toMatchObject({
+      summary: 'Agent @Wilkes needs input: Which components does Q to S cover?',
+      status: 'completed',
+    })
+    expect(notification.origin).toMatchObject(durable)
+    expect(parseTaskNotificationDetails(notification.value)).toMatchObject({
+      status: durable.status, summary: durable.summary,
+    })
+    expect(notification.value).toContain('ToolSearch select:Agent returned nothing')
+    expect(appState.tasks[task.id]?.notified).toBe(true)
+  })
+
+  test.each([
+    ['completed', undefined, 'Agent @Wilkes completed'],
+    ['completed', 'done', 'Agent @Wilkes completed'],
+    ['completed', 'blocked', 'Agent @Wilkes needs input'],
+    ['failed', 'blocked', 'Agent @Wilkes failed: fixture error'],
+    ['killed', 'blocked', 'Agent @Wilkes was stopped'],
+  ] as const)('notification summary preserves %s lifecycle with %s handoff metadata', (status, handoffStatus, summary) => {
+    registerAsyncAgent({
+      agentId: 'summary-fixture', agentName: 'Wilkes', description: 'Fixture', prompt: 'fixture',
+      selectedAgent: { name: 'general-purpose', prompt: 'fixture' }, setAppState,
+    })
+    const task = appState.tasks['summary-fixture']
+    if (task?.type !== 'local_agent') throw new Error('expected local agent')
+    expect(buildAgentNotificationDetails({ ...task, handoffStatus }, {
+      taskId: task.id, description: task.description, status, error: 'fixture error',
+    })).toMatchObject({ status, summary })
   })
 
   test('completeAgentTask clears the finished agent WebSocket session', async () => {
