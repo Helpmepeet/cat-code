@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -107,9 +107,13 @@ test('a running app or an active installer is never replaced', () => {
   bundle(f.installed, 'previous')
   bundle(f.source, 'new')
   writeFileSync(join(f.installed, 'running'), '')
-  expect(install(f, 'new').status).not.toBe(0)
+  const running = install(f, 'new')
+  expect(running.status).not.toBe(0)
   expect(commitAt(f.installed)).toBe('previous')
   expect(retained(f)).toEqual([])
+  const log = readFileSync(join(f.root, 'native.log'), 'utf8')
+  expect(log).not.toContain('unregister ')
+  expect(log).not.toContain('register ')
   mkdirSync(join(f.applications, '.cat-code-install.noindex', 'lock'))
   expect(install(f, 'new').status).not.toBe(0)
   expect(commitAt(f.installed)).toBe('previous')
@@ -173,4 +177,182 @@ test('an extra production app prevents a clean-install report while a Dev app is
   expect(result.stderr).toContain('Extra Cat Code app remains')
   expect(commitAt(extra)).toBe('legacy')
   expect(commitAt(dev)).toBe('dev')
+})
+
+test('a verified current build is left untouched even while running', () => {
+  const f = fixture()
+  bundle(f.installed, 'same')
+  bundle(f.source, 'same')
+  bundle(join(f.backups, 'Cat Code.rollback-previous.app'), 'previous')
+  writeFileSync(join(f.installed, 'running'), '')
+  const result = install(f, 'same')
+  expect(result.status).toBe(0)
+  expect(result.stdout).toContain('Already installed and verified')
+  expect(retained(f)).toEqual(['Cat Code.rollback-previous.app'])
+  expect(existsSync(join(f.installed, 'running'))).toBe(true)
+  expect(existsSync(join(f.applications, '.cat-code-install.noindex'))).toBe(false)
+  const log = readFileSync(join(f.root, 'native.log'), 'utf8')
+  expect(log).not.toContain('unregister ')
+  expect(log).not.toContain('register ')
+})
+
+test('same-build shortcut does not ignore an interrupted installation lock', () => {
+  const f = fixture()
+  bundle(f.installed, 'same')
+  bundle(f.source, 'same')
+  mkdirSync(join(f.applications, '.cat-code-install.noindex', 'lock'), { recursive: true })
+  const result = install(f, 'same')
+  expect(result.status).not.toBe(0)
+  expect(result.stderr).toContain('interrupted install needs inspection')
+  expect(result.stdout).not.toContain('Already installed')
+})
+
+test('a damaged current build is repaired instead of skipped', () => {
+  const f = fixture()
+  bundle(f.installed, 'same')
+  bundle(f.source, 'same')
+  writeFileSync(join(f.installed, 'fail-installed'), '')
+  const result = install(f, 'same')
+  expect(result.status).toBe(0)
+  expect(result.stdout).not.toContain('Already installed')
+  expect(existsSync(join(f.installed, 'fail-installed'))).toBe(false)
+  expect(retained(f)).toHaveLength(1)
+})
+
+// Exercise entrypoint ordering without invoking a build, the installed app,
+// Launch Services, or the user's profile. Preparation owns only temporary files.
+function runMain(f: ReturnType<typeof fixture>, extraShell = '', args: string[] = []) {
+  return spawnSync('bash', ['-c', `source "$SCRIPT"
+${nativeBoundaries}
+skip_current_install() { return 1; }
+git() {
+  if [[ "$1" == -C ]]; then shift 2; fi
+  case "$1" in
+    rev-parse) printf '%s\\n' "$COMMIT" ;;
+    clone) mkdir -p "\${!#}/app" ;;
+    checkout|status) ;;
+    *) return 1 ;;
+  esac
+}
+bun() {
+  printf 'bun %s\\n' "$*" >> "$LOG"
+  if [[ "$*" == 'run --cwd app package' ]]; then
+    mkdir -p "$PWD/app/dist-app"
+    cp -R "$SOURCE" "$PWD/app/dist-app/Cat Code.app"
+  fi
+}
+codesign() { printf '%s\\n' 'Signature=adhoc'; }
+check_closed() { printf 'check closed\\n' >> "$LOG"; return 1; }
+install_bundle() { printf 'unexpected install\\n' >> "$LOG"; return 1; }
+${extraShell}
+main "$@"`, 'fixture', '--no-launch', ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, SCRIPT: installer, SOURCE: f.source, INSTALLED: f.installed,
+      BACKUPS: f.backups, COMMIT: 'a'.repeat(40), LOG: join(f.root, 'native.log'), TMPDIR: f.root },
+  })
+}
+
+test('local preparation finishes before checking for quit and retains the exact build for retry', () => {
+  const f = fixture()
+  const sha = 'a'.repeat(40)
+  bundle(f.source, sha)
+  const result = runMain(f)
+  expect(result.status).not.toBe(0)
+  const log = readFileSync(join(f.root, 'native.log'), 'utf8')
+  expect(log).toContain('bun run --cwd app smoke:packaged:headless\ncheck closed\n')
+  expect(log).not.toContain('unexpected install')
+  expect(result.stdout).toContain('macOS may ask for file access again')
+  expect(result.stdout).toContain('Nothing was installed')
+  expect(result.stdout).toContain(`--commit ${sha} --no-launch`)
+  const scratch = readdirSync(f.root).find(n => n.startsWith('cat-code-install.'))!
+  const prepared = join(f.root, scratch, 'source', 'app', 'dist-app', 'Cat Code.app')
+  expect(commitAt(prepared)).toBe(sha)
+})
+
+test('an entrypoint same-build no-op neither builds, checks for quit, nor launches', () => {
+  const f = fixture()
+  const result = runMain(f, `
+skip_current_install() { printf 'already verified\\n' >> "$LOG"; }
+`)
+  expect(result.status).toBe(0)
+  expect(readFileSync(join(f.root, 'native.log'), 'utf8')).toBe('already verified\n')
+  expect(readdirSync(f.root).some(n => n.startsWith('cat-code-install.'))).toBe(false)
+})
+
+test('a failed packaged smoke stops before asking for quit and removes the incomplete preparation', () => {
+  const f = fixture()
+  bundle(f.source, 'a'.repeat(40))
+  const result = runMain(f, `
+bun() {
+  if [[ "$*" == 'run --cwd app package' ]]; then
+    mkdir -p "$PWD/app/dist-app"
+    cp -R "$SOURCE" "$PWD/app/dist-app/Cat Code.app"
+  fi
+  [[ "$*" != 'run --cwd app smoke:packaged:headless' ]]
+}
+`)
+  expect(result.status).not.toBe(0)
+  expect(result.stdout).not.toContain('Prepared build')
+  expect(readFileSync(join(f.root, 'native.log'), 'utf8')).not.toContain('check closed')
+  expect(readdirSync(f.root).some(n => n.startsWith('cat-code-install.'))).toBe(false)
+})
+
+test('a completed no-launch installation cleans up its temporary checkout', () => {
+  const f = fixture()
+  bundle(f.source, 'a'.repeat(40))
+  const result = runMain(f, `
+check_closed() { printf 'check closed\\n' >> "$LOG"; }
+install_bundle() { printf 'install %s\\n' "$4" >> "$LOG"; }
+`)
+  expect(result.status).toBe(0)
+  expect(readFileSync(join(f.root, 'native.log'), 'utf8')).toContain(`check closed\ninstall ${'a'.repeat(40)}\n`)
+  expect(readdirSync(f.root).some(n => n.startsWith('cat-code-install.'))).toBe(false)
+})
+
+test('a failure at the final replacement retains the prepared artifact', () => {
+  const f = fixture()
+  bundle(f.source, 'a'.repeat(40))
+  const result = runMain(f, `
+check_closed() { return 0; }
+`)
+  expect(result.status).not.toBe(0)
+  const scratch = readdirSync(f.root).find(n => n.startsWith('cat-code-install.'))!
+  expect(commitAt(join(f.root, scratch, 'source', 'app', 'dist-app', 'Cat Code.app'))).toBe('a'.repeat(40))
+})
+
+test('a supplied bundle is verified before asking for quit and is not rebuilt', () => {
+  const f = fixture()
+  const sha = 'a'.repeat(40)
+  bundle(f.source, sha)
+  const result = runMain(f, '', ['--bundle', f.source, '--commit', sha])
+  expect(result.status).not.toBe(0)
+  const log = readFileSync(join(f.root, 'native.log'), 'utf8')
+  expect(log).toBe(`verify ${realpathSync(f.source)}\ncheck closed\n`)
+  expect(result.stdout).toContain('Nothing was installed')
+  expect(commitAt(f.source)).toBe(sha)
+})
+
+test('an invalid supplied bundle stops before the quit check', () => {
+  const f = fixture()
+  bundle(f.source, 'wrong')
+  const result = runMain(f, '', ['--bundle', f.source, '--commit', 'a'.repeat(40)])
+  expect(result.status).not.toBe(0)
+  expect(readFileSync(join(f.root, 'native.log'), 'utf8')).not.toContain('check closed')
+})
+
+test('certificate-signed builds do not receive the ad-hoc warning', () => {
+  const f = fixture()
+  bundle(f.source, 'a'.repeat(40))
+  const result = runMain(f, `codesign() { printf '%s\\n' 'Authority=Developer ID Application: Test'; }`)
+  expect(result.stdout).toContain('Nothing was installed')
+  expect(result.stdout).not.toContain('macOS may ask')
+})
+
+test('a signing inspection failure is reported before the quit check', () => {
+  const f = fixture()
+  bundle(f.source, 'a'.repeat(40))
+  const result = runMain(f, `codesign() { printf '%s\\n' 'signature inspection failed' >&2; return 1; }`)
+  expect(result.status).not.toBe(0)
+  expect(result.stderr).toContain('Could not inspect signing: signature inspection failed')
+  expect(readFileSync(join(f.root, 'native.log'), 'utf8')).not.toContain('check closed')
 })

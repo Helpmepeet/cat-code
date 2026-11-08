@@ -40,6 +40,38 @@ verify_bundle() {
   ' "$bundle" "$commit")
 }
 
+check_no_duplicate_apps() {
+  local installed=$1 duplicate
+  for duplicate in "$(dirname "$installed")"/Cat\ Code*.app; do
+    [[ -d $duplicate && $duplicate != "$installed" ]] || continue
+    [[ $(bundle_identifier "$duplicate") == com.catcode.desktop ]] || continue
+    fail "Extra Cat Code app remains at $duplicate; inspect it before cleanup."
+  done
+}
+
+skip_current_install() {
+  local installed=$1 commit=$2
+  [[ -d $installed ]] || return 1
+  # A failed shortcut falls back to the normal verified replacement, including
+  # repair of a damaged bundle that still contains the requested commit.
+  verify_bundle "$installed" "$commit" >/dev/null 2>&1 || return 1
+  [[ ! -e "$(dirname "$installed")/.cat-code-install.noindex/lock" ]] ||
+    fail 'Another install is active, or an interrupted install needs inspection in .cat-code-install.noindex.'
+  check_no_duplicate_apps "$installed"
+  echo "[install:local] Already installed and verified at ${commit:0:8}; no replacement needed."
+}
+
+report_bundle_signing() {
+  local details
+  details=$(codesign -dv --verbose=2 "$1" 2>&1) || {
+    echo "[install:local] Could not inspect signing: $details" >&2
+    return 1
+  }
+  if [[ $details == *'Signature=adhoc'* ]]; then
+    echo '[install:local] This build is ad-hoc signed. macOS may ask for file access again after an update.'
+  fi
+}
+
 unregister_bundle() {
   # Missing registrations (including paths inside .noindex) are harmless.
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
@@ -54,8 +86,9 @@ register_bundle() {
 # Subshell-owned trap state survives Bash unwinding function locals on errexit.
 install_bundle() (
   tx_built_app=$1 tx_installed_app=$2 tx_backup_dir=$3 tx_commit=$4
+  if skip_current_install "$tx_installed_app" "$tx_commit"; then exit 0; fi
   tx_saved_app=''
-  tx_promoted=0 tx_committed=0 tx_restored=1
+  tx_promoted=0 tx_committed=0 tx_restored=1 tx_touched=0
   tx_stage_root="$(dirname "$tx_installed_app")/.cat-code-install.noindex"
   mkdir -p "$tx_stage_root" "$tx_backup_dir"
   mkdir "$tx_stage_root/lock" || fail 'Another install is active, or an interrupted install needs inspection in .cat-code-install.noindex.'
@@ -70,7 +103,7 @@ install_bundle() (
       if (( tx_restored )) && [[ -n $tx_saved_app && -d $tx_saved_app ]]; then
         mv "$tx_saved_app" "$tx_installed_app" || tx_restored=0
       fi
-      if (( tx_restored )) && [[ -d $tx_installed_app ]]; then
+      if (( tx_restored && tx_touched )) && [[ -d $tx_installed_app ]]; then
         register_bundle "$tx_installed_app" || tx_restored=0
       fi
     fi
@@ -91,9 +124,10 @@ install_bundle() (
   verify_bundle "$tx_built_app" "$tx_commit"
   cp -R "$tx_built_app" "$tx_staging_app"
   verify_bundle "$tx_staging_app" "$tx_commit"
-  unregister_bundle "$tx_built_app"
   check_closed "$tx_installed_app"
+  unregister_bundle "$tx_built_app"
   if [[ -d $tx_installed_app ]]; then
+    tx_touched=1
     unregister_bundle "$tx_installed_app"
     mv "$tx_installed_app" "$tx_transaction/previous.app"
     tx_saved_app="$tx_transaction/previous.app"
@@ -119,11 +153,7 @@ install_bundle() (
   done
   # Existing visible duplicates must be resolved rather than silently declaring
   # a clean install. Do not sweep unknown bundles or another installer's staging.
-  for tx_duplicate in "$(dirname "$tx_installed_app")"/Cat\ Code*.app; do
-    [[ -d $tx_duplicate && $tx_duplicate != "$tx_installed_app" ]] || continue
-    [[ $(bundle_identifier "$tx_duplicate") == com.catcode.desktop ]] || continue
-    fail "Extra Cat Code app remains at $tx_duplicate; inspect it before cleanup."
-  done
+  check_no_duplicate_apps "$tx_installed_app"
   # Unregistering an older copy can invalidate a shared bundle-ID binding.
   register_bundle "$tx_installed_app"
   echo "[install:local] Installed $tx_installed_app at ${tx_commit:0:8}"
@@ -135,6 +165,7 @@ main() {
   if [[ ${1:-} == --help ]]; then
     echo 'Usage: bun run --cwd app install:local [--no-launch] [--bundle PATH --commit SHA]'
     echo 'Builds committed HEAD (or installs an already verified bundle), verifies and replaces the closed app.'
+    echo 'Preparation can run while Cat Code is open. An already installed verified build is not replaced.'
     echo 'Keeps one previous build in ~/Library/Application Support/Cat Code Install Backups.noindex.'
     echo 'Opens Cat Code unless --no-launch is supplied. Run packaged headless smoke before --bundle.'
     return
@@ -153,15 +184,18 @@ main() {
   local installed_app='/Applications/Cat Code.app'
   local backup_dir="$HOME/Library/Application Support/Cat Code Install Backups.noindex"
   command -v bun >/dev/null || fail 'bun is required.'
-  check_closed "$installed_app"
   if [[ -n $built_app || -n $commit ]]; then
     [[ -d $built_app && $commit =~ ^[a-f0-9]{40}$ ]] || fail '--bundle requires an existing bundle and --commit with the full SHA.'
     built_app=$(cd "$built_app" && pwd -P)
     [[ $built_app != "$installed_app" ]] || fail 'The source bundle must differ from the installed app.'
+    if skip_current_install "$installed_app" "$commit"; then return; fi
+    verify_bundle "$built_app" "$commit"
   else
     commit=$(git -C "$repo_root" rev-parse HEAD)
+    if skip_current_install "$installed_app" "$commit"; then return; fi
     scratch=$(mktemp -d "${TMPDIR:-/tmp}/cat-code-install.XXXXXX")
-    trap 'rm -rf "$scratch"' EXIT
+    keep_prepared=0
+    trap 'if (( keep_prepared )); then echo "[install:local] Prepared checkout retained at $scratch"; else rm -rf "$scratch"; fi' EXIT
     local checkout="$scratch/source"
     echo "[install:local] Building committed revision ${commit:0:8}; uncommitted changes are excluded."
     git clone --shared --no-checkout --quiet "$repo_root" "$checkout"
@@ -176,7 +210,21 @@ main() {
     verify_bundle "$built_app" "$commit"
     (cd "$checkout" && bun run --cwd app smoke:packaged:headless)
   fi
+  report_bundle_signing "$built_app"
+  if ! check_closed "$installed_app"; then
+    # Keep the clean checkout and its dependencies too: the retry verifies and
+    # installs this exact artifact without rebuilding a different HEAD.
+    keep_prepared=1
+    echo "[install:local] Prepared build ${commit:0:8} retained at $built_app. Nothing was installed."
+    printf '[install:local] After quitting, run: cd %q && bun run --cwd app install:local --bundle %q --commit %q' \
+      "$repo_root" "$built_app" "$commit"
+    if (( ! launch )); then printf ' --no-launch'; fi
+    printf '\n'
+    return 1
+  fi
+  keep_prepared=1
   install_bundle "$built_app" "$installed_app" "$backup_dir" "$commit"
+  keep_prepared=0
   if (( launch )); then
     /usr/bin/open -a "$installed_app" || fail 'Installed the update, but could not open it.'
     local attempt
