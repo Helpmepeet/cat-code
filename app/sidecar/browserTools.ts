@@ -12,7 +12,8 @@ const navigateSchema = z.strictObject({
 const actSchema = z.strictObject({
   action: z.enum(['click', 'type', 'key', 'scroll', 'select', 'acceptConfirm']),
   ref: z.string().min(1).max(128).optional().describe('A current BrowserRead ref.'),
-  x: z.number().finite().optional(), y: z.number().finite().optional(),
+  x: z.number().finite().optional().describe('Horizontal pixel coordinate in the last BrowserScreenshot image.'),
+  y: z.number().finite().optional().describe('Vertical pixel coordinate in the last BrowserScreenshot image.'),
   text: z.string().max(64 * 1024).optional(), key: z.string().max(64).optional(),
   deltaX: z.number().finite().optional(), deltaY: z.number().finite().optional(),
   value: z.string().max(8192).optional(),
@@ -61,7 +62,10 @@ export function createBrowserTools(requestHost: PeerHostRequester = requestPeerH
       mapToolResultToToolResultBlockParam(data: Output, toolUseID: string) {
         return { type: 'tool_result' as const, tool_use_id: toolUseID,
           content: data.ok === true && 'mimeType' in data.value
-            ? [{ type: 'image' as const, source: { type: 'base64' as const, media_type: data.value.mimeType, data: data.value.data } }]
+            ? [
+              { type: 'text' as const, text: `Screenshot: ${data.value.width} x ${data.value.height} pixels. BrowserAct points use this image's pixel coordinates.` },
+              { type: 'image' as const, source: { type: 'base64' as const, media_type: data.value.mimeType, data: data.value.data } },
+            ]
             : JSON.stringify(data.ok === true ? data.value : { error: data.message }),
           ...(data.ok ? {} : { is_error: true }) }
       },
@@ -72,6 +76,6 @@ export function createBrowserTools(requestHost: PeerHostRequester = requestPeerH
     create('BrowserNavigate', 'browser.navigate', navigateSchema, 'Open a localhost page or local HTML file in the session browser, or go back, forward, or reload.'),
     create('BrowserRead', 'browser.read', z.strictObject({}), 'Read the session browser page text and accessibility tree. Use its current refs for browser actions.'),
     create('BrowserScreenshot', 'browser.screenshot', z.strictObject({}), 'Capture the session browser page as an image.'),
-    create('BrowserAct', 'browser.act', actSchema, 'Click, type, press a key, scroll, or select in the session browser by current ref or point. Password typing is refused. acceptConfirm arms acceptance of the next confirm dialog.'),
+    create('BrowserAct', 'browser.act', actSchema, 'Click, type, press a key, scroll, or select in the session browser by current ref or point in the last BrowserScreenshot image. Password typing is refused. acceptConfirm arms acceptance of the next confirm dialog.'),
   ]
 }

@@ -139,6 +139,7 @@ test('host routes read, describe and screenshot through CDP/capture and wires ge
         commands.push(method)
         if (method === 'Accessibility.getFullAXTree') return { nodes: [{ backendDOMNodeId: 1, role: { value: 'button' }, name: { value: 'Save' } }] }
         if (method === 'Runtime.evaluate' && params.expression.includes('innerText')) return { result: { value: 'Hello' } }
+        if (method === 'Runtime.evaluate' && params.expression.includes('window.innerWidth')) return { result: { value: { width: 10, height: 10 } } }
         return {}
       } },
     }),

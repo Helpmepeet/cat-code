@@ -58,6 +58,7 @@ export class BrowserPaneCdp {
   private accent = { r: 244, g: 114, b: 182 }
   private overlayEnabled = false
   private marked = false
+  private screenshotScale: { x: number; y: number } | undefined
   constructor(private readonly deps: {
     command: BrowserCdpCommand
     url: () => string
@@ -67,7 +68,7 @@ export class BrowserPaneCdp {
     onNativeDialog?: (open: boolean) => void
     nextGeneration?: () => number
   }) { this.generation = deps.nextGeneration?.() ?? 1 }
-  navigated(): void { this.generation = this.deps.nextGeneration?.() ?? this.generation + 1; this.nextRef = 0; this.refs.clear() }
+  navigated(): void { this.generation = this.deps.nextGeneration?.() ?? this.generation + 1; this.nextRef = 0; this.refs.clear(); this.screenshotScale = undefined }
   setAccent(accent: { r: number; g: number; b: number }): void {
     if (Object.values(accent).every(value => Number.isInteger(value) && value >= 0 && value <= 255)) this.accent = { ...accent }
   }
@@ -148,12 +149,23 @@ export class BrowserPaneCdp {
     return { url: this.deps.url(), text: raw.slice(0, MAX_TEXT), snapshot, truncated, generation }
   }
   async screenshot(gate: BrowserDispatchGate): Promise<BrowserRequestValues['browser.screenshot']> {
-    gate()
+    const generation = this.generation
+    const viewport = (await this.send('Runtime.evaluate', {
+      expression: '({ width: window.innerWidth, height: window.innerHeight })', returnByValue: true,
+    }, gate)).result?.value
     const image = await this.deps.capture(BROWSER_SCREENSHOT_MAX_PIXELS)
     gate()
+    if (generation !== this.generation) throw new Error('The page changed while capturing; take another screenshot')
     if (!Number.isInteger(image.width) || !Number.isInteger(image.height) || image.width < 1 || image.height < 1 || image.width > 4096 || image.height > 4096 || image.width * image.height > BROWSER_SCREENSHOT_MAX_PIXELS) throw new Error('Browser screenshot exceeds the pixel limit')
     if (image.data.length > 3_900_000) throw new Error('Browser screenshot exceeds the result limit')
+    if (!Number.isFinite(viewport?.width) || !Number.isFinite(viewport?.height) || viewport.width <= 0 || viewport.height <= 0) throw new Error('Browser viewport is unavailable')
+    // Captures contain device pixels and may be resized again to meet the transport limit.
+    this.screenshotScale = { x: viewport.width / image.width, y: viewport.height / image.height }
     return { ...image, mimeType: 'image/png' }
+  }
+  private cssPoint(input: BrowserActInput): BrowserActInput {
+    if (input.x === undefined || input.y === undefined || !this.screenshotScale) return input
+    return { ...input, x: input.x * this.screenshotScale.x, y: input.y * this.screenshotScale.y }
   }
   private async target(input: BrowserActInput, gate: BrowserDispatchGate, scrollIntoView = false): Promise<{ objectId: string; details: any }> {
     let objectId: string | undefined
@@ -194,7 +206,7 @@ export class BrowserPaneCdp {
   async describe(input: BrowserDescribeInput, gate: BrowserDispatchGate): Promise<BrowserRequestValues['browser.describe']> {
     let description: string
     if (input.operation === 'act') {
-      const act = input.act!
+      const act = this.cssPoint(input.act!)
       this.validate(act)
       const target = act.action === 'acceptConfirm' ? undefined : await this.target(act, gate)
       if (target?.details.password && (act.action === 'type' || act.action === 'key')) throw new Error('Typing into password fields is refused; take over to type it')
@@ -205,6 +217,7 @@ export class BrowserPaneCdp {
     return { description: description.slice(0, 8192), url: this.deps.url() }
   }
   async act(input: BrowserActInput, gate: BrowserDispatchGate): Promise<BrowserRequestValues['browser.act']> {
+    input = this.cssPoint(input)
     this.validate(input)
     let description: string
     if (input.action === 'acceptConfirm') {

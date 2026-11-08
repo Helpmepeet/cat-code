@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { BrowserPaneCdp, isUserBrowserInput } from './browserPaneCdp.js'
 
-function fixture() {
+function fixture(image = { data: 'png', width: 800, height: 600 }, viewport = { width: 800, height: 600 }) {
   const calls: { method: string; params: any }[] = []
   let password = false
   let crossOrigin = false
@@ -10,6 +10,7 @@ function fixture() {
       calls.push({ method, params })
       if (method === 'Accessibility.getFullAXTree') return { nodes: [{ nodeId: '1', backendDOMNodeId: 10, role: { value: 'textbox' }, name: { value: 'Display name' } }] }
       if (method === 'DOM.resolveNode') return { object: { objectId: 'element' } }
+      if (method === 'Runtime.evaluate' && params.expression.includes('window.innerWidth')) return { result: { value: viewport } }
       if (method === 'Runtime.evaluate' && params.expression.includes('innerText')) return { result: { value: 'page text' } }
       if (method === 'Runtime.evaluate') return { result: { objectId: 'element' } }
       if (method === 'Runtime.callFunctionOn' && params.returnByValue) return { result: { value: { password, crossOrigin, x: 20, y: 30, role: 'textbox', name: 'Display name', tag: 'INPUT' } } }
@@ -17,7 +18,7 @@ function fixture() {
       return {}
     },
     url: () => 'http://localhost:3000/',
-    capture: async () => ({ data: 'png', width: 800, height: 600 }),
+    capture: async () => image,
   })
   return { cdp, calls, password: () => { password = true }, crossOrigin: () => { crossOrigin = true } }
 }
@@ -55,10 +56,37 @@ test('screenshots use injected capturePage, not CDP screenshot; gate before each
   const { cdp, calls } = fixture()
   expect(await cdp.screenshot(() => {})).toEqual({ data: 'png', mimeType: 'image/png', width: 800, height: 600 })
   expect(calls.some(c => c.method === 'Page.captureScreenshot')).toBe(false)
-  let count = 0
-  await expect(cdp.act({ action: 'click', x: 1, y: 2 }, () => { if (++count >= 7) throw new Error('user control') })).rejects.toThrow('user control')
+  await expect(cdp.act({ action: 'click', x: 1, y: 2 }, () => {
+    if (calls.some(c => c.params?.type === 'mousePressed')) throw new Error('user control')
+  })).rejects.toThrow('user control')
   expect(calls.some(c => c.params?.type === 'mousePressed')).toBe(true)
   expect(calls.some(c => c.params?.type === 'mouseReleased')).toBe(false)
+})
+
+test('screenshot points are translated for target checks, descriptions, clicks and scrolls while refs stay in CSS pixels', async () => {
+  for (const image of [{ data: 'png', width: 1200, height: 800 }, { data: 'png', width: 300, height: 200 }]) {
+    const { cdp, calls } = fixture(image, { width: 600, height: 400 })
+    await cdp.screenshot(() => {})
+    const point = { x: image.width / 6, y: image.height / 4 }
+    await cdp.describe({ operation: 'act', act: { action: 'click', ...point } }, () => {})
+    const expressions = () => calls.filter(c => c.method === 'Runtime.evaluate' && c.params.expression.includes('elementFromPoint'))
+    expect(expressions().at(-1)?.params.expression).toContain('x = 100, y = 100')
+    await cdp.act({ action: 'click', ...point }, () => {})
+    expect(expressions().at(-1)?.params.expression).toContain('x = 100, y = 100')
+    expect(calls.filter(c => c.method === 'Input.dispatchMouseEvent').map(c => c.params)).toEqual([
+      { type: 'mousePressed', x: 100, y: 100, button: 'left', clickCount: 1 },
+      { type: 'mouseReleased', x: 100, y: 100, button: 'left', clickCount: 1 },
+    ])
+    expect(calls.find(c => c.method === 'Overlay.highlightRect')?.params).toMatchObject({ x: 93, y: 93 })
+    await cdp.act({ action: 'scroll', ...point, deltaY: 25 }, () => {})
+    expect(calls.filter(c => c.method === 'Input.dispatchMouseEvent').at(-1)?.params).toMatchObject({ type: 'mouseWheel', x: 100, y: 100, deltaY: 25 })
+    await cdp.read(() => {})
+    await cdp.act({ action: 'click', ref: 'g1r1' }, () => {})
+    expect(calls.filter(c => c.method === 'Input.dispatchMouseEvent').at(-1)?.params).toMatchObject({ x: 20, y: 30 })
+    cdp.navigated()
+    await cdp.act({ action: 'click', x: 40, y: 50 }, () => {})
+    expect(calls.filter(c => c.method === 'Input.dispatchMouseEvent').at(-1)?.params).toMatchObject({ x: 40, y: 50 })
+  }
 })
 
 test('only genuine user activation input takes control', () => {

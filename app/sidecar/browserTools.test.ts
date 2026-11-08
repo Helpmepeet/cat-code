@@ -38,7 +38,10 @@ test('browser screenshot maps to an image result and workers cannot dispatch bro
   const unusedPermission = async () => { throw new Error('Permission callback is not used by a tool dispatch') }
   const result = await screenshot.call({}, {} as ToolUseContext, unusedPermission, { message: { content: [] } } as never)
   const block = screenshot.mapToolResultToToolResultBlockParam(result.data, 'capture')
-  expect(block.content).toEqual([{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } }])
+  expect(block.content).toEqual([
+    { type: 'text', text: "Screenshot: 10 x 10 pixels. BrowserAct points use this image's pixel coordinates." },
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } },
+  ])
   const before = calls.length
   for (const [i, tool] of tools.entries()) {
     const result = await tool.call(samples[i]!, { agentId: 'worker' } as unknown as ToolUseContext, unusedPermission, { message: { content: [] } } as never)
