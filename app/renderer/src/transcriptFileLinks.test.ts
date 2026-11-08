@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { bareFilePaths, isInlineFilePath } from './transcriptFileLinks.js'
+import { bareFilePaths, isInlineFilePath, recoverAbsoluteFileLinkPath, workspaceFileHref } from './transcriptFileLinks.js'
 import { scopedTranscriptFilePath } from './transcriptFileScope.js'
 
 test('prose discovery retains whole home and route paths without linking abbreviations', () => {
@@ -23,4 +23,16 @@ test('bare prose admits only known file names, and known extensionless names nee
 
 test('a prose label and colon stay outside a whole relative path', () => {
   expect(bareFilePaths('Created at:docs/reports/summary.md.')).toEqual(['docs/reports/summary.md'])
+})
+
+test('absolute link recovery only removes the observed leading non-joiner after URL decoding', () => {
+  const path = '/repo/src/memoryTypes.ts:43'
+  expect(workspaceFileHref(`%E2%80%8C${path}`)).toBe(`\u200c${path}`)
+  expect(recoverAbsoluteFileLinkPath(workspaceFileHref(`%E2%80%8C${path}`)!)).toBe(path)
+  for (const literal of [
+    path, '/repo/\u200cmemoryTypes.ts:43', '\u200cmemoryTypes.ts:43',
+    '\u200c//server/file.ts', '\u200c\u200c/repo/file.ts',
+    '\u200c~/file.ts', '\u200chttps://example.com/file.ts', '\u200cfile:///repo/file.ts',
+    '\u200b/repo/file.ts', '\u200d/repo/file.ts',
+  ]) expect(recoverAbsoluteFileLinkPath(literal)).toBeNull()
 })

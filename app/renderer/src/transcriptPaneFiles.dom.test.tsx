@@ -8,6 +8,7 @@ import { LatestPaneFileCardContext, latestPaneFileCards } from './transcriptPane
 import { ToolCardStyleContext, type ToolCardStyle } from './toolCardStyle.js'
 import { TranscriptModeContext } from './transcriptMode.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
+import { ToastContext } from './toastContext.js'
 import type { NestedTranscriptRow, NestedToolUseRow } from './transcriptProjector.js'
 
 let harness: DomTestHarness
@@ -66,6 +67,105 @@ test('all reply path forms and source files send modifier intent to the pane', a
   expect(external).toEqual([])
   expect(requests).toHaveLength(4)
   expect(requests.at(-1)).toEqual({ sessionId: base.sessionId, path: 'source.ts:12', external: false })
+})
+
+test('a missing non-joiner-prefixed Source link quietly retries its absolute path after a workspace move', async () => {
+  installBridge([])
+  const requests: string[] = []
+  const toasts: string[] = []
+  const path = '/repo/src/memoryTypes.ts:43'
+  const boundary = { ...prose('Moving'), id: 'move', frameId: 'move-frame' }
+  const tree = await harness.mount(<ToastContext.Provider value={message => { toasts.push(message) }}>
+    <FilePaneContext.Provider value={async (_id, target) => {
+      requests.push(target)
+      return target === path ? { ok: true } : { ok: false, reason: 'missing', message: 'Could not find memoryTypes.ts' }
+    }}>
+      <TranscriptRowsView rows={[boundary, prose(`[Source](\u200c${path})`)]} cwd="/other-project"
+        contextTransitions={[{ id: 'move', afterFrameId: 'move-frame', cwd: '/other-project', binding: { kind: 'project' } }]} />
+    </FilePaneContext.Provider>
+  </ToastContext.Provider>)
+  expect(requests).toEqual([])
+  const button = openButtons(tree.container)[0]!
+  expect(button.textContent).toBe('Source')
+  await act(async () => { button.click() })
+  expect(requests).toEqual([`/other-project/\u200c${path}`, path])
+  expect(toasts).toEqual([])
+})
+
+test('file link recovery preserves successful literal filenames and does not retry preview refusals', async () => {
+  installBridge([])
+  const path = '\u200c/repo/file.ts:12'
+  for (const result of [
+    { ok: true as const },
+    { ok: false as const, reason: 'refused', message: 'Could not open this file' },
+    { ok: false as const, reason: 'busy', message: 'Could not open this file' },
+  ]) {
+    const requests: string[] = []
+    const toasts: string[] = []
+    const tree = await harness.mount(<ToastContext.Provider value={message => { toasts.push(message) }}>
+      <FilePaneContext.Provider value={async (_id, target) => { requests.push(target); return result }}>
+        <TranscriptRowsView rows={[prose(`[File](${path})`)]} />
+      </FilePaneContext.Provider>
+    </ToastContext.Provider>)
+    await act(async () => { openButtons(tree.container)[0]!.click() })
+    expect(requests).toEqual([path])
+    expect(toasts).toEqual(result.ok ? [] : [result.message])
+    await tree.unmount()
+  }
+})
+
+test('an unsuccessful cleaned file link still reports one failure', async () => {
+  installBridge([])
+  const requests: string[] = []
+  const toasts: string[] = []
+  const tree = await harness.mount(<ToastContext.Provider value={message => { toasts.push(message) }}>
+    <FilePaneContext.Provider value={async (_id, path) => {
+      requests.push(path); return { ok: false, reason: 'missing', message: 'Could not find missing.ts' }
+    }}>
+      <TranscriptRowsView rows={[prose('[File](%E2%80%8C/repo/missing.ts)')]} />
+    </FilePaneContext.Provider>
+  </ToastContext.Provider>)
+  await act(async () => { openButtons(tree.container)[0]!.click() })
+  expect(requests).toEqual(['\u200c/repo/missing.ts', '/repo/missing.ts'])
+  expect(toasts).toEqual(['Could not find missing.ts'])
+})
+
+test('file links without a preview opener also try the literal path before recovery', async () => {
+  installBridge([])
+  const requests: string[] = []
+  const toasts: string[] = []
+  window.catcode.checkWorkspaceFileAvailability = async () => 'missing'
+  window.catcode.openWorkspaceFile = async (_id, path) => { requests.push(path); return path === '/repo/file.ts:12' }
+  const tree = await harness.mount(<ToastContext.Provider value={message => { toasts.push(message) }}>
+    <TranscriptRowsView rows={[prose('[File](\u200c/repo/file.ts:12)')]} />
+  </ToastContext.Provider>)
+  await act(async () => { openButtons(tree.container)[0]!.click() })
+  expect(requests).toEqual(['\u200c/repo/file.ts:12', '/repo/file.ts:12'])
+  expect(toasts).toEqual([])
+})
+
+test('external recovery preserves modifier intent and does not reinterpret available or busy literal files', async () => {
+  installBridge([])
+  for (const availability of ['missing', 'available', 'busy'] as const) {
+    const requests: Array<{ path: string; external: boolean }> = []
+    const toasts: string[] = []
+    window.catcode.checkWorkspaceFileAvailability = async () => availability
+    const tree = await harness.mount(<ToastContext.Provider value={message => { toasts.push(message) }}>
+      <FilePaneContext.Provider value={async (_id, path, options) => {
+        requests.push({ path, external: options?.external === true })
+        return path === '/repo/file.ts' ? { ok: true } : { ok: false, message: 'Could not open this file' }
+      }}>
+        <TranscriptRowsView rows={[prose('[File](\u200c/repo/file.ts)')]} />
+      </FilePaneContext.Provider>
+    </ToastContext.Provider>)
+    await act(async () => { openButtons(tree.container)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true })) })
+    expect(requests).toEqual([
+      { path: '\u200c/repo/file.ts', external: true },
+      ...(availability === 'missing' ? [{ path: '/repo/file.ts', external: true }] : []),
+    ])
+    expect(toasts).toEqual(availability === 'missing' ? [] : ['Could not open this file'])
+    await tree.unmount()
+  }
 })
 
 test('main transcript uses the same shortened, width-bounded file labels as worker replies', async () => {

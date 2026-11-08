@@ -10,7 +10,7 @@ import type { BrowserPaneSnapshot } from '../../shared/browserPanePresentation.j
 
 export type SlotOccupant = 'file' | 'worker' | 'output' | 'browser'
 export type FilePaneScroll = FilePreviewScroll & { markdown?: MarkdownReadingPosition; topLine?: number; pdf?: { page: number; zoom: number; fitWidth: boolean }; table?: { row: number; column: number; sheet?: string; mode?: 'source' | 'table' }; textWindow?: 'start' | 'end' }
-export type PreviewOpenResult = { ok: true } | { ok: false; message: string }
+export type PreviewOpenResult = { ok: true } | { ok: false; message: string; reason?: string }
 export type FilePaneHistoryEntry = { path: string; scroll: FilePaneScroll; routeKey?: string; baseUrl?: string; previewId?: string }
 export type FilePaneOutput = { id: string; fileIndex: number; request: number }
 type FilePaneCheckpoint = Pick<FilePaneSession, 'open' | 'file' | 'committedFile' | 'lastPath' | 'history' | 'forward' | 'scroll' | 'note' | 'lineTarget' | 'requestedPath'>

@@ -15,6 +15,7 @@ import type { FilePreviewEvent, FilePreviewSource } from '../../shared/filePrevi
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { TranscriptRowsView } from './TranscriptView.js'
+import { FilePaneContext } from './filePaneContext.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { ToastContext } from './toastContext.js'
 import { captureFilePaneScroll, closeFilePane, disposeFilePaneSession, getFilePaneSession, rememberFilePaneScroll, requestOpenFile } from './filePaneState.js'
@@ -310,6 +311,29 @@ test('a reply click opens workspace and outside files through the real host boun
   expect(toasts).toEqual(['Could not find missing.md'])
   expect(getFilePaneSession(sessionId).file?.path).toBe(outsidePath)
   expect(tree.container.querySelectorAll('.subagent-shared-slot')).toHaveLength(1)
+})
+
+test('a malformed reply link recovers through the real host and keeps its source line without a toast', async () => {
+  const { sessionId, firstPath, toasts } = setup()
+  const path = join(dirname(firstPath), 'memoryTypes.ts')
+  writeFileSync(path, Array.from({ length: 20 }, (_, index) => `const line${index + 1} = ${index + 1}`).join('\n'))
+  const content = `[Source](\u200c${path}:12)`
+  const reply: NestedTranscriptRow = {
+    id: 'malformed-reply', sessionId, frameId: 'malformed', messageId: 'malformed', blockIndex: 0,
+    parentToolUseId: null, kind: 'assistant-text', role: 'assistant', children: [], content,
+  }
+  const tree = await harness.mount(<ToastContext.Provider value={message => { toasts.push(message) }}>
+    <FilePaneContext.Provider value={requestOpenFile}>
+      <TranscriptRowsView rows={[reply]} cwd={dirname(firstPath)} />
+    </FilePaneContext.Provider>
+  </ToastContext.Provider>)
+  await click(tree.container, `Open \u200c${path}:12`)
+  const state = getFilePaneSession(sessionId)
+  expect(state.file?.path).toBe(path)
+  expect(state.file?.text).toContain('const line12 = 12')
+  expect(state.lineTarget?.line).toBe(12)
+  expect(toasts).toEqual([])
+  expect(reply.content).toBe(content)
 })
 
 test('automatic file navigation carries its source scope while explicit outside clicks remain available', async () => {

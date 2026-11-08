@@ -59,8 +59,8 @@ import { useFilePaneOpener } from './filePaneContext.js'
 import { filePreviewKind, normalizeLocalhostPreviewUrl } from '../../shared/filePreview.js'
 import { isPaneFilePath } from './filePaneState.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, paneFileKey, selectedTextInside } from './transcriptPaneFiles.js'
-import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, localhostMarkdownHref, pendingFileHref, workspaceFileHref } from './transcriptFileLinks.js'
-import { recordWorkspaceFileWrite, useWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
+import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, localhostMarkdownHref, pendingFileHref, recoverAbsoluteFileLinkPath, workspaceFileHref } from './transcriptFileLinks.js'
+import { recordWorkspaceFileWrite, requestWorkspaceFileAvailability, useWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { TranscriptFileScopeContext, scopedTranscriptFilePath, transcriptFileScopes } from './transcriptFileScope.js'
 import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
 import {
@@ -2093,14 +2093,23 @@ function AssistantProse({
   const openFile = useCallback(
     (rawPath: string, external = false): void => {
       const path = scopedTranscriptFilePath(rawPath, fileCwd)
+      const recovered = recoverAbsoluteFileLinkPath(rawPath)
       const local = normalizeLocalhostPreviewUrl(path)
       const failure = local ? 'Could not open this page' : 'Could not open this file'
       if (paneOpener && (isPaneFilePath(path) || local)) {
-        void paneOpener(sessionId, local ?? path, { external }).then(result => {
+        void paneOpener(sessionId, local ?? path, { external }).then(async result => {
+          if (!result.ok && recovered !== null) {
+            const missing = result.reason === 'missing' || external && result.reason === undefined &&
+              await requestWorkspaceFileAvailability(sessionId, path, { fresh: true }) === false
+            if (missing) result = await paneOpener(sessionId, scopedTranscriptFilePath(recovered, fileCwd), { external })
+          }
           if (!result.ok) toast(result.message, { tone: 'warn' })
         }).catch(() => toast(failure, { tone: 'warn' }))
       } else {
-        void window.catcode.openWorkspaceFile(sessionId, path).then(opened => {
+        void window.catcode.openWorkspaceFile(sessionId, path).then(async opened => {
+          if (!opened && recovered !== null && await requestWorkspaceFileAvailability(sessionId, path, { fresh: true }) === false) {
+            opened = await window.catcode.openWorkspaceFile(sessionId, scopedTranscriptFilePath(recovered, fileCwd))
+          }
           if (!opened) toast(failure, { tone: 'warn' })
         }).catch(() => toast(failure, { tone: 'warn' }))
       }

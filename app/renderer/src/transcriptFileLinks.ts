@@ -45,6 +45,11 @@ export function workspaceFileHref(href: string | undefined): string | null {
   }
 }
 
+/** Only a failed literal lookup may use this repair; Unicode filenames stay literal. */
+export function recoverAbsoluteFileLinkPath(path: string): string | null {
+  return /^\u200c\/(?!\/)/.test(path) ? path.slice(1) : null
+}
+
 /** Undefined is still ambiguous; null is an outside address, as for settled links. */
 export function pendingFileHref(destination: string, href: string | undefined): string | null | undefined {
   const prefix = destination.startsWith('<') ? destination.slice(1) : destination
