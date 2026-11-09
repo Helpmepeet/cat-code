@@ -39,6 +39,41 @@ test('main-agent jump reserves before host acceptance and fences the accepted to
   expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump'])
 })
 
+test('an unknown handle directs local discovery without reserving or fencing the turn', async () => {
+  const fixture = setup()
+  const ctx = context()
+  const staleHandle = '92339bea-bffa-4d42-bc3f-6728d2e46a2b'
+  for (const destination of [handle, staleHandle]) {
+    const result = await fixture.jump.call({ destination }, ctx)
+    expect(result.data.ok).toBe(false)
+    expect(result.data.message).toContain('ListProjects')
+    expect(result.data.message).toContain('name or path')
+    expect(fixture.reserved).toBeNull()
+    expect(ctx.turnHandoff!.requested).toBeNull()
+    expect(ctx.turnHandoff!.isValid).toBe(true)
+    expect(fixture.calls).toEqual([])
+  }
+
+  await fixture.list.call({}, ctx)
+  expect((await fixture.jump.call({ destination: staleHandle }, ctx)).data.ok).toBe(false)
+  expect(fixture.calls).toEqual(['workspaces.list'])
+  expect(fixture.reserved).toBeNull()
+  expect(ctx.turnHandoff!.requested).toBeNull()
+  expect((await fixture.jump.call({ destination: handle }, ctx)).data.ok).toBe(true)
+  expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump'])
+})
+
+test('missing jump machinery does not suggest that a fresh handle can enable it', async () => {
+  const fixture = setup()
+  const ctx = context()
+  await fixture.list.call({}, ctx)
+  ctx.turnHandoff = undefined
+  const result = await fixture.jump.call({ destination: handle }, ctx)
+  expect(result.data).toEqual({ ok: false, message: 'A project jump is unavailable.' })
+  expect(fixture.calls).toEqual(['workspaces.list'])
+  expect(fixture.reserved).toBeNull()
+})
+
 test('renamed project tools preserve legacy allow, ask, and deny rules', async () => {
   const { toolAlwaysAllowedRule, getAskRuleForTool, getDenyRuleForTool } = await import('../../src/utils/permissions/permissions.js')
   const { getDefaultAppState } = await import('../../src/state/AppStateStore.js')

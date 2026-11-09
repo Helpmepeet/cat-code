@@ -77,13 +77,14 @@ export function createWorkspaceJumpTools(requestHost: PeerHostRequester = reques
     userFacingName: () => 'JumpToProject', get inputSchema() { return jumpInput() }, isReadOnly: () => false, isConcurrencySafe: () => false,
     toAutoClassifierInput(input) { return { action: 'move_this_conversation', destination: destinations.get(input.destination)?.path ?? 'unavailable' } },
     async description() { return 'Use this conversation’s one jump to a known project' },
-    async prompt() { return 'Only the main conversational agent may call this tool. Workers must use ordinary tools in their assigned project folder. When a known project is mentioned and the destination is clear, select it by its catalog handle. An explicit switch command is unnecessary. Honor explicit instructions not to move. Ask which project when competing destinations are ambiguous; a project used as reference is not necessarily the work target. Acceptance ends this source turn and loads the destination’s instructions. Only one successful jump is available per conversation. After it is used, this tool is unavailable; later project requests use ordinary tools and permissions without another jump or automatic context loading. Do not require a new Chat.' },
+    async prompt() { return 'Only the main conversational agent may call this tool. Workers must use ordinary tools in their assigned project folder. When a known project is mentioned and the destination is clear, select it by its catalog handle. Handles belong to this conversation and process generation, not to the project permanently. In handoffs, identify the project by name and path rather than copying a handle; resolve it with ListProjects in the receiving conversation. An explicit switch command is unnecessary. Honor explicit instructions not to move. Ask which project when competing destinations are ambiguous; a project used as reference is not necessarily the work target. Acceptance ends this source turn and loads the destination’s instructions. Only one successful jump is available per conversation. After it is used, this tool is unavailable; later project requests use ordinary tools and permissions without another jump or automatic context loading. Do not require a new Chat.' },
     async call(input, context: ToolUseContext): Promise<{ data: Result }> {
       if (context.agentId) return { data: { ok: false, message: 'Only the conversational agent can select its project.' } }
       const owner = admission()
       const fence = context.turnHandoff
       const toolUseId = context.toolUseId
-      if (!owner || !fence || !toolUseId || !destinations.has(input.destination)) return { data: { ok: false, message: 'A project jump is unavailable.' } }
+      if (!owner || !fence || !toolUseId) return { data: { ok: false, message: 'A project jump is unavailable.' } }
+      if (!destinations.has(input.destination)) return { data: { ok: false, message: 'That project handle is not current here. Use ListProjects to find the project by name or path, then retry with its returned handle.' } }
       const operationId = randomUUID()
       const request = { operationId, toolUseId }
       if (!owner.reserve(operationId)) return { data: { ok: false, message: 'This conversation cannot move while other work is waiting.' } }
