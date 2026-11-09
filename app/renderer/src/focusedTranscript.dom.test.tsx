@@ -5,8 +5,10 @@ import { TranscriptRowsView } from './TranscriptView.js'
 import { TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { createToolCardExpansionStore } from './toolCardExpansion.js'
-import type { NestedTranscriptRow } from './transcriptProjector.js'
+import { createTranscriptState, projectServerFrames, selectNestedTranscriptRows, type NestedTranscriptRow } from './transcriptProjector.js'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
+import { PROTOCOL_VERSION, type ServerFrame } from '../../shared/protocol.js'
+import { projectQuestionLifecycles } from './pendingQuestionsState.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -344,6 +346,68 @@ const image = (status: 'pending' | 'success'): NestedTranscriptRow => ({ ...sour
   input: { prompt: 'A neon city portrait' }, status, agentCompletion: null,
   result: status === 'pending' ? null : { content: 'Saved image', isError: false, diff: null,
     generatedImage: { filePath: '/tmp/portrait.png', model: 'gpt-image-1', size: '1024x1024', outputFormat: 'png', bytes: 4, preview: { mediaType: 'image/png', data: 'AAAA' } } } })
+
+for (const lifecycle of ['blocking', 'nonblocking'] as const) test(`${lifecycle} answers stay with their original question as work continues and history is restored`, async () => {
+  const question = { question: 'Go ahead with the four fixes?', options: [], multiSelect: false }
+  const answer = 'Implement the four fixes'
+  const note = 'Leave the asset workflow unchanged'
+  const frame = (message: unknown): ServerFrame => ({
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'focused-test',
+    event: { type: 'message', message: message as never },
+  })
+  const ask = frame({ type: 'assistant', uuid: 'ask-source', session_id: 'engine', parent_tool_use_id: null,
+    message: { role: 'assistant', content: [{ type: 'tool_use', id: 'ask', name: 'AskUserQuestion', input: { questions: [question] } }] } })
+  const answered = frame({ type: 'user', uuid: 'ask-result', session_id: 'engine', parent_tool_use_id: null,
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'ask', content: lifecycle === 'blocking' ? 'User has answered your questions.' : 'Question shown to the user. No answer yet; it will arrive as a separate message.' }] },
+    tool_use_result: lifecycle === 'blocking'
+      ? { questions: [question], answers: { [question.question]: answer }, annotations: { [question.question]: { notes: note } } }
+      : { questions: [question], shown: true } })
+  const continuation = frame({ type: 'assistant', uuid: 'continuation', session_id: 'engine', parent_tool_use_id: null,
+    message: { role: 'assistant', content: [{ type: 'text', text: 'I will implement the fixes now.' }, { type: 'tool_use', id: 'read', name: 'Read', input: { file_path: '/repo/file.ts' } }] } })
+  const frames: ServerFrame[] = [{
+    kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'focused-test', engineSessionId: 'engine',
+    payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: false, activeTurn: true, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
+  }, ask]
+  const rows = (resolved = false) => {
+    const projected = selectNestedTranscriptRows(projectServerFrames(createTranscriptState(), frames), 'focused-test')
+    return lifecycle === 'blocking' ? projected : projectQuestionLifecycles(projected, resolved ? {
+      pending: [], resolved: [{ ...question, toolUseId: 'ask', sourceMessageUuid: 'ask-source', questionIndex: 0, state: 'answered', answer, notes: note }],
+    } : { pending: [{ ...question, toolUseId: 'ask', sourceMessageUuid: 'ask-source', questionIndex: 0 }], resolved: [] })
+  }
+  const store = createToolCardExpansionStore()
+  const render = (resolved: boolean, live = true, mode: TranscriptMode = 'focused') => view(rows(resolved), live, false, mode, store)
+  const tree = await harness.mount(render(false))
+  await click(tree.container.querySelector('.focused-step-head'))
+  const originalStep = tree.container.querySelector('.focused-step')!
+  const checkAnswer = () => {
+    expect(tree.container.querySelector('.focused-deliverables') === null).toBe(true)
+    const body = tree.container.querySelector('.focused-step-body')!
+    expect(body.textContent).toContain(question.question)
+    expect(body.textContent).toContain(answer)
+    expect(body.textContent).toContain(note)
+    expect(originalStep.contains(body)).toBe(true)
+  }
+  frames.push(answered)
+  await tree.render(render(true))
+  checkAnswer()
+  frames.push(continuation)
+  await tree.render(render(true))
+  checkAnswer()
+  const update = tree.container.querySelector('[data-focused-update]')!
+  expect(originalStep.compareDocumentPosition(update) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  // A fresh mount reprojects saved frames, without relying on live component state.
+  await tree.unmount()
+  const restored = await harness.mount(render(true, false))
+  const restoredStep = restored.container.querySelector('.focused-step')!
+  expect(restoredStep.querySelector('.focused-step-body')?.textContent).toContain(note)
+  expect(restoredStep.compareDocumentPosition(restored.container.querySelector('[data-focused-update]')!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(restored.container.querySelector('.focused-deliverables') === null).toBe(true)
+  await restored.render(render(true, false, 'full'))
+  expect(restored.container.textContent?.split(answer)).toHaveLength(2)
+  await restored.render(render(true, false))
+  expect(restored.container.querySelector('.focused-step-body')?.textContent).toContain(note)
+  expect(restored.container.querySelector('.focused-deliverables') === null).toBe(true)
+})
 
 test('a finished generated image stays outside the fold, shown once, while its step still counts it', async () => {
   const done = [user, text('update-1', 'I will make the image.'), image('success'), text('answer', 'Here is the portrait.'), result]

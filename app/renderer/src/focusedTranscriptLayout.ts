@@ -1,4 +1,3 @@
-import { askUserQuestionTranscriptPresentation } from './askUserQuestionTranscript.js'
 import { backgroundAgentState, focusedCallLine, isDeclinedQuestion, type FocusedCallContext, type FocusedCallLine } from './focusedCallText.js'
 import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
@@ -50,11 +49,9 @@ export type FocusedTranscriptItem = { kind: 'rows'; rows: readonly NestedTranscr
  * stays outside the fold. It still counts toward its step's summary.
  */
 export function isFocusedDeliverable(row: NestedTranscriptRow): boolean {
-  if (row.kind !== 'tool-use' || row.status !== 'success') return false
-  if (row.toolFamily === 'imagegen') return row.result?.generatedImage !== undefined
-  // The user's answer is what the turn went on to act on, like a generated image.
-  return row.toolName === 'AskUserQuestion' &&
-    askUserQuestionTranscriptPresentation(row.toolName, row.input, row.status, row.result)?.state === 'answered'
+  // Questions stay with the step that asked them, not below later work.
+  return row.kind === 'tool-use' && row.status === 'success' &&
+    row.toolFamily === 'imagegen' && row.result?.generatedImage !== undefined
 }
 
 /** The newest screenshot a stretch's computer steps returned, for its closed line. */

@@ -251,12 +251,12 @@ describe('focused transcript layout', () => {
     const removed = make({ input: '*** Begin Patch\n*** Delete File: app/old.ts\n*** End Patch' }, 'success', { isError: false, content: '', diff: null, fileDiffs: [{ filePath: '/r/app/old.ts', hunks: [] }] })
     expect(summarizeFocusedWork([removed]).editedPaths).toEqual(['/r/app/old.ts'])
   })
-  test('an answered question stays outside the fold like a generated image', () => {
+  test('question states stay in their original step rather than becoming deliverables', () => {
     const questions = [{ question: 'Which port?', header: 'Port', options: [{ label: '1', description: 'a' }, { label: '2', description: 'b' }], multiSelect: false }]
     const ask = (status: 'pending' | 'success' | 'error', askUserQuestion?: unknown) =>
       ({ ...tool('q', 'other'), toolName: 'AskUserQuestion', input: { questions }, status,
         result: status === 'pending' ? null : { isError: false, content: '', diff: null, ...(askUserQuestion ? { askUserQuestion } : {}) } }) as NestedTranscriptRow
-    expect(isFocusedDeliverable(ask('success', { answers: { 'Which port?': '2' }, notesByQuestion: {} }))).toBe(true)
+    expect(isFocusedDeliverable(ask('success', { answers: { 'Which port?': '2' }, notesByQuestion: {} }))).toBe(false)
     expect(isFocusedDeliverable(ask('success'))).toBe(false)
     expect(isFocusedDeliverable(ask('success', { answers: {}, notesByQuestion: {}, shown: true }))).toBe(false)
     expect(isFocusedDeliverable(ask('pending'))).toBe(false)
