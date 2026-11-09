@@ -162,6 +162,27 @@ test('unsafe-looking excerpts are literal text and a live answer updates the act
   tree.scroller.remove()
 })
 
+test('hidden transcript panes defer viewport measurements until they have height', async () => {
+  const tree = await mountOutline()
+  let reads = 0
+  const release = registerTranscriptRowOffsets(tree.scroller, key => {
+    reads++
+    return ({ p1: 0, p2: 100, p3: 200 } as Record<string, number>)[key] ?? null
+  })
+  await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
+  expect(reads).toBe(0)
+  expect(ticks(tree.container).some(tick => tick.hasAttribute('aria-current'))).toBe(false)
+  Object.defineProperties(tree.scroller, {
+    scrollTop: { configurable: true, writable: true, value: 220 },
+    clientHeight: { configurable: true, value: 300 },
+  })
+  await act(async () => { tree.scroller.dispatchEvent(new Event('scroll')); await harness.nextFrame(); await harness.nextFrame() })
+  expect(reads).toBeGreaterThan(0)
+  expect(ticks(tree.container)[2]!.getAttribute('aria-current')).toBe('location')
+  release()
+  tree.scroller.remove()
+})
+
 test('reading and viewport indicators use virtual row offsets without mounting every prompt', async () => {
   const data = Array.from({ length: 1000 }, (_, index) => prompt(`p${index}`))
   const tree = await mountOutline(data)

@@ -110,6 +110,7 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
     if (!scroller) return
     let frame = 0
     const update = () => {
+      if (scroller.clientHeight <= 0) return
       const items = entriesRef.current
       const mounted = new Map<string, HTMLElement>()
       for (const row of scroller.querySelectorAll<HTMLElement>('[data-row-key]')) {
