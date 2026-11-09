@@ -408,6 +408,7 @@ export const TranscriptView = memo(function TranscriptView({
   columnRef,
   initialScrollRowKey,
   revealAgent = null,
+  revealRow = null,
   welcomeExiting = false,
   projects,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
@@ -479,6 +480,7 @@ export const TranscriptView = memo(function TranscriptView({
   /** Row identity retained by SessionPane when this pane is rebound. */
   initialScrollRowKey?: string | null
   revealAgent?: AgentRevealRequest | null
+  revealRow?: { key: string; sequence: number } | null
   /** Send-message motion (behavior 3): keep `WelcomeScreen` mounted, exiting,
    * for one more render after `state` already has this session's first row. */
   welcomeExiting?: boolean
@@ -526,6 +528,7 @@ export const TranscriptView = memo(function TranscriptView({
       toolCardExpansionStore={toolCardExpansionStore}
       initialScrollRowKey={initialScrollRowKey}
       revealAgent={revealAgent}
+      revealRow={revealRow}
       columnRef={columnRef}
       welcomeExiting={welcomeExiting}
       projects={projects}
@@ -654,6 +657,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   columnRef,
   initialScrollRowKey = null,
   revealAgent = null,
+  revealRow = null,
   welcomeExiting = false,
   projects,
   contextTransitions = EMPTY_CONTEXT_TRANSITIONS,
@@ -696,6 +700,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   columnRef?: Ref<HTMLDivElement>
   initialScrollRowKey?: string | null
   revealAgent?: AgentRevealRequest | null
+  revealRow?: { key: string; sequence: number } | null
   welcomeExiting?: boolean
   projects?: readonly DesktopProject[]
   contextTransitions?: SessionDescriptor['contextTransitions']
@@ -1004,7 +1009,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         keys={entryKeys}
         estimatedChildHeight={82}
         initialAnchorKey={initialScrollRowKey}
-        revealRequest={revealAgent && revealEntryKey ? { key: revealEntryKey, sequence: revealAgent.sequence } : null}
+        revealRequest={revealRow ?? (revealAgent && revealEntryKey ? { key: revealEntryKey, sequence: revealAgent.sequence } : null)}
         renderChild={renderEntry}
         containerRef={columnRef}
         dataCardStyle={cardStyle}

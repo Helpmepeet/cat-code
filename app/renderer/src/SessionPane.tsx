@@ -106,6 +106,7 @@ import type { ToolCardExpansionStore } from './toolCardExpansion.js'
 import { observePaneBottomLock, observePaneScroll } from './markdownScrollCoordinator.js'
 import { TranscriptModeContext } from './transcriptMode.js'
 import { createFocusedTranscriptScroll } from './focusedTranscriptScroll.js'
+import { TranscriptOutline } from './TranscriptOutline.js'
 import { selectPaneFollowIntent } from './paneAnchorModel.js'
 import {
   captureTranscriptScrollAnchor,
@@ -864,8 +865,10 @@ export function SessionPane({
     workers, tasks: tasksSnapshot, transcriptRows: nestedRows, leases, parentModel: model,
   })
   const [revealAgent, setRevealAgent] = useState<AgentRevealRequest | null>(null)
+  const [revealOutlineRow, setRevealOutlineRow] = useState<{ key: string; sequence: number } | null>(null)
   const openDockWorker = (row: SubagentDockRow) => {
     if (row.toolUseId) {
+      setRevealOutlineRow(null)
       focusedScrollRef.current?.release()
       applyAtBottom(false)
       setRevealAgent(previous => ({ toolUseId: row.toolUseId!, sequence: (previous?.sequence ?? 0) + 1 }))
@@ -1978,6 +1981,7 @@ export function SessionPane({
             createdPeerNavigation={createdPeerNavigation}
             toolCardExpansionStore={toolCardExpansionStore}
             revealAgent={revealAgent}
+            revealRow={revealOutlineRow}
             initialScrollRowKey={scrollAnchor?.kind === 'row' ? scrollAnchor.rowKey : null}
             contextTransitions={activeDescriptor?.contextTransitions}
             workspaceMove={activeDescriptor?.workspaceMove}
@@ -2102,6 +2106,12 @@ export function SessionPane({
             </div>
           ) : null}
         </div>
+        <TranscriptOutline key={activeSessionId ?? 'empty'} rows={nestedRows} scrollerRef={transcriptScrollRef} onJump={entry => {
+          focusedScrollRef.current?.release()
+          applyAtBottom(false)
+          setRevealAgent(null)
+          setRevealOutlineRow(previous => ({ key: entry.rowKey, sequence: (previous?.sequence ?? 0) + 1 }))
+        }} />
         {showLatest ? (
           <button
             type="button"

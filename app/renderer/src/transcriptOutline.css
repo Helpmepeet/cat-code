@@ -1,0 +1,131 @@
+.transcript-outline {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.transcript-outline-rail {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  width: 24px;
+  max-height: calc(100% - 32px);
+  padding: 8px 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.transcript-outline-rail::-webkit-scrollbar { display: none; }
+.transcript-outline-rail:hover,
+.transcript-outline-rail:focus-within { width: 42px; }
+
+.transcript-outline-tick {
+  all: unset;
+  display: block;
+  flex: none;
+  position: relative;
+  width: 100%;
+  height: 10px;
+  cursor: pointer;
+}
+
+.transcript-outline-tick::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 4px;
+  width: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text-ghost);
+  opacity: .55;
+  transition: width .12s, background-color .12s, opacity .12s;
+}
+
+.transcript-outline-tick[data-in-view]::before { background: var(--text-muted); opacity: .8; }
+.transcript-outline-tick[aria-current="location"]::before { background: var(--text-primary); opacity: 1; }
+.transcript-outline-tick[data-distance="3"]::before { width: 10px; }
+.transcript-outline-tick[data-distance="2"]::before { width: 15px; }
+.transcript-outline-tick[data-distance="1"]::before { width: 21px; }
+.transcript-outline-tick[data-bookmarked]::before { background: var(--accent); opacity: 1; }
+.transcript-outline-tick[data-distance="0"]::before { width: 28px; background: var(--text-primary); opacity: 1; }
+.transcript-outline-tick[data-distance="0"][data-bookmarked]::before { background: var(--accent); }
+.transcript-outline-tick:focus-visible::before { box-shadow: 0 0 0 2px rgb(var(--accent-rgb) / .45); }
+
+.transcript-outline-preview {
+  position: absolute;
+  left: 58px;
+  top: var(--outline-preview-top, 50%);
+  width: 320px;
+  max-width: calc(100% - 72px);
+  max-height: calc(100% - 16px);
+  overflow: auto;
+  border: 1px solid var(--shell-seam);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: var(--elev-popover);
+  pointer-events: auto;
+}
+
+.transcript-outline-jump {
+  all: unset;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px 12px;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+.transcript-outline-prompt {
+  display: block;
+  padding-right: 26px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.transcript-outline-answer {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-subtle);
+}
+
+.transcript-outline-bookmark {
+  all: unset;
+  position: absolute;
+  right: 7px;
+  top: 7px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.transcript-outline-bookmark:hover { background: var(--shell-hover); color: var(--text-muted); }
+.transcript-outline-bookmark[aria-pressed="true"] { color: var(--accent); }
+.transcript-outline-bookmark svg { width: 14px; height: 14px; }
+.transcript-outline-bookmark[aria-pressed="true"] svg path { fill: currentColor; }
+.transcript-outline-bookmark:focus-visible,
+.transcript-outline-jump:focus-visible { outline: 2px solid rgb(var(--accent-rgb) / .6); outline-offset: -2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .transcript-outline-tick::before { transition: none; }
+}
