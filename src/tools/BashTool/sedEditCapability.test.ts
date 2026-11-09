@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, 
 import { tmpdir } from 'os'
 import { join } from 'path'
 import type { ToolUseContext } from '../../Tool.js'
+import { TaskOutput } from '../../utils/task/TaskOutput.js'
 import {
   createPermissionRequestMessage,
   createPermissionResponseMessage,
@@ -33,6 +34,7 @@ const shellExecStub = async (...args: Parameters<typeof realShellExec>) => {
   if (!shellStubActive) return realShellExec(...args)
   mockedShellCalls++
   return {
+    taskOutput: new TaskOutput('sed-edit-capability-mock', null),
     result: Promise.resolve({
       stdout: 'mocked shell result',
       stderr: '',
