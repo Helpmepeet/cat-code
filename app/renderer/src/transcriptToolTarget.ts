@@ -294,7 +294,7 @@ export function displayFilePath(filePath: string, cwd: string | null): string {
  * `js` tool, so `server › tool` names none of them; the sub-label keeps the
  * tool identity.
  */
-function computerUseStepTitle(
+export function computerUseStepTitle(
   toolName: string,
   str: (key: string) => string | null,
 ): string | null {

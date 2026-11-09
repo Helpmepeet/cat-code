@@ -9,6 +9,13 @@ export type ComputerStep = {
   nested?: boolean
 }
 
+export function selectComputerScreen(steps: readonly ComputerStep[], selected: ComputerStep | null): { step: ComputerStep; index: number } | null {
+  for (let index = selected ? steps.indexOf(selected) : -1; index >= 0; index--) {
+    if (steps[index]!.image) return { step: steps[index]!, index }
+  }
+  return null
+}
+
 export function selectComputerSteps(rows: readonly NestedTranscriptRow[]): ComputerStep[] {
   const steps: ComputerStep[] = []
   const seen = new Set<string>()

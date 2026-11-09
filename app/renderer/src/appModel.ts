@@ -7,6 +7,7 @@ import type {
   SessionId,
 } from '../../shared/protocol.js'
 import type { HostError } from '../../shared/hostApi.js'
+import { computerUseStepTitle } from './transcriptToolTarget.js'
 import type {
   ConnectionSnapshot,
   ConnectionState,
@@ -169,6 +170,7 @@ export function deriveActivity(
 ): {
   verb: string
   target: string | null
+  targetIsProse?: boolean
 } {
   if (compacting) return { verb: 'Compacting', target: null }
   const working = { verb: 'Working', target: null }
@@ -186,6 +188,10 @@ export function deriveActivity(
       // rather than inventing a format.
       if (row.kind === 'tool-use' && row.status === 'pending') {
         if (row.toolName === 'JumpWorkspace' || row.toolName === 'JumpToProject') continue
+        if (row.toolFamily === 'computer') return { verb: 'Using your Mac', target: computerUseStepTitle(row.toolName, key => {
+          const value = row.input[key]
+          return typeof value === 'string' && value.trim() ? value.trim() : null
+        }), targetIsProse: true }
         return { verb: 'Running', target: row.toolName }
       }
     }

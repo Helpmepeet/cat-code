@@ -23,10 +23,11 @@
 .computer-pane-count { flex: none; padding: 0 6px; font: 11px var(--font-mono); color: var(--text-faint); }
 .computer-pane-latest { flex: none; height: 24px; padding: 0 9px; border: 1px solid var(--shell-seam); border-radius: 6px; font-size: 12px; color: var(--text-muted); white-space:nowrap; }
 .computer-pane-latest:hover { color: var(--text-primary); background: var(--shell-hover); }
-.computer-pane-screen { flex: none; max-height: 58%; overflow: auto; padding: 14px 16px 0; }
+.computer-pane-screen { position: relative; flex: none; max-height: 58%; overflow: auto; padding: 14px 16px 0; }
 .computer-pane-screen img { display: block; width: 100%; height: auto; border: 1px solid var(--shell-seam); border-radius: 4px; box-sizing: border-box; }
 .computer-pane-screen[data-agent] img { outline:2px solid var(--accent); outline-offset:-2px; }
-.computer-pane-empty { display:flex; align-items:center; justify-content:center; aspect-ratio:16/10; border:1px dashed var(--shell-seam); border-radius:4px; font-size:12px; color:var(--text-faint); }
+.computer-pane-from { position:absolute; top:22px; left:24px; height:22px; padding:0 8px; border:1px solid var(--shell-seam); border-radius:5px; background:color-mix(in srgb, var(--surface-panel) 88%, transparent); font-size:11.5px; color:var(--text-muted); }
+.computer-pane-from:hover { color:var(--text-primary); }
 .computer-pane-steps { flex: 1; min-height: 84px; overflow: auto; padding: 4px 6px 6px; border-top: 1px solid var(--shell-seam); scrollbar-width: thin; }
 .computer-pane-step { display: grid; grid-template-columns: 6px minmax(0,1fr) auto; align-items: center; column-gap: 10px; width: 100%; height: 28px; padding: 0 8px; border-radius: 5px; text-align: left; font-size: 12px; color: var(--text-muted); }
 .computer-pane-step:hover { background: var(--shell-hover); color: var(--text-primary); }

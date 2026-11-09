@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { selectComputerStep, selectComputerSteps, selectCurrentComputerStepId } from './computerPaneModel.js'
+import { selectComputerScreen, selectComputerStep, selectComputerSteps, selectCurrentComputerStepId } from './computerPaneModel.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 const computerFixture = (id: string, image = true): Extract<NestedTranscriptRow, { kind: 'tool-use' }> => ({
@@ -29,6 +29,16 @@ test('nested computer steps retain stable IDs and titles, deduplicate, and use l
 test('empty and screenshotless histories are safe', () => {
   expect(selectComputerStep([], null)).toBeNull()
   expect(selectComputerStep(selectComputerSteps([computerFixture('pending', false)]), null)?.id).toBe('pending')
+})
+
+test('screen selection carries only the latest capture at or before the selected step', () => {
+  const steps = selectComputerSteps([computerFixture('zero', false), computerFixture('one'), computerFixture('two', false), computerFixture('three')])
+  expect(selectComputerScreen(steps, steps[0]!)).toBeNull()
+  expect(selectComputerScreen(steps, steps[1]!)).toEqual({ step: steps[1], index: 1 })
+  expect(selectComputerScreen(steps, steps[2]!)).toEqual({ step: steps[1], index: 1 })
+  expect(selectComputerScreen(steps, steps[3]!)).toEqual({ step: steps[3], index: 3 })
+  expect(selectComputerScreen(steps, null)).toBeNull()
+  expect(selectComputerScreen([], null)).toBeNull()
 })
 
 test('an interrupted computer call in an older operator turn is not current activity', () => {

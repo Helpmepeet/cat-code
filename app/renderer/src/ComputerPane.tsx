@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { selectComputerStep, type ComputerStep } from './computerPaneModel.js'
+import { selectComputerScreen, selectComputerStep, type ComputerStep } from './computerPaneModel.js'
 import './computerPane.css'
 
 export function ComputerScreenIcon() {
@@ -18,6 +18,7 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
   currentStepId?: string | null
 }) {
   const selected = selectComputerStep(steps, selectedId)
+  const screen = selectComputerScreen(steps, selected)
   const index = selected ? steps.indexOf(selected) : -1
   const currentRef = useRef<HTMLButtonElement>(null)
   const now = running ? [...steps].reverse().find(step => step.status === 'pending' && (currentStepId === undefined || step.id === currentStepId)) : undefined
@@ -32,9 +33,10 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
       <button type="button" className="computer-pane-icon" aria-label="Close computer panel" onClick={onClose}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></button>
     </header>
     {now && <div className="computer-pane-now"><span>Now</span><span>{now.title}</span></div>}
-    <div className="computer-pane-screen" data-agent={active && !!now && selectedId === null || undefined}>
-      {selected?.image ? <img alt={`Screenshot: ${selected.title}`} decoding="async" src={`data:${selected.image.mediaType};base64,${selected.image.data}`} /> : <div className="computer-pane-empty">{selected?.status === 'error' ? 'No screenshot from this step' : 'No screenshot yet'}</div>}
-    </div>
+    {screen?.step.image && <div className="computer-pane-screen" data-agent={active && !!now && selectedId === null || undefined}>
+      <img alt={`Screenshot: ${screen.step.title}`} decoding="async" src={`data:${screen.step.image.mediaType};base64,${screen.step.image.data}`} />
+      {screen.step !== selected && <button type="button" className="computer-pane-from" onClick={() => onSelect(screen.step.id)}>Screen from step {screen.index + 1}</button>}
+    </div>}
     <div className="computer-pane-caption">
       <button type="button" className="computer-pane-icon" aria-label="Previous computer step" disabled={index <= 0} onClick={() => onSelect(steps[index - 1]!.id)}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg></button>
       <button type="button" className="computer-pane-icon" aria-label="Next computer step" disabled={index < 0 || index >= steps.length - 1} onClick={() => onSelect(steps[index + 1]!.id)}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg></button>

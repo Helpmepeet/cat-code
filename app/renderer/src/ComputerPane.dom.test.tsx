@@ -58,12 +58,22 @@ test('navigation, Latest, close and screenshotless selection use supplied state'
   await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Next computer step"]')!.click() })
   expect(calls).toEqual(['two'])
   await tree.render(view('two'))
-  expect(tree.container.textContent).toContain('No screenshot yet')
+  expect(tree.container.querySelector('img')?.alt).toBe('Screenshot: Opening Reminders')
+  expect(tree.container.querySelector('.computer-pane-from')?.textContent).toBe('Screen from step 1')
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-from')!.click())
+  expect(calls).toEqual(['two', 'one'])
   await act(async () => { tree.container.querySelector<HTMLButtonElement>('.computer-pane-latest')!.click(); tree.container.querySelector<HTMLButtonElement>('[aria-label="Close computer panel"]')!.click() })
-  expect(calls).toEqual(['two', null])
+  expect(calls).toEqual(['two', 'one', null])
   expect(closed).toBe(true)
   await tree.render(view(null, false))
   expect(tree.container.querySelector('section')?.hidden).toBe(true)
+})
+
+test('a run without captures keeps caption and steps but has no screen', async () => {
+  const tree = await harness.mount(<ComputerPane steps={[steps[1]!]} selectedId={null} onSelect={() => {}} onClose={() => {}} />)
+  expect(tree.container.querySelector('.computer-pane-screen')).toBeNull()
+  expect(tree.container.querySelector('.computer-pane-caption')?.textContent).toContain('Checking the list')
+  expect(tree.container.querySelector('.computer-pane-steps')?.textContent).toContain('Checking the list')
 })
 
 const row: NestedTranscriptRow = {

@@ -56,7 +56,7 @@ const userTurn = (text: string) => ({
 })
 
 /** One assistant message carrying N tool_use blocks, as parallel calls arrive. */
-const toolCalls = (calls: Array<{ id: string; name: string }>) => ({
+const toolCalls = (calls: Array<{ id: string; name: string; input?: Record<string, unknown> }>) => ({
   type: 'assistant',
   ...base,
   uuid: uuid(),
@@ -72,7 +72,7 @@ const toolCalls = (calls: Array<{ id: string; name: string }>) => ({
       type: 'tool_use',
       id: call.id,
       name: call.name,
-      input: {},
+      input: call.input ?? {},
     })),
   },
 })
@@ -144,6 +144,16 @@ function project(messages: unknown[]) {
 }
 
 const kinds = (rows: ReturnType<typeof project>) => rows.map(row => row.kind)
+
+test.each([
+  { name: 'mcp__codex-computer-use__js', input: { title: 'Opening Reminders' }, target: 'Opening Reminders' },
+  { name: 'mcp__codex-computer-use__js_complete', input: { completion_summary: 'Reminders updated' }, target: 'Reminders updated' },
+  { name: 'mcp__codex-computer-use__js', input: {}, target: null },
+])('computer activity uses prose title: $target', ({ name, input, target }) => {
+  const rows = project([userTurn('use my Mac'), toolCalls([{ id: 'computer', name, input }])])
+  expect(rows.at(-1)).toMatchObject({ kind: 'tool-use', toolFamily: 'computer' })
+  expect(deriveActivity(rows)).toEqual({ verb: 'Using your Mac', target, targetIsProse: true })
+})
 
 test.each(['JumpWorkspace', 'JumpToProject'])('%s is never an activity target', (name) => {
   const rows = project([userTurn('move workspaces'), toolCalls([{ id: 'toolu_jump', name }])])

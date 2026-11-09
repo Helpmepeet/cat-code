@@ -2290,6 +2290,7 @@ export function SessionPane({
           <ActivityIndicator
             verb={activity.verb}
             target={activity.target}
+            targetIsProse={'targetIsProse' in activity && activity.targetIsProse}
             elapsedMs={elapsedMs}
             outputTokens={generating && jumpMove?.phase !== 'moving' ? outputTokens : UNAVAILABLE_OUTPUT_TOKENS}
             paused={paused}
@@ -2762,6 +2763,7 @@ const SHOW_TOKENS_AFTER_MS = 30_000
 function ActivityIndicator({
   verb,
   target,
+  targetIsProse,
   elapsedMs,
   outputTokens,
   paused,
@@ -2771,6 +2773,7 @@ function ActivityIndicator({
 }: {
   verb: string
   target: string | null
+  targetIsProse?: boolean
   elapsedMs: number
   outputTokens: OutputTokenReading
   paused: boolean
@@ -2807,7 +2810,7 @@ function ActivityIndicator({
         {paused ? 'Waiting for approval' : verb}
       </span>
       {target ? (
-        <span className="min-w-0 truncate font-mono text-[11.5px] text-text-subtle">
+        <span className={`min-w-0 truncate text-text-subtle${targetIsProse ? '' : ' font-mono text-[11.5px]'}`}>
           {target}
         </span>
       ) : null}
