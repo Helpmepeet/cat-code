@@ -549,7 +549,7 @@ test('a call auto mode refused is blocked, not failed', async () => {
   expect(stepHead(tree).querySelector('.auto-mode-review')).not.toBeNull()
 })
 
-test('AskUserQuestion waits quietly and an answered one leaves the fold with its answer on the step', async () => {
+test('AskUserQuestion waits quietly and keeps the answer attached to its original step', async () => {
   const questions = [{ question: 'Can I read the transcripts?', header: 'Transcripts', options: [{ label: 'Yes', description: 'a' }, { label: 'No', description: 'b' }], multiSelect: false }]
   const asked = toolCalls(start(), [{ id: 'aq', name: 'AskUserQuestion', input: { questions } }])
   let tree = await harness.mount(view(asked))
@@ -561,8 +561,11 @@ test('AskUserQuestion waits quietly and an answered one leaves the fold with its
   tree = await harness.mount(view(answered, 'focused', null, false))
   await openTurn(tree)
   expect(visibleText(tree.container.querySelector('.focused-step-text'))).toBe('Asked Can I read the transcripts? · Yes')
-  expect(tree.container.querySelector('.focused-deliverables [data-tool-row]')).not.toBeNull()
+  expect(tree.container.querySelector('.focused-deliverables') === null).toBe(true)
   expect(tree.container.querySelector('.focused-turn [data-tool-row]')).toBeNull()
+  await click(stepHead(tree))
+  expect(tree.container.querySelector('.focused-step-body')?.textContent).toContain('Can I read the transcripts?Yes')
+  expect(tree.container.querySelector('.focused-turn [data-tool-row]') !== null).toBe(true)
 })
 
 test('a blocking question waits on the answer, not on an approval', async () => {
