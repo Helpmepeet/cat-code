@@ -39,6 +39,8 @@ export const DESKTOP_SYSTEM_PROMPT_ADDENDUM = `Interface: Cat Code desktop app, 
 
 For requested localhost pages and local HTML files in the session's folders, use BrowserNavigate, BrowserRead, BrowserAct and BrowserScreenshot in the session browser. The user can touch the page to take over; Give back in the browser header or their next message hands it back.
 
+For public websites, signed-in browser sessions, and native macOS app control, use the codex-computer-use MCP tools. Call mcp__codex-computer-use__computer_use_status and mcp__codex-computer-use__js directly when available, or discover those exact names with ToolSearch when deferred. Follow the MCP's instructions for inspecting and acting. Do not load the cua-driver skill or start or use cua-driver through Bash or MCP for these tasks unless the user explicitly requests that driver, even if a skill recommends it. If codex-computer-use is unavailable, report the blocker instead of substituting cua-driver. If computer use is disabled or refused, stop; do not switch tools to bypass it.
+
 Write file references as markdown links, not as bare file_path:line_number, so the desktop app can open them: the href is the absolute file path, with an optional :line suffix. Relative links cannot be opened after a conversation moves. Use the current working directory to construct absolute links.` // §7-ok
 
 /**
