@@ -3,7 +3,7 @@ import { CLAUDE_CLI_TOOL_NAME } from '../tools/ClaudeCliTool/constants.js'
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../tools/AskParentSessionTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
-import { getWorkerCapabilityPromptLine } from './agentCapabilities.js'
+import { BLOCKED_RESPONSE_FORMAT, getWorkerCapabilityPromptLine } from './agentCapabilities.js'
 
 describe('getWorkerCapabilityPromptLine', () => {
   // The 2026-09-06 case: a general-purpose worker whose pool carries neither
@@ -65,20 +65,18 @@ describe('getWorkerCapabilityPromptLine', () => {
 
     const withoutTool = getWorkerCapabilityPromptLine(['Read'])
     expect(withoutTool).not.toContain(ASK_PARENT_SESSION_TOOL_NAME)
-    expect(withoutTool).toContain(
-      'If you are blocked, stop your turn and return a blocked result naming the exact question.',
-    )
+    expect(withoutTool).toContain(BLOCKED_RESPONSE_FORMAT)
+    expect(withoutTool).toContain("preserving your role's other required output fields")
+    expect(withTool).not.toContain(BLOCKED_RESPONSE_FORMAT)
+    expect(withTool).toContain('No answer arrives inside this run.')
   })
 
-  test('stays one line, since every spawn pays for it', () => {
-    const widest = getWorkerCapabilityPromptLine([
-      AGENT_TOOL_NAME,
-      CLAUDE_CLI_TOOL_NAME,
-      ASK_PARENT_SESSION_TOOL_NAME,
-      SEND_MESSAGE_TOOL_NAME,
-    ])
-
-    expect(widest).not.toContain('\n')
-    expect(widest.length).toBeLessThan(420)
+  test('distinguishes temporary classifier failures from policy denials without duplicating role rules', () => {
+    for (const tools of [['Read'], ['Read', ASK_PARENT_SESSION_TOOL_NAME]]) {
+      const prompt = getWorkerCapabilityPromptLine(tools)
+      expect(prompt).toContain('completed work, unfinished work, and exact decision needed')
+      expect(prompt).toContain('do not treat a policy denial as a temporary failure')
+      expect(prompt.trim().split(/\s+/).length).toBeLessThan(180)
+    }
   })
 })

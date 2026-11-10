@@ -3,6 +3,11 @@ import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../tools/AskParentSessionTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 
+export const BLOCKED_RESPONSE_FORMAT = `status: blocked
+
+Open questions / blockers:
+- <exact decision needed and relevant reason>`
+
 /**
  * "May this worker delegate, and how may it escalate" in one place, so a
  * permission check and a prompt line read the same fact instead of each
@@ -37,7 +42,7 @@ export function resolveWorkerCapabilities(
 }
 
 /**
- * The one sentence every worker is told about delegating and escalating,
+ * The shared guidance every worker receives about delegating and escalating,
  * built from the same resolved pool the permission checks read. Role prompts
  * must not restate it: a hand-maintained copy is only true for the roles
  * someone remembered to update, and a general-purpose worker (which has no
@@ -69,12 +74,14 @@ export function getWorkerCapabilityPromptLine(
       : `you have no tool that starts another agent, and you MUST NOT launch one through a shell, so do the work yourself.`
 
   const escalation = capabilities.canAskParentSession
-    ? `If you are blocked on a decision only the parent session can make, call ${ASK_PARENT_SESSION_TOOL_NAME} with the exact question: it ends your run and hands the question over.`
-    : `If you are blocked, stop your turn and return a blocked result naming the exact question.`
+    ? `If you are blocked on a decision only the parent session can make, call ${ASK_PARENT_SESSION_TOOL_NAME} with the exact question: it ends your run and hands the question over. No answer arrives inside this run.`
+    : `If you are blocked, return the blocker using this structure, preserving your role's other required output fields:\n\n${BLOCKED_RESPONSE_FORMAT}`
 
   const sideways = capabilities.canSendMessage
     ? ` ${SEND_MESSAGE_TOOL_NAME} reaches running workers and teammates, never whoever spawned you.`
     : ''
 
-  return `Delegation and escalation for this run: ${delegation} ${escalation}${sideways}`
+  return `Delegation and escalation for this run: ${delegation} ${escalation}${sideways}
+
+If an essential action is denied or repeatedly fails, report the action, reason, completed work, unfinished work, and exact decision needed. Follow explicit retry guidance for temporary classifier failures; do not treat a policy denial as a temporary failure.`
 }

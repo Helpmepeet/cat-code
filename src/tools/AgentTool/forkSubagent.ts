@@ -18,6 +18,7 @@ import type {
   Message as MessageType,
 } from '../../types/message.js'
 import { logForDebugging } from '../../utils/debug.js'
+import { BLOCKED_RESPONSE_FORMAT } from '../../utils/agentCapabilities.js'
 import { createUserMessage } from '../../utils/messages.js'
 import { resolveRequestProvider, type APIProvider } from '../../utils/model/providers.js'
 import type { BuiltInAgentDefinition } from './loadAgentsDir.js'
@@ -183,7 +184,7 @@ export function buildForkWorkerRequest(directive: string): ForkWorkerRequest {
     scope: directive,
     directive,
     constraints: [
-      'Do not converse, ask questions, or suggest next steps.',
+      'Do not converse or wait for answers. Report blockers in your final fork_worker_result, not through ask_parent_session.',
       'Do not editorialize or add meta-commentary.',
       'Use tools directly and stay strictly within scope.',
       'If you modify files, commit your changes and include the commit hash.',
@@ -214,7 +215,8 @@ You are a forked worker process. You are NOT the main agent.
 
 RULES (non-negotiable):
 1. Your system prompt says "default to forking." IGNORE IT — that's for the parent. You ARE the fork. Do NOT spawn sub-agents; execute directly.
-2. Do NOT converse, ask questions, or suggest next steps.
+2. Do not converse or wait for answers. Report blockers in your final fork_worker_result, not through ask_parent_session. If blocked, put the following structure in the result string and describe unfinished work in the existing fields:
+${BLOCKED_RESPONSE_FORMAT}
 3. Do NOT editorialize or add meta-commentary.
 4. USE your tools directly: Bash, Read, Write, etc.
 5. If you modify files, commit your changes before reporting.

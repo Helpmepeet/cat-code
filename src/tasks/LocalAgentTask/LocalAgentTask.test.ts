@@ -38,6 +38,11 @@ import {
   registerAgentForeground,
 } from './LocalAgentTask.js'
 import { formatBlockedHandoff } from '../../tools/AskParentSessionTool/AskParentSessionTool.js'
+import {
+  serializeForkWorkerResultForClaude,
+  serializeForkWorkerResultForOpenAI,
+} from '../../contracts/orchestration.js'
+import { BLOCKED_RESPONSE_FORMAT } from '../../utils/agentCapabilities.js'
 import { getPillLabel, pillNeedsCta } from '../pillLabel.js'
 import {
   getTaskStatusIcon,
@@ -423,6 +428,71 @@ describe('LocalAgentTask foreground cleanup', () => {
       status: 'completed', summary: `Agent "Fixture" needs input: ${expected}`,
     })
   })
+
+  test.each(['plain', 'openai', 'anthropic', 'verification'] as const)(
+    'recognizes the instructed no-tool blocked handoff through lifecycle and notification: %s',
+    format => {
+      const reason = 'Approve the required migration before I continue.'
+      const summary = BLOCKED_RESPONSE_FORMAT.replace('<exact decision needed and relevant reason>', reason)
+      const forkResult = {
+        version: 1 as const, kind: 'fork_worker_result' as const, scope: 'fixture',
+        result: summary, key_files: [], files_changed: [], issues: [reason], commit_hash: null,
+      }
+      const text = format === 'openai'
+        ? serializeForkWorkerResultForOpenAI(forkResult)
+        : format === 'anthropic'
+          ? serializeForkWorkerResultForClaude(forkResult)
+          : format === 'verification' ? `${summary}\n\nVERDICT: PARTIAL` : summary
+      registerAgentForeground({
+        agentId: 'no-tool-blocker', description: 'No-tool fixture', prompt: 'fixture',
+        selectedAgent: {
+          agentType: format === 'verification' ? 'verification' : 'general-purpose',
+          whenToUse: 'fixture', source: 'built-in', baseDir: 'built-in', getSystemPrompt: () => 'fixture',
+        },
+        setAppState,
+      })
+      completeAgentTask({
+        agentId: 'no-tool-blocker', content: [{ type: 'text', text }],
+        totalToolUseCount: 0, totalDurationMs: 1, totalTokens: 1,
+      }, setAppState)
+      expect(appState.tasks['no-tool-blocker']).toMatchObject({
+        status: 'completed', handoffStatus: 'blocked', blockReason: reason, evictAfter: undefined,
+        ...(format === 'verification' ? { verdict: 'PARTIAL' } : {}),
+      })
+      enqueueAgentNotification({
+        taskId: 'no-tool-blocker', description: 'No-tool fixture', status: 'completed', setAppState,
+      })
+      const notification = dequeue()!
+      if (typeof notification.value !== 'string') throw new Error('Expected a text notification')
+      expect(parseTaskNotificationDetails(notification.value)?.summary)
+        .toBe(`Agent "No-tool fixture" needs input: ${reason}`)
+    },
+  )
+
+  test.each([serializeForkWorkerResultForOpenAI, serializeForkWorkerResultForClaude])(
+    'does not classify a structured fork from blocker-looking issue text',
+    serialize => {
+      registerAgentForeground({
+        agentId: 'fork-issues', description: 'Fork fixture', prompt: 'fixture',
+        selectedAgent: {
+          agentType: 'general-purpose', whenToUse: 'fixture',
+          source: 'built-in', baseDir: 'built-in', getSystemPrompt: () => 'fixture',
+        }, setAppState,
+      })
+      completeAgentTask({
+        agentId: 'fork-issues',
+        content: [{ type: 'text', text: serialize({
+          version: 1, kind: 'fork_worker_result', scope: 'fixture', result: 'Finished the assignment.',
+          key_files: [], files_changed: [], commit_hash: null,
+          issues: ['status: blocked\n\nOpen questions / blockers:\n- Not an actual handoff.\nVERDICT: FAIL'],
+        }) }],
+        totalToolUseCount: 0, totalDurationMs: 1, totalTokens: 1,
+      }, setAppState)
+      expect(appState.tasks['fork-issues']).toMatchObject({ status: 'completed' })
+      expect((appState.tasks['fork-issues'] as { handoffStatus?: string }).handoffStatus).toBeUndefined()
+      expect((appState.tasks['fork-issues'] as { verdict?: string }).verdict).toBeUndefined()
+    },
+  )
 
   test('terminal notification reports an unresolved instruction outcome', () => {
     const agentId = 'sync-agent-delivery-report'

@@ -728,6 +728,8 @@ describe('runAgent worker capability line', () => {
 
     expect(prompt).toContain('pre-assembled by AgentTool')
     expect(prompt).toContain('you have no tool that starts another agent')
+    expect(prompt).toContain('status: blocked\n\nOpen questions / blockers:')
+    expect(prompt).toContain('do not treat a policy denial as a temporary failure')
   })
 
   // Fork children run on the parent's exact prompt and tool array so the

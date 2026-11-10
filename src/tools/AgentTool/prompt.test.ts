@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { getBuiltInAgents } from './builtInAgents.js'
 import { VERIFICATION_AGENT, VERIFICATION_WHEN_TO_USE } from './built-in/verificationAgent.js'
-import { getPrompt } from './prompt.js'
+import { formatAgentLine, getPrompt } from './prompt.js'
+import { PLAN_AGENT } from './built-in/planAgent.js'
+import { parseForkWorkerRequest, parseForkWorkerRequestFromTaggedText } from '../../contracts/orchestration.js'
+import { BLOCKED_RESPONSE_FORMAT } from '../../utils/agentCapabilities.js'
+import { buildChildMessage, buildForkWorkerRequest } from './forkSubagent.js'
 
 describe('Agent tool prompt', () => {
   const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
@@ -138,6 +142,61 @@ describe('Agent tool prompt', () => {
         expect(prompt).not.toContain('include file paths, line numbers, what specifically to change')
       }
     }
+  })
+
+  test('explains worker context and permission escalation in every caller mode', async () => {
+    for (const provider of ['openai', 'firstParty'] as const) {
+      for (const isCoordinator of [false, true]) {
+        for (const attachList of ['true', 'false']) {
+          process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES = attachList
+          const prompt = await getPrompt(getBuiltInAgents(), isCoordinator, undefined, provider)
+          expect(prompt).toContain('Fresh workers do not inherit your conversation history or skills loaded there')
+          expect(prompt).toContain('Explore and Plan normally omit that context')
+          expect(prompt).toContain('Skill requires an explicit grant')
+          expect(prompt).toContain('background workers normally cannot show permission dialogs')
+          expect(prompt).toContain("ask_parent_session ends the worker's run")
+          expect(prompt).toContain('forks report blockers in their structured result')
+          expect(prompt.match(/## Writing the prompt/g)).toHaveLength(1)
+        }
+      }
+    }
+    expect(PLAN_AGENT.whenToUse).toContain('Loaded instruction-file context is normally omitted')
+  })
+
+  test('role listings qualify wildcard access without hiding explicit role tools', () => {
+    const role = { ...VERIFICATION_AGENT, agentType: 'fixture', disallowedTools: undefined }
+    for (const tools of [undefined, ['*']]) {
+      const line = formatAgentLine({ ...role, tools })
+      expect(line).toContain('Worker-permitted tools')
+      expect(line).toContain('runtime availability')
+      expect(line).not.toContain('All tools')
+      expect(line).not.toContain('Tools: *')
+    }
+    const denied = formatAgentLine({ ...role, tools: ['*'], disallowedTools: ['Write'] })
+    expect(denied).toContain('Worker-permitted tools except Write')
+    expect(formatAgentLine({ ...role, tools: ['Read', 'Skill'] })).toContain('Tools: Read, Skill')
+    expect(formatAgentLine({ ...role, tools: ['Read', 'Write'], disallowedTools: ['Write'] }))
+      .toContain('Tools: Read')
+  })
+
+  test('fork request constraints use a final structured result rather than interactive escalation', () => {
+    const request = parseForkWorkerRequest(buildForkWorkerRequest('Inspect the migration.'))
+    expect(request.constraints.join('\n')).toContain('Report blockers in your final fork_worker_result, not through ask_parent_session')
+    expect(request.constraints.join('\n')).not.toContain('Do not converse, ask questions')
+  })
+
+  test.each(['openai', 'firstParty'] as const)('fork directive preserves the %s request contract and names the blocked structure', provider => {
+    const directive = 'Inspect the migration.'
+    const message = buildChildMessage(directive, provider)
+    expect(message).toContain(BLOCKED_RESPONSE_FORMAT)
+    expect(message).toContain('If blocked, put the following structure in the result string')
+    expect(message).toContain('Return a single structured fork_worker_result object')
+    expect(message).not.toContain('Do NOT converse, ask questions')
+    const request = provider !== 'openai'
+      ? parseForkWorkerRequestFromTaggedText(message)
+      : parseForkWorkerRequest(JSON.parse(message.slice(message.indexOf('\n{') + 1, message.lastIndexOf('\n\n'))))
+    expect(request.directive).toBe(directive)
+    expect(request.expected_output.include_issues).toBe(true)
   })
 
   test('verification keeps evidence, required checks, and verdict contracts across providers', () => {

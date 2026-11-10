@@ -192,6 +192,21 @@ describe('auto-mode permission observation core routes', () => {
     }
   })
 
+  test('real permission decisions direct worker denials to the parent without changing the reason', async () => {
+    for (const agentId of [undefined, asAgentId('worker')]) {
+      classifyYoloAction.mockResolvedValueOnce({ shouldBlock: true, reason: 'Would expose credentials' })
+      const context = toolUseContext(permissionContext())
+      context.agentId = agentId
+      const run = await observe(tool(), context)
+      expect(run.error).toBeUndefined()
+      expect(run.decision?.behavior).toBe('deny')
+      if (run.decision?.behavior !== 'deny') throw new Error('Expected a policy denial')
+      expect(run.decision.message).toContain('Reason: Would expose credentials')
+      expect(run.decision.message.includes('report the blocker to the parent')).toBe(agentId !== undefined)
+      expect(run.decision.message.includes('STOP and explain to the user')).toBe(agentId === undefined)
+    }
+  })
+
   test('records stage 1 and stage 2 classifier outcomes and ask fallback', async () => {
     classifyYoloAction.mockImplementationOnce(async (...args: unknown[]) => {
       const observer = args[5] as {

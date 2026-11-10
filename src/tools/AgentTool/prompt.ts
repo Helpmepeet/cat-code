@@ -21,7 +21,7 @@ function getToolsDescription(agent: AgentDefinition): string {
   }
 
   const { tools, disallowedTools } = agent
-  const hasAllowlist = tools && tools.length > 0
+  const hasAllowlist = tools && tools.length > 0 && !tools.includes('*')
   const hasDenylist = disallowedTools && disallowedTools.length > 0
 
   if (hasAllowlist && hasDenylist) {
@@ -36,11 +36,9 @@ function getToolsDescription(agent: AgentDefinition): string {
     // Allowlist only: show the specific tools available
     return tools.join(', ')
   } else if (hasDenylist) {
-    // Denylist only: show "All tools except X, Y, Z"
-    return `All tools except ${disallowedTools.join(', ')}`
+    return `Worker-permitted tools except ${disallowedTools.join(', ')}; subject to runtime availability`
   }
-  // No restrictions
-  return 'All tools'
+  return 'Worker-permitted tools, subject to role restrictions and runtime availability'
 }
 
 /**
@@ -123,9 +121,13 @@ Forks are cheap because they share your prompt cache. Don't set \`model\` on a f
 
 ## Writing the prompt
 
-A fresh agent has no conversation context. Give it the objective, scope, permissions, relevant evidence and constraints, and what completion means. Include existing changes or failed attempts when they affect the task; distinguish facts from hypotheses.
+Fresh workers do not inherit your conversation history or skills loaded there. Supply relevant context, constraints, and skill instructions. Forks inherit context and need only the remaining assignment.
 
-Let the worker choose its method within that scope unless the user supplied a procedure or the approach is already decided. A fork inherits context, so give only the remaining assignment. Request a particular report format only when its consumer needs one.
+Ordinary workers receive loaded instruction files; Explore and Plan normally omit that context. Worker tools are restricted by role and runtime. Skill requires an explicit grant; "*" does not grant every tool.
+
+Workers cannot use AskUserQuestion, and background workers normally cannot show permission dialogs. A blocked worker hands control back to you, not directly to the user. Resolve the blocker before ${canResumeAgent ? 'resuming or replacing' : 'replacing'} it. ask_parent_session ends the worker's run; forks report blockers in their structured result.
+
+Let the worker choose its method within scope unless the user supplied a procedure or the approach is already decided. Request a particular report format only when its consumer needs one.
 `
 
   const isGPTPromptStyle = provider === 'openai'
@@ -248,7 +250,7 @@ ${
 }`
 
   if (isCoordinator) {
-    return `${shared}\n\n${delegationGuidance}`
+    return `${shared}\n\n${delegationGuidance}${writingThePromptSection}`
   }
 
   const embedded = hasEmbeddedSearchTools()

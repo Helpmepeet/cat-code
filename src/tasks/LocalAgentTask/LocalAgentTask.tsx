@@ -1,9 +1,10 @@
 import { randomUUID } from 'crypto';
+import { parseForkWorkerResult, parseForkWorkerResultFromTaggedText } from '../../contracts/orchestration.js';
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js';
 import { getCodexLeaseForOwner, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { markPoolAccountLastError } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
-import { OUTPUT_FILE_TAG, STATUS_TAG, SUMMARY_TAG, TASK_ID_TAG, TASK_NOTIFICATION_TAG, TOOL_USE_ID_TAG, WORKTREE_BRANCH_TAG, WORKTREE_PATH_TAG, WORKTREE_TAG } from '../../constants/xml.js';
+import { FORK_WORKER_RESULT_TAG, OUTPUT_FILE_TAG, STATUS_TAG, SUMMARY_TAG, TASK_ID_TAG, TASK_NOTIFICATION_TAG, TOOL_USE_ID_TAG, WORKTREE_BRANCH_TAG, WORKTREE_PATH_TAG, WORKTREE_TAG } from '../../constants/xml.js';
 import { formatTaskNotificationText, toTaskNotificationOrigin } from '../../utils/taskNotification.js';
 import { abortSpeculation } from '../../services/PromptSuggestion/speculation.js';
 import type { AppState } from '../../state/AppState.js';
@@ -1209,7 +1210,17 @@ function extractVerificationVerdict(text: string): VerificationVerdict | undefin
 }
 
 function getResultMetadata(result: AgentToolResult): Pick<LocalAgentTaskState, 'handoffStatus' | 'blockReason' | 'verdict'> {
-  const text = getResultText(result);
+  let text = getResultText(result);
+  // Fork results serialize newlines; read the validated summary, not JSON or issue text.
+  if (text.trimStart().startsWith('{') || text.trimStart().startsWith(`<${FORK_WORKER_RESULT_TAG}>`)) {
+    try {
+      text = (text.trimStart().startsWith(`<${FORK_WORKER_RESULT_TAG}>`)
+        ? parseForkWorkerResultFromTaggedText(text)
+        : parseForkWorkerResult(JSON.parse(text))).result;
+    } catch {
+      // Non-contract JSON and ordinary worker text retain their existing interpretation.
+    }
+  }
   const handoffStatus = extractHandoffStatus(text);
   const verdict = extractVerificationVerdict(text);
   return {

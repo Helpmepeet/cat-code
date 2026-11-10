@@ -226,7 +226,7 @@ export const REJECT_MESSAGE =
 export const REJECT_MESSAGE_WITH_REASON_PREFIX =
   "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). To tell you how to proceed, the user said:\n"
 export const SUBAGENT_REJECT_MESSAGE =
-  'Permission for this tool use was denied. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). Try a different approach or report the limitation to complete your task.'
+  'Permission for this tool use was denied. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). If this action is essential, report the blocker to the parent using this run\'s escalation instructions.'
 export const SUBAGENT_REJECT_MESSAGE_WITH_REASON_PREFIX =
   'Permission for this tool use was denied. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). The user said:\n'
 export const PLAN_REJECTION_PREFIX =
@@ -235,19 +235,37 @@ export const PLAN_REJECTION_PREFIX =
 /**
  * Shared guidance for permission denials, instructing the model on appropriate workarounds.
  */
-export const DENIAL_WORKAROUND_GUIDANCE =
+const DENIAL_WORKAROUND_PREFIX =
   `IMPORTANT: You *may* attempt to accomplish this action using other tools that might naturally be used to accomplish this goal, ` +
   `e.g. using head instead of cat. But you *should not* attempt to work around this denial in malicious ways, ` +
   `e.g. do not use your ability to run tests to execute non-test actions. ` +
-  `You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. ` +
+  `You should only try to work around this restriction in reasonable ways that do not attempt to bypass the intent behind this denial. `
+
+export const DENIAL_WORKAROUND_GUIDANCE =
+  DENIAL_WORKAROUND_PREFIX +
   `If you believe this capability is essential to complete the user's request, STOP and explain to the user ` +
   `what you were trying to do and why you need this permission. Let the user decide how to proceed.`
 
-export function AUTO_REJECT_MESSAGE(toolName: string): string {
-  return `Permission to use ${toolName} has been denied. ${DENIAL_WORKAROUND_GUIDANCE}`
+type PermissionMessageContext = { agentId?: string }
+
+function denialGuidance(context?: PermissionMessageContext): string {
+  return context?.agentId
+    ? DENIAL_WORKAROUND_PREFIX +
+        "If this action is essential, report the blocker to the parent using this run's escalation instructions."
+    : DENIAL_WORKAROUND_GUIDANCE
 }
-export function DONT_ASK_REJECT_MESSAGE(toolName: string): string {
-  return `Permission to use ${toolName} has been denied because Cat Code is running in don't ask mode. ${DENIAL_WORKAROUND_GUIDANCE}`
+
+export function AUTO_REJECT_MESSAGE(
+  toolName: string,
+  context?: PermissionMessageContext,
+): string {
+  return `Permission to use ${toolName} has been denied. ${denialGuidance(context)}`
+}
+export function DONT_ASK_REJECT_MESSAGE(
+  toolName: string,
+  context?: PermissionMessageContext,
+): string {
+  return `Permission to use ${toolName} has been denied because Cat Code is running in don't ask mode. ${denialGuidance(context)}`
 }
 export const NO_RESPONSE_REQUESTED = 'No response requested.'
 
@@ -276,7 +294,10 @@ export function isClassifierDenial(content: string): boolean {
  *
  * @param reason - The classifier's reason for denying the action
  */
-export function buildYoloRejectionMessage(reason: string): string {
+export function buildYoloRejectionMessage(
+  reason: string,
+  context?: PermissionMessageContext,
+): string {
   const prefix = AUTO_MODE_REJECTION_PREFIX
 
   const ruleHint = feature('BASH_CLASSIFIER')
@@ -288,8 +309,8 @@ export function buildYoloRejectionMessage(reason: string): string {
   return (
     `${prefix}${reason}. ` +
     `If you have other tasks that don't depend on this action, continue working on those. ` +
-    `${DENIAL_WORKAROUND_GUIDANCE} ` +
-    ruleHint
+    denialGuidance(context) +
+    (context?.agentId ? '' : ` ${ruleHint}`)
   )
 }
 

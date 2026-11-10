@@ -11,7 +11,6 @@ import {
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
 import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
-import { SKILL_TOOL_NAME } from '../tools/SkillTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../tools/ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/SyntheticOutputTool.js'
@@ -122,7 +121,7 @@ export function getCoordinatorUserContext(
 export function getCoordinatorSystemPrompt(): string {
   const workerCapabilities = isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
     ? `Workers have access to ${BASH_TOOL_NAME}, ${FILE_READ_TOOL_NAME}, and ${getAsyncAgentFileEditTool()} tools, plus MCP tools from configured MCP servers.`
-    : `Workers have access to standard tools and MCP tools from configured MCP servers. They do not have the ${SKILL_TOOL_NAME} tool unless their own agent definition grants it, so do not ask a worker to run a skill: put the steps in the prompt instead.`
+    : `Workers can receive standard tools and MCP tools from configured MCP servers, subject to their role and runtime restrictions.`
 
   return `You are Cat Code, an AI assistant that orchestrates software engineering tasks across multiple workers.
 

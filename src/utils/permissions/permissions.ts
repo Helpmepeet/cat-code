@@ -687,7 +687,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
           type: 'mode',
           mode: 'dontAsk',
         },
-        message: DONT_ASK_REJECT_MESSAGE(tool.name),
+        message: DONT_ASK_REJECT_MESSAGE(tool.name, context),
       }
     }
     // Apply auto mode: use AI classifier instead of prompting user
@@ -1143,7 +1143,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
             classifier: 'auto-mode',
             reason: classifierResult.reason,
           },
-          message: buildYoloRejectionMessage(classifierResult.reason),
+          message: buildYoloRejectionMessage(classifierResult.reason, context),
         }
       }
 
@@ -1183,7 +1183,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
           type: 'asyncAgent',
           reason: 'Permission prompts are not available in this context',
         },
-        message: AUTO_REJECT_MESSAGE(tool.name),
+        message: AUTO_REJECT_MESSAGE(tool.name, context),
       }
     }
   }
