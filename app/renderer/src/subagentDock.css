@@ -1,3 +1,4 @@
+.subagent-dock { font:13px/1.4 var(--font-sans); }
 .subagent-dock .subagent-dock-switcher { gap:1px; padding:0 3px; max-width:none; }
 .subagent-dock .subagent-dock-switcher:hover { background:var(--subagent-dock-fill); }
 .subagent-dock .dock-slot { position:relative; display:flex; flex:none; align-items:center; justify-content:center; width:23px; height:21px; border-radius:7px; color:var(--text-muted); cursor:pointer; }
@@ -11,7 +12,12 @@
 .subagent-dock .dock-slot:has(.dock-count) { width:auto; padding:0 5px; }
 .subagent-dock .dock-row-icon { display:flex; flex:none; width:15px; height:15px; align-items:center; justify-content:center; color:var(--text-muted); }
 .subagent-dock .dock-row-icon svg { width:13px; height:13px; }
+.subagent-dock .dock-slot > .dock-row-icon { color:inherit; }
+.subagent-dock .dock-slot .subagent-dock-tip { top:calc(100% + 9px); right:-4px; display:none; max-width:260px; pointer-events:none; animation:none; }
+.subagent-dock .dock-slot:hover .subagent-dock-tip, .subagent-dock .dock-slot:focus-visible .subagent-dock-tip { display:block; }
 .subagent-dock .dock-file { gap:9px; border-radius:7px; }
-.subagent-dock-unified .subagent-dock-row[aria-pressed='true'], .subagent-dock .dock-file[aria-pressed='true'] { background:var(--subagent-row-attached); box-shadow:inset 0 0 0 1px var(--shell-seam); color:var(--text-primary); }
+.subagent-dock-unified .subagent-dock-row[aria-pressed='true'] { background:var(--subagent-row-attached); border-color:var(--shell-seam); }
+.subagent-dock-unified .subagent-dock-row:focus-visible { outline:none; }
+.subagent-dock .dock-file[aria-pressed='true'] { background:var(--subagent-row-attached); box-shadow:inset 0 0 0 1px var(--shell-seam); color:var(--text-primary); }
 .subagent-dock .dock-plain { color:var(--text-primary); }
 .subagent-dock .dock-subheader { margin-top:4px; padding-top:1px; border-top:1px solid var(--shell-seam); height:24px; }

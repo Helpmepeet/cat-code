@@ -85,7 +85,7 @@ export function animateDockMorph(root: HTMLElement, panel: HTMLElement, chip: Do
       animations.push(clone.animate(frames, { duration, easing: EASING, fill: 'both' }))
     }
   }
-  for (const detail of panel.querySelectorAll<HTMLElement>('.subagent-dock-detail, .subagent-dock-header, .subagent-dock-finished-header')) {
+  for (const detail of panel.querySelectorAll<HTMLElement>('.subagent-dock-detail, .subagent-dock-header')) {
     animations.push(detail.animate(opening
       ? [{ opacity: 0, transform: 'translateX(-10px)' }, { opacity: 1, transform: 'none' }]
       : [{ opacity: 1 }, { opacity: 0 }], { duration: opening ? 200 : 90, delay: opening ? 130 : 0, easing: EASING, fill: 'both' }))

@@ -73,7 +73,7 @@ async function click(container: HTMLElement, selector: string) {
   await act(async () => { element!.click() })
 }
 
-test('dock stays available to switch read-only workers including Finished and close retains the hidden panel', async () => {
+test('dock stays available to switch read-only workers including completed owed results and close retains the hidden panel', async () => {
   const tree = await harness.mount(workspace())
   await click(tree.container, '[data-dock-row="a"]')
   const panel = tree.container.querySelector('aside')!
@@ -101,7 +101,7 @@ test('dock stays available to switch read-only workers including Finished and cl
   await click(tree.container, '[data-dock-row="b"]')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Second worker')
   expect(tree.container.querySelector<HTMLElement>('.subagent-side-body')?.scrollTop).toBe(600)
-  await click(tree.container, '[data-finished-toggle]')
+  expect(tree.container.querySelector('[data-finished-toggle]') === null).toBe(true)
   await click(tree.container, '[data-dock-row="c"]')
   expect(tree.container.querySelector('.subagent-side-name')?.textContent).toBe('worker-c')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Finished answer')
@@ -171,7 +171,7 @@ test('delayed row measurements use the shared bottom lock without pulling a scro
   expect(body.scrollTop).toBe(100)
 })
 
-test('Finished, background, resumed and waiting runs open; only an unbound row keeps the fallback', async () => {
+test('completed owed results, background, resumed and waiting runs open; only an unbound row keeps the fallback', async () => {
   const calls: string[] = []
   const launch = (id: string): NestedToolUseRow => ({
     ...agent(id, []), status: 'success', input: { description: `Task ${id}`, run_in_background: true },
@@ -204,7 +204,7 @@ test('Finished, background, resumed and waiting runs open; only an unbound row k
     await click(tree.container, `[data-dock-row="${id}"]`)
     expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe(`worker-${id}, ${id}`)
   }
-  await click(tree.container, '[data-finished-toggle]')
+  expect(tree.container.querySelector('[data-finished-toggle]') === null).toBe(true)
   await click(tree.container, '[data-dock-row="c"]')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Finished answer')
   expect(calls).toEqual(['unbound'])
@@ -258,8 +258,7 @@ test('real SessionPane opens projected child reasoning, and the parent Agent car
     ...idleSessionPaneProps(), activeSessionId: sessionId, transcript,
     workers: [{ agentId: 'live-id', handle: '@live-reader', role: 'explore', description: 'Inspect the dock', status: 'completed', isBackgrounded: false }],
   }))
-  // A newly completed worker can still occupy the dock's settling active row.
-  if (tree.container.querySelector('[data-finished-toggle]')) await click(tree.container, '[data-finished-toggle]')
+  expect(tree.container.querySelector('[data-finished-toggle]') === null).toBe(true)
   await click(tree.container, '[data-dock-row="live-id"]')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Live child reasoning')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Child reply')
@@ -382,7 +381,6 @@ test('a resume keeps the open panel and its earlier steps above the resumed run'
   const original: NestedToolUseRow = { ...agent(), status: 'success', result: { isError: false, content: 'Finished', diff: null, agentId: 'a' } }
   const fallback = (_row: SubagentDockRow) => { throw new Error('the panel must stay open') }
   const tree = await harness.mount(workspace({ rows: [original], active: [b], finished: [worker('a', { state: 'completed', runToolUseIds: ['launch-a'] })], fallback }))
-  await click(tree.container, '[data-finished-toggle]')
   await click(tree.container, '[data-dock-row="a"]')
   const body = tree.container.querySelector('.subagent-side-body')!
   expect(body.textContent).toContain('The dock opens the worker.')
@@ -485,7 +483,7 @@ test('terminal eviction retains the latest observed completion, not the opening 
   expect(tree.container.querySelector('.subagent-side-switch') === null).toBe(true)
 })
 
-test('finished launches recorded before steps were published keep fallback, while restored steps remain openable', async () => {
+test('completed owed launches without published steps keep fallback, while restored owed steps open directly', async () => {
   const calls: string[] = []
   const launch: NestedToolUseRow = {
     ...agent('async', []), status: 'success', input: { description: 'Async work', run_in_background: true },
@@ -496,7 +494,7 @@ test('finished launches recorded before steps were published keep fallback, whil
       rows: [launch], active: [], finished: [worker('async', { state })],
       fallback: row => calls.push(row.agentId),
     }))
-    await click(tree.container, '[data-finished-toggle]')
+    expect(tree.container.querySelector('[data-finished-toggle]') === null).toBe(true)
     await click(tree.container, '[data-dock-row="async"]')
     expect(tree.container.querySelector('aside') === null).toBe(true)
     await tree.unmount()
@@ -506,11 +504,15 @@ test('finished launches recorded before steps were published keep fallback, whil
     rows: [{ ...launch, children: [prose('restored-async', 'Restored worker steps')] }],
     active: [], finished: [worker('async', { state: 'completed' })],
   }))
-  await click(restored.container, '[data-finished-toggle]')
+  expect(restored.container.querySelector('[data-finished-toggle]') === null).toBe(true)
   await click(restored.container, '[data-dock-row="async"]')
   expect(restored.container.querySelector('aside')?.textContent).toContain('Restored worker steps')
+  const panel = restored.container.querySelector('aside')
   await click(restored.container, '[aria-label="Close subagent panel"]')
-  expect(restored.container.querySelector('[data-finished-toggle]')?.getAttribute('aria-expanded')).toBe('true')
+  expect(restored.container.querySelector('aside') === panel).toBe(true)
+  expect(restored.container.querySelector<HTMLElement>('.subagent-shared-slot')?.hidden).toBe(true)
+  expect(restored.container.querySelector('[data-dock-row="async"]') !== null).toBe(true)
+  expect(restored.container.querySelector('[data-finished-toggle]') === null).toBe(true)
 })
 
 test('a real completed resume cannot use its retained reveal target as current-run steps', () => {

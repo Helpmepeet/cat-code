@@ -178,7 +178,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
       const row = [...dock?.querySelectorAll<HTMLButtonElement>('[data-dock-row]') ?? []]
         .find(element => element.dataset.dockRow === worker?.agentId && !element.closest('[inert]'))
       const target = row ?? [...dock?.querySelectorAll<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]) [data-dock-agent]') ?? []]
-        .find(element => element.dataset.dockAgent === worker?.agentId) ?? dock?.querySelector<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]) button, [data-finished-toggle]')
+        .find(element => element.dataset.dockAgent === worker?.agentId) ?? dock?.querySelector<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]) button')
       if (target) target.focus({ preventScroll: true })
       else focusComposer.current?.()
     })

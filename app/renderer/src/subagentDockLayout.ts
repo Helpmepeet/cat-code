@@ -12,9 +12,9 @@ export function placeSubagentTooltip(
 ) {
   const width = Math.min(tipWidth, Math.max(0, pane.width - 16))
   const attached = row && anchor.left - pane.left >= width + 8
-  const desiredLeft = attached ? anchor.left - width + 1 : anchor.right - width
+  const desiredLeft = attached ? anchor.left - width + 1 : anchor.right + (row ? 0 : 4) - width
   const left = Math.max(pane.left + 8, Math.min(desiredLeft, pane.right - width - 8))
-  const desiredTop = attached ? anchor.top : anchor.bottom + 5
+  const desiredTop = attached ? anchor.top : anchor.bottom + (row ? 5 : 9)
   const height = Math.min(attached ? anchor.height : tipHeight, Math.max(0, pane.height - 16))
   const top = Math.max(pane.top + 8, Math.min(desiredTop, pane.bottom - height - 8))
   return { left, top, width, attached, height }

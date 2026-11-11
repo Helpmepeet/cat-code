@@ -4,5 +4,5 @@
 .side-pane-shell-host:empty { display:none; }
 .side-pane-shell-host > .subagent-shared-slot { max-width:max(360px, calc(var(--side-pane-layout-width, 100vw) - 440px)); }
 /* Only the empty title-bar surface drags; controls and selectable addresses do not. */
-.subagent-shared-slot :is(.file-pane-header,.computer-pane-header,.subagent-side-header,.tool-output-header) { -webkit-app-region:drag; }
+.subagent-shared-slot :is(.file-pane-header,.computer-pane-header,.subagent-side-header,.tool-output-header) { font:13px/1.4 var(--font-sans); -webkit-app-region:drag; }
 .subagent-shared-slot :is(.file-pane-header,.computer-pane-header,.subagent-side-header,.tool-output-header) :is(button,input,[tabindex],.file-pane-path) { -webkit-app-region:no-drag; }

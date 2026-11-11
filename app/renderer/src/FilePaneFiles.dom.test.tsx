@@ -66,3 +66,22 @@ test('dock file requests open and refocus the searchable menu', async () => {
   expect(input.value).toBe('')
   expect(document.activeElement).toBe(input)
 })
+
+test('Files uses the specimen body-relative position and height', async () => {
+  const tree = await harness.mount(<aside className="file-pane" ref={element => {
+    if (element) element.getBoundingClientRect = () => new DOMRect(480, 100, 520, 560)
+  }}>
+    <header className="file-pane-header"><FilePaneFiles appSessionId={sessionId} cwd="/repo" currentPath="/repo/current.md" /></header>
+    <div className="file-pane-host" ref={element => {
+      if (element) element.getBoundingClientRect = () => new DOMRect(480, 140, 520, 520)
+    }} />
+  </aside>)
+  const trigger = tree.container.querySelector<HTMLButtonElement>('button[aria-label="Files"]')!
+  trigger.getBoundingClientRect = () => new DOMRect(548, 107, 26, 26)
+  await act(async () => trigger.click())
+  const menu = document.querySelector<HTMLElement>('.file-pane-files')!
+  expect(menu.style.getPropertyValue('--files-top')).toBe('185px')
+  expect(menu.style.getPropertyValue('--files-left')).toBe('488px')
+  expect(menu.style.getPropertyValue('--files-width')).toBe('420px')
+  expect(menu.style.getPropertyValue('--files-height')).toBe('312px')
+})

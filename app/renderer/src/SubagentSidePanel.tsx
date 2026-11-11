@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef } from 'react'
 import { AgentFace } from './AgentChrome.js'
 import { SidePaneNavigation } from './SidePaneNavigation.js'
+import { ActionCloseIcon } from './SessionActionIcons.js'
 import { useAgentFaceRegistry } from './agentFace.js'
 import { observePaneBottomLock, observePaneScroll } from './markdownScrollCoordinator.js'
 import { selectPaneFollowIntent } from './paneAnchorModel.js'
@@ -65,7 +66,7 @@ export function SubagentSidePanel({ worker, agent, steps, incomplete, cwd, onClo
           {model ? <span className="subagent-side-model">{formatModelDisplayName(model)}</span> : null}
         </div>
       </div>
-      <button ref={close} type="button" className="subagent-side-close" aria-label="Close subagent panel" onClick={onClose}>×</button>
+      <button ref={close} type="button" className="subagent-side-close" aria-label="Close subagent panel" onClick={onClose}><ActionCloseIcon /></button>
     </header>
     <div ref={scroll} className="subagent-side-body" role="region" tabIndex={0} aria-label="Subagent steps"
       onScroll={event => {

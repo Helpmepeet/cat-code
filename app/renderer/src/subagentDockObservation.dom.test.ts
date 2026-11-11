@@ -47,12 +47,14 @@ afterAll(async () => {
 
 const sessionId = 'offscreen-session'
 const engineId = 'engine-offscreen-session'
+let clearVisibleOwedResults: () => void
 function View({ input }: { input: SubagentDockObservationInput }) {
   const { dock, clearFinished } = useSubagentDock(sessionId, engineId, {
     workers: input.workers.bySession[sessionId]?.workers ?? [],
     tasks: input.tasks.bySession[sessionId] ?? null,
     transcriptRows: selectNestedTranscriptRows(input.transcript, sessionId), leases: null,
   })
+  clearVisibleOwedResults = clearFinished
   return createElement('section', { ref: (element: HTMLElement | null) => {
     if (element) element.getBoundingClientRect = () => new DOMRect(0, 0, 1600, 600)
   } }, createElement(SubagentDock, { state: dock, collapsed: false, onCollapsedChange() {},
@@ -270,7 +272,7 @@ test('offscreen completion survives eviction, Clear, and another resume without 
   }
   input = snapshots(input, [worker('running')], [task()])
   const tree = await harness.mount(createElement(Shell, { input }))
-  expect(tree.container.querySelector('.subagent-dock')).toBeNull()
+  expect(tree.container.querySelector('.subagent-dock') === null).toBe(true)
   expect(readSubagentDockObservation(sessionId, engineId, window.localStorage)?.entries['offscreen-agent']?.state).toBe('background')
   input = snapshots(input, [worker('completed')], [task({ status: 'completed', endTime: 200 })])
   await tree.render(createElement(Shell, { input }))
@@ -289,14 +291,14 @@ test('offscreen completion survives eviction, Clear, and another resume without 
   input = snapshots(input, [], [])
   await tree.render(createElement(Shell, { input }))
   await tree.render(createElement(Shell, { input, visible: true }))
-  expect(tree.container.querySelector('.subagent-dock')).toBeNull()
+  expect(tree.container.querySelector('.subagent-dock') === null).toBe(true)
   expect(readSubagentDockSessionsFromStorage(window.localStorage)![engineId].finished[0]).toEqual(firstRun)
   // Clear still applies while the runtime retains the owed completion.
   input = snapshots(input, [worker('completed')], [task({ status: 'completed', endTime: 200 })])
   await tree.render(createElement(Shell, { input, visible: true }))
-  expect(tree.container.querySelector('[aria-label="Ada, completed"]')).not.toBeNull()
-  const clear = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Clear')!
-  await act(async () => { clear.click() })
+  expect(tree.container.querySelector('[aria-label="Ada, completed"]') !== null).toBe(true)
+  expect([...tree.container.querySelectorAll('button')].some(button => button.textContent === 'Clear')).toBe(false)
+  await act(async () => { clearVisibleOwedResults() })
   await tree.render(createElement(Shell, { input }))
   expect(readSubagentDockSessionsFromStorage(window.localStorage)![engineId].cleared).toEqual([{ agentId: 'offscreen-agent', runKey: firstRun.runKey }])
   input = snapshots(input, [worker('running')], [task({ resumedAt: 300 })])
@@ -308,7 +310,7 @@ test('offscreen completion survives eviction, Clear, and another resume without 
   input = snapshots(input, [], [])
   await tree.render(createElement(Shell, { input, visible: true }))
   expect(tree.container.querySelectorAll('[aria-label="Ada, completed"]')).toHaveLength(0)
-  expect(tree.container.querySelector('.subagent-dock')).toBeNull()
+  expect(tree.container.querySelector('.subagent-dock') === null).toBe(true)
   const latest = readSubagentDockSessionsFromStorage(window.localStorage)![engineId]
   expect(latest.finished[0]?.runKey).not.toBe(firstRun.runKey)
   expect(latest.cleared).toEqual([{ agentId: 'offscreen-agent', runKey: firstRun.runKey }])

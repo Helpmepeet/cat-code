@@ -27,8 +27,10 @@ afterAll(async () => {
 })
 
 type Sources = Omit<SubagentDockInput, 'nowMs' | 'clearMarkers' | 'reducedMotion'>
+let clearOwedResults: () => void
 function Pane({ appId, sources, collapsed = false }: { appId: string; sources: Sources; collapsed?: boolean }) {
   const { dock, clearFinished } = useSubagentDock(appId, 'engine-history', sources)
+  clearOwedResults = clearFinished
   return createElement('section', {
     ref: (element: HTMLElement | null) => {
       if (element) element.getBoundingClientRect = () => new DOMRect(0, 0, 1600, 600)
@@ -88,13 +90,11 @@ test('finished background history persists by engine identity through eviction, 
   await restored.render(createElement(Pane, {
     appId: 'app-after-restart', sources: sources([worker({ status: 'completed' })], [task({ status: 'completed' })]),
   }))
-  const toggle = restored.container.querySelector<HTMLButtonElement>('[data-finished-toggle]')!
-  expect(toggle.getAttribute('aria-expanded')).toBe('false')
-  await act(async () => { toggle.click() })
+  expect(restored.container.querySelector('[data-finished-toggle]') === null).toBe(true)
   expect(restored.container.querySelector('[aria-label="Ada, completed"]')?.parentElement?.hasAttribute('inert')).toBe(false)
   expect(restored.container.querySelector('button.dock-slot[aria-label="Ada"]') !== null).toBe(true)
-  const clear = [...restored.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Clear')!
-  await act(async () => { clear.click() })
+  expect([...restored.container.querySelectorAll('button')].some(button => button.textContent === 'Clear')).toBe(false)
+  await act(async () => { clearOwedResults() })
   expect(restored.container.querySelector('.subagent-dock') === null).toBe(true)
   expect(readSubagentDockSessionsFromStorage(window.localStorage)?.['engine-history'].cleared).toEqual([{ agentId: 'agent-a', runKey: firstRun.runKey }])
   await restored.unmount()
@@ -156,8 +156,8 @@ test('collapsed owed failure has its own button, retirement hides the dock, and 
       worker({ agentId: 'agent-b', handle: '@Grace', status: 'completed' }),
     ], [task({ status: 'failed' })]),
   }))
-  const clear = [...restored.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Clear')!
-  await act(async () => clear.click())
+  expect([...restored.container.querySelectorAll('button')].some(button => button.textContent === 'Clear')).toBe(false)
+  await act(async () => clearOwedResults())
   expect(restored.container.querySelector('.subagent-dock') === null).toBe(true)
   const saved = readSubagentDockSessionsFromStorage(window.localStorage)!['engine-history']
   expect(saved.finished).toHaveLength(2)

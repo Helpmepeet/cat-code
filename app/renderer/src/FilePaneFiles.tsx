@@ -91,17 +91,23 @@ export function FilePaneFiles({ appSessionId, cwd, currentPath }: { appSessionId
   useLayoutEffect(() => {
     if (!open || !menu.current || !trigger.current) return
     const place = () => {
-      const paneBounds = trigger.current!.closest('.file-pane')!.getBoundingClientRect()
+      const pane = trigger.current!.closest('.file-pane')!
+      const paneBounds = pane.getBoundingClientRect()
       const anchor = trigger.current!.getBoundingClientRect()
-      menu.current?.style.setProperty('--files-top', `${anchor.bottom + 5}px`)
+      const bodyBounds = pane.querySelector('.file-pane-host')?.getBoundingClientRect()
+      const top = bodyBounds?.height ? bodyBounds.top + 45 : anchor.bottom + 5
+      menu.current?.style.setProperty('--files-top', `${top}px`)
       menu.current?.style.setProperty('--files-left', `${Math.max(8, Math.min(paneBounds.left + 8, window.innerWidth - 100))}px`)
       menu.current?.style.setProperty('--files-width', `${Math.max(100, Math.min(420, paneBounds.width - 16))}px`)
-      menu.current?.style.setProperty('--files-height', `${Math.max(100, Math.min(paneBounds.height * .6, window.innerHeight - anchor.bottom - 16))}px`)
+      menu.current?.style.setProperty('--files-height', `${Math.max(100, Math.min((bodyBounds?.height || paneBounds.height) * .6, window.innerHeight - top - 16))}px`)
     }
     place()
     input.current?.focus()
     const observer = new ResizeObserver(place)
-    observer.observe(trigger.current.closest('.file-pane')!)
+    const pane = trigger.current.closest('.file-pane')!
+    observer.observe(pane)
+    const body = pane.querySelector('.file-pane-host')
+    if (body) observer.observe(body)
     window.addEventListener('resize', place)
     return () => { observer.disconnect(); window.removeEventListener('resize', place) }
   }, [open])

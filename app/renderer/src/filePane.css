@@ -4,6 +4,7 @@
 .file-pane-icon:hover { color:var(--text-primary); background:var(--shell-hover); }
 .file-pane-icon:disabled { color:var(--text-ghost); opacity:.55; cursor:default; background:none; }
 .file-pane-icon svg { width:14px; height:14px; }
+.file-pane-header > [aria-label="Close file"] svg { stroke-width:2; }
 .file-pane-path { display:flex; flex:0 1 auto; min-width:0; align-items:center; height:26px; padding:0 6px; border-radius:5px; font:12px var(--font-mono); cursor:text; user-select:text; }
 .file-pane-path:hover { background:var(--shell-hover); }
 .file-pane-path-empty { flex:1; cursor:default; }

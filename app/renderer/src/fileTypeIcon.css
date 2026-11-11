@@ -1,4 +1,4 @@
-.file-type-icon { display:flex; flex:none; width:15px; height:15px; align-items:center; justify-content:center; color:var(--text-muted); }
+.file-type-icon { display:flex; width:15px; height:15px; align-items:center; justify-content:center; color:var(--text-muted); }
 .file-type-icon svg { width:13px; height:13px; }
 html:not([data-appearance='light']) .file-type-icon[data-type='web'] { color:#e0a070; }
 html:not([data-appearance='light']) .file-type-icon[data-type='doc'] { color:#86b3e0; }
