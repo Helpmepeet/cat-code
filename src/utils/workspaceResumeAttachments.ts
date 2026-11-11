@@ -1,8 +1,9 @@
 import type { Attachment } from './attachments.js'
 import { getCwd } from './cwd.js'
 import type { Message } from '../types/message.js'
-import { isAbsolute, relative } from 'path'
+import { isAbsolute, join, relative } from 'path'
 import { assertSessionNotMoving, readSessionRelocation } from './sessionRelocationState.js'
+import { getClaudeConfigHomeDir } from './envUtils.js'
 
 // Resume filtering is a prompt/state view over archived attachment data. Keep
 // the view attached to the original object so transcript logging and V1 resume
@@ -55,6 +56,7 @@ export function markWorkspaceResumeAttachments(
   ])
   formerRoots.delete(relocation.target.cwd)
   const belongsToFormerProject = (path: string): boolean => {
+    if (wasInside(join(getClaudeConfigHomeDir(), 'skills'), path)) return false
     if (wasInside(relocation.target.cwd, path)) return false
     return [...formerRoots].some(root => wasInside(root, path))
   }
