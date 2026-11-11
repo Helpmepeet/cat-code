@@ -418,6 +418,24 @@ export function reducePasteRemoved(
   return { ...state, [sessionId]: { ...session, entries } }
 }
 
+/** Undo restores payloads as well as tokens. Keep ids monotonic even when an
+ * undone paste is followed by a new paste instead of Redo. */
+export function reduceSessionPastesRestored(
+  state: PasteState,
+  sessionId: SessionId,
+  pastes: readonly PasteEntry[],
+): PasteState {
+  if (pastes.length === 0) return state
+  const session = selectSessionPasteState(state, sessionId)
+  const entries = { ...session.entries }
+  let nextId = session.nextId
+  for (const entry of pastes) {
+    entries[entry.id] = entry
+    nextId = Math.max(nextId, entry.id + 1)
+  }
+  return { ...state, [sessionId]: { entries, nextId } }
+}
+
 /**
  * Drop any paste whose token the user deleted from the draft (Chat.jsx:933-941)
  * so a removed pill never survives as dead state. `nextId` is preserved.

@@ -19,6 +19,7 @@ export const slowDesktopTests = {
     'app/native/lid-closed/native.test.ts',
     'app/native/lid-closed/powerObservation.test.ts',
     'app/scripts/transcriptScrollNative.test.ts',
+    'app/scripts/composer-undo-native.test.ts',
   ],
   analytics: [
     'app/main/usageStatsRunner.test.ts',

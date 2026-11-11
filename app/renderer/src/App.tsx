@@ -206,6 +206,7 @@ import {
   reduceSessionImagesRestored,
   reduceSessionFileAttachmentRestored,
   reduceSessionPastesCleared,
+  reduceSessionPastesRestored,
   removePasteOccurrence,
   reduceTransportErrorCleared,
   reduceTransportErrorSet,
@@ -3704,6 +3705,7 @@ export function App() {
       sessionId: SessionId,
       value: string,
       reason: DraftWriteReason = 'edit',
+      restoredPastes?: PasteEntry[],
     ) => {
       if (branchSwitchSourcesRef.current.has(sessionId)) return
       if (reason === 'edit') clearOlderDraftNotice(sessionId)
@@ -3711,7 +3713,10 @@ export function App() {
       // Prune only on a genuine edit; a transient ↑/↓ history-nav write must NOT
       // drop a live, uncommitted paste that ↓ is about to restore.
       setPasteState(prev =>
-        reducePasteStateForDraftWrite(prev, sessionId, value, reason),
+        reducePasteStateForDraftWrite(
+          restoredPastes ? reduceSessionPastesRestored(prev, sessionId, restoredPastes) : prev,
+          sessionId, value, reason,
+        ),
       )
     },
     [],
@@ -4448,8 +4453,8 @@ export function App() {
                 )
 	              }
 	            }}
-	            setPrompt={(value, reason) =>
-	              setSessionPrompt(sessionId, value, reason)
+	            setPrompt={(value, reason, restoredPastes) =>
+	              setSessionPrompt(sessionId, value, reason, restoredPastes)
 	            }
 	            submit={event => submitSession(sessionId, event)}
 	            retryTurn={notificationRetryBlockedIds.has(sessionId) ? undefined : async (_text, resultId) => {

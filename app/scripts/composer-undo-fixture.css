@@ -1,0 +1,5 @@
+@import '../renderer/src/theme.css';
+@source '../renderer/src';
+
+html, body, #fixture { height: 100%; }
+#fixture { display: flex; flex-direction: column; }

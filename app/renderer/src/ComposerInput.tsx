@@ -32,6 +32,7 @@ import {
   renderComposerDom,
 } from './composerDom.js'
 import { pasteIdAtCaret } from './composerState.js'
+import { ComposerEditHistory, type ComposerEditSnapshot } from './composerEditHistory.js'
 import { selectAttachableImageFiles } from './imageAttachment.js'
 import type { PasteEntry } from './composerState.js'
 import type { ComposerTypeaheadA11y } from './composerTypeaheadA11y.js'
@@ -45,6 +46,8 @@ export type ComposerInputHandle = {
   readonly selectionEnd: number
   setSelectionRange: (start: number, end: number) => void
   focus: () => void
+  /** Capture the selection before a pane-owned prompt edit commits. */
+  prepareEdit: () => void
 }
 
 type ComposerInputProps = {
@@ -60,7 +63,7 @@ type ComposerInputProps = {
   onPointerDown: () => void
   /** `at` is the live start offset of the occurrence the user clicked. */
   onRemovePaste: (entry: PasteEntry, at: number) => void
-  onValueChange: (next: string) => void
+  onValueChange: (next: string, restoredPastes?: PasteEntry[]) => void
   placeholder: string
   placeholderDimmed?: boolean
   /**
@@ -142,6 +145,27 @@ export function ComposerInput({
   // Last known caret, so a handler that runs when the selection has already
   // moved out of the field (a pill's own click) still has a sane offset.
   const caretRef = useRef(0)
+  const historyRef = useRef<ComposerEditHistory | null>(null)
+  if (!historyRef.current) {
+    historyRef.current = new ComposerEditHistory({
+      text: value, pastes, selection: { start: 0, end: 0 },
+    })
+  }
+  const pendingEditRef = useRef<ComposerEditSnapshot | null>(null)
+  const replaySelectionRef = useRef<ComposerEditSnapshot['selection'] | null>(null)
+  const [historyVersion, setHistoryVersion] = useState(0)
+  const captureBeforeEdit = (): void => {
+    const history = historyRef.current!
+    const root = rootRef.current
+    pendingEditRef.current = {
+      ...history.current,
+      selection: (root && composerSelectionOffsets(root)) || history.current.selection,
+    }
+  }
+  const prepareEdit = (): void => {
+    historyRef.current!.breakGroup()
+    captureBeforeEdit()
+  }
   const [previewId, setPreviewId] = useState<number | null>(null)
   // Whether the open preview came from the caret or from the pointer, so caret
   // movement never closes a preview the pointer is holding open.
@@ -193,10 +217,12 @@ export function ComposerInput({
         if (!root) return
         caretRef.current = end
         placeComposerSelection(root, start, end)
+        historyRef.current!.select({ start, end })
       },
       focus() {
         rootRef.current?.focus()
       },
+      prepareEdit,
     }),
     [],
   )
@@ -224,6 +250,23 @@ export function ComposerInput({
     const pastesChanged = renderedPastesRef.current !== pastesSignature
     renderedPastesRef.current = pastesSignature
     const selection = composerSelectionOffsets(root)
+    const history = historyRef.current!
+    if (history.current.text !== value) {
+      const after = {
+        text: value, pastes,
+        selection: {
+          start: Math.min(value.length, selection?.start ?? caretRef.current),
+          end: Math.min(value.length, selection?.end ?? caretRef.current),
+        },
+      }
+      if (pendingEditRef.current) history.record(pendingEditRef.current, after)
+      // Unmarked writes are lifecycle replacements, including a sent draft's
+      // retirement. Never let Undo bring that draft back into the next message.
+      else history.reset(after)
+    } else {
+      history.current = { ...history.current, pastes }
+    }
+    pendingEditRef.current = null
     const rewritten = renderComposerDom(
       root,
       value,
@@ -251,6 +294,7 @@ export function ComposerInput({
                   Array.prototype.indexOf.call(parent.childNodes, node),
                 )
               : 0
+            prepareEdit()
             onRemovePasteRef.current(current, at)
           },
         })
@@ -263,10 +307,17 @@ export function ComposerInput({
     // elsewhere sets it afterwards through the handle.
     const pendingCaret = pendingCaretRef.current
     pendingCaretRef.current = null
-    if (!rewritten || document.activeElement !== root) return
-    if (pendingCaret !== null) placeComposerSelection(root, pendingCaret, pendingCaret)
+    const replaySelection = replaySelectionRef.current
+    replaySelectionRef.current = null
+    if (document.activeElement !== root) return
+    if (replaySelection) placeComposerSelection(root, replaySelection.start, replaySelection.end)
+    else if (!rewritten) return
+    else if (pendingCaret !== null) {
+      placeComposerSelection(root, pendingCaret, pendingCaret)
+      history.select({ start: pendingCaret, end: pendingCaret })
+    }
     else if (selection) placeComposerSelection(root, selection.start, selection.end)
-  }, [closePreviewSoon, openPreview, pastes, pastesSignature, value])
+  }, [closePreviewSoon, openPreview, pastes, pastesSignature, value, historyVersion])
 
   // Park the caret on a pill and its preview opens, the same as hovering it.
   const syncCaretPreview = (): void => {
@@ -284,10 +335,49 @@ export function ComposerInput({
     }
   }
 
-  const handleInput = (): void => {
+  const replayHistory = (direction: 'undo' | 'redo'): void => {
+    if (!editable || isComposingRef.current) return
+    const history = historyRef.current!
+    const snapshot = history[direction]()
+    pendingEditRef.current = null
+    // execCommand can report history edits after mutating detached native undo
+    // nodes. Re-project even at our history boundary to discard that mutation.
+    const target = snapshot ?? history.current
+    replaySelectionRef.current = target.selection
+    setHistoryVersion(version => version + 1)
+    if (snapshot) onValueChangeRef.current(target.text, target.pastes)
+  }
+
+  // React's beforeinput shim does not expose every native inputType. Listen at
+  // the editable boundary so Electron's Edit menu uses the same history as ⌘Z.
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) return
+    const beforeInput = (event: InputEvent): void => {
+      if (event.inputType === 'historyUndo' || event.inputType === 'historyRedo') {
+        event.preventDefault()
+        replayHistory(event.inputType === 'historyUndo' ? 'undo' : 'redo')
+      } else if (!isComposingRef.current) captureBeforeEdit()
+    }
+    root.addEventListener('beforeinput', beforeInput)
+    return () => root.removeEventListener('beforeinput', beforeInput)
+  })
+
+  const handleInput = (inputType = ''): void => {
     const root = rootRef.current
     if (!root || isComposingRef.current) return
-    onValueChange(readComposerText(root))
+    if (inputType === 'historyUndo' || inputType === 'historyRedo') {
+      replayHistory(inputType === 'historyUndo' ? 'undo' : 'redo')
+      return
+    }
+    const history = historyRef.current!
+    const next = {
+      text: readComposerText(root), pastes: pastesRef.current,
+      selection: composerSelectionOffsets(root) ?? history.current.selection,
+    }
+    history.record(pendingEditRef.current ?? history.current, next, inputType)
+    pendingEditRef.current = null
+    onValueChange(next.text)
   }
 
   /**
@@ -330,6 +420,7 @@ export function ComposerInput({
     const bounded = Math.max(0, Math.min(value.length, at))
     pendingCaretRef.current = bounded + text.length
     root.focus()
+    prepareEdit()
     onValueChangeRef.current(
       value.slice(0, bounded) + text + value.slice(bounded),
     )
@@ -401,14 +492,19 @@ export function ComposerInput({
         aria-placeholder={placeholder}
         aria-readonly={readOnly ? true : undefined}
         className="block max-h-[38vh] w-full min-h-6 overflow-y-auto whitespace-pre-wrap break-words py-1.5 text-[15px] font-medium leading-normal text-text-primary caret-accent outline-none"
+        data-composer-input=""
         contentEditable={editable}
-        onBlur={syncCaretPreview}
+        onBlur={() => {
+          historyRef.current!.breakGroup()
+          syncCaretPreview()
+        }}
         onCompositionEnd={() => {
           isComposingRef.current = false
           onCompositionEnd()
-          handleInput()
+          handleInput('insertCompositionText')
         }}
         onCompositionStart={() => {
+          prepareEdit()
           isComposingRef.current = true
           onCompositionStart()
         }}
@@ -418,10 +514,26 @@ export function ComposerInput({
           onFocus()
           syncCaretPreview()
         }}
-        onInput={handleInput}
+        onInput={event => handleInput((event.nativeEvent as InputEvent).inputType)}
+        onKeyDown={event => {
+          if (isComposingRef.current || event.nativeEvent.isComposing) return
+          const key = event.key.toLowerCase()
+          const undo = (event.metaKey || event.ctrlKey) && !event.altKey && key === 'z'
+          const redo = event.ctrlKey && !event.metaKey && !event.altKey && key === 'y'
+          if (undo || redo) {
+            event.preventDefault()
+            event.stopPropagation()
+            replayHistory(redo || event.shiftKey ? 'redo' : 'undo')
+          } else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+            historyRef.current!.breakGroup()
+          }
+        }}
         onKeyUp={syncCaretPreview}
         onMouseUp={syncCaretPreview}
-        onPointerDown={onPointerDown}
+        onPointerDown={() => {
+          historyRef.current!.breakGroup()
+          onPointerDown()
+        }}
         role="textbox"
         spellCheck={false}
         suppressContentEditableWarning

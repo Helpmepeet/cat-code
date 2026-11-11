@@ -17,6 +17,7 @@ import { CH_FILE_PREVIEW_PREPARE, CH_FILE_PREVIEW_REFRESH, CH_FILE_PREVIEW_COMMI
 import { parseInlineCommandPayload } from './inlineCommandPayload.js'
 import { LidClosedMode, lidHelperInstalled } from './lidClosedMode.js'
 import { lidClosedMenu } from './lidClosedMenu.js'
+import { installComposerEditMenu } from './composerEditMenu.js'
 import { LidNativeClient, inspectLidHardware, installLidHelper, lidHelperCurrent } from './lidClosedNative.js'
 import { LidWorkObserver, type LidWorkSession } from './lidWorkObserver.js'
 import { LidTrace } from './lidTrace.js'
@@ -2373,6 +2374,7 @@ function createWindow(): void {
   })
 
   window.once('ready-to-show', () => {
+    installComposerEditMenu(window.webContents)
     updateLidMenu(lidMode?.read())
     // Capture-run hook (verification only), sibling to CATCODE_SMOKE_EXIT_MS below.
     // A headless acceptance run photographs this window with `capturePage` and

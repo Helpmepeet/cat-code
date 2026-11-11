@@ -161,3 +161,68 @@ test('controlled history restores each session draft across pane remounts and ab
   await key(field, 'ArrowDown')
   expect(field.textContent).toBe('edited recalled text')
 })
+
+async function editKey(field: HTMLElement, key: string, modifiers: KeyboardEventInit = {}): Promise<void> {
+  await act(async () => {
+    field.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...modifiers }))
+  })
+}
+
+async function pasteText(field: HTMLElement, text: string): Promise<void> {
+  await act(async () => {
+    const clipboardData = new DataTransfer()
+    clipboardData.setData('text/plain', text)
+    field.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData }))
+  })
+}
+
+test('paste replacement and newline undo/redo restore text and selection', async () => {
+  function Pane() {
+    const [prompt, setPrompt] = useState('fix login bug')
+    return <SessionPane {...idleSessionPaneProps()} prompt={prompt} setPrompt={setPrompt} />
+  }
+  const tree = await harness.mount(<Pane />)
+  const field = fieldOf(tree)
+  field.focus()
+  placeComposerSelection(field, 4, 9)
+  await pasteText(field, 'logout')
+  expect(field.textContent).toBe('fix logout bug')
+  expect(composerSelectionOffsets(field)).toEqual({ start: 10, end: 10 })
+  await editKey(field, 'z', { metaKey: true })
+  expect(field.textContent).toBe('fix login bug')
+  expect(composerSelectionOffsets(field)).toEqual({ start: 4, end: 9 })
+  await editKey(field, 'z', { metaKey: true, shiftKey: true })
+  expect(field.textContent).toBe('fix logout bug')
+  expect(composerSelectionOffsets(field)).toEqual({ start: 10, end: 10 })
+  await editKey(field, 'Enter', { shiftKey: true })
+  expect(field.textContent).toBe('fix logout\n bug')
+  await editKey(field, 'z', { ctrlKey: true })
+  expect(field.textContent).toBe('fix logout bug')
+  await editKey(field, 'y', { ctrlKey: true })
+  expect(field.textContent).toBe('fix logout\n bug')
+})
+
+test('external clear and session rebind never undo into the old draft', async () => {
+  let clear!: () => void
+  let rebind!: () => void
+  function Pane() {
+    const [prompt, setPrompt] = useState('draft')
+    const [sessionId, setSessionId] = useState('a')
+    clear = () => setPrompt('')
+    rebind = () => { setSessionId('b'); setPrompt('other draft') }
+    return <SessionPane {...idleSessionPaneProps()} activeSessionId={sessionId} prompt={prompt} setPrompt={setPrompt} />
+  }
+  const tree = await harness.mount(<Pane />)
+  let field = fieldOf(tree)
+  field.focus()
+  placeComposerSelection(field, 5, 5)
+  await pasteText(field, ' edited')
+  await act(async () => { clear() })
+  await editKey(field, 'z', { metaKey: true })
+  expect(field.textContent).toBe('')
+  await act(async () => { rebind() })
+  field = fieldOf(tree)
+  field.focus()
+  await editKey(field, 'z', { metaKey: true })
+  expect(field.textContent).toBe('other draft')
+})

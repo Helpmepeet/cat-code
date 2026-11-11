@@ -541,6 +541,7 @@ export function SessionPane({
       base: prompt.length,
       prevLength: prompt.length,
     }
+    composerRef.current?.prepareEdit()
     setPrompt(completeSlashDraft(name))
     setHistoryNav(EMPTY_HISTORY_NAV)
     setSlashDismissed(false)
@@ -587,6 +588,7 @@ export function SessionPane({
       base: prompt.length,
       prevLength: prompt.length,
     }
+    composerRef.current?.prepareEdit()
     setPrompt(applyMention(prompt, item.label))
     setHistoryNav(EMPTY_HISTORY_NAV)
     setMentionDismissed(false)
@@ -1601,6 +1603,7 @@ export function SessionPane({
     const end = composer.selectionEnd
     pendingCaretRef.current = { base: end, prevLength: prompt.length }
     setHistoryNav(EMPTY_HISTORY_NAV)
+    composer.prepareEdit()
     if (shouldCollapsePaste(text, estimateComposerCharsPerRow(composer.element))) {
       onPaste(text, start, end)
       return
@@ -1637,6 +1640,7 @@ export function SessionPane({
       const start = el.selectionStart
       const end = el.selectionEnd
       pendingCaretRef.current = { base: end, prevLength: prompt.length }
+      el.prepareEdit()
       setPrompt(`${prompt.slice(0, start)}\n${prompt.slice(end)}`)
       return
     }
@@ -1747,6 +1751,7 @@ export function SessionPane({
         const start = el.selectionStart
         const end = el.selectionEnd
         pendingCaretRef.current = { base: end, prevLength: prompt.length }
+        el.prepareEdit()
         setPrompt(`${prompt.slice(0, start)}\n${prompt.slice(end)}`)
         return
       }
@@ -1769,6 +1774,7 @@ export function SessionPane({
             base: range.end,
             prevLength: prompt.length,
           }
+          el.prepareEdit()
           setPrompt(prompt.slice(0, range.start) + prompt.slice(range.end))
           return
         }
@@ -1813,6 +1819,7 @@ export function SessionPane({
           prevLength: prompt.length,
         }
         // history-nav: this draft swap must not prune the live paste held aside.
+        composerRef.current?.prepareEdit()
         setPrompt(result.value, 'history-nav')
         return
       }
@@ -2502,6 +2509,7 @@ export function SessionPane({
              * strip a textarea's `inline-block` line box left under it (the
              * gap that used to float the send arrow ~7px low). */}
             <ComposerInput
+              key={activeSessionId}
               ref={composerRef}
               ariaLabel="Prompt"
               disabled={!activeSessionId}
@@ -2516,7 +2524,7 @@ export function SessionPane({
               // file token (HC1).
               onAttachImageFile={attachImage}
               onPointerDown={engagePreviewPane}
-              onValueChange={next => {
+              onValueChange={(next, restoredPastes) => {
                 // A genuine keystroke abandons any active ↑/↓ recall cursor
                 // (parity with the prototype resetting historyIdx on input) and
                 // prunes pastes whose token was actually deleted (reason 'edit').
@@ -2524,7 +2532,7 @@ export function SessionPane({
                 // rewrite was about to restore: the browser already placed it.
                 pendingCaretRef.current = null
                 setHistoryNav(EMPTY_HISTORY_NAV)
-                setPrompt(next)
+                setPrompt(next, 'edit', restoredPastes)
               }}
               onCompositionStart={() => {
                 isComposingRef.current = true
@@ -3109,7 +3117,7 @@ type SessionPaneProps = {
    */
   onLoadEarlierHistory?: () => void
   setPermissionMode: (mode: PermissionSetModeMode) => void
-  setPrompt: (value: string, reason?: DraftWriteReason) => void
+  setPrompt: (value: string, reason?: DraftWriteReason, restoredPastes?: PasteEntry[]) => void
   submit: (event: FormEvent<HTMLFormElement>) => void
   retryTurn?: (text: string, resultId: string) => void | TurnRetryResult | Promise<TurnRetryResult>
   onRetryBlockChange?: (sessionId: SessionId, blocker: NotificationRetryBlocker, blocked: boolean) => void
