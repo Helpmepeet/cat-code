@@ -16,7 +16,7 @@ afterAll(async () => { await harness.teardown() })
 const image = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }
 const steps: ComputerStep[] = [{ id: 'one', title: 'Opening Reminders', status: 'success', image }, { id: 'two', title: 'Checking the list', status: 'pending', image: null }]
 
-test('live, between steps, stopped and finished statuses retain follow controls', async () => {
+test('running, between steps, stopped and finished statuses retain screenshot follow controls', async () => {
   let stops = 0
   const selections: (string | null)[] = []
   const view = (running: boolean, selectedId: string | null, current = steps, stopped = false) => <ComputerPane steps={current} running={running} stopped={stopped} selectedId={selectedId} onSelect={id => selections.push(id)} onClose={() => {}} onStop={() => { stops++ }} />
@@ -29,7 +29,7 @@ test('live, between steps, stopped and finished statuses retain follow controls'
   await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-stop')!.click())
   expect(stops).toBe(1)
   await tree.render(view(true, 'one'))
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Back to live')
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest screenshot')
   expect(tree.container.querySelector('.computer-pane-screen')?.hasAttribute('data-agent')).toBe(false)
   await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-latest')!.click())
   expect(selections).toEqual([null])
@@ -40,7 +40,7 @@ test('live, between steps, stopped and finished statuses retain follow controls'
   expect(tree.container.querySelector('.computer-pane-failed')?.textContent).toBe('Failed')
   await tree.render(view(false, 'two', completed))
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished2 steps · 1 failed')
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest')
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest screenshot')
   expect(tree.container.querySelector('.computer-pane-stop')).toBeNull()
   await tree.render(view(false, null, completed, true))
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Stopped2 steps')
@@ -48,7 +48,7 @@ test('live, between steps, stopped and finished statuses retain follow controls'
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished1 steps')
 })
 
-test('navigation, Latest, close and screenshotless selection use supplied state', async () => {
+test('navigation, Latest screenshot, close and screenshotless selection use supplied state', async () => {
   const calls: (string | null)[] = []
   let closed = false
   const view = (selectedId: string | null, active = true) => <ComputerPane steps={steps} selectedId={selectedId} onSelect={id => calls.push(id)} onClose={() => { closed = true }} active={active} />

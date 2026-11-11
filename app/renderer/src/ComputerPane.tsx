@@ -43,7 +43,7 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
       <span className="computer-pane-count">Step {index + 1}</span>
       <div className="computer-pane-title" title={selected?.title}>{selected?.title ?? 'Computer'}</div>
       {selected?.status === 'error' && <span className="computer-pane-failed">Failed</span>}
-      {selectedId !== null && <button type="button" className="computer-pane-latest" onClick={() => onSelect(null)}>{running ? 'Back to live' : 'Latest'}</button>}
+      {selectedId !== null && <button type="button" className="computer-pane-latest" onClick={() => onSelect(null)}>Latest screenshot</button>}
     </div>
     <div className="computer-pane-steps" aria-label="Computer steps">
       {steps.map((step, i) => <button type="button" key={step.id} ref={step.id === (selectedId === null && now ? now.id : selected?.id) ? currentRef : undefined} className="computer-pane-step" aria-current={step.id === selected?.id ? 'true' : undefined} onClick={() => onSelect(step.id)}>
