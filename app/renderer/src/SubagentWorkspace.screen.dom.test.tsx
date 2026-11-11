@@ -6,7 +6,7 @@ import { TranscriptRowsView } from './TranscriptView.js'
 import { applyBrowserPaneEvent } from './browserPaneState.js'
 import { closeFilePane, disposeFilePaneSession, getFilePaneSession, showSlotOccupant, updateFilePaneSession } from './filePaneState.js'
 import { rememberOpenedFile } from './filePaneOpened.js'
-import type { NestedTranscriptRow } from './transcriptProjector.js'
+import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
 import type { BrowserPaneLayout, BrowserPaneSnapshot } from '../../shared/browserPanePresentation.js'
 
 let harness: DomTestHarness
@@ -27,7 +27,7 @@ function setup() {
     reportBrowserPaneLayout: (layout: BrowserPaneLayout) => layouts.push(layout),
   } as unknown as Window['catcode']
 }
-function step(key: string, status: 'success' | 'pending' = 'success'): NestedTranscriptRow {
+function step(key: string, status: 'success' | 'pending' = 'success'): NestedToolUseRow {
   return { id: key, sessionId: id, frameId: key, messageId: key, blockIndex: 0, parentToolUseId: null,
     kind: 'tool-use', toolUseId: key, toolName: 'mcp__codex-computer-use__js', toolFamily: 'computer',
     input: { title: `Step ${key}`, code: 'screenshot()' }, status, agentCompletion: null,
@@ -104,25 +104,41 @@ test('browser hiding keeps its session, never steals a file, and reopens without
   expect(commands).toEqual([])
 })
 
-test('the dock lists every opened file, counts all files and opens the existing chooser for additional files', async () => {
+test('mentioned, generated and read files do not create a dock or a Files group before the user opens a file', async () => {
+  setup()
+  const mention: NestedTranscriptRow = {
+    id: 'mention', sessionId: id, frameId: 'mention', messageId: 'mention', blockIndex: 0, parentToolUseId: null,
+    kind: 'assistant-text', role: 'assistant', content: '[Additional notes](/repo/additional.md)', children: [],
+  }
+  const generated: NestedTranscriptRow = {
+    ...step('generated'), toolName: 'Write', toolFamily: 'write', input: { file_path: '/repo/generated.md' },
+    result: { content: 'Created file', isError: false, diff: null },
+  }
+  const read: NestedTranscriptRow = {
+    ...step('read'), toolName: 'Read', toolFamily: 'read', input: { file_path: '/repo/read.md' },
+    result: { content: 'File contents', isError: false, diff: null },
+  }
+  const tree = await harness.mount(view([mention, generated, read], 'history', false))
+  expect(tree.container.querySelector('.subagent-dock') === null).toBe(true)
+  expect(getFilePaneSession(id).opened.size).toBe(0)
+})
+
+test('the dock lists and counts only user-opened files, even when additional files are mentioned', async () => {
   setup()
   let opened = getFilePaneSession(id).opened
   for (let index = 0; index < 12; index++) opened = rememberOpenedFile(opened, `/repo/file-${index}.md`, { x: 0, y: 0 })
   updateFilePaneSession(id, { opened })
   const tree = await harness.mount(view([], 'history', false))
-  expect(tree.container.querySelectorAll('.subagent-dock-panel .dock-file:not(.dock-all)')).toHaveLength(12)
+  expect(tree.container.querySelectorAll('.subagent-dock-panel .dock-file')).toHaveLength(12)
   expect(tree.container.querySelector('.dock-count')?.textContent).toBe('12')
-  expect(tree.container.querySelector('.dock-all') === null).toBe(true)
   const mention: NestedTranscriptRow = {
     id: 'mention', sessionId: id, frameId: 'mention', messageId: 'mention', blockIndex: 0, parentToolUseId: null,
     kind: 'assistant-text', role: 'assistant', content: '[Additional notes](/repo/additional.md)', children: [],
   }
   await tree.render(view([mention], 'history', false))
-  const all = tree.container.querySelector<HTMLButtonElement>('.dock-all')!
-  expect(all.textContent).toContain('All files13')
-  await act(async () => all.click())
-  expect(getFilePaneSession(id).visible).toBe('file')
-  expect(document.querySelector('[aria-label="Search files"]') !== null).toBe(true)
-  expect(tree.container.querySelector<HTMLButtonElement>('.file-pane-header [aria-label="Reload"]')?.disabled).toBe(true)
-  expect(tree.container.querySelector<HTMLButtonElement>('.file-pane-header [aria-label="Choose an app"]')?.disabled).toBe(true)
+  expect(tree.container.querySelectorAll('.subagent-dock-panel .dock-file')).toHaveLength(12)
+  expect(tree.container.querySelector('.dock-count')?.textContent).toBe('12')
+  const files = tree.container.querySelector('.subagent-dock-panel')?.textContent
+  expect(files).not.toContain('additional.md')
+  expect(files).not.toContain('All files')
 })

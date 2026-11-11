@@ -15,21 +15,17 @@ export type DockFile = { path: string; name: string; parent: string; renderKind?
 type DockItemsProps = {
   views?: readonly DockView[]
   files?: readonly DockFile[]
-  fileAvailable?: boolean
-  fileCount?: number
-  openedFileCount?: number
   selectedKind?: SlotOccupant | null
   selectedFile?: string | null
   selectedWorker?: string | null
   onOpenView?: (kind: DockView['kind']) => void
   onOpenFile?: (path: string) => void
-  onOpenFiles?: () => void
   onToggleFile?: () => void
 }
 
 type Tip = { agentId: string; mode: 'row' | 'chip'; anchor: HTMLElement; hiding?: boolean }
 
-export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChange, onClearFinished, onOpenWorker, onOpenWorkers, onDetailsVisibleChange, views = [], files = [], fileAvailable = false, fileCount = files.length, openedFileCount = files.length, selectedKind = null, selectedFile = null, selectedWorker = null, onOpenView, onOpenFile, onOpenFiles, onToggleFile }: {
+export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChange, onClearFinished, onOpenWorker, onOpenWorkers, onDetailsVisibleChange, views = [], files = [], selectedKind = null, selectedFile = null, selectedWorker = null, onOpenView, onOpenFile, onToggleFile }: {
   state: DerivedSubagentDock
   collapsed: boolean
   hidden?: boolean
@@ -64,7 +60,7 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   const rowLayoutKey = JSON.stringify([state.active.map(row => row.agentId), state.finished.map(row => row.agentId)])
   const freshResumes = new Set(rows.filter(row => row.state === 'resumed' && previousStates.current !== null && previousStates.current.get(row.agentId) !== `${row.state}:${row.runKey}:${row.resumedAt ?? ''}`).map(row => row.agentId))
   const hasAgents = rows.length > 0
-  const hasFiles = fileAvailable || files.length > 0
+  const hasFiles = files.length > 0
   const hasRows = hasAgents || views.length > 0 || hasFiles
   const orderedViews = [...views].sort((a, b) => ['browser', 'computer', 'output'].indexOf(a.kind) - ['browser', 'computer', 'output'].indexOf(b.kind))
   const { flat } = subagentDockLayout(geometry.width, geometry.transcriptWidth)
@@ -72,7 +68,7 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   const panelShown = expanded || morphing
   const hasChip = hasRows
   const chipRoom = geometry.width - 48
-  const controlsWidth = 28 + orderedViews.length * 24 + (hasFiles ? openedFileCount > 1 ? 44 : 24 : 0) +
+  const controlsWidth = 28 + orderedViews.length * 24 + (hasFiles ? files.length > 1 ? 44 : 24 : 0) +
     (hasAgents && (hasFiles || views.length) ? 10 : 0)
   const moreWidth = String(rows.length).length * 7 + 14
   const faceLimit = geometry.width > 0
@@ -254,7 +250,7 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
         {visibleFaces.map(row => <button type="button" key={row.agentId} data-dock-agent={row.agentId} className="dock-slot" aria-label={row.name || row.task || 'Subagent'} aria-pressed={selectedKind === 'worker' && selectedWorker === row.agentId} onClick={() => onOpenWorker(row)} onFocus={event => showTip(row, event.currentTarget, 'chip')} onBlur={() => closeTip()} onMouseEnter={event => showTip(row, event.currentTarget, 'chip')}><DockFace row={row} /></button>)}
         {more > 0 ? <span className="subagent-dock-more">+{more}</span> : null}
         {hasAgents && (hasFiles || views.length > 0) ? <i className="dock-seam" /> : null}
-        {hasFiles ? <button type="button" className="dock-slot" aria-label="Files" title="Files" aria-pressed={selectedKind === 'file'} onClick={onToggleFile}><DockIcon kind="file" />{openedFileCount > 1 ? <span className="dock-count">{openedFileCount}</span> : null}</button> : null}
+        {hasFiles ? <button type="button" className="dock-slot" aria-label="Files" title="Files" aria-pressed={selectedKind === 'file'} onClick={onToggleFile}><DockIcon kind="file" />{files.length > 1 ? <span className="dock-count">{files.length}</span> : null}</button> : null}
         {orderedViews.map(view => <button type="button" key={view.kind} data-dock-view={view.kind} className="dock-slot" aria-label={view.label} title={`${view.label}${view.detail ? `: ${view.detail}` : ''}`} aria-pressed={selectedKind === view.kind} onClick={() => onOpenView?.(view.kind)}><DockIcon kind={view.kind} />{view.kind === 'computer' && view.running ? <i className="subagent-dock-badge subagent-dock-badge-running" /> : null}</button>)}
         <button type="button" className="dock-slot dock-expand" aria-label="Show all" aria-expanded={expanded} aria-controls={panelId} onClick={() => changeExpanded(true)}>⌄</button>
       </div> : null}
@@ -272,7 +268,7 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
             {orderedViews.map(view => <button type="button" key={view.kind} data-dock-view={view.kind} className="subagent-dock-row" aria-pressed={selectedKind === view.kind} onClick={() => onOpenView?.(view.kind)}><DockIcon kind={view.kind} /><span className="subagent-dock-row-main"><span className="subagent-dock-line-a"><span className="subagent-dock-name dock-plain">{view.label}</span></span><span className="subagent-dock-line-b"><span className="subagent-dock-task">{view.detail}</span></span></span></button>)}</> : null}
           {hasFiles ? <><div className={`subagent-dock-header${hasAgents || views.length ? ' dock-subheader' : ''}`}><span>FILES</span>{!hasAgents && !views.length ? <button type="button" aria-label="Collapse" onClick={() => changeExpanded(false)}>⌃</button> : null}</div>
             {files.map(file => <button type="button" key={file.path} className="file-pane-file-row dock-file" aria-pressed={selectedKind === 'file' && selectedFile === file.path} onClick={() => onOpenFile?.(file.path)} title={file.path}><FileTypeIcon path={file.path} renderKind={file.renderKind} /><span className="file-pane-file-name">{file.name}</span><span className="file-pane-file-parent"><bdi>{file.parent}</bdi></span></button>)}
-            {fileCount > openedFileCount ? <button type="button" className="file-pane-file-row dock-file dock-all" onClick={onOpenFiles}><DockIcon kind="files" /><span className="file-pane-file-name">All files</span><span className="file-pane-file-parent">{fileCount}</span></button> : null}</> : null}
+            </> : null}
         </div>
       </div>
       {tip && tipRow ? <div ref={tooltip} id={tipId} role="tooltip" className={`subagent-dock-tip subagent-dock-tip-${tip.mode}${tip.hiding ? ' subagent-dock-tip-hiding' : ''}`} onMouseEnter={() => { clearTipTimer(); setTip(current => current ? { ...current, hiding: false } : null) }} onMouseLeave={() => closeTip()}>
@@ -285,10 +281,10 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   )
 }
 
-function DockIcon({ kind }: { kind: 'file' | 'files' | DockView['kind'] }) {
+function DockIcon({ kind }: { kind: 'file' | DockView['kind'] }) {
   return <span className="dock-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     {kind === 'browser' ? <circle cx="12" cy="12" r="9" /> : kind === 'computer' ? <rect x="3" y="4" width="18" height="12" rx="2" /> : kind === 'output' ? <rect x="3" y="4" width="18" height="16" rx="2" /> : null}
-    <path d={kind === 'browser' ? 'M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18' : kind === 'computer' ? 'M8 20h8M12 16v4' : kind === 'output' ? 'M7 9h10M7 12h10M7 15h6' : kind === 'files' ? 'M5 3h14v18H5zM8 7h8M8 11h8M8 15h8' : 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6'} />
+    <path d={kind === 'browser' ? 'M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18' : kind === 'computer' ? 'M8 20h8M12 16v4' : kind === 'output' ? 'M7 9h10M7 12h10M7 15h6' : 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6'} />
   </svg></span>
 }
 

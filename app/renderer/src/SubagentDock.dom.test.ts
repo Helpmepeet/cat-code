@@ -64,14 +64,14 @@ function button(container: HTMLElement, label: string): HTMLButtonElement {
   return element
 }
 
-test('unified switcher retains narrow card, ordered groups, selected views and conditional All files', async () => {
+test('unified switcher retains narrow card, ordered groups, selected views and opened file rows', async () => {
   reduced = true
   width = 280
   const opened: string[] = []
   const props = {
     state: state([row()]), collapsed: true, onCollapsedChange() {}, onClearFinished() {}, onOpenWorker() {}, onOpenWorkers() {},
     views: [{ kind: 'computer' as const, label: 'Computer', detail: 'Using your Mac', running: true }, { kind: 'browser' as const, label: 'Browser', detail: 'Page title' }],
-    files: [{ path: '/repo/a.md', name: 'a.md', parent: '/repo' }], fileAvailable: true, fileCount: 2, openedFileCount: 1,
+    files: [{ path: '/repo/a.md', name: 'a.md', parent: '/repo' }],
     selectedKind: 'browser' as const, onOpenView(kind: string) { opened.push(kind) },
   }
   const tree = await mount(createElement('section', { ref(element: HTMLElement | null) { if (element) element.getBoundingClientRect = () => new DOMRect(0, 0, width, height) } }, createElement(SubagentDock, props)))
@@ -80,8 +80,8 @@ test('unified switcher retains narrow card, ordered groups, selected views and c
   await act(async () => button(tree.container, 'Show all').click())
   expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.dataset.layout).toBe('floating')
   expect([...tree.container.querySelectorAll('.subagent-dock-header > span')].map(node => node.textContent)).toEqual(['SUBAGENTS', 'VIEWS', 'FILES'])
-  const all = [...tree.container.querySelectorAll<HTMLButtonElement>('.dock-all')][0]!
-  expect(all.textContent).toContain('All files')
+  expect(tree.container.querySelectorAll('.subagent-dock-panel .dock-file')).toHaveLength(1)
+  expect(tree.container.querySelector('.subagent-dock-panel')?.textContent).not.toContain('All files')
   await act(async () => tree.container.querySelector<HTMLButtonElement>('.subagent-dock-panel [aria-pressed="true"]')!.click())
   expect(opened).toEqual(['browser'])
   await act(async () => document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))

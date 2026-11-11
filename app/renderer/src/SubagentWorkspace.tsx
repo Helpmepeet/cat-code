@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { SubagentDock, type DockView } from './SubagentDock.js'
 import { SubagentSidePanel } from './SubagentSidePanel.js'
@@ -14,17 +14,14 @@ import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OU
 import { FilePaneContext } from './filePaneContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneFocus, rememberSlotWidth, requestOpenFile, paneTargetLabel,
-  hideScreenPane, hideSidePane, requestFilePaneFiles, showSlotOccupant, updateFilePaneSession, useFilePaneFields, useSidePaneNavigation, type SlotOccupant,
+  hideScreenPane, hideSidePane, showSlotOccupant, updateFilePaneSession, useFilePaneFields, useSidePaneNavigation, type SlotOccupant,
 } from './filePaneState.js'
 import { findNestedToolUseRow } from './transcriptViewModel.js'
 import { canOpenSubagentPanel, selectSubagentPanelBranch, selectSubagentPanelRowForCard } from './subagentPanelState.js'
 import { AgentPanelContext } from './transcriptAgentReveal.js'
 import { SidePaneNavigationContext } from './sidePaneNavigationContext.js'
 import { SidePaneShellContext } from './sidePaneShellContext.js'
-import { FilePaneFilesContext } from './filePaneFilesContext.js'
 import { paneFileIndex } from './transcriptPaneFiles.js'
-import { selectNestedTranscriptRows, selectTranscriptRows } from './transcriptProjector.js'
-import { peekWorkspaceFileAvailability, subscribeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { useToast } from './toastContext.js'
 import { localhostPreviewHostPort } from '../../shared/filePreview.js'
 import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.js'
@@ -54,24 +51,13 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   children: ReactNode
 }) {
   const shellHost = useContext(SidePaneShellContext)
-  const fileSource = useContext(FilePaneFilesContext)
   const toast = useToast()
   const localId = useId()
   const sessionId = appSessionId ?? `workspace:${localId}`
   const state = useFilePaneFields(sessionId, WORKSPACE_FIELDS)
   const navigationFailed = useCallback((message: string) => toast(message, { tone: 'warn' }), [toast])
   const navigation = useSidePaneNavigation(sessionId, navigationFailed)
-  const [availabilityRevision, setAvailabilityRevision] = useState(0)
-  useEffect(() => subscribeWorkspaceFileAvailability(() => setAvailabilityRevision(value => value + 1)), [])
-  const files = useMemo(() => {
-    const transcript = fileSource?.transcript
-    return paneFileIndex({
-      rows: transcript ? selectNestedTranscriptRows(transcript, sessionId, true) : outputRows,
-      order: transcript ? selectTranscriptRows(transcript, sessionId, true).map(row => row.id) : undefined,
-      cwd: fileSource?.cwd ?? cwd, transitions: fileSource?.contextTransitions, opened: state.opened,
-      available: path => peekWorkspaceFileAvailability(sessionId, path), includeUnconfirmed: true,
-    }).filter(entry => !entry.weak || entry.availabilityPath && peekWorkspaceFileAvailability(sessionId, entry.availabilityPath) === true)
-  }, [fileSource, outputRows, sessionId, cwd, state.opened, availabilityRevision])
+  const files = useMemo(() => paneFileIndex({ rows: [], cwd, opened: state.opened }), [cwd, state.opened])
   const computerSteps = useMemo(() => selectComputerSteps(outputRows), [outputRows])
   const computerStep = selectComputerStep(computerSteps, state.computer?.selectedId ?? null)
   const latestComputerId = computerSteps.at(-1)?.id ?? null
@@ -247,7 +233,6 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
     openedFiles.push({ path: state.file.path, name: localhostPreviewHostPort(state.file.path) ?? url.host,
       parent: `${url.pathname}${url.search}${url.hash}`, renderKind: 'localhost' })
   }
-  const fileCount = files.length + (state.file?.kind === 'localhost' ? 1 : 0)
   const resize = (width: number) => {
     const clamped = clampToolOutputWidth(width, layoutWidth || null)
     slot.current?.style.setProperty('--shared-slot-width', `${clamped}px`)
@@ -316,10 +301,9 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
             onClearFinished={onClearFinished} onDetailsVisibleChange={onDetailsVisibleChange}
             onOpenWorker={toggleWorker} onOpenWorkers={onOpenWorkers}
             views={views} files={openedFiles}
-            fileAvailable={fileCount > 0} fileCount={fileCount} openedFileCount={openedFiles.length}
             selectedKind={state.visible} selectedFile={state.file?.path ?? null} selectedWorker={worker?.agentId ?? null}
-            onOpenView={toggleView} onOpenFile={openFile} onOpenFiles={() => requestFilePaneFiles(sessionId)}
-            onToggleFile={() => state.open ? toggleView('file') : requestFilePaneFiles(sessionId)} />
+            onOpenView={toggleView} onOpenFile={openFile}
+            onToggleFile={() => state.open ? toggleView('file') : openedFiles[0] && openFile(openedFiles[0].path)} />
           <AgentPanelContext.Provider value={openCard}>{children}</AgentPanelContext.Provider>
         </div>
         {portalled ? createPortal(sidePane, shellHost!) : sidePane}

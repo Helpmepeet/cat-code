@@ -14,5 +14,4 @@
 .subagent-dock .dock-file { gap:9px; border-radius:7px; }
 .subagent-dock-unified .subagent-dock-row[aria-pressed='true'], .subagent-dock .dock-file[aria-pressed='true'] { background:var(--subagent-row-attached); box-shadow:inset 0 0 0 1px var(--shell-seam); color:var(--text-primary); }
 .subagent-dock .dock-plain { color:var(--text-primary); }
-.subagent-dock .dock-all > .file-pane-file-parent { font:500 10.5px var(--font-mono); }
 .subagent-dock .dock-subheader { margin-top:4px; padding-top:1px; border-top:1px solid var(--shell-seam); height:24px; }
