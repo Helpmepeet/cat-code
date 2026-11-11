@@ -182,6 +182,14 @@ test('the panel edge is open in dark and keeps the hairline in light and glass',
   expect(css).toMatch(/\.shell-panel\s*\{[^}]*border:\s*1px solid var\(--frame-edge\)/)
 })
 
+test('the selected light tab has an accent edge without changing tab geometry', () => {
+  const rule = themeCss().match(/html\[data-appearance='light'\] \[data-window-active-tab\]\s*\{([^}]*)\}/)?.[1] ?? ''
+  expect(rule).toContain('background: color-mix(in oklab, var(--conversation-bg) 94%, var(--accent));')
+  expect(rule).toContain('box-shadow: inset 0 2px 0 var(--accent), 0 1px 0 var(--conversation-bg);')
+  expect(rule).toContain('font-weight: 600;')
+  expect(rule).not.toMatch(/(?:height|padding|margin|border-width):/)
+})
+
 /**
  * `color-scheme` is load-bearing twice: Chromium's own form controls, focus
  * rings and default scrollbars, AND every `light-dark()` pair in this

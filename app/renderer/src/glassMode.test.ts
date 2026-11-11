@@ -237,7 +237,9 @@ test('the content panel stays translucent and its frame edge takes the chrome wa
   expect(frame?.[1]).toMatch(/border-color:\s*light-dark\(/)
   const tab = css.match(/html\[data-glass='on'\] \[data-window-active-tab\]\s*\{([^}]*)\}/)
   expect(translucentPair(tab?.[1] ?? '')).toEqual({ light: true, dark: true })
-  expect(tab?.[1]).toMatch(/box-shadow:\s*none;/)
+  expect(tab?.[1]).toContain('box-shadow: inset 0 2px 0 var(--accent);')
+  expect(tab?.[1]).toContain('border-color: color-mix(in oklab, var(--accent) 32%, var(--frame-edge));')
+  expect(tab?.[1]).toContain('font-weight: 600;')
 
   const app = rendererTags('App.tsx')
   expect(app.some(tag => tag.attributes.has('data-window-frame'))).toBe(true)

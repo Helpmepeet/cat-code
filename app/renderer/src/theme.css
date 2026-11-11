@@ -574,6 +574,14 @@ html[data-appearance='light'] [data-accent='amber'] {
   --accent-rgb: 163 95 0;
 }
 
+/* A surface step alone is too faint to identify the selected tab on light chrome. */
+html[data-appearance='light'] [data-window-active-tab] {
+  background: color-mix(in oklab, var(--conversation-bg) 94%, var(--accent));
+  border-color: color-mix(in oklab, var(--accent) 32%, var(--frame-edge));
+  box-shadow: inset 0 2px 0 var(--accent), 0 1px 0 var(--conversation-bg);
+  font-weight: 600;
+}
+
 /*
  * Glass mode (`glassMode.ts`). OFF by default, and off means these rules do
  * not match at all: nothing above is redeclared.
@@ -809,12 +817,13 @@ html[data-glass='on'] [data-window-panel] {
   --frame-edge: var(--frame-seam);
 }
 
-/* The active tab cannot be opaque against a translucent panel. It takes the
- * page coat instead; the 1px cover shadow that hides the panel's top edge has
- * nothing opaque to cover with, so that edge stays visible under the tab. */
+/* Keep the selected tab translucent, with an accent edge that survives a
+ * low-contrast backdrop. There is no opaque cover for the panel's top seam. */
 html[data-glass='on'] [data-window-active-tab] {
-  background: light-dark(rgba(252, 252, 253, 0.2), rgba(9, 9, 11, 0.2));
-  box-shadow: none;
+  background: light-dark(rgba(252, 252, 253, 0.5), rgba(9, 9, 11, 0.32));
+  border-color: color-mix(in oklab, var(--accent) 32%, var(--frame-edge));
+  box-shadow: inset 0 2px 0 var(--accent);
+  font-weight: 600;
   --frame-edge: var(--frame-seam);
 }
 
