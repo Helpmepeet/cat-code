@@ -46,7 +46,7 @@ test.skipIf(!layoutBrowser)('side-pane chrome retains the approved type, selecti
     <pre id="result"></pre><script>
       const q = selector => document.querySelector(selector);
       const style = (selector, keys) => { const s=getComputedStyle(q(selector)); return Object.fromEntries(keys.map(key=>[key,s[key]])); };
-      const browser = q('.dock-slot[data-dock-view="browser"]'); browser.focus({preventScroll:true, focusVisible:true});
+      const browser = q('.dock-slot[data-dock-view="browser"]'); browser.focus({preventScroll:true});
       const tip = browser.querySelector('.subagent-dock-tip').getBoundingClientRect(), anchor = browser.getBoundingClientRect();
       const result = {
         dock:style('.subagent-dock',['fontSize','lineHeight']),
