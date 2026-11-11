@@ -118,6 +118,38 @@ test('message HTML is converted to inert text, attachment names remain text, and
   expect((window as unknown as Record<string, unknown>).emailExecuted).toBeUndefined()
 })
 
+test('independent MIME sections stay visible and literal plain-text markup is not interpreted', async () => {
+  const part = (mimeType: string, body: string) => ({ mimeType, body: { data: btoa(body).replaceAll('+', '-').replaceAll('/', '_') } })
+  const payload = { mimeType: 'multipart/mixed', parts: [part('text/plain', 'Introduction <script>literal code</script>'), part('text/html', '<p>Important separate section</p>')] }
+  const tree = await harness.mount(view([row(names.message, envelope(names.message, { message: { id: 'mixed', payload } }))]))
+  expect(tree.container.querySelector('.email-body')?.textContent).toContain('Introduction <script>literal code</script>')
+  expect(tree.container.querySelector('.email-body')?.textContent).toContain('Important separate section')
+  expect(tree.container.querySelectorAll('script')).toHaveLength(0)
+})
+
+test('HTML table cell boundaries keep adjacent values and headers separate', async () => {
+  const html = '<table><thead><tr><th>Amount</th><th>Value</th></tr></thead><tbody><tr><td>12</td><td>34</td></tr></tbody></table>'
+  const payload = { mimeType: 'text/html', body: { data: btoa(html).replaceAll('+', '-').replaceAll('/', '_') } }
+  const tree = await harness.mount(view([row(names.message, envelope(names.message, { message: { id: 'table', payload } }))]))
+  expect(tree.container.querySelector('.email-body')?.textContent).toBe('Amount\tValue\n12\t34')
+})
+
+test('malformed calendar dates and suffixes stay original rather than becoming compact timestamps', async () => {
+  for (const date of ['2026-02-30T09:15:00+07:00', '2026-11-11T09:15:broken', '2026-11-11T09:15:00+99:99']) {
+    const input = row(names.message, envelope(names.message, { message: { id: 'date', headers: { date }, body: 'Test' } }))
+    const tree = await harness.mount(view([input]))
+    const values = [...tree.container.querySelectorAll('.email-fields dd')].map(node => node.textContent)
+    expect(values).toContain(date)
+    expect(values).not.toContain(`${date.slice(0, 10)}, 09:15`)
+    await tree.unmount()
+    const list = await harness.mount(view([row(names.search, envelope(names.search, { messages: [{ id: 'date', date, internalDateIso: date }] }))]))
+    expect(list.container.querySelector('.email-message-time')?.textContent).toBe('')
+    await list.unmount()
+  }
+  const valid = await harness.mount(view([row(names.search, envelope(names.search, { messages: [{ id: 'leap', date: '2024-02-29 09:15', internalDateIso: '2024-02-29T09:15:00+07:00' }] }))]))
+  expect(valid.container.querySelector('.email-message-time')?.textContent).toBe('09:15')
+})
+
 test('oversized HTML previews fall back explicitly instead of parsing an unbounded document', async () => {
   for (const html of ['<div>' + 'x'.repeat(200_001) + '</div>', '<p>x</p>'.repeat(10_001)]) {
     const payload = { mimeType: 'text/html', body: { data: btoa(html).replaceAll('+', '-').replaceAll('/', '_') } }

@@ -156,6 +156,20 @@ describe('email presentation', () => {
     expect(parse('message', { message: { id: 'm', payload: deep } }).kind).toBe('unknown')
     expect(parse('message', { message: { id: 'm', payload: { ...payload, body: { data: '!!!' } } } }).kind).toBe('unknown')
   })
+  test('plain-text preference is local to MIME alternatives, not independent mixed sections', () => {
+    const part = (mimeType: string, body: string) => ({ mimeType, body: { data: btoa(body).replaceAll('+', '-').replaceAll('/', '_') } })
+    const alternative = { mimeType: 'multipart/alternative', parts: [part('text/plain', 'Introduction'), part('text/html', '<p>Alternative introduction</p>')] }
+    const simple = parse('message', { message: { id: 'm', payload: alternative } })
+    expect(simple.kind).toBe('message')
+    if (simple.kind !== 'message') throw new Error('Expected message')
+    expect(simple.message.body).toBe('Introduction')
+    for (const first of [part('text/plain', 'Introduction'), alternative]) {
+      const mixed = parse('message', { message: { id: 'm', payload: { mimeType: 'multipart/mixed', parts: [first, part('text/html', '<p>Important separate section</p>')] } } })
+      expect(mixed.kind).toBe('message')
+      if (mixed.kind !== 'message') throw new Error('Expected mixed message')
+      expect(mixed.message.bodyParts).toEqual([{ format: 'text', body: 'Introduction' }, { format: 'html', body: '<p>Important separate section</p>' }])
+    }
+  })
   test('does not mutate arguments or retain duplicate raw messages', () => {
     const data = { message: { id: 'm', headers: { from: 'a' } } }
     const before = JSON.stringify(data)

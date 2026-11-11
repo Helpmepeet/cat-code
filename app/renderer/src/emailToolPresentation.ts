@@ -16,6 +16,7 @@ export type EmailMessage = {
   id?: string; threadId?: string; headers: Record<string, string>; subject?: string
   from?: string; to?: string; cc?: string; bcc?: string; date?: string
   internalDate?: number; internalDateIso?: string; snippet?: string; body?: string; bodyFormat?: 'text' | 'html'
+  bodyParts?: { format: 'text' | 'html'; body: string }[]
   labels?: string[]; unread?: boolean; attachments: JsonRecord[]
 }
 type Base = { identity: EmailToolIdentity | undefined; originalContent: string; warnings: string[] }
@@ -79,11 +80,13 @@ function message(value: unknown, warnings: string[], curated?: unknown): EmailMe
   }
   if (payload && m.body === undefined) {
     let nodes = 0
-    const parts: { format: 'text' | 'html'; body: string }[] = []
-    const visit = (part: JsonRecord, depth: number) => {
+    type InlinePart = { format: 'text' | 'html'; body: string }
+    const visit = (part: JsonRecord, depth: number): InlinePart[] => {
       if (++nodes > 200 || depth > 12) throw new Error('MIME traversal limit')
+      const inline: InlinePart[] = []
       if (typeof part.filename === 'string' && part.filename) {
         m.attachments.push({ filename: text(part.filename), mimeType: part.mimeType, ...(record(part.body) ? { size: part.body.size, attachmentId: part.body.attachmentId } : {}) })
+        return inline
       }
       if (record(part.body) && typeof part.body.data === 'string' && !part.filename) {
         if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
@@ -97,18 +100,24 @@ function message(value: unknown, warnings: string[], curated?: unknown): EmailMe
           const data = part.body.data
           if (data.length > 1_000_000 || !/^[A-Za-z0-9_-]*={0,2}$/.test(data)) throw new Error('Invalid MIME data')
           const bytes = Uint8Array.from(atob(data.replaceAll('-', '+').replaceAll('_', '/')), c => c.charCodeAt(0))
-          parts.push({ format: part.mimeType === 'text/plain' ? 'text' : 'html', body: new TextDecoder('utf-8', { fatal: true }).decode(bytes) })
+          inline.push({ format: part.mimeType === 'text/plain' ? 'text' : 'html', body: new TextDecoder('utf-8', { fatal: true }).decode(bytes) })
         } else warnings.push('Unsupported MIME body retained in original output.')
       }
       if (part.parts !== undefined) {
         if (!Array.isArray(part.parts) || !part.parts.every(record)) throw new Error('Invalid MIME parts')
-        for (const child of part.parts) visit(child, depth + 1)
+        const children = part.parts.map(child => visit(child, depth + 1))
+        // Only alternatives represent the same content twice. Mixed/related
+        // siblings remain separate, including HTML with its own parse context.
+        const selected = part.mimeType === 'multipart/alternative'
+          ? children.find(child => child.some(item => item.format === 'text')) ?? children.find(child => child.length) ?? []
+          : children.flat()
+        inline.push(...selected)
       }
+      return inline
     }
-    visit(payload, 0)
-    const chosen = parts.filter(p => p.format === 'text')
-    const selected = chosen.length ? chosen : parts
-    if (selected.length) { m.body = selected.map(p => p.body).join('\n'); m.bodyFormat = selected[0]!.format }
+    const selected = visit(payload, 0)
+    if (selected.length > 1 && selected.some(part => part.format === 'html')) m.bodyParts = selected
+    else if (selected.length) { m.body = selected.map(part => part.body).join('\n'); m.bodyFormat = selected[0]!.format }
   }
   return m
 }
@@ -153,13 +162,13 @@ export function parseEmailToolPresentation(toolName: string, _input: Readonly<Re
         ...(data.body !== undefined ? { body: data.body } : {}),
         ...(data.attachments !== undefined ? { attachments: data.attachments } : {}),
       }, base.warnings, data.headers)
-      if (m && (m.id || Object.keys(m.headers).length || m.body !== undefined)) return { ...base, kind: 'message', message: m }
+      if (m && (m.id || Object.keys(m.headers).length || m.body !== undefined || m.bodyParts?.length)) return { ...base, kind: 'message', message: m }
     }
     if (op === 'thread' && !record(data.thread)) return unknown('Missing thread container')
     const container = op === 'thread' && record(data.thread) ? data.thread : data
     if ((op === 'search' || op === 'thread') && Array.isArray(container.messages) && container.messages.length <= (op === 'search' ? 100 : 1000)) {
       const messages = container.messages.map(m => message(m, base.warnings))
-      if (messages.some(m => !m || (op === 'search' ? !m.id : !m.id && !Object.keys(m.headers).length && m.body === undefined))) return unknown('Malformed message list')
+      if (messages.some(m => !m || (op === 'search' ? !m.id : !m.id && !Object.keys(m.headers).length && m.body === undefined && !m.bodyParts?.length))) return unknown('Malformed message list')
       if (op === 'thread') return { ...base, kind: 'thread', id: text(container.id), messages: messages as EmailMessage[] }
       if (data.count !== undefined && (typeof data.count !== 'number' || !Number.isInteger(data.count) || data.count !== messages.length)) return unknown('Invalid page count')
       if (data.has_more !== undefined && typeof data.has_more !== 'boolean') return unknown('Invalid pagination')

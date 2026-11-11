@@ -48,12 +48,19 @@ function attachmentType(value: unknown): string | undefined {
 function messageDate(message: EmailMessage): { day?: string; time?: string; full?: string } {
   for (const value of [message.internalDateIso, message.date]) {
     if (!value) continue
-    const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/.exec(value)
-    if (match && Number.isFinite(Date.parse(`${match[1]}T${match[2]}:00Z`))) {
-      return { day: match[1], time: match[2], full: `${match[1]}, ${match[2]}` }
+    const match = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|([+-])(\d{2}):?(\d{2}))?$/.exec(value)
+    if (!match) continue
+    const day = new Date(`${match[1]}T00:00:00Z`)
+    if (Number.isFinite(day.getTime()) && day.toISOString().slice(0, 10) === match[1]
+      && Number(match[2]) < 24 && Number(match[3]) < 60 && Number(match[4] ?? 0) < 60
+      && Number(match[6] ?? 0) < 24 && Number(match[7] ?? 0) < 60) {
+      const time = `${match[2]}:${match[3]}`
+      return { day: match[1], time, full: `${match[1]}, ${time}` }
     }
   }
-  const timestamp = message.internalDate ?? (message.date ? Date.parse(message.date) : NaN)
+  // Unrecognized header text remains visible verbatim; Date.parse would turn
+  // invalid dates into valid-looking normalized calendar values.
+  const timestamp = message.internalDate ?? NaN
   if (!Number.isFinite(timestamp)) return {}
   const date = new Date(timestamp)
   const year = date.getFullYear(), month = String(date.getMonth() + 1).padStart(2, '0'), day = String(date.getDate()).padStart(2, '0')
@@ -77,6 +84,7 @@ function htmlText(value: string): string | undefined {
   if (nodes.length > 10_000) return undefined
   for (const node of template.content.querySelectorAll('script,style,iframe,object,embed,svg,math,template')) node.remove()
   for (const node of template.content.querySelectorAll('br')) node.replaceWith(document.createTextNode('\n'))
+  for (const node of template.content.querySelectorAll('td,th')) node.append(document.createTextNode('\t'))
   for (const node of template.content.querySelectorAll('p,div,li,h1,h2,h3,h4,h5,h6,tr,blockquote')) node.append(document.createTextNode('\n'))
   return template.content.textContent?.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
@@ -90,7 +98,13 @@ function EmailStatus({ title, detail, failed = false }: { title: string; detail?
 }
 
 function MessageBody({ message }: { message: EmailMessage }) {
-  const body = useMemo(() => message.bodyFormat === 'html' && message.body ? htmlText(message.body) : message.body, [message.body, message.bodyFormat])
+  const body = useMemo(() => {
+    if (!message.bodyParts) return message.bodyFormat === 'html' && message.body ? htmlText(message.body) : message.body
+    if (message.bodyParts.reduce((length, part) => length + part.body.length, 0) > 200_000) return undefined
+    const parts = message.bodyParts.map(part => part.format === 'html' ? htmlText(part.body) : part.body)
+    return parts.some(part => part === undefined) ? undefined : parts.join('\n\n')
+  }, [message.body, message.bodyFormat, message.bodyParts])
+  const hasHtml = message.bodyFormat === 'html' || message.bodyParts?.some(part => part.format === 'html')
   const standard = new Set(['from', 'to', 'cc', 'bcc', 'date', 'subject'])
   const additionalHeaders = Object.entries(message.headers).filter(([name, value]) => value && !standard.has(name.toLowerCase().replaceAll('-', '_'))).map(([name, value]) => [headerName(name), value] as const)
   return <>
@@ -100,7 +114,7 @@ function MessageBody({ message }: { message: EmailMessage }) {
       ['Labels', message.labels?.map(labelName).join(' · ')],
       ...additionalHeaders,
     ]} />
-    {body ? <div className="email-body">{body}</div> : message.bodyFormat === 'html' && body === undefined ? <EmailStatus title="HTML message preview isn’t available." detail="Original output is available below." /> : message.body !== undefined || !message.snippet ? <EmailStatus title="No readable message body returned." /> : <div className="email-body">{message.snippet}<p className="email-secondary">Message excerpt</p></div>}
+    {body ? <div className="email-body">{body}</div> : hasHtml && body === undefined ? <EmailStatus title="HTML message preview isn’t available." detail="Original output is available below." /> : message.body !== undefined || !message.snippet ? <EmailStatus title="No readable message body returned." /> : <div className="email-body">{message.snippet}<p className="email-secondary">Message excerpt</p></div>}
     {message.attachments.length ? <ul className="email-attachments">{message.attachments.map((attachment, index) => {
       const filename = typeof attachment.filename === 'string' && attachment.filename ? attachment.filename : 'Unnamed attachment'
       const size = typeof attachment.sizeHuman === 'string' ? attachment.sizeHuman : undefined

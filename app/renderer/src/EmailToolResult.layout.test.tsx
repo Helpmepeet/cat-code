@@ -24,13 +24,18 @@ test.skipIf(!layoutBrowser)('email results stay compact, fit a narrow pane and k
       const messages = Array.from({length:5}, (_,i) => ({id:'m'+i,from:'Example team <team@example.invalid>',subject:'Long project notes and follow-up details that must fit without moving the time outside the transcript',date:'2026-11-11 13:14',internalDateIso:'2026-11-11T13:14:30+07:00',labels:['UNREAD','INBOX']}));
       const make = (name, stdout) => ({id:name,frameId:name,sessionId:'fixture',messageId:name,blockIndex:0,parentToolUseId:null,kind:'tool-use',toolUseId:name,toolName:name,toolFamily:'mcp',input:{},status:'success',agentCompletion:null,children:[],result:{isError:false,diff:null,content:JSON.stringify({tool:name.slice('mcp__gmail__'.length),service:'gmail',risk:'read',exit_code:0,stdout})}});
       const search = make('mcp__gmail__gmail_search', {messages,count:5,has_more:false,nextPageToken:''});
-      const html = '<div>Hello <b>Peet</b><br>Project notes</div><script>window.activeEmailContent=true<'+ '/script><style>body{display:none}</style><img src="http://127.0.0.1:9/pixel"><email-hostile-test>Extra text</email-hostile-test>';
+      const html = '<div>Hello <b>Peet</b><br>Project notes</div><table><tr><td>12</td><td>34</td></tr></table><script>window.activeEmailContent=true<'+ '/script><style>body{display:none}</style><img src="http://127.0.0.1:9/pixel"><email-hostile-test>Extra text</email-hostile-test>';
       const message = make('mcp__gmail__gmail_get_message',{message:{id:'html',payload:{mimeType:'text/html',body:{data:btoa(html).replaceAll('+','-').replaceAll('/','_')}}}});
+      const part = (mimeType, body) => ({mimeType,body:{data:btoa(body).replaceAll('+','-').replaceAll('/','_')}});
+      const mixed = make('mcp__gmail__gmail_get_message',{message:{id:'mixed',payload:{mimeType:'multipart/mixed',parts:[part('text/plain','Introduction <script>literal code</script>'),part('text/html','<p>Important separate section</p><!--'),part('text/plain','Final separate section')]}}});
+      const badDate = make('mcp__gmail__gmail_get_message',{message:{id:'bad-date',headers:{date:'2026-02-30T09:15:00+07:00'},body:'Test'}});
       const component = (row, operation) => h(ToolCardStyleContext.Provider,{value:{style:'lines',setStyle(){}}},h(EmailToolResult,{row,identity:{provider:'gmail',operation},defaultExpanded:true,originalOutput:'Original output'}));
       flushSync(() => {
         createRoot(document.getElementById('wide')).render(component(search,'search'));
         createRoot(document.getElementById('narrow')).render(component({...search,toolUseId:'narrow'},'search'));
         createRoot(document.getElementById('html-email')).render(component(message,'message'));
+        createRoot(document.getElementById('mixed-email')).render(component(mixed,'message'));
+        createRoot(document.getElementById('bad-date')).render(component(badDate,'message'));
       });
       const wide = document.querySelector('#wide .email-tool');
       const narrow = document.querySelector('#narrow .email-tool');
@@ -43,6 +48,8 @@ test.skipIf(!layoutBrowser)('email results stay compact, fit a narrow pane and k
         narrowOverflow:narrow.scrollWidth > narrow.clientWidth,
         timesInside:timeBoxes.every(box=>box.right <= narrowBox.right+1),
         body:document.querySelector('#html-email .email-body').textContent,
+        mixedBody:document.querySelector('#mixed-email .email-body').textContent,
+        badDate:document.querySelector('#bad-date .email-fields').textContent,
         activeEmailContent:window.activeEmailContent,
         activeNodes:document.querySelectorAll('#html-email img,#html-email iframe,#html-email script,#html-email style,#html-email email-hostile-test').length
       });
@@ -58,11 +65,13 @@ test.skipIf(!layoutBrowser)('email results stay compact, fit a narrow pane and k
       :root { --font-sans:Arial,sans-serif; --font-mono:monospace; --text-primary:#f4f4f5; --text-muted:#a1a1aa; --conversation-ink:#dedede; --shell-seam:#333; --shell-hover:#222; --tone-good:#4ade80; --tone-danger:#f87171; --tone-warn:#fbbf24; }
       .wide { width:836px; } .narrow { width:320px; }
       ${css}
-      </style></head><body><div id="wide" class="wide"></div><div id="narrow" class="narrow"></div><div id="html-email" class="wide"></div><pre id="result"></pre><script src="${script}"></script></body></html>`)
+      </style></head><body><div id="wide" class="wide"></div><div id="narrow" class="narrow"></div><div id="html-email" class="wide"></div><div id="mixed-email" class="wide"></div><div id="bad-date" class="wide"></div><pre id="result"></pre><script src="${script}"></script></body></html>`)
     const run = runLayoutBrowser(file, join(scratch, 'profile'), 1100)
     const output = run.stdout.match(/<pre id="result">(.*?)<\/pre>/)?.[1]
     expect(output, run.diagnostics).toBeDefined()
-    const result = JSON.parse(output!)
+    // dump-dom serializes text-node characters, including literal markup in
+    // an email. Decode that serialization once before reading the JSON.
+    const result = JSON.parse(output!.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&'))
     expect(result.height).toBeLessThan(310)
     expect(result.rowHeight).toBeLessThan(38)
     expect(result.narrowWidth).toBe(320)
@@ -70,6 +79,12 @@ test.skipIf(!layoutBrowser)('email results stay compact, fit a narrow pane and k
     expect(result.timesInside).toBe(true)
     expect(result.body).toContain('Hello Peet')
     expect(result.body).toContain('Project notes')
+    expect(result.body).toContain('12\t34')
+    expect(result.mixedBody).toContain('Introduction <script>literal code</script>')
+    expect(result.mixedBody).toContain('Important separate section')
+    expect(result.mixedBody).toContain('Final separate section')
+    expect(result.badDate).toContain('2026-02-30T09:15:00+07:00')
+    expect(result.badDate).not.toContain('2026-02-30, 09:15')
     expect(result.body).not.toContain('activeEmailContent=true')
     expect(result.activeEmailContent).toBe(false)
     expect(result.activeNodes).toBe(0)
