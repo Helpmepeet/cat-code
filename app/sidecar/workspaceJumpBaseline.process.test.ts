@@ -11,7 +11,7 @@ import { SidecarSupervisor } from '../supervisor/supervisor.js'
 import { resolveSidecarLaunch, type SidecarMode } from '../main/mainDecisions.js'
 import { runSessionRelocationWorker } from '../main/sessionRelocationRunner.js'
 import { runWorkspaceListingWorker } from '../main/workspaceListingRunner.js'
-import { WorkspaceJumpCoordinator } from '../main/workspaceJumpCoordinator.js'
+import { WorkspaceJumpCoordinator, type WorkspaceProjectInspection } from '../main/workspaceJumpCoordinator.js'
 import { WorkspaceHandoffControl } from '../main/workspaceHandoffControl.js'
 import { validateHostRequest, type WorkspaceHostRequest } from '../main/peerRequestPlane.js'
 import type { OperationalRecordInput } from '../shared/operationalLog.js'
@@ -51,16 +51,16 @@ async function until(read: () => boolean, timeout = 60_000) {
     await Bun.sleep(10)
   }
 }
-function sse(toolHandle?: string, readPath?: string) {
+function sse(projectPath?: string, readPath?: string) {
   const content = readPath ? { type: 'tool_use', id: 'baseline-read', name: 'Read', input: {} }
-    : toolHandle ? { type: 'tool_use', id: 'baseline-jump', name: 'JumpToProject', input: {} } : { type: 'text', text: '' }
+    : projectPath ? { type: 'tool_use', id: 'baseline-jump', name: 'JumpToProject', input: {} } : { type: 'text', text: '' }
   const events = [
     { type: 'message_start', message: { id: 'baseline-message', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } },
     { type: 'content_block_start', index: 0, content_block: content },
     { type: 'content_block_delta', index: 0, delta: readPath ? { type: 'input_json_delta', partial_json: JSON.stringify({ file_path: readPath }) }
-      : toolHandle ? { type: 'input_json_delta', partial_json: JSON.stringify({ destination: toolHandle }) } : { type: 'text_delta', text: 'Fixture complete.' } },
+      : projectPath ? { type: 'input_json_delta', partial_json: JSON.stringify({ destination: projectPath }) } : { type: 'text_delta', text: 'Fixture complete.' } },
     { type: 'content_block_stop', index: 0 },
-    { type: 'message_delta', delta: { stop_reason: toolHandle ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } },
+    { type: 'message_delta', delta: { stop_reason: projectPath ? 'tool_use' : 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } },
     { type: 'message_stop' },
   ]
   return events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')
@@ -94,6 +94,12 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       hooks: { SessionStart: [{ matcher: 'resume', hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
   }
   writeFileSync(join(cwd, 'CLAUDE.md'), 'BASELINE_DESTINATION_INSTRUCTIONS\n')
+  if (fixture === 'short') {
+    mkdirSync(join(cwd, '.cat-code'))
+    writeFileSync(join(cwd, '.cat-code', 'project.json'), JSON.stringify({
+      aliases: ['gaming lab'], description: 'A local gaming workspace',
+    }))
+  }
   if (queuedHuman) writeFileSync(join(root, 'queued-read.txt'), 'Read completed before the queued workspace request.\n')
   const hookLog = join(root, 'instructions.jsonl')
   const probeLog = join(root, 'probes.txt')
@@ -136,17 +142,25 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       expect(body).toContain('DESTINATION_INCLUDED_INSTRUCTIONS')
       expect(existsSync(probeLog) && readFileSync(probeLog, 'utf8').split('\n').includes(cwd)).toBe(false)
     }
-    const handle = body.match(/\\"handle\\":\\"([a-f0-9-]+)\\"/)?.[1] ?? body.match(/"handle":"([a-f0-9-]+)"/)?.[1]
-    if (destination) destinationRequests++; else if (handle) sourceRequests++
-    if (queuedHuman && !destination && handle && sourceRequests === 1) {
+    const system = JSON.parse(body).system
+    const systemText = typeof system === 'string' ? system : (system ?? []).map((block: { text?: string }) => block.text ?? '').join('\n')
+    const projectPath = systemText.includes(`"path":${JSON.stringify(cwd)}`) ? cwd : undefined
+    if (fixture === 'short' && (destination || projectPath)) {
+      expect(projectPath).toBe(cwd)
+      expect(systemText).toContain('"aliases":["gaming lab"]')
+      expect(systemText).toContain('"description":"A local gaming workspace"')
+      if (destination) expect(systemText).toContain('Selected workspace metadata')
+    }
+    if (destination) destinationRequests++; else if (projectPath) sourceRequests++
+    if (queuedHuman && !destination && projectPath && sourceRequests === 1) {
       // A tool round drains the busy prompt into an attachment. Ending this
       // response would instead exercise an ordinary between-turn submission.
       await sourceHeld
-      return new Response(sse(handle, join(root, 'queued-read.txt')), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline-read' } })
+      return new Response(sse(projectPath, join(root, 'queued-read.txt')), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline-read' } })
     }
-    if (queuedHuman && !destination && handle) expect(body).toContain(queuedText)
+    if (queuedHuman && !destination && projectPath) expect(body).toContain(queuedText)
     await Bun.sleep(30)
-    return new Response(sse(destination ? undefined : handle), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline' } })
+    return new Response(sse(destination ? undefined : projectPath), { headers: { 'content-type': 'text/event-stream', 'request-id': 'baseline' } })
   } })
   const blocker = join(root, 'network.ts')
   writeFileSync(blocker, `const original = globalThis.fetch; globalThis.fetch = (async (input, init) => { const url = String(input instanceof Request ? input.url : input); if (new URL(url).origin !== ${JSON.stringify(server.url.origin)}) throw new Error('External network disabled'); return original(input, init) }) as typeof fetch\n`)
@@ -211,6 +225,15 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       validateCwd: path => { validationCalls++; try { return { ok: true, realpath: realpathSync(path) } } catch { return { ok: false } } },
       trustedProjectRoots: roots => observeWorker('listing', onTiming => runWorkspaceListingWorker({ command: launch.command, args: launchArgs(blocker, 'workspace-listing'),
         cwd: root, request: { type: 'workspace-list', version: 1, roots: [...roots] }, env, onTiming })),
+      inspectTrustedProjects: async (roots, metadataOffset) => {
+        let metadata: WorkspaceProjectInspection['metadata'] = []
+        const trustedRoots = await observeWorker('listing', onTiming => runWorkspaceListingWorker({
+          command: launch.command, args: launchArgs(blocker, 'workspace-listing'),
+          cwd: root, request: { type: 'workspace-list', version: 1, roots: [...roots], metadataOffset }, env, onTiming,
+          onMetadata: value => { metadata = value },
+        }))
+        return { trustedRoots, metadata }
+      },
       timing: input => { timings.push(input) },
       verifyReady: async (identity, boundary, state) => {
         const delivery = await control!.request(identity.appSessionId, state.operationId, { action: 'verify', ...boundary })
@@ -349,9 +372,9 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
       expect(completed.some(record => record.fields?.phase === phase), phase).toBe(!(fixture === 'lost_continue_ack' && phase === 'admission_to_continuation'))
     }
     const listingInvocations = workerInvocations.filter(invocation => invocation.kind === 'listing')
-    expect(listingInvocations.map(invocation => invocation.request)).toEqual(['workspaces.list', 'workspace.jump', 'workspace.ready'])
+    expect(listingInvocations.map(invocation => invocation.request)).toEqual(['workspaces.list', 'workspace.jump', 'workspace.ready', 'workspaces.list'])
     expect(workerInvocations.filter(invocation => invocation.kind === 'relocation')).toHaveLength(1)
-    expect(new Set(workerInvocations.map(invocation => invocation.invocationId)).size).toBe(4)
+    expect(new Set(workerInvocations.map(invocation => invocation.invocationId)).size).toBe(5)
     for (const invocation of workerInvocations) {
       expect(invocation.outcome).toBe('completed')
       expect(invocation.durationMs).toBeGreaterThanOrEqual(0)

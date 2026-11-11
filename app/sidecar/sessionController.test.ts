@@ -767,7 +767,7 @@ test('workspace tool schemas survive the jump and managed return while consumed 
     expect(await workspaceSchemas(before)).toHaveLength(2)
     expect(await workspaceSchemas(destination)).toEqual(await workspaceSchemas(before))
     expect(await workspaceSchemas(returned)).toEqual(await workspaceSchemas(before))
-    expect(destination.queryEngineConfig.getRuntimeSystemPromptAddendum).toBeUndefined()
+    expect(destination.queryEngineConfig.getRuntimeSystemPromptAddendum).toBeFunction()
     expect(returned.queryEngineConfig.getRuntimeSystemPromptAddendum).toBeUndefined()
     expect(before.queryEngineConfig.appendSystemPrompt).toContain('select it with JumpToProject')
     expect(returned.queryEngineConfig.appendSystemPrompt).toContain('JumpToProject is unavailable')

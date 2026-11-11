@@ -17,7 +17,7 @@ function normalize(value: unknown, limit: number): string {
   return text
 }
 
-/** The caller supplies an already trusted, canonical workspace root. */
+/** Runs in the Bun discovery worker, after saved trust and canonical-root checks. */
 export function readProjectMetadata(canonicalRoot: string): ProjectMetadata {
   const directory = join(canonicalRoot, '.cat-code')
   const path = join(directory, 'project.json')

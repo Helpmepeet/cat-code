@@ -46,7 +46,7 @@ import { ProjectRoutingController } from './projectRoutingController.js'
 import { canReopenRuntime, createShutdownBarrier, settleShutdownTasks, shutdownFullyClean, type ShutdownResult } from './shutdownBarrier.js'
 import { createOwnedWorkerShutdownTracker } from './ownedWorkerShutdown.js'
 import type { WorkerProcessLifecycle } from './ndjsonWorker.js'
-import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention } from './workspaceJumpCoordinator.js'
+import { WorkspaceJumpCoordinator, loadWorkspaceJumpRetention, type WorkspaceProjectInspection } from './workspaceJumpCoordinator.js'
 import { SessionCloseCoordinator } from './sessionCloseCoordinator.js'
 import { WorkspaceHandoffControl, type WorkspaceControlAction, type WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import { runWorkspaceListingWorker } from './workspaceListingRunner.js'
@@ -5470,6 +5470,26 @@ function ensureHost(): Host {
   }, 30_000)
   workspaceStatusTimer.unref()
   workspaceJump?.dispose()
+  const inspectProjectRoots = async (roots: readonly string[], metadataOffset?: number): Promise<WorkspaceProjectInspection> => {
+    const invocation = randomUUID()
+    const started = performance.now()
+    let outcome: 'completed' | 'failed' = 'failed'
+    const record = (measurement: { phase: string; durationMs: number; outcome: 'completed' | 'failed' }) => {
+      try { operationalLog.write({ process: 'main', level: 'info', event: 'workspace.jump.timing',
+        fields: { ...measurement, invocationId: invocation } }) } catch { /* Observation only. */ }
+    }
+    let metadata: WorkspaceProjectInspection['metadata'] = []
+    try {
+      const trustedRoots = await runWorkspaceListingWorker({ command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('workspace-listing'), cwd: process.cwd(),
+        request: { type: 'workspace-list', version: 1, roots: [...roots],
+          ...(metadataOffset !== undefined ? { metadataOffset } : {}) },
+        onMetadata: value => { metadata = value },
+        onTiming: record })
+      outcome = 'completed'
+      return { trustedRoots, metadata }
+    } finally { record({ phase: 'listing_worker', durationMs: performance.now() - started, outcome }) }
+  }
   workspaceJump = new WorkspaceJumpCoordinator({
     timing: input => operationalLog.write({ ...input, process: 'main' }),
     host,
@@ -5486,24 +5506,8 @@ function ensureHost(): Host {
       })),
     ],
     validateCwd,
-    trustedProjectRoots: async roots => {
-      const invocation = randomUUID()
-      const started = performance.now()
-      let outcome: 'completed' | 'failed' = 'failed'
-      // Invocation identity binds child-local durations to this complete main
-      // wait. Child clocks are never compared with main's monotonic clock.
-      const record = (measurement: { phase: string; durationMs: number; outcome: 'completed' | 'failed' }) => {
-        try { operationalLog.write({ process: 'main', level: 'info', event: 'workspace.jump.timing',
-          fields: { ...measurement, invocationId: invocation } }) } catch { /* Observation only. */ }
-      }
-      try {
-        const result = await runWorkspaceListingWorker({ command: sidecarLaunch().command,
-          args: sidecarLaunch().argsFor('workspace-listing'), cwd: process.cwd(),
-          request: { type: 'workspace-list', version: 1, roots: [...roots] }, onTiming: record })
-        outcome = 'completed'
-        return result
-      } finally { record({ phase: 'listing_worker', durationMs: performance.now() - started, outcome }) }
-    },
+    trustedProjectRoots: async roots => (await inspectProjectRoots(roots)).trustedRoots,
+    inspectTrustedProjects: inspectProjectRoots,
     verifyReady: async (identity, boundary, state) => {
       const observed = observedWorkspaceHandoffs.get(identity.appSessionId)
       if (!observed || observed.generation !== identity.generation || observed.operationId !== state.operationId ||

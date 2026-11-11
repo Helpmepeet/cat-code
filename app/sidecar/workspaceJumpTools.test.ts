@@ -8,16 +8,18 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 const handle = '8578a013-f8e9-4612-8227-ce2c6921f3cf'
+const projectPath = '/workspace/cat-code'
 function context() { return { turnHandoff: new TurnHandoff(), toolUseId: 'jump-call' } as ToolUseContext }
 function setup(refuse: boolean | 'timeout' = false, cancellation: 'not_accepted' | 'cancelled' | 'lost' = 'lost') {
   const calls: string[] = []
   let reserved: string | null = null
   let unaccepted: string | null = null
-  const request: PeerHostRequester = (async (verb: string, args: { operationId?: string }) => {
+  const request: PeerHostRequester = (async (verb: string, args: { operationId?: string; destinationHandle?: string }) => {
     calls.push(verb)
     if (verb === 'workspaces.list') return { ok: true, value: { eligible: true, workspaces: [{ handle, name: 'cat-code', path: '/workspace/cat-code' }] } }
     if (verb === 'workspace.jump') {
       expect(reserved).toBe(args.operationId!)
+      expect(args.destinationHandle).toBe(handle)
       return refuse ? { ok: false, error: { code: refuse === 'timeout' ? 'timeout' : 'unavailable', message: 'refused' } } : { ok: true, value: { operationId: args.operationId, status: 'accepted' } }
     }
     return cancellation !== 'lost' ? { ok: true, value: { operationId: args.operationId, status: cancellation } } : { ok: false, error: { code: 'unavailable', message: 'no accepted operation' } }
@@ -31,23 +33,23 @@ test('main-agent jump reserves before host acceptance and fences the accepted to
   const fixture = setup()
   const ctx = context()
   await fixture.list.call({}, ctx)
-  expect(fixture.jump.toAutoClassifierInput({ destination: handle })).toEqual({ action: 'move_this_conversation', destination: '/workspace/cat-code' })
-  const result = await fixture.jump.call({ destination: handle }, ctx)
+  expect(fixture.jump.toAutoClassifierInput({ destination: projectPath })).toEqual({ action: 'move_this_conversation', destination: '/workspace/cat-code' })
+  const result = await fixture.jump.call({ destination: projectPath }, ctx)
   expect(result.data.ok).toBe(true)
   expect(ctx.turnHandoff!.accepted?.toolUseId).toBe('jump-call')
   expect(ctx.turnHandoff!.accepted?.operationId).toEqual(fixture.reserved ?? undefined)
   expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump'])
 })
 
-test('an unknown handle directs local discovery without reserving or fencing the turn', async () => {
+test('an unknown path or UUID directs local discovery without reserving or fencing the turn', async () => {
   const fixture = setup()
   const ctx = context()
   const staleHandle = '92339bea-bffa-4d42-bc3f-6728d2e46a2b'
-  for (const destination of [handle, staleHandle]) {
+  for (const destination of [projectPath, staleHandle]) {
     const result = await fixture.jump.call({ destination }, ctx)
     expect(result.data.ok).toBe(false)
     expect(result.data.message).toContain('ListProjects')
-    expect(result.data.message).toContain('name or path')
+    expect(result.data.message).toContain('name, alias, or path')
     expect(fixture.reserved).toBeNull()
     expect(ctx.turnHandoff!.requested).toBeNull()
     expect(ctx.turnHandoff!.isValid).toBe(true)
@@ -59,7 +61,7 @@ test('an unknown handle directs local discovery without reserving or fencing the
   expect(fixture.calls).toEqual(['workspaces.list'])
   expect(fixture.reserved).toBeNull()
   expect(ctx.turnHandoff!.requested).toBeNull()
-  expect((await fixture.jump.call({ destination: handle }, ctx)).data.ok).toBe(true)
+  expect((await fixture.jump.call({ destination: projectPath }, ctx)).data.ok).toBe(true)
   expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump'])
 })
 
@@ -68,7 +70,7 @@ test('missing jump machinery does not suggest that a fresh handle can enable it'
   const ctx = context()
   await fixture.list.call({}, ctx)
   ctx.turnHandoff = undefined
-  const result = await fixture.jump.call({ destination: handle }, ctx)
+  const result = await fixture.jump.call({ destination: projectPath }, ctx)
   expect(result.data).toEqual({ ok: false, message: 'A project jump is unavailable.' })
   expect(fixture.calls).toEqual(['workspaces.list'])
   expect(fixture.reserved).toBeNull()
@@ -88,17 +90,54 @@ test('renamed project tools preserve legacy allow, ask, and deny rules', async (
   }
 })
 
-test('one concurrent initial observation freezes metadata and authorizes a direct handle with the real Auto path', async () => {
+test('one concurrent initial observation freezes metadata and authorizes a direct path with the real Auto path', async () => {
   const fixture = setup()
   const signal = new AbortController().signal
   const [first, second] = await Promise.all([fixture.getInitialCatalogContext(signal), fixture.getInitialCatalogContext(signal)])
   expect(first).toBe(second)
-  expect(first).toContain(JSON.stringify({ handle, name: 'cat-code', path: '/workspace/cat-code' }))
+  expect(first).toContain(JSON.stringify({ name: 'cat-code', path: projectPath, aliases: [], description: '' }))
   expect(await fixture.getInitialCatalogContext(signal)).toBe(first)
   expect(fixture.calls).toEqual(['workspaces.list'])
-  expect(fixture.jump.toAutoClassifierInput({ destination: handle })).toEqual({ action: 'move_this_conversation', destination: '/workspace/cat-code' })
-  expect((await fixture.jump.call({ destination: handle }, context())).data.ok).toBe(true)
+  expect(fixture.jump.toAutoClassifierInput({ destination: projectPath })).toEqual({ action: 'move_this_conversation', destination: '/workspace/cat-code' })
+  expect((await fixture.jump.call({ destination: projectPath }, context())).data.ok).toBe(true)
   expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump'])
+})
+
+test('project discovery strips internal handles and keeps earlier pages selectable', async () => {
+  const requests: unknown[] = []
+  const runtime = createWorkspaceJumpTools((async (verb, args) => {
+    requests.push({ verb, args })
+    const input = args as { operationId?: string; cursor?: string }
+    if (verb === 'workspace.jump') return { ok: true, value: { operationId: input.operationId, status: 'accepted' } }
+    const second = input.cursor === 'next'
+    return { ok: true, value: { eligible: true,
+      workspaces: [{ handle: second ? 'second' : handle, name: second ? 'Other' : 'cat-code',
+        path: second ? '/workspace/other' : projectPath, aliases: ['kitten'], description: 'Core project' }],
+      ...(!second ? { nextCursor: 'next', remainingProjects: 1 } : {}) } }
+  }) as PeerHostRequester, () => ({ reserve: () => true, release() {}, cancelNotAccepted() {} }))
+  const [list, jump] = runtime.tools
+  const first = await list.call({}, context())
+  expect(first.data.workspaces).toEqual([{ name: 'cat-code', path: projectPath, aliases: ['kitten'], description: 'Core project' }])
+  expect(JSON.stringify(first.data)).not.toContain(handle)
+  await list.call({ cursor: first.data.nextCursor! }, context())
+  expect((await jump.call({ destination: projectPath }, context())).data.ok).toBe(true)
+  expect(requests.at(-1)).toMatchObject({ verb: 'workspace.jump', args: { destinationHandle: handle } })
+})
+
+test('selected project context requests only its metadata after jump eligibility is consumed', async () => {
+  const requests: unknown[] = []
+  const runtime = createWorkspaceJumpTools((async (verb, args) => {
+    requests.push({ verb, args })
+    return { ok: true, value: { eligible: false, workspaces: [
+      { handle, name: 'cat-code', path: projectPath, aliases: ['kitten'], description: 'Project core' },
+    ] } }
+  }) as PeerHostRequester)
+  const selected = await runtime.getSelectedProjectContext(new AbortController().signal)
+  expect(requests).toEqual([{ verb: 'workspaces.list', args: { scope: 'selected' } }])
+  expect(selected).toContain('"aliases":["kitten"]')
+  expect(selected).toContain('"description":"Project core"')
+  expect(selected).not.toContain(handle)
+  expect(selected).not.toContain('Recent known projects')
 })
 
 test.each(['stop', 'timeout', 'unavailable'] as const)('initial %s falls back without retrying or seeding a late result', async failure => {
@@ -113,7 +152,7 @@ test.each(['stop', 'timeout', 'unavailable'] as const)('initial %s falls back wi
   if (failure === 'stop') settle({ ok: true, value: { eligible: true, workspaces: [{ handle, name: 'cat-code', path: '/workspace/cat-code' }] } })
   await Promise.resolve()
   expect(await runtime.getInitialCatalogContext(new AbortController().signal)).toBeUndefined()
-  expect(runtime.tools[1].toAutoClassifierInput({ destination: handle }).destination).toBe('unavailable')
+  expect(runtime.tools[1].toAutoClassifierInput({ destination: projectPath }).destination).toBe('unavailable')
   expect(calls).toBe(1)
 })
 
@@ -126,7 +165,7 @@ test('initial catalog caps rows and UTF-8 metadata bytes while treating project 
     const serialized = context!.split('\n\n').at(-1)!
     const rows = JSON.parse(serialized)
     expect(Buffer.byteLength(serialized, 'utf8')).toBeLessThanOrEqual(8192)
-    expect(rows).toEqual(workspaces.slice(0, longPaths ? 1 : 8))
+    expect(rows).toEqual(workspaces.slice(0, longPaths ? 1 : 8).map(({ handle: _handle, ...entry }) => ({ ...entry, aliases: [], description: '' })))
   }
 })
 
@@ -135,7 +174,7 @@ test('workers cannot create an operation through an inherited jump tool', async 
   const ctx = context()
   await fixture.list.call({}, ctx)
   ctx.agentId = 'fork-worker' as ToolUseContext['agentId']
-  expect((await fixture.jump.call({ destination: handle }, ctx)).data.ok).toBe(false)
+  expect((await fixture.jump.call({ destination: projectPath }, ctx)).data.ok).toBe(false)
   expect(fixture.calls).toEqual(['workspaces.list'])
   expect(fixture.reserved).toBeNull()
 })
@@ -144,7 +183,7 @@ test('non-timeout error with no cancellation receipt retains source admission', 
   const fixture = setup(true)
   const ctx = context()
   await fixture.list.call({}, ctx)
-  expect((await fixture.jump.call({ destination: handle }, ctx)).data.ok).toBe(false)
+  expect((await fixture.jump.call({ destination: projectPath }, ctx)).data.ok).toBe(false)
   expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump', 'workspace.cancel'])
   expect(ctx.turnHandoff!.requested?.operationId).toEqual(fixture.reserved ?? undefined)
   expect(ctx.turnHandoff!.isValid).toBe(false)
@@ -155,7 +194,7 @@ test('lost acceptance and cancellation acknowledgements retain the execution fen
   const fixture = setup('timeout')
   const ctx = context()
   await fixture.list.call({}, ctx)
-  expect((await fixture.jump.call({ destination: handle }, ctx)).data.ok).toBe(false)
+  expect((await fixture.jump.call({ destination: projectPath }, ctx)).data.ok).toBe(false)
   expect(fixture.calls).toEqual(['workspaces.list', 'workspace.jump', 'workspace.cancel'])
   expect(ctx.turnHandoff!.requested?.operationId).toEqual(fixture.reserved ?? undefined)
   expect(ctx.turnHandoff!.isValid).toBe(false)
@@ -166,7 +205,7 @@ test('authoritative nonacceptance schedules idle settlement while keeping this t
   const fixture = setup('timeout', 'not_accepted')
   const ctx = context()
   await fixture.list.call({}, ctx)
-  expect((await fixture.jump.call({ destination: handle }, ctx)).data.ok).toBe(false)
+  expect((await fixture.jump.call({ destination: projectPath }, ctx)).data.ok).toBe(false)
   expect(fixture.unaccepted).toEqual(fixture.reserved)
   expect(ctx.turnHandoff!.requested?.operationId).toEqual(fixture.reserved ?? undefined)
   expect(ctx.turnHandoff!.isValid).toBe(false)
@@ -177,7 +216,7 @@ test('a published operation cancellation retains the source hold despite a non-t
   const fixture = setup(true, 'cancelled')
   const ctx = context()
   await fixture.list.call({}, ctx)
-  expect((await fixture.jump.call({ destination: handle }, ctx)).data.ok).toBe(false)
+  expect((await fixture.jump.call({ destination: projectPath }, ctx)).data.ok).toBe(false)
   expect(fixture.unaccepted).toBeNull()
   expect(ctx.turnHandoff!.isValid).toBe(false)
   expect(fixture.reserved).not.toBeNull()
@@ -233,7 +272,7 @@ test('real jump errors fence following effects in a mixed engine tool batch', as
         updateFileHistoryState() {}, updateAttributionState() {}, messages: [],
       } as ToolUseContext
       await fixture.list.call({}, ctx)
-      const blocks = [{ type: 'tool_use' as const, name: 'JumpToProject', id: 'jump-call', caller: { type: 'direct' as const }, input: { destination: handle } },
+      const blocks = [{ type: 'tool_use' as const, name: 'JumpToProject', id: 'jump-call', caller: { type: 'direct' as const }, input: { destination: projectPath } },
         { type: 'tool_use' as const, name: 'FollowingEffect', id: 'later-effect', caller: { type: 'direct' as const }, input: {} }]
       const assistant = createAssistantMessage({ content: blocks })
       const results: Array<{ tool_use_id: string; is_error?: boolean }> = []

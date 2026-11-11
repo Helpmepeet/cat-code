@@ -434,6 +434,9 @@ test('workspace receipt clocks cannot be supplied on the wire', async () => {
 
 test.each([
   ['workspaces.list', { cwd: '/authored/path' }],
+  ['workspaces.list', { scope: 'arbitrary' }],
+  ['workspaces.list', { scope: 'selected', cursor: 'cursor' }],
+  ['workspaces.list', { cursor: '' }],
   ['workspace.jump', { operationId: 'op', destinationHandle: 'handle', path: '/authored/path' }],
   ['workspace.jump', { operationId: 'op' }],
   ['workspace.ready', { operationId: 'op', tipUuid: 'tip', toolUseId: 123 }],

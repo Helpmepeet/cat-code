@@ -573,9 +573,11 @@ export async function createNormalSidecarQueryEngineConfig(
             ? { name: process.env.CATCODE_SIDECAR_PROJECT_NAME, cwd }
             : undefined,
         ) + relocationPrompt,
-        ...(binding.kind === 'managed' && !workspaceJumpUnavailable
-          ? { getRuntimeSystemPromptAddendum: workspaceJumpTools.getInitialCatalogContext }
-          : {}),
+        ...(binding.kind === 'project'
+          ? { getRuntimeSystemPromptAddendum: workspaceJumpTools.getSelectedProjectContext }
+          : binding.kind === 'managed' && !workspaceJumpUnavailable
+            ? { getRuntimeSystemPromptAddendum: workspaceJumpTools.getInitialCatalogContext }
+            : {}),
         ...(appSessionId && binding.kind !== 'managed'
           ? {
               getPostCompactRuntimeAttachments: createPeerCompactContext({

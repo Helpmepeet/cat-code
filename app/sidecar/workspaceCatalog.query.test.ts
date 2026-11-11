@@ -146,7 +146,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
       deliveredInstructions = request.openAIInstructionAssembly?.instructions
       deliveredTools = request.tools
       yield assistant(selectedHandle
-        ? [{ type: 'tool_use', id: 'direct-jump', name: 'JumpToProject', input: { destination: selectedHandle } }]
+        ? [{ type: 'tool_use', id: 'direct-jump', name: 'JumpToProject', input: { destination: realpathSync(target) } }]
         : [{ type: 'text', text: 'No initial catalog was supplied.' }])
     }))
     const projections: unknown[] = []
@@ -155,7 +155,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
     })
     const events = await drain(runtime.submitMessage('What is project? Reply in chat only; do not edit files.'))
     expect(providerCalls).toBe(1)
-    expect(deliveredInstructions).toContain(JSON.stringify({ handle: selectedHandle, name: 'project', path: realpathSync(target) }))
+    expect(deliveredInstructions).toContain(JSON.stringify({ name: 'project', path: realpathSync(target), aliases: [], description: '' }))
     expect(deliveredInstructions).not.toContain('CANDIDATE_INSTRUCTIONS_MUST_NOT_LOAD')
     expect(deliveredInstructions).toContain('do not by themselves prohibit selecting a project')
     expect(deliveredTools).toContain(jump)
@@ -174,7 +174,7 @@ if (process.env.CATCODE_WORKSPACE_CATALOG_TEST_CHILD !== '1') {
       classifierRequest = JSON.stringify(request.messages)
       return { ...assistant([{ type: 'tool_use', id: 'verdict', name: YOLO_CLASSIFIER_TOOL_NAME, input: { shouldBlock: false } }]).message, type: 'message' } as never
     }))
-    const verdict = await classifyYoloAction([], formatActionForClassifier('JumpToProject', { destination: selectedHandle }),
+    const verdict = await classifyYoloAction([], formatActionForClassifier('JumpToProject', { destination: realpathSync(target) }),
       setup.queryEngineConfig.tools, { ...setup.appStateStore.getState().toolPermissionContext, mode: 'auto' }, new AbortController().signal)
     expect(verdict.shouldBlock).toBe(false)
     expect(classifierRequest).toContain(realpathSync(target))

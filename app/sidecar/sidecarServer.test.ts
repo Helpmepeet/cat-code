@@ -9887,6 +9887,33 @@ test('a pending browser screenshot larger than 128 KiB arrives intact', async ()
   expect(await pending).toEqual({ ok: true, value })
 })
 
+test('project metadata and pagination cross the real host-result receiving boundary', async () => {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+  const pending = server.requestHost('workspaces.list', { scope: 'selected' })
+  const sent = received.find(frame => frame.kind === 'host.request') as { requestId: string }
+  const value = { eligible: false, workspaces: [{
+    handle: randomUUID(), name: 'Project', path: '/workspace/project',
+    aliases: ['kitten', '猫'], description: 'Core purpose', metadataWarning: 'Check .cat-code/project.json.',
+  }], nextCursor: randomUUID(), remainingProjects: 2 }
+  server.handleData(conn, hostPlaneFrame({ type: 'host.result', requestId: sent.requestId, ok: true, value }))
+  expect(await pending).toEqual({ ok: true, value })
+})
+
+test.each([
+  { aliases: Array(13).fill('alias') },
+  { aliases: ['x'.repeat(81)] },
+  { description: 'x'.repeat(321) },
+  { metadataWarning: { unexpected: true } },
+  { extra: true },
+])('project metadata rejects malformed or oversized host fields', async fields => {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+  const pending = server.requestHost('workspaces.list', {})
+  const sent = received.find(frame => frame.kind === 'host.request') as { requestId: string }
+  server.handleData(conn, hostPlaneFrame({ type: 'host.result', requestId: sent.requestId, ok: true,
+    value: { eligible: true, workspaces: [{ handle: randomUUID(), name: 'Project', path: '/workspace/project', ...fields }] } }))
+  expect(await pending).toMatchObject({ ok: false, error: { code: 'internal_error' } })
+})
+
 test('the request client mints an id, awaits its result, and resolves the caller', async () => {
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 

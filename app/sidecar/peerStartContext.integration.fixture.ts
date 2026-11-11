@@ -16,7 +16,9 @@ const { createAssistantMessage, normalizeMessagesForAPI } = await import('../../
 bootstrap.switchSession(asSessionId(randomUUID()), join(root, 'transcript'))
 bootstrap.setSessionProvider('openai')
 let rosterCalls = 0
-setPeerHostRequester(async () => {
+setPeerHostRequester(async verb => {
+  if (verb === 'workspaces.list') return { ok: true, value: { eligible: false, workspaces: [] } } as never
+  if (verb !== 'peers.list') throw new Error('Unexpected host request')
   rosterCalls++
   return { ok: true, value: { peers: populated ? [{
     name: 'UniquePeerRosterTest', status: 'live', presence: 'running', title: 'Other work',

@@ -7334,7 +7334,19 @@ const HOST_RESULT_VALUE_SCHEMAS = {
     .object({ messageId: peerIdSchema, outcome: peerDeliverOutcomeSchema })
     .strict(),
   'peer.ack': z.object({ messageId: peerIdSchema }).strict(),
-  'workspaces.list': z.object({ eligible: z.boolean(), workspaces: z.array(z.object({ handle: z.string().uuid(), name: z.string().min(1).max(256), path: z.string().min(1).max(4096) }).strict()).max(128) }).strict(),
+  'workspaces.list': z.object({
+    eligible: z.boolean(),
+    workspaces: z.array(z.object({
+      handle: z.string().uuid(),
+      name: z.string().min(1).max(256),
+      path: z.string().min(1).max(4096),
+      aliases: z.array(z.string().min(1).max(160).refine(value => Array.from(value).length <= 80)).max(12).optional(),
+      description: z.string().max(640).refine(value => Array.from(value).length <= 320).optional(),
+      metadataWarning: z.string().min(1).max(256).optional(),
+    }).strict()).max(128),
+    nextCursor: z.string().uuid().optional(),
+    remainingProjects: z.number().int().safe().positive().optional(),
+  }).strict(),
   'workspace.jump': z.object({ operationId: z.string().uuid(), status: z.literal('accepted') }).strict(),
   'workspace.ready': z.object({ operationId: z.string().uuid(), status: z.enum(['ready', 'cancelled', 'settled']) }).strict(),
   'workspace.cancel': z.object({ operationId: z.string().uuid(), status: z.enum(['cancelled', 'not_accepted']) }).strict(),

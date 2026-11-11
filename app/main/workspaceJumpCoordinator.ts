@@ -1,7 +1,7 @@
 /** Owns the one-shot operation, not the model's workspace judgment.
  * HOST-REQUEST-PLANE and CHAT-RELOCATION's agent-jump amendments define authority.
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { createWorkspaceJumpTiming, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
 import { isWorkspaceHandoffSnapshot, type WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
@@ -10,6 +10,7 @@ import type { Host, CwdValidation } from '../host/host.js'
 import type { HostRequestValues, HostRequestError, HostRequestVerb } from '../shared/protocol.js'
 import type { PeerRegistryRow, ValidatedHostRequest } from './peerRequestPlane.js'
 import { readSessionRelocation } from '../../src/utils/sessionRelocationState.js'
+import type { ProjectMetadata } from '../shared/projectMetadata.js'
 import {
   hasVerifiedSourceCompensation, loadWorkspaceJumpRetention, readWorkspaceJump, workspaceJumpDirectory, workspaceJumpRequiresRetention, writeWorkspaceJump,
   upgradeWorkspaceJumpState, workspaceJumpOperationSha256, workspaceJumpHasConfirmedGate, workspaceJumpAllowsQueuedInput, type WorkspaceJumpBoundary, type WorkspaceJumpStateV2,
@@ -22,6 +23,7 @@ type WorkspaceVerb = Extract<HostRequestVerb, 'workspaces.list' | 'workspace.jum
 type WorkspaceRequest = Extract<ValidatedHostRequest, { verb: WorkspaceVerb }>
 type Result<V extends WorkspaceVerb = WorkspaceVerb> = { ok: true; value: HostRequestValues[V] } | { ok: false; error: HostRequestError }
 export type WorkspaceJumpIdentity = { appSessionId: string; engineSessionId: string; generation: string }
+export type WorkspaceProjectInspection = { trustedRoots: readonly string[]; metadata: readonly ({ path: string } & ProjectMetadata)[] }
 export type WorkspaceJumpCoordinatorDeps = {
   host: Pick<Host, 'reserveWorkspaceJump' | 'releaseWorkspaceJump' | 'moveWorkspaceJump' | 'getSessionGeneration'>
   row: (appSessionId: string) => PeerRegistryRow | undefined
@@ -29,6 +31,8 @@ export type WorkspaceJumpCoordinatorDeps = {
   validateCwd: (cwd: string) => CwdValidation
   /** Observation-only engine trust read. Never instructions, hooks, or accounts. */
   trustedProjectRoots: (roots: readonly string[]) => Promise<readonly string[]>
+  /** The existing Bun trust worker reads optional metadata only after trust. */
+  inspectTrustedProjects?: (roots: readonly string[], metadataOffset: number) => Promise<WorkspaceProjectInspection>
   /** Source receiving boundary checks both controller and sidecar turn owners,
    * its observed SDKResultHandoff, and the current active-chain boundary.
    */
@@ -57,6 +61,7 @@ export class WorkspaceJumpCoordinator {
   private readonly acceptedTimings = new Map<string, { operationId: string; received?: (outcome?: 'completed' | 'failed' | 'unavailable') => void; end: (outcome?: 'completed' | 'failed' | 'unavailable') => void; boundary: (outcome?: 'completed' | 'failed' | 'unavailable') => void; admission?: (outcome?: 'completed' | 'failed' | 'unavailable') => void; providerObserved?: boolean; admissionObserved?: boolean }>()
   private readonly directory: string
   private readonly handles = new Map<string, { appSessionId: string; generation: string; path: string }>()
+  private readonly catalogs = new Map<string, { generation: string; fingerprint: string; cursor: string; offset: number; chunk: number; trusted?: string }>()
   private readonly running = new Map<string, Promise<void>>()
   private readonly observations = new Map<string, WorkspaceHandoffSnapshot>()
   private readonly effects = new Set<Promise<void>>()
@@ -91,6 +96,7 @@ export class WorkspaceJumpCoordinator {
   loadRetention(): ReturnType<typeof loadWorkspaceJumpRetention> { return loadWorkspaceJumpRetention(this.directory) }
   /** Retire only ephemeral discovery authority; durable history is never erased. */
   forgetHandles(appSessionId: string): void {
+    this.catalogs.delete(appSessionId)
     for (const [handle, entry] of this.handles) if (entry.appSessionId === appSessionId) this.handles.delete(handle)
     if (!this.identity(appSessionId)) {
       this.cancellations.delete(appSessionId)
@@ -174,9 +180,9 @@ export class WorkspaceJumpCoordinator {
     const record = readSessionRelocation(row.engineSessionId)
     return record === null || hasVerifiedSourceCompensation(state, record, appSessionId, row.engineSessionId, row.cwd)
   }
-  private roots(): string[] {
+  private roots(projects = this.deps.knownProjects()): string[] {
     const candidates = new Map<string, number>()
-    for (const project of this.deps.knownProjects()) {
+    for (const project of projects) {
       const used = Number.isFinite(project.lastUsedAt) ? project.lastUsedAt : 0
       candidates.set(project.path, Math.max(candidates.get(project.path) ?? used, used))
     }
@@ -186,10 +192,10 @@ export class WorkspaceJumpCoordinator {
       if (!validated.ok) continue
       recent.set(validated.realpath, Math.max(recent.get(validated.realpath) ?? 0, used))
     }
-    // Conversation duplicates and aliases cannot consume the workspace bound.
-    return [...recent].sort(([a, at], [b, bt]) => bt - at || a.localeCompare(b)).slice(0, 128).map(([path]) => path)
+    // Canonicalize before pagination so aliases cannot crowd out other projects.
+    return [...recent].sort(([a, at], [b, bt]) => bt - at || a.localeCompare(b)).map(([path]) => path)
   }
-  private async list(appSessionId: string): Promise<Result<'workspaces.list'>> {
+  private async list(appSessionId: string, args: { cursor?: string; scope?: 'selected' } = {}): Promise<Result<'workspaces.list'>> {
     for (const [handle, entry] of this.handles) {
       const current = this.identity(entry.appSessionId)
       if (!current || current.generation !== entry.generation) this.handles.delete(handle)
@@ -198,27 +204,81 @@ export class WorkspaceJumpCoordinator {
       const current = this.identity(id)
       if (!current || current.generation !== entry.generation || current.engineSessionId !== entry.engineSessionId) this.cancellations.delete(id)
     }
-    if (!this.eligible(appSessionId)) return { ok: true, value: { workspaces: [], eligible: false } }
-    const identity = this.identity(appSessionId)!
-    const roots = this.roots()
-    const trusted = new Set(await this.deps.trustedProjectRoots(roots))
-    if (!this.eligible(appSessionId) || this.identity(appSessionId)?.generation !== identity.generation) return refuse('This Chat changed while projects were listed')
-    const available = roots.filter(path => trusted.has(path))
-    const previous = new Map<string, string>()
-    for (const [handle, entry] of this.handles) {
-      if (entry.appSessionId !== appSessionId) continue
-      if (!available.includes(entry.path)) this.handles.delete(handle)
-      else previous.set(entry.path, handle)
+    const row = this.deps.row(appSessionId)
+    const identity = this.identity(appSessionId)
+    if (!identity || !row || (row.createdBy && row.binding?.kind !== 'project')) return refuse('Project discovery is unavailable for this Chat')
+    if (args.scope === 'selected' && args.cursor) return refuse('List the selected project without a cursor')
+    const selected = args.scope === 'selected'
+    const selectedPath = row.cwd
+    const known = this.deps.knownProjects()
+    const sourceFingerprint = JSON.stringify(known)
+    const canonical = selected && row.binding?.kind === 'project' ? this.deps.validateCwd(selectedPath) : undefined
+    const roots = selected ? canonical?.ok && canonical.realpath === selectedPath ? [canonical.realpath] : [] : this.roots(known).filter(path => path !== row.cwd || row.binding?.kind !== 'managed')
+    const fingerprint = createHash('sha256').update(JSON.stringify(roots)).digest('hex')
+    let snapshot = this.catalogs.get(appSessionId)
+    if (args.cursor) {
+      if (!snapshot || snapshot.cursor !== args.cursor) return refuse('The project listing expired. List projects again')
+      if (snapshot.generation !== identity.generation || snapshot.fingerprint !== fingerprint) {
+        this.catalogs.delete(appSessionId)
+        return refuse('The project listing expired. List projects again')
+      }
+    } else {
+      snapshot = { generation: identity.generation, fingerprint, cursor: randomUUID(), offset: 0, chunk: 0 }
+      if (!selected) this.catalogs.set(appSessionId, snapshot)
     }
-    // Frozen initial context can keep selecting a still-current handle after a
-    // later listing. Only current canonical roots retain discovery authority.
-    const workspaces = available.map(path => {
-      const handle = previous.get(path) ?? randomUUID()
+    const page = snapshot!
+    const expectedCursor = page.cursor
+    const scanned = roots.slice(page.chunk, page.chunk + 128)
+    const inspection = this.deps.inspectTrustedProjects
+      ? await this.deps.inspectTrustedProjects(scanned, page.offset - page.chunk)
+      : { trustedRoots: await this.deps.trustedProjectRoots(scanned), metadata: [] }
+    const trusted = new Set(inspection.trustedRoots)
+    if (this.identity(appSessionId)?.generation !== identity.generation ||
+        (!selected && (this.catalogs.get(appSessionId) !== page || page.cursor !== expectedCursor)) ||
+        (selected && (this.deps.row(appSessionId)?.cwd !== selectedPath || this.deps.row(appSessionId)?.binding?.kind !== 'project') && roots.length > 0)) {
+      return refuse('This Chat changed while projects were listed')
+    }
+    if (JSON.stringify(this.deps.knownProjects()) !== sourceFingerprint) {
+      if (!selected && this.catalogs.get(appSessionId) === page) this.catalogs.delete(appSessionId)
+      return refuse('The project catalog changed. List projects again')
+    }
+    const trustFingerprint = JSON.stringify(scanned.filter(path => trusted.has(path)))
+    for (const [handle, entry] of this.handles) {
+      if (entry.appSessionId === appSessionId &&
+          ((!selected && !roots.includes(entry.path)) || (scanned.includes(entry.path) && !trusted.has(entry.path)))) this.handles.delete(handle)
+    }
+    if (args.cursor && page.trusted !== undefined && page.trusted !== trustFingerprint) {
+      this.catalogs.delete(appSessionId)
+      return refuse('Project trust changed. List projects again')
+    }
+    page.trusted = trustFingerprint
+    const workspaces: HostRequestValues['workspaces.list']['workspaces'] = []
+    const eligible = this.eligible(appSessionId)
+    while (page.offset < Math.min(roots.length, page.chunk + 128) && workspaces.length < 8) {
+      const path = roots[page.offset]!
+      if (!trusted.has(path)) { page.offset++; continue }
+      const previous = [...this.handles].find(([, entry]) => entry.appSessionId === appSessionId && entry.generation === identity.generation && entry.path === path)
+      const handle = previous?.[0] ?? randomUUID()
+      const name = known.find(project => project.path === path && project.name)?.name ?? basename(path)
+      const metadata = inspection.metadata.find(project => project.path === path)
+      const entry = { handle, name, path, aliases: metadata?.aliases ?? [], description: metadata?.description ?? '',
+        ...(metadata?.metadataWarning ? { metadataWarning: metadata.metadataWarning } : {}) }
+      // Reserve room for pagination fields without splitting or truncating entries.
+      if (Buffer.byteLength(JSON.stringify({ workspaces: [...workspaces, entry], eligible })) >= 15 * 1024) {
+        if (!workspaces.length) return refuse('Project details are too large to list')
+        break
+      }
       this.handles.set(handle, { appSessionId, generation: identity.generation, path })
-      const name = this.deps.knownProjects().find(project => project.path === path && project.name)?.name
-      return { handle, name: name ?? basename(path), path }
-    })
-    return { ok: true, value: { workspaces, eligible: true } }
+      workspaces.push(entry)
+      page.offset++
+    }
+    if (page.offset >= page.chunk + 128) {
+      page.chunk = page.offset
+      page.trusted = undefined
+    }
+    const remainingProjects = roots.length - page.offset
+    page.cursor = randomUUID()
+    return { ok: true, value: { workspaces, eligible, ...(!selected && remainingProjects > 0 ? { nextCursor: page.cursor, remainingProjects } : {}) } }
   }
   private async accept(appSessionId: string, operationId: string, handle: string, onAccepted: () => void): Promise<Result<'workspace.jump'>> {
     if (!UUID.test(operationId) || this.accepting.has(appSessionId)) return refuse('A workspace change is already being considered')
@@ -296,7 +356,7 @@ export class WorkspaceJumpCoordinator {
   async handleRequest(appSessionId: string, request: WorkspaceRequest, receivedAt = this.timing.now()): Promise<Result> {
     try {
       switch (request.verb) {
-        case 'workspaces.list': return await this.timing.span({ ...this.identity(appSessionId), appSessionId }, 'catalog', () => this.list(appSessionId))
+        case 'workspaces.list': return await this.timing.span({ ...this.identity(appSessionId), appSessionId }, 'catalog', () => this.list(appSessionId, request))
         case 'workspace.jump': {
           // Production supplies main's supervisor-frame receipt clock, before
           // peer-plane validation. Direct internal callers default to dispatch.

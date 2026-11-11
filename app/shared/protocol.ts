@@ -4,6 +4,7 @@ import type { FocusedBashJob } from './focusedBashJobs.js'
 import type { BrowserRequestArgs, BrowserRequestValues } from './browserPane.js'
 import type { BrowserPaneSnapshot, BrowserPaneEvent, BrowserPaneLayout, BrowserPaneCommand, BrowserPaneCommandResult } from './browserPanePresentation.js'
 import type { ExternalAppIconRequest, ExternalAppIcon } from './externalAppIcons.js'
+import type { ProjectMetadata } from './projectMetadata.js'
 export type { AutoModeReview } from '../../src/app-runtime/autoModeReviewContract.js'
 /**
  * CatCode desktop IPC protocol — v6.
@@ -841,7 +842,7 @@ export type PeerDeliverOutcome =
  * row that name already produced. See the field's own comment below.
  */
 export type HostRequestArgs = BrowserRequestArgs & {
-  'workspaces.list': Record<string, never>
+  'workspaces.list': { cursor?: string; scope?: 'selected' }
   'workspace.jump': { operationId: string; destinationHandle: string }
   /** Engine-authored readiness; the connection supplies process identity. */
   'workspace.ready': { operationId: string; tipUuid: string; toolUseId: string }
@@ -873,7 +874,12 @@ export type HostRequestArgs = BrowserRequestArgs & {
 
 /** Per-verb `value` on a successful `host.result`. */
 export type HostRequestValues = BrowserRequestValues & {
-  'workspaces.list': { workspaces: Array<{ handle: string; name: string; path: string }>; eligible: boolean }
+  'workspaces.list': {
+    workspaces: Array<{ handle: string; name: string; path: string } & Partial<ProjectMetadata>>
+    eligible: boolean
+    nextCursor?: string
+    remainingProjects?: number
+  }
   'workspace.jump': { operationId: string; status: 'accepted' }
   'workspace.ready': { operationId: string; status: 'ready' }
   'workspace.cancel': { operationId: string; status: 'cancelled' | 'not_accepted' }

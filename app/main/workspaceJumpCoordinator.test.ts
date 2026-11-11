@@ -162,7 +162,7 @@ test('acceptance cannot move; durable readiness, response delivery, and one-use 
   expect(h.coordinator.snapshot(h.appSessionId)?.continuation.dispatch).toBe('unknown')
   const reopened = new WorkspaceJumpCoordinator(h.deps)
   const list = await reopened.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
-  expect(list).toEqual({ ok: true, value: { eligible: false, workspaces: [] } })
+  expect(list).toMatchObject({ ok: true, value: { eligible: false, workspaces: [{ path: '/projects/cat-code' }] } })
   expect(readWorkspaceJump(h.appSessionId, h.directory)?.consumed).toBe(true)
 })
 
@@ -191,8 +191,100 @@ test('recent listing deduplicates canonical workspaces before the bound and save
   if (!result.ok || !('workspaces' in result.value)) throw new Error('listing failed')
   expect(result.value.workspaces.map(row => row.path)).toEqual([
     '/projects/recent', '/projects/cat-code',
-    ...Array.from({ length: 125 }, (_, i) => `/projects/old-${String(i).padStart(3, '0')}`),
+    ...Array.from({ length: 6 }, (_, i) => `/projects/old-${String(i).padStart(3, '0')}`),
   ])
+  const all = [...result.value.workspaces]
+  let cursor = result.value.nextCursor
+  while (cursor) {
+    const next = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor })
+    if (!next.ok || !('workspaces' in next.value)) throw new Error('pagination failed')
+    expect(next.value.workspaces.length).toBeLessThanOrEqual(8)
+    all.push(...next.value.workspaces)
+    cursor = next.value.nextCursor
+  }
+  expect(all).toHaveLength(132)
+  expect(all.at(-1)?.path).toBe('/projects/old-129')
+})
+
+test('selected discovery includes an old host binding but never a managed cwd', async () => {
+  const h = harness()
+  h.deps.knownProjects = () => Array.from({ length: 200 }, (_, i) => ({ path: `/project/${i}`, lastUsedAt: i, name: `Project ${i}` }))
+  expect(await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', scope: 'selected' })).toMatchObject({ ok: true, value: { workspaces: [] } })
+  h.row.cwd = '/project/0'
+  h.row.binding = { kind: 'project' }
+  expect(await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', scope: 'selected' })).toMatchObject({
+    ok: true, value: { eligible: false, workspaces: [{ name: 'Project 0', path: '/project/0' }] },
+  })
+  h.row.createdBy = randomUUID()
+  expect(await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', scope: 'selected' })).toMatchObject({
+    ok: true, value: { eligible: false, workspaces: [{ path: '/project/0' }] },
+  })
+})
+
+test('concurrent reuse of one cursor cannot silently skip pages or invalidate the winning response', async () => {
+  const h = harness()
+  h.deps.knownProjects = () => Array.from({ length: 30 }, (_, i) => ({ path: `/project/${i}`, lastUsedAt: i }))
+  const first = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+  if (!first.ok || !('workspaces' in first.value) || !first.value.nextCursor) throw new Error('Expected cursor')
+  const cursor = first.value.nextCursor
+  let release!: () => void
+  const wait = new Promise<void>(resolve => { release = resolve })
+  h.deps.trustedProjectRoots = async roots => { await wait; return roots }
+  const requests = [0, 1].map(() => h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor }))
+  release()
+  const results = await Promise.all(requests)
+  expect(results.filter(result => result.ok)).toHaveLength(1)
+  const winner = results.find(result => result.ok)!
+  if (!winner.ok || !('workspaces' in winner.value) || !winner.value.nextCursor) throw new Error('Expected winning cursor')
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor: winner.value.nextCursor })).ok).toBe(true)
+})
+
+test('cursors are requester and generation scoped, single use, and reject changed trust or membership', async () => {
+  const h = harness()
+  h.deps.knownProjects = () => Array.from({ length: 140 }, (_, i) => ({ path: `/project/${i}`, lastUsedAt: i }))
+  const first = async () => {
+    const result = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
+    if (!result.ok || !('workspaces' in result.value) || !result.value.nextCursor) throw new Error('Expected cursor')
+    return result.value.nextCursor
+  }
+  const original = await first()
+  const advanced = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor: original })
+  if (!advanced.ok || !('workspaces' in advanced.value) || !advanced.value.nextCursor) throw new Error('Expected continuation')
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor: original })).ok).toBe(false)
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor: advanced.value.nextCursor })).ok).toBe(true)
+  let cursor = await first()
+  expect((await h.coordinator.handleRequest(randomUUID(), { verb: 'workspaces.list', cursor })).ok).toBe(false)
+  h.setTrusted(false)
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor })).ok).toBe(false)
+  h.setTrusted(true)
+  cursor = await first()
+  h.setGeneration()
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor })).ok).toBe(false)
+  cursor = await first()
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor })).ok).toBe(true)
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor })).ok).toBe(false)
+  cursor = await first()
+  h.deps.knownProjects = () => []
+  expect((await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', cursor })).ok).toBe(false)
+})
+
+test('catalog membership and selected binding are rechecked after asynchronous inspection', async () => {
+  for (const selected of [false, true]) {
+    const h = harness()
+    h.deps.knownProjects = () => Array.from({ length: 30 }, (_, i) => ({ path: `/project/${i}`, lastUsedAt: i }))
+    if (selected) {
+      h.row.cwd = '/project/0'
+      h.row.binding = { kind: 'project' }
+    }
+    let release!: () => void
+    const wait = new Promise<void>(resolve => { release = resolve })
+    h.deps.trustedProjectRoots = async roots => { await wait; return roots }
+    const pending = h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list', ...(selected ? { scope: 'selected' as const } : {}) })
+    if (selected) h.row.cwd = '/project/1'
+    else h.deps.knownProjects = () => []
+    release()
+    expect((await pending).ok).toBe(false)
+  }
 })
 
 test('raw validation is deduplicated per enumeration, not across authorization boundaries', async () => {
@@ -249,7 +341,7 @@ test('stable canonical ordering matches the original row-by-row algorithm', asyn
   h.deps.trustedProjectRoots = async roots => { trustedInput = [...roots]; return roots }
   const result = await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })
   if (!result.ok || !('workspaces' in result.value)) throw new Error('listing failed')
-  expect(result.value.workspaces.map(row => row.path)).toEqual(expected)
+  expect(result.value.workspaces.map(row => row.path)).toEqual(expected.slice(0, 8))
   expect(trustedInput).toEqual(expected)
   expect(expected).toHaveLength(128)
 })
@@ -955,5 +1047,5 @@ test('verified source compensation permits a later request but a later manual re
   expect(listed.ok && 'eligible' in listed.value && listed.value.eligible).toBe(true)
   expect(h.coordinator.snapshot(h.appSessionId)?.consumed).toBe(false)
   writeSessionRelocation({ ...compensation, backup: `${compensation.backup}-manual`, movedAt: compensation.movedAt + 1 })
-  expect(await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })).toEqual({ ok: true, value: { eligible: false, workspaces: [] } })
+  expect(await h.coordinator.handleRequest(h.appSessionId, { verb: 'workspaces.list' })).toMatchObject({ ok: true, value: { eligible: false, workspaces: [{ path: '/projects/cat-code' }] } })
 })

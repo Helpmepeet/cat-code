@@ -21,4 +21,23 @@ for (const [kind, directory] of [['managed', '/workspace/chat'], ['project', und
     expect(prompt).toContain('report the blocker instead of substituting cua-driver')
     expect(prompt).toContain('If computer use is disabled or refused, stop; do not switch tools to bypass it')
   })
+
+  test(`${kind} desktop prompt keeps metadata maintenance small and descriptions stable`, () => {
+    const prompt = buildDesktopSystemPrompt({ name: null, createdByName: null, createdById: null }, directory)
+    expect(prompt).toContain('.cat-code/project.json')
+    expect(prompt).toContain('once per conversation')
+    expect(prompt).toContain("The description captures the project's core purpose")
+    expect(prompt).toContain('add it as an alias if the intended workspace is clear')
+    expect(prompt).toContain('preserve unrelated fields')
+    expect(prompt).not.toContain('UpdateProjectMetadata')
+    expect(prompt).not.toContain('Learn aliases actively early on')
+  })
 }
+
+test('managed project selection uses paths and honors the configured instruction mode', () => {
+  const prompt = buildDesktopSystemPrompt({ name: null, createdByName: null, createdById: null }, '/workspace/chat')
+  expect(prompt).toContain('exact project path')
+  expect(prompt).toContain('configured Project instructions mode')
+  expect(prompt).toContain('aliases, descriptions, and paths')
+  expect(prompt).not.toContain('known-project handle')
+})

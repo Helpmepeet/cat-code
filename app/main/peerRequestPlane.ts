@@ -243,7 +243,7 @@ const VERB_ARG_KEYS: Record<
   // delivery and can never widen one (F17, ruling 11; see `handlePeerDeliver`).
   'peer.deliver': { required: ['to', 'text'], optional: ['expectCreatorId'] },
   'peer.ack': { required: ['messageId'], optional: [] },
-  'workspaces.list': { required: [], optional: [] },
+  'workspaces.list': { required: [], optional: ['cursor', 'scope'] },
   'workspace.jump': { required: ['operationId', 'destinationHandle'], optional: [] },
   'workspace.ready': { required: ['operationId', 'tipUuid', 'toolUseId'], optional: [] },
   'workspace.cancel': { required: ['operationId'], optional: [] },
@@ -311,7 +311,7 @@ export type ValidatedHostRequest =
       expectCreatorId?: string
     }
   | { verb: 'peer.ack'; messageId: string }
-  | { verb: 'workspaces.list' }
+  | { verb: 'workspaces.list'; cursor?: string; scope?: 'selected' }
   | { verb: 'workspace.jump'; operationId: string; destinationHandle: string }
   | { verb: 'workspace.ready'; operationId: string; tipUuid: string; toolUseId: string }
   | { verb: 'workspace.cancel'; operationId: string }
@@ -466,7 +466,15 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
         request: { verb, messageId: strings.messageId as string },
       }
     case 'workspaces.list':
-      return { ok: true, requestId, request: { verb } }
+      if (strings.scope !== undefined && strings.scope !== 'selected') {
+        return { ok: false, requestId, error: fail('bad_request', 'Unknown project scope') }
+      }
+      if (strings.cursor !== undefined && (!strings.cursor || strings.scope !== undefined)) {
+        return { ok: false, requestId, error: fail('bad_request', 'Use a project cursor without a scope') }
+      }
+      return { ok: true, requestId, request: { verb,
+        ...(strings.cursor !== undefined ? { cursor: strings.cursor } : {}),
+        ...(strings.scope === 'selected' ? { scope: 'selected' as const } : {}) } }
     case 'workspace.jump':
       return { ok: true, requestId, request: { verb, operationId: strings.operationId!, destinationHandle: strings.destinationHandle! } }
     case 'workspace.ready':
