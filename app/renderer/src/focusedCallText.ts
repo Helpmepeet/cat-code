@@ -28,6 +28,8 @@ import { FAMILY_STYLE } from './toolCardPalette.js'
 import { agentToolSourceOf } from './transcriptAgent.js'
 import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
 import { deriveTarget, peerTargetFragment, toolSearchCardView } from './transcriptToolTarget.js'
+import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
+import { getEmailToolIdentity } from './emailToolPresentation.js'
 
 export type FocusedCallPhase = 'preparing' | 'queued' | 'reviewing' | 'approval' | 'running' | 'done' | 'failed' | 'stopped' | 'blocked'
 
@@ -134,6 +136,11 @@ function askWords(call: FocusedCall): Words {
 
 function callWords(call: FocusedCall, ctx: FocusedCallContext): Words {
   const { toolName, input } = call
+  const email = getEmailToolIdentity(toolName)
+  if (email) {
+    const detail = { search: 'Search messages', message: 'Read a message', thread: 'Read a conversation', labels: 'List labels', send: 'Send messages', accounts: 'List accounts' }[email.operation]
+    return { present: 'Using', past: 'Used', target: email.provider === 'gmail' ? 'Gmail' : 'Outlook', detail, face: 'sans' }
+  }
   const str = (key: string) => inputString(input, key)
   switch (toolName) {
     case 'WebSearch': case 'web_search':
@@ -143,8 +150,12 @@ function callWords(call: FocusedCall, ctx: FocusedCallContext): Words {
       return { present: 'Resuming', past: 'Resumed', target: withoutAt(str('agentId')), face: 'sans', detail: str('prompt') ? peerTargetFragment(str('prompt')!) : null }
     case 'SendMessage':
       return { present: 'Messaging', past: 'Messaged', target: withoutAt(str('to')), face: 'sans', detail: str('summary')?.trim() || null }
-    case 'ToolSearch':
-      return { present: 'Loading', past: 'Loaded', target: toolSearchCardView(call).target }
+    case 'ToolSearch': {
+      const emailTools = call.status === 'success' && !call.result?.isError
+        ? emailToolDiscovery(call.result?.toolSearch?.matches)
+        : requestedEmailToolDiscovery(input.query)
+      return { present: 'Loading', past: 'Loaded', target: emailTools ? 'email tools' : toolSearchCardView(call).target, face: emailTools ? 'sans' : 'mono' }
+    }
     case 'TaskOutput':
       return { present: 'Waiting on', past: 'Checked on', target: taskLabel(call, ctx), face: 'sans' }
     case 'TaskStop':

@@ -205,3 +205,21 @@ describe('patch file paths', () => {
     expect(deriveTarget(call('apply_patch', { input: patch('/repo/a.ts') }), '/repo')).toBe('a.ts')
   })
 })
+
+test('focused email calls name the service and action without claiming a failed send succeeded', () => {
+  const gmail = focusedCallLine(call('mcp__gmail__gmail_search'), ctx())
+  expect(gmail).toMatchObject({ target: 'Gmail', detail: 'Search messages', targetFace: 'sans' })
+  expect(focusedCallLine(call('mcp__outlook__list-accounts'), ctx())).toMatchObject({ target: 'Outlook', detail: 'List accounts' })
+  const failed = focusedCallLine(call('mcp__gmail__gmail_send_message', {}, { status: 'error' }), ctx())
+  expect(failed.target).toBe('Gmail')
+  expect(failed.verb).not.toBe('Sent')
+})
+
+test('focused email-only discovery stays readable, while mixed discovery retains its tools', () => {
+  const matches = ['mcp__gmail__gmail_search', 'mcp__outlook__list-accounts']
+  const query = `select:${matches.join(',')}`
+  expect(focusedCallLine(call('ToolSearch', { query }, { result: result({ toolSearch: { matches } }) }), ctx())).toMatchObject({ target: 'email tools', targetFace: 'sans' })
+  expect(focusedCallLine(pending('ToolSearch', { query }), ctx())).toMatchObject({ target: 'email tools', targetFace: 'sans' })
+  const mixed = focusedCallLine(call('ToolSearch', { query: 'email search' }, { result: result({ toolSearch: { matches: [matches[0]!, 'WebSearch'] } }) }), ctx())
+  expect(mixed.target).toBe('email search')
+})

@@ -40,6 +40,10 @@ import { InlineCommandContext } from './inlineCommandState.js'
 import { ComputerPaneContext } from './computerPaneContext.js'
 import './computerPane.css'
 import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
+import { EmailToolResult } from './EmailToolResult.js'
+import { EmailToolDiscovery } from './EmailToolChrome.js'
+import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
+import { getEmailToolIdentity } from './emailToolPresentation.js'
 import { AutoModeReviewContext, summarizeAutoModeReviews, type ReviewSummary } from './autoModeReview.js'
 import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
@@ -3200,6 +3204,7 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
 
 function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   const motion = useContext(TranscriptMotionContext)
+  const openToolOutput = useContext(ToolOutputContext)
   const resolving = motion.results.active.has(row.id)
   // The weakest of the three expansion inputs: a user's own click still wins
   // (`resolveToolCardExpanded`), and a failed or finished-image card still opens
@@ -3220,6 +3225,13 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   if (isPeerSpeechCall(row.toolName)) return <PeerSpeechRow row={row} />
   // Also ahead of the cancelled branch: a stopped search keeps its own mark.
   if (row.toolName === 'ToolSearch') return <ToolSearchCard row={row} />
+  const emailIdentity = getEmailToolIdentity(row.toolName)
+  if (emailIdentity && !row.result?.images?.length) return <div className="w-full">
+    <EmailToolResult row={row} identity={emailIdentity} defaultExpanded={toolsExpanded}
+      originalOutput={<PlainLinesBody content={row.result?.content ?? ''} isError={row.result?.isError === true}
+        onOpenFull={openToolOutput ? () => openToolOutput(row) : null} toolUseId={row.toolUseId} />} />
+    {row.children.length ? <NestedRowList className="ml-6 border-l border-shell-seam pl-3" childGap={8} rows={row.children} /> : null}
+  </div>
   const fileDiffs = row.result?.fileDiffs
   if (row.toolFamily === 'edit' && fileDiffs && fileDiffs.length > 1) {
     return <PatchFileCards row={row} diffs={fileDiffs} />
@@ -3651,6 +3663,11 @@ const TOOL_SEARCH_PRESENTATION = { mark: FAMILY_STYLE.grep.mark, word: 'Tools' }
 function ToolSearchCard({ row }: { row: ToolUseNestedRow }) {
   const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
   const view = toolSearchCardView(row)
+  const emailEntries = row.status === 'success' && !row.result?.isError
+    ? emailToolDiscovery(row.result?.toolSearch?.matches)
+    : requestedEmailToolDiscovery(row.input.query)
+  if (emailEntries) return <EmailToolDiscovery row={row} entries={emailEntries} defaultExpanded={toolsExpanded}
+    originalOutput={row.result?.content ? <PlainLinesBody content={row.result.content} isError={row.result.isError} onOpenFull={null} toolUseId={row.toolUseId} /> : undefined} />
   const body =
     row.status === 'cancelled' ? (
       <ToolCancelledBody />
