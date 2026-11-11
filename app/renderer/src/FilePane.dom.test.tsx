@@ -202,7 +202,7 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
     getExternalAppIcon: async () => null,
   } })
   releases.push(() => {
-    closeFilePane(sessionId); closeFilePane(otherSession)
+    disposeFilePaneSession(sessionId); disposeFilePaneSession(otherSession)
     ids.forEach(id => service.release(id)); localhost.dispose()
     if (previous) Object.defineProperty(window, 'catcode', previous)
     else Reflect.deleteProperty(window, 'catcode')
@@ -379,9 +379,11 @@ test('file history restores scroll and session switches preserve file and width 
   expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
   expect(tree.container.querySelector<HTMLElement>('.file-pane-markdown:not(.file-pane-staging)')?.scrollTop).toBe(180)
   expect(tree.container.querySelector<HTMLElement>('.subagent-shared-slot')?.style.getPropertyValue('--shared-slot-width')).toBe(width)
+  const retainedHistory = getFilePaneSession(sessionId).sideHistory
   await click(tree.container, 'Close file')
-  expect(getFilePaneSession(sessionId).history).toEqual([])
-  expect(getFilePaneSession(sessionId).forward).toEqual([])
+  expect(getFilePaneSession(sessionId).visible).toBeNull()
+  expect(getFilePaneSession(sessionId).sideHistory).toEqual(retainedHistory)
+  expect(getFilePaneSession(sessionId).file?.path).toBe(firstPath)
 })
 
 test.each([
@@ -448,7 +450,7 @@ test('a watched file stages new bytes while removal keeps the last rendered vers
 })
 
 
-test('closing during an in-flight history request cannot reopen the pane or retain its host capability', async () => {
+test('closing during an in-flight history request stays hidden and retains only the current host capability until disposal', async () => {
   const { pane, sessionId, pauseNextPrepare, service, ids } = setup()
   const tree = await harness.mount(pane())
   await click(tree.container, 'Open ./notes.md:12')
@@ -458,8 +460,10 @@ test('closing during an in-flight history request cannot reopen the pane or reta
   await click(tree.container, 'Close file')
   await act(async () => { resume(); await new Promise(resolve => setTimeout(resolve, 100)) })
   await settle()
-  expect(tree.container.querySelector('.file-pane')).toBeNull()
-  expect(getFilePaneSession(sessionId).open).toBe(false)
+  expect(getFilePaneSession(sessionId).visible).toBeNull()
+  expect(getFilePaneSession(sessionId).open).toBe(true)
+  expect(service.has(getFilePaneSession(sessionId).file!.id)).toBe(true)
+  disposeFilePaneSession(sessionId)
   expect([...ids].filter(id => service.has(id))).toEqual([])
 })
 
@@ -755,7 +759,8 @@ test('Escape dismisses the header file menu without closing its pane, while Esca
   expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)') === body).toBe(true)
   body.focus()
   await act(async () => { body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
-  expect(getFilePaneSession(sessionId).open).toBe(false)
+  expect(getFilePaneSession(sessionId).visible).toBeNull()
+  expect(getFilePaneSession(sessionId).open).toBe(true)
 })
 
 
@@ -902,9 +907,10 @@ test('a delayed successful update cannot reopen a closed pane', async () => {
     await click(tree.container, 'Close file')
     await act(async () => { delayed.resume() })
     await settle()
-    expect(getFilePaneSession(sessionId).open).toBe(false)
-    expect(tree.container.querySelector('.file-pane')).toBeNull()
-    expect(service.has(id)).toBe(false)
+    expect(getFilePaneSession(sessionId).visible).toBeNull()
+    expect(getFilePaneSession(sessionId).open).toBe(true)
+    expect(getFilePaneSession(sessionId).file?.id).toBe(id)
+    expect(service.has(id)).toBe(true)
   } finally { delayed.resume(); await settle() }
 })
 
@@ -1275,7 +1281,7 @@ test.each([false, true])('viewer readiness and late failure respect focus owners
   await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event('error')) })
   await settle()
   expect(getFilePaneSession(sessionId).committedFile?.path).toBe(imagePath)
-  expect(document.activeElement).toBe(moved ? outside : tree.container.querySelector('[aria-label="Files"]'))
+  expect(document.activeElement === (moved ? outside : tree.container.querySelector('.file-pane-header [aria-label="Files"]'))).toBe(true)
 })
 
 test('switching a large log window and citing its start retains the new live capability until it paints', async () => {
@@ -1387,7 +1393,7 @@ test.each(['commit', 'failure', 'close'] as const)('Opened retains the painted f
   expect(openedPosition()).toMatchObject({ x: 12, y: 650 })
   await act(async () => { await requestOpenFile(sessionId, brokenPath) })
   await settle()
-  await paintLocalFrame(tree.container)
+  if (tree.container.querySelector('iframe.file-pane-staging')) await paintLocalFrame(tree.container)
   const reopened = getFilePaneSession(sessionId).committedFile!
   expect(await window.catcode.readFilePreviewScroll(reopened.id, reopened.revision)).toEqual({ x: 12, y: 650 })
 })

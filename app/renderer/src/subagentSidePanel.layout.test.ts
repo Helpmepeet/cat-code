@@ -16,6 +16,8 @@ test.skipIf(!layoutBrowser)('panel stays reachable when opened in a narrow pane 
       .session-pane { display:flex; flex:1; min-height:0; flex-direction:column }
       .parent-transcript { flex:1; min-height:0; overflow:auto }
       textarea { flex:none; height:80px; width:100%; min-width:0 }
+      button { border:0; padding:0 }
+      .file-pane-icon { flex:none; width:26px; height:28px }
       ${css}
     </style><style id="original">
       .subagent-workspace-layout { flex-direction:row }
@@ -25,13 +27,13 @@ test.skipIf(!layoutBrowser)('panel stays reachable when opened in a narrow pane 
     </div></div></div><pre id="result"></pre><script>
       const pane = document.querySelector('#pane');
       const layout = document.querySelector('.subagent-workspace-layout');
-      const panel = '<aside class="subagent-side-panel"><header class="subagent-side-header"><div class="subagent-side-identity"><div class="subagent-side-line"><span class="subagent-side-name">worker with a long name</span></div><div class="subagent-side-line"><span class="subagent-side-task">A long task description</span><span class="subagent-side-model">Sonnet</span></div></div><nav class="subagent-side-faces"><button class="subagent-side-switch">A</button><button class="subagent-side-switch">B</button></nav><button class="subagent-side-close" aria-label="Close subagent panel">×</button></header><div class="subagent-side-body">Steps</div></aside>';
+      const panel = '<aside class="subagent-side-panel"><header class="subagent-side-header"><button class="file-pane-icon" aria-label="Back" disabled>←</button><button class="file-pane-icon" aria-label="Forward" disabled>→</button><svg width="19" height="19" aria-hidden="true"></svg><div class="subagent-side-identity" title="A long task description"><div class="subagent-side-line"><span class="subagent-side-name">worker with a long name</span><span class="subagent-side-model">Sonnet</span></div></div><button class="subagent-side-close" aria-label="Close subagent panel">×</button></header><div class="subagent-side-body">Steps</div></aside>';
       function snapshot() {
         const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x:r.x, y:r.y, width:r.width, height:r.height, right:r.right, bottom:r.bottom }; };
         const close = document.querySelector('.subagent-side-close');
         close.focus({ preventScroll:true });
         const r = close.getBoundingClientRect();
-        return { pane:rect('#pane'), parent:rect('.subagent-parent'), transcript:rect('.parent-transcript'), composer:rect('textarea'), panel:rect('aside'), close:rect('.subagent-side-close'), reachable:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2) === close, focused:document.activeElement === close };
+        return { pane:rect('#pane'), parent:rect('.subagent-parent'), transcript:rect('.parent-transcript'), composer:rect('textarea'), panel:rect('aside'), header:rect('.subagent-side-header'), name:rect('.subagent-side-name'), model:rect('.subagent-side-model'), close:rect('.subagent-side-close'), reachable:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2) === close, focused:document.activeElement === close };
       }
       pane.style.width = '360px';
       layout.insertAdjacentHTML('beforeend', panel);
@@ -42,18 +44,18 @@ test.skipIf(!layoutBrowser)('panel stays reachable when opened in a narrow pane 
       const wide = snapshot();
       pane.style.width = '360px';
       const resizedNarrow = snapshot();
-      document.querySelector('.subagent-side-close').addEventListener('click', () => document.querySelector('aside').remove());
+      const retainedPanel = document.querySelector('aside');
+      document.querySelector('.subagent-side-close').addEventListener('click', () => { retainedPanel.hidden = true; retainedPanel.style.display = 'none'; });
       document.querySelector('.subagent-side-close').click();
       const closedParent = document.querySelector('.subagent-parent').getBoundingClientRect();
-      document.querySelector('#result').textContent = JSON.stringify({ broken, openedNarrow, wide, resizedNarrow, closedHeight:closedParent.height });
+      document.querySelector('#result').textContent = JSON.stringify({ broken, openedNarrow, wide, resizedNarrow, retained:document.querySelector('aside') === retainedPanel, hidden:retainedPanel.hidden, closedHeight:closedParent.height });
     </script>`)
     const run = runLayoutBrowser(file, join(scratch, 'profile'), 1400)
     const output = run.stdout.match(/<pre id="result">(.*?)<\/pre>/)?.[1]
     expect(output, run.diagnostics).toBeDefined()
     const result = JSON.parse(output!)
     expect(result.broken.parent.width).toBe(0)
-    expect(result.broken.close.x).toBe(434)
-    expect(result.broken.close.right).toBe(460)
+    expect(result.broken.close.right).toBeGreaterThan(result.broken.pane.right)
     expect(result.broken.reachable).toBe(false)
     for (const geometry of [result.openedNarrow, result.resizedNarrow]) {
       expect(geometry.parent.width).toBe(360)
@@ -65,10 +67,16 @@ test.skipIf(!layoutBrowser)('panel stays reachable when opened in a narrow pane 
       expect(geometry.close.right).toBeLessThanOrEqual(geometry.pane.right)
       expect(geometry.reachable).toBe(true)
       expect(geometry.focused).toBe(true)
+      expect(geometry.header.height).toBe(40)
+      expect(geometry.name.y + geometry.name.height / 2).toBe(geometry.model.y + geometry.model.height / 2)
+      expect(geometry.model.right).toBeLessThanOrEqual(geometry.close.x)
     }
     expect(result.wide.panel.width).toBe(480)
     expect(result.wide.parent.width).toBe(720)
     expect(result.wide.panel.x).toBe(result.wide.parent.right)
+    expect(result.wide.header.height).toBe(40)
+    expect(result.retained).toBe(true)
+    expect(result.hidden).toBe(true)
     expect(result.closedHeight).toBe(700)
   } finally {
     rmSync(scratch, { recursive: true, force: true })

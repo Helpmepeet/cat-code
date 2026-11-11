@@ -5,10 +5,31 @@ import { useEntranceLatch, useEntranceOnChange } from './entranceLatch.js'
 import { subagentDockLayout, placeSubagentTooltip } from './subagentDockLayout.js'
 import { animateDockMorph, animateDockReorder, dockMorphStart, dockRowRects, type DockMorphStart } from './subagentDockMotion.js'
 import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.js'
+import type { SlotOccupant } from './filePaneState.js'
+import { FileTypeIcon, type FileIconRenderKind } from './FileTypeIcon.js'
+import './filePaneFiles.css'
+import './subagentDock.css'
+
+export type DockView = { kind: 'browser' | 'computer' | 'output'; label: string; detail: string; running?: boolean }
+export type DockFile = { path: string; name: string; parent: string; renderKind?: FileIconRenderKind }
+type DockItemsProps = {
+  views?: readonly DockView[]
+  files?: readonly DockFile[]
+  fileAvailable?: boolean
+  fileCount?: number
+  openedFileCount?: number
+  selectedKind?: SlotOccupant | null
+  selectedFile?: string | null
+  selectedWorker?: string | null
+  onOpenView?: (kind: DockView['kind']) => void
+  onOpenFile?: (path: string) => void
+  onOpenFiles?: () => void
+  onToggleFile?: () => void
+}
 
 type Tip = { agentId: string; mode: 'row' | 'chip'; anchor: HTMLElement; hiding?: boolean }
 
-export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChange, onClearFinished, onOpenWorker, onOpenWorkers, onDetailsVisibleChange }: {
+export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChange, onClearFinished, onOpenWorker, onOpenWorkers, onDetailsVisibleChange, views = [], files = [], fileAvailable = false, fileCount = files.length, openedFileCount = files.length, selectedKind = null, selectedFile = null, selectedWorker = null, onOpenView, onOpenFile, onOpenFiles, onToggleFile }: {
   state: DerivedSubagentDock
   collapsed: boolean
   hidden?: boolean
@@ -17,10 +38,10 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   onOpenWorker: (row: SubagentDockRow) => void
   onOpenWorkers: () => void
   onDetailsVisibleChange?: (visible: boolean) => void
-}) {
+} & DockItemsProps) {
   const root = useRef<HTMLDivElement>(null)
   const panel = useRef<HTMLDivElement>(null)
-  const chip = useRef<HTMLButtonElement>(null)
+  const chip = useRef<HTMLDivElement>(null)
   const tooltip = useRef<HTMLDivElement>(null)
   const pane = useRef<HTMLElement | null>(null)
   const [geometry, setGeometry] = useState({ width: 0, height: 0, transcriptWidth: 900 })
@@ -42,13 +63,23 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   const rows = [...state.active, ...state.finished]
   const rowLayoutKey = JSON.stringify([state.active.map(row => row.agentId), state.finished.map(row => row.agentId)])
   const freshResumes = new Set(rows.filter(row => row.state === 'resumed' && previousStates.current !== null && previousStates.current.get(row.agentId) !== `${row.state}:${row.runKey}:${row.resumedAt ?? ''}`).map(row => row.agentId))
-  const hasRows = rows.length > 0
-  const { flat, fits } = subagentDockLayout(geometry.width, geometry.transcriptWidth)
-  const expanded = fits && ((flat && !collapsed) || floating)
+  const hasAgents = rows.length > 0
+  const hasFiles = fileAvailable || files.length > 0
+  const hasRows = hasAgents || views.length > 0 || hasFiles
+  const orderedViews = [...views].sort((a, b) => ['browser', 'computer', 'output'].indexOf(a.kind) - ['browser', 'computer', 'output'].indexOf(b.kind))
+  const { flat } = subagentDockLayout(geometry.width, geometry.transcriptWidth)
+  const expanded = (flat && !collapsed) || floating
   const panelShown = expanded || morphing
-  const hasChip = state.chipFaces.length > 0
-  const visibleFaces = state.chipFaces.slice(0, Math.max(1, Math.min(6, Math.floor((geometry.width - 74) / 19))))
-  const more = state.chipFaces.length - visibleFaces.length
+  const hasChip = hasRows
+  const chipRoom = geometry.width - 48
+  const controlsWidth = 28 + orderedViews.length * 24 + (hasFiles ? openedFileCount > 1 ? 44 : 24 : 0) +
+    (hasAgents && (hasFiles || views.length) ? 10 : 0)
+  const moreWidth = String(rows.length).length * 7 + 14
+  const faceLimit = geometry.width > 0
+    ? Math.max(0, Math.min(6, Math.floor((chipRoom - controlsWidth - (rows.length > 6 || rows.length * 24 + controlsWidth > chipRoom ? moreWidth : 0)) / 24)))
+    : 6
+  const visibleFaces = rows.slice(0, faceLimit)
+  const more = rows.length - visibleFaces.length
   const tipRow = tip ? rows.find(row => row.agentId === tip.agentId) : null
 
   const detailsVisible = !hidden && tip !== null && !!tipRow && !tip.hiding
@@ -116,7 +147,6 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   const changeExpanded = (opening: boolean) => {
     if (morphing) return
     closeTip(true)
-    if (opening && !fits) { onOpenWorkers(); return }
     if (!reducedMotion && chip.current) {
       pendingMorph.current = { start: dockMorphStart(chip.current), opening }
       setMorphing(true)
@@ -142,8 +172,8 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
     if (hidden || morphing || pendingFocus.current === null) return
     const opening = pendingFocus.current
     pendingFocus.current = null
-    if (opening) panel.current?.querySelector<HTMLButtonElement>('[data-dock-row], [data-finished-toggle]')?.focus()
-    else chip.current?.focus()
+    if (opening) panel.current?.querySelector<HTMLButtonElement>('[data-dock-row], [data-finished-toggle], .subagent-dock-row, .dock-file')?.focus()
+    else chip.current?.querySelector<HTMLButtonElement>('.dock-expand')?.focus()
   })
 
   useLayoutEffect(() => {
@@ -161,7 +191,7 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
     const parent = pane.current
     const dock = root.current
     if (tip && (!tipRow || !tip.anchor.isConnected || tip.anchor.closest('[inert]') ||
-        tip.mode === 'chip' && !state.chipFaces.some(row => row.agentId === tip.agentId))) { setTip(null); return }
+        tip.mode === 'chip' && !rows.some(row => row.agentId === tip.agentId))) { setTip(null); return }
     if (!tip || !tipRow || !element || !parent || !dock) return
     const place = () => {
       const anchorBox = tip.anchor.getBoundingClientRect()
@@ -193,21 +223,16 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
       currentPanel?.removeEventListener('scroll', place, true)
       tip.anchor.classList.remove('subagent-dock-row-tipped')
     }
-  }, [tip, tipRow, geometry, finishedOpen, state.chipFaces])
+  }, [tip, tipRow, geometry, finishedOpen, state.active, state.finished])
 
   useEffect(() => {
     if (hidden || !hasRows) return
     const key = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
       if (tip) closeTip(true)
-      else if (floating) changeExpanded(false)
-    }
-    const outside = (event: MouseEvent) => {
-      if (floating && event.target instanceof Node && !root.current?.contains(event.target)) changeExpanded(false)
     }
     document.addEventListener('keydown', key)
-    document.addEventListener('mousedown', outside)
-    return () => { document.removeEventListener('keydown', key); document.removeEventListener('mousedown', outside) }
+    return () => { document.removeEventListener('keydown', key) }
   })
 
   useEffect(() => {
@@ -225,18 +250,29 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   const chipLabel = `Subagents: ${visibleFaces.map(row => `${row.name || row.task || 'Subagent'}, ${row.state}`).join('; ')}${more > 0 ? `; ${more} more` : ''}`
   return (
     <div ref={root} hidden={hidden} inert={hidden} className={`subagent-dock${flat ? ' subagent-dock-flat' : ''}${reducedMotion ? ' subagent-dock-reduced' : ''}`} data-layout={expanded ? flat ? 'panel' : 'floating' : 'chip'}>
-      {hasChip ? <button ref={chip} type="button" data-window-overlay className={`subagent-dock-chip${panelShown ? ' subagent-dock-hidden' : ''}`} aria-label={chipLabel} aria-expanded={expanded} aria-controls={fits ? panelId : undefined} aria-hidden={panelShown || undefined} tabIndex={panelShown ? -1 : 0} aria-describedby={tip?.mode === 'chip' ? tipId : undefined} onClick={() => changeExpanded(true)} onFocus={event => { const first = visibleFaces[0]; if (first) showTip(first, event.currentTarget, 'chip') }} onBlur={() => closeTip()} onMouseLeave={() => closeTip()}>
-        {visibleFaces.map(row => <span key={row.agentId} className="subagent-dock-chip-slot" onMouseEnter={event => showTip(row, event.currentTarget, 'chip')}><DockFace row={row} /></span>)}
+      {hasChip ? <div ref={chip} data-window-overlay className={`subagent-dock-chip subagent-dock-switcher${panelShown ? ' subagent-dock-hidden' : ''}`} role="group" aria-label={chipLabel} aria-hidden={panelShown || undefined} inert={panelShown} onMouseLeave={() => closeTip()}>
+        {visibleFaces.map(row => <button type="button" key={row.agentId} data-dock-agent={row.agentId} className="dock-slot" aria-label={row.name || row.task || 'Subagent'} aria-pressed={selectedKind === 'worker' && selectedWorker === row.agentId} onClick={() => onOpenWorker(row)} onFocus={event => showTip(row, event.currentTarget, 'chip')} onBlur={() => closeTip()} onMouseEnter={event => showTip(row, event.currentTarget, 'chip')}><DockFace row={row} /></button>)}
         {more > 0 ? <span className="subagent-dock-more">+{more}</span> : null}
-      </button> : null}
-      <div ref={panel} id={panelId} data-window-overlay role="region" aria-label="Subagents" aria-hidden={!panelShown || undefined} inert={!expanded} className={`subagent-dock-panel${panelShown ? '' : ' subagent-dock-hidden'}${flat ? '' : ' subagent-dock-floating'}`}>
-        <div className="subagent-dock-header"><span>SUBAGENTS</span><button type="button" aria-label="Collapse subagents" onClick={() => changeExpanded(false)}>⌃</button></div>
+        {hasAgents && (hasFiles || views.length > 0) ? <i className="dock-seam" /> : null}
+        {hasFiles ? <button type="button" className="dock-slot" aria-label="Files" title="Files" aria-pressed={selectedKind === 'file'} onClick={onToggleFile}><DockIcon kind="file" />{openedFileCount > 1 ? <span className="dock-count">{openedFileCount}</span> : null}</button> : null}
+        {orderedViews.map(view => <button type="button" key={view.kind} data-dock-view={view.kind} className="dock-slot" aria-label={view.label} title={`${view.label}${view.detail ? `: ${view.detail}` : ''}`} aria-pressed={selectedKind === view.kind} onClick={() => onOpenView?.(view.kind)}><DockIcon kind={view.kind} />{view.kind === 'computer' && view.running ? <i className="subagent-dock-badge subagent-dock-badge-running" /> : null}</button>)}
+        <button type="button" className="dock-slot dock-expand" aria-label="Show all" aria-expanded={expanded} aria-controls={panelId} onClick={() => changeExpanded(true)}>⌄</button>
+      </div> : null}
+      <div ref={panel} id={panelId} data-window-overlay role="region" aria-label="Side panes" aria-hidden={!panelShown || undefined} inert={!expanded} className={`subagent-dock-panel subagent-dock-unified${panelShown ? '' : ' subagent-dock-hidden'}${flat ? '' : ' subagent-dock-floating'}`}>
         <div className="subagent-dock-list">
+          {hasAgents ? <div className="subagent-dock-header"><span>SUBAGENTS</span><button type="button" aria-label="Collapse subagents" onClick={() => changeExpanded(false)}>⌃</button></div> : null}
+          <div className="subagent-dock-agents" data-selected-worker={selectedKind === 'worker' ? selectedWorker ?? undefined : undefined}>
           {[
-            ...state.active.map(row => <div key={row.agentId} className="subagent-dock-row-wrapper"><DockRow row={row} arriving={freshResumes.has(row.agentId)} finished={false} reducedMotion={reducedMotion} describedBy={tip?.agentId === row.agentId && tip.mode === 'row' ? tipId : undefined} onOpen={onOpenWorker} onShow={showTip} onHide={closeTip} /></div>),
+            ...state.active.map(row => <div key={row.agentId} className="subagent-dock-row-wrapper"><DockRow row={row} selected={selectedKind === 'worker' && selectedWorker === row.agentId} arriving={freshResumes.has(row.agentId)} finished={false} reducedMotion={reducedMotion} describedBy={tip?.agentId === row.agentId && tip.mode === 'row' ? tipId : undefined} onOpen={onOpenWorker} onShow={showTip} onHide={closeTip} /></div>),
             ...(state.finished.length ? [<div key="finished-header" className="subagent-dock-finished-header"><button type="button" data-finished-toggle aria-expanded={finishedOpen} aria-controls={state.finished.map(row => `${finishedId}-${row.agentId}`).join(' ')} onClick={() => { closeTip(true); setFinishedOpen(open => !open) }}><span aria-hidden="true">{finishedOpen ? '⌄' : '›'}</span> Finished <span>{state.finished.length}</span></button><button type="button" onClick={onClearFinished}>Clear</button></div>] : []),
-            ...state.finished.map(row => <div key={row.agentId} id={`${finishedId}-${row.agentId}`} className={`subagent-dock-row-wrapper subagent-dock-finished-row${finishedOpen ? '' : ' subagent-dock-finished-closed'}`} inert={!finishedOpen} aria-hidden={!finishedOpen || undefined}><DockRow row={row} arriving={false} finished reducedMotion={reducedMotion} describedBy={tip?.agentId === row.agentId && tip.mode === 'row' ? tipId : undefined} onOpen={onOpenWorker} onShow={showTip} onHide={closeTip} /></div>),
+            ...state.finished.map(row => <div key={row.agentId} id={`${finishedId}-${row.agentId}`} className={`subagent-dock-row-wrapper subagent-dock-finished-row${finishedOpen ? '' : ' subagent-dock-finished-closed'}`} inert={!finishedOpen} aria-hidden={!finishedOpen || undefined}><DockRow row={row} selected={selectedKind === 'worker' && selectedWorker === row.agentId} arriving={false} finished reducedMotion={reducedMotion} describedBy={tip?.agentId === row.agentId && tip.mode === 'row' ? tipId : undefined} onOpen={onOpenWorker} onShow={showTip} onHide={closeTip} /></div>),
           ]}
+          </div>
+          {orderedViews.length ? <><div className={`subagent-dock-header${hasAgents ? ' dock-subheader' : ''}`}><span>VIEWS</span>{!hasAgents ? <button type="button" aria-label="Collapse" onClick={() => changeExpanded(false)}>⌃</button> : null}</div>
+            {orderedViews.map(view => <button type="button" key={view.kind} data-dock-view={view.kind} className="subagent-dock-row" aria-pressed={selectedKind === view.kind} onClick={() => onOpenView?.(view.kind)}><DockIcon kind={view.kind} /><span className="subagent-dock-row-main"><span className="subagent-dock-line-a"><span className="subagent-dock-name dock-plain">{view.label}</span></span><span className="subagent-dock-line-b"><span className="subagent-dock-task">{view.detail}</span></span></span></button>)}</> : null}
+          {hasFiles ? <><div className={`subagent-dock-header${hasAgents || views.length ? ' dock-subheader' : ''}`}><span>FILES</span>{!hasAgents && !views.length ? <button type="button" aria-label="Collapse" onClick={() => changeExpanded(false)}>⌃</button> : null}</div>
+            {files.map(file => <button type="button" key={file.path} className="file-pane-file-row dock-file" aria-pressed={selectedKind === 'file' && selectedFile === file.path} onClick={() => onOpenFile?.(file.path)} title={file.path}><FileTypeIcon path={file.path} renderKind={file.renderKind} /><span className="file-pane-file-name">{file.name}</span><span className="file-pane-file-parent"><bdi>{file.parent}</bdi></span></button>)}
+            {fileCount > openedFileCount ? <button type="button" className="file-pane-file-row dock-file dock-all" onClick={onOpenFiles}><DockIcon kind="files" /><span className="file-pane-file-name">All files</span><span className="file-pane-file-parent">{fileCount}</span></button> : null}</> : null}
         </div>
       </div>
       {tip && tipRow ? <div ref={tooltip} id={tipId} role="tooltip" className={`subagent-dock-tip subagent-dock-tip-${tip.mode}${tip.hiding ? ' subagent-dock-tip-hiding' : ''}`} onMouseEnter={() => { clearTipTimer(); setTip(current => current ? { ...current, hiding: false } : null) }} onMouseLeave={() => closeTip()}>
@@ -249,13 +285,20 @@ export function SubagentDock({ state, collapsed, hidden = false, onCollapsedChan
   )
 }
 
+function DockIcon({ kind }: { kind: 'file' | 'files' | DockView['kind'] }) {
+  return <span className="dock-row-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {kind === 'browser' ? <circle cx="12" cy="12" r="9" /> : kind === 'computer' ? <rect x="3" y="4" width="18" height="12" rx="2" /> : kind === 'output' ? <rect x="3" y="4" width="18" height="16" rx="2" /> : null}
+    <path d={kind === 'browser' ? 'M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18' : kind === 'computer' ? 'M8 20h8M12 16v4' : kind === 'output' ? 'M7 9h10M7 12h10M7 15h6' : kind === 'files' ? 'M5 3h14v18H5zM8 7h8M8 11h8M8 15h8' : 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6'} />
+  </svg></span>
+}
+
 function DockFace({ row }: { row: SubagentDockRow }) {
   const face = useAgentFaceRegistry().faceFor(row.agentId, row.name)
   return <span className="subagent-dock-face" data-dock-face={row.agentId} aria-hidden="true"><AgentFace axes={face.axes} fill={face.fill} size={15} /><span className={`subagent-dock-badge subagent-dock-badge-${row.state}`} /></span>
 }
 
-function DockRow({ row, arriving, finished, reducedMotion, describedBy, onOpen, onShow, onHide }: {
-  row: SubagentDockRow; arriving: boolean; finished: boolean; reducedMotion: boolean; describedBy?: string
+function DockRow({ row, selected, arriving, finished, reducedMotion, describedBy, onOpen, onShow, onHide }: {
+  row: SubagentDockRow; selected: boolean; arriving: boolean; finished: boolean; reducedMotion: boolean; describedBy?: string
   onOpen: (row: SubagentDockRow) => void
   onShow: (row: SubagentDockRow, anchor: HTMLElement, mode: Tip['mode']) => void
   onHide: () => void
@@ -264,7 +307,7 @@ function DockRow({ row, arriving, finished, reducedMotion, describedBy, onOpen, 
   const arrival = useEntranceLatch(arriving && !reducedMotion ? new Set([arrivalKey]) : new Set<string>(), 1850)
   const arrivingNow = arrival.active.has(arrivalKey) && !reducedMotion
   const badge = useEntranceOnChange(row.state, !reducedMotion, 'subagent-dock-state-change')
-  return <button type="button" ref={arrival.refFor(arrivalKey, 'subagent-dock-arrival')} onAnimationEnd={event => arrival.onAnimationEnd(arrivalKey, event)} data-dock-row={row.agentId} className={`subagent-dock-row${finished ? ' subagent-dock-row-finished' : ''}${arrivingNow ? ' subagent-dock-arrival' : ''}${row.settling ? ' subagent-dock-settling' : ''}`} aria-label={`${row.name || row.task || 'Subagent'}, ${row.state}`} aria-describedby={describedBy} onClick={() => onOpen(row)} onFocus={event => onShow(row, event.currentTarget, 'row')} onBlur={onHide} onMouseEnter={event => onShow(row, event.currentTarget, 'row')} onMouseLeave={onHide}>
+  return <button type="button" ref={arrival.refFor(arrivalKey, 'subagent-dock-arrival')} onAnimationEnd={event => arrival.onAnimationEnd(arrivalKey, event)} data-dock-row={row.agentId} aria-pressed={selected} className={`subagent-dock-row${finished ? ' subagent-dock-row-finished' : ''}${arrivingNow ? ' subagent-dock-arrival' : ''}${row.settling ? ' subagent-dock-settling' : ''}`} aria-label={`${row.name || row.task || 'Subagent'}, ${row.state}`} aria-describedby={describedBy} onClick={() => onOpen(row)} onFocus={event => onShow(row, event.currentTarget, 'row')} onBlur={onHide} onMouseEnter={event => onShow(row, event.currentTarget, 'row')} onMouseLeave={onHide}>
     <span ref={badge.ref} onAnimationEnd={badge.onAnimationEnd} className={badge.active ? 'subagent-dock-state-change' : undefined}><DockFace row={row} /></span>
     <span className="subagent-dock-row-main"><span className="subagent-dock-line-a"><span className="subagent-dock-name">{row.name || row.task || 'Subagent'}</span>{row.stateWord && row.state !== 'running' && row.state !== 'background' ? <span className={`subagent-dock-detail subagent-dock-word subagent-dock-word-${row.state}`}>{row.stateWord}</span> : null}{row.state === 'waiting' ? <span className="subagent-dock-detail"><Baton owner="assistant" /></span> : row.rowModel ? <span className="subagent-dock-detail subagent-dock-model">{row.rowModel}</span> : null}</span><span className="subagent-dock-line-b subagent-dock-detail"><span className="subagent-dock-task">{row.name ? row.task : ''}</span><AgentTypeLabel role={row.type} /></span></span>
   </button>

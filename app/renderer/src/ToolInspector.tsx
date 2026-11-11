@@ -1,3 +1,5 @@
+import { SidePaneNavigation } from './SidePaneNavigation.js'
+
 /**
  * The full-output panel: a tool call's complete output, docked beside the
  * transcript in `SubagentWorkspace`'s right-hand slot.
@@ -175,7 +177,8 @@ function OutputPanel({
     >
       {embedded ? null : <ResizeHandle />}
       <header className="tool-output-header">
-        <div className="tool-output-identity">
+        <SidePaneNavigation />
+        {embedded ? <span className="pane-title" title={model.target}>Full output</span> : <div className="tool-output-identity">
           {back ? (
             <button
               type="button"
@@ -199,7 +202,7 @@ function OutputPanel({
             changes={changes}
             files={model.diffs.length}
           />
-        </div>
+        </div>}
         {onClose ? (
           <button
             type="button"

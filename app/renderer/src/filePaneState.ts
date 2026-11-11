@@ -14,8 +14,17 @@ export type FilePaneScroll = FilePreviewScroll & { markdown?: MarkdownReadingPos
 export type PreviewOpenResult = { ok: true } | { ok: false; message: string; reason?: string }
 export type FilePaneHistoryEntry = { path: string; scroll: FilePaneScroll; routeKey?: string; baseUrl?: string; previewId?: string }
 export type FilePaneOutput = { id: string; fileIndex: number; request: number }
-type FilePaneCheckpoint = Pick<FilePaneSession, 'open' | 'file' | 'committedFile' | 'lastPath' | 'history' | 'forward' | 'scroll' | 'note' | 'lineTarget' | 'requestedPath'>
+type SidePaneEntry =
+  | { kind: 'file'; target: FilePaneHistoryEntry | null }
+  | { kind: 'worker'; worker: SubagentDockRow }
+  | { kind: 'output'; output: FilePaneOutput }
+  | { kind: 'browser'; entry: string }
+  | { kind: 'computer' }
+type FilePaneCheckpoint = Pick<FilePaneSession, 'open' | 'file' | 'committedFile' | 'lastPath' | 'history' | 'forward' | 'scroll' | 'note' | 'lineTarget' | 'requestedPath' | 'sideHistory' | 'sideHistoryIndex' | 'visible'>
 export type FilePaneSession = {
+  filesRequest: number
+  sideHistory: readonly SidePaneEntry[]
+  sideHistoryIndex: number
   opened: OpenedPaneFiles
   requestedPath: string | null
   lineTarget: { line: number; token: number } | null
@@ -38,6 +47,7 @@ export type FilePaneSession = {
   checkpoint: FilePaneCheckpoint | null
 }
 const EMPTY: FilePaneSession = {
+  filesRequest: 0, sideHistory: [], sideHistoryIndex: -1,
   opened: new Map(), requestedPath: null, lineTarget: null, open: false, file: null, committedFile: null, lastPath: null, visible: null,
   worker: null, output: null, browser: null, computer: null, screenActivity: EMPTY_SCREEN_ACTIVITY, hiddenScreens: [],
   width: null, history: [], forward: [], scroll: { x: 0, y: 0 }, note: null, checkpoint: null,
@@ -47,6 +57,13 @@ const listeners = new Map<string, Set<() => void>>()
 const focusers = new Map<string, () => void>()
 const scrollReaders = new Map<string, () => Promise<FilePaneScroll>>()
 const opening = new Map<string, number>()
+const stepping = new Set<string>()
+const sideNavigationVersions = new Map<string, number>()
+function cancelSidePaneStep(id: string): void {
+  if (stepping.has(id)) opening.set(id, (opening.get(id) ?? 0) + 1)
+  sideNavigationVersions.set(id, (sideNavigationVersions.get(id) ?? 0) + 1)
+  stepping.delete(id)
+}
 const pendingOpenings = new Map<string, Set<number>>()
 const deferredReleases = new Map<string, Map<string, FilePreviewDescriptor>>()
 const viewerFocusers = new Map<string, { focus: () => void; failed?: () => void }>()
@@ -57,6 +74,8 @@ function fileCheckpoint(state: FilePaneSession, scroll: FilePaneScroll): FilePan
   return {
     open: state.open, file: state.file, committedFile: state.committedFile, lastPath: state.lastPath,
     history: state.history, forward: state.forward, scroll, note: state.note, lineTarget: state.lineTarget, requestedPath: state.requestedPath,
+    sideHistory: state.sideHistory, sideHistoryIndex: state.sideHistoryIndex,
+    visible: state.visible,
   }
 }
 
@@ -113,11 +132,99 @@ export function updateFilePaneSession(id: string, patch: Partial<FilePaneSession
   const next = { ...previous, ...patch }
   if (!next.open && !next.worker && !next.output && !next.browser && !next.computer) { next.visible = null; next.width = null }
   else if (next.visible === 'file' && !next.open || next.visible === 'worker' && !next.worker || next.visible === 'output' && !next.output || next.visible === 'browser' && !next.browser || next.visible === 'computer' && !next.computer) {
-    next.visible = next.open ? 'file' : next.worker ? 'worker' : next.output ? 'output' : next.browser && !next.hiddenScreens.includes('browser') ? 'browser' : next.computer && !next.hiddenScreens.includes('computer') ? 'computer' : null
+    next.visible = null
   }
+  if (!stepping.has(id) && patch.sideHistory === undefined) recordSidePaneEntry(previous, next)
   if ((Object.keys(next) as Array<keyof FilePaneSession>).every(key => Object.is(previous[key], next[key]))) return
   sessions.set(id, next)
   listeners.get(id)?.forEach(listener => listener())
+}
+function sidePaneEntry(state: FilePaneSession): SidePaneEntry | null {
+  switch (state.visible) {
+    case 'file':
+      if (state.checkpoint || state.file && !samePaneRevision(state.file, state.committedFile)) return null
+      return { kind: 'file', target: state.file ? historyEntry(state.file, state.scroll) : null }
+    case 'worker': return state.worker ? { kind: 'worker', worker: state.worker } : null
+    case 'output': return state.output ? { kind: 'output', output: state.output } : null
+    case 'browser': return state.browser?.historyEntry ? { kind: 'browser', entry: state.browser.historyEntry } : null
+    case 'computer': return { kind: 'computer' }
+    default: return null
+  }
+}
+function sameSidePaneEntry(a: SidePaneEntry | undefined, b: SidePaneEntry): boolean {
+  if (!a || a.kind !== b.kind) return false
+  switch (b.kind) {
+    case 'file': return a.kind === 'file' && a.target?.path === b.target?.path && a.target?.routeKey === b.target?.routeKey
+    case 'worker': return a.kind === 'worker' && a.worker.agentId === b.worker.agentId && a.worker.runKey === b.worker.runKey
+    case 'output': return a.kind === 'output' && a.output.id === b.output.id && a.output.fileIndex === b.output.fileIndex
+    case 'browser': return a.kind === 'browser' && a.entry === b.entry
+    case 'computer': return true
+  }
+}
+function recordSidePaneEntry(previous: FilePaneSession, next: FilePaneSession): void {
+  const entry = sidePaneEntry(next)
+  if (!entry) return
+  const current = previous.sideHistory[previous.sideHistoryIndex]
+  if (sameSidePaneEntry(current, entry)) return
+  next.sideHistory = [...previous.sideHistory.slice(0, previous.sideHistoryIndex + 1), entry]
+  next.sideHistoryIndex = next.sideHistory.length - 1
+}
+export function useSidePaneNavigation(id: string, onFailure?: (message: string) => void): { canGoBack: boolean; canGoForward: boolean; back: () => void; forward: () => void } {
+  const state = useFilePaneSession(id)
+  return {
+    canGoBack: state.sideHistoryIndex > 0,
+    canGoForward: state.sideHistoryIndex + 1 < state.sideHistory.length,
+    back: useCallback(() => { void stepSidePaneHistory(id, 'back').then(result => { if (!result.ok) onFailure?.(result.message) }) }, [id, onFailure]),
+    forward: useCallback(() => { void stepSidePaneHistory(id, 'forward').then(result => { if (!result.ok) onFailure?.(result.message) }) }, [id, onFailure]),
+  }
+}
+export function requestFilePaneFiles(id: string): void {
+  const state = getFilePaneSession(id)
+  updateFilePaneSession(id, { open: true, filesRequest: state.filesRequest + 1 })
+  showSlotOccupant(id, 'file')
+}
+export async function stepSidePaneHistory(id: string, direction: 'back' | 'forward'): Promise<PreviewOpenResult> {
+  if (stepping.has(id)) return HANDLED
+  const state = getFilePaneSession(id)
+  const index = state.sideHistoryIndex + (direction === 'back' ? -1 : 1)
+  const target = state.sideHistory[index]
+  if (!target) return HANDLED
+  const version = sideNavigationVersions.get(id) ?? 0
+  const current = () => sessions.has(id) && (sideNavigationVersions.get(id) ?? 0) === version
+  stepping.add(id)
+  try {
+    if (state.visible === 'file') await captureFilePaneScroll(id)
+    if (!current()) return HANDLED
+    if (target.kind === 'browser') {
+      const result = await window.catcode.browserPaneCommand({ appSessionId: id, command: 'history', historyEntry: target.entry })
+      if (!result.ok) return result
+    } else if (target.kind === 'file' && target.target) {
+      const file = getFilePaneSession(id).file
+      let restored = false
+      if (file?.kind === 'localhost' && target.target.routeKey && target.target.previewId === file.id) {
+        let descriptor: FilePreviewDescriptor | null = null
+        try { descriptor = await window.catcode.navigateLocalhostPreview(file.id, target.target.routeKey, target.target.scroll) } catch { /* Recreate retired routes through the normal preview boundary. */ }
+        if (!current()) return HANDLED
+        if (descriptor) {
+          updateFilePaneSession(id, { file: descriptor, committedFile: descriptor, checkpoint: null, open: true, scroll: target.target.scroll, lastPath: descriptor.path, note: previewDescriptorNote(descriptor) })
+          restored = true
+        }
+      }
+      if (!restored) {
+        const result = await openFile(id, target.target.path, { textWindow: target.target.scroll.textWindow })
+        if (!result.ok) return result
+        if (!current()) return HANDLED
+        updateFilePaneSession(id, { scroll: target.target.scroll })
+      }
+    } else if (target.kind === 'file') updateFilePaneSession(id, { open: true, filesRequest: getFilePaneSession(id).filesRequest + 1 })
+    else if (target.kind === 'worker') updateFilePaneSession(id, { worker: target.worker })
+    else if (target.kind === 'output') updateFilePaneSession(id, { output: { ...target.output, request: (getFilePaneSession(id).output?.request ?? 0) + 1 } })
+    if (!current()) return HANDLED
+    revealSlotOccupant(id, target.kind)
+    updateFilePaneSession(id, { sideHistoryIndex: index })
+    return HANDLED
+  } catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'Could not restore this pane' } }
+  finally { if ((sideNavigationVersions.get(id) ?? 0) === version) stepping.delete(id) }
 }
 export function registerFilePaneFocus(id: string, focus: () => void): () => void {
   focusers.set(id, focus)
@@ -164,11 +271,20 @@ export function rememberFilePaneScroll(id: string, scroll: FilePaneScroll, sourc
     const history = [...state.history]
     const last = history.at(-1)
     if (last?.path === source.path && last.routeKey === source.routeKey) history[history.length - 1] = { ...last, scroll }
-    sessions.set(id, { ...state, history, checkpoint: { ...state.checkpoint, scroll }, opened: source.kind !== 'localhost' ? updateOpenedFileScroll(state.opened, source.path, scroll) : state.opened })
+    const withScroll = (entries: readonly SidePaneEntry[], index: number) => entries.map((entry, position) =>
+      position === index && entry.kind === 'file' && entry.target?.path === source.path && entry.target.routeKey === source.routeKey
+        ? { ...entry, target: { ...entry.target, scroll } } : entry)
+    sessions.set(id, { ...state, history,
+      sideHistory: withScroll(state.sideHistory, state.sideHistoryIndex),
+      checkpoint: { ...state.checkpoint, scroll, sideHistory: withScroll(state.checkpoint.sideHistory, state.checkpoint.sideHistoryIndex) },
+      opened: source.kind !== 'localhost' ? updateOpenedFileScroll(state.opened, source.path, scroll) : state.opened })
     return
   }
   // Scroll is read when navigating. It does not repaint the shell on every pixel.
-  sessions.set(id, { ...state, scroll, opened: source && source.kind !== 'localhost' ? updateOpenedFileScroll(state.opened, source.path, scroll) : state.opened })
+  const current = state.sideHistory[state.sideHistoryIndex]
+  const sideHistory = current?.kind === 'file' && current.target && (!source || current.target.path === source.path && current.target.routeKey === source.routeKey)
+    ? state.sideHistory.map((entry, index) => index === state.sideHistoryIndex ? { ...current, target: { ...current.target!, scroll } } : entry) : state.sideHistory
+  sessions.set(id, { ...state, sideHistory, scroll, opened: source && source.kind !== 'localhost' ? updateOpenedFileScroll(state.opened, source.path, scroll) : state.opened })
 }
 async function captureScroll(id: string): Promise<FilePaneScroll> {
   try { return await scrollReaders.get(id)?.() ?? getFilePaneSession(id).scroll } catch { return getFilePaneSession(id).scroll }
@@ -180,6 +296,7 @@ async function captureForNavigation(id: string): Promise<FilePaneScroll> {
   if (page) {
     try { await window.catcode.captureLocalhostPreview(page.id) } catch { /* Navigation remains available if a bounded capture cannot finish. */ }
   }
+  rememberFilePaneScroll(id, scroll, state.checkpoint?.committedFile ?? state.committedFile ?? state.file ?? undefined)
   return scroll
 }
 export async function captureFilePaneScroll(id: string): Promise<void> {
@@ -197,7 +314,20 @@ export function rememberSlotWidth(id: string, width: number): void {
   if (state.open) writeViewPreference(defaultViewPreferenceStorage(), FILE_WIDTH_KEY, 'width', width)
 }
 export function showSlotOccupant(id: string, visible: SlotOccupant): void {
+  cancelSidePaneStep(id)
+  revealSlotOccupant(id, visible)
+}
+function revealSlotOccupant(id: string, visible: SlotOccupant): void {
   const state = getFilePaneSession(id)
+  if (state.visible === 'file' && visible !== 'file') {
+    const index = state.sideHistoryIndex
+    const entry = state.sideHistory[index]
+    void captureForNavigation(id).then(scroll => {
+      const current = sessions.get(id)
+      if (!current || entry?.kind !== 'file' || !entry.target || !sameSidePaneEntry(current.sideHistory[index], entry)) return
+      updateFilePaneSession(id, { sideHistory: current.sideHistory.map((item, position) => position === index ? { ...entry, target: { ...entry.target!, scroll } } : item) })
+    })
+  }
   const width = state.width ?? (visible === 'file' ? readFilePaneWidth() : visible === 'worker' ? 480 : readToolOutputWidth())
   updateFilePaneSession(id, {
     visible, width,
@@ -206,23 +336,23 @@ export function showSlotOccupant(id: string, visible: SlotOccupant): void {
 }
 /** Hiding a screen does not end browser automation or discard captured computer steps. */
 export function hideScreenPane(id: string, kind: ScreenKind): void {
+  cancelSidePaneStep(id)
   const state = getFilePaneSession(id)
   updateFilePaneSession(id, {
-    ...(state.visible === kind ? { visible: state.open ? 'file' : state.worker ? 'worker' : state.output ? 'output' : null } : {}),
+    ...(state.visible === kind ? { visible: null } : {}),
     screenActivity: { ...state.screenActivity, revealed: true },
     hiddenScreens: state.hiddenScreens.includes(kind) ? state.hiddenScreens : [...state.hiddenScreens, kind],
   })
 }
 export function closeFilePane(id: string): void {
+  hideSidePane(id)
+}
+export function hideSidePane(id: string): void {
+  cancelSidePaneStep(id)
   opening.set(id, (opening.get(id) ?? 0) + 1)
-  const state = getFilePaneSession(id)
-  const { file, committedFile } = state
-  const outgoingScroll = state.checkpoint?.scroll ?? state.scroll
   viewerFocusRequests.delete(id)
-  updateFilePaneSession(id, { open: false, file: null, committedFile: null, history: [], forward: [], note: null, checkpoint: null, lineTarget: null, opened: committedFile && committedFile.kind !== 'localhost' ? updateOpenedFileScroll(state.opened, committedFile.path, outgoingScroll) : state.opened })
-  flushDeferredReleases(id, true)
-  if (file) window.catcode?.releaseFilePreview(file.id)
-  if (committedFile && committedFile.id !== file?.id) window.catcode?.releaseFilePreview(committedFile.id)
+  if (getFilePaneSession(id).visible === 'file') void captureFilePaneScroll(id)
+  updateFilePaneSession(id, { visible: null })
 }
 function releaseUnusedCandidate(id: string, descriptor: FilePreviewDescriptor): void {
   const state = getFilePaneSession(id)
@@ -264,6 +394,10 @@ async function prepare(id: string, path: string, source?: FilePreviewSource, tex
   } catch { return { ok: false, message: normalizeLocalhostPreviewUrl(path) ? 'Could not open this page' : 'Could not open this file' } }
 }
 export async function requestOpenFile(id: string, path: string, options?: { external?: boolean; source?: FilePreviewSource; focus?: 'composer' | 'viewer'; textWindow?: 'start' | 'end' }): Promise<PreviewOpenResult> {
+  cancelSidePaneStep(id)
+  return openFile(id, path, options)
+}
+async function openFile(id: string, path: string, options?: { external?: boolean; source?: FilePreviewSource; focus?: 'composer' | 'viewer'; textWindow?: 'start' | 'end' }): Promise<PreviewOpenResult> {
   if (options?.external || !options?.source && !isPaneFilePath(path) && !normalizeLocalhostPreviewUrl(path)) {
     try {
       if (!isPaneFilePath(path) && !normalizeLocalhostPreviewUrl(path)) return await window.catcode.openWorkspaceFile(id, path) ? HANDLED : refusal(path)
@@ -290,7 +424,7 @@ export async function requestOpenFile(id: string, path: string, options?: { exte
     if (previous.open && previous.file?.path === descriptor.path && previous.file.id === descriptor.id) {
       if (descriptor.kind === 'text' && result.location) updateFilePaneSession(id, { lineTarget: { line: result.location.line, token }, scroll: { x: 0, y: 0, topLine: result.location.line }, requestedPath: path })
       if (descriptor.kind === 'text' && options?.textWindow && descriptor.textWindow?.side !== previous.file.textWindow?.side) updateFilePaneSession(id, { file: descriptor, scroll: { x: 0, y: 0 }, lineTarget: null })
-      showSlotOccupant(id, 'file')
+      revealSlotOccupant(id, 'file')
       if (options?.focus !== 'viewer') focusers.get(id)?.()
       else commitOpenedFilePane(id, previous.committedFile ?? descriptor)
       return HANDLED
@@ -372,9 +506,12 @@ export function recordLocalhostRoute(id: string, url: string, outgoingScroll: Fi
   const parsed = new URL(normalized)
   const path = parsed.pathname === '/' && !parsed.search && !parsed.hash ? '' : `${parsed.pathname}${parsed.search}${parsed.hash}`
   const file: FilePreviewDescriptor = { ...state.file, path: normalized, displayPath: `${parsed.host}${path}`, routeKey, blockedHost: undefined, browserNote }
+  rememberFilePaneScroll(id, outgoingScroll, state.file)
+  const retained = getFilePaneSession(id)
   updateFilePaneSession(id, {
     file, ...(samePaneRevision(state.committedFile, file) ? { committedFile: file } : {}), lastPath: normalized,
     history: replace ? state.history : [...state.history, historyEntry(state.file, outgoingScroll)], forward: replace ? state.forward : [], scroll: { x: 0, y: 0 }, note: previewDescriptorNote(file),
+    ...(replace ? { sideHistory: retained.sideHistory.map((entry, index) => index === retained.sideHistoryIndex && entry.kind === 'file' ? { kind: 'file' as const, target: historyEntry(file, { x: 0, y: 0 }) } : entry) } : {}),
   })
 }
 
@@ -384,7 +521,15 @@ export function rejectFilePaneCandidate(id: string, descriptor: FilePreviewDescr
   if (!state.open || !samePaneRevision(state.file, descriptor)) return false
   const checkpoint = state.checkpoint
   if (checkpoint) {
-    updateFilePaneSession(id, { ...checkpoint, checkpoint: null })
+    const retired = checkpoint.visible === 'worker' && !state.worker || checkpoint.visible === 'output' && !state.output ||
+      checkpoint.visible === 'browser' && !state.browser || checkpoint.visible === 'computer' && !state.computer
+    const previousVisible = retired ? checkpoint.open ? 'file' : null : checkpoint.visible
+    updateFilePaneSession(id, {
+      ...checkpoint,
+      ...(state.visible !== 'file' ? { sideHistory: state.sideHistory, sideHistoryIndex: state.sideHistoryIndex } : {}),
+      visible: state.visible === 'file' ? previousVisible : state.visible,
+      checkpoint: null,
+    })
     if (descriptor.id !== checkpoint.file?.id && descriptor.id !== checkpoint.committedFile?.id) window.catcode.releaseFilePreview(descriptor.id)
     return true
   }
@@ -394,6 +539,7 @@ export function rejectFilePaneCandidate(id: string, descriptor: FilePreviewDescr
 
 /** Confirmed session retirement releases resources; an ordinary switch does not. */
 export function disposeFilePaneSession(id: string): void {
+  cancelSidePaneStep(id)
   disposeWorkspaceFileAvailability(id)
   opening.set(id, (opening.get(id) ?? 0) + 1)
   const state = sessions.get(id)

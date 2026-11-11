@@ -41,8 +41,8 @@ test('dock reuses top-level agent candidates while live worker facts still refre
   expect(visits).toBeGreaterThan(afterFirst)
 })
 
-// This is the lifecycle owner: snapshots can evict records before parent results
-// arrive, and transcript launch acknowledgements must never imply completion.
+// Snapshots own live+owed membership; transcript launch acknowledgements must
+// never imply completion.
 test('blocked completed workers stay waiting, ordered ahead of live work and unnamed rows lead with their task', () => {
   const result = view(createSubagentDockState(), { workers: [worker({ agentId: 'b' }), worker({ status: 'completed', handoffStatus: 'blocked', blockReason: 'Need a decision', handle: 'a' })] })
   expect(result.active.map(row => [row.agentId, row.state])).toEqual([['a', 'waiting'], ['b', 'running']])
@@ -50,7 +50,7 @@ test('blocked completed workers stay waiting, ordered ahead of live work and unn
   expect(result.finished).toEqual([])
 })
 
-test('foreground disappearance waits for terminal evidence, then settles and retains the result after eviction', () => {
+test('foreground disappearance keeps grace but terminal evidence after retirement is history only', () => {
   const runningRow = agentRow({ children: [{ kind: 'assistant-text', id: 'child', sessionId: 'session', frameId: 'child-frame', messageId: 'child-msg', blockIndex: 0, parentToolUseId: 'launch-a', role: 'assistant', content: 'Checking', children: [], model: 'worker-model' }] })
   const start = view(createSubagentDockState(), { workers: [worker()], transcriptRows: [runningRow], tasks: { items: [], subagents: [{ toolUseId: 'launch-a', agentId: 'a', agentName: 'Ada', agentType: 'Explore', isSidechain: true, spawnedAt: 100, isBackgrounded: false }] } })
   expect(start.active[0]?.model).toBe('worker-model')
@@ -58,11 +58,14 @@ test('foreground disappearance waits for terminal evidence, then settles and ret
   expect(vanished.active.map(row => row.agentId)).toEqual(['a'])
   const terminalRow = agentRow({ status: 'success', result: { isError: false, content: 'Done', diff: null, agentId: 'a', agentUsage: { totalTokens: 2300, toolUses: 2 } } })
   const terminal = view(vanished.state, { nowMs: 1200, transcriptRows: [terminalRow] })
-  expect(terminal.active[0]).toMatchObject({ state: 'completed', settling: true })
-  expect(terminal.nextUpdateAt).toBe(1900)
+  expect(terminal.active).toEqual([])
+  expect(terminal.finished).toEqual([])
+  expect(terminal.state.entries.a).toMatchObject({ state: 'completed', usageLabel: '2 tool calls · 2.3k tokens' })
+  expect(terminal.nextUpdateAt).toBeNull()
   const settled = view(terminal.state, { nowMs: 1900 })
   expect(settled.active).toEqual([])
-  expect(settled.finished[0]).toMatchObject({ agentId: 'a', stripLines: ['worker-model · 2 tool calls · 2.3k tokens', null] })
+  expect(settled.finished).toEqual([])
+  expect(settled.state.entries.a).toMatchObject({ agentId: 'a', model: 'worker-model', usageLabel: '2 tool calls · 2.3k tokens' })
 })
 
 test('disappearance without terminal evidence expires without inventing a finished outcome', () => {
@@ -71,6 +74,37 @@ test('disappearance without terminal evidence expires without inventing a finish
   expect(missing.nextUpdateAt).toBe(3100)
   expect(view(missing.state, { nowMs: 3100 }).active).toEqual([])
   expect(view(missing.state, { nowMs: 3100 }).finished).toEqual([])
+})
+
+for (const status of ['completed', 'failed', 'killed'] as const) {
+  test(`${status} remains owed while roster retains it, then disappears without deleting history`, () => {
+    const owed = view(createSubagentDockState(), { workers: [worker({ status })] })
+    expect(owed.finished).toHaveLength(1)
+    // A tasks snapshot can retain the worker while snapshots update separately.
+    const taskOnly = view(owed.state, { tasks: { items: [task({ status })], subagents: [] } })
+    expect(taskOnly.finished).toHaveLength(1)
+    const retired = view(taskOnly.state)
+    expect(retired.active).toEqual([])
+    expect(retired.finished).toEqual([])
+    expect(retired.chipFaces).toEqual([])
+    expect(retired.nextUpdateAt).toBeNull()
+    expect(retired.state.entries.a).toEqual(taskOnly.state.entries.a)
+    const restored = view(createSubagentDockState(Object.values(retired.state.entries)))
+    expect(restored.active).toEqual([])
+    expect(restored.finished).toEqual([])
+    expect(restored.state.entries.a).toMatchObject({ runKey: owed.state.entries.a!.runKey })
+  })
+}
+
+test('blocked work remains owed until roster retirement without changing its retained state', () => {
+  const blocked = worker({ status: 'completed', handoffStatus: 'blocked', blockReason: 'Need a decision' })
+  const owed = view(createSubagentDockState(), { workers: [blocked] })
+  const retained = view(owed.state, { workers: [blocked], nowMs: 10_000 })
+  expect(retained.active[0]).toMatchObject({ state: 'waiting', blockReason: 'Need a decision' })
+  const retired = view(retained.state, { nowMs: 10_001 })
+  expect(retired.active).toEqual([])
+  expect(retired.finished).toEqual([])
+  expect(retired.state.entries.a).toMatchObject({ state: 'waiting' })
 })
 
 for (const [status, delay, state] of [['failed', 1500, 'failed'], ['killed', 700, 'stopped'], ['completed', 700, 'completed']] as const) {
@@ -98,13 +132,18 @@ test('all-finished chip excludes done and stopped history, retains only failures
   expect(history.finished).toHaveLength(3)
   expect(history.chipFaces.map(row => row.agentId)).toEqual(['failed'])
   const clearMarkers = [{ agentId: 'failed', runKey: history.chipFaces[0]!.runKey }]
-  const cleared = view(history.state, { clearMarkers })
+  const cleared = view(history.state, { clearMarkers, workers: [
+    worker({ agentId: 'done', status: 'completed' }),
+    worker({ agentId: 'failed', status: 'failed' }),
+    worker({ agentId: 'stopped', status: 'killed' }),
+  ] })
   expect(cleared.chipFaces).toEqual([])
   expect(cleared.finished.map(row => row.state).sort()).toEqual(['completed', 'stopped'])
   expect(Object.values(cleared.state.entries)).toHaveLength(3)
   const restored = view(createSubagentDockState(Object.values(cleared.state.entries)), { clearMarkers })
   expect(restored.chipFaces).toEqual([])
-  expect(restored.finished).toHaveLength(2)
+  expect(restored.finished).toEqual([])
+  expect(Object.values(restored.state.entries)).toHaveLength(3)
 })
 
 for (const liveState of ['running', 'waiting', 'background', 'resumed'] as const) {
@@ -184,7 +223,8 @@ test('capped unordered completions stay cleared after cold reload, while indepen
   const newRun = agentRow({ toolUseId: 'resume-1', toolName: 'ResumeAgent', input: { agentId: 'agent-1' }, status: 'success',
     agentCompletion: { status: 'completed', summary: 'Done again', result: null, usage: null } })
   const transcriptRun = reload({ transcriptRows: [...rows, newRun] })
-  expect(transcriptRun.finished.map(entry => [entry.agentId, entry.runKey])).toEqual([['agent-1', 'resume-1']])
+  expect(transcriptRun.finished).toEqual([])
+  expect(transcriptRun.state.entries['agent-1']).toMatchObject({ runKey: 'resume-1' })
   expect(Object.keys(transcriptRun.state.entries)).toHaveLength(128)
 
   const resumedAfterReload = reload({
@@ -280,9 +320,11 @@ test('alias resumes use canonical task identity and keep their transcript join a
   const completion = { ...resume, agentCompletion: { status: 'completed' as const, summary: 'Done', result: 'Checked', usage: { toolUses: 1, totalTokens: 500, durationMs: 100 } } }
   const finished = view(running.state, { transcriptRows: [completion], nowMs: 3000, reducedMotion: true })
   expect(finished.active).toEqual([])
-  expect(finished.finished.map(row => [row.agentId, row.toolUseId, row.usageLabel])).toEqual([['a', 'resume-alias', '1 tool call · 500 tokens']])
+  expect(finished.finished).toEqual([])
+  expect(finished.state.entries.a).toMatchObject({ toolUseId: 'resume-alias', usageLabel: '1 tool call · 500 tokens' })
   const restored = view(createSubagentDockState(), { transcriptRows: [original, completion], reducedMotion: true })
-  expect(restored.finished.map(row => row.agentId)).toEqual(['a'])
+  expect(restored.finished).toEqual([])
+  expect(restored.state.entries.a).toMatchObject({ toolUseId: 'resume-alias', state: 'completed' })
   const unresolved = view(createSubagentDockState(), { transcriptRows: [completion], reducedMotion: true })
   expect(unresolved.finished).toEqual([])
 })
@@ -328,7 +370,7 @@ test('an exhausted account failover never claims a successful move or a held lea
 test('a rejected resume preserves the cleared finished run and its transcript target', () => {
   const launch = agentRow({ status: 'success', result: { isError: false, content: 'Done', diff: null, agentId: 'a' } })
   const finished = view(createSubagentDockState(), { transcriptRows: [launch], reducedMotion: true })
-  const clearMarkers = [{ agentId: 'a', runKey: finished.finished[0]!.runKey }]
+  const clearMarkers = [{ agentId: 'a', runKey: finished.state.entries.a!.runKey }]
   const rejected = agentRow({ toolName: 'ResumeAgent', toolUseId: 'rejected-resume', input: { agentId: 'a' }, status: 'success', result: { isError: false, content: JSON.stringify({ success: false, message: 'No transcript to resume' }), diff: null } })
   const unchanged = view(finished.state, { transcriptRows: [launch, rejected], clearMarkers, nowMs: 2000 })
   expect(unchanged.finished).toEqual([])

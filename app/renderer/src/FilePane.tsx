@@ -15,13 +15,14 @@ import { ActionCheckIcon, ActionChevronIcon, ActionCloseIcon, ActionCopyIcon } f
 import { useToast } from './toastContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneScroll, registerFilePaneViewerFocus, commitOpenedFilePane, failFilePaneOpen, rememberFilePaneScroll,
-  isPaneFilePath, paneTargetLabel, previewDescriptorNote, recordLocalhostRoute, samePaneRevision, rejectFilePaneCandidate, requestOpenFile, stepFilePaneHistory, updateFilePaneSession, useFilePaneFields, type FilePaneScroll,
+  isPaneFilePath, paneTargetLabel, previewDescriptorNote, recordLocalhostRoute, samePaneRevision, rejectFilePaneCandidate, requestOpenFile, updateFilePaneSession, useFilePaneFields, type FilePaneScroll,
 } from './filePaneState.js'
 import { SourceTextView } from './SourceTextView.js'
 import { FilePreviewWindowControl } from './FilePreviewWindowControl.js'
 import { useSourceWrap } from './sourceWrap.js'
 import { readSourceLanguage } from './readSource.js'
 import { FilePaneFiles } from './FilePaneFiles.js'
+import { SidePaneNavigation } from './SidePaneNavigation.js'
 const PdfDocumentView = lazy(() => import('./PdfDocumentView.js').then(module => ({ default: module.PdfDocumentView })))
 import { TableDocumentView } from './TableDocumentView.js'
 import './filePane.css'
@@ -310,7 +311,25 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     if (painted.descriptor.kind !== 'text') activeBody.current.scrollTop = scroll.y
   }, [painted, appSessionId])
 
-  if (!descriptor) return null
+  if (!descriptor) return <aside ref={paneRef} className="file-pane" aria-label="Files" onKeyDown={event => {
+    if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); event.stopPropagation(); closeFilePane(appSessionId); onFocusComposer?.() }
+  }}>
+    <header className="file-pane-header">
+      <SidePaneNavigation />
+      <FilePaneFiles appSessionId={appSessionId} cwd={cwd} currentPath="" />
+      <button type="button" className="file-pane-icon" aria-label="Reload" title="Reload" disabled><ReloadIcon /></button>
+      <div className="file-pane-path file-pane-path-empty" aria-hidden="true" />
+      <button type="button" className="file-pane-copy" aria-label="Copy full path" title="Copy full path" disabled><ActionCopyIcon /></button>
+      <div className="file-pane-app-split">
+        <button type="button" className="file-pane-open-app" aria-label="Open in default application" disabled>
+          <span className="external-app-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M3 9h18M7 6.5h.01M10 6.5h.01" /></svg></span>
+        </button>
+        <button type="button" className="file-pane-choose-app" aria-label="Choose an app" disabled><ActionChevronIcon /></button>
+      </div>
+      <button type="button" className="file-pane-icon" aria-label="Close file" onClick={() => { closeFilePane(appSessionId); onFocusComposer?.() }}><ActionCloseIcon /></button>
+    </header>
+    <div className="file-pane-host" />
+  </aside>
   const showing = painted?.descriptor ?? descriptor
   const isLocalhost = showing.kind === 'localhost'
   const name = paneTargetLabel(showing.path)
@@ -365,11 +384,8 @@ export function FilePane({ appSessionId, cwd, onFocusComposer }: {
     if (event.key === 'Escape' && !event.defaultPrevented && !pathMenu && !appMenu) { event.preventDefault(); event.stopPropagation(); closeFilePane(appSessionId); onFocusComposer?.() }
   }}>
     <header className="file-pane-header">
+      <SidePaneNavigation />
       <FilePaneFiles appSessionId={appSessionId} cwd={cwd} currentPath={showing.path} />
-      <button type="button" className="file-pane-icon" aria-label="Back" title="Back" disabled={!state.history.length}
-        onClick={() => { void stepFilePaneHistory(appSessionId, 'back').then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}><PaneArrow back /></button>
-      <button type="button" className="file-pane-icon" aria-label="Forward" title="Forward" disabled={!state.forward.length}
-        onClick={() => { void stepFilePaneHistory(appSessionId, 'forward').then(result => { if (!result.ok) toast(result.message, { tone: 'warn' }) }) }}><PaneArrow /></button>
       <button type="button" className="file-pane-icon" aria-label="Reload" title="Reload" onClick={() => { void reloadFile() }}><ReloadIcon /></button>
       <div ref={headerPath} className="file-pane-path" tabIndex={0} role="button" title={showing.path}
         data-scrollable={pathScrollable || undefined} data-dragging={pathDragging || undefined}
@@ -602,9 +618,6 @@ function TextFileContent({ file, active, className, bodyRef, appSessionId, onRea
       lineTarget={outside ? undefined : target ?? undefined} initialTopLine={initialScroll.current.topLine} initialScrollLeft={initialScroll.current.x}
       onScroll={position => { if (active) rememberFilePaneScroll(appSessionId, { ...position, textWindow: file.textWindow?.side }, file) }} />}
   </div>
-}
-function PaneArrow({ back = false }: { back?: boolean }) {
-  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d={back ? 'M20 12H4m7-7-7 7 7 7' : 'M4 12h16m-7-7 7 7-7 7'} /></svg>
 }
 function ReloadIcon() {
   return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" /></svg>

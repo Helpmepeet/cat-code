@@ -72,7 +72,9 @@ export class BrowserPanePresentation {
       const local = await this.deps.host.policy.localPath(id, url)
       if (this.disposed || this.versions.get(id) !== version || this.records.get(id) !== record) return
       const history = record.view.history?.() ?? { canGoBack: false, canGoForward: false }
-      this.states.set(id, { appSessionId: id, url, displayUrl: local ?? url, controller: record.controller, ...history, still: this.states.get(id)?.still ?? null, agentUseSequence: record.agentUseSequence })
+      const historyEntry = await record.view.historyEntry?.()
+      if (this.disposed || this.versions.get(id) !== version || this.records.get(id) !== record) return
+      this.states.set(id, { appSessionId: id, url, displayUrl: local ?? url, title: record.view.getTitle?.().slice(0, 8192), controller: record.controller, ...history, historyEntry, still: this.states.get(id)?.still ?? null, agentUseSequence: record.agentUseSequence })
       this.emit(id)
       await this.reconcile()
     } catch (error) { this.hide(record); this.report(error) }
@@ -181,12 +183,16 @@ export class BrowserPanePresentation {
   }
   async command(input: BrowserPaneCommand): Promise<BrowserPaneCommandResult> {
     const fail = (message: string): BrowserPaneCommandResult => ({ ok: false, message })
-    if (this.disposed || !closed(input, ['appSessionId', 'command']) || typeof input.appSessionId !== 'string' || !this.known(input.appSessionId) || !['back', 'forward', 'reload', 'external', 'close', 'takeover', 'handback'].includes(input.command)) return fail('Invalid browser command')
+    const historyCommand = input?.command === 'history'
+    if (this.disposed || !closed(input, historyCommand ? ['appSessionId', 'command', 'historyEntry'] : ['appSessionId', 'command']) || typeof input.appSessionId !== 'string' || !this.known(input.appSessionId) || !['back', 'forward', 'reload', 'external', 'close', 'takeover', 'handback', 'history'].includes(input.command) || historyCommand && (typeof input.historyEntry !== 'string' || !/^[a-f0-9-]{36}:\d{1,16}$/.test(input.historyEntry))) return fail('Invalid browser command')
     const id = input.appSessionId
     const record = this.deps.host.get(id)
     if (!record) return fail('No browser page is open')
     try {
       switch (input.command) {
+        case 'history':
+          await this.deps.host.restoreHistoryEntry(id, input.historyEntry)
+          break
         case 'handback':
           this.deps.host.handBack(id)
           break
@@ -196,8 +202,13 @@ export class BrowserPanePresentation {
           break
         case 'close':
           this.release(record)
-          await this.deps.host.close(id)
-          await this.onHostChange(undefined, id)
+          if (this.selected?.appSessionId === id) {
+            this.epoch++
+            this.selected = null
+            this.pendingCapture = undefined
+            this.cancelTimer?.(); this.cancelTimer = undefined
+          }
+          this.clearStill(id)
           return { ok: true }
         case 'external': {
           const url = record.view.getURL?.() || record.url

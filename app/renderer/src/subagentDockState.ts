@@ -294,11 +294,18 @@ function join(parts: (string | null | undefined)[]): string | null {
 }
 export function selectSubagentDock(state: SubagentDockState, input: SubagentDockInput): DerivedSubagentDock {
   const { latest: rows, runs } = latestAgentRows(input, state)
+  const roster = new Set([
+    ...input.workers.map(worker => worker.agentId),
+    ...(input.tasks?.items ?? []).filter(task => task.type === 'local_agent').map(task => task.id),
+  ])
   const active: SubagentDockRow[] = []
   const finished: SubagentDockRow[] = []
   let nextUpdateAt: number | null = null
   for (const entry of Object.values(state.entries)) {
     const terminal = isSubagentDockTerminal(entry.state)
+    // Engine retirement means the result is no longer owed. Retain evidence
+    // for history and Clear without turning it back into dock membership.
+    if ((terminal || entry.state === 'waiting') && !roster.has(entry.agentId)) continue
     if (terminal && input.clearMarkers?.some(marker => marker.agentId === entry.agentId && marker.runKey === entry.runKey)) continue
     const observedLease = terminal || entry.state === 'waiting' ? null : selectLeaseForOwner(input.leases, entry.agentId)
     const lease = observedLease?.state === 'active' ? observedLease : null

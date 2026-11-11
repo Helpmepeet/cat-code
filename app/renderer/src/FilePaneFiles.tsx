@@ -7,6 +7,7 @@ import { requestOpenFile, useFilePaneSession } from './filePaneState.js'
 import { peekWorkspaceFileAvailability, requestWorkspaceFileAvailability, subscribeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 import { filterPaletteItems, type PaletteItem } from './commandPaletteModel.js'
 import { useToast } from './toastContext.js'
+import { FileTypeIcon } from './FileTypeIcon.js'
 import './filePaneFiles.css'
 
 export function FilePaneFiles({ appSessionId, cwd, currentPath }: { appSessionId: string; cwd: string | null; currentPath: string }) {
@@ -21,6 +22,17 @@ export function FilePaneFiles({ appSessionId, cwd, currentPath }: { appSessionId
   const menu = useRef<HTMLDivElement>(null)
   const listId = useId()
   const toast = useToast()
+  const filesRequest = pane.filesRequest
+  const previousFilesRequest = useRef(0)
+  useEffect(() => {
+    const increased = filesRequest > previousFilesRequest.current
+    previousFilesRequest.current = filesRequest
+    if (!increased) return
+    setQuery('')
+    setActiveKey(null)
+    setOpen(true)
+    input.current?.focus()
+  }, [filesRequest])
   useEffect(() => open ? subscribeWorkspaceFileAvailability(() => setAvailabilityRevision(value => value + 1)) : undefined, [open])
   const entries = useMemo(() => {
     if (!open) return []
@@ -128,9 +140,11 @@ export function FilePaneFiles({ appSessionId, cwd, currentPath }: { appSessionId
         <div id={listId} role="listbox" aria-label="Files" className="file-pane-files-list">
           {filtered.length ? filtered.map((entry, index) => <div key={entry.key}>
             {!query.trim() && (index === 0 || filtered[index - 1]?.group !== entry.group) ? <div className="file-pane-files-group">{entry.group}</div> : null}
-            <button id={`${listId}-${index}`} type="button" className="file-pane-file-row" role="option" aria-selected={entry.key === activeKey} tabIndex={-1}
+            <button id={`${listId}-${index}`} type="button" className="file-pane-file-row" role="option" aria-selected={entry.key === activeKey} aria-current={entry.key === currentKey ? 'true' : undefined} tabIndex={-1}
               title={entry.path} onMouseEnter={() => setActiveKey(entry.key)} onMouseDown={event => event.preventDefault()} onClick={event => choose(entry, event.metaKey)}>
-              <span className="file-pane-file-check" aria-hidden="true">{entry.key === currentKey ? '✓' : ''}</span>
+              <FileTypeIcon path={entry.path} renderKind={entry.key === currentKey
+                ? pane.file?.kind === 'text' && /\.(?:csv|tsv)$/i.test(entry.path) && pane.scroll.table?.mode !== 'source' && pane.lineTarget === null ? 'table' : pane.file?.kind
+                : undefined} />
               <span className="file-pane-file-name">{entry.filename}{entry.external ? <span className="file-pane-file-external" aria-hidden="true"> ↗</span> : null}</span>
               <span className="file-pane-file-parent"><bdi>{entry.parent}</bdi></span>
             </button>

@@ -21,6 +21,9 @@ test('running, between steps, stopped and finished statuses retain screenshot fo
   const selections: (string | null)[] = []
   const view = (running: boolean, selectedId: string | null, current = steps, stopped = false) => <ComputerPane steps={current} running={running} stopped={stopped} selectedId={selectedId} onSelect={id => selections.push(id)} onClose={() => {}} onStop={() => { stops++ }} />
   const tree = await harness.mount(view(true, null))
+  expect([...tree.container.querySelectorAll('.computer-pane-header button')].map(button => button.getAttribute('aria-label') ?? button.textContent)).toEqual(['Back', 'Forward', 'Stop', 'Close computer panel'])
+  expect(tree.container.querySelector('.computer-pane-header button[aria-label="Back"]')?.hasAttribute('disabled')).toBe(true)
+  expect(tree.container.querySelector('.computer-pane-caption button[aria-label="Previous computer step"]')).not.toBeNull()
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Using your Mac')
   expect(tree.container.querySelector('.computer-pane-now')?.textContent).toBe('NowChecking the list')
   expect(tree.container.querySelector('.computer-pane-screen')?.hasAttribute('data-agent')).toBe(true)

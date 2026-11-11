@@ -20,6 +20,12 @@ function fixture(folders: readonly string[] = []) {
       navigate: async () => {}, back: async options => { native.push(`back:${id}:${options?.ignoreBeforeUnload}`) },
       forward: async () => {}, reload: async () => {}, destroy: () => {}, clearData: async () => {},
       history: () => ({ canGoBack: true, canGoForward: false }),
+      getTitle: () => 'Retained page',
+      historyEntry: async () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1',
+      restoreHistoryEntry: async (entry, options) => {
+        if (entry !== 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1') throw new Error('This browser history entry is no longer available')
+        native.push(`history:${id}:${entry}:${options?.ignoreBeforeUnload}`)
+      },
     }),
   } })
   const presentation = new BrowserPanePresentation({ host, sessions: () => [{ appSessionId: 'a' }, { appSessionId: 'b' }],
@@ -49,6 +55,26 @@ test('handback validates closed input and session ownership before returning con
   expect(f.presentation.snapshots()[0]!.controller).toBe('agent')
   f.presentation.dispose()
   await f.host.dispose()
+})
+
+test('history restoration accepts only closed commands and opaque native entries', async () => {
+  const f = fixture(); await f.open('a')
+  const historyEntry = f.presentation.snapshots()[0]!.historyEntry!
+  expect(historyEntry).toBe('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1')
+  expect(f.presentation.snapshots()[0]!.title).toBe('Retained page')
+  f.host.get('a')!.view.getTitle = () => 'x'.repeat(20_000)
+  await f.presentation.onHostChange(f.host.get('a'), 'a')
+  expect(f.presentation.snapshots()[0]!.title?.length).toBe(8192)
+  for (const input of [
+    { appSessionId: 'a', command: 'history' },
+    { appSessionId: 'a', command: 'history', historyEntry: 'http://localhost:3000/' },
+    { appSessionId: 'a', command: 'history', historyEntry, url: 'http://localhost:4000/' },
+    { appSessionId: 'unknown', command: 'history', historyEntry },
+  ]) expect((await f.presentation.command(input as never)).ok).toBe(false)
+  expect(await f.presentation.command({ appSessionId: 'a', command: 'history', historyEntry })).toEqual({ ok: true })
+  expect(f.native).toContain(`history:a:${historyEntry}:true`)
+  expect((await f.presentation.command({ appSessionId: 'a', command: 'history', historyEntry: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb:1' })).ok).toBe(false)
+  f.presentation.dispose(); await f.host.dispose()
 })
 
 test('identical layout heartbeats renew freshness but still fail closed after reports stop and can recover', async () => {
@@ -130,8 +156,9 @@ test('commands validate known sessions and closed inputs; use main URL and heade
   expect(await f.presentation.command({ appSessionId: 'a', command: 'back' })).toEqual({ ok: true })
   expect(f.native).toContain('back:a:true')
   expect(await f.presentation.command({ appSessionId: 'a', command: 'close' })).toEqual({ ok: true })
-  expect(f.presentation.snapshots()).toEqual([])
-  expect(f.events.at(-1)).toEqual({ appSessionId: 'a', state: null })
+  expect(f.presentation.snapshots()).toHaveLength(1)
+  expect(f.host.get('a')!.visible).toBe(false)
+  expect(f.events.at(-1)?.state).not.toBeNull()
   f.presentation.dispose(); await f.host.dispose()
 })
 

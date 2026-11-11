@@ -52,7 +52,7 @@ function Fixture({ value, initialCollapsed = false }: { value: DerivedSubagentDo
     },
   }, createElement(SubagentDock, { state: value, collapsed, onCollapsedChange: setCollapsed, onClearFinished() {}, onOpenWorker() {}, onOpenWorkers() { dialogs++ } }))
 }
-async function mount(node: ReturnType<typeof fixture>) {
+async function mount(node: Parameters<DomTestHarness['mount']>[0]) {
   const tree = await harness.mount(node)
   await resize(width)
   return tree
@@ -63,24 +63,46 @@ function button(container: HTMLElement, label: string): HTMLButtonElement {
   if (!element) throw new Error(`Missing button ${label}`)
   return element
 }
+
+test('unified switcher retains narrow card, ordered groups, selected views and conditional All files', async () => {
+  reduced = true
+  width = 280
+  const opened: string[] = []
+  const props = {
+    state: state([row()]), collapsed: true, onCollapsedChange() {}, onClearFinished() {}, onOpenWorker() {}, onOpenWorkers() {},
+    views: [{ kind: 'computer' as const, label: 'Computer', detail: 'Using your Mac', running: true }, { kind: 'browser' as const, label: 'Browser', detail: 'Page title' }],
+    files: [{ path: '/repo/a.md', name: 'a.md', parent: '/repo' }], fileAvailable: true, fileCount: 2, openedFileCount: 1,
+    selectedKind: 'browser' as const, onOpenView(kind: string) { opened.push(kind) },
+  }
+  const tree = await mount(createElement('section', { ref(element: HTMLElement | null) { if (element) element.getBoundingClientRect = () => new DOMRect(0, 0, width, height) } }, createElement(SubagentDock, props)))
+  expect(button(tree.container, 'Browser').getAttribute('aria-pressed')).toBe('true')
+  expect(tree.container.querySelector('.dock-seam')).not.toBeNull()
+  await act(async () => button(tree.container, 'Show all').click())
+  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.dataset.layout).toBe('floating')
+  expect([...tree.container.querySelectorAll('.subagent-dock-header > span')].map(node => node.textContent)).toEqual(['SUBAGENTS', 'VIEWS', 'FILES'])
+  const all = [...tree.container.querySelectorAll<HTMLButtonElement>('.dock-all')][0]!
+  expect(all.textContent).toContain('All files')
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('.subagent-dock-panel [aria-pressed="true"]')!.click())
+  expect(opened).toEqual(['browser'])
+  await act(async () => document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })))
+  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.dataset.layout).toBe('floating')
+})
 async function resize(nextWidth: number) {
   await act(async () => { width = nextWidth; for (const callback of observers) callback() })
 }
 
-test('pane resize selects flat panel, floating panel, and Workers fallback without using window width', async () => {
+test('pane resize preserves flat and floating cards at narrow widths', async () => {
   const tree = await mount(fixture(state([row()])))
   const dock = () => tree.container.querySelector<HTMLElement>('.subagent-dock')!
   expect(dock().dataset.layout).toBe('panel')
   await resize(800)
   expect(dock().dataset.layout).toBe('chip')
-  await act(async () => button(tree.container, 'Subagents: Ada, running').click())
+  await act(async () => button(tree.container, 'Show all').click())
   expect(dock().dataset.layout).toBe('floating')
   expect(document.activeElement?.getAttribute('data-dock-row')).toBe('worker-a')
   await resize(160)
-  expect(dock().dataset.layout).toBe('chip')
-  await act(async () => button(tree.container, 'Subagents: Ada, running').click())
-  expect(dialogs).toBe(1)
-  expect(dock().dataset.layout).toBe('chip')
+  expect(dialogs).toBe(0)
+  expect(dock().dataset.layout).toBe('floating')
 })
 
 test('Finished stays inert until disclosed and collapse/expand returns keyboard focus', async () => {
@@ -94,15 +116,15 @@ test('Finished stays inert until disclosed and collapse/expand returns keyboard 
   expect(toggle.getAttribute('aria-expanded')).toBe('true')
   expect(finished.parentElement?.hasAttribute('inert')).toBe(false)
   await act(async () => button(tree.container, 'Collapse subagents').click())
-  const chip = button(tree.container, 'Subagents: Ada, running')
+  const chip = button(tree.container, 'Show all')
   expect(document.activeElement === chip).toBe(true)
   await act(async () => chip.click())
   expect(document.activeElement === button(tree.container, 'Ada, running')).toBe(true)
 })
 
-test('chip remains one button and names each face, and focus links row details until Escape', async () => {
+test('chip has separate face buttons and expansion, and focus links row details until Escape', async () => {
   const tree = await mount(fixture(state([row(), row({ agentId: 'worker-b', name: null, task: 'Check release', state: 'background' })]), true))
-  const chip = button(tree.container, 'Subagents: Ada, running; Check release, background')
+  const chip = button(tree.container, 'Show all')
   expect(chip.querySelectorAll('button')).toHaveLength(0)
   await act(async () => chip.click())
   const active = button(tree.container, 'Ada, running')
@@ -121,9 +143,9 @@ for (const mode of ['attached', 'popover', 'chip'] as const) {
     const initialWidth = width
     const tree = await mount(fixture(state([row()]), mode === 'chip'))
     if (mode === 'popover') {
-      await act(async () => button(tree.container, 'Subagents: Ada, running').click())
+      await act(async () => button(tree.container, 'Show all').click())
     }
-    const anchor = button(tree.container, mode === 'chip' ? 'Subagents: Ada, running' : 'Ada, running')
+    const anchor = button(tree.container, mode === 'chip' ? 'Ada' : 'Ada, running')
     anchor.getBoundingClientRect = () => new DOMRect(width - (mode === 'chip' ? 40 : 300), 30, mode === 'chip' ? 16 : 280, 50)
     await act(async () => anchor.focus())
     const tip = tree.container.querySelector<HTMLElement>('[role="tooltip"]')!
@@ -272,66 +294,82 @@ test('reduced motion resumes instantly and an empty dock leaves no controls', as
 
 for (const reduceMotion of [false, true]) {
   for (const terminal of ['completed', 'stopped'] as const) {
-    test(`last ${terminal} face disappears without losing announcements or Finished history (reduced motion ${reduceMotion})`, async () => {
+    test(`last owed ${terminal} face remains until retirement without losing announcements (reduced motion ${reduceMotion})`, async () => {
       reduced = reduceMotion
       const tree = await mount(fixture(state([row()]), true))
-      await act(async () => button(tree.container, 'Subagents: Ada, running').focus())
+      await act(async () => button(tree.container, 'Ada').focus())
       expect(tree.container.querySelector('[role="tooltip"]')).not.toBeNull()
       const done = row({ state: terminal, stateWord: terminal === 'completed' ? 'done' : 'stopped', settling: !reduced, terminalAt: 20 })
       await tree.render(fixture(reduced ? state([], [done]) : state([done]), true))
-      expect(tree.container.querySelector('.subagent-dock-chip')).toBeNull()
-      expect(tree.container.querySelector('[role="tooltip"]')).toBeNull()
+      expect(tree.container.querySelector('.subagent-dock-chip')).not.toBeNull()
+      expect(button(tree.container, 'Ada').querySelector(`.subagent-dock-badge-${terminal}`)).not.toBeNull()
+      expect(button(tree.container, 'Show all')).toBeDefined()
+      expect(tree.container.querySelector('[role="tooltip"]')?.textContent).toContain(`Ada${done.stateWord}`)
       expect(tree.container.querySelector('[role="status"]')?.textContent).toBe('Ada finished.')
       await tree.render(fixture(state([], [{ ...done, settling: false }]), true))
       expect(tree.container.querySelector('[data-finished-toggle]')?.textContent).toContain('Finished 1')
-      expect(tree.container.querySelector('.subagent-dock-chip')).toBeNull()
+      expect(tree.container.querySelector('.subagent-dock-chip')).not.toBeNull()
+      await tree.render(fixture(state([]), true))
+      expect(tree.container.querySelector('.subagent-dock')).toBeNull()
+      expect(tree.container.querySelector('[role="tooltip"]')).toBeNull()
       await resize(800)
       await tree.render(fixture(state([row({ state: 'resumed', stateWord: 'resumed', runKey: 'run-b', resumedAt: 30 })]), true))
-      const chip = button(tree.container, 'Subagents: Ada, resumed')
+      const chip = button(tree.container, 'Show all')
       await act(async () => chip.click())
       expect(tree.container.querySelector('.subagent-dock')?.getAttribute('data-layout')).toBe('floating')
     })
   }
 }
 
-test('finished-only expanded panel retains disclosure and Clear, but collapsing leaves no chip', async () => {
+test('finished-only owed panel retains disclosure and Clear, and collapsing leaves its face and Show all', async () => {
   const done = row({ state: 'completed', stateWord: 'done', terminalAt: 20 })
   const tree = await mount(fixture(state([], [done])))
   expect(tree.container.querySelector('.subagent-dock')?.getAttribute('data-layout')).toBe('panel')
-  expect(tree.container.querySelector('.subagent-dock-chip')).toBeNull()
+  expect(tree.container.querySelector('.subagent-dock-chip')).not.toBeNull()
   const toggle = tree.container.querySelector<HTMLButtonElement>('[data-finished-toggle]')!
   await act(async () => toggle.click())
   expect(button(tree.container, 'Ada, completed').parentElement?.hasAttribute('inert')).toBe(false)
   expect([...tree.container.querySelectorAll('button')].some(button => button.textContent === 'Clear')).toBe(true)
   await act(async () => button(tree.container, 'Collapse subagents').click())
-  expect(tree.container.querySelector('.subagent-dock-chip')).toBeNull()
+  expect(tree.container.querySelector('.subagent-dock-chip')).not.toBeNull()
+  expect(button(tree.container, 'Ada').querySelector('.subagent-dock-badge-completed')).not.toBeNull()
+  expect(button(tree.container, 'Show all')).toBeDefined()
   expect(tree.container.querySelector('.subagent-dock-panel')?.hasAttribute('inert')).toBe(true)
+  await tree.render(fixture(state([])))
+  expect(tree.container.querySelector('.subagent-dock')).toBeNull()
 })
 
-test('a failed-only chip keeps its red badge and tooltip, then disappears when the failure is cleared', async () => {
+test('an owed failure keeps its badge and tooltip, then leaves remaining owed completions when cleared', async () => {
   const done = row({ state: 'completed', stateWord: 'done', terminalAt: 20 })
   const failed = row({ agentId: 'worker-b', name: 'Grace', state: 'failed', stateWord: 'failed', terminalAt: 30 })
   const tree = await mount(fixture(state([], [failed, done]), true))
-  const chip = button(tree.container, 'Subagents: Grace, failed')
+  const chip = button(tree.container, 'Grace')
   expect(chip.querySelectorAll('[data-dock-face]')).toHaveLength(1)
   expect(chip.querySelector('.subagent-dock-badge-failed')).not.toBeNull()
   expect(chip.classList.contains('subagent-dock-all-finished')).toBe(false)
   await act(async () => chip.focus())
   expect(tree.container.querySelector('[role="tooltip"]')?.textContent).toContain('Gracefailed')
   await tree.render(fixture(state([], [done]), true))
-  expect(tree.container.querySelector('.subagent-dock-chip')).toBeNull()
+  expect(tree.container.querySelector('.subagent-dock-chip')).not.toBeNull()
+  expect(tree.container.querySelector('.dock-slot[aria-label="Grace"]')).toBeNull()
+  expect(button(tree.container, 'Ada').querySelector('.subagent-dock-badge-completed')).not.toBeNull()
   expect(tree.container.querySelector('[role="tooltip"]')).toBeNull()
+  await tree.render(fixture(state([]), true))
+  expect(tree.container.querySelector('.subagent-dock')).toBeNull()
 })
 
-test('a focused live chip does not keep completed details when only a failed face remains', async () => {
+test('a focused live chip updates to completed details while its owed face remains beside failures', async () => {
   const failed = row({ agentId: 'worker-b', name: 'Grace', state: 'failed', stateWord: 'failed', terminalAt: 20 })
   const tree = await mount(fixture(state([row({ stateWord: 'running' })], [failed]), true))
-  await act(async () => button(tree.container, 'Subagents: Ada, running').focus())
+  await act(async () => button(tree.container, 'Ada').focus())
   expect(tree.container.querySelector('[role="tooltip"]')?.textContent).toContain('Adarunning')
-  await tree.render(fixture(state([], [row({ state: 'completed', terminalAt: 30 }), failed]), true))
-  expect(button(tree.container, 'Subagents: Grace, failed').querySelectorAll('[data-dock-face]')).toHaveLength(1)
-  expect(tree.container.querySelector('[role="tooltip"]')).toBeNull()
+  await tree.render(fixture(state([], [row({ state: 'completed', stateWord: 'done', terminalAt: 30 }), failed]), true))
+  expect(button(tree.container, 'Grace').querySelectorAll('[data-dock-face]')).toHaveLength(1)
+  expect(tree.container.querySelector('[role="tooltip"]')?.textContent).toContain('Adadone')
   expect(tree.container.querySelector('[role="status"]')?.textContent).toBe('Ada finished.')
+  await tree.render(fixture(state([], [failed]), true))
+  expect(tree.container.querySelector('[role="tooltip"]')).toBeNull()
+  expect(tree.container.querySelector('.dock-slot[aria-label="Ada"]')).toBeNull()
 })
 
 for (const opening of [true, false]) {
@@ -341,15 +379,15 @@ for (const opening of [true, false]) {
     HTMLElement.prototype.animate = function () { return { cancel() { cancelled++ } } as Animation }
     try {
       const tree = await mount(fixture(state([row()]), opening))
-      await act(async () => button(tree.container, opening ? 'Subagents: Ada, running' : 'Collapse subagents').click())
+      await act(async () => button(tree.container, opening ? 'Show all' : 'Collapse subagents').click())
       expect(tree.container.querySelector('.subagent-dock-frame')).not.toBeNull()
-      await tree.render(fixture(state([], [row({ state: 'completed', terminalAt: 20 })]), opening))
+      await tree.render(fixture(state([]), opening))
       expect(tree.container.querySelector('.subagent-dock-frame')).toBeNull()
       expect(tree.container.querySelector('.subagent-dock-flyer')).toBeNull()
       expect(tree.container.querySelector('.subagent-dock-morphing')).toBeNull()
       expect(cancelled).toBeGreaterThan(0)
       await tree.render(fixture(state([row({ state: 'resumed', stateWord: 'resumed', runKey: 'run-b', resumedAt: 30 })]), opening))
-      await act(async () => button(tree.container, opening ? 'Collapse subagents' : 'Subagents: Ada, resumed').click())
+      await act(async () => button(tree.container, opening ? 'Collapse subagents' : 'Show all').click())
       expect(tree.container.querySelector('.subagent-dock-frame')).not.toBeNull()
     } finally {
       await harness.unmountAll()

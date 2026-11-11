@@ -1,32 +1,37 @@
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { SubagentDock } from './SubagentDock.js'
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { SubagentDock, type DockView } from './SubagentDock.js'
 import { SubagentSidePanel } from './SubagentSidePanel.js'
 import { ToolInspector } from './ToolInspector.js'
 import { FilePane } from './FilePane.js'
-import { BrowserPane, BrowserGlobe } from './BrowserPane.js'
+import { BrowserPane } from './BrowserPane.js'
 import { browserPaneLabel } from './browserPaneState.js'
-import { ComputerPane, ComputerScreenIcon } from './ComputerPane.js'
+import { ComputerPane } from './ComputerPane.js'
 import { ComputerPaneContext } from './computerPaneContext.js'
 import { selectComputerStep, selectComputerSteps, selectCurrentComputerStepId } from './computerPaneModel.js'
-import { ScreenActivityChip } from './ScreenActivityChip.js'
 import { reduceScreenActivity, type ScreenKind } from './screenActivityState.js'
 import { ToolOutputContext, clampToolOutputWidth, TOOL_OUTPUT_MIN_WIDTH, TOOL_OUTPUT_WIDTH_STEP, writeToolOutputWidth, type OpenToolOutput } from './toolOutputPanel.js'
 import { FilePaneContext } from './filePaneContext.js'
 import {
   closeFilePane, getFilePaneSession, registerFilePaneFocus, rememberSlotWidth, requestOpenFile, paneTargetLabel,
-  hideScreenPane, showSlotOccupant, updateFilePaneSession, useFilePaneFields, type SlotOccupant,
+  hideScreenPane, hideSidePane, requestFilePaneFiles, showSlotOccupant, updateFilePaneSession, useFilePaneFields, useSidePaneNavigation, type SlotOccupant,
 } from './filePaneState.js'
 import { findNestedToolUseRow } from './transcriptViewModel.js'
 import { canOpenSubagentPanel, selectSubagentPanelBranch, selectSubagentPanelRowForCard } from './subagentPanelState.js'
 import { AgentPanelContext } from './transcriptAgentReveal.js'
-import { AgentFace } from './AgentChrome.js'
-import { useAgentFaceRegistry } from './agentFace.js'
-import { ActionFileIcon } from './SessionActionIcons.js'
+import { SidePaneNavigationContext } from './sidePaneNavigationContext.js'
+import { SidePaneShellContext } from './sidePaneShellContext.js'
+import { FilePaneFilesContext } from './filePaneFilesContext.js'
+import { paneFileIndex } from './transcriptPaneFiles.js'
+import { selectNestedTranscriptRows, selectTranscriptRows } from './transcriptProjector.js'
+import { peekWorkspaceFileAvailability, subscribeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
+import { useToast } from './toastContext.js'
+import { localhostPreviewHostPort } from '../../shared/filePreview.js'
 import type { DerivedSubagentDock, SubagentDockRow } from './subagentDockState.js'
 import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjector.js'
 import './filePane.css'
 
-const WORKSPACE_FIELDS = ['open', 'file', 'visible', 'worker', 'output', 'browser', 'computer', 'screenActivity', 'width'] as const
+const WORKSPACE_FIELDS = ['open', 'opened', 'file', 'scroll', 'lineTarget', 'visible', 'worker', 'output', 'browser', 'computer', 'screenActivity', 'width'] as const
 
 export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopped = false, dock, collapsed, onCollapsedChange, onClearFinished, onDetailsVisibleChange, onFallback, onOpenWorkers, onLoadMissingHistory, rows, outputRows = rows, running = false, runKey = null, cwd, children }: {
   appSessionId?: string
@@ -48,13 +53,27 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   cwd: string | null
   children: ReactNode
 }) {
-  const faces = useAgentFaceRegistry()
+  const shellHost = useContext(SidePaneShellContext)
+  const fileSource = useContext(FilePaneFilesContext)
+  const toast = useToast()
   const localId = useId()
   const sessionId = appSessionId ?? `workspace:${localId}`
   const state = useFilePaneFields(sessionId, WORKSPACE_FIELDS)
+  const navigationFailed = useCallback((message: string) => toast(message, { tone: 'warn' }), [toast])
+  const navigation = useSidePaneNavigation(sessionId, navigationFailed)
+  const [availabilityRevision, setAvailabilityRevision] = useState(0)
+  useEffect(() => subscribeWorkspaceFileAvailability(() => setAvailabilityRevision(value => value + 1)), [])
+  const files = useMemo(() => {
+    const transcript = fileSource?.transcript
+    return paneFileIndex({
+      rows: transcript ? selectNestedTranscriptRows(transcript, sessionId, true) : outputRows,
+      order: transcript ? selectTranscriptRows(transcript, sessionId, true).map(row => row.id) : undefined,
+      cwd: fileSource?.cwd ?? cwd, transitions: fileSource?.contextTransitions, opened: state.opened,
+      available: path => peekWorkspaceFileAvailability(sessionId, path), includeUnconfirmed: true,
+    }).filter(entry => !entry.weak || entry.availabilityPath && peekWorkspaceFileAvailability(sessionId, entry.availabilityPath) === true)
+  }, [fileSource, outputRows, sessionId, cwd, state.opened, availabilityRevision])
   const computerSteps = useMemo(() => selectComputerSteps(outputRows), [outputRows])
   const computerStep = selectComputerStep(computerSteps, state.computer?.selectedId ?? null)
-  const latestComputerStep = selectComputerStep(computerSteps, null)
   const latestComputerId = computerSteps.at(-1)?.id ?? null
   const browserSequence = state.browser ? state.browser.agentUseSequence ?? 0 : null
   useLayoutEffect(() => {
@@ -78,7 +97,8 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   const hideScreen = (kind: ScreenKind) => {
     hideScreenPane(sessionId, kind)
     requestAnimationFrame(() => {
-      const chip = parent.current?.querySelector<HTMLButtonElement>(`[data-screen-kind="${kind}"] button`)
+      const chip = [...parent.current?.querySelectorAll<HTMLButtonElement>(`[data-dock-view="${kind}"]`) ?? []]
+        .find(element => !element.closest('[inert]'))
       if (chip) chip.focus({ preventScroll: true })
       else focusComposer.current?.()
     })
@@ -88,6 +108,23 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   const parent = useRef<HTMLDivElement>(null)
   const slot = useRef<HTMLDivElement>(null)
   const workspace = useRef<HTMLDivElement>(null)
+  const [layoutWidth, setLayoutWidth] = useState(0)
+  const portalled = !!shellHost && layoutWidth >= (state.open ? 1000 : 840)
+  const portalledRef = useRef(portalled)
+  portalledRef.current = portalled
+  useLayoutEffect(() => {
+    const element = workspace.current
+    if (!element) return
+    const measure = () => {
+      const width = element.clientWidth + (portalledRef.current ? slot.current?.getBoundingClientRect().width ?? 0 : 0)
+      setLayoutWidth(width)
+      slot.current?.style.setProperty('--side-pane-layout-width', `${width}px`)
+    }
+    measure()
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+    observer?.observe(element)
+    return () => observer?.disconnect()
+  }, [shellHost, portalled])
   const workers = useMemo(() => [...dock.active, ...dock.finished], [dock.active, dock.finished])
   const observed = selected ? workers.find(row => row.agentId === selected.agentId) : undefined
   const retained = useRef<{ selection: SubagentDockRow; row: SubagentDockRow } | null>(null)
@@ -119,7 +156,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   }, [sessionId, selected, candidate, worker, onFallback])
   useLayoutEffect(() => {
     if (state.width !== null) slot.current?.style.setProperty('--shared-slot-width', `${state.width}px`)
-  }, [state.width])
+  }, [state.width, portalled])
   useLayoutEffect(() => () => {
     if (dragFrame.current !== null) cancelAnimationFrame(dragFrame.current)
     dragFrame.current = null
@@ -132,7 +169,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
     showSlotOccupant(sessionId, 'output')
   }, [sessionId])
   const closeOutput = useCallback(() => {
-    updateFilePaneSession(sessionId, { output: null })
+    hideSidePane(sessionId)
     const target = opener.current
     opener.current = null
     requestAnimationFrame(() => { if (target?.isConnected) target.focus({ preventScroll: true }) })
@@ -149,13 +186,15 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   openCardRef.current = card => open(selectSubagentPanelRowForCard(card, workers))
   const openCard = useCallback((card: NestedToolUseRow) => openCardRef.current(card), [])
   const closeWorker = useCallback(() => {
-    updateFilePaneSession(sessionId, { worker: null })
+    hideSidePane(sessionId)
     requestAnimationFrame(() => {
       const dock = parent.current
       const row = [...dock?.querySelectorAll<HTMLButtonElement>('[data-dock-row]') ?? []]
         .find(element => element.dataset.dockRow === worker?.agentId && !element.closest('[inert]'))
-      const target = row ?? dock?.querySelector<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]), [data-finished-toggle]')
-      target?.focus({ preventScroll: true })
+      const target = row ?? [...dock?.querySelectorAll<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]) [data-dock-agent]') ?? []]
+        .find(element => element.dataset.dockAgent === worker?.agentId) ?? dock?.querySelector<HTMLButtonElement>('.subagent-dock-chip:not([aria-hidden="true"]) button, [data-finished-toggle]')
+      if (target) target.focus({ preventScroll: true })
+      else focusComposer.current?.()
     })
   }, [sessionId, worker?.agentId])
   // Switching the slot changes visibility, not the retained bodies or their
@@ -174,8 +213,43 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
     ...(worker ? [{ kind: 'worker' as const, label: worker.name || worker.task }] : []),
     ...(outputRow ? [{ kind: 'output' as const, label: 'Full output' }] : []),
   ]
+  const toggleView = (kind: SlotOccupant) => {
+    if (state.visible === kind) hideSidePane(sessionId)
+    else showSlotOccupant(sessionId, kind)
+  }
+  const toggleWorker = (row: SubagentDockRow) => {
+    if (state.visible === 'worker' && worker?.agentId === row.agentId) closeWorker()
+    else open(row)
+  }
+  const openFile = (path: string) => {
+    void requestOpenFile(sessionId, path, { focus: 'viewer' }).then(result => {
+      if (!result.ok) toast(result.message, { tone: 'warn' })
+    })
+  }
+  const currentComputerStep = running ? computerSteps.find(step => step.status === 'pending' && step.id === selectCurrentComputerStepId(rows)) : null
+  const views: DockView[] = [
+    ...(state.browser ? [{ kind: 'browser' as const, label: 'Browser', detail: state.browser.title || browserPaneLabel(state.browser) }] : []),
+    ...(computerSteps.length ? [{ kind: 'computer' as const, label: 'Computer',
+      detail: running ? currentComputerStep ? 'Using your Mac' : 'Between steps' : `${computerSteps.length} steps${computerSteps.some(step => step.status === 'error') ? ` · ${computerSteps.filter(step => step.status === 'error').length} failed` : ''}`,
+      running: !!currentComputerStep }] : []),
+    ...(outputRow ? [{ kind: 'output' as const, label: 'Full output', detail: typeof outputRow.input.command === 'string' ? outputRow.input.command : outputRow.toolName }] : []),
+  ]
+  const openedFiles = [...state.opened.keys()].reverse().flatMap(key => {
+    const entry = files.find(file => file.key === key)
+    return entry ? [{
+    path: entry.path, name: entry.filename, parent: entry.parent,
+    ...(state.file?.path === entry.path ? { renderKind: state.file.kind === 'text' && /\.(?:csv|tsv)$/i.test(entry.path) &&
+      state.scroll.table?.mode !== 'source' && state.lineTarget === null ? 'table' as const : state.file.kind } : {}),
+    }] : []
+  })
+  if (state.file?.kind === 'localhost') {
+    const url = new URL(state.file.path)
+    openedFiles.push({ path: state.file.path, name: localhostPreviewHostPort(state.file.path) ?? url.host,
+      parent: `${url.pathname}${url.search}${url.hash}`, renderKind: 'localhost' })
+  }
+  const fileCount = files.length + (state.file?.kind === 'localhost' ? 1 : 0)
   const resize = (width: number) => {
-    const clamped = clampToolOutputWidth(width, workspace.current?.clientWidth || null)
+    const clamped = clampToolOutputWidth(width, layoutWidth || null)
     slot.current?.style.setProperty('--shared-slot-width', `${clamped}px`)
     slot.current?.querySelector('[role="separator"]')?.setAttribute('aria-valuenow', String(clamped))
     rememberSlotWidth(sessionId, clamped)
@@ -191,31 +265,14 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
     resize(current.width)
     setDragging(false)
   }
-  return <FilePaneContext.Provider value={appSessionId ? requestOpenFile : null}><ToolOutputContext.Provider value={openOutput}><ComputerPaneContext.Provider value={computerContext}>
-    <div ref={workspace} className="subagent-workspace" data-resizing={dragging || undefined}>
-      <div className="subagent-workspace-layout" data-file-open={state.open && state.visible !== null || undefined}>
-        <div ref={parent} className="subagent-parent">
-          {(computerSteps.length > 0 && state.visible !== 'computer' || state.browser && state.visible !== 'browser') ? <div className="screen-activity-chips">
-            {computerSteps.length > 0 && state.visible !== 'computer' ? <span data-screen-kind="computer"><ScreenActivityChip kind="computer" label="Computer"
-              imageUrl={latestComputerStep?.image ? `data:${latestComputerStep.image.mediaType};base64,${latestComputerStep.image.data}` : null}
-              running={running && computerSteps.some(step => step.status === 'pending')} onClick={() => openComputer(null)} /></span> : null}
-            {state.browser && state.visible !== 'browser' ? <span data-screen-kind="browser"><ScreenActivityChip kind="browser" label={browserPaneLabel(state.browser)}
-              imageUrl={state.browser.still} running={running && state.browser.controller === 'agent' && state.screenActivity.latest === 'browser'}
-              onClick={() => showSlotOccupant(sessionId, 'browser')} /></span> : null}
-          </div> : null}
-          <SubagentDock state={dock} collapsed={collapsed} hidden={worker !== null && state.visible === 'worker'} onCollapsedChange={onCollapsedChange}
-            onClearFinished={onClearFinished} onDetailsVisibleChange={onDetailsVisibleChange}
-            onOpenWorker={open} onOpenWorkers={onOpenWorkers} />
-          <AgentPanelContext.Provider value={openCard}>{children}</AgentPanelContext.Provider>
-        </div>
-        {occupants.length ? <div ref={slot} className="subagent-shared-slot" hidden={state.visible === null}>
+  const sidePane = occupants.length ? <div ref={slot} className="subagent-shared-slot" hidden={state.visible === null}>
           <div className="subagent-shared-resize" role="separator" aria-orientation="vertical" aria-label="Resize side panel"
             aria-valuenow={state.width ?? 560} aria-valuemin={TOOL_OUTPUT_MIN_WIDTH} tabIndex={0} data-dragging={dragging || undefined}
             onPointerDown={event => {
               if (event.button !== 0 || drag.current) return
               event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId)
               const width = slot.current?.getBoundingClientRect().width || state.width || 560
-              drag.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: width, width, layoutWidth: workspace.current?.clientWidth || null }
+              drag.current = { pointerId: event.pointerId, startX: event.clientX, startWidth: width, width, layoutWidth: layoutWidth || null }
               setDragging(true)
             }} onPointerMove={event => {
               const current = drag.current
@@ -243,20 +300,6 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
               } else return
               event.preventDefault()
             }} />
-          {occupants.length > 1 ? <nav className="subagent-slot-strip" role="tablist" aria-label="Side panels">
-            {occupants.map(occupant => <button key={occupant.kind} type="button" className="subagent-slot-tab" role="tab"
-              aria-label={occupant.label} aria-selected={state.visible === occupant.kind} tabIndex={state.visible === occupant.kind ? 0 : -1}
-              onClick={() => showSlotOccupant(sessionId, occupant.kind)} onKeyDown={event => {
-                if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
-                event.preventDefault()
-                const index = occupants.findIndex(item => item.kind === occupant.kind)
-                const next = occupants[(index + (event.key === 'ArrowRight' ? 1 : occupants.length - 1)) % occupants.length]!
-                showSlotOccupant(sessionId, next.kind)
-                const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
-                tabs?.[occupants.findIndex(item => item.kind === next.kind)]?.focus()
-              }}>{occupant.kind === 'file' ? <ActionFileIcon /> : occupant.kind === 'browser' ? <BrowserGlobe /> : occupant.kind === 'computer' ? <ComputerScreenIcon /> : occupant.kind === 'worker' && worker ?
-                <AgentFace axes={faces.faceFor(worker.agentId, worker.name).axes} fill={faces.faceFor(worker.agentId, worker.name).fill} size={13} /> : <span aria-hidden>▤</span>}<span>{occupant.label}</span></button>)}
-          </nav> : null}
           {workerPanel ? <div className="subagent-slot-content" hidden={state.visible !== 'worker'}>{workerPanel}</div> : null}
           {outputPanel ? <div className="subagent-slot-content" hidden={state.visible !== 'output'}>{outputPanel}</div> : null}
           {filePanel ? <div className="subagent-slot-content" hidden={state.visible !== 'file'}>{filePanel}</div> : null}
@@ -264,8 +307,23 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
           {computerSteps.length ? <div className="subagent-slot-content" hidden={state.visible !== 'computer'}><ComputerPane steps={computerSteps}
             selectedId={state.computer?.selectedId ?? null} onSelect={openComputer} onClose={() => hideScreen('computer')} active={state.visible === 'computer'}
             running={running} stopped={stopped} currentStepId={selectCurrentComputerStepId(rows)} onStop={computerSteps.some(step => step.nested) ? undefined : onStop} /></div> : null}
-        </div> : null}
+        </div> : null
+  return <FilePaneContext.Provider value={appSessionId ? requestOpenFile : null}><ToolOutputContext.Provider value={openOutput}><ComputerPaneContext.Provider value={computerContext}><SidePaneNavigationContext.Provider value={navigation}>
+    <div ref={workspace} className="subagent-workspace" data-external-pane={portalled || undefined} data-resizing={dragging || undefined}>
+      <div className="subagent-workspace-layout" data-file-open={!portalled && state.open && state.visible !== null || undefined}>
+        <div ref={parent} className="subagent-parent">
+          <SubagentDock state={dock} collapsed={collapsed} onCollapsedChange={onCollapsedChange}
+            onClearFinished={onClearFinished} onDetailsVisibleChange={onDetailsVisibleChange}
+            onOpenWorker={toggleWorker} onOpenWorkers={onOpenWorkers}
+            views={views} files={openedFiles}
+            fileAvailable={fileCount > 0} fileCount={fileCount} openedFileCount={openedFiles.length}
+            selectedKind={state.visible} selectedFile={state.file?.path ?? null} selectedWorker={worker?.agentId ?? null}
+            onOpenView={toggleView} onOpenFile={openFile} onOpenFiles={() => requestFilePaneFiles(sessionId)}
+            onToggleFile={() => state.open ? toggleView('file') : requestFilePaneFiles(sessionId)} />
+          <AgentPanelContext.Provider value={openCard}>{children}</AgentPanelContext.Provider>
+        </div>
+        {portalled ? createPortal(sidePane, shellHost!) : sidePane}
       </div>
     </div>
-  </ComputerPaneContext.Provider></ToolOutputContext.Provider></FilePaneContext.Provider>
+  </SidePaneNavigationContext.Provider></ComputerPaneContext.Provider></ToolOutputContext.Provider></FilePaneContext.Provider>
 }

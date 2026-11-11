@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { SidePaneNavigation } from './SidePaneNavigation.js'
 import { selectComputerScreen, selectComputerStep, type ComputerStep } from './computerPaneModel.js'
 import './computerPane.css'
 
@@ -28,6 +29,7 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
   }, [active, selected?.id, now?.id])
   return <section className="computer-pane" aria-label="Computer screenshots" hidden={!active}>
     <header className="computer-pane-header">
+      <SidePaneNavigation />
       <div className="computer-pane-status">{running ? <><span className="computer-pane-live-dot" data-live={!!now || undefined} />{now ? 'Using your Mac' : 'Between steps'}</> : <>{stopped && <span className="computer-pane-live-dot" />}{stopped ? 'Stopped' : 'Finished'}<small>{steps.length} steps{!stopped && failed ? ` · ${failed} failed` : ''}</small></>}</div>
       {running && onStop && <button type="button" className="computer-pane-stop" onClick={onStop}><i aria-hidden="true" />Stop</button>}
       <button type="button" className="computer-pane-icon" aria-label="Close computer panel" onClick={onClose}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></svg></button>

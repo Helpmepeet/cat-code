@@ -84,6 +84,7 @@ import {
   type SessionDismissals,
 } from './sessionDismissal.js'
 import { TabBar, type TabBarEntry, type TabModel } from './TabBar.js'
+import { SidePaneShell } from './SidePaneShell.js'
 import {
   createTabNavigation,
   applyForegroundSelectionIfCurrent,
@@ -4740,10 +4741,7 @@ export function App() {
        * `body` already paint, in the chrome colour the tab bar and rail share.
        * Harmless while they are opaque, and marked so glass mode can stop the
        * three from compounding (`theme.css`). */}
-      <div
-        className="flex h-screen flex-col bg-shell-chrome font-sans text-text-primary"
-        data-window-ground
-      >
+      <SidePaneShell>
         <ExternalLinkRecovery />
         {activeView === 'sessions' && bulkExportUnknown ? <p role="status" aria-label="Bulk export status" className="border border-warning/40 bg-shell-hover p-3">
           Export delivery is unknown for one or more sessions. Wait for the session results before exporting again. Completed transcripts are being kept.
@@ -5433,7 +5431,7 @@ export function App() {
           focusAgentId={tasksFocusAgentId}
           initialTab={tasksInitialTab}
         />
-      </div>
+      </SidePaneShell>
     </AgentFaceRegistryContext.Provider>
     </AgentFaceRegistryStoreContext.Provider>
     </LidClosedProvider>

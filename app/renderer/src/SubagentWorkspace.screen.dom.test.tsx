@@ -5,6 +5,7 @@ import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import { applyBrowserPaneEvent } from './browserPaneState.js'
 import { closeFilePane, disposeFilePaneSession, getFilePaneSession, showSlotOccupant, updateFilePaneSession } from './filePaneState.js'
+import { rememberOpenedFile } from './filePaneOpened.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type { BrowserPaneLayout, BrowserPaneSnapshot } from '../../shared/browserPanePresentation.js'
 
@@ -53,7 +54,9 @@ test('Computer auto-opens once, stays hidden through later steps, and the chip r
   await tree.render(view([step('one'), step('two')]))
   expect(getFilePaneSession(id).visible).toBeNull()
   expect(tree.container.querySelector('.subagent-shared-slot')?.hasAttribute('hidden')).toBe(true)
-  await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Show Computer"]')!.click())
+  expect(tree.container.querySelector('.screen-activity-chips')).toBeNull()
+  expect(tree.container.querySelector('.subagent-slot-strip')).toBeNull()
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('.dock-slot[aria-label="Computer"]')!.click())
   expect(getFilePaneSession(id).visible).toBe('computer')
   expect(tree.container.querySelector('.computer-pane-title')?.textContent).toBe('Step two')
   await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Previous computer step"]')!.click())
@@ -86,17 +89,40 @@ test('browser hiding keeps its session, never steals a file, and reopens without
   const tree = await harness.mount(view([]))
   await act(async () => applyBrowserPaneEvent({ appSessionId: id, state: browser }))
   expect(getFilePaneSession(id).visible).toBe('file')
-  await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Show localhost:3000"]')!.click())
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('.dock-slot[aria-label="Browser"]')!.click())
   expect(getFilePaneSession(id).visible).toBe('browser')
   await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Hide browser"]')!.click())
-  expect(getFilePaneSession(id).visible).toBe('file')
+  expect(getFilePaneSession(id).visible).toBeNull()
   expect(getFilePaneSession(id).browser).toEqual(browser)
   expect(layouts.at(-1)?.rect).toBeNull()
   await act(async () => closeFilePane(id))
   expect(getFilePaneSession(id).visible).toBeNull()
   await act(async () => applyBrowserPaneEvent({ appSessionId: id, state: { ...browser, agentUseSequence: 2 } }))
   expect(getFilePaneSession(id).visible).toBeNull()
-  await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Show localhost:3000"]')!.click())
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('.dock-slot[aria-label="Browser"]')!.click())
   expect(getFilePaneSession(id).visible).toBe('browser')
   expect(commands).toEqual([])
+})
+
+test('the dock lists every opened file, counts all files and opens the existing chooser for additional files', async () => {
+  setup()
+  let opened = getFilePaneSession(id).opened
+  for (let index = 0; index < 12; index++) opened = rememberOpenedFile(opened, `/repo/file-${index}.md`, { x: 0, y: 0 })
+  updateFilePaneSession(id, { opened })
+  const tree = await harness.mount(view([], 'history', false))
+  expect(tree.container.querySelectorAll('.subagent-dock-panel .dock-file:not(.dock-all)')).toHaveLength(12)
+  expect(tree.container.querySelector('.dock-count')?.textContent).toBe('12')
+  expect(tree.container.querySelector('.dock-all') === null).toBe(true)
+  const mention: NestedTranscriptRow = {
+    id: 'mention', sessionId: id, frameId: 'mention', messageId: 'mention', blockIndex: 0, parentToolUseId: null,
+    kind: 'assistant-text', role: 'assistant', content: '[Additional notes](/repo/additional.md)', children: [],
+  }
+  await tree.render(view([mention], 'history', false))
+  const all = tree.container.querySelector<HTMLButtonElement>('.dock-all')!
+  expect(all.textContent).toContain('All files13')
+  await act(async () => all.click())
+  expect(getFilePaneSession(id).visible).toBe('file')
+  expect(document.querySelector('[aria-label="Search files"]') !== null).toBe(true)
+  expect(tree.container.querySelector<HTMLButtonElement>('.file-pane-header [aria-label="Reload"]')?.disabled).toBe(true)
+  expect(tree.container.querySelector<HTMLButtonElement>('.file-pane-header [aria-label="Choose an app"]')?.disabled).toBe(true)
 })

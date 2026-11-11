@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { BrowserPane } from './BrowserPane.js'
+import { SidePaneNavigationContext } from './sidePaneNavigationContext.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { applyBrowserPaneEvent, getBrowserPaneSnapshot, installBrowserPaneSubscription } from './browserPaneState.js'
 import { disposeFilePaneSession, getFilePaneSession, rememberSlotWidth, showSlotOccupant, updateFilePaneSession } from './filePaneState.js'
@@ -53,9 +54,10 @@ test('header cat is decorative for agent control and gives back user control', a
   const tree = await harness.mount(<BrowserPane state={state} active />)
   expect([...tree.container.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))).toEqual(['Back', 'Forward', 'Reload', 'Open in default browser', 'Hide browser'])
   expect(tree.container.querySelector('.file-pane-path')?.textContent).toBe(state.displayUrl)
+  expect(tree.container.querySelector('button[aria-label="Back"]')?.hasAttribute('disabled')).toBe(true)
   expect(tree.container.querySelector('button[aria-label="Forward"]')?.hasAttribute('disabled')).toBe(true)
   for (const button of tree.container.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')) await act(async () => button.click())
-  expect(commands).toEqual(['back', 'reload', 'external'])
+  expect(commands).toEqual(['reload', 'external'])
   expect(getBrowserPaneSnapshot(state.appSessionId)).toEqual(state)
   expect(getFilePaneSession(state.appSessionId).visible).toBeNull()
   await tree.render(<BrowserPane state={{ ...state, displayUrl: state.url }} active />)
@@ -68,6 +70,22 @@ test('header cat is decorative for agent control and gives back user control', a
   await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Give back"]')!.click())
   expect(commands.at(-1)).toBe('handback')
   expect(tree.container.querySelector('[data-agent]')).toBeNull()
+})
+test('header history invokes shared callbacks rather than native browser history', async () => {
+  setup()
+  const navigation: string[] = []
+  const tree = await harness.mount(<SidePaneNavigationContext.Provider value={{
+    canGoBack: true, canGoForward: true,
+    back: () => { navigation.push('back') }, forward: () => { navigation.push('forward') },
+  }}><BrowserPane state={{ ...state, canGoBack: false, canGoForward: false }} active /></SidePaneNavigationContext.Provider>)
+  for (const label of ['Back', 'Forward']) {
+    const button = tree.container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+    expect(button !== null).toBe(true)
+    expect(button!.disabled).toBe(false)
+    await act(async () => button!.click())
+  }
+  expect(navigation).toEqual(['back', 'forward'])
+  expect(commands).toEqual([])
 })
 test('shell snapshot subscription survives pane remounts and event wins over late snapshot', async () => {
   setup()
@@ -106,7 +124,9 @@ test('ordinary browser updates preserve file selection and shared width', () => 
   showSlotOccupant(state.appSessionId, 'browser')
   expect(getFilePaneSession(state.appSessionId).width).toBe(690)
   applyBrowserPaneEvent({ appSessionId: state.appSessionId, state: null })
-  expect(getFilePaneSession(state.appSessionId).visible).toBe('file')
+  expect(getFilePaneSession(state.appSessionId).visible).toBeNull()
+  expect(getFilePaneSession(state.appSessionId).open).toBe(true)
+  expect(getFilePaneSession(state.appSessionId).width).toBe(690)
   expect(getFilePaneSession(state.appSessionId).worker).not.toBeNull()
 })
 test('new agent browser use preserves user panel selection and does not change another chat', () => {
@@ -160,27 +180,33 @@ test('layout heartbeat reports host bounds, ignores the resize rail, detects ove
   await act(async () => { window.dispatchEvent(new Event('resize')); await new Promise(done => setTimeout(done, 450)) })
   expect(reports.length).toBe(count)
 })
-test('workspace renders the globe browser tab beside the file and hides its native host on file selection and unmount', async () => {
+test('workspace dock switches Browser and Files and hides its native host on file selection and unmount', async () => {
   setup()
-  updateFilePaneSession(state.appSessionId, { open: true, file: { id: 'image', appSessionId: state.appSessionId, path: '/plan.png', displayPath: 'plan.png', kind: 'image', url: 'cat-preview://test/image', revision: 1 } })
+  updateFilePaneSession(state.appSessionId, {
+    open: true,
+    opened: new Map([['/plan.png', { path: '/plan.png', scroll: { x: 0, y: 0 }, aliases: ['/plan.png'] }]]),
+    file: { id: 'image', appSessionId: state.appSessionId, path: '/plan.png', displayPath: 'plan.png', kind: 'image', url: 'cat-preview://test/image', revision: 1 },
+  })
   const tree = await harness.mount(<SubagentWorkspace appSessionId={state.appSessionId} dock={{ active: [], finished: [], chipFaces: [], nextUpdateAt: null }}
     collapsed={false} onCollapsedChange={() => {}} onClearFinished={() => {}} onDetailsVisibleChange={() => {}}
     onFallback={() => {}} onOpenWorkers={() => {}} rows={[]} cwd={null}><div /></SubagentWorkspace>)
-  const browser = tree.container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="localhost:3000"]')!
-  expect(browser).not.toBeNull()
-  expect(browser.querySelector('svg circle')).not.toBeNull()
-  expect(browser.getAttribute('aria-selected')).toBe('true')
-  await act(async () => tree.container.querySelector<HTMLButtonElement>('[role="tab"][aria-label="plan.png"]')!.click())
-  expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]')).not.toBeNull()
+  const browser = tree.container.querySelector<HTMLButtonElement>('.dock-slot[aria-label="Browser"]')!
+  expect(browser !== null).toBe(true)
+  expect(browser.querySelector('svg circle') !== null).toBe(true)
+  expect(browser.getAttribute('aria-pressed')).toBe('true')
+  const files = tree.container.querySelector<HTMLButtonElement>('.dock-slot[aria-label="Files"]')!
+  expect(files !== null).toBe(true)
+  await act(async () => files.click())
+  expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]') !== null).toBe(true)
   expect(reports.at(-1)?.rect).toBeNull()
   await act(async () => applyBrowserPaneEvent({ appSessionId: state.appSessionId, state: { ...state, agentUseSequence: 1 } }))
-  expect(browser.getAttribute('aria-selected')).toBe('false')
-  expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]')).not.toBeNull()
-  const reopen = tree.container.querySelector<HTMLButtonElement>('.screen-activity-chip')!
-  expect(reopen.textContent).toContain('localhost:3000')
-  await act(async () => reopen.click())
-  expect(browser.getAttribute('aria-selected')).toBe('true')
-  expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]')).toBeNull()
+  expect(browser.getAttribute('aria-pressed')).toBe('false')
+  expect(files.getAttribute('aria-pressed')).toBe('true')
+  expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]') !== null).toBe(true)
+  expect(browser.title).toContain('localhost:3000')
+  await act(async () => browser.click())
+  expect(browser.getAttribute('aria-pressed')).toBe('true')
+  expect(tree.container.querySelector('.browser-pane')?.closest('[hidden]') === null).toBe(true)
   await tree.render(<div />)
   expect(reports.at(-1)?.rect).toBeNull()
   expect(getBrowserPaneSnapshot(state.appSessionId)).toEqual({ ...state, agentUseSequence: 1 })

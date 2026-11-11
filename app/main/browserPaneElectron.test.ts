@@ -15,6 +15,8 @@ async function fixture() {
     const visibility = [];
     let failBounds = false, failVisible = false;
     let started = false;
+    let activeIndex = 0;
+    const historyEntries = [{ id: 11, url: 'http://localhost:3000/same' }, { id: 12, url: 'http://localhost:3000/same' }];
     class Image {
       constructor(width, height, scale = 1) { this.width = width; this.height = height; this.scale = scale; }
       getSize() { return { width: this.width, height: this.height }; }
@@ -32,10 +34,16 @@ async function fixture() {
         async sendCommand(method) {
           events.push(method);
           if (!started) throw new Error('CDP page command sent before renderer startup');
+          if (method === 'Page.getNavigationHistory') return { currentIndex: activeIndex, entries: historyEntries };
           return {};
         },
       });
       async loadURL(url) { events.push('load:' + url); started = true; }
+      navigationHistory = {
+        goToIndex: index => { events.push('index:' + index); activeIndex = index; this.emit('did-finish-load'); },
+        canGoBack: () => activeIndex > 0,
+        canGoForward: () => activeIndex < historyEntries.length - 1,
+      };
       async capturePage() { return new Image(1400, 1400, 2); }
       getURL() { return 'about:blank'; }
       setWindowOpenHandler() {}
@@ -59,6 +67,23 @@ async function fixture() {
     const { createBrowserPaneElectronAdapter, createBrowserPanePresentationNative } = await import(${JSON.stringify(new URL('./browserPaneElectron.ts', import.meta.url).pathname)});
     const { BrowserPanePolicy } = await import(${JSON.stringify(new URL('./browserPanePolicy.ts', import.meta.url).pathname)});
     const view = await createBrowserPaneElectronAdapter().create('probe', new BrowserPanePolicy({ folders: () => null, devOrigin: null }));
+    const hookEvents = [];
+    view.setHooks({ navigated: () => hookEvents.push('navigation'), titleUpdated: () => hookEvents.push('title') });
+    view.nativeView.webContents.emit('page-title-updated');
+    assert.deepEqual(hookEvents, ['title']);
+    const firstEntry = await view.historyEntry();
+    activeIndex = 1;
+    const secondEntry = await view.historyEntry();
+    assert.notEqual(firstEntry, secondEntry);
+    await view.restoreHistoryEntry(firstEntry);
+    assert.equal(activeIndex, 0);
+    assert.equal(events.at(-1), 'index:0');
+    await view.restoreHistoryEntry(secondEntry);
+    assert.equal(activeIndex, 1);
+    historyEntries.pop();
+    await assert.rejects(view.restoreHistoryEntry(secondEntry), /no longer available/);
+    await assert.rejects(view.restoreHistoryEntry('different-view:11'), /no longer available/);
+    assert.deepEqual(events.filter(event => event.startsWith('load:')), ['load:about:blank']);
     const capture = await view.capturePage(2000000);
     const png = Buffer.from(capture.data, 'base64');
     const presentation = createBrowserPanePresentationNative();

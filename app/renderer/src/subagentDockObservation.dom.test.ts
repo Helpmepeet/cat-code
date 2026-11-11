@@ -289,6 +289,11 @@ test('offscreen completion survives eviction, Clear, and another resume without 
   input = snapshots(input, [], [])
   await tree.render(createElement(Shell, { input }))
   await tree.render(createElement(Shell, { input, visible: true }))
+  expect(tree.container.querySelector('.subagent-dock')).toBeNull()
+  expect(readSubagentDockSessionsFromStorage(window.localStorage)![engineId].finished[0]).toEqual(firstRun)
+  // Clear still applies while the runtime retains the owed completion.
+  input = snapshots(input, [worker('completed')], [task({ status: 'completed', endTime: 200 })])
+  await tree.render(createElement(Shell, { input, visible: true }))
   expect(tree.container.querySelector('[aria-label="Ada, completed"]')).not.toBeNull()
   const clear = [...tree.container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Clear')!
   await act(async () => { clear.click() })
@@ -302,7 +307,8 @@ test('offscreen completion survives eviction, Clear, and another resume without 
   await tree.render(createElement(Shell, { input }))
   input = snapshots(input, [], [])
   await tree.render(createElement(Shell, { input, visible: true }))
-  expect(tree.container.querySelectorAll('[aria-label="Ada, completed"]')).toHaveLength(1)
+  expect(tree.container.querySelectorAll('[aria-label="Ada, completed"]')).toHaveLength(0)
+  expect(tree.container.querySelector('.subagent-dock')).toBeNull()
   const latest = readSubagentDockSessionsFromStorage(window.localStorage)![engineId]
   expect(latest.finished[0]?.runKey).not.toBe(firstRun.runKey)
   expect(latest.cleared).toEqual([{ agentId: 'offscreen-agent', runKey: firstRun.runKey }])
@@ -350,15 +356,24 @@ test('bounded finished history stays stable across pane renders, Clear and a res
       `history-agent-${128 - index}`, 5000, `launch-${128 - index}`,
     ])
     const display = () => JSON.parse(tree.container.querySelector('output')!.textContent!)
-    expect(display()).toEqual({ active: [['still-running', 'running']], finished: expectedFinished })
-    expect(readSubagentDockSessionsFromStorage(window.localStorage)![historyEngineId].finished).toHaveLength(MAX_PERSISTED_DOCK_FINISHED)
+    expect(display()).toEqual({ active: [['still-running', 'running']], finished: [] })
+    const storedHistory = readSubagentDockSessionsFromStorage(window.localStorage)![historyEngineId].finished
+    expect(storedHistory).toHaveLength(MAX_PERSISTED_DOCK_FINISHED)
+    expect([...storedHistory].sort((a, b) => b.launchOrder - a.launchOrder).map(row => [row.agentId, row.terminalAt, row.runKey])).toEqual(expectedFinished)
     for (const revision of [2, 3]) {
       now += 1000
       await tree.render(createElement(HistoryView, { revision }))
-      expect(display()).toEqual({ active: [['still-running', 'running']], finished: expectedFinished })
+      expect(display()).toEqual({ active: [['still-running', 'running']], finished: [] })
+      expect(readSubagentDockSessionsFromStorage(window.localStorage)![historyEngineId].finished).toEqual(storedHistory)
     }
+    const owedWorkers: LiveWorkerItem[] = expectedFinished.map(([agentId]) => ({
+      agentId: agentId as string, handle: `@${agentId}`, role: 'Explore', status: 'completed', description: 'Retained completion',
+    }))
+    await tree.render(createElement(HistoryView, { revision: 3, workers: [activeWorker, ...owedWorkers] }))
+    expect(display()).toEqual({ active: [['still-running', 'running']], finished: expectedFinished })
     await act(async () => { tree.container.querySelector('button')!.click() })
     expect(display()).toEqual({ active: [['still-running', 'running']], finished: [] })
+    expect(readSubagentDockSessionsFromStorage(window.localStorage)![historyEngineId].cleared).toHaveLength(MAX_PERSISTED_DOCK_FINISHED)
     now = 9000
     await tree.render(createElement(HistoryView, { revision: 4 }))
     expect(display().finished).toEqual([])
@@ -377,11 +392,14 @@ test('bounded finished history stays stable across pane renders, Clear and a res
     expect(display()).toEqual({ active: [['still-running', 'running']], finished: [['history-agent-0', 10000, 'resume-0']] })
     now = 11000
     await tree.render(createElement(HistoryView, { revision: 7 }))
-    expect(display()).toEqual({ active: [['still-running', 'running']], finished: [['history-agent-0', 10000, 'resume-0']] })
+    expect(display()).toEqual({ active: [['still-running', 'running']], finished: [] })
     const saved = readSubagentDockSessionsFromStorage(window.localStorage)![historyEngineId]
+    expect(saved.finished).toHaveLength(MAX_PERSISTED_DOCK_FINISHED)
+    expect(saved.finished.find(row => row.agentId === 'history-agent-0')).toMatchObject({ terminalAt: 10000, runKey: 'resume-0' })
     const restoredInput = { workers: [], tasks: null, transcriptRows: selectNestedTranscriptRows(transcript, historySessionId), leases: null, clearMarkers: saved.cleared, nowMs: 12000, reducedMotion: true }
     const restored = reconcileSubagentDockState(createSubagentDockState(saved.finished), restoredInput)
-    expect(selectSubagentDock(restored, restoredInput).finished.map(row => [row.agentId, row.terminalAt, row.runKey])).toEqual([['history-agent-0', 10000, 'resume-0']])
+    expect(selectSubagentDock(restored, restoredInput).finished).toEqual([])
+    expect(restored.entries['history-agent-0']).toMatchObject({ terminalAt: 10000, runKey: 'resume-0' })
     expect(restored.entries['history-agent-1']).toBeUndefined()
   } finally { clock.mockRestore() }
 })

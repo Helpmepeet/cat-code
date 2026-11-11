@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { FilePaneFiles } from './FilePaneFiles.js'
-import { disposeFilePaneSession, updateFilePaneSession } from './filePaneState.js'
+import { disposeFilePaneSession, requestFilePaneFiles, updateFilePaneSession } from './filePaneState.js'
 import { disposeWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
 
 let harness: DomTestHarness
@@ -35,6 +35,8 @@ test('Files keeps the previous file active across discoveries, ignores IME Enter
   const input = document.querySelector<HTMLInputElement>('[role="combobox"]')!
   expect(document.activeElement).toBe(input)
   expect(document.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain('previous.zip')
+  expect(document.querySelector('[role="option"][aria-current="true"]')?.textContent).toContain('current.md')
+  expect(document.querySelectorAll('.file-type-icon')).toHaveLength(2)
   const next = new Map(opened)
   next.set('/repo/new.md', { path: '/repo/new.md', scroll: { x: 0, y: 0 }, aliases: ['/repo/new.md'] })
   await act(async () => updateFilePaneSession(sessionId, { opened: next }))
@@ -52,4 +54,15 @@ test('Files keeps the previous file active across discoveries, ignores IME Enter
   expect(escape.defaultPrevented).toBe(true)
   expect(document.querySelector('[role="listbox"]')).toBeNull()
   expect(document.activeElement).toBe(trigger)
+})
+
+test('dock file requests open and refocus the searchable menu', async () => {
+  await harness.mount(<aside className="file-pane"><FilePaneFiles appSessionId={sessionId} cwd="/repo" currentPath="/repo/current.md" /></aside>)
+  await act(async () => requestFilePaneFiles(sessionId))
+  const input = document.querySelector<HTMLInputElement>('[role="combobox"]')!
+  expect(input).not.toBeNull()
+  expect(document.activeElement).toBe(input)
+  await act(async () => { input.blur(); requestFilePaneFiles(sessionId) })
+  expect(input.value).toBe('')
+  expect(document.activeElement).toBe(input)
 })

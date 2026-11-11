@@ -1,0 +1,18 @@
+.subagent-dock .subagent-dock-switcher { gap:1px; padding:0 3px; max-width:none; }
+.subagent-dock .subagent-dock-switcher:hover { background:var(--subagent-dock-fill); }
+.subagent-dock .dock-slot { position:relative; display:flex; flex:none; align-items:center; justify-content:center; width:23px; height:21px; border-radius:7px; color:var(--text-muted); cursor:pointer; }
+.subagent-dock .dock-slot:hover, .subagent-dock .dock-slot:focus-visible { background:var(--subagent-row-attached); color:var(--text-primary); outline:none; }
+.subagent-dock .dock-slot[aria-pressed='true'] { background:light-dark(var(--shell-active), rgba(255,255,255,.11)); color:var(--text-primary); }
+.subagent-dock .dock-slot > .subagent-dock-badge { right:1px; bottom:1px; }
+.subagent-dock .dock-seam { flex:none; width:1px; height:13px; margin:0 4px; background:var(--shell-seam); }
+.subagent-dock-switcher .subagent-dock-more { margin:0 3px 0 4px; }
+.subagent-dock .dock-expand { width:19px; font-size:12px; color:var(--text-faint); }
+.subagent-dock .dock-count { margin-left:3px; font:500 10.5px var(--font-mono); color:var(--text-faint); }
+.subagent-dock .dock-slot:has(.dock-count) { width:auto; padding:0 5px; }
+.subagent-dock .dock-row-icon { display:flex; flex:none; width:15px; height:15px; align-items:center; justify-content:center; color:var(--text-muted); }
+.subagent-dock .dock-row-icon svg { width:13px; height:13px; }
+.subagent-dock .dock-file { gap:9px; border-radius:7px; }
+.subagent-dock-unified .subagent-dock-row[aria-pressed='true'], .subagent-dock .dock-file[aria-pressed='true'] { background:var(--subagent-row-attached); box-shadow:inset 0 0 0 1px var(--shell-seam); color:var(--text-primary); }
+.subagent-dock .dock-plain { color:var(--text-primary); }
+.subagent-dock .dock-all > .file-pane-file-parent { font:500 10.5px var(--font-mono); }
+.subagent-dock .dock-subheader { margin-top:4px; padding-top:1px; border-top:1px solid var(--shell-seam); height:24px; }

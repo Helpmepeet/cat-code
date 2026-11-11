@@ -62,7 +62,8 @@ function openButtons(root: ParentNode): HTMLButtonElement[] {
 }
 
 function outputPanel(root: ParentNode): HTMLElement | null {
-  return root.querySelector<HTMLElement>('aside[aria-label="Full output"]')
+  const panel = root.querySelector<HTMLElement>('aside[aria-label="Full output"]')
+  return panel?.closest('[hidden]') ? null : panel
 }
 
 async function press(target: Element, key: string, init: KeyboardEventInit = {}) {
@@ -214,8 +215,8 @@ test('Open full output docks beside the transcript, swaps in place, and Escape r
   expect(sharedSlot.parentElement?.className).toBe('subagent-workspace-layout')
   expect(sharedSlot.previousElementSibling?.contains(tree.container.querySelector('main')!)).toBe(true)
   expect(tree.container.querySelector('[aria-modal], .bg-scrim')).toBeNull()
-  expect(panel.querySelector('.tool-output-target')?.textContent).toBe('cmd-one')
-  expect(panel.querySelector('.tool-output-facts')?.textContent).toBe('900 lines')
+  expect(panel.querySelector('.pane-title')?.textContent).toBe('Full output')
+  expect(panel.querySelector('.pane-title')?.getAttribute('title')).toBe('cmd-one')
   // Focus lands in the body, so the keyboard scrolls and searches it at once.
   expect(document.activeElement).toBe(panel.querySelector('[role="region"][aria-label="Output"]'))
   // The transcript is still there to use: the second card opens in the same slot.
@@ -223,7 +224,7 @@ test('Open full output docks beside the transcript, swaps in place, and Escape r
   second.focus()
   await act(async () => { second.click() })
   expect(tree.container.querySelectorAll('aside[aria-label="Full output"]')).toHaveLength(1)
-  expect(outputPanel(tree.container)?.querySelector('.tool-output-target')?.textContent).toBe('cmd-two')
+  expect(outputPanel(tree.container)?.querySelector('.pane-title')?.getAttribute('title')).toBe('cmd-two')
   // Happy DOM measures every row at 0px, so which slice mounts is not a fact
   // about the product; the body's text is.
   expect(outputPanel(tree.container)?.querySelector('[role="region"]')?.textContent).toContain('second 9')
@@ -267,13 +268,13 @@ test('the open panel follows the live row: a later result updates it and a vanis
   await tree.render(workspace([longBash('one', 'cmd-one', 950, 'late')]))
   expect(outputPanel(tree.container)?.textContent).toContain('late 9')
   expect(outputPanel(tree.container)?.textContent).not.toContain('early')
-  expect(outputPanel(tree.container)?.querySelector('.tool-output-facts')?.textContent).toBe('950 lines')
+  expect(outputPanel(tree.container)?.querySelector('.pane-title')?.getAttribute('title')).toBe('cmd-one')
 
   await tree.render(workspace([]))
   expect(outputPanel(tree.container)).toBeNull()
 })
 
-test('worker and output share one slot; switching preserves the worker and closing output leaves it open', async () => {
+test('worker and output share one slot; history preserves bodies and closing hides the pane but keeps dock entries', async () => {
   const agent = toolRow({
     id: 'agent-a', toolUseId: 'launch-a', toolName: 'Agent', toolFamily: 'agent', status: 'pending', result: null,
     input: { description: 'Task a', subagent_type: 'explore' },
@@ -285,20 +286,24 @@ test('worker and output share one slot; switching preserves the worker and closi
   const workerBody = slot.querySelector<HTMLElement>('.subagent-side-body')!
   await act(async () => { openButtons(slot)[0].click() })
   const panel = outputPanel(tree.container)!
-  expect(panel.querySelector('.tool-output-target')?.textContent).toBe('cmd-inner')
+  expect(panel.querySelector('.pane-title')?.getAttribute('title')).toBe('cmd-inner')
   expect(workerBody.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(true)
   expect(slot.querySelector('.subagent-side-body')).toBe(workerBody)
   expect(panel.querySelector('[aria-label^="Back to"]')).toBeNull()
-  expect(slot.querySelectorAll('.subagent-slot-strip [role="tab"]')).toHaveLength(2)
-  expect(slot.querySelector('.subagent-slot-strip button button')).toBeNull()
-  await act(async () => { [...slot.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(tab => tab.textContent === 'worker-a')!.click() })
+  expect(slot.querySelector('.subagent-slot-strip')).toBeNull()
+  await act(async () => { panel.querySelector<HTMLButtonElement>('.tool-output-header [aria-label="Back"]')!.click() })
   expect(workerBody.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(false)
-  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(true)
-  await act(async () => { slot.querySelector<HTMLButtonElement>('[role="tab"][aria-label="Full output"]')!.click() })
   expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(false)
-  await act(async () => { panel.querySelector<HTMLButtonElement>('[aria-label="Close full output"]')!.click() })
-  expect(outputPanel(tree.container)).toBeNull()
+  await act(async () => { slot.querySelector<HTMLButtonElement>('.subagent-side-header [aria-label="Forward"]')!.click() })
+  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(false)
+  await act(async () => { outputPanel(tree.container)!.querySelector<HTMLButtonElement>('[aria-label="Close full output"]')!.click() })
+  expect(outputPanel(tree.container) === null).toBe(true)
   expect(slot.querySelector('.subagent-side-body')).toBe(workerBody)
+  expect(slot.hidden).toBe(true)
+  expect(workerBody.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(true)
+  expect(tree.container.querySelector('.dock-slot[aria-label="Full output"]')).not.toBeNull()
+  await act(async () => { tree.container.querySelector<HTMLButtonElement>('.dock-slot[aria-label="worker-a"]')!.click() })
+  expect(slot.hidden).toBe(false)
   expect(workerBody.closest<HTMLElement>('.subagent-slot-content')?.hidden).toBe(false)
   expect(slot.querySelector('.subagent-slot-strip')).toBeNull()
 })

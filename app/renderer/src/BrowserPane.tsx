@@ -3,6 +3,7 @@ import type { BrowserPaneCommand, BrowserPaneLayout, BrowserPaneSnapshot } from 
 import './browserPane.css'
 import { hideScreenPane } from './filePaneState.js'
 import codingCat from './assets/browser-header-cats/coding.png'
+import { SidePaneNavigation } from './SidePaneNavigation.js'
 import sleepingCat from './assets/browser-header-cats/sleeping.png'
 import stretchingCat from './assets/browser-header-cats/stretching.png'
 
@@ -42,7 +43,7 @@ function overlappingOverlay(host: HTMLElement, bounds: DOMRect, surfaces: readon
 }
 export function BrowserPane({ state, active, onHide }: { state: BrowserPaneSnapshot; active: boolean; onHide?: () => void }) {
   const host = useRef<HTMLDivElement>(null)
-  const command = (command: BrowserPaneCommand['command']) => {
+  const command = (command: Exclude<BrowserPaneCommand['command'], 'history'>) => {
     void window.catcode.browserPaneCommand({ appSessionId: state.appSessionId, command }).then(result => {
       if (result.ok === false) console.error('Browser pane command refused', { command, appSessionId: state.appSessionId, message: result.message })
     }).catch(error => console.error('Browser pane command failed', { command, appSessionId: state.appSessionId, error }))
@@ -138,7 +139,7 @@ export function BrowserPane({ state, active, onHide }: { state: BrowserPaneSnaps
   }, [active, state.appSessionId])
   const action = (name: keyof typeof paths, label: string, disabled = false) => <button type="button" className="file-pane-icon" aria-label={label} title={label} disabled={disabled} onClick={() => command(name)}><svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name]} /></svg></button>
   return <aside className="file-pane browser-pane">
-    <header className="file-pane-header">{action('back', 'Back', !state.canGoBack)}{action('forward', 'Forward', !state.canGoForward)}{action('reload', 'Reload')}
+    <header className="file-pane-header"><SidePaneNavigation />{action('reload', 'Reload')}
       <div className="file-pane-path" title={state.displayUrl}><span className="file-pane-path-text"><bdi><BrowserAddress state={state} /></bdi></span></div>
       {state.controller === 'agent' ? <span className="browser-header-cat" aria-hidden="true"><img src={codingCat} alt="" /></span> :
         <button type="button" className="browser-header-cat browser-header-cat-user" aria-label="Give back" title="Give back" onClick={() => command('handback')}><img className="browser-cat-sleeping" src={sleepingCat} alt="" /><img className="browser-cat-stretching" src={stretchingCat} alt="" /></button>}

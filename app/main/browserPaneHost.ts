@@ -8,6 +8,7 @@ export type BrowserNavigationOptions = { ignoreBeforeUnload?: boolean }
 export interface BrowserPaneViewHooks {
   input(input: { type: string; _modifiers?: number }): void
   navigated(): void
+  titleUpdated?(): void
   nativeDialog(open: boolean): void
   beforeUnload(): void
   cdpEvent(method: string, params: unknown, sessionId?: string): void
@@ -18,7 +19,10 @@ export interface BrowserPaneView {
   forward(options?: BrowserNavigationOptions): Promise<void>
   reload(options?: BrowserNavigationOptions): Promise<void>
   getURL?(): string
+  getTitle?(): string
   history?(): { canGoBack: boolean; canGoForward: boolean }
+  historyEntry?(): Promise<string>
+  restoreHistoryEntry?(entry: string, options?: BrowserNavigationOptions): Promise<void>
   setHooks?(hooks: BrowserPaneViewHooks): void
   capturePage?(maxPixels: number): Promise<BrowserCapturedPage>
   destroy(): void
@@ -70,6 +74,17 @@ export class BrowserPaneHost {
   }
   headerNavigate(id: string, args: BrowserRequestArgs['browser.navigate']): Promise<BrowserResult> {
     return this.request(id, { verb: 'browser.navigate', args }, true)
+  }
+  restoreHistoryEntry(id: string, entry: string): Promise<void> {
+    return this.serial(async () => {
+      const record = this.records.get(id)
+      if (this.disposed || !record?.view.restoreHistoryEntry) throw new Error('Browser history is unavailable')
+      if (record.nativeDialog) throw new Error('Dismiss the browser dialog first')
+      this.active.get(id)?.('The user is using the browser')
+      await record.view.restoreHistoryEntry(entry, { ignoreBeforeUnload: true })
+      record.url = record.view.getURL?.() || record.url
+      this.publish(id)
+    })
   }
   private serial<T>(run: () => Promise<T>): Promise<T> {
     const result = this.queue.then(run)
@@ -185,6 +200,7 @@ export class BrowserPaneHost {
             view.setHooks?.({
               input: event => { if (this.records.get(id) === owned && isUserBrowserInput(event)) this.takeOver(id) },
               navigated: () => { if (this.records.get(id) !== owned) return; owned.cdp?.navigated(); owned.url = view.getURL?.() || owned.url; this.publish(id) },
+              titleUpdated: () => { if (this.records.get(id) === owned) this.publish(id) },
               nativeDialog,
               beforeUnload: () => { if (this.records.get(id) === owned) this.active.get(id)?.('The page prevented navigation') },
               cdpEvent: (method, params, sessionId) => {

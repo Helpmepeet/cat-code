@@ -1,6 +1,7 @@
 import { app, nativeImage, protocol, session, WebContentsView } from 'electron'
 import { readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { BROWSER_LOCAL_SCHEME } from './browserPanePolicy.js'
 import type { BrowserPaneAdapter, BrowserPaneView, BrowserPaneViewHooks, BrowserNavigationOptions } from './browserPaneHost.js'
 import type { BrowserPanePresentationNative } from './browserPanePresentation.js'
@@ -55,6 +56,7 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
       let ignoreBeforeUnload = false
       wc.on('input-event', (_event, input) => hooks?.input(input as typeof input & { _modifiers?: number }))
       wc.on('did-navigate', () => hooks?.navigated())
+      wc.on('page-title-updated', () => hooks?.titleUpdated?.())
       wc.on('did-navigate-in-page', (_event, _url, isMainFrame) => { if (isMainFrame) hooks?.navigated() })
       wc.on('will-prevent-unload', event => {
         if (ignoreBeforeUnload) event.preventDefault()
@@ -104,12 +106,29 @@ export function createBrowserPaneElectronAdapter(): BrowserPaneAdapter {
         ignoreBeforeUnload = options?.ignoreBeforeUnload === true
         try { await action() } finally { ignoreBeforeUnload = false }
       }
+      const historyScope = randomUUID()
+      const nativeHistory = async () => await wc.debugger.sendCommand('Page.getNavigationHistory') as {
+        currentIndex: number; entries: { id: number; url: string }[]
+      }
       return {
         nativeView: view,
         debugger: wc.debugger,
         setHooks: value => { hooks = value },
         getURL: () => wc.getURL(),
+        getTitle: () => wc.getTitle(),
         history: () => ({ canGoBack: wc.navigationHistory.canGoBack(), canGoForward: wc.navigationHistory.canGoForward() }),
+        historyEntry: async () => {
+          const history = await nativeHistory()
+          return `${historyScope}:${history.entries[history.currentIndex]!.id}`
+        },
+        restoreHistoryEntry: (entry, options) => navigation(async () => {
+          const history = await nativeHistory()
+          const index = history.entries.findIndex(candidate => `${historyScope}:${candidate.id}` === entry)
+          if (index < 0) throw new Error('This browser history entry is no longer available')
+          if (index === history.currentIndex) return
+          requested = history.entries[index]!.url
+          try { await historyNavigation(() => wc.navigationHistory.goToIndex(index)) } finally { requested = undefined }
+        }, options),
         capturePage: async maxPixels => {
           // Normalize Retina representations so these limits describe encoded pixels, not DIPs.
           let image = nativeImage.createFromBuffer((await wc.capturePage()).toPNG(), { scaleFactor: 1 })

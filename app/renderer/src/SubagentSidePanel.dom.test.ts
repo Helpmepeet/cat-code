@@ -69,43 +69,47 @@ function workspace({ rows = [agent(), agent('b', [prose('answer-b', 'Second work
 }
 async function click(container: HTMLElement, selector: string) {
   const element = container.querySelector<HTMLButtonElement>(selector)
-  expect(element).not.toBeNull()
+  expect(element !== null).toBe(true)
   await act(async () => { element!.click() })
 }
 
-test('dock opens an inline read-only panel, hides the dock, switches faces including Finished, and closes', async () => {
+test('dock stays available to switch read-only workers including Finished and close retains the hidden panel', async () => {
   const tree = await harness.mount(workspace())
   await click(tree.container, '[data-dock-row="a"]')
   const panel = tree.container.querySelector('aside')!
   const slot = panel.closest<HTMLElement>('.subagent-shared-slot')!
-  expect(slot).not.toBeNull()
+  expect(slot !== null).toBe(true)
   expect(slot.parentElement?.className).toBe('subagent-workspace-layout')
   expect(slot.parentElement?.parentElement?.className).toBe('subagent-workspace')
   expect(slot.previousElementSibling?.contains(tree.container.querySelector('main')!)).toBe(true)
-  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(true)
-  expect(tree.container.querySelector('.subagent-dock')?.hasAttribute('inert')).toBe(true)
+  expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(false)
+  expect(tree.container.querySelector('.subagent-dock')?.hasAttribute('inert')).toBe(false)
   expect(panel.textContent).toContain('Checking the click handler')
   expect(panel.textContent).toContain('The dock opens the worker.')
-  expect(panel.querySelector('[data-tool-use-id], [data-tool-row]')).not.toBeNull()
-  expect(panel.querySelector('textarea, [contenteditable="true"], [aria-label="Stop the turn"]')).toBeNull()
+  expect(panel.querySelector('[data-tool-use-id], [data-tool-row]') !== null).toBe(true)
+  expect(panel.querySelector('textarea, [contenteditable="true"], [aria-label="Stop the turn"]') === null).toBe(true)
   expect(panel.querySelector('header')?.textContent).not.toContain('Read')
-  expect(panel.querySelector('[aria-current="true"]')?.getAttribute('aria-label')).toBe('worker-a, running')
+  expect(panel.querySelector('.subagent-side-switch, .subagent-side-faces') === null).toBe(true)
+  expect(tree.container.querySelector('[data-dock-row="a"]')?.getAttribute('aria-pressed')).toBe('true')
   expect(document.activeElement?.getAttribute('aria-label')).toBe('Close subagent panel')
   const firstBody = panel.querySelector<HTMLElement>('.subagent-side-body')!
   expect(firstBody.scrollTop).toBe(600)
   await act(async () => { firstBody.scrollTop = 100; firstBody.dispatchEvent(new Event('scroll')) })
-  await click(tree.container, '.subagent-side-switch[aria-current="true"]')
-  expect(tree.container.querySelector('.subagent-side-body')).toBe(firstBody)
+  await click(tree.container, '[data-dock-row="a"]')
+  expect(tree.container.querySelector('.subagent-side-body') === firstBody).toBe(true)
   expect(firstBody.scrollTop).toBe(100)
-  await click(tree.container, '.subagent-side-switch[aria-label="worker-b, running"]')
+  await click(tree.container, '[data-dock-row="b"]')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Second worker')
   expect(tree.container.querySelector<HTMLElement>('.subagent-side-body')?.scrollTop).toBe(600)
-  await click(tree.container, '.subagent-side-switch[aria-label="worker-c, completed"]')
-  expect(tree.container.querySelector('header')?.textContent).toContain('4 tool calls · 21.0k tokens')
+  await click(tree.container, '[data-finished-toggle]')
+  await click(tree.container, '[data-dock-row="c"]')
+  expect(tree.container.querySelector('.subagent-side-name')?.textContent).toBe('worker-c')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Finished answer')
+  const retained = tree.container.querySelector('aside')
   await click(tree.container, '[aria-label="Close subagent panel"]')
   await act(async () => { await harness.nextFrame() })
-  expect(tree.container.querySelector('aside')).toBeNull()
+  expect(tree.container.querySelector('aside') === retained).toBe(true)
+  expect(tree.container.querySelector<HTMLElement>('.subagent-shared-slot')?.hidden).toBe(true)
   expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(false)
   await click(tree.container, '[data-dock-row="a"]')
   expect(tree.container.querySelector<HTMLElement>('.subagent-side-body')?.scrollTop).toBe(600)
@@ -133,16 +137,24 @@ test('new steps follow the bottom, preserve a reader scrolling back, and resume 
   expect(tree.container.querySelector('aside')?.textContent).not.toContain('Latest')
 })
 
-test('waiting header shows the baton instead of activity and settled headers use real usage', async () => {
+test('header keeps exact face name and model identity across waiting and completion without state decoration', async () => {
   const tree = await harness.mount(workspace())
   await click(tree.container, '[data-dock-row="a"]')
   await tree.render(workspace({ active: [worker('a', { state: 'waiting' }), b] }))
   const header = tree.container.querySelector('.subagent-side-header')!
-  expect(header.textContent).toContain('waiting')
-  expect(header.textContent).toContain('→assistant')
+  const face = header.querySelector('svg:not(.file-pane-icon svg)')
+  expect(face !== null).toBe(true)
+  const identity = header.querySelector('.subagent-side-identity')!
+  expect([...identity.querySelectorAll('.subagent-side-line > span')].map(node => node.className)).toEqual(['subagent-side-name', 'subagent-side-model'])
+  expect(identity.textContent).toContain('worker-a')
+  expect(identity.textContent).toContain('Sonnet')
+  expect(header.textContent).not.toContain('waiting')
+  expect(header.querySelector('.animate-face-pulse, .subagent-side-lead, .subagent-side-type, .subagent-side-usage') === null).toBe(true)
   expect(header.textContent).not.toContain('Read')
   await tree.render(workspace({ active: [b], finished: [worker('a', { state: 'completed', usageLabel: '2 tool calls · 9.0k tokens' }), done] }))
-  expect(header.textContent).toContain('2 tool calls · 9.0k tokens')
+  expect(header.querySelector('svg:not(.file-pane-icon svg)') === face).toBe(true)
+  expect(identity.textContent).toContain('worker-a')
+  expect(header.textContent).not.toContain('2 tool calls · 9.0k tokens')
   expect(header.textContent).not.toContain('waiting')
 })
 
@@ -175,13 +187,13 @@ test('Finished, background, resumed and waiting runs open; only an unbound row k
   }))
   await click(tree.container, '[data-dock-row="unbound"]')
   expect(calls).toEqual(['unbound'])
-  expect(tree.container.querySelector('aside')).toBeNull()
+  expect(tree.container.querySelector('aside') === null).toBe(true)
   // A background run opens before its first step, with nothing claimed missing.
   await click(tree.container, '[data-dock-row="bg"]')
   expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-bg, background')
-  expect(tree.container.querySelector('.subagent-side-availability')).toBeNull()
-  // A background run is working, so its face pulses like a foreground one.
-  expect(tree.container.querySelector('.subagent-side-header .animate-face-pulse')).not.toBeNull()
+  expect(tree.container.querySelector('.subagent-side-availability') === null).toBe(true)
+  // The face identifies the worker, independently of its working state.
+  expect(tree.container.querySelector('.subagent-side-header .animate-face-pulse') === null).toBe(true)
   await tree.render(workspace({
     active: [a, background, resumed, waiting, unbound],
     rows: [agent(), { ...launch('bg'), children: [prose('bg-step', 'Background step')] }, launch('resumed'), agent('waiting', []), agent('c', [prose('answer-c', 'Finished answer')])],
@@ -189,14 +201,17 @@ test('Finished, background, resumed and waiting runs open; only an unbound row k
   }))
   expect(tree.container.querySelector('aside')?.textContent).toContain('Background step')
   for (const id of ['resumed', 'waiting']) {
-    await click(tree.container, `.subagent-side-switch[aria-label="worker-${id}, ${id}"]`)
+    await click(tree.container, `[data-dock-row="${id}"]`)
     expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe(`worker-${id}, ${id}`)
   }
-  await click(tree.container, '.subagent-side-switch[aria-label="worker-c, completed"]')
+  await click(tree.container, '[data-finished-toggle]')
+  await click(tree.container, '[data-dock-row="c"]')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Finished answer')
   expect(calls).toEqual(['unbound'])
+  const retained = tree.container.querySelector('aside')
   await click(tree.container, '[aria-label="Close subagent panel"]')
-  expect(tree.container.querySelector('aside')).toBeNull()
+  expect(tree.container.querySelector('aside') === retained).toBe(true)
+  expect(tree.container.querySelector<HTMLElement>('.subagent-shared-slot')?.hidden).toBe(true)
   expect(tree.container.querySelector<HTMLElement>('.subagent-dock')?.hidden).toBe(false)
 })
 
@@ -211,23 +226,24 @@ test('missing, orphaned and partially restored steps stay truthful and refresh w
   expect(tree.container.querySelector('aside')?.textContent).toContain("This agent's steps aren't fully loaded.")
   await tree.render(workspace({ rows: [partial] }))
   expect(tree.container.querySelector('aside')?.textContent).toContain('The dock opens the worker.')
-  expect(tree.container.querySelector('.subagent-side-availability')).not.toBeNull()
+  expect(tree.container.querySelector('.subagent-side-availability') !== null).toBe(true)
   await tree.render(workspace({ rows: [row] }))
-  expect(tree.container.querySelector('.subagent-side-availability')).toBeNull()
+  expect(tree.container.querySelector('.subagent-side-availability') === null).toBe(true)
   const orphan = { ...source, id: 'orphan', kind: 'orphaned-agent' as const, missingToolUseId: 'launch-a', agentName: 'worker-a', children: [prose('orphan-answer')] }
   await tree.render(workspace({ rows: [orphan] }))
   expect(tree.container.querySelector('aside')?.textContent).toContain('Reply orphan-answer')
-  expect(tree.container.querySelector('.subagent-side-availability')).not.toBeNull()
+  expect(tree.container.querySelector('.subagent-side-availability') !== null).toBe(true)
 })
 
 test('real SessionPane opens projected child reasoning, and the parent Agent card opens the panel without nesting steps', async () => {
+  const sessionId = 'subagent-panel-real-session'
   let transcript = createTranscriptState()
   const message = (uuid: string, parent: string | null, role: 'assistant' | 'user', content: unknown[], extra = {}) => ({
-    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1',
-    event: { type: 'message', message: { type: role, uuid, session_id: 'session-1', parent_tool_use_id: parent, message: { id: uuid, role, content }, ...extra } },
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId,
+    event: { type: 'message', message: { type: role, uuid, session_id: sessionId, parent_tool_use_id: parent, message: { id: uuid, role, content }, ...extra } },
   } as unknown as ServerFrame)
   for (const frame of [
-    { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', engineSessionId: 'engine-1', payload: {
+    { kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId, engineSessionId: 'subagent-panel-real-engine', payload: {
       type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false,
       abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
     } } as ServerFrame,
@@ -237,20 +253,29 @@ test('real SessionPane opens projected child reasoning, and the parent Agent car
       tool_use_result: { agentId: 'live-id', agentName: 'live-reader', totalTokens: 21_000, totalToolUseCount: 3 },
     }),
   ]) transcript = projectServerFrame(transcript, frame)
-  expect(selectNestedTranscriptRows(transcript, 'session-1')[0]?.children.length).toBe(2)
-  const tree = await harness.mount(createElement(SessionPane, { ...idleSessionPaneProps(), transcript }))
-  await click(tree.container, '[data-finished-toggle]')
+  expect(selectNestedTranscriptRows(transcript, sessionId)[0]?.children.length).toBe(2)
+  const tree = await harness.mount(createElement(SessionPane, {
+    ...idleSessionPaneProps(), activeSessionId: sessionId, transcript,
+    workers: [{ agentId: 'live-id', handle: '@live-reader', role: 'explore', description: 'Inspect the dock', status: 'completed', isBackgrounded: false }],
+  }))
+  // A newly completed worker can still occupy the dock's settling active row.
+  if (tree.container.querySelector('[data-finished-toggle]')) await click(tree.container, '[data-finished-toggle]')
   await click(tree.container, '[data-dock-row="live-id"]')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Live child reasoning')
   expect(tree.container.querySelector('aside')?.textContent).toContain('Child reply')
-  expect(tree.container.querySelector('.subagent-side-header')?.textContent).toContain('3 tool calls · 21.0k tokens')
+  expect(tree.container.querySelector('.subagent-side-header')?.textContent).not.toContain('3 tool calls · 21.0k tokens')
+  expect(tree.container.querySelector('.subagent-side-name')?.textContent).toBeTruthy()
   const parentCard = tree.container.querySelector('[data-agent-tool-id="live-agent"]')!
   // Steps live only in the panel: the parent card nests none and never expands.
   expect(tree.container.querySelector('main')?.textContent).not.toContain('Child reply')
-  expect(parentCard.querySelector('button[aria-expanded]')).toBeNull()
+  expect(parentCard.querySelector('button[aria-expanded]') === null).toBe(true)
+  const retained = tree.container.querySelector('aside')
   await click(tree.container, '[aria-label="Close subagent panel"]')
-  expect(tree.container.querySelector('aside')).toBeNull()
+  expect(tree.container.querySelector('aside') === retained).toBe(true)
+  expect(tree.container.querySelector<HTMLElement>('.subagent-shared-slot')?.hidden).toBe(true)
   await act(async () => { parentCard.querySelector<HTMLButtonElement>('button')!.click() })
+  expect(tree.container.querySelector('aside') === retained).toBe(true)
+  expect(tree.container.querySelector<HTMLElement>('.subagent-shared-slot')?.hidden).toBe(false)
   expect(tree.container.querySelector('aside')?.textContent).toContain('Child reply')
   expect(tree.container.querySelector('main')?.textContent).not.toContain('Child reply')
 })
@@ -329,7 +354,7 @@ test('worker file labels reuse transcript shortening without changing full-path 
     expect(buttons[3]!.querySelector('code')?.textContent).toBe(relative)
     for (const button of buttons) {
       expect(button.classList.contains('transcript-file-link')).toBe(true)
-      expect(button.querySelector('.transcript-file-link-label')).not.toBeNull()
+      expect(button.querySelector('.transcript-file-link-label') !== null).toBe(true)
       await act(async () => { button.click() })
     }
     expect(buttons.slice(0, 5).map(button => button.title)).toEqual(Array(5).fill(path))
@@ -363,12 +388,12 @@ test('a resume keeps the open panel and its earlier steps above the resumed run'
   expect(body.textContent).toContain('The dock opens the worker.')
   const resumed = worker('a', { state: 'resumed', runKey: 'resume-a', toolUseId: 'resume-a', resumedAt: 2000, runToolUseIds: ['launch-a', 'resume-a'] })
   await tree.render(workspace({ rows: [original, resumeCard], active: [resumed, b], finished: [], fallback }))
-  expect(tree.container.querySelector('.subagent-side-body')).toBe(body)
+  expect(tree.container.querySelector('.subagent-side-body') === body).toBe(true)
   expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-a, resumed')
   const text = body.textContent ?? ''
   expect(text.indexOf('The dock opens the worker.')).toBeGreaterThanOrEqual(0)
   expect(text.indexOf('Resumed reply')).toBeGreaterThan(text.indexOf('The dock opens the worker.'))
-  expect(body.querySelector('.subagent-side-availability')).toBeNull()
+  expect(body.querySelector('.subagent-side-availability') === null).toBe(true)
 })
 
 test('dock opens a repeatedly resumed worker when its card arrives before the task update', async () => {
@@ -405,7 +430,7 @@ test('dock opens a repeatedly resumed worker when its card arrives before the ta
   expect(body.textContent).toContain('Earlier resumed reply')
   expect(body.textContent).toContain('Current resumed reply')
   await tree.render(derive([original, firstResume, nextResume], 2000, 'running', 'resume-new'))
-  expect(tree.container.querySelector('.subagent-side-body')).toBe(body)
+  expect(tree.container.querySelector('.subagent-side-body') === body).toBe(true)
 })
 
 test('an open panel follows its run into the background but not into a resume without a run of its own', async () => {
@@ -455,8 +480,9 @@ test('terminal eviction retains the latest observed completion, not the opening 
   expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-a, completed')
   await tree.render(workspace({ active: [b], finished: [] }))
   expect(tree.container.querySelector('aside')?.getAttribute('aria-label')).toBe('worker-a, completed')
-  expect(tree.container.querySelector('.subagent-side-header')?.textContent).toContain('3 tool calls')
-  expect(tree.container.querySelector('.subagent-side-switch[aria-current="true"]')?.getAttribute('aria-label')).toBe('worker-a, completed')
+  expect(tree.container.querySelector('.subagent-side-header')?.textContent).not.toContain('3 tool calls')
+  expect(tree.container.querySelector('.subagent-side-name')?.textContent).toBe('worker-a')
+  expect(tree.container.querySelector('.subagent-side-switch') === null).toBe(true)
 })
 
 test('finished launches recorded before steps were published keep fallback, while restored steps remain openable', async () => {
