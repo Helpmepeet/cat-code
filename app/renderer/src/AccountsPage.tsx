@@ -12,6 +12,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactElement,
@@ -535,6 +536,21 @@ function TouchAllDialog({
 
 /* ── pool row + ⋯ menu ── */
 
+function useAccountMenuPopover() {
+  const popover = usePopover()
+  const [above, setAbove] = useState(false)
+  const { open, triggerRef, panelRef } = popover
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current || !panelRef.current) return
+    const trigger = triggerRef.current.getBoundingClientRect()
+    const page = triggerRef.current.closest('.accounts-page')?.getBoundingClientRect()
+    const below = Math.min(window.innerHeight, page?.bottom ?? window.innerHeight) - trigger.bottom - 4
+    const spaceAbove = trigger.top - Math.max(0, page?.top ?? 0) - 4
+    setAbove(below < panelRef.current.getBoundingClientRect().height && spaceAbove > below)
+  }, [open, triggerRef, panelRef])
+  return { ...popover, above }
+}
+
 function AccountRowMenu({
   account,
   signOutState,
@@ -544,7 +560,7 @@ function AccountRowMenu({
   signOutState?: 'submitting' | 'checking' | 'refreshing'
   onAction: (key: AccountMenuKey, account: AccountStatus) => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef, panelRef, above } = useAccountMenuPopover()
 
   const items = selectAccountMenuItems(account, signOutState)
   if (items.length === 0) return null
@@ -566,10 +582,11 @@ function AccountRowMenu({
       </button>
       {open ? (
         <div
+          ref={panelRef}
           role="menu"
           aria-label="Account actions"
           onKeyDown={handleMenuRovingKeyDown}
-          className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[light-dark(#ffffff,#141417)] p-[5px] shadow-[var(--elev-menu)]"
+          className={`accounts-account-menu absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[light-dark(#ffffff,#141417)] p-[5px] shadow-[var(--elev-menu)] ${above ? 'is-above' : ''}`}
         >
           {items.map(it => (
             <button
@@ -679,7 +696,7 @@ function SignedOutProfileMenu({
   onRelink: () => void
   onDelete: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef, panelRef, above } = useAccountMenuPopover()
   const canDelete =
     profile.lifecycleGeneration !== null ||
     profile.credentialGeneration !== null
@@ -700,10 +717,11 @@ function SignedOutProfileMenu({
       </button>
       {open ? (
         <div
+          ref={panelRef}
           role="menu"
           aria-label="Account actions"
           onKeyDown={handleMenuRovingKeyDown}
-          className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[light-dark(#ffffff,#141417)] p-[5px] shadow-[var(--elev-menu)]"
+          className={`accounts-account-menu absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[light-dark(#ffffff,#141417)] p-[5px] shadow-[var(--elev-menu)] ${above ? 'is-above' : ''}`}
         >
           <button
             type="button"
@@ -876,7 +894,7 @@ function ClaudeRowMenu({ account, onAction }: {
   account: AnthropicAccountStatus
   onAction: (key: string) => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef, panelRef, above } = useAccountMenuPopover()
   const items = [
     ...(!account.isDefault && account.status === 'healthy' ? [{ key: 'switch', label: 'Make default for new chats' }] : []),
     { key: 'check', label: 'Check sign-in' },
@@ -890,8 +908,8 @@ function ClaudeRowMenu({ account, onAction }: {
   return <div ref={ref} className="relative shrink-0">
     <button ref={triggerRef} type="button" aria-label="Account actions" aria-haspopup="menu" aria-expanded={open}
       onClick={() => setOpen(value => !value)} className="h-7 w-7 rounded-[7px] text-text-muted hover:bg-shell-hover">⋯</button>
-    {open ? <div role="menu" aria-label="Account actions" onKeyDown={handleMenuRovingKeyDown}
-      className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-shell-seam bg-surface-panel p-[5px] shadow-[var(--elev-menu)]">
+    {open ? <div ref={panelRef} role="menu" aria-label="Account actions" onKeyDown={handleMenuRovingKeyDown}
+      className={`accounts-account-menu absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-shell-seam bg-surface-panel p-[5px] shadow-[var(--elev-menu)] ${above ? 'is-above' : ''}`}>
       {items.map(item => <button key={item.key} type="button" role="menuitem"
         className="block w-full rounded-[7px] px-2.5 py-[7px] text-left text-[12.5px] text-text-primary hover:bg-shell-hover"
         onClick={() => { close(); onAction(item.key) }}>{item.label}</button>)}

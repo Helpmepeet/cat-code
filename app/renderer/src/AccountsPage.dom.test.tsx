@@ -110,6 +110,42 @@ test('inline account actions preserve provider routing and wait for snapshots to
   }
 })
 
+test('account menus open above rows near the scroll boundary and restore focus on Escape', async () => {
+  const signedOut: AccountsSnapshot = { ...emptySnapshot, signedOutProfiles: [{
+    id: 'old', alias: 'Home', state: 'signed_out', credentialGeneration: 2,
+    lifecycleGeneration: 2, credentialGenerationState: 'lifecycle_bound',
+    lifecycleState: 'signed_out', lifecycleReadStatus: 'valid',
+  }] }
+  let triggerTop = 700
+  const bounds = spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function(this: Element) {
+    const top = this.matches('.accounts-page') ? 40 : this.matches('[role="menu"]') ? 0 : triggerTop
+    const height = this.matches('.accounts-page') ? 710 : this.matches('[role="menu"]') ? 180 : 28
+    return { top, bottom: top + height, height, left: 0, right: 180, width: 180, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+  })
+  try {
+    for (const snapshot of [claudeSnapshot, signedOut]) {
+      const sent: AccountVerbMessage[] = []
+      const tree = await harness.mount(<AccountsPage snapshot={snapshot} lastResult={null} onVerb={verb => sent.push(verb)} />)
+      const trigger = tree.container.querySelector<HTMLButtonElement>('[aria-label="Account actions"]')!
+      triggerTop = 700
+      await act(async () => { trigger.focus(); trigger.click() })
+      expect(tree.container.querySelector('[role="menu"]')?.classList.contains('is-above')).toBe(true)
+      await act(async () => {
+        document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
+      expect(tree.container.querySelector('[role="menu"]')).toBeNull()
+      expect(document.activeElement === trigger).toBe(true)
+      triggerTop = 100
+      await act(async () => { trigger.click() })
+      expect(tree.container.querySelector('[role="menu"]')?.classList.contains('is-above')).toBe(false)
+      expect(sent).toHaveLength(0)
+      await harness.unmountAll()
+    }
+  } finally {
+    bounds.mockRestore()
+  }
+})
+
 test('page defaults ignore chat scope and sign-in defaults are opt-in', async () => {
   const sent: AccountVerbMessage[] = []
   const tree = await harness.mount(<AccountsPage snapshot={{ ...claudeSnapshot,
