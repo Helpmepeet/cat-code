@@ -80,15 +80,13 @@
 .focused-tick-in { animation: focused-tick-in 240ms var(--ease-enter) both; }
 .focused-tick-out { animation: focused-tick-out 180ms var(--ease-standard) both; }
 
-/* Live work carries a light sweep instead of a pulsing dot. */
+/* Opacity can run on the compositor; a moving text gradient repaints every frame.
+ * Inline-block keeps the nested ticker labels eligible for compositing too. */
 .focused-turn[data-focused-live] .focused-shimmer,
-.focused-step-head[data-running] .focused-step-verb {
-  background: linear-gradient(90deg, var(--text-subtle) 0 38%, var(--text-primary) 50%, var(--text-subtle) 62% 100%);
-  background-size: 300% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: focused-shimmer 1.8s linear infinite;
+.focused-step-head[data-running] .focused-step-verb,
+.focused-live-verb {
+  display: inline-block;
+  animation: focused-status-pulse 1.8s ease-in-out infinite;
 }
 
 /* The live head stays in view while its work scrolls. Glass panes have no
@@ -154,7 +152,7 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
 @keyframes focused-text-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes focused-tick-in { from { transform: translateY(80%); opacity: 0; } }
 @keyframes focused-tick-out { to { transform: translateY(-80%); opacity: 0; } }
-@keyframes focused-shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@keyframes focused-status-pulse { 50% { opacity: .55; } }
 @keyframes focused-cascade { from { opacity: 0; transform: translateY(-5px); } }
 @keyframes focused-running-pulse { 50% { opacity: .5; } }
 @media (prefers-reduced-motion: reduce) {
@@ -206,7 +204,7 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
   .focused-live-verb { background: none; color: var(--text-subtle); }
 }
 
-.focused-live-verb { background: linear-gradient(90deg, var(--text-subtle) 0 38%, var(--text-primary) 50%, var(--text-subtle) 62% 100%); background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: focused-shimmer 1.8s linear infinite; }
+.focused-live-verb { color: var(--text-subtle); }
 .focused-thinking .focused-reasoning-node { background: var(--accent); animation: focused-running-pulse 2s cubic-bezier(.4,0,.6,1) infinite; }
 @media (prefers-reduced-motion: reduce) { .focused-live-verb, .focused-thinking .focused-reasoning-node { animation: none; } .focused-live-verb { background: none; color: var(--text-subtle); } }
 

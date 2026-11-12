@@ -1307,7 +1307,7 @@ html[data-glass='on'] [data-window-frame] {
 }
 
 @keyframes effort-flow {
-  to { left: 100%; }
+  to { transform: translateX(var(--effort-flow-width, 0px)); }
 }
 
 @layer components {
@@ -1340,7 +1340,8 @@ html[data-glass='on'] [data-window-frame] {
     position: absolute;
     top: 0;
     bottom: 0;
-    left: -40px;
+    left: 0;
+    transform: translateX(-100%);
     width: 40px;
     background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .55), transparent);
     animation: effort-flow var(--effort-flow-duration, 2.4s) linear infinite;
@@ -1803,6 +1804,7 @@ html[data-glass='on'] [data-window-frame] {
   .animate-tab-in,
   .animate-face-pulse,
   .animate-effort-flow,
+  .effort-flow-light-band,
   .animate-compact-ingest,
   .animate-compact-absorb,
   .animate-compact-star,

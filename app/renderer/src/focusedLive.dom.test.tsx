@@ -1,5 +1,5 @@
 import { PROTOCOL_VERSION } from '../../shared/protocol.js'
-import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { TranscriptView } from './TranscriptView.js'
@@ -10,8 +10,28 @@ import type { ServerFrame, TasksSnapshot } from '../../shared/protocol.js'
 let harness: DomTestHarness
 let now = 10000
 let clock: ReturnType<typeof spyOn>
+let intervals: Map<ReturnType<typeof setInterval>, { callback: () => void; delay: number }>
+let intervalSpy: ReturnType<typeof spyOn>
+let clearIntervalSpy: ReturnType<typeof spyOn>
 beforeAll(async () => { harness = await createDomTestHarness() })
-afterEach(async () => { await harness.unmountAll(); clock?.mockRestore() })
+beforeEach(() => {
+  intervals = new Map()
+  let id = 0
+  intervalSpy = spyOn(globalThis, 'setInterval').mockImplementation(((callback: () => void, delay: number) => {
+    const timer = ++id as unknown as ReturnType<typeof setInterval>
+    intervals.set(timer, { callback, delay })
+    return timer
+  }) as typeof setInterval)
+  clearIntervalSpy = spyOn(globalThis, 'clearInterval').mockImplementation(timer => {
+    intervals.delete(timer as ReturnType<typeof setInterval>)
+  })
+})
+afterEach(async () => {
+  await harness.unmountAll()
+  clock?.mockRestore()
+  intervalSpy.mockRestore()
+  clearIntervalSpy.mockRestore()
+})
 afterAll(async () => { await harness.teardown() })
 function start() {
   now = 10000
@@ -36,8 +56,84 @@ function view(state: TranscriptState, mode: TranscriptMode = 'focused', tasks: T
   return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptView state={state} activeSessionId="live" turnLive={live} focusedTasks={tasks} cwd={cwd} /></TranscriptModeContext.Provider>
 }
 const visibleText = (node: Element | null) => node ? [...node.querySelectorAll(':scope > *:not([aria-hidden="true"])')].map(child => child.textContent).join('') : ''
-async function tick() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 270)) }) }
+async function tick() {
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 270)) })
+  await act(async () => { for (const timer of intervals.values()) timer.callback() })
+}
 async function click(element: Element | null) { expect(element).not.toBeNull(); await act(async () => { (element as HTMLElement).click() }) }
+
+function mockVisibility(get: () => DocumentVisibilityState) {
+  const previous = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get })
+  return () => {
+    if (previous) Object.defineProperty(document, 'visibilityState', previous)
+    else Reflect.deleteProperty(document, 'visibilityState')
+  }
+}
+
+test('live clock uses one-second ticks, suspends hidden work, catches up on resume and cleans up', async () => {
+  let visibility: DocumentVisibilityState = 'visible'
+  const restoreVisibility = mockVisibility(() => visibility)
+  const dispatchVisibility = async () => {
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+  }
+  try {
+    const state = activity(calls(start(), ['running']), 'running', 'executing', { output: 'first', totalLines: 1 })
+    const tree = await harness.mount(view(state))
+    expect([...intervals.values()].map(timer => timer.delay)).toEqual([1000])
+    now += 1000
+    await act(async () => { for (const timer of intervals.values()) timer.callback() })
+    expect(tree.container.querySelector('.focused-meta')).toBeNull()
+    now += 1000
+    await act(async () => { for (const timer of intervals.values()) timer.callback() })
+    expect(tree.container.querySelector('.focused-step-head .focused-meta')?.textContent).toBe('2s')
+    expect(tree.container.querySelector('.focused-live-out')?.textContent).toBe('first1 lines')
+    visibility = 'hidden'
+    await dispatchVisibility()
+    expect(intervals.size).toBe(0)
+    now += 8000
+    expect(tree.container.querySelector('.focused-step-head .focused-meta')?.textContent).toBe('2s')
+    // Stream events are not blocked by document visibility or timer cadence.
+    await tree.render(view(activity(state, 'running', 'executing', { startedAt: 10000, output: 'new output', totalLines: 2 })))
+    expect(tree.container.querySelector('.focused-live-out')?.textContent).toBe('new output2 lines')
+    expect(tree.container.querySelector('.focused-step-head .focused-meta')?.textContent).toBe('10s')
+    now += 5000
+    visibility = 'visible'
+    await dispatchVisibility()
+    expect(tree.container.querySelector('.focused-step-head .focused-meta')?.textContent).toBe('15s')
+    expect([...intervals.values()].map(timer => timer.delay)).toEqual([1000])
+    await dispatchVisibility()
+    expect(intervals.size).toBe(1)
+    await tree.render(view(state, 'focused', null, false))
+    expect(intervals.size).toBe(0)
+    await dispatchVisibility()
+    expect(intervals.size).toBe(0)
+    await tree.render(view(state))
+    expect(intervals.size).toBe(1)
+    await tree.unmount()
+    expect(intervals.size).toBe(0)
+    await dispatchVisibility()
+    expect(intervals.size).toBe(0)
+  } finally {
+    restoreVisibility()
+  }
+})
+
+test('a turn mounted hidden starts its clock only when visible', async () => {
+  let visibility: DocumentVisibilityState = 'hidden'
+  const restoreVisibility = mockVisibility(() => visibility)
+  try {
+    const tree = await harness.mount(view(start()))
+    expect(intervals.size).toBe(0)
+    now += 3000
+    visibility = 'visible'
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
+    expect(visibleText(tree.container.querySelector('.focused-thinking .focused-ticker'))).toBe('Thinking it over')
+    expect([...intervals.values()].map(timer => timer.delay)).toEqual([1000])
+  } finally {
+    restoreVisibility()
+  }
+})
 
 test('rolling work keeps the first running command ahead of later queued calls and counts only finished calls', async () => {
   let state = activity(calls(start(), ['test-first', 'done', 'queued-a', 'queued-b', 'queued-c']), 'test-first', 'executing')

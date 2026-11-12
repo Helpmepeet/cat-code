@@ -288,11 +288,28 @@ function useLiveClock(live: boolean): number {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (!live) return
-    setNow(Date.now())
-    const timer = setInterval(() => setNow(Date.now()), 250)
-    return () => clearInterval(timer)
+    let timer: ReturnType<typeof setInterval> | undefined
+    const stop = () => {
+      if (timer !== undefined) clearInterval(timer)
+      timer = undefined
+    }
+    const sync = () => {
+      stop()
+      if (document.visibilityState === 'hidden') return
+      setNow(Date.now())
+      // Elapsed labels use whole seconds. The 1.5s output gate can wait until
+      // the next tick; stream updates still render independently of this clock.
+      timer = setInterval(() => setNow(Date.now()), 1000)
+    }
+    sync()
+    document.addEventListener('visibilitychange', sync)
+    return () => {
+      stop()
+      document.removeEventListener('visibilitychange', sync)
+    }
   }, [live])
-  return now
+  // Incoming activity must use current time even between ticks or while hidden.
+  return live ? Date.now() : now
 }
 
 /** Text that changes in place leaves upward while its replacement rises in. */
