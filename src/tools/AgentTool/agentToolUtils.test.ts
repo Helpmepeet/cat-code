@@ -18,7 +18,12 @@ import { TASK_GET_TOOL_NAME } from '../../tools/TaskGetTool/constants.js'
 import { TASK_LIST_TOOL_NAME } from '../../tools/TaskListTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from '../../tools/TaskUpdateTool/constants.js'
 import { TODO_WRITE_TOOL_NAME } from '../../tools/TodoWriteTool/constants.js'
-import { getTools } from '../../tools.js'
+import {
+  assembleToolPool,
+  getAllBaseTools,
+  getTools,
+  getToolsForDefaultPreset,
+} from '../../tools.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
@@ -273,7 +278,7 @@ describe('resolveAgentTools Skill policy for async workers', () => {
   })
 })
 
-describe('resolveAgentTools ClaudeCli explicit-grant policy', () => {
+describe('ClaudeCli is hidden from runtime tool pools', () => {
   beforeEach(() => {
     resetStateForTests()
   })
@@ -295,11 +300,21 @@ describe('resolveAgentTools ClaudeCli explicit-grant policy', () => {
     ).resolvedTools.map(tool => tool.name)
   }
 
-  test('ClaudeCli is present in the base tool pool', () => {
-    expect(
-      getTools(getEmptyToolPermissionContext()).map(tool => tool.name),
-    ).toContain(CLAUDE_CLI_TOOL_NAME)
-  })
+  test.each(['firstParty', 'openai'] as const)(
+    'omits ClaudeCli from built-ins, presets, and the merged pool on %s',
+    provider => {
+      setSessionProvider(provider)
+      const context = getEmptyToolPermissionContext()
+      for (const tools of [
+        getAllBaseTools(),
+        getTools(context),
+        assembleToolPool(context, []),
+      ]) {
+        expect(tools.map(tool => tool.name)).not.toContain(CLAUDE_CLI_TOOL_NAME)
+      }
+      expect(getToolsForDefaultPreset()).not.toContain(CLAUDE_CLI_TOOL_NAME)
+    },
+  )
 
   // ClaudeCli launches a nested external Claude CLI agent loop. A wildcard
   // `tools: ['*']` definition must not count as naming it, for either spawn
@@ -320,11 +335,9 @@ describe('resolveAgentTools ClaudeCli explicit-grant policy', () => {
     ['sync', false],
     ['async', true],
   ] as const)(
-    'grants ClaudeCli to a %s worker whose definition names it',
+    'withholds ClaudeCli even when a %s worker definition names it',
     (_shape, isAsync) => {
-      expect(resolveNames(['Read', CLAUDE_CLI_TOOL_NAME], isAsync)).toContain(
-        CLAUDE_CLI_TOOL_NAME,
-      )
+      expect(resolveNames(['Read', CLAUDE_CLI_TOOL_NAME], isAsync)).toEqual(['Read'])
     },
   )
 
@@ -353,7 +366,7 @@ describe('resolveAgentTools ClaudeCli explicit-grant policy', () => {
       true,
     )
 
-    expect(toolNames).toEqual(['Read', CLAUDE_CLI_TOOL_NAME])
+    expect(toolNames).toEqual(['Read'])
   })
 })
 
