@@ -57,6 +57,7 @@ import {
 import type { HostResult, SessionDescriptor, WorkspaceBranches, WorkspaceMoveDisplay } from '../../shared/hostApi.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import { BoundedChildList } from './BoundedChildList.js'
 import { MarkdownCode, MarkdownCodeBlock } from './MarkdownElements.js'
 import { MARKDOWN_COMPONENTS } from './markdownComponents.js'
 import { childrenToText } from './markdownText.js'
@@ -67,8 +68,7 @@ import { isPaneFilePath } from './filePaneState.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, paneFileKey, selectedTextInside } from './transcriptPaneFiles.js'
 import { firstLocalhostUrlInOutput, isInlineFilePath, linkifyFilePathTree, localhostMarkdownHref, pendingFileHref, recoverAbsoluteFileLinkPath, workspaceFileHref } from './transcriptFileLinks.js'
 import { recordWorkspaceFileWrite, requestWorkspaceFileAvailability, useWorkspaceFileAvailability } from './workspaceFileAvailabilityQueue.js'
-import { TranscriptFileScopeContext, scopedTranscriptFilePath, transcriptFileScopes } from './transcriptFileScope.js'
-import { ownPaneHeightDelta, readNestedPaneHeights } from './paneHeightOwnership.js'
+import { TranscriptFileScopeContext, scopedTranscriptFilePath, createTranscriptFileScopesSelector } from './transcriptFileScope.js'
 import {
   PEER_BUBBLE_CLASS,
   PEER_TONE_CLASS,
@@ -90,25 +90,6 @@ import {
   type MountedMarkdownLeaf,
 } from './markdownRenderPlan.js'
 import { VirtualLineList } from './VirtualLineList.js'
-import {
-  observePaneScroll,
-  flushPaneScrollCorrections,
-  compensatePanePrefix,
-  reportPaneHeightCorrection,
-  reportPaneLayoutChange,
-} from './markdownScrollCoordinator.js'
-import {
-  createCompositeChildState,
-  reduceCompositeChildState,
-  sameCompositeChildWindow,
-  selectCompositeChildEntries,
-  selectCompositeChildWindow,
-  selectInitialCompositeChildWindow,
-  INITIAL_CHILD_VIEWPORT_HEIGHT,
-  type CompositeChildMeasurement,
-  type CompositeChildEntry,
-  type CompositeChildWindow,
-} from './compositeChildWindow.js'
 import {
   REHYPE_PLUGINS,
   TRANSCRIPT_REHYPE_PLUGINS,
@@ -158,7 +139,6 @@ import { deriveFocusedTranscript, type FocusedTranscriptItem, type FocusedTurnIt
 import { FocusedChevron, FocusedTranscript } from './FocusedTranscript.js'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
 import './taskNotification.css'
-import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
 import {
   DIFF_ROW_CLASS,
   DIFF_SIGN_CLASS,
@@ -276,7 +256,7 @@ import {
 import {
   logLineClass,
   narrationRowIds,
-  recoveredResponseCopyByRowId,
+  createRecoveredResponseCopySelector,
   resolveToolCardExpanded,
   selectPeekLines,
   withoutRecoveredRetryNotices,
@@ -744,6 +724,11 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       })
     }
     : undefined
+  const errorActions = useMemo(() => ({
+    openAccounts: onOpenAccounts,
+    saveDiagnostics: onSaveDiagnostics,
+    ...(retryTarget && sendRetry ? { retryResultId: retryTarget.resultId, retry: sendRetry } : {}),
+  }), [onOpenAccounts, onSaveDiagnostics, retryTarget?.resultId, sendRetry])
   const [filePathMenuState, setFilePathMenuState] = useState<{
     anchor: FilePathActionsAnchor
     rawPath: string
@@ -771,9 +756,10 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   const inheritedFileScopes = useContext(TranscriptFileScopeContext)
   const inheritedFileAvailabilityFallback = useContext(FileAvailabilityFallbackContext)
   const fileAvailabilityFallback = inheritedFileAvailabilityFallback && contextTransitions.length === 0
+  const selectFileScopes = useMemo(createTranscriptFileScopesSelector, [])
   const fileScopes = useMemo(
-    () => inheritedFileScopes ?? transcriptFileScopes(boundaryRows, contextTransitions),
-    [boundaryRows, contextTransitions, inheritedFileScopes],
+    () => inheritedFileScopes ?? selectFileScopes(boundaryRows, contextTransitions),
+    [selectFileScopes, boundaryRows, contextTransitions, inheritedFileScopes],
   )
   useEffect(() => {
     const visit = (items: readonly NestedTranscriptRow[]) => {
@@ -831,7 +817,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   )
   const faceRegistry = inheritedFaces ?? ownFaces
   const moveView = useWorkspaceMoveView(workspaceMove, boundaryRows, restorePhase === null && !loadEarlierPending)
-  const recoveredCopies = useMemo(() => recoveredResponseCopyByRowId(rows), [rows])
+  const selectRecoveredCopies = useMemo(createRecoveredResponseCopySelector, [])
+  const recoveredCopies = useMemo(() => selectRecoveredCopies(rows), [selectRecoveredCopies, rows])
   const displayRows = useMemo(() => withoutRecoveredRetryNotices(
     withoutReplacedMoveNotice(withoutWorkspaceTools(rows), workspaceMove),
   ), [rows, workspaceMove])
@@ -891,7 +878,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     if (entry.kind === 'transition') return renderTransition(entry.transition, entryKeys[index])
     if (entry.kind === 'focused') return (
       <div data-row-key={entry.turn.id} data-transcript-entry={entryKeys[index]} key={entry.turn.id}>
-        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} renderReasoning={renderFocusedReasoning} liveState={focusedLiveState} latestLive={liveFocusedEntry?.kind === 'focused' && liveFocusedEntry.turn.id === entry.turn.id} tasks={focusedTasks} cwd={cwd} />
+        <FocusedTranscript turn={entry.turn} renderRows={renderFocusedRows} renderReasoning={renderFocusedReasoning} liveState={entry.turn.live ? focusedLiveState : null} latestLive={liveFocusedEntry?.kind === 'focused' && liveFocusedEntry.turn.id === entry.turn.id} tasks={focusedTasks} cwd={cwd} />
       </div>
     )
     const item = entry.item
@@ -1066,15 +1053,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         <LeaseSnapshotContext.Provider value={leases}>
           <AgentBackgroundContext.Provider value={agentBackground}>
             <CreatedPeerNavigationContext.Provider value={createdPeerNavigation}>
-                <TurnErrorActionsContext.Provider
-                  value={{
-                    openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics,
-                    ...(retryTarget && sendRetry ? {
-                      retryResultId: retryTarget.resultId,
-                      retry: sendRetry,
-                    } : {}),
-                  }}
-                >
+                <TurnErrorActionsContext.Provider value={errorActions}>
                   <FilePathMenuContext.Provider value={filePathMenuContextValue}>
                   <LatestPaneFileCardContext.Provider value={latestFileCards}>
                   <TranscriptFileScopeContext.Provider value={fileScopes}>
@@ -1361,403 +1340,6 @@ function DisplayItemView({
 const NESTED_ROW_ESTIMATED_HEIGHT = 120
 const RUN_MEMBER_ESTIMATED_HEIGHT = 28
 const DELEGATE_MEMBER_ESTIMATED_HEIGHT = 120
-
-/**
- * Mounts a bounded range of ONE composite container's children.
- *
- * Same division of labour as `BoundedMarkdown`: `compositeChildWindow.ts` owns
- * the range and the measurement state, and this owns geometry — where the
- * container sits relative to the pane viewport, and how measured heights
- * replace the estimate. The caller keeps its complete child list and every
- * count it prints; only the mounted range comes from here.
- *
- * Scroller observation goes through the SHARED pane coordinator, so a
- * transcript full of these adds no scroll listeners to the pane. The two
- * observers each container does own watch its own elements: its root box, and
- * its own direct children.
- */
-function BoundedChildList({
-  keys,
-  estimatedChildHeight,
-  childGap = 0,
-  renderChild,
-  className,
-  initialAnchorKey,
-  revealRequest = null,
-  containerRef,
-  dataCardStyle,
-  transcriptEntries = false,
-  footer,
-}: {
-  /** One stable identity per child, in order. Length is the true child count. */
-  keys: readonly string[]
-  estimatedChildHeight: number
-  childGap?: number
-  /** Draws the child at an index into `keys`. Called only for mounted children. */
-  renderChild: (index: number) => ReactNode
-  /** Layout classes the replaced wrapper carried, so spacing is unchanged. */
-  className?: string
-  initialAnchorKey?: string | null
-  revealRequest?: { key: string; sequence: number } | null
-  containerRef?: Ref<HTMLDivElement>
-  dataCardStyle?: string
-  transcriptEntries?: boolean
-  footer?: ReactNode
-}) {
-  const [state, dispatch] = useReducer(
-    reduceCompositeChildState,
-    undefined,
-    createCompositeChildState,
-  )
-  const entries = useMemo(
-    () => selectCompositeChildEntries(keys, estimatedChildHeight, state),
-    [keys, estimatedChildHeight, state],
-  )
-  const [childWindow, setChildWindow] = useState<CompositeChildWindow>(() =>
-    initialAnchorKey
-      ? selectCompositeChildWindow(
-          entries,
-          entries.slice(0, keys.indexOf(initialAnchorKey) < 0
-            ? Math.max(0, entries.length - 1)
-            : keys.indexOf(initialAnchorKey)).reduce((total, entry) => total + entry.height + childGap, 0),
-          INITIAL_CHILD_VIEWPORT_HEIGHT,
-          undefined,
-          undefined,
-          childGap,
-        )
-      : transcriptEntries
-        ? selectCompositeChildWindow(
-            entries,
-            Math.max(0, entries.reduce((sum, entry) => sum + entry.height, 0) - INITIAL_CHILD_VIEWPORT_HEIGHT),
-            INITIAL_CHILD_VIEWPORT_HEIGHT,
-            undefined,
-            undefined,
-            childGap,
-          )
-        : selectInitialCompositeChildWindow(entries, undefined, childGap),
-  )
-  const rootRef = useRef<HTMLDivElement | null>(null)
-  const entriesRef = useRef(entries)
-  const previousEntriesRef = useRef(entries)
-  const entriesChangedRef = useRef(false)
-  const childWindowRef = useRef(childWindow)
-  const scheduleRef = useRef<() => void>(() => {})
-  const paneScrollerRef = useRef<HTMLElement | null>(null)
-  const focusedEntryKeyRef = useRef<string | null>(null)
-  const boxRef = useRef<{
-    height: number
-    topSpacer: number
-    entries: readonly CompositeChildEntry[]
-    nestedHeights: ReadonlyMap<Element, number>
-  } | null>(null)
-  const compensatedPrefixDeltaRef = useRef(0)
-
-  useLayoutEffect(() => {
-    const previousEntries = previousEntriesRef.current
-    if (previousEntries !== entries) entriesChangedRef.current = true
-    const previousWindow = childWindowRef.current
-    const retainedKey = previousEntries[previousWindow.start]?.key
-    const retainedIndex = retainedKey === undefined
-      ? -1
-      : entries.findIndex(entry => entry.key === retainedKey)
-    if (retainedIndex >= 0 && retainedIndex !== previousWindow.start && paneScrollerRef.current) {
-      const oldPrefix = previousEntries.slice(0, previousWindow.start).reduce((sum, entry) => sum + entry.height + childGap, 0)
-      const newPrefix = entries.slice(0, retainedIndex).reduce((sum, entry) => sum + entry.height + childGap, 0)
-      const delta = newPrefix - oldPrefix
-      if (delta !== 0) {
-        compensatePanePrefix(paneScrollerRef.current, delta)
-        compensatedPrefixDeltaRef.current += delta
-      }
-      const root = rootRef.current
-      const scroller = paneScrollerRef.current
-      if (root && scroller) {
-        const offset = scroller.getBoundingClientRect().top - root.getBoundingClientRect().top
-        setChildWindow(current => {
-          const next = selectCompositeChildWindow(
-            entries,
-            offset,
-            scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT,
-            undefined,
-            undefined,
-            childGap,
-          )
-          return sameCompositeChildWindow(current, next) ? current : next
-        })
-      }
-    }
-    previousEntriesRef.current = entries
-    entriesRef.current = entries
-    childWindowRef.current = childWindow
-    scheduleRef.current()
-  }, [entries, childGap])
-
-  useEffect(() => {
-    childWindowRef.current = childWindow
-  }, [childWindow])
-
-  // Attaches once for the lifetime of the container. Streamed child arrivals
-  // reach the window through the ref above, so a growing run never detaches and
-  // re-attaches the shared pane scroller.
-  useEffect(() => {
-    const root = rootRef.current
-    if (root === null || typeof window === 'undefined') return
-    const scroller = findPaneScroller(root)
-    paneScrollerRef.current = scroller
-    const releaseRowOffsets = transcriptEntries ? registerTranscriptRowOffsets(scroller, key => {
-      const index = entriesRef.current.findIndex(entry => entry.key === key)
-      if (index < 0) return null
-      const prefix = entriesRef.current.slice(0, index).reduce((sum, entry) => sum + entry.height + childGap, 0)
-      return root.getBoundingClientRect().top - scroller.getBoundingClientRect().top
-        - scroller.clientTop + scroller.scrollTop + (Number.parseFloat(getComputedStyle(root).paddingTop) || 0) + prefix
-    }) : () => {}
-    let frame = 0
-    let hasObservedScroll = false
-    const update = () => {
-      frame = 0
-      if (!hasObservedScroll && initialAnchorKey === null && scroller.clientHeight <= 0 && !entriesChangedRef.current) return
-      flushPaneScrollCorrections(scroller)
-      const rootRect = root.getBoundingClientRect()
-      const scrollerRect = scroller.getBoundingClientRect()
-      // A remounted row can replace its retained estimate before ResizeObserver
-      // commits its measurement. Window against the current boxes, otherwise a
-      // shorter prefix can evict the visible answer using the old row heights.
-      let windowEntries = entriesRef.current
-      if (transcriptEntries) {
-        const measurements: CompositeChildMeasurement[] = []
-        for (const child of root.children) {
-          const key = child.getAttribute('data-transcript-entry')
-          if (key === null) continue
-          const height = child.getBoundingClientRect().height +
-            (Number.parseFloat(getComputedStyle(child).marginBlockEnd) || 0)
-          if (height > 0) measurements.push({ key, height })
-        }
-        const heights = new Map(measurements.map(measurement => [measurement.key, measurement.height]))
-        windowEntries = windowEntries.map(entry => ({ ...entry, height: heights.get(entry.key) ?? entry.height }))
-        if (measurements.length) dispatch({ kind: 'measured', measurements })
-      }
-      setChildWindow(current => {
-        const next = selectCompositeChildWindow(
-          windowEntries,
-          scrollerRect.top - rootRect.top,
-          scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT,
-          undefined,
-          undefined,
-          childGap,
-        )
-        return sameCompositeChildWindow(current, next) ? current : next
-      })
-      entriesChangedRef.current = false
-    }
-    const schedule = () => {
-      if (frame === 0) frame = window.requestAnimationFrame(update)
-    }
-    scheduleRef.current = schedule
-    const rootObserver =
-      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
-    rootObserver?.observe(root)
-    const releasePane = observePaneScroll(scroller, () => {
-      hasObservedScroll = true
-      schedule()
-    })
-    schedule()
-    return () => {
-      scheduleRef.current = () => {}
-      paneScrollerRef.current = null
-      if (frame !== 0) window.cancelAnimationFrame(frame)
-      rootObserver?.disconnect()
-      releasePane()
-      releaseRowOffsets()
-    }
-  }, [])
-
-  // Reports this container's own height change to the pane, on EVERY commit and
-  // with no dependency list, for the same reason `BoundedMarkdown` does: a
-  // measured child height replaces an estimate frames after the commit that used
-  // it, so only the rendered box marks where the document actually moved. Outer
-  // row replacements correct before paint so remounting a prefix cannot flash a
-  // different part of the answer while the shared frame is still pending.
-  useLayoutEffect(() => {
-    const root = rootRef.current
-    const scroller = paneScrollerRef.current
-    if (root === null || scroller === null) return
-    const rect = root.getBoundingClientRect()
-    const previous = boxRef.current
-    const nestedHeights = readNestedPaneHeights(root)
-    boxRef.current = { height: rect.height, topSpacer: childWindow.topSpacerHeight, entries, nestedHeights }
-    const compensatedPrefixDelta = compensatedPrefixDeltaRef.current
-    compensatedPrefixDeltaRef.current = 0
-    if (previous === null) return
-    if (rect.height > 0 || previous.height > 0) reportPaneLayoutChange(scroller)
-    // Exclude only the prefix movement the keyed anchor already compensated.
-    // Scrolling changes the spacer partition without changing document height.
-    const delta = ownPaneHeightDelta(
-      rect.height - previous.height,
-      previous.nestedHeights,
-      nestedHeights,
-    ) - compensatedPrefixDelta
-    if (delta === 0) {
-      if (transcriptEntries) flushPaneScrollCorrections(scroller)
-      return
-    }
-    let commonPrefix = 0
-    while (
-      commonPrefix < previous.entries.length && commonPrefix < entries.length &&
-      previous.entries[commonPrefix].key === entries[commonPrefix].key &&
-      previous.entries[commonPrefix].height === entries[commonPrefix].height
-    ) commonPrefix += 1
-    // An append changes the document below the viewport, not at the current
-    // window's leading spacer. Locate list edits at their first changed entry.
-    const unchangedPrefix = commonPrefix < Math.max(previous.entries.length, entries.length)
-      ? entries.slice(0, commonPrefix).reduce((sum, entry) => sum + entry.height + childGap, 0)
-      : Math.min(previous.topSpacer, childWindow.topSpacerHeight)
-    reportPaneHeightCorrection(scroller, {
-      delta,
-      readOffset: () => scroller.contains(root)
-        ? root.getBoundingClientRect().top - scroller.getBoundingClientRect().top +
-          scroller.scrollTop + unchangedPrefix
-        : null,
-    })
-    if (transcriptEntries) flushPaneScrollCorrections(scroller)
-  })
-
-  useLayoutEffect(() => {
-    if (!revealRequest?.key) return
-    const index = entriesRef.current.findIndex(entry => entry.key === revealRequest.key)
-    const root = rootRef.current
-    if (index < 0 || !root) return
-    const scroller = findPaneScroller(root)
-    const offset = entriesRef.current.slice(0, index).reduce((sum, entry) => sum + entry.height + childGap, 0)
-    const navigate = () => {
-      scroller.scrollTop += root.getBoundingClientRect().top - scroller.getBoundingClientRect().top + offset
-      setChildWindow(selectCompositeChildWindow(entriesRef.current, offset,
-        scroller.clientHeight || INITIAL_CHILD_VIEWPORT_HEIGHT, undefined, undefined, childGap))
-    }
-    let frame: number
-    if (transcriptEntries) {
-      navigate()
-      frame = requestAnimationFrame(() => {
-        const element = [...root.children].find(child => child.getAttribute('data-transcript-entry') === revealRequest.key)
-        element?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
-      })
-    } else {
-      // Let the outer turn land first; its navigation would otherwise undo
-      // the nested command window's reveal in the same commit.
-      frame = requestAnimationFrame(() => { frame = requestAnimationFrame(navigate) })
-    }
-    return () => cancelAnimationFrame(frame)
-  }, [revealRequest?.key, revealRequest?.sequence, childGap, transcriptEntries])
-
-  const mounted = useMemo(
-    () => entries.slice(childWindow.start, childWindow.end),
-    [entries, childWindow.start, childWindow.end],
-  )
-  const pinnedFocusKey = transcriptEntries ? focusedEntryKeyRef.current : null
-  const pinnedFocusIndex = pinnedFocusKey === null ? -1 : entries.findIndex(entry => entry.key === pinnedFocusKey)
-  const pinnedFocusEntry = transcriptEntries && pinnedFocusIndex >= 0 ? entries[pinnedFocusIndex] : undefined
-  const mountedSignature = `${mounted.map(entry => entry.key).join('|')}|${pinnedFocusEntry?.key ?? ''}|${footer ? 'footer' : ''}`
-  const sumEntryHeights = (from: number, to: number): number => {
-    let total = 0
-    for (let index = from; index < to; index += 1) total += entries[index]?.height ?? 0
-    return total
-  }
-  const renderTranscriptWindow = (): ReactNode[] => {
-    const indices = Array.from({ length: childWindow.end - childWindow.start },
-      (_unused, offset) => childWindow.start + offset)
-    if (pinnedFocusEntry && (pinnedFocusIndex < childWindow.start || pinnedFocusIndex >= childWindow.end)) {
-      indices.push(pinnedFocusIndex)
-      indices.sort((left, right) => left - right)
-    }
-    const children: ReactNode[] = []
-    let cursor = 0
-    for (const index of indices) {
-      if (index > cursor) {
-        children.push(<div aria-hidden key={`spacer:${cursor}:${index}`} style={{ height: `${sumEntryHeights(cursor, index)}px` }} />)
-      }
-      children.push(renderChild(index))
-      cursor = index + 1
-    }
-    if (cursor < entries.length) {
-      children.push(<div aria-hidden key={`spacer:${cursor}:${entries.length}`} style={{ height: `${sumEntryHeights(cursor, entries.length)}px` }} />)
-    }
-    return children
-  }
-
-  // Keyed on the mounted identities rather than the numeric range, so a child
-  // replaced inside an unchanged window is observed immediately.
-  useEffect(() => {
-    const root = rootRef.current
-    if (root === null || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(records => {
-      const measurements: CompositeChildMeasurement[] = []
-      for (const record of records) {
-        const key = record.target.getAttribute('data-transcript-child') ??
-          record.target.getAttribute('data-transcript-entry')
-        if (key === null) continue
-        const height = (record.borderBoxSize[0]?.blockSize ?? record.contentRect.height) +
-          (Number.parseFloat(getComputedStyle(record.target).marginBlockEnd) || 0)
-        measurements.push({ key, height })
-      }
-      if (measurements.length > 0) dispatch({ kind: 'measured', measurements })
-    })
-    // DIRECT children only. A descendant query would also reach a nested
-    // container's children and file their heights under this container's cache.
-    for (const element of root.children) {
-      if (!(element instanceof HTMLElement)) continue
-      if (
-        element.getAttribute('data-transcript-child') === null &&
-        element.getAttribute('data-transcript-entry') === null
-      ) continue
-      observer.observe(element)
-    }
-    return () => observer.disconnect()
-  }, [mountedSignature])
-
-  return (
-    <div className={className} data-card-style={dataCardStyle} data-pane-height-owner="" onFocusCapture={event => {
-      if (!transcriptEntries || !(event.target instanceof Element)) return
-      focusedEntryKeyRef.current = event.target.closest('[data-transcript-entry]')
-        ?.getAttribute('data-transcript-entry') ?? null
-    }} onBlurCapture={event => {
-      if (!transcriptEntries) return
-      if (event.relatedTarget instanceof Node && rootRef.current?.contains(event.relatedTarget)) return
-      focusedEntryKeyRef.current = null
-      scheduleRef.current()
-    }} ref={node => {
-      rootRef.current = node
-      if (typeof containerRef === 'function') containerRef(node)
-      else if (containerRef) containerRef.current = node
-    }}>
-      {transcriptEntries ? renderTranscriptWindow() : <>
-        {childWindow.topSpacerHeight > 0 ? (
-          <div aria-hidden style={{ height: `${childWindow.topSpacerHeight}px` }} />
-        ) : null}
-        {mounted.map((entry, offset) => (
-          <div data-transcript-child={entry.key} key={entry.key}>
-            {renderChild(childWindow.start + offset)}
-          </div>
-        ))}
-        {childWindow.bottomSpacerHeight > 0 ? (
-          <div aria-hidden style={{ height: `${childWindow.bottomSpacerHeight}px` }} />
-        ) : null}
-      </>}
-      {footer}
-    </div>
-  )
-}
-
-/**
- * The pane scroller this container lives in. Same walk `BoundedMarkdown` does;
- * duplicated rather than shared because that module is a component file and may
- * not export a helper under the Fast Refresh boundary rule.
- */
-function findPaneScroller(element: HTMLElement): HTMLElement {
-  let current: HTMLElement | null = element.parentElement
-  while (current !== null) {
-    if (/(auto|scroll)/.test(window.getComputedStyle(current).overflowY)) return current
-    current = current.parentElement
-  }
-  return document.documentElement
-}
 
 /**
  * A nested row list (subagent children under an Agent card, tool-card children).

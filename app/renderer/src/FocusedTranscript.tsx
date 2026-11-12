@@ -5,6 +5,7 @@ import type { FocusedLiveState } from './transcriptProjector.js'
 import type { TasksSnapshot } from '../../shared/protocol.js'
 import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
+import { BoundedChildList } from './BoundedChildList.js'
 import { focusedNamedCall, isFocusedDeliverable, latestComputerScreenshot, summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { useToolCardExpanded } from './toolCardExpansion.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
@@ -55,10 +56,16 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
     ? summarizeFocusedWork(turn.rows.filter(row => row.kind === 'tool-use' && row.status !== 'pending'))
     : turn, [turn, headLive])
   const detail = [time, settled.toolCalls === 0 ? '' : settled.compact].filter(Boolean).join(' · ')
-  const segments = turn.segments.filter(segment => segment.kind !== 'stretch' || segment.toolCalls > 0)
-  if (preparing.length && segments.at(-1)?.kind !== 'stretch') {
-    segments.push({ kind: 'stretch', id: `focused-preparing:${preparing[0]!.toolUseId}`, rows: [], ...summarizeFocusedWork([]) })
-  }
+  const preparingId = preparing[0]?.toolUseId
+  const segments = useMemo(() => {
+    const result = turn.segments.filter(segment => segment.kind !== 'stretch' || segment.toolCalls > 0)
+    if (preparingId && result.at(-1)?.kind !== 'stretch') {
+      result.push({ kind: 'stretch', id: `focused-preparing:${preparingId}`, rows: [], ...summarizeFocusedWork([]) })
+    }
+    return result
+  }, [turn.segments, preparingId])
+  const segmentKeys = useMemo(() => segments.map(segment => segment.id), [segments])
+  const revealSegment = reveal ? segments.find(segment => containsAgentTool(segment.rows, reveal.toolUseId)) : null
   const latestStretch = [...segments].reverse().find(segment => segment.kind === 'stretch')
   const pending = turn.rows.some(row => row.kind === 'tool-use' && row.status === 'pending') || preparing.length > 0
   const visibleOutput = segments.length > 0 || pending || turn.answering
@@ -92,18 +99,27 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
         <FailureMark summary={turn} />
       </button>
       <FocusedDisclosure open={open} id={bodyId} exitMs={TURN_BODY_EXIT_MS} className="focused-turn-disclosure">
-        <div className="focused-turn-body" data-cascade={cascading ? '' : undefined}>
-          {segments.map(segment => <FocusedSegmentBlock key={segment.id} segment={segment} live={turn.live}>
+        <BoundedChildList keys={segmentKeys} estimatedChildHeight={82} directChildren
+          className="focused-turn-body" cascading={cascading}
+          initialAnchorKey={turn.live ? segments.at(-1)?.id : null}
+          revealRequest={revealSegment && reveal ? { key: revealSegment.id, sequence: reveal.sequence } : null}
+          renderChild={index => {
+            const segment = segments[index]
+            if (!segment) return null
+            return <FocusedSegmentBlock key={segment.id} segment={segment} live={turn.live} following={index > 0}>
             {segment.kind === 'update'
               ? <div data-focused-update data-latest={segment.id === latestUpdate ? '' : undefined}><FocusedStaticRows segment={segment} narration renderRows={renderRows} /></div>
               : segment.kind === 'speech' ? <div className="focused-lifted-speech"><FocusedStaticRows segment={segment} narration={false} renderRows={renderRows} /></div>
               : segment.kind === 'reasoning' ? <FocusedStaticReasoning segment={segment} live={turn.live && !turn.answering && segment === last} renderReasoning={renderReasoning} />
               : <FocusedStep segment={segment} live={turn.live} rolling={latestLive && segment === latestStretch && !turn.answering} preparing={segment === latestStretch ? preparing : []} liveState={liveState} callContext={callContext} renderRows={renderRows} />}
-          </FocusedSegmentBlock>)}
+          </FocusedSegmentBlock>
+          }}
+          footer={<>
           {background.length ? <FocusedBackground jobs={background} /> : null}
           {turn.live && latestLive && !turn.answering && !pending && !liveState?.streaming
             ? <FocusedThinking liveState={liveState} firstWait={firstWait} /> : null}
-        </div>
+          </>}
+        />
       </FocusedDisclosure>
     </section>
     {deliverables.length ? <div className="focused-deliverables">{renderRows(deliverables, false)}</div> : null}
@@ -153,11 +169,12 @@ function FocusedBackground({ jobs }: { jobs: NonNullable<TasksSnapshot['focusedB
     </div>)}</>
 }
 
-function FocusedSegmentBlock({ segment, live, children }: { segment: FocusedSegment; live: boolean; children: ReactNode }) {
+function FocusedSegmentBlock({ segment, live, following, children }: { segment: FocusedSegment; live: boolean; following: boolean; children: ReactNode }) {
   const id = useId()
   const motion = useContext(TranscriptMotionContext)
   const arriving = live && segment.rows.some(row => motion.rows.active.has(row.id) || motion.freshProse.has(row.id))
-  return <FocusedDisclosure open id={id} animateArrival={arriving} className="focused-segment">{children}</FocusedDisclosure>
+  return <FocusedDisclosure open id={id} childKey={segment.id} animateArrival={arriving}
+    className={`focused-segment${following ? ' focused-segment-following' : ''}`}>{children}</FocusedDisclosure>
 }
 
 function FocusedStep({ segment, live, rolling, preparing, liveState, callContext, renderRows }: {

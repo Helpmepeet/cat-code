@@ -42,7 +42,7 @@
 .focused-turn-disclosure:not([data-open]) { transition: grid-template-rows 360ms var(--ease-standard) 120ms, opacity 150ms linear; }
 .focused-turn-body { margin-top: 2px; padding: 4px 0 2px; }
 .focused-deliverables { padding-bottom: 10px; }
-.focused-segment + .focused-segment > .focused-disclosure-clip { padding-top: 10px; }
+.focused-segment-following > .focused-disclosure-clip { padding-top: 10px; }
 
 .focused-step { padding: 2px 0; }
 .focused-step-head { font-size: 12px; }

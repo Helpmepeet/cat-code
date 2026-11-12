@@ -69,7 +69,7 @@ function userRow(index: number): Extract<NestedTranscriptRow, { kind: 'user-text
     blockIndex: 0, parentToolUseId: null, children: [], kind: 'user-text', content: `Synthetic message ${index}`,
     role: 'user', isReplay: false }
 }
-function proseRow(content: string): NestedTranscriptRow {
+function proseRow(content: string): Extract<NestedTranscriptRow, { kind: 'assistant-text' }> {
   const { kind: _kind, role: _role, isReplay: _replay, ...source } = userRow(0)
   return { ...source, id: 'prose', kind: 'assistant-text', content, role: 'assistant' }
 }
@@ -370,6 +370,86 @@ async function focusedListAnswerRemount() {
   return { scenario, anchorError: 0, writes: automaticWrites }
 }
 
+async function focusedSegmentTransitions() {
+  scenario = 'Focused segment threshold, reopen, completion and nested reveal'
+  const writeStart = writes.length
+  flushSync(() => root.render(null))
+  const operator = userRow(9_000)
+  const updates: NestedTranscriptRow[] = Array.from({ length: 1_200 }, (_, index) => ({
+    ...proseRow(`Paragraph window-${index}: ` +
+      'The synthetic transcript retains the reading position while later work arrives. '.repeat(4)),
+    id: `window-update:${index}`, frameId: `window-frame:${index}`, messageId: `window-message:${index}`,
+    phase: 'commentary',
+  }))
+  const agent: NestedTranscriptRow = {
+    ...userRow(9_001), id: 'window-agent', kind: 'tool-use', toolUseId: 'window-agent-call',
+    toolName: 'Agent', toolFamily: 'agent', input: { description: 'Inspect synthetic history' },
+    status: 'success', result: null, agentCompletion: null,
+  }
+  const draw = (count: number, live: boolean, reveal = false) => {
+    const rows = [operator, ...updates.slice(0, count)]
+    if (reveal) rows.splice(11, 0, agent)
+    flushSync(() => root.render(createElement('div', { className: 'scroll-fixture-pane' },
+      createElement(TranscriptModeContext.Provider, { value: { mode: 'focused', setMode() {} } },
+        createElement(TranscriptRowsView, { rows, turnLive: live,
+          revealAgent: reveal ? { toolUseId: 'window-agent-call', sequence: 1 } : null })))))
+    return document.querySelector<HTMLElement>('.scroll-fixture-pane')!
+  }
+  const assertBounded = (pane: HTMLElement) => {
+    const mounted = pane.querySelectorAll('.focused-segment').length
+    if (mounted === 0 || mounted > 80) throw new Error(`${scenario}: mounted ${mounted} segments`)
+  }
+  const pane = draw(80, true)
+  await settle(pane)
+  pane.scrollTop = 600
+  await settle(pane)
+  const reading = track(pane)
+  draw(81, true)
+  await settle(pane, 12, reading)
+  assertClose(readTracked(pane, reading), reading.top, 'crossing the segment threshold')
+  draw(1_200, true)
+  await settle(pane, 12, reading)
+  assertBounded(pane)
+  const releaseBottom = observePaneBottomLock(pane, () => true)
+  pane.scrollTop = pane.scrollHeight
+  // Newly mounted live segments can still be in their height entrance while
+  // the motion latch expires. Verify the settled end, not its intermediate box.
+  await settle(pane, 36)
+  releaseBottom()
+  if (!pane.querySelector('[data-focused-update][data-latest]')) {
+    recordGeometry(pane, 'live tail missing after bottom follow')
+    throw new Error(`Live tail is not mounted: ${JSON.stringify({
+      scrollTop: pane.scrollTop, scrollHeight: pane.scrollHeight, clientHeight: pane.clientHeight,
+      entries: [...pane.querySelectorAll('[data-transcript-entry]')].map(element => element.getAttribute('data-transcript-entry')),
+      segments: [...pane.querySelectorAll('.focused-segment')].map(element => element.getAttribute('data-transcript-child')),
+    })}`)
+  }
+  const tail = track(pane)
+  draw(1_200, false)
+  await settle(pane, 24, tail)
+  assertClose(readTracked(pane, tail), tail.top, 'completion retains the reading position')
+  const head = pane.querySelector<HTMLButtonElement>('.focused-fold-head')!
+  head.click()
+  await settle(pane, 36)
+  head.click()
+  await settle(pane, 24)
+  assertBounded(pane)
+  draw(1_200, false, true)
+  await settle(pane, 24)
+  const revealed = pane.querySelector<HTMLElement>('[data-transcript-child="focused-stretch:window-agent"]')
+  if (!revealed || revealed.querySelector('.focused-step-head')?.getAttribute('aria-expanded') !== 'true') {
+    throw new Error('Nested reveal did not mount and open the distant agent segment')
+  }
+  const box = revealed.getBoundingClientRect()
+  const viewport = pane.getBoundingClientRect()
+  if (box.bottom <= viewport.top || box.top >= viewport.top + pane.clientHeight) {
+    throw new Error('Nested reveal left the agent segment outside the viewport')
+  }
+  assertBounded(pane)
+  return { scenario, anchorError: 0, writes: writes.length - writeStart,
+    mountedSegments: pane.querySelectorAll('.focused-segment').length }
+}
+
 async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 'wheel' } = {}) {
   const { nativeAnchoring = false } = options
   if (pendingWheel) throw new Error('The previous wheel run is still active')
@@ -494,7 +574,7 @@ async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 
   flushSync(() => root.render(null))
   const paragraph = (index: number) => `Paragraph ${index.toString().padStart(3, '0')}: ` + 'Synthetic reading content with wrapped lines. '.repeat(12)
   let paragraphs = Array.from({ length: 100 }, (_, index) => paragraph(index))
-  let rows = [proseRow(paragraphs.join('\n\n'))]
+  let rows: NestedTranscriptRow[] = [proseRow(paragraphs.join('\n\n'))]
   const pane = render(rows, 'scroll-fixture-prose')
   scenario = 'Markdown initialization'
   pane.scrollTop = 1_000; await settle(pane)
@@ -545,6 +625,7 @@ async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 
   release()
   results.push(await focusedAnswerBoundary())
   results.push(await focusedListAnswerRemount())
+  results.push(await focusedSegmentTransitions())
   flushSync(() => root.render(null))
   if (observed.size !== 0) throw new Error(`Observers retained after unmount: ${observed.size}`)
   const peakAnchorError = samples.reduce((peak, sample) => Math.max(peak, Math.abs(sample.anchorError ?? 0)), 0)

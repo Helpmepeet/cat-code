@@ -53,6 +53,7 @@ test.skipIf(process.platform !== 'darwin')('transcript text stays in place under
     expect(result.results.map(entry => entry.scenario)).toEqual(expect.arrayContaining([
       'Focused answer above a virtualized structured query',
       'Focused list-heavy answer remounted above the viewport',
+      'Focused segment threshold, reopen, completion and nested reveal',
     ]))
   } finally {
     rmSync(out, { recursive: true, force: true })
