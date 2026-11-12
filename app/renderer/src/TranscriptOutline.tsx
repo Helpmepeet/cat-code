@@ -39,6 +39,14 @@ const EXCERPT_COMPONENTS: Components = {
   img: ({ alt }) => alt ? <span>{alt}</span> : null,
   input: () => null,
 }
+// The title is one truncated line: blocks keep their words but lose their shape.
+const flatten = ({ children }: { children?: ReactNode }) => <>{children}</>
+const TITLE_COMPONENTS: Components = {
+  ...EXCERPT_COMPONENTS,
+  ...Object.fromEntries(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'pre']
+    .map(tag => [tag, flatten])),
+  hr: () => null,
+}
 
 class ExcerptBoundary extends Component<{ fallback: string; children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
@@ -245,7 +253,11 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
       onFocusCapture={clearTimers} onBlurCapture={hideSoon}>
       <button type="button" className="transcript-outline-jump" ref={jumpRef}
         aria-label={`Jump to prompt ${previewIndex + 1}: ${preview.prompt}`} onClick={() => onJump(preview)}>
-        <span className="transcript-outline-prompt">{preview.prompt}</span>
+        <span className="transcript-outline-prompt">
+          <ExcerptBoundary key={preview.prompt} fallback={preview.prompt}>
+            <Markdown remarkPlugins={EXCERPT_PLUGINS} components={TITLE_COMPONENTS}>{preview.prompt}</Markdown>
+          </ExcerptBoundary>
+        </span>
         {preview.answer ? <div className="transcript-outline-answer">
           <ExcerptBoundary key={preview.answer} fallback={preview.answer}>
             <Markdown remarkPlugins={EXCERPT_PLUGINS} components={EXCERPT_COMPONENTS}>{preview.answer}</Markdown>

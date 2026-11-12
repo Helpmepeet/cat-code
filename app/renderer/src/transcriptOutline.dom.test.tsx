@@ -185,6 +185,18 @@ test('answers render as inert Markdown inside the jump button', async () => {
   tree.scroller.remove()
 })
 
+test('titles keep inline Markdown and flatten blocks onto their one line', async () => {
+  const tree = await mountOutline([prompt('p', '# Fix `auth.ts`\n\n- **now** see [docs](https://example.com)\n\n---\n\n```\ncode\n```')])
+  await act(async () => { ticks(tree.container)[0]!.focus() })
+  const title = tree.container.querySelector('.transcript-outline-prompt')!
+  expect(title.querySelector('code')?.textContent).toBe('auth.ts')
+  expect(title.querySelector('strong')?.textContent).toBe('now')
+  expect(title.querySelector('h1, ul, li, p, pre, hr, a') === null).toBe(true)
+  expect(title.textContent).toContain('Fix auth.ts')
+  expect(title.textContent).toContain('now see docs')
+  tree.scroller.remove()
+})
+
 test('hidden transcript panes defer viewport measurements until they have height', async () => {
   const tree = await mountOutline()
   let reads = 0
