@@ -111,7 +111,8 @@ export function reportPaneLayoutChange(scroller: HTMLElement): void {
   if (pane === undefined) return
   // A distant explicit jump can leave no old mounted content to sample. Once
   // its new window exists, establish the reading position before measuring it.
-  pane.anchor ??= capturePaneVisibleAnchor(scroller)
+  if (isFollowingBottom(pane)) pane.anchor = null
+  else pane.anchor ??= capturePaneVisibleAnchor(scroller)
   pane.geometryDirty = true
   pane.schedule()
 }
@@ -122,7 +123,8 @@ export function flushPaneScrollCorrections(scroller: HTMLElement): void {
   if (!pane || (!pane.geometryDirty && pane.corrections.length === 0)) return
   // Keyed prefix edits can remount the reading row in a follow-up layout
   // commit. Leave its anchor and reports intact until that row exists again.
-  if (pane.anchor && readPaneVisibleAnchorAdjustment(scroller, pane.anchor) === null) return
+  if (!isFollowingBottom(pane) && pane.anchor &&
+    readPaneVisibleAnchorAdjustment(scroller, pane.anchor) === null) return
   applyPendingCorrections(scroller, pane)
 }
 
@@ -130,6 +132,7 @@ export function flushPaneScrollCorrections(scroller: HTMLElement): void {
 export function compensatePanePrefix(scroller: HTMLElement, delta: number): void {
   if (delta === 0) return
   const pane = panes.get(scroller)
+  if (pane && isFollowingBottom(pane)) pane.anchor = null
   if (pane?.anchor && pane.anchor.scrollTop !== scroller.scrollTop) {
     pane.anchor = capturePaneVisibleAnchor(scroller)
   }
@@ -165,11 +168,15 @@ export function observePaneBottomLock(
   const pane = panes.get(scroller) ?? createPane(scroller)
   panes.set(scroller, pane)
   pane.bottomLocks.add(isBottomLocked)
+  if (isFollowingBottom(pane)) pane.anchor = null
   if (onProgrammaticScroll) pane.programmaticScrolls.add(onProgrammaticScroll)
 
   return () => {
     pane.bottomLocks.delete(isBottomLocked)
     if (onProgrammaticScroll) pane.programmaticScrolls.delete(onProgrammaticScroll)
+    if (pane.subscribers.size > 0 && !isFollowingBottom(pane)) {
+      pane.anchor ??= capturePaneVisibleAnchor(scroller)
+    }
     releaseWhenEmpty(scroller, pane)
   }
 }
@@ -256,6 +263,8 @@ function createPane(scroller: HTMLElement): PaneRecord {
     // A shorter virtualized prefix can clamp scrollTop before this frame's
     // correction. That browser movement must not replace the reader's anchor.
     if (!isDocumentClamp(readPaneMetrics(scroller), pane)) {
+      // Capture even if a bottom owner still reports locked: its scroll
+      // listener may run after ours and release following on this same event.
       pane.anchor = capturePaneVisibleAnchor(scroller)
     }
     schedule()
@@ -305,14 +314,13 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
     if (offset !== null) corrections.push({ offset, delta: report.delta })
   }
 
-  let bottomLocked = false
-  for (const isBottomLocked of pane.bottomLocks) {
-    if (isBottomLocked()) bottomLocked = true
-  }
+  const bottomLocked = isFollowingBottom(pane)
+  // Following owns the end, not a character. Discard any old reading goal so
+  // an unmounted row cannot block an early flush or leak into a later reflow.
+  if (bottomLocked) pane.anchor = null
   // Mutation invalidation is also used for net-zero interior movement. It is
   // not a new bottom-follow request when the document dimensions did not move.
   if (bottomLocked && corrections.length === 0 && !geometryChanged) {
-    pane.anchor = capturePaneVisibleAnchor(scroller)
     return
   }
 
@@ -342,13 +350,21 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
       onProgrammaticScroll(scroller.scrollTop)
     }
   }
-  pane.anchor = capturePaneVisibleAnchor(scroller)
+  pane.anchor = bottomLocked ? null : capturePaneVisibleAnchor(scroller)
   if (!bottomLocked && pane.anchor && visibleAdjustment !== null) {
     // Reflow can change which character starts the visible line. Resample its
     // identity, but carry the uncorrected displacement into its reading goal.
     const remainder = visibleAdjustment - (scroller.scrollTop - metrics.scrollTop)
     for (const point of pane.anchor.points) point.top -= remainder
   }
+}
+
+function isFollowingBottom(pane: PaneRecord): boolean {
+  let following = false
+  for (const isBottomLocked of pane.bottomLocks) {
+    if (isBottomLocked()) following = true
+  }
+  return following
 }
 
 function isDocumentClamp(metrics: PaneScrollMetrics, pane: PaneRecord): boolean {

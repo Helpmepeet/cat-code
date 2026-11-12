@@ -178,7 +178,7 @@ function matchText(text: Text, point: TextAnchor, requireLeading = true): number
 function isNestedScroller(element: Element | null, pane: HTMLElement): boolean {
   for (let current = element; current && current !== pane; current = current.parentElement) {
     if (/(auto|scroll)/.test(getComputedStyle(current).overflowY)) return true
-    if (current.hasAttribute('aria-hidden')) return true
+    if (current.getAttribute('aria-hidden') === 'true') return true
   }
   return false
 }

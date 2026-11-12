@@ -74,16 +74,19 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
     return userOffset?.id === state.userRowId ? userOffset.top : null
   }
   const max = () => Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+  const rememberCarried = () => {
+    if (following && state.generating && !carried) {
+      const top = readUserOffset()
+      if (top !== null && scroller.scrollTop > top - FOCUSED_PREVIOUS_OUTPUT_PEEK_PX + 1) carried = true
+    }
+  }
   const write = (top: number) => {
     if (!following || disposed) return
     const next = Math.max(0, Math.min(max(), top))
     if (Math.abs(scroller.scrollTop - next) < 0.5) return
     scroller.scrollTop = next
     ownScrollTop = scroller.scrollTop
-    if (state.generating && !carried) {
-      const top = readUserOffset()
-      if (top !== null && scroller.scrollTop > top - FOCUSED_PREVIOUS_OUTPUT_PEEK_PX + 1) carried = true
-    }
+    rememberCarried()
     // The coordinator recognizes explicit writes before their scroll event arrives.
     reportPaneLayoutChange(scroller)
   }
@@ -146,6 +149,9 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
     mayResume = false
     landing = false
     setFollowing(false)
+    // Following deliberately held no character goal. Establish one before a
+    // disclosure or the next streamed commit can move the released viewport.
+    reportPaneLayoutChange(scroller)
     if (collapsing) setSpace(0)
   }
   const resume = () => {
@@ -163,9 +169,15 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
     if (following) write(target())
     settleLanding()
   })
-  // A false lock subscribes to correction writes without taking anchor ownership.
-  // Their browser scroll events are not reader requests to resume following.
-  const stopCorrections = observePaneBottomLock(scroller, () => false, top => { ownScrollTop = top })
+  // Navigation owns its animation and the sent-message reservation. Only
+  // ordinary overflowing output can delegate following to the coordinator.
+  // An old reservation can temporarily inflate max() before reserve() runs.
+  const stopCorrections = observePaneBottomLock(scroller,
+    () => !disposed && state.generating && following && !landing && !motion && space === 0,
+    top => {
+      ownScrollTop = top
+      rememberCarried()
+    })
   const onScroll = () => {
     if (ownScrollTop !== null && Math.abs(scroller.scrollTop - ownScrollTop) < 0.5) {
       ownScrollTop = null
@@ -218,6 +230,9 @@ export function createFocusedTranscriptScroll(scroller: HTMLElement, options: Fo
       const ended = state.generating && !next.generating
       const answered = !next.generating && next.answerRowId != null && next.answerRowId !== state.answerRowId
       state = next
+      // End-of-turn layout returns correction ownership to the reading anchor
+      // before reservation removal or collapse can change the document.
+      if (ended) reportPaneLayoutChange(scroller)
       initialized = true
       if (sent) { landing = false; carried = false; setFollowing(true) }
       if ((ended || answered) && following && next.answerRowId && !carried) landing = true

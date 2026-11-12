@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { createFocusedTranscriptScroll, FOCUSED_PREVIOUS_OUTPUT_PEEK_PX as PEEK } from './focusedTranscriptScroll.js'
-import { _forTest, compensatePanePrefix } from './markdownScrollCoordinator.js'
+import {
+  _forTest, compensatePanePrefix, reportPaneLayoutChange, flushPaneScrollCorrections,
+} from './markdownScrollCoordinator.js'
 import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
 import { selectCompositeChildWindow } from './compositeChildWindow.js'
 
@@ -286,4 +288,138 @@ test('completion uses virtual offsets when a long answer has unmounted both mess
     f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
     expect(f.scroller.scrollTop).toBe(1000 - PEEK)
   } finally { unregister(); f.cleanup() }
+})
+
+// Count real text traversal with injected boxes. These are operation counts,
+// not evidence about native browser layout or elapsed renderer time.
+function countedFixture(reducedMotion = true) {
+  const f = fixture(true, reducedMotion)
+  const originalRange = document.createRange.bind(document)
+  const raf = globalThis.requestAnimationFrame
+  const cancel = globalThis.cancelAnimationFrame
+  let frames: FrameRequestCallback[] = []
+  let reads = 0
+  let prefix = 0
+  const disclosure = document.createElement('div')
+  disclosure.setAttribute('aria-hidden', 'false')
+  f.scroller.firstElementChild!.append(disclosure)
+  for (let i = 0; i < 1200; i++) {
+    const p = document.createElement('p')
+    p.textContent = `Reading paragraph ${i}`
+    p.dataset.last = String(i === 1199)
+    disclosure.append(p)
+  }
+  document.createRange = () => {
+    const range = originalRange()
+    range.getBoundingClientRect = () => {
+      reads++
+      const top = range.startContainer.parentElement?.dataset.last === 'true'
+        ? 80 + 1320 + prefix - f.scroller.scrollTop : -100
+      return { top, bottom: top + 20, height: 20 } as DOMRect
+    }
+    return range
+  }
+  globalThis.requestAnimationFrame = cb => { frames.push(cb); return frames.length }
+  globalThis.cancelAnimationFrame = () => {}
+  return {
+    ...f,
+    reads: () => reads,
+    resetReads: () => { reads = 0 },
+    moveText: (delta: number) => { prefix += delta },
+    flush: (now = performance.now()) => {
+      const pending = frames
+      frames = []
+      for (const cb of pending) cb(now)
+    },
+    cleanup: () => {
+      f.cleanup()
+      document.createRange = originalRange
+      globalThis.requestAnimationFrame = raf
+      globalThis.cancelAnimationFrame = cancel
+    },
+  }
+}
+
+test('active overflowing output delegates bottom following without Range scans and remembers being carried', () => {
+  const f = countedFixture()
+  try {
+    // Exactly the sent-message resting position, with no reservation. Its
+    // initial write has not yet carried the reader beyond the prompt.
+    f.setEnd(1000 - PEEK + 500)
+    f.controller.update({ generating: true, userRowId: 'user' })
+    f.flush()
+    f.resetReads()
+    for (let i = 0; i < 20; i++) {
+      f.setEnd(1800 + i * 20)
+      reportPaneLayoutChange(f.scroller)
+      flushPaneScrollCorrections(f.scroller)
+      f.flush()
+      f.scroller.dispatchEvent(new Event('scroll'))
+    }
+    expect(f.scroller.scrollTop).toBe(1680)
+    expect(f.reads()).toBe(0)
+    f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+    f.flush()
+    expect(f.scroller.scrollTop).toBe(1680)
+    expect(f.space()).toBe('0px')
+  } finally { f.cleanup() }
+})
+
+test('release establishes a reading anchor before disclosure reflow without waiting for a scroll event', () => {
+  const f = countedFixture()
+  try {
+    f.setEnd(1800)
+    f.controller.update({ generating: true, userRowId: 'user' })
+    f.flush()
+    f.resetReads()
+    f.controller.release()
+    expect(f.reads()).toBeGreaterThanOrEqual(1200)
+    f.moveText(24)
+    f.setEnd(1824)
+    reportPaneLayoutChange(f.scroller)
+    flushPaneScrollCorrections(f.scroller)
+    f.flush()
+    expect(f.scroller.scrollTop).toBe(1324)
+    expect(f.controller.isFollowing()).toBe(false)
+    f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+    f.flush()
+    expect(f.scroller.scrollTop).toBe(1324)
+  } finally { f.cleanup() }
+})
+
+test('reserved sent-message space does not acquire bottom ownership or falsely mark a short turn carried', () => {
+  const f = countedFixture()
+  try {
+    f.controller.update({ generating: true, userRowId: 'user' })
+    f.flush()
+    f.resetReads()
+    f.setEnd(1120)
+    reportPaneLayoutChange(f.scroller)
+    flushPaneScrollCorrections(f.scroller)
+    expect(f.scroller.scrollTop).toBe(1000 - PEEK)
+    f.flush()
+    expect(f.reads()).toBeGreaterThanOrEqual(1200)
+    f.setEnd(1800)
+    f.controller.update({ generating: false, userRowId: 'user', answerRowId: 'answer' })
+    f.flush()
+    expect(f.scroller.scrollTop).toBe(1000 - PEEK)
+    expect(f.space()).toBe('0px')
+  } finally { f.cleanup() }
+})
+
+test('a pending send animation retains navigation ownership during an early coordinator flush', () => {
+  const f = countedFixture(false)
+  try {
+    f.setEnd(1800)
+    f.controller.update({ generating: true, userRowId: 'user' })
+    f.addRow('next', 1800)
+    f.setEnd(2600)
+    f.controller.update({ generating: true, userRowId: 'next' })
+    const top = f.scroller.scrollTop
+    reportPaneLayoutChange(f.scroller)
+    flushPaneScrollCorrections(f.scroller)
+    expect(f.scroller.scrollTop).toBe(top)
+    f.flush(performance.now() + 500)
+    expect(f.scroller.scrollTop).toBe(2100)
+  } finally { f.cleanup() }
 })

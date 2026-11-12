@@ -71,6 +71,18 @@ function fixture(roundScroll = false) {
   return { pane, row, paragraph, writes, flush, grow: (above: number, below: number) => { prefix += above; contentHeight += above + below } }
 }
 
+test('shown disclosures remain eligible reading anchors while hidden ancestors are excluded', () => {
+  const f = fixture()
+  f.row.setAttribute('aria-hidden', 'false')
+  const anchor = capturePaneVisibleAnchor(f.pane)
+  expect(anchor).not.toBeNull()
+  f.grow(24, 0)
+  expect(readPaneVisibleAnchorAdjustment(f.pane, anchor!)).toBe(24)
+  f.row.setAttribute('aria-hidden', 'true')
+  expect(capturePaneVisibleAnchor(f.pane)).toBeNull()
+  expect(readPaneVisibleAnchorAdjustment(f.pane, anchor!)).toBeNull()
+})
+
 for (const delta of [-0.75, 0.75]) {
   for (const roundScroll of [false, true]) {
     test(`fractional movement stays bounded across frames: ${delta}px, rounded scroll ${roundScroll}`, () => {
