@@ -19,6 +19,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ComponentProps,
 } from 'react'
 import { getBridge } from './bridge.js'
 import { useNotificationVisibility } from './notificationVisibility.js'
@@ -4738,6 +4739,41 @@ export function App() {
     return () => window.clearTimeout(timer)
   }, [oauthContext, oauthProgress])
 
+  // Keep shell callbacks stable across transcript-only updates. Dependencies are
+  // deliberately complete: navigation changes must install fresh closures.
+  const tabBarActions = useMemo(() => ({
+    onSelectTarget: (target: Parameters<NonNullable<ComponentProps<typeof TabBar>['onSelectTarget']>>[0]) => {
+      if (target.kind === 'session') selectTab(target.sessionId)
+      else openPage(target.page)
+    },
+    onClose: (sessionId: SessionId) => { void closeTab(sessionId) },
+    onCloseTarget: (target: Parameters<NonNullable<ComponentProps<typeof TabBar>['onCloseTarget']>>[0]) => {
+      if (target.kind === 'session') void closeTab(target.sessionId)
+      else closePage(target.page)
+    },
+    onOpenActions: (sessionId: SessionId, anchor: SessionActionsAnchor) =>
+      setSessionActionsTarget({ sessionId, anchor, origin: 'tab' }),
+  }), [selectTab, openPage, closeTab, closePage])
+  const sidebarActions = useMemo(() => ({
+    onUnarchiveSession: (row: MergedSessionRow) =>
+      setArchivedSessions(current => reduceSessionUnarchived(current, row)),
+    onSelectView: (view: ComponentProps<typeof Sidebar>['activeView']) => {
+      if (view === 'chat') {
+        if (activeSessionId) selectTab(activeSessionId)
+      } else openPage(view)
+    },
+    onRestore: (sessionId: SessionId) => { void performRestore(sessionId) },
+    onOpenHistory: (engineSessionId: string) => { void openHistorySession(engineSessionId) },
+    onOpenRowActions: (sessionId: SessionId, anchor: SessionActionsAnchor) =>
+      setSessionActionsTarget({ sessionId, anchor, origin: 'sidebar' }),
+    onNewSessionInWorkspace: (repId: SessionId) => { void newSessionInWorkspace(repId) },
+    onNewProjectSession: (projectId: string) => { void newProjectSession(projectId) },
+    onNewChat: () => { void newChat() },
+    onNewManagedChat: () => { void newManagedChat() },
+    onAddProject: () => setCreateProjectOpen(true),
+  }), [activeSessionId, selectTab, openPage, performRestore, openHistorySession,
+    newSessionInWorkspace, newProjectSession, newChat, newManagedChat])
+
   return (
     <LidClosedProvider>
     <AgentFaceRegistryStoreContext.Provider value={faceRegistries}>
@@ -4791,20 +4827,9 @@ export function App() {
           selectedTarget={tabNavigation.selected}
           rosterReady={hostSnapshotReady}
           onSelect={selectTab}
-          onSelectTarget={target => {
-            if (target.kind === 'session') selectTab(target.sessionId)
-            else openPage(target.page)
-          }}
-          onClose={sessionId => void closeTab(sessionId)}
-          onCloseTarget={target => {
-            if (target.kind === 'session') void closeTab(target.sessionId)
-            else closePage(target.page)
-          }}
+          {...tabBarActions}
           onRestart={restartTab}
           onNewTab={newChat}
-          onOpenActions={(sessionId, anchor) =>
-            setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
-          }
         />
         </SessionWorkMarksContext.Provider>
 
@@ -4817,22 +4842,10 @@ export function App() {
           rows={sessionCatalogRows}
           projects={projects}
           archivedSessions={archivedSessions}
-          onUnarchiveSession={row =>
-            setArchivedSessions(current => reduceSessionUnarchived(current, row))
-          }
+          {...sidebarActions}
           activeSessionId={activeSessionId}
           activeView={activeView}
-          onSelectView={view => {
-            if (view === 'chat') {
-              if (activeSessionId) selectTab(activeSessionId)
-            } else openPage(view)
-          }}
           onSelectLive={selectTab}
-          onRestore={sessionId => void performRestore(sessionId)}
-          onOpenHistory={engineSessionId => void openHistorySession(engineSessionId)}
-          onOpenRowActions={(sessionId, anchor) =>
-            setSessionActionsTarget({ sessionId, anchor, origin: 'sidebar' })
-          }
           /* P4-33 (Sidebar.jsx:80) — the row's ⋮ menu and rename editor are
            * App-level `fixed` overlays, so they float OUTSIDE the rail's hover box:
            * moving the pointer toward one fires onMouseLeave and collapses the
@@ -4842,11 +4855,6 @@ export function App() {
             sessionActionsTarget?.origin === 'sidebar' ||
             renamingSession?.origin === 'sidebar'
           }
-          onNewSessionInWorkspace={repId => void newSessionInWorkspace(repId)}
-          onNewProjectSession={projectId => void newProjectSession(projectId)}
-          onNewChat={() => void newChat()}
-          onNewManagedChat={() => void newManagedChat()}
-          onAddProject={() => setCreateProjectOpen(true)}
           accountAlias={
             selectActiveAccount(selectGlobalAccountsSnapshot(accounts))?.alias ??
             null

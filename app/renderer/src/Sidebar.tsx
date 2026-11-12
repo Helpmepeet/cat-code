@@ -101,6 +101,7 @@ import { UsageBarsIcon } from './AccountsUsageCharts.js'
  */
 
 import {
+  memo,
   useCallback,
   useContext,
   useEffect,
@@ -271,7 +272,7 @@ const NAV: NavItem[] = [
 
 type SidebarView = 'chat' | 'sessions' | 'scheduled' | 'goals' | 'accounts' | 'usage' | 'settings'
 
-export function Sidebar({
+export const Sidebar = memo(function Sidebar({
   rows,
   projects = [],
   activeSessionId,
@@ -1319,7 +1320,7 @@ export function Sidebar({
       </aside>
     </>
   )
-}
+})
 
 // Workspace grouping (frozen-alphabetical by the rendered label; empty-cwd in one
 // "Unknown workspace" bucket) is the shared `groupByWorkspace` from

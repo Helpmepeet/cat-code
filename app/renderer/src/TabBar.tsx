@@ -9,6 +9,7 @@
  */
 
 import {
+  memo,
   useContext, useLayoutEffect, useRef,
   type AnimationEventHandler, type KeyboardEvent,
 } from 'react'
@@ -53,7 +54,7 @@ const PAGE_LABELS: Record<PageTab, string> = {
   sessions: 'Sessions',
 }
 
-export function TabBar({
+export const TabBar = memo(function TabBar({
   tabs,
   navigationTabs,
   selectedTarget,
@@ -272,7 +273,7 @@ export function TabBar({
       </div>
     </div>
   )
-}
+})
 
 function entryTarget(entry: TabBarEntry): NavigationTarget {
   return entry.kind === 'session'

@@ -80,6 +80,7 @@ import type { QuestionSnapshot, QuestionReplyBatch, QuestionDismiss } from '../.
 import type { AskQuestionDraft } from './askQuestionFlowModel.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
+import { PaneElapsedReadout } from './PaneElapsedReadout.js'
 import { requestDiagnosticsSave } from './diagnosticsSaveAction.js'
 import {
   type RawMessageSessionLog,
@@ -174,7 +175,7 @@ import {
 } from './agentFace.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { LatestPaneFileCardContext, latestPaneFileCards, sameFileCards } from './transcriptPaneFiles.js'
-import { TranscriptFileScopeContext, transcriptFileScopes } from './transcriptFileScope.js'
+import { TranscriptFileScopeContext, createTranscriptFileScopesSelector } from './transcriptFileScope.js'
 import { useSubagentDock } from './subagentDockController.js'
 import { useSubagentDockCollapsedPreference } from './subagentDockPersistence.js'
 import type { SubagentDockRow } from './subagentDockState.js'
@@ -205,8 +206,6 @@ import type {
 } from '../../shared/hostApi.js'
 import {
   deriveActivity,
-  fmtElapsed,
-  fmtTok,
   isTurnRunning,
   restartConnection,
 } from './appModel.js'
@@ -356,6 +355,7 @@ export function SessionPane({
     [activeSessionId],
   )
   const toast = useToast()
+  const saveDiagnostics = useCallback(() => { void requestDiagnosticsSave(toast) }, [toast])
   const moveBack = useCallback(() => {
     if (!activeSessionId) return
     void getBridge().moveSession(activeSessionId, null).then(result => {
@@ -848,9 +848,10 @@ export function SessionPane({
   const paneFileRows = selectNestedTranscriptRows(transcript, activeSessionId, true)
   const paneFileSession = activeSessionId ? transcript.sessions[activeSessionId] : undefined
   const paneFileOrder = useMemo(() => selectTranscriptRows(transcript, activeSessionId, true).map(row => row.id), [paneFileSession, activeSessionId])
+  const selectFileScopes = useMemo(createTranscriptFileScopesSelector, [])
   const fileScopes = useMemo(
-    () => transcriptFileScopes(paneFileRows, activeDescriptor?.contextTransitions),
-    [paneFileRows, activeDescriptor?.contextTransitions],
+    () => selectFileScopes(paneFileRows, activeDescriptor?.contextTransitions),
+    [selectFileScopes, paneFileRows, activeDescriptor?.contextTransitions],
   )
   const nextFileCards = useMemo(() => latestPaneFileCards(paneFileRows, activeDescriptor?.cwd ?? null, paneFileOrder, fileScopes), [paneFileRows, activeDescriptor?.cwd, paneFileOrder, fileScopes])
   // Every tool card reads this through context, past its memo. A streamed delta must not change its identity.
@@ -1306,23 +1307,6 @@ export function SessionPane({
       if (welcomeExitTimerRef.current !== null) clearTimeout(welcomeExitTimerRef.current)
     }
   }, [])
-
-  // Elapsed clock: tick once per second from the turn start App recorded for
-  // this session. The start is NOT stamped here — a pane is mounted only while
-  // its session is on screen, so owning it here restamped it on every tab
-  // switch: the count restarted at 0s and took the token byline (gated on 30s
-  // of turn time) with it.
-  const [elapsedMs, setElapsedMs] = useState(0)
-  useEffect(() => {
-    if (!activityRunning || turnStartedAt === null) {
-      setElapsedMs(0)
-      return
-    }
-    const tick = (): void => setElapsedMs(Date.now() - turnStartedAt)
-    tick()
-    const id = setInterval(tick, 1000)
-    return () => clearInterval(id)
-  }, [activityRunning, turnStartedAt])
 
   // Stop → the real `app.abort` boundary. The requestId is a message envelope
   // (the sidecar aborts the current turn regardless — `sidecarServer.ts:642`),
@@ -1975,7 +1959,7 @@ export function SessionPane({
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={activeDescriptor?.moving ? undefined : onLoadEarlierHistory}
             onOpenAccounts={onManageAccounts}
-            onSaveDiagnostics={() => void requestDiagnosticsSave(toast)}
+            onSaveDiagnostics={saveDiagnostics}
             onRetryTurn={!generating && !retryComposerBlocked({
               draft: prompt, imageCount: images.length, hasFile: !!fileAttachment,
               attachmentPending: preparingImage || pickingFile,
@@ -2142,9 +2126,7 @@ export function SessionPane({
                 <span className="font-semibold">
                   {paused ? 'Waiting for approval' : activity.verb}
                 </span>
-                <span className="font-mono tabular-nums text-text-subtle">
-                  {fmtElapsed(elapsedMs)}
-                </span>
+                <PaneElapsedReadout turnStartedAt={turnStartedAt} />
                 <span aria-hidden>↓</span>
               </>
             ) : (
@@ -2308,7 +2290,7 @@ export function SessionPane({
             verb={activity.verb}
             target={activity.target}
             targetIsProse={'targetIsProse' in activity && activity.targetIsProse}
-            elapsedMs={elapsedMs}
+            turnStartedAt={turnStartedAt}
             outputTokens={generating && jumpMove?.phase !== 'moving' ? outputTokens : UNAVAILABLE_OUTPUT_TOKENS}
             paused={paused}
             compacting={compacting}
@@ -2736,11 +2718,6 @@ function QueuedRow({ text }: { text: string }) {
   )
 }
 
-/** Parity with the engine's `SHOW_TOKENS_AFTER_MS` (`SpinnerAnimationRow.tsx:19`):
- * the estimated token byline is gated behind 30s of turn time so quick turns
- * stay quiet — it appears only on genuinely long turns, exactly as the TUI. */
-const SHOW_TOKENS_AFTER_MS = 30_000
-
 /**
  * P4-18c activity indicator (`Chat.jsx` SpinnerWithVerb): pulse dots + verb +
  * active target + elapsed clock + optional per-turn token byline. Paused (a
@@ -2782,7 +2759,7 @@ function ActivityIndicator({
   verb,
   target,
   targetIsProse,
-  elapsedMs,
+  turnStartedAt,
   outputTokens,
   paused,
   compacting,
@@ -2792,7 +2769,7 @@ function ActivityIndicator({
   verb: string
   target: string | null
   targetIsProse?: boolean
-  elapsedMs: number
+  turnStartedAt: number | null
   outputTokens: OutputTokenReading
   paused: boolean
   /** Swaps the pulse dots for the compaction glyph (see `CompactingGlyph`). */
@@ -2803,11 +2780,6 @@ function ActivityIndicator({
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
   const dot = paused ? 'bg-tone-warn' : 'bg-accent'
-  const showTokens = outputTokens.quality !== 'unavailable' &&
-    outputTokens.tokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
-  const tokenDescription = outputTokens.quality === 'unavailable'
-    ? 'Output count unavailable for this turn.'
-    : 'Main-chat output, including reasoning and tool inputs. Excludes separate agents.'
   const todoReadout = selectTodoReadout(todoPlan)
   return (
     <div className="flex items-center gap-2.5 bg-transparent px-1 pb-1.5 pt-0 text-xs">
@@ -2832,15 +2804,7 @@ function ActivityIndicator({
           {target}
         </span>
       ) : null}
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-subtle" title={tokenDescription}>
-        {fmtElapsed(elapsedMs)}
-        {showTokens ? (
-          <span aria-label={`${outputTokens.quality === 'estimated' ? 'Estimated' : 'Reported'} output: ${fmtTok(outputTokens.tokens)} tokens. ${tokenDescription}`}>
-            {' · ↓ '}
-            {fmtTok(outputTokens.tokens)} tokens
-          </span>
-        ) : null}
-      </span>
+      <PaneElapsedReadout turnStartedAt={turnStartedAt} outputTokens={outputTokens} />
       {stopError ? (
         <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
       ) : null}

@@ -3,7 +3,7 @@ import { focusedCallLine, focusedCallMark, type FocusedCallContext, type Focused
 import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { FocusedLiveState } from './transcriptProjector.js'
 import type { TasksSnapshot } from '../../shared/protocol.js'
-import { memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, memo, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
 import { focusedNamedCall, isFocusedDeliverable, latestComputerScreenshot, summarizeFocusedWork, type FocusedSegment, type FocusedSummary, type FocusedTurnItem } from './focusedTranscriptLayout.js'
 import { useToolCardExpanded } from './toolCardExpansion.js'
@@ -37,7 +37,6 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   renderReasoning: ReasoningRenderer
 }) {
   const bodyId = useId()
-  const now = useLiveClock(turn.live)
   const preparing = turn.live && latestLive && !turn.answering ? preparingCalls(liveState, turn.rows[0]?.sessionId ?? '') : []
   // Disclosure choices are independent of the Tool call detail preference.
   const [open, setOpen] = useToolCardExpanded(turn.id, !turn.completed)
@@ -67,13 +66,10 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   const [hadVisibleOutput, setHadVisibleOutput] = useState(visibleOutput)
   if (visibleOutput && !hadVisibleOutput) setHadVisibleOutput(true)
   const firstWait = !visibleOutput && !hadVisibleOutput
-  const quietMs = liveState ? now - liveState.lastVisibleChangeAt : 0
-  const thinking = turn.live && latestLive && !turn.answering && !pending && !liveState?.streaming && quietMs >= 1000
-  const waitPhrase = firstWait ? firstWaitPhrase(quietMs) : null
   const issuedCalls = new Set(turn.rows.flatMap(row => row.kind === 'tool-use' ? [row.toolUseId] : []))
   const background = turn.live && latestLive ? tasks?.focusedBashJobs?.filter(job => job.toolUseId &&
     (issuedCalls.has(job.toolUseId) || !!liveState?.activities[job.toolUseId]) &&
-    (job.status === 'running' || (job.endTime !== undefined && now - job.endTime < 4000))) ?? [] : []
+    (job.status === 'running' || job.endTime !== undefined)) ?? [] : []
   const last = segments.at(-1)
   const callContext: FocusedCallContext = { signalled: liveState !== null, cwd, tasks, turnRows: turn.rows }
   const deliverables = useMemo(() => turn.rows.filter(isFocusedDeliverable), [turn.rows])
@@ -99,27 +95,63 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
         <div className="focused-turn-body" data-cascade={cascading ? '' : undefined}>
           {segments.map(segment => <FocusedSegmentBlock key={segment.id} segment={segment} live={turn.live}>
             {segment.kind === 'update'
-              ? <div data-focused-update data-latest={segment.id === latestUpdate ? '' : undefined}>{renderRows(segment.rows, true)}</div>
-              : segment.kind === 'speech' ? <div className="focused-lifted-speech">{renderRows(segment.rows, false)}</div>
-              : segment.kind === 'reasoning' ? renderReasoning(segment.rows, turn.live && !turn.answering && segment === last)
-              : <FocusedStep segment={segment} live={turn.live} rolling={latestLive && segment === latestStretch && !turn.answering} preparing={segment === latestStretch ? preparing : []} liveState={liveState} callContext={callContext} now={now} renderRows={renderRows} />}
+              ? <div data-focused-update data-latest={segment.id === latestUpdate ? '' : undefined}><FocusedStaticRows segment={segment} narration renderRows={renderRows} /></div>
+              : segment.kind === 'speech' ? <div className="focused-lifted-speech"><FocusedStaticRows segment={segment} narration={false} renderRows={renderRows} /></div>
+              : segment.kind === 'reasoning' ? <FocusedStaticReasoning segment={segment} live={turn.live && !turn.answering && segment === last} renderReasoning={renderReasoning} />
+              : <FocusedStep segment={segment} live={turn.live} rolling={latestLive && segment === latestStretch && !turn.answering} preparing={segment === latestStretch ? preparing : []} liveState={liveState} callContext={callContext} renderRows={renderRows} />}
           </FocusedSegmentBlock>)}
-          {background.map(job => <div key={job.id} className={`focused-bg${job.status !== 'running' ? ' focused-bg-done' : ''}`}>
-            <span className="focused-bg-mark" aria-hidden>&amp;</span><span className="focused-bg-text">{job.label}</span>
-            <span className={`focused-meta${job.status === 'failed' ? ' focused-meta-fail' : job.status === 'killed' ? ' focused-meta-warn' : ''}`}>{job.status === 'running' ? duration(now - job.startTime) : job.status === 'completed' ? 'finished' : job.status === 'killed' ? 'stopped' : 'failed'}</span>
-          </div>)}
-          {thinking ? <div className="focused-thinking">
-            <span className="focused-reasoning-gutter" aria-hidden><span className="focused-reasoning-node" /></span>
-            {waitPhrase !== null
-              ? <FocusedTicker tickKey={waitPhrase} className=""><span className="focused-live-verb">{waitPhrase}</span></FocusedTicker>
-              : <><span className="focused-live-verb">Thinking</span><span className="focused-meta">{quietMs >= 2000 ? duration(quietMs) : ''}</span></>}
-          </div> : null}
+          {background.length ? <FocusedBackground jobs={background} /> : null}
+          {turn.live && latestLive && !turn.answering && !pending && !liveState?.streaming
+            ? <FocusedThinking liveState={liveState} firstWait={firstWait} /> : null}
         </div>
       </FocusedDisclosure>
     </section>
     {deliverables.length ? <div className="focused-deliverables">{renderRows(deliverables, false)}</div> : null}
   </>)
 })
+
+// Keep presentation gates outside row rendering: a new latest update need not rerender its predecessor.
+const FocusedStaticRows = memo(function FocusedStaticRows({ segment, narration, renderRows }: {
+  segment: FocusedSegment; narration: boolean; renderRows: RowRenderer
+}) {
+  return renderRows(segment.rows, narration)
+})
+
+const FocusedStaticReasoning = memo(function FocusedStaticReasoning({ segment, live, renderReasoning }: {
+  segment: FocusedSegment; live: boolean; renderReasoning: ReasoningRenderer
+}) {
+  return renderReasoning(segment.rows, live)
+})
+
+/** Only time-dependent presentation consumes this value; the step's rows stay outside clock renders. */
+const FocusedClockContext = createContext(0)
+
+function FocusedCallClock({ live, children }: { live: boolean; children: ReactNode }) {
+  const now = useLiveClock(live)
+  return <FocusedClockContext.Provider value={now}>{children}</FocusedClockContext.Provider>
+}
+
+function FocusedThinking({ liveState, firstWait }: { liveState: FocusedLiveState | null; firstWait: boolean }) {
+  const now = useLiveClock(liveState !== null)
+  const quietMs = liveState ? now - liveState.lastVisibleChangeAt : 0
+  if (quietMs < 1000) return null
+  const waitPhrase = firstWait ? firstWaitPhrase(quietMs) : null
+  return <div className="focused-thinking">
+    <span className="focused-reasoning-gutter" aria-hidden><span className="focused-reasoning-node" /></span>
+    {waitPhrase !== null
+      ? <FocusedTicker tickKey={waitPhrase} className=""><span className="focused-live-verb">{waitPhrase}</span></FocusedTicker>
+      : <><span className="focused-live-verb">Thinking</span><span className="focused-meta">{quietMs >= 2000 ? duration(quietMs) : ''}</span></>}
+  </div>
+}
+
+function FocusedBackground({ jobs }: { jobs: NonNullable<TasksSnapshot['focusedBashJobs']> }) {
+  const now = useLiveClock(jobs.some(job => job.status === 'running' || (job.endTime !== undefined && Date.now() - job.endTime < 4000)))
+  return <>{jobs.filter(job => job.status === 'running' || (job.endTime !== undefined && now - job.endTime < 4000)).map(job =>
+    <div key={job.id} className={`focused-bg${job.status !== 'running' ? ' focused-bg-done' : ''}`}>
+      <span className="focused-bg-mark" aria-hidden>&amp;</span><span className="focused-bg-text">{job.label}</span>
+      <span className={`focused-meta${job.status === 'failed' ? ' focused-meta-fail' : job.status === 'killed' ? ' focused-meta-warn' : ''}`}>{job.status === 'running' ? duration(now - job.startTime) : job.status === 'completed' ? 'finished' : job.status === 'killed' ? 'stopped' : 'failed'}</span>
+    </div>)}</>
+}
 
 function FocusedSegmentBlock({ segment, live, children }: { segment: FocusedSegment; live: boolean; children: ReactNode }) {
   const id = useId()
@@ -128,8 +160,8 @@ function FocusedSegmentBlock({ segment, live, children }: { segment: FocusedSegm
   return <FocusedDisclosure open id={id} animateArrival={arriving} className="focused-segment">{children}</FocusedDisclosure>
 }
 
-function FocusedStep({ segment, live, rolling, preparing, liveState, callContext, now, renderRows }: {
-  segment: FocusedSegment; live: boolean; rolling: boolean; preparing: FocusedCall[]; liveState: FocusedLiveState | null; callContext: FocusedCallContext; now: number; renderRows: RowRenderer
+function FocusedStep({ segment, live, rolling, preparing, liveState, callContext, renderRows }: {
+  segment: FocusedSegment; live: boolean; rolling: boolean; preparing: FocusedCall[]; liveState: FocusedLiveState | null; callContext: FocusedCallContext; renderRows: RowRenderer
 }) {
   const bodyId = useId()
   // A settled stretch that failed opens with its rows when the turn is reopened.
@@ -176,6 +208,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
   const noteOmitted = headNames?.line.phase === 'stopped' ? 'stopped' : headNames?.line.phase === 'blocked' ? 'blocked'
     : headNames?.line.phase === 'done' && headNames.line.background?.state === 'failed' ? 'failed' : null
   return (
+    <FocusedCallClock live={live && [...(liveHead ? [liveHead] : []), ...childCalls, ...rollingList].some(call => call.status === 'pending' && !!call.activity && !call.preparing && !call.awaitingApproval)}>
     <div className="focused-step">
       <button type="button" className="focused-step-head" data-open={open ? '' : undefined} data-running={headLine?.verbTone === 'live' && headLine.phase !== 'preparing' ? '' : undefined}
         aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen(!open)}>
@@ -187,11 +220,11 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
         <AutoModeReviewMark summary={summarizeAutoModeReviews(calls.map(call => call.autoModeReview))} />
         <DiffTotals summary={summary} />
         <FailureMark summary={summary} omit={noteOmitted} />
-        {liveHead && headLine ? <CallMeta call={liveHead} line={headLine} now={now} /> : headNames && headNames.line.phase !== 'failed' ? <BackgroundMeta background={headNames.line.background} /> : null}
+        {liveHead && headLine ? <CallMeta call={liveHead} line={headLine} /> : headNames && headNames.line.phase !== 'failed' ? <BackgroundMeta background={headNames.line.background} /> : null}
       </button>
-      {liveHead ? <LiveOutput call={liveHead} now={now} className="focused-head-out" /> : null}
-      {agentHead ? <RollingCalls calls={childCalls} now={now} callContext={{ ...callContext, signalled: false }} /> : null}
-      <RollingCalls calls={rollingList} now={now} callContext={callContext} />
+      {liveHead ? <LiveOutput call={liveHead} className="focused-head-out" /> : null}
+      {agentHead ? <RollingCalls calls={childCalls} callContext={{ ...callContext, signalled: false }} /> : null}
+      <RollingCalls calls={rollingList} callContext={callContext} />
       {!open && screenshot ? <button type="button" className="focused-shot" aria-label="Open this step" onClick={() => setOpen(true)}>
         <img alt="Latest screenshot" decoding="async" loading="lazy" src={`data:${screenshot.mediaType};base64,${screenshot.data}`} />
       </button> : null}
@@ -201,6 +234,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
         </FocusedNamedCallContext.Provider>
       </FocusedDisclosure>
     </div>
+    </FocusedCallClock>
   )
 }
 
@@ -220,7 +254,8 @@ function CallWords({ line, call, kind }: { line: FocusedCallLine; call: FocusedC
   </>
 }
 
-function CallMeta({ call, line, now }: { call: FocusedCall; line: FocusedCallLine; now: number }) {
+function CallMeta({ call, line }: { call: FocusedCall; line: FocusedCallLine }) {
+  const now = useContext(FocusedClockContext)
   if (line.phase === 'failed') return <span className="focused-meta focused-meta-fail">failed</span>
   if (call.status === 'pending' && call.activity && !call.preparing && !call.awaitingApproval) {
     const elapsed = now - call.activity.startedAt
@@ -241,7 +276,8 @@ function BackgroundMeta({ background }: { background: FocusedCallLine['backgroun
     : <span className="focused-meta focused-meta-warn">stopped</span>
 }
 
-function LiveOutput({ call, now, className = '' }: { call: FocusedCall; now: number; className?: string }) {
+function LiveOutput({ call, className = '' }: { call: FocusedCall; className?: string }) {
+  const now = useContext(FocusedClockContext)
   const activity = call.activity
   if (call.status !== 'pending' || activity?.phase !== 'executing' || now - activity.startedAt < 1500 || activity.output === undefined) return null
   const line = activity.output.replace(/\r\n/g, '\n').replace(/\n$/, '').split(/[\n\r]/).at(-1) ?? ''
@@ -250,7 +286,7 @@ function LiveOutput({ call, now, className = '' }: { call: FocusedCall; now: num
   return <div className={`focused-live-out ${className}`}><FocusedTicker tickKey={call.toolUseId} className="">{line}</FocusedTicker><span className="focused-live-count">{count} lines</span></div>
 }
 
-function RollingCalls({ calls, now, callContext }: { calls: FocusedCall[]; now: number; callContext: FocusedCallContext }) {
+function RollingCalls({ calls, callContext }: { calls: FocusedCall[]; callContext: FocusedCallContext }) {
   const [retained, setRetained] = useState(calls)
   const ids = calls.map(call => call.toolUseId).join(':')
   useEffect(() => {
@@ -267,8 +303,8 @@ function RollingCalls({ calls, now, callContext }: { calls: FocusedCall[]; now: 
         <span className={`focused-call-mark ${line.markClass}`} aria-hidden>{line.mark}</span>
         <FocusedTicker tickKey={`${call.toolUseId}:${line.phase}:${line.verb}`} className=""><CallWords line={line} call={call} kind="row" /></FocusedTicker>
         <AutoModeReviewMark review={call.autoModeReview} />
-        <CallMeta call={call} line={line} now={now} />
-      </div><LiveOutput call={call} now={now} /><AgentLatest call={call} callContext={callContext} /></div>
+        <CallMeta call={call} line={line} />
+      </div><LiveOutput call={call} /><AgentLatest call={call} callContext={callContext} /></div>
     </div>
   })}</div>
 }
@@ -285,7 +321,7 @@ function AgentLatest({ call, callContext }: { call: FocusedCall; callContext: Fo
 }
 
 function useLiveClock(live: boolean): number {
-  const [now, setNow] = useState(Date.now)
+  const [, setNow] = useState(Date.now)
   useEffect(() => {
     if (!live) return
     let timer: ReturnType<typeof setInterval> | undefined
@@ -308,8 +344,8 @@ function useLiveClock(live: boolean): number {
       document.removeEventListener('visibilitychange', sync)
     }
   }, [live])
-  // Incoming activity must use current time even between ticks or while hidden.
-  return live ? Date.now() : now
+  // Prop updates need current time even while hidden or after the clock stops.
+  return Date.now()
 }
 
 /** Text that changes in place leaves upward while its replacement rises in. */

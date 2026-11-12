@@ -277,8 +277,9 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   const restoreBody = source.slice(restoreStart, restoreEnd)
 
   expect(source).toContain(
-    'onRestore={sessionId => void performRestore(sessionId)}',
+    'onRestore: (sessionId: SessionId) => { void performRestore(sessionId) }',
   )
+  expect(source).toContain('{...sidebarActions}')
   // The paint yield is a frame THEN a timer: the exact nesting, not two loose
   // mentions that a reversed pair would satisfy just as well. Whitespace is
   // normalised first, so the claim is the nesting and not the indent depth.
