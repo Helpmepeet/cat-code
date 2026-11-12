@@ -1,7 +1,9 @@
-import { memo, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type RefObject } from 'react'
+import { Component, memo, useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
+import Markdown, { type Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { observePaneScroll } from './markdownScrollCoordinator.js'
 import { readTranscriptRowOffset } from './transcriptRowNavigation.js'
-import { deriveTranscriptOutline, type TranscriptOutlineEntry } from './transcriptOutlineModel.js'
+import { TRANSCRIPT_OUTLINE_MIN_PROMPTS, deriveTranscriptOutline, type TranscriptOutlineEntry } from './transcriptOutlineModel.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { transcriptOutlineBookmarks } from './transcriptOutlineBookmarks.js'
 import './transcriptOutline.css'
@@ -29,10 +31,26 @@ function reduceOutline(state: OutlineState, action: OutlineAction): OutlineState
   }
 }
 
-export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrollerRef, onJump }: {
+// Raw HTML stays off (react-markdown default). The excerpt sits inside the jump
+// button, so links and task checkboxes render as text and images never load.
+const EXCERPT_PLUGINS = [remarkGfm]
+const EXCERPT_COMPONENTS: Components = {
+  a: ({ children }) => <span className="transcript-outline-link">{children}</span>,
+  img: ({ alt }) => alt ? <span>{alt}</span> : null,
+  input: () => null,
+}
+
+class ExcerptBoundary extends Component<{ fallback: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  render() { return this.state.failed ? this.props.fallback : this.props.children }
+}
+
+export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrollerRef, onJump, minPrompts = TRANSCRIPT_OUTLINE_MIN_PROMPTS }: {
   rows: readonly NestedTranscriptRow[]
   scrollerRef: RefObject<HTMLDivElement | null>
   onJump: (entry: TranscriptOutlineEntry) => void
+  minPrompts?: number
 }) {
   const entries = useMemo(() => deriveTranscriptOutline(rows), [rows])
   const entriesRef = useRef(entries)
@@ -172,7 +190,7 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
     return () => document.removeEventListener('pointerdown', outside, true)
   }, [preview?.id])
 
-  if (entries.length === 0) return null
+  if (entries.length === 0 || entries.length < minPrompts) return null
   return <div className="transcript-outline" ref={rootRef} onPointerDownCapture={() => { keyboard.current = false }}
     onKeyDown={event => {
       if (event.key === 'Escape') {
@@ -228,7 +246,11 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
       <button type="button" className="transcript-outline-jump" ref={jumpRef}
         aria-label={`Jump to prompt ${previewIndex + 1}: ${preview.prompt}`} onClick={() => onJump(preview)}>
         <span className="transcript-outline-prompt">{preview.prompt}</span>
-        {preview.answer ? <span className="transcript-outline-answer">{preview.answer}</span> : null}
+        {preview.answer ? <div className="transcript-outline-answer">
+          <ExcerptBoundary key={preview.answer} fallback={preview.answer}>
+            <Markdown remarkPlugins={EXCERPT_PLUGINS} components={EXCERPT_COMPONENTS}>{preview.answer}</Markdown>
+          </ExcerptBoundary>
+        </div> : null}
       </button>
       <button type="button" className="transcript-outline-bookmark"
         aria-pressed={bookmarks.has(preview.id)} aria-label={bookmarks.has(preview.id) ? 'Remove bookmark' : 'Bookmark'}

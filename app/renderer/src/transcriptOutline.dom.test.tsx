@@ -5,7 +5,7 @@ import { TranscriptOutline } from './TranscriptOutline.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import { TranscriptModeContext } from './transcriptMode.js'
 import { registerTranscriptRowOffsets } from './transcriptRowNavigation.js'
-import type { TranscriptOutlineEntry } from './transcriptOutlineModel.js'
+import { TRANSCRIPT_OUTLINE_MIN_PROMPTS, type TranscriptOutlineEntry } from './transcriptOutlineModel.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { createTranscriptState, projectServerFrame } from './transcriptProjector.js'
 import { PROTOCOL_VERSION } from '../../shared/protocol.js'
@@ -35,14 +35,14 @@ async function pointer(target: Element, type: string) {
 }
 async function pause(ms: number) { await act(async () => { await new Promise(resolve => setTimeout(resolve, ms)) }) }
 async function click(target: HTMLElement) { await act(async () => { target.click() }) }
-async function mountOutline(initial = rows) {
+async function mountOutline(initial = rows, minPrompts = 1) {
   const scroller = document.createElement('div')
   scroller.className = 'outline-fixture-scroller'
   harness.document.body.append(scroller)
   const scrollerRef = createRef<HTMLDivElement>()
   scrollerRef.current = scroller
   const jumps: TranscriptOutlineEntry[] = []
-  const render = (data: NestedTranscriptRow[]) => <TranscriptOutline rows={data} scrollerRef={scrollerRef} onJump={entry => jumps.push(entry)} />
+  const render = (data: NestedTranscriptRow[]) => <TranscriptOutline rows={data} scrollerRef={scrollerRef} onJump={entry => jumps.push(entry)} minPrompts={minPrompts} />
   const tree = await harness.mount(render(initial))
   return { ...tree, scroller, jumps, update: (data: NestedTranscriptRow[]) => tree.render(render(data)) }
 }
@@ -162,6 +162,29 @@ test('unsafe-looking excerpts are literal text and a live answer updates the act
   tree.scroller.remove()
 })
 
+test('the rail waits for enough prompts to be worth navigating', async () => {
+  const data = (count: number) => Array.from({ length: count }, (_, index) => prompt(`p${index}`))
+  const tree = await mountOutline(data(TRANSCRIPT_OUTLINE_MIN_PROMPTS - 1), TRANSCRIPT_OUTLINE_MIN_PROMPTS)
+  expect(tree.container.querySelector('nav') === null).toBe(true)
+  await tree.update(data(TRANSCRIPT_OUTLINE_MIN_PROMPTS))
+  expect(ticks(tree.container)).toHaveLength(TRANSCRIPT_OUTLINE_MIN_PROMPTS)
+  tree.scroller.remove()
+})
+
+test('answers render as inert Markdown inside the jump button', async () => {
+  const tree = await mountOutline([prompt('p'), answer('a',
+    '## Plan\n\n- **Check** `designs`\n- [x] see [docs](https://example.com) ![chart](https://example.com/x.png)')])
+  await act(async () => { ticks(tree.container)[0]!.focus() })
+  const excerpt = tree.container.querySelector('.transcript-outline-answer')!
+  expect(excerpt.querySelector('h2')?.textContent).toBe('Plan')
+  expect(excerpt.querySelectorAll('li')).toHaveLength(2)
+  expect(excerpt.querySelector('strong')?.textContent).toBe('Check')
+  expect(excerpt.querySelector('code')?.textContent).toBe('designs')
+  expect(excerpt.querySelector('a, img, input') === null).toBe(true)
+  expect(excerpt.textContent).toContain('see docs chart')
+  tree.scroller.remove()
+})
+
 test('hidden transcript panes defer viewport measurements until they have height', async () => {
   const tree = await mountOutline()
   let reads = 0
@@ -226,6 +249,12 @@ for (const mode of ['full', 'focused'] as const) {
       },
     } as never)
     const event = (message: unknown) => ({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 'session-1', event: { type: 'message', message } }) as never
+    for (let index = 1; index < TRANSCRIPT_OUTLINE_MIN_PROMPTS; index++) {
+      state = projectServerFrame(state, event({
+        type: 'user', uuid: `earlier-user-${index}`, session_id: 'engine-1', parent_tool_use_id: null,
+        message: { role: 'user', content: `Earlier question ${index}` },
+      }))
+    }
     state = projectServerFrame(state, event({
       type: 'user', uuid: 'outline-user', session_id: 'engine-1', parent_tool_use_id: null,
       message: { role: 'user', content: 'Inspect the module' },

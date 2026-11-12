@@ -60,6 +60,12 @@ describe('deriveTranscriptOutline', () => {
       { commandName: 'review', args: 'changes', skillFormat: false }), answer('a')])[0]!.prompt).toBe('/review changes')
   })
 
+  test('answers keep Markdown line structure while prompts stay on one line', () => {
+    const entry = deriveTranscriptOutline([prompt('p', 'Two\nlines'), answer('a', '\n## Plan\n\n- one\n- two\n')])[0]!
+    expect(entry.prompt).toBe('Two lines')
+    expect(entry.answer).toBe('## Plan\n\n- one\n- two')
+  })
+
   test('huge unsafe-looking input stays bounded inert text', () => {
     const unsafe = '<script>alert(1)</script> **[link](javascript:bad)** ``` ' + 'x'.repeat(100_000)
     const entry = deriveTranscriptOutline([prompt('p', unsafe), answer('a', unsafe)])[0]!

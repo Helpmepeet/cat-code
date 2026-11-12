@@ -103,7 +103,20 @@
   font-size: 12.5px;
   line-height: 1.5;
   color: var(--text-subtle);
+  overflow-wrap: anywhere;
 }
+
+/* A compact Markdown grammar: block rhythm would spend the three lines on gaps. */
+.transcript-outline-answer :is(p, ul, ol, pre, blockquote, table, h1, h2, h3, h4, h5, h6) { margin: 0; }
+.transcript-outline-answer :is(h1, h2, h3, h4, h5, h6) { font-size: inherit; font-weight: 600; color: var(--text-muted); }
+.transcript-outline-answer :is(strong, b) { font-weight: 600; color: var(--text-muted); }
+.transcript-outline-answer ul { padding-left: 1.2em; list-style: disc; }
+.transcript-outline-answer ol { padding-left: 1.5em; list-style: decimal; }
+.transcript-outline-answer blockquote { padding-left: 8px; border-left: 2px solid var(--shell-seam); }
+.transcript-outline-answer code { font-family: var(--font-mono); font-size: .9em; color: var(--text-muted); }
+.transcript-outline-answer pre { white-space: pre-wrap; }
+.transcript-outline-answer hr { display: none; }
+.transcript-outline-link { text-decoration: underline; text-decoration-color: var(--text-ghost); }
 
 .transcript-outline-bookmark {
   all: unset;

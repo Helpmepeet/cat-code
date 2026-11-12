@@ -8,11 +8,22 @@ export type TranscriptOutlineEntry = {
   answer: string
 }
 
-// Excerpts are text, not Markdown render plans. Bound work before normalizing
-// whitespace, including for unfinished fences or hostile-looking HTML.
+/** A short chat is quicker to scroll than to navigate by ticks. */
+export const TRANSCRIPT_OUTLINE_MIN_PROMPTS = 5
+
+// Bound work before normalizing whitespace, including for unfinished fences or
+// hostile-looking HTML. Prompts are one-line text; answers keep their line
+// breaks because the card renders them as Markdown.
+function bound(text: string): string {
+  return text.length > 240 ? `${text.slice(0, 239)}…` : text
+}
+
 function preview(text: string): string {
-  const bounded = text.slice(0, 4096).replace(/\s+/g, ' ').trim()
-  return bounded.length > 240 ? `${bounded.slice(0, 239)}…` : bounded
+  return bound(text.slice(0, 4096).replace(/\s+/g, ' ').trim())
+}
+
+function markdownPreview(text: string): string {
+  return bound(text.slice(0, 4096).trim())
 }
 
 function frameKey(row: NestedTranscriptRow): string {
@@ -66,7 +77,7 @@ export function deriveTranscriptOutline(rows: readonly NestedTranscriptRow[]): T
         }
       }
     } else if (row.kind === 'assistant-text' && current) {
-      const text = preview(row.content)
+      const text = markdownPreview(row.content)
       if (!text) continue
       if (row.phase === 'final_answer' && !finalAnswers.has(current.id)) {
         current.answer = text
