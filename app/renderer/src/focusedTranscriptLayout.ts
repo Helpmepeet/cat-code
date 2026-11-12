@@ -165,6 +165,13 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
 }
 
 const segmentCache = new WeakMap<readonly NestedTranscriptRow[], readonly FocusedSegment[]>()
+// Source rows are immutable. Keep only the latest model per first row, so new
+// outer arrays can reuse history without retaining a session-wide version log.
+const segmentModels = new WeakMap<NestedTranscriptRow, FocusedSegment>()
+const turnModels = new WeakMap<NestedTranscriptRow, FocusedTurnItem>()
+const sameRows = (left: readonly NestedTranscriptRow[], right: readonly NestedTranscriptRow[]) =>
+  left.length === right.length && left.every((row, index) => row === right[index])
+
 export function deriveFocusedSegments(rows: readonly NestedTranscriptRow[]): readonly FocusedSegment[] {
   const cached = segmentCache.get(rows)
   if (cached) return cached
@@ -190,6 +197,14 @@ export function deriveFocusedSegments(rows: readonly NestedTranscriptRow[]): rea
     } else stretch.push(row)
   }
   flush()
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index]!
+    const key = segment.rows[0]!
+    const previous = segmentModels.get(key)
+    if (previous?.kind === segment.kind && previous.id === segment.id && sameRows(previous.rows, segment.rows)) {
+      segments[index] = previous
+    } else segmentModels.set(key, segment)
+  }
   segmentCache.set(rows, segments)
   return segments
 }
@@ -274,12 +289,26 @@ export function deriveFocusedTranscript(
       const work = rows.slice(fragment.start, fragment.end)
       // A result measures the whole turn, not an individual control-point fragment.
       const duration = hasOperator && fragments.length === 1 ? result?.durationMs : undefined
-      const summary = summarizeFocusedWork(work)
       const id = fragmentIndex === 0 ? `focused-turn:${anchor.id}` : `focused-turn:${anchor.id}:after:${rows[fragment.start - 1]!.id}`
-      items.push({ kind: 'focused-turn', id, rows: work,
-        segments: deriveFocusedSegments(work), live, completed: successful && answers.size > 0, answering: answers.size > 0,
-        durationMs: typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 ? duration : null,
-        ...summary, hasErrors: summary.hasErrors || result?.isError === true })
+      const completed = successful && answers.size > 0
+      const answering = answers.size > 0
+      const durationMs = typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 ? duration : null
+      const key = work[0] ?? anchor
+      const previous = turnModels.get(key)
+      if (previous?.id === id && previous.live === live && previous.completed === completed &&
+        previous.answering === answering && previous.durationMs === durationMs &&
+        // A result can change failure state without changing any work row.
+        previous.hasErrors === (previous.errorCount > 0 || result?.isError === true) &&
+        sameRows(previous.rows, work)) {
+        items.push(previous)
+      } else {
+        const summary = summarizeFocusedWork(work)
+        const model: FocusedTurnItem = { kind: 'focused-turn', id, rows: work,
+          segments: deriveFocusedSegments(work), live, completed, answering, durationMs,
+          ...summary, hasErrors: summary.hasErrors || result?.isError === true }
+        turnModels.set(key, model)
+        items.push(model)
+      }
       fragmentIndex++
       j = fragment.end > j ? fragment.end : j + 1
     }

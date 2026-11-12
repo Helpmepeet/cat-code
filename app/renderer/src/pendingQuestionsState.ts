@@ -25,11 +25,27 @@ export function reducePendingQuestionsState(state: PendingQuestionsState, action
 }
 
 /** Lifecycle state overlays are selectors, never mutations of transcript rows. */
+const lifecycleRows = new WeakMap<QuestionSnapshot, WeakMap<NestedTranscriptRow, NestedTranscriptRow>>()
 export function projectQuestionLifecycles(rows: NestedTranscriptRow[], snapshot: QuestionSnapshot | undefined): NestedTranscriptRow[] {
   if (!snapshot) return rows
+  let cache = lifecycleRows.get(snapshot)
+  if (!cache) lifecycleRows.set(snapshot, cache = new WeakMap())
   const states = new Map<string, { question: string; state: 'pending' | 'answered' | 'dismissed'; answer?: string; notes?: string }>([...snapshot.pending.map(q => [JSON.stringify([q.toolUseId, q.questionIndex]), { ...q, state: 'pending' as const }] as const), ...snapshot.resolved.map(q => [JSON.stringify([q.toolUseId, q.questionIndex]), q] as const)])
-  return rows.map(row => {
-    const children = projectQuestionLifecycles(row.children, snapshot)
+  const visit = (rows: NestedTranscriptRow[]): NestedTranscriptRow[] => {
+    let projected: NestedTranscriptRow[] | undefined
+    rows.forEach((row, index) => {
+      let next = cache.get(row)
+      if (!next) {
+        next = project(row)
+        cache.set(row, next)
+      }
+      if (next !== row && !projected) projected = rows.slice(0, index)
+      projected?.push(next)
+    })
+    return projected ?? rows
+  }
+  const project = (row: NestedTranscriptRow): NestedTranscriptRow => {
+    const children = visit(row.children)
     if (row.kind !== 'tool-use' || row.toolName !== 'AskUserQuestion' || !Array.isArray(row.input.questions)) return children === row.children ? row : { ...row, children }
     const answers: Record<string, string> = Object.create(null)
     const notesByQuestion: Record<string, string> = Object.create(null)
@@ -46,5 +62,6 @@ export function projectQuestionLifecycles(rows: NestedTranscriptRow[], snapshot:
     if (!Object.keys(statesByQuestion).length) return children === row.children ? row : { ...row, children }
     const result = { ...(row.result ?? { isError: false, content: '', diff: null }), askUserQuestion: { answers, notesByQuestion, statesByQuestion } }
     return { ...row, children, status: 'success', result }
-  })
+  }
+  return visit(rows)
 }

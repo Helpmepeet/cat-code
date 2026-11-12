@@ -32,3 +32,25 @@ test('missing lifecycle state preserves legacy rows; another call cannot inherit
   const projected = projectQuestionLifecycles([other], snapshot)[0]
   expect(projected?.kind === 'tool-use' ? projected.result?.askUserQuestion : undefined).toBeUndefined()
 })
+
+test('overlays copy only the question ancestor path and keep unrelated subtree identity', () => {
+  const unrelated = { ...row(), id: 'unrelated', toolUseId: 'different', children: [{ ...row(), toolUseId: 'also-different' }] }
+  const questionRow = row()
+  const parent = { ...row(), toolUseId: 'parent', children: [questionRow, unrelated] }
+  const rows = [unrelated, parent]
+  expect(projectQuestionLifecycles(rows, { pending: [], resolved: [] })).toBe(rows)
+  const next = projectQuestionLifecycles(rows, snapshot)
+  expect(next).not.toBe(rows)
+  expect(next[0]).toBe(unrelated)
+  expect(next[1]).not.toBe(parent)
+  expect(next[1]!.children[1]).toBe(unrelated)
+  expect(next[1]!.children[0]).not.toBe(questionRow)
+  expect(next[1]!.children[0]!.children).toBe(questionRow.children)
+  const later = projectQuestionLifecycles([...rows, { ...unrelated, id: 'tail' }], snapshot)
+  expect(later[1]).toBe(next[1])
+  const dismissed = projectQuestionLifecycles(rows, {
+    pending: [], resolved: [{ ...question(0), state: 'dismissed' }],
+  })
+  expect(dismissed[1]!.children[0]).not.toBe(next[1]!.children[0])
+  expect(projectQuestionLifecycles(rows, undefined)).toBe(rows)
+})

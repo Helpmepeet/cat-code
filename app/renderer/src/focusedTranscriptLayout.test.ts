@@ -9,10 +9,80 @@ const tool = (id = 't', family: ToolFamily = 'read'): NestedTranscriptRow => ({
   ...base(id), kind: 'tool-use', toolUseId: id, toolName: family, toolFamily: family,
   input: { file_path: '/a', command: 'bun test', pattern: 'needle' }, status: 'success', result: null, agentCompletion: null,
 })
-const result = (isError = false): NestedTranscriptRow => ({ ...base('r'), kind: 'result', subtype: isError ? 'error' : 'success', isError, errors: [], durationMs: 1234 })
+const result = (isError = false): Extract<NestedTranscriptRow, { kind: 'result' }> => ({ ...base('r'), kind: 'result', subtype: isError ? 'error' : 'success', isError, errors: [], durationMs: 1234 })
 const groups = (rows: readonly NestedTranscriptRow[], live = false) => deriveFocusedTranscript(rows, live).filter(x => x.kind === 'focused-turn')
 
 describe('focused transcript layout', () => {
+  test('new live-tail arrays preserve historical models through insertion and resets', () => {
+    const history = [user('old'), tool('old-call'), text('old-answer'), result()]
+    const tail = [user('new'), tool('new-call'), text('stream')]
+    const before = groups([...history, ...tail], true)
+    const after = groups([...history, ...tail.slice(0, -1), { ...text('stream'), content: 'more' }], true)
+    expect(after[0]).toBe(before[0])
+    expect(after[0]!.segments).toBe(before[0]!.segments)
+    expect(after[1]).not.toBe(before[1])
+    expect(after[1]!.segments[0]).toBe(before[1]!.segments[0])
+    const inserted = [user('earlier'), tool('earlier-call'), text('earlier-answer'), result()]
+    expect(groups([...inserted, ...history, ...tail], true)[1]).toBe(before[0])
+    expect(deriveFocusedTranscript([], false)).toEqual([])
+    const reset = groups(history.map(row => ({ ...row })))
+    expect(reset[0]).not.toBe(before[0])
+    expect(reset[0]).toEqual(before[0])
+  })
+
+  test('fragment changes invalidate only changed groups, including mutable divider sets', () => {
+    const first = tool('first'), second = tool('second'), third = tool('third')
+    const notice: NestedTranscriptRow = { ...base('divider'), kind: 'system-notice', noticeType: 'provider_error', content: 'notice' }
+    const rows = [user(), first, second, notice, third, text('answer'), result()]
+    const dividers = new Set<string>()
+    const before = deriveFocusedTranscript(rows, false, dividers).filter(x => x.kind === 'focused-turn')
+    dividers.add(first.id)
+    const split = deriveFocusedTranscript([...rows], false, dividers).filter(x => x.kind === 'focused-turn')
+    expect(split).toHaveLength(3)
+    expect(split[0]).not.toBe(before[0])
+    expect(split[2]).toBe(before[1])
+    expect(split.flatMap(item => item.rows)).toEqual([first, second, third])
+    dividers.clear()
+    const restored = deriveFocusedTranscript(rows, false, dividers).filter(x => x.kind === 'focused-turn')
+    expect(restored.map(item => item.rows)).toEqual(before.map(item => item.rows))
+    expect(restored[1]).toBe(before[1])
+  })
+
+  test('result metadata and live transitions invalidate turns but retain unchanged segments', () => {
+    const work = [user(), tool(), { ...text('comment'), phase: 'commentary' as const }]
+    const live = groups(work, true)[0]!
+    const stopped = groups([...work], false)[0]!
+    expect(stopped).not.toBe(live)
+    expect(stopped.segments[0]).toBe(live.segments[0])
+    const done = groups([...work, result()])[0]!
+    expect(done.durationMs).toBe(1234)
+    expect(done.completed).toBe(false)
+    const failed = groups([...work, result(true)])[0]!
+    expect(failed).not.toBe(done)
+    expect(failed.hasErrors).toBe(true)
+    expect(failed.errorCount).toBe(0)
+    const recovered = groups([...work, { ...result(), durationMs: 42 }])[0]!
+    expect(recovered.hasErrors).toBe(false)
+    expect(recovered.durationMs).toBe(42)
+    expect(recovered.segments[0]).toBe(done.segments[0])
+  })
+
+  test('nested-agent replacements invalidate summaries without mutating old models', () => {
+    const child = tool('child')
+    const parent = { ...tool('agent', 'agent'), children: [child] }
+    const rows = [user(), text('update'), parent, text('answer'), result()]
+    const before = groups(rows)[0]!
+    const failedChild = { ...child, status: 'error' as const } as NestedTranscriptRow
+    const after = groups(rows.map(row => row === parent ? { ...parent, children: [failedChild] } : row))[0]!
+    expect(after).not.toBe(before)
+    expect(after.hasErrors).toBe(true)
+    expect(after.errorCount).toBe(1)
+    expect(after.toolCalls).toBe(1)
+    expect(before.hasErrors).toBe(false)
+    expect(after.segments[0]).toBe(before.segments[0])
+    expect(after.segments[1]).not.toBe(before.segments[1])
+  })
+
   test('live prose stays inside; successful final prose stays outside at turn end', () => {
     const rows = [user(), text('update'), tool(), text('answer')]
     const live = groups(rows, true)[0]!

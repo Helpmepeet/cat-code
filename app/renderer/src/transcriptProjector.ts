@@ -1020,13 +1020,8 @@ export type OrphanedAgentRow = FrameRowSource & {
   agentName?: string
 }
 
-// Perf (2026-07-08, F3): the nested-row tree is a pure function of ONE session
-// slice, and `projectServerFrame` replaces that slice object only when its rows
-// actually change (`if (projected === session) return state`). So caching the
-// result on the slice reference makes repeated reads (unrelated App re-renders —
-// keystrokes, another session's frame) return an IDENTICAL array, which lets the
-// `React.memo`'d TranscriptView/rows skip re-rendering. A new slice (real change)
-// misses the cache and recomputes. WeakMap ⇒ evicts with the slice, no leak.
+// Repeated slice reads are constant-time. Cross-slice reuse below checks only
+// transcript dependencies: activity and live-status changes do not alter rows.
 const nestedRowsCache = new WeakMap<TranscriptSessionState, NestedTranscriptRow[]>()
 // P4-36: the revealed view is a DIFFERENT pure function of the same slice, so it
 // needs its own cache line rather than a composite key — otherwise flipping the
@@ -1056,6 +1051,15 @@ const nestedRowsChanges = new WeakMap<readonly NestedTranscriptRow[], {
 // Weak values avoid pinning prior transcript arrays through the current slice.
 const lastNestedRows = new Map<string, WeakRef<NestedTranscriptRow[]>>()
 const MAX_NESTED_ROWS_VIEWS = 64
+const lastNestedInputs = new Map<string, WeakRef<TranscriptSessionState>>()
+
+function sameNestedInputs(a: TranscriptSessionState, b: TranscriptSessionState): boolean {
+  return a.rows === b.rows && a.toolResultsByUseId === b.toolResultsByUseId &&
+    a.autoModeReviews === b.autoModeReviews &&
+    a.agentCompletionsByToolUseId === b.agentCompletionsByToolUseId &&
+    a.hiddenFrameIds === b.hiddenFrameIds && a.historyTruncated === b.historyTruncated &&
+    a.unavailableParentToolUseIds === b.unavailableParentToolUseIds
+}
 
 export function nestedRowsChange(rows: readonly NestedTranscriptRow[]): NestedRowsChange | null {
   const change = nestedRowsChanges.get(rows)
@@ -1100,6 +1104,18 @@ export function selectNestedTranscriptRows(
   const cached = cache.get(session)
   if (cached) return cached
   const viewKey = `${sessionId}:${revealHidden ? 'revealed' : 'default'}`
+  const previousInputs = lastNestedInputs.get(viewKey)?.deref()
+  const previousResult = previousInputs && sameNestedInputs(previousInputs, session)
+    ? cache.get(previousInputs) : undefined
+  lastNestedInputs.delete(viewKey)
+  lastNestedInputs.set(viewKey, new WeakRef(session))
+  if (lastNestedInputs.size > MAX_NESTED_ROWS_VIEWS) {
+    lastNestedInputs.delete(lastNestedInputs.keys().next().value!)
+  }
+  if (previousResult) {
+    cache.set(session, previousResult)
+    return previousResult
+  }
   const prior = lastNestedRows.get(viewKey)?.deref()
 
   const rows = selectTranscriptRows(state, sessionId, revealHidden)
@@ -4192,9 +4208,23 @@ function visibleWorkChanged(previous: TranscriptSessionState | undefined, next: 
   return before.length !== after.length || after.some((row, index) => row !== before[index])
 }
 
+const focusedLiveByActivities = new WeakMap<TranscriptSessionState['activities'], FocusedLiveState>()
+const focusedLiveBySession = new WeakMap<TranscriptSessionState, FocusedLiveState>()
 export function selectFocusedLiveState(state: TranscriptState, sessionId: SessionId | null): FocusedLiveState | null {
   const session = sessionId ? state.sessions[sessionId] : undefined
   if (!session) return null
-  return { activities: session.activities, awaitingApproval: session.awaitingApproval, preparing: session.preparing, lastVisibleChangeAt: session.lastVisibleChangeAt,
-    streaming: Object.values(session.streamingTextBlocks).some(block => !!block.content.trim()) || Object.values(session.streamingThinkingBlocks).some(block => !!block.content.trim()) }
+  const existing = focusedLiveBySession.get(session)
+  if (existing) return existing
+  const streaming = Object.values(session.streamingTextBlocks).some(block => !!block.content.trim()) || Object.values(session.streamingThinkingBlocks).some(block => !!block.content.trim())
+  const cached = focusedLiveByActivities.get(session.activities)
+  if (cached && cached.awaitingApproval === session.awaitingApproval &&
+      cached.preparing === session.preparing && cached.lastVisibleChangeAt === session.lastVisibleChangeAt &&
+      cached.streaming === streaming) {
+    focusedLiveBySession.set(session, cached)
+    return cached
+  }
+  const result = { activities: session.activities, awaitingApproval: session.awaitingApproval, preparing: session.preparing, lastVisibleChangeAt: session.lastVisibleChangeAt, streaming }
+  focusedLiveByActivities.set(session.activities, result)
+  focusedLiveBySession.set(session, result)
+  return result
 }

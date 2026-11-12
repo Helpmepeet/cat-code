@@ -6,6 +6,22 @@ import { localFileUrlPath } from '../../shared/localFileUrl.js'
 
 export const TranscriptFileScopeContext = createContext<ReadonlyMap<string, string> | null>(null)
 
+/** Own one selector per mounted transcript so unrelated panes cannot evict it. */
+export function createTranscriptFileScopesSelector(): typeof transcriptFileScopes {
+  let previousRows: readonly NestedTranscriptRow[] | undefined
+  let previousTransitions: SessionDescriptor['contextTransitions']
+  let previous: ReadonlyMap<string, string> | undefined
+  return (rows, transitions) => {
+    if (previous && rows === previousRows && transitions === previousTransitions) return previous
+    const next = transcriptFileScopes(rows, transitions)
+    previousRows = rows
+    previousTransitions = transitions
+    if (previous && previous.size === next.size &&
+        [...next].every(([id, cwd]) => previous!.get(id) === cwd)) return previous
+    return previous = next
+  }
+}
+
 /** Parent replies use loaded move seams; workers use their recorded run folder. */
 export function transcriptFileScopes(
   rows: readonly NestedTranscriptRow[],

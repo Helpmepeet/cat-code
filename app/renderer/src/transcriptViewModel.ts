@@ -3,6 +3,20 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 
 type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
 
+/** Retain equivalent context values across changes to unrelated transcript rows. */
+export function createRecoveredResponseCopySelector(): typeof recoveredResponseCopyByRowId {
+  let previousRows: readonly NestedTranscriptRow[] | undefined
+  let previous: ReadonlyMap<string, string> | undefined
+  return rows => {
+    if (previous && rows === previousRows) return previous
+    const next = recoveredResponseCopyByRowId(rows)
+    previousRows = rows
+    if (previous && previous.size === next.size &&
+        [...next].every(([id, copy]) => previous!.get(id) === copy)) return previous
+    return previous = next
+  }
+}
+
 /** Recovery is transient UI, not a permanent seam in the answer. Keep stored rows intact. */
 export function withoutRecoveredRetryNotices(
   rows: readonly NestedTranscriptRow[],
