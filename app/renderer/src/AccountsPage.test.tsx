@@ -89,11 +89,14 @@ test('renders the pool rows and the ready label from a snapshot', () => {
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
   expect(html).toContain('Accounts')
-  expect(html).toContain('Codex Pool')
+  expect(html).toContain('Codex accounts')
   expect(html).toContain('2 of 2 ready')
   expect(html).toContain('primary')
   expect(html).toContain('backup')
-  expect(html).toContain('Saved default')
+  expect(html).toContain('Default')
+  expect(html).toContain('Claude default account')
+  expect(html).toContain('Codex default account')
+  expect(html).not.toContain('Close older Cat Code versions')
   expect(html).not.toContain('MOCK')
 })
 
@@ -105,7 +108,7 @@ test('saved usage is labeled without changing current account availability', () 
       usageResetAt: resetAt, usageWeeklyResetAt: resetAt,
     })])} lastResult={null} onVerb={noop} />,
   )
-  expect(html).toContain('Stale usage')
+  expect(html).toContain('Usage may be out of date')
   expect(html).toContain('Showing the last successful usage check.')
   expect(html).toContain('1 of 1 ready')
   expect(html).not.toContain('usage limit reached')
@@ -229,7 +232,7 @@ test('renders the redacted Anthropic pool alongside Codex', () => {
   const html = renderToStaticMarkup(
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
-  expect(html).toContain('Anthropic Pool')
+  expect(html).toContain('Claude accounts')
   expect(html).toContain('claude@example.com')
   expect(html).toContain('personal')
   expect(html).toContain('1 of 1 ready')
@@ -255,7 +258,7 @@ test('a Claude nickname leads its row and an unnamed account shows its email onc
   )
   expect(html).toContain('>work<')
   expect(html).toContain('>named@example.com<')
-  expect(html.split('unnamed@example.com').length - 1).toBe(1)
+  expect(html.replace(/<[^>]*>/g, '').split('unnamed@example.com').length - 1).toBe(1)
 })
 
 test('anthropicAccountName prefers a nickname and never repeats the email', () => {
@@ -313,6 +316,32 @@ test('an unhealthy active Anthropic account shows health over plan decoration', 
   expect(html).not.toContain('subscription expired')
 })
 
+test('Claude rows keep useful plan and organization details without billing noise', () => {
+  const snap = snapshot([])
+  snap.anthropicAccounts = [{
+    id: 'claude', alias: null, email: 'personal@example.com', status: 'healthy',
+    isDefault: false, hasVaultProfile: true, subscriptionType: 'pro',
+    billingType: 'stripe_subscription', rateLimitTier: 'default_claude_ai',
+    organizationName: "personal@example.com's Organization",
+    extraUsage: { isEnabled: false, usedCredits: null, monthlyLimit: null },
+    usageWeekly: 20,
+  }]
+  const render = () => renderToStaticMarkup(<AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />)
+  const html = render()
+  expect(html).toContain('accounts-plan">Pro')
+  expect(html).not.toContain('stripe_subscription')
+  expect(html).not.toContain('Claude subscription')
+  expect(html).not.toContain('Organization')
+  expect(html).not.toContain('Extra usage')
+  expect(html).toContain('data-tone="good"')
+  expect(html).not.toContain('text-tone-good">20%')
+  snap.anthropicAccounts[0] = { ...snap.anthropicAccounts[0]!,
+    rateLimitTier: 'default_claude_max_5x', organizationName: 'Studio',
+  }
+  expect(render()).toContain('Max 5x')
+  expect(render()).toContain('Studio')
+})
+
 /* ── (d) Delete dispatches account.delete with confirm:true ── */
 
 test('deleteVerb builds an account.delete verb with confirm true', () => {
@@ -346,8 +375,8 @@ test('a null snapshot renders the waiting state without throwing', () => {
   )
   expect(html).toContain('Accounts')
   expect(html).toContain('Loading accounts')
-  expect(html).toContain('+ Add Anthropic')
-  expect(html).toContain('+ Add account')
+  expect(html).toContain('+ Add Claude account')
+  expect(html).toContain('+ Add Codex account')
   expect(html).not.toContain('MOCK')
   // CLAUDE.md §7 — the empty state must not print internal vocabulary at the
   // user (the copy it replaced named the sidecar and the prototype fixtures).
@@ -471,20 +500,17 @@ test('statusLabelTone follows pure status colour with NO default→accent overri
   ).toBe('warn')
 })
 
-test('the active/default account label follows status colour, not the pink dot tone', () => {
-  // #14 minor: the availability label reused the dot tone, so the active account
-  // read PINK. It must follow pure status (green healthy) while the dot stays pink.
+test('the default account uses a shared row with a pink dot and no redundant Ready label', () => {
   const snap = snapshot([
     account({ id: 'acc-1', alias: 'primary', isDefault: true, availabilityLabel: 'Ready' }),
   ])
   const html = renderToStaticMarkup(
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
-  // Label 'Ready' is painted status-good (green), NOT accent-pink.
-  expect(html).toContain('text-tone-good">Ready')
-  expect(html).not.toContain('text-accent">Ready')
-  // The hero dot keeps the pink-for-default override.
-  expect(html).toMatch(/h-\[9px\] w-\[9px\][^"]*bg-accent/)
+  expect(html).not.toContain('>Ready<')
+  expect(html).toContain('accounts-dot bg-accent')
+  expect(html).toContain('accounts-default-tag">Default')
+  expect(html).not.toContain('h-[9px]')
 })
 
 test('a capped account that is ALSO the default renders a pink dot (precedence) with a red label', () => {
@@ -505,7 +531,7 @@ test('a capped account that is ALSO the default renders a pink dot (precedence) 
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
   // Hero dot is pink (accent) even though the account is capped.
-  expect(html).toMatch(/h-\[9px\] w-\[9px\][^"]*bg-accent/)
+  expect(html).toContain('accounts-dot bg-accent')
   // The availability label reads its true status (danger/red), not pink.
   expect(html).toContain('text-tone-danger">Usage limit hit')
 })
@@ -528,9 +554,9 @@ test('the weekly and 5h headroom bars each show their own reset', () => {
   const html = renderToStaticMarkup(
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
-  expect((html.match(/↺/g) ?? []).length).toBe(2)
-  expect(html).toContain('↺ in 3h')
-  expect(html).toContain('↺ in 4h')
+  expect((html.match(/accounts-metric-reset/g) ?? []).length).toBe(2)
+  expect(html).toContain('resets in 3h')
+  expect(html).toContain('resets in 4h')
 })
 
 test('unavailable quota stays distinct from measured zero in the header and pool row', () => {
@@ -553,7 +579,8 @@ test('unavailable quota stays distinct from measured zero in the header and pool
     />,
   )
   expect(measured).toContain('>0%<')
-  expect(measured).not.toContain('usage unavailable')
+  const codexCard = measured.split('aria-label="Codex default account"')[1]!.split('</section>')[0]!
+  expect(codexCard).not.toContain('usage unavailable')
 })
 
 test('named quota slots follow reported duration and keep unknown durations unavailable', () => {
@@ -570,7 +597,7 @@ test('named quota slots follow reported duration and keep unknown durations unav
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
   const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
-  expect(text).toContain('12% 5h')
+  expect(text).toContain('12% 5-hour')
   expect(text).toContain('81% Weekly')
   expect(text).toContain('5h 12%')
   expect(text).toContain('wk 81%')

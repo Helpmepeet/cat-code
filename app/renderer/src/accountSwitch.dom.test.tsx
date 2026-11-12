@@ -275,7 +275,7 @@ test('Accounts ignores the retained chat selection and keeps global defaults', a
     },
   })
   await app.click('Accounts')
-  expect(app.tree.container.textContent).toContain('default for new chats')
+  expect(app.tree.container.textContent).toContain("New chats use each provider's default account.")
   expect([...app.tree.container.querySelectorAll('button')].filter(
     button => button.textContent?.trim() === 'Switch',
   )).toHaveLength(1)
@@ -338,9 +338,8 @@ test('Accounts does not confuse a main failover identity with the default', asyn
   const menus = app.tree.container.querySelectorAll<HTMLButtonElement>(
     'button[aria-label="Account actions"]',
   )
-  expect(menus[0]!.closest('[data-window-card]')?.textContent ??
-    menus[0]!.parentElement?.parentElement?.textContent).toContain('limitedSaved default')
-  expect(app.tree.container.textContent).not.toContain('replacementSaved default')
+  expect(menus[0]!.closest('.accounts-row')?.textContent).toContain('limitedDefault')
+  expect(menus[1]!.closest('.accounts-row')?.querySelector('.accounts-default-tag')).toBeNull()
   expect(app.tree.container.textContent).not.toContain('replacementNext chat')
   await act(async () => { menus[0]!.click() })
   expect(app.tree.container.textContent).not.toContain('Switch to this account')

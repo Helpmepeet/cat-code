@@ -3,7 +3,10 @@ import type { AccountsSnapshot, AccountStatus, AnthropicAccountStatus } from '..
 import {
   accountRecoveryReason,
   accountTakenAliases,
+  accountPlanLabel,
   claudeRateLimitTier,
+  claudeOrganizationName,
+  formatResetLabel,
   renameError,
   anthropicStatusDotTone,
   anthropicCredentialLabel,
@@ -22,8 +25,27 @@ test('account details map known reasons and tiers without exposing unknown codes
   expect(accountRecoveryReason('internal_unknown')).not.toContain('internal_unknown')
   expect(claudeRateLimitTier('default_claude_max_5x')).toBe('Max 5x')
   expect(claudeRateLimitTier('default_claude_max_20x')).toBe('Max 20x')
-  expect(claudeRateLimitTier('future_internal_code')).toBe('Claude subscription')
+  expect(claudeRateLimitTier('future_internal_code')).toBeNull()
   expect(claudeRateLimitTier(null)).toBeNull()
+})
+
+test('plan and organization labels keep meaningful details and hide boilerplate', () => {
+  expect(accountPlanLabel('plus')).toBe('Plus')
+  expect(accountPlanLabel('pro')).toBe('Pro')
+  expect(accountPlanLabel('internal_plan')).toBeNull()
+  const account = { email: 'test@example.com', organizationName: "test@example.com's Organization" } as AnthropicAccountStatus
+  expect(claudeOrganizationName(account)).toBeNull()
+  expect(claudeOrganizationName({ ...account, organizationName: 'Design team' })).toBe('Design team')
+})
+
+test('reset labels use days after 24 hours without losing short windows', () => {
+  const now = 1_000_000
+  const reset = (seconds: number) => formatResetLabel(now / 1000 + seconds, now)
+  expect(reset(0)).toBe('now')
+  expect(reset(20 * 60)).toBe('in 20m')
+  expect(reset(3 * 3600 + 20 * 60)).toBe('in 3h 20m')
+  expect(reset(24 * 3600)).toBe('in 1d')
+  expect(reset(99 * 3600 + 20 * 60)).toBe('in 4d 3h')
 })
 
 test('rename reserves aliases across both providers and both profile inventories', () => {

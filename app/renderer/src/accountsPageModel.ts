@@ -33,7 +33,25 @@ export function claudeRateLimitTier(tier: string | null | undefined): string | n
   if (!tier) return null
   if (tier === 'default_claude_max_5x') return 'Max 5x'
   if (tier === 'default_claude_max_20x') return 'Max 20x'
-  return 'Claude subscription'
+  return null
+}
+
+export function accountPlanLabel(plan: string | null | undefined): string | null {
+  switch (plan?.toLowerCase()) {
+    case 'pro': return 'Pro'
+    case 'plus': return 'Plus'
+    case 'max': return 'Max'
+    case 'team': return 'Team'
+    case 'business': return 'Business'
+    case 'enterprise': return 'Enterprise'
+    case 'free': return 'Free'
+    default: return null
+  }
+}
+
+export function claudeOrganizationName(account: AnthropicAccountStatus): string | null {
+  const name = account.organizationName?.trim()
+  return !name || name === `${account.email}'s Organization` ? null : name
 }
 
 export function accountTakenAliases(snapshot: AccountsSnapshot | null): string[] {
@@ -331,6 +349,11 @@ export function formatResetLabel(sec: number | null, now = Date.now()): string {
   const mins = Math.round(ms / 60000)
   if (mins < 60) return `in ${mins}m`
   const hrs = Math.floor(mins / 60)
+  if (hrs >= 24) {
+    const days = Math.floor(hrs / 24)
+    const hours = hrs % 24
+    return hours ? `in ${days}d ${hours}h` : `in ${days}d`
+  }
   const rem = mins % 60
   return rem ? `in ${hrs}h ${rem}m` : `in ${hrs}h`
 }

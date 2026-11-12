@@ -1,25 +1,6 @@
 /**
- * Accounts page (P4-5, #14 fidelity rebuild) — the real Codex account pool +
- * lifecycle surface, rebuilt element-by-element from the prototype's
- * `AccountsPage`/`CodexPool`/`HeadroomBar`/`AccountLifecycle`
- * (Pages.jsx:354-471,506-575 + AccountLifecycle.jsx) in TS/Tailwind on the P0-2
- * tokens. Every inline `style` in the prototype was translated to its nearest
- * theme token/arbitrary utility: resting greys use `text-faint` /
- * `text-ghost`, bar tracks use `bg-white/[0.07]`, the status-dot tones
- * mirror POOL_STATUS (capped=danger, dead=warn, quarantined=grey), and the hero
- * row + active dot carry the prototype's pink glow.
- *
- * §0 DEFERRED (mock-backed, no real data source): the prototype AccountsPage's
- * large usage-analytics region — the 4-column stat grid (Pages.jsx:589), the
- * "Tokens by Account" / "Daily Tokens by Model" time-series charts
- * (AccountBars/ProfileLineChart with the 7d/30d toggle, Pages.jsx:609-686), and
- * the By-Account / By-Model / Main-vs-Subagents / Cache breakdown grids
- * (Pages.jsx:690,704) — has NO per-account daily-token history on the desktop
- * wire (the prototype's own comments call it DEMO-ONLY / "DERIVABLE-IF-LOGGED";
- * `AccountStatus` carries only 5h/weekly used-percent, not a token series). It is
- * NOT built here and MUST NOT be faked; it is deferred pending a real
- * usage-history data source/session. This page ships the real spine: pool table
- * + lifecycle verbs + active headroom, all from the redacted `AccountsSnapshot`.
+ * Provider defaults and account lifecycle from the redacted AccountsSnapshot.
+ * Usage history is not available on this wire and must not be invented.
  *
  * Writes go ONLY through the `onVerb` prop. App-level account management uses
  * main's account worker; destructive profile mutations use their one-shot
@@ -49,7 +30,6 @@ import type {
 } from './accountsState.js'
 import {
   selectAccountRows,
-  selectActiveAccount,
   selectCapAccount,
   selectHasOtherSwitchable,
   selectReadyLabel,
@@ -59,7 +39,9 @@ import {
   capIncidentKey,
   accountRecoveryReason,
   accountTakenAliases,
+  accountPlanLabel,
   claudeRateLimitTier,
+  claudeOrganizationName,
   anthropicAccountName,
   anthropicCredentialLabel,
   deleteVerb,
@@ -91,6 +73,7 @@ import { toneClasses, type Tone } from './tone.js'
 import { useAccountUsageWindows } from './welcomeUsage.js'
 import { getBridge } from './bridge.js'
 import { ProviderLogo } from './ProviderLogo.js'
+import './accountsPage.css'
 
 /* ── pure helpers (unit-tested without a DOM, like tone.ts / toastReducer) ── */
 
@@ -128,7 +111,7 @@ function GhostBtn({
     <button
       type="button"
       onClick={onClick}
-      className="rounded-lg border border-white/[0.12] px-3.5 py-2 text-[12.5px] font-medium text-text-muted transition-colors hover:bg-shell-hover"
+      className="rounded-lg border border-shell-seam px-3.5 py-2 text-[12.5px] font-medium text-text-muted transition-colors hover:bg-shell-hover"
     >
       {children}
     </button>
@@ -167,32 +150,34 @@ function HeadroomBar({
   resetAt?: number | null
   showReset?: boolean
 }) {
-  const p = pct ?? 0
-  const t = toneClasses(usageTone(pct))
   return (
-    <div className="flex items-center gap-[9px]">
-      <span className="w-7 shrink-0 text-[10px] tabular-nums text-text-faint">
-        {label}
-      </span>
-      <div className="h-[5px] flex-1 overflow-hidden rounded-full bg-white/[0.07]">
-        {/* §0 EXCEPTION: data-driven percent width Tailwind can't express — the
-            single allowed inline style here (width only), per the P4-5 brief. */}
-        <div className={`h-full rounded-full ${t.dot}`} style={{ width: `${p}%` }} />
+    <div className="accounts-metric" data-tone={usageTone(pct)}>
+      <div className="accounts-metric-row">
+        <span className="accounts-metric-label">{label}</span>
+        <UsageTrack label={label} pct={pct} />
+        <UsageValue label={label} pct={pct} />
       </div>
-      <span
-        aria-label={pct === null ? `${label} usage unavailable` : undefined}
-        title={pct === null ? 'Usage unavailable' : undefined}
-        className={`w-8 shrink-0 text-right text-[11px] font-semibold tabular-nums ${t.text}`}
-      >
-        {pct === null ? '–' : `${pct}%`}
-      </span>
-      {showReset ? (
-        <span className="w-[54px] shrink-0 text-[10px] tabular-nums text-text-ghost">
-          {resetAt != null ? `↺ ${formatResetLabel(resetAt)}` : ''}
-        </span>
-      ) : null}
+      {showReset && resetAt != null ? <div className="accounts-metric-reset">resets {formatResetLabel(resetAt)}</div> : null}
     </div>
   )
+}
+
+function UsageTrack({ label, pct }: { label: string; pct: number | null }) {
+  return <progress className="accounts-usage-track" aria-label={`${label} usage`} aria-valuetext={pct === null ? 'Usage unavailable' : `${pct}%`} max={100} value={Math.max(0, Math.min(100, pct ?? 0))} />
+}
+
+function UsageValue({ label, pct }: { label: string; pct: number | null }) {
+  return <span className={`accounts-usage-value${pct === null ? ' is-unavailable' : ''}`}
+    aria-label={pct === null ? `${label} usage unavailable` : undefined}
+    title={pct === null ? 'Usage unavailable' : undefined}>{pct === null ? '–' : `${pct}%`}</span>
+}
+
+function StaleUsage() {
+  return <span className="accounts-stale" title="Showing the last successful usage check.">Usage may be out of date</span>
+}
+
+function DefaultTag() {
+  return <span className="accounts-default-tag">Default</span>
 }
 
 /* ── dialog shell ── */
@@ -229,7 +214,7 @@ function ALDialog({
         aria-label={title}
         tabIndex={-1}
         onClick={e => e.stopPropagation()}
-        className="animate-toast-in w-[460px] max-w-[calc(100%-48px)] overflow-hidden rounded-[14px] border border-white/10 bg-[light-dark(#ffffff,#0c0c0e)] shadow-[var(--elev-modal)]"
+        className="animate-toast-in w-[460px] max-w-[calc(100%-48px)] overflow-hidden rounded-[14px] border border-shell-seam bg-surface-panel shadow-[var(--elev-modal)]"
       >
         <div className="border-b border-shell-seam px-[18px] py-4">
           <div className="text-[14.5px] font-semibold text-text-primary">
@@ -399,6 +384,7 @@ function DeleteAccountDialog({
           </span>
         ) : null}
       </div>
+      <p className="mt-3 text-[12px] text-tone-warn">Close older Cat Code versions before signing out or deleting accounts.</p>
     </ALDialog>
   )
 }
@@ -452,6 +438,7 @@ function LogoutAccountDialog({
           <>The default account for new chats will not change.</>
         )}
       </div>
+      <p className="mt-3 text-[12px] text-tone-warn">Close older Cat Code versions before signing out or deleting accounts.</p>
     </ALDialog>
   )
 }
@@ -610,22 +597,17 @@ function AccountRowMenu({
 
 function PoolRow({
   account,
-  hero,
   signOutState,
   onAction,
 }: {
   account: AccountStatus
-  hero?: boolean
   signOutState?: 'submitting' | 'checking' | 'refreshing'
   onAction: (key: AccountMenuKey, account: AccountStatus) => void
 }) {
   const usable = account.status === 'healthy'
   const pressured = usable && account.usageLimitReached
-  const dimmed = account.status === 'dead'
-  const t = toneClasses(statusDotTone(account))
-  // The availability LABEL follows pure STATUS colour (no default→pink); only the
-  // DOT carries the pink-for-default override — decoupled per the prototype
-  // (Pages.jsx:409 dot vs :417 label).
+  const expired = account.status === 'dead'
+  const t = toneClasses(expired ? 'danger' : statusDotTone(account))
   const labelTone = toneClasses(statusLabelTone(account))
   const usage = useAccountUsageWindows(account)
   const alias = account.alias ?? account.id
@@ -638,48 +620,23 @@ function PoolRow({
           ? 'Refreshing account…'
           : null
   return (
-    <div
-      className={`flex items-center gap-3.5 border ${
-        hero
-          ? 'rounded-xl border-accent/[0.28] bg-accent/5 px-4 py-[14px] shadow-[0_0_0_1px_rgb(var(--accent-rgb)/0.06),0_8px_24px_-12px_rgb(var(--accent-rgb)/0.25)]'
-          : 'rounded-[10px] border-white/[0.06] bg-white/[0.018] px-3.5 py-[11px]'
-      } ${dimmed ? 'opacity-55' : ''}`}
-    >
-      <span
-        className={`shrink-0 rounded-full ${
-          hero ? 'h-[9px] w-[9px] shadow-[0_0_8px_rgb(var(--accent-rgb)/0.6)]' : 'h-2 w-2'
-        } ${t.dot} ${account.status === 'quarantined' ? 'animate-pulse' : ''}`}
-      />
-      <div className="w-[150px] shrink-0">
-        <div className="flex items-center gap-[7px]">
-          <span
-            className={`truncate font-semibold ${hero ? 'text-[14.5px]' : 'text-[13px]'} text-text-primary`}
-          >
-            {alias}
-          </span>
-          {account.isDefault ? (
-            <span className="shrink-0 rounded bg-accent/[0.12] px-[5px] py-[1.5px] text-[8px] font-bold uppercase tracking-[0.06em] text-accent">
-              Saved default
-            </span>
-          ) : null}
+    <div className="accounts-row">
+      <span className={`accounts-dot ${t.dot} ${account.status === 'quarantined' ? 'animate-pulse' : ''}`} />
+      <div className="accounts-identity">
+        <div className="accounts-name">
+          <span className="truncate" title={alias}>{alias}</span>
+          {account.isDefault ? <DefaultTag /> : null}
         </div>
-        <div className="mt-[1px] truncate text-[11px]">
-          <span className={pressured ? 'text-tone-warn' : labelTone.text}>
-            {transitionLabel ?? (pressured ? 'Near limit' : account.availabilityLabel)}
-          </span>
-          {account.lastError ? (
-            <span className="text-text-faint"> · {account.lastError}</span>
-          ) : null}
-          {account.usageStale && (usage.fiveHour || usage.weekly) ? (
-            <span title="Showing the last successful usage check." className="text-text-faint">
-              {' · Stale usage'}
-            </span>
-          ) : null}
-        </div>
+        {account.email && account.email !== alias ? <div className="accounts-sub" title={account.email}>{account.email}</div> : null}
+        {transitionLabel || expired || !usable || pressured ? <div className={`accounts-sub ${expired ? 'text-tone-danger' : labelTone.text}`}>
+          {transitionLabel ?? (expired ? 'Sign-in expired' : pressured ? 'Near limit' : account.availabilityLabel)}
+        </div> : null}
+        {account.lastError ? <div className="accounts-sub" title={account.lastError}>{account.lastError}</div> : null}
+        {account.usageStale && (usage.fiveHour || usage.weekly) ? <div className="accounts-sub"><StaleUsage /></div> : null}
       </div>
-      {account.email && account.email !== alias ? <div className="text-[11px] text-text-faint">{account.email}</div> : null}
+      <span className="accounts-plan">{accountPlanLabel(account.planType)}</span>
       {usable ? (
-        <div className={`flex flex-1 flex-col ${hero ? 'gap-[7px]' : 'gap-1.5'}`}>
+        <>
           <HeadroomBar
             label="5h"
             pct={usage.fiveHour?.percent ?? null}
@@ -692,19 +649,23 @@ function PoolRow({
             resetAt={usage.weekly?.resetAt}
             showReset
           />
-        </div>
+        </>
       ) : (
-        <div className="flex-1 text-[11px] text-text-faint">
+        <div className="accounts-row-note">
           {account.status === 'capped'
             ? `Resets ${formatResetLabel(account.usageResetAt)}`
             : ''}
         </div>
       )}
-      <AccountRowMenu
+      <div className="accounts-inline-action">
+        {!signOutState && expired ? <button type="button" className="accounts-button is-fix" onClick={() => onAction('relink', account)}>Sign in again</button>
+          : !signOutState && usable && !account.isDefault && account.switchable ? <button type="button" className="accounts-button is-quiet" onClick={() => onAction('switch', account)}>Make default</button> : null}
+      </div>
+      <div className="accounts-menu"><AccountRowMenu
         account={account}
         signOutState={signOutState}
         onAction={onAction}
-      />
+      /></div>
     </div>
   )
 }
@@ -784,89 +745,94 @@ function SignedOutProfileRow({
   onDelete: () => void
 }) {
   return (
-    <div className="flex items-center gap-3.5 rounded-[10px] border border-white/[0.06] bg-white/[0.018] px-3.5 py-[11px] opacity-70">
-      <span className="h-2 w-2 shrink-0 rounded-full bg-text-ghost" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-semibold text-text-primary">
+    <div className="accounts-row is-signed-out">
+      <span className="accounts-dot bg-text-ghost" />
+      <div className="accounts-identity">
+        <div className="accounts-name">
           {profile.alias ?? profile.email ?? profile.id}
         </div>
-        <div className="mt-[1px] text-[11px] text-text-faint">
-          {profile.state === 'recovery_required'
-            ? 'Sign-out needs attention'
-            : 'Signed out'}
-        </div>
+        {profile.email && profile.alias && profile.email !== profile.alias ? <div className="accounts-sub">{profile.email}</div> : null}
       </div>
-      {profile.email && profile.alias && profile.email !== profile.alias ? <div className="text-[11px] text-text-faint">{profile.email}</div> : null}
-      {profile.recoveryReason ? <div className="text-[11px] text-text-faint">{accountRecoveryReason(profile.recoveryReason)}</div> : null}
-      <SignedOutProfileMenu
+      <span className="accounts-plan" />
+      <div className="accounts-row-note" title={profile.recoveryReason ? accountRecoveryReason(profile.recoveryReason) : undefined}>{profile.recoveryReason ? 'Saved sign-in changed' : 'Signed out'}</div>
+      <div className="accounts-inline-action"><button type="button" className="accounts-button is-quiet" onClick={onRelink}>Sign in again</button></div>
+      <div className="accounts-menu"><SignedOutProfileMenu
         profile={profile}
         onRelink={onRelink}
         onDelete={onDelete}
-      />
+      /></div>
     </div>
   )
 }
 
 /* ── header pieces ── */
 
-function ActiveHeadroom({ account }: { account: AccountStatus }) {
-  const usage = useAccountUsageWindows(account)
-  return (
-    <div className="rounded-[10px] border border-accent/[0.18] bg-accent/[0.04] px-4 py-2.5">
-      <div className="mb-[9px] flex items-center gap-1.5">
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent shadow-[0_0_6px_rgb(var(--accent-rgb)/0.6)]" />
-        <span className="font-mono text-[12.5px] font-semibold text-text-primary">
-          {account.alias ?? account.id}
-        </span>
-        <span className="rounded bg-accent/[0.12] px-[5px] py-[1.5px] text-[8.5px] font-bold uppercase tracking-[0.06em] text-accent">
-          Saved default
-        </span>
-        <span
-          title={account.usageStale ? 'Showing the last successful usage check.' : undefined}
-          className="ml-0.5 text-[10.5px] text-text-faint"
-        >
-          {account.usageStale && (usage.fiveHour || usage.weekly) ? 'stale usage' : 'used'}
-        </span>
-      </div>
-      <div className="flex gap-[18px]">
-        {(
-          [
-            ['5h', usage.fiveHour?.percent ?? null, usage.fiveHour?.resetAt],
-            ['Weekly', usage.weekly?.percent ?? null, usage.weekly?.resetAt],
-          ] as const
-        ).map(([k, pct, resetAt]) => {
-          const t = toneClasses(usageTone(pct))
-          const p = pct ?? 0
-          return (
-            <div key={k} className="min-w-[78px]">
-              <div className="mb-1.5 flex items-baseline gap-1.5">
-                <span
-                  aria-label={pct === null ? `${k} usage unavailable` : undefined}
-                  title={pct === null ? 'Usage unavailable' : undefined}
-                  className={`text-[18px] font-bold tabular-nums ${t.text}`}
-                >
-                  {pct === null ? '–' : `${pct}%`}
-                </span>
-                <span className="text-[10px] uppercase tracking-[0.06em] text-text-faint">
-                  {k}
-                </span>
-              </div>
-              <div className="h-1 overflow-hidden rounded-full bg-white/[0.07]">
-                {/* §0 EXCEPTION: data-driven percent width — the single allowed inline style. */}
-                <div
-                  className={`h-full rounded-full ${t.dot}`}
-                  style={{ width: `${p}%` }}
-                />
-              </div>
-              <div className="mt-1 text-[9.5px] tabular-nums text-text-ghost">
-                {resetAt != null ? `↺ resets ${formatResetLabel(resetAt)}` : ''}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+type SummaryWindow = { percent: number | null; resetAt?: number | null } | null | undefined
+
+function ProviderMark({ provider }: { provider: Provider }) {
+  return <span className={provider === 'anthropic' ? 'text-provider-claude' : 'text-provider-openai'}><ProviderLogo provider={provider} size={14} /></span>
+}
+
+function ProviderSummary({ provider, readyLabel, name, detail, stale, fiveHour, weekly }: {
+  provider: Provider
+  readyLabel: string
+  name: string
+  detail?: string | null
+  stale?: boolean
+  fiveHour?: SummaryWindow
+  weekly?: SummaryWindow
+}) {
+  return <section className="accounts-summary-card" data-window-card aria-label={`${provider === 'anthropic' ? 'Claude' : 'Codex'} default account`}>
+    <div className="accounts-summary-top"><span className="accounts-provider"><ProviderMark provider={provider} />{provider === 'anthropic' ? 'Claude' : 'Codex'}</span><span className="accounts-count">{readyLabel}</span></div>
+    <div className="accounts-summary-label">New chats use</div>
+    <div className="accounts-summary-name" title={name}>{name}</div>
+    <div className="accounts-summary-sub">{detail ? <span>{detail}</span> : null}{stale ? <StaleUsage /> : null}</div>
+    <div className="accounts-summary-windows">
+      {([['5-hour', fiveHour], ['Weekly', weekly]] as const).map(([label, usage]) => <div key={label} data-tone={usageTone(usage?.percent ?? null)}>
+        <div className="accounts-summary-value"><UsageValue label={label} pct={usage?.percent ?? null} /><span>{label}</span></div>
+        <UsageTrack label={label} pct={usage?.percent ?? null} />
+        <div className="accounts-summary-reset">{usage?.resetAt != null ? `resets ${formatResetLabel(usage.resetAt)}` : '\u00a0'}</div>
+      </div>)}
     </div>
-  )
+  </section>
+}
+
+function CodexSummary({ account, readyLabel }: { account: AccountStatus; readyLabel: string }) {
+  const usage = useAccountUsageWindows(account)
+  const name = account.alias ?? account.email ?? account.id
+  return <ProviderSummary provider="openai" readyLabel={readyLabel} name={name}
+    detail={[account.email && account.email !== name ? account.email : null, accountPlanLabel(account.planType)].filter(Boolean).join(' · ')}
+    stale={account.usageStale && !!(usage.fiveHour || usage.weekly)} fiveHour={usage.fiveHour} weekly={usage.weekly} />
+}
+
+function ClaudeRow({ account, onAction }: { account: AnthropicAccountStatus; onAction: (key: string) => void }) {
+  const name = anthropicAccountName(account)
+  const credentialLabel = anthropicCredentialLabel(account)
+  const needsSignIn = account.status === 'dead' || !!credentialLabel
+  const plan = claudeRateLimitTier(account.rateLimitTier) ?? accountPlanLabel(account.subscriptionType)
+  const org = claudeOrganizationName(account)
+  return <div className="accounts-row">
+    <span className={`accounts-dot ${needsSignIn ? 'bg-tone-danger' : account.isDefault ? 'bg-accent' : 'bg-tone-good'}`} />
+    <div className="accounts-identity">
+      <div className="accounts-name"><span className="truncate" title={name.title}>{name.title}</span>{account.isDefault ? <DefaultTag /> : null}</div>
+      {name.detail ? <div className="accounts-sub" title={name.detail}>{name.detail}</div> : null}
+      {needsSignIn ? <div className="accounts-sub text-tone-danger" title={credentialLabel ?? undefined}>Sign-in expired</div> : null}
+      {account.usageStale && [account.usageFiveHour, account.usageWeekly, account.usageWeeklyOpus, account.usageWeeklySonnet].some(value => value != null) ? <div className="accounts-sub"><StaleUsage /></div> : null}
+      {org ? <div className="accounts-sub" title={org}>{org}</div> : null}
+      {account.extraUsage?.isEnabled ? <div className="accounts-sub">Extra usage: {account.extraUsage.usedCredits ?? '–'} / {account.extraUsage.monthlyLimit ?? '–'} credits</div> : !account.extraUsage && account.hasExtraUsageEnabled ? <div className="accounts-sub">Extra usage enabled</div> : null}
+    </div>
+    <span className="accounts-plan">{plan}</span>
+    {needsSignIn ? <div className="accounts-row-note" /> : <>
+      <HeadroomBar label="5h" pct={account.usageFiveHour ?? null} resetAt={account.usageFiveHourResetAt} showReset />
+      <div className="accounts-weekly-metrics">
+        <HeadroomBar label="wk" pct={account.usageWeekly ?? null} resetAt={account.usageWeeklyResetAt} showReset />
+        {account.usageWeeklyOpus != null ? <HeadroomBar label="Opus" pct={account.usageWeeklyOpus} resetAt={account.usageWeeklyOpusResetAt} showReset /> : null}
+        {account.usageWeeklySonnet != null ? <HeadroomBar label="Sonnet" pct={account.usageWeeklySonnet} resetAt={account.usageWeeklySonnetResetAt} showReset /> : null}
+      </div>
+    </>}
+    <div className="accounts-inline-action">{needsSignIn ? <button type="button" className="accounts-button is-fix" onClick={() => onAction('relink')}>Sign in again</button> : !account.isDefault ? <button type="button" className="accounts-button is-quiet" onClick={() => onAction('switch')}>Make default</button> : null}</div>
+    <div className="accounts-menu"><ClaudeRowMenu account={account} onAction={onAction} /></div>
+  </div>
 }
 
 /** Main does not publish failed reads. Bound loading locally while sign-in remains available. */
@@ -882,8 +848,8 @@ function WaitingState({ onRetry, onSignIn }: {
       </div>
       <div className="mt-4 flex flex-wrap justify-center gap-2">
         {presentation === 'unavailable' ? <GhostBtn onClick={onRetry}>Try again</GhostBtn> : null}
-        <PrimaryBtn onClick={() => onSignIn('anthropic')}>+ Add Anthropic</PrimaryBtn>
-        <PrimaryBtn onClick={() => onSignIn('openai')}>+ Add account</PrimaryBtn>
+        <button type="button" className="accounts-button" onClick={() => onSignIn('anthropic')}>+ Add Claude account</button>
+        <button type="button" className="accounts-button" onClick={() => onSignIn('openai')}>+ Add Codex account</button>
       </div>
     </section>
   )
@@ -991,11 +957,11 @@ export function AccountsPage({
     })),
   } : null
   const rows = selectAccountRows(switchSnapshot)
-  const active = selectActiveAccount(switchSnapshot)
+  const active = snapshot?.accounts.find(account => account.id === (snapshot.effectiveDefaultAccountId !== undefined ? snapshot.effectiveDefaultAccountId : snapshot.activeAccountId)) ?? null
+  const activeClaude = snapshot?.anthropicAccounts.find(account => account.id === (snapshot.anthropicEffectiveDefaultAccountId !== undefined ? snapshot.anthropicEffectiveDefaultAccountId : snapshot.anthropicActiveAccountId)) ?? null
   const capAccount = selectCapAccount(snapshot)
   const readyLabel = selectReadyLabel(snapshot)
   const anthropicReadyLabel = selectAnthropicReadyLabel(snapshot)
-  const rest = rows.filter(a => a.id !== active?.id)
   const capSwitchTarget = capAccount
     ? rows.find(a => a.id !== capAccount.id && !a.isDefault && a.switchable) ?? null
     : null
@@ -1094,19 +1060,15 @@ export function AccountsPage({
   }
 
   return (
-    <main className="flex min-h-0 flex-1 overflow-auto px-7 py-7">
-      <div className="mx-auto w-full max-w-[1000px]">
-        <header className="mb-5 flex flex-wrap items-start justify-between gap-4">
+    <main className="accounts-page">
+      <div className="accounts-wrap">
+        <header className="accounts-header">
           <div>
             <h1 className="text-lg font-semibold tracking-tight text-text-primary">
               Accounts
             </h1>
             <p className="mt-1 text-[13px] text-text-faint">
-              Anthropic and Codex subscription accounts available to Cat Code.
-            </p>
-            <p className="mt-1 text-[13px] text-text-faint">
-              {'Account choices here set the default for new chats.'}
-              {' Close older Cat Code versions before signing out or deleting accounts.'}
+              New chats use each provider's default account.
             </p>
           </div>
           {snapshot ? <div className="text-[11.5px] text-text-subtle">{(['openai', 'anthropic'] as const).map(provider => {
@@ -1119,9 +1081,6 @@ export function AccountsPage({
             const name = (id: string | null) => { const account = pool.find(a => a.id === id); return account?.alias ?? account?.email ?? id ?? 'none' }
             return <p key={provider}>{provider === 'openai' ? 'Codex' : 'Claude'}: Saved default: {name(saved)}; New chats: {name(actual)}</p>
           })}</div> : null}
-          {active && active.status === 'healthy' ? (
-            <ActiveHeadroom account={active} />
-          ) : null}
         </header>
 
         {capAccount && shouldShowCapBanner(capKey, dismissedCapKey) ? (
@@ -1141,7 +1100,7 @@ export function AccountsPage({
                 <button
                   type="button"
                   onClick={() => submit(switchVerb(capSwitchTarget.id))}
-                  className="rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
+                  className="accounts-button"
                 >
                   Switch
                 </button>
@@ -1179,157 +1138,72 @@ export function AccountsPage({
           />
         ) : (
           <>
-          <section className="mb-[22px]">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="flex items-baseline gap-2.5">
-                <h2 className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.08em] text-text-subtle">
-                  <ProviderLogo provider="anthropic" size={14} />
-                  Anthropic Pool
-                </h2>
-                <span className="text-[12px] tabular-nums text-text-faint">
-                  {anthropicReadyLabel}
-                </span>
+          <div className="accounts-summaries">
+            <ProviderSummary provider="anthropic" readyLabel={anthropicReadyLabel}
+              name={activeClaude ? anthropicAccountName(activeClaude).title : snapshot.anthropicRouteAvailable ? 'Configured route' : 'No default account'}
+              detail={activeClaude ? [anthropicAccountName(activeClaude).detail, claudeRateLimitTier(activeClaude.rateLimitTier) ?? accountPlanLabel(activeClaude.subscriptionType)].filter(Boolean).join(' · ') : null}
+              stale={activeClaude?.usageStale}
+              fiveHour={activeClaude ? { percent: activeClaude.usageFiveHour ?? null, resetAt: activeClaude.usageFiveHourResetAt } : null}
+              weekly={activeClaude ? { percent: activeClaude.usageWeekly ?? null, resetAt: activeClaude.usageWeeklyResetAt } : null} />
+            {active ? <CodexSummary account={active} readyLabel={readyLabel} /> : <ProviderSummary provider="openai" readyLabel={readyLabel} name="No default account" />}
+          </div>
+          <section className="accounts-section" aria-label="Claude accounts">
+            <div className="accounts-section-header">
+              <h2><ProviderMark provider="anthropic" />Claude accounts <span className="accounts-count">{snapshot.anthropicAccounts.length}</span></h2>
+              <div className="accounts-section-actions">
+                <button type="button" onClick={() => submit(touchAllVerb('anthropic'))} className="accounts-button">Check sign-ins</button>
+                <button type="button" aria-label="Add Claude account" onClick={() => beginSignIn('anthropic')} className="accounts-button">+ Add account</button>
               </div>
-              <button type="button" onClick={() => submit(touchAllVerb('anthropic'))} className="text-[12px] text-text-muted">Check all sign-ins</button>
-              <button
-                type="button"
-                onClick={() => beginSignIn('anthropic')}
-                className="inline-flex items-center gap-1.5 rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
-              >
-                <ProviderLogo provider="anthropic" size={12} />
-                + Add Anthropic
-              </button>
             </div>
-            {snapshot.anthropicAccounts.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-7 text-center text-[12.5px] text-text-subtle">
-                {snapshot.anthropicRouteAvailable
-                  ? 'Anthropic route configured through an API key or cloud provider.'
-                  : 'No Anthropic accounts linked yet.'}
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1.5">
-                {switchSnapshot!.anthropicAccounts.map(account => {
-                  const name = anthropicAccountName(account)
-                  return (
-                  <div
-                    key={account.id}
-                    data-window-card
-                    className="flex items-center gap-3 rounded-[10px] border border-shell-seam bg-surface-panel px-4 py-3"
-                  >
-                    <span
-                      className={`h-2 w-2 shrink-0 rounded-full ${
-                        account.status !== 'healthy'
-                          ? 'bg-tone-danger'
-                          : account.isDefault
-                            ? 'bg-accent'
-                            : 'bg-tone-good'
-                      }`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate font-mono text-[13px] text-text-primary">
-                          {name.title}
-                        </span>
-                        {account.isDefault ? (
-                          <span className="shrink-0 rounded bg-accent/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em] text-accent">
-                            Saved default
-                          </span>
-                        ) : null}
-                      </div>
-                      {name.detail ? (
-                        <div className="mt-0.5 truncate text-[11.5px] text-text-subtle">
-                          {name.detail}
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="text-[11px] text-text-subtle" title={[
-                      account.organizationName, account.organizationRole, account.workspaceRole,
-                      claudeRateLimitTier(account.rateLimitTier), account.billingType,
-                      account.usageCheckedAt ? `Usage checked ${new Date(account.usageCheckedAt).toLocaleString()}` : null,
-                    ].filter(Boolean).join(' · ')}>
-                      {[account.organizationName, account.organizationRole, account.workspaceRole, claudeRateLimitTier(account.rateLimitTier), account.billingType].filter(Boolean).join(' · ')}
-                      {account.usageStale ? <div>Stale usage</div> : null}
-                      {account.extraUsage ? <div>Extra usage: {account.extraUsage.usedCredits ?? '–'} / {account.extraUsage.monthlyLimit ?? '–'} credits ({account.extraUsage.isEnabled === null ? 'unavailable' : account.extraUsage.isEnabled ? 'enabled' : 'disabled'})</div> : account.hasExtraUsageEnabled ? <div>Extra usage enabled</div> : null}
-                    </div>
-                    <div className="min-w-[130px]">
-                      <HeadroomBar label="5h" pct={account.usageFiveHour ?? null} resetAt={account.usageFiveHourResetAt} showReset />
-                      <HeadroomBar label="wk" pct={account.usageWeekly ?? null} resetAt={account.usageWeeklyResetAt} showReset />
-                      {account.usageWeeklyOpus != null ? <HeadroomBar label="Opus" pct={account.usageWeeklyOpus} resetAt={account.usageWeeklyOpusResetAt} showReset /> : null}
-                      {account.usageWeeklySonnet != null ? <HeadroomBar label="Sonnet" pct={account.usageWeeklySonnet} resetAt={account.usageWeeklySonnetResetAt} showReset /> : null}
-                    </div>
-                    <span className="text-[11.5px] text-text-muted">
-                      {anthropicCredentialLabel(account) ?? (account.status === 'healthy'
-                        ? account.subscriptionType ?? account.status
-                        : account.status)}
-                    </span>
-                    <ClaudeRowMenu account={account} onAction={key => claudeAction(key, account)} />
-                  </div>
-                  )
-                })}
-              </div>
-            )}
-            {snapshot.anthropicCredentialSource && !['claude_subscription', 'none'].includes(snapshot.anthropicCredentialSource.kind) ? <p className="mt-2 text-[11.5px] text-text-subtle">Credential source: {snapshot.anthropicCredentialSource.variableName ?? snapshot.anthropicCredentialSource.kind.replaceAll('_', ' ')}</p> : null}
-            {(snapshot.anthropicSignedOutProfiles ?? []).length > 0 ? <div className="mt-3 border-t border-shell-seam pt-3">
-              <div className="mb-2 text-[10.5px] font-semibold uppercase text-text-ghost">Signed out</div>
+            <div className="accounts-list" data-window-card>
+              {snapshot.anthropicAccounts.length === 0 ? <div className="accounts-empty">
+                {snapshot.anthropicRouteAvailable ? 'Anthropic route configured through an API key or cloud provider.' : 'No Claude accounts linked yet.'}
+              </div> : switchSnapshot!.anthropicAccounts.map(account => <ClaudeRow key={account.id} account={account} onAction={key => claudeAction(key, account)} />)}
+            {(snapshot.anthropicSignedOutProfiles ?? []).length > 0 ? <>
+              <div className="accounts-group">Signed out <span className="accounts-count">{snapshot.anthropicSignedOutProfiles!.length}</span></div>
               {snapshot.anthropicSignedOutProfiles!.map(profile => <SignedOutProfileRow key={profile.id}
                 profile={{ ...profile, credentialGeneration: profile.loginGeneration, lifecycleGeneration: profile.loginGeneration,
                   state: 'signed_out', credentialGenerationState: null, lifecycleState: 'signed_out', lifecycleReadStatus: 'valid' }}
                 onRelink={() => setDialog({ kind: 'relink', provider: 'anthropic', account: { ...profile, alias: profile.alias ?? profile.email } })}
                 onDelete={() => setDialog({ kind: 'delete', target: { ...profile, provider: 'anthropic',
                   expectedCredentialGeneration: profile.loginGeneration, signedOut: true, isDefault: false } })} />)}
-            </div> : null}
+            </> : null}
+            </div>
+            {snapshot.anthropicCredentialSource && !['claude_subscription', 'none'].includes(snapshot.anthropicCredentialSource.kind) ? <p className="accounts-credential-source">Credential source: {snapshot.anthropicCredentialSource.variableName ?? snapshot.anthropicCredentialSource.kind.replaceAll('_', ' ')}</p> : null}
           </section>
 
-          <section className="mb-[22px]">
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div className="flex items-baseline gap-2.5">
-                <h2 className="flex items-center gap-2 text-[13px] font-bold uppercase tracking-[0.08em] text-text-subtle">
-                  <ProviderLogo provider="openai" size={14} />
-                  Codex Pool
-                </h2>
-                <span className="text-[12px] tabular-nums text-text-faint">
-                  {readyLabel}
-                </span>
-              </div>
-              <div className="flex gap-1.5">
+          <section className="accounts-section" aria-label="Codex accounts">
+            <div className="accounts-section-header">
+              <h2><ProviderMark provider="openai" />Codex accounts <span className="accounts-count">{rows.length}</span></h2>
+              <div className="accounts-section-actions">
                 <button
                   type="button"
                   onClick={() => setDialog({ kind: 'touchall' })}
-                  className="rounded-[7px] border border-white/10 px-[11px] py-1.5 text-[12px] font-medium text-text-muted transition-colors hover:border-white/20 hover:text-text-primary"
+                  className="accounts-button"
                 >
                   Refresh all
                 </button>
                 <button
                   type="button"
+                  aria-label="Add Codex account"
                   onClick={() => beginSignIn('openai')}
-                  className="inline-flex items-center gap-1.5 rounded-[7px] bg-accent px-3 py-1.5 text-[12px] font-semibold text-on-fill"
+                  className="accounts-button"
                 >
-                  <ProviderLogo provider="openai" size={12} />
                   + Add account
                 </button>
               </div>
             </div>
 
+            <div className="accounts-list" data-window-card>
             {rows.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-10 text-center text-[12.5px] text-text-subtle">
+              <div className="accounts-empty">
                 {snapshot.signedOutProfiles.length > 0
                   ? 'No Codex accounts are signed in. Sign in again or add another account.'
                   : 'No Codex accounts are signed in.'}
               </div>
             ) : (
               <>
-                {active ? (
-                  <div className="mb-2">
-                    <PoolRow
-                      account={active}
-                      hero
-                      signOutState={signOutStateFor(active.id)}
-                      onAction={onRowAction}
-                    />
-                  </div>
-                ) : null}
-                <div className="flex flex-col gap-1.5">
-                  {rest.map(account => (
+                  {rows.map(account => (
                     <PoolRow
                       key={account.id}
                       account={account}
@@ -1337,15 +1211,11 @@ export function AccountsPage({
                       onAction={onRowAction}
                     />
                   ))}
-                </div>
               </>
             )}
             {snapshot.signedOutProfiles.length > 0 ? (
-              <div className="mt-3 border-t border-shell-seam pt-3">
-                <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-text-ghost">
-                  Signed out
-                </div>
-                <div className="flex flex-col gap-1.5">
+              <>
+                <div className="accounts-group">Signed out <span className="accounts-count">{snapshot.signedOutProfiles.length}</span></div>
                   {snapshot.signedOutProfiles.map(profile => (
                     <SignedOutProfileRow
                       key={profile.id}
@@ -1371,9 +1241,9 @@ export function AccountsPage({
                       }}
                     />
                   ))}
-                </div>
-              </div>
+              </>
             ) : null}
+            </div>
           </section>
 
           </>

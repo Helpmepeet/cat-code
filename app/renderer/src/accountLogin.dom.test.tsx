@@ -94,7 +94,7 @@ test.each(['trust', 'first-run', 'add-account', 'orphan'] as const)(
       })
     } else if (surface === 'add-account') {
       await app.click('Accounts')
-      await app.click('+ Add account')
+      await app.click('Add Codex account')
       expect(app.calls).toEqual([])
       expect(app.tree.container.querySelector('.lid-notice')?.textContent).toContain("Couldn't restore normal sleep")
       const retry = [...app.tree.container.querySelectorAll<HTMLButtonElement>('.lid-notice button')]
@@ -255,17 +255,17 @@ test('Settings remains accessible while first-run completion waits for inventory
 test('Accounts starts login, cancels, and reaches naming with no open sessions', async () => {
   const { calls, lifecycleCalls, toasts, tree, click, confirmCodexLogin, hostEvent } = await mountAccountsApp()
   await click('Accounts')
-  await click('+ Add account')
+  await click('Add Codex account')
   expect(calls).toEqual([])
   await click('Cancel')
   expect(calls).toEqual([])
-  await click('+ Add account')
+  await click('Add Codex account')
   await confirmCodexLogin()
   expect(calls.map(verb => verb.type)).toEqual(['account.login'])
   expect(toasts).toEqual([])
   await click('Cancel')
   expect(calls.map(verb => verb.type)).toEqual(['account.login', 'account.oauthCancel'])
-  await click('+ Add account')
+  await click('Add Codex account')
   expect(calls.map(verb => verb.type)).toEqual(['account.login', 'account.oauthCancel'])
   await confirmCodexLogin()
   await act(async () => { hostEvent({ type: 'account-oauth', provider: 'openai', progress: { state: 'waiting_for_alias' } }) })
@@ -281,7 +281,7 @@ test.each(['anthropic', 'openai'] as const)('%s sign-in receives the host link a
   const { calls, lifecycleCalls, tree, click, confirmCodexLogin, hostEvent } = await mountAccountsApp(['account.oauthPasteCode', 'account.oauthAlias'])
   if (provider === 'openai') {
     await click('Accounts')
-    await click('+ Add account')
+    await click('Add Codex account')
     expect(calls).toEqual([])
     await confirmCodexLogin()
   } else {

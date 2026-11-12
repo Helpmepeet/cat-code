@@ -48,7 +48,7 @@ test('Claude menu emits provider-aware generation-bound actions and correlates r
     expect(tree.container.textContent).toContain('Workspace')
     expect(tree.container.textContent).toContain('42%')
     expect(tree.container.textContent).toContain('Extra usage: 2 / 20 credits')
-    expect(tree.container.textContent).toContain('Stale usage')
+    expect(tree.container.textContent).toContain('Usage may be out of date')
     expect(tree.container.textContent).not.toContain('Reconnect this chat')
     await act(async () => { buttonIn(tree.container, '⋯').click() })
     await act(async () => { buttonIn(tree.container, action).click() })
@@ -60,6 +60,9 @@ test('Claude menu emits provider-aware generation-bound actions and correlates r
     if (action === 'Delete' || action === 'Sign out') expect(sent[0]).toHaveProperty('expectedCredentialGeneration', 7)
     if (hasDialog) {
       expect(tree.container.querySelector('[role="dialog"]')).not.toBeNull()
+      if (action === 'Delete' || action === 'Sign out') {
+        expect(tree.container.querySelector('[role="dialog"]')!.textContent).toContain('Close older Cat Code versions before signing out or deleting accounts.')
+      }
       const result: AccountResultFrame = { kind: 'account.result', protocolVersion: PROTOCOL_VERSION, sessionId: '', requestId: 'other', verb: sent[0]!.type, ok: true, message: 'Done' }
       await tree.render(<AccountsPage snapshot={claudeSnapshot} lastResult={result} onVerb={onVerb} />)
       expect(tree.container.querySelector('[role="dialog"]')).not.toBeNull()
@@ -67,6 +70,43 @@ test('Claude menu emits provider-aware generation-bound actions and correlates r
       expect(tree.container.querySelector('[role="dialog"]')).toBeNull()
     }
     await harness.unmountAll()
+  }
+})
+
+test('inline account actions preserve provider routing and wait for snapshots to change defaults', async () => {
+  const codex = {
+    id: 'codex', alias: 'Backup', credentialGeneration: 4, status: 'healthy' as const,
+    statusReason: null, availability: 'available' as const, availabilityLabel: 'Ready',
+    isDefault: false, hasVaultProfile: true, source: 'vault' as const,
+    usagePrimary: 0, usageWeekly: null, usagePrimaryWindowSeconds: 18_000,
+    usageLimitReached: false, usageResetAt: null, lastRefreshIso: null,
+    lastError: null, planType: 'plus', switchable: true,
+  }
+  const sent: AccountVerbMessage[] = []
+  const onVerb = (verb: AccountVerbMessage) => { sent.push(verb) }
+  const snapshot = { ...claudeSnapshot, accounts: [codex] }
+  const tree = await harness.mount(<AccountsPage snapshot={snapshot} lastResult={null} onVerb={onVerb} />)
+  const claude = tree.container.querySelector<HTMLElement>('section[aria-label="Claude accounts"]')!
+  const openai = tree.container.querySelector<HTMLElement>('section[aria-label="Codex accounts"]')!
+  await act(async () => { buttonIn(claude, 'Make default').click() })
+  expect(sent[0]).toMatchObject({ type: 'account.switch', provider: 'anthropic', accountId: 'claude' })
+  expect(claude.querySelector('.accounts-default-tag')).toBeNull()
+  await act(async () => { buttonIn(openai, 'Make default').click() })
+  expect(sent[1]).toMatchObject({ type: 'account.switch', provider: 'openai', accountId: 'codex' })
+  expect(openai.querySelector('.accounts-default-tag')).toBeNull()
+  expect(openai.querySelector('progress[aria-label="5h usage"]')?.getAttribute('aria-valuetext')).toBe('0%')
+  expect(openai.querySelector('progress[aria-label="wk usage"]')?.getAttribute('aria-valuetext')).toBe('Usage unavailable')
+
+  await tree.render(<AccountsPage snapshot={{ ...snapshot,
+    accounts: [{ ...codex, status: 'dead', switchable: false }],
+    anthropicAccounts: [{ ...claudeSnapshot.anthropicAccounts[0]!, status: 'dead' }],
+  }} lastResult={null} onVerb={onVerb} />)
+  expect(claude.textContent).toContain('Sign-in expired')
+  expect(openai.textContent).toContain('Sign-in expired')
+  for (const [section, provider] of [[claude, 'anthropic'], [openai, 'openai']] as const) {
+    await act(async () => { buttonIn(section, 'Sign in again').click() })
+    await act(async () => { buttonIn(tree.container, 'Sign in').click() })
+    expect(sent.at(-1)).toMatchObject({ type: 'account.login', provider, makeDefault: false })
   }
 })
 
@@ -79,16 +119,16 @@ test('page defaults ignore chat scope and sign-in defaults are opt-in', async ()
   await act(async () => { buttonIn(tree.container, '⋯').click() })
   await act(async () => { buttonIn(tree.container, 'Make default for new chats').click() })
   expect(sent.pop()).toMatchObject({ type: 'account.switch', provider: 'anthropic', accountId: 'claude' })
-  await act(async () => { buttonIn(tree.container, '+ Add Anthropic').click() })
+  await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Add Claude account"]')!.click() })
   expect(sent).toHaveLength(0)
   expect((tree.container.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(false)
   await act(async () => { (tree.container.querySelector('input[type="checkbox"]') as HTMLInputElement).click() })
   await act(async () => { buttonIn(tree.container, 'Sign in').click() })
   expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic', makeDefault: true })
-  await act(async () => { buttonIn(tree.container, '+ Add account').click() })
+  await act(async () => { tree.container.querySelector<HTMLButtonElement>('[aria-label="Add Codex account"]')!.click() })
   await act(async () => { buttonIn(tree.container, 'Sign in').click() })
   expect(sent[1]).toMatchObject({ type: 'account.login', provider: 'openai', makeDefault: false })
-  await act(async () => { buttonIn(tree.container, 'Check all sign-ins').click() })
+  await act(async () => { buttonIn(tree.container, 'Check sign-ins').click() })
   expect(sent[2]).toMatchObject({ type: 'account.touchAll', provider: 'anthropic' })
   expect(sent[2]).not.toHaveProperty('accountId')
 })
@@ -100,7 +140,7 @@ test('signed-out Claude profiles keep their names and delete with login generati
   expect(tree.container.textContent).toContain('Home')
   expect(tree.container.textContent).toContain('home@example.com')
   await act(async () => { buttonIn(tree.container, '⋯').click() })
-  await act(async () => { buttonIn(tree.container, 'Sign in again').click() })
+  await act(async () => { buttonIn(tree.container.querySelector('[role="menu"]')! as HTMLElement, 'Sign in again').click() })
   await act(async () => { buttonIn(tree.container, 'Sign in').click() })
   expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic', makeDefault: false })
   await act(async () => { buttonIn(tree.container, '⋯').click() })
@@ -154,7 +194,8 @@ test('Claude tiers and Codex recovery reasons are readable without internal code
       lifecycleState: 'reauth_required', lifecycleReadStatus: 'valid' }],
   }} lastResult={null} onVerb={() => {}} />)
   expect(tree.container.textContent).toContain('Max 20x')
-  expect(tree.container.textContent).toContain('The saved sign-in has changed.')
+  expect(tree.container.textContent).toContain('Saved sign-in changed')
+  expect(tree.container.querySelector('[title^="The saved sign-in has changed."]')).not.toBeNull()
   expect(tree.container.innerHTML).not.toContain('default_claude_max_20x')
   expect(tree.container.innerHTML).not.toContain('generation_mismatch')
 })
@@ -214,10 +255,10 @@ test('unloaded accounts expose sign-in, a bounded failure and a working retry', 
     expect(tree.container.textContent).toContain('Loading accounts…')
     const button = (label: string) => [...tree.container.querySelectorAll('button')]
       .find(item => item.textContent === label)!
-    await act(async () => { button('+ Add Anthropic').click() })
+    await act(async () => { button('+ Add Claude account').click() })
     await act(async () => { button('Sign in').click() })
     expect(sent[0]).toMatchObject({ type: 'account.login', provider: 'anthropic' })
-    await act(async () => { button('+ Add account').click() })
+    await act(async () => { button('+ Add Codex account').click() })
     await act(async () => { button('Sign in').click() })
     expect(sent[1]).toMatchObject({ type: 'account.login', provider: 'openai' })
     expect(deadlines).toHaveLength(1)
