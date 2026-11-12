@@ -1,18 +1,21 @@
 /** Builds an isolated Electron benchmark; --run is intentionally required to launch it. */
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, readdirSync, copyFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { manifest } from './streaming-benchmark-fixture.js'
+import { availableWorkloads, manifest } from './streaming-benchmark-fixture.js'
+import { transcriptMode } from './streaming-benchmark-instrumentation.js'
 import { boundedFailureDetail, OwnedProcessGroupLifecycle } from './streaming-benchmark-cleanup.js'
 
 const run = process.argv.includes('--run')
 const requestedWorkload = valueAfter('--workload')
 const requestedPolicy = valueAfter('--policy')
 const requestedOut = valueAfter('--out')
+const mode = transcriptMode(valueAfter('--transcript-mode'))
+const profile = process.argv.includes('--profile')
 if (run && !requestedOut) throw new Error('--run requires --out so raw samples survive scratch cleanup')
-const workloads = requestedWorkload ? manifest.workloads.filter(item => item.id === requestedWorkload) : manifest.workloads
+const workloads = requestedWorkload ? availableWorkloads.filter(item => item.id === requestedWorkload) : manifest.workloads
 const policies = requestedPolicy ? manifest.policies.filter(item => item === requestedPolicy) : manifest.policies
 if (workloads.length === 0 || policies.length === 0) throw new Error('unknown workload or policy')
 
@@ -24,6 +27,10 @@ const sourcePaths = [
   'scripts/streaming-benchmark-cleanup.ts', 'scripts/streaming-benchmark.vite.config.ts', 'package.json',
   'scripts/streaming-benchmark-runtime.ts',
   'scripts/streaming-benchmark-fixture.ts',
+  'scripts/streaming-benchmark-instrumentation.ts',
+  '../src/utils/usageWindow.ts', '../src/constants/apiLimits.ts',
+  '../src/app-runtime/appSubmitLimits.ts', '../src/app-runtime/toolActivityContract.ts',
+  '../src/app-runtime/autoModeReviewContract.ts', '../src/tools/FilePatchTool/constants.ts',
 ] as const
 const hashesBefore = sourceHashes()
 const scratch = mkdtempSync(join(tmpdir(), 'catcode-streaming-benchmark-'))
@@ -55,14 +62,14 @@ try {
   // explicit ESM contract Electron's loader needs for top-level await/imports.
   await bundle(resolve(appRoot, 'scripts/streaming-benchmark-main.ts'), bundleOut, 'main.mjs', 'esm')
   const build = spawnSync('bunx', ['vite', 'build', '--config', resolve(appRoot, 'scripts/streaming-benchmark.vite.config.ts')], {
-    cwd: appRoot, stdio: 'inherit', env: allowlistedEnv({ CATCODE_STREAMING_BENCHMARK_RENDERER_OUT: rendererOut }),
+    cwd: appRoot, stdio: 'inherit', env: allowlistedEnv({ CATCODE_STREAMING_BENCHMARK_RENDERER_OUT: rendererOut, CATCODE_STREAMING_BENCHMARK_TRANSCRIPT_MODE: mode }),
   })
   if (build.status !== 0) throw new Error(`renderer build failed (${build.status})`)
   const hashesAfter = sourceHashes()
-  if (JSON.stringify(hashesBefore) !== JSON.stringify(hashesAfter)) throw new Error('benchmark inputs changed during build; retry from a stable tree')
+  assertStableSources(hashesBefore, hashesAfter, 'build')
 
   if (!run) {
-    process.stdout.write(`${JSON.stringify({ prepared: true, launched: false, workloads: workloads.map(item => item.id), policies, sourceHashes: hashesAfter })}\n`)
+    process.stdout.write(`${JSON.stringify({ prepared: true, launched: false, transcriptMode: mode, profile, workloads: workloads.map(item => item.id), policies, sourceHashes: hashesAfter })}\n`)
   } else {
     const durableOut = resolve(requestedOut!)
     mkdirSync(durableOut, { recursive: true })
@@ -81,10 +88,13 @@ try {
           CLAUDE_CONFIG_DIR: join(sample, 'config'), CATCODE_STREAMING_BENCHMARK_RUN_DIR: sample,
           CATCODE_STREAMING_BENCHMARK_RENDERER_OUT: rendererOut, CATCODE_STREAMING_BENCHMARK_PRELOAD: join(bundleOut, 'preload.cjs'),
           CATCODE_STREAMING_BENCHMARK_WORKLOAD: workload.id, CATCODE_STREAMING_BENCHMARK_POLICY: policy,
+          CATCODE_STREAMING_BENCHMARK_TRANSCRIPT_MODE: mode, CATCODE_STREAMING_BENCHMARK_PROFILE: profile ? '1' : '0',
         }), manifest.warmupMs + manifest.durationMs + 30_000)
         if (!outcome.ok) throw new Error(`sample failed: ${outcome.error}`)
         const result = JSON.parse(readFileSync(join(sample, 'result.json'), 'utf8'))
+        assertStableSources(hashesAfter, sourceHashes(), 'sampling')
         const durable = { repetition, ...result, sourceHashes: hashesAfter }
+        if (profile) copyFileSync(join(sample, 'renderer.cpuprofile'), join(durableOut, `${sampleName}.cpuprofile`), 1)
         writeFileSync(join(durableOut, `${sampleName}.json`), `${JSON.stringify(durable)}\n`, { flag: 'wx' })
         await verifyOwnedPidsExited(result.ownedPids)
         process.stdout.write(`${JSON.stringify(durable)}\n`)
@@ -100,8 +110,31 @@ async function bundle(entry: string, outdir: string, name: string, format: 'esm'
   const result = await Bun.build({ entrypoints: [entry], outdir, target: 'node', format, external: ['electron'], naming: name, define })
   if (!result.success) throw new Error(result.logs.map(item => item.message).join('\n'))
 }
-function sourceHashes() { return Object.fromEntries(sourcePaths.map(path => [path, sha256(readFileSync(resolve(appRoot, path))) ])) }
-function valueAfter(flag: string) { const index = process.argv.indexOf(flag); return index < 0 ? undefined : process.argv[index + 1] }
+function sourceHashes() {
+  const paths = new Set<string>(sourcePaths)
+  // Runtime source/styles, including additions and deletions, participate.
+  // Generated welcome images, tests and build output are not scored code inputs.
+  for (const directory of ['renderer', 'main', 'preload', 'shared']) {
+    for (const entry of readdirSync(resolve(appRoot, directory), { recursive: true, withFileTypes: true })) {
+      const path = join(entry.parentPath, entry.name).slice(appRoot.length + 1)
+      if (entry.isFile() && /\.(?:[cm]?[jt]sx?|css|html|json)$/.test(path) &&
+        !/(?:^|\/)(?:dist|build|node_modules|generated-welcome-cats)(?:\/|$)/.test(path) &&
+        !/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path) && !/(?:^|\/)__tests__\//.test(path)) paths.add(path)
+    }
+  }
+  return Object.fromEntries([...paths].sort().map(path => [path, sha256(readFileSync(resolve(appRoot, path))) ]))
+}
+function assertStableSources(before: Record<string, string>, after: Record<string, string>, phase: string) {
+  const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter(path => before[path] !== after[path])
+  if (changed.length) throw new Error(`benchmark inputs changed during ${phase}; discard this run: ${changed.slice(0, 20).join(', ')}`)
+}
+function valueAfter(flag: string) {
+  const index = process.argv.indexOf(flag)
+  if (index < 0) return undefined
+  const value = process.argv[index + 1]
+  if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`)
+  return value
+}
 function sha256(value: Uint8Array) { return createHash('sha256').update(value).digest('hex') }
 function allowlistedEnv(extra: Record<string, string>) {
   const env: Record<string, string> = { PATH: process.env.PATH ?? '', LANG: process.env.LANG ?? 'C.UTF-8' }

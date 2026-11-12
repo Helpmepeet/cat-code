@@ -13,6 +13,10 @@ let noRawStateChangeCount = 0
 let generation = 0
 let overflowed = false
 let layoutCommitCount = 0
+const executions: Record<string, number> = {}
+export function benchmarkCountExecution(name: string): void {
+  executions[name] = (executions[name] ?? 0) + 1
+}
 
 export function benchmarkObserveBatch(frames: readonly ServerFrame[]): void {
   dispatchCount++
@@ -61,6 +65,7 @@ export function benchmarkObserverSnapshot() {
     noRawStateChangeCount,
     overflowed,
     layoutCommitCount,
+    executions: { ...executions },
   }
 }
 
@@ -77,6 +82,7 @@ export function benchmarkCoverageComplete(snapshot: BenchmarkObserverCounters, e
 }
 
 export function resetBenchmarkObserver(): void {
+  for (const name of Object.keys(executions)) delete executions[name]
   generation++
   committed.clear()
   commits.length = 0

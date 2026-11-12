@@ -60,4 +60,6 @@ test('the exact-checked transform instruments reducer lineage and layout endpoin
   expect(result.code).toContain('withBatch(benchmarkWrapRawReducer(reduceServerFrame))')
   expect(result.code).toContain('benchmarkObserveBatch(frames)')
   expect(result.code).toContain('benchmarkObserveCommit(performance.now(), state)')
+  expect(result.code).toContain("useLayoutEffect as benchmarkUseLayoutEffect")
+  expect(Bun.Transpiler && new Bun.Transpiler({ loader: 'tsx' }).transformSync(result.code)).toContain('benchmarkUseLayoutEffect')
 })

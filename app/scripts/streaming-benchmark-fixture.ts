@@ -24,11 +24,19 @@ export const manifest = {
 } as const
 
 export type Workload = typeof manifest.workloads[number]
+// Opt-in cases keep the historical default matrix and fixture hashes intact.
+export const additionalWorkloads = [
+  { id: 'completed-turn-history-8', sessions: 8, intervalMs: 20, history: 120, burst: 1, barrierEvery: 0 },
+  { id: 'long-single-turn-1', sessions: 1, intervalMs: 20, history: 1_200, burst: 1, barrierEvery: 0 },
+  { id: 'idle-clock-8', sessions: 8, intervalMs: 20, history: 0, burst: 1, barrierEvery: 0 },
+] as const
+export const availableWorkloads = [...manifest.workloads, ...additionalWorkloads]
+type ExtendedWorkload = Workload | typeof additionalWorkloads[number]
 export type Arrival = { atMs: number; frame: ServerFrame; barrier: boolean }
 type FixtureMessage = Extract<EventFrame['event'], { type: 'message' }>['message']
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
-export function createFixture(workload: Workload, durationMs: number = manifest.durationMs) {
+export function createFixture(workload: ExtendedWorkload, durationMs: number = manifest.durationMs) {
   const initial: ServerFrame[] = []
   const arrivals: Arrival[] = []
   let sequence = 0
@@ -65,7 +73,30 @@ export function createFixture(workload: Workload, durationMs: number = manifest.
         activeTurn: true, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
       },
     }))
-    for (let i = 0; i < workload.history; i++) initial.push(event(sessionId, {
+    for (let i = 0; i < workload.history; i++) {
+      if (workload.id === 'completed-turn-history-8') {
+        const message = (value: unknown) => initial.push(event(sessionId, { type: 'message', message: value as FixtureMessage }))
+        const callId = `history-call-${s}-${i}`
+        message({ type: 'user', uuid: `user-${s}-${i}`, session_id: sessionId,
+          parent_tool_use_id: null, message: { role: 'user', content: `Synthetic completed turn ${i}` } })
+        message({ type: 'assistant', uuid: `work-${s}-${i}`, session_id: sessionId, parent_tool_use_id: null,
+          message: { id: `work-${s}-${i}`, role: 'assistant', content: [
+            { type: 'thinking', thinking: `Inspect synthetic file ${i}`, signature: '' },
+            { type: 'tool_use', id: callId, name: 'Read', input: { file_path: `/synthetic/file-${i}.ts` } },
+          ] } })
+        message({ type: 'user', uuid: `tool-result-${s}-${i}`, session_id: sessionId, parent_tool_use_id: null,
+          message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: callId, content: 'Synthetic file contents', is_error: false }] } })
+        message({ type: 'assistant', uuid: `answer-${s}-${i}`, session_id: sessionId, parent_tool_use_id: null,
+          message: { id: `answer-${s}-${i}`, role: 'assistant', content: [
+            { type: 'text', text: String(i).padEnd(manifest.historyTextCharacters, '.') },
+          ], stop_reason: 'end_turn' } })
+        // The real projector uses result messages as authoritative turn boundaries.
+        message({ type: 'result', subtype: 'success', uuid: `result-${s}-${i}`, session_id: sessionId,
+          is_error: false, errors: [], duration_ms: 1_000, duration_api_ms: 900, num_turns: 1,
+          result: `Synthetic completed turn ${i}`, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [] })
+        continue
+      }
+      initial.push(event(sessionId, {
       type: 'message', message: {
         type: 'assistant', uuid: `history-${s}-${i}`, parent_tool_use_id: null,
         session_id: sessionId, message: {
@@ -73,13 +104,15 @@ export function createFixture(workload: Workload, durationMs: number = manifest.
           content: [{ type: 'text', text: String(i).padEnd(manifest.historyTextCharacters, '.') }],
         },
       } as FixtureMessage,
-    }))
+      }))
+    }
+    if (workload.id === 'completed-turn-history-8') initial.push(event(sessionId, { type: 'turn.status', activeTurn: true }))
     initial.push(stream(sessionId, { type: 'message_start', message: { id: `stream-${s}` } }))
     initial.push(stream(sessionId, { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }))
     initial.push(stream(sessionId, { type: 'content_block_start', index: 1, content_block: { type: 'thinking', thinking: '' } }))
     let ordinal = 0
     const phase = s * workload.intervalMs / workload.sessions
-    for (let atMs = phase; atMs < durationMs; atMs += workload.intervalMs) {
+    for (let atMs = phase; workload.id !== 'idle-clock-8' && atMs < durationMs; atMs += workload.intervalMs) {
       for (let b = 0; b < workload.burst; b++) {
         const thinking = (++ordinal % 5) === 0
         arrivals.push({ atMs: atMs + b * 0.2, barrier: false, frame: stream(sessionId, {
@@ -98,6 +131,7 @@ export function createFixture(workload: Workload, durationMs: number = manifest.
         }) })
       }
     }
+    if (workload.id === 'idle-clock-8') continue
     arrivals.push({ atMs: durationMs + s * 0.1, barrier: true, frame: stream(sessionId, { type: 'content_block_stop', index: 0 }) })
     arrivals.push({ atMs: durationMs + s * 0.1, barrier: true, frame: stream(sessionId, { type: 'content_block_stop', index: 1 }) })
     arrivals.push({ atMs: durationMs + s * 0.1, barrier: true, frame: event(sessionId, { type: 'turn.status', activeTurn: false }) })

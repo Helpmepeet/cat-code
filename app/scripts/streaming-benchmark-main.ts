@@ -6,7 +6,8 @@ import { performance } from 'node:perf_hooks'
 import { AttachmentGate } from '../main/attachmentGate.js'
 import { createLiveFrameDeliveryCoordinator, type LiveFrameDeliveryCoordinator } from '../main/liveFrameBatcher.js'
 import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from '../main/deliveryTraceSink.js'
-import { createFixture, digest, manifest } from './streaming-benchmark-fixture.js'
+import { availableWorkloads, createFixture, digest, manifest } from './streaming-benchmark-fixture.js'
+import { performanceMetricDeltas, transcriptMode } from './streaming-benchmark-instrumentation.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
@@ -38,9 +39,11 @@ const rendererDir = required('CATCODE_STREAMING_BENCHMARK_RENDERER_OUT')
 const preloadPath = required('CATCODE_STREAMING_BENCHMARK_PRELOAD')
 const workloadId = required('CATCODE_STREAMING_BENCHMARK_WORKLOAD')
 const policyName = required('CATCODE_STREAMING_BENCHMARK_POLICY')
-const selectedWorkload = manifest.workloads.find(item => item.id === workloadId)
+const selectedWorkload = availableWorkloads.find(item => item.id === workloadId)
 if (!selectedWorkload) throw new Error(`unknown workload ${workloadId}`)
 const workload = selectedWorkload
+const mode = transcriptMode(process.env.CATCODE_STREAMING_BENCHMARK_TRANSCRIPT_MODE)
+const profileEnabled = process.env.CATCODE_STREAMING_BENCHMARK_PROFILE === '1'
 if (!['original', '0', '8', '16'].includes(policyName)) throw new Error(`unknown policy ${policyName}`)
 const delayMs = policyName === 'original' ? 0 : Number(policyName)
 const BOOTSTRAP_TRANSCRIPT_MARKER = 'CATCODE_SYNTHETIC_STREAMING_BENCHMARK_READY'
@@ -210,10 +213,19 @@ const expectedChanging = rawChangingFrames(fixture.initial, fixture.arrivals.map
 // Align main's monotonic clock to the renderer clock. Half the minimum round
 // trip bounds the offset uncertainty; before and after samples expose drift.
 const calibrationBefore = await calibrate(window)
+let metricsBefore: Array<{ name: string; value: number }> = []
+if (profileEnabled) {
+  window.webContents.debugger.attach('1.3')
+  await window.webContents.debugger.sendCommand('Performance.enable')
+  await window.webContents.debugger.sendCommand('Profiler.enable')
+  await window.webContents.debugger.sendCommand('Profiler.start')
+  metricsBefore = (await window.webContents.debugger.sendCommand('Performance.getMetrics')).metrics
+}
 const processMetricsBefore = cpuSnapshot()
 const cpuStart = process.cpuUsage()
 const wallStart = performance.now()
 await deliverFixture(fixture, true, wallStart)
+if (workload.id === 'idle-clock-8') await sleep(Math.max(0, wallStart + manifest.durationMs - performance.now()))
 coordinator.flush()
 await waitForCoverage(window, expectedChanging.length)
 await waitForAcknowledgements(scoredTraceIds.size)
@@ -221,6 +233,14 @@ const wallEnd = performance.now()
 const cpu = process.cpuUsage(cpuStart)
 const processMetrics = app.getAppMetrics()
 const processMetricsAfter = cpuSnapshot(processMetrics)
+let cdpMetrics = null
+if (profileEnabled) {
+  const metricsAfter = (await window.webContents.debugger.sendCommand('Performance.getMetrics')).metrics
+  cdpMetrics = performanceMetricDeltas(metricsBefore, metricsAfter)
+  const { profile } = await window.webContents.debugger.sendCommand('Profiler.stop')
+  writeFileSync(join(runDir, 'renderer.cpuprofile'), JSON.stringify(profile))
+  window.webContents.debugger.detach()
+}
 const calibrationAfter = await calibrate(window)
 const observer = await window.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.snapshot()')
 const commits = Array.isArray(observer.commits) ? observer.commits : []
@@ -237,6 +257,8 @@ for (const commit of commits) for (const identity of commit.frames ?? []) {
 }
 const result = {
   schemaVersion: 1, tier: 'focused-electron-delivery-pipeline', workload: workload.id, policy: policyName,
+  transcriptMode: mode, profileEnabled, cdpMetrics, executionCounts: observer.executions,
+  measurementKind: workload.id === 'idle-clock-8' ? 'active-turn-clock-only-no-arrivals' : 'streaming',
   fixtureHash: fixture.hash, deliveredFrames: fixture.arrivals.length, expectedCommittedRawFrames: expectedChanging.length, observedCommittedRawFrames: latencies.length,
   sendCount, dispatchCount: observer.dispatchCount, commitCount: observer.commitCount,
   noRawStateChangeFrames: observer.noRawStateChangeCount, observerOverflowed: observer.overflowed, queue: coordinator.stats(),
