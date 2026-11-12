@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  buildMemoryLines,
   MAX_ENTRYPOINT_BYTES,
   MAX_ENTRYPOINT_LINES,
   truncateEntrypointContent,
 } from './memdir.js'
+import { TYPES_SECTION_COMBINED } from './memoryTypes.js'
 
 const WARNING_MARKER = '\n\n> WARNING:'
 
@@ -11,6 +13,81 @@ function bodyOf(content: string): string {
   const at = content.indexOf(WARNING_MARKER)
   return at === -1 ? content : content.slice(0, at)
 }
+
+describe('memory admission prompt contract', () => {
+  const variants = [
+    {
+      name: 'individual with an index',
+      prompt: () => buildMemoryLines('auto memory', '/memories/').join('\n'),
+    },
+    {
+      name: 'individual without an index',
+      prompt: () =>
+        buildMemoryLines('auto memory', '/memories/', undefined, true).join(
+          '\n',
+        ),
+    },
+    {
+      name: 'combined private/team taxonomy',
+      prompt: () => TYPES_SECTION_COMBINED.join('\n'),
+    },
+  ]
+
+  for (const variant of variants) {
+    test(`${variant.name} applies admission and attribution to all types`, () => {
+      const prompt = variant.prompt()
+      const admissionAt = prompt.indexOf('## Before saving any memory')
+      const typesAt = prompt.indexOf('## Types of memory')
+      const admission = prompt.slice(admissionAt, typesAt)
+
+      expect(admissionAt).toBeGreaterThanOrEqual(0)
+      expect(typesAt).toBeGreaterThan(admissionAt)
+      expect(prompt.match(/## Before saving any memory/g)).toHaveLength(1)
+      expect(admission).toContain('For every memory type')
+      expect(admission).toContain('future usefulness is unclear, do not save')
+      expect(admission).toContain('who said it, when it applies')
+      expect(admission).toContain('any reason the user gave')
+      expect(admission).toContain('Keep conditional guidance conditional')
+      expect(admission).toContain('user explicitly stated')
+      expect(admission).toContain('Label any interpretation as an inference')
+      expect(admission).toContain('not a user statement')
+      expect(admission).toContain('uncertain inferences')
+      expect(admission).toContain('Casual approval or lack of pushback')
+      expect(admission).toContain('not, by itself, evidence')
+      expect(
+        prompt.match(/<name>(user|feedback|project|reference)<\/name>/g),
+      ).toHaveLength(4)
+      expect(prompt).not.toContain('accepting an unusual choice without pushback')
+      expect(prompt).toContain('does not save: approval of this PR alone')
+      expect(prompt).toContain('user: for future refactors in this area')
+      expect(prompt).toContain('Reason: the user finds split reviews harder')
+    })
+  }
+
+  for (const skipIndex of [false, true]) {
+    test(`individual prompt preserves existing safeguards (skipIndex=${skipIndex})`, () => {
+      const prompt = buildMemoryLines(
+        'auto memory',
+        '/memories/',
+        undefined,
+        skipIndex,
+      ).join('\n')
+
+      expect(prompt).toContain('If the user explicitly asks you to remember')
+      expect(prompt).toContain('If they ask you to forget')
+      expect(prompt).toContain('These exclusions apply even when the user')
+      expect(prompt).toContain(
+        'When the future scope is unclear, keep it turn-scoped',
+      )
+      expect(prompt).toContain('including every trigger qualifier')
+      expect(prompt).toContain('compare it with existing memories for conflicts')
+      expect(prompt).toContain('preserve any non-overlapping conditions')
+      expect(prompt).toContain('proceed as if MEMORY.md were empty')
+      expect(prompt).toContain('verify first')
+      expect(prompt).toContain('type: {{user, feedback, project, reference}}')
+    })
+  }
+})
 
 describe('truncateEntrypointContent byte cap', () => {
   test('leaves an ASCII index under both caps untouched', () => {

@@ -30,11 +30,23 @@ export function parseMemoryType(raw: unknown): MemoryType | undefined {
   return MEMORY_TYPES.find(t => t === raw)
 }
 
+// Keep admission policy with the taxonomy so every typed-memory writer gets it.
+const MEMORY_ADMISSION_SECTION: readonly string[] = [
+  '## Before saving any memory',
+  '',
+  '- For every memory type below, save only information that is relevant to the work with this user and likely to remain useful in future conversations. If its future usefulness is unclear, do not save it.',
+  '- Preserve who said it, when it applies, the circumstances, and any reason the user gave. Keep conditional guidance conditional; do not broaden it into a general rule.',
+  '- Distinguish what the user explicitly stated from your own interpretation. Label any interpretation as an inference, not a user statement; do not present uncertain inferences as facts or standing preferences.',
+  '- Casual approval or lack of pushback is not, by itself, evidence of a lasting preference. Do not turn approval of one result into a rule for future tasks.',
+  '',
+]
+
 /**
  * `## Types of memory` section for COMBINED mode (private + team directories).
  * Includes <scope> tags and team/private qualifiers in examples.
  */
 export const TYPES_SECTION_COMBINED: readonly string[] = [
+  ...MEMORY_ADMISSION_SECTION,
   '## Types of memory',
   '',
   'There are several discrete types of memory that you can store in your memory system. Each type below declares a <scope> of `private`, `team`, or guidance for choosing between the two.',
@@ -58,7 +70,7 @@ export const TYPES_SECTION_COMBINED: readonly string[] = [
   '    <name>feedback</name>',
   '    <scope>default to private. Save as team only when the guidance is clearly a project-wide convention that every contributor should follow (e.g., a testing policy, a build invariant), not a personal style preference.</scope>',
   "    <description>Guidance the user has given you about how to approach work — both what to avoid and what to keep doing. These are a very important type of memory to read and write as they allow you to remain coherent and responsive to the way you should approach work in the project. Record from failure AND success: if you only save corrections, you will avoid past mistakes but drift away from approaches the user has already validated, and may grow overly cautious. Before saving a private feedback memory, check that it doesn't contradict a team feedback memory — if it does, either don't save it or note the override explicitly.</description>",
-  '    <when_to_save>When the user corrects your approach ("no not that", "don\'t", "stop doing X") OR confirms a non-obvious approach worked ("yes exactly", "perfect, keep doing that", accepting an unusual choice without pushback), first decide whether the guidance is durable. Save it only when the user says it should apply in future conversations or it clearly generalizes beyond the current turn or task. Do not turn a local interruption or task-scoped directive into a standing rule. Anti-pattern: "up to you, don\'t ask anymore" while choosing one task detail does not mean "never ask follow-up questions"; stopping one delegated worker does not mean "never spawn subagents." When the future scope is unclear, keep it turn-scoped and do not save it. For durable guidance, include *why* so you can judge edge cases later.</when_to_save>',
+  '    <when_to_save>When the user corrects your approach ("no not that", "don\'t", "stop doing X") OR confirms a non-obvious approach worked ("yes exactly", "perfect, keep doing that"), first decide whether the guidance is durable. Save it only when the user says it should apply in future conversations or it clearly generalizes beyond the current turn or task. Do not turn a local interruption or task-scoped directive into a standing rule. Anti-pattern: "up to you, don\'t ask anymore" while choosing one task detail does not mean "never ask follow-up questions"; stopping one delegated worker does not mean "never spawn subagents." When the future scope is unclear, keep it turn-scoped and do not save it. For durable guidance, include *why* so you can judge edge cases later.</when_to_save>',
   '    <how_to_use>Let these memories guide your behavior so that the user and other users in the project do not need to offer the same guidance twice.</how_to_use>',
   '    <body_structure>Lead with a rule that states its trigger condition, then a **Why:** line (the reason the user gave — often a past incident or strong preference) and a **How to apply:** line (when/where this guidance kicks in). The matching MEMORY.md index hook itself must preserve the complete decision rule, including every trigger qualifier and the resulting guidance; do not rely on the index title to carry a qualifier, and do not broaden or shorten conditional guidance in either place. Knowing *why* lets you judge edge cases instead of blindly following the rule.</body_structure>',
   '    <examples>',
@@ -69,7 +81,10 @@ export const TYPES_SECTION_COMBINED: readonly string[] = [
   "    assistant: [saves private feedback memory: this user wants terse responses with no trailing summaries. Private because it's a communication preference, not a project convention]",
   '',
   "    user: yeah the single bundled PR was the right call here, splitting this one would've just been churn",
-  '    assistant: [saves private feedback memory: for refactors in this area, user prefers one bundled PR over many small ones. Confirmed after I chose this approach — a validated judgment call, not a correction]',
+  '    assistant: [does not save: approval of this PR alone does not establish a preference for future refactors]',
+  '',
+  '    user: for future refactors in this area, keep related changes in one PR because splitting them makes review harder',
+  '    assistant: [saves private feedback memory: for refactors in this area, keep related changes in one PR. Reason: the user finds split reviews harder. Private because this is their review preference]',
   '    </examples>',
   '</type>',
   '<type>',
@@ -111,6 +126,7 @@ export const TYPES_SECTION_COMBINED: readonly string[] = [
  * only makes sense with a private/team split is reworded.
  */
 export const TYPES_SECTION_INDIVIDUAL: readonly string[] = [
+  ...MEMORY_ADMISSION_SECTION,
   '## Types of memory',
   '',
   'There are several discrete types of memory that you can store in your memory system:',
@@ -132,7 +148,7 @@ export const TYPES_SECTION_INDIVIDUAL: readonly string[] = [
   '<type>',
   '    <name>feedback</name>',
   '    <description>Guidance the user has given you about how to approach work — both what to avoid and what to keep doing. These are a very important type of memory to read and write as they allow you to remain coherent and responsive to the way you should approach work in the project. Record from failure AND success: if you only save corrections, you will avoid past mistakes but drift away from approaches the user has already validated, and may grow overly cautious.</description>',
-  '    <when_to_save>When the user corrects your approach ("no not that", "don\'t", "stop doing X") OR confirms a non-obvious approach worked ("yes exactly", "perfect, keep doing that", accepting an unusual choice without pushback), first decide whether the guidance is durable. Save it only when the user says it should apply in future conversations or it clearly generalizes beyond the current turn or task. Do not turn a local interruption or task-scoped directive into a standing rule. Anti-pattern: "up to you, don\'t ask anymore" while choosing one task detail does not mean "never ask follow-up questions"; stopping one delegated worker does not mean "never spawn subagents." When the future scope is unclear, keep it turn-scoped and do not save it. For durable guidance, include *why* so you can judge edge cases later.</when_to_save>',
+  '    <when_to_save>When the user corrects your approach ("no not that", "don\'t", "stop doing X") OR confirms a non-obvious approach worked ("yes exactly", "perfect, keep doing that"), first decide whether the guidance is durable. Save it only when the user says it should apply in future conversations or it clearly generalizes beyond the current turn or task. Do not turn a local interruption or task-scoped directive into a standing rule. Anti-pattern: "up to you, don\'t ask anymore" while choosing one task detail does not mean "never ask follow-up questions"; stopping one delegated worker does not mean "never spawn subagents." When the future scope is unclear, keep it turn-scoped and do not save it. For durable guidance, include *why* so you can judge edge cases later.</when_to_save>',
   '    <how_to_use>Let these memories guide your behavior so that the user does not need to offer the same guidance twice.</how_to_use>',
   '    <body_structure>Lead with a rule that states its trigger condition, then a **Why:** line (the reason the user gave — often a past incident or strong preference) and a **How to apply:** line (when/where this guidance kicks in). The matching MEMORY.md index hook itself must preserve the complete decision rule, including every trigger qualifier and the resulting guidance; do not rely on the index title to carry a qualifier, and do not broaden or shorten conditional guidance in either place. Knowing *why* lets you judge edge cases instead of blindly following the rule.</body_structure>',
   '    <examples>',
@@ -143,7 +159,10 @@ export const TYPES_SECTION_INDIVIDUAL: readonly string[] = [
   '    assistant: [saves feedback memory: this user wants terse responses with no trailing summaries]',
   '',
   "    user: yeah the single bundled PR was the right call here, splitting this one would've just been churn",
-  '    assistant: [saves feedback memory: for refactors in this area, user prefers one bundled PR over many small ones. Confirmed after I chose this approach — a validated judgment call, not a correction]',
+  '    assistant: [does not save: approval of this PR alone does not establish a preference for future refactors]',
+  '',
+  '    user: for future refactors in this area, keep related changes in one PR because splitting them makes review harder',
+  '    assistant: [saves feedback memory: for refactors in this area, keep related changes in one PR. Reason: the user finds split reviews harder]',
   '    </examples>',
   '</type>',
   '<type>',
