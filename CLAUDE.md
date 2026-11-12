@@ -74,6 +74,19 @@ not take the cursor, focus, or frontmost window is pre-approved. GUI work uses
 - Renderer styling belongs in stylesheets and classes, not inline `style={{}}`.
 - A comment should need almost no maintenance. Keep rationale and incident context.
 
+## Performance
+
+Earlier optimizations don't automatically cover new code. When a change adds
+or alters rendering, timers, subscriptions, or streaming updates:
+
+- Check the total work it causes (idle and while streaming), not just the
+  path you touched. If you can't measure it, say so.
+- Preserve object identity for unchanged data so downstream memoization and
+  caching remain effective; real changes must still invalidate them.
+- Frequent updates (clocks, spinners, streaming text) should not cause
+  unnecessary rerendering or repainting of unrelated UI. If a fix only
+  makes the work less frequent, say what remains.
+
 ## User-visible text (§7)
 
 No em dashes or engineering notes. Status and helper text must change what the user
