@@ -704,7 +704,12 @@ async function branchDraft() {
     kind: 'image', name: 'sketch.png', mediaType: 'image/png', bytes: new Uint8Array([104, 105]),
   })
   await app.click('Add attachment')
-  await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+  // Attachments settle asynchronously; a fixed pause loses that race on a busy machine.
+  const attached = () => app.tree.container.querySelector('[aria-label="Remove pasted text 1"]') &&
+    app.tree.container.textContent?.includes('notes.txt') && app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')
+  for (const deadline = performance.now() + 5000; !attached() && performance.now() < deadline;) {
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)) })
+  }
   expect(app.tree.container.querySelector('[aria-label="Remove pasted text 1"]')).not.toBeNull()
   expect(app.tree.container.textContent).toContain('notes.txt')
   expect(app.tree.container.querySelector('img[src="data:image/png;base64,aGk="]')).not.toBeNull()

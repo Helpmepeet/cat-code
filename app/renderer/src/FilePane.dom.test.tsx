@@ -48,6 +48,17 @@ async function settle() {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 130)) })
   await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
 }
+// Staged candidates wait on the real preview service, which a busy machine can
+// delay past one settle. Bounded, so a candidate that never mounts still fails.
+async function staged<T extends Element = Element>(root: ParentNode, selector: string): Promise<T | null> {
+  for (const deadline = performance.now() + 3000; !root.querySelector(selector) && performance.now() < deadline;) await settle()
+  return root.querySelector<T>(selector)
+}
+async function dispatchStaged(root: ParentNode, selector: string, type: string) {
+  const node = await staged(root, selector)
+  expect(node, selector).not.toBeNull()
+  await act(async () => { node!.dispatchEvent(new Event(type)) })
+}
 async function click(root: ParentNode, label: string) {
   const button = root.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
   expect(button, `Missing ${label}: ${[...root.querySelectorAll('a,button')].map(node => node.outerHTML).join('\n')}`).not.toBeNull()
@@ -395,7 +406,7 @@ test.each([
   writeFileSync(brokenPath, '<!doctype html><h1>Original HTML</h1>')
   const tree = await harness.mount(renderPane())
   const paintCandidate = async () => {
-    const frame = tree.container.querySelector('iframe.file-pane-staging')
+    const frame = await staged(tree.container, 'iframe.file-pane-staging')
     expect(frame).not.toBeNull()
     await act(async () => { frame!.dispatchEvent(new Event('load')) })
     await settle()
@@ -474,13 +485,14 @@ test('unreadable real local assets reject an initial paint and roll a later navi
   writeFileSync(join(brokenPath, '..', 'oversized.css'), Buffer.alloc(16 * 1024 * 1024 + 1))
   const tree = await harness.mount(pane())
   const failStagedPage = async () => {
+    await staged(tree.container, 'iframe.file-pane-staging')
     const file = getFilePaneSession(sessionId).file!
     // Happy DOM has no protocol transport. Drive the actual host request that
     // Electron makes for this page's stylesheet, then the frame's load event.
     const response = await service.respond(new Request(new URL('oversized.css', file.url)))
     expect(response.status).toBe(404)
     expect(service.absentPaths(file.id, file.revision)).toEqual([])
-    await act(async () => { tree.container.querySelector('iframe.file-pane-staging')!.dispatchEvent(new Event('load')) })
+    await dispatchStaged(tree.container, 'iframe.file-pane-staging', 'load')
     await settle()
   }
   await click(tree.container, 'Open broken.html')
@@ -535,7 +547,7 @@ test('a retained file removal survives a failed different-file candidate without
   await act(async () => { await service.refresh(retained.id) })
   expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
   expect(tree.container.querySelector('.file-pane-note')).toBeNull()
-  await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('error')) })
+  await dispatchStaged(tree.container, '.file-pane-staging.file-pane-image img', 'error')
   await settle()
   expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
   expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')).toBe(body)
@@ -689,7 +701,7 @@ test('image decode errors reject a corrupt initial file and retain a good image 
   const { pane, sessionId, imagePath, imageBytes, service, toasts } = setup()
   const tree = await harness.mount(pane())
   const signalImage = async (event: 'load' | 'error') => {
-    const image = tree.container.querySelector('.file-pane-staging.file-pane-image img')
+    const image = await staged(tree.container, '.file-pane-staging.file-pane-image img')
     expect(image).not.toBeNull()
     // Happy DOM cannot decode pixels. These are Chromium's real element events;
     // file preparation, revisions and retained bytes use the actual host service.
@@ -803,7 +815,7 @@ test.each(['scroll restoration', 'commit reply'] as const)('Reload escapes a pen
   writeFileSync(brokenPath, '<!doctype html><h1>Original page</h1>')
   const tree = await harness.mount(pane())
   const loadCandidate = async () => {
-    const frame = tree.container.querySelector('iframe.file-pane-staging')
+    const frame = await staged(tree.container, 'iframe.file-pane-staging')
     expect(frame).not.toBeNull()
     await act(async () => { frame!.dispatchEvent(new Event('load')) })
     await settle()
@@ -928,7 +940,7 @@ function localServer(port = 0) {
   return { server, requests, url: server.url.href }
 }
 async function paintLocalFrame(root: ParentNode) {
-  const iframe = root.querySelector<HTMLIFrameElement>('iframe.file-pane-staging')!
+  const iframe = (await staged<HTMLIFrameElement>(root, 'iframe.file-pane-staging'))!
   expect(iframe).not.toBeNull()
   await act(async () => { iframe.dispatchEvent(new Event('load')) })
   await settle()
@@ -1012,7 +1024,7 @@ test('server stop preserves the current frame, recovery stages a new revision, a
     await web.server.stop(true)
     await act(async () => { await localhost.refresh(id) })
     expect(tree.container.querySelector('.file-pane-note')).toBeNull()
-    await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('error')) })
+    await dispatchStaged(tree.container, '.file-pane-staging.file-pane-image img', 'error')
     await settle()
     expect(tree.container.querySelector('.file-pane-note')?.textContent).toBe('The server stopped. Showing the last version.')
     expect(tree.container.querySelector('iframe.file-pane-content:not(.file-pane-staging)') === old).toBe(true)
@@ -1087,7 +1099,7 @@ test('browser notes from the still-painted page survive a rejected candidate wit
     await click(tree.container, 'Open broken.png')
     await act(async () => { localhost.browserNote(initial.id, initial.revision, 'browser-required') })
     expect(tree.container.querySelector('.file-pane-note')).toBeNull()
-    await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('error')) })
+    await dispatchStaged(tree.container, '.file-pane-staging.file-pane-image img', 'error')
     await settle()
     expect(tree.container.querySelector('.file-pane-note span')?.textContent).toBe('This page needs a browser to continue.')
     expect(getFilePaneSession(sessionId).file?.path).toBe(web.url)
@@ -1177,7 +1189,7 @@ test('a delayed application choice for one type cannot overwrite the newly displ
   expect(option).not.toBeUndefined()
   await act(async () => { option.click() })
   await click(tree.container, 'Open image.png')
-  await act(async () => { tree.container.querySelector('.file-pane-staging.file-pane-image img')!.dispatchEvent(new Event('load')) })
+  await dispatchStaged(tree.container, '.file-pane-staging.file-pane-image img', 'load')
   await settle()
   expect(tree.container.querySelector('.file-pane-open-app')?.getAttribute('title')).toBe('Open in Default application')
   await act(async () => { resume(); await new Promise(resolve => setTimeout(resolve, 80)) })
@@ -1269,7 +1281,7 @@ test.each([false, true])('viewer readiness and late failure respect focus owners
   composer.focus()
   await act(async () => { await requestOpenFile(sessionId, imagePath, { focus: 'viewer' }) })
   expect(document.activeElement).toBe(composer)
-  await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event('load')) })
+  await dispatchStaged(tree.container, '.file-pane-staging img', 'load')
   await settle()
   expect(document.activeElement).toBe(tree.container.querySelector('.file-pane-image:not(.file-pane-staging)'))
   composer.focus()
@@ -1278,7 +1290,7 @@ test.each([false, true])('viewer readiness and late failure respect focus owners
   outside.textContent = 'Other control'
   tree.container.append(outside)
   if (moved) outside.focus()
-  await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event('error')) })
+  await dispatchStaged(tree.container, '.file-pane-staging img', 'error')
   await settle()
   expect(getFilePaneSession(sessionId).committedFile?.path).toBe(imagePath)
   expect(document.activeElement === (moved ? outside : tree.container.querySelector('.file-pane-header [aria-label="Files"]'))).toBe(true)
@@ -1352,7 +1364,7 @@ test('a slow document candidate keeps the painted file header and app choice unt
   expect(lookups).toEqual([])
   await click(tree.container, 'Open in Visual Studio Code')
   expect(external.at(-1)).toMatchObject({path: firstPath,target: 'vscode'})
-  await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event('load')) })
+  await dispatchStaged(tree.container, '.file-pane-staging img', 'load')
   await settle()
   expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(imagePath)
   await lookupReached
@@ -1381,7 +1393,7 @@ test.each(['commit', 'failure', 'close'] as const)('Opened retains the painted f
   expect(openedPosition()).toMatchObject({ x: 12, y: 650 })
   if (outcome === 'close') await act(async () => { closeFilePane(sessionId) })
   else {
-    await act(async () => { tree.container.querySelector('.file-pane-staging img')!.dispatchEvent(new Event(outcome === 'failure' ? 'error' : 'load')) })
+    await dispatchStaged(tree.container, '.file-pane-staging img', outcome === 'failure' ? 'error' : 'load')
     await settle()
     if (outcome === 'commit') {
       await click(tree.container, 'Back')
