@@ -3115,7 +3115,7 @@ function registerIpcHandlers(): void {
     // absence (D1). `count` is the magnitude that distinguishes a lost frame
     // from a lost restore; reading the record without it was the 2026-08-14
     // mistake in miniature.
-    const pending = attachmentGate.onRendererReady()
+    const pending = attachmentGate.onRendererReady(payload.documentId)
     if (pending.length > 0 && !deliverableContents()) {
       logOperational('diagnostic', 'warn', {
         source: 'attachmentReplay',

@@ -3932,6 +3932,8 @@ export type ServerFramePayload =
  */
 export type ServerFrame = ServerFramePayload & {
   deliveryTrace?: import('./deliveryTrace.js').DeliveryTrace
+  /** Transient recovery output belongs to one renderer document and is never reload history. */
+  recoveryViewId?: string
 }
 
 export type ServerFrameKind = ServerFramePayload['kind']

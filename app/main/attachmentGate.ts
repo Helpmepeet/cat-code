@@ -55,6 +55,7 @@ export class AttachmentGate {
     ReplayCoalescingEntry
   >()
   private attached = false
+  private documentId: string | null = null
 
   constructor(
     buffer: FrameReplayBuffer = new FrameReplayBuffer(),
@@ -68,10 +69,11 @@ export class AttachmentGate {
   }
 
   /**
-   * A frame arrived from the supervisor. Always buffered; returned for live
-   * delivery only if a renderer is currently attached (else it waits for replay).
+   * Current-document frames are buffered and delivered when attached. Recovery
+   * from an obsolete document must never enter the new document's projection.
    */
   onFrame(sessionId: SessionId, frame: ServerFrame): ServerFrame[] {
+    if (frame.recoveryViewId !== undefined && frame.recoveryViewId !== this.documentId) return []
     this.buffer.record(sessionId, frame)
     if (!this.attached) return []
 
@@ -227,9 +229,10 @@ export class AttachmentGate {
    * The renderer announced readiness. Replays the buffered snapshot once per
    * document load; a repeat signal on the same load returns nothing.
    */
-  onRendererReady(): ServerFrame[] {
+  onRendererReady(documentId?: string): ServerFrame[] {
     if (this.attached) return []
     this.attached = true
+    this.documentId = documentId ?? null
     this.replayCoalescing.clear()
     return this.buffer.snapshot().map(frame => {
       // Buffered retry delays are no longer fresh. Reuse history presentation
@@ -249,6 +252,7 @@ export class AttachmentGate {
   /** A new document is loading (reload or new window): re-arm for a fresh replay. */
   onNavigationStart(): void {
     this.attached = false
+    this.documentId = null
     this.replayCoalescing.clear()
   }
 
@@ -286,6 +290,7 @@ export class AttachmentGate {
   /** The session was torn down (macOS window-all-closed): drop everything. */
   reset(): void {
     this.attached = false
+    this.documentId = null
     this.replayCoalescing.clear()
     this.buffer.clear()
   }

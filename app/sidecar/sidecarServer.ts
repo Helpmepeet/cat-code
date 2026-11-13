@@ -1363,6 +1363,8 @@ export class SidecarServer {
       sessionId: this.sessionId,
       unavailableParentToolUseIds: [...ids],
       ...(recovered ? { recovered: true as const } : {}),
+      ...(recovered && connection.loadEarlierViewId !== null
+        ? { recoveryViewId: connection.loadEarlierViewId } : {}),
     })
   }
 
@@ -1493,6 +1495,8 @@ export class SidecarServer {
           kind: 'event', protocolVersion: PROTOCOL_VERSION,
           sessionId: this.sessionId, replay: true, event,
           ...(recoveredMessages ? { recovered: true } : {}),
+          ...(recoveredMessages && connection.loadEarlierViewId !== null
+            ? { recoveryViewId: connection.loadEarlierViewId } : {}),
         }
         const size = Buffer.byteLength(JSON.stringify(frame), 'utf8')
         if (++count > MAX_HISTORY_REPLAY_FRAMES || bytes + size > MAX_HISTORY_REPLAY_BYTES) {
@@ -5799,6 +5803,7 @@ export class SidecarServer {
           // set it: its preceding ready frame resets the session projection, so
           // the retained tail appends in its own arrival order.
           recovered: true,
+          ...(viewId === undefined ? {} : { recoveryViewId: viewId }),
           event: prepared,
         })
         added += 1
@@ -5868,6 +5873,7 @@ export class SidecarServer {
       sessionId: this.sessionId,
       requestId,
       ...outcome,
+      ...(connection.loadEarlierViewId === null ? {} : { recoveryViewId: connection.loadEarlierViewId }),
     })
   }
 

@@ -739,6 +739,10 @@ test('successive requests recover the next prefix and a new document recovers it
   const recovered = replayedText(received.slice(start))
   expect(recovered).toEqual([...texts.slice(5, 34), ...texts.slice(0, 5)])
   expect(new Set(recovered).size).toBe(34)
+  expect(received.slice(start).filter(frame =>
+    frame.kind === 'history.loadEarlier.result' ||
+    (frame.kind === 'event' || frame.kind === 'history.availability') && frame.recovered
+  ).every(frame => frame.recoveryViewId === 'document-one')).toBe(true)
   const beforeReload = received.length
   server.handleData(connection, frame(stampHistoryViewAnchor(
     { type: 'history.loadEarlier', requestId: 'reload' }, tail[0]!.uuid, true, 'document-two',

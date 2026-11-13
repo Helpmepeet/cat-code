@@ -293,11 +293,14 @@ describe.skipIf(feature('TRANSCRIPT_CLASSIFIER') ? false : true)('real app-runti
       const connection = server.addConnection(socket)
       received.length = 0
       server.handleData(connection, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: 'review-earlier',
-        message: { type: 'history.loadEarlier', requestId: 'recover-reviews' } }))
+        message: { type: 'history.loadEarlier', requestId: 'recover-reviews', viewId: 'review-document' } }))
       await done.promise
-      expect(received.find(frame => frame.kind === 'history.loadEarlier.result')).toMatchObject({ ok: true })
+      expect(received.find(frame => frame.kind === 'history.loadEarlier.result')).toMatchObject({
+        ok: true, recoveryViewId: 'review-document',
+      })
       expect(received.find(frame => frame.kind === 'event' && frame.event.type === 'tool.review')).toMatchObject({
-        replay: true, recovered: true, event: { type: 'tool.review', toolUseId: 'main-tool', outcome: 'allowed', reason },
+        replay: true, recovered: true, recoveryViewId: 'review-document',
+        event: { type: 'tool.review', toolUseId: 'main-tool', outcome: 'allowed', reason },
       })
     } finally { server.close() }
   })

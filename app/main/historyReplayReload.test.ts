@@ -16,6 +16,7 @@ import {
 } from '../shared/limits.js'
 import type { ServerFrame } from '../shared/protocol.js'
 import { AttachmentGate } from './attachmentGate.js'
+import { createTranscriptState, projectServerFrames } from '../renderer/src/transcriptProjector.js'
 import {
   DEFAULT_MAX_BUFFERED_BYTES,
   DEFAULT_MAX_BUFFERED_FRAMES,
@@ -59,6 +60,47 @@ test('ALIGNMENT INVARIANT: history replay caps sit strictly below the replay-buf
   // snapshots, and early live frames without evicting history.
   expect(MAX_HISTORY_REPLAY_FRAMES).toBeLessThan(DEFAULT_MAX_BUFFERED_FRAMES)
   expect(MAX_HISTORY_REPLAY_BYTES).toBeLessThan(DEFAULT_MAX_BUFFERED_BYTES)
+})
+
+test('reloading before an old recovery finishes never delivers its prefix or completion into the new view', () => {
+  const gate = new AttachmentGate()
+  gate.onFrame(SESSION, readyFrame())
+  gate.onFrame(SESSION, replayEventFrame(2))
+  let state = projectServerFrames(createTranscriptState(), gate.onRendererReady('old-document'))
+  const recover = (index: number, recoveryViewId: string): ServerFrame => ({
+    ...replayEventFrame(index), recovered: true, recoveryViewId,
+  }) as ServerFrame
+  const result = (complete: boolean, recoveryViewId: string): ServerFrame => ({
+    kind: 'history.loadEarlier.result', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION,
+    requestId: 'recovery', ok: true, added: 1, complete, message: '', recoveryViewId,
+  }) as ServerFrame
+  state = projectServerFrames(state, gate.onFrame(SESSION, recover(1, 'old-document')))
+  state = projectServerFrames(state, gate.onFrame(SESSION, result(false, 'old-document')))
+  expect(state.sessions[SESSION]!.rows.map(row => 'content' in row ? row.content : null))
+    .toEqual(['restored 1', 'restored 2'])
+
+  gate.onNavigationStart()
+  state = projectServerFrames(createTranscriptState(), gate.onRendererReady('new-document'))
+  const staleAvailability = {
+    kind: 'history.availability', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION,
+    recovered: true, recoveryViewId: 'old-document', unavailableParentToolUseIds: ['stale-worker'],
+  } as ServerFrame
+  for (const frame of [recover(0, 'old-document'), staleAvailability, result(true, 'old-document')]) {
+    const delivered = gate.onFrame(SESSION, frame)
+    expect(delivered).toEqual([])
+    state = projectServerFrames(state, delivered)
+  }
+  expect(state.sessions[SESSION]!.rows.map(row => 'content' in row ? row.content : null))
+    .toEqual(['restored 2'])
+  expect(state.sessions[SESSION]!.historyTruncated).toBe(true)
+  expect(state.sessions[SESSION]!.unavailableParentToolUseIds.size).toBe(0)
+
+  for (const frame of [recover(0, 'new-document'), recover(1, 'new-document'), result(true, 'new-document')]) {
+    state = projectServerFrames(state, gate.onFrame(SESSION, frame))
+  }
+  expect(state.sessions[SESSION]!.rows.map(row => 'content' in row ? row.content : null))
+    .toEqual(['restored 0', 'restored 1', 'restored 2'])
+  expect(state.sessions[SESSION]!.historyTruncated).toBe(false)
 })
 
 test('an AT-CAP history survives a renderer reload intact through the real gate + buffer', () => {
