@@ -615,6 +615,9 @@ export async function pruneDeferredContinuationHistory(
       const parsed = deferredContinuationHistorySchema.parse(
         await readPrivateJson(join(paths.history, name)),
       ) as DeferredContinuationHistoryV1
+      // Suppression is keyed by filename, even when the payload disagrees.
+      // A mismatched record cannot prove its terminal authority is obsolete.
+      if (name !== `${parsed.jobId}.json`) continue
       if (referencedJobIds.has(parsed.jobId)) continue
       if (now - parsed.terminalAt < DEFERRED_CONTINUATION_HISTORY_RETENTION_MS) {
         continue

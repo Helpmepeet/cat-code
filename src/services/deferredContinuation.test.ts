@@ -485,6 +485,33 @@ describe('deferred continuation durable store', () => {
     expect(await listDueDeferredContinuations(NOW, paths)).toEqual([])
   })
 
+  test('history retention keeps a mismatched tombstone at the filename suppressing pending work', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-retention-mismatched-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    const stranded = job({ notBefore: NOW - 1 })
+    await createPendingDeferredContinuation(stranded, paths)
+    const historyPath = join(paths.history, `${stranded.jobId}.json`)
+    await writeFile(
+      historyPath,
+      `${JSON.stringify({
+        ...stranded,
+        jobId: '44444444-4444-4444-8444-444444444444',
+        terminalState: 'completed',
+        terminalReason: 'completed',
+        terminalAt: NOW - DEFERRED_CONTINUATION_HISTORY_RETENTION_MS - 1,
+      })}\n`,
+      { mode: 0o600 },
+    )
+    expect(await readPendingDeferredContinuation(stranded.sessionId, paths)).toBeNull()
+
+    expect(await pruneDeferredContinuationHistory(NOW, paths)).toBe(0)
+
+    expect(await lstat(historyPath)).toBeDefined()
+    expect(await readPendingDeferredContinuation(stranded.sessionId, paths)).toBeNull()
+    expect(await listDueDeferredContinuations(NOW, paths)).toEqual([])
+  })
+
   test('history retention keeps unreadable history rather than making pending work executable', async () => {
     const root = await mkdtemp('/tmp/cat-code-deferred-retention-malformed-')
     cleanup.push(root)
