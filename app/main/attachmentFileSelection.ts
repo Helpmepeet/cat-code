@@ -10,7 +10,7 @@ export function selectAttachmentFile(
   mint: (sessionId: string, path: string) => AttachmentFileSelection,
 ): AttachmentFileSelection {
   const invalid: AttachmentFileSelection = { kind: 'error', message: 'Choose a readable file, not a folder, and try again.' }
-  if (typeof appSessionId !== 'string' || !appSessionId || typeof path !== 'string' || !isAbsolute(path) || path.includes('"')) return invalid
+  if (typeof appSessionId !== 'string' || !appSessionId || typeof path !== 'string' || !isAbsolute(path)) return invalid
   try {
     const realpath = realpathSync(path)
     const stats = statSync(realpath)

@@ -30,6 +30,9 @@ export function WindowDrop({ enabled, editable, root, onDrop }: {
     const update = (next: DropFeedback | null) => {
       if (current.current?.title === next?.title && current.current?.detail === next?.detail) return
       current.current = next
+      // Previews and email bodies are iframes, whose documents would take the
+      // drag away from this window once the pointer crossed into them.
+      document.documentElement.toggleAttribute('data-window-drag', next !== null)
       setFeedback(next)
     }
     const clear = () => update(null)

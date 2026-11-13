@@ -8,13 +8,13 @@ beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await harness.unmountAll() })
 afterAll(async () => { await harness.teardown() })
 
-function Fixture({ editable = true, attach = async (_file: File) => {}, attachFile = async (_file: File) => {} }) {
+function Fixture({ editable = true, attach = async (_file: File) => {}, attachFile = async (_file: File) => {}, unavailable = () => {} }) {
   const [value, setValue] = useState('hello')
   return <main className="session-pane"><ComposerInput
     windowDropEnabled ariaLabel="Prompt" disabled={false} readOnly={!editable}
     onCompositionEnd={() => {}} onCompositionStart={() => {}} onFocus={() => {}}
     onPointerDown={() => {}} onRemovePaste={() => {}} onValueChange={setValue}
-    onAttachImageFile={attach} onAttachDroppedFile={attachFile} pastes={[]} placeholder="Message" value={value}
+    onAttachImageFile={attach} onAttachDroppedFile={attachFile} onDroppedFileUnavailable={unavailable} pastes={[]} placeholder="Message" value={value}
   /><output>{value}</output></main>
 }
 
@@ -110,7 +110,27 @@ test('text over another field is left to that field', async () => {
   expect((await drag('dragover', search, { files: [file] })).event.defaultPrevented).toBe(true)
 })
 
-test('disabled composers reject drops without a veil', async () => {
+test('a drop that announced files but delivered none reports it instead of inserting text', async () => {
+  let reported = 0
+  const tree = await harness.mount(<Fixture unavailable={() => { reported++ }} />)
+  await drag('dragover', window, { types: ['Files', 'text/plain'] })
+  await drag('drop', window, { types: ['Files', 'text/plain'], text: 'promise text' })
+  expect(reported).toBe(1)
+  expect(tree.container.querySelector('output')?.textContent).toBe('hello')
+})
+
+test('iframes stop taking the drag only while one is over the window', async () => {
+  await harness.mount(<Fixture />)
+  await drag('dragover')
+  expect(document.documentElement.hasAttribute('data-window-drag')).toBe(true)
+  await drag('drop', window, { text: 'x' })
+  expect(document.documentElement.hasAttribute('data-window-drag')).toBe(false)
+  await drag('dragover')
+  await harness.unmountAll()
+  expect(document.documentElement.hasAttribute('data-window-drag')).toBe(false)
+})
+
+test('read-only composers reject drops without a veil', async () => {
   const tree = await harness.mount(<Fixture editable={false} />)
   const result = await drag('dragover')
   expect(result.transfer.dropEffect).toBe('none')

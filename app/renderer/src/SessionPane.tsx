@@ -222,6 +222,9 @@ const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
 /** Stable identity so a session with no worker snapshot never re-renders. */
 const EMPTY_WORKERS: readonly LiveWorkerItem[] = []
 const LATEST_PILL_MIN_GAP = 80
+/** A drop with no native file behind it: a synthetic File, or a macOS file
+ * promise (Photos, Mail) that Chromium announces as Files but never delivers. */
+const DROPPED_FILE_UNAVAILABLE = 'Could not attach this file. Drag it from Finder or use the + button.'
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it.
@@ -672,8 +675,17 @@ export function SessionPane({
   const [transportErrorFromImage, setTransportErrorFromImage] = useState<
     string | null
   >(null)
+  // A ref, not `pickingFile`: a drop's attach chain keeps the callback from the
+  // render it started in, so state captured there can be stale by the time the
+  // file's turn comes after the drop's images.
+  const pickingFileRef = useRef(false)
   const attachFile = async (droppedFile?: File): Promise<void> => {
-    if (!activeSessionId || pickingFile) return
+    if (!activeSessionId) return
+    if (pickingFileRef.current) {
+      if (droppedFile) toast('Wait for the file to finish attaching.', { tone: 'info' })
+      return
+    }
+    pickingFileRef.current = true
     setPickingFile(true)
     onRetryBlockChange?.(activeSessionId, 'attachment', true)
     try {
@@ -681,7 +693,7 @@ export function SessionPane({
         ? await getBridge().dropAttachmentFile(activeSessionId, droppedFile)
         : await getBridge().pickAttachmentFile(activeSessionId)
       if (!selection) {
-        if (droppedFile) setTransportErrorFromImage('Could not attach this file. Choose a file from your computer and try again.')
+        if (droppedFile) setTransportErrorFromImage(DROPPED_FILE_UNAVAILABLE)
         return
       }
       if (selection.kind === 'error') {
@@ -703,6 +715,7 @@ export function SessionPane({
     } catch (error) {
       setTransportErrorFromImage(errorMessage(error))
     } finally {
+      pickingFileRef.current = false
       setPickingFile(false)
       onRetryBlockChange?.(activeSessionId, 'attachment', false)
     }
@@ -2553,6 +2566,7 @@ export function SessionPane({
               // preload so only main can mint a path-backed token (HC1).
               onAttachImageFile={attachImage}
               onAttachDroppedFile={attachFile}
+              onDroppedFileUnavailable={() => setTransportErrorFromImage(DROPPED_FILE_UNAVAILABLE)}
               onPointerDown={engagePreviewPane}
               onValueChange={(next, restoredPastes) => {
                 // A genuine keystroke abandons any active ↑/↓ recall cursor

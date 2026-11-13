@@ -1,3 +1,4 @@
+:root[data-window-drag] iframe { pointer-events: none; }
 .window-drop-veil {
   position: absolute;
   inset: 0;

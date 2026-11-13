@@ -27,6 +27,17 @@ test('accepts one file with images and explains unsupported formats', () => {
   expect(classifyWindowDrop(files('image/png', '', ''), ['Files'])?.allowed).toBe(false)
 })
 
+test('labels follow the user-visible text rules', () => {
+  const shapes: [ReturnType<typeof files>, string[]][] = [
+    [files('image/png'), ['Files']], [files('image/heic'), ['Files']], [files('application/pdf'), ['Files']],
+    [files('application/pdf', ''), ['Files']], [files('image/png', 'text/csv'), ['Files']], [[], ['text/plain']],
+  ]
+  for (const [items, types] of shapes) {
+    const feedback = classifyWindowDrop(items, types)!
+    expect(`${feedback.title} ${feedback.detail}`).not.toMatch(/[—–]/)
+  }
+})
+
 test('plain text qualifies but internal sidebar drags and rich-only content do not', () => {
   expect(classifyWindowDrop([], ['text/plain'])?.title).toBe('Drop to add text')
   for (const type of ['text/workspace-cwd', 'text/pinned-session-id']) {

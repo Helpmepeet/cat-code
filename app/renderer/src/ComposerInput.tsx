@@ -66,6 +66,8 @@ type ComposerInputProps = {
    * A promise serializes preparation across files from the same drop. */
   onAttachImageFile?: (file: File) => void | Promise<void>
   onAttachDroppedFile?: (file: File) => void | Promise<void>
+  /** The drag announced files but the drop delivered none to read. */
+  onDroppedFileUnavailable?: () => void
   onPointerDown: () => void
   /** `at` is the live start offset of the occurrence the user clicked. */
   onRemovePaste: (entry: PasteEntry, at: number) => void
@@ -117,6 +119,7 @@ export function ComposerInput({
   disabled,
   onAttachImageFile,
   onAttachDroppedFile,
+  onDroppedFileUnavailable,
   onCompositionEnd,
   onCompositionStart,
   onFocus,
@@ -448,6 +451,11 @@ export function ComposerInput({
         for (const image of images) await onAttachImageFile?.(image)
         if (otherFiles[0]) await onAttachDroppedFile?.(otherFiles[0])
       })()
+      return
+    }
+    // The veil promised a file; its companion text must not stand in for it.
+    if (event.dataTransfer.types.includes('Files')) {
+      onDroppedFileUnavailable?.()
       return
     }
     const root = rootRef.current
