@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { SlashCatalogEntry } from '../../shared/protocol.js'
 import {
+  applyInlineSlashCommand,
   completeSlashDraft,
   filterSlashCommands,
+  findInlineSlashToken,
+  findSlashCommandRanges,
   nextSlashIndex,
   parseSlashDraft,
 } from './slashCommandPickerModel.js'
@@ -91,4 +94,39 @@ test('completeSlashDraft inserts /name with a trailing space (picker closes)', (
   expect(draft).toBe('/help ')
   // The completed draft no longer opens the picker (space present).
   expect(parseSlashDraft(draft)).toBeNull()
+})
+
+test('findInlineSlashToken finds the slash token around the caret after whitespace', () => {
+  expect(findInlineSlashToken('fix /el', 7)).toEqual({ start: 4, end: 7, query: 'el' })
+  // The token runs past the caret to the end of the name.
+  expect(findInlineSlashToken('fix /eli5 now', 6)).toEqual({ start: 4, end: 9, query: 'eli5' })
+  expect(findInlineSlashToken('line\n/', 6)).toEqual({ start: 5, end: 6, query: '' })
+  expect(findInlineSlashToken('/re', 3)).toEqual({ start: 0, end: 3, query: 're' })
+  // Paths, a caret past the name, and a caret outside the draft are not tokens.
+  expect(findInlineSlashToken('see a/b', 7)).toBeNull()
+  expect(findInlineSlashToken('fix /eli5 now', 10)).toBeNull()
+  expect(findInlineSlashToken('fix', 8)).toBeNull()
+  expect(findInlineSlashToken('/x', 0)).toBeNull()
+})
+
+test('applyInlineSlashCommand replaces only the token and reuses a following space', () => {
+  const draft = 'fix /el now'
+  const token = findInlineSlashToken(draft, 7)!
+  expect(applyInlineSlashCommand(draft, token, 'eli5')).toEqual({ text: 'fix /eli5 now', caret: 10 })
+  const atEnd = findInlineSlashToken('fix /el', 7)!
+  expect(applyInlineSlashCommand('fix /el', atEnd, 'eli5')).toEqual({ text: 'fix /eli5 ', caret: 10 })
+  const beforeNewline = findInlineSlashToken('fix /el\nok', 7)!
+  expect(applyInlineSlashCommand('fix /el\nok', beforeNewline, 'eli5'))
+    .toEqual({ text: 'fix /eli5 \nok', caret: 10 })
+})
+
+test('findSlashCommandRanges keeps only known names at the start or after whitespace', () => {
+  const known = (name: string) => name === 'eli5'
+  expect(findSlashCommandRanges('/eli5 a/eli5 /eli5x\t/eli5.', known)).toEqual([
+    { start: 0, end: 5 },
+    { start: 20, end: 25 },
+  ])
+  // The leading position may use a different set.
+  expect(findSlashCommandRanges('/new /new', (name, start) => name === 'new' && start === 0))
+    .toEqual([{ start: 0, end: 4 }])
 })

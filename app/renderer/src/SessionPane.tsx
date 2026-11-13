@@ -132,8 +132,10 @@ import {
   slashCommandOptionId,
 } from './composerTypeaheadA11y.js'
 import {
+  applyInlineSlashCommand,
   completeSlashDraft,
   filterSlashCommands,
+  findInlineSlashToken,
   nextSlashIndex,
   parseSlashDraft,
 } from './slashCommandPickerModel.js'
@@ -468,6 +470,9 @@ export function SessionPane({
   // `/name ` into the draft; submission resolves the desktop command first.
   const [slashActiveIndex, setSlashActiveIndex] = useState(0)
   const [slashDismissed, setSlashDismissed] = useState(false)
+  // The caret, kept only while it sits in a mid-message `/token`, so moving it
+  // through ordinary text does not re-render the pane.
+  const [inlineSlashCaret, setInlineSlashCaret] = useState<number | null>(null)
   // P1-2 raw-frame debug view (F2, 2026-07-08): collapsed by default and its
   // body rendered ONLY when opened. Stringifying + wrapping the whole retained
   // log (up to 8 MiB) was the dominant DOM reflow on every switch/frame/keystroke;
@@ -505,15 +510,38 @@ export function SessionPane({
   // prop). It falls back to the names-only `slash_commands` catalog (from the
   // init frame) when the rich snapshot is absent — a session that predates it, or
   // a degraded catalog load — so the picker never regresses below name-only.
+  const slashCommandNamesFromInit = selectSlashCommands(transcript, activeSessionId)
   const slashEntries: readonly SlashCatalogEntry[] =
     mergeDesktopSlashCatalog(
       slashCatalog,
-      selectSlashCommands(transcript, activeSessionId),
+      slashCommandNamesFromInit,
       railCommands,
     )
-  const slashQuery = parseSlashDraft(prompt)
+  // Later in a message, `/name` is text the model reads as a skill reference, so
+  // only engine commands are offered there; desktop commands act only alone.
+  const inlineSlashEntries = slashEntries.filter(entry =>
+    !isDesktopNewChatCommand(`/${entry.name}`) &&
+    parseDesktopRailCommand(`/${entry.name}`) === null)
+  const leadingSlashQuery = parseSlashDraft(prompt)
+  const inlineSlash = leadingSlashQuery === null && inlineSlashCaret !== null
+    ? findInlineSlashToken(prompt, inlineSlashCaret)
+    : null
+  const slashQuery = leadingSlashQuery ?? inlineSlash?.query ?? null
   const slashMatches =
-    slashQuery === null ? [] : filterSlashCommands(slashEntries, slashQuery)
+    slashQuery === null
+      ? []
+      : filterSlashCommands(
+          inlineSlash && inlineSlash.start > 0 ? inlineSlashEntries : slashEntries,
+          slashQuery,
+        )
+  // Coloring follows what the engine runs, including commands the menu hides.
+  const inlineSlashCommandNames = slashCatalog.length > 0
+    ? slashCatalog.map(entry => entry.name)
+    : slashCommandNamesFromInit
+  const slashCommandNames = [
+    ...inlineSlashCommandNames,
+    ...slashEntries.map(entry => entry.name),
+  ]
   const slashOpen =
     !slashDismissed && slashQuery !== null && slashMatches.length > 0
   const slashIndex =
@@ -532,18 +560,30 @@ export function SessionPane({
   useEffect(() => {
     setSlashActiveIndex(0)
     setSlashDismissed(false)
-  }, [slashQuery])
+  }, [slashQuery, inlineSlash?.start])
 
   const pickSlashCommand = (name: string): void => {
-    // Slash completion replaces the in-progress query with a longer command.
-    // Preserve the old end as the base so the shared rewrite effect places the
-    // caret at the end of the completed draft.
-    pendingCaretRef.current = {
-      base: prompt.length,
-      prevLength: prompt.length,
+    if (inlineSlash) {
+      // Only the token is replaced; the caret lands after the command's space.
+      const completed = applyInlineSlashCommand(prompt, inlineSlash, name)
+      pendingCaretRef.current = {
+        base: completed.caret,
+        prevLength: completed.text.length,
+      }
+      composerRef.current?.prepareEdit()
+      setPrompt(completed.text)
+      setInlineSlashCaret(null)
+    } else {
+      // Slash completion replaces the in-progress query with a longer command.
+      // Preserve the old end as the base so the shared rewrite effect places the
+      // caret at the end of the completed draft.
+      pendingCaretRef.current = {
+        base: prompt.length,
+        prevLength: prompt.length,
+      }
+      composerRef.current?.prepareEdit()
+      setPrompt(completeSlashDraft(name))
     }
-    composerRef.current?.prepareEdit()
-    setPrompt(completeSlashDraft(name))
     setHistoryNav(EMPTY_HISTORY_NAV)
     setSlashDismissed(false)
     setSlashActiveIndex(0)
@@ -1653,7 +1693,7 @@ export function SessionPane({
             const picked = slashMatches[slashIndex]
             // Enter runs available rail commands; fallback catalog entries
             // that cannot act still complete the draft, as Tab does.
-            const rail = picked && event.key === 'Enter'
+            const rail = picked && event.key === 'Enter' && !inlineSlash
               ? parseDesktopRailCommand(`/${picked.name}`)
               : null
             if (rail && railCommands.includes(rail)) runRailCommand(rail)
@@ -2531,6 +2571,11 @@ export function SessionPane({
               placeholderHeld={placeholderHeld}
               typeahead={composerTypeahead}
               value={prompt}
+              commandNames={slashCommandNames}
+              inlineCommandNames={inlineSlashCommandNames}
+              onCaretChange={(text, caret) => {
+                setInlineSlashCaret(findInlineSlashToken(text, caret) ? caret : null)
+              }}
             />
           </div>
           {/* The send slot holds SEND or STOP, never both (Chat.jsx:1413-1423

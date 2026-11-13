@@ -99,6 +99,20 @@ describe('splitComposerText', () => {
     const draft = `a ${formatPasteRef(1, 1)} b`
     expect(splitComposerText(draft)).toEqual(splitComposerText(draft))
   })
+
+  test('command ranges cut command runs out of text on either side of a pill', () => {
+    const token = formatPasteRef(1, 0)
+    const draft = `/a ${token} then /b`
+    const b = draft.length - 2
+    expect(splitComposerText(draft, () => true, [{ start: 0, end: 2 }, { start: b, end: b + 2 }]))
+      .toEqual([
+        { kind: 'command', text: '/a' },
+        { kind: 'text', text: ' ' },
+        { kind: 'pill', token, id: 1, numLines: 0 },
+        { kind: 'text', text: ' then ' },
+        { kind: 'command', text: '/b' },
+      ])
+  })
 })
 
 describe('readComposerText', () => {

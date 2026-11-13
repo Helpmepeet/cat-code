@@ -97,6 +97,75 @@ test('accepting a mention leaves the caret after its name and separator', async 
   expect(document.activeElement).toBe(field)
 })
 
+const SKILL_CATALOG = [
+  { name: 'eli5', description: 'Explain simply.' },
+  { name: 'review', description: 'Review code.' },
+]
+
+function slashOptions(tree: MountedTree): string[] {
+  return Array.from(tree.container.querySelectorAll('[role="option"] button'))
+    .map(button => button.getAttribute('aria-label')!.replace('Insert slash command ', ''))
+}
+
+function coloredCommands(field: HTMLElement): string[] {
+  return Array.from(field.querySelectorAll('[data-composer-command]')).map(node => node.textContent!)
+}
+
+test('a slash command typed mid-message opens the picker and completes in place', async () => {
+  function Pane() {
+    const [prompt, setPrompt] = useState('explain this /el\nthanks')
+    return <SessionPane {...idleSessionPaneProps()} prompt={prompt} setPrompt={setPrompt}
+      slashCatalog={SKILL_CATALOG} />
+  }
+  const tree = await harness.mount(<Pane />)
+  const field = fieldOf(tree)
+  field.focus()
+  expect(slashOptions(tree)).toEqual([])
+  placeComposerSelection(field, 16, 16)
+  await act(async () => {
+    field.dispatchEvent(new KeyboardEvent('keyup', { key: 'l', bubbles: true }))
+  })
+  // Desktop-only commands such as /clear act only as a whole draft, so they are
+  // not offered here.
+  expect(slashOptions(tree)).toEqual(['/eli5'])
+  await key(field, 'Enter')
+  expect(field.textContent).toBe('explain this /eli5 \nthanks')
+  expect(composerSelectionOffsets(field)).toEqual({ start: 19, end: 19 })
+  expect(slashOptions(tree)).toEqual([])
+  expect(coloredCommands(field)).toEqual(['/eli5'])
+})
+
+test('known slash commands are colored at the start and after whitespace only', async () => {
+  const tree = await harness.mount(<SessionPane {...idleSessionPaneProps()}
+    prompt={'/eli5\nuse /review and /nope, not a/eli5 or /new'} setPrompt={() => {}}
+    slashCatalog={SKILL_CATALOG} />)
+  const field = fieldOf(tree)
+  expect(coloredCommands(field)).toEqual(['/eli5', '/review'])
+  expect(field.textContent).toBe('/eli5\nuse /review and /nope, not a/eli5 or /new')
+})
+
+test('typing past a colored command moves the new text out of its color', async () => {
+  function Pane() {
+    const [prompt, setPrompt] = useState('/eli5')
+    return <SessionPane {...idleSessionPaneProps()} prompt={prompt} setPrompt={setPrompt}
+      slashCatalog={SKILL_CATALOG} />
+  }
+  const tree = await harness.mount(<Pane />)
+  const field = fieldOf(tree)
+  field.focus()
+  const span = field.querySelector('[data-composer-command]')!
+  // What the browser does when the caret sits at the end of the span: the typed
+  // text joins the span's own text node.
+  span.firstChild!.nodeValue = '/eli5 dogs'
+  placeComposerSelection(field, 10, 10)
+  await act(async () => {
+    field.dispatchEvent(new InputEvent('input', { inputType: 'insertText', bubbles: true }))
+  })
+  expect(field.textContent).toBe('/eli5 dogs')
+  expect(coloredCommands(field)).toEqual(['/eli5'])
+  expect(composerSelectionOffsets(field)).toEqual({ start: 10, end: 10 })
+})
+
 test('slash options select through click activation while pointer down preserves editor focus', async () => {
   const picked: string[] = []
   const tree = await harness.mount(<SlashCommandPicker open query="he"

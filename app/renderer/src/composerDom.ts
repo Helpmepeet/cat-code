@@ -225,7 +225,34 @@ export function composerOffsetOf(
 
 export type ComposerSegment =
   | { kind: 'text'; text: string }
+  | { kind: 'command'; text: string }
   | { kind: 'pill'; token: string; id: number; numLines: number }
+
+/** Marks the span that colors a known `/command` in the draft. */
+export const COMMAND_TOKEN_ATTR = 'data-composer-command'
+
+export type ComposerRange = { start: number; end: number }
+
+/** Split one text run at `offset` in the draft into text and command segments. */
+function splitTextRun(
+  text: string,
+  offset: number,
+  commandRanges: readonly ComposerRange[],
+): ComposerSegment[] {
+  const segments: ComposerSegment[] = []
+  let cursor = 0
+  for (const range of commandRanges) {
+    const start = range.start - offset
+    const end = range.end - offset
+    if (end <= cursor || start >= text.length) continue
+    if (start < cursor || end > text.length) continue
+    if (start > cursor) segments.push({ kind: 'text', text: text.slice(cursor, start) })
+    segments.push({ kind: 'command', text: text.slice(start, end) })
+    cursor = end
+  }
+  if (cursor < text.length) segments.push({ kind: 'text', text: text.slice(cursor) })
+  return segments
+}
 
 /**
  * Cut a draft into the runs the composer renders: literal text, and each
@@ -237,22 +264,28 @@ export type ComposerSegment =
  * aside behind them; rendering that as a pill would give them a chip whose
  * preview is empty and whose remove button does nothing. Tokens with no backing
  * entry stay literal text, and merge into the surrounding run.
+ *
+ * `commandRanges` (sorted draft offsets) cut command segments out of the text
+ * runs. A range never spans a pill: a command name cannot contain `[`.
  */
 export function splitComposerText(
   text: string,
   hasEntry: (id: number) => boolean = () => true,
+  commandRanges: readonly ComposerRange[] = [],
 ): ComposerSegment[] {
   const segments: ComposerSegment[] = []
   let pending = ''
+  let pendingStart = 0
   let cursor = 0
   const flush = (): void => {
-    if (pending) segments.push({ kind: 'text', text: pending })
+    if (pending) segments.push(...splitTextRun(pending, pendingStart, commandRanges))
     pending = ''
   }
   // A fresh regex per call: PASTE_REF_RE is global, so its lastIndex is shared.
   const pattern = new RegExp(PASTE_REF_RE.source, 'g')
   let match = pattern.exec(text)
   while (match) {
+    if (!pending) pendingStart = cursor
     pending += text.slice(cursor, match.index)
     const id = Number(match[1])
     if (hasEntry(id)) {
@@ -269,6 +302,7 @@ export function splitComposerText(
     cursor = match.index + match[0].length
     match = pattern.exec(text)
   }
+  if (!pending) pendingStart = cursor
   pending += text.slice(cursor)
   flush()
   return segments
@@ -367,6 +401,11 @@ export function buildPastePill(options: PastePillOptions): HTMLElement {
  * the string is unchanged but a pill's own content is not (a paste added or
  * removed under the same token text).
  *
+ * Command coloring is the exception to "only when the text drifted": typing can
+ * turn `/eli` into the known `/eli5`, or carry a typed space into the colored
+ * span, with the text still matching. When either side has a command, the DOM's
+ * shape is compared too.
+ *
  * Returns whether the DOM was rewritten, so the caller knows when the caret it
  * had needs restoring.
  */
@@ -376,12 +415,25 @@ export function renderComposerDom(
   buildPill: (segment: { token: string; id: number; numLines: number }) => HTMLElement,
   force = false,
   hasEntry?: (id: number) => boolean,
+  commandRanges: readonly ComposerRange[] = [],
 ): boolean {
-  if (!force && readComposerText(root) === text) return false
+  if (!force && readComposerText(root) === text) {
+    const hasCommandDom = root.querySelector(`[${COMMAND_TOKEN_ATTR}]`) !== null
+    if (commandRanges.length === 0 && !hasCommandDom) return false
+    if (domMatchesSegments(root, splitComposerText(text, hasEntry, commandRanges), text)) {
+      return false
+    }
+  }
   const fragment = document.createDocumentFragment()
-  for (const segment of splitComposerText(text, hasEntry)) {
+  for (const segment of splitComposerText(text, hasEntry, commandRanges)) {
     if (segment.kind === 'text') {
       fragment.appendChild(document.createTextNode(segment.text))
+    } else if (segment.kind === 'command') {
+      const span = document.createElement('span')
+      span.setAttribute(COMMAND_TOKEN_ATTR, '')
+      span.className = 'text-accent'
+      span.textContent = segment.text
+      fragment.appendChild(span)
     } else {
       fragment.appendChild(buildPill(segment))
     }
@@ -394,6 +446,41 @@ export function renderComposerDom(
   root.textContent = ''
   root.appendChild(fragment)
   return true
+}
+
+/** Whether the live DOM already has exactly the shape `renderComposerDom` would build. */
+function domMatchesSegments(
+  root: HTMLElement,
+  segments: readonly ComposerSegment[],
+  text: string,
+): boolean {
+  const nodes = Array.from(root.childNodes)
+  if (text.endsWith('\n')) {
+    if (nodes[nodes.length - 1]?.nodeName !== 'BR') return false
+    nodes.pop()
+  }
+  let index = 0
+  for (const segment of segments) {
+    if (segment.kind === 'text') {
+      let run = ''
+      while (nodes[index]?.nodeType === TEXT_NODE) run += nodes[index++]!.nodeValue ?? ''
+      if (run !== segment.text) return false
+      continue
+    }
+    const node = nodes[index++]
+    if (!(node instanceof Element)) return false
+    if (segment.kind === 'pill') {
+      if (node.getAttribute(PASTE_TOKEN_ATTR) !== segment.token) return false
+    } else if (
+      !node.hasAttribute(COMMAND_TOKEN_ATTR) ||
+      node.childNodes.length !== 1 ||
+      node.firstChild?.nodeType !== TEXT_NODE ||
+      node.textContent !== segment.text
+    ) {
+      return false
+    }
+  }
+  return index === nodes.length
 }
 
 // ── Selection ────────────────────────────────────────────────────────────────

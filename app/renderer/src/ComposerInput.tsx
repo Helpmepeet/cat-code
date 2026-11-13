@@ -19,6 +19,7 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
@@ -31,6 +32,7 @@ import {
   readComposerText,
   renderComposerDom,
 } from './composerDom.js'
+import { findSlashCommandRanges } from './slashCommandPickerModel.js'
 import { pasteIdAtCaret } from './composerState.js'
 import { ComposerEditHistory, type ComposerEditSnapshot } from './composerEditHistory.js'
 import { selectAttachableImageFiles } from './imageAttachment.js'
@@ -93,7 +95,15 @@ type ComposerInputProps = {
   /** The one typeahead whose listbox the focused editor currently controls. */
   typeahead?: ComposerTypeaheadA11y | null
   value: string
+  /** Command names colored when `/name` starts the draft. */
+  commandNames?: readonly string[]
+  /** Command names colored when `/name` follows whitespace later in the draft. */
+  inlineCommandNames?: readonly string[]
+  /** The caret after typing or moving it, with the text it is an offset into. */
+  onCaretChange?: (text: string, caret: number) => void
 }
+
+const NO_COMMAND_NAMES: readonly string[] = []
 
 /** Grace period so the cursor can travel from a pill into its popover. */
 const PREVIEW_CLOSE_MS = 160
@@ -117,8 +127,23 @@ export function ComposerInput({
   ref,
   typeahead = null,
   value,
+  commandNames = NO_COMMAND_NAMES,
+  inlineCommandNames = NO_COMMAND_NAMES,
+  onCaretChange,
 }: ComposerInputProps) {
   const rootRef = useRef<HTMLDivElement>(null)
+  const onCaretChangeRef = useRef(onCaretChange)
+  onCaretChangeRef.current = onCaretChange
+  // The pane rebuilds its catalog arrays every render; key on their contents so
+  // the field is not re-rendered for an unchanged catalog.
+  const commandSignature = `${commandNames.join('\n')}\u0000${inlineCommandNames.join('\n')}`
+  const isCommandAt = useMemo(() => {
+    const [leading, inline] = commandSignature
+      .split('\u0000')
+      .map(list => new Set(list.split('\n')))
+    return (name: string, start: number): boolean =>
+      (start === 0 ? leading! : inline!).has(name)
+  }, [commandSignature])
   // Send-message motion (behaviors 1 and 3): the placeholder's own entrance is
   // keyed off the true → false EDGE, read during render (`useEntranceOnChange`'s
   // pattern) and committed in a layout effect so this survives a StrictMode
@@ -218,6 +243,7 @@ export function ComposerInput({
         caretRef.current = end
         placeComposerSelection(root, start, end)
         historyRef.current!.select({ start, end })
+        onCaretChangeRef.current?.(readComposerText(root), end)
       },
       focus() {
         rootRef.current?.focus()
@@ -301,6 +327,7 @@ export function ComposerInput({
       },
       pastesChanged,
       id => pastes.some(entry => entry.id === id),
+      findSlashCommandRanges(value, isCommandAt),
     )
     // A rewrite replaced every node, so a caret that was inside the field is
     // gone. Put it back where it was; a programmatic edit that wants it
@@ -317,7 +344,7 @@ export function ComposerInput({
       history.select({ start: pendingCaret, end: pendingCaret })
     }
     else if (selection) placeComposerSelection(root, selection.start, selection.end)
-  }, [closePreviewSoon, openPreview, pastes, pastesSignature, value, historyVersion])
+  }, [closePreviewSoon, openPreview, pastes, pastesSignature, value, historyVersion, isCommandAt])
 
   // Park the caret on a pill and its preview opens, the same as hovering it.
   const syncCaretPreview = (): void => {
@@ -326,6 +353,7 @@ export function ComposerInput({
     const offsets = composerSelectionOffsets(root)
     if (!offsets) return
     caretRef.current = offsets.end
+    onCaretChangeRef.current?.(value, offsets.end)
     if (offsets.start !== offsets.end) return
     const hit = pasteIdAtCaret(value, offsets.end)
     if (hit !== null) openPreview(hit, 'caret')
@@ -378,6 +406,7 @@ export function ComposerInput({
     history.record(pendingEditRef.current ?? history.current, next, inputType)
     pendingEditRef.current = null
     onValueChange(next.text)
+    onCaretChangeRef.current?.(next.text, next.selection.end)
   }
 
   /**
