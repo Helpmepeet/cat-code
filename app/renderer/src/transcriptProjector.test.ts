@@ -64,6 +64,82 @@ function messageFrame(
   }
 }
 
+test('recovery insertion transactions preserve ordering, streamed upserts and unchanged identities', () => {
+  const sessionId = 'buffered-recovery'
+  const user = (id: string, recovered = true): ServerFrame => ({
+    ...messageFrame(sessionId, {
+      type: 'user', uuid: id as `${string}-${string}-${string}-${string}-${string}`, session_id: 'engine-buffered-recovery',
+      parent_tool_use_id: null, message: { role: 'user', content: id },
+    }),
+    ...(recovered ? { recovered: true, replay: true } : {}),
+  })
+  const stream = S1_STREAMING_REASONING_TURN.messages
+  const initial = projectServerFrames(createTranscriptState(), [
+    ready(sessionId), user('retained', false),
+    ...stream.slice(0, 3).map(message => messageFrame(sessionId, message)),
+  ])
+  const retained = initial.sessions[sessionId]!.rows[0]
+  const streamed = initial.sessions[sessionId]!.rows[1]!
+  const finish: ServerFrame = {
+    ...messageFrame(sessionId, stream[4]!), recovered: true, replay: true,
+  }
+  const close: ServerFrame = {
+    kind: 'history.loadEarlier.result', protocolVersion: PROTOCOL_VERSION,
+    sessionId, requestId: 'batch', ok: true, complete: false, added: 3, message: '',
+  }
+  const frames = [
+    user('older-a'), user('older-b'), user('older-a'), finish,
+    user('older-c'), finish, close,
+    user('oldest-a'), user('oldest-b'), close, user('live', false),
+  ]
+  const sequential = frames.reduce(projectServerFrame, initial)
+  const batched = projectServerFrames(initial, frames)
+  expect(batched.sessions[sessionId]!.rows).toEqual(sequential.sessions[sessionId]!.rows)
+  expect(batched.sessions[sessionId]!.rows.map(row => row.frameId)).toEqual([
+    'oldest-a', 'oldest-b', 'older-a', 'older-b', 'older-c',
+    'retained', stream[4]!.uuid!, 'live',
+  ])
+  expect(batched.sessions[sessionId]!.rows[5]).toBe(retained)
+  expect(batched.sessions[sessionId]!.rows[6]!.id).toBe(streamed.id)
+  expect(initial.sessions[sessionId]!.rows[1]).toBe(streamed)
+  expect(streamed).toHaveProperty('isStreaming', true)
+  expect(batched.sessions[sessionId]!.rows[6]).not.toHaveProperty('isStreaming')
+  expect(batched.sessions[sessionId]!.recoveryInsertAt).toBeNull()
+  expect(projectServerFrames(batched, [user('older-a'), finish])).toBe(batched)
+
+  const reset: ServerFrame = {
+    kind: 'transcript.reset', protocolVersion: PROTOCOL_VERSION, sessionId,
+  }
+  const resetFrames = [user('discard-a'), user('discard-b'), reset, user('replacement'), user('after-reset', false)]
+  expect(projectServerFrames(batched, resetFrames).sessions[sessionId]!.rows)
+    .toEqual(resetFrames.reduce(projectServerFrame, batched).sessions[sessionId]!.rows)
+  expect(projectServerFrames(batched, resetFrames).sessions[sessionId]!.rows.map(row => row.frameId))
+    .toEqual(['replacement', 'after-reset'])
+})
+
+test('recovery buffers preserve mixed fixture tool joins and frame-by-frame projection', () => {
+  for (const fixture of [
+    PARALLEL_AGENTS_TURN,
+    AGENT_WITH_NESTED_SUBAGENT_TURN,
+    S1_STREAMING_TEXT_TURN,
+    S1_CONCURRENT_REASONING_TURN,
+  ]) {
+    const sessionId = 'recovery-fixtures'
+    const initial = projectServerFrame(createTranscriptState(), ready(sessionId))
+    const frames: ServerFrame[] = fixture.messages.map(message => ({
+      ...messageFrame(sessionId, message), recovered: true, replay: true,
+    }))
+    const sequential = frames.reduce(projectServerFrame, initial)
+    const batched = projectServerFrames(initial, frames)
+    expect(batched.sessions[sessionId]!.rows).toEqual(sequential.sessions[sessionId]!.rows)
+    expect(batched.sessions[sessionId]!.toolResultsByUseId)
+      .toEqual(sequential.sessions[sessionId]!.toolResultsByUseId)
+    expect(selectTranscriptRows(batched, sessionId)).toEqual(selectTranscriptRows(sequential, sessionId))
+    expect(projectServerFrames(batched, frames).sessions[sessionId]!.rows)
+      .toEqual(frames.reduce(projectServerFrame, batched).sessions[sessionId]!.rows)
+  }
+})
+
 test('nested row change spans identify tail updates, head inserts and middle reorders', () => {
   const sessionId = 'motion-change-spans'
   let state = projectServerFrame(createTranscriptState(), ready(sessionId))

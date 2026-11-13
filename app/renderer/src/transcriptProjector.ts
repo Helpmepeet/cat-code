@@ -1539,6 +1539,14 @@ export function projectServerFrames(
     // frame would resurrect one the pane just removed.
     const draft = getSessionDraft(drafts, state, frame.sessionId)
     if (!draft) continue
+    // Ordinary recovered messages can use the insertion buffer. Paths that
+    // inspect or restructure the complete transcript require ordered rows.
+    if (!(frame.kind === 'event' && frame.event.type === 'message' &&
+      frame.recovered === true &&
+      ((frame.event.message.type === 'user' && !frame.event.message.origin) ||
+        (frame.event.message.type === 'assistant' && !frame.event.message.error)))) {
+      flushRecoveredRows(draft)
+    }
     if (frame.kind === 'lifecycle') {
       draft.session.inlineCommandResults = [
         ...(draft.session.inlineCommandResults ?? []),
@@ -1697,6 +1705,7 @@ export function projectServerFrames(
   if (changedDrafts.length === 0) return state
   const sessions = { ...state.sessions }
   for (const draft of changedDrafts) {
+    flushRecoveredRows(draft)
     if (visibleWorkChanged(state.sessions[draft.sessionId], draft.session)) draft.session.lastVisibleChangeAt = Date.now()
     sessions[draft.sessionId] = draft.session
   }
@@ -1716,7 +1725,10 @@ type SessionDraft = {
   generatedImagePreviewsOwned: boolean
   agentCompletionsOwned: boolean
   hiddenFrameIdsOwned: boolean
+  // Indexes address the physical rows only. Recovered inserts stay separate
+  // until an ordered-row reader needs them or this transaction is published.
   rowIndexes: Map<string, number> | null
+  recoveredRows: { at: number; rows: TranscriptRow[]; indexes: Map<string, number> } | null
 }
 
 function createSessionDraft(
@@ -1737,6 +1749,7 @@ function createSessionDraft(
     agentCompletionsOwned: false,
     hiddenFrameIdsOwned: false,
     rowIndexes: null,
+    recoveredRows: null,
   }
 }
 
@@ -1892,6 +1905,38 @@ function markFrameSeen(draft: SessionDraft, frameId: string): void {
   draft.session.seenFrameIds[frameId] = true
 }
 
+function flushRecoveredRows(draft: SessionDraft): void {
+  const pending = draft.recoveredRows
+  if (!pending) return
+  const rows = draft.session.rows
+  // Avoid argument-count limits for large recovery deliveries.
+  draft.session.rows = [
+    ...rows.slice(0, pending.at),
+    ...pending.rows,
+    ...rows.slice(pending.at),
+  ]
+  draft.rowsOwned = true
+  draft.recoveredRows = null
+  draft.rowIndexes = null
+}
+
+function insertRecoveredRows(
+  draft: SessionDraft,
+  rows: TranscriptRow[],
+  at: number,
+): void {
+  if (draft.recoveredRows &&
+    at !== draft.recoveredRows.at + draft.recoveredRows.rows.length) {
+    flushRecoveredRows(draft)
+  }
+  draft.recoveredRows ??= { at, rows: [], indexes: new Map() }
+  for (let index = 0; index < rows.length; index++) {
+    draft.recoveredRows.indexes.set(rows[index]!.id, draft.recoveredRows.rows.length + index)
+  }
+  draft.recoveredRows.rows.push(...rows)
+  draft.session.recoveryInsertAt = at + rows.length
+}
+
 /**
  * Where a frame's rows go (B1, decisions/HISTORY-LOAD-EARLIER.md).
  *
@@ -1917,22 +1962,18 @@ function appendFrameRows(
   recoveryInsertAt: number | null,
 ): boolean {
   if (draft.session.seenFrameIds[frameId] || rows.length === 0) return false
-  ensureOwnedRows(draft)
   markFrameSeen(draft, frameId)
-  const indexes = draftRowIndexes(draft)
-  if (recoveryInsertAt === null) {
-    const start = draft.session.rows.length
-    draft.session.rows.push(...rows)
-    for (let index = 0; index < rows.length; index += 1) {
-      indexes.set(rows[index]!.id, start + index)
-    }
+  if (recoveryInsertAt !== null) {
+    insertRecoveredRows(draft, rows, recoveryInsertAt)
     return true
   }
-  draft.session.rows.splice(recoveryInsertAt, 0, ...rows)
-  for (let index = recoveryInsertAt; index < draft.session.rows.length; index += 1) {
-    indexes.set(draft.session.rows[index]!.id, index)
+  ensureOwnedRows(draft)
+  const indexes = draftRowIndexes(draft)
+  const start = draft.session.rows.length
+  draft.session.rows.push(...rows)
+  for (let index = 0; index < rows.length; index += 1) {
+    indexes.set(rows[index]!.id, start + index)
   }
-  draft.session.recoveryInsertAt = recoveryInsertAt + rows.length
   return true
 }
 
@@ -1952,6 +1993,11 @@ function upsertFrameRows(
   const indexes = draftRowIndexes(draft)
   const added: TranscriptRow[] = []
   for (const row of rows) {
+    const pendingIndex = draft.recoveredRows?.indexes.get(row.id)
+    if (pendingIndex !== undefined) {
+      draft.recoveredRows!.rows[pendingIndex] = row
+      continue
+    }
     const index = indexes.get(row.id)
     if (index === undefined) added.push(row)
     else draft.session.rows[index] = row
@@ -1965,11 +2011,7 @@ function upsertFrameRows(
     }
     return added.length
   }
-  draft.session.rows.splice(recoveryInsertAt, 0, ...added)
-  for (let index = recoveryInsertAt; index < draft.session.rows.length; index += 1) {
-    indexes.set(draft.session.rows[index]!.id, index)
-  }
-  draft.session.recoveryInsertAt = recoveryInsertAt + added.length
+  insertRecoveredRows(draft, added, recoveryInsertAt)
   return added.length
 }
 
@@ -2224,6 +2266,7 @@ function projectAssistantFrame(
       nonEmptyString(message.parent_tool_use_id),
     )
     if (appended) {
+      flushRecoveredRows(draft)
       ensureOwnedRows(draft)
       const index = draft.session.rows.findIndex(row => row.frameId === noticeFrameId)
       const row = draft.session.rows[index]
@@ -2773,6 +2816,7 @@ function projectSystemFrame(
       }
       observeRetryWait(retry)
       const appended = appendSystemNotice(draft, frameId, 'api_retry', `${reason}. Retrying.`, recoveryInsertAt, parent)
+      flushRecoveredRows(draft)
       const index = draft.session.rows.findIndex(row => row.frameId === frameId)
       const row = draft.session.rows[index]
       if (row?.kind === 'system-notice') draft.session.rows[index] = { ...row, retry }
@@ -2794,7 +2838,12 @@ function projectSystemFrame(
 function currentScopeRows(draft: SessionDraft, parent: string | null, insertAt: number | null) {
   const rows: TranscriptRow[] = []
   for (let index = (insertAt ?? draft.session.rows.length) - 1; index >= 0; index--) {
-    const row = draft.session.rows[index]!
+    const pending = draft.recoveredRows
+    const row = pending && index >= pending.at
+      ? index < pending.at + pending.rows.length
+        ? pending.rows[index - pending.at]!
+        : draft.session.rows[index - pending.rows.length]!
+      : draft.session.rows[index]!
     const scope = 'parentToolUseId' in row ? row.parentToolUseId ?? null : null
     if (scope === parent && (row.kind === 'result' || row.kind === 'turn-stopped' || row.kind === 'user-text' || row.kind === 'question-reply')) break
     if (scope === parent) rows.push(row)
@@ -2809,6 +2858,8 @@ function settleRetries(
   insertAt: number | null,
 ): void {
   for (const row of currentScopeRows(draft, parent, insertAt)) {
+    if (row.kind !== 'system-notice' || row.retry?.state !== 'waiting') continue
+    flushRecoveredRows(draft)
     settleRetryRow(draft, draft.session.rows.indexOf(row), state)
   }
 }
