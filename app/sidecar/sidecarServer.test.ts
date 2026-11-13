@@ -1483,7 +1483,7 @@ test('idle submit validates selected history and rejects malformed selection', a
   const { server, conn, received } = connect(controller)
   server.handleData(conn, clientFrame({
     type: 'app.submit', requestId: 'malformed', prompt: 'Sure',
-    options: { observedProposal: { messageUuid: 'a', text: 'x'.repeat(2001) } },
+    options: { observedProposal: { messageUuid: 'a', text: 'x'.repeat(16001) } },
   }))
   expect(bindings).toHaveLength(0)
   expect(received.some(frame => frame.kind === 'error' && frame.code === 'bad_request')).toBe(true)

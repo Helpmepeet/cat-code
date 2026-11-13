@@ -16,6 +16,8 @@ import type { ImageDimensions } from '../../../utils/imageResizer.js';
 import { maybeResizeAndDownsampleImageBlock } from '../../../utils/imageResizer.js';
 import { cacheImagePath, storeImage } from '../../../utils/imageStore.js';
 import { logError } from '../../../utils/log.js';
+import { reconstructQuestionSelection, recordQuestionSelections } from '../../../utils/questionSelections.js';
+import type { QuestionAnswer } from '../../../utils/pendingQuestions.js';
 import { applyMarkdown } from '../../../utils/markdown.js';
 import { isPlanModeInterviewPhaseEnabled } from '../../../utils/planModeV2.js';
 import { getPlanFilePath } from '../../../utils/plans.js';
@@ -238,6 +240,7 @@ function AskUserQuestionPermissionRequestBody(t0) {
   }
   const planFilePath = t10;
   const state = useMultipleChoiceState();
+  const receivedAnswers = useRef<Record<string, QuestionAnswer>>(Object.create(null));
   const {
     currentQuestionIndex,
     answers,
@@ -378,7 +381,7 @@ Questions asked and answers provided:\n${questionsWithAnswers_0}`;
           interviewPhaseEnabled: isInPlanMode && isPlanModeInterviewPhaseEnabled()
         });
       }
-      const annotations = {};
+      const annotations = Object.create(null);
       for (const q_3 of questions) {
         const answer_1 = answersToSubmit[q_3.question];
         const notes = questionStates[q_3.question]?.textInputValue;
@@ -398,11 +401,20 @@ Questions asked and answers provided:\n${questionsWithAnswers_0}`;
       const updatedInput = {
         ...toolUseConfirm.input,
         answers: answersToSubmit,
-        ...(Object.keys(annotations).length > 0 && {
-          annotations
-        })
+        annotations,
       };
+      const selections = questions.map((question: Question, questionIndex: number) => {
+        const answer = receivedAnswers.current[question.question];
+        if (!answer) throw new Error('Question selection unavailable');
+        const notes = questionStates[question.question]?.textInputValue?.trim();
+        return reconstructQuestionSelection(toolUseConfirm.toolUseID, questionIndex, { ...question, options: question.options ?? [] }, {
+          ...answer,
+          ...(notes && !answer.other && answer.optionIndices.length === 1
+            ? { notes: [{ optionIndex: answer.optionIndices[0]!, text: notes }] } : {}),
+        });
+      });
       const contentBlocks = await convertImagesToBlocks(allImageAttachments);
+      recordQuestionSelections(toolUseConfirm.toolUseID, questions, answersToSubmit, selections);
       onDone();
       toolUseConfirm.onAllow(updatedInput, [], undefined, contentBlocks && contentBlocks.length > 0 ? contentBlocks : undefined);
     };
@@ -424,8 +436,17 @@ Questions asked and answers provided:\n${questionsWithAnswers_0}`;
       const shouldAdvance = t17 === undefined ? true : t17;
       let answer_2;
       const isMultiSelect = Array.isArray(label);
+      const question: Question | undefined = questions.find((q: Question) => q.question === questionText_1);
+      if (!question) throw new Error('Question unavailable');
+      const labels = isMultiSelect ? label : [label];
+      receivedAnswers.current[questionText_1] = {
+        optionIndices: labels.filter(value => value !== '__other__').map(value => question.options.findIndex(option => option.label === value)),
+        ...(labels.includes('__other__') ? {
+          other: textInput || (Object.values(pastedContentsByQuestion[questionText_1] ?? {}).some(_temp5) ? '(Image attached)' : ''),
+        } : {}),
+      };
       if (isMultiSelect) {
-        answer_2 = label.join(", ");
+        answer_2 = label.filter(value => value !== '__other__').concat(textInput ? [textInput] : []).join(", ");
       } else {
         if (textInput) {
           const questionImages = Object.values(pastedContentsByQuestion[questionText_1] ?? {}).filter(_temp5);

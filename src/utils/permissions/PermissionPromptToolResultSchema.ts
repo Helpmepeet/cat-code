@@ -11,6 +11,7 @@ import {
   persistPermissionUpdates,
 } from './PermissionUpdate.js'
 import { permissionUpdateSchema } from './PermissionUpdateSchema.js'
+import { markHumanPermissionRefusal } from './permissionDecisionContext.js'
 
 export const inputSchema = lazySchema(() =>
   z.object({
@@ -120,8 +121,10 @@ export function permissionPromptToolResultToPermissionDecision(
     )
     toolUseContext.abortController.abort()
   }
-  return {
+  const decision: PermissionDecision = {
     ...result,
     decisionReason,
   }
+  return result.behavior === 'deny' && result.decisionClassification === 'user_reject'
+    ? markHumanPermissionRefusal(decision) : decision
 }

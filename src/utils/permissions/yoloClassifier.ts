@@ -20,6 +20,7 @@ import { parsePromptTooLongTokenCounts } from '../../services/api/errors.js'
 import type { Tool, ToolPermissionContext, Tools } from '../../Tool.js'
 import type { Message, MessageOrigin, UserMessage } from '../../types/message.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
+import { readQuestionSelections } from '../questionSelections.js'
 import type {
   ClassifierUsage,
   YoloClassifierResult,
@@ -54,6 +55,7 @@ import {
 } from './autoModeDefaultsSplice.js'
 import { buildSettingsDenyRulesText } from './autoModeDenyRules.js'
 import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
+import { collectPermissionDecisionContexts, type PermissionDecisionContext } from './permissionDecisionContext.js'
 import {
   buildAutoModeMetaLines,
   buildAutoModeOutcomeLine,
@@ -396,6 +398,7 @@ type TranscriptBlock =
    * `tool_use` it belongs to.
    */
   | { type: 'outcome'; record: AutoModeOutcomeRecord }
+  | { type: 'permission_decision'; record: PermissionDecisionContext }
 
 export type TranscriptEntry = {
   role: 'user' | 'assistant'
@@ -448,28 +451,21 @@ function questionReplyPrefix(origin: MessageOrigin | undefined): string | null {
  * answer to a question that was never asked.
  */
 function askUserQuestionAnswerText(
-  block: { tool_use_id?: string; content?: unknown },
-  askedQuestionIds: ReadonlySet<string>,
+  block: { tool_use_id?: string; content?: unknown; is_error?: boolean },
+  askedQuestions: ReadonlyMap<string, { assistantUuid: string; questions: unknown }>,
+  message: UserMessage,
 ): string | null {
   const id = block.tool_use_id
-  if (id === undefined || !askedQuestionIds.has(id)) return null
-  const raw =
-    typeof block.content === 'string'
-      ? block.content
-      : Array.isArray(block.content)
-        ? block.content
-            .filter(
-              (b): b is { type: 'text'; text: string } =>
-                typeof b === 'object' &&
-                b !== null &&
-                (b as { type?: unknown }).type === 'text',
-            )
-            .map(b => b.text)
-            .join('\n')
-        : ''
-  if (!raw.startsWith('User has answered your questions:')) return null
-  const text = raw.slice('User has answered your questions:'.length).trim()
-  return text.length > 0 ? text : null
+  const asked = id === undefined ? undefined : askedQuestions.get(id)
+  if (!asked || !id || message.sourceToolAssistantUUID !== asked.assistantUuid ||
+    block.is_error || message.origin !== undefined || message.isCompactSummary ||
+    message.isMeta || message.isVirtual || message.isVisibleInTranscriptOnly) return null
+  const output = message.toolUseResult
+  if (typeof output !== 'object' || output === null || !('selections' in output)) return null
+  const selections = readQuestionSelections(output.selections, id, asked.questions)
+  // A body prefix, legacy answer argument, or arbitrary tool output is not a
+  // receiver receipt. Emit only the selected engine-owned meaning and user text.
+  return selections ? JSON.stringify({ selections }) : null
 }
 
 type ClassifierTranscriptOptions = {
@@ -504,6 +500,15 @@ export function buildTranscriptEntries(
   options: ClassifierTranscriptOptions = {},
 ): TranscriptEntry[] {
   const transcript: TranscriptEntry[] = []
+  const decisionContexts = collectPermissionDecisionContexts(messages)
+  // Always expose negative decisions, independently of optional outcome telemetry.
+  // The complete action is data, not a new source of user instructions.
+  for (const record of decisionContexts) {
+    transcript.push({
+      role: 'assistant',
+      content: [{ type: 'permission_decision', record }],
+    })
+  }
   const proposals = new Map<string, ReturnType<typeof readAssistantProposal>>()
   const appendProposal = (humanReply: boolean, rawBinding: unknown) => {
     const binding = humanReply ? parsePriorAssistantContext(rawBinding) : null
@@ -517,7 +522,7 @@ export function buildTranscriptEntries(
   }
   // Which tool_use ids were AskUserQuestion calls. Built as we walk forward, so
   // a result is only credited to a question the agent actually asked earlier.
-  const askedQuestionIds = new Set<string>()
+  const askedQuestions = new Map<string, { assistantUuid: string; questions: unknown }>()
   for (const msg of messages) {
     if (msg.type === 'attachment' && msg.attachment.type === 'queued_command') {
       const prompt = msg.attachment.prompt
@@ -569,7 +574,7 @@ export function buildTranscriptEntries(
             // exception is the user's own answer to a question the agent asked:
             // it is direct user intent, and the ported prompt recognises it by
             // this exact prefix.
-            const answer = askUserQuestionAnswerText(block, askedQuestionIds)
+            const answer = askUserQuestionAnswerText(block, askedQuestions, msg)
             if (answer !== null) {
               textBlocks.push({
                 type: 'text',
@@ -617,7 +622,11 @@ export function buildTranscriptEntries(
             block.name === ASK_USER_QUESTION_TOOL_NAME &&
             block.id !== undefined
           ) {
-            askedQuestionIds.add(block.id)
+            askedQuestions.set(block.id, {
+              assistantUuid: msg.uuid,
+              questions: typeof block.input === 'object' && block.input !== null && 'questions' in block.input
+                ? block.input.questions : undefined,
+            })
           }
           blocks.push({
             type: 'tool_use',
@@ -723,6 +732,16 @@ function toCompactBlock(
   }
   if (block.type === 'outcome') {
     return buildAutoModeOutcomeLine(block.record) ?? ''
+  }
+  if (block.type === 'permission_decision') {
+    const record = block.record
+    const id = record.toolUseId
+    // Reuse the existing call/outcome contract. Unlike tool projections, the
+    // snapshot keeps the full refused input even after its call is compacted.
+    const call = isJsonlTranscriptEnabled()
+      ? classifierData({ [harnessSafeToolName(record.toolName, true)]: record.input, id }) + '\n'
+      : `${/^[\w.-]+$/.test(record.toolName) ? record.toolName : classifierData(record.toolName)}[${classifierText(id)}] ${classifierData(record.input)}\n`
+    return call + classifierData({ outcome: record.outcome, id }) + '\n'
   }
   if (block.type === 'text') {
     return isJsonlTranscriptEnabled()

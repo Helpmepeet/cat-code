@@ -14,6 +14,7 @@ import type { ConversationRewindResult } from '../QueryEngine.js'
 import type { ConversationForkResult } from '../commands/branch/branch.js'
 import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiagnostics.js'
 import { canonicalResumeJson } from '../utils/resumeCheckpoint.js'
+import { markPermissionRequestCancelled } from '../utils/permissions/permissionDecisionContext.js'
 import { HandoffExecution, type WorkspaceHandoffConfiguration } from './handoffExecution.js'
 import type { ResumeCheckpoint, WorkspaceHandoffSnapshot } from '../../app/shared/workspaceHandoff.js'
 import { handoffContinuationPrompt, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './handoff.js'
@@ -438,10 +439,10 @@ export class AppSessionController {
       // A submit cut cancels the main tool signal, not a detached worker's.
       // Unscoped adapters retain the fail-closed turn-level fallback.
       if (adapterIntent === 'interrupt' && pending.signal) continue
-      this.respondToPermissionRequest(requestId, {
+      this.respondToPermissionRequest(requestId, markPermissionRequestCancelled({
         behavior: 'deny',
         message: reason,
-      })
+      }))
     }
     if (alreadyAborting) return
     if (!this.activeTurn) {
@@ -721,17 +722,17 @@ export class AppSessionController {
   ): Promise<AppPermissionResponse> {
     const ownerSignal = signal ?? this.abortController?.signal
     if (ownerSignal?.aborted) {
-      return Promise.resolve({
+      return Promise.resolve(markPermissionRequestCancelled({
         behavior: 'deny',
         message: this.getAbortReason(),
-      })
+      }))
     }
 
     return new Promise(resolve => {
-      const cancel = () => this.respondToPermissionRequest(request.requestId, {
+      const cancel = () => this.respondToPermissionRequest(request.requestId, markPermissionRequestCancelled({
         behavior: 'deny',
         message: typeof ownerSignal?.reason === 'string' ? ownerSignal.reason : this.getAbortReason(),
-      })
+      }))
       this.pendingPermissionRequests.set(request.requestId, {
         request,
         resolve,

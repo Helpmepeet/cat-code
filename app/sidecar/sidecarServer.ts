@@ -1,6 +1,7 @@
 import { readWorkspaceJump, workspaceJumpAllowsQueuedInput, upgradeWorkspaceJumpState, workspaceJumpOperationSha256 } from '../../src/utils/workspaceJumpState.js'
 import { canPersistHandoffTranscript, getTranscriptPath, recordQueueOperation, verifyActiveTranscriptTipDurably } from '../../src/utils/sessionStorage.js'
 import { readAutoModeReviews } from '../../src/app-runtime/autoModeReviewPersistence.js'
+import { reconstructQuestionSelection, recordQuestionSelections, type QuestionSelection } from '../../src/utils/questionSelections.js'
 import type { UndeliveredPrompt } from './sessionResume.js'
 import { getCwd } from '../../src/utils/cwd.js'
 import { queryTimingBoundary } from '../../src/utils/queryProfiler.js'
@@ -5126,7 +5127,7 @@ export class SidecarServer {
       gatedInput,
       message.answers,
     )
-    if (!reconstructed.ok) {
+    if (reconstructed.ok === false) {
       this.sendError(
         connection,
         message.requestId,
@@ -5140,6 +5141,10 @@ export class SidecarServer {
     // Resolve through the engine's OWN decision path. `questions`/`metadata` are
     // the engine's gated fields (never the wire). Replace answers and annotations
     // together so model-supplied notes or previews cannot survive a new pick.
+    if (pending.request.tool_use_id) recordQuestionSelections(
+      pending.request.tool_use_id, gatedInput?.questions, reconstructed.answers,
+      reconstructed.selections.map(selection => ({ ...selection, toolUseId: pending.request.tool_use_id! })),
+    )
     this.controller.respondToPermissionRequest(message.requestId, {
       behavior: 'allow',
       updatedInput: {
@@ -8030,6 +8035,7 @@ type AskUserQuestionReconstructResult =
       ok: true
       answers: Record<string, string>
       annotations: Record<string, { notes: string }>
+      selections: QuestionSelection[]
     }
   | { ok: false; reason: string }
 
@@ -8037,6 +8043,7 @@ type AskUserQuestionReconstructResult =
 type NarrowedGatedQuestion = {
   question: string
   options: string[] // option labels, in engine order
+  descriptions: string[]
   multiSelect: boolean
 }
 
@@ -8068,15 +8075,20 @@ function narrowGatedQuestions(
     seenQuestions.add(record.question)
     if (!Array.isArray(record.options)) return undefined
     const options: string[] = []
+    const descriptions: string[] = []
     for (const option of record.options) {
       if (typeof option !== 'object' || option === null) return undefined
       const label = (option as Record<string, unknown>).label
       if (typeof label !== 'string') return undefined
       options.push(label)
+      const description = (option as Record<string, unknown>).description
+      if (typeof description !== 'string') return undefined
+      descriptions.push(description)
     }
     questions.push({
       question: record.question,
       options,
+      descriptions,
       multiSelect: record.multiSelect === true,
     })
   }
@@ -8091,7 +8103,7 @@ function narrowGatedQuestions(
  * freeform text and option notes are bounded renderer-authored, model-visible
  * text only. Fail-closed on any structural mismatch; the request stays pending.
  */
-function reconstructAskUserQuestionAnswers(
+export function reconstructAskUserQuestionAnswers(
   gatedInput: Record<string, unknown> | undefined,
   answers: AskUserQuestionAnswerMessage['answers'],
 ): AskUserQuestionReconstructResult {
@@ -8106,8 +8118,9 @@ function reconstructAskUserQuestionAnswers(
     }
   }
 
-  const map: Record<string, string> = {}
-  const annotations: Record<string, { notes: string }> = {}
+  const map: Record<string, string> = Object.create(null)
+  const annotations: Record<string, { notes: string }> = Object.create(null)
+  const selections: QuestionSelection[] = []
   for (let qi = 0; qi < questions.length; qi++) {
     const question = questions[qi]!
     const answer = answers[qi]!
@@ -8118,7 +8131,7 @@ function reconstructAskUserQuestionAnswers(
     // Every index must select a real, distinct engine-minted option.
     const seen = new Set<number>()
     for (const index of indices) {
-      if (index >= question.options.length) {
+      if (!Number.isInteger(index) || index < 0 || index >= question.options.length) {
         return {
           ok: false,
           reason: `option index ${index} is out of range for question ${qi}`,
@@ -8168,9 +8181,14 @@ function reconstructAskUserQuestionAnswers(
     const parts = indices.map(index => question.options[index]!)
     if (hasOther) parts.push(other)
     map[question.question] = parts.join(', ')
+    selections.push(reconstructQuestionSelection('', qi, {
+      question: question.question,
+      multiSelect: question.multiSelect,
+      options: question.options.map((label, i) => ({ label, description: question.descriptions[i]! })),
+    }, answer))
   }
 
-  return { ok: true, answers: map, annotations }
+  return { ok: true, answers: map, annotations, selections }
 }
 
 /** Structural deep equality for JSON-shaped values (T6 echo check). */

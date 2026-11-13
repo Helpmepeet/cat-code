@@ -6,6 +6,7 @@ export const AUTO_MODE_OUTCOME_CODES = [
   'error',
   'interrupted',
   'rejected-by-user',
+  'unanswered',
   'blocked-by-permissions',
   'automode-blocked',
   'automode-unavailable',

@@ -303,8 +303,7 @@ export function QuestionView(t0) {
           selectedValue: values
         }, true);
         const textInput = values.includes("__other__") ? questionStates[questionText]?.textInputValue : undefined;
-        const finalValues = values.filter(_temp4).concat(textInput ? [textInput] : []);
-        onAnswer(questionText, finalValues, undefined, false);
+        onAnswer(questionText, values, textInput, false);
       }} onFocus={handleFocus} onCancel={onCancel} submitButtonText={currentQuestionIndex === questions.length - 1 ? "Submit" : "Next"} onSubmit={onSubmit} onDownFromLastItem={handleDownFromLastItem} isDisabled={isFooterFocused} onOpenEditor={handleOpenEditor} onImagePaste={onImagePaste} pastedContents={pastedContents} onRemoveImage={onRemoveImage} /> : <Select key={question.question} options={options} defaultValue={questionStates[question.question]?.selectedValue as string | undefined} onChange={value_1 => {
         onUpdateQuestionState(questionText, {
           selectedValue: value_1

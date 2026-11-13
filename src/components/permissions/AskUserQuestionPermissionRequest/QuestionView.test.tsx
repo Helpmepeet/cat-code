@@ -7,7 +7,7 @@ import { getDefaultAppState } from '../../../state/AppStateStore.js'
 import { createStore } from '../../../state/store.js'
 import { TerminalSizeContext } from '../../../ink/components/TerminalSizeContext.js'
 import { QuestionView } from './QuestionView.js'
-import { Select } from '../../CustomSelect/index.js'
+import { Select, SelectMulti } from '../../CustomSelect/index.js'
 
 function ExitAfterRender({ children }: { children: React.ReactNode }) {
   const { exit } = useApp()
@@ -75,3 +75,46 @@ for (const multiSelect of [false, true]) {
     expect(onAnswer).toHaveBeenCalledWith(question.question, '__other__', 'Wait, explain first.')
   })
 }
+
+test('multi-select forwards raw selections and separate Other text without flattening', async () => {
+  const question = {
+    question: 'Which choices?', options: [
+      { label: 'A, B', description: 'One choice' },
+      { label: 'A', description: 'Another choice' },
+      { label: 'B', description: 'Third choice' },
+    ], multiSelect: true,
+  }
+  const onAnswer = mock(() => {})
+  let selectProps: React.ComponentProps<typeof SelectMulti> | undefined
+  function inspect(node: React.ReactNode): void {
+    React.Children.forEach(node, child => {
+      if (!React.isValidElement<{ children?: React.ReactNode }>(child)) return
+      if (child.type === SelectMulti) selectProps = child.props as React.ComponentProps<typeof SelectMulti>
+      inspect(child.props.children)
+    })
+  }
+  function InspectQuestion() {
+    const node = QuestionView({
+      question, questions: [question], currentQuestionIndex: 0,
+      answers: {}, questionStates: { [question.question]: { textInputValue: 'A, B' } },
+      onUpdateQuestionState() {}, onAnswer, onTextInputFocus() {}, onCancel() {},
+      onSubmit() {}, onRespondToClaude() {}, onFinishPlanInterview() {},
+    })
+    inspect(node)
+    return node
+  }
+  await renderQuestion(
+    <AppStoreContext.Provider value={createStore(getDefaultAppState())}>
+      <TerminalSizeContext.Provider value={{ columns: 100, rows: 40 }}>
+        <InspectQuestion />
+      </TerminalSizeContext.Provider>
+    </AppStoreContext.Provider>,
+  )
+  expect(selectProps).toBeDefined()
+  selectProps!.onChange!(['A, B'])
+  expect(onAnswer).toHaveBeenLastCalledWith(question.question, ['A, B'], undefined, false)
+  selectProps!.onChange!(['A', 'B'])
+  expect(onAnswer).toHaveBeenLastCalledWith(question.question, ['A', 'B'], undefined, false)
+  selectProps!.onChange!(['__other__'])
+  expect(onAnswer).toHaveBeenLastCalledWith(question.question, ['__other__'], 'A, B', false)
+})

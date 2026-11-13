@@ -33,6 +33,7 @@ import {
 import { createPermissionContext } from '../../hooks/toolPermission/PermissionContext.js'
 import { createAppRuntimeCanUseTool } from '../../app-runtime/appRuntimeCanUseTool.js'
 import { AskUserQuestionTool } from '../../tools/AskUserQuestionTool/AskUserQuestionTool.js'
+import { recordQuestionSelections, reconstructQuestionSelection } from '../../utils/questionSelections.js'
 import { withToolActivity } from '../../app-runtime/toolActivity.js'
 import type { ToolActivity } from '../../app-runtime/toolActivityContract.js'
 
@@ -328,11 +329,19 @@ test('desktop question answers execute after one prompt without losing the answe
   const canUseTool = createAppRuntimeCanUseTool({
     getPermissionRequestHandler: () => async request => {
       prompts++
+      const parsed = AskUserQuestionTool.inputSchema.parse(request.request.input)
+      const answers = { [question]: prompts === 1 ? 'Confirm' : 'Restrictions' }
+      const toolUseId = request.request.tool_use_id!
+      recordQuestionSelections(toolUseId, parsed.questions, answers, [
+        reconstructQuestionSelection(toolUseId, 0, { ...parsed.questions[0]!, options: parsed.questions[0]!.options ?? [] }, {
+          optionIndices: [prompts === 1 ? 0 : 1],
+        }),
+      ])
       return {
         behavior: 'allow',
         updatedInput: {
           ...request.request.input,
-          answers: { [question]: prompts === 1 ? 'Confirm' : 'Restrictions' },
+          answers,
         },
       }
     },
@@ -361,7 +370,39 @@ test('desktop question answers execute after one prompt without losing the answe
   })
   expect(results).toHaveLength(1)
   expect(results[0]?.is_error).not.toBe(true)
-  expect(results[0]?.content).toContain(`"${question}"="Confirm"`)
+  const resultText = results[0]?.content
+  expect(typeof resultText).toBe('string')
+  const structured = JSON.parse((resultText as string).slice('User has answered your questions: '.length))
+  expect(structured.answers).toEqual({ [question]: 'Confirm' })
+  expect(structured.selections).toEqual([{
+    toolUseId: 'toolu_desktop_question', questionIndex: 0, question,
+    selectedOptions: [{ optionIndex: 0, label: 'Confirm', description: 'No extra restrictions' }],
+    notes: [],
+  }])
+  expect(updates.some(update => update.message?.type === 'user' &&
+    (update.message.toolUseResult as { selections?: unknown })?.selections !== undefined)).toBe(true)
+})
+
+test('a new question occurrence cannot inherit a cancelled selection receipt', async () => {
+  const toolUseId = 'reused-question-id'
+  const questions = [{ question: 'Choose a scope?', options: [
+    { label: 'Inspect', description: 'Read only' },
+    { label: 'Publish', description: 'External publication' },
+  ], multiSelect: false }]
+  const answers = { 'Choose a scope?': 'Publish' }
+  recordQuestionSelections(toolUseId, questions, answers, [
+    reconstructQuestionSelection(toolUseId, 0, questions[0]!, { optionIndices: [1] }),
+  ])
+  const updates: MessageUpdateLazy[] = []
+  for await (const update of runToolUse({
+    type: 'tool_use', id: toolUseId, name: AskUserQuestionTool.name, input: { questions, answers }, caller: { type: 'direct' },
+  }, createAssistantMessage(), async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
+  createToolUseContext([AskUserQuestionTool]))) updates.push(update)
+  const result = updates.find(update => update.message?.type === 'user')?.message
+  expect(result?.type).toBe('user')
+  if (result?.type !== 'user') throw new Error('Expected question result')
+  expect((result.toolUseResult as { selections?: unknown }).selections).toBeUndefined()
+  expect(JSON.stringify(result.message.content)).toContain('Unverified question answer data:')
 })
 
 describe('runToolUse PreToolUse additionalContext', () => {

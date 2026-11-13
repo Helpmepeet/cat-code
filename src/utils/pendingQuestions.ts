@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod/v4'
+import { reconstructQuestionSelection, type QuestionSelection } from './questionSelections.js'
 import { isSubmitImageBase64, MAX_SUBMIT_IMAGE_BYTES, MAX_SUBMIT_IMAGES, MAX_SUBMIT_TOTAL_IMAGE_BYTES } from '../app-runtime/appSubmitLimits.js'
 
 export const questionReplyImageSchema = z.strictObject({
@@ -49,6 +50,7 @@ export type ResolvedQuestion = PendingQuestion & {
   answer?: string
   notes?: string
   selectedPreview?: string
+  selection?: QuestionSelection
 }
 export type ResolvedQuestionSnapshot = Omit<ResolvedQuestion, 'options' | 'multiSelect' | 'selectedPreview'>
 export type QuestionReplyDelivery = {
@@ -68,7 +70,7 @@ export function questionKey(ref: QuestionReference): string {
   return JSON.stringify([ref.toolUseId, ref.questionIndex])
 }
 
-function reconstructAnswer(question: PendingQuestion, answer: QuestionAnswer): { answer: string; notes?: string; selectedPreview?: string } {
+function reconstructAnswer(question: PendingQuestion, answer: QuestionAnswer): { answer: string; notes?: string; selectedPreview?: string; selection: QuestionSelection } {
   const indices = [...answer.optionIndices].sort((a, b) => a - b)
   if (new Set(indices).size !== indices.length || indices.some(index => !question.options[index])) {
     throw new Error('Invalid option selection')
@@ -84,7 +86,7 @@ function reconstructAnswer(question: PendingQuestion, answer: QuestionAnswer): {
   const text = [...indices.map(index => question.options[index]!.label), ...(other ? [other] : [])].join(', ')
   const noteText = notes.filter(note => note.text.trim()).map(note => `${question.options[note.optionIndex]!.label}: ${note.text.trim()}`).join('\n')
   const preview = !question.multiSelect && indices.length === 1 ? question.options[indices[0]!]!.preview : undefined
-  return { answer: text, ...(noteText ? { notes: noteText } : {}), ...(preview ? { selectedPreview: preview } : {}) }
+  return { answer: text, selection: reconstructQuestionSelection(question.toolUseId, question.questionIndex, question, answer), ...(noteText ? { notes: noteText } : {}), ...(preview ? { selectedPreview: preview } : {}) }
 }
 
 /**
@@ -242,7 +244,7 @@ export class PendingQuestionRegistry {
         return { ...question, state: 'answered', ...reconstructAnswer(question, answer) }
       })
       // Keep engine-authored text quoted, so a question or note cannot break its framing.
-      const content = JSON.stringify(resolutions.map(({ toolUseId, questionIndex, question, answer, notes, selectedPreview }, index) => ({ toolUseId, questionIndex, question: question.slice(0, 4096), answer, ...(notes ? { notes } : {}), ...(selectedPreview ? { selectedPreview } : {}), ...(batch.replies[index]?.images?.length ? { imageCount: batch.replies[index]!.images!.length } : {}) })))
+      const content = JSON.stringify(resolutions.map(({ toolUseId, questionIndex, question, answer, notes, selectedPreview, selection }, index) => ({ toolUseId, questionIndex, question, answer, selection, ...(notes ? { notes } : {}), ...(selectedPreview ? { selectedPreview } : {}), ...(batch.replies[index]?.images?.length ? { imageCount: batch.replies[index]!.images!.length } : {}) })))
       // A failed fsync can leave a complete record on disk. Retrying in the
       // same process must produce the same delivery identity in that case.
       const hash = createHash('sha256').update(fingerprint).update(JSON.stringify(resolutions.map(ref => ref.sourceMessageUuid))).digest('hex')

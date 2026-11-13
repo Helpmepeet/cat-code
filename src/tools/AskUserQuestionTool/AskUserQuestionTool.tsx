@@ -10,6 +10,7 @@ import { Box, Text } from '../../ink.js';
 import type { Tool } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
 import { lazySchema } from '../../utils/lazySchema.js';
+import { takeQuestionSelections } from '../../utils/questionSelections.js';
 import { ASK_USER_QUESTION_TOOL_NAME, ASK_USER_QUESTION_TOOL_PROMPT, DESCRIPTION, MAX_HTML_PREVIEW_CHARS, PREVIEW_FEATURE_PROMPT } from './prompt.js';
 const questionOptionSchema = lazySchema(() => z.object({
   label: z.string().describe('The display text for this option that the user will see and select. Should be concise (1-5 words) and clearly describe the choice.'),
@@ -71,6 +72,14 @@ const outputSchema = lazySchema(() => z.object({
   questions: z.array(questionSchema()).describe('The questions that were asked'),
   answers: z.record(z.string(), z.string()).describe('The answers provided by the user (question text -> answer string; multi-select answers are comma-separated)'),
   annotations: annotationsSchema(),
+  selections: z.array(z.object({
+    toolUseId: z.string(),
+    questionIndex: z.number().int(),
+    question: z.string(),
+    selectedOptions: z.array(z.object({ optionIndex: z.number().int(), label: z.string(), description: z.string() })),
+    other: z.string().optional(),
+    notes: z.array(z.object({ optionIndex: z.number().int(), text: z.string() })),
+  })).optional(),
   shown: z.literal(true).optional()
 }));
 type OutputSchema = ReturnType<typeof outputSchema>;
@@ -220,10 +229,23 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
       await _context.pendingQuestions.ask(_context.toolUseId, parentMessage.uuid, questions.map(q => ({ question: q.question, options: q.options ?? [], multiSelect: q.multiSelect })));
       return { data: { questions, answers: {}, shown: true as const } };
     }
+    const selections = takeQuestionSelections(_context.toolUseId, questions, answers);
+    const answerMap = answers && typeof answers === 'object' && !Array.isArray(answers)
+      ? answers as Record<string, string> : {};
+    const restoredAnswers = selections?.some(selection => selection.question === '__proto__')
+      ? Object.fromEntries([
+          ...Object.entries(answerMap).filter(([question]) => question !== '__proto__'),
+          ...selections.filter(selection => selection.question === '__proto__').map(selection => [
+            selection.question,
+            [...selection.selectedOptions.map(option => option.label), ...(selection.other ? [selection.other] : [])].join(', '),
+          ]),
+        ])
+      : answerMap;
     return {
       data: {
         questions,
-        answers,
+        answers: restoredAnswers,
+        selections,
         ...(annotations && {
           annotations
         })
@@ -232,23 +254,12 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
   },
   mapToolResultToToolResultBlockParam({
     answers,
-    annotations, shown
+    annotations, shown, selections
   }, toolUseID) {
     if (shown) return { type: 'tool_result', content: 'Question shown to the user. No answer yet; it will arrive as a separate message.', tool_use_id: toolUseID };
-    const answersText = Object.entries(answers).map(([questionText, answer]) => {
-      const annotation = annotations?.[questionText];
-      const parts = [`"${questionText}"="${answer}"`];
-      if (annotation?.preview) {
-        parts.push(`selected preview:\n${annotation.preview}`);
-      }
-      if (annotation?.notes) {
-        parts.push(`user notes: ${annotation.notes}`);
-      }
-      return parts.join(' ');
-    }).join(', ');
     return {
       type: 'tool_result',
-      content: `User has answered your questions: ${answersText}.`,
+      content: `${selections ? 'User has answered your questions: ' : 'Unverified question answer data: '}${JSON.stringify({ answers, ...(annotations ? { annotations } : {}), ...(selections ? { selections } : {}) })}`,
       tool_use_id: toolUseID
     };
   }

@@ -42,7 +42,7 @@ describe('AskUserQuestion free-text contract', () => {
       questions,
       answers: { [questions[0]!.question]: 'Wait, explain first.' },
     }, 'question-1')
-    expect(result.content).toBe('User has answered your questions: "What should happen next?"="Wait, explain first.".')
+    expect(result.content).toBe('Unverified question answer data: {"answers":{"What should happen next?":"Wait, explain first."}}')
   })
 })
 

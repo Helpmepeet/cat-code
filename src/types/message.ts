@@ -124,6 +124,8 @@ export type UserMessage = {
    * cancellation from a failed invocation without parsing its model-facing body.
    */
   toolResultStatus?: 'cancelled'
+  /** Engine-owned negative decision evidence; never parsed from tool output. */
+  permissionDecision?: import('../utils/permissions/permissionDecisionContext.js').PermissionDecisionContext
   mcpMeta?: {
     _meta?: Record<string, unknown>
     structuredContent?: Record<string, unknown>
@@ -195,6 +197,8 @@ export type SystemMessage = {
   data?: unknown
   toolUseID?: string
   compactMetadata?: CompactMetadata
+  /** Exact negative decision evidence carried across compaction by the engine. */
+  permissionDecisions?: import('../utils/permissions/permissionDecisionContext.js').PermissionDecisionContext[]
 }
 
 export type SystemAPIErrorMessage = SystemMessage & {

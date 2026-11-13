@@ -13,6 +13,7 @@ import {
 } from '../utils/permissions/permissions.js'
 import { resolveInitialPermissionOccurrence } from '../utils/permissions/autoModeObservation.js'
 import { issueUserApprovalReceipt } from '../services/tools/toolInputSecurity.js'
+import { isPermissionRequestCancelled, markHumanPermissionRefusal, markPermissionRequestCancelled } from '../utils/permissions/permissionDecisionContext.js'
 import type {
   AppPermissionRequest,
   AppPermissionResponse,
@@ -98,6 +99,10 @@ export function createAppRuntimeCanUseTool({
       input,
       toolUseContext,
     )
+    if (decision.behavior === 'deny') {
+      if (isPermissionRequestCancelled(result)) markPermissionRequestCancelled(decision)
+      else markHumanPermissionRefusal(decision)
+    }
     if (decision.behavior === 'allow' && decision.updatedInput !== undefined) {
       // The receipt must bind the normalized object returned to tool execution.
       issueUserApprovalReceipt(tool.name, decision.updatedInput, toolUseID)

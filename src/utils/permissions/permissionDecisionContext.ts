@@ -1,0 +1,85 @@
+import { z } from 'zod/v4'
+import type { Message } from '../../types/message.js'
+import type { PermissionDecision } from '../../types/permissions.js'
+import { getRecordedAutoModeOutcome } from './autoModeMeta.js'
+
+// These marks cannot be supplied through a tool argument or a permission wire response.
+const humanRefusals = new WeakSet<object>()
+const cancelledRequests = new WeakSet<object>()
+
+export function markHumanPermissionRefusal<T extends PermissionDecision>(decision: T): T {
+  humanRefusals.add(decision)
+  return decision
+}
+
+export function markPermissionRequestCancelled<T extends object>(response: T): T {
+  cancelledRequests.add(response)
+  return response
+}
+
+export function isPermissionRequestCancelled(response: object): boolean {
+  return cancelledRequests.has(response)
+}
+
+export function permissionRefusalOutcome(decision: PermissionDecision, toolUseId: string): PermissionDecisionContext['outcome'] {
+  if (cancelledRequests.has(decision)) return 'unanswered'
+  if (humanRefusals.has(decision)) return 'rejected-by-user'
+  if (decision.decisionReason?.type === 'classifier') {
+    const outcome = getRecordedAutoModeOutcome(toolUseId)?.outcome
+    return outcome === 'automode-unavailable' || outcome === 'automode-parsing-error' || outcome === 'interrupted'
+      ? outcome : 'automode-blocked'
+  }
+  return decision.behavior === 'ask' ? 'unanswered' : 'blocked-by-permissions'
+}
+
+const permissionDecisionContextSchema = z.strictObject({
+  version: z.literal(1),
+  toolUseId: z.string().min(1),
+  assistantUuid: z.string().min(1),
+  toolName: z.string().min(1),
+  input: z.record(z.string(), z.unknown()),
+  outcome: z.enum(['rejected-by-user', 'unanswered', 'blocked-by-permissions', 'automode-blocked', 'automode-unavailable', 'automode-parsing-error', 'interrupted']),
+})
+
+/** Engine-owned decision metadata, never inferred from result bodies or summaries. */
+export type PermissionDecisionContext = z.infer<typeof permissionDecisionContextSchema>
+
+export function readPermissionDecisionContext(value: unknown): PermissionDecisionContext | null {
+  const parsed = permissionDecisionContextSchema.safeParse(value)
+  return parsed.success ? parsed.data : null
+}
+
+/**
+ * Negative evidence has no time expiry. It follows the selected conversation
+ * ancestry, including compaction and ordinary restart, not a process-wide cache.
+ * Clearing or rewinding before the decision removes it. New approval is for the
+ * checker to compare to this historical action, never a reason to rewrite it.
+ */
+export function collectPermissionDecisionContexts(messages: readonly Message[]): PermissionDecisionContext[] {
+  const records = new Map<string, PermissionDecisionContext>()
+  const calls = new Map<string, { assistantUuid: string; toolName: string }>()
+  for (const message of messages) {
+    if (message.type === 'assistant') {
+      for (const block of message.message.content) {
+        if (block.type === 'tool_use') calls.set(block.id, { assistantUuid: message.uuid, toolName: block.name })
+      }
+    } else if (message.type === 'system' && message.subtype === 'compact_boundary') {
+      // This field is populated by the engine after summarization, not by the model.
+      const saved = 'permissionDecisions' in message ? message.permissionDecisions : undefined
+      if (Array.isArray(saved)) for (const value of saved) {
+        const record = readPermissionDecisionContext(value)
+        if (record) records.set(JSON.stringify([record.assistantUuid, record.toolUseId]), record)
+      }
+    } else if (message.type === 'user') {
+      const record = readPermissionDecisionContext(message.permissionDecision)
+      if (!record || message.isCompactSummary || message.origin !== undefined) continue
+      const call = calls.get(record.toolUseId)
+      if (call?.assistantUuid !== record.assistantUuid || call.toolName !== record.toolName ||
+        message.sourceToolAssistantUUID !== record.assistantUuid ||
+        !Array.isArray(message.message.content) || !message.message.content.some(block =>
+          block.type === 'tool_result' && block.tool_use_id === record.toolUseId && block.is_error === true)) continue
+      records.set(JSON.stringify([record.assistantUuid, record.toolUseId]), record)
+    }
+  }
+  return [...records.values()]
+}

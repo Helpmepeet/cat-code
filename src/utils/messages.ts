@@ -528,6 +528,7 @@ export function createUserMessage({
   summarizeMetadata,
   toolUseResult,
   toolResultStatus,
+  permissionDecision,
   mcpMeta,
   uuid,
   timestamp,
@@ -546,6 +547,7 @@ export function createUserMessage({
   summarizedRelayedInput?: true
   toolUseResult?: unknown // Matches tool's `Output` type
   toolResultStatus?: 'cancelled'
+  permissionDecision?: UserMessage['permissionDecision']
   /** MCP protocol metadata to pass through to SDK consumers (never sent to model) */
   mcpMeta?: {
     _meta?: Record<string, unknown>
@@ -583,6 +585,7 @@ export function createUserMessage({
     timestamp: timestamp ?? new Date().toISOString(),
     toolUseResult,
     toolResultStatus,
+    permissionDecision,
     mcpMeta,
     imagePasteIds,
     sourceToolAssistantUUID,

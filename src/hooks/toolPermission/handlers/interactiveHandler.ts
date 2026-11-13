@@ -28,6 +28,7 @@ import { errorMessage } from '../../../utils/errors.js'
 import type { PermissionDecision } from '../../../utils/permissions/PermissionResult.js'
 import type { PermissionUpdate } from '../../../utils/permissions/PermissionUpdateSchema.js'
 import { hasPermissionsToUseTool } from '../../../utils/permissions/permissions.js'
+import { markHumanPermissionRefusal } from '../../../utils/permissions/permissionDecisionContext.js'
 import type { PermissionContext } from '../PermissionContext.js'
 import { createResolveOnce } from '../PermissionContext.js'
 
@@ -199,7 +200,7 @@ function handleInteractivePermission(
         },
         { permissionPromptStartTimeMs },
       )
-      resolveOnce(ctx.cancelAndAbort(feedback, undefined, contentBlocks))
+      resolveOnce(markHumanPermissionRefusal(ctx.cancelAndAbort(feedback, undefined, contentBlocks)))
     },
     async recheckPermission() {
       if (isResolved()) return
@@ -289,7 +290,7 @@ function handleInteractivePermission(
             },
             { permissionPromptStartTimeMs },
           )
-          resolveOnce(ctx.cancelAndAbort(response.message))
+          resolveOnce(markHumanPermissionRefusal(ctx.cancelAndAbort(response.message)))
         }
       },
     )
@@ -391,7 +392,7 @@ function handleInteractivePermission(
               { permissionPromptStartTimeMs },
             )
             resolveOnce(
-              ctx.cancelAndAbort(`Denied via channel ${response.fromServer}`),
+              markHumanPermissionRefusal(ctx.cancelAndAbort(`Denied via channel ${response.fromServer}`)),
             )
           }
         },

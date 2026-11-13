@@ -104,6 +104,8 @@ import type {
   PermissionResult,
 } from '../../utils/permissions/PermissionResult.js'
 import { recordAutoModeOutcome } from '../../utils/permissions/autoModeMeta.js'
+import { permissionRefusalOutcome, type PermissionDecisionContext } from '../../utils/permissions/permissionDecisionContext.js'
+import { discardQuestionSelections } from '../../utils/questionSelections.js'
 import {
   startSessionActivity,
   stopSessionActivity,
@@ -496,6 +498,9 @@ export async function* runToolUse(
   canUseTool: CanUseToolFn,
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdateLazy, void> {
+  // A new permission occurrence cannot inherit a cancelled question receipt,
+  // even if a provider reuses the same tool-use id and arguments.
+  discardQuestionSelections(toolUse.id)
   if (isHandoffExecutionFenced(toolUseContext)) {
     yield { message: createHandoffSkippedResult(toolUse.id, assistantMessage) }
     return
@@ -1338,13 +1343,15 @@ async function checkPermissionsAndCallTool(
 
   if (permissionDecision.behavior !== 'allow') {
     await preparation.dispose()
-    if (permissionDecision.decisionReason?.type !== 'classifier') {
-      recordAutoModeOutcome(
-        toolUseID,
-        permissionDecision.behavior === 'ask'
-          ? 'rejected-by-user'
-          : 'blocked-by-permissions',
-      )
+    const outcome = permissionRefusalOutcome(permissionDecision, toolUseID)
+    recordAutoModeOutcome(toolUseID, outcome)
+    const permissionDecisionContext: PermissionDecisionContext = {
+      version: 1,
+      toolUseId: toolUseID,
+      assistantUuid: assistantMessage.uuid,
+      toolName: tool.name,
+      input: structuredClone(processedInput),
+      outcome,
     }
     logForDebugging(`${tool.name} tool permission denied`)
     const decisionInfo = toolUseContext.toolDecisions?.get(toolUseID)
@@ -1419,6 +1426,7 @@ async function checkPermissionsAndCallTool(
         content: messageContent,
         imagePasteIds: rejectImageIds,
         toolUseResult: `Error: ${errorMessage}`,
+        permissionDecision: permissionDecisionContext,
         sourceToolAssistantUUID: assistantMessage.uuid,
       }),
     })
