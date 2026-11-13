@@ -274,6 +274,23 @@ describe('restored subagent branches', () => {
     expect(unavailableParentToolUseIds).toEqual(['tu-2'])
   })
 
+  test('exhausted prefix budgets do not mark an already-delivered resumed tail unavailable', async () => {
+    let reads = 0
+    const restored = await loadBranchesWithinBudget('session', [{
+      agentId: asAgentId('resumed'), parentToolUseId: 'tail-run', agentName: undefined,
+      runs: [
+        { parentToolUseId: 'prefix-run', firstMessageUuid: randomUUID() },
+        { parentToolUseId: 'tail-run', firstMessageUuid: randomUUID() },
+      ],
+    }], 0, new Set(), async () => {
+      reads++
+      return { messages: [], bytesRead: 0, truncated: false }
+    }, { readBytes: MAX_HISTORY_REPLAY_BYTES, readMessages: MAX_HISTORY_REPLAY_FRAMES, frameBytes: 0 },
+    undefined, new Set(['prefix-run']))
+    expect(reads).toBe(0)
+    expect(restored.unavailableParentToolUseIds).toEqual(['prefix-run'])
+  })
+
   test('skips an oversized branch but still reads a later branch that fits', async () => {
     const calls: string[] = []
     const { branches, unavailableParentToolUseIds } = await loadBranchesWithinBudget(

@@ -275,6 +275,10 @@ type Connection = {
   loadEarlierTerminalMessage: string | null
   loadEarlierViewId: string | null
   loadEarlierUnavailableParentToolUseIds: Set<string>
+  /** Independent of document identity: a reset and same-document retry is still a new generation. */
+  loadEarlierGeneration: number
+  /** Rejected frames inside the recovered range cannot be restored by advancing its head. */
+  loadEarlierOmitted: boolean
 }
 
 /**
@@ -1205,6 +1209,8 @@ export class SidecarServer {
       loadEarlierTerminalMessage: null,
       loadEarlierViewId: null,
       loadEarlierUnavailableParentToolUseIds: new Set(this.unavailableParentToolUseIds),
+      loadEarlierGeneration: 0,
+      loadEarlierOmitted: false,
     }
     this.connections.add(connection)
     this.scheduleDiagnostics()
@@ -4636,6 +4642,8 @@ export class SidecarServer {
   }
 
   private resetConnectionReplayState(connection: Connection): void {
+    connection.loadEarlierGeneration++
+    connection.loadEarlierOmitted = false
     connection.loadEarlierAnchorUuid = null
     connection.loadEarlierReplayed = false
     connection.loadEarlierComplete = false
@@ -5617,6 +5625,8 @@ export class SidecarServer {
     // progress within the same document; keep those views distinct.
     const sameView = viewId !== undefined && connection.loadEarlierViewId === viewId
     if (viewId !== undefined && !sameView) {
+      connection.loadEarlierGeneration++
+      connection.loadEarlierOmitted = false
       connection.loadEarlierViewId = viewId
       connection.loadEarlierReadBytes = MAX_HISTORY_LOAD_EARLIER_BYTES
       connection.loadEarlierTerminalMessage = null
@@ -5711,6 +5721,7 @@ export class SidecarServer {
       return
     }
 
+    const recoveryGeneration = connection.loadEarlierGeneration
     this.loadEarlierInFlight = true
     try {
       let read: Awaited<ReturnType<HistoryLoadEarlierReader>>
@@ -5721,7 +5732,7 @@ export class SidecarServer {
           beforeUuid: anchorUuid,
         })
         if (this.closed || connection.closed ||
-            (viewId !== undefined && connection.loadEarlierViewId !== viewId)) return
+            connection.loadEarlierGeneration !== recoveryGeneration) return
         anchorIndex = anchorUuid === null
           ? read.messages.length
           : read.messages.findIndex(message => message.uuid === anchorUuid)
@@ -5763,7 +5774,6 @@ export class SidecarServer {
       for (const id of read.unavailableParentToolUseIds ?? []) {
         if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(id)
       }
-      let omitted = false
       let oldestSentUuid: string | undefined
       let added = 0
       for (const message of missing) {
@@ -5771,7 +5781,7 @@ export class SidecarServer {
         if (!prepared) {
           // Un-serializable recovered message: an omission, so the transcript
           // above this point stays incomplete no matter what the loader said.
-          omitted = true
+          connection.loadEarlierOmitted = true
           if (typeof message.parent_tool_use_id === 'string' &&
               unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(message.parent_tool_use_id)
           continue
@@ -5802,13 +5812,13 @@ export class SidecarServer {
       // omissions strictly OLDER than it stay recoverable by a later request. A
       // message dropped mid-prefix (newer than the oldest send) now sits inside
       // the range a later read treats as already delivered, and is permanently
-      // out of this reader's reach. Nothing lies about that: `omitted` forces
-      // `complete: false` below, and blocks the head latch.
+      // out of this reader's reach. Keep that omission across later tiers so a
+      // deeper prefix cannot hide a known hole by declaring the view complete.
       if (oldestSentUuid !== undefined) {
         connection.loadEarlierAnchorUuid = oldestSentUuid
         connection.loadEarlierReplayed = true
       }
-      const complete = !read.truncated && !omitted
+      const complete = !read.truncated && !connection.loadEarlierOmitted
       const canLoadMore = !complete && read.truncated &&
         connection.loadEarlierReadBytes < MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES
       if (canLoadMore) connection.loadEarlierReadBytes = MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES
@@ -5833,7 +5843,8 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error)
         }`,
       )
-      if (!this.closed && !connection.closed) {
+      if (!this.closed && !connection.closed &&
+          connection.loadEarlierGeneration === recoveryGeneration) {
         this.sendLoadEarlierResult(connection, requestId, {
           ok: false,
           message: 'Earlier messages could not be loaded.',

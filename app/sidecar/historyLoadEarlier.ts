@@ -78,6 +78,8 @@ export const readEarlierDisplayHistory: HistoryLoadEarlierReader = async (
     // count here could only truncate a session the byte budget already fits.
     maxMessages: MAX_HISTORY_LOAD_EARLIER_MESSAGES,
     maxBytes,
+    // A temporary read failure must stay retryable, not look like a proven gap.
+    throwOnReadError: true,
   })
   const history = projectResumedHistory(display.messages)
   const anchorIndex = options?.beforeUuid

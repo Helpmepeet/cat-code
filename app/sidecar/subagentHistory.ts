@@ -290,6 +290,7 @@ export async function loadBranchesWithinBudget(
   for (const candidate of candidates) {
     const omit = () => {
       for (const id of candidateParentIds(candidate)) {
+        if (reachable && !reachable.has(id)) continue
         if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(id)
       }
     }

@@ -5020,6 +5020,8 @@ export async function loadTranscriptFile(
     /** Exact newline-aligned prefix for durable resume proof. */
     prefixBytes?: number
     strict?: boolean
+    /** Propagate failed reads without enabling strict JSONL validation. */
+    throwOnReadError?: boolean
   },
 ): Promise<{
   messages: Map<UUID, TranscriptMessage>
@@ -5355,7 +5357,7 @@ export async function loadTranscriptFile(
       }
     }
   } catch (error) {
-    if (opts?.strict) throw error
+    if (opts?.strict || opts?.throwOnReadError) throw error
     // File doesn't exist or can't be read
   }
 
@@ -5505,11 +5507,12 @@ export async function loadTranscriptFile(
 
 export async function loadDisplayTranscriptFromJsonlPath(
   filePath: string,
-  options: { maxMessages: number; maxBytes: number },
+  options: { maxMessages: number; maxBytes: number; throwOnReadError?: boolean },
 ): Promise<{ messages: SerializedMessage[]; truncated: boolean }> {
   const loaded = await loadTranscriptFile(filePath, {
     keepCompactedHistory: true,
     maxReadBytes: options.maxBytes,
+    throwOnReadError: options.throwOnReadError,
   })
   const active = selectActiveConversation(
     loaded.messages,

@@ -21,7 +21,7 @@
 
 import { afterEach, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createMessageEvent } from '../../src/app-runtime/sessionEvents.js'
@@ -925,6 +925,119 @@ test('a renderer replacement invalidates an older in-flight recovery before it e
   await waitForResult(received, 'new-retry')
   expect(replayedText(received.slice(start))).toEqual(['older'])
   expect(results(received).at(-1)).toMatchObject({ ok: true, complete: true, added: 1 })
+})
+
+test('reset then retry in the same document never admits an older read generation', async () => {
+  const anchor = historyMessage(randomUUID(), 'old tail')
+  const stale = historyMessage(randomUUID(), 'old prefix')
+  let release: ((value: EarlierHistoryRead) => void) | undefined
+  const server = makeServer({
+    history: [anchor], historySourceTruncated: true,
+    loadEarlierHistory: () => new Promise(resolve => { release = resolve }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  server.handleData(connection, frame({
+    type: 'history.loadEarlier', requestId: 'old-generation', viewId: 'same-document',
+  }))
+  server['broadcastTranscriptReset']()
+  const start = received.length
+  server.handleData(connection, frame({
+    type: 'history.loadEarlier', requestId: 'new-generation', viewId: 'same-document', viewTruncated: true,
+  }))
+  await waitForResult(received, 'new-generation')
+  release!({ messages: [stale, anchor], truncated: false })
+  await Bun.sleep(0)
+  expect(replayedText(received.slice(start))).toEqual([])
+  expect(results(received).some(result => result.requestId === 'old-generation')).toBe(false)
+  expect(connection.loadEarlierComplete).toBe(false)
+  expect(connection.loadEarlierAnchorUuid).toBeNull()
+})
+
+test('a rejected frame in an earlier tier cannot disappear from the completeness verdict', async () => {
+  const anchor = historyMessage(randomUUID(), 'tail')
+  const first = historyMessage(randomUUID(), 'first tier oldest')
+  const rejected = {
+    ...historyMessage(randomUUID(), 'omitted'),
+    message: { role: 'user', content: { api_key: 'blocked-fixture' } },
+  } as unknown as SDKMessage
+  const last = historyMessage(randomUUID(), 'first tier newest')
+  const oldest = historyMessage(randomUUID(), 'expanded oldest')
+  let reads = 0
+  const server = makeServer({
+    history: [anchor], historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      reads++
+      return reads === 1
+        ? { messages: [first, rejected, last, anchor], truncated: true }
+        : { messages: [oldest, first, rejected, last, anchor], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  for (const requestId of ['first-tier', 'expanded-tier', 'terminal-repeat']) {
+    server.handleData(connection, frame({
+      type: 'history.loadEarlier', requestId, viewId: 'same-document',
+    }))
+    await waitForResult(received, requestId)
+  }
+  expect(results(received).at(-2)).toMatchObject({
+    added: 1, complete: false, canLoadMore: false,
+    message: "Some earlier messages couldn't be shown.",
+  })
+  expect(results(received).at(-1)).toMatchObject({ added: 0, complete: false, canLoadMore: false })
+  expect(reads).toBe(2)
+  expect(connection.loadEarlierComplete).toBe(false)
+  expect(JSON.stringify(received)).not.toContain('blocked-fixture')
+})
+
+test('recovery read errors preserve torn-tail tolerance and legacy missing-file behavior', async () => {
+  const texts = mintTranscript(2)
+  const { getTranscriptPath } = await import('../../src/utils/sessionStorage.js')
+  const path = getTranscriptPath()
+  writeFileSync(path, '{"type":"user","uuid":', { flag: 'a' })
+  const options = { maxMessages: 100, maxBytes: MAX_HISTORY_LOAD_EARLIER_BYTES }
+  const display = await loadDisplayTranscriptFromJsonlPath(path, { ...options, throwOnReadError: true })
+  expect(projectResumedHistory(display.messages).map(message =>
+    message.type === 'user' ? message.message?.content : null)).toEqual(texts)
+  expect(display.truncated).toBe(false)
+  const unavailablePath = `${path}.unavailable`
+  renameSync(path, unavailablePath)
+  try {
+    await expect(loadDisplayTranscriptFromJsonlPath(path, options)).resolves.toEqual({
+      messages: [], truncated: false,
+    })
+    await expect(loadDisplayTranscriptFromJsonlPath(path, { ...options, throwOnReadError: true })).rejects.toThrow()
+  } finally {
+    renameSync(unavailablePath, path)
+  }
+})
+
+test('a temporary real transcript read failure remains retryable in the same document', async () => {
+  mintTranscript(6)
+  const tail = await replayedTail(2)
+  const { getTranscriptPath } = await import('../../src/utils/sessionStorage.js')
+  const path = getTranscriptPath()
+  const unavailablePath = `${path}.unavailable`
+  const server = makeServer({ history: tail, historySourceTruncated: true })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  renameSync(path, unavailablePath)
+  try {
+    server.handleData(connection, frame({
+      type: 'history.loadEarlier', requestId: 'unreadable', viewId: 'same-document',
+    }))
+    await waitForResult(received, 'unreadable')
+    expect(results(received).at(-1)).toMatchObject({ ok: false, complete: false, added: 0 })
+    expect(results(received).at(-1)).not.toHaveProperty('canLoadMore', false)
+  } finally {
+    renameSync(unavailablePath, path)
+  }
+  server.handleData(connection, frame({
+    type: 'history.loadEarlier', requestId: 'retry', viewId: 'same-document',
+  }))
+  await waitForResult(received, 'retry')
+  expect(results(received).at(-1)).toMatchObject({ ok: true, complete: true, added: 4 })
 })
 
 /* ------------------------------------------------------------------------- *
