@@ -884,9 +884,11 @@ test('acknowledged continuation remains running during a real permission wait be
   } })
   const timers = new Map<ReturnType<typeof setTimeout>, { callback: () => void; delay: number }>()
   const realTimer = globalThis.setTimeout, realClear = globalThis.clearTimeout
-  const timerSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delay: number) => {
-    const id = realTimer(callback, delay)
-    if (delay >= 1_000) timers.set(id, { callback, delay })
+  // Forward extra arguments: sleep() passes its resolver through them, and any
+  // long sleep that starts during this window would otherwise throw.
+  const timerSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, delay: number, ...args: unknown[]) => {
+    const id = realTimer(callback, delay, ...args)
+    if (delay >= 1_000) timers.set(id, { callback: () => callback(...args), delay })
     return id
   }) as typeof setTimeout)
   const clearSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(((id: ReturnType<typeof setTimeout>) => {
