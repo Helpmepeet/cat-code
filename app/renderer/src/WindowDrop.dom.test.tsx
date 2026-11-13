@@ -97,6 +97,19 @@ test('text on the field uses the pointer position rather than the saved caret', 
   }
 })
 
+test('text over another field is left to that field', async () => {
+  const tree = await harness.mount(<><input aria-label="Search sessions" /><Fixture /></>)
+  const search = tree.container.querySelector('input')!
+  const over = await drag('dragover', search, { text: 'world' })
+  expect(over.event.defaultPrevented).toBe(false)
+  expect(tree.container.querySelector('.window-drop-veil')).toBeNull()
+  const dropped = await drag('drop', search, { text: 'world' })
+  expect(dropped.event.defaultPrevented).toBe(false)
+  expect(tree.container.querySelector('output')?.textContent).toBe('hello')
+  const file = new File(['a'], 'a.png', { type: 'image/png' })
+  expect((await drag('dragover', search, { files: [file] })).event.defaultPrevented).toBe(true)
+})
+
 test('disabled composers reject drops without a veil', async () => {
   const tree = await harness.mount(<Fixture editable={false} />)
   const result = await drag('dragover')

@@ -3,6 +3,18 @@ import { createPortal } from 'react-dom'
 import { classifyWindowDrop, type DropFeedback } from './windowDropModel.js'
 import './windowDrop.css'
 
+/** Text dropped on another field (sidebar search, a question's text box) belongs
+ * to that field, so the window-wide route leaves it to the browser. */
+function otherTextField(
+  event: DragEvent,
+  root: React.RefObject<HTMLDivElement | null>,
+): boolean {
+  if (event.dataTransfer?.types.includes('Files')) return false
+  const target = event.target instanceof Element ? event.target : null
+  const field = target?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')
+  return field != null && !(root.current?.contains(field) ?? false)
+}
+
 export function WindowDrop({ enabled, editable, root, onDrop }: {
   enabled: boolean
   editable: boolean
@@ -25,7 +37,7 @@ export function WindowDrop({ enabled, editable, root, onDrop }: {
       const transfer = event.dataTransfer
       if (!transfer) return
       const next = classifyWindowDrop(Array.from(transfer.items), Array.from(transfer.types))
-      if (!next) { clear(); return }
+      if (!next || otherTextField(event, root)) { clear(); return }
       event.preventDefault()
       transfer.dropEffect = editable && next.allowed ? 'copy' : 'none'
       update(editable ? next : null)
@@ -35,7 +47,7 @@ export function WindowDrop({ enabled, editable, root, onDrop }: {
       const transfer = event.dataTransfer
       if (!transfer) return
       const next = classifyWindowDrop(Array.from(transfer.items), Array.from(transfer.types))
-      if (!next) return
+      if (!next || otherTextField(event, root)) return
       event.preventDefault()
       event.stopPropagation()
       if (editable && next.allowed) drop.current(event)

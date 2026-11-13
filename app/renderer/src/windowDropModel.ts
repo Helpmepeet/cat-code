@@ -1,4 +1,6 @@
 import { ACCEPTED_IMAGE_TYPES } from './imageAttachment.js'
+import { PINNED_SESSION_DRAG_MIME } from './sidebarPinnedSessions.js'
+import { WORKSPACE_ORDER_DRAG_MIME } from './sidebarWorkspaceOrder.js'
 
 export type DropFeedback = { allowed: boolean; title: string; detail: string }
 
@@ -7,7 +9,7 @@ export function classifyWindowDrop(
   items: readonly { kind: string; type: string }[],
   types: readonly string[],
 ): DropFeedback | null {
-  if (types.includes('text/workspace-cwd') || types.includes('text/pinned-session-id')) return null
+  if (types.includes(WORKSPACE_ORDER_DRAG_MIME) || types.includes(PINNED_SESSION_DRAG_MIME)) return null
   const files = items.filter(item => item.kind === 'file')
   const images = files.filter(item => ACCEPTED_IMAGE_TYPES.some(type => type === item.type)).length
   if (images) return {
