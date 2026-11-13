@@ -995,6 +995,33 @@ test('a rejected frame in an earlier tier cannot disappear from the completeness
   expect(JSON.stringify(received)).not.toContain('blocked-fixture')
 })
 
+test('an attach-time omission inside the retained tail remains incomplete after recovery and reload', async () => {
+  const oldest = historyMessage(randomUUID(), 'retained oldest')
+  const rejected = {
+    ...historyMessage(randomUUID(), 'omitted middle'),
+    tool_use_result: { api_key: 'blocked-fixture' },
+  } as unknown as SDKMessage
+  const tail = historyMessage(randomUUID(), 'retained newest')
+  const history = [oldest, rejected, tail]
+  const server = makeServer({
+    history,
+    loadEarlierHistory: async () => ({ messages: history, truncated: false }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  for (const viewId of ['first-document', 'replacement-document']) {
+    server.handleData(connection, frame(stampHistoryViewAnchor(
+      { type: 'history.loadEarlier', requestId: viewId }, oldest.uuid, true, viewId,
+    )))
+    await waitForResult(received, viewId)
+    expect(results(received).at(-1)).toMatchObject({
+      complete: false, canLoadMore: false, message: "Some earlier messages couldn't be shown.",
+    })
+  }
+  expect(connection.loadEarlierComplete).toBe(false)
+  expect(JSON.stringify(received)).not.toContain('blocked-fixture')
+})
+
 test('recovery read errors preserve torn-tail tolerance and legacy missing-file behavior', async () => {
   const texts = mintTranscript(2)
   const { getTranscriptPath } = await import('../../src/utils/sessionStorage.js')

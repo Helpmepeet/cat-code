@@ -279,6 +279,8 @@ type Connection = {
   loadEarlierGeneration: number
   /** Rejected frames inside the recovered range cannot be restored by advancing its head. */
   loadEarlierOmitted: boolean
+  /** Initial replay may already contain a hole inside its tail, below every recovery anchor. */
+  loadEarlierReplayOmitted: boolean
 }
 
 /**
@@ -1211,6 +1213,7 @@ export class SidecarServer {
       loadEarlierUnavailableParentToolUseIds: new Set(this.unavailableParentToolUseIds),
       loadEarlierGeneration: 0,
       loadEarlierOmitted: false,
+      loadEarlierReplayOmitted: false,
     }
     this.connections.add(connection)
     this.scheduleDiagnostics()
@@ -1417,6 +1420,8 @@ export class SidecarServer {
         // Un-serializable restored message (should not happen for
         // JSONL-round-tripped content) — an omission, so the replay is lossy.
         truncated = true
+        connection.loadEarlierReplayOmitted = true
+        connection.loadEarlierOmitted = true
         if (typeof message.parent_tool_use_id === 'string') unavailable.add(message.parent_tool_use_id)
         continue
       }
@@ -4648,6 +4653,7 @@ export class SidecarServer {
   private resetConnectionReplayState(connection: Connection): void {
     connection.loadEarlierGeneration++
     connection.loadEarlierOmitted = false
+    connection.loadEarlierReplayOmitted = false
     connection.loadEarlierAnchorUuid = null
     connection.loadEarlierReplayed = false
     connection.loadEarlierComplete = false
@@ -5630,7 +5636,7 @@ export class SidecarServer {
     const sameView = viewId !== undefined && connection.loadEarlierViewId === viewId
     if (viewId !== undefined && !sameView) {
       connection.loadEarlierGeneration++
-      connection.loadEarlierOmitted = false
+      connection.loadEarlierOmitted = connection.loadEarlierReplayOmitted
       connection.loadEarlierViewId = viewId
       connection.loadEarlierReadBytes = MAX_HISTORY_LOAD_EARLIER_BYTES
       connection.loadEarlierTerminalMessage = null
