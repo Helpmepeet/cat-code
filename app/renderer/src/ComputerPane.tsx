@@ -1,11 +1,21 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef } from 'react'
 import { SidePaneNavigation } from './SidePaneNavigation.js'
 import { selectComputerScreen, selectComputerStep, type ComputerStep } from './computerPaneModel.js'
+import { VirtualLineList } from './VirtualLineList.js'
 import './computerPane.css'
 
 export function ComputerScreenIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg>
 }
+
+const ComputerObservation = memo(function ComputerObservation({ text }: { text: string }) {
+  const lines = useMemo(() => text.split('\n'), [text])
+  return <div className="computer-pane-observation">
+    <div className="computer-pane-observation-heading"><strong>Observed output</strong><span>This step may show only what changed.</span></div>
+    <VirtualLineList lines={lines} activeIndex={null} className="computer-pane-observation-lines" label="Computer observation"
+      renderLine={line => <div>{line || '\u00a0'}</div>} />
+  </div>
+})
 
 export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, active = true, running = false, stopped = false, currentStepId }: {
   steps: readonly ComputerStep[]
@@ -20,6 +30,7 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
 }) {
   const selected = selectComputerStep(steps, selectedId)
   const screen = selectComputerScreen(steps, selected)
+  const hasObservation = !!selected?.observation.trim()
   const index = selected ? steps.indexOf(selected) : -1
   const currentRef = useRef<HTMLButtonElement>(null)
   const now = running ? [...steps].reverse().find(step => step.status === 'pending' && (currentStepId === undefined || step.id === currentStepId)) : undefined
@@ -27,7 +38,7 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
   useEffect(() => {
     if (active) currentRef.current?.scrollIntoView?.({ block: 'nearest' })
   }, [active, selected?.id, now?.id])
-  return <section className="computer-pane" aria-label="Computer screenshots" hidden={!active}>
+  return <section className="computer-pane" aria-label="Computer activity" hidden={!active}>
     <header className="computer-pane-header">
       <SidePaneNavigation />
       <div className="computer-pane-status">{running ? <><span className="computer-pane-live-dot" data-live={!!now || undefined} />{now ? 'Using your Mac' : 'Between steps'}</> : <>{stopped && <span className="computer-pane-live-dot" />}{stopped ? 'Stopped' : 'Finished'}<small>{steps.length} steps{!stopped && failed ? ` · ${failed} failed` : ''}</small></>}</div>
@@ -39,21 +50,18 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
       <img alt={`Screenshot: ${screen.step.title}`} decoding="async" src={`data:${screen.step.image.mediaType};base64,${screen.step.image.data}`} />
       {screen.step !== selected && <button type="button" className="computer-pane-from" onClick={() => onSelect(screen.step.id)}>Screen from step {screen.index + 1}</button>}
     </div>}
-    {!screen && <div className="computer-pane-empty" role="status">
-      <ComputerScreenIcon />
-      <strong>No screenshot available</strong>
-      <p>{steps.some(step => step.image)
-        ? 'No screenshot was captured at or before this step. Select a later step to view its screenshot.'
-        : 'These steps have no captured screenshots. Computer actions can use text-only page information.'}</p>
-    </div>}
     <div className="computer-pane-caption">
       <button type="button" className="computer-pane-icon" aria-label="Previous computer step" disabled={index <= 0} onClick={() => onSelect(steps[index - 1]!.id)}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg></button>
       <button type="button" className="computer-pane-icon" aria-label="Next computer step" disabled={index < 0 || index >= steps.length - 1} onClick={() => onSelect(steps[index + 1]!.id)}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg></button>
       <span className="computer-pane-count">Step {index + 1}</span>
       <div className="computer-pane-title" title={selected?.title}>{selected?.title ?? 'Computer'}</div>
       {selected?.status === 'error' && <span className="computer-pane-failed">Failed</span>}
-      {selectedId !== null && <button type="button" className="computer-pane-latest" onClick={() => onSelect(null)}>Latest screenshot</button>}
+      {selectedId !== null && <button type="button" className="computer-pane-latest" onClick={() => onSelect(null)}>Latest output</button>}
     </div>
+    {hasObservation ? active && <ComputerObservation key={selected!.id} text={selected!.observation} /> : !screen && <div className="computer-pane-empty" role="status">
+      <ComputerScreenIcon />
+      <strong>{selected?.status === 'pending' && running ? 'Waiting for output' : 'No output for this step'}</strong>
+    </div>}
     <div className="computer-pane-steps" aria-label="Computer steps">
       {steps.map((step, i) => <button type="button" key={step.id} ref={step.id === (selectedId === null && now ? now.id : selected?.id) ? currentRef : undefined} className="computer-pane-step" aria-current={step.id === selected?.id ? 'true' : undefined} onClick={() => onSelect(step.id)}>
         <span className="computer-pane-dot" data-status={step.status} aria-label={step.status} />

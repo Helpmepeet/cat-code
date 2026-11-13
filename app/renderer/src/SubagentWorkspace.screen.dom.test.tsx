@@ -82,6 +82,24 @@ test('historical screenshots open on click without auto-opening and hide/reveal 
   expect(getFilePaneSession(id).visible).toBe('computer')
 })
 
+test('text-only computer results reach the panel and update without taking another observation', async () => {
+  setup()
+  const text = (key: string, content: string): NestedToolUseRow => ({
+    ...step(key), result: { content, isError: false, diff: null },
+  })
+  const first = text('one', 'Browser tab: 12, Title: "Drive"\n42 button Share')
+  const tree = await harness.mount(view([first]))
+  expect(getFilePaneSession(id).visible).toBe('computer')
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('42 button Share')
+  expect(tree.container.querySelector('.computer-pane-screen')).toBeNull()
+  await tree.render(view([first, text('two', '+ 45 text Restricted')]))
+  expect(tree.container.querySelector('.computer-pane-title')?.textContent).toBe('Step two')
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('Restricted')
+  await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Previous computer step"]')!.click())
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('42 button Share')
+  expect(commands).toEqual([])
+})
+
 test('browser hiding keeps its session, never steals a file, and reopens without sending a close command', async () => {
   setup()
   updateFilePaneSession(id, { open: true, file: { id: 'image', appSessionId: id, path: '/plan.png', displayPath: 'plan.png', kind: 'image', url: 'cat-preview://test/image', revision: 1 } })

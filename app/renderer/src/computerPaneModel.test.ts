@@ -31,6 +31,22 @@ test('empty and screenshotless histories are safe', () => {
   expect(selectComputerStep(selectComputerSteps([computerFixture('pending', false)]), null)?.id).toBe('pending')
 })
 
+test('text observations are preserved verbatim and latest follows text after an older image', () => {
+  const capture = computerFixture('capture')
+  const observation = 'Browser tab: 12, Title: "Drive"\n+ 42 button Share\n- 18 text Loading...\n<script>not markup</script>'
+  const text = { ...computerFixture('text', false), status: 'success' as const, result: { content: observation, isError: false, diff: null } }
+  const pending = computerFixture('pending', false)
+  const steps = selectComputerSteps([capture, text, pending])
+  expect(steps[1]?.observation).toBe(observation)
+  expect(steps[2]?.observation).toBe('')
+  expect(selectComputerStep(steps, null)?.id).toBe('text')
+  expect(selectComputerStep(steps, 'removed')?.id).toBe('text')
+  expect(selectComputerStep(steps, 'capture')?.id).toBe('capture')
+  expect(selectComputerScreen(steps, steps[1]!)).toEqual({ step: steps[0], index: 0 })
+  const empty = { ...text, id: 'empty', result: { ...text.result, content: ' \n ' } }
+  expect(selectComputerStep(selectComputerSteps([text, empty]), null)?.id).toBe('text')
+})
+
 test('screen selection carries only the latest capture at or before the selected step', () => {
   const steps = selectComputerSteps([computerFixture('zero', false), computerFixture('one'), computerFixture('two', false), computerFixture('three')])
   expect(selectComputerScreen(steps, steps[0]!)).toBeNull()

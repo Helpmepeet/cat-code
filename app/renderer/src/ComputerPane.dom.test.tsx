@@ -9,12 +9,13 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type { ComputerStep } from './computerPaneModel.js'
 import { SubagentWorkspace } from './SubagentWorkspace.js'
 import { disposeFilePaneSession, showSlotOccupant, updateFilePaneSession } from './filePaneState.js'
+import { MAX_MOUNTED_CHUNK_CHARS, MAX_MOUNTED_OUTPUT_LINES } from './lineWindow.js'
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await harness.unmountAll() })
 afterAll(async () => { await harness.teardown() })
 const image = { mediaType: 'image/png' as const, data: 'iVBORw0KGgo=' }
-const steps: ComputerStep[] = [{ id: 'one', title: 'Opening Reminders', status: 'success', image }, { id: 'two', title: 'Checking the list', status: 'pending', image: null }]
+const steps: ComputerStep[] = [{ id: 'one', title: 'Opening Reminders', status: 'success', observation: '', image }, { id: 'two', title: 'Checking the list', status: 'pending', observation: '', image: null }]
 
 test('running, between steps, stopped and finished statuses retain screenshot follow controls', async () => {
   let stops = 0
@@ -32,7 +33,7 @@ test('running, between steps, stopped and finished statuses retain screenshot fo
   await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-stop')!.click())
   expect(stops).toBe(1)
   await tree.render(view(true, 'one'))
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest screenshot')
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest output')
   expect(tree.container.querySelector('.computer-pane-screen')?.hasAttribute('data-agent')).toBe(false)
   await act(async () => tree.container.querySelector<HTMLButtonElement>('.computer-pane-latest')!.click())
   expect(selections).toEqual([null])
@@ -43,7 +44,7 @@ test('running, between steps, stopped and finished statuses retain screenshot fo
   expect(tree.container.querySelector('.computer-pane-failed')?.textContent).toBe('Failed')
   await tree.render(view(false, 'two', completed))
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished2 steps · 1 failed')
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest screenshot')
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest output')
   expect(tree.container.querySelector('.computer-pane-stop')).toBeNull()
   await tree.render(view(false, null, completed, true))
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Stopped2 steps')
@@ -51,7 +52,7 @@ test('running, between steps, stopped and finished statuses retain screenshot fo
   expect(tree.container.querySelector('.computer-pane-status')?.textContent).toBe('Finished1 steps')
 })
 
-test('navigation, Latest screenshot, close and screenshotless selection use supplied state', async () => {
+test('navigation, Latest output, close and screenshotless selection use supplied state', async () => {
   const calls: (string | null)[] = []
   let closed = false
   const view = (selectedId: string | null, active = true) => <ComputerPane steps={steps} selectedId={selectedId} onSelect={id => calls.push(id)} onClose={() => { closed = true }} active={active} />
@@ -72,27 +73,50 @@ test('navigation, Latest screenshot, close and screenshotless selection use supp
   expect(tree.container.querySelector('section')?.hidden).toBe(true)
 })
 
-test('a text-only run explains missing screenshots and replaces the message when a capture arrives', async () => {
-  const textOnly: ComputerStep[] = [{ ...steps[1]!, status: 'success' }]
-  const view = (current: ComputerStep[], running = true) => <ComputerPane steps={current} running={running} selectedId={null} onSelect={() => {}} onClose={() => {}} />
-  const tree = await harness.mount(view(textOnly))
+test('text-only observations display without images and follow new output, not the last screenshot', async () => {
+  const first: ComputerStep = { ...steps[1]!, status: 'success', observation: 'Browser tab: 12, Title: "Drive"\n42 button Share' }
+  const second: ComputerStep = { ...first, id: 'three', title: 'Reading sharing settings', observation: '+ 45 text Restricted\n<script>not markup</script>' }
+  const view = (current: ComputerStep[], selectedId: string | null = null) => <ComputerPane steps={current} running selectedId={selectedId} onSelect={() => {}} onClose={() => {}} />
+  const tree = await harness.mount(view([first]))
   expect(tree.container.querySelector('.computer-pane-screen')).toBeNull()
-  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('No screenshot available')
-  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('text-only page information')
-  expect(tree.container.querySelector('.computer-pane-caption')?.textContent).toContain('Checking the list')
-  expect(tree.container.querySelector('.computer-pane-steps')?.textContent).toContain('Checking the list')
-  await tree.render(view(textOnly, false))
-  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('No screenshot available')
-  await tree.render(view([...textOnly, { ...steps[0]!, id: 'capture' }]))
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('42 button Share')
   expect(tree.container.querySelector('.computer-pane-empty')).toBeNull()
+  await tree.render(view([steps[0]!, first, second]))
+  expect(tree.container.querySelector('.computer-pane-title')?.textContent).toBe('Reading sharing settings')
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('+ 45 text Restricted')
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('<script>not markup</script>')
+  expect(tree.container.querySelector('script')).toBeNull()
+  expect(tree.container.querySelector('.computer-pane-observation-heading')?.textContent).toContain('may show only what changed')
   expect(tree.container.querySelector('img')?.alt).toBe('Screenshot: Opening Reminders')
+  expect(tree.container.querySelector('.computer-pane-from')?.textContent).toBe('Screen from step 1')
+  await tree.render(view([steps[0]!, first, second], first.id))
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).toContain('42 button Share')
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')?.textContent).not.toContain('Restricted')
+  await tree.render(view([steps[0]!, first, second, { ...steps[1]!, id: 'pending' }]))
+  expect(tree.container.querySelector('.computer-pane-title')?.textContent).toBe('Reading sharing settings')
+  expect(tree.container.querySelector('.computer-pane-now')).not.toBeNull()
 })
 
-test('a step before the first capture explains how to find a screen without displaying the future', async () => {
+test('an empty step before the first capture never displays future output', async () => {
   const tree = await harness.mount(<ComputerPane steps={[steps[1]!, steps[0]!]} selectedId="two" onSelect={() => {}} onClose={() => {}} />)
   expect(tree.container.querySelector('img')).toBeNull()
-  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('Select a later step')
-  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest screenshot')
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('No output for this step')
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest output')
+  await tree.render(<ComputerPane steps={[steps[1]!]} running selectedId={null} onSelect={() => {}} onClose={() => {}} />)
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('Waiting for output')
+})
+
+test('large observations stay windowed, unchanged output retains its DOM, and hidden panes unmount observation work', async () => {
+  const large: ComputerStep = { ...steps[0]!, image: null, observation: `${'x'.repeat(20_000)}\n${Array.from({ length: 10_000 }, (_, i) => `line ${i}`).join('\n')}` }
+  const view = (current: ComputerStep[], active = true) => <ComputerPane steps={current} active={active} selectedId={null} onSelect={() => {}} onClose={() => {}} />
+  const tree = await harness.mount(view([large]))
+  const output = tree.container.querySelector('[aria-label="Computer observation"]')!
+  expect(output.querySelectorAll('div').length).toBeLessThan(MAX_MOUNTED_OUTPUT_LINES * 3)
+  expect(output.textContent!.length).toBeLessThan(MAX_MOUNTED_CHUNK_CHARS + 10_000)
+  await tree.render(view([large, steps[1]!]))
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')).toBe(output)
+  await tree.render(view([large, steps[1]!], false))
+  expect(tree.container.querySelector('[aria-label="Computer observation"]')).toBeNull()
 })
 
 const row: NestedTranscriptRow = {

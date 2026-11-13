@@ -22,16 +22,11 @@ for (const [kind, directory] of [['managed', '/workspace/chat'], ['project', und
     expect(prompt).toContain('If computer use is disabled or refused, stop; do not switch tools to bypass it')
   })
 
-  test(`${kind} desktop prompt requests task-scoped screenshots without a polling feed`, () => {
+  test(`${kind} desktop prompt does not request screenshots to populate the panel`, () => {
     const prompt = buildDesktopSystemPrompt({ name: null, createdByName: null, createdById: null }, directory)
-    expect(prompt).toContain('not a live video feed')
-    expect(prompt).toContain('when starting UI work and after meaningful visible changes')
-    expect(prompt).toContain('getAXStateAndScreenshot()')
-    expect(prompt).toContain('keep image output enabled')
-    expect(prompt).toContain('not unrelated windows')
-    expect(prompt).toContain('Do not poll for screenshots')
-    expect(prompt).toContain('bypass a disabled or refused capture')
-    expect(prompt).toContain('continue only with permitted observations')
+    expect(prompt).not.toContain('Capture the task')
+    expect(prompt).not.toContain('getAXStateAndScreenshot()')
+    expect(prompt).not.toContain('keep image output enabled')
   })
 
   test(`${kind} desktop prompt keeps metadata maintenance small and descriptions stable`, () => {

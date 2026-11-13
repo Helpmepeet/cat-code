@@ -5,6 +5,7 @@ export type ComputerStep = {
   id: string
   title: string
   status: ToolCardStatus
+  observation: string
   image: NonNullable<ToolResultProjection['images']>[number] | null
   nested?: boolean
 }
@@ -23,7 +24,7 @@ export function selectComputerSteps(rows: readonly NestedTranscriptRow[]): Compu
     for (const row of branch) {
       if (row.kind === 'tool-use' && row.toolFamily === 'computer' && !seen.has(row.id)) {
         seen.add(row.id)
-        steps.push({ id: row.id, title: deriveTarget(row), status: row.status, image: row.result?.images?.at(-1) ?? null, nested })
+        steps.push({ id: row.id, title: deriveTarget(row), status: row.status, observation: row.result?.content ?? '', image: row.result?.images?.at(-1) ?? null, nested })
       }
       visit(row.children, true)
     }
@@ -45,14 +46,14 @@ export function selectCurrentComputerStepId(rows: readonly NestedTranscriptRow[]
   return steps.reverse().find(step => step.status === 'pending')?.id ?? null
 }
 
-/** Follow captures, not unfinished calls. A removed selection rejoins the latest capture. */
+/** Follow received output, keeping the last observation while another call is pending. */
 export function selectComputerStep(steps: readonly ComputerStep[], selectedId: string | null): ComputerStep | null {
   if (selectedId !== null) {
     const selected = steps.find(step => step.id === selectedId)
     if (selected) return selected
   }
   for (let index = steps.length - 1; index >= 0; index--) {
-    if (steps[index]!.image !== null) return steps[index]!
+    if (steps[index]!.observation.trim() || steps[index]!.image !== null) return steps[index]!
   }
   return steps.at(-1) ?? null
 }
