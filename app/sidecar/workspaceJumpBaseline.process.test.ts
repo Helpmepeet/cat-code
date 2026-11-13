@@ -112,7 +112,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     writeFileSync(join(config, 'settings.json'), JSON.stringify({ permissions: { allow: ['JumpToProject'] },
       hooks: { InstructionsLoaded: [{ hooks: [{ type: 'command', command: `"${process.execPath}" "${hook}"` }] }] } }))
   }
-  let sourceRequests = 0, destinationRequests = 0, retainedReplayCount = 0, validationCalls = 0
+  let sourceRequests = 0, destinationRequests = 0, retainedReplayCount = 0, validationCalls = 0, readyFrames = 0
   const destinationCommands: string[] = []
   const peerRosterHolds: boolean[] = []
   let dropped = false, sawNullAdmission = false, destinationPermission = false, destinationReady = false
@@ -270,6 +270,7 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
     supervisor.subscribe(event => {
       if (event.type !== 'frame') return
       const { deliveryTrace: _trace, ...frame } = event.frame
+      if (frame.kind === 'ready') readyFrames++
       if (queuedHuman) {
         frames.push(frame)
         if (frame.kind === 'queued-prompts.snapshot') queuedUuid ??= frame.prompts.find(prompt => prompt.text === queuedText)?.id
@@ -329,7 +330,9 @@ for (const fixture of ['short', 'queued_human', 'many_rows', 'retained', 'unreso
         { cwd: original.cwd, env: { ...process.env, ...env }, stdout: 'pipe', stderr: 'pipe' })
       const [code, error] = await Promise.all([minter.exited, new Response(minter.stderr).text(), new Response(minter.stdout).text()])
       expect(code, error).toBe(0)
+      const previousReadyFrames = readyFrames
       expect((await host.restoreSession(id)).ok).toBe(true)
+      await until(() => readyFrames > previousReadyFrames)
       await until(() => supervisor.listSessions().some(row => row.sessionId === id && row.status === 'ready'))
     }
     supervisor.send(id, { type: 'app.submit', requestId: randomUUID(), prompt: fixture === 'short' ? 'Jump to P1_gaming' : 'Run the isolated jump fixture.' })

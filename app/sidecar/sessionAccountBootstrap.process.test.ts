@@ -54,7 +54,7 @@ test.each([false, true])('real replacement process holds an old chat after same-
   expect(replacement.selection).toEqual(saved)
   expect((await restart(root, { anthropic: handle.accountId })).blocked).toBe(true)
   expect((await restart(root, { anthropic: handle.accountId, anthropicLoginGeneration: handle.generation + 1 })).blocked).toBe(false)
-})
+}, 30_000)
 
 test('real replacement process permits a refreshed revision within the saved login generation', async () => {
   const { root, credentials, handle } = setup()

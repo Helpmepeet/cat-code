@@ -117,7 +117,9 @@ test('account menus open above rows near the scroll boundary and restore focus o
     lifecycleState: 'signed_out', lifecycleReadStatus: 'valid',
   }] }
   let triggerTop = 700
-  const bounds = spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function(this: Element) {
+  const viewportHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight')
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: 900 })
+  const bounds = spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function(this: HTMLElement) {
     const top = this.matches('.accounts-page') ? 40 : this.matches('[role="menu"]') ? 0 : triggerTop
     const height = this.matches('.accounts-page') ? 710 : this.matches('[role="menu"]') ? 180 : 28
     return { top, bottom: top + height, height, left: 0, right: 180, width: 180, x: 0, y: top, toJSON: () => ({}) } as DOMRect
@@ -143,6 +145,8 @@ test('account menus open above rows near the scroll boundary and restore focus o
     }
   } finally {
     bounds.mockRestore()
+    if (viewportHeight) Object.defineProperty(window, 'innerHeight', viewportHeight)
+    else Reflect.deleteProperty(window, 'innerHeight')
   }
 })
 
