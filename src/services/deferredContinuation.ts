@@ -973,8 +973,13 @@ export async function acquireDeferredContinuationLocks(
         sessionGuard.assertHealthy()
       },
       async release() {
-        await sessionGuard.release()
-        await jobGuard.release()
+        try {
+          await sessionGuard.release()
+        } finally {
+          // A compromised session lock rejects release, but the independent job
+          // lock may still be healthy and must stop refreshing.
+          await jobGuard.release()
+        }
       },
     }
   } catch (error) {

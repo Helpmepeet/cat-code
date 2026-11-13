@@ -5,6 +5,8 @@ import {
   acquireDeferredContinuationLocks,
   createPendingDeferredContinuation,
   DEFERRED_LOCK_UPDATE_MS,
+  getDeferredContinuationLockTargets,
+  getDeferredContinuationPaths,
   readPendingDeferredContinuation,
   type DeferredContinuationJobV1,
 } from './deferredContinuation.js'
@@ -22,6 +24,7 @@ import {
   recordTranscript,
 } from '../utils/sessionStorage.js'
 import { getSessionId, switchSession } from '../bootstrap/state.js'
+import { unlock } from '../utils/lockfile.js'
 import type { SessionId } from '../types/ids.js'
 import type { Message } from '../types/message.js'
 
@@ -97,6 +100,42 @@ async function runHiddenWorker(config: string) {
 }
 
 describe('deferred continuation process probes', () => {
+  test('releasing a compromised session lock still frees the healthy job lock', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-partial-compromise-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    const job = probeJob(Date.now())
+    const targets = getDeferredContinuationLockTargets(job, paths)
+    const guard = await acquireDeferredContinuationLocks(job, paths)
+    try {
+      // Lose only the session lock. Its heartbeat must notice for real while
+      // the independent job lock remains healthy and continues refreshing.
+      await rm(`${targets.session}.lock`, { recursive: true })
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error('Session lock compromise was not detected')),
+          DEFERRED_LOCK_UPDATE_MS + 10_000,
+        )
+        guard.signal.addEventListener('abort', () => {
+          clearTimeout(timer)
+          resolve()
+        }, { once: true })
+      })
+      expect(() => guard.assertHealthy()).toThrow()
+      await expect(guard.release()).rejects.toThrow()
+
+      const replacement = await acquireDeferredContinuationLocks(job, paths)
+      await replacement.release()
+    } finally {
+      // Also clean up on the old behavior, which strands the healthy job lock.
+      await Promise.all(
+        [targets.session, targets.job].map(target =>
+          unlock(target, { realpath: false }).catch(() => {}),
+        ),
+      )
+    }
+  }, 45_000)
+
   test('two fresh processes have exactly one simultaneous lock owner', async () => {
     const root = await mkdtemp('/tmp/cat-code-deferred-probe-')
     cleanup.push(root)
