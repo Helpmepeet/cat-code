@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
 import { BrowserPaneCdp, isUserBrowserInput } from './browserPaneCdp.js'
+import { browserCursorScript } from './browserPaneCursor.js'
 
 function fixture(image = { data: 'png', width: 800, height: 600 }, viewport = { width: 800, height: 600 }) {
   const calls: { method: string; params: any }[] = []
@@ -77,7 +78,7 @@ test('screenshot points are translated for target checks, descriptions, clicks a
       { type: 'mousePressed', x: 100, y: 100, button: 'left', clickCount: 1 },
       { type: 'mouseReleased', x: 100, y: 100, button: 'left', clickCount: 1 },
     ])
-    expect(calls.find(c => c.method === 'Overlay.highlightRect')?.params).toMatchObject({ x: 93, y: 93 })
+    expect(calls.some(c => c.method === 'Runtime.evaluate' && c.params.expression === browserCursorScript({ x: 100, y: 100, color: { r: 244, g: 114, b: 182 } }))).toBe(true)
     await cdp.act({ action: 'scroll', ...point, deltaY: 25 }, () => {})
     expect(calls.filter(c => c.method === 'Input.dispatchMouseEvent').at(-1)?.params).toMatchObject({ type: 'mouseWheel', x: 100, y: 100, deltaY: 25 })
     await cdp.read(() => {})
@@ -139,7 +140,7 @@ test('dialog reports reach the next read without opening or answering native dia
   expect((await cdp.read(() => {})).snapshot).not.toContain('[dialog]')
 })
 
-test('last action point uses one accent-colored highlightRect and local descriptions use the human path', async () => {
+test('last action point uses one accent-colored pointer and local descriptions use the human path', async () => {
   const calls: { method: string; params: any }[] = []
   const cdp = new BrowserPaneCdp({
     command: async (method, params: any) => {
@@ -153,8 +154,35 @@ test('last action point uses one accent-colored highlightRect and local descript
   })
   cdp.setAccent({ r: 100, g: 110, b: 120 })
   expect((await cdp.act({ action: 'click', x: 10, y: 20 }, () => {})).description).toContain('/project/index.html')
-  const marks = calls.filter(call => call.method === 'Overlay.highlightRect')
+  const marks = calls.filter(call => call.method === 'Runtime.evaluate' && call.params.expression === browserCursorScript({ x: 10, y: 20, color: { r: 100, g: 110, b: 120 } }))
   expect(marks).toHaveLength(1)
-  expect(marks[0]!.params.outlineColor).toMatchObject({ r: 100, g: 110, b: 120 })
-  expect(calls.some(call => call.method === 'Overlay.highlightNode')).toBe(false)
+  expect(calls.some(call => call.method.startsWith('Overlay.'))).toBe(false)
+  await cdp.clearMark(() => {})
+  expect(calls.at(-1)?.params.expression).toBe(browserCursorScript(null))
+  const count = calls.length
+  await cdp.clearMark(() => {})
+  expect(calls).toHaveLength(count)
+})
+
+test('user takeover can clear a pointer whose render command has not returned yet', async () => {
+  let takenOver = false
+  let cleared = false
+  const draw = browserCursorScript({ x: 10, y: 20, color: { r: 244, g: 114, b: 182 } })
+  const cdp = new BrowserPaneCdp({
+    command: async (method, params) => {
+      if (method === 'Runtime.evaluate' && params.expression === draw) {
+        takenOver = true
+        await cdp.clearMark(() => {})
+      } else if (method === 'Runtime.evaluate' && params.expression === browserCursorScript(null)) cleared = true
+      if (method === 'Runtime.evaluate') return { result: { objectId: 'target' } }
+      if (method === 'Runtime.callFunctionOn') return { result: { value: { x: 10, y: 20 } } }
+      return {}
+    },
+    url: () => 'http://localhost:3000/',
+    capture: async () => ({ data: '', width: 1, height: 1 }),
+  })
+  await expect(cdp.act({ action: 'click', x: 10, y: 20 }, () => {
+    if (takenOver) throw new Error('user control')
+  })).rejects.toThrow('user control')
+  expect(cleared).toBe(true)
 })

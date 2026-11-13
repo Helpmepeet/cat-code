@@ -54,6 +54,7 @@ test('header cat is decorative for agent control and gives back user control', a
   const tree = await harness.mount(<BrowserPane state={state} active />)
   expect([...tree.container.querySelectorAll('button')].map(button => button.getAttribute('aria-label'))).toEqual(['Back', 'Forward', 'Reload', 'Open in default browser', 'Hide browser'])
   expect(tree.container.querySelector('.file-pane-path')?.textContent).toBe(state.displayUrl)
+  expect(tree.container.querySelector('[data-agent]')).toBeNull()
   expect(tree.container.querySelector('button[aria-label="Back"]')?.hasAttribute('disabled')).toBe(true)
   expect(tree.container.querySelector('button[aria-label="Forward"]')?.hasAttribute('disabled')).toBe(true)
   for (const button of tree.container.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')) await act(async () => button.click())

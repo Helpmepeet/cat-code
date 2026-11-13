@@ -1,5 +1,6 @@
 import type { BrowserActInput, BrowserDescribeInput, BrowserRequestValues } from '../shared/browserPane.js'
 import { BROWSER_ARM_CONFIRM_SCRIPT, BROWSER_DIALOG_BINDING, BROWSER_DIALOG_SCRIPT } from './browserPaneDialogs.js'
+import { browserCursorScript } from './browserPaneCursor.js'
 
 export type BrowserDispatchGate = () => void
 export type BrowserCdpCommand = (method: string, params?: any, sessionId?: string) => Promise<any>
@@ -56,7 +57,6 @@ export class BrowserPaneCdp {
   private refs = new Map<string, number>()
   private dialogs: string[] = []
   private accent = { r: 244, g: 114, b: 182 }
-  private overlayEnabled = false
   private marked = false
   private screenshotScale: { x: number; y: number } | undefined
   constructor(private readonly deps: {
@@ -74,19 +74,15 @@ export class BrowserPaneCdp {
   }
   async clearMark(gate: BrowserDispatchGate): Promise<void> {
     if (!this.marked) return
-    await this.send('Overlay.hideHighlight', {}, gate)
+    await this.send('Runtime.evaluate', { expression: browserCursorScript(null) }, gate)
     this.marked = false
   }
   private async markPoint(x: number, y: number, gate: BrowserDispatchGate): Promise<void> {
     if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return
-    if (!this.overlayEnabled) {
-      await this.send('DOM.enable', {}, gate)
-      await this.send('Overlay.enable', {}, gate)
-      this.overlayEnabled = true
-    }
-    await this.send('Overlay.highlightRect', { x: Math.max(0, Math.round(x - 7)), y: Math.max(0, Math.round(y - 7)), width: 14, height: 14,
-      color: { ...this.accent, a: 0.16 }, outlineColor: { ...this.accent, a: 0.9 } }, gate)
+    gate()
+    // Takeover must be able to clear a pointer even while its command is in flight.
     this.marked = true
+    await this.send('Runtime.evaluate', { expression: browserCursorScript({ x, y, color: this.accent }) }, gate)
   }
   private async send(method: string, params: any, gate: BrowserDispatchGate, sessionId?: string): Promise<any> {
     gate()

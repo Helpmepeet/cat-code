@@ -146,7 +146,7 @@ export function BrowserPane({ state, active, onHide }: { state: BrowserPaneSnaps
       {action('external', 'Open in default browser')}
       <button type="button" className="file-pane-icon" aria-label="Hide browser" title="Hide browser" onClick={onHide ?? (() => hideScreenPane(state.appSessionId, 'browser'))}><svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d={paths.close} /></svg></button>
     </header>
-    <div ref={host} className="file-pane-host browser-pane-host" data-agent={state.controller === 'agent' || undefined}>
+    <div ref={host} className="file-pane-host browser-pane-host">
       {state.still !== null ? <img className="browser-pane-still" src={state.still} alt="" onClick={() => command('takeover')} /> : null}
     </div>
   </aside>
