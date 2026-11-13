@@ -16,7 +16,9 @@ const highlightedCode = new Map<string, {
 let highlightedCharacters = 0
 const MAX_CACHED_HIGHLIGHTED_BLOCKS = 32
 const MAX_CACHED_HIGHLIGHTED_CHARACTERS = 256_000
-const MAX_HIGHLIGHT_CACHE_ENTRY_CHARACTERS = 16_000
+// Highlighting runs before DOM windowing. Use the existing per-entry cache
+// budget as a work ceiling too; larger fences retain plain text and language.
+const MAX_HIGHLIGHTED_BLOCK_CHARACTERS = 16_000
 
 /** Reuses syntax trees for settled fences while the full Markdown document is re-parsed. */
 function rehypeHighlightCached() {
@@ -39,10 +41,7 @@ function rehypeHighlightCached() {
 
 function highlightCode(code: Element): void {
   const source = hastText(code)
-  if (source.length > MAX_HIGHLIGHT_CACHE_ENTRY_CHARACTERS) {
-    runHighlighter(code)
-    return
-  }
+  if (source.length > MAX_HIGHLIGHTED_BLOCK_CHARACTERS) return
   const language = Array.isArray(code.properties.className)
     ? code.properties.className.join(' ')
     : ''
