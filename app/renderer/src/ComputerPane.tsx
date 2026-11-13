@@ -39,6 +39,13 @@ export function ComputerPane({ steps, selectedId, onSelect, onClose, onStop, act
       <img alt={`Screenshot: ${screen.step.title}`} decoding="async" src={`data:${screen.step.image.mediaType};base64,${screen.step.image.data}`} />
       {screen.step !== selected && <button type="button" className="computer-pane-from" onClick={() => onSelect(screen.step.id)}>Screen from step {screen.index + 1}</button>}
     </div>}
+    {!screen && <div className="computer-pane-empty" role="status">
+      <ComputerScreenIcon />
+      <strong>No screenshot available</strong>
+      <p>{steps.some(step => step.image)
+        ? 'No screenshot was captured at or before this step. Select a later step to view its screenshot.'
+        : 'These steps have no captured screenshots. Computer actions can use text-only page information.'}</p>
+    </div>}
     <div className="computer-pane-caption">
       <button type="button" className="computer-pane-icon" aria-label="Previous computer step" disabled={index <= 0} onClick={() => onSelect(steps[index - 1]!.id)}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></svg></button>
       <button type="button" className="computer-pane-icon" aria-label="Next computer step" disabled={index < 0 || index >= steps.length - 1} onClick={() => onSelect(steps[index + 1]!.id)}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg></button>

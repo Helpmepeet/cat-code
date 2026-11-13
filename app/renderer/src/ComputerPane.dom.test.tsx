@@ -72,11 +72,27 @@ test('navigation, Latest screenshot, close and screenshotless selection use supp
   expect(tree.container.querySelector('section')?.hidden).toBe(true)
 })
 
-test('a run without captures keeps caption and steps but has no screen', async () => {
-  const tree = await harness.mount(<ComputerPane steps={[steps[1]!]} selectedId={null} onSelect={() => {}} onClose={() => {}} />)
+test('a text-only run explains missing screenshots and replaces the message when a capture arrives', async () => {
+  const textOnly: ComputerStep[] = [{ ...steps[1]!, status: 'success' }]
+  const view = (current: ComputerStep[], running = true) => <ComputerPane steps={current} running={running} selectedId={null} onSelect={() => {}} onClose={() => {}} />
+  const tree = await harness.mount(view(textOnly))
   expect(tree.container.querySelector('.computer-pane-screen')).toBeNull()
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('No screenshot available')
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('text-only page information')
   expect(tree.container.querySelector('.computer-pane-caption')?.textContent).toContain('Checking the list')
   expect(tree.container.querySelector('.computer-pane-steps')?.textContent).toContain('Checking the list')
+  await tree.render(view(textOnly, false))
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('No screenshot available')
+  await tree.render(view([...textOnly, { ...steps[0]!, id: 'capture' }]))
+  expect(tree.container.querySelector('.computer-pane-empty')).toBeNull()
+  expect(tree.container.querySelector('img')?.alt).toBe('Screenshot: Opening Reminders')
+})
+
+test('a step before the first capture explains how to find a screen without displaying the future', async () => {
+  const tree = await harness.mount(<ComputerPane steps={[steps[1]!, steps[0]!]} selectedId="two" onSelect={() => {}} onClose={() => {}} />)
+  expect(tree.container.querySelector('img')).toBeNull()
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain('Select a later step')
+  expect(tree.container.querySelector('.computer-pane-latest')?.textContent).toBe('Latest screenshot')
 })
 
 const row: NestedTranscriptRow = {
