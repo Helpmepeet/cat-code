@@ -226,13 +226,21 @@ finish, then check /continue-after-limit status.`,
       }
     }
     const now = Date.now()
+    guard.assertHealthy()
     await recordDeferredContinuationNotice({
       version: 1,
       sessionId,
       kind: 'canceled_command',
       observedAt: now,
     })
-    await moveDeferredContinuationToHistory(current, 'canceled', 'command', now)
+    await moveDeferredContinuationToHistory(
+      current,
+      'canceled',
+      'command',
+      now,
+      undefined,
+      guard,
+    )
     // `ambiguous` withholds automatic retry, not the user's own decision to
     // stop. Cancelling clears the schedule; it cannot un-start an attempt that
     // may already have run, so the warning stays.
