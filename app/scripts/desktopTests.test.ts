@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { desktopTestArgs, slowDesktopTests } from './desktopTests.js'
+import { desktopTestArgs, fullSuiteLanes, fullSuiteWorkers, runFullSuite, slowDesktopTests } from './desktopTests.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -32,6 +32,15 @@ test('area selection and Bun reporter arguments reach the intended test invocati
     'test', ...slowDesktopTests.workspace.map(path => `./${path}`), ...reporter,
   ])
   expect(desktopTestArgs('all', reporter)).toEqual(['test', './app', ...reporter])
+})
+
+test('full-suite lanes cover every file once and native checks wait for the workers', () => {
+  const [routine, workspace, native] = fullSuiteLanes(5)
+  const heavy = [...slowDesktopTests.workspace, ...slowDesktopTests.native]
+  expect(routine).toEqual({ name: 'routine', args: ['test', './app', '--parallel=5', ...heavy.flatMap(path => ['--path-ignore-patterns', path])] })
+  expect(workspace).toEqual({ name: 'workspace', args: ['test', ...slowDesktopTests.workspace.map(path => `./${path}`)] })
+  expect(native).toEqual({ name: 'native', args: ['test', ...slowDesktopTests.native.map(path => `./${path}`)], after: 'routine' })
+  expect([4, 8, 12, 32].map(cores => fullSuiteWorkers(cores))).toEqual([1, 3, 5, 5])
 })
 
 test('real Bun discovery partitions fast and slow, full retains both, and copied tmp tests never run', async () => {
@@ -69,8 +78,38 @@ test('real Bun discovery partitions fast and slow, full retains both, and copied
   const workspace = await run('slow', ['workspace'])
   expect(workspace.code, workspace.output).toBe(0)
   expect(workspace.output).toContain(`${slowDesktopTests.workspace.length} pass`)
+  const lanes = async () => {
+    let output = ''
+    const code = await runFullSuite(root, fullSuiteLanes(2), text => { output += text })
+    return { code, output }
+  }
+  const lanePasses = await lanes()
+  expect(lanePasses.code, lanePasses.output).toBe(0)
+  const routineCount = slowFiles.length - slowDesktopTests.workspace.length - slowDesktopTests.native.length + 2
+  for (const count of [routineCount, slowDesktopTests.workspace.length, slowDesktopTests.native.length]) {
+    expect(lanePasses.output).toContain(`${count} pass`)
+  }
+  expect(lanePasses.output).toContain('all lanes passed')
+  expect(lanePasses.output).not.toContain('STALE_COPY_RAN')
+  expect(lanePasses.output).toMatch(/routine: started, log \S+routine\.log/)
+  fixture(slowDesktopTests.native[0], 'throw new Error("NATIVE_FAILURE")')
+  const laneFailure = await lanes()
+  expect(laneFailure.code).not.toBe(0)
+  expect(laneFailure.output).toContain('failed: native')
+  // A file that never settles must not hold an install gate open, and the
+  // lane's process group (including any test workers) must be stopped.
+  mkdirSync(join(root, 'app', 'stall'), { recursive: true })
+  const pidFile = join(root, 'stall.pid')
+  writeFileSync(join(root, 'app', 'stall', 'stall.test.ts'),
+    `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000); await new Promise(() => {})`)
+  let stalledOutput = ''
+  const stalled = await runFullSuite(root, [{ name: 'routine', args: ['test', './app/stall', '--parallel=2'] }], text => { stalledOutput += text }, 3_000)
+  expect(stalled).toBe(1)
+  expect(stalledOutput).toContain('routine: stopped without a result after 3s')
+  expect(() => process.kill(Number(readFileSync(pidFile, 'utf8')), 0)).toThrow()
+  rmSync(join(root, 'app', 'stall'), { recursive: true })
   fixture('app/routine.test.ts', 'throw new Error("ROUTINE_FAILURE")')
   expect((await run('fast')).code).not.toBe(0)
   fixture(slowFiles[0]!, 'throw new Error("SLOW_FAILURE")')
   expect((await run('slow')).code).not.toBe(0)
-})
+}, 60_000)
