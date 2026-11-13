@@ -336,7 +336,7 @@ export async function readInterruptedTurnRecord(
       }
     })(),
   )
-  if (!parsed.success) {
+  if (!parsed.success || parsed.data.sessionId !== sessionId) {
     await unlink(path).catch(() => {})
     return null
   }

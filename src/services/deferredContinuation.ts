@@ -408,6 +408,9 @@ export async function readPendingDeferredContinuation(
   }
   try {
     const job = deferredContinuationJobSchema.parse(await readPrivateJson(recordPath))
+    if (job.sessionId !== sessionId) {
+      throw new Error('Deferred continuation session identity mismatch')
+    }
     return (await terminalHistoryExists(job, paths)) ? null : job
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -529,6 +532,7 @@ export async function listDueDeferredContinuations(
       const job = deferredContinuationJobSchema.parse(
         await readPrivateJson(join(paths.pending, name)),
       )
+      if (name !== `${job.sessionId}.json`) continue
       if (await terminalHistoryExists(job, paths)) continue
       if (job.state === 'pending' && job.notBefore <= now) jobs.push(job)
     } catch {
@@ -548,6 +552,7 @@ export async function listDeferredContinuations(
       const job = deferredContinuationJobSchema.parse(
         await readPrivateJson(join(paths.pending, name)),
       )
+      if (name !== `${job.sessionId}.json`) continue
       if (!(await terminalHistoryExists(job, paths))) jobs.push(job)
     } catch {
       // Malformed records fail closed and are never returned as executable work.

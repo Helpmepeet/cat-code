@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { copyFile, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import type { LogOption } from '../types/logs.js'
 import type { AssistantMessage, Message, UserMessage } from '../types/message.js'
 import {
@@ -12,6 +13,7 @@ import {
   getInterruptedTurnDir,
   INTERRUPTED_TURN_MAX_AGE_MS,
   MAX_PARTIAL_OUTPUT_BYTES,
+  readInterruptedTurnRecord,
 } from './interruptedTurn.js'
 import {
   createAssistantMessage,
@@ -175,6 +177,41 @@ describe('structured interrupted-turn continuation', () => {
         undefined,
       )
       expect(again?.interruptedTurn).toBeNull()
+    })
+  })
+
+  test('a misplaced record cannot supply another session output or consume its record', async () => {
+    await withStore(async () => {
+      const sessionId = randomUUID()
+      const { log, assistantMessages, messages } =
+        interruptedTurnTranscript(sessionId)
+      const record = captureInterruptedTurn({
+        sessionId,
+        messages,
+        assistantMessages,
+        reason: 'user_abort',
+      })
+      const otherSessionId = randomUUID()
+      await copyFile(
+        join(getInterruptedTurnDir(), `${sessionId}.json`),
+        join(getInterruptedTurnDir(), `${otherSessionId}.json`),
+      )
+      // Forked sessions can share message UUIDs. Leaf equality alone cannot
+      // establish which session owns an interruption record.
+      const otherMessages = messages.map(message => ({
+        ...message,
+        sessionId: otherSessionId,
+      }))
+
+      const resumed = await loadConversationForResume(
+        logOptionFor(otherSessionId, otherMessages),
+        undefined,
+      )
+
+      expect(resumed?.interruptedTurn).toBeNull()
+      expect(await readInterruptedTurnRecord(sessionId)).toEqual(record)
+      const source = await loadConversationForResume(log, undefined)
+      expect(source?.interruptedTurn?.status).toBe('apply')
     })
   })
 

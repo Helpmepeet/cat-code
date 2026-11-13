@@ -29,6 +29,7 @@ import {
   getDeferredContinuationLockTargets,
   getDeferredContinuationPaths,
   getLatestDeferredContinuationHistory,
+  listDeferredContinuations,
   listDueDeferredContinuations,
   moveDeferredContinuationToHistory,
   prepareHumanPromptAgainstDeferredContinuation,
@@ -262,6 +263,30 @@ describe('deferred continuation durable store', () => {
     expect(JSON.stringify(await readPendingDeferredContinuation(job().sessionId, paths))).not.toContain('secret')
     expect((await stat(paths.root)).mode & 0o077).toBe(0)
     expect((await stat(join(paths.pending, `${job().sessionId}.json`))).mode & 0o077).toBe(0)
+  })
+
+  test('a pending record cannot claim another session through its filename', async () => {
+    const root = await mkdtemp('/tmp/cat-code-deferred-session-identity-')
+    cleanup.push(root)
+    const paths = getDeferredContinuationPaths(join(root, 'queue'))
+    const pending = job({ notBefore: NOW - 1 })
+    await createPendingDeferredContinuation(pending, paths)
+    const otherSessionId = '44444444-4444-4444-8444-444444444444'
+    await writeFile(
+      join(paths.pending, `${otherSessionId}.json`),
+      `${JSON.stringify(pending)}\n`,
+      { mode: 0o600 },
+    )
+
+    await expect(
+      readPendingDeferredContinuation(otherSessionId, paths),
+    ).rejects.toThrow('session identity mismatch')
+    expect(await listDeferredContinuations(paths)).toEqual([pending])
+    expect(await listDueDeferredContinuations(NOW, paths)).toEqual([pending])
+
+    expect(await discardUnreadableDeferredContinuation(otherSessionId, paths)).toBe(true)
+    expect(await readPendingDeferredContinuation(otherSessionId, paths)).toBeNull()
+    expect(await readPendingDeferredContinuation(pending.sessionId, paths)).toEqual(pending)
   })
 
   // F2: an unreadable pending record was a one-way trap. It cannot be moved to
