@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, realpath, rm, utimes } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
+  getOriginalCwd,
+  getSessionId,
+  getSessionProjectDir,
   isProviderSwitchLocked,
+  setOriginalCwd,
   setProviderSwitchLocked,
+  switchSession,
 } from '../bootstrap/state.js'
 import {
   acquireDeferredContinuationLocks,
@@ -33,12 +38,23 @@ import { releaseActiveTranscriptLease } from './transcriptLease.js'
 
 const cleanup: string[] = []
 const originalCwd = process.cwd()
+let previousSessionId = getSessionId()
+let previousSessionProjectDir = getSessionProjectDir()
+let previousOriginalCwd = getOriginalCwd()
+
+beforeEach(() => {
+  previousSessionId = getSessionId()
+  previousSessionProjectDir = getSessionProjectDir()
+  previousOriginalCwd = getOriginalCwd()
+})
 
 afterEach(async () => {
   process.chdir(originalCwd)
   setCwd(originalCwd)
   resetProjectForTesting()
   await releaseActiveTranscriptLease()
+  switchSession(previousSessionId, previousSessionProjectDir)
+  setOriginalCwd(previousOriginalCwd)
   await Promise.all(cleanup.splice(0).map(path => rm(path, { recursive: true, force: true })))
 })
 
