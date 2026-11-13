@@ -14,6 +14,9 @@ import { questionReplyMessageSchema } from './nonblockingQuestionMessages.js'
 function journal(root: string): any[] {
   return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
     const path = join(root, entry.name)
+    // Append locks are directories the sidecar creates and removes while this
+    // walk runs; they hold no journal entries.
+    if (entry.name.endsWith('.lock')) return []
     if (entry.isDirectory()) return journal(path)
     return entry.name.endsWith('.jsonl') ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
   })
