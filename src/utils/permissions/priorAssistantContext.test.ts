@@ -10,6 +10,7 @@ import {
   capturePriorAssistantContext,
   parsePriorAssistantContext,
   readAssistantProposal,
+  MAX_PROPOSAL_CHARS,
 } from './priorAssistantContext.js'
 
 function assistant(text: string, uuid = 'proposal'): Message {
@@ -17,7 +18,7 @@ function assistant(text: string, uuid = 'proposal'): Message {
 }
 
 describe('submission-time proposal identity', () => {
-  test('captures an immutable identity and bounded text digest, not a live history reference', () => {
+  test('captures an immutable complete-text digest, not a live history reference', () => {
     const original = assistant('May I list windows?')
     const messages = [original]
     const binding = capturePriorAssistantContext(messages)
@@ -70,10 +71,21 @@ describe('submission-time proposal identity', () => {
     expect(readAssistantProposal({ ...assistant('May I inspect?'), isInternalNoResponseSentinel: true } as Message)).toBeNull()
   })
 
-  test('caps proposal text at the tail without starting inside a surrogate pair', () => {
-    const proposal = readAssistantProposal(assistant('x'.repeat(2100) + '\u{1f600}' + 'y'.repeat(1999)))!
-    expect(proposal.text).toBe('y'.repeat(1999))
+  test('preserves full scope and Unicode rather than retaining only a tail', () => {
+    const text = 'To: alice. Exclude live accounts. Approval only after review.\n' +
+      'x'.repeat(2100) + '\u{1f600}' + 'y'.repeat(1999)
+    const proposal = readAssistantProposal(assistant(text))!
+    expect(proposal.text).toBe(text)
     expect(proposal.binding.textHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(readAssistantProposal(assistant(text.replace('alice', 'carol')))?.binding).not.toEqual(proposal.binding)
+  })
+
+  test('oversized proposals cannot supply partial scope or fall back to older prose', () => {
+    const older = assistant('May I inspect?', 'older')
+    expect(readAssistantProposal(assistant('x'.repeat(MAX_PROPOSAL_CHARS)))?.text.length).toBe(MAX_PROPOSAL_CHARS)
+    const oversized = assistant('x'.repeat(MAX_PROPOSAL_CHARS + 1))
+    expect(readAssistantProposal(oversized)).toBeNull()
+    expect(capturePriorAssistantContext([older, oversized])).toBeNull()
   })
 
   test('restored user and queued-attachment records keep A rather than infer later B', async () => {

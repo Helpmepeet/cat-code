@@ -54,3 +54,18 @@ test('unknown or malformed SDK records cannot supply proposal text', () => {
     expect(selectObservedProposal([message], rows())).toBeNull()
   }
 })
+
+test('captures prefix and tail in full, or no proposal when scope exceeds the bound', () => {
+  for (const length of [4100, 16000, 16001]) {
+    const prefix = 'Recipient: alice. Exclude production. Approval after review.\n'
+    const suffix = '\nTail'
+    const text = prefix + 'x'.repeat(length - prefix.length - suffix.length) + suffix
+    const message = { ...a, message: { id: 'api-a', role: 'assistant', model: 'claude', content: [{ type: 'text', text }] } } as SDKMessage
+    const observed = selectObservedProposal([message], rows([message]))
+    if (text.length <= 16000) {
+      expect(observed).toEqual({ messageUuid: 'proposal-a', text })
+    } else {
+      expect(observed).toBeNull()
+    }
+  }
+})

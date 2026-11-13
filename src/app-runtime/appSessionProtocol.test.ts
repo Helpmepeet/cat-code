@@ -9,7 +9,7 @@ describe('app session protocol', () => {
     expect(parse(null).success).toBe(true)
     expect(parse({ messageUuid: 'a', text: 'proposal A' }).success).toBe(true)
     for (const value of [{}, 'a', { messageUuid: '', text: 'x' },
-      { messageUuid: 'a'.repeat(201), text: 'x' }, { messageUuid: 'a', text: 'x'.repeat(2001) },
+      { messageUuid: 'a'.repeat(201), text: 'x' }, { messageUuid: 'a', text: 'x'.repeat(16001) },
       { messageUuid: 'a', text: 'x', textHash: 'forged' }]) expect(parse(value).success).toBe(false)
   })
   test('rejects oversized image, aggregate, count and UTF-8 text budgets', () => {

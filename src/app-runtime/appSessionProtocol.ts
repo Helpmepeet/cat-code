@@ -61,7 +61,7 @@ const appSubmitMessageSchema = z.object({
       goalSnapshot: z.unknown().optional(),
       observedProposal: z.strictObject({
         messageUuid: z.string().min(1).max(200),
-        text: z.string().min(1).max(2000),
+        text: z.string().min(1).max(16000),
       }).nullable().optional(),
     })
     .optional(),

@@ -3,6 +3,9 @@ import type { SubmitOptions } from '../../shared/protocol.js'
 import { isRecord } from '../../shared/narrow.js'
 import type { TranscriptRow } from './transcriptProjector.js'
 
+// Must match MAX_PROPOSAL_CHARS at the engine receiving boundary.
+const MAX_PROPOSAL_CHARS = 16000
+
 /** Select displayed, completed prose, never a partial stream or hidden frame. */
 export function selectObservedProposal(messages: readonly SDKMessage[], rows: readonly TranscriptRow[]): SubmitOptions['observedProposal'] {
   if (rows.some(row => row.kind === 'assistant-text' && row.parentToolUseId === null && row.isStreaming)) return null
@@ -33,9 +36,8 @@ export function selectObservedProposal(messages: readonly SDKMessage[], rows: re
     // Without a visible-row receipt, do not claim that prose was the referent.
     if (displayed.some(row => row.kind === 'assistant-text' && row.phase === 'commentary')) return null
     if (messages.filter(other => other.type === 'assistant' && other.uuid === message.uuid).length !== 1) return null
-    const tail = prose.slice(-2000)
-    const first = tail.charCodeAt(0)
-    return { messageUuid: message.uuid, text: first >= 0xdc00 && first <= 0xdfff ? tail.slice(1) : tail }
+    if (prose.length > MAX_PROPOSAL_CHARS) return null
+    return { messageUuid: message.uuid, text: prose }
   }
   return null
 }

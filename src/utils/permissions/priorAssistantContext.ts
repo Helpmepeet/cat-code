@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto'
 import type { Message, PriorAssistantContext } from '../../types/message.js'
 import { SYNTHETIC_MODEL } from '../messages.js'
 
-const MAX_PROPOSAL_CHARS = 2000
+// A proposal is consent context only when its entire scope fits. Never hash or
+// render a tail as though it represented the complete proposal.
+export const MAX_PROPOSAL_CHARS = 16000
 
 export function parsePriorAssistantContext(value: unknown): PriorAssistantContext | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
@@ -29,10 +31,8 @@ export function readAssistantProposal(message: Message): {
     .filter(block => block.type === 'text')
     .map(block => block.text)
     .join('\n')
-  if (!prose.trim()) return null
-  const tail = prose.slice(-MAX_PROPOSAL_CHARS)
-  const first = tail.charCodeAt(0)
-  const text = first >= 0xdc00 && first <= 0xdfff ? tail.slice(1) : tail
+  if (!prose.trim() || prose.length > MAX_PROPOSAL_CHARS) return null
+  const text = prose
   return {
     binding: {
       messageUuid: message.uuid,
