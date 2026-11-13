@@ -117,6 +117,24 @@ test('large observations stay windowed, unchanged output retains its DOM, and hi
   expect(tree.container.querySelector('[aria-label="Computer observation"]')).toBe(output)
   await tree.render(view([large, steps[1]!], false))
   expect(tree.container.querySelector('[aria-label="Computer observation"]')).toBeNull()
+  expect(tree.container.innerHTML).not.toContain('computer-pane-observation-heading')
+})
+
+test('long observation lines remain fully reachable through bounded part navigation', async () => {
+  const long: ComputerStep = { ...steps[0]!, image: null, observation: `START ${'x'.repeat(MAX_MOUNTED_CHUNK_CHARS * 2)} TAIL_SENTINEL` }
+  const tree = await harness.mount(<ComputerPane steps={[long]} selectedId={null} onSelect={() => {}} onClose={() => {}} />)
+  const output = () => tree.container.querySelector('[aria-label="Computer observation"]')!
+  expect(output().textContent).not.toContain('TAIL_SENTINEL')
+  const next = () => output().querySelector<HTMLButtonElement>('[aria-label="Next part of line 1"]')
+  expect(next()).not.toBeNull()
+  await act(async () => next()!.click())
+  expect(output().textContent!.length).toBeLessThan(MAX_MOUNTED_CHUNK_CHARS + 500)
+  await act(async () => next()!.click())
+  expect(output().textContent).toContain('TAIL_SENTINEL')
+  expect(next()).toBeNull()
+  await act(async () => output().querySelector<HTMLButtonElement>('[aria-label="Previous part of line 1"]')!.click())
+  expect(output().textContent).not.toContain('TAIL_SENTINEL')
+  expect(next()).not.toBeNull()
 })
 
 const row: NestedTranscriptRow = {

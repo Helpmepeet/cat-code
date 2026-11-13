@@ -1,7 +1,7 @@
-import { memo, useEffect, useMemo, useRef } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { SidePaneNavigation } from './SidePaneNavigation.js'
 import { selectComputerScreen, selectComputerStep, type ComputerStep } from './computerPaneModel.js'
-import { VirtualLineList } from './VirtualLineList.js'
+import { SourceTextView } from './SourceTextView.js'
 import './computerPane.css'
 
 export function ComputerScreenIcon() {
@@ -10,10 +10,11 @@ export function ComputerScreenIcon() {
 
 const ComputerObservation = memo(function ComputerObservation({ text }: { text: string }) {
   const lines = useMemo(() => text.split('\n'), [text])
-  return <div className="computer-pane-observation">
+  const [wrap, setWrap] = useState(true)
+  return <div className="computer-pane-observation" role="region" aria-label="Computer observation">
     <div className="computer-pane-observation-heading"><strong>Observed output</strong><span>This step may show only what changed.</span></div>
-    <VirtualLineList lines={lines} activeIndex={null} className="computer-pane-observation-lines" label="Computer observation"
-      renderLine={line => <div>{line || '\u00a0'}</div>} />
+    <SourceTextView lines={lines} body={text} copy={text} gutter={index => index + 1}
+      language={null} diffRows={null} wrap={wrap} onWrap={setWrap} />
   </div>
 })
 
