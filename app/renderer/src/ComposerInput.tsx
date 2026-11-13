@@ -40,6 +40,8 @@ import type { PasteEntry } from './composerState.js'
 import type { ComposerTypeaheadA11y } from './composerTypeaheadA11y.js'
 import type { ComposerPlaceholderParts } from './composerState.js'
 import { PEER_TONE_CLASS } from './peerSurfaces.js'
+import { WindowDrop } from './WindowDrop.js'
+import { classifyWindowDrop } from './windowDropModel.js'
 
 /** The textarea-shaped surface the pane's handlers drive the field through. */
 export type ComposerInputHandle = {
@@ -53,6 +55,7 @@ export type ComposerInputHandle = {
 }
 
 type ComposerInputProps = {
+  windowDropEnabled?: boolean
   ariaLabel: string
   /** No session bound yet: the field shows nothing and takes no input. */
   disabled: boolean
@@ -130,6 +133,7 @@ export function ComposerInput({
   commandNames = NO_COMMAND_NAMES,
   inlineCommandNames = NO_COMMAND_NAMES,
   onCaretChange,
+  windowDropEnabled = false,
 }: ComposerInputProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const onCaretChangeRef = useRef(onCaretChange)
@@ -425,9 +429,13 @@ export function ComposerInput({
    * still ignored: converting one into a path the engine reads would make the
    * renderer the author of a filesystem path (HC1).
    */
-  const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
+  const handleDrop = (event: DragEvent | React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
-    if (!editable) return
+    if (!editable || !event.dataTransfer) return
+    const payload = classifyWindowDrop(
+      Array.from(event.dataTransfer.items), Array.from(event.dataTransfer.types),
+    )
+    if (!payload?.allowed) return
     const images = selectAttachableImageFiles(
       Array.from(event.dataTransfer.files),
     )
@@ -444,7 +452,9 @@ export function ComposerInput({
     const text = event.dataTransfer.getData('text')
     if (!text) return
     const at =
-      composerOffsetFromPoint(root, event.clientX, event.clientY) ??
+      (event.target instanceof Node && root.contains(event.target)
+        ? composerOffsetFromPoint(root, event.clientX, event.clientY)
+        : null) ??
       caretRef.current
     const bounded = Math.max(0, Math.min(value.length, at))
     pendingCaretRef.current = bounded + text.length
@@ -461,6 +471,7 @@ export function ComposerInput({
 
   return (
     <>
+      <WindowDrop enabled={windowDropEnabled} editable={editable} root={rootRef} onDrop={handleDrop} />
       {/* Full-text preview, anchored above the composer (Chat.jsx:1386). Kept
        * open while the pointer is over it so its body stays readable and
        * selectable. */}

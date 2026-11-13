@@ -2534,6 +2534,7 @@ export function SessionPane({
              * gap that used to float the send arrow ~7px low). */}
             <ComposerInput
               key={activeSessionId}
+              windowDropEnabled={isActivePane}
               ref={composerRef}
               ariaLabel="Prompt"
               disabled={!activeSessionId}
