@@ -46,14 +46,21 @@ test.skipIf(!layoutBrowser)('side-pane chrome retains the approved type, selecti
     <pre id="result"></pre><script>
       const q = selector => document.querySelector(selector);
       const style = (selector, keys) => { const s=getComputedStyle(q(selector)); return Object.fromEntries(keys.map(key=>[key,s[key]])); };
-      const browser = q('.dock-slot[data-dock-view="browser"]'); browser.focus({preventScroll:true, focusVisible:true});
-      const tip = browser.querySelector('.subagent-dock-tip').getBoundingClientRect(), anchor = browser.getBoundingClientRect();
-      const result = {
+      // Headless Chrome often starts without window focus when other browsers
+      // are running, so :focus-visible cannot be relied on to match. Read which
+      // rules reveal the tip, then measure placement with it shown.
+      const browser = q('.dock-slot[data-dock-view="browser"]'), tipNode = browser.querySelector('.subagent-dock-tip');
+      const tipHidden = getComputedStyle(tipNode).display;
+      const tipShownBy = [...document.styleSheets].flatMap(sheet => [...sheet.cssRules])
+        .filter(rule => rule.style?.display === 'block').flatMap(rule => rule.selectorText.split(/,\\s*/))
+        .filter(selector => selector.endsWith('.dock-slot:hover .subagent-dock-tip') || selector.endsWith('.dock-slot:focus-visible .subagent-dock-tip'));
+      tipNode.style.display = 'block';
+      const tip = tipNode.getBoundingClientRect(), anchor = browser.getBoundingClientRect();
+      const result = { tipHidden, tipShownBy,
         dock:style('.subagent-dock',['fontSize','lineHeight']),
         selected:style('.subagent-dock-panel [data-dock-view="browser"]',['borderTopColor','boxShadow']),
         button:style('.dock-slot[data-dock-view="browser"]',['color']),
         icon:style('.dock-slot[data-dock-view="browser"] svg',['width','height','color']),
-        tip:style('.dock-slot[data-dock-view="browser"] .subagent-dock-tip',['display']),
         tipGap:tip.top-anchor.bottom, tipRight:tip.right-anchor.right,
         file:style('.dock-file',['lineHeight']), fileIcon:style('.file-type-icon',['flexShrink','color']),
         fileParent:style('.file-pane-file-parent',['direction']),
@@ -77,7 +84,10 @@ test.skipIf(!layoutBrowser)('side-pane chrome retains the approved type, selecti
     expect(result.selected).toEqual({ borderTopColor: 'rgba(255, 255, 255, 0.06)', boxShadow: 'none' })
     expect(result.icon).toEqual({ width: '13px', height: '13px', color: result.button.color })
     expect(result.button.color).toBe('rgb(244, 244, 245)')
-    expect(result.tip.display).toBe('block')
+    expect(result.tipHidden).toBe('none')
+    expect(result.tipShownBy).toEqual([
+      '.subagent-dock .dock-slot:hover .subagent-dock-tip', '.subagent-dock .dock-slot:focus-visible .subagent-dock-tip',
+    ])
     expect(result.tipGap).toBeCloseTo(9, 1)
     expect(result.tipRight).toBeCloseTo(4, 1)
     expect(result.file.lineHeight).toBe('16.8px')
