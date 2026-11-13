@@ -65,6 +65,7 @@ type ComposerInputProps = {
   /** Attach each dropped image through the pane's existing `attachImage` path.
    * A promise serializes preparation across files from the same drop. */
   onAttachImageFile?: (file: File) => void | Promise<void>
+  onAttachDroppedFile?: (file: File) => void | Promise<void>
   onPointerDown: () => void
   /** `at` is the live start offset of the occurrence the user clicked. */
   onRemovePaste: (entry: PasteEntry, at: number) => void
@@ -115,6 +116,7 @@ export function ComposerInput({
   ariaLabel,
   disabled,
   onAttachImageFile,
+  onAttachDroppedFile,
   onCompositionEnd,
   onCompositionStart,
   onFocus,
@@ -425,9 +427,8 @@ export function ComposerInput({
    * `dataTransfer.files` and usually leaves `text/plain` empty, so the early
    * return below made dragging a screenshot in a silent no-op. Files are checked
    * first and an image is handed to the SAME byte-based attach path ⌘V uses
-   * (`onAttachImageFile` → `prepareImageAttachment`). Any other dropped file is
-   * still ignored: converting one into a path the engine reads would make the
-   * renderer the author of a filesystem path (HC1).
+   * (`onAttachImageFile` → `prepareImageAttachment`). Other files cross preload
+   * as File objects, never renderer-authored filesystem paths (HC1).
    */
   const handleDrop = (event: DragEvent | React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
@@ -436,14 +437,16 @@ export function ComposerInput({
       Array.from(event.dataTransfer.items), Array.from(event.dataTransfer.types),
     )
     if (!payload?.allowed) return
-    const images = selectAttachableImageFiles(
-      Array.from(event.dataTransfer.files),
-    )
-    if (images.length > 0) {
+    const files = Array.from(event.dataTransfer.files)
+    const images = selectAttachableImageFiles(files)
+    const otherFiles = files.filter(file => !file.type.startsWith('image/'))
+    if (otherFiles.length > 1) return
+    if (files.length > 0) {
       // Preparation is serialized: the pane's in-flight guard must not reject
       // later files from the same drop while the first file is still reading.
       void (async () => {
         for (const image of images) await onAttachImageFile?.(image)
+        if (otherFiles[0]) await onAttachDroppedFile?.(otherFiles[0])
       })()
       return
     }

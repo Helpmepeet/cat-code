@@ -1,3 +1,4 @@
+import { selectAttachmentFile } from './attachmentFileSelection.js'
 import { createPreviewDocumentHost } from './previewDocumentHost.js'
 import { createPreviewDocumentRunner } from './previewDocumentRunner.js'
 import { CH_FILE_PREVIEW_DOCUMENT_READ } from '../shared/ipcChannels.js'
@@ -103,11 +104,8 @@ import { createAccountControlRunner } from './accountControlRunner.js'
 import { parseAccountControlVerb } from '../shared/accountControlWorker.js'
 import { spawn } from 'node:child_process'
 import {
-  closeSync,
   existsSync,
-  openSync,
   readFileSync,
-  readSync,
   realpathSync,
   statSync,
 } from 'node:fs'
@@ -125,7 +123,6 @@ import {
 import { Host, type CwdValidation } from '../host/host.js'
 import { ManagedStorage } from '../host/managedStorage.js'
 import {
-  MAX_ATTACHMENT_SOURCE_IMAGE_BYTES,
   type AttachmentFileSelection,
   type HostEvent,
   type HostResult,
@@ -216,6 +213,7 @@ import {
   CH_HOST_PICK_DIR,
   CH_HOST_PICK_SCHEDULED_TASK_DIR,
   CH_HOST_PICK_ATTACHMENT_FILE,
+  CH_HOST_DROP_ATTACHMENT_FILE,
   CH_HOST_PREVIEW,
   CH_HOST_SESSIONS_CATALOG,
   CH_HOST_OPEN_HISTORY,
@@ -243,7 +241,6 @@ import {
   appendAttachmentFileMention,
   createAttachmentFileTokenStore,
   createCwdTokenStore,
-  detectAttachmentImageMediaType,
   createRendererHealthFlightRecorder,
   createRendererHealthMonitor,
   createRendererRecoveryPolicy,
@@ -3858,48 +3855,14 @@ function registerHostControlPlane(): void {
         ? await dialog.showOpenDialog(parent, { properties: ['openFile'] })
         : await dialog.showOpenDialog({ properties: ['openFile'] })
       if (result.canceled || result.filePaths.length === 0) return null
-      try {
-        const realpath = realpathSync(result.filePaths[0]!)
-        const stats = statSync(realpath)
-        if (!stats.isFile() || realpath.includes('"')) return null
-        const handle = openSync(realpath, 'r')
-        const header = new Uint8Array(12)
-        let headerBytes = 0
-        try {
-          headerBytes = readSync(handle, header, 0, header.length, 0)
-        } finally {
-          closeSync(handle)
-        }
-        const mediaType = detectAttachmentImageMediaType(
-          header.subarray(0, headerBytes),
-        )
-        if (mediaType) {
-          if (stats.size > MAX_ATTACHMENT_SOURCE_IMAGE_BYTES) {
-            return {
-              kind: 'error',
-              message: 'This image is too large to attach.',
-            }
-          }
-          const bytes = readFileSync(realpath)
-          if (bytes.byteLength > MAX_ATTACHMENT_SOURCE_IMAGE_BYTES) {
-            return {
-              kind: 'error',
-              message: 'This image is too large to attach.',
-            }
-          }
-          return {
-            kind: 'image',
-            name: basename(realpath),
-            mediaType,
-            bytes: new Uint8Array(bytes),
-          }
-        }
-        return attachmentFileTokens.mint(appSessionId, realpath)
-      } catch {
-        return null
-      }
+      return selectAttachmentFile(appSessionId, result.filePaths[0], attachmentFileTokens.mint)
     },
   )
+
+  ipcMain.handle(CH_HOST_DROP_ATTACHMENT_FILE, (event, appSessionId: unknown, path: unknown) => {
+    if (!isMainWindowSender(event)) return null
+    return selectAttachmentFile(appSessionId, path, attachmentFileTokens.mint)
+  })
 
   ipcMain.handle(
     CH_HOST_CREATE,

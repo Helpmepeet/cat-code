@@ -8,13 +8,13 @@ beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await harness.unmountAll() })
 afterAll(async () => { await harness.teardown() })
 
-function Fixture({ editable = true, attach = async (_file: File) => {} }) {
+function Fixture({ editable = true, attach = async (_file: File) => {}, attachFile = async (_file: File) => {} }) {
   const [value, setValue] = useState('hello')
   return <main className="session-pane"><ComposerInput
     windowDropEnabled ariaLabel="Prompt" disabled={false} readOnly={!editable}
     onCompositionEnd={() => {}} onCompositionStart={() => {}} onFocus={() => {}}
     onPointerDown={() => {}} onRemovePaste={() => {}} onValueChange={setValue}
-    onAttachImageFile={attach} pastes={[]} placeholder="Message" value={value}
+    onAttachImageFile={attach} onAttachDroppedFile={attachFile} pastes={[]} placeholder="Message" value={value}
   /><output>{value}</output></main>
 }
 
@@ -61,7 +61,7 @@ test('window text drop focuses the composer and uses its saved caret; repeated d
   expect(tree.container.querySelector('.window-drop-veil')).toBeNull()
 })
 
-test('images prepare sequentially and skip other files even over the field', async () => {
+test('images prepare sequentially and one file attaches even over the field', async () => {
   const calls: string[] = []
   let active = 0
   const attach = async (file: File) => {
@@ -71,12 +71,12 @@ test('images prepare sequentially and skip other files even over the field', asy
     calls.push(file.name)
     active--
   }
-  const tree = await harness.mount(<Fixture attach={attach} />)
+  const tree = await harness.mount(<Fixture attach={attach} attachFile={attach} />)
   const files = [new File(['a'], 'a.png', { type: 'image/png' }), new File(['b'], 'b.pdf', { type: 'application/pdf' }), new File(['c'], 'c.jpg', { type: 'image/jpeg' })]
   await drag('dragover', window, { files })
-  expect(tree.container.querySelector('.window-drop-detail')?.textContent).toBe('2 images · Other files are skipped')
+  expect(tree.container.querySelector('.window-drop-detail')?.textContent).toBe('2 images and 1 file')
   await drag('drop', tree.container.querySelector('[role="textbox"]')!, { files })
-  expect(calls).toEqual(['a.png', 'c.jpg'])
+  expect(calls).toEqual(['a.png', 'c.jpg', 'b.pdf'])
 })
 
 test('text on the field uses the pointer position rather than the saved caret', async () => {
@@ -119,12 +119,12 @@ test('disabled composers reject drops without a veil', async () => {
   expect(tree.container.querySelector('output')?.textContent).toBe('hello')
 })
 
-test('unsupported files are blocked, sidebar drags are ignored, and all exit paths clear feedback', async () => {
+test('multiple files are blocked, sidebar drags are ignored, and all exit paths clear feedback', async () => {
   const tree = await harness.mount(<Fixture />)
   const file = new File(['a'], 'a.pdf', { type: 'application/pdf' })
-  expect((await drag('dragover', window, { files: [file] })).transfer.dropEffect).toBe('none')
+  expect((await drag('dragover', window, { files: [file, file] })).transfer.dropEffect).toBe('none')
   expect(tree.container.querySelector('.window-drop-no')).not.toBeNull()
-  expect((await drag('drop', window, { files: [file] })).event.defaultPrevented).toBe(true)
+  expect((await drag('drop', window, { files: [file, file] })).event.defaultPrevented).toBe(true)
   await drag('dragover', window, { types: ['text/workspace-cwd', 'text/plain'] })
   expect(tree.container.querySelector('.window-drop-veil')).toBeNull()
   for (const type of ['dragleave', 'dragend', 'blur', 'keydown']) {

@@ -21,7 +21,7 @@ import type { LidModeView } from '../shared/lidClosed.js'
  * against the allowlist schema at the real engine trust boundary.
  */
 
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { CH_HOST_EXTERNAL_APP_ICON } from '../shared/ipcChannels.js'
 import { parseNotificationPreferences, type NotificationPreferences } from '../shared/notificationPreferences.js'
 import type { NotificationVisibilityBridge, NotificationVisibility } from '../shared/notificationVisibility.js'
@@ -148,6 +148,7 @@ import {
   CH_HOST_PICK_DIR,
   CH_HOST_PICK_SCHEDULED_TASK_DIR,
   CH_HOST_PICK_ATTACHMENT_FILE,
+  CH_HOST_DROP_ATTACHMENT_FILE,
   CH_HOST_PREVIEW,
   CH_HOST_SESSIONS_CATALOG,
   CH_HOST_OPEN_HISTORY,
@@ -743,6 +744,12 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     const payload = { appSessionId }
     sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_HOST_PICK_ATTACHMENT_FILE, appSessionId) as Promise<import('../shared/hostApi.js').AttachmentFileSelection | null>
+  },
+  dropAttachmentFile(appSessionId: SessionId, file: File) {
+    const path = webUtils.getPathForFile(file)
+    if (!path) return Promise.resolve(null)
+    sendGuard.assertAllowed({ appSessionId, path })
+    return ipcRenderer.invoke(CH_HOST_DROP_ATTACHMENT_FILE, appSessionId, path) as Promise<import('../shared/hostApi.js').AttachmentFileSelection | null>
   },
   getWorkspaceFileAvailability(appSessionId: SessionId, path: string): Promise<boolean> {
     const payload = { appSessionId, path }

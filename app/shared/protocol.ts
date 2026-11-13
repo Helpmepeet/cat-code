@@ -4417,6 +4417,8 @@ export type CatCodeBridge = {
   pickAttachmentFile(
     appSessionId: SessionId,
   ): Promise<AttachmentFileSelection | null>
+  /** Preload derives the native path; renderer-authored paths are never accepted. */
+  dropAttachmentFile(appSessionId: SessionId, file: File): Promise<AttachmentFileSelection | null>
 
   /* ----------------------------------------------------------------------- *
    * Control plane (P3-3 — REGISTRY §6.1 / SECURITY-MINIMUM Addendum HC1–HC4).

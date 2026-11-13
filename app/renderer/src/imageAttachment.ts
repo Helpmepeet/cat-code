@@ -99,9 +99,9 @@ export async function prepareImageAttachment(
  * "Choose a PNG, JPEG, GIF, or WebP image." rather than the drop silently doing
  * nothing.
  *
- * Non-image files are excluded on purpose. Turning a dropped file into a path the
- * engine reads would make the renderer the author of a filesystem path, which is
- * exactly what HC1 forbids; that is a separate decision, not this fix.
+ * Non-image files take the preload File bridge instead. HC1 forbids the
+ * renderer from authoring paths: preload derives the native path and only main
+ * validates it and mints an attachment token.
  */
 export function selectAttachableImageFiles(
   files: readonly File[],

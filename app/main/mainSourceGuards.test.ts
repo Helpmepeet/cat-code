@@ -166,7 +166,11 @@ test('HC1: non-image file attachments resolve opaque tokens without returning pa
     'ipcMain.handle(\n    CH_HOST_CREATE',
   )
 
-  expect(pick).toContain('attachmentFileTokens.mint(appSessionId, realpath)')
+  expect(pick).toContain('selectAttachmentFile(appSessionId, result.filePaths[0], attachmentFileTokens.mint)')
+  expect(pick).toContain('selectAttachmentFile(appSessionId, path, attachmentFileTokens.mint)')
+  const selection = readFileSync(new URL('./attachmentFileSelection.ts', import.meta.url), 'utf8')
+  expect(selection).toContain('return mint(appSessionId, realpath)')
+  expect(selection).not.toContain('return realpath')
   expect(pick).not.toContain('return realpath')
 })
 

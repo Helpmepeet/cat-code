@@ -288,6 +288,7 @@ async function runProductionHardeningSmoke(
       // engine id (HC3 fixed sender; renderer authors no cwd, HC1).
       'openHistorySession',
       'pickAttachmentFile',
+      'dropAttachmentFile',
       'pickDirectory',
       'pickScheduledTaskDirectory',
       'previewSession',

@@ -672,13 +672,18 @@ export function SessionPane({
   const [transportErrorFromImage, setTransportErrorFromImage] = useState<
     string | null
   >(null)
-  const attachFile = async (): Promise<void> => {
+  const attachFile = async (droppedFile?: File): Promise<void> => {
     if (!activeSessionId || pickingFile) return
     setPickingFile(true)
     onRetryBlockChange?.(activeSessionId, 'attachment', true)
     try {
-      const selection = await getBridge().pickAttachmentFile(activeSessionId)
-      if (!selection) return
+      const selection = droppedFile
+        ? await getBridge().dropAttachmentFile(activeSessionId, droppedFile)
+        : await getBridge().pickAttachmentFile(activeSessionId)
+      if (!selection) {
+        if (droppedFile) setTransportErrorFromImage('Could not attach this file. Choose a file from your computer and try again.')
+        return
+      }
       if (selection.kind === 'error') {
         setTransportErrorFromImage(selection.message)
         return
@@ -2544,10 +2549,10 @@ export function SessionPane({
               // CC-84 — a Finder drag carries its payload on
               // `dataTransfer.files`, so the field's text-only drop handler
               // ignored it. A dropped image goes through the SAME `attachImage`
-              // the ⌘V and native-picker paths use; other dropped file kinds stay
-              // ignored because only main may turn a chosen path into an opaque
-              // file token (HC1).
+              // the ⌘V and native-picker paths use. Other files go through
+              // preload so only main can mint a path-backed token (HC1).
               onAttachImageFile={attachImage}
+              onAttachDroppedFile={attachFile}
               onPointerDown={engagePreviewPane}
               onValueChange={(next, restoredPastes) => {
                 // A genuine keystroke abandons any active ↑/↓ recall cursor

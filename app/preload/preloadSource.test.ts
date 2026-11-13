@@ -170,7 +170,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain('setPeerWakeBlocked(')
   expect(channels).toContain("export const CH_NOTIFICATION_VISIBILITY = 'catcode:notification-visibility'")
   expect(source).toContain('reportNotificationVisibility(value: NotificationVisibility): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(100)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(101)
   expect(channels).toContain("export const CH_HOST_EXTERNAL_APP_ICON = 'catcode:host:external-app-icon'")
   expect(source).toContain('ipcRenderer.invoke(CH_HOST_EXTERNAL_APP_ICON, request)')
   expect(channels).toContain("export const CH_QUESTION_VERB = 'catcode:question-verb'")
@@ -229,7 +229,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(107)
+  expect(names.length).toBe(108)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -325,7 +325,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(67)
+  expect(invokeChannels.length).toBe(68)
   const allowed = new Set([
     'CH_BROWSER_PANE_SNAPSHOT',
     'CH_BROWSER_PANE_COMMAND',
@@ -374,6 +374,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_PICK_DIR',
     'CH_HOST_PICK_SCHEDULED_TASK_DIR',
     'CH_HOST_PICK_ATTACHMENT_FILE',
+    'CH_HOST_DROP_ATTACHMENT_FILE',
     'CH_HOST_PREVIEW',
     'CH_HOST_SESSIONS_CATALOG',
     'CH_HOST_OPEN_HISTORY',
@@ -628,6 +629,35 @@ test('acknowledgement flushing batches across tasks rather than per delivered fr
 // 2026-08-13 through seven app/ commits, and `recordRenderCommit` repeat it the
 // same day. This compares the two lists as SOURCE TEXT so the drift is caught by
 // plain `bun test app/`, wherever it runs.
+test('dropped file bridge derives paths in preload and sends nothing for synthetic files', async () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('  dropAttachmentFile(')
+  const end = source.indexOf('  getWorkspaceFileAvailability(', start)
+  const method = source.slice(start, end)
+    .replace('appSessionId: SessionId, file: File', 'appSessionId, file')
+    .replace(/ as Promise<import\([^\n]+/, '')
+  const calls: unknown[][] = []
+  const file = {}
+  let nativePath = ''
+  const bridge = new Function('webUtils', 'sendGuard', 'ipcRenderer', 'CH_HOST_DROP_ATTACHMENT_FILE', `return {${method}}`)(
+    { getPathForFile: (value: unknown) => { expect(value).toBe(file); return nativePath } },
+    { assertAllowed: (value: unknown) => calls.push(['guard', value]) },
+    { invoke: (...args: unknown[]) => { calls.push(args); return Promise.resolve(null) } },
+    'drop-channel',
+  )
+  await bridge.dropAttachmentFile('session', file)
+  expect(calls).toEqual([])
+  nativePath = '/native/file.txt'
+  await bridge.dropAttachmentFile('session', file)
+  expect(calls).toEqual([
+    ['guard', { appSessionId: 'session', path: nativePath }],
+    ['drop-channel', 'session', nativePath],
+  ])
+  const main = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+  const handler = main.slice(main.indexOf('ipcMain.handle(CH_HOST_DROP_ATTACHMENT_FILE,'))
+  expect(handler.slice(0, handler.indexOf('\n  })'))).toContain('if (!isMainWindowSender(event)) return null')
+})
+
 test('the hardening allowlist matches the bridge preload actually exposes', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
   const start = source.indexOf('const bridge: CatCodeBridge & NotificationVisibilityBridge = {')
