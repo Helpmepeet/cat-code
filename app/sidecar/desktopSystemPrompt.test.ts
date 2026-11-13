@@ -38,6 +38,8 @@ for (const [kind, directory] of [['managed', '/workspace/chat'], ['project', und
     const prompt = buildDesktopSystemPrompt({ name: null, createdByName: null, createdById: null }, directory)
     expect(prompt).toContain('.cat-code/project.json')
     expect(prompt).toContain('once per conversation')
+    expect(prompt).toContain('if the file is missing or its description is empty')
+    expect(prompt).not.toContain('description or aliases are empty')
     expect(prompt).toContain("The description captures the project's core purpose")
     expect(prompt).toContain('add it as an alias if the intended workspace is clear')
     expect(prompt).toContain('preserve unrelated fields')
