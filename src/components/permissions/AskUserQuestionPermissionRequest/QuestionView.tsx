@@ -1,6 +1,6 @@
 import { c as _c } from "react/compiler-runtime";
 import figures from 'figures';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import type { KeyboardEvent } from '../../../ink/events/keyboard-event.js';
 import { Box, Text } from '../../../ink.js';
 import { useAppState } from '../../../state/AppState.js';
@@ -67,6 +67,8 @@ export function QuestionView(t0) {
   } = t0;
   const hideSubmitTab = t1 === undefined ? false : t1;
   const isFreeText = question.options.length === 0;
+  // Input changes notify selection synchronously, before the parent can render.
+  const currentText = useRef<Record<string, string>>(Object.create(null));
   const isInPlanMode = useAppState(_temp) === "plan";
   const [isFooterFocused, setIsFooterFocused] = useState(false);
   const [footerIndex, setFooterIndex] = useState(0);
@@ -172,6 +174,7 @@ export function QuestionView(t0) {
       t8 = async (currentValue, setValue) => {
         const result = await editPromptInEditor(currentValue);
         if (result.content !== null && result.content !== currentValue) {
+          currentText.current[questionText] = result.content;
           setValue(result.content);
           onUpdateQuestionState(questionText, {
             textInputValue: result.content
@@ -191,6 +194,7 @@ export function QuestionView(t0) {
     let t11;
     if ($[22] !== onUpdateQuestionState || $[23] !== question.multiSelect || $[24] !== questionText) {
       t11 = value_0 => {
+        currentText.current[questionText] = value_0;
         onUpdateQuestionState(questionText, {
           textInputValue: value_0
         }, question.multiSelect ?? false);
@@ -302,13 +306,13 @@ export function QuestionView(t0) {
         onUpdateQuestionState(questionText, {
           selectedValue: values
         }, true);
-        const textInput = values.includes("__other__") ? questionStates[questionText]?.textInputValue : undefined;
+        const textInput = values.includes("__other__") ? currentText.current[questionText] ?? questionStates[questionText]?.textInputValue : undefined;
         onAnswer(questionText, values, textInput, false);
       }} onFocus={handleFocus} onCancel={onCancel} submitButtonText={currentQuestionIndex === questions.length - 1 ? "Submit" : "Next"} onSubmit={onSubmit} onDownFromLastItem={handleDownFromLastItem} isDisabled={isFooterFocused} onOpenEditor={handleOpenEditor} onImagePaste={onImagePaste} pastedContents={pastedContents} onRemoveImage={onRemoveImage} /> : <Select key={question.question} options={options} defaultValue={questionStates[question.question]?.selectedValue as string | undefined} onChange={value_1 => {
         onUpdateQuestionState(questionText, {
           selectedValue: value_1
         }, false);
-        const textInput_0 = value_1 === "__other__" ? questionStates[questionText]?.textInputValue : undefined;
+        const textInput_0 = value_1 === "__other__" ? currentText.current[questionText] ?? questionStates[questionText]?.textInputValue : undefined;
         if (isFreeText && !textInput_0?.trim()) return;
         onAnswer(questionText, value_1, textInput_0);
       }} onFocus={handleFocus} onCancel={onCancel} onDownFromLastItem={handleDownFromLastItem} isDisabled={isFooterFocused} layout="compact-vertical" onOpenEditor={handleOpenEditor} onImagePaste={onImagePaste} pastedContents={pastedContents} onRemoveImage={onRemoveImage} />}</Box>;

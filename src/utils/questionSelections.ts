@@ -5,7 +5,7 @@ export type QuestionSelection = {
   toolUseId: string
   questionIndex: number
   question: string
-  selectedOptions: { optionIndex: number; label: string; description: string }[]
+  selectedOptions: { optionIndex: number; label: string; description: string; previewContext?: string }[]
   other?: string
   notes: { optionIndex: number; text: string }[]
 }
@@ -18,13 +18,14 @@ const selectionSchema = z.strictObject({
     optionIndex: z.number().int().min(0).max(3),
     label: z.string(),
     description: z.string(),
+    previewContext: z.string().optional(),
   })).max(4),
   other: z.string().optional(),
   notes: z.array(z.strictObject({ optionIndex: z.number().int().min(0).max(3), text: z.string() })).max(4),
 })
 const questionSpecsSchema = z.array(z.object({
   question: z.string(),
-  options: z.array(z.object({ label: z.string(), description: z.string() })).max(4),
+  options: z.array(z.object({ label: z.string(), description: z.string(), preview: z.string().optional() })).max(4),
   multiSelect: z.boolean().default(false),
 })).min(1).max(4)
 
@@ -32,12 +33,15 @@ const questionSpecsSchema = z.array(z.object({
 export function readQuestionSelections(value: unknown, toolUseId: string, questions: unknown): QuestionSelection[] | null {
   const specs = questionSpecsSchema.safeParse(questions)
   const selections = z.array(selectionSchema).min(1).max(4).safeParse(value)
-  if (!specs.success || !selections.success || specs.data.length !== selections.data.length) return null
+  if (!specs.success || !selections.success) return null
   try {
+    let previousIndex = -1
     for (let index = 0; index < selections.data.length; index++) {
       const selection = selections.data[index]!
-      if (selection.toolUseId !== toolUseId || selection.questionIndex !== index) return null
-      const expected = reconstructQuestionSelection(toolUseId, index, specs.data[index]!, {
+      const questionIndex = selection.questionIndex
+      if (selection.toolUseId !== toolUseId || questionIndex <= previousIndex || questionIndex >= specs.data.length) return null
+      previousIndex = questionIndex
+      const expected = reconstructQuestionSelection(toolUseId, questionIndex, specs.data[questionIndex]!, {
         optionIndices: selection.selectedOptions.map(option => option.optionIndex),
         other: selection.other,
         notes: selection.notes,
@@ -60,7 +64,12 @@ export function reconstructQuestionSelection(toolUseId: string, questionIndex: n
   if (new Set(notes.map(n => n.optionIndex)).size !== notes.length || notes.some(n => !indices.includes(n.optionIndex))) throw new Error('Notes must refer to distinct selected options')
   return {
     toolUseId, questionIndex, question: question.question,
-    selectedOptions: indices.map(optionIndex => ({ optionIndex, label: question.options[optionIndex]!.label, description: question.options[optionIndex]!.description })),
+    // Selected engine-owned scope, not evidence that the user viewed a preview.
+    selectedOptions: indices.map(optionIndex => {
+      const option = question.options[optionIndex]!
+      return { optionIndex, label: option.label, description: option.description,
+        ...(option.preview !== undefined ? { previewContext: option.preview } : {}) }
+    }),
     ...(other ? { other } : {}),
     notes: notes.map(n => ({ optionIndex: n.optionIndex, text: n.text })),
   }

@@ -8044,6 +8044,7 @@ type NarrowedGatedQuestion = {
   question: string
   options: string[] // option labels, in engine order
   descriptions: string[]
+  previews: (string | undefined)[]
   multiSelect: boolean
 }
 
@@ -8076,6 +8077,7 @@ function narrowGatedQuestions(
     if (!Array.isArray(record.options)) return undefined
     const options: string[] = []
     const descriptions: string[] = []
+    const previews: (string | undefined)[] = []
     for (const option of record.options) {
       if (typeof option !== 'object' || option === null) return undefined
       const label = (option as Record<string, unknown>).label
@@ -8084,11 +8086,15 @@ function narrowGatedQuestions(
       const description = (option as Record<string, unknown>).description
       if (typeof description !== 'string') return undefined
       descriptions.push(description)
+      const preview = (option as Record<string, unknown>).preview
+      if (preview !== undefined && typeof preview !== 'string') return undefined
+      previews.push(typeof preview === 'string' ? preview : undefined)
     }
     questions.push({
       question: record.question,
       options,
       descriptions,
+      previews,
       multiSelect: record.multiSelect === true,
     })
   }
@@ -8184,7 +8190,7 @@ export function reconstructAskUserQuestionAnswers(
     selections.push(reconstructQuestionSelection('', qi, {
       question: question.question,
       multiSelect: question.multiSelect,
-      options: question.options.map((label, i) => ({ label, description: question.descriptions[i]! })),
+      options: question.options.map((label, i) => ({ label, description: question.descriptions[i]!, ...(question.previews[i] !== undefined ? { preview: question.previews[i] } : {}) })),
     }, answer))
   }
 

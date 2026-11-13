@@ -403,15 +403,16 @@ Questions asked and answers provided:\n${questionsWithAnswers_0}`;
         answers: answersToSubmit,
         annotations,
       };
-      const selections = questions.map((question: Question, questionIndex: number) => {
+      const selections = questions.flatMap((question: Question, questionIndex: number) => {
+        if (!Object.hasOwn(answersToSubmit, question.question)) return [];
         const answer = receivedAnswers.current[question.question];
         if (!answer) throw new Error('Question selection unavailable');
         const notes = questionStates[question.question]?.textInputValue?.trim();
-        return reconstructQuestionSelection(toolUseConfirm.toolUseID, questionIndex, { ...question, options: question.options ?? [] }, {
+        return [reconstructQuestionSelection(toolUseConfirm.toolUseID, questionIndex, { ...question, options: question.options ?? [] }, {
           ...answer,
           ...(notes && !answer.other && answer.optionIndices.length === 1
             ? { notes: [{ optionIndex: answer.optionIndices[0]!, text: notes }] } : {}),
-        });
+        })];
       });
       const contentBlocks = await convertImagesToBlocks(allImageAttachments);
       recordQuestionSelections(toolUseConfirm.toolUseID, questions, answersToSubmit, selections);

@@ -76,7 +76,7 @@ const outputSchema = lazySchema(() => z.object({
     toolUseId: z.string(),
     questionIndex: z.number().int(),
     question: z.string(),
-    selectedOptions: z.array(z.object({ optionIndex: z.number().int(), label: z.string(), description: z.string() })),
+    selectedOptions: z.array(z.object({ optionIndex: z.number().int(), label: z.string(), description: z.string(), previewContext: z.string().optional() })),
     other: z.string().optional(),
     notes: z.array(z.object({ optionIndex: z.number().int(), text: z.string() })),
   })).optional(),

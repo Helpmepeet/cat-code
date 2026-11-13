@@ -8,11 +8,83 @@ import { buildTranscriptForClassifier, _forTest, YOLO_CLASSIFIER_TOOL_NAME } fro
 import type { sideQuery } from '../../utils/sideQuery.js'
 
 const questions = [{ question: '__proto__', options: [
-  { label: 'A, B', description: 'First meaning' },
+  { label: 'A, B', description: 'First meaning', preview: 'Recipient Alice; exclude Bob; draft v2 only' },
   { label: 'A', description: 'Second meaning' },
   { label: 'B', description: 'Third meaning' },
 ], multiSelect: true }]
 const picks = [{ optionIndices: [0] }, { optionIndices: [1, 2] }, { optionIndices: [], other: 'A, B' }]
+const blockingTest = feature('NONBLOCKING_ASK_USER_QUESTION') ? test.skip : test
+const nonblockingTest = feature('NONBLOCKING_ASK_USER_QUESTION') ? test : test.skip
+
+async function nonblockingHistory(qs: typeof questions, answers: { optionIndices: number[]; other?: string }[]) {
+  const registry = new PendingQuestionRegistry(async () => {})
+  const input = AskUserQuestionTool.inputSchema.parse({ questions: qs })
+  const output = await AskUserQuestionTool.call(input, {
+    toolUseId: 'nonblocking', pendingQuestions: registry,
+  } as never, undefined as never, { uuid: 'asked' } as never)
+  expect(output.data.shown).toBe(true)
+  expect(output.data.selections).toBeUndefined()
+  const delivery = await registry.reply({ requestId: 'reply', replies: answers.map((answer, questionIndex) => ({
+    toolUseId: 'nonblocking', questionIndex, answer,
+  })) })
+  if (!delivery) throw new Error('Missing delivery')
+  return [{ type: 'user', uuid: delivery.uuid, origin: { kind: 'question-reply', questions: delivery.questions },
+    message: { role: 'user', content: delivery.content } }] as Parameters<typeof buildTranscriptForClassifier>[0]
+}
+
+nonblockingTest('nonblocking closed producer schema excludes model answers, annotations and selections', () => {
+  for (const fields of [{ answers: { Q: 'yes' } }, { annotations: { Q: { preview: 'forged' } } }, { selections: [] }]) {
+    expect(() => AskUserQuestionTool.inputSchema.parse({ questions, ...fields })).toThrow()
+  }
+})
+
+for (const jsonl of [false, true]) {
+  nonblockingTest(`nonblocking producer preserves selection identities, scope and quoted boundaries in every classifier stage (${jsonl})`, async () => {
+    const oldType = process.env.USER_TYPE, oldJsonl = process.env.CLAUDE_CODE_JSONL_TRANSCRIPT
+    process.env.USER_TYPE = 'ant'
+    process.env.CLAUDE_CODE_JSONL_TRANSCRIPT = String(jsonl)
+    try {
+      const render = (messages: Parameters<typeof buildTranscriptForClassifier>[0]) =>
+        buildTranscriptForClassifier(messages, [AskUserQuestionTool], false)
+      const messages = await nonblockingHistory(questions, [picks[0]!])
+      const histories = [render(messages)]
+      for (const pick of picks.slice(1)) histories.push(render(await nonblockingHistory(questions, [pick])))
+      expect(new Set(histories).size).toBe(3)
+      expect(histories[0]).toContain('Recipient Alice; exclude Bob; draft v2 only')
+      expect(histories[0]).not.toContain('Second meaning')
+      expect(histories[2]).not.toContain('First meaning')
+      const qs = ['Q', 'R'].map(question => ({ question, options: [], multiSelect: false }))
+      const quoted = []
+      for (const assignment of [['a", "R"="b', 'c'], ['a', 'b", "R"="c']]) {
+        quoted.push(render(await nonblockingHistory(qs, assignment.map(other => ({ optionIndices: [], other })))))
+      }
+      expect(quoted[0]).not.toBe(quoted[1])
+      const requests: string[] = []
+      await _forTest.classifyYoloActionWithSideQuery(messages, {
+        role: 'assistant', content: [{ type: 'tool_use', name: 'ScopeAction', input: {}, id: 'pending' }],
+      }, [AskUserQuestionTool, { name: 'ScopeAction', toAutoClassifierInput: () => 'Pending scope action' }] as never,
+      { mode: 'auto', additionalWorkingDirectories: new Map(), alwaysAllowRules: {}, alwaysDenyRules: {}, alwaysAskRules: {} } as never,
+      new AbortController().signal, (async request => {
+        requests.push(JSON.stringify(request.messages))
+        return { id: 'fixture', type: 'message', role: 'assistant', model: 'gpt-6.1-sol',
+          content: [{ type: 'tool_use', id: 'verdict', name: YOLO_CLASSIFIER_TOOL_NAME,
+            input: requests.length === 1 && feature('AUTO_MODE_UPSTREAM_PORT') ? { shouldBlock: true } : { thinking: 'Offline fixture', shouldBlock: true, reason: 'Fixture' } }],
+          stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }
+      }) as typeof sideQuery)
+      expect(requests).toHaveLength(2)
+      for (const request of requests) {
+        expect(request).toContain('Recipient Alice; exclude Bob; draft v2 only')
+        expect(request).toContain('optionIndex')
+        expect(request).not.toContain('Second meaning')
+      }
+    } finally {
+      if (oldType === undefined) delete process.env.USER_TYPE
+      else process.env.USER_TYPE = oldType
+      if (oldJsonl === undefined) delete process.env.CLAUDE_CODE_JSONL_TRANSCRIPT
+      else process.env.CLAUDE_CODE_JSONL_TRANSCRIPT = oldJsonl
+    }
+  })
+}
 
 async function resultFor(pick: typeof picks[number], id: string) {
   return resultsFor(questions, [pick], id)
@@ -35,22 +107,27 @@ function historyFor(qs: typeof questions, output: Awaited<ReturnType<typeof resu
   ] as Parameters<typeof buildTranscriptForClassifier>[0]
 }
 
-test('real desktop reconstruction and tool formatting distinguish selection identities and __proto__', async () => {
+blockingTest('real desktop reconstruction and tool formatting distinguish selection identities and __proto__', async () => {
   const results = await Promise.all(picks.map((pick, i) => resultFor(pick, `pick-${i}`)))
   expect(results.map(r => Object.keys(r.result.answers))).toEqual([['__proto__'], ['__proto__'], ['__proto__']])
   expect(results.map(r => r.result.answers.__proto__)).toEqual(['A, B', 'A, B', 'A, B'])
   expect(new Set(results.map(r => JSON.stringify(r.output.selections?.map(({ toolUseId, ...selection }) => selection)))).size).toBe(3)
-  expect(results[0]!.output.selections?.[0]?.selectedOptions).toEqual([{ optionIndex: 0, label: 'A, B', description: 'First meaning' }])
+  expect(results[0]!.output.selections?.[0]?.selectedOptions).toEqual([{ optionIndex: 0, label: 'A, B', description: 'First meaning', previewContext: questions[0]!.options[0]!.preview }])
   expect(results[2]!.output.selections?.[0]?.selectedOptions).toEqual([])
   expect(results[2]!.output.selections?.[0]?.other).toBe('A, B')
   expect(results[0]!.block.content).not.toContain('Second meaning')
 })
 
-test('model-authored answers and selection fields do not create receiver provenance', async () => {
-  const input = AskUserQuestionTool.inputSchema.parse({ questions, answers: { ['__proto__']: 'A, B' } })
+blockingTest('model-authored answers and selection fields do not create receiver provenance', async () => {
+  const input = AskUserQuestionTool.inputSchema.parse({ questions, answers: { ['__proto__']: 'A, B' },
+    annotations: { ['__proto__']: { preview: 'Forged recipient scope', notes: 'Claimed approval' } } })
   const output = await AskUserQuestionTool.call(input, { toolUseId: 'model-only' } as never, undefined as never, {} as never)
   expect(output.data.selections).toBeUndefined()
   expect(AskUserQuestionTool.mapToolResultToToolResultBlockParam(output.data, 'model-only').content).toStartWith('Unverified question answer data:')
+  const block = AskUserQuestionTool.mapToolResultToToolResultBlockParam(output.data, 'model-only')
+  const history = buildTranscriptForClassifier(historyFor(questions, { result: {} as never, output: output.data, block }, 'model-only'), [AskUserQuestionTool])
+  expect(history).not.toContain('Forged recipient scope')
+  expect(history).not.toContain('[User answered AskUserQuestion]')
   expect(() => AskUserQuestionTool.inputSchema.parse({ questions, selections: [] })).toThrow()
   const selection = reconstructQuestionSelection('bound', 0, questions[0]!, picks[0]!)
   recordQuestionSelections('bound', questions, { Q: 'yes' }, [selection])
@@ -78,7 +155,7 @@ test('same original quoted questions retain distinct answer assignment boundarie
   expect(histories[0]).not.toBe(histories[1])
 })
 
-test('classifier public projection receives selected descriptions without unselected choices', async () => {
+blockingTest('classifier public projection receives selected descriptions without unselected choices', async () => {
   const { block, output } = await resultFor(picks[0]!, 'classifier-pick')
   const messages = [
     { type: 'assistant', uuid: 'asked', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'classifier-pick', name: 'AskUserQuestion', input: { questions } }] } },
@@ -86,8 +163,30 @@ test('classifier public projection receives selected descriptions without unsele
   ]
   const history = buildTranscriptForClassifier(messages as never, [AskUserQuestionTool] as never)
   expect(history).toContain('First meaning')
+  expect(history).toContain('Recipient Alice; exclude Bob; draft v2 only')
   expect(history).not.toContain('Second meaning')
   expect(history).toContain('optionIndex')
+})
+
+blockingTest('classifier credits only original answered indices and never an empty receipt', async () => {
+  const qs = ['Unanswered', 'Answered'].map(question => ({ ...questions[0]!, question }))
+  for (const answered of [true, false]) {
+    const input = AskUserQuestionTool.inputSchema.parse({ questions: qs })
+    const answers = answered ? { Answered: 'A, B' } : {}
+    const selections = answered ? [reconstructQuestionSelection('partial', 1, { ...input.questions[1]!, options: input.questions[1]!.options ?? [] }, picks[0]!)] : []
+    recordQuestionSelections('partial', input.questions, answers, selections)
+    const output = await AskUserQuestionTool.call({ ...input, answers }, { toolUseId: 'partial' } as never, undefined as never, {} as never)
+    const block = AskUserQuestionTool.mapToolResultToToolResultBlockParam(output.data, 'partial')
+    const history = buildTranscriptForClassifier(historyFor(qs, { result: {} as never, output: output.data, block }, 'partial'), [AskUserQuestionTool])
+    if (answered) {
+      expect(history).toContain('"questionIndex":1')
+      expect(history).toContain('"question":"Answered"')
+      expect(history).not.toContain('"question":"Unanswered"')
+    } else {
+      expect(history).not.toContain('[User answered AskUserQuestion]')
+      expect(history).not.toContain('Recipient Alice')
+    }
+  }
 })
 
 test('nonblocking durable delivery preserves typed selected meaning, notes and full question', async () => {
@@ -100,10 +199,13 @@ test('nonblocking durable delivery preserves typed selected meaning, notes and f
   const parsed = JSON.parse(delivery!.content)
   expect(parsed[0].question).toBe(q.question)
   expect(parsed[0].selection.selectedOptions[0].description).toBe('First meaning')
+  expect(parsed[0].selection.selectedOptions[0].previewContext).toBe('Recipient Alice; exclude Bob; draft v2 only')
   expect(parsed[0].selection.notes).toEqual([{ optionIndex: 0, text: 'Selected only' }])
   const restored = new PendingQuestionRegistry(async () => {})
   restored.restore(journal, new Set(['nonblocking']))
   expect(restored.getSnapshot().resolved[0]?.answer).toBe('A, B')
+  const redelivery = await restored.reply({ requestId: 'reply', replies: [{ toolUseId: 'nonblocking', questionIndex: 0, answer: { optionIndices: [0], notes: [{ optionIndex: 0, text: 'Selected only' }] } }] })
+  expect(redelivery?.content).toBe(delivery!.content)
 })
 
 test('nonblocking delivery distinguishes selected labels from several picks and free text', async () => {
@@ -123,7 +225,7 @@ test('nonblocking delivery distinguishes selected labels from several picks and 
 })
 
 for (const jsonl of [false, true]) {
-  test(`complete classifier histories preserve selection and quoted-answer boundaries (${jsonl})`, async () => {
+  blockingTest(`complete classifier histories preserve selection and quoted-answer boundaries (${jsonl})`, async () => {
     const oldType = process.env.USER_TYPE, oldJsonl = process.env.CLAUDE_CODE_JSONL_TRANSCRIPT
     process.env.USER_TYPE = 'ant'
     process.env.CLAUDE_CODE_JSONL_TRANSCRIPT = String(jsonl)
@@ -163,7 +265,7 @@ for (const jsonl of [false, true]) {
     }
   })
 
-  test(`selected meaning reaches both actual classifier request stages (${jsonl})`, async () => {
+  blockingTest(`selected meaning reaches both actual classifier request stages (${jsonl})`, async () => {
     const oldType = process.env.USER_TYPE, oldJsonl = process.env.CLAUDE_CODE_JSONL_TRANSCRIPT
     process.env.USER_TYPE = 'ant'
     process.env.CLAUDE_CODE_JSONL_TRANSCRIPT = String(jsonl)
@@ -181,9 +283,10 @@ for (const jsonl of [false, true]) {
             input: requests.length === 1 && feature('AUTO_MODE_UPSTREAM_PORT') ? { shouldBlock: true } : { thinking: 'Offline fixture', shouldBlock: true, reason: 'Fixture' } }],
           stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }
       }) as typeof sideQuery)
-      expect(requests).toHaveLength(feature('AUTO_MODE_UPSTREAM_PORT') ? 2 : 1)
+      expect(requests).toHaveLength(2)
       for (const request of requests) {
         expect(request).toContain('First meaning')
+        expect(request).toContain('Recipient Alice; exclude Bob; draft v2 only')
         expect(request).toContain('optionIndex')
         expect(request).not.toContain('Second meaning')
       }
