@@ -1345,11 +1345,13 @@ async function checkPermissionsAndCallTool(
     await preparation.dispose()
     const outcome = permissionRefusalOutcome(permissionDecision, toolUseID)
     recordAutoModeOutcome(toolUseID, outcome)
+    const requestedCall = assistantMessage.message.content.find(block =>
+      block.type === 'tool_use' && block.id === toolUseID)
     const permissionDecisionContext: PermissionDecisionContext = {
       version: 1,
       toolUseId: toolUseID,
       assistantUuid: assistantMessage.uuid,
-      toolName: tool.name,
+      toolName: requestedCall?.type === 'tool_use' ? requestedCall.name : tool.name,
       input: structuredClone(processedInput),
       outcome,
     }

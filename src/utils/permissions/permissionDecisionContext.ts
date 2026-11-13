@@ -56,7 +56,13 @@ export function readPermissionDecisionContext(value: unknown): PermissionDecisio
  * checker to compare to this historical action, never a reason to rewrite it.
  */
 export function collectPermissionDecisionContexts(messages: readonly Message[]): PermissionDecisionContext[] {
+  return [...positionPermissionDecisionContexts(messages).values()].flat()
+}
+
+/** Native results win over carried copies, without moving a decision in time. */
+export function positionPermissionDecisionContexts(messages: readonly Message[]): Map<Message, PermissionDecisionContext[]> {
   const records = new Map<string, PermissionDecisionContext>()
+  const owners = new Map<string, Message>()
   const calls = new Map<string, { assistantUuid: string; toolName: string }>()
   for (const message of messages) {
     if (message.type === 'assistant') {
@@ -68,7 +74,13 @@ export function collectPermissionDecisionContexts(messages: readonly Message[]):
       const saved = 'permissionDecisions' in message ? message.permissionDecisions : undefined
       if (Array.isArray(saved)) for (const value of saved) {
         const record = readPermissionDecisionContext(value)
-        if (record) records.set(JSON.stringify([record.assistantUuid, record.toolUseId]), record)
+        if (record) {
+          const key = JSON.stringify([record.assistantUuid, record.toolUseId])
+          if (!records.has(key)) {
+            records.set(key, record)
+            owners.set(key, message)
+          }
+        }
       }
     } else if (message.type === 'user') {
       const record = readPermissionDecisionContext(message.permissionDecision)
@@ -78,8 +90,17 @@ export function collectPermissionDecisionContexts(messages: readonly Message[]):
         message.sourceToolAssistantUUID !== record.assistantUuid ||
         !Array.isArray(message.message.content) || !message.message.content.some(block =>
           block.type === 'tool_result' && block.tool_use_id === record.toolUseId && block.is_error === true)) continue
-      records.set(JSON.stringify([record.assistantUuid, record.toolUseId]), record)
+      const key = JSON.stringify([record.assistantUuid, record.toolUseId])
+      records.set(key, record)
+      owners.set(key, message)
     }
   }
-  return [...records.values()]
+  const positioned = new Map<Message, PermissionDecisionContext[]>()
+  for (const [key, owner] of owners) {
+    const values = positioned.get(owner) ?? []
+    values.push(records.get(key)!)
+    positioned.set(owner, values)
+  }
+  return new Map(messages.filter(message => positioned.has(message))
+    .map(message => [message, positioned.get(message)!]))
 }

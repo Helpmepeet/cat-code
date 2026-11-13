@@ -2,7 +2,7 @@ import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { getPostCompactTaskAttachments } from './taskRestoration.js'
-import { collectPermissionDecisionContexts } from '../../utils/permissions/permissionDecisionContext.js'
+import { positionPermissionDecisionContexts } from '../../utils/permissions/permissionDecisionContext.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const sessionTranscriptModule = feature('KAIROS')
@@ -360,8 +360,11 @@ export async function appendPostCompactRuntimeAttachments(
   context: ToolUseContext,
   messages: Message[] = context.messages,
 ): Promise<CompactionResult> {
-  const permissionDecisions = collectPermissionDecisionContexts(messages)
-  if (permissionDecisions.length > 0) {
+  const keptUuids = new Set((result.messagesToKeep ?? []).map(message => message.uuid))
+  const permissionDecisions = [...positionPermissionDecisionContexts(messages)]
+    .filter(([message]) => !keptUuids.has(message.uuid))
+    .flatMap(([, records]) => records)
+  if (permissionDecisions.length > 0 || result.boundaryMarker.permissionDecisions !== undefined) {
     result = {
       ...result,
       boundaryMarker: { ...result.boundaryMarker, permissionDecisions },

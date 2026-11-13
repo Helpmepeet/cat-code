@@ -13,7 +13,7 @@ import { createAppRuntimeCanUseTool } from '../../app-runtime/appRuntimeCanUseTo
 import { appendPostCompactRuntimeAttachments, buildPostCompactMessages } from '../../services/compact/compact.js'
 import { collectPermissionDecisionContexts, markPermissionRequestCancelled, permissionRefusalOutcome } from './permissionDecisionContext.js'
 import { getRecordedAutoModeOutcome, recordAutoModeOutcome, resetRecordedAutoModeOutcomesForTest } from './autoModeMeta.js'
-import { buildTranscriptForClassifier, _forTest, YOLO_CLASSIFIER_TOOL_NAME } from './yoloClassifier.js'
+import { buildTranscriptForClassifier, _forTest, YOLO_CLASSIFIER_TOOL_NAME, MAX_CLASSIFIER_CONTEXT_CHARS } from './yoloClassifier.js'
 import type { sideQuery } from '../sideQuery.js'
 import { loadTranscriptFile } from '../sessionStorage.js'
 
@@ -31,9 +31,9 @@ afterEach(() => {
   resetRecordedAutoModeOutcomesForTest()
 })
 
-async function refuse(path: 'terminal-feedback' | 'terminal-no-feedback' | 'desktop' | 'unanswered' | 'policy' | 'cancelled') {
+async function refuse(path: 'terminal-feedback' | 'terminal-no-feedback' | 'desktop' | 'unanswered' | 'policy' | 'cancelled', invokedName?: string) {
   let executions = 0
-  const tool = buildTool({ name: 'RefusalSentinel', inputSchema: z.strictObject({ target: z.string() }),
+  const tool = buildTool({ name: 'RefusalSentinel', aliases: ['OldRefusalSentinel'], inputSchema: z.strictObject({ target: z.string() }),
     isReadOnly: () => true, isConcurrencySafe: () => false, maxResultSizeChars: 1000,
     description: async () => 'Offline fixture', prompt: async () => 'Offline fixture',
     validateInput: async () => ({ result: true }), renderToolUseMessage: () => null,
@@ -42,7 +42,7 @@ async function refuse(path: 'terminal-feedback' | 'terminal-no-feedback' | 'desk
     mapToolResultToToolResultBlockParam: (_data: unknown, id: string) => ({ type: 'tool_result' as const, tool_use_id: id, content: 'fixture' }),
     async call() { executions++; throw new Error('Refused tool executed') },
   })
-  const call = { type: 'tool_use' as const, id: 'refused-action', name: tool.name, input: { target: 'original-target' }, caller: { type: 'direct' as const } }
+  const call = { type: 'tool_use' as const, id: 'refused-action', name: invokedName ?? tool.name, input: { target: 'original-target' }, caller: { type: 'direct' as const } }
   const parent: AssistantMessage = { type: 'assistant', uuid: randomUUID(), message: { model: 'gpt-6.1-sol', content: [call] } }
   const state = { toolPermissionContext: { mode: 'default', additionalWorkingDirectories: new Map(), alwaysAllowRules: {}, alwaysDenyRules: {}, alwaysAskRules: {} },
     mcp: { tools: [], clients: [] }, tasks: {}, sessionHooks: new Map() }
@@ -86,6 +86,19 @@ for (const path of ['terminal-feedback', 'terminal-no-feedback', 'desktop', 'una
     expect(text).toContain('original-target')
   })
 }
+
+test('alias refusal keeps exact invoked-name correlation without accepting another tool name', async () => {
+  const { messages, tool } = await refuse('desktop', 'OldRefusalSentinel')
+  const result = messages.find(message => message.type === 'user') as UserMessage
+  expect(result.permissionDecision?.toolName).toBe('OldRefusalSentinel')
+  expect(collectPermissionDecisionContexts(messages)).toHaveLength(1)
+  expect(buildTranscriptForClassifier(messages, [tool], false)).toContain('rejected-by-user')
+  const changedCall = structuredClone(messages[0]!) as AssistantMessage
+  const block = changedCall.message.content[0]!
+  if (block.type !== 'tool_use') throw new Error('Expected tool call')
+  block.name = 'AnotherTool'
+  expect(collectPermissionDecisionContexts([changedCall, result])).toEqual([])
+})
 
 test('classifier block, unavailable, parsing failure and interruption stay distinct', () => {
   const decision = { behavior: 'deny' as const, message: 'Fixture classifier', decisionReason: { type: 'classifier' as const, classifier: 'auto-mode' as const, reason: 'Fixture' } }
@@ -166,11 +179,107 @@ for (const jsonl of [false, true]) {
           input: calls === 1 ? { shouldBlock: true } : { shouldBlock: true, thinking: 'Fixture', reason: 'Fixture' } }],
         stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }
     }) as typeof sideQuery)
-    expect(requests.length).toBeGreaterThanOrEqual(1)
+    expect(requests).toHaveLength(2)
     for (const request of requests) {
       expect(request).toContain('rejected-by-user')
       expect(request).toContain('original-target')
       expect(request).toContain('changed-target')
+      expect(request).toContain(messages[0]!.uuid)
+      expect(request.match(/original-target/g)).toHaveLength(1)
     }
   })
 }
+
+test('native refusal stays after old approval, supersedes carried copy, and never completes pending calls', async () => {
+  const { messages, tool } = await refuse('desktop')
+  const approval = { type: 'user', uuid: 'old-approval', message: { role: 'user', content: 'OLD_APPROVAL' } } as UserMessage
+  const records = collectPermissionDecisionContexts(messages)
+  const boundary = { type: 'system', subtype: 'compact_boundary', uuid: 'earlier', permissionDecisions: records } as Message
+  const text = buildTranscriptForClassifier([boundary, approval, ...messages], [tool], false)
+  expect(text.indexOf('OLD_APPROVAL')).toBeLessThan(text.indexOf('rejected-by-user'))
+  expect(text.match(/original-target/g)).toHaveLength(1)
+  const pending = buildTranscriptForClassifier([messages[0]!], [tool], false)
+  expect(pending).toContain('original-target')
+  expect(pending).not.toContain('rejected-by-user')
+})
+
+test('compaction carries only removed evidence, so rewind before retained round drops its refusal', async () => {
+  const { messages, context, tool } = await refuse('desktop')
+  const prompt = { type: 'user', uuid: 'rewind-here', message: { role: 'user', content: 'rewind-here' } } as UserMessage
+  const retained = [prompt, ...messages]
+  const input = [{ type: 'user', uuid: 'older', message: { role: 'user', content: 'older' } } as UserMessage, ...retained]
+  const compact = await appendPostCompactRuntimeAttachments({
+    boundaryMarker: { type: 'system', uuid: 'boundary', subtype: 'compact_boundary' },
+    summaryMessages: [], messagesToKeep: retained, attachments: [], hookResults: [],
+  }, context, input)
+  expect(compact.boundaryMarker.permissionDecisions ?? []).toEqual([])
+  const restored = JSON.parse(JSON.stringify(buildPostCompactMessages(compact))) as Message[]
+  expect(collectPermissionDecisionContexts(restored)).toHaveLength(1)
+  const again = await appendPostCompactRuntimeAttachments({
+    ...compact, boundaryMarker: { type: 'system', uuid: 'boundary-2', subtype: 'compact_boundary' },
+  }, context, restored)
+  const repeated = buildPostCompactMessages(again)
+  expect(collectPermissionDecisionContexts(repeated)).toHaveLength(1)
+  expect(buildTranscriptForClassifier(repeated.slice(0, repeated.findIndex(message => message.uuid === prompt.uuid)), [tool], false))
+    .not.toContain('rejected-by-user')
+  const summarized = await appendPostCompactRuntimeAttachments({
+    ...compact, messagesToKeep: [], boundaryMarker: { type: 'system', uuid: 'boundary-3', subtype: 'compact_boundary' },
+  }, context, repeated)
+  expect(collectPermissionDecisionContexts(buildPostCompactMessages(summarized))).toHaveLength(1)
+})
+
+test('classifier admission preserves exact evidence through boundary and fails closed before any provider call', async () => {
+  process.env.USER_TYPE = 'ant'
+  const { messages, context, tool } = await refuse('desktop')
+  const result = messages.find(message => message.type === 'user') as UserMessage
+  const action = { role: 'assistant' as const, content: [{ type: 'tool_use' as const, name: tool.name, id: 'retry', input: { target: 'retry' } }] }
+  let providerCalls = 0
+  let expectedTarget = ''
+  const fake = (async request => {
+    providerCalls++
+    expect(JSON.stringify(request.messages)).toContain(expectedTarget)
+    return { id: 'fixture', type: 'message', role: 'assistant', model: 'gpt-6.1-sol',
+      content: [{ type: 'tool_use', id: 'verdict', name: YOLO_CLASSIFIER_TOOL_NAME, input: { shouldBlock: false } }],
+      stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }
+  }) as typeof sideQuery
+  const probe = async (length: number) => {
+    expectedTarget = 'x'.repeat(length)
+    const changed = { ...result, permissionDecision: { ...result.permissionDecision!, input: { target: expectedTarget } } }
+    return _forTest.classifyYoloActionWithSideQuery([messages[0]!, changed], action, [tool],
+      context.getAppState().toolPermissionContext, new AbortController().signal, fake)
+  }
+  let low = 0
+  let high = MAX_CLASSIFIER_CONTEXT_CHARS
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2)
+    if ((await probe(middle)).transcriptTooLong) high = middle
+    else low = middle
+  }
+  const before = providerCalls
+  expect((await probe(low)).transcriptTooLong).not.toBe(true)
+  expect(providerCalls).toBe(before + 1)
+  expect((await probe(high)).transcriptTooLong).toBe(true)
+  expect(providerCalls).toBe(before + 1)
+  expect((await probe(100_000 * 100)).transcriptTooLong).toBe(true)
+  expect(providerCalls).toBe(before + 1)
+})
+
+test('oversized context stops projecting later calls instead of materializing the whole history', async () => {
+  process.env.USER_TYPE = 'ant'
+  const { messages, context, tool } = await refuse('desktop')
+  const result = messages.find(message => message.type === 'user') as UserMessage
+  const oversized = { ...result, permissionDecision: { ...result.permissionDecision!, input: { target: 'x'.repeat(MAX_CLASSIFIER_CONTEXT_CHARS) } } }
+  let laterProjections = 0
+  let providerCalls = 0
+  const laterTool = { ...tool, name: 'LaterContextTool', toAutoClassifierInput() { laterProjections++; return 'later' } }
+  const laterCall: AssistantMessage = { type: 'assistant', uuid: randomUUID(), message: { content: [
+    { type: 'tool_use', id: 'later', name: laterTool.name, input: { target: 'later' } },
+  ] } }
+  const classified = await _forTest.classifyYoloActionWithSideQuery([messages[0]!, oversized, laterCall], {
+    role: 'assistant', content: [{ type: 'tool_use', name: tool.name, input: { target: 'pending' }, id: 'pending' }],
+  }, [tool, laterTool], context.getAppState().toolPermissionContext, new AbortController().signal,
+  (async () => { providerCalls++; throw new Error('Provider must not be used') }) as typeof sideQuery)
+  expect(classified.transcriptTooLong).toBe(true)
+  expect(providerCalls).toBe(0)
+  expect(laterProjections).toBe(0)
+})
