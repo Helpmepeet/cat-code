@@ -429,6 +429,7 @@ export async function createPendingDeferredContinuation(
     if (await readPendingDeferredContinuation(parsed.sessionId, paths)) {
       throw new Error('A deferred continuation already exists for this session')
     }
+    guard.assertHealthy()
     await atomicWriteJson(pendingPath(paths, parsed.sessionId), parsed, paths)
     return parsed
   } finally {
