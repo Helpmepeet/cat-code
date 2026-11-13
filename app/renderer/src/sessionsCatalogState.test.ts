@@ -763,8 +763,9 @@ test('group by workspace, alphabetical — active workspace does NOT float to to
       expect(buckets[0]!.rows.map(r => r.sessionId)).toEqual(['y'])
       expect(buckets[1]!.rows.map(r => r.sessionId)).toEqual(['d'])
     } finally {
-      if (priorTz === undefined) delete process.env.TZ
-      else process.env.TZ = priorTz
+      // Bun test runs in UTC without exposing TZ. Deleting it would switch this
+      // worker to the machine's zone for every later file it runs.
+      process.env.TZ = priorTz ?? 'Etc/UTC'
     }
   })
 
