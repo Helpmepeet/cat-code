@@ -1346,6 +1346,20 @@ test('main stamps its anchor onto a frame that carried none', () => {
   })
 })
 
+test('main replaces or removes a forged recovery document identity', () => {
+  const forged: HistoryLoadEarlierMessage = {
+    type: 'history.loadEarlier' as const, requestId: 'view',
+    viewId: 'forged-document', viewTruncated: true,
+  }
+  expect(stampHistoryViewAnchor(forged, undefined, true, 'current-document')).toEqual({
+    type: 'history.loadEarlier', requestId: 'view', viewTruncated: true,
+    viewId: 'current-document',
+  })
+  expect(stampHistoryViewAnchor(forged, undefined)).toEqual({
+    type: 'history.loadEarlier', requestId: 'view',
+  })
+})
+
 test('main preserves a truncated view without a surviving anchor', () => {
   const forged: {
     type: string

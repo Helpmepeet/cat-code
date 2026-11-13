@@ -337,6 +337,7 @@ export function SessionPane({
   historyLoadEarlierPending = false,
   historyLoadEarlierAttempted = false,
   historyLoadEarlierFailure = null,
+  historyLoadEarlierUnavailable = null,
   onLoadEarlierHistory,
   setPermissionMode,
   setPrompt,
@@ -876,7 +877,7 @@ export function SessionPane({
       applyAtBottom(false)
       setRevealAgent(previous => ({ toolUseId: row.toolUseId!, sequence: (previous?.sequence ?? 0) + 1 }))
       if (!nestedRows.some(candidate => candidate.kind === 'tool-use' && candidate.toolUseId === row.toolUseId) &&
-          activeSessionId && transcript.sessions[activeSessionId]?.historyTruncated) onLoadEarlierHistory?.()
+          !historyLoadEarlierUnavailable && activeSessionId && transcript.sessions[activeSessionId]?.historyTruncated) onLoadEarlierHistory?.()
     } else onOpenTasks?.(row.agentId, true)
   }
   const historyIncomplete = activeSessionId !== null &&
@@ -884,7 +885,7 @@ export function SessionPane({
   const autoRecoverHistory = !preview && activeConnection.status === 'ready' &&
     activeDescriptor?.moving !== true &&
     onLoadEarlierHistory !== undefined
-  const hideHistoryBoundary = autoRecoverHistory && !historyLoadEarlierFailure &&
+  const hideHistoryBoundary = autoRecoverHistory && !historyLoadEarlierUnavailable && !historyLoadEarlierFailure &&
     (!historyLoadEarlierAttempted || historyLoadEarlierPending)
   // App retains the attempt across pane unmounts. Claim locally as well because
   // StrictMode can run this effect twice before App commits the pending state.
@@ -894,12 +895,12 @@ export function SessionPane({
       autoHistoryClaimRef.current = null
       return
     }
-    if (!autoRecoverHistory || historyLoadEarlierFailure ||
+    if (!autoRecoverHistory || historyLoadEarlierUnavailable || historyLoadEarlierFailure ||
         autoHistoryClaimRef.current === activeSessionId) return
     autoHistoryClaimRef.current = activeSessionId
     onLoadEarlierHistory?.()
   }, [autoRecoverHistory, historyIncomplete, historyLoadEarlierAttempted,
-    historyLoadEarlierPending, historyLoadEarlierFailure, activeSessionId, onLoadEarlierHistory])
+    historyLoadEarlierPending, historyLoadEarlierFailure, historyLoadEarlierUnavailable, activeSessionId, onLoadEarlierHistory])
   // Compaction is the one activity the rows cannot report: it runs between
   // turns of the loop and mints nothing until its boundary lands at the end.
   const compacting = selectIsCompacting(transcript, activeSessionId)
@@ -1835,7 +1836,7 @@ export function SessionPane({
     <TranscriptFileScopeContext.Provider value={fileScopes}>
     <SubagentWorkspace key={activeSessionId} appSessionId={activeSessionId ?? undefined} onFocusComposer={() => composerRef.current?.element?.focus({ preventScroll: true })} dock={dock} collapsed={dockCollapsed} onCollapsedChange={setDockCollapsed}
       onClearFinished={clearFinished} onDetailsVisibleChange={setDetailsVisible} onFallback={openDockWorker}
-      onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending ? onLoadEarlierHistory : undefined}
+      onLoadMissingHistory={autoRecoverHistory && historyIncomplete && !historyLoadEarlierPending && !historyLoadEarlierUnavailable ? onLoadEarlierHistory : undefined}
       onOpenWorkers={() => onOpenTasks?.(undefined, true)} rows={nestedRows} cwd={activeDescriptor?.cwd ?? null}
       running={generating} stopped={activeConnection.userStopped} onStop={stopTurn} runKey={turnStartedAt === null ? null : String(turnStartedAt)}
       outputRows={revealHidden ? selectNestedTranscriptRows(transcript, activeSessionId, true) : nestedRows}>
@@ -1957,6 +1958,7 @@ export function SessionPane({
             loadEarlierPending={historyLoadEarlierPending}
             hideHistoryBoundary={hideHistoryBoundary}
             loadEarlierFailure={historyLoadEarlierFailure}
+            loadEarlierUnavailable={historyLoadEarlierUnavailable}
             onLoadEarlier={activeDescriptor?.moving ? undefined : onLoadEarlierHistory}
             onOpenAccounts={onManageAccounts}
             onSaveDiagnostics={saveDiagnostics}
@@ -3073,6 +3075,7 @@ type SessionPaneProps = {
   historyLoadEarlierAttempted?: boolean
   /** What to say about this session's last read that did not work. */
   historyLoadEarlierFailure?: string | null
+  historyLoadEarlierUnavailable?: string | null
   /**
    * Read further back into this session's transcript. Owned by App because the
    * answer arrives as a frame, and a pane is unmounted while its session is off

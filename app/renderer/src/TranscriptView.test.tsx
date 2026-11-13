@@ -7052,6 +7052,21 @@ test('a whole transcript has no boundary row, so it has no control', () => {
   expect(html).not.toContain('Earlier messages from this session aren')
 })
 
+test('a terminal incomplete transcript keeps its explanation without a retry control', () => {
+  let state = projectServerFrame(createTranscriptState(), inspectorReady('limited-history'))
+  state = projectServerFrame(state, { kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: 'limited-history',
+    requestId: 'catcode.history-truncated', code: 'internal_error', message: 'incomplete', retryable: false })
+  const html = renderToStaticMarkup(
+    <TranscriptView state={state} activeSessionId="limited-history"
+      hideHistoryBoundary loadEarlierUnavailable="Some earlier messages are no longer available."
+      onLoadEarlier={() => {}} />,
+  )
+  expect(html).toContain('Some earlier messages are no longer available.')
+  expect(html).toContain('Earlier messages from this session aren')
+  expect(html).not.toContain('Load earlier messages')
+  expect(html).not.toContain('<button')
+})
+
 test('a pane with nothing to ask keeps the row and drops the control', () => {
   // The preview case: a cached transcript with no engine behind it. The row is
   // a fact about the transcript and stays; the control would have nowhere to

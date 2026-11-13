@@ -5053,6 +5053,7 @@ function handOff(
     message,
     attachmentGate.viewAnchorUuid(sessionId),
     attachmentGate.viewTruncated(sessionId),
+    rendererDocumentId,
   )
 
   let admission: string | undefined

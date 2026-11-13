@@ -381,6 +381,7 @@ export const TranscriptView = memo(function TranscriptView({
   loadEarlierPending,
   hideHistoryBoundary = false,
   loadEarlierFailure,
+  loadEarlierUnavailable,
   onLoadEarlier,
   onOpenAccounts,
   onSaveDiagnostics,
@@ -434,6 +435,7 @@ export const TranscriptView = memo(function TranscriptView({
   hideHistoryBoundary?: boolean
   /** What to say about the last read that did not work. */
   loadEarlierFailure?: string | null
+  loadEarlierUnavailable?: string | null
   /**
    * Read further back into this session. ABSENT is the whole gate on the
    * control: a pane with no engine behind it (a cached preview, a session whose
@@ -476,10 +478,10 @@ export const TranscriptView = memo(function TranscriptView({
 }) {
   const projectedRows = selectNestedTranscriptRows(state, activeSessionId, revealHidden)
   const visibleRows = useMemo(
-    () => hideHistoryBoundary
+    () => hideHistoryBoundary && !loadEarlierUnavailable
       ? projectedRows.filter(row => row.kind !== 'history-boundary')
       : projectedRows,
-    [projectedRows, hideHistoryBoundary],
+    [projectedRows, hideHistoryBoundary, loadEarlierUnavailable],
   )
   return (
     <TranscriptRowsView
@@ -502,6 +504,7 @@ export const TranscriptView = memo(function TranscriptView({
       restorePhase={restorePhase ?? null}
       loadEarlierPending={loadEarlierPending ?? false}
       loadEarlierFailure={loadEarlierFailure ?? null}
+      loadEarlierUnavailable={loadEarlierUnavailable ?? null}
       onLoadEarlier={onLoadEarlier}
       onOpenAccounts={onOpenAccounts}
       onSaveDiagnostics={onSaveDiagnostics}
@@ -630,6 +633,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   restorePhase = null,
   loadEarlierPending = false,
   loadEarlierFailure = null,
+  loadEarlierUnavailable = null,
   onLoadEarlier,
   onOpenAccounts,
   onSaveDiagnostics,
@@ -674,6 +678,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   restorePhase?: RestorePhase | null
   loadEarlierPending?: boolean
   loadEarlierFailure?: string | null
+  loadEarlierUnavailable?: string | null
   onLoadEarlier?: () => void
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
@@ -900,6 +905,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           <HistoryBoundaryRow
             pending={loadEarlierPending}
             failure={loadEarlierFailure}
+            unavailable={loadEarlierUnavailable}
             onLoad={onLoadEarlier}
           />
         ) : (
@@ -1410,10 +1416,12 @@ const HISTORY_LOADING_LABEL = 'Loading…'
 function HistoryBoundaryRow({
   pending,
   failure,
+  unavailable,
   onLoad,
 }: {
   pending: boolean
   failure: string | null
+  unavailable: string | null
   onLoad?: () => void
 }) {
   return (
@@ -1421,7 +1429,7 @@ function HistoryBoundaryRow({
       <div className="w-full">
         <Seam tone="neutral" label={HISTORY_BOUNDARY_LABEL} />
       </div>
-      {onLoad ? (
+      {onLoad && unavailable === null ? (
         <button
           type="button"
           onClick={onLoad}
@@ -1432,7 +1440,9 @@ function HistoryBoundaryRow({
           {pending ? HISTORY_LOADING_LABEL : HISTORY_LOAD_LABEL}
         </button>
       ) : null}
-      {onLoad && failure !== null ? (
+      {unavailable !== null ? (
+        <span className="text-[11px] text-text-muted">{unavailable}</span>
+      ) : onLoad && failure !== null ? (
         <span className="text-[11px] text-tone-danger">{failure}</span>
       ) : null}
     </div>

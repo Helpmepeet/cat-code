@@ -11,13 +11,14 @@ import {
   createHistoryLoadEarlierState,
   reduceHistoryLoadEarlierState,
   selectHistoryLoadEarlierFailure,
+  selectHistoryLoadEarlierUnavailable,
   selectHistoryLoadEarlierPending,
   HISTORY_LOAD_EARLIER_UNREACHABLE,
 } from './historyLoadEarlierState.js'
 import type { HistoryLoadEarlierResultFrame } from '../../shared/protocol.js'
 
 function result(
-  over: Partial<HistoryLoadEarlierResultFrame> & { requestId: string },
+  over: Partial<HistoryLoadEarlierResultFrame> & { requestId: string; canLoadMore?: boolean },
 ): HistoryLoadEarlierResultFrame {
   return {
     kind: 'history.loadEarlier.result',
@@ -188,4 +189,49 @@ test('an untracked session is left exactly as it was', () => {
   expect(
     reduceHistoryLoadEarlierState(state, { type: 'engine-gone', sessionId: 'a' }),
   ).toBe(state)
+})
+
+test('a successful zero-progress terminal read retains its explanation until reset', () => {
+  const requested = reduceHistoryLoadEarlierState(createHistoryLoadEarlierState(), {
+    type: 'requested', sessionId: 'a', requestId: 'r1',
+  })
+  const state = reduceHistoryLoadEarlierState(requested, {
+    type: 'result',
+    frame: result({
+      requestId: 'r1', ok: true, added: 0, complete: false, canLoadMore: false,
+      message: 'Some earlier messages are no longer available.',
+    }),
+  })
+  expect(selectHistoryLoadEarlierPending(state, 'a')).toBe(false)
+  expect(selectHistoryLoadEarlierFailure(state, 'a')).toBeNull()
+  expect(selectHistoryLoadEarlierUnavailable(state, 'a')).toBe('Some earlier messages are no longer available.')
+  expect(selectHistoryLoadEarlierUnavailable(state, 'b')).toBeNull()
+  expect(selectHistoryLoadEarlierUnavailable(state, null)).toBeNull()
+  expect(reduceHistoryLoadEarlierState(state, {
+    type: 'result', frame: result({ requestId: 'stale' }),
+  })).toBe(state)
+  for (const action of [
+    { type: 'requested', sessionId: 'a', requestId: 'r2' },
+    { type: 'attached', sessionId: 'a' },
+    { type: 'engine-gone', sessionId: 'a' },
+  ] as const) {
+    expect(selectHistoryLoadEarlierUnavailable(reduceHistoryLoadEarlierState(state, action), 'a')).toBeNull()
+  }
+})
+
+test('recoverable and complete responses do not create a terminal explanation', () => {
+  for (const over of [
+    { ok: false, complete: false, canLoadMore: true },
+    { ok: true, complete: false },
+    { ok: true, complete: true, canLoadMore: false },
+  ]) {
+    const state = reduceHistoryLoadEarlierState(
+      reduceHistoryLoadEarlierState(createHistoryLoadEarlierState(), {
+        type: 'requested', sessionId: 'a', requestId: 'r1',
+      }),
+      { type: 'result', frame: result({ requestId: 'r1', ...over }) },
+    )
+    expect(selectHistoryLoadEarlierUnavailable(state, 'a')).toBeNull()
+    expect(selectHistoryLoadEarlierFailure(state, 'a')).toBe(over.ok ? null : 'Loaded the rest of this session.')
+  }
 })

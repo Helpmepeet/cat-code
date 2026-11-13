@@ -119,6 +119,8 @@ import {
   MAX_HANDOFF_STATES_PER_WINDOW,
   MAX_FRAMES_PER_WINDOW,
   MAX_GENERATED_IMAGE_PREVIEW_BYTES,
+  MAX_HISTORY_LOAD_EARLIER_BYTES,
+  MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES,
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
@@ -259,7 +261,7 @@ type Connection = {
    * from it (HISTORY-LOAD-EARLIER.md §The view anchor).
    */
   loadEarlierAnchorUuid: string | null
-  /** True once `sendHistoryReplay` put at least one frame on this socket. */
+  /** True when replay included a top-level display message, even one without a UUID. */
   loadEarlierReplayed: boolean
   /**
    * Latched when a deeper read reaches this reader's head. Later requests are
@@ -269,6 +271,10 @@ type Connection = {
    * another one is.
    */
   loadEarlierComplete: boolean
+  loadEarlierReadBytes: number
+  loadEarlierTerminalMessage: string | null
+  loadEarlierViewId: string | null
+  loadEarlierUnavailableParentToolUseIds: Set<string>
 }
 
 /**
@@ -1195,6 +1201,10 @@ export class SidecarServer {
       loadEarlierAnchorUuid: null,
       loadEarlierReplayed: false,
       loadEarlierComplete: false,
+      loadEarlierReadBytes: MAX_HISTORY_LOAD_EARLIER_BYTES,
+      loadEarlierTerminalMessage: null,
+      loadEarlierViewId: null,
+      loadEarlierUnavailableParentToolUseIds: new Set(this.unavailableParentToolUseIds),
     }
     this.connections.add(connection)
     this.scheduleDiagnostics()
@@ -1424,15 +1434,18 @@ export class SidecarServer {
       // `history.loadEarlier` has to reach back from: the caps may have dropped
       // an older prefix that was loaded but never sent, and that prefix is
       // exactly what the deeper read exists to recover.
-      if (typeof message.uuid === 'string') {
+      if (isTopLevelDisplayMessage(message) && typeof message.uuid === 'string') {
         oldestRetainedUuid = message.uuid
       }
     }
     // Per connection, and reset on every attach: this reader has just been sent
     // the ORIGINAL tail, whatever an earlier reader already recovered past.
     connection.loadEarlierAnchorUuid = oldestRetainedUuid ?? null
-    connection.loadEarlierReplayed = retained.length > 0
+    connection.loadEarlierReplayed = retained.some(frame =>
+      frame.kind === 'event' && frame.event.type === 'message' &&
+      isTopLevelDisplayMessage(frame.event.message))
     connection.loadEarlierComplete = false
+    connection.loadEarlierUnavailableParentToolUseIds = unavailable
     retained.reverse()
 
     if (truncated) {
@@ -4626,6 +4639,10 @@ export class SidecarServer {
     connection.loadEarlierAnchorUuid = null
     connection.loadEarlierReplayed = false
     connection.loadEarlierComplete = false
+    connection.loadEarlierReadBytes = MAX_HISTORY_LOAD_EARLIER_BYTES
+    connection.loadEarlierTerminalMessage = null
+    connection.loadEarlierViewId = null
+    connection.loadEarlierUnavailableParentToolUseIds = new Set(this.unavailableParentToolUseIds)
   }
 
   private sendQuestionSnapshot(connection: Connection): void {
@@ -5594,8 +5611,19 @@ export class SidecarServer {
       )
       return
     }
-    const { requestId, viewAnchorUuid, viewTruncated } = parsed.data
+    const { requestId, viewAnchorUuid, viewTruncated, viewId } = parsed.data
 
+    // Main's ring omits recovered rows. Its anchor describes a reload, not
+    // progress within the same document; keep those views distinct.
+    const sameView = viewId !== undefined && connection.loadEarlierViewId === viewId
+    if (viewId !== undefined && !sameView) {
+      connection.loadEarlierViewId = viewId
+      connection.loadEarlierReadBytes = MAX_HISTORY_LOAD_EARLIER_BYTES
+      connection.loadEarlierTerminalMessage = null
+      connection.loadEarlierComplete = false
+      connection.loadEarlierAnchorUuid = viewAnchorUuid ??
+        (viewTruncated ? null : connection.loadEarlierAnchorUuid)
+    }
     if (this.loadEarlierInFlight) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: false,
@@ -5605,14 +5633,21 @@ export class SidecarServer {
       })
       return
     }
+    const knownView = sameView || (viewAnchorUuid === undefined && !viewTruncated)
+    if (knownView && connection.loadEarlierTerminalMessage !== null) {
+      this.sendLoadEarlierResult(connection, requestId, {
+        ok: true, added: 0, complete: false, canLoadMore: false,
+        message: connection.loadEarlierTerminalMessage,
+      })
+      return
+    }
 
     // Already whole for this reader: a previous read reached the head, so there
     // is provably nothing above it. Answered from the latch, because the read
     // that would confirm it costs the full ceiling plus every subagent file.
     if (
       connection.loadEarlierComplete &&
-      viewAnchorUuid === undefined &&
-      !viewTruncated
+      knownView
     ) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
@@ -5650,47 +5685,52 @@ export class SidecarServer {
       return
     }
 
-    // What the READER is holding, which is not always what this CONNECTION was
-    // sent. Main's anchor wins outright whenever it exists, because it is the
-    // only one of the two derived from the pane's actual contents: main hands a
-    // reloaded renderer its ring and nothing else, and it stamps the anchor only
-    // when that ring is lossy. It is also never OLDER than this connection's own
-    // anchor for the reader's live view, since every frame this socket sent went
-    // through that ring — so preferring it can at worst re-send messages the
-    // renderer already has (which its uuid dedupe absorbs), and can never leave
-    // a gap, which the connection anchor alone can and did.
-    // An explicitly lossy main view with no UUID holds no recoverable display
-    // message. Its empty view supersedes the connection's stale restored tail.
-    const anchorlessView = viewTruncated === true && viewAnchorUuid === undefined
-    const anchorUuid = anchorlessView
+    // Main's anchor wins for a new document. After that, this connection knows
+    // the recovered prefix that the ring deliberately does not retain.
+    const anchorlessView = !sameView && viewTruncated === true && viewAnchorUuid === undefined
+    const anchorUuid = sameView
+      ? connection.loadEarlierAnchorUuid
+      : anchorlessView
       ? null
       : viewAnchorUuid ?? connection.loadEarlierAnchorUuid
+    connection.loadEarlierAnchorUuid = anchorUuid
     // History WAS restored, yet none of what reached this reader carries an
     // identity to diff a deeper read against. Everything read would look
     // missing and the reader would see the conversation twice, so refuse rather
     // than duplicate it. (Not the same case as an empty replay below, where
     // nothing went out and everything read really is missing.)
     if (anchorUuid === null && connection.loadEarlierReplayed && !anchorlessView) {
+      connection.loadEarlierTerminalMessage = "Earlier messages can't be loaded in this view."
       this.sendLoadEarlierResult(connection, requestId, {
         ok: false,
-        message: 'Earlier messages could not be loaded.',
+        message: connection.loadEarlierTerminalMessage,
         added: 0,
         complete: false,
+        canLoadMore: false,
       })
       return
     }
 
     this.loadEarlierInFlight = true
     try {
-      const read = await this.loadEarlierHistory(line => this.log(line))
-      if (this.closed || connection.closed) return
-
-      // With no anchor, this reader was sent nothing, so the whole read is the
-      // missing prefix. Otherwise the prefix is what sits above the anchor.
-      const anchorIndex =
-        anchorUuid === null
+      let read: Awaited<ReturnType<HistoryLoadEarlierReader>>
+      let anchorIndex: number
+      for (;;) {
+        read = await this.loadEarlierHistory(line => this.log(line), {
+          maxBytes: connection.loadEarlierReadBytes,
+          beforeUuid: anchorUuid,
+        })
+        if (this.closed || connection.closed ||
+            (viewId !== undefined && connection.loadEarlierViewId !== viewId)) return
+        anchorIndex = anchorUuid === null
           ? read.messages.length
           : read.messages.findIndex(message => message.uuid === anchorUuid)
+        // A reload's ring may start outside the first file window. Find the
+        // trusted anchor before emitting anything, never guess across a gap.
+        if (anchorIndex >= 0 || !read.truncated ||
+            connection.loadEarlierReadBytes >= MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES) break
+        connection.loadEarlierReadBytes = MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES
+      }
       if (anchorIndex < 0) {
         // The deeper read could not find the message the reader is currently
         // oldest on, so there is no prefix that is provably missing rather than
@@ -5698,17 +5738,31 @@ export class SidecarServer {
         this.log(
           '[sidecar] history.loadEarlier: replayed history not found in the deeper read',
         )
+        connection.loadEarlierTerminalMessage = "Earlier messages can't be loaded in this view."
         this.sendLoadEarlierResult(connection, requestId, {
           ok: false,
-          message: 'Earlier messages could not be loaded.',
+          message: connection.loadEarlierTerminalMessage,
           added: 0,
           complete: false,
+          canLoadMore: false,
         })
         return
       }
 
       const missing = read.messages.slice(0, anchorIndex)
-      const unavailable = new Set(read.unavailableParentToolUseIds ?? [])
+      const unavailable = connection.loadEarlierUnavailableParentToolUseIds
+      // Re-evaluate newly reached cards without overwriting availability for
+      // worker steps already delivered in the tail.
+      for (const message of missing) {
+        if (message.type !== 'assistant' || !Array.isArray(message.message.content)) continue
+        for (const block of message.message.content) {
+          if (block && typeof block === 'object' && 'type' in block && block.type === 'tool_use' &&
+              'id' in block && typeof block.id === 'string') unavailable.delete(block.id)
+        }
+      }
+      for (const id of read.unavailableParentToolUseIds ?? []) {
+        if (unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(id)
+      }
       let omitted = false
       let oldestSentUuid: string | undefined
       let added = 0
@@ -5718,7 +5772,8 @@ export class SidecarServer {
           // Un-serializable recovered message: an omission, so the transcript
           // above this point stays incomplete no matter what the loader said.
           omitted = true
-          if (typeof message.parent_tool_use_id === 'string') unavailable.add(message.parent_tool_use_id)
+          if (typeof message.parent_tool_use_id === 'string' &&
+              unavailable.size < MAX_HISTORY_REPLAY_FRAMES) unavailable.add(message.parent_tool_use_id)
           continue
         }
         this.send(connection, {
@@ -5737,7 +5792,8 @@ export class SidecarServer {
           event: prepared,
         })
         added += 1
-        if (oldestSentUuid === undefined && typeof message.uuid === 'string') {
+        if (oldestSentUuid === undefined && isTopLevelDisplayMessage(message) &&
+            typeof message.uuid === 'string') {
           oldestSentUuid = message.uuid
         }
       }
@@ -5753,14 +5809,23 @@ export class SidecarServer {
         connection.loadEarlierReplayed = true
       }
       const complete = !read.truncated && !omitted
+      const canLoadMore = !complete && read.truncated &&
+        connection.loadEarlierReadBytes < MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES
+      if (canLoadMore) connection.loadEarlierReadBytes = MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES
+      if (!complete && !canLoadMore) {
+        connection.loadEarlierTerminalMessage = read.truncated
+          ? "Older messages beyond this point can't be loaded here."
+          : "Some earlier messages couldn't be shown."
+      }
       this.sendHistoryAvailability(connection, [...unavailable], true)
       // Latch the head so a repeat request answers without touching disk.
       if (complete) connection.loadEarlierComplete = true
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
-        message: loadEarlierMessage(added, complete),
+        message: connection.loadEarlierTerminalMessage ?? loadEarlierMessage(added, complete),
         added,
         complete,
+        ...(!complete && !canLoadMore ? { canLoadMore: false } : {}),
       })
     } catch (error) {
       this.log(
@@ -5784,7 +5849,7 @@ export class SidecarServer {
   private sendLoadEarlierResult(
     connection: Connection,
     requestId: string,
-    outcome: { ok: boolean; message: string; added: number; complete: boolean },
+    outcome: { ok: boolean; message: string; added: number; complete: boolean; canLoadMore?: boolean },
   ): void {
     this.send(connection, {
       kind: 'history.loadEarlier.result',
@@ -7082,7 +7147,7 @@ function checkStrictKeys(message: unknown): string | null {
     // boundary (SECURITY-MINIMUM §2 R2). Neither steers the file or read budget;
     // the anchor is equality-compared against the sidecar's own read. Any OTHER key
     // is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
-    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid', 'viewTruncated'])],
+    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid', 'viewTruncated', 'viewId'])],
     // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds. No preload
     // channel forwards either one and no renderer can author one, but they are
     // on the closed allowlist all the same, because the sidecar is the trust
@@ -7214,6 +7279,7 @@ const appParkMessageSchema = z.object({
 const historyLoadEarlierMessageSchema = z.object({
   type: z.literal('history.loadEarlier'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  viewId: z.string().min(1).max(128).optional(),
   viewTruncated: z.literal(true).optional(),
   viewAnchorUuid: z
     .string()
@@ -7571,11 +7637,12 @@ function promptRecallMessage(
     : `${alreadyDelivered} messages already went to the model, so they stayed.`
 }
 
-/**
- * The load-earlier outcome, in the user's terms. Says only what is surprising
- * (CLAUDE.md §7): that more is still out of reach, or that there was nothing
- * left to fetch. A successful, complete load says the plain thing and stops.
- */
+function isTopLevelDisplayMessage(message: SDKMessage): boolean {
+  return (message.type === 'user' || message.type === 'assistant') &&
+    !(typeof message.parent_tool_use_id === 'string' && message.parent_tool_use_id.length > 0)
+}
+
+/** Recovery feedback distinguishes a complete prefix from one that can grow. */
 function loadEarlierMessage(added: number, complete: boolean): string {
   if (added === 0) {
     return complete

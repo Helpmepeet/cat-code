@@ -15,9 +15,9 @@
  * The transcript is resolved from the engine's OWN live session identity
  * (`getTranscriptPath()` / `getSessionId()`), so no byte of an inbound frame can
  * steer which file is read or how much of it. The verb that reaches the server
- * carries only a correlation id plus main's `viewAnchorUuid`, and neither
- * reaches this function: the anchor is used AFTER the read, to diff it, and
- * that separation is the whole point of the read being parameterless.
+ * carries no read budget. The sidecar selects a bounded read tier and supplies
+ * the view anchor only to avoid loading branches in the already-held tail.
+ * Active-branch selection still runs over the whole bounded parent read.
  *
  * The seed merge that restore performs (`mergeDisplayHistoryWithSeed`) is
  * deliberately absent: that alignment exists to keep the VISIBLE TAIL identical
@@ -35,7 +35,10 @@ import {
 
 import {
   MAX_HISTORY_LOAD_EARLIER_BYTES,
+  MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES,
   MAX_HISTORY_LOAD_EARLIER_MESSAGES,
+  MAX_HISTORY_REPLAY_BYTES,
+  MAX_HISTORY_REPLAY_FRAMES,
 } from '../shared/limits.js'
 import { projectResumedHistory } from './historyProjection.js'
 import { withRestoredSubagentHistory } from './subagentHistory.js'
@@ -58,28 +61,39 @@ export type EarlierHistoryRead = {
 /** The seam the sidecar server calls. Defaulted to the real read below. */
 export type HistoryLoadEarlierReader = (
   onError?: (message: string) => void,
+  options?: { maxBytes: number; beforeUuid: string | null },
 ) => Promise<EarlierHistoryRead>
 
 export const readEarlierDisplayHistory: HistoryLoadEarlierReader = async (
   onError?: (message: string) => void,
+  options?: { maxBytes: number; beforeUuid: string | null },
 ): Promise<EarlierHistoryRead> => {
+  const maxBytes = options?.maxBytes ?? MAX_HISTORY_LOAD_EARLIER_BYTES
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 ||
+      maxBytes > MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES) {
+    throw new Error('Invalid display history read budget')
+  }
   const display = await loadDisplayTranscriptFromJsonlPath(getTranscriptPath(), {
     // No count cap by decision: the measured corpus never comes near one, so a
     // count here could only truncate a session the byte budget already fits.
     maxMessages: MAX_HISTORY_LOAD_EARLIER_MESSAGES,
-    maxBytes: MAX_HISTORY_LOAD_EARLIER_BYTES,
+    maxBytes,
   })
   const history = projectResumedHistory(display.messages)
-  // The child join shares restore's aggregate source-byte, message, and output
-  // budgets. A deeper parent read never buys a fresh budget for each branch;
-  // omitted children retain the existing unavailable-history card state.
+  const anchorIndex = options?.beforeUuid
+    ? history.findIndex(message => message.uuid === options.beforeUuid)
+    : history.length
+  // An absent anchor cannot establish a missing prefix. Return parents only
+  // so the server can widen the read without scanning unrelated worker files.
+  if (anchorIndex < 0) return { messages: history, truncated: display.truncated }
   const restored = await withRestoredSubagentHistory(
     getSessionId(),
-    history,
+    history.slice(0, anchorIndex),
     onError,
+    { frames: MAX_HISTORY_REPLAY_FRAMES, bytes: MAX_HISTORY_REPLAY_BYTES },
   )
   return {
-    messages: restored.history,
+    messages: [...restored.history, ...history.slice(anchorIndex)],
     truncated: display.truncated,
     unavailableParentToolUseIds: restored.unavailableParentToolUseIds,
   }

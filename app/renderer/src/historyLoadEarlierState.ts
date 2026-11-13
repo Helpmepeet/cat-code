@@ -37,6 +37,7 @@ export type HistoryLoadEarlierRequest = {
   pendingRequestId: string | null
   /** What to say about the last attempt that did not work; null when there is nothing to say. */
   failure: string | null
+  unavailable: string | null
 }
 
 export type HistoryLoadEarlierState = {
@@ -76,6 +77,7 @@ export function reduceHistoryLoadEarlierState(
         // A new attempt clears what the last one said: the control is about to
         // report on itself again, and two outcomes on one row read as one.
         failure: null,
+        unavailable: null,
       })
 
     case 'unreachable': {
@@ -84,6 +86,7 @@ export function reduceHistoryLoadEarlierState(
       return withRequest(state, action.sessionId, {
         pendingRequestId: null,
         failure: HISTORY_LOAD_EARLIER_UNREACHABLE,
+        unavailable: null,
       })
     }
 
@@ -97,6 +100,7 @@ export function reduceHistoryLoadEarlierState(
         // path and no token material, so passing them through says more than
         // any sentence this side could invent.
         failure: frame.ok ? null : frame.message,
+        unavailable: frame.canLoadMore === false && !frame.complete ? frame.message : null,
       })
     }
 
@@ -105,6 +109,7 @@ export function reduceHistoryLoadEarlierState(
       return withRequest(state, action.sessionId, {
         pendingRequestId: null,
         failure: null,
+        unavailable: null,
       })
     }
 
@@ -132,6 +137,13 @@ export function selectHistoryLoadEarlierFailure(
 ): string | null {
   const request = sessionId ? state.bySession[sessionId] : undefined
   return request?.failure ?? null
+}
+
+export function selectHistoryLoadEarlierUnavailable(
+  state: HistoryLoadEarlierState,
+  sessionId: SessionId | null,
+): string | null {
+  return (sessionId ? state.bySession[sessionId]?.unavailable : null) ?? null
 }
 
 function withRequest(

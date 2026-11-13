@@ -549,9 +549,9 @@ export type AppParkMessage = {
  * `getTranscriptPath()`, never from frame content (SECURITY-MINIMUM HC1's
  * posture, applied to a read).
  *
- * Paging was rejected: the measured corpus has a 2,988-record maximum, so a
- * whole real transcript fits one bounded read, and a cursor would buy nothing
- * while putting a validated, attacker-reachable offset on the trust boundary.
+ * Read tiers stay sidecar-owned. Main identifies the renderer document so
+ * successive requests can advance without confusing a reload with a repeat.
+ * Neither identity authorizes a path, offset, or larger read.
  *
  * App-owned vocabulary — the engine's shared `appClientMessageSchema` is
  * deliberately NOT extended (the WS server shares it and has no handler for
@@ -576,6 +576,8 @@ export type HistoryLoadEarlierVerbType =
 export type HistoryLoadEarlierMessage = {
   type: 'history.loadEarlier'
   requestId: string
+  /** Main-stamped document identity; resets view-local recovery progress after reload. */
+  viewId?: string
   /**
    * MAIN-AUTHORED (decisions/HISTORY-LOAD-EARLIER.md §The view anchor). The uuid
    * of the oldest transcript message Electron main's replay ring still retains
@@ -3812,6 +3814,8 @@ export type HistoryLoadEarlierResultFrame = {
    * when `ok`; a refusal reports false because it learned nothing.
    */
   complete: boolean
+  /** False when another recovery cannot help this view; absence keeps legacy retry behavior. */
+  canLoadMore?: boolean
 }
 
 /**

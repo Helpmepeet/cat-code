@@ -23,6 +23,7 @@ import {
   splitAgentRuns,
   withRestoredSubagentHistory,
 } from './subagentHistory.js'
+import { readEarlierDisplayHistory } from './historyLoadEarlier.js'
 
 function spawnFrame(toolUseId: string, uuid: string): SDKMessage {
   return {
@@ -432,6 +433,48 @@ describe('restored subagent history availability', () => {
     const restored = await withRestoredSubagentHistory(sessionId, history)
     expect(restored.unavailableParentToolUseIds).toEqual(['tu-worker'])
     expect(restored.history).toHaveLength(MAX_HISTORY_REPLAY_FRAMES)
+  })
+
+  test('deeper recovery grants one bounded branch allowance without subtracting parent history', async () => {
+    await branch('worker', 'tu-worker', ['saved worker steps'])
+    const history = [spawnFrame('tu-worker', 'spawn'), ...Array.from(
+      { length: MAX_HISTORY_REPLAY_FRAMES }, (_, index) => plainFrame(`row-${index}`),
+    ), plainFrame('x'.repeat(MAX_HISTORY_REPLAY_BYTES))]
+    const restored = await withRestoredSubagentHistory(sessionId, history, undefined, {
+      frames: MAX_HISTORY_REPLAY_FRAMES, bytes: MAX_HISTORY_REPLAY_BYTES,
+    })
+    expect(restored.unavailableParentToolUseIds).toEqual([])
+    expect(restored.history).toHaveLength(history.length + 1)
+    expect(restored.history[1]?.parent_tool_use_id).toBe('tu-worker')
+  })
+
+  test('the real deeper reader restores newly reached steps without relabeling or reading tail workers', async () => {
+    await branch('older', 'tu-older', ['older worker steps'])
+    await branch('tail', 'tu-tail', ['x'.repeat(MAX_HISTORY_REPLAY_BYTES + 1024)])
+    const older = randomUUID(), large = randomUUID(), tail = randomUUID()
+    const records = [
+      { type: 'assistant', uuid: older, parentUuid: null, message: {
+        role: 'assistant', content: [{ type: 'tool_use', id: 'tu-older', name: 'Agent', input: {} }],
+      } },
+      { type: 'user', uuid: large, parentUuid: older, message: {
+        role: 'user', content: 'x'.repeat(MAX_HISTORY_REPLAY_BYTES + 1024),
+      } },
+      { type: 'assistant', uuid: tail, parentUuid: large, message: {
+        role: 'assistant', content: [{ type: 'tool_use', id: 'tu-tail', name: 'Agent', input: {} }],
+      } },
+    ]
+    writeFileSync(join(directory, `${sessionId}.jsonl`), records.map(record => JSON.stringify({
+      ...record, sessionId, isSidechain: false, cwd: directory,
+      timestamp: '2026-11-13T00:00:00.000Z', version: 'test',
+    })).join('\n') + '\n')
+    const read = await readEarlierDisplayHistory(undefined, {
+      maxBytes: 16 * 1024 * 1024, beforeUuid: tail,
+    })
+    expect(read.truncated).toBe(false)
+    expect(read.unavailableParentToolUseIds).toEqual([])
+    expect(read.messages.some(message => message.parent_tool_use_id === 'tu-older')).toBe(true)
+    expect(read.messages.some(message => message.parent_tool_use_id === 'tu-tail')).toBe(false)
+    expect(read.messages.at(-1)?.uuid).toBe(tail)
   })
 
   test('empty workers and unreachable branches are not reported as omitted steps', async () => {

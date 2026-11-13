@@ -129,9 +129,11 @@ test('opening an incomplete live session recovers history once and keeps manual 
   await tree.render(pane())
   expect(requests).toBe(1)
   expect(tree.container.textContent).not.toContain('Load earlier messages')
+  expect(tree.container.textContent).not.toContain("Earlier messages from this session aren't loaded.")
   await tree.render(pane({ historyLoadEarlierAttempted: true, historyLoadEarlierPending: true }))
   expect(requests).toBe(1)
   expect(tree.container.textContent).not.toContain('Load earlier messages')
+  expect(tree.container.textContent).not.toContain("Earlier messages from this session aren't loaded.")
   await tree.render(pane({ historyLoadEarlierAttempted: true, historyLoadEarlierFailure: 'Try again.' }))
   expect(requests).toBe(1)
   expect(tree.container.textContent).toContain('Try again.')
@@ -158,6 +160,31 @@ function scrollerOf(container: HTMLElement): HTMLElement {
   }
   return scroller
 }
+
+test('a terminal history limitation stays visible and does not automatically repeat the read', async () => {
+  const incomplete = projectServerFrame(transcriptWithRows(), {
+    kind: 'error', protocolVersion: PROTOCOL_VERSION, sessionId: SESSION,
+    requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID, code: 'internal_error',
+    message: 'Only the newest messages are shown.', retryable: false,
+  })
+  let requests = 0
+  const pane = (overrides: Record<string, unknown> = {}) => paneWithWaiting({
+    transcript: incomplete,
+    historyLoadEarlierUnavailable: 'Some earlier messages are no longer available.',
+    onLoadEarlierHistory: () => { requests += 1 },
+    ...overrides,
+  })
+  const tree = await harness.mount(pane())
+  expect(requests).toBe(0)
+  expect(tree.container.textContent).toContain('Some earlier messages are no longer available.')
+  expect(tree.container.textContent).toContain("Earlier messages from this session aren't loaded.")
+  expect(tree.container.textContent).not.toContain('Load earlier messages')
+  await tree.render(pane({ historyLoadEarlierAttempted: true }))
+  expect(requests).toBe(0)
+  await tree.render(pane({ preview: true }))
+  expect(requests).toBe(0)
+  expect(tree.container.textContent).toContain('Some earlier messages are no longer available.')
+})
 
 function waitingBlockOf(container: HTMLElement): HTMLElement {
   for (const node of container.querySelectorAll('div')) {

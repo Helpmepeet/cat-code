@@ -218,15 +218,11 @@ export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
  * ring now compacts streamed partials out and `DEFAULT_MAX_BUFFERED_BYTES` is
  * 16 MiB), but the §2 transcript distribution this number comes from stands.
  *
- * SIZING, from that report's 1,849-transcript corpus. Bytes per session: p50
- * 326 KiB, p90 1.34 MiB, p99 4.32 MiB, max 18.1 MiB. 16 MiB clears p99 by
- * roughly 3.7x, so an ordinary session is read whole in one bounded read, and
- * sits just under the largest transcript that corpus contained — deliberately,
- * because the ceiling has to bound a hostile-adjacent read too: every recovered
- * message stays mounted for the life of the pane (no virtualization; CC-59
- * Stage Two is deferred), so the ceiling is also the renderer's memory bound.
- * A session past it recovers a prefix and reports that more remains, which is
- * the honest outcome, not a failure.
+ * The first read stays at 16 MiB. An explicit subsequent request can reach
+ * 32 MiB through the same branch-aware loader. The DOM is windowed, but parsed
+ * history, projected rows, and outbound bytes still consume memory.
+ * Keep automatic recovery at the first tier rather than spending the expanded
+ * budget for every reopened session.
  *
  * NO MESSAGE-COUNT CAP. Records per session in the same corpus: p50 82, p90
  * 332, p99 1,075, max 2,988 — no session came within 25% of any count cap in
@@ -237,10 +233,11 @@ export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
  * loader's `capped` flag off and leaves its `truncated` reporting purely about
  * the byte ceiling above.
  *
- * Raising either of these re-opens the CC-59 memory gate (same decision doc,
- * §Known cost). Do not raise them without it.
+ * Peer transcript reads also use the first-tier ceiling; deeper UI recovery
+ * must not silently increase their independent budget.
  */
 export const MAX_HISTORY_LOAD_EARLIER_BYTES = 16 * 1024 * 1024
+export const MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES = 32 * 1024 * 1024
 export const MAX_HISTORY_LOAD_EARLIER_MESSAGES = Number.MAX_SAFE_INTEGER
 
 /**

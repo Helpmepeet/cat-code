@@ -593,17 +593,20 @@ export function stampHistoryViewAnchor<T extends { type: string }>(
   message: T,
   anchor: string | undefined,
   truncated: boolean = false,
+  viewId?: string,
 ): T {
   if (message.type !== 'history.loadEarlier') return message
   const {
     viewAnchorUuid: _rendererAnchor,
     viewTruncated: _rendererTruncated,
+    viewId: _rendererViewId,
     ...rest
-  } = message as T & { viewAnchorUuid?: unknown; viewTruncated?: unknown }
+  } = message as T & { viewAnchorUuid?: unknown; viewTruncated?: unknown; viewId?: unknown }
   return {
     ...rest,
     ...(anchor === undefined ? {} : { viewAnchorUuid: anchor }),
     ...(truncated ? { viewTruncated: true } : {}),
+    ...(viewId === undefined ? {} : { viewId }),
   } as T
 }
 

@@ -172,6 +172,7 @@ import {
   createHistoryLoadEarlierState,
   reduceHistoryLoadEarlierState,
   selectHistoryLoadEarlierFailure,
+  selectHistoryLoadEarlierUnavailable,
   selectHistoryLoadEarlierPending,
   type HistoryLoadEarlierState,
 } from './historyLoadEarlierState.js'
@@ -4397,6 +4398,7 @@ export function App() {
 	              rememberTranscriptScroll(sessionId, anchor)
 	            }
 	            historyLoadEarlierAttempted={historyLoadEarlier.bySession[sessionId] !== undefined}
+	            historyLoadEarlierUnavailable={selectHistoryLoadEarlierUnavailable(historyLoadEarlier, sessionId)}
 	            historyLoadEarlierPending={selectHistoryLoadEarlierPending(
 	              historyLoadEarlier,
 	              sessionId,

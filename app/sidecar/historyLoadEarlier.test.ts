@@ -21,7 +21,7 @@
 
 import { afterEach, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createMessageEvent } from '../../src/app-runtime/sessionEvents.js'
@@ -40,6 +40,7 @@ import { loadDisplayTranscriptFromJsonlPath } from '../../src/utils/sessionStora
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import {
   MAX_HISTORY_LOAD_EARLIER_BYTES,
+  MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES,
   MAX_OUTBOUND_FRAME_BYTES,
 } from '../shared/limits.js'
 import {
@@ -49,6 +50,7 @@ import {
 } from '../shared/protocol.js'
 import { projectResumedHistory } from './historyProjection.js'
 import type { EarlierHistoryRead } from './historyLoadEarlier.js'
+import { readEarlierDisplayHistory } from './historyLoadEarlier.js'
 import type { Message } from '../../src/types/message.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
@@ -707,6 +709,223 @@ test(
   },
   30_000,
 )
+
+test('successive requests recover the next prefix and a new document recovers its own view', async () => {
+  const texts = mintTranscript(36, 512 * 1024)
+  const tail = await replayedTail(2)
+  const budgets: number[] = []
+  const server = makeServer({
+    history: tail, historySourceTruncated: true,
+    loadEarlierHistory: async (onError, options) => {
+      budgets.push(options!.maxBytes)
+      return readEarlierDisplayHistory(onError, options)
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const start = received.length
+  for (const requestId of ['first', 'second', 'complete-repeat']) {
+    server.handleData(connection, frame(stampHistoryViewAnchor(
+      { type: 'history.loadEarlier', requestId }, tail[0]!.uuid, true, 'document-one',
+    )))
+    await waitForResult(received, requestId)
+  }
+  expect(budgets).toEqual([MAX_HISTORY_LOAD_EARLIER_BYTES, MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES])
+  expect(results(received).slice(-3)).toMatchObject([
+    { added: 29, complete: false },
+    { added: 5, complete: true },
+    { added: 0, complete: true },
+  ])
+  const recovered = replayedText(received.slice(start))
+  expect(recovered).toEqual([...texts.slice(5, 34), ...texts.slice(0, 5)])
+  expect(new Set(recovered).size).toBe(34)
+  const beforeReload = received.length
+  server.handleData(connection, frame(stampHistoryViewAnchor(
+    { type: 'history.loadEarlier', requestId: 'reload' }, tail[0]!.uuid, true, 'document-two',
+  )))
+  await waitForResult(received, 'reload')
+  expect(budgets.at(-1)).toBe(MAX_HISTORY_LOAD_EARLIER_BYTES)
+  expect(replayedText(received.slice(beforeReload))).toEqual(texts.slice(5, 34))
+})
+
+test('progressive recovery keeps the active branch across a transcript rewrite', async () => {
+  const texts = mintTranscript(36, 512 * 1024)
+  const tail = await replayedTail(2)
+  const { getTranscriptPath } = await import('../../src/utils/sessionStorage.js')
+  const path = getTranscriptPath()
+  const original = readFileSync(path, 'utf8')
+  const tip = JSON.stringify({
+    type: 'active-conversation-tip', sessionId: getSessionId(), tipUuid: tail.at(-1)!.uuid,
+  }) + '\n'
+  const deadFork = JSON.stringify({
+    type: 'user', uuid: randomUUID(), parentUuid: null, isSidechain: false,
+    sessionId: getSessionId(), cwd: getSessionProjectDir(), version: 'test',
+    timestamp: '2027-01-01T00:00:00.000Z',
+    message: { role: 'user', content: 'dead fork ' + 'x'.repeat(6 * 1024 * 1024) },
+  }) + '\n'
+  writeFileSync(path, original + deadFork + tip)
+  const server = makeServer({ history: tail, historySourceTruncated: true })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const start = received.length
+  server.handleData(connection, frame({ type: 'history.loadEarlier', requestId: 'before-rewrite', viewId: 'same' }))
+  await waitForResult(received, 'before-rewrite')
+  expect(results(received).at(-1)).toMatchObject({ complete: false })
+  // Tombstone removal can rewrite the file between requests. Byte offsets
+  // would now be stale; the active-tip and parent chain remain authoritative.
+  writeFileSync(path, original + tip)
+  server.handleData(connection, frame({ type: 'history.loadEarlier', requestId: 'after-rewrite', viewId: 'same' }))
+  await waitForResult(received, 'after-rewrite')
+  expect(results(received).at(-1)).toMatchObject({ ok: true, complete: true })
+  const recovered = replayedText(received.slice(start))
+  expect(new Set(recovered)).toEqual(new Set(texts.slice(0, -2)))
+  expect(recovered).toHaveLength(texts.length - 2)
+})
+
+test('the expanded read ceiling is terminal and repeated requests do not reread disk', async () => {
+  mintTranscript(68, 512 * 1024)
+  const tail = await replayedTail(2)
+  let reads = 0
+  const server = makeServer({
+    history: tail, historySourceTruncated: true,
+    loadEarlierHistory: async (onError, options) => {
+      reads++
+      return readEarlierDisplayHistory(onError, options)
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  for (const requestId of ['first', 'limit', 'terminal-repeat']) {
+    server.handleData(connection, frame(stampHistoryViewAnchor(
+      { type: 'history.loadEarlier', requestId }, tail[0]!.uuid, true, 'same-document',
+    )))
+    await waitForResult(received, requestId)
+  }
+  expect(reads).toBe(2)
+  expect(results(received).at(-2)).toMatchObject({
+    ok: true, complete: false, canLoadMore: false, added: 32,
+  })
+  expect(results(received).at(-1)).toMatchObject({
+    ok: true, complete: false, canLoadMore: false, added: 0,
+    message: "Older messages beyond this point can't be loaded here.",
+  })
+})
+
+test.each([null, 1, '', 'x'.repeat(129)])('invalid recovery document identity %j is refused', async viewId => {
+  let reads = 0
+  const server = makeServer({ loadEarlierHistory: async () => {
+    reads++
+    return { messages: [], truncated: false }
+  } })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  server.handleData(connection, frame({ type: 'history.loadEarlier', requestId: 'bad-view', viewId }))
+  await Bun.sleep(0)
+  expect(reads).toBe(0)
+  expect(errors(received).at(-1)).toMatchObject({ code: 'bad_request' })
+})
+
+test('a replay starting inside an agent run anchors on the next parent message', async () => {
+  const parent = {
+    ...historyMessage('parent-card', ''),
+    type: 'assistant',
+    message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'tu-worker', name: 'Agent', input: {} },
+    ] },
+  } as unknown as SDKMessage
+  const child = { ...historyMessage('child-step', 'retained worker step'), parent_tool_use_id: 'tu-worker' }
+  const tail = historyMessage('parent-tail', 'main conversation')
+  const server = makeServer({
+    history: [child, tail], historySourceTruncated: true,
+    loadEarlierHistory: async () => ({ messages: [parent, child, tail], truncated: false }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  expect(connection.loadEarlierAnchorUuid).toBe(tail.uuid!)
+  server.handleData(connection, frame({ type: 'history.loadEarlier', requestId: 'agent-cut' }))
+  await waitForResult(received, 'agent-cut')
+  expect(results(received).at(-1)).toMatchObject({ ok: true, complete: true })
+  expect(received.some(f => f.kind === 'event' && f.recovered &&
+    f.event.type === 'message' && f.event.message.uuid === parent.uuid)).toBe(true)
+})
+
+test('prefix availability preserves already-known tail omissions', async () => {
+  const anchor = historyMessage('anchor', 'tail')
+  const server = makeServer({
+    history: [anchor], historySourceTruncated: true,
+    unavailableParentToolUseIds: ['tail-worker'],
+    loadEarlierHistory: async () => ({
+      messages: [historyMessage('older', 'older'), anchor], truncated: false,
+      unavailableParentToolUseIds: ['older-worker'],
+    }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  server.handleData(connection, frame({ type: 'history.loadEarlier', requestId: 'availability' }))
+  await waitForResult(received, 'availability')
+  expect(received.filter(f => f.kind === 'history.availability').at(-1)).toMatchObject({
+    unavailableParentToolUseIds: ['tail-worker', 'older-worker'], recovered: true,
+  })
+})
+
+test('a new renderer anchor outside the first read widens before sending any prefix', async () => {
+  const anchor = historyMessage(randomUUID(), 'cached ring anchor')
+  const newer = historyMessage(randomUUID(), 'newer')
+  const older = historyMessage(randomUUID(), 'older')
+  const budgets: number[] = []
+  const server = makeServer({
+    history: [newer], historySourceTruncated: true,
+    loadEarlierHistory: async (_onError, options) => {
+      budgets.push(options!.maxBytes)
+      return options!.maxBytes === MAX_HISTORY_LOAD_EARLIER_BYTES
+        ? { messages: [newer], truncated: true }
+        : { messages: [older, anchor, newer], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const before = received.length
+  server.handleData(connection, frame(stampHistoryViewAnchor(
+    { type: 'history.loadEarlier', requestId: 'wide-anchor' }, anchor.uuid, true, 'new-document',
+  )))
+  await waitForResult(received, 'wide-anchor')
+  expect(budgets).toEqual([MAX_HISTORY_LOAD_EARLIER_BYTES, MAX_HISTORY_LOAD_EARLIER_EXPANDED_BYTES])
+  expect(replayedText(received.slice(before))).toEqual(['older'])
+  expect(results(received).at(-1)).toMatchObject({ added: 1, complete: true })
+})
+
+test('a renderer replacement invalidates an older in-flight recovery before it emits a prefix', async () => {
+  const older = historyMessage(randomUUID(), 'older')
+  const anchor = historyMessage(randomUUID(), 'anchor')
+  let release: (() => void) | undefined
+  let reads = 0
+  const server = makeServer({
+    history: [anchor], historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      reads++
+      if (reads === 1) await new Promise<void>(resolve => { release = resolve })
+      return { messages: [older, anchor], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const send = (requestId: string, viewId: string) => server.handleData(connection,
+    frame(stampHistoryViewAnchor({ type: 'history.loadEarlier', requestId }, anchor.uuid, true, viewId)))
+  const start = received.length
+  send('old-read', 'old-document')
+  await Bun.sleep(0)
+  send('new-busy', 'new-document')
+  await waitForResult(received, 'new-busy')
+  expect(results(received).at(-1)).toMatchObject({ ok: false, message: 'Still loading earlier messages.' })
+  release!()
+  await Bun.sleep(0)
+  expect(replayedText(received.slice(start))).toEqual([])
+  expect(results(received).some(result => result.requestId === 'old-read')).toBe(false)
+  send('new-retry', 'new-document')
+  await waitForResult(received, 'new-retry')
+  expect(replayedText(received.slice(start))).toEqual(['older'])
+  expect(results(received).at(-1)).toMatchObject({ ok: true, complete: true, added: 1 })
+})
 
 /* ------------------------------------------------------------------------- *
  * Per-reader recovery state

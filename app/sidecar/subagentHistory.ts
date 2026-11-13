@@ -393,6 +393,7 @@ export async function withRestoredSubagentHistory(
   sessionId: string,
   history: readonly SDKMessage[],
   onError?: (message: string) => void,
+  additionalBudget?: { frames: number; bytes: number },
 ): Promise<RestoredSubagentHistory> {
   let assembled: SDKMessage[] = [...history]
   const unavailable = new Set<string>()
@@ -406,11 +407,17 @@ export async function withRestoredSubagentHistory(
     // so branches take only the headroom that is left. Without this the splice
     // pushes the total past the cap and `sendHistoryReplay` drops the OLDEST
     // main-transcript frames to make room for subagent chatter.
-    let budget = MAX_HISTORY_REPLAY_FRAMES - assembled.length
+    // Initial replay shares its wire budget with parents. Deeper recovery can
+    // grant one separately bounded allowance for all newly reached branches.
+    let budget = additionalBudget
+      ? Math.min(MAX_HISTORY_REPLAY_FRAMES, additionalBudget.frames)
+      : MAX_HISTORY_REPLAY_FRAMES - assembled.length
     const work: BranchWorkBudget = {
       readBytes: MAX_HISTORY_REPLAY_BYTES,
       readMessages: MAX_HISTORY_REPLAY_FRAMES,
-      frameBytes: Math.max(0, MAX_HISTORY_REPLAY_BYTES - Buffer.byteLength(JSON.stringify(assembled), 'utf8')),
+      frameBytes: Math.max(0, additionalBudget
+        ? Math.min(MAX_HISTORY_REPLAY_BYTES, additionalBudget.bytes)
+        : MAX_HISTORY_REPLAY_BYTES - Buffer.byteLength(JSON.stringify(assembled), 'utf8')),
     }
     while (pending.length > 0) {
       const reachable = collectToolUseIds(assembled)
