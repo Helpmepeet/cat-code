@@ -205,10 +205,10 @@ describe('assembleUpstreamSystemPrompt', () => {
       createHash('sha256')
         .update(out)
         .digest('hex'),
-    // Pinned over the assembled prompt, which now includes the fork-local
-    // <cross_session_messages_rule> text. Re-pin only for a deliberate wording
-    // change; an unexplained move means the vendored template drifted.
-    ).toBe('2361b9f5d022c91a8c21942f4ea70e27ba08dcb11ae056aa20f96d9f3479f570')
+    // Pin the complete policy, including fork-local provenance and outcomes.
+    // Re-pin only after reviewing an intentional wording change; unexplained
+    // changes require investigation.
+    ).toBe('f65083bc660fa7492b4eb0f9883bc1df518f06c3603687b55f919c29fcb8beab')
   })
 
   test('defines unanswered decisions without converting them or summaries into authorization', () => {
