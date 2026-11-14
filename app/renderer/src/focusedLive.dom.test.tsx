@@ -128,7 +128,7 @@ test('a turn mounted hidden starts its clock only when visible', async () => {
     now += 3000
     visibility = 'visible'
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')) })
-    expect(visibleText(tree.container.querySelector('.focused-thinking .focused-ticker'))).toBe('Thinking it over')
+    expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking3s')
     expect([...intervals.values()].map(timer => timer.delay)).toEqual([1000])
   } finally {
     restoreVisibility()
@@ -271,35 +271,25 @@ test('streaming output updates in place without sliding each output batch upward
   }
 })
 
-test('the first wait follows the phrase ladder without seconds and slides whole phrases', async () => {
+test('the first wait shows Thinking with seconds from 2s, like every later gap', async () => {
   const state = start()
   const tree = await harness.mount(view(state))
   expect(tree.container.querySelector('.focused-thinking')).toBeNull()
   now = 10999
   await tick()
   expect(tree.container.querySelector('.focused-thinking')).toBeNull()
-  let previous: string | null = null
-  for (const [elapsed, phrase] of [
-    [1000, 'Reading your message'], [2999, 'Reading your message'],
-    [3000, 'Thinking it over'], [6999, 'Thinking it over'],
-    [7000, 'Weighing it up'], [11999, 'Weighing it up'],
-    [12000, 'Thinking it through'], [60000, 'Thinking it through'],
+  for (const [elapsed, text] of [
+    [1000, 'Thinking'], [1999, 'Thinking'],
+    [2000, 'Thinking2s'], [3000, 'Thinking3s'], [14000, 'Thinking14s'], [60000, 'Thinking1m 0s'],
   ] as const) {
     now = 10000 + elapsed
     await tick()
     const row = tree.container.querySelector('.focused-thinking')!
     expect(row).not.toBeNull()
-    if (!previous) expect(row.querySelector('.focused-live-verb')?.textContent).toBe(phrase)
-    expect(row.querySelector('.focused-meta')).toBeNull()
+    expect(row.textContent).toBe(text)
+    expect(row.querySelector('.focused-live-verb')?.textContent).toBe('Thinking')
     expect(row.querySelector('.focused-reasoning-node')).not.toBeNull()
-    const ticker = row.querySelector('.focused-ticker')!
-    expect(visibleText(ticker)).toBe(phrase)
-    expect(ticker.querySelector(':scope > span:not([aria-hidden="true"]) > .focused-live-verb')?.textContent).toBe(phrase)
-    if (previous && phrase !== previous) {
-      expect(ticker.querySelector('.focused-tick-out[aria-hidden="true"]')?.textContent).toBe(previous)
-      expect(ticker.querySelector('.focused-tick-in')?.textContent).toBe(phrase)
-    }
-    previous = phrase
+    expect(row.querySelector('.focused-ticker, .focused-tick-in, .focused-tick-out')).toBeNull()
   }
 })
 
@@ -319,11 +309,11 @@ test('hidden context and empty or redacted reasoning keep the first wait on the 
   expect(tree.container.querySelector('.focused-thinking')).toBeNull()
   now = 13000
   await tick()
-  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Reading your message')
-  expect(tree.container.querySelector('.focused-thinking .focused-meta')).toBeNull()
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking')
+  expect(tree.container.querySelector('.focused-thinking .focused-meta')?.textContent).toBe('')
   now = 15000
   await tick()
-  expect(visibleText(tree.container.querySelector('.focused-thinking .focused-ticker'))).toBe('Thinking it over')
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking3s')
 })
 
 test('a later quiet gap after a finished call keeps Thinking and seconds, even after remount', async () => {
@@ -331,7 +321,7 @@ test('a later quiet gap after a finished call keeps Thinking and seconds, even a
   let tree = await harness.mount(view(state))
   now = 11000
   await tick()
-  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Reading your message')
+  expect(tree.container.querySelector('.focused-thinking')?.textContent).toBe('Thinking')
   now = 12000
   state = calls(state, ['first-output'])
   await tree.render(view(state))

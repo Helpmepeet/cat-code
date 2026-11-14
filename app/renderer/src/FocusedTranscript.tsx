@@ -1,4 +1,4 @@
-import { duration, firstWaitPhrase, preparingCalls, rollingCalls, type FocusedCall } from './focusedLive.js'
+import { duration, preparingCalls, rollingCalls, type FocusedCall } from './focusedLive.js'
 import { focusedCallLine, focusedCallMark, type FocusedCallContext, type FocusedCallLine } from './focusedCallText.js'
 import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { FocusedLiveState } from './transcriptProjector.js'
@@ -68,11 +68,6 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   const revealSegment = reveal ? segments.find(segment => containsAgentTool(segment.rows, reveal.toolUseId)) : null
   const latestStretch = [...segments].reverse().find(segment => segment.kind === 'stretch')
   const pending = turn.rows.some(row => row.kind === 'tool-use' && row.status === 'pending') || preparing.length > 0
-  const visibleOutput = segments.length > 0 || pending || turn.answering
-  // Preparing calls can disappear on a replacement stream without leaving a stored row.
-  const [hadVisibleOutput, setHadVisibleOutput] = useState(visibleOutput)
-  if (visibleOutput && !hadVisibleOutput) setHadVisibleOutput(true)
-  const firstWait = !visibleOutput && !hadVisibleOutput
   const issuedCalls = new Set(turn.rows.flatMap(row => row.kind === 'tool-use' ? [row.toolUseId] : []))
   const background = turn.live && latestLive ? tasks?.focusedBashJobs?.filter(job => job.toolUseId &&
     (issuedCalls.has(job.toolUseId) || !!liveState?.activities[job.toolUseId]) &&
@@ -117,7 +112,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
           footer={<>
           {background.length ? <FocusedBackground jobs={background} /> : null}
           {turn.live && latestLive && !turn.answering && !pending && !liveState?.streaming
-            ? <FocusedThinking liveState={liveState} firstWait={firstWait} /> : null}
+            ? <FocusedThinking liveState={liveState} /> : null}
           </>}
         />
       </FocusedDisclosure>
@@ -147,16 +142,13 @@ function FocusedCallClock({ live, children }: { live: boolean; children: ReactNo
   return <FocusedClockContext.Provider value={now}>{children}</FocusedClockContext.Provider>
 }
 
-function FocusedThinking({ liveState, firstWait }: { liveState: FocusedLiveState | null; firstWait: boolean }) {
+function FocusedThinking({ liveState }: { liveState: FocusedLiveState | null }) {
   const now = useLiveClock(liveState !== null)
   const quietMs = liveState ? now - liveState.lastVisibleChangeAt : 0
   if (quietMs < 1000) return null
-  const waitPhrase = firstWait ? firstWaitPhrase(quietMs) : null
   return <div className="focused-thinking">
     <span className="focused-reasoning-gutter" aria-hidden><span className="focused-reasoning-node" /></span>
-    {waitPhrase !== null
-      ? <FocusedTicker tickKey={waitPhrase} className=""><span className="focused-live-verb">{waitPhrase}</span></FocusedTicker>
-      : <><span className="focused-live-verb">Thinking</span><span className="focused-meta">{quietMs >= 2000 ? duration(quietMs) : ''}</span></>}
+    <span className="focused-live-verb">Thinking</span><span className="focused-meta">{quietMs >= 2000 ? duration(quietMs) : ''}</span>
   </div>
 }
 
