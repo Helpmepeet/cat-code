@@ -3,6 +3,7 @@ import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
 import { selectToolDiffs } from './toolDiffs.js'
+import { isMemoryRecall } from './memoryRecall.js'
 
 export type FocusedSummary = {
   readPaths: readonly string[]
@@ -27,7 +28,7 @@ export type FocusedSummary = {
   activeCall: { toolUseId: string; target: string } | null
 }
 export type FocusedSegment = {
-  kind: 'update' | 'reasoning' | 'stretch' | 'speech'
+  kind: 'update' | 'reasoning' | 'stretch' | 'speech' | 'recall'
   id: string
   rows: readonly NestedTranscriptRow[]
 } & FocusedSummary
@@ -87,7 +88,7 @@ function rowHasError(row: NestedTranscriptRow): boolean {
 export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): FocusedSummary {
   const reads = new Set<string>(), edits = new Set<string>(), searches = new Set<string>()
   const other: Partial<Record<ToolFamily, number>> = {}
-  let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0, stoppedCount = 0, blockedCount = 0, questions = 0
+  let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0, stoppedCount = 0, blockedCount = 0, questions = 0, recalls = 0
   let activeCall: FocusedSummary['activeCall'] = null
   for (const row of rows) {
     if (rowHasError(row)) errorCount++
@@ -101,7 +102,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     if (isBlocked(row)) { blockedCount++; continue }
     const path = toolCardFilePath(row)
     switch (row.toolFamily) {
-      case 'read': if (path) reads.add(path); break
+      case 'read': if (isMemoryRecall(row)) recalls++; else if (path) reads.add(path); break
       case 'edit': case 'write': {
         // Diffs name every file a call changed (added below). Without them, a patch's
         // headers still say which files it was for, as a failed patch has none.
@@ -140,6 +141,10 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     compact.push(`${verb} ${n}`)
   }
   count('read', reads.size, 'file'); count('edited', edits.size, 'file')
+  if (recalls) {
+    parts.push(`recalled ${recalls} ${recalls === 1 ? 'memory' : 'memories'}`)
+    compact.push(`recalled ${recalls}`)
+  }
   count('searched', searches.size, 'pattern'); count('ran', commands, 'command')
   count('delegated', other.agent ?? 0, 'task')
   // Everything else is a noun; only a lead noun gets its old verb so it still reads as a sentence.
@@ -183,7 +188,10 @@ export function deriveFocusedSegments(rows: readonly NestedTranscriptRow[]): rea
     stretch = []
   }
   for (const row of rows) {
-    if (row.kind === 'tool-use' && isPeerSpeechCall(row.toolName)) {
+    if (row.kind === 'tool-use' && isMemoryRecall(row)) {
+      flush()
+      segments.push({ kind: 'recall', id: `focused-recall:${row.id}`, rows: [row], ...summarizeFocusedWork([row]) })
+    } else if (row.kind === 'tool-use' && isPeerSpeechCall(row.toolName)) {
       flush()
       segments.push({ kind: 'speech', id: `focused-speech:${row.id}`, rows: [row], ...summarizeFocusedWork([row]) })
     } else if (row.kind === 'assistant-text') {

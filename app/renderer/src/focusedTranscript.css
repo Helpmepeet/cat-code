@@ -142,6 +142,34 @@ html:not([data-glass='on']) .focused-turn[data-focused-live] > .focused-fold-hea
 .focused-reasoning[data-live] .focused-reasoning-text { color: var(--text-muted); }
 .focused-reasoning[data-live] .focused-reasoning-text strong { color: var(--text-primary); }
 
+.memory-recall { min-width: 0; }
+.memory-recall-line {
+  display: flex; align-items: flex-start; gap: 10px; width: calc(100% + var(--focused-hang, 26px)); text-align: left;
+  margin-left: calc(-1 * var(--focused-hang, 26px));
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px;
+  font-style: italic; line-height: 1.55; color: var(--text-faint); cursor: pointer;
+}
+.memory-recall-text { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-recall-text strong { font-weight: 600; color: var(--text-subtle); }
+.memory-recall-line:hover, .memory-recall[data-open] .memory-recall-line { color: var(--text-subtle); }
+.memory-recall-line:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.memory-recall-line:hover strong, .memory-recall[data-open] .memory-recall-text strong { color: var(--text-muted); }
+.memory-recall-ring {
+  position: absolute; top: 7px; left: 5px; width: 6px; height: 6px; box-sizing: border-box;
+  border: 1px solid var(--text-ghost); border-radius: 50%;
+}
+.memory-recall[data-live] .memory-recall-ring { border-color: var(--accent); animation: focused-running-pulse 2s cubic-bezier(.4, 0, .6, 1) infinite; }
+.memory-recall[data-live] .memory-recall-text { color: var(--text-muted); }
+.memory-recall-age { margin-left: auto; flex-shrink: 0; font-size: 10.5px; font-style: normal; color: var(--text-faint); }
+.memory-recall-body { border-left: 1px solid var(--shell-seam); padding: 2px 0 4px 12px; margin: 2px 0 4px; }
+.memory-note-lead { font-size: 12.5px; line-height: 1.5; color: var(--text-primary); margin-bottom: 8px; }
+.memory-note-paragraph { font-size: 12px; line-height: 1.65; color: var(--text-subtle); white-space: pre-wrap; overflow-wrap: anywhere; min-height: .65em; }
+.memory-note-paragraph strong { font-weight: 600; color: var(--text-muted); }
+.memory-note-filename { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-ghost); margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .memory-recall[data-live] .memory-recall-ring, .memory-recall .focused-live-verb { animation: none; }
+}
+
 .focused-text-arrival { animation: focused-text-in 180ms var(--ease-enter) both; }
 .focused-transcript-space { height: var(--focused-transcript-space-height, 0px); flex-shrink: 0; pointer-events: none; }
 .appearance-preview-focused { padding-inline: 32px; }

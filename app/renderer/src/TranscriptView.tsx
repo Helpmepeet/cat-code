@@ -1,5 +1,6 @@
 import type { TurnRetryResult } from '../../shared/notificationNavigation.js'
 import type { DesktopProject } from '../../shared/projects.js'
+import { isMemoryRecall, selectMemoryNote } from './memoryRecall.js'
 import { selectFocusedLiveState, type FocusedLiveState } from './transcriptProjector.js'
 /**
  * Renders the projector's view models from transcriptProjector.ts.
@@ -1052,6 +1053,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   }
 
   return (
+    <MemoryRecallApprovalContext.Provider value={focusedLiveState?.awaitingApproval ?? null}>
     <TranscriptMotionContext.Provider value={motion}>
     <AgentRevealContext.Provider value={revealAgent}>
     <ToolCardExpansionContext.Provider value={expansionStore}>
@@ -1090,6 +1092,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     </ToolCardExpansionContext.Provider>
     </AgentRevealContext.Provider>
     </TranscriptMotionContext.Provider>
+    </MemoryRecallApprovalContext.Provider>
   )
 })
 
@@ -2794,7 +2797,10 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   return <AutoModeReviewContext.Provider value={row.autoModeReview}><ToolCardContent row={row} /></AutoModeReviewContext.Provider>
 }
 
+const MemoryRecallApprovalContext = createContext<FocusedLiveState['awaitingApproval'] | null>(null)
+
 function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
+  const approvals = useContext(MemoryRecallApprovalContext)
   const motion = useContext(TranscriptMotionContext)
   const openToolOutput = useContext(ToolOutputContext)
   const resolving = motion.results.active.has(row.id)
@@ -2811,6 +2817,7 @@ function ToolCardContent({ row }: { row: ToolUseNestedRow }) {
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
   const targetFilePath =
     filePath === null ? undefined : { rawPath: filePath, sessionId: row.sessionId, rowId: row.id }
+  if (isMemoryRecall(row, !!approvals?.[row.toolUseId])) return <MemoryRecall row={row} />
   // A send is speech, not a card. Ahead of the cancelled branch because the
   // shape does not change when the call was stopped: the row still says who
   // this session was talking to and what it said.
@@ -4481,6 +4488,39 @@ function DelegateGroup({ members }: { members: NestedToolUseRow[] }) {
       />
     </div>
   )
+}
+
+function MemoryRecall({ row }: { row: ToolUseNestedRow }) {
+  const [open, setOpen] = useToolCardExpanded(row.toolUseId, false)
+  const id = useId()
+  const openOutput = useContext(ToolOutputContext)
+  const note = selectMemoryNote(row)
+  const live = row.status === 'pending'
+  return <div className="memory-recall" data-live={live ? '' : undefined} data-open={open ? '' : undefined}>
+    <button type="button" className="memory-recall-line" aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}>
+      <span className="focused-reasoning-gutter" aria-hidden><span className="memory-recall-ring" /></span>
+      <span className="memory-recall-text">{live ? <span className="focused-live-verb">Recalling a memory</span> : <>Recalled <strong>{note.name}</strong>{note.type ? <> · {note.type}</> : null}</>}</span>
+      {!live && note.age !== null ? <span className="memory-recall-age">{note.age} days old</span> : null}
+    </button>
+    {open ? <div id={id} className="memory-recall-body">
+      {note.body !== null ? <MemoryNoteBody row={row} /> : <NumberedBody content={row.result?.content ?? ''} filePath={row.input.file_path} onOpenFull={openOutput ? () => openOutput(row) : null} toolUseId={row.toolUseId} />}
+    </div> : null}
+    {row.children.length ? <NestedRowList className="ml-6 border-l border-shell-seam pl-3" childGap={8} rows={row.children} /> : null}
+  </div>
+}
+
+function MemoryNoteBody({ row }: { row: ToolUseNestedRow }) {
+  const note = selectMemoryNote(row)
+  const openOutput = useContext(ToolOutputContext)
+  const lines = useMemo(() => (note.body ?? '').split('\n'), [note.body])
+  const { window, visibleLines, revealMore } = useInlineOutputWindow(lines, row.toolUseId)
+  return <>
+    {note.description ? <p className="memory-note-lead">{note.description}</p> : null}
+    <VirtualLineList lines={visibleLines} activeIndex={null} className={INLINE_OUTPUT_SCROLLER}
+      renderBeforeIndex={window.truncated ? index => index === window.head.length ? <InlineRevealBand hidden={window.hidden} revealStep={window.revealStep} onReveal={revealMore} onOpenFull={openOutput ? () => openOutput(row) : null} /> : null : undefined}
+      renderLine={(line, index) => <p key={index} className="memory-note-paragraph">{line.split(/(\*\*[^*]+\*\*)/g).map((part, i) => part.startsWith('**') && part.endsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part)}</p>} />
+    <div className="memory-note-filename">{note.filename}</div>
+  </>
 }
 
 /** Per-family body from real data. */

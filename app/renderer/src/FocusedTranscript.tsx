@@ -105,6 +105,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
             {segment.kind === 'update'
               ? <div data-focused-update data-latest={segment.id === latestUpdate ? '' : undefined}><FocusedStaticRows segment={segment} narration renderRows={renderRows} /></div>
               : segment.kind === 'speech' ? <div className="focused-lifted-speech"><FocusedStaticRows segment={segment} narration={false} renderRows={renderRows} /></div>
+              : segment.kind === 'recall' ? <FocusedStaticRows segment={segment} narration={false} renderRows={renderRows} />
               : segment.kind === 'reasoning' ? <FocusedStaticReasoning segment={segment} live={turn.live && !turn.answering && segment === last} renderReasoning={renderReasoning} />
               : <FocusedStep segment={segment} live={turn.live} rolling={latestLive && segment === latestStretch && !turn.answering} preparing={segment === latestStretch ? preparing : []} liveState={liveState} callContext={callContext} renderRows={renderRows} />}
           </FocusedSegmentBlock>

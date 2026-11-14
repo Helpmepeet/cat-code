@@ -43,6 +43,7 @@
 import type { ReasoningLayoutItem } from './reasoningLayout.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import type { UserImagesItem } from './userImageLayout.js'
+import { memoryReadPath } from './memoryRecall.js'
 
 export type ToolRunMember = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
 
@@ -79,6 +80,7 @@ export const TOOL_RUN_MIN_MEMBERS = 2
  */
 export function toolRunFamily(row: NestedTranscriptRow): ToolRunFamily | null {
   if (row.kind !== 'tool-use' || row.children.length > 0) return null
+  if (memoryReadPath(row)) return null
   if (!(TOOL_RUN_FAMILIES as readonly string[]).includes(row.toolFamily)) return null
   // An edit with no named file (a multi-file patch) has no file to share a run on.
   if (row.toolFamily === 'edit' && editRunPath(row) === null) return null
