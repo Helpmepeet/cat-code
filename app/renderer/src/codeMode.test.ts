@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test'
-import { codeModeDigest, codeModeStepDigest, codeModeSteps, parseCodeMode, type CodeModeEnvelope } from './codeMode.js'
+import { codeModeDigest, codeModeStepDigest, parseCodeMode, type CodeModeEnvelope } from './codeMode.js'
+import { codeModeSteps } from './codeModeSteps.js'
 import { summarizeFocusedWork } from './focusedTranscriptLayout.js'
 import { focusedCallLine, focusedCallPhase } from './focusedCallText.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'

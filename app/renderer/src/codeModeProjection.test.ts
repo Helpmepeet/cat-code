@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { PROTOCOL_VERSION, type ServerFrame } from '../../shared/protocol.js'
 import { createTranscriptState, projectCodeModeCall, projectServerFrames, selectNestedTranscriptRows, selectTranscriptRows, type NestedToolUseRow } from './transcriptProjector.js'
-import { findNestedToolUseRow } from './transcriptViewModel.js'
+import { findToolOutputRow } from './toolOutputRow.js'
 const envelope = (cellId: string, status = 'completed') => ({ kind: 'code-mode', cellId, generation: 'g', description: 'Read project', code: '// Read\nRead()', status, output: 'selected', calls: [{ toolUseId: 'inner', name: 'Read', input: { file_path: '/a' }, status: 'completed', line: 2 }], changedFiles: [] })
 const initial = () => projectServerFrames(createTranscriptState(), [{ kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId: 's', engineSessionId: 'engine-s', payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true, activeTurn: false, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] } } as unknown as ServerFrame])
 const frame = (message: Record<string, unknown>, replay = false): ServerFrame => ({ kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: 's', ...(replay ? { replay: true } : {}), event: { type: 'message', message: { session_id: 'engine-s', ...message } } } as unknown as ServerFrame)
@@ -42,9 +42,9 @@ test('restored audit child outputs remain reachable through the real output-pane
   const parent = selectNestedTranscriptRows(state, 's')[0] as NestedToolUseRow
   const call = parent.result!.codeMode!.calls[0]!
   const audited = projectCodeModeCall(parent, call)
-  expect(findNestedToolUseRow([parent], audited.id)).toBe(audited)
+  expect(findToolOutputRow([parent], audited.id)).toBe(audited)
   const actual = { ...audited, id: 'real-child-frame', parentToolUseId: null }
-  expect(findNestedToolUseRow([{ ...parent, children: [actual] }], audited.id)).toBe(actual)
+  expect(findToolOutputRow([{ ...parent, children: [actual] }], audited.id)).toBe(actual)
 })
 
 test('only actual REPL tools may interpret audits or own Code Mode display children', () => {

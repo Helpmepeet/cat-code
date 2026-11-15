@@ -16,7 +16,7 @@ import {
   closeFilePane, getFilePaneSession, registerFilePaneFocus, rememberSlotWidth, requestOpenFile, paneTargetLabel,
   hideScreenPane, hideSidePane, showSlotOccupant, updateFilePaneSession, useFilePaneFields, useSidePaneNavigation, type SlotOccupant,
 } from './filePaneState.js'
-import { findNestedToolUseRow } from './transcriptViewModel.js'
+import { findToolOutputRow } from './toolOutputRow.js'
 import { canOpenSubagentPanel, selectSubagentPanelBranch, selectSubagentPanelRowForCard } from './subagentPanelState.js'
 import { AgentPanelContext } from './transcriptAgentReveal.js'
 import { SidePaneNavigationContext } from './sidePaneNavigationContext.js'
@@ -119,7 +119,7 @@ export function SubagentWorkspace({ appSessionId, onFocusComposer, onStop, stopp
   const branch = useMemo(() => selectSubagentPanelBranch(rows, worker?.toolUseId ?? null, worker?.runToolUseIds), [rows, worker?.toolUseId, worker?.runToolUseIds])
   const panelWorkers = useMemo(() => worker && !workers.some(row => row.agentId === worker.agentId) ? [...workers, worker] : workers, [workers, worker])
   const opener = useRef<HTMLElement | null>(null)
-  const outputRow = useMemo(() => output ? findNestedToolUseRow(outputRows, output.id) : null, [outputRows, output?.id])
+  const outputRow = useMemo(() => output ? findToolOutputRow(outputRows, output.id) : null, [outputRows, output?.id])
   const [dragging, setDragging] = useState(false)
   const drag = useRef<{ pointerId: number; startX: number; startWidth: number; width: number; layoutWidth: number | null } | null>(null)
   const dragFrame = useRef<number | null>(null)
