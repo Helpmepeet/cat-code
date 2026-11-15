@@ -11,6 +11,7 @@ import type {
   Message,
   StreamEvent,
   SystemAPIErrorMessage,
+  SystemTransportRecoveryMessage,
   UserMessage,
 } from '../types/message.js'
 import { getCwd } from '../utils/cwd.js'
@@ -87,8 +88,8 @@ async function withFixture<T>(
 
 export async function withVCR(
   messages: Message[],
-  f: () => Promise<(AssistantMessage | StreamEvent | SystemAPIErrorMessage)[]>,
-): Promise<(AssistantMessage | StreamEvent | SystemAPIErrorMessage)[]> {
+  f: () => Promise<(AssistantMessage | StreamEvent | SystemAPIErrorMessage | SystemTransportRecoveryMessage)[]>,
+): Promise<(AssistantMessage | StreamEvent | SystemAPIErrorMessage | SystemTransportRecoveryMessage)[]> {
   if (!shouldUseVCR()) {
     return await f()
   }
@@ -118,7 +119,7 @@ export async function withVCR(
   try {
     const cached = jsonParse(
       await readFile(filename, { encoding: 'utf8' }),
-    ) as { output: (AssistantMessage | StreamEvent)[] }
+    ) as { output: (AssistantMessage | StreamEvent | SystemAPIErrorMessage | SystemTransportRecoveryMessage)[] }
     cached.output.forEach(addCachedCostToTotalSessionCost)
     return cached.output.map((message, index) =>
       mapMessage(message, hydrateValue, index, randomUUID()),
@@ -161,9 +162,9 @@ export async function withVCR(
 }
 
 function addCachedCostToTotalSessionCost(
-  message: AssistantMessage | StreamEvent,
+  message: AssistantMessage | StreamEvent | SystemAPIErrorMessage | SystemTransportRecoveryMessage,
 ): void {
-  if (message.type === 'stream_event') {
+  if (message.type !== 'assistant') {
     return
   }
   const model = message.message.model
@@ -276,11 +277,11 @@ function mapAssistantMessage(
 }
 
 function mapMessage(
-  message: AssistantMessage | SystemAPIErrorMessage | StreamEvent,
+  message: AssistantMessage | SystemAPIErrorMessage | SystemTransportRecoveryMessage | StreamEvent,
   f: (s: unknown) => unknown,
   index: number,
   uuid?: UUID,
-): AssistantMessage | SystemAPIErrorMessage | StreamEvent {
+): AssistantMessage | SystemAPIErrorMessage | SystemTransportRecoveryMessage | StreamEvent {
   if (message.type === 'assistant') {
     return mapAssistantMessage(message, f, index, uuid)
   } else {
@@ -349,11 +350,11 @@ function hydrateValue(s: unknown): unknown {
 export async function* withStreamingVCR(
   messages: Message[],
   f: () => AsyncGenerator<
-    StreamEvent | AssistantMessage | SystemAPIErrorMessage,
+    StreamEvent | AssistantMessage | SystemAPIErrorMessage | SystemTransportRecoveryMessage,
     void
   >,
 ): AsyncGenerator<
-  StreamEvent | AssistantMessage | SystemAPIErrorMessage,
+  StreamEvent | AssistantMessage | SystemAPIErrorMessage | SystemTransportRecoveryMessage,
   void
 > {
   if (!shouldUseVCR()) {
@@ -361,7 +362,7 @@ export async function* withStreamingVCR(
   }
 
   // Compute and yield messages
-  const buffer: (StreamEvent | AssistantMessage | SystemAPIErrorMessage)[] = []
+  const buffer: (StreamEvent | AssistantMessage | SystemAPIErrorMessage | SystemTransportRecoveryMessage)[] = []
 
   // Record messages (or fetch from cache)
   const cachedBuffer = await withVCR(messages, async () => {

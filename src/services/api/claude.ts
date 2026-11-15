@@ -51,6 +51,7 @@ import type {
   Message,
   StreamEvent,
   SystemAPIErrorMessage,
+  SystemTransportRecoveryMessage,
   UserMessage,
 } from '../../types/message.js'
 import {
@@ -79,6 +80,7 @@ import { computeFingerprintFromMessages } from '../../utils/fingerprint.js'
 import { captureAPIRequest, logError } from '../../utils/log.js'
 import {
   createAssistantAPIErrorMessage,
+  createSystemTransportRecoveryMessage,
   createUserMessage,
   ensureToolResultPairing,
   normalizeContentFromAPI,
@@ -95,6 +97,7 @@ import {
   isNonCustomOpusModel,
 } from '../../utils/model/model.js'
 import { recordRunFacts } from '../../utils/sessionStorage.js'
+import { sleep } from '../../utils/sleep.js'
 import {
   asSystemPrompt,
   type SystemPrompt,
@@ -119,6 +122,7 @@ import {
 } from './modelAttemptRecorder.js'
 import {
   CodexPartialStreamReplaySkippedError,
+  extractConnectionErrorDetails,
   isCodexPartialStreamReplaySkippedError,
 } from './errorUtils.js'
 
@@ -128,12 +132,40 @@ import {
 // bypass it by setting a client-level timeout, so we can cap higher.
 export const MAX_NON_STREAMING_TOKENS = 64_000
 
+const CLAUDE_THINKING_STREAM_RETRIES = 2
+const RETRYABLE_STREAM_CONNECTION_CODES = new Set([
+  'ECONNRESET',
+  'EPIPE',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'ERR_STREAM_PREMATURE_CLOSE',
+  'UND_ERR_SOCKET',
+])
+
+function isThinkingStreamConnectionError(error: unknown): boolean {
+  let cause: unknown = error
+  for (let depth = 0; cause instanceof Error && depth < 5; depth++) {
+    if (cause instanceof APIUserAbortError || cause instanceof StreamIdleError) {
+      return false
+    }
+    cause = cause.cause
+  }
+  if (error instanceof APIError && error.status !== undefined) {
+    return false
+  }
+  const details = extractConnectionErrorDetails(error)
+  return details
+    ? RETRYABLE_STREAM_CONNECTION_CODES.has(details.code)
+    : error instanceof APIConnectionError
+}
+
 /* eslint-disable @typescript-eslint/no-require-imports */
 const autoModeStateModule = feature('TRANSCRIPT_CLASSIFIER')
   ? (require('../../utils/permissions/autoModeState.js') as typeof import('../../utils/permissions/autoModeState.js'))
   : null
 import type { ClientOptions } from '@anthropic-ai/sdk'
 import {
+  APIConnectionError,
   APIConnectionTimeoutError,
   APIError,
   APIUserAbortError,
@@ -948,7 +980,7 @@ export async function* queryModelWithStreaming({
   signal: AbortSignal
   options: Options
 }): AsyncGenerator<
-  StreamEvent | AssistantMessage | SystemAPIErrorMessage,
+  StreamEvent | AssistantMessage | SystemAPIErrorMessage | SystemTransportRecoveryMessage,
   void
 > {
   return yield* withStreamingVCR(messages, async function* () {
@@ -1237,7 +1269,7 @@ async function* queryModel(
   options: Options,
   openAIInstructionAssembly?: OpenAIInstructionAssembly,
 ): AsyncGenerator<
-  StreamEvent | AssistantMessage | SystemAPIErrorMessage,
+  StreamEvent | AssistantMessage | SystemAPIErrorMessage | SystemTransportRecoveryMessage,
   void
 > {
   // Check cheap conditions first — the off-switch await blocks on GrowthBook
@@ -1802,6 +1834,8 @@ async function* queryModel(
   let streamResponseHeaders: Headers | undefined
   let activeStreamingAttempt: ModelAttempt | undefined
   let attemptOutputEscaped = false
+  let thinkingOnlyReplaySafe = true
+  let thinkingStreamRetriesExhausted = false
   let lastNetworkProgress = 0
   let cancelProgressBody: (() => void) | undefined
   // The SDK consumes SSE pings internally, so observe body chunks before parsing.
@@ -1826,7 +1860,8 @@ async function* queryModel(
       args[1]?.signal ?? signal,
       streamIdleTimeoutMs(),
       error => {
-        if (error && attemptOutputEscaped) options.onStreamInterrupted?.()
+        if (error && attemptOutputEscaped &&
+            (requestProvider !== 'firstParty' || !thinkingOnlyReplaySafe)) options.onStreamInterrupted?.()
         cancel()
       },
       () => new APIUserAbortError(),
@@ -2178,7 +2213,7 @@ async function* queryModel(
 
   try {
     queryCheckpoint('query_client_creation_start')
-    const generator = withRetry(
+    const createStreamingRequest = () => withRetry(
       () =>
         getAnthropicClient({
           maxRetries: 0, // Disabled auto-retry in favor of manual implementation
@@ -2279,26 +2314,21 @@ async function* queryModel(
           requestProvider === 'firstParty' && isClaudeAISubscriber(),
       },
     )
+    stream = yield* createStreamingRequest()
 
-    let e
-    do {
-      e = await generator.next()
-
-      // yield API error messages (the stream has a 'controller' property, error messages don't)
-      if (!('controller' in e.value)) {
-        yield e.value
-      }
-    } while (!e.done)
-    stream = e.value as Stream<BetaRawMessageStreamEvent>
-
-    // reset state
-    newMessages.length = 0
-    ttftMs = 0
-    partialMessage = undefined
-    contentBlocks.length = 0
-    usage = EMPTY_USAGE
-    stopReason = null
-    isAdvisorInProgress = false
+    function resetStreamState(): void {
+      newMessages.length = 0
+      ttftMs = 0
+      partialMessage = undefined
+      contentBlocks.length = 0
+      usage = EMPTY_USAGE
+      stopReason = null
+      isAdvisorInProgress = false
+      research = undefined
+      attemptOutputEscaped = false
+      thinkingOnlyReplaySafe = true
+    }
+    resetStreamState()
 
     // Streaming idle timeout watchdog: abort the stream if no chunks arrive
     // for STREAM_IDLE_TIMEOUT_MS. Unlike the stall detection below (which only
@@ -2364,6 +2394,56 @@ async function* queryModel(
     }
     resetStreamIdleTimer()
 
+    async function* readStreamingAttempts(): AsyncGenerator<
+      BetaRawMessageStreamEvent | SystemAPIErrorMessage | SystemTransportRecoveryMessage
+    > {
+      for (let retry = 0; ; retry++) {
+        try {
+          const events = requestProvider === 'openai' ? stream! : withStreamIdleDeadline(
+            stream!, signal, streamIdleTimeoutMs(), error => {
+              if (error && attemptOutputEscaped &&
+                  (requestProvider !== 'firstParty' || !thinkingOnlyReplaySafe)) options.onStreamInterrupted?.()
+              releaseStreamResources()
+            },
+            () => new APIUserAbortError(),
+            () => lastNetworkProgress,
+          )
+          yield* events
+          return
+        } catch (error) {
+          if (requestProvider !== 'firstParty' || !thinkingOnlyReplaySafe ||
+              signal.aborted || !isThinkingStreamConnectionError(error)) throw error
+
+          activeStreamingAttempt?.end('failed')
+          releaseStreamResources()
+          logForDebugging(
+            `Claude thinking stream connection failed: request_id=${streamRequestId ?? 'none'} ` +
+            `client_request_id=${clientRequestId ?? 'none'} retry=${retry}/${CLAUDE_THINKING_STREAM_RETRIES} ` +
+            `error=${errorMessage(error)}`,
+            { level: 'warn' },
+          )
+          if (retry >= CLAUDE_THINKING_STREAM_RETRIES) {
+            thinkingStreamRetriesExhausted = true
+            throw new APIConnectionError({
+              message: 'Connection lost before a response was produced. Please try again.',
+              cause: error instanceof Error ? error : undefined,
+            })
+          }
+          // No completed block or possible tool effect may be replayed. Only
+          // transient, unsigned thinking is discarded before reopening.
+          yield createSystemTransportRecoveryMessage(
+            'Connection lost. Retrying.',
+            retry + 1,
+            CLAUDE_THINKING_STREAM_RETRIES,
+          )
+          await sleep(1000 * 2 ** retry, signal, { abortError: () => new APIUserAbortError() })
+          stream = yield* createStreamingRequest()
+          resetStreamState()
+          resetStreamIdleTimer()
+        }
+      }
+    }
+
     startSessionActivity('api_call')
     try {
       // stream in and accumulate state
@@ -2392,14 +2472,18 @@ async function* queryModel(
         }
       }
 
-      for await (const part of requestProvider === 'openai' ? stream : withStreamIdleDeadline(
-        stream, signal, streamIdleTimeoutMs(), error => {
-          if (error && attemptOutputEscaped) options.onStreamInterrupted?.()
-          releaseStreamResources()
-        },
-        () => new APIUserAbortError(),
-        () => lastNetworkProgress,
-      )) {
+      for await (const part of readStreamingAttempts()) {
+        if (part.type === 'system') {
+          yield part
+          continue
+        }
+        if ((part.type === 'content_block_start' &&
+              part.content_block.type !== 'thinking' && part.content_block.type !== 'redacted_thinking') ||
+            (part.type === 'content_block_delta' &&
+              part.delta.type !== 'thinking_delta' && part.delta.type !== 'signature_delta') ||
+            part.type === 'content_block_stop' || part.type === 'message_delta' || part.type === 'message_stop') {
+          thinkingOnlyReplaySafe = false
+        }
         if (part.type === 'content_block_start' || part.type === 'content_block_delta') {
           attemptOutputEscaped = true
         }
@@ -3002,7 +3086,7 @@ async function* queryModel(
       // a surfaced tool call twice. This safety decision must survive the outer
       // provider-agnostic streaming fallback.
       if (streamingError instanceof StreamIdleError ||
-          attemptOutputEscaped || isCodexPartialStreamReplaySkippedError(streamingError)) {
+          thinkingStreamRetriesExhausted || attemptOutputEscaped || isCodexPartialStreamReplaySkippedError(streamingError)) {
         throw streamingError
       }
 
