@@ -1,5 +1,6 @@
 import { feature } from 'bun:bundle'
 import type { Task, TaskType } from './Task.js'
+import { CodeModeTask } from './tasks/CodeModeTask.js'
 import { DreamTask } from './tasks/DreamTask/DreamTask.js'
 import { LocalAgentTask } from './tasks/LocalAgentTask/LocalAgentTask.js'
 import { LocalShellTask } from './tasks/LocalShellTask/LocalShellTask.js'
@@ -21,6 +22,7 @@ const MonitorMcpTask: Task | null = feature('MONITOR_TOOL')
  */
 export function getAllTasks(): Task[] {
   const tasks: Task[] = [
+    CodeModeTask,
     LocalShellTask,
     LocalAgentTask,
     RemoteAgentTask,

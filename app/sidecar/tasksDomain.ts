@@ -20,7 +20,7 @@ import type {
   TaskSubagentMetadata,
 } from '../shared/protocol.js'
 import { subscribeToProjection } from './projectedSubscription.js'
-import { deriveUnfinishedTaskFacts, type UnfinishedTaskFacts } from './unfinishedWork.js'
+import { deriveUnfinishedTaskFacts, hasUnfinishedCodeModeTask, type UnfinishedTaskFacts } from './unfinishedWork.js'
 
 export type SidecarTasksDomain = {
   /** Live read-only snapshot over the same app-state store the runtime mutates. */
@@ -59,8 +59,7 @@ export function createSidecarTasksDomain(
     readUnfinishedWork() {
       const state = appStateStore.getState()
       const pending = controller?.getPendingPermissionRequests() ?? []
-      const actors = new Set(pending.flatMap(({ request }) =>
-        request.agent_id ? [request.agent_id] : []))
+      const actors = new Set(pending.map(({ request }) => request.agent_id ?? ''))
       return deriveUnfinishedTaskFacts(state.tasks, actors)
     },
     hasLiveWork() {
@@ -70,7 +69,7 @@ export function createSidecarTasksDomain(
         appStateStore.getState().tasks
       if (!tasks) return false
       return Object.values(tasks).some(
-        task => task.status === 'running' || task.status === 'pending',
+        task => task.status === 'running' || task.status === 'pending' || hasUnfinishedCodeModeTask(task),
       )
     },
     subscribe(listener) {
@@ -96,11 +95,13 @@ function hasOperationalWork(
   const pending = controller.getPendingPermissionRequests()
   const blockedActors = new Set(pending.flatMap(({ request }) => request.agent_id ? [request.agent_id] : []))
   const live = Object.entries(tasks).filter(([, task]) =>
-    (task.status === 'running' || task.status === 'pending') && !isMainSessionTask(task))
+    (task.status === 'running' || task.status === 'pending' || hasUnfinishedCodeModeTask(task)) && !isMainSessionTask(task))
   const delegated = Object.fromEntries(live.filter(([, task]) =>
     task.type !== 'local_agent' || !blockedActors.has(task.agentId)))
   const standalone = live.some(([, task]) =>
-    task.type === 'local_bash' && task.kind !== 'monitor' || task.type === 'dream')
+    task.type === 'local_bash' && task.kind !== 'monitor' || task.type === 'dream' ||
+    (task.type === 'code_mode' && hasUnfinishedCodeModeTask(task) && !pending.some(({ request }) =>
+      request.agent_id === task.owner.agentId)))
   // A foreground tool owns the parent turn until it settles. Count that tool,
   // not the parent's still-active flag, while its worker awaits permission.
   const foreground = live.some(([, task]) =>
@@ -189,6 +190,7 @@ function isVisibleBackgroundTask(task: TaskState): boolean {
     !('isBackgrounded' in task && task.isBackgrounded === false)
   return (
     isLiveBackgroundTask ||
+    hasUnfinishedCodeModeTask(task) ||
     (task.type === 'local_agent' && task.isBackgrounded && task.status !== 'running')
   )
 }
@@ -203,6 +205,11 @@ function toTaskSnapshotItem(task: TaskState): TaskSnapshotItem {
     ...(task.totalPausedMs !== undefined ? { totalPausedMs: task.totalPausedMs } : {}),
   }
   switch (task.type) {
+    case 'code_mode':
+      return {
+        ...base,
+        label: task.delivery === 'failed' ? `${task.description} (result delivery failed)` : task.description,
+      }
     case 'local_bash':
       return {
         ...base,

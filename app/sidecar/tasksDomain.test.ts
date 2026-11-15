@@ -20,6 +20,27 @@ import { SleepAssertionOwner } from '../shared/sleepAssertion.js'
 import { DesktopPower } from '../main/desktopPower.js'
 import { unknownPowerObservation } from '../main/powerObservation.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
+import type { CodeModeTaskState } from '../../src/tasks/CodeModeTask.js'
+
+test('Code Mode retains terminal undelivered receipts in snapshot and idle-park accounting', () => {
+  const cell: CodeModeTaskState = {
+    ...createTaskStateBase('c-owned', 'code_mode', 'Run tests'),
+    type: 'code_mode', status: 'completed', owner: { sessionId: 'session' },
+    cellId: 'cell', generation: 'generation', settled: true,
+    cancellationRequested: false, delivery: 'failed', deliveryError: 'sink unavailable',
+  }
+  const store = createStore({ ...getDefaultAppState(), tasks: { [cell.id]: cell } })
+  const domain = createSidecarTasksDomain(store)
+  expect(domain.hasLiveWork()).toBe(true)
+  expect(domain.readUnfinishedWork().activeBackgroundTasks).toBe(1)
+  expect(domain.getSnapshot().items).toMatchObject([
+    { id: cell.id, type: 'code_mode', status: 'completed', label: 'Run tests (result delivery failed)' },
+  ])
+  store.setState(prev => ({ ...prev, tasks: { [cell.id]: { ...cell, delivery: 'delivered' } } }))
+  expect(domain.hasLiveWork()).toBe(false)
+  expect(domain.readUnfinishedWork().activeBackgroundTasks).toBe(0)
+  expect(domain.getSnapshot().items).toEqual([])
+})
 
 function bashTask(over: Partial<LocalShellTaskState> = {}): LocalShellTaskState {
   return {

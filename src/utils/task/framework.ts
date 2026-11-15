@@ -165,9 +165,10 @@ export function evictTerminalTask(
   setAppState(prev => {
     const task = prev.tasks?.[taskId]
     if (!task) return prev
-    // Shell output remains addressable through TaskOutput for this session.
-    // Completed shell tasks already release their process and stream resources.
-    if (task.type === 'local_bash') return prev
+    // Shell and delivered Code Mode output remain addressable through TaskOutput.
+    // Code Mode compacts delivered rows to metadata and archives selected output;
+    // undelivered rows must retain their real outcome and resource ownership.
+    if (task.type === 'local_bash' || task.type === 'code_mode') return prev
     if (!isTerminalTaskStatus(task.status)) return prev
     if (!task.notified) return prev
     if (hasUnresolvedLocalAgentMessages(task)) return prev
@@ -209,7 +210,7 @@ export function generateTaskAttachments(state: AppState): {
   const tasks = state.tasks ?? {}
 
   for (const taskState of Object.values(tasks) as TaskState[]) {
-    if (taskState.type === 'local_bash') continue
+    if (taskState.type === 'local_bash' || taskState.type === 'code_mode') continue
     // Not yet notified, or still pending/running — the parent still needs it.
     if (!taskState.notified) continue
     if (!isTerminalTaskStatus(taskState.status)) continue
@@ -239,7 +240,7 @@ export function applyTaskEvictions(
     const newTasks = { ...prev.tasks } as Record<string, TaskState>
     for (const id of evictedTaskIds) {
       const fresh = newTasks[id]
-      if (fresh?.type === 'local_bash') continue
+      if (fresh?.type === 'local_bash' || fresh?.type === 'code_mode') continue
       // Re-check terminal+notified on fresh state (TOCTOU: resume may have
       // replaced the task since it was collected)
       if (!fresh || !isTerminalTaskStatus(fresh.status) || !fresh.notified) {

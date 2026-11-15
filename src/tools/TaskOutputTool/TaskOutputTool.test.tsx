@@ -21,6 +21,8 @@ import {
 } from '../../utils/task/diskOutput.js'
 import { TaskOutputTool } from './TaskOutputTool.js'
 import { applyTaskEvictions, evictTerminalTask, generateTaskAttachments } from '../../utils/task/framework.js'
+import { getSessionId } from '../../bootstrap/state.js'
+import type { CodeModeTaskState } from '../../tasks/CodeModeTask.js'
 
 function makeContext(appStateRef: { current: AppState }) {
   return {
@@ -30,6 +32,57 @@ function makeContext(appStateRef: { current: AppState }) {
     },
     abortController: new AbortController(),
   }
+}
+
+for (const [status, block] of [['running', false], ['completed', false], ['completed', true]] as const) {
+  test(`Code Mode TaskOutput selects output without promoting child audit (${status}, block=${block})`, async () => {
+    const task: CodeModeTaskState = {
+      id: 'code-private-audit', type: 'code_mode', status,
+      description: 'Summarize private input', startTime: 1,
+      outputFile: '', outputOffset: 0, notified: false,
+      owner: { sessionId: getSessionId() }, cellId: 'cell-private', generation: 'generation-private',
+      settled: status === 'completed', cancellationRequested: false,
+      delivery: 'failed', deliveryError: 'PRIVATE_DELIVERY_DIAGNOSTIC',
+      error: 'PRIVATE_HOST_DIAGNOSTIC',
+      receipt: {
+        kind: 'code-mode', cellId: 'cell-private', generation: 'generation-private',
+        description: 'PRIVATE_RECEIPT_DESCRIPTION', code: 'PRIVATE_SOURCE',
+        status, output: 'Selected summary only.',
+        error: 'PRIVATE_RECEIPT_ERROR',
+        changedFiles: [{ path: 'summary.txt', additions: 2, deletions: 1, privateMetadata: 'PRIVATE_FILE_METADATA' } as never],
+        calls: [{
+          toolUseId: 'child-private', name: 'Read', status: 'completed',
+          input: { path: 'PRIVATE_CHILD_INPUT' },
+          result: { content: 'PRIVATE_CHILD_RESULT' },
+          error: 'PRIVATE_CHILD_ERROR',
+        }],
+      },
+    }
+    const audit = task.receipt!;
+    const ref = { current: { ...getDefaultAppState(), tasks: { [task.id]: task } } };
+    const result = await TaskOutputTool.call(
+      { task_id: task.id, block, timeout: 0 }, makeContext(ref) as never,
+      undefined as never, undefined as never,
+    );
+    expect(result.data.retrieval_status).toBe(status === 'running' ? 'not_ready' : 'success');
+    expect(JSON.parse(result.data.task!.output)).toEqual({
+      cellId: task.cellId, generation: task.generation, status,
+      output: 'Selected summary only.', partial: status === 'running',
+      changedFiles: [{ path: 'summary.txt', additions: 2, deletions: 1 }],
+      settled: status === 'completed', cancellationRequested: false, delivery: 'failed',
+    });
+    const mapped = TaskOutputTool.mapToolResultToToolResultBlockParam(result.data, 'collect-cell');
+    expect(mapped.content).toContain('Selected summary only.');
+    expect(mapped.content).toContain('summary.txt');
+    expect(JSON.stringify(result.data)).not.toContain('PRIVATE_');
+    expect(mapped.content).not.toContain('PRIVATE_');
+    expect(mapped.content).not.toContain('child-private');
+    expect(mapped.content).not.toContain('"calls"');
+    expect((ref.current.tasks[task.id] as CodeModeTaskState).receipt).toBe(audit);
+    expect(audit.calls[0]!.input).toEqual({ path: 'PRIVATE_CHILD_INPUT' });
+    expect(audit.calls[0]!.result).toEqual({ content: 'PRIVATE_CHILD_RESULT' });
+    expect((ref.current.tasks[task.id] as CodeModeTaskState).deliveryError).toBe('PRIVATE_DELIVERY_DIAGNOSTIC');
+  });
 }
 
 function makeCompletedLocalAgentTask(): LocalAgentTaskState {

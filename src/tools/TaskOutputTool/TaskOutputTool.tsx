@@ -27,6 +27,8 @@ import type { ThemeName } from '../../utils/theme.js';
 import { AgentPromptDisplay, AgentResponseDisplay } from '../AgentTool/UI.js';
 import BashToolResultMessage from '../BashTool/BashToolResultMessage.js';
 import { TASK_OUTPUT_TOOL_NAME } from './constants.js';
+import { getSessionId } from '../../bootstrap/state.js';
+import { assertCodeModeTaskAccess, projectCodeModeTaskOutput } from '../../tasks/CodeModeTask.js';
 const inputSchema = lazySchema(() => z.strictObject({
   task_id: z.string().describe('The task ID to get output from'),
   block: semanticBoolean(z.boolean().default(true)).describe('Whether to wait for completion'),
@@ -82,6 +84,23 @@ export type { TaskOutputProgress as Progress } from '../../types/tools.js';
 
 // Get output for any task type
 async function getTaskOutputData(task: TaskState): Promise<TaskOutput> {
+  if (task.type === 'code_mode') {
+    const output = task.outputArchived
+      ? await getTaskOutput(task.id)
+      : JSON.stringify(projectCodeModeTaskOutput(task));
+    return {
+      task_id: task.id,
+      task_type: task.type,
+      status: task.status,
+      description: task.description,
+      // TaskOutput is model-visible. Child inputs/results and internal errors stay
+      // in the owned audit; selected guest output is not authenticated refusal evidence.
+      output,
+      error: task.outputArchived && !output
+        ? 'Archived Code Mode output is unavailable.'
+        : task.error ? 'Code Mode host execution failed.' : undefined,
+    };
+  }
   if (task.type === 'local_agent') {
     const agentTask = task as LocalAgentTaskState;
     // Prefer the clean final answer from the in-memory result over the raw
@@ -251,6 +270,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     if (!task) {
       throw new Error(`No task found with ID: ${task_id}`);
     }
+    assertCodeModeTaskAccess(task, getSessionId(), toolUseContext.agentId);
     if (!block) {
       // Non-blocking: return current state
       if (task.status !== 'running' && task.status !== 'pending') {

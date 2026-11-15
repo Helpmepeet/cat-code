@@ -51,3 +51,23 @@ test('unknown live runtime variants count conservatively; malformed status is un
   expect(deriveUnfinishedTaskFacts({ future: task('future_task') }).activeBackgroundTasks).toBe(1)
   expect(deriveUnfinishedTaskFacts({ malformed: { type: 'future_task' } }).available).toBe(false)
 })
+
+test('Code Mode owns background work through settlement and durable delivery', () => {
+  for (const cell of [
+    task('code_mode', 'running', { settled: false, delivery: 'pending' }),
+    task('code_mode', 'running', { settled: false, cancellationRequested: true }),
+    task('code_mode', 'completed', { settled: true, delivery: 'failed' }),
+    task('code_mode', 'killed', { settled: true, delivery: 'pending' }),
+  ]) {
+    expect(deriveUnfinishedTaskFacts({ cell })).toMatchObject({ activeBackgroundTasks: 1, activeSubagents: 0 })
+  }
+  expect(deriveUnfinishedTaskFacts({
+    cell: task('code_mode', 'completed', { settled: true, delivery: 'delivered' }),
+  }).activeBackgroundTasks).toBe(0)
+})
+
+test('Code Mode approval attribution uses its real worker owner', () => {
+  expect(deriveUnfinishedTaskFacts({
+    cell: task('code_mode', 'running', { owner: { agentId: 'worker' } }),
+  }, new Set(['worker']))).toMatchObject({ activeBackgroundTasks: 1, waitingForApproval: true })
+})

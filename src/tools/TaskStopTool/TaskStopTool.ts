@@ -2,6 +2,8 @@ import { z } from 'zod/v4'
 import type { TaskStateBase } from '../../Task.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { stopTask } from '../../tasks/stopTask.js'
+import { getSessionId } from '../../bootstrap/state.js'
+import { assertCodeModeTaskAccess } from '../../tasks/CodeModeTask.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { DESCRIPTION, TASK_STOP_TOOL_NAME } from './prompt.js'
@@ -106,7 +108,7 @@ export const TaskStopTool = buildTool({
   renderToolResultMessage,
   async call(
     { task_id, shell_id },
-    { getAppState, setAppState, abortController },
+    { getAppState, setAppState, abortController, agentId },
   ) {
     // Support both task_id and shell_id (deprecated KillShell compat)
     const id = task_id ?? shell_id
@@ -114,6 +116,8 @@ export const TaskStopTool = buildTool({
       throw new Error('Missing required parameter: task_id')
     }
 
+    const task = getAppState().tasks[id]
+    if (task) assertCodeModeTaskAccess(task, getSessionId(), agentId)
     const result = await stopTask(id, {
       getAppState,
       setAppState,
@@ -121,7 +125,9 @@ export const TaskStopTool = buildTool({
 
     return {
       data: {
-        message: `Successfully stopped task: ${result.taskId} (${result.command})`,
+        message: result.taskType === 'code_mode'
+          ? `Cancellation requested for task: ${result.taskId}. Await task output for settlement.`
+          : `Successfully stopped task: ${result.taskId} (${result.command})`,
         task_id: result.taskId,
         task_type: result.taskType,
         command: result.command,

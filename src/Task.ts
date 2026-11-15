@@ -4,6 +4,7 @@ import type { AgentId } from './types/ids.js'
 import { getTaskOutputPath } from './utils/task/diskOutput.js'
 
 export type TaskType =
+  | 'code_mode'
   | 'local_bash'
   | 'local_agent'
   | 'remote_agent'
@@ -78,6 +79,7 @@ export type Task = {
 
 // Task ID prefixes
 const TASK_ID_PREFIXES: Record<string, string> = {
+  code_mode: 'c',
   local_bash: 'b', // Keep as 'b' for backward compatibility
   local_agent: 'a',
   remote_agent: 'r',

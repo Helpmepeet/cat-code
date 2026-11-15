@@ -371,6 +371,7 @@ function classifyDelegatedTask(task: DelegatedTaskFacts): DelegatedContribution 
     // Local shell, MCP monitors, and dream consolidation are not delegated
     // agent work and never block the user.
     case 'local_bash':
+    case 'code_mode':
     case 'monitor_mcp':
     case 'dream':
       return 'none'

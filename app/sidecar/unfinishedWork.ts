@@ -20,6 +20,14 @@ type RuntimeTask = {
   pendingUserMessages?: unknown
   awaitingPlanApproval?: unknown
   shutdownRequested?: unknown
+  settled?: unknown
+  delivery?: unknown
+  owner?: { agentId?: unknown }
+}
+
+/** A terminal receipt still owns work until durable delivery succeeds. */
+export function hasUnfinishedCodeModeTask(task: RuntimeTask): boolean {
+  return task.type === 'code_mode' && (task.settled !== true || task.delivery !== 'delivered')
 }
 
 /**
@@ -48,6 +56,13 @@ export function deriveUnfinishedTaskFacts(
       }
     }
     const task = value as RuntimeTask
+    if (hasUnfinishedCodeModeTask(task)) {
+      activeBackgroundTasks++
+      const actorId = task.owner?.agentId
+      if ((typeof actorId === 'string' && permissionActorIds.has(actorId)) ||
+        (actorId === undefined && permissionActorIds.has(''))) waitingForApproval = true
+      continue
+    }
     if (task.status === 'completed' || task.status === 'failed' || task.status === 'killed') continue
     if (task.status !== 'pending' && task.status !== 'running') {
       return {
