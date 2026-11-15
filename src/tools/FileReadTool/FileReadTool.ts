@@ -37,6 +37,7 @@ import {
   fileIdentitiesEqual,
 } from '../../utils/file.js'
 import { formatMissingPathResult, suggestMissingPath } from '../../utils/missingPathSuggestions.js'
+import { createFileStateCacheWithSizeLimit, isCodeModeRead } from '../../utils/fileStateCache.js'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
 import { formatFileSize } from '../../utils/format.js'
 import { getFsImplementation } from '../../utils/fsOperations.js'
@@ -781,6 +782,18 @@ export const FileReadTool = buildTool({
     _canUseTool?,
     parentMessage?,
   ) {
+    // A guest has not received any prior model Read. Keep its delivery and
+    // bookkeeping invocation-local, without erasing the model's proven view.
+    if (isCodeModeRead(context.toolUseId)) {
+      context = {
+        ...context,
+        readFileState: createFileStateCacheWithSizeLimit(
+          context.readFileState.max,
+          context.readFileState.maxSize,
+        ),
+      }
+      parentMessage = undefined
+    }
     const { file_path, offset = 1, limit = undefined, pages } = input
     const prepared = getPreparedFileRead(
       context,

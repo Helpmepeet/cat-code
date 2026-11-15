@@ -22,6 +22,7 @@ import { getFileIdentity } from '../../utils/file.js'
 import {
   createFileStateCacheWithSizeLimit,
   isCompleteUnboundedRead,
+  withCodeModeRead,
 } from '../../utils/fileStateCache.js'
 import { createAssistantMessage } from '../../utils/messages.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
@@ -223,12 +224,13 @@ async function runRealToolUse(
     behavior: 'allow',
     updatedInput: authorizedInput,
   }),
+  toolUseId = `toolu-${tool.name}`,
 ): Promise<unknown[]> {
   const updates: unknown[] = []
   for await (const _update of runToolUse(
     {
       type: 'tool_use',
-      id: `toolu-${tool.name}`,
+      id: toolUseId,
       name: tool.name,
       input,
       caller: { type: 'direct' },
@@ -244,6 +246,44 @@ async function runRealToolUse(
 }
 
 describe('missing-file exact function recovery', () => {
+  test('guest reads deliver bytes without granting or replacing model Read provenance', async () => {
+    const directory = join(tmpDir, 'code-mode-provenance')
+    mkdirSync(directory)
+    const file = join(realpathSync(directory), 'source.txt')
+    writeFileSync(file, 'first line\nsecond line\n')
+    const context = createLifecycleContext([FileReadTool]) as ToolUseContext
+    context.getAppState().toolPermissionContext.additionalWorkingDirectories.set(directory, directory)
+    const read = (toolUseId = 'model-read') => runWithCwdOverride(directory, () =>
+      runRealToolUse(FileReadTool, { file_path: file }, context, undefined, toolUseId),
+    )
+    const guest = () => withCodeModeRead('guest-read', () => read('guest-read'))
+    expect(JSON.stringify(await guest())).toContain('first line')
+    expect(context.readFileState.has(file)).toBe(false)
+    expect(isCompleteUnboundedRead(context.readFileState.get(file))).toBe(false)
+    expect(JSON.stringify(await read())).toContain('first line')
+    const modelState = context.readFileState.get(file)
+    expect(isCompleteUnboundedRead(modelState)).toBe(true)
+    for (let generation = 0; generation < 3; generation++) {
+      expect(JSON.stringify(await guest())).toContain('first line')
+      expect(context.readFileState.get(file)).toBe(modelState)
+    }
+    expect(JSON.stringify(await read())).toContain('file_unchanged')
+    writeFileSync(file, 'changed bytes with different size\n')
+    expect(JSON.stringify(await guest())).toContain('changed bytes')
+    expect(context.readFileState.get(file)).toBe(modelState)
+    expect(JSON.stringify(await read())).toContain('changed bytes')
+    context.readFileState.clear()
+    expect(JSON.stringify(await guest())).toContain('changed bytes')
+    expect(context.readFileState.size).toBe(0)
+    // An Agent can inherit its caller's async scope. Its worker's direct Read
+    // is a different engine invocation and still delivers content to a model.
+    expect(JSON.stringify(await withCodeModeRead('guest-agent', () => read('worker-read')))).toContain('changed bytes')
+    expect(isCompleteUnboundedRead(context.readFileState.get(file))).toBe(true)
+    const workerState = context.readFileState.get(file)
+    expect(JSON.stringify(await guest())).toContain('changed bytes')
+    expect(context.readFileState.get(file)).toBe(workerState)
+  })
+
   function fixture(name: string, source = 'export function TasksStrip() {\n  return <div />\n}') {
     const directory = join(tmpDir, `function-recovery-${name}`)
     mkdirSync(directory)

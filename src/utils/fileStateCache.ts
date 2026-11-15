@@ -1,6 +1,18 @@
 import { LRUCache } from 'lru-cache'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { normalize } from 'path'
 import type { FileIdentity } from './file.js'
+
+const codeModeReadScope = new AsyncLocalStorage<string>()
+
+/** Host-only invocation scope. Guest inputs must never select delivery provenance. */
+export function withCodeModeRead<T>(toolUseId: string, callback: () => T): T {
+  return codeModeReadScope.run(toolUseId, callback)
+}
+
+export function isCodeModeRead(toolUseId: string | undefined): boolean {
+  return toolUseId !== undefined && codeModeReadScope.getStore() === toolUseId
+}
 
 export type FileState = {
   content: string
