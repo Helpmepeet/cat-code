@@ -126,6 +126,8 @@ export type SDKAssistantMessage = SDKBaseMessage & {
     [key: string]: unknown
   }
   parent_tool_use_id?: string | null
+  code_mode?: { cellId: string; generation: string; line?: number }
+  isVirtual?: true
   agent_name?: string
   agent_cwd?: string
   error?: SDKAssistantErrorCode
@@ -381,6 +383,8 @@ export type SDKUserMessage = SDKBaseMessage & {
     [key: string]: unknown
   }
   parent_tool_use_id?: string | null
+  code_mode?: { cellId: string; generation: string; line?: number }
+  isVirtual?: true
   agent_name?: string
   agent_cwd?: string
   isSynthetic?: boolean

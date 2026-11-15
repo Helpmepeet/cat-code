@@ -15,7 +15,8 @@ import { collectPermissionDecisionContexts, markPermissionRequestCancelled, perm
 import { getRecordedAutoModeOutcome, recordAutoModeOutcome, resetRecordedAutoModeOutcomesForTest } from './autoModeMeta.js'
 import { buildTranscriptForClassifier, _forTest, YOLO_CLASSIFIER_TOOL_NAME, MAX_CLASSIFIER_CONTEXT_CHARS } from './yoloClassifier.js'
 import type { sideQuery } from '../sideQuery.js'
-import { loadTranscriptFile } from '../sessionStorage.js'
+import { cleanMessagesForLogging, loadTranscriptFile } from '../sessionStorage.js'
+import { normalizeMessagesForAPI } from '../messages.js'
 
 // Keep renderer-only module aliases out of the engine's compiler program.
 const rendererPermissionState = '../../../app/renderer/src/permissionState.ts'
@@ -98,6 +99,31 @@ test('alias refusal keeps exact invoked-name correlation without accepting anoth
   if (block.type !== 'tool_use') throw new Error('Expected tool call')
   block.name = 'AnotherTool'
   expect(collectPermissionDecisionContexts([changedCall, result])).toEqual([])
+})
+
+test('real child refusal remains authenticated after external logging and compaction while hidden from model context', async () => {
+  process.env.USER_TYPE = 'external'
+  const { messages, context, tool } = await refuse('desktop')
+  for (const message of messages) {
+    if (message.type === 'assistant' || message.type === 'user') {
+      message.codeMode = { cellId: 'outer-script', generation: 'generation-1' }
+      message.isVirtual = true
+    }
+  }
+  const logged = cleanMessagesForLogging(messages) as Message[]
+  expect(logged).toEqual(messages)
+  expect(collectPermissionDecisionContexts(logged)).toHaveLength(1)
+  expect(buildTranscriptForClassifier(logged, [tool], false)).toContain('rejected-by-user')
+  expect(normalizeMessagesForAPI(logged)).toEqual([])
+  const compact = await appendPostCompactRuntimeAttachments({
+    boundaryMarker: { type: 'system', uuid: 'child-refusal-boundary', subtype: 'compact_boundary' },
+    summaryMessages: [{ type: 'user', uuid: 'child-summary', timestamp: '', isCompactSummary: true, message: { role: 'user', content: 'The script chose no output.' } }],
+    attachments: [], hookResults: [],
+  }, context, logged)
+  const compacted = buildPostCompactMessages(compact)
+  expect(collectPermissionDecisionContexts(compacted)).toEqual(collectPermissionDecisionContexts(logged))
+  expect(buildTranscriptForClassifier(compacted, [tool], false)).toContain('rejected-by-user')
+  expect(JSON.stringify(normalizeMessagesForAPI(compacted))).not.toContain('original-target')
 })
 
 test('classifier block, unavailable, parsing failure and interruption stay distinct', () => {

@@ -77,7 +77,7 @@ export function isSDKControlRequest(
 export function isEligibleBridgeMessage(m: Message): boolean {
   // Virtual messages (REPL inner calls) are display-only — bridge/SDK
   // consumers see the REPL tool_use/result which summarizes the work.
-  if (m.type === 'user' && m.isVirtual) {
+  if ((m.type === 'user' || m.type === 'assistant') && (m.isVirtual || m.codeMode)) {
     return false
   }
   return (

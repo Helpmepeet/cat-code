@@ -1396,12 +1396,22 @@ export const SDKMessageOriginSchema = lazySchema(() =>
   ]),
 )
 
+export const SDKCodeModeMetadataSchema = lazySchema(() =>
+  z.strictObject({
+    cellId: z.string().min(1).max(256).regex(/^[^\0]*$/),
+    generation: z.string().min(1).max(256).regex(/^[^\0]*$/),
+    line: z.number().int().min(1).max(1_000_000).optional(),
+  }),
+)
+
 // SDKUserMessage content without uuid/session_id
 const SDKUserMessageContentSchema = lazySchema(() =>
   z.object({
     type: z.literal('user'),
     message: APIUserMessagePlaceholder(),
     parent_tool_use_id: z.string().nullable(),
+    code_mode: SDKCodeModeMetadataSchema().optional(),
+    isVirtual: z.literal(true).optional(),
     // The engine-minted identity of the subagent that emitted this nested
     // transcript frame. Absent on ordinary main-session turns.
     agent_name: z.string().optional(),
@@ -1492,6 +1502,8 @@ export const SDKAssistantMessageSchema = lazySchema(() =>
     type: z.literal('assistant'),
     message: APIAssistantMessagePlaceholder(),
     parent_tool_use_id: z.string().nullable(),
+    code_mode: SDKCodeModeMetadataSchema().optional(),
+    isVirtual: z.literal(true).optional(),
     // See SDKUserMessageContentSchema: this stays with the replayable nested
     // frame rather than being joined from live task state by a consumer.
     agent_name: z.string().optional(),

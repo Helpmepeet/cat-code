@@ -262,6 +262,15 @@ export function toSDKMessageOriginProp(
   return projected === undefined ? {} : { origin: projected }
 }
 
+export function toSDKCodeModeProps(
+  message: { codeMode?: import('../../types/message.js').CodeModeMetadata; isVirtual?: true },
+): { code_mode?: import('../../types/message.js').CodeModeMetadata; isVirtual?: true } {
+  return {
+    ...(message.codeMode ? { code_mode: message.codeMode } : {}),
+    ...(message.isVirtual || message.codeMode ? { isVirtual: true as const } : {}),
+  }
+}
+
 export function toSDKMessages(messages: Message[]): SDKMessage[] {
   return messages.flatMap((message): SDKMessage[] => {
     switch (message.type) {
@@ -275,6 +284,7 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
             parent_tool_use_id: null,
             uuid: message.uuid,
             error: message.error,
+            ...toSDKCodeModeProps(message),
           },
         ]
       case 'user':
@@ -286,6 +296,7 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
             parent_tool_use_id: null,
             uuid: message.uuid,
             timestamp: message.timestamp,
+            ...toSDKCodeModeProps(message),
             isSynthetic: message.isMeta || message.isVisibleInTranscriptOnly,
             // Structured tool output (not the string content sent to the
             // model — the full Output object). Rides the protobuf catchall

@@ -37,7 +37,6 @@ import { builtInCommandNames } from '../commands.js'
 import { COMMAND_NAME_TAG, TICK_TAG } from '../constants/xml.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import * as sessionIngress from '../services/api/sessionIngress.js'
-import { REPL_TOOL_NAME } from '../tools/REPLTool/constants.js'
 import {
   type AgentId,
   asAgentId,
@@ -6316,10 +6315,15 @@ export function isLoggableMessage(m: Message): boolean {
 
 function collectReplIds(messages: readonly Message[]): Set<string> {
   const ids = new Set<string>()
+  const codeModeIds = new Set(messages.flatMap(m =>
+    (m.type === 'assistant' || m.type === 'user') && m.codeMode
+      ? [m.codeMode.cellId] : [],
+  ))
   for (const m of messages) {
+    if ((m.type === 'assistant' || m.type === 'user') && m.codeMode) continue
     if (m.type === 'assistant' && Array.isArray(m.message.content)) {
       for (const b of m.message.content) {
-        if (b.type === 'tool_use' && b.name === REPL_TOOL_NAME) {
+        if (b.type === 'tool_use' && b.name === 'REPL' && !codeModeIds.has(b.id)) {
           ids.add(b.id)
         }
       }
@@ -6346,14 +6350,16 @@ function transformMessagesForExternalTranscript(
   replIds: Set<string>,
 ): Transcript {
   return messages.flatMap(m => {
+    // Code Mode retains its wrapper and display-only children verbatim.
+    if ((m.type === 'assistant' || m.type === 'user') && m.codeMode) return [m]
     if (m.type === 'assistant' && Array.isArray(m.message.content)) {
       const content = m.message.content
       const hasRepl = content.some(
-        b => b.type === 'tool_use' && b.name === REPL_TOOL_NAME,
+        b => b.type === 'tool_use' && replIds.has(b.id),
       )
       const filtered = hasRepl
         ? content.filter(
-            b => !(b.type === 'tool_use' && b.name === REPL_TOOL_NAME),
+            b => !(b.type === 'tool_use' && replIds.has(b.id)),
           )
         : content
       if (filtered.length === 0) return []
@@ -6400,6 +6406,10 @@ export function cleanMessagesForLogging(
   allMessages: readonly Message[] = messages,
 ): Transcript {
   const filtered = messages.filter(isLoggableMessage) as Transcript
+  // Modern REPL source/results are model history, even before any child exists
+  // or when validation/permission denies execution before tool.call. Keep this
+  // build-scoped so a runtime opt-out cannot rewrite already-modern history.
+  if (feature('CODE_MODE')) return filtered
   return getUserType() !== 'ant'
     ? transformMessagesForExternalTranscript(
         filtered,

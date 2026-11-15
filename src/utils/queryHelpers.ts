@@ -33,7 +33,7 @@ import {
   isNotEmptyMessage,
   normalizeMessages,
 } from './messages.js'
-import { toSDKMessageOriginProp } from './messages/mappers.js'
+import { toSDKMessageOriginProp, toSDKCodeModeProps } from './messages/mappers.js'
 import { expandPath } from './path.js'
 import type {
   inputSchema as permissionToolInputSchema,
@@ -134,6 +134,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
           session_id: getSessionId(),
           uuid: _.uuid,
           error: _.error,
+          ...toSDKCodeModeProps(message),
         }
       }
       return
@@ -158,6 +159,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 session_id: getSessionId(),
                 uuid: _.uuid,
                 error: _.error,
+                ...toSDKCodeModeProps(message.data.message),
               }
               break
             case 'user':
@@ -169,6 +171,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 session_id: getSessionId(),
                 uuid: _.uuid,
                 timestamp: _.timestamp,
+                ...toSDKCodeModeProps(message.data.message),
                 isSynthetic: _.isMeta || _.isVisibleInTranscriptOnly,
                 tool_use_result: _.mcpMeta
                   ? { content: _.toolUseResult, ..._.mcpMeta }
@@ -239,6 +242,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
           session_id: getSessionId(),
           uuid: _.uuid,
           timestamp: _.timestamp,
+          ...toSDKCodeModeProps(message),
           isSynthetic: _.isMeta || _.isVisibleInTranscriptOnly,
           tool_use_result: _.mcpMeta
             ? { content: _.toolUseResult, ..._.mcpMeta }

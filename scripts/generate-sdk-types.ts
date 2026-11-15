@@ -195,6 +195,19 @@ function syncAgentCwdField(contents: string): string {
     }), contents)
 }
 
+function syncCodeModeFields(contents: string): string {
+  const enabled = schemas.includes('code_mode: SDKCodeModeMetadataSchema().optional()')
+  const virtualEnabled = /isVirtual:\s*z\.literal\(true\)\.optional\(\)/.test(schemas)
+  const codeModeField = '  code_mode?: { cellId: string; generation: string; line?: number }\n'
+  const virtualField = '  isVirtual?: true\n'
+  return agentNameTypes.reduce((next, typeName) =>
+    replaceTypeDeclaration(next, typeName, declaration => {
+      const clean = declaration.replace(codeModeField, '').replace(virtualField, '')
+      return clean.replace('  parent_tool_use_id?: string | null\n',
+        `  parent_tool_use_id?: string | null\n${enabled ? codeModeField : ''}${virtualEnabled ? virtualField : ''}`)
+    }), contents)
+}
+
 function replaceTypeDeclaration(
   contents: string,
   typeName: string,
@@ -288,7 +301,7 @@ function syncToolResultStatus(contents: string): string {
 
 for (const path of effortSnapshotPaths) {
   const contents = readFileSync(path, 'utf-8')
-  const nextContents = syncAgentCwdField(syncAgentNameField(contents))
+  const nextContents = syncCodeModeFields(syncAgentCwdField(syncAgentNameField(contents)))
   if (nextContents !== contents) {
     writeFileSync(path, nextContents, 'utf-8')
     console.log(`Synced subagent frame identity in ${path.slice(repoRoot.length + 1)}.`)

@@ -466,24 +466,29 @@ export function createAssistantMessage({
   content,
   usage,
   isVirtual,
+  codeMode,
 }: {
   content: string | BetaContentBlock[]
   usage?: Usage
   isVirtual?: true
+  codeMode?: AssistantMessage['codeMode']
 }): AssistantMessage {
-  return baseCreateAssistantMessage({
-    content:
-      typeof content === 'string'
-        ? [
-            {
-              type: 'text' as const,
-              text: content === '' ? NO_CONTENT_MESSAGE : content,
-            } as BetaContentBlock, // NOTE: citations field is not supported in Bedrock API
-          ]
-        : content,
-    usage,
-    isVirtual,
-  })
+  return {
+    ...baseCreateAssistantMessage({
+      content:
+        typeof content === 'string'
+          ? [
+              {
+                type: 'text' as const,
+                text: content === '' ? NO_CONTENT_MESSAGE : content,
+              } as BetaContentBlock, // NOTE: citations field is not supported in Bedrock API
+            ]
+          : content,
+      usage,
+      isVirtual,
+    }),
+    ...(codeMode ? { codeMode, isVirtual: true as const } : {}),
+  }
 }
 
 export function createAssistantAPIErrorMessage({
@@ -523,6 +528,7 @@ export function createUserMessage({
   isMeta,
   isVisibleInTranscriptOnly,
   isVirtual,
+  codeMode,
   isCompactSummary,
   summarizedRelayedInput,
   summarizeMetadata,
@@ -542,6 +548,7 @@ export function createUserMessage({
   isMeta?: true
   isVisibleInTranscriptOnly?: true
   isVirtual?: true
+  codeMode?: UserMessage['codeMode']
   isCompactSummary?: true
   /** See `UserMessage.summarizedRelayedInput`. Only meaningful on a summary. */
   summarizedRelayedInput?: true
@@ -578,6 +585,7 @@ export function createUserMessage({
     isMeta,
     isVisibleInTranscriptOnly,
     isVirtual,
+    ...(codeMode ? { codeMode, isVirtual: true as const } : {}),
     isCompactSummary,
     summarizedRelayedInput,
     summarizeMetadata,
@@ -873,6 +881,7 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
             },
             isMeta: message.isMeta,
             isVirtual: message.isVirtual,
+            codeMode: message.codeMode,
             requestId: message.requestId,
             uuid,
             error: message.error,
@@ -935,6 +944,9 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
               isMeta: message.isMeta,
               isVisibleInTranscriptOnly: message.isVisibleInTranscriptOnly,
               isVirtual: message.isVirtual,
+              codeMode: message.codeMode,
+              sourceToolAssistantUUID: message.sourceToolAssistantUUID,
+              permissionDecision: message.permissionDecision,
               timestamp: message.timestamp,
               imagePasteIds: imageId !== undefined ? [imageId] : undefined,
               origin: message.origin,
@@ -2123,7 +2135,7 @@ export function normalizeMessagesForAPI(
   // Then strip virtual messages — they're display-only (e.g. REPL inner tool
   // calls) and must never reach the API.
   const reorderedMessages = reorderAttachmentsForAPI(messages).filter(
-    m => !((m.type === 'user' || m.type === 'assistant') && m.isVirtual),
+    m => !((m.type === 'user' || m.type === 'assistant') && (m.isVirtual || m.codeMode)),
   )
 
   // Build a map from error text → which block types to strip from the preceding user message.

@@ -81,6 +81,12 @@ export type PartialCompactDirection = 'from' | 'up_to'
 
 export type SystemMessageLevel = 'info' | 'warning' | 'error'
 
+export type CodeModeMetadata = {
+  cellId: string
+  generation: string
+  line?: number
+}
+
 export type UserMessage = {
   type: 'user'
   uuid: UUID | string
@@ -96,6 +102,7 @@ export type UserMessage = {
   dateChange?: string
   isVisibleInTranscriptOnly?: true
   isVirtual?: true
+  codeMode?: CodeModeMetadata
   isCompactSummary?: true
   /**
    * Set on a compact summary when at least one message it summarizes was
@@ -144,6 +151,8 @@ export type UserMessage = {
 
 export type AssistantMessage<TContentBlock = BetaContentBlock | ContentBlock | ContentBlockParam> = {
   type: 'assistant'
+  isVirtual?: true
+  codeMode?: CodeModeMetadata
   uuid: UUID | string
   timestamp?: string
   /**
