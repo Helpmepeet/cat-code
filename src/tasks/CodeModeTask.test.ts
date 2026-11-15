@@ -18,9 +18,9 @@ afterEach(async () => {
   artifacts.clear()
 })
 
-function fixture(agentId?: string) {
+function fixture(agentId?: string, sessionId: string = crypto.randomUUID()) {
   let state = getDefaultAppState()
-  const owner = { sessionId: crypto.randomUUID(), agentId, workerRunId: agentId ? crypto.randomUUID() : undefined }
+  const owner = { sessionId, agentId, workerRunId: agentId ? crypto.randomUUID() : undefined }
   let resolve!: (value: { result: CodeModeResult; value: number }) => void
   const completion = new Promise<{ result: CodeModeResult; value: number }>(r => { resolve = r })
   let cancelled = 0
@@ -306,6 +306,56 @@ for (const kind of ['hardlink', 'symlink'] as const) {
       expect(f.state().delivery).toBe('delivered')
       expect(f.state().receipt).toBeUndefined()
     } finally {
+      await unlink(target)
+      await rmdir(dir)
+    }
+  })
+}
+
+for (const kind of ['symlink', 'hardlink', 'same-size-file'] as const) {
+  test(`archived TaskOutput rejects a post-delivery ${kind} swap without exposing private bytes`, async () => {
+    const { getSessionId } = await import('../bootstrap/state.js')
+    const { TaskOutputTool } = await import('../tools/TaskOutputTool/TaskOutputTool.js')
+    const { link, symlink, mkdtemp, writeFile, readFile, unlink, rmdir } = await import('node:fs/promises')
+    const { dirname, join } = await import('node:path')
+    const f = fixture(undefined, getSessionId())
+    f.resolve({ result: f.result, value: 1 })
+    await f.handle.deliver(async () => {})
+    const context = {
+      getAppState: () => ({ ...getDefaultAppState(), tasks: { [f.handle.taskId]: f.state() } }),
+      setAppState: f.setAppState,
+      abortController: new AbortController(),
+    }
+    const read = (block: boolean) => TaskOutputTool.call(
+      { task_id: f.handle.taskId, block, timeout: 0 }, context as never, undefined as never, undefined as never,
+    )
+    expect(JSON.parse((await read(false)).data.task!.output).output).toBe('selected')
+    const identity = f.state().archiveIntegrity!
+    expect(identity.sha256).toHaveLength(64)
+    expect(f.state().receipt).toBeUndefined()
+    const path = f.state().outputFile
+    const dir = await mkdtemp(join(dirname(path), 'code-mode-private-read-test-'))
+    const target = join(dir, 'private.txt')
+    const marker = 'PRIVATE_ARTIFACT_SWAP_MARKER'
+    const privateContent = marker.padEnd(identity.bytes, 'x')
+    try {
+      await writeFile(target, privateContent, { flag: 'wx', mode: 0o600 })
+      await unlink(path)
+      if (kind === 'symlink') await symlink(target, path)
+      else if (kind === 'hardlink') await link(target, path)
+      else await writeFile(path, privateContent, { flag: 'wx', mode: 0o600 })
+      for (const block of [false, true]) {
+        const result = await read(block)
+        expect(result.data.task!.output).toBe('')
+        expect(result.data.task!.error).toBe('Archived Code Mode output is unavailable.')
+        const mapped = TaskOutputTool.mapToolResultToToolResultBlockParam(result.data, 'collect')
+        expect(mapped.content).not.toContain(marker)
+        expect(mapped.content).toContain('Archived Code Mode output is unavailable.')
+      }
+      expect(f.state().archiveIntegrity).toBe(identity)
+      expect(await readFile(target, 'utf8')).toBe(privateContent)
+    } finally {
+      await unlink(path)
       await unlink(target)
       await rmdir(dir)
     }

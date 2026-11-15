@@ -28,7 +28,7 @@ import { AgentPromptDisplay, AgentResponseDisplay } from '../AgentTool/UI.js';
 import BashToolResultMessage from '../BashTool/BashToolResultMessage.js';
 import { TASK_OUTPUT_TOOL_NAME } from './constants.js';
 import { getSessionId } from '../../bootstrap/state.js';
-import { assertCodeModeTaskAccess, projectCodeModeTaskOutput } from '../../tasks/CodeModeTask.js';
+import { assertCodeModeTaskAccess, projectCodeModeTaskOutput, readArchivedCodeModeOutput } from '../../tasks/CodeModeTask.js';
 const inputSchema = lazySchema(() => z.strictObject({
   task_id: z.string().describe('The task ID to get output from'),
   block: semanticBoolean(z.boolean().default(true)).describe('Whether to wait for completion'),
@@ -86,7 +86,7 @@ export type { TaskOutputProgress as Progress } from '../../types/tools.js';
 async function getTaskOutputData(task: TaskState): Promise<TaskOutput> {
   if (task.type === 'code_mode') {
     const output = task.outputArchived
-      ? await getTaskOutput(task.id)
+      ? await readArchivedCodeModeOutput(task) ?? ''
       : JSON.stringify(projectCodeModeTaskOutput(task));
     return {
       task_id: task.id,

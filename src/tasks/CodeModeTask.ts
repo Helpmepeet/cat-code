@@ -2,6 +2,9 @@ import { createTaskStateBase, generateTaskId, type SetAppState, type Task, type 
 import type { CodeModeResult } from '../tools/REPLTool/codeModeHost.js'
 import { registerTask, updateTaskState } from '../utils/task/framework.js'
 import { writeFileAtomicDurable } from '../utils/atomicFile.js'
+import { createHash } from 'node:crypto'
+import { constants as fsConstants } from 'node:fs'
+import { open } from 'node:fs/promises'
 
 export type CodeModeOwner = Readonly<{ sessionId: string; agentId?: string; workerRunId?: string }>
 export type CodeModeTaskState = TaskStateBase & {
@@ -12,6 +15,8 @@ export type CodeModeTaskState = TaskStateBase & {
   receipt?: CodeModeResult
   /** Delivered payloads live at outputFile; AppState retains only addressable metadata. */
   outputArchived?: boolean
+  /** Computed from the engine's selected projection, never from artifact contents. */
+  archiveIntegrity?: Readonly<{ sha256: string; bytes: number }>
   cancellationRequested: boolean
   settled: boolean
   delivery: 'pending' | 'delivering' | 'delivered' | 'failed'
@@ -40,10 +45,42 @@ export function projectCodeModeTaskOutput(task: CodeModeTaskState) {
   }
 }
 
-async function archiveSelectedOutput(path: string, output: string): Promise<void> {
+const MAX_ARCHIVED_OUTPUT_READ_BYTES = 8 * 1024 * 1024
+
+/** Fail closed before exposing any artifact bytes; task temp entries are guest-replaceable. */
+export async function readArchivedCodeModeOutput(task: CodeModeTaskState): Promise<string | undefined> {
+  const expected = task.archiveIntegrity
+  if (!expected || !Number.isSafeInteger(expected.bytes) || expected.bytes < 0 ||
+    expected.bytes > MAX_ARCHIVED_OUTPUT_READ_BYTES || !fsConstants.O_NOFOLLOW) return undefined
+  let file: Awaited<ReturnType<typeof open>> | undefined
+  try {
+    file = await open(task.outputFile, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
+    const stat = await file.stat()
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size !== expected.bytes) return undefined
+    const buffer = Buffer.alloc(expected.bytes + 1)
+    let offset = 0
+    while (offset < buffer.length) {
+      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset !== expected.bytes) return undefined
+    const content = buffer.subarray(0, offset)
+    if (createHash('sha256').update(content).digest('hex') !== expected.sha256) return undefined
+    return content.toString('utf8')
+  } catch {
+    return undefined
+  } finally {
+    await file?.close().catch(() => {})
+  }
+}
+
+async function archiveSelectedOutput(path: string, output: string): Promise<NonNullable<CodeModeTaskState['archiveIntegrity']>> {
+  const integrity = Object.freeze({ sha256: createHash('sha256').update(output, 'utf8').digest('hex'), bytes: Buffer.byteLength(output, 'utf8') })
   // Replace the directory entry, never open its existing inode for mutation:
   // guest Bash can substitute a symlink or hardlink at the task output path.
   await writeFileAtomicDurable(path, output, { encoding: 'utf8', mode: 0o600 })
+  return integrity
 }
 export function sameCodeModeOwner(a: CodeModeOwner, b: CodeModeOwner): boolean {
   return a.sessionId === b.sessionId && a.agentId === b.agentId && a.workerRunId === b.workerRunId
@@ -144,10 +181,10 @@ export function registerCodeModeTask<T>(options: {
           else throw new Error('Host did not produce a final receipt; a durable failure sink is required', { cause: failure })
           deliveryAccepted = true
         }
-        await archiveSelectedOutput(initialTask.outputFile, JSON.stringify(selected))
+        const archiveIntegrity = await archiveSelectedOutput(initialTask.outputFile, JSON.stringify(selected))
         // Eager compaction gives all worker incarnations the same bound: zero
         // full delivered payloads in AppState, regardless of task count.
-        update(state => ({ ...state, delivery: 'delivered', outputArchived: true, receipt: undefined, deliveryError: undefined, error: state.error ? 'Code Mode host execution failed.' : undefined }))
+        update(state => ({ ...state, delivery: 'delivered', outputArchived: true, archiveIntegrity, receipt: undefined, deliveryError: undefined, error: state.error ? 'Code Mode host execution failed.' : undefined }))
         runs.delete(id)
         delivered = true
         outcome = undefined
