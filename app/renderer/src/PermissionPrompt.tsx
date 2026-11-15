@@ -8,6 +8,7 @@ import { AgentFace } from './AgentChrome.js'
 import { useAgentFaceRegistry } from './agentFace.js'
 import { Glyph } from './SessionActionIcons.js'
 import type { PermissionRequest } from './permissionState.js'
+import './codeMode.css'
 import { isModalOverlayOpen, useModalOverlayOpen } from './overlayFocus.js'
 import {
   buildPermissionOptions,
@@ -80,6 +81,7 @@ const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
 export function PermissionPrompt({
   request,
   workers = [],
+  scriptSource,
   submitted,
   animateArrival = false,
   arrivalRef,
@@ -94,6 +96,8 @@ export function PermissionPrompt({
   request: PermissionRequest
   /** Engine-sourced worker snapshot used only to label a relayed request. */
   workers?: readonly LiveWorkerItem[]
+  /** Correlated by engine tool-use identity to a virtual child's SDK metadata. */
+  scriptSource?: { cellId: string; generation: string; line?: number }
   /** True while an answer for this card is in flight. */
   submitted?: boolean
   /** Request arrived after this pane's first committed render. */
@@ -382,6 +386,7 @@ export function PermissionPrompt({
             worker
           </span>
         ) : null}
+        {scriptSource ? <span className="code-mode-permission-badge">from script{scriptSource.line ? ` · line ${scriptSource.line}` : ''}</span> : null}
         {pendingCount !== undefined && pendingCount > 1 ? (
           <span className="ml-auto font-mono text-[10px] tabular-nums text-text-faint">
             <b className="text-text-muted">{pendingCount}</b> pending

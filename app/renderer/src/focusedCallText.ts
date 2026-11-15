@@ -30,6 +30,7 @@ import type { NestedToolUseRow, NestedTranscriptRow } from './transcriptProjecto
 import { deriveTarget, peerTargetFragment, toolSearchCardView } from './transcriptToolTarget.js'
 import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
 import { getEmailToolIdentity } from './emailToolPresentation.js'
+import { codeModeDigest, codeModeForRow } from './codeMode.js'
 
 export type FocusedCallPhase = 'preparing' | 'queued' | 'reviewing' | 'approval' | 'running' | 'done' | 'failed' | 'stopped' | 'blocked'
 
@@ -63,6 +64,12 @@ export function isDeclinedQuestion(row: NestedToolUseRow): boolean {
 }
 
 export function focusedCallPhase(call: FocusedCall, signalled: boolean): FocusedCallPhase {
+  const cellStatus = codeModeForRow(call)?.status
+  if (cellStatus === 'running') return 'running'
+  if (cellStatus === 'yielded') return 'stopped'
+  if (cellStatus === 'blocked') return 'blocked'
+  if (cellStatus === 'cancelled') return 'stopped'
+  if (cellStatus === 'failed') return 'failed'
   if (call.preparing) return 'preparing'
   if (call.status === 'success' || isDeclinedQuestion(call)) return 'done'
   if (call.status === 'cancelled') return 'stopped'
@@ -136,6 +143,13 @@ function askWords(call: FocusedCall): Words {
 
 function callWords(call: FocusedCall, ctx: FocusedCallContext): Words {
   const { toolName, input } = call
+  const cell = codeModeForRow(call)
+  if (cell) {
+    return { present: 'Running script', past: 'Script', target: cell.description, face: 'sans', detail: codeModeDigest(cell) }
+  }
+  if (toolName === 'REPL') {
+    return { present: 'Running script', past: 'Script', target: typeof input.description === 'string' ? input.description : '', face: 'sans' }
+  }
   const email = getEmailToolIdentity(toolName)
   if (email) {
     const detail = { search: 'Search messages', message: 'Read a message', thread: 'Read a conversation', labels: 'List labels', send: 'Send messages', accounts: 'List accounts' }[email.operation]
@@ -203,6 +217,7 @@ function callWords(call: FocusedCall, ctx: FocusedCallContext): Words {
 
 /** Mark glyph and colour class: the family's own, with Focus's and the peer tools' exceptions. */
 export function focusedCallMark(call: FocusedCall): { mark: string; markClass: string } {
+  if (call.toolName === 'REPL') return { mark: '{}', markClass: 'code-mode-identity' }
   if (call.toolName === 'AskUserQuestion') return { mark: '?', markClass: 'text-accent' }
   if (call.toolName === 'ToolSearch') return { mark: '⌕', markClass: FAMILY_STYLE.grep.color }
   const peer = peerToolPresentation(call.toolName, call.input)
@@ -255,7 +270,7 @@ export function focusedCallLine(call: FocusedCall, ctx: FocusedCallContext): Foc
   const phase = focusedCallPhase(call, ctx.signalled)
   const words = callWords(call, ctx)
   const mark = focusedCallMark(call)
-  const [verb, verbTone] = phaseVerb(phase, words, call.toolName === 'AskUserQuestion')
+  const [verb, verbTone] = codeModeForRow(call)?.status === 'yielded' ? ['Paused', null] as const : phaseVerb(phase, words, call.toolName === 'AskUserQuestion')
   return { phase, verb, verbTone, target: words.target, targetFace: words.face ?? 'mono', detail: words.detail ?? null,
     ...mark, background: backgroundOf(call, ctx) }
 }

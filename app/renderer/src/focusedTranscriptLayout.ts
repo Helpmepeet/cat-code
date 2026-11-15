@@ -1,6 +1,8 @@
 import { backgroundAgentState, focusedCallLine, isDeclinedQuestion, type FocusedCallContext, type FocusedCallLine } from './focusedCallText.js'
 import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
+import { deriveToolFamily } from './transcriptProjector.js'
+import { codeModeCallCompleted, codeModeForRow, codeModeInput } from './codeMode.js'
 import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
 import { selectToolDiffs } from './toolDiffs.js'
 import { isMemoryRecall } from './memoryRecall.js'
@@ -93,6 +95,44 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   for (const row of rows) {
     if (rowHasError(row)) errorCount++
     if (row.kind !== 'tool-use' || isPeerSpeechCall(row.toolName)) continue
+    const cell = codeModeForRow(row)
+    if ((cell && cell.cellId === row.toolUseId) || row.toolName === 'REPL') {
+      const calls = cell?.calls ?? row.children.flatMap(child => child.kind === 'tool-use' ? [{
+        toolUseId: child.toolUseId, name: child.toolName, input: child.input, status: isBlocked(child) ? 'blocked' : child.status,
+        ...(child.result?.isError ? { error: child.result.content } : {}),
+      }] : [])
+      toolCalls += calls.filter(codeModeCallCompleted).length
+      if (row.status === 'pending' && activeCall === null) activeCall = { toolUseId: row.toolUseId, target: cell?.description ?? (typeof row.input.description === 'string' ? row.input.description : 'Script') }
+      let innerErrors = 0, innerBlocked = 0, innerStopped = 0
+      for (const call of calls) {
+        if (call.status === 'blocked') innerBlocked++
+        else if (call.status === 'cancelled') innerStopped++
+        else if (call.error || call.status === 'failed' || call.status === 'error') innerErrors++
+        if (!codeModeCallCompleted(call)) continue
+        const input = codeModeInput(call)
+        const path = input.file_path ?? input.path
+        if (call.name === 'Read' && typeof path === 'string') reads.add(path)
+        else if (call.name === 'Bash') commands++
+        else if (call.name === 'Grep' && typeof input.pattern === 'string') searches.add(input.pattern)
+        else {
+          const family = deriveToolFamily(call.name)
+          if (family !== 'edit' && family !== 'write' && family !== 'read' && family !== 'grep') other[family] = (other[family] ?? 0) + 1
+        }
+      }
+      const outerBlocked = cell?.status === 'blocked' || isBlocked(row)
+      const outerStopped = cell?.status === 'cancelled' || cell?.status === 'yielded' || row.status === 'cancelled'
+      // The outer outcome summarizes the same inner work, not another failure.
+      if (rowHasError(row)) errorCount--
+      errorCount += Math.max(innerErrors, !outerBlocked && !outerStopped && (cell?.status === 'failed' || rowHasError(row)) ? 1 : 0)
+      blockedCount += Math.max(innerBlocked, outerBlocked ? 1 : 0)
+      stoppedCount += Math.max(innerStopped, outerStopped ? 1 : 0)
+      for (const file of cell?.changedFiles ?? []) {
+        edits.add(file.path)
+        additions += file.additions ?? 0
+        deletions += file.deletions ?? 0
+      }
+      continue
+    }
     toolCalls++
     if (row.status === 'pending' && activeCall === null) {
       activeCall = { toolUseId: row.toolUseId, target: focusedCallLine(row, { signalled: false, cwd: null, tasks: null, turnRows: rows }).target }

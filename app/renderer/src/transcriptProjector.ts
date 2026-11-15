@@ -51,6 +51,7 @@ import {
 import { isAppReadyFrame } from './connectionState.js'
 import { parseInlineCommandResult, type InlineCommandRequest, type InlineCommandRun } from '../../shared/inlineCommand.js'
 import { observeRetryWait } from './retryClock.js'
+import { codeModeInput, parseCodeMode, type CodeModeCall, type CodeModeEnvelope } from './codeMode.js'
 
 type FrameRowSource = {
   /** Stable React/projector identity derived only from producer identifiers. */
@@ -69,6 +70,7 @@ type FrameRowSource = {
 }
 
 type RowSource = FrameRowSource & {
+  codeMode?: { cellId: string; generation: string; line?: number }
   /** Shared API message id; falls back to the assistant frame UUID. */
   messageId: string
   /** Content-block index within the shared API message. */
@@ -195,6 +197,7 @@ export type ToolCardStatus = 'pending' | 'success' | 'error' | 'cancelled'
  * plain text or no image, never crash.
  */
 export type ToolResultProjection = {
+  codeMode?: CodeModeEnvelope
   isError: boolean
   /** Engine-minted cancellation status, never inferred from tool output text. */
   isCancelled?: true
@@ -798,7 +801,16 @@ export function selectTranscriptRows(
     }
     const isHidden = revealHidden && hidden[row.frameId] === true
     if (row.kind !== 'tool-use') return [isHidden ? markHidden(row) : row]
-    const storedResult = session.toolResultsByUseId[row.toolUseId] ?? null
+    const rawResult = session.toolResultsByUseId[row.toolUseId] ?? null
+    let storedResult: ToolResultProjection | null = rawResult
+    if (rawResult?.codeMode && row.toolName !== 'REPL') {
+      storedResult = ordinaryToolResults.get(rawResult) ?? null
+      if (!storedResult) {
+        const { codeMode: _untrustedAudit, ...ordinary } = rawResult
+        storedResult = ordinary
+        ordinaryToolResults.set(rawResult, ordinary)
+      }
+    }
     const autoModeReview = session.autoModeReviews[row.toolUseId]
     const resumedAgentId =
       row.toolName === 'ResumeAgent' && typeof row.input.agentId === 'string'
@@ -827,7 +839,13 @@ export function selectTranscriptRows(
             ...resumedIdentity,
             agentId: resumedAgentId,
           }
-    const status: ToolCardStatus = result
+    const cellStatus = result?.codeMode?.status
+    const status: ToolCardStatus = cellStatus === 'running'
+      ? 'pending'
+      : cellStatus === 'yielded' ? 'success'
+      : cellStatus === 'cancelled' ? 'cancelled'
+      : cellStatus === 'failed' || cellStatus === 'blocked' ? 'error'
+      : result
       ? result.isCancelled === true
         ? 'cancelled'
         : result.isError
@@ -867,6 +885,7 @@ type JoinedToolRow = {
   row: ToolUseRow
 }
 const joinedToolRows = new WeakMap<ToolUseRow, { normal?: JoinedToolRow; hidden?: JoinedToolRow }>()
+const ordinaryToolResults = new WeakMap<ToolResultProjection, ToolResultProjection>()
 const hiddenRows = new WeakMap<TranscriptRow, TranscriptRow>()
 
 /** The read-time hidden-tier mark. Returns a stable copy; the stored row is untouched. */
@@ -1139,8 +1158,14 @@ export function selectNestedTranscriptRows(
   // missing parent, emitted where that parent's FIRST surviving child arrived.
   const topLevel: (TranscriptRow | OrphanSlot)[] = []
   for (const row of rows) {
-    const parentId =
-      'parentToolUseId' in row ? row.parentToolUseId : null
+    const metadata = 'codeMode' in row ? row.codeMode : undefined
+    const cellParent = metadata ? byToolUseId.get(metadata.cellId) : undefined
+    const validCellParent = metadata && cellParent && (
+      cellParent.kind === 'tool-use' && cellParent.toolName === 'REPL' &&
+      cellParent.toolUseId !== ('toolUseId' in row ? row.toolUseId : null) &&
+      (!cellParent.result?.codeMode || cellParent.result.codeMode.generation === metadata.generation)
+    )
+    const parentId = validCellParent ? metadata.cellId : 'parentToolUseId' in row ? row.parentToolUseId : null
     if (!parentId) {
       topLevel.push(row)
       continue
@@ -1360,6 +1385,32 @@ function historyBoundaryRow(sessionId: SessionId, anchor: TranscriptRow | Transc
 
 /** A nested tool-use row (the shape an Agent card / DelegateGroup member carries). */
 export type NestedToolUseRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
+
+const auditedCallRows = new WeakMap<CodeModeCall, NestedToolUseRow>()
+/** Restore can retain an audit even when a child's own frames were bounded away. */
+export function projectCodeModeCall(parent: NestedToolUseRow, call: CodeModeCall): NestedToolUseRow {
+  const cached = auditedCallRows.get(call)
+  if (cached && cached.sessionId === parent.sessionId && cached.parentToolUseId === parent.toolUseId) return cached
+  const failed = !!call.error || call.status === 'failed' || call.status === 'blocked'
+  const cancelled = call.status === 'cancelled'
+  const pending = call.status === 'running' || call.status === 'pending'
+  const receipt = isRecord(call.result) ? call.result : null
+  const result = pending ? null : projectToolResultBlock({
+    tool_use_id: call.toolUseId,
+    content: receipt?.content ?? call.error ?? (receipt?.omitted === true ? 'Output was not retained' : ''),
+    is_error: failed,
+  }, undefined, cancelled)
+  const row: NestedToolUseRow = {
+    id: `${parent.id}:audit:${call.toolUseId}`, sessionId: parent.sessionId,
+    messageId: parent.messageId, frameId: parent.frameId, blockIndex: 0,
+    parentToolUseId: parent.toolUseId, kind: 'tool-use', toolUseId: call.toolUseId,
+    toolName: call.name, toolFamily: deriveToolFamily(call.name), input: codeModeInput(call),
+    status: pending ? 'pending' : cancelled ? 'cancelled' : failed ? 'error' : 'success',
+    result, agentCompletion: null, children: [],
+  }
+  auditedCallRows.set(call, row)
+  return row
+}
 
 /**
  * D2/§3/C3 DelegateGroup: parallel agent tool_use rows launched together render
@@ -2293,6 +2344,11 @@ function projectAssistantFrame(
   )
   const stableFrameId =
     frameId ?? `${messageId}:block-${blockIndexes[0] ?? firstBlockIndex}`
+  const metadata = message.code_mode
+  const cellMetadata = isRecord(metadata) && message.isVirtual === true &&
+    nonEmptyString(metadata.cellId) && nonEmptyString(metadata.generation)
+    ? metadata : null
+  // Keep the true worker parent in the row; Code Mode only adds a display nest.
   const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
   const agentName = normalizeAgentName(message.agent_name)
   const model = nonEmptyString(body.model)
@@ -2306,6 +2362,11 @@ function projectAssistantFrame(
       frameId: stableFrameId,
       blockIndex: blockIndexes[localIndex]!,
       parentToolUseId,
+      ...(cellMetadata ? { codeMode: {
+        cellId: String(cellMetadata.cellId),
+        generation: String(cellMetadata.generation),
+        ...(Number.isSafeInteger(cellMetadata.line) && Number(cellMetadata.line) > 0 ? { line: Number(cellMetadata.line) } : {}),
+      } } : {}),
       ...(agentName ? { agentName } : {}),
       ...(agentCwd ? { agentCwd } : {}),
       ...(model !== null ? { model } : {}),
@@ -2985,6 +3046,8 @@ function projectToolResultBlock(
     extractGeneratedImageProjection(toolUseResult)
   const askUserQuestion = extractAskUserQuestionResult(toolUseResult)
   const diffProjection = extractDiffProjection(toolUseResult)
+  const candidateCodeMode = parseCodeMode(toolUseResult)
+  const codeMode = candidateCodeMode?.cellId === block.tool_use_id ? candidateCodeMode : null
   let generatedImage = generatedImageProjection.generatedImage
   let images = contentProjection.images
   if (generatedImage && block.is_error !== true) {
@@ -3008,6 +3071,7 @@ function projectToolResultBlock(
   }
   return {
     isError: block.is_error === true,
+    ...(codeMode ? { codeMode } : {}),
     ...(isCancelled ? { isCancelled: true as const } : {}),
     content: contentProjection.content,
     ...(images !== undefined ? { images } : {}),

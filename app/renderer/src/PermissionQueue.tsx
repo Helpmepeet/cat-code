@@ -1,7 +1,8 @@
-import { useLayoutEffect, useRef } from 'react'
+import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useEntranceLatch } from './entranceLatch.js'
 import { PermissionPrompt } from './PermissionPrompt.js'
 import type { LiveWorkerItem } from '../../shared/protocol.js'
+import type { NestedTranscriptRow } from './transcriptProjector.js'
 import {
   isAskUserQuestionRequest,
   type PermissionQueueItem,
@@ -20,6 +21,7 @@ import {
 export function PermissionQueue({
   items,
   workers = [],
+  transcriptRows,
   keyboardTargetRequestId = null,
   onAllow,
   onDeny,
@@ -29,6 +31,7 @@ export function PermissionQueue({
   items: PermissionQueueItem[]
   /** This session's engine-sourced workers, for relayed-card identity only. */
   workers?: readonly LiveWorkerItem[]
+  transcriptRows?: readonly NestedTranscriptRow[]
   /**
    * The request the shortcuts act on, or null when no card owns the keyboard
    * here (a background pane, or a dedicated flow holding the keys). That card
@@ -49,6 +52,34 @@ export function PermissionQueue({
     items.map(item => item.request.requestId).filter(id => !seenIds.current?.has(id)),
   )
   const entrance = useEntranceLatch(arrivals)
+  const knownScriptSources = useRef(new Map<string, { cellId: string; generation: string; line?: number } | null>())
+  const scriptSources = useMemo(() => {
+    const sources = new Map<string, { cellId: string; generation: string; line?: number }>()
+    if (!items.length || !transcriptRows) return sources
+    const pendingIds = new Set(items.map(item => item.request.request.tool_use_id))
+    for (const id of knownScriptSources.current.keys()) if (!pendingIds.has(id)) knownScriptSources.current.delete(id)
+    const wanted = new Set<string>()
+    for (const id of pendingIds) {
+      if (!id) continue
+      const known = knownScriptSources.current.get(id)
+      if (known) sources.set(id, known)
+      else if (!knownScriptSources.current.has(id)) wanted.add(id)
+    }
+    // A matched engine identity cannot acquire another origin later. Keep that
+    // evidence while the request is pending, not a fresh history scan per token.
+    const visit = (rows: readonly NestedTranscriptRow[]) => {
+      for (const row of rows) {
+        if (!wanted.size) return
+        if (row.kind === 'tool-use' && wanted.delete(row.toolUseId)) {
+          knownScriptSources.current.set(row.toolUseId, row.codeMode ?? null)
+          if (row.codeMode) sources.set(row.toolUseId, row.codeMode)
+        }
+        if (row.children.length) visit(row.children)
+      }
+    }
+    visit(transcriptRows)
+    return sources
+  }, [items, transcriptRows])
   useLayoutEffect(() => {
     for (const item of items) seenIds.current?.add(item.request.requestId)
   })
@@ -98,6 +129,7 @@ export function PermissionQueue({
             // happening to fall under the card's own render threshold.
             pendingCount={index === 0 ? awaitingAnswer : undefined}
             request={item.request}
+            scriptSource={scriptSources.get(item.request.request.tool_use_id ?? '')}
             submitted={item.submitted}
             animateArrival={entrance.active.has(item.request.requestId)}
             arrivalRef={entrance.refFor(item.request.requestId, 'animate-toast-in')}

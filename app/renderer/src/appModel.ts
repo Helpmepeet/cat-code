@@ -187,6 +187,11 @@ export function deriveActivity(
       // been made; until it is, this reports one tool that is genuinely running
       // rather than inventing a format.
       if (row.kind === 'tool-use' && row.status === 'pending') {
+        if (row.toolName === 'REPL') return {
+          verb: row.result?.codeMode?.status === 'yielded' ? 'Waiting' : 'Running script',
+          target: row.result?.codeMode?.description ?? (typeof row.input.description === 'string' ? row.input.description : null),
+          targetIsProse: true,
+        }
         if (row.toolName === 'JumpWorkspace' || row.toolName === 'JumpToProject') continue
         if (row.toolFamily === 'computer') return { verb: 'Using your Mac', target: computerUseStepTitle(row.toolName, key => {
           const value = row.input[key]

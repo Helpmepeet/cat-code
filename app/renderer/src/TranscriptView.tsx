@@ -42,6 +42,7 @@ import { ComputerPaneContext } from './computerPaneContext.js'
 import './computerPane.css'
 import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { EmailToolResult } from './EmailToolResult.js'
+import { CodeModeCard } from './CodeModeCard.js'
 import { EmailToolDiscovery } from './EmailToolChrome.js'
 import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
 import { getEmailToolIdentity } from './emailToolPresentation.js'
@@ -2794,6 +2795,10 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
  * render layer, and are never mocked.
  */
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
+  const approvals = useContext(MemoryRecallApprovalContext)
+  if (row.toolName === 'REPL') {
+    return <CodeModeCard row={row} waitingForApproval={row.children.some(child => child.kind === 'tool-use' && !!approvals?.[child.toolUseId])} renderChild={child => <TranscriptRowView row={child} narration={false} />} />
+  }
   return <AutoModeReviewContext.Provider value={row.autoModeReview}><ToolCardContent row={row} /></AutoModeReviewContext.Provider>
 }
 

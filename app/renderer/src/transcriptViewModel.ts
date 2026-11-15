@@ -1,5 +1,6 @@
 import type { TranscriptLayoutItem } from './toolRunLayout.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
+import { projectCodeModeCall } from './transcriptProjector.js'
 
 type ToolUseNestedRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }>
 
@@ -68,6 +69,10 @@ export function findNestedToolUseRow(
     if (row.kind === 'tool-use' && row.id === id) return row
     const nested = findNestedToolUseRow(row.children, id)
     if (nested) return nested
+    if (row.kind === 'tool-use' && row.toolName === 'REPL' && id.startsWith(`${row.id}:audit:`)) {
+      const call = row.result?.codeMode?.calls.find(candidate => `${row.id}:audit:${candidate.toolUseId}` === id)
+      if (call) return row.children.find((child): child is ToolUseNestedRow => child.kind === 'tool-use' && child.toolUseId === call.toolUseId) ?? projectCodeModeCall(row, call)
+    }
   }
   return null
 }

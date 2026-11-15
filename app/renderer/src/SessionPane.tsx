@@ -2282,6 +2282,7 @@ export function SessionPane({
 
       <PermissionQueue
         items={permissionQueue}
+        transcriptRows={nestedRows}
         keyboardTargetRequestId={permissionKeyTargetRequestId}
         onAllow={allowPermission}
         onDeny={denyPermission}
