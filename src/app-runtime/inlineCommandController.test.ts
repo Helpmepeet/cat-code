@@ -70,9 +70,11 @@ test('command Stop cancels only command permissions; session abort cancels both 
   })
   const running = controller.submit('permission')
   expect(controller.getPendingPermissionRequests()).toHaveLength(1)
+  expect(controller.getPendingAgentPermissionRequests().map(request => request.requestId)).toEqual(['main'])
   expect(controller.canStartInlineCommand()).toBe(true)
   const inline = controller.submitInlineCommand(source, () => {})
   expect(controller.getPendingPermissionRequests()).toHaveLength(2)
+  expect(controller.getPendingAgentPermissionRequests().map(request => request.requestId)).toEqual(['main'])
   controller.stopInlineCommand(operation.runId)
   await inline
   expect(controller.getPendingPermissionRequests().map(request => request.requestId)).toEqual(['main'])
@@ -80,5 +82,39 @@ test('command Stop cancels only command permissions; session abort cancels both 
   controller.abort('Session closing')
   await Promise.all([running, another])
   expect(controller.getPendingPermissionRequests()).toHaveLength(0)
+  expect(controller.getPendingAgentPermissionRequests()).toHaveLength(0)
   expect(controller.isInlineCommandActive()).toBe(false)
+})
+
+test('independent command ownership does not hide detached worker approvals', async () => {
+  const controller = new AppSessionController({
+    async *runTurn() {},
+    async *runInlineCommand({ onPermissionRequest }) {
+      await onPermissionRequest(permission('inline'))
+    },
+  })
+  const seen: string[][] = []
+  controller.subscribe(event => {
+    if (event.type === 'permission.requested') {
+      seen.push(controller.getPendingAgentPermissionRequests().map(request => request.requestId))
+    }
+  })
+  const worker = { ...permission('worker'), request: { ...permission('worker').request, agent_id: 'worker-1' } }
+  const owned = new AbortController()
+  const response = controller.requestOwnedPermission(worker, owned.signal)
+  const inline = controller.submitInlineCommand(source, () => {})
+  try {
+    expect(seen).toEqual([['worker'], ['worker']])
+    expect(controller.getPendingPermissionRequests().map(request => request.requestId)).toEqual(['worker', 'inline'])
+    expect(controller.getPendingAgentPermissionRequests()).toEqual([worker])
+    expect(controller.getPendingAgentPermissionRequests()[0]).toBe(worker)
+    owned.abort('Worker stopped')
+    await response
+    expect(controller.getPendingPermissionRequests().map(request => request.requestId)).toEqual(['inline'])
+    expect(controller.getPendingAgentPermissionRequests()).toEqual([])
+  } finally {
+    controller.abort('Session closing')
+    await Promise.all([response, inline])
+    controller.dispose()
+  }
 })

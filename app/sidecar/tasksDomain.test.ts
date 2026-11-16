@@ -592,3 +592,41 @@ test('a background permission does not suppress the runnable parent turn', async
     await turn; h.dispose()
   }
 })
+
+test('only the model approval controls turn protection when Run also awaits approval', async () => {
+  let finishTurn!: () => void
+  const finish = new Promise<void>(resolve => { finishTurn = resolve })
+  const permission = (requestId: string): AppPermissionRequest => ({ requestId, request: {
+    subtype: 'can_use_tool', tool_name: 'Bash', tool_use_id: requestId, input: { command: 'true' },
+  } })
+  const h = powerDomain({}, undefined, {
+    async *runTurn({ onPermissionRequest }) {
+      await onPermissionRequest(permission('model'))
+      await finish
+    },
+    async *runInlineCommand({ onPermissionRequest }) {
+      await onPermissionRequest(permission('inline'))
+    },
+  })
+  const turn = h.controller.submit('model work')
+  const inline = h.controller.submitInlineCommand({
+    engineSessionId: 'session', messageUuid: 'assistant', contentBlockIndex: 0, fenceOrdinal: 0,
+  }, () => {})
+  try {
+    expect(h.controller.getPendingPermissionRequests()).toHaveLength(2)
+    expect(h.power.read().assertion.desired).toBe(false)
+    h.controller.respondToPermissionRequest('model', { behavior: 'allow', updatedInput: {} })
+    expect(h.controller.getPendingPermissionRequests().map(request => request.requestId)).toEqual(['inline'])
+    expect(h.power.read().assertion.desired).toBe(true)
+    finishTurn()
+    await turn
+    expect(h.controller.isInlineCommandActive()).toBe(true)
+    expect(h.power.read().assertion.desired).toBe(false)
+  } finally {
+    finishTurn()
+    h.controller.abort('Test cleanup')
+    await Promise.all([turn, inline])
+    h.controller.dispose()
+    h.dispose()
+  }
+})

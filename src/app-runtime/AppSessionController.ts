@@ -103,6 +103,7 @@ type AppSessionEventListener = (event: AppSessionEvent) => void
 
 type PendingPermissionRequest = {
   request: AppPermissionRequest
+  source: 'agent' | 'inline-command'
   resolve: (response: AppPermissionResponse) => void
   signal?: AbortSignal
   cleanup?: () => void
@@ -187,6 +188,13 @@ export class AppSessionController {
 
   getPendingPermissionRequests(): AppPermissionRequest[] {
     return Array.from(this.pendingPermissionRequests.values(), value => value.request)
+  }
+
+  /** Independent Run commands do not block the model or its delegated workers. */
+  getPendingAgentPermissionRequests(): AppPermissionRequest[] {
+    return Array.from(this.pendingPermissionRequests.values())
+      .filter(value => value.source === 'agent')
+      .map(value => value.request)
   }
 
   isTurnActive(): boolean {
@@ -538,7 +546,7 @@ export class AppSessionController {
         }, onPermissionRequest: (request, signal) =>
           this.waitForPermissionResponse(request, AbortSignal.any([
             ...(signal ? [signal] : []), operation.controller.signal, operation.sessionController.signal,
-          ])),
+          ]), 'inline-command'),
         })
         for await (const message of messages) this.emit(createMessageEvent(message))
       })
@@ -723,6 +731,7 @@ export class AppSessionController {
   private waitForPermissionResponse(
     request: AppPermissionRequest,
     signal?: AbortSignal,
+    source: PendingPermissionRequest['source'] = 'agent',
   ): Promise<AppPermissionResponse> {
     const ownerSignal = signal ?? this.abortController?.signal
     if (ownerSignal?.aborted) {
@@ -739,6 +748,7 @@ export class AppSessionController {
       }))
       this.pendingPermissionRequests.set(request.requestId, {
         request,
+        source,
         resolve,
         signal,
         cleanup: () => ownerSignal?.removeEventListener('abort', cancel),

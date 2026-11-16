@@ -42,7 +42,7 @@ export type SidecarTasksDomain = {
 
 export function createSidecarTasksDomain(
   appStateStore: AppStateStore,
-  controller?: Pick<AppSessionController, 'isTurnActive' | 'getPendingPermissionRequests' | 'subscribe'>,
+  controller?: Pick<AppSessionController, 'isTurnActive' | 'getPendingAgentPermissionRequests' | 'subscribe'>,
 ): SidecarTasksDomain {
   const getSnapshot = (): TasksSnapshot => {
     const state = appStateStore.getState()
@@ -58,7 +58,7 @@ export function createSidecarTasksDomain(
     getSnapshot,
     readUnfinishedWork() {
       const state = appStateStore.getState()
-      const pending = controller?.getPendingPermissionRequests() ?? []
+      const pending = controller?.getPendingAgentPermissionRequests() ?? []
       const actors = new Set(pending.map(({ request }) => request.agent_id ?? ''))
       return deriveUnfinishedTaskFacts(state.tasks, actors)
     },
@@ -90,9 +90,9 @@ export function createSidecarTasksDomain(
 
 function hasOperationalWork(
   tasks: Record<string, TaskState>,
-  controller: Pick<AppSessionController, 'isTurnActive' | 'getPendingPermissionRequests'>,
+  controller: Pick<AppSessionController, 'isTurnActive' | 'getPendingAgentPermissionRequests'>,
 ): boolean {
-  const pending = controller.getPendingPermissionRequests()
+  const pending = controller.getPendingAgentPermissionRequests()
   const blockedActors = new Set(pending.flatMap(({ request }) => request.agent_id ? [request.agent_id] : []))
   const live = Object.entries(tasks).filter(([, task]) =>
     (task.status === 'running' || task.status === 'pending' || hasUnfinishedCodeModeTask(task)) && !isMainSessionTask(task))

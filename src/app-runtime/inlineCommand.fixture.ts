@@ -6,7 +6,7 @@ import { YOLO_CLASSIFIER_TOOL_NAME } from '../utils/permissions/classifierShared
 
 const root = process.env.INLINE_TEST_ROOT!
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated environment required')
-const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; progressProbe?: boolean; ordinaryProgress?: boolean; explain?: boolean; nextTurn?: boolean; autoOrigin?: boolean; inlineOnly?: boolean; classifierDeny?: boolean; denyRule?: string; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
+const input = JSON.parse(process.env.INLINE_TEST_INPUT!) as { command: string; powerApproval?: boolean; progressProbe?: boolean; ordinaryProgress?: boolean; explain?: boolean; nextTurn?: boolean; autoOrigin?: boolean; inlineOnly?: boolean; classifierDeny?: boolean; denyRule?: string; secondCommand?: string; artifact?: boolean; queued?: boolean; disk?: boolean; multiBlock?: boolean; provider?: string; deny?: boolean; edit?: boolean; stop?: boolean; agentStop?: boolean; failPersistence?: boolean; sandbox?: boolean; hookEdit?: boolean; hookStop?: 'PreToolUse' | 'PostToolUse'; hookContext?: boolean }
 const model = input.provider === 'codex' ? 'gpt-5.6-terra' : 'claude-sonnet-4-5'
 const evidence = { requests: [] as unknown[], classifierRequests: [] as any[], codexRequests: [] as unknown[], frames: [] as any[], transcript: [] as any[], runs: [] as any[], progressTimes: [] as number[], ordinaryProgress: [] as unknown[], restored: [] as any[], permissions: 0, error: undefined as string | undefined, cwd: process.cwd(), counter: '', childAlive: false }
 if (input.sandbox || input.hookEdit || input.hookStop || input.hookContext) {
@@ -35,7 +35,7 @@ let requestStarted!: () => void
 const firstRequest = new Promise<void>(resolve => { requestStarted = resolve })
 let releaseGeneration!: () => void
 const generationBoundary = new Promise<void>(resolve => { releaseGeneration = resolve })
-const overlap = Boolean((input as typeof input & { overlap?: boolean }).overlap)
+const overlap = Boolean(input.powerApproval || (input as typeof input & { overlap?: boolean }).overlap)
 mock.module('../services/api/client.js', () => ({
   CLIENT_REQUEST_ID_HEADER: 'x-client-request-id',
   resolveCodexOAuthTokensForLeaseOwner: async () => { throw new Error('OAuth forbidden') },
@@ -105,16 +105,18 @@ if (input.autoOrigin) state = { ...state, toolPermissionContext: {
   ...state.toolPermissionContext, mode: 'auto',
   ...(input.denyRule ? { alwaysDenyRules: { session: [input.denyRule] } } : {}),
 } }
+const powerStore = input.powerApproval ? (await import('../state/store.js')).createStore(state) : undefined
 let retainedMessages: readonly unknown[] = []
 const initial = createAssistantMessage({ content: '```bash\n' + input.command + '\n```' +
   (input.secondCommand ? '\n```sh\n' + input.secondCommand + '\n```' : '') })
 initial.message.stop_reason = 'end_turn'
 const configuration: QueryEngineAppSessionConfig = {
   initialMessages: input.multiBlock ? [] : [initial], cwd: process.cwd(), tools: [BashTool], commands: [], mcpClients: [], agents: [],
-  getAppState: () => state, setAppState: update => { state = update(state) },
+  getAppState: powerStore?.getState ?? (() => state),
+  setAppState: powerStore?.setState ?? (update => { state = update(state) }),
   readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'Explain command results.',
   userSpecifiedModel: model,
-  canUseTool: input.autoOrigin ? undefined : async (_tool, toolInput) => {
+  canUseTool: input.autoOrigin || input.powerApproval ? undefined : async (_tool, toolInput) => {
     evidence.permissions++
     if (input.deny) return { behavior: 'deny', message: 'Fixture denied', decisionReason: { type: 'other', reason: 'Fixture' } }
     return { behavior: 'allow', updatedInput: input.edit ? { ...toolInput, command: 'printf substituted > forbidden' } : toolInput }
@@ -143,7 +145,85 @@ try {
     ;(evidence as any).restoredSourceCommand = resolveInlineCommandSource(snapshot, getSessionId(), source)
   }
   const source = { engineSessionId: getSessionId(), messageUuid: sourceMessage.uuid, contentBlockIndex: 0, fenceOrdinal: 0 }
-  if (input.ordinaryProgress) {
+  if (input.powerApproval) {
+    const { EventEmitter } = await import('node:events')
+    const { SidecarServer } = await import('../../app/sidecar/sidecarServer.js')
+    const { createSidecarTasksDomain } = await import('../../app/sidecar/tasksDomain.js')
+    const { DesktopPower } = await import('../../app/main/desktopPower.js')
+    const { SleepAssertionOwner } = await import('../../app/shared/sleepAssertion.js')
+    const { unknownPowerObservation } = await import('../../app/main/powerObservation.js')
+    const { FrameDecoder, encodeFrame } = await import('../../app/shared/framing.js')
+    const { PROTOCOL_VERSION } = await import('../../app/shared/protocol.js')
+    const { MAX_OUTBOUND_FRAME_BYTES } = await import('../../app/shared/limits.js')
+    const children: import('node:events').EventEmitter[] = []
+    const power = new DesktopPower(new SleepAssertionOwner({
+      enabled: true, setTimeout, clearTimeout, log() {},
+      spawn() {
+        const child = Object.assign(new EventEmitter(), {
+          unref() {}, kill() { queueMicrotask(() => child.emit('exit')); return true },
+        })
+        children.push(child)
+        queueMicrotask(() => child.emit('spawn'))
+        return child as unknown as import('node:child_process').ChildProcess
+      },
+    }), { setActive() {}, read: () => ({
+      status: 'inactive', observation: unknownPowerObservation(), observedAt: null, failures: 0,
+    }) })
+    const tasks = createSidecarTasksDomain(powerStore!, controller)
+    const received: import('../../app/shared/protocol.js').ServerFrame[] = []
+    const decoder = new FrameDecoder(MAX_OUTBOUND_FRAME_BYTES)
+    const server = new SidecarServer({
+      sessionId: 'power-fixture', engineSessionId: getSessionId(), controller, tasks, resumed: true, log() {},
+    })
+    const connection = server.addConnection({
+      write(data) {
+        for (const decoded of decoder.push(Buffer.from(data))) {
+          if (decoded.kind !== 'frame') continue
+          const frame = decoded.payload as import('../../app/shared/protocol.js').ServerFrame
+          received.push(frame)
+          power.receive('power-fixture', frame)
+        }
+      }, end() {},
+    })
+    const send = (message: unknown) => server.handleData(connection, encodeFrame({
+      protocolVersion: PROTOCOL_VERSION, sessionId: 'power-fixture', message,
+    }))
+    const waitFor = async (predicate: () => boolean) => {
+      const deadline = Date.now() + 10_000
+      while (!predicate()) {
+        if (Date.now() > deadline) throw new Error('Timed out waiting for power fixture: ' + JSON.stringify(received))
+        await Bun.sleep(10)
+      }
+    }
+    try {
+      send({ type: 'app.submit', requestId: 'model-turn', prompt: 'Continue generating while I run an older block.' })
+      await firstRequest
+      const snapshot = received.find(frame => frame.kind === 'inline-command.snapshot')
+      if (!snapshot || snapshot.kind !== 'inline-command.snapshot') throw new Error('Missing Run snapshot')
+      send({ type: 'inline-command.start', requestId: 'run-button', generation: snapshot.generation, source })
+      await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+      const pending = controller.getPendingPermissionRequests()[0]!
+      ;(evidence as any).whileApprovalPending = {
+        mainTurnActive: controller.isTurnActive(), permissionTool: pending.request.tool_name,
+        operationalWork: tasks.getSnapshot().hasOperationalWork, sleepProtected: power.read().assertion.desired,
+      }
+      send({ type: 'permission.response', requestId: pending.requestId,
+        response: { behavior: 'allow', updatedInput: pending.request.input } })
+      await waitFor(() => received.some(frame =>
+        frame.kind === 'inline-command.snapshot' && frame.runs.some(run => run.status !== 'running')))
+      ;(evidence as any).afterCommandFinished = {
+        mainTurnActive: controller.isTurnActive(), sleepProtected: power.read().assertion.desired,
+      }
+      releaseGeneration()
+      await waitFor(() => !controller.isTurnActive() && !controller.isInlineCommandActive())
+      ;(evidence as any).afterAllWorkFinished = { sleepProtected: power.read().assertion.desired }
+    } finally {
+      releaseGeneration()
+      server.close()
+      power.dispose()
+      for (const child of children) child.emit('exit')
+    }
+  } else if (input.ordinaryProgress) {
     const { asAgentId } = await import('../types/ids.js')
     await BashTool.call({ command: input.command }, {
       abortController: new AbortController(), getAppState: () => state,

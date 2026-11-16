@@ -66,6 +66,20 @@ test('desktop Run skips Auto classification without granting approval to the nex
   }
 }, 30_000)
 
+test('Run approval preserves sleep protection for an independently streaming model', async () => {
+  const result = await fixture({
+    powerApproval: true, command: "bash -c 'printf executed >> counter'",
+  })
+  expect(result.error).toBeUndefined()
+  expect(result.whileApprovalPending).toEqual({
+    mainTurnActive: true, permissionTool: 'Bash', operationalWork: true, sleepProtected: true,
+  })
+  expect(result.afterCommandFinished).toEqual({ mainTurnActive: true, sleepProtected: true })
+  expect(result.afterAllWorkFinished).toEqual({ sleepProtected: false })
+  expect(result.counter).toBe('executed')
+  expect(result.requests).toHaveLength(1)
+}, 30_000)
+
 test('a rejecting Auto classifier cannot deny Run but still denies the next agent command', async () => {
   const result = await fixture({ autoOrigin: true, classifierDeny: true,
     command: "bash -c 'printf executed >> counter'" })
