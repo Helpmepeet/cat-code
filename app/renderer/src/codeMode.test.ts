@@ -1,7 +1,5 @@
-import { expect, spyOn, test } from 'bun:test'
-import * as acorn from 'acorn'
+import { expect, test } from 'bun:test'
 import { codeModeDigest, codeModeInput, codeModeInputWasOmitted, codeModeStepDigest, parseCodeMode, type CodeModeEnvelope } from './codeMode.js'
-import { codeModeSteps } from './codeModeSteps.js'
 import { summarizeFocusedWork } from './focusedTranscriptLayout.js'
 import { focusedCallLine, focusedCallPhase } from './focusedCallText.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'
@@ -11,21 +9,6 @@ test('accepts host envelope without parsing output and rejects malformed shapes'
   const value = cell()
   expect(parseCodeMode(value)).toBe(value)
   for (const malformed of [null, JSON.stringify(value), { ...value, status: 'green' }, { ...value, calls: [{}] }, { ...value, changedFiles: [{ path: '/a', additions: -1 }] }, { ...value, line: 0 }]) expect(parseCodeMode(malformed)).toBeNull()
-})
-test('comment-derived steps keep failures and cache identity', () => {
-  const value = cell()
-  const steps = codeModeSteps(value)
-  expect(steps.map(step => step.label)).toEqual(['Read files', 'Check'])
-  expect(steps[1]!.calls[0]!.error).toBe('test failed')
-  expect(codeModeSteps(value)).toBe(steps)
-  expect(codeModeDigest(value)).toBe('1 file read · 1 error')
-})
-test('no comments falls back to source lines then individual calls', () => {
-  const value = cell({ code: 'Read();\nBash();', calls: [{ toolUseId: 'a', name: 'Read', input: {}, status: 'completed', line: 1 }, { toolUseId: 'b', name: 'Bash', input: {}, status: 'running' }] })
-  expect(codeModeSteps(value).map(step => step.label)).toEqual(['Read();', 'Bash'])
-})
-test('parse errors and not-run cells create no fictional steps', () => {
-  expect(codeModeSteps(cell({ calls: [], status: 'failed', error: 'SyntaxError' }))).toEqual([])
 })
 test('Focused counts inner work and partial changes rather than one REPL', () => {
   const summary = summarizeFocusedWork([row(cell({ changedFiles: [{ path: '/b', additions: 3, deletions: 2 }], status: 'cancelled' }))])
@@ -39,26 +22,6 @@ test('running receipts remain live, but yielded cells are terminal and paused', 
   const line = focusedCallLine(paused, { signalled: false, cwd: null, tasks: null, turnRows: [paused] })
   expect(line.verb).toBe('Paused')
   expect(line.verbTone).toBeNull()
-})
-test('large cells keep stable groups without scanning source for each call', () => {
-  const value = cell({ code: Array.from({ length: 10000 }, (_, index) => `// step ${index}\nRead();`).join('\n'), calls: Array.from({ length: 10000 }, (_, index) => ({ toolUseId: String(index), name: 'Read', input: {}, status: 'completed', line: index * 2 + 2 })) })
-  const start = performance.now()
-  const steps = codeModeSteps(value)
-  expect(steps).toHaveLength(10000)
-  expect(codeModeSteps(value)).toBe(steps)
-  expect(performance.now() - start).toBeLessThan(1000)
-})
-
-test('strings and nested comments cannot invent top-level step labels', () => {
-  const value = cell({ code: 'const text = `\n// Not a step\n`;\nRead();', calls: [{ toolUseId: 'a', name: 'Read', input: {}, status: 'completed', line: 4 }] })
-  expect(codeModeSteps(value)[0]!.label).toBe('Read();')
-})
-test('retained helper calls without current source mapping do not get misleading line links', () => {
-  for (const line of [undefined, 999]) {
-    const value = cell({ calls: [{ toolUseId: 'a', name: 'Read', input: {}, status: 'completed', ...(line ? { line } : {}) }] })
-    expect(codeModeSteps(value)[0]!.line).toBeUndefined()
-    expect(codeModeSteps(value)[0]!.label).toBe('Read')
-  }
 })
 test('concise check digests and failed reads never invent successful file reads', () => {
   const calls = Array.from({ length: 15 }, (_, index) => ({ toolUseId: String(index), name: 'Bash', input: { command: `test -e /repo/${index}` }, status: 'completed' }))
@@ -124,25 +87,6 @@ test('live Script summaries count only finished work and never denied Grep searc
   expect(summary.readPaths).toEqual(['/done'])
   expect(summary.searchedPatterns).toEqual([])
   expect(summary.blockedCount).toBe(1)
-})
-
-test('incremental child updates parse unchanged source once with bounded source-plan retention', () => {
-  const parse = spyOn(acorn, 'parse')
-  const code = '// Incremental source-plan regression\nRead();'
-  try {
-    for (let index = 0; index < 100; index++) {
-      const calls = Array.from({ length: index + 1 }, (_, call) => ({ toolUseId: String(call), name: 'Read', input: {}, status: 'completed', line: 2 }))
-      expect(codeModeSteps(cell({ code, calls }))[0]!.calls).toHaveLength(index + 1)
-    }
-    expect(parse).toHaveBeenCalledTimes(1)
-    codeModeSteps(cell({ code: `${code}\nRead();` }))
-    expect(parse).toHaveBeenCalledTimes(2)
-    for (let index = 0; index < 9; index++) codeModeSteps(cell({ code: `// Eviction source ${index}\nRead();` }))
-    codeModeSteps(cell({ code }))
-    expect(parse).toHaveBeenCalledTimes(12)
-  } finally {
-    parse.mockRestore()
-  }
 })
 
 test('only validated host-call inputOmission metadata controls omission, never argument data', () => {

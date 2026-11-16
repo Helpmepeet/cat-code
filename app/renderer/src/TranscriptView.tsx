@@ -2806,12 +2806,35 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
   const approvals = useContext(MemoryRecallApprovalContext)
   if (row.toolName === 'REPL') {
-    return <CodeModeCard row={row} waitingForApproval={!!approvals?.[row.toolUseId] || row.children.some(child => child.kind === 'tool-use' && !!approvals?.[child.toolUseId])} renderChild={child => <TranscriptRowView row={child} narration={false} />} />
+    return <CodeModeCard row={row} waitingForApproval={!!approvals?.[row.toolUseId] || row.children.some(child => child.kind === 'tool-use' && !!approvals?.[child.toolUseId])} renderChild={child => <TranscriptRowView row={child} narration={false} />} renderCall={child => <CodeModeMember row={child} />} />
   }
   return <AutoModeReviewContext.Provider value={row.autoModeReview}>
     {row.codeModeInputOmitted ? <div className="code-mode-input-note">Final input is too large to display</div> : null}
     <ToolCardContent row={row} />
   </AutoModeReviewContext.Provider>
+}
+
+/** A Script member uses the compact row grammar; agent and rich nested calls keep their own cards. */
+function CodeModeMember({ row }: { row: ToolUseNestedRow }) {
+  const { expanded: defaults } = useContext(ToolsExpandedContext)
+  const approvals = useContext(MemoryRecallApprovalContext)
+  const [open, setOpen] = useToolCardExpanded(row.toolUseId, defaults || row.status === 'error')
+  if (row.children.length || !['Read', 'Bash', 'Grep', 'Glob'].includes(row.toolName) ||
+      isMemoryRecall(row, !!approvals?.[row.toolUseId]) || bashLocalhostUrl(row.result) ||
+      row.result?.images?.length || row.result?.fileDiffs?.length) return <TranscriptRowView row={row} narration={false} />
+  const family = FAMILY_STYLE[row.toolFamily]
+  const status = STATE_STYLE[row.status]
+  return <div>
+    {row.codeModeInputOmitted ? <div className="code-mode-input-note">Final input is too large to display</div> : null}
+    <button type="button" className="code-mode-member" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <span className={`code-mode-caret${open ? ' is-open' : ''}`} aria-hidden>▸</span>
+      <span className={`code-mode-member-mark ${family.color}`} aria-hidden>{family.mark}</span>
+      <span className="code-mode-member-target">{deriveTarget(row)}</span>
+      <AutoModeReviewMark review={row.autoModeReview} />
+      {row.status !== 'success' ? <span className={`code-mode-member-status ${status.color}`}>{status.word}</span> : null}
+    </button>
+    {open ? <div className="code-mode-member-body"><AutoModeReviewReason review={row.autoModeReview} /><ToolCardBody row={row} content={row.result?.content ?? ''} ack={toolAckForResult(row.result)} /></div> : null}
+  </div>
 }
 
 const MemoryRecallApprovalContext = createContext<FocusedLiveState['awaitingApproval'] | null>(null)

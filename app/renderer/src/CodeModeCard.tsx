@@ -3,8 +3,7 @@ import { BoundedChildList } from './BoundedChildList.js'
 import { ToolOutputContext } from './toolOutputPanel.js'
 import { ToolCardStyleContext } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
-import { codeModeForRow, codeModeDigest, codeModeStepDigest, type CodeModeEnvelope } from './codeMode.js'
-import { codeModeSteps } from './codeModeSteps.js'
+import { codeModeForRow, codeModeDigest, codeModeStepDigest, type CodeModeCall, type CodeModeEnvelope } from './codeMode.js'
 import { codeModeLiveView } from './codeModeLiveView.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'
 import { codeModeChildView } from './codeModeChildView.js'
@@ -15,8 +14,18 @@ import { CodeModeOutput } from './CodeModeOutput.js'
 import { CodeModePartialChanges } from './CodeModePartialChanges.js'
 import { FocusedNamedCallContext } from './transcriptMode.js'
 import { focusedCallPhase } from './focusedCallText.js'
+import { deriveToolFamily } from './transcriptProjector.js'
+import { FAMILY_STYLE } from './toolCardPalette.js'
 
-export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, waitingForApproval = false }: { row: NestedToolUseRow; renderChild: (row: NestedToolUseRow['children'][number]) => ReactNode; waitingForApproval?: boolean }) {
+function CodeModeGroup({ id, selected, errors, label, digest, issue, family, onSelect, lineLink, children }: { id: string; selected: boolean; errors: boolean; label: string; digest: string | null; issue: string | null; family: { mark: string; color: string }; onSelect: () => void; lineLink: ReactNode; children: ReactNode }) {
+  const [open, setOpen] = useToolCardExpanded(`code-mode-group:${id}`, selected || errors)
+  return <div className={`code-mode-step${selected ? ' is-selected' : ''}`}>
+    <div className="code-mode-group-header"><button type="button" aria-expanded={open} onClick={() => { onSelect(); setOpen(!open) }}><span className={`code-mode-caret${open ? ' is-open' : ''}`} aria-hidden>▸</span><span className={`code-mode-member-mark ${family.color}`} aria-hidden>{family.mark}</span><span className="code-mode-member-target">{label}</span><span className="code-mode-digest">{digest}</span>{issue ? <><span className={`code-mode-dot ${issue === 'Stopped' ? 'code-mode-dot-cancelled' : errors ? 'code-mode-dot-failed' : 'code-mode-dot-running'}`} aria-hidden /><span className={issue === 'Stopped' ? 'code-mode-stopped' : errors ? 'code-mode-error' : 'code-mode-status'}>{issue}</span></> : null}</button>{lineLink}</div>
+    {open ? <div className="code-mode-group-body">{children}</div> : null}
+  </div>
+}
+
+export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, renderCall, waitingForApproval = false }: { row: NestedToolUseRow; renderChild: (row: NestedToolUseRow['children'][number]) => ReactNode; renderCall?: (row: NestedToolUseRow) => ReactNode; waitingForApproval?: boolean }) {
   const cell = useMemo<CodeModeEnvelope | undefined>(() => {
     const audit = codeModeLiveView(row)
     if (audit) return audit
@@ -38,9 +47,19 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, waiti
   const hasCallErrors = useMemo(() => cell?.calls.some(call => !!call.error || ['failed', 'error', 'blocked', 'cancelled'].includes(call.status)) ?? false, [cell])
   const [expandedChoice, setPicked] = useToolCardExpanded(row.toolUseId, row.status === 'pending' || row.status === 'error' || hasCallErrors || defaults)
   const expanded = headerless || expandedChoice
-  const steps = useMemo(() => cell ? codeModeSteps(cell) : [], [cell])
+  const steps = useMemo(() => {
+    const groups: { key: string; line?: number; calls: CodeModeCall[] }[] = []
+    const lineCount = cell?.code ? cell.code.split('\n').length : 0
+    for (const call of cell?.calls ?? []) {
+      const line = call.line && call.line <= lineCount ? call.line : undefined
+      const last = groups.at(-1)
+      if (line && last?.line === line && last.calls[0]?.name === call.name && deriveToolFamily(call.name) !== 'edit') last.calls.push(call)
+      else groups.push({ key: call.toolUseId, line, calls: [call] })
+    }
+    return groups
+  }, [cell])
   const keys = useMemo(() => steps.map(step => step.key), [steps])
-  const selectedStep = useMemo(() => selection ? steps.find(step => step.calls.some(call => call.line === selection.line)) : undefined, [steps, selection])
+  const selectedStep = useMemo(() => selection ? steps.find(step => step.line === selection.line) : undefined, [steps, selection])
   const revealRequest = useMemo(() => selectedStep && selection ? { key: selectedStep.key, sequence: selection.token } : null, [selectedStep, selection])
   const extraChildren = useMemo(() => {
     const audited = new Set(cell?.calls.map(call => call.toolUseId))
@@ -67,9 +86,9 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, waiti
       {open ? <button className="code-mode-source" onClick={() => open(row)}>Open</button> : null}
     </div> : null : <header className="code-mode-header">
       <button className="code-mode-disclosure" aria-expanded={expanded} onClick={() => setPicked(!expanded)}>
-        <span className="code-mode-word">SCRIPT</span><span className="code-mode-description">{description}</span>
+        <span className="code-mode-mark" aria-hidden>{'{}'}</span><span className="code-mode-word">SCRIPT</span><span className="code-mode-description">{description}</span>
         {!expanded && cell ? <span className="code-mode-digest">{codeModeDigest(cell)}</span> : null}
-        <span className={`code-mode-status code-mode-status-${status}`}>{statusLabel}</span>
+        <span className={`code-mode-status code-mode-status-${status}`}>{statusLabel}</span><span className={`code-mode-dot code-mode-dot-${status}`} aria-hidden />
       </button>
       {open ? <button className="code-mode-source" onClick={() => open(row)}>Open</button> : null}
     </header>}
@@ -80,20 +99,21 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, waiti
         const step = steps[index]!
         const errors = step.calls.filter(call => call.error || ['failed', 'error', 'cancelled', 'blocked'].includes(call.status))
         const issue = errors.length ? errors.every(call => call.status === 'cancelled') ? 'Stopped' : errors.every(call => call.status === 'blocked') ? 'Blocked' : 'Failed' : null
-        const selected = step.calls.some(call => call.line === selection?.line)
-        return <details className={`code-mode-step${selected ? ' is-selected' : ''}`} open={errors.length > 0}>
-          <summary onClick={() => { if (step.line) revealCodeModeLine(row.sessionId, row.toolUseId, step.line) }}><span>{step.label.length > 180 ? `${step.label.slice(0, 180)}…` : step.label}</span><span className="code-mode-digest">{codeModeStepDigest(step.calls)}</span>{issue ? <span className="code-mode-error"> {issue}</span> : step.calls.some(call => call.status === 'running' || call.status === 'pending') ? <span className="code-mode-status"> Running</span> : null}{step.line && open ? <button className="code-mode-line" onClick={event => { event.preventDefault(); event.stopPropagation(); selectCodeModeLine(row.sessionId, row.toolUseId, step.line!); open(row) }}>Line {step.line}</button> : null}</summary>
-          <BoundedChildList keys={step.calls.map(call => call.toolUseId)} estimatedChildHeight={38} renderChild={callIndex => {
-            const call = step.calls[callIndex]!
-            const child = childrenByCall.get(call.toolUseId)
-            const sourceLine = step.line !== undefined ? call.line : undefined
-            const selectSource = () => { if (sourceLine) selectCodeModeLine(row.sessionId, row.toolUseId, sourceLine) }
-            const revealSource = () => { if (sourceLine) revealCodeModeLine(row.sessionId, row.toolUseId, sourceLine) }
-            return <div className={`code-mode-linked-call${sourceLine && sourceLine === selection?.line ? ' is-selected' : ''}`} onClick={revealSource} onFocusCapture={selectSource}>
-              {renderChild(codeModeChildView(row, call, child))}
-            </div>
-          }} />
-        </details>
+        const selected = !!step.line && step.line === selection?.line
+        const renderMember = (call: CodeModeCall) => {
+          const child = childrenByCall.get(call.toolUseId)
+          const sourceLine = step.line === call.line ? call.line : undefined
+          return <div className={`code-mode-linked-call${sourceLine && sourceLine === selection?.line ? ' is-selected' : ''}`} onClick={() => { if (sourceLine) revealCodeModeLine(row.sessionId, row.toolUseId, sourceLine) }} onFocusCapture={() => { if (sourceLine) selectCodeModeLine(row.sessionId, row.toolUseId, sourceLine) }}>
+            {(renderCall ?? renderChild)(codeModeChildView(row, call, child))}
+          </div>
+        }
+        const lineLink = step.line && open ? <button className="code-mode-line" aria-label={`Show line ${step.line} in the script`} title={`Show line ${step.line} in the script`} onClick={() => { selectCodeModeLine(row.sessionId, row.toolUseId, step.line!); open(row) }}>L{step.line}</button> : null
+        if (step.calls.length === 1) return <div className={`code-mode-step${selected ? ' is-selected' : ''}`}><div className="code-mode-single">{renderMember(step.calls[0]!)}{lineLink}</div></div>
+        const running = step.calls.some(call => call.status === 'running' || call.status === 'pending')
+        const settled = step.calls.filter(call => call.status !== 'running' && call.status !== 'pending').length
+        return <CodeModeGroup id={`${row.sessionId}:${row.toolUseId}:${step.key}`} selected={selected} errors={errors.length > 0} label={step.calls[0]?.name === 'Read' ? `${step.calls.length} files` : `${step.calls.length} ${step.calls[0]?.name ?? 'tool'} calls`} digest={running ? `${settled} of ${step.calls.length}` : codeModeStepDigest(step.calls)} issue={issue ?? (running ? 'Running' : null)} family={FAMILY_STYLE[deriveToolFamily(step.calls[0]!.name)]} onSelect={() => { if (step.line) revealCodeModeLine(row.sessionId, row.toolUseId, step.line) }} lineLink={lineLink}>
+          <BoundedChildList keys={step.calls.map(call => call.toolUseId)} estimatedChildHeight={38} renderChild={callIndex => renderMember(step.calls[callIndex]!)} />
+        </CodeModeGroup>
       }} />
       <BoundedChildList keys={childKeys} estimatedChildHeight={52} renderChild={index => renderChild(extraChildren[index]!)} />
       {!partial && cell?.changedFiles.length ? <details><summary>{cell.changedFiles.length} files changed</summary><BoundedChildList keys={changedKeys} estimatedChildHeight={28} renderChild={index => {

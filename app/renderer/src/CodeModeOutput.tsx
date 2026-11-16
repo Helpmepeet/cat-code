@@ -4,12 +4,17 @@ import { useSourceWrap } from './sourceWrap.js'
 
 export function CodeModeOutput({ output }: { output: string | undefined }) {
   const [expanded, setExpanded] = useState(false)
+  const count = useMemo(() => {
+    if (!output) return 0
+    let lines = 1
+    for (let index = 0; index < output.length; index++) if (output[index] === '\n') lines++
+    return lines
+  }, [output])
   return <div className="code-mode-output">
     <details open={expanded}>
-      <summary onClick={event => { event.preventDefault(); setExpanded(value => !value) }}>Output</summary>
-      {expanded && output !== undefined ? <OutputBody output={output} /> : null}
+      <summary onClick={event => { event.preventDefault(); setExpanded(value => !value) }}><span className={`code-mode-caret${expanded ? ' is-open' : ''}`} aria-hidden>▸</span><span className="code-mode-output-mark" aria-hidden>↩</span> Output <span className="code-mode-output-count">{output === undefined ? 'Waiting for output' : output ? `${count} ${count === 1 ? 'line' : 'lines'}` : 'empty'}</span></summary>
+      {expanded ? output ? <OutputBody output={output} /> : <span>{output === undefined ? 'Waiting for output' : 'Nothing was returned.'}</span> : null}
     </details>
-    {!expanded ? output !== undefined ? <pre>{output ? output.slice(0, 1600) : 'Empty output'}</pre> : <span>Waiting for output</span> : null}
   </div>
 }
 function OutputBody({ output }: { output: string }) {

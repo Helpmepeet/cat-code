@@ -33,7 +33,6 @@ export function parseCodeMode(value: unknown): CodeModeEnvelope | null {
   if (new Set(value.calls.map(call => call.toolUseId)).size !== value.calls.length) return null
   return value as CodeModeEnvelope
 }
-export type CodeModeStep = { key: string; label: string; line?: number; calls: CodeModeCall[] }
 export function codeModeInput(call: CodeModeCall): Record<string, unknown> {
   return object(call.input) ? call.input : {}
 }
