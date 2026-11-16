@@ -174,6 +174,50 @@ test('failed durable background publication retries original receipts without re
   expect(new Set(uuids).size).toBe(uuids.length)
 }, 30_000)
 
+test('failed worker archive remains reachable from the parent retry after worker finalization', async () => {
+  const evidence = await scenario('worker-background-archive')
+  expect(evidence.workerEffects).toBe('x')
+  expect(evidence.selectedDeliveries).toBe(1)
+  expect(evidence.failedWorkerArchive.delivery).toBe('failed')
+  expect(evidence.failedWorkerArchive.receipt.output).toContain('worker background finished')
+  const task = Object.values(evidence.tasks).find((task: any) => task.type === 'code_mode') as any
+  expect(task.delivery).toBe('delivered')
+  expect(task.outputArchived).toBe(true)
+  expect(task.receipt).toBeUndefined()
+  expect(task.owner.agentId).toBeTruthy()
+}, 30_000)
+
+for (const recovery of ['retry', 'newturn', 'close']) {
+  test(`background archive failure retains host ownership and recovers through production ${recovery} without replay`, async () => {
+    const evidence = await scenario(`background-archive-${recovery}`)
+    expect(evidence.effects).toBe('x')
+    expect(evidence.selectedSinkDeliveries).toBe(1)
+    expect(evidence.failedArchiveTask.delivery).toBe('failed')
+    expect(evidence.failedArchiveTask.cancellationRequested).toBe(false)
+    expect(evidence.failedArchiveTask.receipt.output).toContain('selected-background')
+    expect(evidence.failedArchiveTask.outputArchived).not.toBe(true)
+    expect(evidence.failedHostTracking).toEqual({ deliveries: 1, cancellations: 1, active: 0 })
+    expect(evidence.finalHostTracking).toEqual({ deliveries: 0, cancellations: 0, active: 0 })
+    const task = Object.values(evidence.tasks).find((task: any) => task.type === 'code_mode') as any
+    expect(task.delivery).toBe('delivered')
+    expect(task.outputArchived).toBe(true)
+    expect(task.receipt).toBeUndefined()
+    expect(task.cancellationRequested).toBe(false)
+    expect(task.archiveIntegrity.bytes).toBeGreaterThan(0)
+    expect(evidence.firstTurnFenced).toBe(false)
+    expect(evidence.finalFence).toBe(false)
+    if (recovery === 'close') {
+      expect(evidence.closeFailure).toContain('Error')
+      expect(evidence.failedCloseTracking).toEqual({ deliveries: 1, cancellations: 1, active: 0 })
+      // Closed incarnations do not enqueue notifications into a later conversation.
+      expect(evidence.completionNotifications).toBe(0)
+    } else {
+      expect(evidence.completionNotifications).toBe(1)
+      expect(evidence.sawFence).toBe(false)
+    }
+  }, 30_000)
+}
+
 test('direct unsafe tools and detached guest tools share serialization without holding the outer REPL lane', async () => {
   const evidence = await scenario('background-direct')
   expect(evidence.firstTurnFenced).toBe(false)

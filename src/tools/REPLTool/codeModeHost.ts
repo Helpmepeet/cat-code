@@ -22,6 +22,14 @@ import { updateTaskState } from '../../utils/task/framework.js'
 
 const FOREGROUND_WALL_TIME_MS = 10 * 60_000
 const BACKGROUND_WALL_TIME_MS = 2 * 60 * 60_000
+// Failed worker finalizers remain reachable from their parent session's retry
+// path without keeping healthy background work behind an interruption fence.
+const failedPublications = new Map<string, { sessionId: string; retry: () => Promise<void> }>()
+export async function retryFailedCodeModePublications(sessionId: string): Promise<void> {
+  await Promise.all([...failedPublications.values()]
+    .filter(publication => publication.sessionId === sessionId)
+    .map(publication => publication.retry()))
+}
 type ContextMessage = AssistantMessage | UserMessage | AttachmentMessage | SystemMessage
 const sameMemoryContext = (a: MemoryFileInfo, b: MemoryFileInfo) =>
   a.path === b.path && a.type === b.type && a.content === b.content && a.parent === b.parent &&
@@ -58,6 +66,7 @@ export class CodeModeHost {
   private incarnation = randomUUID()
   private controllers = new Map<string, AbortController>()
   private backgroundPublications = new Set<Promise<void>>()
+  private backgroundDeliveries = new Map<string, Promise<void>>()
   private backgroundCancellations = new Map<string, () => void>()
   private backgroundOwners = new Map<string, CodeModeOwner>()
   private pendingModelMessages = new Map<string, ContextMessage>()
@@ -197,7 +206,7 @@ export class CodeModeHost {
   }
 
   prepareWorkspaceChange(): 'clean' | 'reset' | 'stopping' {
-    const stopping = this.queued > 0 || this.backgroundPublications.size > 0
+    const stopping = this.queued > 0 || this.backgroundDeliveries.size > 0
     const hadState = !!this.runtime
     this.instructionEpoch++
     this.revokeAdmissions()
@@ -220,7 +229,16 @@ export class CodeModeHost {
   async close(): Promise<void> {
     this.dispose()
     await this.lane
-    await Promise.all([...this.backgroundPublications])
+    await Promise.allSettled([...this.backgroundPublications])
+    // One bounded retry, not a timer or a wait for permanent storage failure.
+    await Promise.all([...failedPublications.entries()]
+      .filter(([taskId]) => this.backgroundDeliveries.has(taskId))
+      .map(([, publication]) => publication.retry()))
+  }
+
+  /** Resource owners can defer release after a failed close until an explicit retry succeeds. */
+  whenBackgroundDelivered(): Promise<void> {
+    return Promise.all([...this.backgroundDeliveries.values()]).then(() => {})
   }
 
   run(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, background = false): Promise<CodeModeHostCompletion> {
@@ -278,7 +296,7 @@ export class CodeModeHost {
     if (!receiptOwner) throw new Error('Background scripts require a durable execution owner')
     if (this.disposed) throw new Error('Code Mode runtime incarnation has ended')
     if (!this.isModelContextCurrent(context.codeModeModelEpoch)) throw new Error('New instructions require a fresh model request before another script can execute')
-    if (this.backgroundPublications.size >= 8) throw new Error('At most eight background cells may await delivery in this incarnation. Finish or collect existing work before launching more.')
+    if (this.backgroundDeliveries.size >= 8) throw new Error('At most eight background cells may await delivery in this incarnation. Finish or collect existing work before launching more.')
     const undelivered = Object.values(context.getAppState().tasks).filter(task => task && typeof task === 'object' &&
       'type' in task && task.type === 'code_mode' && 'delivery' in task && task.delivery !== 'delivered')
     if (undelivered.length >= 32) throw new Error('Background script receipts are awaiting delivery. Resolve existing tasks before starting more background scripts.')
@@ -382,7 +400,7 @@ export class CodeModeHost {
       void auditDelivery.catch(logError)
     }
     this.backgroundCancellations.set(cellId, () => { cancel(); void task.cancel().catch(logError) })
-    const publication = task.deliver(async final => {
+    const deliver = () => task.deliver(async final => {
       await auditDelivery
       if (fence) { await fence; return }
       try {
@@ -391,7 +409,10 @@ export class CodeModeHost {
           acceptReceipt(message)
         }
       } catch (error) { logError(error); await retain() }
-    }).then(async () => {
+    })
+    let notificationQueued = false
+    const notify = async () => {
+      if (notificationQueued) return
       if (this.disposed || getSessionId() !== owner.sessionId) return
       const { result } = await completion
       const { enqueuePendingNotification } = await import('../../utils/messageQueueManager.js')
@@ -403,12 +424,31 @@ export class CodeModeHost {
       }
       updateTaskState(taskId, detached.setAppState, task => task.notified ? task : { ...task, notified: true })
       enqueuePendingNotification({ value: formatTaskNotificationText(details), mode: 'task-notification', priority: 'next', agentId: context.agentId, origin: toTaskNotificationOrigin(details) })
-    }).finally(() => {
-      this.backgroundCancellations.delete(cellId)
-      this.backgroundPublications.delete(publication)
-    })
-    this.backgroundPublications.add(publication)
-    void publication.catch(logError)
+      notificationQueued = true
+    }
+    let delivered!: () => void
+    this.backgroundDeliveries.set(taskId, new Promise<void>(resolve => { delivered = resolve }))
+    let active: Promise<void> | undefined
+    const publish = (): Promise<void> => {
+      if (active) return active
+      const publication = deliver().then(notify).then(() => {
+        failedPublications.delete(taskId)
+        this.backgroundDeliveries.delete(taskId)
+        this.backgroundCancellations.delete(cellId)
+        delivered()
+      }).catch(error => {
+        // Keep the original task handle and its accepted-delivery checkpoint.
+        failedPublications.set(taskId, { sessionId: owner.sessionId, retry: publish })
+        throw error
+      }).finally(() => {
+        this.backgroundPublications.delete(publication)
+        active = undefined
+      })
+      active = publication
+      this.backgroundPublications.add(publication)
+      return publication
+    }
+    void publish().catch(logError)
     return {
       kind: 'code-mode', cellId, generation, taskId, ...input, status: 'running',
       output: `Background script running as task ${taskId}. This receipt is not completion. Final output will be delivered separately.`,

@@ -4,6 +4,12 @@ import { AskParentSessionTool } from '../AskParentSessionTool/AskParentSessionTo
 import { codeModeExclusion, resolveCodeModeTool } from './codeModeTools.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
 
+test('ToolSearch recovery text names the actual guest discovery API', () => {
+  const reason = codeModeExclusion({ ...BashTool, name: 'ToolSearch' } as Tool)
+  expect(reason).toContain('tools.discover({op:"search",query:"..."})')
+  expect(reason).toContain('tools.discover({op:"describe",name:"..."})')
+})
+
 test('computer compatibility uses current MCP identity even with unprefixed names and aliases', () => {
   for (const name of ['computer_use_status', 'js', 'js_complete', 'js_reset']) {
     const tool = { ...BashTool, name, aliases: ['friendly_alias'], mcpInfo: { serverName: 'codex-computer-use', toolName: name } } as Tool

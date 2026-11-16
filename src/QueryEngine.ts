@@ -39,7 +39,7 @@ import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from './services/tools/interruptedToolRun.js'
-import { CodeModeHost } from './tools/REPLTool/codeModeHost.js'
+import { CodeModeHost, retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
 import { logError } from './utils/log.js'
 import { restoreCodeModeHistory } from './tools/REPLTool/codeModeRestoration.js'
 import { categorizeRetryableAPIError } from './services/api/errors.js'
@@ -419,12 +419,19 @@ export class QueryEngine {
   dispose(): void {
     this.codeModeHost.dispose()
     if (this.interruptedToolLease.isCurrent()) this.interruptedTools.cancelPending()
-    void this.codeModeHost.close().then(() => {
+    const release = () => {
       this.interruptedToolLease.dispose()
       this.unsubscribeInterruptedTools()
-    }).catch(logError)
+    }
+    void this.codeModeHost.close().then(release).catch(error => {
+      logError(error)
+      void this.codeModeHost.whenBackgroundDelivered().then(release).catch(logError)
+    })
   }
-  retryInterruptedToolReceipts(): void { this.interruptedTools.retryDelivery() }
+  retryInterruptedToolReceipts(): void {
+    this.interruptedTools.retryDelivery()
+    void retryFailedCodeModePublications(this.toolOwnerSessionId).catch(logError)
+  }
   private assertToolEffectsSettled(): void {
     if (!this.hasUnresolvedToolEffects()) return
     this.interruptedTools.retryDelivery()

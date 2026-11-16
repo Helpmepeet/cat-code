@@ -1,10 +1,18 @@
 import { mock } from 'bun:test'
-import { writeFile, readFile } from 'node:fs/promises'
+import { writeFile, readFile, rmdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { watch } from 'node:fs'
+import { watch, mkdirSync } from 'node:fs'
 import { YOLO_CLASSIFIER_TOOL_NAME } from '../utils/permissions/classifierShared.js'
 const root = process.env.CODE_MODE_TEST_ROOT!
-const workerBackground = process.env.CODE_MODE_TEST_SCENARIO === 'worker-background'
+const workerArchive = process.env.CODE_MODE_TEST_SCENARIO === 'worker-background-archive'
+const workerBackground = process.env.CODE_MODE_TEST_SCENARIO?.startsWith('worker-background')
+let workerSettled!: () => void
+const workerSettlement = new Promise<void>(resolve => { workerSettled = resolve })
+let archiveDelivered!: () => void
+const archiveDelivery = new Promise<void>(resolve => { archiveDelivered = resolve })
+let archivePath: string | undefined
+let selectedDeliveries = 0
+let onArchiveFailure: (() => void) | undefined
 if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspace')) throw new Error('Isolated worker fixture required')
 globalThis.fetch = (() => { throw new Error('Network forbidden') }) as unknown as typeof fetch
 ;(globalThis as any).MACRO = { VERSION: 'code-mode-worker-test' }
@@ -27,14 +35,16 @@ mock.module('../services/api/client.js', () => ({
     if (worker) evidence.workerRequests.push(JSON.parse(JSON.stringify(body)))
     if (index > (worker ? workerBackground ? 1 : 2 : 1)) throw new Error(`Unexpected ${worker ? 'worker' : 'parent'} request ${index}`)
     const code = `var agentResult = await tools.call({name:"Agent",input:{description:"Read and test isolated worker",prompt:"Worker fixture: read worker-source.txt with Read, then run the ordinary worker command, and report.",subagent_type:"general-purpose"}}); output("worker completed");`
-    const workerCode = `await tools.call({name:"Bash",input:{command:"printf worker-start > worker-start.txt; /bin/sleep 30; printf forbidden > worker-forbidden.txt",work_lifetime:"finite",run_in_background:false}}); output("worker background finished");`
+    const workerCommand = workerArchive ? 'printf x >> worker-effects.txt; /bin/sleep 0.1' : 'printf worker-start > worker-start.txt; /bin/sleep 30; printf forbidden > worker-forbidden.txt'
+    const workerCode = `await tools.call({name:"Bash",input:{command:${JSON.stringify(workerCommand)},work_lifetime:"finite",run_in_background:false}}); output("worker background finished");`
     const tool = worker ? workerBackground
       ? index === 0 ? { name: 'REPL', input: { code: workerCode, description: 'Owned worker background script', run_in_background: true } } : undefined
       : index === 0 ? { name: 'Read', input: { file_path: join(root, 'workspace', 'worker-source.txt') } } : index === 1 ? { name: 'Bash', input: { command: 'printf ordinary-worker > worker.txt', work_lifetime: 'finite', run_in_background: false } } : undefined
       : index === 0 ? { name: 'REPL', input: { code, description: 'Launch a real worker from a script' } } : undefined
     const id = `${worker ? 'worker' : 'parent'}-${index}`
     const stream = Object.assign((async function* () {
-      if (workerBackground && worker && index === 1) await new Promise<void>(resolve => {
+      if (workerArchive && worker && index === 1) await workerSettlement
+      else if (workerBackground && worker && index === 1) await new Promise<void>(resolve => {
         const watcher = watch(process.cwd(), (_event, name) => { if (name === 'worker-start.txt') { watcher.close(); resolve() } })
         void readFile(join(process.cwd(), 'worker-start.txt')).then(() => { watcher.close(); resolve() }, () => {})
       })
@@ -63,8 +73,21 @@ let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto', isAutoModeAvailable: true } }
 const session = createQueryEngineAppSession({
   cwd: process.cwd(), tools: [REPLTool, BashTool, FileReadTool, AgentTool], commands: [], mcpClients: [], agents: [GENERAL_PURPOSE_AGENT],
-  getAppState: () => state, setAppState: update => { state = update(state) },
+  getAppState: () => state, setAppState: update => {
+    state = update(state)
+    if (Object.values(state.tasks).some((task: any) => task.type === 'code_mode' && task.settled)) workerSettled()
+    if (Object.values(state.tasks).some((task: any) => task.type === 'code_mode' && task.delivery === 'failed')) onArchiveFailure?.()
+    if (Object.values(state.tasks).some((task: any) => task.type === 'code_mode' && task.delivery === 'delivered')) archiveDelivered()
+  },
   publishSubagentFrame: frame => {
+    if (workerArchive && frame.type === 'user' && (frame.tool_use_result as any)?.kind === 'code-mode' &&
+        (frame.tool_use_result as any)?.status === 'completed') {
+      selectedDeliveries++
+      if (!archivePath) {
+        archivePath = (Object.values(state.tasks).find((task: any) => task.type === 'code_mode') as any).outputFile
+        mkdirSync(archivePath!, { recursive: true })
+      }
+    }
     if ('code_mode' in frame && frame.code_mode && Object.values(state.tasks).some((task: any) => task.type === 'code_mode' && !task.settled)) evidence.workerActivityWasLive = true
   },
   readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'Run the isolated parent script.', userSpecifiedModel: 'claude-sonnet-4-5',
@@ -72,6 +95,19 @@ const session = createQueryEngineAppSession({
 })
 const controller = createQueryEngineSessionController(session)
 await controller.submit('Run the parent script.')
+let failedWorkerArchive: unknown
+if (workerArchive) {
+  await new Promise<void>(resolve => {
+    onArchiveFailure = resolve
+    if (Object.values(state.tasks).some((task: any) => task.type === 'code_mode' && task.delivery === 'failed')) resolve()
+  })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  failedWorkerArchive = structuredClone(Object.values(state.tasks).find((task: any) => task.type === 'code_mode'))
+  await rmdir(archivePath!)
+  session.retryInterruptedToolReceipts()
+  await archiveDelivery
+  await new Promise<void>(resolve => setImmediate(resolve))
+}
 evidence.workerOutput = await readFile(join(root, 'workspace', 'worker.txt'), 'utf8').catch(() => '')
 evidence.tasks = state.tasks
 evidence.workerForbidden = await readFile(join(root, 'workspace', 'worker-forbidden.txt'), 'utf8').catch(() => null)
@@ -90,5 +126,8 @@ if (workerBackground) {
     cursor = row.parentUuid
   }
 }
-await writeFile(join(root, 'evidence.json'), JSON.stringify(evidence))
+await writeFile(join(root, 'evidence.json'), JSON.stringify({
+  ...evidence, failedWorkerArchive, selectedDeliveries,
+  workerEffects: await readFile(join(root, 'workspace', 'worker-effects.txt'), 'utf8').catch(() => null),
+}))
 session.dispose?.()

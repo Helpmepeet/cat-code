@@ -36,7 +36,7 @@ function currentToolDescription(tool: Tool, context: ToolUseContext): Promise<st
 /** Compatibility, not authority: callers must still enter runToolUse. */
 const directOnly = new Map<string, string>([
   ['REPL', 'Recursive interpreter execution is not supported'],
-  ['ToolSearch', 'Use searchTools and describeTool inside Code Mode'],
+  ['ToolSearch', 'Use tools.discover({op:"search",query:"..."}) and tools.discover({op:"describe",name:"..."}) inside Code Mode'],
   ['AskUserQuestion', 'Human answers require a new model decision'],
   ['AskParentSession', 'Human or parent answers require a new model decision'],
   ['ask_parent_session', 'Human or parent answers require a new model decision'],

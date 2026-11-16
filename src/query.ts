@@ -51,6 +51,7 @@ import type {
   TombstoneMessage,
 } from './types/message.js'
 import { logError } from './utils/log.js'
+import { retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
 import {
   PROMPT_TOO_LONG_ERROR_MESSAGE,
   isPromptTooLongMessage,
@@ -495,6 +496,7 @@ async function* queryLoop(
     while (true) {
       assertLidWorkAdmission()
       const codeModeHost = state.toolUseContext.codeModeHost
+      void retryFailedCodeModePublications(getSessionId()).catch(logError)
       const pendingCodeModeMessages = codeModeHost?.takePendingModelMessages(state.messages) ?? []
       if (pendingCodeModeMessages.length) {
         state = { ...state, messages: [...state.messages, ...pendingCodeModeMessages] }

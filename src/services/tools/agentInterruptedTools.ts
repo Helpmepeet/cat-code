@@ -63,8 +63,13 @@ export function createAgentInterruptedTools(context: ToolUseContext, options: {
     owner,
     async finish(cleanup: () => void | Promise<void> = () => {}): Promise<void> {
       finish()
-      await codeModeHost.close()
       const release = async () => { try { await cleanup() } finally { lease.dispose() } }
+      try { await codeModeHost.close() }
+      catch (error) {
+        logError(error)
+        void codeModeHost.whenBackgroundDelivered().then(() => owner.whenSettled()).then(release).catch(logError)
+        return
+      }
       if (owner.ownPending) void owner.whenSettled().then(release).catch(logError)
       else await release()
     },
