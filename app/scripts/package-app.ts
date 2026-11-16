@@ -138,6 +138,9 @@ async function buildSidecar(): Promise<void> {
     'bun',
     'build',
     join(appRoot, 'sidecar', 'packagedEntry.ts'),
+    ...(features.includes('--feature=CODE_MODE')
+      ? [join(appRoot, '..', 'src', 'tools', 'REPLTool', 'runtime', 'worker.ts')]
+      : []),
     '--compile',
     '--target',
     'bun',

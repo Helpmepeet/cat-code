@@ -197,6 +197,17 @@ export type McpRuntimeInputs = {
 }
 
 export type ToolUseContext = {
+  /** Runtime owned by this executable session/worker incarnation, never guest input. */
+  codeModeHost?: import('./tools/REPLTool/codeModeHost.js').CodeModeHost
+  /** Outer executor's virtual-child stream; never inherited by worker model loops. */
+  onCodeModeAudit?: (message: Message) => void
+  /** Rechecked after scheduler admission; queued guest work cannot cross a barrier. */
+  getCodeModeDispatchFence?: () => string | undefined
+  /** Worker-owned transient display route; durability remains with its receipt owner. */
+  publishCodeModeActivity?: (message: Message) => void | Promise<void>
+  /** Instruction epoch actually supplied to this model request, never tool input. */
+  codeModeModelEpoch?: number
+  codeModeBackgroundCell?: boolean
   /** Controller-owned foreground execution, never populated from tool input. */
   inlineCommand?: {
     runId: string
@@ -268,6 +279,8 @@ export type ToolUseContext = {
   abortController: AbortController
   /** Internal executor hook fired immediately before a permitted tool effect starts. */
   onToolExecutionStart?: () => void
+  /** Engine-only audit of the final authorized executable input, before effect. */
+  onToolFinalInput?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => void | Promise<void>
   /** Session-owned late receipts and admission fence for interrupted foreground effects. */
   interruptedToolRun?: import('./services/tools/interruptedToolRun.js').InterruptedToolRun
   /** Called only after a provider has returned a valid response to a request

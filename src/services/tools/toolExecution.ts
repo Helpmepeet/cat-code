@@ -1,4 +1,11 @@
 import { basename } from 'path'
+import { withoutCodeModeAdmission } from '../../tools/REPLTool/codeModeAdmission.js'
+import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
+import { acquireCodeModeToolLane } from './codeModeToolScheduling.js'
+import { UNRESOLVED_TOOL_MESSAGE } from './interruptedToolRun.js'
+import type { CodeModeTaskState } from '../../tasks/CodeModeTask.js'
+import type { Attachment } from '../../utils/attachments.js'
 import { recordToolActivity } from '../../app-runtime/toolActivity.js'
 import { feature } from 'bun:bundle'
 import { assertLidWorkAdmission } from '../lidClosedWork.js'
@@ -498,9 +505,43 @@ export async function* runToolUse(
   canUseTool: CanUseToolFn,
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdateLazy, void> {
+  const resolvedTool = findToolByName(toolUseContext.options.tools, toolUse.name)
+  const canonicalName = resolvedTool?.name
+  const builtin = !resolvedTool?.isMcp && !resolvedTool?.mcpInfo
+  const control = builtin && (canonicalName === REPL_TOOL_NAME || canonicalName === 'TaskStop' || canonicalName === 'TaskOutput' ||
+    canonicalName === 'JumpToProject' || canonicalName === 'EnterWorktree' || canonicalName === 'ExitWorktree')
+  const release = control ? () => {} : await acquireCodeModeToolLane(toolUseContext)
+  try { yield* runToolUseUnscheduled(toolUse, assistantMessage, canUseTool, toolUseContext) }
+  finally { release() }
+}
+
+async function* runToolUseUnscheduled(
+  toolUse: ToolUseBlock,
+  assistantMessage: AssistantMessage,
+  canUseTool: CanUseToolFn,
+  toolUseContext: ToolUseContext,
+): AsyncGenerator<MessageUpdateLazy, void> {
   // A new permission occurrence cannot inherit a cancelled question receipt,
   // even if a provider reuses the same tool-use id and arguments.
   discardQuestionSelections(toolUse.id)
+  const resolvedTool = findToolByName(toolUseContext.options.tools, toolUse.name)
+  const canonicalName = resolvedTool?.name
+  const taskControl = !resolvedTool?.isMcp && !resolvedTool?.mcpInfo && (canonicalName === 'TaskStop' || canonicalName === 'TaskOutput')
+  if (toolUseContext.interruptedToolRun?.blocked && !taskControl) {
+    yield { message: createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: toolUse.id, is_error: true, content: `${UNRESOLVED_TOOL_MESSAGE} End this turn and wait for the results.` }],
+      sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+    }) }
+    return
+  }
+  const codeModeFence = toolUseContext.getCodeModeDispatchFence?.()
+  if (codeModeFence) {
+    yield { message: createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: toolUse.id, is_error: true, content: codeModeFence }],
+      sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+    }) }
+    return
+  }
   if (isHandoffExecutionFenced(toolUseContext)) {
     yield { message: createHandoffSkippedResult(toolUse.id, assistantMessage) }
     return
@@ -667,11 +708,14 @@ function streamedCheckPermissionsAndCallTool(
   // Ideally the progress reporting and tool call reporting would
   // be via separate mechanisms.
   const stream = new Stream<MessageUpdateLazy>()
+  const executionToolUseContext = tool.name === REPL_TOOL_NAME
+    ? { ...toolUseContext, onCodeModeAudit: (message: Message) => stream.enqueue({ message }) }
+    : toolUseContext
   checkPermissionsAndCallTool(
     tool,
     toolUseID,
     input,
-    toolUseContext,
+    executionToolUseContext,
     canUseTool,
     assistantMessage,
     messageId,
@@ -1685,8 +1729,13 @@ async function checkPermissionsAndCallTool(
     // Measurement must never change tool execution or cancellation.
   }
   try {
+    if (('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) ||
+        ('contentBlocks' in permissionDecision && permissionDecision.contentBlocks?.length)) {
+      toolUseContext.codeModeHost?.fenceForInstructions('New approval feedback requires a new script before further dispatch')
+    }
     const executionContext = {
       ...toolUseContext,
+      ...((!tool.isMcp && (tool.name === AGENT_TOOL_NAME || tool.name === 'ResumeAgent')) ? { onCodeModeAudit: undefined, getCodeModeDispatchFence: undefined, publishCodeModeActivity: undefined } : {}),
       toolUseId: toolUseID,
       userModified: permissionDecision.userModified ?? false,
     }
@@ -1699,7 +1748,11 @@ async function checkPermissionsAndCallTool(
         trustedSedEdit,
       )
     }
-    const result = await tool.call(
+    await toolUseContext.onToolFinalInput?.(toolUseID, tool.name, callInput)
+    const workspaceReset = !tool.isMcp && ['JumpToProject', 'EnterWorktree', 'ExitWorktree'].includes(tool.name)
+      ? toolUseContext.codeModeHost?.prepareWorkspaceChange() : undefined
+    if (workspaceReset === 'stopping') throw new Error('Background scripts are stopping and their results must arrive before changing projects. Script variables were reset. End this turn and wait for those results before retrying.')
+    const invokeTool = () => tool.call(
       callInput,
       executionContext,
       canUseTool,
@@ -1711,6 +1764,40 @@ async function checkPermissionsAndCallTool(
         })
       },
     )
+    // The Agent invocation is authorized in its parent's cell, but the worker's
+    // independent model loop must not inherit that script's admission scope.
+    const rawResult = await (!tool.isMcp && (tool.name === AGENT_TOOL_NAME || tool.name === 'ResumeAgent')
+      ? withoutCodeModeAdmission(invokeTool)
+      : invokeTool())
+    let result = workspaceReset === 'reset' ? {
+      ...rawResult,
+      newMessages: [...(rawResult.newMessages ?? []), createUserMessage({ content: '[Code Mode] Script variables and functions were reset for the workspace transition. No earlier script was replayed.', isMeta: true })],
+    } : rawResult
+    if (!tool.isMcp && (tool.name === AGENT_TOOL_NAME || tool.name === 'ResumeAgent') &&
+        result.data && typeof result.data === 'object' && 'agentId' in result.data &&
+        typeof result.data.agentId === 'string' && 'status' in result.data &&
+        (result.data.status === 'completed' || result.data.status === 'completed_with_error')) {
+      const agentId = result.data.agentId
+      const outcomes = Object.values(toolUseContext.getAppState().tasks).filter((task): task is CodeModeTaskState => {
+        if (!task || typeof task !== 'object' || !('type' in task) || task.type !== 'code_mode' || !('owner' in task)) return false
+        const owner = task.owner
+        const current = ('startTime' in task && typeof task.startTime === 'number' && task.startTime >= startTime) ||
+          ('endTime' in task && typeof task.endTime === 'number' && task.endTime >= startTime)
+        return current && !!owner && typeof owner === 'object' && 'agentId' in owner && owner.agentId === agentId
+      })
+      if (outcomes.length) result = {
+        ...result, newMessages: [...(result.newMessages ?? []), createUserMessage({
+          content: `Worker-owned script outcomes: ${outcomes.slice(0, 32).map(task => `${task.id}: ${task.status}, delivery ${task.delivery}`).join('; ')}.${outcomes.length > 32 ? ' Additional outcomes are available through task results.' : ''} Use TaskOutput for selected script output. Worker completion does not mean cancelled scripts completed their work.`,
+          isMeta: true,
+        })],
+      }
+    }
+    if (!tool.isMcp && tool.name === 'Skill' && result.contextModifier && !result.newMessages?.length) {
+      result = { ...result, newMessages: [createUserMessage({ content: 'Skill context was loaded. Read the skill result before authoring the next script.', isMeta: true })] }
+    }
+    if (!tool.isMcp && tool.name === 'Skill' && result.newMessages?.length) {
+      toolUseContext.codeModeHost?.fenceForInstructions('New Skill instructions require a new script before further dispatch')
+    }
     const executionDurationMs = performance.now() - executionStarted
     const durationMs = Date.now() - startTime
     addToToolDuration(durationMs)
@@ -1900,7 +1987,7 @@ async function checkPermissionsAndCallTool(
     let toolOutput = result.data
     const hookResults = []
     const toolContextModifier = result.contextModifier
-    const mcpMeta = result.mcpMeta
+    let mcpMeta = result.mcpMeta
 
     async function addToolResult(
       toolUseResult: unknown,
@@ -1956,17 +2043,25 @@ async function checkPermissionsAndCallTool(
         }
       }
 
-      resultingMessages.push({
-        message: createUserMessage({
+      const pairedMessage = createUserMessage({
           content: contentBlocks,
           imagePasteIds: allowImageIds,
           toolUseResult:
             toolUseContext.agentId && !toolUseContext.preserveToolUseResults
               ? undefined
               : toolUseResult,
-          mcpMeta: toolUseContext.agentId ? undefined : mcpMeta,
-          sourceToolAssistantUUID: assistantMessage.uuid,
-        }),
+          mcpMeta: toolUseContext.agentId
+            ? (toolUseContext.getCodeModeDispatchFence && mcpMeta?.structuredContent ? { structuredContent: mcpMeta.structuredContent } : undefined)
+            : mcpMeta,
+          sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+        })
+      if (('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) ||
+          allowContentBlocks?.length ||
+          (!tool.isMcp && tool.name === REPL_TOOL_NAME && toolUseContext.codeModeHost?.needsContextRegistration)) {
+        toolUseContext.codeModeHost?.requireModelMessages([pairedMessage])
+      }
+      resultingMessages.push({
+        message: pairedMessage,
         contextModifier: toolContextModifier
           ? {
               toolUseID: toolUseID,
@@ -1997,6 +2092,9 @@ async function checkPermissionsAndCallTool(
       if ('updatedMCPToolOutput' in hookResult) {
         if (isMcpTool(tool)) {
           toolOutput = hookResult.updatedMCPToolOutput
+          // Metadata from the original response is no longer evidence of the
+          // effective post-hook result. Never expose stale structured data.
+          mcpMeta = mcpMeta?._meta ? { _meta: mcpMeta._meta } : undefined
         }
       } else if (isMcpTool(tool)) {
         hookResults.push(hookResult)
@@ -2091,6 +2189,22 @@ async function checkPermissionsAndCallTool(
     // Yield the remaining hook results after the other messages are sent
     for (const hookResult of hookResults) {
       resultingMessages.push(hookResult)
+    }
+    if (toolUseContext.codeModeHost) {
+      const authoritativeSupplemental = !tool.isMcp && !tool.mcpInfo &&
+        (['Skill', AGENT_TOOL_NAME, 'ResumeAgent', REPL_TOOL_NAME].includes(tool.name) || workspaceReset === 'reset')
+      const supplemental = new Set(authoritativeSupplemental ? result.newMessages?.map(message => message.uuid) : [])
+      const controlMessages = resultingMessages.flatMap(update => {
+        const message = update.message
+        if (supplemental.has(message.uuid)) return [message]
+        if (message.type !== 'attachment') return []
+        const attachment = message.attachment as Attachment
+        return ['hook_stopped_continuation', 'hook_additional_context', 'nested_memory'].includes(attachment.type) ? [message] : []
+      })
+      if (controlMessages.length) toolUseContext.codeModeHost.commitModelContext(
+        controlMessages,
+        toolUseContext.codeModeBackgroundCell && !tool.isMcp && tool.name === 'Skill' ? result.contextModifier : undefined,
+      )
     }
     return resultingMessages
   } catch (error) {

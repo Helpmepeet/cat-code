@@ -16,6 +16,8 @@ export class InterruptedToolRun {
   private wake?: () => void
   private failed = false
   private cancel?: () => void
+  private additional: { iterator: AsyncIterator<Update>; first: Promise<IteratorResult<Update>> }[] = []
+  private publicationLane: Promise<void> = Promise.resolve()
   private readonly settled = new Set<() => void>()
 
   get blocked(): boolean {
@@ -66,6 +68,33 @@ export class InterruptedToolRun {
     for (const [key, run] of sessions) if (JSON.parse(key)[0] === sessionId) run.cancel?.()
   }
 
+  /** Healthy detached publication uses the same durable sink without setting a fence. */
+  publish(message: Message): Promise<void> {
+    return this.writeReceipt(message, false)
+  }
+
+  private writeReceipt(message: Message, retained: boolean): Promise<void> {
+    const generation = this.generation
+    const sink = this.sink
+    const operation = this.publicationLane.then(async () => {
+      if (!retained && this.pending) throw new Error(UNRESOLVED_TOOL_MESSAGE)
+      if (!sink) throw new Error('Tool receipt owner is unavailable')
+      if (generation !== this.generation || sink !== this.sink) throw new Error('Tool receipt owner changed before delivery')
+      await sink(message, () => generation === this.generation)
+      if (generation !== this.generation) throw new Error('Tool receipt owner changed during delivery')
+    })
+    this.publicationLane = operation.then(() => {}, () => {})
+    return operation
+  }
+
+  /** Aggregate independent cancelled/undelivered cells under the real owner. */
+  retainAdditional(iterator: AsyncIterator<Update>, first: Promise<IteratorResult<Update>>, cancel?: () => void): void {
+    if (!this.pending) { this.retain(iterator, first, cancel); return }
+    this.additional.push({ iterator, first })
+    const previousCancel = this.cancel
+    this.cancel = () => { previousCancel?.(); cancel?.() }
+  }
+
   retain(iterator: AsyncIterator<Update>, first: Promise<IteratorResult<Update>>, cancel?: () => void): void {
     if (this.pending) throw new Error(UNRESOLVED_TOOL_MESSAGE)
     this.pending = true
@@ -80,7 +109,9 @@ export class InterruptedToolRun {
   }
 
   private async reconcile(iterator: AsyncIterator<Update>, first: Promise<IteratorResult<Update>>): Promise<void> {
+    let currentIterator = iterator
     let next = await first
+    while (true) {
     while (!next.done) {
       const message = next.value.message
       if (message) {
@@ -91,7 +122,7 @@ export class InterruptedToolRun {
           const generation = this.generation
           if (sink) {
             try {
-              await sink(message, () => generation === this.generation)
+              await this.writeReceipt(message, true)
               if (generation === this.generation) break
             } catch (error) {
               // Storage/delivery failure retains both the receipt and admission fence.
@@ -102,7 +133,12 @@ export class InterruptedToolRun {
           await new Promise<void>(resolve => { this.wake = resolve })
         }
       }
-      next = await iterator.next()
+      next = await currentIterator.next()
+    }
+    const additional = this.additional.shift()
+    if (!additional) break
+    currentIterator = additional.iterator
+    next = await additional.first
     }
     if (!this.failed) {
       this.pending = false

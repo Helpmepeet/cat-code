@@ -39,6 +39,9 @@ import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from './services/tools/interruptedToolRun.js'
+import { CodeModeHost } from './tools/REPLTool/codeModeHost.js'
+import { logError } from './utils/log.js'
+import { restoreCodeModeHistory } from './tools/REPLTool/codeModeRestoration.js'
 import { categorizeRetryableAPIError } from './services/api/errors.js'
 import type {
   MCPServerConnection,
@@ -343,6 +346,7 @@ export class QueryEngine {
   private discoveredSkillNames = new Set<string>()
   private loadedNestedMemoryPaths = new Set<string>()
   private transcriptLane: Promise<void> = Promise.resolve()
+  private readonly codeModeHost = new CodeModeHost()
   private inlineExecutionOwner: InlineCommandOperation | null = null
   private inlineSettlements = 0
   private tailRecoveryHold = false
@@ -359,7 +363,7 @@ export class QueryEngine {
 
   constructor(config: QueryEngineConfig) {
     this.config = config
-    this.mutableMessages = config.initialMessages ?? []
+    this.mutableMessages = restoreCodeModeHistory(config.initialMessages ?? [], config.getAppState().tasks)
     this.interruptedToolLease = this.interruptedTools.attach(async (message, isCurrent) => {
       const release = await this.acquireTranscriptLane()
       try {
@@ -413,9 +417,12 @@ export class QueryEngine {
       !this.interruptedToolLease.isCurrent() || this.interruptedTools.blocked
   }
   dispose(): void {
+    this.codeModeHost.dispose()
     if (this.interruptedToolLease.isCurrent()) this.interruptedTools.cancelPending()
-    this.interruptedToolLease.dispose()
-    this.unsubscribeInterruptedTools()
+    void this.codeModeHost.close().then(() => {
+      this.interruptedToolLease.dispose()
+      this.unsubscribeInterruptedTools()
+    }).catch(logError)
   }
   retryInterruptedToolReceipts(): void { this.interruptedTools.retryDelivery() }
   private assertToolEffectsSettled(): void {
@@ -537,6 +544,7 @@ export class QueryEngine {
   ): AsyncGenerator<SDKMessage, void, unknown> {
     // This wrapper runs at acceptance, not at the generator's first next().
     // Queue delivery must supply its original binding, including explicit null.
+    this.codeModeHost.revokeAdmissions()
     return this.submitAcceptedMessage(prompt, {
       ...options,
       uuid: options?.uuid ?? randomUUID(),
@@ -745,6 +753,7 @@ export class QueryEngine {
     ].filter(Boolean).join('\n\n') || undefined
 
     let processUserInputContext: ProcessUserInputContext = {
+      codeModeHost: this.codeModeHost,
       turnHandoff,
       pendingQuestions: this.questionRuntime?.registry,
       messages: this.mutableMessages,
@@ -1085,6 +1094,7 @@ export class QueryEngine {
     // Recreate after processing the prompt to pick up updated messages and
     // model (from slash commands).
     processUserInputContext = {
+      codeModeHost: this.codeModeHost,
       interruptedToolRun: this.interruptedTools,
       turnHandoff,
       pendingQuestions: this.questionRuntime?.registry,

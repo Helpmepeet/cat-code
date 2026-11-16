@@ -4608,6 +4608,37 @@ test('T6 — an allow that echoes the gated input is accepted', async () => {
   expect(allowInput(resolved)).toEqual({ command: 'ls' })
 })
 
+test('Code Mode approval feedback preserves human words without authoring executable input', async () => {
+  let resolved: AppPermissionResponse | null = null
+  const controller = new AppSessionController(permissionAdapter({ command: 'ls' }, response => { resolved = response }))
+  const { server, conn } = connect(controller)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  const feedback = 'Yes, but leave migration files unchanged.'
+  server.handleData(conn, clientFrame({
+    type: 'permission.response', requestId: 'perm-1',
+    response: { behavior: 'allow', updatedInput: {}, acceptFeedback: feedback },
+  }))
+  await waitFor(() => resolved !== null)
+  expect(allowInput(resolved)).toEqual({ command: 'ls' })
+  expect((resolved as unknown as { acceptFeedback?: string }).acceptFeedback).toBe(feedback)
+})
+
+test('Code Mode approval feedback is bounded and cannot appear on a deny response', async () => {
+  const controller = new AppSessionController(permissionAdapter({ command: 'ls' }, () => {}))
+  const { server, conn, received } = connect(controller)
+  void controller.submit('go')
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  for (const response of [
+    { behavior: 'allow', updatedInput: {}, acceptFeedback: 'x'.repeat(16_385) },
+    { behavior: 'deny', message: 'No', acceptFeedback: 'Not an allow' },
+  ]) {
+    server.handleData(conn, clientFrame({ type: 'permission.response', requestId: 'perm-1', response } as unknown as Parameters<typeof clientFrame>[0]))
+    expect(controller.getPendingPermissionRequests()).toHaveLength(1)
+  }
+  expect(received.filter(frame => frame.kind === 'error' && frame.code === 'bad_request')).toHaveLength(2)
+})
+
 test('T6/F1 — an empty updatedInput forwards the GATED input, not "use original"', async () => {
   // The engine gated a safe input (https); an empty allow must not reverse that
   // gate back to the original (http). The sidecar forwards the gated input.

@@ -34,6 +34,7 @@ export function createQueryEngineAppSession(
   config: QueryEngineAppSessionConfig,
 ): QueryEngineSessionLike {
   let currentPermissionHandler: AppPermissionRequestHandler | undefined
+  let backgroundPermissionHandler: AppPermissionRequestHandler | undefined
   const abortController = config.abortController ?? createAbortController()
   const engineConfig = {
     ...config,
@@ -41,7 +42,7 @@ export function createQueryEngineAppSession(
     canUseTool: createAppRuntimeCanUseTool({
       baseCanUseTool: config.canUseTool,
       createRequestId: config.createRequestId,
-      getPermissionRequestHandler: () => currentPermissionHandler,
+      getPermissionRequestHandler: () => currentPermissionHandler ?? backgroundPermissionHandler,
     }),
   }
   const engine = config.createEngine?.(engineConfig) ?? new QueryEngine(engineConfig)
@@ -58,6 +59,7 @@ export function createQueryEngineAppSession(
   }
 
   return {
+    setBackgroundPermissionHandler: handler => { backgroundPermissionHandler = handler },
     getQuestionRegistry: () => engine.getQuestionRegistry?.(),
     initializeQuestions: () => engine.initializeQuestions?.() ?? Promise.resolve(),
     deliverQuestionReplies: () => engine.deliverQuestionReplies?.(),
@@ -65,7 +67,7 @@ export function createQueryEngineAppSession(
     requiresRecoveryReview: () => engine.requiresRecoveryReview?.() ?? false,
     hasUnresolvedToolEffects: () => engine.hasUnresolvedToolEffects?.() ?? false,
     retryInterruptedToolReceipts: () => engine.retryInterruptedToolReceipts?.(),
-    dispose: () => engine.dispose?.(),
+    dispose: () => { backgroundPermissionHandler = undefined; engine.dispose?.() },
     executeInlineCommand,
     submitMessage(prompt, options?: QueryEngineSessionOptions) {
       options = { ...options, priorAssistantContext: options?.priorAssistantContext === undefined

@@ -494,6 +494,16 @@ async function* queryLoop(
     // eslint-disable-next-line no-constant-condition
     while (true) {
       assertLidWorkAdmission()
+      const codeModeHost = state.toolUseContext.codeModeHost
+      const pendingCodeModeMessages = codeModeHost?.takePendingModelMessages(state.messages) ?? []
+      if (pendingCodeModeMessages.length) {
+        state = { ...state, messages: [...state.messages, ...pendingCodeModeMessages] }
+        for (const message of pendingCodeModeMessages) yield message
+      }
+      if (codeModeHost) {
+        const context = codeModeHost.consumeContextModifiers(state.toolUseContext)
+        if (context !== state.toolUseContext) state = { ...state, toolUseContext: context }
+      }
       const temporaryWorkContext = lidWorkContext()
       const systemPrompt = temporaryWorkContext
         ? asSystemPrompt([...baseSystemPrompt, temporaryWorkContext]) : baseSystemPrompt
@@ -778,10 +788,21 @@ async function* queryLoop(
       )
     }
 
+    if (codeModeHost?.hasPendingContextModifiers) {
+      state = { ...state, messages: messagesForQuery, toolUseContext, autoCompactTracking: tracking }
+      continue
+    }
+    const requiredCodeModeMessages = codeModeHost?.missingRequiredModelMessages(messagesForQuery) ?? []
+    if (requiredCodeModeMessages.length) {
+      const existing = new Set(state.messages.map(message => message.uuid))
+      for (const message of requiredCodeModeMessages) if (!existing.has(message.uuid)) yield message
+      messagesForQuery = [...messagesForQuery, ...requiredCodeModeMessages]
+    }
     //TODO: no need to set toolUseContext.messages during set-up since it is updated here
     toolUseContext = {
       ...toolUseContext,
       messages: messagesForQuery,
+      codeModeModelEpoch: codeModeHost?.modelEpochForContext(messagesForQuery),
     }
 
     const assistantMessages: AssistantMessage[] = []
@@ -1174,6 +1195,7 @@ async function* queryLoop(
               yield yieldMessage
             }
             if (message.type === 'assistant') {
+              if (!message.isApiErrorMessage) codeModeHost?.markModelContextDelivered(toolUseContext.codeModeModelEpoch)
               assistantMessages.push(message)
               if (message.isApiErrorMessage) {
                 streamingToolExecutor?.stopUnstartedTools('stream_interrupted')

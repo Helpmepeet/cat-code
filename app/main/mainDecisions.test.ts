@@ -89,6 +89,7 @@ test('a move refusal answers every inline request without depending on a generat
 
 test('the production sidecar runtime enables the desktop engine features', () => {
   expect(SIDECAR_RUNTIME_ARGS).toEqual([
+    '--feature=CODE_MODE',
     '--feature=LID_CLOSED',
     '--feature=AUTO_MODE_UPSTREAM_PORT',
     '--feature=TRANSCRIPT_CLASSIFIER',
@@ -110,6 +111,7 @@ describe('sidecar launch resolution (P5-1)', () => {
     const plan = resolveSidecarLaunch(DEV)
     expect(plan.command).toBe('bun')
     expect(plan.argsFor('session')).toEqual([
+      '--feature=CODE_MODE',
       '--feature=LID_CLOSED',
       '--feature=AUTO_MODE_UPSTREAM_PORT',
       '--feature=TRANSCRIPT_CLASSIFIER',
@@ -153,6 +155,7 @@ describe('sidecar launch resolution (P5-1)', () => {
 
   test('debug cleanup keeps the feature flags the session sidecar has', () => {
     expect(resolveSidecarLaunch(DEV).argsFor('debug-cleanup')).toEqual([
+      '--feature=CODE_MODE',
       '--feature=LID_CLOSED',
       '--feature=AUTO_MODE_UPSTREAM_PORT',
       '--feature=TRANSCRIPT_CLASSIFIER',

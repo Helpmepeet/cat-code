@@ -5024,6 +5024,7 @@ export class SidecarServer {
       // which the engine reads as "use original" — the same input the engine
       // itself gated, since no renderer rewrite reached it.
       updatedInput: gatedInput ?? {},
+      ...(response.acceptFeedback ? { acceptFeedback: response.acceptFeedback } : {}),
       // updatedPermissions intentionally dropped (T6b).
       // Note: toolUseID is rejected upstream by checkStrictKeys and thus not passed here.
     }
@@ -7214,6 +7215,7 @@ function checkStrictKeys(message: unknown): string | null {
     'updatedInput',
     'message',
     'applySuggestions',
+    'acceptFeedback',
   ])
 
   // `Map.get`, not `key in obj` — an inherited key like "constructor" or
@@ -7255,6 +7257,10 @@ function checkStrictKeys(message: unknown): string | null {
       if (!allowedResponseKeys.has(key)) {
         return `unexpected key "${key}" on permission.response.response`
       }
+    }
+    if ((obj.response as Record<string, unknown>).behavior !== 'allow' &&
+        Object.prototype.hasOwnProperty.call(obj.response, 'acceptFeedback')) {
+      return 'acceptFeedback is only valid on an allow response'
     }
   }
 

@@ -4606,6 +4606,8 @@ export type PermissionResponseInput =
   | {
       behavior: 'allow'
       updatedInput?: Record<string, unknown>
+      /** Human qualification of this approval, never an executable input rewrite. */
+      acceptFeedback?: string
       /**
        * "Always allow": indices into THIS request's engine-minted
        * `permission_suggestions`. The sidecar validates every index against

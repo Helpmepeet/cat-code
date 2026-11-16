@@ -169,6 +169,8 @@ import { getTools, assembleToolPool } from '../tools.js';
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js';
 import { resolveAgentTools } from '../tools/AgentTool/agentToolUtils.js';
 import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
+import { CodeModeHost } from '../tools/REPLTool/codeModeHost.js';
+import { restoreCodeModeHistory } from '../tools/REPLTool/codeModeRestoration.js';
 import { displayNameForAgent } from '../tools/AgentTool/resolveAgentTarget.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
@@ -1617,6 +1619,11 @@ export function REPL({
   const [messageSelectorPreselect, setMessageSelectorPreselect] = useState<UserMessage | undefined>(undefined);
   const [showCostDialog, setShowCostDialog] = useState(false);
   const [conversationId, setConversationId] = useState(randomUUID());
+  const codeModeHost = useMemo(() => new CodeModeHost(), [conversationId]);
+  useEffect(() => {
+    setMessages(previous => restoreCodeModeHistory(previous, store.getState().tasks));
+    return () => { void codeModeHost.close().catch(logError); };
+  }, [codeModeHost, setMessages, store]);
   setConversationIdRef.current = setConversationId;
 
   // Idle-return dialog: shown when user submits after a long idle gap
@@ -2737,6 +2744,7 @@ export function REPL({
       return resolveAgentTools(mainThreadAgentDefinition, merged, false, 'main-thread').resolvedTools;
     };
     return {
+      codeModeHost,
       abortController,
       pendingQuestions: questionRuntime?.registry,
       interruptedToolRun: interruptedTools.run,
@@ -2855,7 +2863,7 @@ export function REPL({
       requestPrompt: feature('HOOK_PROMPTS') ? requestPrompt : undefined,
       contentReplacementState: contentReplacementStateRef.current
     };
-	  }, [interruptedTools, questionRuntime, commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, queryGuard]);
+	  }, [codeModeHost, interruptedTools, questionRuntime, commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, queryGuard]);
   getToolUseContextRef.current = getToolUseContext;
 
   // Session backgrounding (Ctrl+B to background/foreground)

@@ -15,6 +15,7 @@ import type {
   ToolCallProgress,
   ToolResult,
   ToolUseContext,
+  ToolPermissionContext,
   ValidationResult,
 } from 'src/Tool.js'
 import { buildTool, type ToolDef } from 'src/Tool.js'
@@ -794,27 +795,29 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
         if (allowedTools.length > 0) {
           // Capture the current getAppState to chain modifications properly
           const previousGetAppState = modifiedContext.getAppState
+          let sourcePolicy: ToolPermissionContext | undefined
+          let derivedPolicy: ToolPermissionContext | undefined
           modifiedContext = {
             ...modifiedContext,
             getAppState() {
               // Use the previous getAppState, not the closure's context.getAppState,
               // to properly chain context modifications
               const appState = previousGetAppState()
+              // Keep the derived policy stable until the real source policy
+              // changes. Admission epochs must not churn on ordinary state reads.
+              if (sourcePolicy !== appState.toolPermissionContext) {
+                sourcePolicy = appState.toolPermissionContext
+                derivedPolicy = {
+                  ...sourcePolicy,
+                  alwaysAllowRules: {
+                    ...sourcePolicy.alwaysAllowRules,
+                    command: [...new Set([...(sourcePolicy.alwaysAllowRules.command || []), ...allowedTools])],
+                  },
+                }
+              }
               return {
                 ...appState,
-                toolPermissionContext: {
-                  ...appState.toolPermissionContext,
-                  alwaysAllowRules: {
-                    ...appState.toolPermissionContext.alwaysAllowRules,
-                    command: [
-                      ...new Set([
-                        ...(appState.toolPermissionContext.alwaysAllowRules
-                          .command || []),
-                        ...allowedTools,
-                      ]),
-                    ],
-                  },
-                },
+                toolPermissionContext: derivedPolicy!,
               }
             },
           }

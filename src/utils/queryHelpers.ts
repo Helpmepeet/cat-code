@@ -159,7 +159,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 session_id: getSessionId(),
                 uuid: _.uuid,
                 error: _.error,
-                ...toSDKCodeModeProps(message.data.message),
+                ...toSDKCodeModeProps(_),
               }
               break
             case 'user':
@@ -171,7 +171,7 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
                 session_id: getSessionId(),
                 uuid: _.uuid,
                 timestamp: _.timestamp,
-                ...toSDKCodeModeProps(message.data.message),
+                ...toSDKCodeModeProps(_),
                 isSynthetic: _.isMeta || _.isVisibleInTranscriptOnly,
                 tool_use_result: _.mcpMeta
                   ? { content: _.toolUseResult, ..._.mcpMeta }

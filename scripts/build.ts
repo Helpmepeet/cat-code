@@ -27,6 +27,7 @@ const fullExperimentalFeatures = [
   'CCR_MIRROR',
   'CCR_REMOTE_SETUP',
   'COMPACTION_REMINDERS',
+  'CODE_MODE',
   'CONNECTOR_TEXT',
   'DUMP_SYSTEM_PROMPT',
   'EXTRACT_MEMORIES',
@@ -87,6 +88,7 @@ function getVersionChangelog(): string {
 }
 
 const defaultFeatures = [
+  'CODE_MODE',
   'LID_CLOSED',
   'AUTO_MODE_UPSTREAM_PORT',
   'TRANSCRIPT_CLASSIFIER',
@@ -176,6 +178,7 @@ const cmd = [
   'bun',
   'build',
   './src/entrypoints/cli.tsx',
+  ...(features.includes('CODE_MODE') ? ['./src/tools/REPLTool/runtime/worker.ts'] : []),
   '--compile',
   '--target',
   'bun',

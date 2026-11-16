@@ -35,7 +35,7 @@ import { GREP_TOOL_NAME } from '../../tools/GrepTool/prompt.js'
 import { ASK_USER_QUESTION_TOOL_NAME, NONBLOCKING_QUESTION_MODEL_CONTRACT } from '../../tools/AskUserQuestionTool/prompt.js'
 import { EXPLORE_AGENT } from '../../tools/AgentTool/built-in/exploreAgent.js'
 import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents.js'
-import { isReplModeEnabled } from '../../tools/REPLTool/constants.js'
+import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
 import { isForkSubagentEnabled } from '../../tools/AgentTool/forkSubagent.js'
 import { isManagedSession } from '../../utils/managedSessionPolicy.js'
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
@@ -218,16 +218,6 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     enabledTools.has(n),
   )
 
-  if (isReplModeEnabled()) {
-    const items = [
-      taskToolName
-        ? `When task tracking helps, use ${taskToolName}.`
-        : null,
-    ].filter(item => item !== null)
-    if (items.length === 0) return ''
-    return [`# Using Your Tools`, ...prependBullets(items)].join('\n')
-  }
-
   const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()
@@ -236,6 +226,9 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     : null
 
   const items = [
+    enabledTools.has(REPL_TOOL_NAME)
+      ? `${REPL_TOOL_NAME} runs JavaScript over your granted tools and returns selected output. Use it for dependent tool workflows or filtering large intermediate results; direct coding tools remain available. Follow its discovery, state-reset, and instruction-yield contract.`
+      : null,
     `Read files systematically when the requested coverage requires it. Keep output bounded to what the task needs.`,
     ...(enabledTools.has(GREP_TOOL_NAME)
       ? [`Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match.`]

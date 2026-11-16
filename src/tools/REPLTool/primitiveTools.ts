@@ -11,11 +11,8 @@ import { NotebookEditTool } from '../NotebookEditTool/NotebookEditTool.js'
 let _primitiveTools: readonly Tool[] | undefined
 
 /**
- * Primitive tools hidden from direct model use when REPL mode is on
- * (REPL_ONLY_TOOLS) but still accessible inside the REPL VM context.
- * Exported so display-side code (collapseReadSearch, renderers) can
- * classify/render virtual messages for these tools even when they're
- * absent from the filtered execution tools list.
+ * Display-only lookup for historical virtual messages. It does not grant
+ * execution; the Code Mode host resolves the current session/worker pool.
  *
  * Lazy getter — the import chain collapseReadSearch.ts → primitiveTools.ts
  * → FileReadTool.tsx → ... loops back through the tool registry, so a

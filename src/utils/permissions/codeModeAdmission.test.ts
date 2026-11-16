@@ -102,9 +102,32 @@ test('script admission retains real child policy without repeated Auto review', 
     await admission.withCodeModeAdmission(fourth, async () => expect((await evaluate()).behavior).toBe('ask'))
     const fifth = admission.beginCodeModeCell(owner, { cellId: 'five', code: 'child()' })
     admission.admitCodeModeCell(fifth)
+    await admission.withCodeModeAdmission(fifth, async () => {
+      const agent = { ...tool, name: 'Agent' }
+      const worker = { ...context, agentId: 'guest-launched-worker', abortController: new AbortController() }
+      // The invocation belongs to the parent script, not to the worker loop.
+      expect((await evaluate(agent)).behavior).toBe('allow')
+      expect(admission.getCodeModeAdmission(worker)).toBe(false)
+      expect((await evaluate(tool, worker)).behavior).toBe('ask')
+      expect(requests).toBe(1)
+      await admission.withoutCodeModeAdmission(async () => {
+        await Promise.resolve()
+        expect(admission.getCodeModeAdmission(worker)).toBeUndefined()
+        expect((await evaluate(tool, worker)).behavior).toBe('allow')
+        expect(requests).toBe(2)
+      })
+      expect(admission.getCodeModeAdmission(context)).toBe(true)
+      expect((await evaluate(agent)).behavior).toBe('allow')
+      // Exiting the worker scope must neither erase nor refresh parent authority.
+      admission.revokeCodeModeAdmission(owner)
+      await Promise.resolve()
+      expect(admission.getCodeModeAdmission(context)).toBe(false)
+      expect((await evaluate()).behavior).toBe('ask')
+      expect(requests).toBe(2)
+    })
     context.abortController.abort()
     expect(admission.withCodeModeAdmission(fifth, () => admission.getCodeModeAdmission(context))).toBe(false)
-    expect(requests).toBe(1)
+    expect(requests).toBe(2)
     expect(() => admission.withCodeModeAdmission({ cellId: 'forged', code: '' }, () => {})).toThrow()
   `
   try {

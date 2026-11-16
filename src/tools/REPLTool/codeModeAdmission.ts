@@ -77,6 +77,11 @@ export function withCodeModeAdmission<T>(cell: CodeModeCell, run: () => T): T {
   return scope.run(cell, run)
 }
 
+/** Worker model loops own their permissions rather than the launching script's. */
+export function withoutCodeModeAdmission<T>(run: () => T): T {
+  return scope.exit(run)
+}
+
 /** Undefined means an ordinary call; false means explicit approval, never reclassification. */
 export function getCodeModeAdmission(context: ToolUseContext): boolean | undefined {
   const cell = scope.getStore()

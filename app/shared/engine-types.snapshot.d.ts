@@ -168,6 +168,7 @@ type AppPermissionRequest = {
 type AppPermissionResponse =
   | {
       behavior: 'allow'
+      acceptFeedback?: string
       updatedInput: Record<string, unknown>
       updatedPermissions?: PermissionUpdate[]
       toolUseID?: string
@@ -193,6 +194,15 @@ type AppSessionAbortState =
   | { status: 'aborted'; reason?: string }
 
 /* --- generated question lifecycle --- */
+export type QuestionSelection = {
+  toolUseId: string
+  questionIndex: number
+  question: string
+  selectedOptions: { optionIndex: number; label: string; description: string; previewContext?: string }[]
+  other?: string
+  notes: { optionIndex: number; text: string }[]
+}
+
 export type QuestionReference = { toolUseId: string; questionIndex: number }
 
 export type PendingQuestionSpec = {
@@ -208,6 +218,7 @@ export type ResolvedQuestion = PendingQuestion & {
   answer?: string
   notes?: string
   selectedPreview?: string
+  selection?: QuestionSelection
 }
 
 export type ResolvedQuestionSnapshot = Omit<ResolvedQuestion, 'options' | 'multiSelect' | 'selectedPreview'>

@@ -46,6 +46,7 @@ const PermissionAllowResultSchema = lazySchema(() =>
   z.object({
     behavior: z.literal('allow'),
     updatedInput: z.record(z.string(), z.unknown()),
+    acceptFeedback: z.string().max(16_384).optional(),
     // SDK hosts may send malformed entries; fall back to undefined rather
     // than rejecting the entire allow decision (anthropics/claude-code#29440)
     updatedPermissions: z

@@ -417,6 +417,10 @@ export class AppSessionController {
     return true
   }
 
+  requestOwnedPermission(request: AppPermissionRequest, signal: AbortSignal): Promise<AppPermissionResponse> {
+    return this.waitForPermissionResponse(request, signal)
+  }
+
   abort(
     reason = 'Session aborted',
     adapterIntent?: AppSessionAbortIntent,

@@ -100,6 +100,7 @@ export function inlineCommandRefusalFrame(
  * (`app/scripts/package-app.ts`), which is why both read this one array.
  */
 export const SIDECAR_RUNTIME_ARGS = [
+  '--feature=CODE_MODE',
   '--feature=LID_CLOSED',
   '--feature=AUTO_MODE_UPSTREAM_PORT',
   '--feature=TRANSCRIPT_CLASSIFIER',

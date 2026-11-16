@@ -40,7 +40,7 @@ import {
   getScratchpadDir,
 } from '../utils/permissions/filesystem.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from '../utils/envUtils.js'
-import { isReplModeEnabled } from '../tools/REPLTool/constants.js'
+import { REPL_TOOL_NAME } from '../tools/REPLTool/constants.js'
 import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
 import { shouldUseGlobalCacheScope } from '../utils/betas.js'
@@ -303,18 +303,6 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
     enabledTools.has(n),
   )
 
-  // In REPL mode, Read/Write/Edit/Glob/Grep/Bash/Agent are hidden from direct
-  // use (REPL_ONLY_TOOLS). REPL's prompt covers scripted tool calls.
-  if (isReplModeEnabled()) {
-    const items = [
-      taskToolName
-        ? `Break down and manage your work with the ${taskToolName} tool. These tools are helpful for planning your work and helping the user track your progress. Mark each task as completed as soon as you are done with the task. Do not batch up multiple tasks before marking them as completed.`
-        : null,
-    ].filter(item => item !== null)
-    if (items.length === 0) return ''
-    return [`# Using your tools`, ...prependBullets(items)].join(`\n`)
-  }
-
   // Ant-native builds alias find/grep to embedded bfs/ugrep and remove the
   // dedicated Glob/Grep tools, so skip guidance pointing at them.
   const embedded = hasEmbeddedSearchTools()
@@ -338,6 +326,9 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
   ].filter(item => item !== null)
 
   const items = [
+    enabledTools.has(REPL_TOOL_NAME)
+      ? `${REPL_TOOL_NAME} runs JavaScript over your granted tools and returns selected output. Use it for dependent tool workflows or filtering large intermediate results; direct coding tools remain available. Follow its discovery, state-reset, and instruction-yield contract.`
+      : null,
     ...(providedToolSubitems.length > 0
       ? [
           'Available file tools:',

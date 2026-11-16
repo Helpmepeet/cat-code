@@ -1862,6 +1862,9 @@ export function memoryFilesToAttachments(
         displayPath: relative(getCwd(), memoryFile.path),
       })
       toolUseContext.loadedNestedMemoryPaths?.add(memoryFile.path)
+      if (isInstructionsMemoryType(memoryFile.type)) {
+        toolUseContext.codeModeHost?.fenceForMemory(memoryFile)
+      }
 
       // Mark as loaded in readFileState — this provides cross-function and
       // cross-turn dedup via the .has() check above.
@@ -1921,7 +1924,7 @@ export function memoryFilesToAttachments(
  * @param appState The app state containing tool permission context
  * @returns Array of nested memory attachments
  */
-async function getNestedMemoryAttachmentsForFile(
+export async function getNestedMemoryAttachmentsForFile(
   filePath: string,
   toolUseContext: ToolUseContext,
   appState: { toolPermissionContext: ToolPermissionContext },
@@ -3089,7 +3092,9 @@ export async function* getAttachmentMessages(
   })
 
   for (const attachment of attachments) {
-    yield createAttachmentMessage(attachment)
+    const created = createAttachmentMessage(attachment)
+    const message = toolUseContext.codeModeHost?.canonicalMemoryMessage(created) ?? created
+    yield message
   }
 }
 

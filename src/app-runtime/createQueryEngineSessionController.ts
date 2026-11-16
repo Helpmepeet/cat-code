@@ -38,6 +38,7 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
 }
 
 export type QueryEngineSessionLike = {
+  setBackgroundPermissionHandler?: (handler: QueryEngineSessionOptions['onPermissionRequest']) => void
   getQuestionRegistry?: () => import('../utils/pendingQuestions.js').PendingQuestionRegistry | undefined
   initializeQuestions?: () => Promise<void>
   deliverQuestionReplies?: () => void
@@ -124,5 +125,9 @@ export function createQueryEngineSessionAdapter(
 export function createQueryEngineSessionController(
   session: QueryEngineSessionLike,
 ): AppSessionController {
-  return new AppSessionController(createQueryEngineSessionAdapter(session))
+  const controller = new AppSessionController(createQueryEngineSessionAdapter(session))
+  session.setBackgroundPermissionHandler?.((request, signal) => signal
+    ? controller.requestOwnedPermission(request, signal)
+    : Promise.resolve({ behavior: 'deny', message: 'Background approval requires a live execution owner.' }))
+  return controller
 }
