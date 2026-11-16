@@ -1975,10 +1975,13 @@ class Project {
           ...sourceMessageFields
         } = message
 
-        // For tool_result messages, use the assistant message UUID from the message
-        // if available (set at creation time), otherwise fall back to sequential parent
+        // Modern results keep chronological ancestry, including intervening
+        // guest audits and background/ordinary turns. Pairing and refusal
+        // authentication use sourceToolAssistantUUID, not the history edge.
+        // Legacy builds retain their original tool-result topology.
         let effectiveParentUuid = parentUuid
         if (
+          !feature('CODE_MODE') &&
           message.type === 'user' &&
           'sourceToolAssistantUUID' in message &&
           message.sourceToolAssistantUUID &&

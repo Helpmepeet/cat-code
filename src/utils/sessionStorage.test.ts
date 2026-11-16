@@ -1432,7 +1432,7 @@ describe('session storage', () => {
     )
   })
 
-  test('writer and boundary metadata agree when a preserved REPL-only message is dropped', async () => {
+  test('writer and boundary metadata agree on build-specific REPL preservation', async () => {
     const { annotateBoundaryWithPreservedSegment } = await import(
       '../services/compact/compact.js'
     )
@@ -1496,7 +1496,11 @@ describe('session storage', () => {
       [replOnly, durable],
       originalMessages,
     )
-    expect(boundary.compactMetadata.preservedMessages).toEqual({
+    const preservesRepl = feature('CODE_MODE') ? true : false
+    expect(boundary.compactMetadata.preservedMessages).toEqual(preservesRepl ? {
+      anchorUuid: summary.uuid,
+      durableUuids: [replOnly.uuid, durable.uuid],
+    } : {
       anchorUuid: summary.uuid,
       durableUuids: [durable.uuid],
       liveUuids: [replOnly.uuid, durable.uuid],
@@ -1516,14 +1520,13 @@ describe('session storage', () => {
     expect(resume?.messages.map(message => message.uuid)).toEqual([
       boundary.uuid,
       summary.uuid,
+      ...(preservesRepl ? [replOnly.uuid] : []),
       durable.uuid,
     ])
     expect(resume?.messages.map(message => message.uuid)).not.toContain(
       archival.uuid,
     )
-    expect(resume?.messages.map(message => message.uuid)).not.toContain(
-      replOnly.uuid,
-    )
+    expect(resume?.messages.some(message => message.uuid === replOnly.uuid)).toBe(preservesRepl)
   })
 
   test('display history retains summarized rows around a prefix-preserved compact seam', async () => {
