@@ -332,9 +332,9 @@ test('Markdown previews share chat table, fence and callout presentation without
   expect(getFilePaneSession(sessionId).file?.path).toBe(secondPath)
 })
 
-test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown paint coordination waits for a delayed %s reply', async schedule => {
+test.each(['link prepare', 'reply prepare', 'reply prepare with retained refresh', 'reply commit'] as const)('Markdown paint coordination waits for a delayed %s reply', async schedule => {
   const deadline = performance.now() + 3000
-  const { pane, sessionId, firstPath, secondPath, pauseNextPrepare, pauseNextCommit } = setup()
+  const { pane, sessionId, firstPath, secondPath, service, pauseNextPrepare, pauseNextCommit } = setup()
   const tree = await harness.mount(pane())
   await click(tree.container, 'Open ./notes.md:12')
   const original = await paintedMarkdown(tree.container, sessionId, firstPath, deadline)
@@ -349,6 +349,14 @@ test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown 
     } else {
       await click(tree.container, 'Open second.markdown')
     }
+    if (schedule === 'reply prepare with retained refresh') {
+      const retained = getFilePaneSession(sessionId).committedFile!
+      await act(async () => { await service.refresh(retained.id) })
+      await probeState(() => (getFilePaneSession(sessionId).committedFile?.revision ?? 0) > retained.revision,
+        'successful retained refresh while prepare is held', deadline)
+      const refreshed = await paintedMarkdown(tree.container, sessionId, firstPath, deadline)
+      expect(refreshed === original).toBe(false)
+    }
     // These are the original assertion points. The old coordination has
     // returned even though the real host operation is deliberately unfinished.
     if (gate) {
@@ -359,7 +367,12 @@ test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown 
       expect(getFilePaneSession(sessionId).file?.path).toBe(firstPath)
     }
     const earlyBody = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')
-    expect(earlyBody).toBe(original)
+    expect(earlyBody !== null).toBe(true)
+    expect(earlyBody!.isConnected).toBe(true)
+    expect(earlyBody!.textContent).toContain('Actual disk notes')
+    expect(getFilePaneSession(sessionId).committedFile?.path).toBe(firstPath)
+    expect(getFilePaneSession(sessionId).note).toBeNull()
+    expect(tree.container.querySelector('.file-pane-path')?.getAttribute('title')).toBe(firstPath)
     let painted = false
     waiting = paintedMarkdown(tree.container, sessionId, secondPath, deadline).then(body => { painted = true; return body })
     await Promise.resolve()
@@ -367,9 +380,11 @@ test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown 
     // Resume inside the wait's act scope, rather than nesting concurrent acts.
     resume()
     const next = await waiting
+    expect(getFilePaneSession(sessionId).file?.path).toBe(secondPath)
     expect(getFilePaneSession(sessionId).committedFile?.path).toBe(secondPath)
+    expect(getFilePaneSession(sessionId).note).toBeNull()
     expect(next.textContent).toContain('Actual second document')
-    expect(next).not.toBe(earlyBody)
+    expect(next === earlyBody).toBe(false)
     expect(earlyBody!.isConnected).toBe(false)
   } finally {
     gate?.cancel()
