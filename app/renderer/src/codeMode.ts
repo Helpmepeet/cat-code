@@ -2,6 +2,7 @@ export type CodeModeStatus = 'completed' | 'failed' | 'cancelled' | 'blocked' | 
 export type CodeModeCall = { toolUseId: string; name: string; input: unknown; inputOmission?: { bytes: number }; status: string; line?: number; result?: unknown; error?: string }
 export type CodeModeEnvelope = {
   kind: 'code-mode'; cellId: string; generation: string; description: string; code: string
+  taskId?: string
   status: CodeModeStatus; output: string; calls: CodeModeCall[]
   changedFiles: { path: string; additions?: number; deletions?: number }[]; error?: string; line?: number
 }
@@ -23,6 +24,7 @@ export function parseCodeMode(value: unknown): CodeModeEnvelope | null {
   if (!object(value) || value.kind !== 'code-mode' || typeof value.cellId !== 'string' || !value.cellId ||
     typeof value.generation !== 'string' || !value.generation || typeof value.description !== 'string' ||
     typeof value.code !== 'string' || typeof value.output !== 'string' || typeof value.status !== 'string' || !statuses.has(value.status) ||
+    (value.taskId !== undefined && (typeof value.taskId !== 'string' || !value.taskId)) ||
     !line(value.line) || (value.error !== undefined && typeof value.error !== 'string') ||
     !Array.isArray(value.calls) || !Array.isArray(value.changedFiles)) return null
   if (!value.calls.every(call => object(call) && typeof call.toolUseId === 'string' && !!call.toolUseId &&

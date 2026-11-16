@@ -203,6 +203,9 @@ export type ToolCardStatus = 'pending' | 'success' | 'error' | 'cancelled'
  */
 export type ToolResultProjection = {
   codeMode?: CodeModeEnvelope
+  /** Background receipts stay separate until a matching REPL is projected. */
+  codeModeCompletions?: readonly CodeModeEnvelope[]
+  codeModeCompletionPending?: true
   isError: boolean
   /** Engine-minted cancellation status, never inferred from tool output text. */
   isCancelled?: true
@@ -807,11 +810,26 @@ export function selectTranscriptRows(
     const isHidden = revealHidden && hidden[row.frameId] === true
     if (row.kind !== 'tool-use') return [isHidden ? markHidden(row) : row]
     const rawResult = session.toolResultsByUseId[row.toolUseId] ?? null
-    let storedResult: ToolResultProjection | null = rawResult
-    if (rawResult?.codeMode && row.toolName !== 'REPL') {
-      storedResult = ordinaryToolResults.get(rawResult) ?? null
+    let storedResult: ToolResultProjection | null = rawResult?.codeModeCompletionPending ? null : rawResult
+    if (row.toolName === 'REPL' && storedResult?.codeMode?.status === 'running' && storedResult.codeMode.taskId) {
+      const initial = storedResult.codeMode
+      const completion = storedResult.codeModeCompletions?.find(candidate => candidate.cellId === initial.cellId &&
+        candidate.generation === initial.generation && candidate.taskId === initial.taskId)
+      if (completion) {
+        let settled = completedCodeModeResults.get(storedResult)
+        if (!settled) {
+          settled = projectToolResultBlock({ type: 'tool_result', tool_use_id: row.toolUseId,
+            content: completion.output, is_error: completion.status === 'failed' || completion.status === 'blocked' }, completion,
+          completion.status === 'cancelled')
+          completedCodeModeResults.set(storedResult, settled)
+        }
+        storedResult = settled
+      }
+    }
+    if (storedResult?.codeMode && row.toolName !== 'REPL') {
+      storedResult = ordinaryToolResults.get(storedResult) ?? null
       if (!storedResult) {
-        const { codeMode: _untrustedAudit, ...ordinary } = rawResult
+        const { codeMode: _untrustedAudit, ...ordinary } = rawResult!
         storedResult = ordinary
         ordinaryToolResults.set(rawResult, ordinary)
       }
@@ -896,6 +914,7 @@ type JoinedToolRow = {
 }
 const joinedToolRows = new WeakMap<ToolUseRow, { normal?: JoinedToolRow; hidden?: JoinedToolRow }>()
 const ordinaryToolResults = new WeakMap<ToolResultProjection, ToolResultProjection>()
+const completedCodeModeResults = new WeakMap<ToolResultProjection, ToolResultProjection>()
 const hiddenRows = new WeakMap<TranscriptRow, TranscriptRow>()
 
 /** The read-time hidden-tier mark. Returns a stable copy; the stored row is untouched. */
@@ -2275,18 +2294,39 @@ function foldToolResultBlocks(
       toolUseResult,
       toolResultStatus === 'cancelled',
     )
+    const completions = draft.session.toolResultsByUseId[toolUseId]?.codeModeCompletions
+    const withCompletions = completions?.length ? { ...projection, codeModeCompletions: completions } : projection
     const preview = draft.session.generatedImagePreviewsByUseId[toolUseId]
     ensureOwnedToolResults(draft)
     draft.session.toolResultsByUseId[toolUseId] =
-      preview && projection.generatedImage
+      preview && withCompletions.generatedImage
         ? {
-            ...projection,
-            generatedImage: { ...projection.generatedImage, preview },
+            ...withCompletions,
+            generatedImage: { ...withCompletions.generatedImage, preview },
           }
-        : projection
+        : withCompletions
     changed = true
   }
   return changed
+}
+
+/** The host sends a background ledger on a synthetic task notification, not a tool_result block. */
+function foldBackgroundCodeModeCompletion(draft: SessionDraft, message: Extract<SDKMessage, { type: 'user' }>): boolean {
+  if (!nonEmptyString(message.uuid) || message.isSynthetic !== true || message.origin?.kind !== 'task-notification') return false
+  const receipt = parseCodeMode(message.tool_use_result)
+  const toolUseId = nonEmptyString(message.origin.toolUseId)
+  if (!receipt || !receipt.taskId || receipt.status === 'running' || !toolUseId || receipt.cellId !== toolUseId) return false
+  const existing = draft.session.toolResultsByUseId[toolUseId]
+  const completions = existing?.codeModeCompletions ?? []
+  if (completions.some(value => value.cellId === receipt.cellId && value.generation === receipt.generation && value.taskId === receipt.taskId)) return false
+  // Bound unmatched historical candidates; eviction can leave a card pending,
+  // but can never promote a receipt that did not match its initial ledger.
+  const next = [...completions.slice(-63), receipt]
+  ensureOwnedToolResults(draft)
+  draft.session.toolResultsByUseId[toolUseId] = existing
+    ? { ...existing, codeModeCompletions: next }
+    : { content: '', isError: false, diff: null, codeModeCompletionPending: true, codeModeCompletions: next }
+  return true
 }
 
 function projectAssistantFrame(
@@ -2603,15 +2643,15 @@ function projectUserFrame(
       return true
     }
   }
-  let changed =
-    isRecord(body) && Array.isArray(body.content)
-      ? foldToolResultBlocks(
+  let changed = foldBackgroundCodeModeCompletion(draft, message)
+  if (isRecord(body) && Array.isArray(body.content)) {
+    changed = foldToolResultBlocks(
           draft,
           body.content,
           message.tool_use_result,
           message.tool_result_status,
-        )
-      : false
+        ) || changed
+  }
   // P4-36 — the hidden tier is RETAINED, not discarded. This used to be
   // `if (message.isSynthetic === true) return` before any row was projected,
   // which threw the row away and left the reveal control with nothing to
