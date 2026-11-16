@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { act, StrictMode } from 'react'
+import { act, StrictMode, useEffect, useState } from 'react'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -48,8 +48,13 @@ async function settle() {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 130)) })
   await act(async () => { await harness.nextFrame(); await harness.nextFrame() })
 }
-async function paintedMarkdown(root: ParentNode, sessionId: string, path: string): Promise<Element> {
-  const deadline = performance.now() + 3000
+async function probeState(ready: () => boolean, label: string, deadline = performance.now() + 3000) {
+  // The producer may need React effects to flush. Never await its promise
+  // inside act: a missing producer would leave that act scope open on timeout.
+  while (!ready() && performance.now() < deadline) await act(async () => { await harness.nextFrame() })
+  if (!ready()) throw new Error(`Probe did not reach ${label}`)
+}
+async function paintedMarkdown(root: ParentNode, sessionId: string, path: string, deadline = performance.now() + 3000): Promise<Element> {
   while (performance.now() < deadline) {
     const state = getFilePaneSession(sessionId)
     const body = root.querySelector('.file-pane-markdown:not(.file-pane-staging)')
@@ -189,10 +194,19 @@ function setup(withOutput = false, local?: { url: string; snapshots?: Map<string
   const pauseNextCommit = (before = false) => {
     let reached!: () => void
     let resume!: () => void
+    let hasReached = false
     const reachedPromise = new Promise<void>(resolve => { reached = resolve })
     const waiting = new Promise<void>(resolve => { resume = resolve })
-    commitGates.push({ before, reached, waiting })
-    return { reached: reachedPromise, resume }
+    const gate = { before, reached: () => { hasReached = true; reached() }, waiting }
+    commitGates.push(gate)
+    const cancel = () => {
+      const index = commitGates.indexOf(gate)
+      if (index !== -1) commitGates.splice(index, 1)
+      resume()
+      reached()
+    }
+    releases.push(cancel)
+    return { reached: reachedPromise, resume, cancel, get hasReached() { return hasReached } }
   }
   let prepareGate: Promise<void> | null = null
   const pauseNextPrepare = () => {
@@ -319,12 +333,14 @@ test('Markdown previews share chat table, fence and callout presentation without
 })
 
 test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown paint coordination waits for a delayed %s reply', async schedule => {
+  const deadline = performance.now() + 3000
   const { pane, sessionId, firstPath, secondPath, pauseNextPrepare, pauseNextCommit } = setup()
   const tree = await harness.mount(pane())
   await click(tree.container, 'Open ./notes.md:12')
-  const original = await paintedMarkdown(tree.container, sessionId, firstPath)
+  const original = await paintedMarkdown(tree.container, sessionId, firstPath, deadline)
   const gate = schedule === 'reply commit' ? pauseNextCommit() : null
   const resume = gate?.resume ?? pauseNextPrepare()
+  let waiting: Promise<Element> | undefined
   try {
     if (schedule === 'link prepare') {
       const link = [...original.querySelectorAll('button')].find(button => button.textContent === 'Next document')!
@@ -336,7 +352,7 @@ test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown 
     // These are the original assertion points. The old coordination has
     // returned even though the real host operation is deliberately unfinished.
     if (gate) {
-      await act(async () => { await gate.reached })
+      await probeState(() => gate.hasReached, 'delayed reply commit', deadline)
       expect(getFilePaneSession(sessionId).file?.path).toBe(secondPath)
       expect(getFilePaneSession(sessionId).committedFile?.path).toBe(firstPath)
     } else {
@@ -345,7 +361,7 @@ test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown 
     const earlyBody = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')
     expect(earlyBody).toBe(original)
     let painted = false
-    const waiting = paintedMarkdown(tree.container, sessionId, secondPath).then(body => { painted = true; return body })
+    waiting = paintedMarkdown(tree.container, sessionId, secondPath, deadline).then(body => { painted = true; return body })
     await Promise.resolve()
     expect(painted).toBe(false)
     // Resume inside the wait's act scope, rather than nesting concurrent acts.
@@ -356,7 +372,9 @@ test.each(['link prepare', 'reply prepare', 'reply commit'] as const)('Markdown 
     expect(next).not.toBe(earlyBody)
     expect(earlyBody!.isConnected).toBe(false)
   } finally {
+    gate?.cancel()
     resume()
+    await waiting?.catch(() => {})
     await settle()
   }
 })
@@ -652,7 +670,7 @@ test('a successful retained refresh reply cannot repaint after an image candidat
   const delayed = pauseNextCommit()
   try {
     await act(async () => { await service.refresh(retained.id) })
-    await act(async () => { await delayed.reached })
+    await probeState(() => delayed.hasReached, 'retained refresh commit')
     await click(tree.container, 'Open broken.png')
     expect(await staged(tree.container, '.file-pane-staging.file-pane-image img') !== null).toBe(true)
     const body = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
@@ -662,46 +680,102 @@ test('a successful retained refresh reply cannot repaint after an image candidat
     expect(getFilePaneSession(sessionId).file?.kind).toBe('image')
     expect(getFilePaneSession(sessionId).committedFile?.revision).toBe(retained.revision)
     expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)') === body).toBe(true)
-  } finally { delayed.resume(); await settle() }
+  } finally { delayed.cancel(); await settle() }
 })
 
-test('Markdown identity capture waits for a queued same-file refresh to finish painting', async () => {
+test.each(['immediate', 'busy'] as const)('Markdown identity capture waits for a queued same-file refresh to finish painting (%s)', async schedule => {
+  const deadline = performance.now() + 3000
   const { pane, sessionId, firstPath, service, pauseNextCommit } = setup()
   const originalCommit = window.catcode.commitFilePreview
   let queued: ReturnType<typeof pauseNextCommit> | null = null
-  const releaseQueued = () => queued?.resume()
+  let busyRefresh: ReturnType<typeof service.refresh> | undefined
+  let cancelled = false
+  const releaseQueued = () => { cancelled = true; queued?.cancel() }
   let firstCommit = true
   window.catcode.commitFilePreview = async (id, revision) => {
     const committed = await originalCommit(id, revision)
+    if (cancelled) return committed
     if (firstCommit) {
       firstCommit = false
       // A refresh can publish while the prior successful commit reply is in
       // flight. Use the real service, including its revision/cache semantics.
       queued = pauseNextCommit(true)
-      await service.refresh(id)
+      if (schedule === 'busy') {
+        busyRefresh = service.refresh(id)
+        // The injected refresh returns before the in-flight read publishes.
+        expect(await service.refresh(id)).toBeNull()
+      } else await service.refresh(id)
     }
     return committed
   }
-  const tree = await harness.mount(pane())
   try {
+    const tree = await harness.mount(pane())
     await click(tree.container, 'Open ./notes.md:12')
+    await probeState(() => queued?.hasReached === true, 'queued same-file commit', deadline)
     expect(queued !== null).toBe(true)
-    await act(async () => { await queued!.reached })
     const earlyState = getFilePaneSession(sessionId)
     const earlyBody = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
     expect(earlyBody !== null).toBe(true)
     expect(earlyState.file!.revision).toBeGreaterThan(earlyState.committedFile!.revision)
-    const waiting = paintedMarkdown(tree.container, sessionId, firstPath)
     queued!.resume()
-    const body = await waiting
+    const body = await paintedMarkdown(tree.container, sessionId, firstPath, deadline)
     expect(body === earlyBody).toBe(false)
     expect(earlyBody.isConnected).toBe(false)
     expect(body.isConnected).toBe(true)
   } finally {
     releaseQueued()
     window.catcode.commitFilePreview = originalCommit
+    await busyRefresh
     await settle()
   }
+})
+
+test('a bounded gate wait flushes its real commit effect producer and leaves the next root healthy', async () => {
+  const { sessionId, firstPath, pauseNextCommit } = setup()
+  const result = await window.catcode.prepareFilePreview(sessionId, firstPath)
+  if (!result.ok) throw new Error('Could not prepare the real commit producer')
+  const descriptor = result.descriptor
+  const gate = pauseNextCommit(true)
+  let trigger!: () => void
+  let commit: Promise<boolean> | undefined
+  function CommitProducer() {
+    const [ready, setReady] = useState(false)
+    trigger = () => setReady(true)
+    useEffect(() => {
+      if (ready) commit = window.catcode.commitFilePreview(descriptor.id, descriptor.revision)
+    }, [ready])
+    return <div data-commit-ready={ready}>Real commit producer</div>
+  }
+  try {
+    const tree = await harness.mount(<CommitProducer />)
+    // The pending render must flush before the effect can reach the gate.
+    queueMicrotask(() => trigger())
+    await probeState(() => gate.hasReached, 'effect-produced real commit')
+    expect(tree.container.querySelector('[data-commit-ready="true"]') !== null).toBe(true)
+    expect(commit !== undefined).toBe(true)
+  } finally { gate.cancel() }
+  expect(await commit).toBe(true)
+  const next = await harness.mount(<div data-probe-root="healthy">Healthy next root</div>)
+  expect(next.container.querySelector('[data-probe-root="healthy"]')?.textContent).toBe('Healthy next root')
+})
+
+test('an unreached probe gate fails boundedly without stranding the next DOM root', async () => {
+  const { pane, sessionId, firstPath, pauseNextCommit } = setup()
+  const gate = pauseNextCommit(true)
+  let cancelledWaitSettled = false
+  void gate.reached.then(() => { cancelledWaitSettled = true })
+  try {
+    await expect(probeState(() => gate.hasReached, 'absent commit', performance.now() + 40))
+      .rejects.toThrow('Probe did not reach absent commit')
+  } finally { gate.cancel() }
+  await Promise.resolve()
+  expect(cancelledWaitSettled).toBe(true)
+  expect(gate.hasReached).toBe(false)
+  const tree = await harness.mount(pane())
+  await click(tree.container, 'Open ./notes.md:12')
+  await paintedMarkdown(tree.container, sessionId, firstPath)
+  const next = await harness.mount(<div data-probe-root="healthy">Healthy next root</div>)
+  expect(next.container.querySelector('[data-probe-root="healthy"]')?.textContent).toBe('Healthy next root')
 })
 
 test('confirmed session disposal releases its page and late scroll cleanup cannot restore session state', async () => {
@@ -1036,25 +1110,26 @@ test('Reload reports an unavailable preview instead of silently leaving the old 
 })
 
 test('a delayed successful update cannot replace a newer different-file navigation', async () => {
+  const deadline = performance.now() + 3000
   const { pane, sessionId, firstPath, secondPath, service, pauseNextCommit } = setup()
   const tree = await harness.mount(pane())
   await click(tree.container, 'Open ./notes.md:12')
-  await paintedMarkdown(tree.container, sessionId, firstPath)
+  await paintedMarkdown(tree.container, sessionId, firstPath, deadline)
   const id = getFilePaneSession(sessionId).file!.id
   const delayed = pauseNextCommit()
   try {
     writeFileSync(firstPath, '# Delayed earlier file')
     await act(async () => { await service.refresh(id) })
-    await act(async () => { await delayed.reached })
+    await probeState(() => delayed.hasReached, 'delayed earlier-file commit', deadline)
     await click(tree.container, 'Open second.markdown')
-    await paintedMarkdown(tree.container, sessionId, secondPath)
+    await paintedMarkdown(tree.container, sessionId, secondPath, deadline)
     const newerBody = tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)')!
     await act(async () => { delayed.resume() })
     await settle()
     expect(getFilePaneSession(sessionId).file?.path).toBe(secondPath)
     expect(getFilePaneSession(sessionId).committedFile?.path).toBe(secondPath)
     expect(tree.container.querySelector('.file-pane-markdown:not(.file-pane-staging)') === newerBody).toBe(true)
-  } finally { delayed.resume(); await settle() }
+  } finally { delayed.cancel(); await settle() }
 })
 
 test('a delayed successful update cannot reopen a closed pane', async () => {
