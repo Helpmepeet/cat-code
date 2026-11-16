@@ -1,4 +1,5 @@
 import { selectAttachmentFile } from './attachmentFileSelection.js'
+import { coercePermissionResponse } from './permissionResponse.js'
 import { createPreviewDocumentHost } from './previewDocumentHost.js'
 import { createPreviewDocumentRunner } from './previewDocumentRunner.js'
 import { CH_FILE_PREVIEW_DOCUMENT_READ } from '../shared/ipcChannels.js'
@@ -362,7 +363,7 @@ import {
   type NavigationConfig,
 } from './navigationPolicy.js'
 import { decodeImageDataUrl, planContextMenu } from './contextMenuPolicy.js'
-import { MAX_SUGGESTION_SELECTIONS, MAX_TEXT_FIELD_CHARS, PARKED_EXIT_CODE } from '../shared/limits.js'
+import { MAX_TEXT_FIELD_CHARS, PARKED_EXIT_CODE } from '../shared/limits.js'
 import { createOperationalLogSink } from './operationalLogSink.js'
 import { createOperationalRecord } from '../shared/operationalLog.js'
 import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
@@ -5171,59 +5172,6 @@ function answerUnforwardedSubmit(
       code,
     }),
   )
-}
-
-type CoercedPermissionResponse =
-  | {
-      behavior: 'allow'
-      updatedInput: Record<string, unknown>
-      applySuggestions?: number[]
-    }
-  | { behavior: 'deny'; message: string }
-
-function coercePermissionResponse(response: unknown): CoercedPermissionResponse | null {
-  if (typeof response !== 'object' || response === null) return null
-  const r = response as {
-    behavior?: unknown
-    updatedInput?: unknown
-    message?: unknown
-    applySuggestions?: unknown
-  }
-  if (r.behavior === 'deny' && typeof r.message === 'string') {
-    return { behavior: 'deny', message: r.message }
-  }
-  if (r.behavior === 'allow') {
-    // updatedInput is echo-only downstream (T6, enforced at the sidecar). Pass an
-    // object or default to empty ("use original").
-    const updatedInput =
-      typeof r.updatedInput === 'object' && r.updatedInput !== null && !Array.isArray(r.updatedInput)
-        ? (r.updatedInput as Record<string, unknown>)
-        : {}
-    // C1 — "always allow" suggestion selection (decisions/PERMISSION-BOUNDARY.md).
-    // Indices only; the sidecar re-validates against the pending request's
-    // engine-minted suggestions. A malformed selection drops the whole response
-    // (fail-closed) rather than silently downgrading "always" to allow-once.
-    if (r.applySuggestions !== undefined) {
-      if (
-        !Array.isArray(r.applySuggestions) ||
-        r.applySuggestions.length > MAX_SUGGESTION_SELECTIONS ||
-        !r.applySuggestions.every(
-          value => typeof value === 'number' && Number.isInteger(value) && value >= 0,
-        )
-      ) {
-        return null
-      }
-      if (r.applySuggestions.length > 0) {
-        return {
-          behavior: 'allow',
-          updatedInput,
-          applySuggestions: r.applySuggestions as number[],
-        }
-      }
-    }
-    return { behavior: 'allow', updatedInput }
-  }
-  return null
 }
 
 function requestWorkspaceControl(sessionId: string, operationId: string, action: WorkspaceControlAction): Promise<WorkspaceControlDelivery> {

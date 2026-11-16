@@ -278,6 +278,7 @@ import {
 } from 'src/services/api/grove.js'
 import {
   toInternalMessages,
+  isSDKDisplayOnlyMessage,
   toSDKRateLimitInfo,
 } from 'src/utils/messages/mappers.js'
 import { createModelSwitchBreadcrumbs } from 'src/utils/messages.js'
@@ -484,6 +485,19 @@ export async function completeClaudeOAuthControlInstallation(
     attempt.committedNotified = true
     onCommitted()
   }
+}
+
+// Returns true when this frame is consumed and must not enter the human queue.
+export function consumeSDKHistoryMessage(
+  message: SDKMessage,
+  history: Message[],
+  echo?: (message: SDKMessage) => void,
+): boolean {
+  if (isSDKDisplayOnlyMessage(message)) return true
+  if (message.type !== 'assistant' && message.type !== 'system') return false
+  history.push(...toInternalMessages([message]))
+  if (message.type === 'assistant') echo?.(message)
+  return true
 }
 
 /**
@@ -4279,15 +4293,10 @@ export function runHeadlessStreaming(
       } else if (message.type === 'update_environment_variables') {
         // Handled in structuredIO.ts, but TypeScript needs the type guard
         continue
-      } else if (message.type === 'assistant' || message.type === 'system') {
-        // History replay from bridge: inject into mutableMessages as
-        // conversation context so the model sees prior turns.
-        const internalMsgs = toInternalMessages([message])
-        mutableMessages.push(...internalMsgs)
-        // Echo assistant messages back so CCR displays them
-        if (message.type === 'assistant' && options.replayUserMessages) {
-          output.enqueue(message)
-        }
+      } else if (consumeSDKHistoryMessage(
+        message, mutableMessages,
+        options.replayUserMessages ? frame => output.enqueue(frame) : undefined,
+      )) {
         continue
       }
       // After handling control, keep-alive, env-var, assistant, and system

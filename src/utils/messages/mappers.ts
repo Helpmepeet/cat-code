@@ -33,10 +33,21 @@ import {
 } from '../messages.js'
 import { getPlan } from '../plans.js'
 
+// SDK audit frames are display-only, not authenticated engine history. Exclude
+// both halves of child tool exchanges rather than importing orphan tool results.
+export function isSDKDisplayOnlyMessage(
+  message: { type: string },
+): boolean {
+  const frame = message as { type: string; code_mode?: unknown; isVirtual?: unknown }
+  return (frame.type === 'assistant' || frame.type === 'user') &&
+    (frame.code_mode !== undefined || frame.isVirtual === true)
+}
+
 export function toInternalMessages(
   messages: readonly DeepImmutable<SDKMessage>[],
 ): Message[] {
   return messages.flatMap(message => {
+    if (isSDKDisplayOnlyMessage(message)) return []
     switch (message.type) {
       case 'assistant':
         return [
