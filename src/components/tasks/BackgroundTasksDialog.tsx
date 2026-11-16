@@ -40,6 +40,9 @@ import { DreamDetailDialog } from './DreamDetailDialog.js';
 import { InProcessTeammateDetailDialog } from './InProcessTeammateDetailDialog.js';
 import { RemoteSessionDetailDialog } from './RemoteSessionDetailDialog.js';
 import { ShellDetailDialog } from './ShellDetailDialog.js';
+import { CodeModeTask, type CodeModeTaskState } from '../../tasks/CodeModeTask.js';
+import { CodeModeDetailDialog } from './CodeModeDetailDialog.js';
+import { truncate } from '../../utils/format.js';
 type ViewState = {
   mode: 'list';
 } | {
@@ -54,6 +57,12 @@ type Props = {
   initialDetailTaskId?: string;
 };
 type ListItem = {
+  id: string;
+  type: 'code_mode';
+  label: string;
+  status: string;
+  task: DeepImmutable<CodeModeTaskState>;
+} | {
   id: string;
   type: 'local_bash';
   label: string;
@@ -125,6 +134,7 @@ function getSelectableBackgroundTasks(tasks: Record<string, TaskState> | undefin
   return backgroundTasks.filter(task => !(task.type === 'local_agent' && task.id === foregroundedTaskId));
 }
 function isVisibleBackgroundTask(task: TaskState): boolean {
+  if (task.type === 'code_mode') return true;
   if (isBackgroundTask(task)) return true;
   return task.type === 'local_agent' && task.isBackgrounded && task.status !== 'running';
 }
@@ -166,6 +176,7 @@ export function BackgroundTasksDialog({
     };
   });
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
+  const [stopError, setStopError] = useState<string>();
 
   // Register as modal overlay so parent Chat keybindings (up/down for history)
   // are deactivated while this dialog is open
@@ -180,6 +191,7 @@ export function BackgroundTasksDialog({
     workflowTasks,
     mcpMonitors,
     dreamTasks: dreamTasks_0,
+    codeModeTasks,
     allSelectableItems
   } = useMemo(() => {
 	    // Keep terminal local agents visible so blocked/completed handoffs can be opened.
@@ -201,6 +213,7 @@ export function BackgroundTasksDialog({
     const workflows = sorted.filter(item_2 => item_2.type === 'local_workflow');
     const monitorMcp = sorted.filter(item_3 => item_3.type === 'monitor_mcp');
     const dreamTasks = sorted.filter(item_4 => item_4.type === 'dream');
+    const codeModeTasks = sorted.filter(item => item.type === 'code_mode');
     // In spinner-tree mode, exclude teammates from the dialog (they appear in the tree)
     const teammates = showSpinnerTree ? [] : sorted.filter(item_5 => item_5.type === 'in_process_teammate');
     // Add leader entry when there are teammates, so users can foreground back to leader
@@ -217,11 +230,12 @@ export function BackgroundTasksDialog({
       workflowTasks: workflows,
       mcpMonitors: monitorMcp,
       dreamTasks,
+      codeModeTasks,
       teammateTasks: [...leaderItem, ...teammates],
       // Order MUST match JSX render order (teammates \u2192 bash \u2192 monitorMcp \u2192
-      // remote \u2192 agent \u2192 workflows \u2192 dream) so \u2193/\u2191 navigation moves the cursor
+      // remote \u2192 agent \u2192 workflows \u2192 dream \u2192 Code Mode) so \u2193/\u2191 navigation moves the cursor
       // visually downward.
-      allSelectableItems: [...leaderItem, ...teammates, ...bash, ...monitorMcp, ...remote, ...agent, ...workflows, ...dreamTasks]
+      allSelectableItems: [...leaderItem, ...teammates, ...bash, ...monitorMcp, ...remote, ...agent, ...workflows, ...dreamTasks, ...codeModeTasks]
     };
   }, [typedTasks, foregroundedTaskId, showSpinnerTree]);
   const currentSelection = allSelectableItems[selectedIndex] ?? null;
@@ -271,7 +285,9 @@ export function BackgroundTasksDialog({
 
     if (e.key === 'x') {
       e.preventDefault();
-      if (currentSelection_0.type === 'local_bash' && currentSelection_0.status === 'running') {
+      if (currentSelection_0.type === 'code_mode' && !currentSelection_0.task.settled && !currentSelection_0.task.cancellationRequested) {
+        void killCodeModeTask(currentSelection_0.id).catch(error => setStopError(String(error)));
+      } else if (currentSelection_0.type === 'local_bash' && currentSelection_0.status === 'running') {
         void killShellTask(currentSelection_0.id);
       } else if (currentSelection_0.type === 'local_agent' && currentSelection_0.status === 'running') {
         void killAgentTask(currentSelection_0.id);
@@ -309,6 +325,9 @@ export function BackgroundTasksDialog({
   };
   async function killShellTask(taskId: string): Promise<void> {
     await LocalShellTask.kill(taskId, setAppState);
+  }
+  async function killCodeModeTask(taskId: string): Promise<void> {
+    await CodeModeTask.kill(taskId, setAppState);
   }
   async function killAgentTask(taskId_0: string): Promise<void> {
     await LocalAgentTask.kill(taskId_0, setAppState);
@@ -377,6 +396,8 @@ export function BackgroundTasksDialog({
 
     // Detail mode - show appropriate detail dialog
     switch (task_0.type) {
+      case 'code_mode':
+        return <CodeModeDetailDialog task={task_0} onDone={() => onDone()} onBack={goBackToList} onStop={() => killCodeModeTask(task_0.id)} />;
       case 'local_bash':
         return <ShellDetailDialog shell={task_0} onDone={onDone} onKillShell={() => void killShellTask(task_0.id)} onBack={goBackToList} key={`shell-${task_0.id}`} />;
       case 'local_agent':
@@ -416,6 +437,9 @@ export function BackgroundTasksDialog({
               {runningAgentCount !== 1 ? 'active agents' : 'active agent'}
             </Text>] : [])], index => <Text key={`separator-${index}`}> · </Text>);
   const actions = [<KeyboardShortcutHint key="upDown" shortcut="↑/↓" action="select" />, <KeyboardShortcutHint key="enter" shortcut="Enter" action="view" />, ...(currentSelection?.type === 'in_process_teammate' && currentSelection.status === 'running' ? [<KeyboardShortcutHint key="foreground" shortcut="f" action="foreground" />] : []), ...((currentSelection?.type === 'local_bash' || currentSelection?.type === 'local_agent' || currentSelection?.type === 'in_process_teammate' || currentSelection?.type === 'local_workflow' || currentSelection?.type === 'monitor_mcp' || currentSelection?.type === 'dream' || currentSelection?.type === 'remote_agent') && currentSelection.status === 'running' ? [<KeyboardShortcutHint key="kill" shortcut="x" action="stop" />] : []), ...(agentTasks.some(t => t.status === 'running') ? [<KeyboardShortcutHint key="kill-all" shortcut={killAgentsShortcut} action="stop all agents" />] : []), <KeyboardShortcutHint key="esc" shortcut="←/Esc" action="close" />];
+  if (currentSelection?.type === 'code_mode' && !currentSelection.task.settled && !currentSelection.task.cancellationRequested) {
+    actions.splice(actions.length - 1, 0, <KeyboardShortcutHint key="stop-code" shortcut="x" action="stop" />);
+  }
   const handleCancel = () => onDone('Background tasks dialog dismissed', {
     display: 'system'
   });
@@ -427,9 +451,10 @@ export function BackgroundTasksDialog({
   }
   return <Box flexDirection="column" tabIndex={0} autoFocus onKeyDown={handleKeyDown}>
       <Dialog title="Background tasks" subtitle={<>{subtitle}</>} onCancel={handleCancel} color="background" inputGuide={renderInputGuide}>
+        {stopError && <Text color="error">Could not request cancellation: {stopError}</Text>}
         {allSelectableItems.length === 0 ? <Text dimColor>No tasks currently running</Text> : <Box flexDirection="column">
             {teammateTasks.length > 0 && <Box flexDirection="column">
-                {(bashTasks.length > 0 || remoteSessions.length > 0 || agentTasks.length > 0) && <Text dimColor>
+                {(bashTasks.length > 0 || remoteSessions.length > 0 || agentTasks.length > 0 || codeModeTasks.length > 0) && <Text dimColor>
                     <Text bold>{'  '}Agents</Text> (
                     {count(teammateTasks, i => i.type !== 'leader')})
                   </Text>}
@@ -439,7 +464,7 @@ export function BackgroundTasksDialog({
               </Box>}
 
             {bashTasks.length > 0 && <Box flexDirection="column" marginTop={teammateTasks.length > 0 ? 1 : 0}>
-                {(teammateTasks.length > 0 || remoteSessions.length > 0 || agentTasks.length > 0) && <Text dimColor>
+                {(teammateTasks.length > 0 || remoteSessions.length > 0 || agentTasks.length > 0 || codeModeTasks.length > 0) && <Text dimColor>
                     <Text bold>{'  '}Shells</Text> ({bashTasks.length})
                   </Text>}
                 <Box flexDirection="column">
@@ -489,12 +514,18 @@ export function BackgroundTasksDialog({
                   {dreamTasks_0.map(item_11 => <Item key={item_11.id} item={item_11} isSelected={item_11.id === currentSelection?.id} />)}
                 </Box>
               </Box>}
+            {codeModeTasks.length > 0 && <Box flexDirection="column" marginTop={allSelectableItems.length > codeModeTasks.length ? 1 : 0}>
+                <Text dimColor><Text bold>{'  '}Code Mode</Text> ({codeModeTasks.length})</Text>
+                {codeModeTasks.map(item => <Item key={item.id} item={item} isSelected={item.id === currentSelection?.id} />)}
+              </Box>}
           </Box>}
       </Dialog>
     </Box>;
 }
 function toListItem(task: BackgroundTaskState): ListItem {
   switch (task.type) {
+    case 'code_mode':
+      return { id: task.id, type: 'code_mode', label: task.description, status: task.status, task };
     case 'local_bash':
       return {
         id: task.id,
@@ -585,7 +616,7 @@ function Item(t0) {
   const t5 = isSelected && !useGreyPointer ? "suggestion" : undefined;
   let t6;
   if ($[4] !== item.task || $[5] !== item.type || $[6] !== maxActivityWidth) {
-    t6 = item.type === "leader" ? <Text>@{TEAM_LEAD_NAME}</Text> : <BackgroundTaskComponent task={item.task} maxActivityWidth={maxActivityWidth} />;
+    t6 = item.type === "leader" ? <Text>@{TEAM_LEAD_NAME}</Text> : item.type === 'code_mode' ? <Text>{truncate(item.label, maxActivityWidth, true)} · {item.task.cancellationRequested && !item.task.settled ? 'Cancellation requested' : item.status}{item.task.delivery === 'failed' ? ' · Result delivery failed' : ''}</Text> : <BackgroundTaskComponent task={item.task} maxActivityWidth={maxActivityWidth} />;
     $[4] = item.task;
     $[5] = item.type;
     $[6] = maxActivityWidth;
