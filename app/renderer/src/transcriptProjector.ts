@@ -51,7 +51,7 @@ import {
 import { isAppReadyFrame } from './connectionState.js'
 import { parseInlineCommandResult, type InlineCommandRequest, type InlineCommandRun } from '../../shared/inlineCommand.js'
 import { observeRetryWait } from './retryClock.js'
-import { codeModeInput, parseCodeMode, type CodeModeCall, type CodeModeEnvelope } from './codeMode.js'
+import { codeModeInput, codeModeInputWasOmitted, parseCodeMode, type CodeModeCall, type CodeModeEnvelope } from './codeMode.js'
 
 type FrameRowSource = {
   /** Stable React/projector identity derived only from producer identifiers. */
@@ -125,6 +125,11 @@ export type AssistantTextRow = RowSource & {
  * "status is not stored"). A row with no map entry yet renders `pending`.
  */
 export type ToolUseRow = RowSource & {
+  /** Read-time host audit overlay; never a replacement for stored history. */
+  codeModeInputOmitted?: true
+  /** Read-time Script phase evidence; never written into stored tool rows. */
+  activity?: ToolActivity
+  preparing?: true
   kind: 'tool-use'
   toolUseId: string
   toolName: string
@@ -812,6 +817,8 @@ export function selectTranscriptRows(
       }
     }
     const autoModeReview = session.autoModeReviews[row.toolUseId]
+    const activity = row.toolName === 'REPL' && (!storedResult || storedResult.codeMode?.status === 'running')
+      ? session.activities[row.toolUseId] : undefined
     const resumedAgentId =
       row.toolName === 'ResumeAgent' && typeof row.input.agentId === 'string'
         ? row.input.agentId
@@ -825,6 +832,7 @@ export function selectTranscriptRows(
     const cached = isHidden ? views?.hidden : views?.normal
     if (cached && cached.storedResult === storedResult &&
         cached.autoModeReview === autoModeReview &&
+        cached.activity === activity &&
         cached.agentCompletion === agentCompletion &&
         cached.resumedAgentId === resumedAgentId &&
         cached.agentName === resumedIdentity?.agentName &&
@@ -857,15 +865,16 @@ export function selectTranscriptRows(
       source.status === status &&
       source.result === result &&
       source.autoModeReview === autoModeReview &&
+      source.activity === activity &&
       source.agentCompletion === agentCompletion
     ) {
       return [source]
     }
-    const joined = { ...source, status, result, agentCompletion, autoModeReview }
+    const joined = { ...source, status, result, agentCompletion, autoModeReview, ...(activity ? { activity } : {}) }
     joinedToolRows.set(row, {
       ...views,
       [isHidden ? 'hidden' : 'normal']: {
-        storedResult, agentCompletion, resumedAgentId, autoModeReview,
+        storedResult, agentCompletion, resumedAgentId, autoModeReview, activity,
         agentName: resumedIdentity?.agentName, agentUsage: resumedIdentity?.agentUsage,
         row: joined,
       },
@@ -876,6 +885,7 @@ export function selectTranscriptRows(
 }
 
 type JoinedToolRow = {
+  activity?: ToolActivity
   storedResult: ToolResultProjection | null
   autoModeReview?: AutoModeReview
   agentCompletion: AgentCompletionProjection | null
@@ -1072,12 +1082,28 @@ const lastNestedRows = new Map<string, WeakRef<NestedTranscriptRow[]>>()
 const MAX_NESTED_ROWS_VIEWS = 64
 const lastNestedInputs = new Map<string, WeakRef<TranscriptSessionState>>()
 
+function sameScriptActivities(a: TranscriptSessionState, b: TranscriptSessionState): boolean {
+  if (a.activities === b.activities) return true
+  const ids = new Set([...Object.keys(a.activities), ...Object.keys(b.activities)])
+  for (const id of ids) {
+    if (a.activities[id] === b.activities[id]) continue
+    for (let index = b.rows.length - 1; index >= 0; index--) {
+      const row = b.rows[index]!
+      if (row.kind !== 'tool-use' || row.toolUseId !== id) continue
+      const result = b.toolResultsByUseId[id]
+      if (row.toolName === 'REPL' && (!result || result.codeMode?.status === 'running')) return false
+      break
+    }
+  }
+  return true
+}
+
 function sameNestedInputs(a: TranscriptSessionState, b: TranscriptSessionState): boolean {
   return a.rows === b.rows && a.toolResultsByUseId === b.toolResultsByUseId &&
     a.autoModeReviews === b.autoModeReviews &&
     a.agentCompletionsByToolUseId === b.agentCompletionsByToolUseId &&
     a.hiddenFrameIds === b.hiddenFrameIds && a.historyTruncated === b.historyTruncated &&
-    a.unavailableParentToolUseIds === b.unavailableParentToolUseIds
+    a.unavailableParentToolUseIds === b.unavailableParentToolUseIds && sameScriptActivities(a, b)
 }
 
 export function nestedRowsChange(rows: readonly NestedTranscriptRow[]): NestedRowsChange | null {
@@ -1405,6 +1431,7 @@ export function projectCodeModeCall(parent: NestedToolUseRow, call: CodeModeCall
     messageId: parent.messageId, frameId: parent.frameId, blockIndex: 0,
     parentToolUseId: parent.toolUseId, kind: 'tool-use', toolUseId: call.toolUseId,
     toolName: call.name, toolFamily: deriveToolFamily(call.name), input: codeModeInput(call),
+    ...(codeModeInputWasOmitted(call) ? { codeModeInputOmitted: true as const } : {}),
     status: pending ? 'pending' : cancelled ? 'cancelled' : failed ? 'error' : 'success',
     result, agentCompletion: null, children: [],
   }

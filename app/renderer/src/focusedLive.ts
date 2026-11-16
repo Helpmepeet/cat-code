@@ -20,7 +20,7 @@ function partialField(json: string, field: string): string {
 }
 export function preparingCalls(state: FocusedLiveState | null, sessionId: string): FocusedCall[] {
   return Object.values(state?.preparing ?? {}).map(tool => {
-    const input = Object.fromEntries(['command', 'file_path', 'path', 'pattern', 'url', 'query', 'description', 'prompt', 'notebook_path', 'to', 'agentId', 'skill'].map(key => [key, partialField(tool.json, key)]))
+    const input = Object.fromEntries(['command', 'file_path', 'path', 'pattern', 'url', 'query', 'description', 'code', 'prompt', 'notebook_path', 'to', 'agentId', 'skill'].map(key => [key, partialField(tool.json, key)]))
     const patch = tool.json.startsWith('***') ? tool.json : partialField(tool.json, 'patch') || partialField(tool.json, 'input')
     const file = partialField(tool.json, 'file_path') || partialField(tool.json, 'path') || /\*\*\* (?:Update|Add|Delete) File: ([^\n]+)/.exec(patch)?.[1] || ''
     const added = partialField(tool.json, 'new_string') || partialField(tool.json, 'content')

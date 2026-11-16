@@ -2,7 +2,8 @@ import { backgroundAgentState, focusedCallLine, isDeclinedQuestion, type Focused
 import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { deriveToolFamily } from './transcriptProjector.js'
-import { codeModeCallCompleted, codeModeForRow, codeModeInput } from './codeMode.js'
+import { codeModeCallCompleted, codeModeInput } from './codeMode.js'
+import { codeModeLiveView } from './codeModeLiveView.js'
 import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
 import { selectToolDiffs } from './toolDiffs.js'
 import { isMemoryRecall } from './memoryRecall.js'
@@ -95,7 +96,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   for (const row of rows) {
     if (rowHasError(row)) errorCount++
     if (row.kind !== 'tool-use' || isPeerSpeechCall(row.toolName)) continue
-    const cell = codeModeForRow(row)
+    const cell = codeModeLiveView(row)
     if ((cell && cell.cellId === row.toolUseId) || row.toolName === 'REPL') {
       const calls = cell?.calls ?? row.children.flatMap(child => child.kind === 'tool-use' ? [{
         toolUseId: child.toolUseId, name: child.toolName, input: child.input, status: isBlocked(child) ? 'blocked' : child.status,

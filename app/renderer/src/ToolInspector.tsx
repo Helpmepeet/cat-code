@@ -219,6 +219,7 @@ function OutputPanel({
         ) : null}
       </header>
 
+      {row.codeModeInputOmitted ? <div className="code-mode-input-note">Final input is too large to display</div> : null}
       {views.length > 1 ? (
         <div className="tool-output-tabs" role="tablist" aria-label="Output views">
           {views.map(option => (

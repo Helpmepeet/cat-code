@@ -5,11 +5,17 @@ import { TranscriptRowsView } from './TranscriptView.js'
 import { ToolInspector } from './ToolInspector.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { ToolOutputContext } from './toolOutputPanel.js'
-import { selectCodeModeLine } from './codeModeSelection.js'
+import { revealCodeModeLine, selectCodeModeLine } from './codeModeSelection.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'
 import type { CodeModeEnvelope } from './codeMode.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { CodeModeCard } from './CodeModeCard.js'
+import { codeModeBackgroundFixture } from './codeModeBackgroundFixture.js'
+import { codeModeLiveView } from './codeModeLiveView.js'
+import { TranscriptModeContext } from './transcriptMode.js'
+import { createToolCardExpansionStore } from './toolCardExpansion.js'
+import { findToolOutputRow } from './toolOutputRow.js'
+import { SubagentWorkspace } from './SubagentWorkspace.js'
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
 afterEach(async () => { await act(async () => { await harness.nextFrame() }); await harness.unmountAll() })
@@ -62,7 +68,7 @@ test('large outputs and call sets mount bounded children and source lines', asyn
 })
 test('running receipt, cancellation and syntax errors remain distinct', async () => {
   const tree = await harness.mount(transcript([row('receipt', { status: 'running', calls: [], changedFiles: [] }), row('cancelled', { status: 'cancelled', error: 'Stopped after edit' }), row('syntax', { status: 'failed', calls: [], error: 'SyntaxError: unexpected token' })]))
-  expect(tree.container.querySelector('.code-mode-status-running')?.textContent).toBe('running')
+  expect(tree.container.querySelector('.code-mode-status-running')?.textContent).toBe('Running')
   expect(tree.container.querySelector('.code-mode-status-cancelled')?.textContent).toBe('cancelled')
   expect(tree.container.textContent).toContain('Stopped after edit')
   expect(tree.container.textContent).toContain('SyntaxError: unexpected token')
@@ -203,4 +209,275 @@ test('identical cell IDs in forked sessions have isolated selection and retained
   const restored = await harness.mount(<>{transcript([first])}<ToolInspector row={first} /></>)
   expect(restored.container.querySelector('.code-mode-step.is-selected')?.textContent).toContain('Read files')
   expect(restored.container.querySelector('button[aria-label="Select line 2, executed"]')?.getAttribute('aria-pressed')).toBe('true')
+})
+
+test('background child frames advance production Script, source gutter and Focused counts before final receipt', async () => {
+  const fixture = codeModeBackgroundFixture('background-dom')
+  const view = () => <>
+    <div data-background-full>{transcript([fixture.row()])}</div>
+    <ToolInspector row={fixture.row()} />
+    <div data-background-focused><TranscriptModeContext.Provider value={{ mode: 'focused', setMode() {} }}>
+      <TranscriptRowsView rows={fixture.rows()} turnLive={fixture.row().status === 'pending'} />
+    </TranscriptModeContext.Provider></div>
+  </>
+  const tree = await harness.mount(view())
+  const full = () => tree.container.querySelector('[data-background-full]')!
+  const focusedCount = () => tree.container.querySelector('[data-background-focused] .focused-fold-detail > span:last-child')?.textContent ?? ''
+  expect(full().querySelectorAll('.code-mode-step')).toHaveLength(0)
+  fixture.start('live-read', 'Read', 2)
+  await tree.render(view())
+  expect(full().querySelectorAll('.code-mode-step')).toHaveLength(1)
+  expect(full().querySelector('.code-mode-step summary')?.textContent).toContain('Read files')
+  expect(tree.container.querySelector<HTMLButtonElement>('button[aria-label="Select line 2, executed"]')?.title).toContain('running')
+  expect(focusedCount()).not.toContain('read 1')
+  fixture.finish('live-read')
+  await tree.render(view())
+  expect(full().querySelector('.code-mode-step summary')?.textContent).toContain('1 file read')
+  expect(focusedCount()).toContain('read 1')
+  expect(fixture.row().result!.codeMode!.calls).toEqual([])
+  expect(full().querySelector('.code-mode-step summary')?.textContent).not.toContain('Invented')
+  expect(codeModeLiveView(fixture.row())!.calls.map(call => call.name)).toEqual(['Read'])
+  expect(full().querySelector('.code-mode-output')?.textContent).toContain('Background started')
+  fixture.start('live-check', 'Bash', 4)
+  fixture.finish('live-check')
+  await tree.render(view())
+  expect(full().querySelectorAll('.code-mode-step')).toHaveLength(2)
+  expect(full().querySelectorAll('.code-mode-linked-call')).toHaveLength(2)
+  expect(tree.container.querySelector('button[aria-label="Select line 4, executed"]')).not.toBeNull()
+  expect(focusedCount()).toContain('ran 1')
+  const observed = codeModeLiveView(fixture.row())!.calls
+  fixture.receipt('running', [{ ...observed[0]!, status: 'running' }])
+  await tree.render(view())
+  expect(full().querySelectorAll('.code-mode-linked-call')).toHaveLength(2)
+  // Final host ledger is authoritative even if older child frames remain.
+  fixture.receipt('completed', [observed[0]!])
+  await tree.render(view())
+  expect(full().querySelectorAll('.code-mode-step')).toHaveLength(1)
+  expect(full().querySelectorAll('.code-mode-linked-call')).toHaveLength(1)
+  expect(tree.container.querySelector('button[aria-label="Select line 4, executed"]')).toBeNull()
+  expect(focusedCount()).toContain('read 1')
+  expect(focusedCount()).not.toContain('ran 1')
+  expect(full().querySelector('.code-mode-output')?.textContent).toContain('Final selected output')
+})
+
+test('opened named Focused Scripts are headerless and visible without changing Full expansion choices', async () => {
+  for (const status of ['running', 'completed'] as const) {
+    const fixture = codeModeBackgroundFixture(`named-${status}`)
+    fixture.start('read', 'Read', 2)
+    fixture.finish('read')
+    fixture.receipt(status, codeModeLiveView(fixture.row())!.calls)
+    const store = createToolCardExpansionStore()
+    let opened = ''
+    const view = (mode: 'full' | 'focused') => <ToolOutputContext.Provider value={value => { opened = value.toolUseId }}>
+      <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptRowsView rows={fixture.rows()} turnLive={status === 'running'} toolCardExpansionStore={store} /></TranscriptModeContext.Provider>
+    </ToolOutputContext.Provider>
+    const tree = await harness.mount(view('full'))
+    const fullHeader = tree.container.querySelector('.code-mode-disclosure')!
+    if (fullHeader.getAttribute('aria-expanded') === 'false') await click(fullHeader)
+    await click(tree.container.querySelector('.code-mode-disclosure')!)
+    expect(tree.container.querySelector('.code-mode-body')).toBeNull()
+    await tree.render(view('focused'))
+    const turn = tree.container.querySelector('.focused-fold-head')!
+    if (turn.getAttribute('aria-expanded') === 'false') await click(turn)
+    const step = tree.container.querySelector('.focused-step-head')!
+    expect(step.textContent).toContain('Inspect in background')
+    if (step.getAttribute('aria-expanded') === 'false') await click(step)
+    const body = tree.container.querySelector('.focused-step-body')!
+    expect(Boolean(body.querySelector('.code-mode-header'))).toBe(false)
+    expect(body.querySelector('.code-mode-body')).not.toBeNull()
+    expect(body.querySelector('.code-mode-source')?.textContent).toBe('Open')
+    await click(body.querySelector('.code-mode-source')!)
+    expect(opened).toBe(fixture.cellId)
+    expect(body.querySelector('.code-mode-line')).not.toBeNull()
+    await tree.render(view('full'))
+    expect(tree.container.querySelector('.code-mode-disclosure')?.getAttribute('aria-expanded')).toBe('false')
+    expect(tree.container.querySelector('.code-mode-body')).toBeNull()
+    await tree.unmount()
+  }
+})
+
+test('zero-call parse failures keep a visible Focused body and reachable Script inspector', async () => {
+  const value = { ...row('named-parse', { status: 'failed', calls: [], code: 'const = ;', error: 'SyntaxError: unexpected token' }), status: 'error' as const }
+  const user = { id: 'parse-user', sessionId: value.sessionId, frameId: 'parse-user', messageId: 'parse-user', blockIndex: 0, parentToolUseId: null, children: [], kind: 'user-text' as const, role: 'user' as const, content: 'Inspect', isReplay: false }
+  let opened = ''
+  const tree = await harness.mount(<ToolOutputContext.Provider value={target => { opened = target.toolUseId }}>
+    <TranscriptModeContext.Provider value={{ mode: 'focused', setMode() {} }}><TranscriptRowsView rows={[user, value]} /></TranscriptModeContext.Provider>
+  </ToolOutputContext.Provider>)
+  const turn = tree.container.querySelector('.focused-fold-head')!
+  if (turn.getAttribute('aria-expanded') === 'false') await click(turn)
+  const step = tree.container.querySelector('.focused-step-head')
+  expect(step).not.toBeNull()
+  if (step!.getAttribute('aria-expanded') === 'false') await click(step!)
+  const body = tree.container.querySelector('.focused-step-body')!
+  expect(Boolean(body.querySelector('.code-mode-header'))).toBe(false)
+  expect(body.textContent).toContain('SyntaxError: unexpected token')
+  await click(body.querySelector('.code-mode-source')!)
+  expect(opened).toBe(value.toolUseId)
+})
+
+test('Script child cards and their inspectors show host-final commands and paths, not submitted history', async () => {
+  for (const name of ['Bash', 'Read']) {
+    const fixture = codeModeBackgroundFixture(`final-action-${name}`)
+    fixture.start('action', name, 2)
+    fixture.finish('action', 'Actual child output', name === 'Read')
+    const before = fixture.row()
+    const submitted = before.children[0] as NestedToolUseRow
+    const observed = codeModeLiveView(before)!.calls[0]!
+    const input = name === 'Bash' ? { command: 'printf hook-final-command' } : { file_path: '/repo/hook-final.txt' }
+    fixture.receipt(name === 'Bash' ? 'completed' : 'blocked', [{ ...observed, input, status: name === 'Bash' ? 'completed' : 'blocked' }])
+    const parent = fixture.row()
+    const inspector = findToolOutputRow(fixture.rows(), submitted.id)!
+    const tree = await harness.mount(<>{transcript([parent])}<ToolInspector row={inspector} /></>)
+    const target = name === 'Bash' ? 'hook-final-command' : 'hook-final.txt'
+    const childCard = tree.container.querySelector('.code-mode-linked-call')!
+    expect(childCard.textContent).toContain(target)
+    expect(childCard.textContent).toContain('Actual child output')
+    expect(childCard.textContent).not.toContain('test -e /repo/a')
+    expect(tree.container.querySelector('.tool-output-target')?.textContent).toContain(target)
+    expect(parent.children[0]).toBe(submitted)
+    expect(submitted.input).toEqual(name === 'Bash' ? { command: 'test -e /repo/a' } : { file_path: '/repo/a' })
+    expect(inspector.result).toBe(submitted.result)
+    expect(inspector.id).toBe(submitted.id)
+    await tree.unmount()
+  }
+})
+
+test('omitted final inputs are explicit in Script child and inspector without original-action fallback', async () => {
+  const fixture = codeModeBackgroundFixture('omitted-action-dom')
+  fixture.start('omitted', 'Bash', 2)
+  fixture.finish('omitted', 'Actual child output')
+  const submitted = fixture.row().children[0] as NestedToolUseRow
+  const observed = codeModeLiveView(fixture.row())!.calls[0]!
+  fixture.receipt('completed', [{ ...observed, input: { omitted: true, reason: 'Final executable input display limit', bytes: 70000 }, inputOmission: { bytes: 70000 } }])
+  const inspector = findToolOutputRow(fixture.rows(), submitted.id)!
+  const tree = await harness.mount(<>{transcript([fixture.row()])}<ToolInspector row={inspector} /></>)
+  expect(tree.container.querySelector('.code-mode-linked-call .code-mode-input-note')?.textContent).toBe('Final input is too large to display')
+  expect(tree.container.querySelector('aside .code-mode-input-note')?.textContent).toBe('Final input is too large to display')
+  expect(tree.container.textContent).not.toContain('test -e /repo/a')
+  expect(submitted.input.command).toBe('test -e /repo/a')
+})
+
+function sourceWorkspace(value: NestedToolUseRow) {
+  return <ToolsExpandedContext.Provider value={{ expanded: true, setExpanded() {} }}>
+    <SubagentWorkspace dock={{ active: [], finished: [], chipFaces: [], nextUpdateAt: null }} collapsed={false}
+      onCollapsedChange={() => {}} onClearFinished={() => {}} onDetailsVisibleChange={() => {}}
+      onFallback={() => {}} onOpenWorkers={() => {}} rows={[value]} cwd={null}>
+      <main className="session-pane"><TranscriptRowsView rows={[value]} /></main>
+    </SubagentWorkspace>
+  </ToolsExpandedContext.Provider>
+}
+
+test('real workspace Line links reveal Script again, including the same previously selected line', async () => {
+  const value = row('workspace-line-reveal', { code: '// Read files\nRead();\n// Verify\nBash();\n' + 'void 0;\n'.repeat(400) })
+  const tree = await harness.mount(sourceWorkspace(value))
+  const line = () => tree.container.querySelector('.code-mode-line')!
+  await click(line())
+  const firstPanel = tree.container.querySelector('.code-mode-panel')!
+  const output = [...firstPanel.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Output')!
+  await click(output)
+  expect(output.getAttribute('aria-selected')).toBe('true')
+  await click(line())
+  const reopened = tree.container.querySelector('.code-mode-panel')!
+  expect(reopened !== firstPanel).toBe(true)
+  expect(reopened.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Script')
+  expect(reopened.querySelector('button[aria-label="Select line 2, executed"]')?.getAttribute('aria-pressed')).toBe('true')
+  const scroller = reopened.querySelector<HTMLElement>('.tool-output-scroller')!
+  await act(async () => { scroller.scrollTop = 5000; scroller.dispatchEvent(new Event('scroll')); await harness.nextFrame() })
+  expect(scroller.scrollTop).toBe(5000)
+  await click(line())
+  const reset = tree.container.querySelector<HTMLElement>('.code-mode-panel .tool-output-scroller')!
+  expect(reset.scrollTop).toBeLessThan(5000)
+  expect(tree.container.querySelector('.code-mode-panel .tool-output-row.is-active')?.textContent).toContain('Read();')
+})
+
+test('step selection reveals Script from Output and can reveal the same line without reopening the inspector', async () => {
+  const value = row('workspace-step-reveal', { code: '// Read files\nRead();\n// Verify\nBash();\n' + 'void 0;\n'.repeat(400) })
+  const tree = await harness.mount(sourceWorkspace(value))
+  await click(tree.container.querySelector('.code-mode-line')!)
+  const panel = tree.container.querySelector('.code-mode-panel')!
+  await click([...panel.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Output')!)
+  const wrap = [...panel.querySelectorAll('button')].find(button => button.textContent === 'Wrap')!
+  const wasWrapped = wrap.getAttribute('aria-pressed')
+  await click(wrap)
+  await click(tree.container.querySelector('.code-mode-step summary')!)
+  expect(tree.container.querySelector('.code-mode-panel') === panel).toBe(true)
+  expect(panel.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Script')
+  expect([...panel.querySelectorAll('button')].find(button => button.textContent === 'Wrap')?.getAttribute('aria-pressed')).not.toBe(wasWrapped)
+  expect(Boolean(panel.querySelector('button[aria-label="Copy output"]'))).toBe(true)
+  const scroller = panel.querySelector<HTMLElement>('.tool-output-scroller')!
+  await act(async () => { scroller.scrollTop = 5000; scroller.dispatchEvent(new Event('scroll')); await harness.nextFrame() })
+  expect(scroller.scrollTop).toBe(5000)
+  await click(tree.container.querySelector('.code-mode-step summary')!)
+  expect(panel.querySelector('.tool-output-scroller') === scroller).toBe(true)
+  expect(scroller.scrollTop).toBeLessThan(5000)
+  expect(panel.querySelector('.tool-output-row.is-active')?.textContent).toContain('Read();')
+  await click([...panel.querySelectorAll('button')].find(button => button.textContent === 'Wrap')!)
+})
+
+test('streamed background child updates do not switch an explicitly selected Output tab', async () => {
+  const fixture = codeModeBackgroundFixture('output-tab-streaming')
+  const tree = await harness.mount(sourceWorkspace(fixture.row()))
+  await click(tree.container.querySelector('.code-mode-source')!)
+  const panel = tree.container.querySelector('.code-mode-panel')!
+  await click([...panel.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Output')!)
+  fixture.start('read', 'Read', 2)
+  await tree.render(sourceWorkspace(fixture.row()))
+  fixture.finish('read')
+  await tree.render(sourceWorkspace(fixture.row()))
+  expect(tree.container.querySelector('.code-mode-panel') === panel).toBe(true)
+  expect(panel.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Output')
+  expect(panel.textContent).toContain('Background started')
+})
+
+test('explicit source reveals do not change tabs or notify an identical cell in another session', async () => {
+  const first = { ...row('reveal-shared-cell'), sessionId: 'reveal-session-a' }
+  const second = { ...row('reveal-shared-cell'), sessionId: 'reveal-session-b' }
+  let secondCommits = 0
+  const tree = await harness.mount(<>
+    <div data-reveal-pane="a"><ToolInspector row={first} /></div>
+    <Profiler id="reveal-b" onRender={() => { secondCommits++ }}><div data-reveal-pane="b"><ToolInspector row={second} /></div></Profiler>
+  </>)
+  const paneA = tree.container.querySelector('[data-reveal-pane="a"]')!
+  const paneB = tree.container.querySelector('[data-reveal-pane="b"]')!
+  for (const pane of [paneA, paneB]) await click([...pane.querySelectorAll('[role="tab"]')].find(tab => tab.textContent === 'Output')!)
+  const before = secondCommits
+  await act(async () => { revealCodeModeLine(first.sessionId, first.toolUseId, 2) })
+  expect(paneA.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Script')
+  expect(paneB.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe('Output')
+  expect(secondCommits).toBe(before)
+})
+
+test('guest MCP arguments that resemble omission control remain visible data without omission UI', async () => {
+  const fixture = codeModeBackgroundFixture('guest-omission-data-dom')
+  const input = { omitted: true, reason: 'Final executable input display limit', bytes: 1, file_path: '/actual-target', inputOmission: { bytes: 90000 } }
+  fixture.start('save', 'mcp__fixture__save', 2)
+  fixture.finish('save', JSON.stringify(input))
+  const submitted = fixture.row().children[0] as NestedToolUseRow
+  const observed = codeModeLiveView(fixture.row())!.calls[0]!
+  fixture.receipt('completed', [{ ...observed, input }])
+  const inspector = findToolOutputRow(fixture.rows(), submitted.id)!
+  const tree = await harness.mount(<>{transcript([fixture.row()])}<ToolInspector row={inspector} /></>)
+  expect(inspector.input).toEqual(input)
+  expect(inspector.codeModeInputOmitted).toBeUndefined()
+  expect(Boolean(tree.container.querySelector('.code-mode-input-note'))).toBe(false)
+  expect(tree.container.textContent).toContain('/actual-target')
+  expect(tree.container.textContent).toContain('omitted')
+})
+
+test('genuine host omission UI clears when the canonical input becomes small', async () => {
+  const fixture = codeModeBackgroundFixture('host-omission-clearing-dom')
+  fixture.start('save', 'Bash', 2)
+  fixture.finish('save', 'Actual child output')
+  const submitted = fixture.row().children[0] as NestedToolUseRow
+  const observed = codeModeLiveView(fixture.row())!.calls[0]!
+  fixture.receipt('completed', [{ ...observed, input: { omitted: true, reason: 'Final executable input display limit', bytes: 90000 }, inputOmission: { bytes: 90000 } }])
+  const view = () => <>{transcript([fixture.row()])}<ToolInspector row={findToolOutputRow(fixture.rows(), submitted.id)} /></>
+  const tree = await harness.mount(view())
+  expect(tree.container.querySelectorAll('.code-mode-input-note')).toHaveLength(2)
+  fixture.receipt('completed', [{ ...observed, input: { command: 'printf small-final-input' } }])
+  await tree.render(view())
+  expect(Boolean(tree.container.querySelector('.code-mode-input-note'))).toBe(false)
+  expect(tree.container.querySelector('.code-mode-linked-call')?.textContent).toContain('small-final-input')
+  expect(tree.container.querySelector('.tool-output-target')?.textContent).toContain('small-final-input')
+  expect(submitted.input.command).toBe('test -e /repo/a')
 })

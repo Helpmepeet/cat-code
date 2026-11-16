@@ -6,13 +6,14 @@ import './codeMode.css'
 import { selectCodeModeLine, useCodeModeSelection } from './codeModeSelection.js'
 import { SidePaneNavigation } from './SidePaneNavigation.js'
 import { ActionCloseIcon } from './SessionActionIcons.js'
-import { codeModeForRow } from './codeMode.js'
+import { codeModeLiveView } from './codeModeLiveView.js'
 
 /** Uses the same bounded, searchable source renderer as file and tool output. */
 export function CodeModeInspector({ row, onClose }: { row: NestedToolUseRow; onClose?: () => void }) {
-  const cell = codeModeForRow(row)
+  const cell = codeModeLiveView(row)
   const [tab, setTab] = useState('script')
   const selection = useCodeModeSelection(row.sessionId, row.toolUseId)
+  useLayoutEffect(() => { if (selection?.revealToken) setTab('script') }, [selection?.revealToken])
   const root = useRef<HTMLElement>(null)
   useLayoutEffect(() => { root.current?.querySelector<HTMLElement>('[role="region"]')?.focus({ preventScroll: true }) }, [])
   const [wrap, setWrap] = useSourceWrap()

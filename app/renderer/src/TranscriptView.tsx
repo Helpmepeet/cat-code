@@ -138,6 +138,7 @@ import {
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { FocusedNamedCallContext, TranscriptModeContext, type TranscriptMode } from './transcriptMode.js'
 import { deriveFocusedTranscript, type FocusedTranscriptItem, type FocusedTurnItem } from './focusedTranscriptLayout.js'
+import { preparingCalls } from './focusedLive.js'
 import { FocusedChevron, FocusedTranscript } from './FocusedTranscript.js'
 import { FocusedDisclosure } from './FocusedDisclosure.js'
 import './taskNotification.css'
@@ -823,6 +824,9 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     rows.length === 0 ? null : rows[0].sessionId,
   )
   const faceRegistry = inheritedFaces ?? ownFaces
+  const preparingScripts = useMemo(() => transcriptMode === 'full' && rows[0]?.sessionId
+    ? preparingCalls(focusedLiveState, rows[0].sessionId).filter(row => row.toolName === 'REPL')
+    : [], [transcriptMode, focusedLiveState?.preparing, rows[0]?.sessionId])
   const moveView = useWorkspaceMoveView(workspaceMove, boundaryRows, restorePhase === null && !loadEarlierPending)
   const selectRecoveredCopies = useMemo(createRecoveredResponseCopySelector, [])
   const recoveredCopies = useMemo(() => selectRecoveredCopies(rows), [selectRecoveredCopies, rows])
@@ -1014,7 +1018,12 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         dataCardStyle={cardStyle}
         transcriptEntries
         className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-0 px-8 pt-6 transcript-col-slide workspace-transcript-column transcript-virtual-column"
-        footer={compacting ? <CompactingSeam /> : null}
+        footer={<>
+          {preparingScripts.length ? <ToolOutputContext.Provider value={null}>
+            {preparingScripts.map(row => <ToolCard key={row.toolUseId} row={row} />)}
+          </ToolOutputContext.Provider> : null}
+          {compacting ? <CompactingSeam /> : null}
+        </>}
       />
     )
     // Send-message motion (behavior 3): the row above already committed —
@@ -2797,9 +2806,12 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
 function ToolCard({ row }: { row: ToolUseNestedRow }) {
   const approvals = useContext(MemoryRecallApprovalContext)
   if (row.toolName === 'REPL') {
-    return <CodeModeCard row={row} waitingForApproval={row.children.some(child => child.kind === 'tool-use' && !!approvals?.[child.toolUseId])} renderChild={child => <TranscriptRowView row={child} narration={false} />} />
+    return <CodeModeCard row={row} waitingForApproval={!!approvals?.[row.toolUseId] || row.children.some(child => child.kind === 'tool-use' && !!approvals?.[child.toolUseId])} renderChild={child => <TranscriptRowView row={child} narration={false} />} />
   }
-  return <AutoModeReviewContext.Provider value={row.autoModeReview}><ToolCardContent row={row} /></AutoModeReviewContext.Provider>
+  return <AutoModeReviewContext.Provider value={row.autoModeReview}>
+    {row.codeModeInputOmitted ? <div className="code-mode-input-note">Final input is too large to display</div> : null}
+    <ToolCardContent row={row} />
+  </AutoModeReviewContext.Provider>
 }
 
 const MemoryRecallApprovalContext = createContext<FocusedLiveState['awaitingApproval'] | null>(null)

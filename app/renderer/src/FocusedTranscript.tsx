@@ -52,13 +52,15 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   const headLive = useSettling(turn.live)
   const label = headLive ? 'Working' : 'Worked'
   const time = headLive || turn.durationMs === null ? '' : formatDuration(turn.durationMs)
+  // A running Script can already own completed inner work.
   const settled = useMemo(() => headLive
-    ? summarizeFocusedWork(turn.rows.filter(row => row.kind === 'tool-use' && row.status !== 'pending'))
+    ? summarizeFocusedWork(turn.rows.filter(row => row.kind === 'tool-use' && (row.status !== 'pending' || row.toolName === 'REPL')))
     : turn, [turn, headLive])
   const detail = [time, settled.toolCalls === 0 ? '' : settled.compact].filter(Boolean).join(' · ')
   const preparingId = preparing[0]?.toolUseId
   const segments = useMemo(() => {
-    const result = turn.segments.filter(segment => segment.kind !== 'stretch' || segment.toolCalls > 0)
+    const result = turn.segments.filter(segment => segment.kind !== 'stretch' || segment.toolCalls > 0 ||
+      segment.rows.some(row => row.kind === 'tool-use' && row.toolName === 'REPL'))
     if (preparingId && result.at(-1)?.kind !== 'stretch') {
       result.push({ kind: 'stretch', id: `focused-preparing:${preparingId}`, rows: [], ...summarizeFocusedWork([]) })
     }
@@ -181,7 +183,11 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
   useEffect(() => {
     if (revealMatch) setOpen(true)
   }, [reveal?.sequence, revealMatch])
-  const calls: FocusedCall[] = [...segment.rows.filter((row): row is Extract<NestedTranscriptRow, { kind: 'tool-use' }> => row.kind === 'tool-use').map(row => ({ ...row, activity: liveState?.activities[row.toolUseId], awaitingApproval: liveState?.awaitingApproval[row.toolUseId] })), ...preparing]
+  const calls: FocusedCall[] = [...segment.rows.filter((row): row is Extract<NestedTranscriptRow, { kind: 'tool-use' }> => row.kind === 'tool-use').map((row): FocusedCall => ({
+    ...row, activity: liveState?.activities[row.toolUseId] ?? row.activity,
+    awaitingApproval: liveState?.awaitingApproval[row.toolUseId] || row.toolName === 'REPL' &&
+      row.children.some(child => child.kind === 'tool-use' && !!liveState?.awaitingApproval[child.toolUseId]) ? true : undefined,
+  })), ...preparing]
   const messageOrder = new Map([...new Set(calls.map(call => call.messageId))].map((id, index) => [id, index]))
   calls.sort((a, b) => messageOrder.get(a.messageId)! - messageOrder.get(b.messageId)! || a.blockIndex - b.blockIndex)
   const finished = calls.filter(call => call.status !== 'pending')
@@ -239,7 +245,9 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
         <img alt="Latest screenshot" decoding="async" loading="lazy" src={`data:${screenshot.mediaType};base64,${screenshot.data}`} />
       </button> : null}
       <FocusedDisclosure open={open} id={bodyId}>
-        <FocusedNamedCallContext.Provider value={headNames?.toolUseId ?? null}>
+        <FocusedNamedCallContext.Provider value={headNames?.toolUseId ??
+          (liveHead?.toolName === 'REPL' ? liveHead.toolUseId :
+            stoppedRow?.kind === 'tool-use' && stoppedRow.toolName === 'REPL' ? stoppedRow.toolUseId : null)}>
           <div className="focused-step-body">{renderRows(segment.rows.filter(row => !isFocusedDeliverable(row)), false)}</div>
         </FocusedNamedCallContext.Provider>
       </FocusedDisclosure>

@@ -1,5 +1,5 @@
 export type CodeModeStatus = 'completed' | 'failed' | 'cancelled' | 'blocked' | 'yielded' | 'running'
-export type CodeModeCall = { toolUseId: string; name: string; input: unknown; status: string; line?: number; result?: unknown; error?: string }
+export type CodeModeCall = { toolUseId: string; name: string; input: unknown; inputOmission?: { bytes: number }; status: string; line?: number; result?: unknown; error?: string }
 export type CodeModeEnvelope = {
   kind: 'code-mode'; cellId: string; generation: string; description: string; code: string
   status: CodeModeStatus; output: string; calls: CodeModeCall[]
@@ -14,6 +14,10 @@ const line = (value: unknown) => value === undefined || (Number.isSafeInteger(va
 const count = (value: unknown) => value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0)
 const statuses = new Set(['completed', 'failed', 'cancelled', 'blocked', 'yielded', 'running'])
 const callStatuses = new Set(['completed', 'failed', 'cancelled', 'blocked', 'running'])
+function validInputOmission(value: unknown): value is { bytes: number } {
+  return object(value) && Object.keys(value).length === 1 && Object.hasOwn(value, 'bytes') &&
+    Number.isSafeInteger(value.bytes) && Number(value.bytes) >= 0
+}
 /** Only the host audit envelope is accepted, never JSON parsed from selected output. */
 export function parseCodeMode(value: unknown): CodeModeEnvelope | null {
   if (!object(value) || value.kind !== 'code-mode' || typeof value.cellId !== 'string' || !value.cellId ||
@@ -23,7 +27,8 @@ export function parseCodeMode(value: unknown): CodeModeEnvelope | null {
     !Array.isArray(value.calls) || !Array.isArray(value.changedFiles)) return null
   if (!value.calls.every(call => object(call) && typeof call.toolUseId === 'string' && !!call.toolUseId &&
     typeof call.name === 'string' && 'input' in call && typeof call.status === 'string' && callStatuses.has(call.status) && line(call.line) &&
-    (call.error === undefined || typeof call.error === 'string'))) return null
+    (call.error === undefined || typeof call.error === 'string') &&
+    (call.inputOmission === undefined || validInputOmission(call.inputOmission)))) return null
   if (!value.changedFiles.every(file => object(file) && typeof file.path === 'string' && count(file.additions) && count(file.deletions))) return null
   if (new Set(value.calls.map(call => call.toolUseId)).size !== value.calls.length) return null
   return value as CodeModeEnvelope
@@ -31,6 +36,10 @@ export function parseCodeMode(value: unknown): CodeModeEnvelope | null {
 export type CodeModeStep = { key: string; label: string; line?: number; calls: CodeModeCall[] }
 export function codeModeInput(call: CodeModeCall): Record<string, unknown> {
   return object(call.input) ? call.input : {}
+}
+export function codeModeInputWasOmitted(call: CodeModeCall): boolean {
+  // Arguments are guest data; only the separate host field is omission control.
+  return validInputOmission(call.inputOmission)
 }
 const digestCache = new WeakMap<CodeModeEnvelope, string>()
 export function codeModeCallCompleted(call: CodeModeCall): boolean {

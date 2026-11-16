@@ -3,17 +3,26 @@ import type { CodeModeEnvelope, CodeModeStep } from './codeMode.js'
 
 // Source parsing belongs to Script presentation, not the shared audit projector.
 const stepsCache = new WeakMap<CodeModeEnvelope, readonly CodeModeStep[]>()
-/** Standalone comments label the following observed calls; comments alone never imply execution. */
-export function codeModeSteps(cell: CodeModeEnvelope): readonly CodeModeStep[] {
-  const cached = stepsCache.get(cell)
-  if (cached) return cached
-  const sourceLines = cell.code.split('\n')
+type SourcePlan = { sourceLines: string[]; comments: { line: number; label: string }[] }
+const sourcePlans = new Map<string, SourcePlan>()
+const MAX_SOURCE_PLANS = 8
+const MAX_SOURCE_PLAN_CHARS = 512 * 1024
+let sourcePlanChars = 0
+
+function sourcePlan(code: string): SourcePlan {
+  const cached = sourcePlans.get(code)
+  if (cached) {
+    sourcePlans.delete(code)
+    sourcePlans.set(code, cached)
+    return cached
+  }
+  const sourceLines = code.split('\n')
   let comments: { line: number; label: string }[] = []
   // Parse rather than regex-match strings, regex literals, and nested comments.
   // Incomplete or invalid source still has a useful per-call/line fallback.
-  if (cell.code.length <= 256 * 1024) try {
+  if (code.length <= 256 * 1024) try {
     const candidates: { line: number; label: string; start: number }[] = []
-    const program = parse(cell.code, {
+    const program = parse(code, {
       ecmaVersion: 'latest', sourceType: 'script', locations: true,
       allowAwaitOutsideFunction: true, allowReturnOutsideFunction: true,
       onComment: (_block, text, start, _end, location) => {
@@ -30,6 +39,24 @@ export function codeModeSteps(cell: CodeModeEnvelope): readonly CodeModeStep[] {
   } catch {
     comments = []
   }
+  const plan = { sourceLines, comments }
+  if (code.length <= 256 * 1024) {
+    sourcePlans.set(code, plan)
+    sourcePlanChars += code.length
+    while (sourcePlans.size > MAX_SOURCE_PLANS || sourcePlanChars > MAX_SOURCE_PLAN_CHARS) {
+      const oldest = sourcePlans.keys().next().value!
+      sourcePlans.delete(oldest)
+      sourcePlanChars -= oldest.length
+    }
+  }
+  return plan
+}
+
+/** Standalone comments label the following observed calls; comments alone never imply execution. */
+export function codeModeSteps(cell: CodeModeEnvelope): readonly CodeModeStep[] {
+  const cached = stepsCache.get(cell)
+  if (cached) return cached
+  const { sourceLines, comments } = sourcePlan(cell.code)
   const groups = new Map<string, CodeModeStep>()
   for (const call of cell.calls) {
     const sourceLine = call.line !== undefined && call.line <= sourceLines.length ? call.line : undefined

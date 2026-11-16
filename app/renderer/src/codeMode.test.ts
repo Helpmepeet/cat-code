@@ -1,5 +1,6 @@
-import { expect, test } from 'bun:test'
-import { codeModeDigest, codeModeStepDigest, parseCodeMode, type CodeModeEnvelope } from './codeMode.js'
+import { expect, spyOn, test } from 'bun:test'
+import * as acorn from 'acorn'
+import { codeModeDigest, codeModeInput, codeModeInputWasOmitted, codeModeStepDigest, parseCodeMode, type CodeModeEnvelope } from './codeMode.js'
 import { codeModeSteps } from './codeModeSteps.js'
 import { summarizeFocusedWork } from './focusedTranscriptLayout.js'
 import { focusedCallLine, focusedCallPhase } from './focusedCallText.js'
@@ -123,4 +124,39 @@ test('live Script summaries count only finished work and never denied Grep searc
   expect(summary.readPaths).toEqual(['/done'])
   expect(summary.searchedPatterns).toEqual([])
   expect(summary.blockedCount).toBe(1)
+})
+
+test('incremental child updates parse unchanged source once with bounded source-plan retention', () => {
+  const parse = spyOn(acorn, 'parse')
+  const code = '// Incremental source-plan regression\nRead();'
+  try {
+    for (let index = 0; index < 100; index++) {
+      const calls = Array.from({ length: index + 1 }, (_, call) => ({ toolUseId: String(call), name: 'Read', input: {}, status: 'completed', line: 2 }))
+      expect(codeModeSteps(cell({ code, calls }))[0]!.calls).toHaveLength(index + 1)
+    }
+    expect(parse).toHaveBeenCalledTimes(1)
+    codeModeSteps(cell({ code: `${code}\nRead();` }))
+    expect(parse).toHaveBeenCalledTimes(2)
+    for (let index = 0; index < 9; index++) codeModeSteps(cell({ code: `// Eviction source ${index}\nRead();` }))
+    codeModeSteps(cell({ code }))
+    expect(parse).toHaveBeenCalledTimes(12)
+  } finally {
+    parse.mockRestore()
+  }
+})
+
+test('only validated host-call inputOmission metadata controls omission, never argument data', () => {
+  const input = { omitted: true, reason: 'Final executable input display limit', bytes: 1, file_path: '/actual-target', inputOmission: { bytes: 90000 } }
+  const guest = { toolUseId: 'guest-call', name: 'mcp__fixture__save', status: 'completed', input }
+  expect(codeModeInputWasOmitted(guest)).toBe(false)
+  expect(codeModeInput(guest)).toBe(input)
+  const plain = cell({ calls: [guest] })
+  expect(parseCodeMode(plain)).toBe(plain)
+  const host = { ...guest, input: {}, inputOmission: { bytes: 90000 } }
+  expect(codeModeInputWasOmitted(host)).toBe(true)
+  const envelope = cell({ calls: [host] })
+  expect(parseCodeMode(envelope)).toBe(envelope)
+  for (const inputOmission of [null, {}, { bytes: -1 }, { bytes: 1.5 }, { bytes: '90000' }, { bytes: 90000, extra: true }]) {
+    expect(parseCodeMode(cell({ calls: [{ ...guest, inputOmission } as unknown as typeof host] }))).toBeNull()
+  }
 })

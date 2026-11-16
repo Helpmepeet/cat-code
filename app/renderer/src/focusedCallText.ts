@@ -31,6 +31,7 @@ import { deriveTarget, peerTargetFragment, toolSearchCardView } from './transcri
 import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
 import { getEmailToolIdentity } from './emailToolPresentation.js'
 import { codeModeDigest, codeModeForRow } from './codeMode.js'
+import { codeModeLiveView } from './codeModeLiveView.js'
 
 export type FocusedCallPhase = 'preparing' | 'queued' | 'reviewing' | 'approval' | 'running' | 'done' | 'failed' | 'stopped' | 'blocked'
 
@@ -65,18 +66,22 @@ export function isDeclinedQuestion(row: NestedToolUseRow): boolean {
 
 export function focusedCallPhase(call: FocusedCall, signalled: boolean): FocusedCallPhase {
   const cellStatus = codeModeForRow(call)?.status
-  if (cellStatus === 'running') return 'running'
   if (cellStatus === 'yielded') return 'stopped'
   if (cellStatus === 'blocked') return 'blocked'
   if (cellStatus === 'cancelled') return 'stopped'
   if (cellStatus === 'failed') return 'failed'
-  if (call.preparing) return 'preparing'
-  if (call.status === 'success' || isDeclinedQuestion(call)) return 'done'
-  if (call.status === 'cancelled') return 'stopped'
-  if (call.status === 'error') return call.autoModeReview?.outcome === 'blocked' ? 'blocked' : 'failed'
+  if (cellStatus === 'completed') return 'done'
+  if (cellStatus !== 'running') {
+    if (call.preparing) return 'preparing'
+    if (call.status === 'success' || isDeclinedQuestion(call)) return 'done'
+    if (call.status === 'cancelled') return 'stopped'
+    if (call.status === 'error') return call.autoModeReview?.outcome === 'blocked' ? 'blocked' : 'failed'
+  }
   // A blocking question reaches the user through the permission queue; it waits on an answer, not an approval.
   if (call.awaitingApproval && call.toolName !== 'AskUserQuestion') return 'approval'
+  if (cellStatus === 'running') return 'running'
   if (call.activity?.phase === 'reviewing') return 'reviewing'
+  if (call.activity?.phase !== 'executing' && call.autoModeReview?.outcome === 'reviewing') return 'reviewing'
   return call.activity?.phase === 'executing' || !signalled ? 'running' : 'queued'
 }
 
@@ -143,7 +148,7 @@ function askWords(call: FocusedCall): Words {
 
 function callWords(call: FocusedCall, ctx: FocusedCallContext): Words {
   const { toolName, input } = call
-  const cell = codeModeForRow(call)
+  const cell = codeModeLiveView(call)
   if (cell) {
     return { present: 'Running script', past: 'Script', target: cell.description, face: 'sans', detail: codeModeDigest(cell) }
   }
@@ -270,7 +275,8 @@ export function focusedCallLine(call: FocusedCall, ctx: FocusedCallContext): Foc
   const phase = focusedCallPhase(call, ctx.signalled)
   const words = callWords(call, ctx)
   const mark = focusedCallMark(call)
-  const [verb, verbTone] = codeModeForRow(call)?.status === 'yielded' ? ['Paused', null] as const : phaseVerb(phase, words, call.toolName === 'AskUserQuestion')
+  const [verb, verbTone] = codeModeForRow(call)?.status === 'yielded' ? ['Paused', null] as const :
+    call.toolName === 'REPL' && phase === 'preparing' ? ['Writing script', 'live'] as const : phaseVerb(phase, words, call.toolName === 'AskUserQuestion')
   return { phase, verb, verbTone, target: words.target, targetFace: words.face ?? 'mono', detail: words.detail ?? null,
     ...mark, background: backgroundOf(call, ctx) }
 }

@@ -15,6 +15,10 @@
 .code-mode-partial { margin-block-start: 8px; padding: 8px 10px; border-inline-start: 2px solid light-dark(#a46a16, #d7ad64); }
 .code-mode-partial strong { font-size: 12px; font-weight: 500; }
 .code-mode-partial button { color: var(--script-ink); font-size: 12px; }
+.code-mode.code-mode-headerless { border: 0; border-radius: 0; margin: 0; padding: 0; }
+.code-mode-source-action { display: flex; justify-content: flex-end; margin-block-end: 6px; }
+.code-mode-input-note { padding: 6px 10px; font-size: 12px; color: var(--text-muted); }
+.code-mode-headerless .code-mode-body { padding-block-start: 0; }
 .code-mode-step { padding-block: 6px; }
 .code-mode-step.is-selected { border-inline-start: 2px solid var(--script-ink); background: color-mix(in srgb, var(--script-ink) 7%, transparent); padding-inline-start: 8px; }
 .code-mode-linked-call.is-selected { box-shadow: inset 2px 0 var(--script-ink); padding-inline-start: 8px; }
