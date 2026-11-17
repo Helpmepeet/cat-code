@@ -1,10 +1,15 @@
-import { expect, test } from 'bun:test'
+import { expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdtemp, mkdir, writeFile, rm, symlink, realpath, chmod } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createFilePreviewService, parseFilePreviewUrl } from './filePreview.js'
 import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import type { FilePreviewEvent } from '../shared/filePreview.js'
+
+// These security checks use real snapshots, canonical paths and watchers, with
+// hundreds of filesystem operations per case. Their latency depends on host I/O;
+// the watcher assertions below keep their own tighter delivery deadlines.
+setDefaultTimeout(30_000)
 
 function previewService(deps: Parameters<typeof createFilePreviewService>[0]) {
   const service = createFilePreviewService(deps)
