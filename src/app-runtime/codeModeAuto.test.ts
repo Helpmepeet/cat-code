@@ -47,7 +47,7 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
         // truncate the pending source while presenting it as the current action.
         for (const body of evidence.classifierBodies) {
           const action = body.messages.at(-1).content.at(-1).text
-          const expected = `REPL ${evidence.code}\n`
+          const expected = `<pending_action>\nREPL ${evidence.code}\n</pending_action>\n`
           if (action !== expected) throw new Error(`Incomplete final-source Auto review (${scenario}): action length ${action.length}, expected ${expected.length}; middle=${action.includes(':distinct-middle:')}, suffix=${action.includes(':distinct-suffix*/')}; executed=${effect !== null}`)
         }
         return
@@ -60,14 +60,14 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
       expect(evidence.reviews.some((review: any) => review.toolUseId === 'submitted-script' && review.outcome === 'reviewing')).toBe(true)
       expect(evidence.reviews.some((review: any) => review.toolUseId === 'submitted-script' && review.outcome === 'allowed')).toBe(true)
       for (const body of evidence.classifierBodies) {
-        // The serializer appends the current action as its own final text block,
-        // after history. Compare that block, not a substring anywhere in history.
+        // The final block identifies the prospective action separately from
+        // history. Verify its entire source inside the engine envelope.
         const blocks = body.messages.at(-1).content
         const action = blocks.at(-1).text
         const projectedCode = /[\r\n\v\f\u0085\u2028\u2029<]/.test(evidence.code)
           ? JSON.stringify(evidence.code).replaceAll('<', '\\u003c').replaceAll('\u0085', '\\u0085').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029')
           : evidence.code
-        expect(action).toBe(`REPL ${projectedCode}\n`)
+        expect(action).toBe(`<pending_action>\nREPL ${projectedCode}\n</pending_action>\n`)
       }
       const children = evidence.transcript.filter((message: any) => message.type === 'assistant' && message.codeMode)
       const reviewedIdentities = new Set(children.flatMap((message: any) => message.message.content.filter((block: any) => block.type === 'tool_use').map((block: any) => block.id)).filter((id: string) => evidence.reviews.some((review: any) => review.toolUseId === id)))
