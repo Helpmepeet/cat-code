@@ -108,6 +108,7 @@ import {
   CH_SETTINGS_VERB,
   CH_PING,
   CH_RESTART,
+  CH_RECOVER_HANDOFF,
   CH_SERVER_FRAME,
   CH_RENDERER_READY,
   CH_DELIVERY_ACK,
@@ -511,6 +512,11 @@ const bridge: CatCodeBridge & NotificationVisibilityBridge = {
     const payload = { sessionId, nonce }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_PING, payload)
+  },
+  recoverHandoff(sessionId: SessionId, operationId: string, generation: string): Promise<HostResult<void>> {
+    const payload = { sessionId, operationId, generation }
+    sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_RECOVER_HANDOFF, payload) as Promise<HostResult<void>>
   },
   restart(sessionId: SessionId): Promise<HostResult<void>> {
     const payload = { sessionId }

@@ -1,6 +1,7 @@
 import type { ResumeCheckpoint, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
   WorkspaceHandoffExecutionOutcome, WorkspaceHandoffRecordStatus, WorkspaceHandoffSnapshot } from '../../app/shared/workspaceHandoff.js'
 import { logForDebugging } from '../utils/debug.js'
+import { handoffFailure } from './handoffFailure.js'
 
 export type WorkspaceHandoffConfiguration = {
   identity: WorkspaceHandoffIdentity
@@ -27,6 +28,7 @@ export class HandoffExecution {
   private finished = false
   private fenced = false
   private publications = 0
+  private failure: WorkspaceHandoffSnapshot['failure'] = null
 
   constructor(readonly configuration: WorkspaceHandoffConfiguration,
     private readonly changed: () => void) {}
@@ -55,6 +57,12 @@ export class HandoffExecution {
     return this.record.kind === 'valid' ? this.record.record : null
   }
   get canSettle(): boolean { return !this.completion || this.finished }
+  get settled(): boolean { return this.canSettle && this.publications === 0 }
+  recordFailure(stage: NonNullable<WorkspaceHandoffSnapshot['failure']>['stage'], error: unknown): void {
+    this.failure = handoffFailure(stage, error)
+    try { logForDebugging(`[workspace-handoff] ${JSON.stringify({ operationId: this.configuration.identity.operationId, ...this.failure })}`, { level: 'warn' }) } catch {}
+    this.announce()
+  }
   get canRetire(): boolean {
     const record = this.persisted
     return this.canSettle && this.publications === 0 && (this.configuration.historical === true ||
@@ -63,7 +71,7 @@ export class HandoffExecution {
   get closed(): boolean { return this.frozen !== null }
   snapshot(gate: WorkspaceHandoffSnapshot['gate']): WorkspaceHandoffSnapshot {
     return { ...this.configuration.identity, observerGeneration: this.configuration.observerGeneration,
-      statusSeq: ++this.sequence, execution: this.observation, record: this.record, gate }
+      statusSeq: ++this.sequence, execution: this.observation, settled: this.settled, failure: this.failure, recoveryId: null, record: this.record, gate }
   }
   gateChanged(): void { this.announce() }
   private announce(): void { this.sequence++; this.changed() }
@@ -74,7 +82,7 @@ export class HandoffExecution {
   }
   private async publish(change: (record: WorkspaceHandoffExecutionRecord) => WorkspaceHandoffExecutionRecord): Promise<void> {
     this.publications++
-    try { await this.publishRecord(change) } finally { this.publications-- }
+    try { await this.publishRecord(change) } finally { this.publications--; this.announce() }
   }
   private async publishRecord(change: (record: WorkspaceHandoffExecutionRecord) => WorkspaceHandoffExecutionRecord): Promise<void> {
     const { readWorkspaceHandoffExecution, updateWorkspaceHandoffExecution } = await import('../utils/workspaceHandoffExecutionState.js')
@@ -105,33 +113,37 @@ export class HandoffExecution {
     const acknowledgement = new Promise<void>((resolve, reject) => { claimReady = resolve; claimFailed = reject })
     this.acknowledgement = acknowledgement
     this.completion = (async () => {
+      let stage: NonNullable<WorkspaceHandoffSnapshot['failure']>['stage'] = 'execution_record'
       try {
         await this.publish(record => ({ ...record, consumed: true, cancellation: this.cancellation ?? record.cancellation }))
         claimReady()
         if (!this.cancellation || this.cancellation.application !== 'prevented_start') {
           this.started = true; this.observation = 'running'; this.announce()
+          stage = 'execution'
           try { await run() } catch (error) {
             if (!this.frozen || this.frozen.outcome === 'success') throw error
           }
         } else this.close('not_started')
         if (!this.frozen) this.close('failed')
+        stage = 'checkpoint_seal'
         this.observation = 'finalizing'; this.announce()
         const watchdog = setTimeout(() => { this.observation = 'unconfirmed'; this.announce() }, 30_000)
         try {
           let checkpoint: ResumeCheckpoint
           try { checkpoint = await seal() }
           catch (error) {
-            this.logFailure('checkpoint_retry', error)
+            if (handoffFailure('checkpoint_seal', error).reason !== 'unknown') throw error
             // Retry only the durability proof. The closed execution must never
             // be replayed, and a second failure still leaves it unconfirmed.
             checkpoint = await seal()
           }
           const terminal = { ...this.frozen!, checkpoint }
+          stage = 'execution_record'
           await this.publish(record => ({ ...record, terminal }))
           this.observation = 'terminal'; this.announce()
         } finally { clearTimeout(watchdog) }
       } catch (error) {
-        this.logFailure('completion_unconfirmed', error)
+        this.recordFailure(stage, error)
         claimFailed(error)
         this.observation = 'unconfirmed'; this.announce()
         throw error
@@ -142,16 +154,6 @@ export class HandoffExecution {
     void this.completion.catch(() => {})
     await acknowledgement
     return { completion: this.completion }
-  }
-  private logFailure(stage: string, error: unknown): void {
-    try {
-      const causes: string[] = []
-      for (let current = error; current && causes.length < 4;
-        current = current instanceof Error ? current.cause : undefined) {
-        causes.push(String(current))
-      }
-      logForDebugging(`[workspace-handoff] ${stage} operation=${this.configuration.identity.operationId}: ${causes.join(' caused by ')}`, { level: 'warn' })
-    } catch { /* Diagnostics must not prevent a failed claim from settling. */ }
   }
   close(outcome: WorkspaceHandoffExecutionOutcome): void {
     if (this.frozen) return

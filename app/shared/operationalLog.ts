@@ -1,3 +1,4 @@
+import { isWorkspaceHandoffFailure, isHandoffUuid } from './workspaceHandoff.js'
 import { WORKSPACE_JUMP_STAGES } from './workspaceJumpTiming.js'
 
 /**
@@ -79,6 +80,7 @@ export const OPERATIONAL_EVENTS = [
   'session.turn.completed',
   'session.turn.stalled',
   'workspace.jump.timing',
+  'workspace.handoff.failed',
   'session.restore.started',
   'session.restore.completed',
   'session.restore.failed',
@@ -133,6 +135,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
  * another event.
  */
 const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly string[]>> = {
+  'workspace.handoff.failed': ['phase', 'reason', 'code', 'messageId', 'kind', 'operationId', 'generation'],
   'workspace.jump.timing': ['phase', 'outcome', 'durationMs', 'operationId', 'generation', 'invocationId'],
   'app.start': ['version', 'packaged', 'platform', 'arch'],
   'app.ready': ['durationMs'],
@@ -312,6 +315,11 @@ export function sanitizeOperationalFields(
       throw new Error('invalid workspace jump timing')
     }
   }
+  if (event === 'workspace.handoff.failed' && (!isHandoffUuid(fields.operationId) || !isHandoffUuid(fields.generation) ||
+      !isWorkspaceHandoffFailure({ stage: fields.phase, reason: fields.reason,
+        ...(fields.code !== undefined ? { ioCode: fields.code } : {}),
+        ...(fields.messageId !== undefined ? { messageUuid: fields.messageId } : {}),
+        ...(fields.kind !== undefined ? { messageType: fields.kind } : {}) }))) throw new Error('Unsafe handoff failure metadata')
   const entries = Object.entries(fields)
   if (entries.length > MAX_OPERATIONAL_FIELDS) {
     throw new Error('operational record has too many fields')

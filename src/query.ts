@@ -312,7 +312,8 @@ function getEligibleCodexPartialStreamFailure(
 // Retained history owns raw identity. Provider projection can omit attachments or
 // mint user rows, so it must only run when preparing a provider request.
 function retainToolOutput(rows: Message[], message: Message): void {
-  if (message.type === 'user' || message.type === 'attachment' || isSystemLocalCommandMessage(message)) rows.push(message)
+  if (message.type === 'attachment' || isSystemLocalCommandMessage(message) ||
+      message.type === 'user' && !message.isVirtual && !message.codeMode) rows.push(message)
 }
 
 export type QueryParams = {

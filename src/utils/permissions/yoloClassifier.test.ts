@@ -1262,6 +1262,10 @@ describe('two-stage upstream classifier', () => {
       }
       return response('msg_fast', 'req_fast', { shouldBlock: false })
     })
+    if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+      expect(JSON.stringify(requests[0]?.system)).not.toContain('## User Intent Rule')
+      expect(JSON.stringify(requests[1]?.system)).toContain('## User Intent Rule')
+    }
 
     expect(requests.map(request => `${request.provider}/${request.model}`)).toEqual(
       ['openai/gpt-6-luna', 'firstParty/sonnet'],

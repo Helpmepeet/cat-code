@@ -410,6 +410,8 @@ function makeHost(
     prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
     cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
     prepareSessionRecovery?: HostOptions['prepareSessionRecovery']
+    prepareWorkspaceRecovery?: HostOptions['prepareWorkspaceRecovery']
+    cancelWorkspaceRecovery?: HostOptions['cancelWorkspaceRecovery']
     hasPendingSubmit?: HostOptions['hasPendingSubmit']
   } = {},
 ): Harness {
@@ -447,6 +449,8 @@ function makeHost(
     prepareMoveReplayRecovery: overrides.prepareMoveReplayRecovery,
     cancelMoveReplayCoalescing: overrides.cancelMoveReplayCoalescing,
     prepareSessionRecovery: overrides.prepareSessionRecovery,
+    prepareWorkspaceRecovery: overrides.prepareWorkspaceRecovery,
+    cancelWorkspaceRecovery: overrides.cancelWorkspaceRecovery,
     hasPendingSubmit: overrides.hasPendingSubmit,
     validateCwd:
       overrides.validateCwd ??
@@ -518,6 +522,11 @@ test('workspace reservation rejects stale process authority and serializes manua
   expect(acceptedDescriptor?.workspaceMove?.phase).toBe('moving')
   expect(acceptedDescriptor?.workspaceMove?.target.path).toBe(realpathSync(h.cwd))
   expect(acceptedDescriptor?.moving).toBe(false)
+  const eventCount = h.events.length
+  const started = performance.now()
+  for (let observation = 0; observation < 1000; observation++) h.host.publishWorkspaceJumpDisplay(accepted)
+  console.info('handoff polling fixture', JSON.stringify({ observations: 1000, elapsedMs: performance.now() - started, emittedStatuses: h.events.length - eventCount }))
+  expect(h.events.length).toBe(eventCount)
   expect(h.events.at(-1)?.type).toBe('session-status')
   h.host.publishWorkspaceJumpDisplay({ ...accepted, engineSessionId: randomUUID(), phase: 'settled', outcome: 'failed' })
   expect(h.host.listSessions().find(row => row.appSessionId === id)?.workspaceMove?.phase).toBe('moving')
@@ -5108,4 +5117,44 @@ test('failed account authority persistence is visible and identical snapshots ca
   await settle(() => h.host.listSessions().find(row => row.appSessionId === id)?.accountSelectionUnsaved === false)
   expect(registry.hasUnsavedAccountSelection(id)).toBe(false)
   expect(registry.getAccountSelection(id)?.openai).toBe('codex-b')
+})
+
+test.each(['prepared', 'refused', 'stale', 'restart failure'] as const)('held recovery %s retains ownership and ordinary restart refusal', async outcome => {
+  const root = tempDir()
+  const managedStorage = new ManagedStorage({ appDataBase: join(root, 'data'), ownershipDir: join(root, 'ownership') })
+  const gate = Promise.withResolvers<import('../shared/workspaceHandoff.js').WorkspaceRecoveryPreparation>()
+  let prepares = 0, cleanups = 0, recovered = 0
+  const h = makeHost({ managedStorage, validateCwd: cwd => existsSync(cwd) ? { ok: true, realpath: realpathSync(cwd) } : { ok: false },
+    prepareWorkspaceRecovery: async () => { prepares++; return gate.promise },
+    cancelWorkspaceRecovery: async () => { cleanups++ },
+    prepareSessionRecovery: () => { recovered++ },
+  })
+  const created = await h.host.createManagedChat()
+  if (!created.ok) throw new Error(created.error.message)
+  const id = created.value.appSessionId, engine = randomUUID(), operation = randomUUID()
+  h.supervisor.emitReady(id, engine)
+  await settle(() => h.registry.findSession(id)?.engineSessionId === engine)
+  writeTranscript(h.storageDir, engine)
+  await h.registry.markInputAccepted(id)
+  const generation = h.host.getSessionGeneration(id)!
+  expect((await h.host.reserveWorkspaceJump(id, operation, generation)).ok).toBe(true)
+  expect((await h.host.restartSession(id)).ok).toBe(false)
+  const pid = h.supervisor.getSessionProcessId(id)
+  const first = h.host.recoverWorkspaceHandoff(id, operation, generation)
+  const second = h.host.recoverWorkspaceHandoff(id, operation, generation)
+  expect(second).toBe(first)
+  await settle(() => prepares === 1)
+  expect(h.supervisor.getSessionProcessId(id)).toBe(pid)
+  if (outcome === 'stale') h.supervisor.records.get(id)!.generation = randomUUID()
+  if (outcome === 'restart failure') h.supervisor.restartSession = async () => { throw new Error('synthetic restart failure') }
+  gate.resolve(outcome !== 'refused' ? { ok: true } : { ok: false, reason: 'live_tasks' })
+  const result = await first
+  expect(result.ok).toBe(outcome === 'prepared')
+  if (outcome === 'refused' && result.ok === false) expect(result.error.message).toContain('Background work is still active')
+  expect(prepares).toBe(1)
+  expect(cleanups).toBe(1)
+  expect(recovered).toBe(outcome === 'prepared' || outcome === 'restart failure' ? 1 : 0)
+  expect(h.host.isWorkspaceJumpReserved(id)).toBe(true)
+  if (outcome === 'prepared') expect(h.supervisor.records.get(id)?.resumeEngineSessionId).toBe(engine)
+  else if (outcome !== 'restart failure') expect(h.supervisor.getSessionProcessId(id)).toBe(pid)
 })

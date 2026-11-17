@@ -81,6 +81,7 @@ export type AppSessionControllerAdapter = {
   recoverHandoffReconciliation?: (notice: { displayUuid: string; contextUuid: string }) => Promise<{
     inputUuid: string; contextUuid: string; checkpoint: ResumeCheckpoint
   } | null>
+  verifyWorkspaceRecoveryArchive?: () => Promise<void>
   sealResumeCheckpoint?: () => Promise<ResumeCheckpoint>
   requiresRecoveryReview?: () => boolean
   hasUnresolvedToolEffects?: () => boolean
@@ -197,6 +198,8 @@ export class AppSessionController {
       .map(value => value.request)
   }
 
+  hasUnresolvedToolEffects(): boolean { return this.adapter.hasUnresolvedToolEffects?.() === true }
+
   isTurnActive(): boolean {
     return this.activeTurn
   }
@@ -263,8 +266,18 @@ export class AppSessionController {
     this.announceHandoffState()
   }
   getWorkspaceHandoffSnapshot(): WorkspaceHandoffSnapshot | null {
-    return this.handoffExecution?.snapshot({ mode: this.handoffReservation ? 'held' : this.requiresUserReconciliation ? 'review' : 'open',
+    const snapshot = this.handoffExecution?.snapshot({ mode: this.handoffReservation ? 'held' : this.requiresUserReconciliation ? 'review' : 'open',
       reservationOperationId: this.handoffReservation, requiresUserReconciliation: this.requiresUserReconciliation }) ?? null
+    return snapshot ? { ...snapshot, settled: snapshot.settled && !this.activeTurn && !this.handoffSettlement && !this.initializing } : null
+  }
+  async verifyWorkspaceRecoveryArchive(): Promise<void> {
+    if (!this.getWorkspaceHandoffSnapshot()?.settled || !this.adapter.verifyWorkspaceRecoveryArchive || !this.adapter.verifyResumeCheckpoint) throw new Error('Recovery verification unavailable')
+    await this.adapter.verifyWorkspaceRecoveryArchive()
+    const record = this.handoffExecution?.persisted
+    if (!record || !record.consumed) throw new Error('Recovery execution evidence unavailable')
+    for (const checkpoint of [record.terminal?.checkpoint, record.notice?.checkpoint, record.reconciliation?.checkpoint]) {
+      if (checkpoint) await this.adapter.verifyResumeCheckpoint(checkpoint)
+    }
   }
   async startHandoffContinuation(): Promise<{ completion: Promise<void> }> {
     const execution = this.handoffExecution
@@ -288,11 +301,14 @@ export class AppSessionController {
     const execution = this.handoffExecution
     if (!execution || !execution.canSettle || this.activeTurn) throw new Error('Workspace outcome cannot be settled')
     if (execution.persisted?.notice) return
+    if (this.getWorkspaceHandoffSnapshot()?.failure) throw new Error('Workspace completion needs explicit recovery')
     if (execution.persisted?.terminal?.outcome === 'success') throw new Error('Successful execution cannot publish a warning')
     // Fence delayed continuation before the first warning/storage await.
     execution.fenceNoStart()
     this.handoffSettlement = this.persistWorkspaceHandoffNotice(outcome)
-    try { await this.handoffSettlement } finally { this.handoffSettlement = null }
+    try { await this.handoffSettlement }
+    catch (error) { execution.recordFailure('recovery_notice', error); throw error }
+    finally { this.handoffSettlement = null; this.announceHandoffState() }
   }
   private async persistWorkspaceHandoffNotice(outcome: HandoffTerminalOutcome): Promise<void> {
     const execution = this.handoffExecution

@@ -80,5 +80,8 @@
   },
   "transport": "pinned production Codex adapter; sideQuery attribution header omitted; no credential refresh or account failover",
   "interpretation": "One paired pass, interrupted and resumed. No consistent latency improvement demonstrated. This supports the policy-only reduction on this synthetic corpus, not statistical equivalence for all sessions.",
-  "historyAndInstructionReduction": false
+  "historyAndInstructionReduction": false,
+  "automaticReductionModels": [
+    "gpt-6-luna"
+  ]
 }

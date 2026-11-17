@@ -12,7 +12,7 @@ function harness() {
   const observations: WorkspaceHandoffSnapshot[] = [], recoveries: string[] = []
   const control = new WorkspaceHandoffControl({ generation: () => generation, acceptsStatus: (sessionId, status) => sessionId === id && status.engineSessionId === engineSessionId, send: (_id, message) => { sent.push(message); return true }, observe: (_id, status) => observations.push(status), recover: (_id, operation) => recoveries.push(operation) })
   controls.push(control)
-  const status: WorkspaceHandoffSnapshot = { appSessionId: id, engineSessionId, operationId, continuationId: randomUUID(), sourceGeneration: randomUUID(), admissionGeneration: generation, operationSha256: 'a'.repeat(64), observerGeneration: generation, statusSeq: 1, execution: 'running', record: { kind: 'absent' }, gate: { mode: 'held', reservationOperationId: operationId, requiresUserReconciliation: false } }
+  const status: WorkspaceHandoffSnapshot = { appSessionId: id, engineSessionId, operationId, continuationId: randomUUID(), sourceGeneration: randomUUID(), admissionGeneration: generation, operationSha256: 'a'.repeat(64), observerGeneration: generation, statusSeq: 1, settled: false, failure: null, recoveryId: null, execution: 'running', record: { kind: 'absent' }, gate: { mode: 'held', reservationOperationId: operationId, requiresUserReconciliation: false } }
   return { control, id, operationId, generation, sent, observations, recoveries, status }
 }
 
@@ -36,11 +36,13 @@ test('one outstanding command preserves cancellation priority; disconnect is del
   const pending = h.control.request(h.id, h.operationId, { action: 'continue', continuationId: h.status.continuationId })
   expect(await h.control.request(h.id, h.operationId, { action: 'status' })).toEqual({ kind: 'unavailable' })
   const cancellation = h.control.request(h.id, h.operationId, { action: 'cancel', cancelId: randomUUID() })
-  expect(h.sent.map(message => message.action)).toEqual(['continue', 'cancel'])
+  const cleanup = h.control.request(h.id, h.operationId, { action: 'cancel_recovery', recoveryId: randomUUID() })
+  expect(h.sent.map(message => message.action)).toEqual(['continue', 'cancel', 'cancel_recovery'])
   expect(h.sent.every(message => message.forGeneration === h.generation)).toBe(true)
   h.control.disconnect(h.id)
   expect(await pending).toEqual({ kind: 'disconnected' })
   expect(await cancellation).toEqual({ kind: 'disconnected' })
+  expect(await cleanup).toEqual({ kind: 'disconnected' })
 })
 
 test('slot wait does not send or block cancellation and wakes after command acknowledgement', async () => {
@@ -111,7 +113,7 @@ test('rate-limited null admission cannot hide current admission evidence whose s
     for (let sequence = 1; sequence <= 33; sequence++) {
       h.control.receiveState(h.id, { ...h.status, admissionGeneration: null, statusSeq: sequence })
     }
-    const admitted = { ...h.status, statusSeq: 1, execution: 'idle' as const }
+    const admitted = { ...h.status, statusSeq: 1, settled: false, failure: null, recoveryId: null, execution: 'idle' as const }
     h.control.receiveState(h.id, admitted)
     h.control.receiveState(h.id, { ...h.status, admissionGeneration: null, statusSeq: 100 })
     callbacks[1]!()

@@ -56,6 +56,7 @@ export type QueryEngineSessionLike = {
   recoverHandoffReconciliation?: (notice: { displayUuid: string; contextUuid: string }) => Promise<{
     inputUuid: string; contextUuid: string; checkpoint: ResumeCheckpoint
   } | null>
+  verifyWorkspaceRecoveryArchive?: () => Promise<void>
   sealResumeCheckpoint?: () => Promise<ResumeCheckpoint>
   requiresRecoveryReview?: () => boolean
   hasUnresolvedToolEffects?: () => boolean
@@ -93,6 +94,7 @@ export function createQueryEngineSessionAdapter(
     getInlineCommandRuns: session.getInlineCommandRuns ? () => session.getInlineCommandRuns!() : undefined,
     readHandoffOutcome: session.readHandoffOutcome ? operationId => session.readHandoffOutcome!(operationId) : undefined,
     recoverHandoffReconciliation: session.recoverHandoffReconciliation ? notice => session.recoverHandoffReconciliation!(notice) : undefined,
+    verifyWorkspaceRecoveryArchive: session.verifyWorkspaceRecoveryArchive ? () => session.verifyWorkspaceRecoveryArchive!() : undefined,
     sealResumeCheckpoint: session.sealResumeCheckpoint ? () => session.sealResumeCheckpoint!() : undefined,
     requiresRecoveryReview: session.requiresRecoveryReview ? () => session.requiresRecoveryReview!() : undefined,
     hasUnresolvedToolEffects: session.hasUnresolvedToolEffects ? () => session.hasUnresolvedToolEffects!() : undefined,

@@ -107,7 +107,7 @@ import type {
 /** v4 retires session metadata/stats/OAuth; see decisions/SESSION-PROTOCOL-V4.md. */
 /** Additive tool.activity v1 and queue submitId: decisions/FOCUSED-LIVE-ACTIVITY.md. */
 /** v5 accepts versioned V1/V2 resume evidence; see CHAT-RELOCATION's V2 amendment. */
-export const PROTOCOL_VERSION = 6 as const
+export const PROTOCOL_VERSION = 7 as const
 
 /**
  * A session address. In P1-0 there is exactly one sidecar and one sessionId,
@@ -983,6 +983,7 @@ export type WorkspaceHandoffMessage = {
   | { action: 'cancel'; cancelId: string }
   | { action: 'settle'; outcome: 'failed' | 'cancelled' | 'uncertain' }
   | { action: 'release'; authorizationRevision: number }
+  | { action: 'prepare_recovery' | 'cancel_recovery'; recoveryId: string }
 )
 export type { ResumeCheckpoint, ResumeCheckpointV1, ResumeCheckpointV2, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
   WorkspaceHandoffSnapshot, WorkspaceHandoffAction, WorkspaceHandoffDisposition, WorkspaceHandoffReason } from './workspaceHandoff.js'
@@ -4310,6 +4311,7 @@ export type CatCodeBridge = {
    * Restart the addressed sidecar while retaining renderer attachment. This is a
    * fixed control-plane request: typed host failures are returned as data.
    */
+  recoverHandoff(sessionId: SessionId, operationId: string, generation: string): Promise<HostResult<void>>
   restart(sessionId: SessionId): Promise<HostResult<void>>
   /**
    * Subscribe to server frames. Main delivers them in batches (one `ServerFrame[]`

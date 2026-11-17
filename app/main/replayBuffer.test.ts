@@ -461,7 +461,7 @@ test('workspace control receipts never survive renderer replay', () => {
     status: {
       appSessionId: SID, engineSessionId: 'engine-1', operationId: 'jump-1', continuationId: 'continuation-1',
       sourceGeneration: 'source-1', admissionGeneration: null, operationSha256: 'a'.repeat(64),
-      observerGeneration: 'observer-1', statusSeq: 1, execution: 'unconfirmed', record: { kind: 'absent' },
+      observerGeneration: 'observer-1', statusSeq: 1, settled: false, failure: null, recoveryId: null, execution: 'unconfirmed', record: { kind: 'absent' },
       gate: { mode: 'review', reservationOperationId: null, requiresUserReconciliation: true },
     },
   })

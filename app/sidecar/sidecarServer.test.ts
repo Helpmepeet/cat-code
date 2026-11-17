@@ -7715,7 +7715,7 @@ test('destination diagnostics waits through pending admission and recovery, then
   const identity = { appSessionId: SESSION, engineSessionId: ENGINE_SESSION, operationId: randomUUID(),
     continuationId: randomUUID(), sourceGeneration: randomUUID(), admissionGeneration: randomUUID(), operationSha256: 'a'.repeat(64) }
   let status: NonNullable<ReturnType<AppSessionController['getWorkspaceHandoffSnapshot']>> = {
-    ...identity, observerGeneration: randomUUID(), statusSeq: 1, execution: 'idle', record: { kind: 'absent' },
+    ...identity, observerGeneration: randomUUID(), statusSeq: 1, settled: false, failure: null, recoveryId: null, execution: 'idle', record: { kind: 'absent' },
     gate: { mode: 'held', reservationOperationId: identity.operationId, requiresUserReconciliation: false },
   }
   let changed = () => {}

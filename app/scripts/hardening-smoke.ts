@@ -260,6 +260,7 @@ async function runProductionHardeningSmoke(
       'rendererReady',
       'respondPermission',
       'restart',
+      'recoverHandoff',
       'runControlVerb',
       'sessionActionVerb',
       'setPermissionMode',

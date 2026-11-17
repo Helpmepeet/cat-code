@@ -1,3 +1,4 @@
+import { workspaceRecoveryRefusalText, type WorkspaceRecoveryPreparation } from '../shared/workspaceHandoff.js'
 import { isRelocationControls, readSessionRelocation, writeSessionRelocation, type RelocationControls, type SessionLocation } from '../../src/utils/sessionRelocationState.js'
 import type { RelocationRequest } from '../../src/utils/sessionRelocationState.js'
 import { hasVerifiedSourceCompensation, readWorkspaceJump, type WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
@@ -156,6 +157,8 @@ export type HostOptions = {
   cancelMoveReplayCoalescing?: (appSessionId: SessionId) => void
   /** Recover retained handoffs only after this host has claimed the session. */
   prepareSessionRecovery?: (appSessionId: SessionId) => void
+  prepareWorkspaceRecovery?: (appSessionId: SessionId, operationId: string, generation: string, recoveryId: string) => Promise<WorkspaceRecoveryPreparation>
+  cancelWorkspaceRecovery?: (appSessionId: SessionId, operationId: string, generation: string, recoveryId: string) => Promise<void>
   /**
    * Called when a session is closed/restarted so main can evict its replay
    * buffer (the P3-0 carry — `AttachmentGate.clearSession`). Kept as an injected
@@ -203,6 +206,9 @@ export class Host implements HostApi {
   private readonly prepareMoveReplayRecovery?: HostOptions['prepareMoveReplayRecovery']
   private readonly cancelMoveReplayCoalescing?: HostOptions['cancelMoveReplayCoalescing']
   private readonly prepareSessionRecovery?: HostOptions['prepareSessionRecovery']
+  private readonly prepareWorkspaceRecovery?: HostOptions['prepareWorkspaceRecovery']
+  private readonly cancelWorkspaceRecovery?: HostOptions['cancelWorkspaceRecovery']
+  private readonly workspaceRecoveries = new Map<string, { operationId: string; generation: string; task: Promise<HostResult<void>> }>()
   private readonly moving = new Set<SessionId>()
   private readonly workspaceMoves = new Map<SessionId, WorkspaceMoveDisplay>()
   private readonly workspaceJumpReservations = new Map<SessionId, { operationId: string; generation: string }>()
@@ -294,6 +300,8 @@ export class Host implements HostApi {
     this.prepareMoveReplayRecovery = options.prepareMoveReplayRecovery
     this.cancelMoveReplayCoalescing = options.cancelMoveReplayCoalescing
     this.prepareSessionRecovery = options.prepareSessionRecovery
+    this.prepareWorkspaceRecovery = options.prepareWorkspaceRecovery
+    this.cancelWorkspaceRecovery = options.cancelWorkspaceRecovery
     this.managedStorage = options.managedStorage
     this.evictReplay = options.evictReplay ?? (() => {})
     this.log = options.log ?? (line => process.stderr.write(`${line}\n`))
@@ -1476,12 +1484,13 @@ export class Host implements HostApi {
    * --------------------------------------------------------------------- */
 
   /** Main publishes a view of the accepted ledger, never a new move command. */
-  publishWorkspaceJumpDisplay(state: WorkspaceJumpState): void {
+  publishWorkspaceJumpDisplay(state: WorkspaceJumpState, status?: import('../shared/workspaceHandoff.js').WorkspaceHandoffSnapshot): void {
     const row = this.registry.findSession(state.appSessionId)
     if (!row || row.engineSessionId !== state.engineSessionId) return
     try {
       const record = readSessionRelocation(state.engineSessionId)
-      const display = workspaceJumpDisplay(state, record?.appSessionId === state.appSessionId ? record.transitions ?? [] : [], this.projectNameForCwd?.(state.target.cwd))
+      const display = workspaceJumpDisplay(state, record?.appSessionId === state.appSessionId ? record.transitions ?? [] : [], this.projectNameForCwd?.(state.target.cwd), status)
+      if (JSON.stringify(display) === JSON.stringify(this.workspaceMoves.get(state.appSessionId) ?? null)) return
       if (display) this.workspaceMoves.set(state.appSessionId, display)
       else this.workspaceMoves.delete(state.appSessionId)
       this.emitStatus(state.appSessionId)
@@ -2047,7 +2056,43 @@ export class Host implements HostApi {
     }
   }
 
-  async restartSession(appSessionId: SessionId, options: { workspaceJumpReserved?: boolean } = {}): Promise<HostResult<void>> {
+  recoverWorkspaceHandoff(appSessionId: SessionId, operationId: string, generation: string): Promise<HostResult<void>> {
+    const previous = this.workspaceRecoveries.get(appSessionId)
+    if (previous) return previous.operationId === operationId && previous.generation === generation ? previous.task :
+      Promise.resolve(hostError('session_unreachable', 'Recovery is already preparing this Chat'))
+    if (!isUuid(appSessionId) || !isUuid(operationId) || !isUuid(generation)) return Promise.resolve(hostError('session_unreachable', 'Recovery identity is unavailable'))
+    const recoveryId = randomUUID()
+    const task = (async (): Promise<HostResult<void>> => {
+      await this.launched
+      try {
+        const reserved = this.workspaceJumpReservations.get(appSessionId)
+        if (reserved && reserved.operationId !== operationId || this.getSessionGeneration(appSessionId) !== generation) {
+          return hostError('session_unreachable', workspaceRecoveryRefusalText('wrong_identity'))
+        }
+        const prepared = await this.prepareWorkspaceRecovery?.(appSessionId, operationId, generation, recoveryId)
+        if (!prepared || prepared.ok === false) return hostError('session_unreachable', workspaceRecoveryRefusalText(prepared?.ok === false ? prepared.reason : 'invalid_state'))
+        if (this.getSessionGeneration(appSessionId) !== generation ||
+            this.workspaceJumpReservations.has(appSessionId) && this.workspaceJumpReservations.get(appSessionId)?.operationId !== operationId) {
+          return hostError('session_unreachable', 'Recovery ownership changed')
+        }
+        // A claimed restore can have a retained ledger without an in-memory reservation.
+        // Only the authenticated preparation may rebuild that host fence.
+        this.workspaceJumpReservations.set(appSessionId, { operationId, generation })
+        return await this.restartOwnedSession(appSessionId, {}, { operationId, generation })
+      } catch { return hostError('spawn_failed', 'Recovery could not reopen this Chat. Your draft is kept') }
+      finally {
+        try { await this.cancelWorkspaceRecovery?.(appSessionId, operationId, generation, recoveryId) } catch {}
+        this.workspaceRecoveries.delete(appSessionId)
+      }
+    })()
+    this.workspaceRecoveries.set(appSessionId, { operationId, generation, task })
+    return task
+  }
+
+  restartSession(appSessionId: SessionId, options: { workspaceJumpReserved?: boolean } = {}): Promise<HostResult<void>> {
+    return this.restartOwnedSession(appSessionId, options)
+  }
+  private async restartOwnedSession(appSessionId: SessionId, options: { workspaceJumpReserved?: boolean }, recovery?: { operationId: string; generation: string }): Promise<HostResult<void>> {
     await this.launched
     if (this.moving.has(appSessionId)) return hostError('session_unreachable', 'This Chat is moving')
     if (!isUuid(appSessionId)) {
@@ -2062,7 +2107,10 @@ export class Host implements HostApi {
     const workspaceJumpReserved = this.workspaceJumpReservations.has(appSessionId) || options.workspaceJumpReserved === true
     // A lost transport needs an explicit replacement to report saved handoff
     // evidence. Keep its reservation; replacement never readmits continuation.
-    if (workspaceJumpReserved && !isTerminalStatus(supervisorRecord.status) && supervisorRecord.status !== 'disconnected') {
+    const recoveryAuthorized = recovery && this.workspaceJumpReservations.get(appSessionId)?.operationId === recovery.operationId &&
+      this.getSessionGeneration(appSessionId) === recovery.generation
+    if (recovery && !recoveryAuthorized) return hostError('session_unreachable', 'Recovery ownership changed')
+    if (workspaceJumpReserved && !recoveryAuthorized && !isTerminalStatus(supervisorRecord.status) && supervisorRecord.status !== 'disconnected') {
       return hostError('session_unreachable', 'This Chat has a pending workspace change')
     }
     const row = this.registry.findSession(appSessionId)
@@ -2116,6 +2164,7 @@ export class Host implements HostApi {
       const savedAccounts = this.registry.getAccountSelection(appSessionId)
       if (savedAccounts) await this.recordAccountSelection(appSessionId, savedAccounts)
       const accountSelection = this.registry.getAccountSelection(appSessionId)
+      if (recovery && (this.workspaceJumpReservations.get(appSessionId)?.operationId !== recovery.operationId || this.getSessionGeneration(appSessionId) !== recovery.generation)) throw new Error('Recovery ownership changed')
       this.prepareSessionRecovery?.(appSessionId)
       // Evict replay only after recovery succeeds, before replacing the child.
       this.evictReplay(appSessionId)

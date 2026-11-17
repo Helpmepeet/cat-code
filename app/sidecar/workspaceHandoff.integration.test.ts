@@ -219,7 +219,8 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
     cancellation: null, review: { required: false, noticeUuid: null, reconciledInputUuid: null },
     release: { target: 'held', authorizedRevision: null, confirmed: null } }
   writeWorkspaceJump(state)
-  const controller = createRuntimeBackedAppSession({ queryEngineConfig: engineConfig([seed], options.tools ?? [], options.canUseTool),
+  const queryConfig = engineConfig([seed], options.tools ?? [], options.canUseTool)
+  const controller = createRuntimeBackedAppSession({ queryEngineConfig: queryConfig,
     initializeController: async instance => {
       instance.restoreHandoffReservation(operationId)
       await instance.configureWorkspaceHandoff({ identity: { appSessionId, engineSessionId, operationId,
@@ -228,18 +229,21 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
         observerGeneration: generation, origin: 'fresh', recover: false })
     } })
   await controller.waitForInitialization()
-  let held = true, drop = options.dropRelease, releaseCommands = 0, paused = false
+  let held = true, drop = options.dropRelease, releaseCommands = 0, paused = false, dropRecoveryCleanup = false
   const batch: ServerFrame[] = []
   const received: ServerFrame[] = [], decoder = new FrameDecoder(32 * 1024 * 1024)
   let control!: InstanceType<typeof WorkspaceHandoffControl>
   let connection!: ReturnType<InstanceType<typeof SidecarServer>['addConnection']>
-  const server = new SidecarServer({ sessionId: appSessionId, engineSessionId, generation, controller, log: () => {},
+  const { createSidecarTasksDomain } = await import('./tasksDomain.js')
+  const tasks = createSidecarTasksDomain({ getState: queryConfig.getAppState, setState: queryConfig.setAppState, subscribe: () => () => {} }, controller)
+  const server = new SidecarServer({ sessionId: appSessionId, engineSessionId, generation, controller, tasks, log: () => {},
     recoveredPrompts: options.recoveredPrompts, recoveredUnavailableCount: options.recoveredUnavailableCount,
     loadRecoveredPrompts: async () => selectUndeliveredPrompts(await storage.getSessionQueueOperations(engineSessionId)).prompts })
   const coordinator = new WorkspaceJumpCoordinator({ row: id => id === appSessionId ? {
     appSessionId, engineSessionId, cwd: state.target.cwd, binding: state.target.binding,
     lastAttachedAt: 1, lastMessageSentAt: 1, shutdown: null } : undefined,
     knownProjects: () => [], validateCwd: cwd => ({ ok: true, realpath: cwd }), trustedProjectRoots: async paths => paths,
+    waitForControlSlot: (id, operation, gen) => control.waitForSlot(id, operation, gen),
     verifyReady: () => false, control: (current, action) => control.request(appSessionId, current.operationId, action),
     host: { getSessionGeneration: () => generation,
       reserveWorkspaceJump: async () => ({ ok: true, value: undefined }),
@@ -248,6 +252,7 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
     acceptsStatus: (id, status) => id === appSessionId && status.engineSessionId === engineSessionId,
     observe: (id, snapshot) => { coordinator.observe(id, snapshot) }, recover: id => coordinator.queryStatus(id),
     send: (_id, message) => {
+      if (message.action === 'cancel_recovery' && dropRecoveryCleanup) return false
       if (message.action === 'release') {
         releaseCommands++
         if (drop === 'command') { drop = undefined; return true }
@@ -270,7 +275,8 @@ async function harness(options: { dropRelease?: 'command' | 'reply'; tools?: Ret
   state.continuation.dispatch = 'unknown'
   writeWorkspaceJump(state)
   disposers.push(() => { control.dispose(); server.close() })
-  return { appSessionId, engineSessionId, operationId, generation, state, seed, controller, server, received, coordinator, control,
+  return { appSessionId, engineSessionId, operationId, generation, state, seed, controller, server, tasks, received, coordinator, control,
+    dropRecoveryCleanup: (drop: boolean) => { dropRecoveryCleanup = drop },
     held: () => held, releaseCommands: () => releaseCommands,
     pauseControl: () => { paused = true },
     flushControlBatch: () => { paused = false; for (const frame of batch.splice(0)) control.receiveFrame(appSessionId, frame) },
@@ -1068,4 +1074,228 @@ test.each(['intact', 'damaged'] as const)('fresh execution admission supplies de
     await expect(controller.startHandoffContinuation().then(result => result.completion)).resolves.toBeUndefined()
     expect(providers).toBe(1)
   }
+})
+
+test('structural proof failure stays held without repeated writes and recovery preparation fences ingress until cancellation', async () => {
+  const { ResumeIdentityError } = await import('../../src/utils/resumeCheckpoint.js')
+  let calls = 0, seals = 0
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    calls++; yield assistant([{ type: 'text', text: 'saved result before proof failure' }])
+  }))
+  const h = await harness()
+  const originalSeal = storage.sealResumeCheckpoint
+  const seal = spyOn(storage, 'sealResumeCheckpoint').mockImplementation(async messages => {
+    if (!messages.some(m => m.type === 'assistant')) return originalSeal(messages)
+    seals++; throw new ResumeIdentityError('duplicate_message_identity', randomUUID(), 'attachment')
+  })
+  spies.push(seal)
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => h.controller.getWorkspaceHandoffSnapshot()?.settled === true &&
+    h.received.at(-1)?.kind !== 'activity', 'failed proof settles')
+  await Bun.sleep(0)
+  expect(h.controller.getWorkspaceHandoffSnapshot()).toMatchObject({ execution: 'unconfirmed', settled: true,
+    failure: { stage: 'checkpoint_seal', reason: 'duplicate_message_identity' }, gate: { mode: 'held' } })
+  seal.mockRestore()
+  const bytes = await fsPromises.readFile(storage.getTranscriptPath())
+  for (let i = 0; i < 4; i++) await h.command({ action: 'status' })
+  expect(seals).toBe(1)
+  expect(await fsPromises.readFile(storage.getTranscriptPath())).toEqual(bytes)
+  const id = randomUUID()
+  expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, randomUUID(), id)).toMatchObject({ ok: false })
+  expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, h.generation, id)).toMatchObject({ ok: true })
+  const submitId = randomUUID()
+  h.send({ type: 'app.submit', requestId: randomUUID(), prompt: 'keep this draft', options: { submitId } })
+  expect(h.received.find(frame => frame.kind === 'submit.result' && frame.submitId === submitId)).toMatchObject({ accepted: false })
+  expect(h.controller.getHandoffReservation()).toBe(h.operationId)
+  expect(calls).toBe(1)
+  await h.coordinator.cancelRecovery(h.appSessionId, h.operationId, h.generation, id)
+  const status = await h.command({ action: 'status' })
+  expect(status.kind === 'result' && status.result.status?.recoveryId).toBeNull()
+  expect(h.held()).toBe(true)
+  expect(calls).toBe(1)
+})
+
+test('watchdog unconfirmed cannot authorize replacement while the actual seal is still running', async () => {
+  const blocked = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
+  const original = storage.sealResumeCheckpoint
+  spies.push(spyOn(storage, 'sealResumeCheckpoint').mockImplementation(async messages => {
+    if (messages.some(m => m.type === 'assistant')) { entered.resolve(); await blocked.promise }
+    return original(messages)
+  }))
+  const realTimer = globalThis.setTimeout
+  let watchdog: (() => void) | undefined
+  const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, ms: number, ...args: unknown[]) => {
+    if (ms === 30_000) watchdog = callback
+    return realTimer(callback, ms, ...args)
+  }) as typeof setTimeout)
+  spies.push(timer)
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    yield assistant([{ type: 'text', text: 'completed but sealing' }])
+  }))
+  const h = await harness()
+  try {
+    await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+    await entered.promise
+    expect(watchdog).toBeDefined()
+    watchdog!()
+    expect(h.controller.getWorkspaceHandoffSnapshot()).toMatchObject({ execution: 'unconfirmed', settled: false })
+    expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, h.generation, randomUUID())).toMatchObject({ ok: false })
+    const attempt = await h.command({ action: 'prepare_recovery', recoveryId: randomUUID() })
+    expect(attempt.kind === 'result' && attempt.result.disposition).toBe('refused')
+  } finally { blocked.resolve() }
+  await until(() => !h.held(), 'original seal finishes without replacement')
+})
+
+for (const effect of ['tool receipt', 'task', 'queue', 'missing archive', 'changed archive'] as const) {
+  test(`recovery refuses ${effect} and keeps the handoff reservation`, async () => {
+    const { ResumeIdentityError } = await import('../../src/utils/resumeCheckpoint.js')
+    spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+      yield assistant([{ type: 'text', text: 'ARCHIVE_RECOVERY_RESULT' }])
+    }))
+    const h = await harness()
+    const originalSeal = storage.sealResumeCheckpoint
+    const seal = spyOn(storage, 'sealResumeCheckpoint').mockImplementation(async messages => {
+      if (!messages.some(m => m.type === 'assistant')) return originalSeal(messages)
+      throw new ResumeIdentityError('duplicate_message_identity')
+    })
+    spies.push(seal)
+    await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+    await until(() => h.controller.getWorkspaceHandoffSnapshot()?.settled === true, 'failed attempt settles')
+    await Bun.sleep(0)
+    seal.mockRestore()
+    const path = storage.getTranscriptPath()
+    if (effect === 'tool receipt') spies.push(spyOn(h.controller, 'hasUnresolvedToolEffects').mockReturnValue(true))
+    if (effect === 'task') spies.push(spyOn(h.tasks, 'hasLiveWork').mockReturnValue(true))
+    if (effect === 'queue') enqueue({ value: 'queued human input', mode: 'prompt', uuid: randomUUID() })
+    if (effect === 'missing archive') await fsPromises.rename(path, path + '.saved')
+    if (effect === 'changed archive') {
+      await storage.flushCurrentTranscriptDurably()
+      const original = await fsPromises.readFile(path, 'utf8')
+      expect(original).toContain('ARCHIVE_RECOVERY_RESULT')
+      await fsPromises.writeFile(path, original.replaceAll('ARCHIVE_RECOVERY_RESULT', 'ALTERED_RECOVERY_RESULT'))
+      expect(await fsPromises.readFile(path, 'utf8')).not.toContain('ARCHIVE_RECOVERY_RESULT')
+    }
+    const attempt = await h.command({ action: 'prepare_recovery', recoveryId: randomUUID() })
+    expect(attempt.kind === 'result' && attempt.result.disposition).toBe('refused')
+    if (attempt.kind === 'result') expect(attempt.result.reason).toBe(({ 'tool receipt': 'pending_receipts', task: 'live_tasks', queue: 'queued_input', 'missing archive': 'durability_unconfirmed', 'changed archive': 'durability_unconfirmed' } as const)[effect])
+    const status = await h.command({ action: 'status' })
+    expect(status.kind === 'result' && status.result.status?.recoveryId).toBeNull()
+    expect(h.controller.getHandoffReservation()).toBe(h.operationId)
+    expect(h.held()).toBe(true)
+    if (effect === 'missing archive') await fsPromises.rename(path + '.saved', path)
+  })
+}
+
+test.each(['cancelled', 'late tool receipt'] as const)('recovery preparation rechecks its owners after archive read: %s', async interruption => {
+  const { ResumeIdentityError } = await import('../../src/utils/resumeCheckpoint.js')
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    yield assistant([{ type: 'text', text: 'completed before abandoned preparation' }])
+  }))
+  const h = await harness()
+  const originalSeal = storage.sealResumeCheckpoint
+  const seal = spyOn(storage, 'sealResumeCheckpoint').mockImplementation(async rows => {
+    if (rows.some(row => row.type === 'assistant')) throw new ResumeIdentityError('duplicate_message_identity')
+    return originalSeal(rows)
+  })
+  spies.push(seal)
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => h.controller.getWorkspaceHandoffSnapshot()?.settled === true, 'completion settles')
+  await Bun.sleep(0)
+  seal.mockRestore()
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const verify = h.controller.verifyWorkspaceRecoveryArchive.bind(h.controller)
+  spies.push(spyOn(h.controller, 'verifyWorkspaceRecoveryArchive').mockImplementation(async () => {
+    entered.resolve(); await release.promise; await verify()
+  }))
+  const recoveryId = randomUUID()
+  const preparation = h.command({ action: 'prepare_recovery', recoveryId })
+  try {
+    await entered.promise
+    if (interruption === 'cancelled') {
+      const cancelled = await h.command({ action: 'cancel_recovery', recoveryId })
+      expect(cancelled.kind === 'result' && cancelled.result.disposition).toBe('accepted')
+    } else spies.push(spyOn(h.controller, 'hasUnresolvedToolEffects').mockReturnValue(true))
+  } finally { release.resolve() }
+  const late = await preparation
+  expect(late.kind === 'result' && late.result.disposition).toBe('refused')
+  if (interruption === 'late tool receipt' && late.kind === 'result') expect(late.result.reason).toBe('pending_receipts')
+  const status = await h.command({ action: 'status' })
+  expect(status.kind === 'result' && status.result.status?.recoveryId).toBeNull()
+  expect(h.controller.getHandoffReservation()).toBe(h.operationId)
+})
+
+test('execution publication failure reports only its bounded stage and I/O code', async () => {
+  const execution = await import('../../src/utils/workspaceHandoffExecutionState.js')
+  const update = execution.updateWorkspaceHandoffExecution
+  spies.push(spyOn(execution, 'updateWorkspaceHandoffExecution').mockImplementation((identity, change) => update(identity, previous => {
+    const next = change(previous)
+    if (next.terminal) throw Object.assign(new Error('PRIVATE content must not enter status'), { code: 'ENOSPC' })
+    return next
+  })))
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    yield assistant([{ type: 'text', text: 'completed before publication failure' }])
+  }))
+  const h = await harness()
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => h.controller.getWorkspaceHandoffSnapshot()?.settled === true, 'publication failure settles')
+  const status = h.controller.getWorkspaceHandoffSnapshot()!
+  expect(status.failure).toEqual({ stage: 'execution_record', reason: 'unknown', ioCode: 'ENOSPC' })
+  expect(JSON.stringify(status)).not.toContain('PRIVATE')
+  expect(status.gate.mode).toBe('held')
+})
+
+test('explicit recovery reconciles an orphaned preparation after its cleanup command was lost', async () => {
+  const { ResumeIdentityError } = await import('../../src/utils/resumeCheckpoint.js')
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    yield assistant([{ type: 'text', text: 'completed before lost cleanup' }])
+  }))
+  const h = await harness()
+  const originalSeal = storage.sealResumeCheckpoint
+  const seal = spyOn(storage, 'sealResumeCheckpoint').mockImplementation(async rows => {
+    if (rows.some(row => row.type === 'assistant')) throw new ResumeIdentityError('duplicate_message_identity')
+    return originalSeal(rows)
+  })
+  spies.push(seal)
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => h.controller.getWorkspaceHandoffSnapshot()?.settled === true, 'failed completion settles')
+  await Bun.sleep(0)
+  seal.mockRestore()
+  const firstId = randomUUID(), nextId = randomUUID()
+  expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, h.generation, firstId)).toEqual({ ok: true })
+  h.dropRecoveryCleanup(true)
+  expect(await h.coordinator.cancelRecovery(h.appSessionId, h.operationId, h.generation, firstId)).toBe(false)
+  h.dropRecoveryCleanup(false)
+  expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, h.generation, nextId)).toEqual({ ok: true })
+  const status = await h.command({ action: 'status' })
+  expect(status.kind === 'result' && status.result.status?.recoveryId).toBe(nextId)
+  expect(await h.coordinator.cancelRecovery(h.appSessionId, h.operationId, h.generation, nextId)).toBe(true)
+  expect(h.held()).toBe(true)
+})
+
+test('a settled failed terminal with an unsealed review notice can prepare explicit recovery', async () => {
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
+    const failed = assistant([{ type: 'text', text: 'synthetic execution failure' }])
+    failed.isApiErrorMessage = true
+    yield failed
+  }))
+  const h = await harness()
+  const originalSeal = storage.sealResumeCheckpoint
+  const seal = spyOn(storage, 'sealResumeCheckpoint').mockImplementation(async rows => {
+    if (rows.some(row => row.type === 'system' && row.subtype === 'workspace_handoff_outcome')) throw new Error('synthetic notice seal failure')
+    return originalSeal(rows)
+  })
+  spies.push(seal)
+  await h.command({ action: 'continue', continuationId: h.state.continuation.id })
+  await until(() => h.controller.getWorkspaceHandoffSnapshot()?.failure?.stage === 'recovery_notice' &&
+    h.controller.getWorkspaceHandoffSnapshot()?.settled === true, 'failed review notice settles')
+  await Bun.sleep(0)
+  seal.mockRestore()
+  expect(h.controller.getWorkspaceHandoffSnapshot()).toMatchObject({ execution: 'terminal', settled: true,
+    record: { kind: 'valid', record: { terminal: { outcome: 'failed' }, notice: null } }, gate: { mode: 'held' } })
+  const before = await fsPromises.readFile(storage.getTranscriptPath())
+  for (let i = 0; i < 3; i++) await h.command({ action: 'status' })
+  expect(await fsPromises.readFile(storage.getTranscriptPath())).toEqual(before)
+  const recoveryId = randomUUID()
+  expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, h.generation, recoveryId)).toEqual({ ok: true })
+  await h.coordinator.cancelRecovery(h.appSessionId, h.operationId, h.generation, recoveryId)
 })

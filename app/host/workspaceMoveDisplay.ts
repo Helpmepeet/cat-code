@@ -3,6 +3,7 @@ import { basename } from 'node:path'
 import { handoffOutcomeText } from '../../src/app-runtime/handoff.js'
 import { upgradeWorkspaceJumpState, type WorkspaceJumpState } from '../../src/utils/workspaceJumpState.js'
 import type { SessionLocation, SessionLocationTransition } from '../../src/utils/sessionRelocationState.js'
+import { isSettledWorkspaceRecoveryCandidate, type WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import type { WorkspaceMoveDisplay } from '../shared/hostApi.js'
 
 /** Presentation has no authority over relocation or continuation admission. */
@@ -20,6 +21,7 @@ export function workspaceJumpDisplay(
   state: WorkspaceJumpState,
   transitions: readonly SessionLocationTransition[],
   projectName?: string,
+  status?: WorkspaceHandoffSnapshot,
 ): WorkspaceMoveDisplay | null {
   const normalized = upgradeWorkspaceJumpState(state)
   const latest = transitions.at(-1)
@@ -37,12 +39,20 @@ export function workspaceJumpDisplay(
     normalized.cancellation?.application === 'abort_signalled'
     ? 'finished'
     : normalized.continuation.dispatch === 'consumed' ? 'dispatched' : 'waiting'
+  const held = normalized.release.target === 'held' && phase === 'arrived'
+  const live = status?.operationId === state.operationId ? status : undefined
+  const blocked = held && live?.settled && (live.execution === 'unconfirmed' || !!live.failure)
+  const checking = held && (!live || live.execution === 'unconfirmed' && !live.settled)
   return {
+    ...(blocked ? { completion: 'blocked' as const,
+      ...(isSettledWorkspaceRecoveryCandidate(live) ? { recoveryGeneration: live.observerGeneration } : {}) } :
+      checking ? { completion: 'checking' as const } :
+      live?.gate.mode === 'review' ? { completion: 'review' as const } : {}),
     id: state.operationId.slice(0, 128),
     target: moveDisplayTarget(state.target, projectName),
     phase,
     agentJump: true,
-    continuation,
+    continuation: blocked || checking ? 'waiting' : continuation,
     ...(phase === 'failed' || phase === 'stopped'
       ? { replacedNotice: handoffOutcomeText(phase === 'stopped' ? 'cancelled' : 'failed').slice(0, 512) } : {}),
     ...(arrival ? { transitionId: arrival.id, afterFrameId: arrival.afterFrameId } : {}),

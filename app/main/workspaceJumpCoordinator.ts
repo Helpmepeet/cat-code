@@ -4,7 +4,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import { createWorkspaceJumpTiming, type WorkspaceJumpTimingSink } from '../shared/workspaceJumpTiming.js'
-import { isWorkspaceHandoffSnapshot, type WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
+import { isWorkspaceHandoffSnapshot, isSettledWorkspaceRecoveryCandidate, type WorkspaceRecoveryPreparation, type WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
 import type { WorkspaceControlAction, WorkspaceControlDelivery } from './workspaceHandoffControl.js'
 import type { Host, CwdValidation } from '../host/host.js'
 import type { HostRequestValues, HostRequestError, HostRequestVerb } from '../shared/protocol.js'
@@ -42,7 +42,7 @@ export type WorkspaceJumpCoordinatorDeps = {
   waitForControlSlot?: (appSessionId: string, operationId: string, generation: string) => Promise<boolean>
   controlSlotOccupied?: (appSessionId: string, operationId: string) => boolean
   /** Holds source/destination turn admission and user reconciliation gates. */
-  onStateChanged?: (state: WorkspaceJumpStateV2) => void
+  onStateChanged?: (state: WorkspaceJumpStateV2, status?: WorkspaceHandoffSnapshot) => void
   /** Retry unacked peer frames rejected while a continuation was closing. */
   onPeerInputOpen?: (appSessionId: string) => void
   directory?: string
@@ -519,7 +519,7 @@ export class WorkspaceJumpCoordinator {
     }).finally(() => {
       this.effectKeys.delete(key)
       this.effects.delete(task)
-      if (action.action === 'status' || action.action === 'continue') this.retryContinuation(appSessionId)
+      if (action.action === 'status' || action.action === 'continue' && sent) this.retryContinuation(appSessionId)
     }).catch(() => { if (sent) this.scheduleObservation(appSessionId) })
     this.effects.add(task)
   }
@@ -590,6 +590,7 @@ export class WorkspaceJumpCoordinator {
     const gateMatches = next.release.authorizedRevision !== null && status.gate.mode === next.release.target && status.gate.reservationOperationId === null && status.gate.requiresUserReconciliation === (next.release.target === 'review')
     if (gateMatches) next = { ...next, release: { ...next.release, confirmed: { generation, mode: status.gate.mode as 'review' | 'open' } } }
     if (JSON.stringify(next) !== JSON.stringify(state)) this.save(next)
+    this.deps.onStateChanged?.(next, status)
     this.releaseFinishedClose(appSessionId)
     if (gateMatches) {
       this.deps.host.releaseWorkspaceJump(appSessionId, state.operationId)
@@ -598,10 +599,44 @@ export class WorkspaceJumpCoordinator {
         this.deps.onPeerInputOpen?.(appSessionId)
       }
     } else if (next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
-    else if (status.execution === 'unconfirmed' && next.continuation.outcome !== 'success' && !next.review.noticeUuid) this.effect(appSessionId, { action: 'settle', outcome: 'uncertain' })
-    else if (['idle','terminal'].includes(status.execution) && next.continuation.outcome !== 'success' && !next.review.noticeUuid && (next.cancellation || next.continuation.outcome !== 'pending')) this.settleWarning(appSessionId, next.cancellation?.application === 'prevented_start' || next.cancellation?.application === 'abort_signalled' ? 'cancelled' : next.continuation.dispatch === 'none' ? 'failed' : 'uncertain')
+    else if (status.settled && !status.failure && !status.recoveryId && status.execution === 'unconfirmed' && next.continuation.outcome !== 'success' && !next.review.noticeUuid) this.effect(appSessionId, { action: 'settle', outcome: 'uncertain' })
+    else if (status.settled && !status.failure && !status.recoveryId && ['idle','terminal'].includes(status.execution) && next.continuation.outcome !== 'success' && !next.review.noticeUuid && (next.cancellation || next.continuation.outcome !== 'pending')) this.settleWarning(appSessionId, next.cancellation?.application === 'prevented_start' || next.cancellation?.application === 'abort_signalled' ? 'cancelled' : next.continuation.dispatch === 'none' ? 'failed' : 'uncertain')
     else this.retryContinuation(appSessionId)
     return true
+  }
+  async prepareRecovery(appSessionId: string, operationId: string, generation: string, recoveryId: string): Promise<WorkspaceRecoveryPreparation> {
+    const refused = (reason: import('../shared/workspaceHandoff.js').WorkspaceHandoffReason): WorkspaceRecoveryPreparation => ({ ok: false, reason })
+    if (this.disposed || this.running.has(appSessionId) || this.liveMoves.has(appSessionId)) return refused('active_work')
+    if (!await this.deps.waitForControlSlot?.(appSessionId, operationId, generation)) return refused('wrong_generation')
+    let state = this.snapshot(appSessionId)
+    if (!state || state.operationId !== operationId || this.identity(appSessionId)?.generation !== generation) return refused('wrong_identity')
+    const observed = await this.deps.control(state, { action: 'status' })
+    if (observed.kind !== 'result' || !observed.result.status) return refused('invalid_state')
+    this.observe(appSessionId, observed.result.status)
+    if (JSON.stringify(this.observations.get(appSessionId)) !== JSON.stringify(observed.result.status)) return refused('conflict')
+    state = this.snapshot(appSessionId)
+    const status = this.observations.get(appSessionId)
+    if (!state || state.operationId !== operationId || state.phase !== 'settled' || state.location !== 'destination' ||
+        state.release.target !== 'held' || state.continuation.dispatch !== 'consumed' || state.review.noticeUuid ||
+        this.identity(appSessionId)?.generation !== generation || !status || status.observerGeneration !== generation) return refused('wrong_identity')
+    if (!isSettledWorkspaceRecoveryCandidate(status)) return refused(status.settled ? 'invalid_state' : 'active_work')
+    // A prior cleanup can lose its acknowledgement or never reach the sidecar.
+    // Only a new explicit recovery reconciles that authenticated preparation.
+    if (status.recoveryId && !await this.cancelRecovery(appSessionId, operationId, generation, status.recoveryId)) return refused('invalid_state')
+    const prepared = await this.deps.control(state, { action: 'prepare_recovery', recoveryId })
+    const current = this.snapshot(appSessionId)
+    if (prepared.kind !== 'result') return refused('invalid_state')
+    if (!['accepted', 'already_applied'].includes(prepared.result.disposition)) return refused(prepared.result.reason ?? 'invalid_state')
+    return prepared.result.status?.recoveryId === recoveryId && isSettledWorkspaceRecoveryCandidate(prepared.result.status) &&
+      this.identity(appSessionId)?.generation === generation && current?.operationId === operationId &&
+      current.release.target === 'held' && current.revision === state.revision ? { ok: true } : refused('wrong_identity')
+  }
+  async cancelRecovery(appSessionId: string, operationId: string, generation: string, recoveryId: string): Promise<boolean> {
+    if (this.identity(appSessionId)?.generation !== generation) return true
+    const state = this.snapshot(appSessionId)
+    if (state?.operationId !== operationId) return false
+    const cancelled = await this.deps.control(state, { action: 'cancel_recovery', recoveryId })
+    return cancelled.kind === 'result' && ['accepted', 'already_applied'].includes(cancelled.result.disposition)
   }
   liveObservation(appSessionId: string): WorkspaceHandoffSnapshot | undefined { return this.observations.get(appSessionId) }
   queryStatus(appSessionId: string, attachment = false): void {

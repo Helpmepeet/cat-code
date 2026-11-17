@@ -142,7 +142,7 @@ test('repeated attachments share the state cap and retain the newest cumulative 
   const identity = { appSessionId: sessionId, engineSessionId, operationId, continuationId: state.continuation.id,
     sourceGeneration: state.sourceGeneration, admissionGeneration: generation, operationSha256: workspaceJumpOperationSha256(state) }
   // Scripted snapshots isolate transport throttling; this test publishes no W/R proof.
-  let snapshot: WorkspaceHandoffSnapshot = { ...identity, observerGeneration: generation, statusSeq: 1,
+  let snapshot: WorkspaceHandoffSnapshot = { ...identity, observerGeneration: generation, statusSeq: 1, settled: false, failure: null, recoveryId: null,
     execution: 'idle', record: { kind: 'absent' }, gate: { mode: 'held', reservationOperationId: operationId, requiresUserReconciliation: false } }
   let sequence = 1
   const controller = new AppSessionController({ async *runTurn() {} })

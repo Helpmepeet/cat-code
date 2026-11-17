@@ -11,6 +11,7 @@ export type WorkspaceControlAction =
   | { action: 'cancel'; cancelId: string }
   | { action: 'settle'; outcome: 'failed' | 'cancelled' | 'uncertain' }
   | { action: 'release'; authorizationRevision: number }
+  | { action: 'prepare_recovery' | 'cancel_recovery'; recoveryId: string }
 export type WorkspaceControlResult = {
   requestId: string; operationId: string; action: WorkspaceControlAction['action']; disposition: 'accepted' | 'already_applied' | 'busy' | 'refused'; reason?: import('../shared/workspaceHandoff.js').WorkspaceHandoffReason; status?: WorkspaceHandoffSnapshot
 }
@@ -51,7 +52,7 @@ export class WorkspaceHandoffControl {
     const key = `${sessionId}:${operationId}`
     // Cancellation has its own priority slot. The in-flight storage/continue
     // acknowledgement cannot delay application at the engine's closure latch.
-    const slot = action.action === 'cancel' ? `${key}:cancel` : key
+    const slot = action.action === 'cancel_recovery' ? `${key}:recovery-cancel` : action.action === 'cancel' ? `${key}:cancel` : key
     if (this.disposed || !generation || this.pending.size >= 128 || this.operations.has(slot)) return Promise.resolve({ kind: 'unavailable' })
     if (this.authorizedOperations.get(sessionId) !== operationId) {
       const previousWindow = this.windows.get(sessionId)

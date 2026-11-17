@@ -2719,11 +2719,8 @@ export async function verifyHandoffTranscriptDurably(
   return { tip_uuid: expected.tip_uuid, tool_use_id: expected.tool_use_id }
 }
 
-/** Checkpoint intent uses logging transforms and the normal active selection.
- * Trailing non-user/assistant rows do not anchor resume and are excluded.
- */
-export function intendedResumeProjection(messages: Message[]): Message[] {
-  const logged = cleanMessagesForLogging(messages).map(message => {
+function loggedResumeRows(messages: Message[]): Message[] {
+  return cleanMessagesForLogging(messages).map(message => {
     if (message.type !== 'system' || message.subtype !== 'api_error') return message
     // The existing JSONL writer serializes SDK APIError/Error/Headers objects
     // in these two fields to their enumerable JSON representation. Apply that
@@ -2733,6 +2730,13 @@ export function intendedResumeProjection(messages: Message[]): Message[] {
     const fields = message as typeof message & { error?: unknown; cause?: unknown }
     return { ...message, error: jsonErrorField(fields.error), cause: jsonErrorField(fields.cause) }
   })
+}
+
+/** Checkpoint intent uses logging transforms and the normal active selection.
+ * Trailing non-user/assistant rows do not anchor resume and are excluded.
+ */
+export function intendedResumeProjection(messages: Message[]): Message[] {
+  const logged = loggedResumeRows(messages)
   const end = logged.findLastIndex(message => message.type === 'user' || message.type === 'assistant')
   return logged.slice(0, end + 1)
 }
@@ -2787,6 +2791,36 @@ export async function prepareOwnedTranscriptForResume(sessionId: string, path = 
   })
   if (result) clearSessionMessagesCache()
   return result
+}
+
+/** Explicit replacement may discard duplicate emissions, never unique or conflicting
+ * retained work. This read creates no checkpoint and never repairs the archive. */
+export async function verifyWorkspaceRecoveryArchive(messages: Message[]): Promise<void> {
+  assertActiveTranscriptLease(getSessionId())
+  await flushCurrentTranscriptDurably()
+  const path = getOwnedTranscriptPath()
+  if (!path) throw new Error('Recovery requires transcript ownership')
+  const loaded = await loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+  const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+  if (loaded.sourceTruncated || active.sessionId !== getSessionId() || !active.tip || !active.messages.length ||
+      active.messages.some(message => message.parentUuid && !loaded.messages.has(message.parentUuid))) throw new Error('Recovery history is incomplete')
+  preflightResumeIdentities(active.messages)
+  const archived = new Map(resumeProjectionV1(active.messages).map((row, index) => {
+    const message = row as Record<string, unknown>
+    return [message.uuid, { content: canonicalResumeJson(row), index }]
+  }))
+  const seen = new Set<string>()
+  let previousIndex = -1
+  for (const message of loggedResumeRows(messages)) {
+    preflightResumeIdentities([message])
+    const stored = archived.get(message.uuid)
+    if (!stored || stored.content !== canonicalResumeJson(resumeProjectionV1([message])[0])) throw new Error('Recovery would discard retained work')
+    if (!seen.has(message.uuid)) {
+      if (stored.index <= previousIndex) throw new Error('Recovery retained message order differs')
+      previousIndex = stored.index
+      seen.add(message.uuid)
+    }
+  }
 }
 
 export async function sealResumeCheckpoint(expectedResumeProjection: Message[]): Promise<ResumeCheckpointV2> {

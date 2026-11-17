@@ -42,7 +42,7 @@ import { InlineCommandRequests, inlineCommandMessageSchema } from './inlineComma
 
 import { randomUUID } from 'crypto'
 import type { WorkspaceHandoffDisposition, WorkspaceHandoffReason, WorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
-import { isWorkspaceHandoffSnapshot } from '../shared/workspaceHandoff.js'
+import { isWorkspaceHandoffSnapshot, isSettledWorkspaceRecoveryCandidate } from '../shared/workspaceHandoff.js'
 import { open } from 'node:fs/promises'
 import z from 'zod/v4'
 import type {
@@ -672,6 +672,7 @@ export class SidecarServer {
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
   private unsubscribeHandoffStatus: (() => void) | null = null
+  private recoveryPreparation: { operationId: string; recoveryId: string; connection: Connection } | null = null
   private handoffExecutionTask: Promise<void> | null = null
   private handoffStateWindow = 0
   private handoffStateCount = 0
@@ -1522,6 +1523,7 @@ export class SidecarServer {
     connection.closed = true
     connection.decoder.reset()
     this.connections.delete(connection)
+    if (this.recoveryPreparation?.connection === connection) { this.recoveryPreparation = null; this.publishHandoffState() }
     // CC-3: the last supervisor connection just dropped (e.g. a host crash left
     // this sidecar orphaned). Start the idle countdown; a reconnect within the
     // TTL cancels it again.
@@ -1885,6 +1887,10 @@ export class SidecarServer {
     // kinds and falls through to the shared schema below.
     const messageType = (frame.message as { type?: unknown } | null | undefined)
       ?.type
+    if (this.recoveryPreparation && !['workspace.handoff', 'app.ping', 'work.status', 'host.result', 'inline-command.get'].includes(messageType as string)) {
+      this.rejectFrameWithSubmitAnswer(connection, payload, requestId, 'session_not_ready', 'Recovery is preparing this Chat. Your draft is kept.', true)
+      return
+    }
     const route =
       typeof messageType === 'string'
         ? SidecarServer.VERB_ROUTES.get(messageType)
@@ -2232,8 +2238,26 @@ export class SidecarServer {
     })
   }
 
-  private publishHandoffState(connection?: Connection): void {
+  private recoverySnapshot(): WorkspaceHandoffSnapshot | null {
     const status = this.controller.getWorkspaceHandoffSnapshot()
+    return status ? { ...status, recoveryId: this.recoveryPreparation?.recoveryId ?? null } : null
+  }
+
+  private recoveryBlocker(): WorkspaceHandoffReason | undefined {
+    if (this.activeTurn || this.controller.isTurnActive() || this.inlineCommandActive || this.handoffExecutionTask ||
+        this.controller.isInlineCommandActive() || this.unacceptedHandoffSettlement) return 'active_work'
+    if (this.controller.getPendingPermissionRequests().length) return 'pending_permissions'
+    if (this.tasks?.readUnfinishedWork().available !== true) return 'effects_unavailable'
+    if (this.tasks.hasLiveWork()) return 'live_tasks'
+    if (this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification() || this.stagedPrompts.size || this.pendingPeerAnnouncements.size) return 'queued_input'
+    if (this.controller.hasUnresolvedToolEffects()) return 'pending_receipts'
+    if (this.inFlightDurableWrites || this.questionWritesInFlight || this.conversationMutationInFlight || this.pendingHostRequests.size) return 'pending_writes'
+    if (this.parking || this.manualCloseRequested || !this.isParkGateOpen()) return 'unresolved_effects'
+    return undefined
+  }
+
+  private publishHandoffState(connection?: Connection): void {
+    const status = this.recoverySnapshot()
     if (!status) return
     const now = Date.now()
     if (now - this.handoffStateWindow >= HANDOFF_STATE_WINDOW_MS) { this.handoffStateWindow = now; this.handoffStateCount = 0 }
@@ -2299,6 +2323,18 @@ export class SidecarServer {
     let status: WorkspaceHandoffSnapshot | undefined
     try {
       if (message.forGeneration !== this.generation) { reason = 'wrong_generation'; throw new Error() }
+      if (message.action === 'cancel_recovery') {
+        const preparation = this.recoveryPreparation
+        if (preparation && (preparation.operationId !== message.operationId || preparation.recoveryId !== message.recoveryId || preparation.connection !== connection)) throw new Error()
+        this.recoveryPreparation = null
+        const current = this.recoverySnapshot()
+        this.publishHandoffState()
+        this.send(connection, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
+          sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId,
+          action: message.action, disposition: preparation ? 'accepted' : 'already_applied',
+          ...(current?.operationId === message.operationId ? { status: current } : {}) })
+        return
+      }
       const saved = readWorkspaceJump(this.sessionId)
       if (!saved || saved.engineSessionId !== this.engineSessionId || saved.operationId !== message.operationId) {
         reason = 'wrong_identity'; throw new Error()
@@ -2341,7 +2377,30 @@ export class SidecarServer {
           recover: state.origin === 'legacy' || state.continuation.admissionGeneration !== this.generation })
       }
       status = this.controller.getWorkspaceHandoffSnapshot() ?? undefined
-      if (message.action === 'verify') {
+      if (this.recoveryPreparation && !['status', 'prepare_recovery', 'cancel_recovery'].includes(message.action)) throw new Error()
+      if (message.action === 'prepare_recovery') {
+        if (this.recoveryPreparation && this.recoveryPreparation.recoveryId !== message.recoveryId) throw new Error()
+        if (!isSettledWorkspaceRecoveryCandidate(status) ||
+            state.phase !== 'settled' || state.location !== 'destination' || state.release.target !== 'held' ||
+            state.continuation.dispatch !== 'consumed' || state.review.noticeUuid ||
+            getCwd() !== state.target.cwd) { reason = status?.settled ? 'invalid_state' : 'active_work'; throw new Error() }
+        const blocker = this.recoveryBlocker()
+        if (blocker) { reason = blocker; throw new Error() }
+        // No await between checking the owners and fencing every new ingress.
+        const preparation = this.recoveryPreparation = { operationId: message.operationId, recoveryId: message.recoveryId, connection }
+        reason = 'durability_unconfirmed'
+        try {
+          await this.controller.verifyWorkspaceRecoveryArchive()
+          const lateBlocker = this.recoveryBlocker()
+          if (lateBlocker) { reason = lateBlocker; throw new Error() }
+          if (this.recoveryPreparation !== preparation || connection.closed ||
+              JSON.stringify(readWorkspaceJump(this.sessionId)) !== JSON.stringify(state)) { reason = 'wrong_identity'; throw new Error() }
+        } catch {
+          if (this.recoveryPreparation === preparation) this.recoveryPreparation = null
+          throw new Error()
+        }
+        this.publishHandoffState()
+      } else if (message.action === 'verify') {
         const observed = this.handoffResult
         if (!this.isParkGateOpen() || !observed || observed.operationId !== message.operationId ||
             observed.tipUuid !== message.tipUuid || observed.toolUseId !== message.toolUseId ||
@@ -2409,8 +2468,8 @@ export class SidecarServer {
       }
       if (disposition === 'refused') disposition = 'accepted'
       reason = undefined
-    } catch (error) { this.log(`[sidecar] workspace handoff ${message.action} refused for ${message.operationId}: ${String(error)}`) }
-    status = this.controller.getWorkspaceHandoffSnapshot() ?? status
+    } catch { this.log(`[sidecar] workspace handoff ${message.action} refused for ${message.operationId}: ${reason}`) }
+    status = this.recoverySnapshot() ?? status
     if (status?.operationId !== message.operationId || reason === 'wrong_identity' || reason === 'wrong_generation') status = undefined
     this.send(connection, { kind: 'workspace.handoff.result', protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId, requestId: message.requestId, operationId: message.operationId,
@@ -7190,7 +7249,7 @@ function checkStrictKeys(message: unknown): string | null {
     // main-derived hop chain, all of which the sidecar treats as DATA: it is
     // never read as authority, and the chain is never authored on this side.
     ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
-    ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'forGeneration', 'action', 'tipUuid', 'toolUseId', 'continuationId', 'cancelId', 'outcome', 'authorizationRevision'])],
+    ['workspace.handoff', new Set(['type', 'requestId', 'operationId', 'forGeneration', 'action', 'tipUuid', 'toolUseId', 'continuationId', 'cancelId', 'outcome', 'authorizationRevision', 'recoveryId'])],
     [
       'peer.deliver',
       new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'untagged']),
@@ -7348,6 +7407,7 @@ const workspaceHandoffSchema = z.union([
   z.object({ ...workspaceHandoffBase, action: z.literal('cancel'), cancelId: z.string().uuid() }).strict(),
   z.object({ ...workspaceHandoffBase, action: z.literal('settle'), outcome: z.enum(['failed', 'cancelled', 'uncertain']) }).strict(),
   z.object({ ...workspaceHandoffBase, action: z.literal('release'), authorizationRevision: z.number().int().safe().positive() }).strict(),
+  z.object({ ...workspaceHandoffBase, action: z.enum(['prepare_recovery', 'cancel_recovery']), recoveryId: z.string().uuid() }).strict(),
 ])
 
 const hostResultEnvelopeSchema = z.object({

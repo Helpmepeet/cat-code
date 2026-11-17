@@ -62,10 +62,28 @@ export type WorkspaceHandoffExecutionRecord = WorkspaceHandoffIdentity & {
 export type WorkspaceHandoffRecordStatus =
   | { kind: 'absent' | 'unreadable' | 'invalid' }
   | { kind: 'valid'; record: WorkspaceHandoffExecutionRecord }
+export type WorkspaceHandoffFailure = {
+  stage: 'execution' | 'checkpoint_seal' | 'execution_record' | 'recovery_notice'
+  reason: 'invalid_message_identity' | 'duplicate_message_identity' | 'unknown'
+  messageUuid?: string
+  messageType?: string
+  ioCode?: 'EIO' | 'ENOSPC' | 'EACCES' | 'EPERM' | 'ENOENT' | 'EROFS' | 'EDQUOT' | 'EBUSY'
+}
+export function isWorkspaceHandoffFailure(value: unknown): value is WorkspaceHandoffFailure {
+  if (!object(value) || Object.keys(value).some(key => !['stage', 'reason', 'messageUuid', 'messageType', 'ioCode'].includes(key))) return false
+  return ['execution', 'checkpoint_seal', 'execution_record', 'recovery_notice'].includes(value.stage as string) &&
+    ['invalid_message_identity', 'duplicate_message_identity', 'unknown'].includes(value.reason as string) &&
+    (value.messageUuid === undefined || isHandoffUuid(value.messageUuid)) &&
+    (value.messageType === undefined || ['user', 'assistant', 'attachment', 'system', 'progress'].includes(value.messageType as string)) &&
+    (value.ioCode === undefined || ['EIO', 'ENOSPC', 'EACCES', 'EPERM', 'ENOENT', 'EROFS', 'EDQUOT', 'EBUSY'].includes(value.ioCode as string))
+}
 export type WorkspaceHandoffSnapshot = WorkspaceHandoffIdentity & {
   observerGeneration: string
   statusSeq: number
   execution: 'idle' | 'consuming' | 'running' | 'finalizing' | 'terminal' | 'unconfirmed'
+  settled: boolean
+  failure: WorkspaceHandoffFailure | null
+  recoveryId: string | null
   record: WorkspaceHandoffRecordStatus
   gate: {
     mode: 'held' | 'review' | 'open'
@@ -73,10 +91,35 @@ export type WorkspaceHandoffSnapshot = WorkspaceHandoffIdentity & {
     requiresUserReconciliation: boolean
   }
 }
-export type WorkspaceHandoffAction = 'verify' | 'continue' | 'status' | 'cancel' | 'settle' | 'release'
+export type WorkspaceHandoffAction = 'verify' | 'continue' | 'status' | 'cancel' | 'settle' | 'release' | 'prepare_recovery' | 'cancel_recovery'
 export type WorkspaceHandoffDisposition = 'accepted' | 'already_applied' | 'busy' | 'refused'
 export type WorkspaceHandoffReason = 'wrong_identity' | 'wrong_generation' | 'invalid_state' | 'not_trusted' |
-  'durability_unconfirmed' | 'storage_unavailable' | 'conflict' | 'rate_limited'
+  'durability_unconfirmed' | 'storage_unavailable' | 'conflict' | 'rate_limited' | 'unresolved_effects' | 'active_work' | 'pending_permissions' | 'live_tasks' | 'queued_input' | 'pending_receipts' | 'pending_writes' | 'effects_unavailable'
+
+export type WorkspaceRecoveryPreparation = { ok: true } | { ok: false; reason: WorkspaceHandoffReason }
+
+/** Eligibility is descriptive. The receiving sidecar must still reserve and recheck effects. */
+export function isSettledWorkspaceRecoveryCandidate(status: WorkspaceHandoffSnapshot | null | undefined): boolean {
+  if (!status?.settled || status.gate.mode !== 'held' || status.record.kind !== 'valid' ||
+      !status.record.record.consumed || status.record.record.notice) return false
+  return status.execution === 'unconfirmed' || status.execution === 'terminal' &&
+    status.failure?.stage === 'recovery_notice' && status.record.record.terminal?.outcome !== 'success'
+}
+
+export function workspaceRecoveryRefusalText(reason: WorkspaceHandoffReason): string {
+  switch (reason) {
+    case 'active_work': return 'This Chat is still finishing a turn. Wait for it to settle before recovering.'
+    case 'pending_permissions': return 'Resolve the pending approvals before recovering this Chat.'
+    case 'live_tasks': return 'Background work is still active. Stop it using the existing controls before recovering.'
+    case 'queued_input': return 'This Chat has queued input. Review or recall it before recovering.'
+    case 'pending_receipts': return 'Tool results are still pending. Wait for them to settle before recovering.'
+    case 'pending_writes': return 'Saved changes are still being written. Wait for them to finish before recovering.'
+    case 'effects_unavailable': return 'Active work could not be checked. This Chat remains held and your draft is kept.'
+    case 'durability_unconfirmed': return 'Saved history could not be verified. This Chat remains held. Inspect or export it before trying recovery again. Your draft is kept.'
+    case 'wrong_identity': case 'wrong_generation': case 'conflict': return 'This Chat changed while recovery was preparing. Refresh its status and try again. Your draft is kept.'
+    default: return 'Recovery could not confirm this Chat is ready. Your draft is kept.'
+  }
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const SHA256 = /^[0-9a-f]{64}$/
@@ -144,10 +187,11 @@ export function isWorkspaceHandoffExecutionRecord(value: unknown): value is Work
   return true
 }
 export function isWorkspaceHandoffSnapshot(value: unknown): value is WorkspaceHandoffSnapshot {
-  if (!object(value) || !keys(value, [...identityKeys, 'observerGeneration', 'statusSeq', 'execution', 'record', 'gate']) ||
+  if (!object(value) || !keys(value, [...identityKeys, 'observerGeneration', 'statusSeq', 'execution', 'settled', 'failure', 'recoveryId', 'record', 'gate']) ||
     !identity(value) || !isHandoffUuid(value.observerGeneration) || !integer(value.statusSeq) ||
     !['idle', 'consuming', 'running', 'finalizing', 'terminal', 'unconfirmed'].includes(value.execution as string) ||
-    !object(value.record) || !object(value.gate)) return false
+    typeof value.settled !== 'boolean' || (value.failure !== null && !isWorkspaceHandoffFailure(value.failure)) ||
+    (value.recoveryId !== null && !isHandoffUuid(value.recoveryId)) || !object(value.record) || !object(value.gate)) return false
   const record = value.record
   if (record.kind === 'valid') {
     if (!keys(record, ['kind', 'record']) || !isWorkspaceHandoffExecutionRecord(record.record)) return false
@@ -166,8 +210,8 @@ export function isWorkspaceHandoffSnapshot(value: unknown): value is WorkspaceHa
   return true
 }
 export function isWorkspaceHandoffAction(value: unknown): value is WorkspaceHandoffAction {
-  return ['verify', 'continue', 'status', 'cancel', 'settle', 'release'].includes(value as string)
+  return ['verify', 'continue', 'status', 'cancel', 'settle', 'release', 'prepare_recovery', 'cancel_recovery'].includes(value as string)
 }
 export function isWorkspaceHandoffReason(value: unknown): value is WorkspaceHandoffReason {
-  return ['wrong_identity', 'wrong_generation', 'invalid_state', 'not_trusted', 'durability_unconfirmed', 'storage_unavailable', 'conflict', 'rate_limited'].includes(value as string)
+  return ['wrong_identity', 'wrong_generation', 'invalid_state', 'not_trusted', 'durability_unconfirmed', 'storage_unavailable', 'conflict', 'rate_limited', 'unresolved_effects', 'active_work', 'pending_permissions', 'live_tasks', 'queued_input', 'pending_receipts', 'pending_writes', 'effects_unavailable'].includes(value as string)
 }

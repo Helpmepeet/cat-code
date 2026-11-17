@@ -824,7 +824,20 @@ export function SessionPane({
   const generating = !!activeSessionId && isTurnRunning(activeConnection)
   const jumpMove = activeDescriptor?.workspaceMove?.agentJump === true
     ? activeDescriptor.workspaceMove : null
-  const jumpHeld = turnStartedAt !== null && jumpMove !== null &&
+  const [recoveryPending, setRecoveryPending] = useState(false)
+  const recoveryPendingRef = useRef(false)
+  const completionBlocked = jumpMove?.completion === 'blocked' || jumpMove?.completion === 'checking'
+  const recoverHandoff = async (): Promise<void> => {
+    if (!activeSessionId || !jumpMove?.recoveryGeneration || recoveryPendingRef.current) return
+    recoveryPendingRef.current = true
+    setRecoveryPending(true)
+    try {
+      const result = await getBridge().recoverHandoff(activeSessionId, jumpMove.id, jumpMove.recoveryGeneration)
+      if (!result.ok) toast(result.error.message, { tone: 'warn' })
+    } catch { toast('Could not recover this Chat. Your draft is kept.', { tone: 'warn' }) }
+    finally { recoveryPendingRef.current = false; setRecoveryPending(false) }
+  }
+  const jumpHeld = jumpMove?.completion !== 'blocked' && turnStartedAt !== null && jumpMove !== null &&
     jumpMove.continuation !== undefined && jumpMove.continuation !== 'finished' &&
     (jumpMove.phase === 'moving' || jumpMove.phase === 'arrived')
   const activityRunning = generating || jumpHeld
@@ -867,7 +880,7 @@ export function SessionPane({
     creationPending: desktopCommandPending,
   })
   const composerReadOnly =
-    branchSwitchPending || managedFolderUnavailable || !composerGate.editable
+    branchSwitchPending || managedFolderUnavailable || (!composerGate.editable && !completionBlocked)
   useEffect(() => {
     if (
       !isActivePane ||
@@ -1886,7 +1899,7 @@ export function SessionPane({
       results={activeSessionId ? transcript.sessions[activeSessionId]?.inlineCommandResults : undefined}
       {...getInlineCommandAvailability({
         connected: !!activeSessionId && (composerGate.engineInputEnabled || composerGate.turnPending),
-        workspaceBusy: composerReadOnly || projectRoute !== null,
+        workspaceBusy: composerReadOnly || completionBlocked || recoveryPending || projectRoute !== null,
       })}
     >
     <AgentFaceRegistryContext.Provider value={paneFaces}>
@@ -2361,6 +2374,19 @@ export function SessionPane({
         </div>
       ) : null}
 
+      {completionBlocked ? (
+        <div className="flex items-center gap-3 text-sm text-text-subtle" role="status">
+          <span>{jumpMove?.completion === 'checking'
+            ? 'Completion is not confirmed yet. Your draft is kept while this Chat checks its saved work.'
+            : jumpMove?.recoveryGeneration ? 'Completion could not be confirmed. Recover this Chat to review saved work. Your draft is kept.'
+            : 'Completion could not be confirmed. Recovery is unavailable until saved work can be checked. Your draft is kept.'}</span>
+          {jumpMove?.completion === 'blocked' && jumpMove.recoveryGeneration ? (
+            <button type="button" className="shrink-0 text-accent disabled:text-text-ghost" disabled={recoveryPending}
+              onClick={() => { void recoverHandoff() }}>{recoveryPending ? 'Recovering…' : 'Recover Chat'}</button>
+          ) : null}
+        </div>
+      ) : null}
+
       {activeDescriptor?.forked && isManagedChat ? (
         <p className="text-[11px] text-text-subtle">Files are shared with the source chat.</p>
       ) : null}
@@ -2384,6 +2410,7 @@ export function SessionPane({
         onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onSubmit={event => {
+          if (completionBlocked || recoveryPending) { event.preventDefault(); return }
           if (railCommand) {
             event.preventDefault()
             if (railCommandReady) runRailCommand(railCommand)
@@ -2631,7 +2658,7 @@ export function SessionPane({
               aria-label="Send prompt"
               title="Send"
               className="flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-accent transition-colors disabled:text-text-ghost"
-              disabled={
+              disabled={completionBlocked || recoveryPending || (
                 railCommand
                   ? !railCommandReady
                   : desktopCommand
@@ -2644,7 +2671,7 @@ export function SessionPane({
                     (prompt.trim().length === 0 &&
                       images.length === 0 &&
                       fileAttachment === null) ||
-                    pendingSubmit !== null
+                    pendingSubmit !== null)
               }
               type="submit"
             >

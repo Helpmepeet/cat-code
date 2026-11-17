@@ -1,3 +1,4 @@
+import { isHandoffUuid } from '../shared/workspaceHandoff.js'
 import { selectAttachmentFile } from './attachmentFileSelection.js'
 import { coercePermissionResponse } from './permissionResponse.js'
 import { createPreviewDocumentHost } from './previewDocumentHost.js'
@@ -174,6 +175,7 @@ import {
   CH_SETTINGS_VERB,
   CH_PING,
   CH_RESTART,
+  CH_RECOVER_HANDOFF,
   CH_SERVER_FRAME,
   CH_RENDERER_READY,
   CH_DELIVERY_ACK,
@@ -729,6 +731,7 @@ let scheduledTasks: ScheduledTasks | null = null
 let scheduledTasksError: string | undefined
 let projectRouting: ProjectRoutingController | null = null
 let workspaceJump: WorkspaceJumpCoordinator | null = null
+const workspaceFailureLogs = new Map<string, string>()
 const observedWorkspaceHandoffs = new Map<string, { generation: string; operationId: string; tipUuid: string; toolUseId: string }>()
 let workspaceControl: WorkspaceHandoffControl | null = null
 let workspaceStatusTimer: ReturnType<typeof setInterval> | null = null
@@ -2723,6 +2726,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     if (isTerminalLifecycleFrame(frame)) {
       projectRouting?.interrupted(event.sessionId)
       observedWorkspaceHandoffs.delete(event.sessionId)
+      workspaceFailureLogs.delete(event.sessionId)
       workspaceControl?.disconnect(event.sessionId)
       accountInvalidation.clear(event.sessionId)
       // Presence is a fact about a LIVE row. Absence means not live, nothing
@@ -3067,6 +3071,15 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_PING, (_e, arg: { sessionId: SessionId; nonce: string }) => {
     if (typeof arg?.sessionId !== 'string' || typeof arg?.nonce !== 'string') return
     forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
+  })
+
+  ipcMain.handle(CH_RECOVER_HANDOFF, (event: IpcMainInvokeEvent, raw: unknown): Promise<HostResult<void>> => {
+    const value = raw as Record<string, unknown> | null
+    if (!isMainWindowSender(event) || !value || typeof value !== 'object' || Array.isArray(value) ||
+        Object.keys(value).length !== 3 || !isHandoffUuid(value.sessionId) || !isHandoffUuid(value.operationId) || !isHandoffUuid(value.generation) || !host) {
+      return Promise.resolve({ ok: false, error: { code: 'session_unreachable', message: 'Recovery request refused' } })
+    }
+    return host.recoverWorkspaceHandoff(value.sessionId, value.operationId, value.generation)
   })
 
   ipcMain.handle(
@@ -5279,6 +5292,8 @@ function ensureHost(): Host {
     validateCwd,
     projectNameForCwd: cwd => storedProjectsForDiscovery().find(project => project.cwd === cwd)?.name,
     managedStorage,
+    prepareWorkspaceRecovery: (id, operationId, generation, recoveryId) => workspaceJump?.prepareRecovery(id, operationId, generation, recoveryId) ?? Promise.resolve({ ok: false as const, reason: 'invalid_state' as const }),
+    cancelWorkspaceRecovery: async (id, operationId, generation, recoveryId) => { await workspaceJump?.cancelRecovery(id, operationId, generation, recoveryId) },
     prepareSessionRecovery: appSessionId => {
       if (!workspaceJump) throw new Error('Workspace recovery is unavailable')
       const previous = workspaceJump.snapshot(appSessionId)
@@ -5434,11 +5449,23 @@ function ensureHost(): Host {
     waitForControlSlot: (id, operationId, generation) => workspaceControl?.waitForSlot(id, operationId, generation) ?? Promise.resolve(false),
     controlSlotOccupied: (id, operationId) => workspaceControl?.isSlotOccupied(id, operationId) ?? true,
     onPeerInputOpen: appSessionId => peerPlane?.onPeerInputOpen(appSessionId),
-    onStateChanged: state => {
+    onStateChanged: (state, status) => {
+      if (status) {
+        const failure = status.failure
+        const key = JSON.stringify([status.operationId, status.observerGeneration, failure])
+        if (failure && workspaceFailureLogs.get(state.appSessionId) !== key) {
+          workspaceFailureLogs.set(state.appSessionId, key)
+          logOperational('workspace.handoff.failed', 'warn', { operationId: status.operationId, generation: status.observerGeneration,
+            phase: failure.stage, reason: failure.reason,
+            ...(failure.ioCode ? { code: failure.ioCode } : {}),
+            ...(failure.messageUuid ? { messageId: failure.messageUuid } : {}),
+            ...(failure.messageType ? { kind: failure.messageType } : {}) }, state.appSessionId)
+        } else if (!failure) workspaceFailureLogs.delete(state.appSessionId)
+      }
       const transitionId = `workspace-jump:${state.operationId}`
       if (state.phase === 'settled') currentWorkObserver?.endWorkspaceTransition(state.appSessionId, transitionId)
       else currentWorkObserver?.beginWorkspaceTransition(state.appSessionId, transitionId)
-      host?.publishWorkspaceJumpDisplay(state)
+      host?.publishWorkspaceJumpDisplay(state, status)
     },
   })
   // Startup may display shared ledgers, but only a claimed restore may recover

@@ -2007,6 +2007,11 @@ export class QueryEngine {
     })
   }
 
+  async verifyWorkspaceRecoveryArchive(): Promise<void> {
+    const { verifyWorkspaceRecoveryArchive } = await import('./utils/sessionStorage.js')
+    await verifyWorkspaceRecoveryArchive(this.mutableMessages)
+  }
+
   async sealResumeCheckpoint(): Promise<import('../app/shared/workspaceHandoff.js').ResumeCheckpoint> {
     if (this.interruptedTools.blocked) throw new Error(UNRESOLVED_TOOL_MESSAGE)
     if (this.inlineSettlements) throw new Error('An inline command is still active')

@@ -2105,8 +2105,8 @@ test('failed recovery admission remains held across restart despite a surviving 
   expect(engine([], { initialMessages: [...next.getMessages()] }).requiresRecoveryReview()).toBe(false)
 })
 
-for (const streaming of [false, true]) for (const allowedTools of [[], ['Read']]) {
-  test(`raw Skill and real hook context survive ${streaming ? 'streaming' : 'ordinary'} continuation with ${allowedTools.length} permission rules`, async () => {
+for (const destination of [false, true]) for (const streaming of [false, true]) for (const allowedTools of [[], ['Read']]) {
+  test(`${destination ? 'destination' : 'ordinary'} raw Skill and real hook context survive ${streaming ? 'streaming' : 'ordinary'} continuation with ${allowedTools.length} permission rules`, async () => {
     process.env.CLAUDE_CODE_SIMPLE = '0'
     const { SkillTool } = await import('./tools/SkillTool/SkillTool.js')
     const { normalizeMessagesForAPI, createUserMessage } = await import('./utils/messages.js')
@@ -2129,9 +2129,21 @@ for (const streaming of [false, true]) for (const allowedTools of [[], ['Read']]
     const commands = await import('./commands.js')
     spies.push(spyOn(commands, 'getCommands').mockResolvedValue([command]))
     const tools = [SkillTool, observe]
+    const { StreamingToolExecutor } = await import('./services/tools/StreamingToolExecutor.js')
+    const completedResults = StreamingToolExecutor.prototype.getCompletedResults
+    let sampling = false
+    const streamedContext = new Set<string>()
+    spies.push(spyOn(StreamingToolExecutor.prototype, 'getCompletedResults').mockImplementation(function* (this: import('./services/tools/StreamingToolExecutor.js').StreamingToolExecutor) {
+      for (const update of completedResults.call(this)) {
+        if (sampling && update.message?.type === 'attachment' &&
+            ['command_permissions', 'hook_additional_context'].includes(update.message.attachment.type)) streamedContext.add(update.message.uuid)
+        yield update
+      }
+    }))
     const requests: Message[][] = []
     const projected: string[] = []
     spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* (args) {
+      sampling = true
       requests.push([...args.messages])
       // Use the same production instruction assembly and normalization as the provider.
       const assembly = buildProviderInstructionAssembly({ provider: 'openai', messages: args.messages,
@@ -2140,6 +2152,15 @@ for (const streaming of [false, true]) for (const allowedTools of [[], ['Read']]
       if (requests.length === 1) yield assistant([{ type: 'tool_use', id: 'fixture-skill', name: 'Skill', input: { skill: command.name } }])
       else if (requests.length === 2) yield assistant([{ type: 'tool_use', id: 'fixture-observe', name: observe.name, input: {} }])
       else yield assistant([{ type: 'text', text: 'context applied' }])
+      if (streaming && requests.length <= 2) {
+        const expected = requests.length === 1 ? 1 : 3
+        const deadline = Date.now() + 10_000
+        while (streamedContext.size < expected && Date.now() < deadline) {
+          await Bun.sleep(0)
+          yield { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '' } } } as never
+        }
+      }
+      sampling = false
     }))
     const seed = createUserMessage({ content: 'synthetic workspace work' })
     await storage.recordTranscript([seed])
@@ -2147,10 +2168,13 @@ for (const streaming of [false, true]) for (const allowedTools of [[], ['Read']]
       canUseTool: async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
     })
     const controller = createQueryEngineSessionController(runtime)
-    await controller.configureWorkspaceHandoff(handoffConfiguration())
-    const started = await controller.startHandoffContinuation()
-    await started.completion
+    if (destination) {
+      await controller.configureWorkspaceHandoff(handoffConfiguration())
+      const started = await controller.startHandoffContinuation()
+      await started.completion
+    } else await controller.submit('apply the synthetic context')
     expect(requests).toHaveLength(3)
+    if (streaming) expect(streamedContext.size).toBe(3)
     const rows = runtime.getMessages()
     const supplemental = rows.filter(m => m.type === 'attachment' && ['command_permissions', 'hook_additional_context'].includes(m.attachment.type))
     expect(supplemental.map(m => m.type === 'attachment' && m.attachment.type).sort()).toEqual(['command_permissions', 'hook_additional_context', 'hook_additional_context'])
@@ -2158,11 +2182,13 @@ for (const streaming of [false, true]) for (const allowedTools of [[], ['Read']]
     for (const marker of ['RAW_SKILL_INSTRUCTION_MARKER', ...Object.values(hookMarkers)]) {
       expect(projected[2]!.split(marker).length - 1).toBe(1)
     }
-    const snapshot = controller.getWorkspaceHandoffSnapshot()!
-    expect(snapshot.record.kind).toBe('valid')
-    if (snapshot.record.kind !== 'valid' || !snapshot.record.record.terminal) throw new Error('Expected sealed terminal')
-    await storage.verifyResumeCheckpoint(snapshot.record.record.terminal.checkpoint)
-    await controller.releaseWorkspaceHandoff(snapshot.operationId, 'open')
+    if (destination) {
+      const snapshot = controller.getWorkspaceHandoffSnapshot()!
+      expect(snapshot.record.kind).toBe('valid')
+      if (snapshot.record.kind !== 'valid' || !snapshot.record.record.terminal) throw new Error('Expected sealed terminal')
+      await storage.verifyResumeCheckpoint(snapshot.record.record.terminal.checkpoint)
+      await controller.releaseWorkspaceHandoff(snapshot.operationId, 'open')
+    } else await storage.verifyResumeCheckpoint(await runtime.sealResumeCheckpoint())
     await controller.submit('follow-up after context delivery', { uuid: randomUUID() })
     expect(requests).toHaveLength(4)
     const checkpoint = await runtime.sealResumeCheckpoint()
@@ -2195,4 +2221,52 @@ test('duplicate intended identity fails before checkpoint writes on every attemp
       expect(await fsPromises.readFile(path)).toEqual(before)
     }
   }
+})
+
+test('recovery verifies retained order while permitting identical repeated emissions only for explicit replacement', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const first = createUserMessage({ content: 'first retained instruction' })
+  const second = createUserMessage({ content: 'second retained instruction' })
+  const done = assistant([{ type: 'text', text: 'completed' }])
+  await storage.recordTranscript([first, second, done])
+  await storage.markActiveConversationTip(done.uuid as UUID)
+  await storage.flushCurrentTranscriptDurably()
+  await storage.verifyWorkspaceRecoveryArchive([first, second, first, done])
+  const { createAttachmentMessage } = await import('./utils/attachments.js')
+  const trailing = createAttachmentMessage({ type: 'hook_additional_context', content: ['unpersisted required context'], hookName: 'PostToolUse:Fixture', hookEvent: 'PostToolUse', toolUseID: 'fixture' })
+  await expect(storage.verifyWorkspaceRecoveryArchive([first, second, done, trailing])).rejects.toThrow('discard retained work')
+  const path = storage.getTranscriptPath()
+  const lines = (await fsPromises.readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+  for (const row of lines) {
+    if (row.uuid === second.uuid) row.parentUuid = null
+    if (row.uuid === first.uuid) row.parentUuid = second.uuid
+    if (row.uuid === done.uuid) row.parentUuid = first.uuid
+  }
+  await fsPromises.writeFile(path, lines.map(row => JSON.stringify(row)).join('\n') + '\n')
+  await expect(storage.verifyWorkspaceRecoveryArchive([first, second, done])).rejects.toThrow('order')
+})
+
+test.each([false, true])('tool collection retains local-command identity but keeps virtual output out of query state: streaming=%s', async streaming => {
+  const { createUserMessage, createCommandInputMessage } = await import('./utils/messages.js')
+  const virtual = { ...createUserMessage({ content: 'DISPLAY_ONLY_MARKER' }), isVirtual: true as const }
+  const command = createCommandInputMessage('LOCAL_COMMAND_MARKER')
+  const probe = buildTool({ name: 'SupplementalRows', inputSchema: z.object({}), description: async () => 'fixture', prompt: async () => 'fixture',
+    maxResultSizeChars: 100, renderToolUseMessage: () => null,
+    async call() { return { data: 'done', newMessages: [virtual, command] } },
+    mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: 'done' }),
+  })
+  spies.push(spyOn(growthbook, 'checkStatsigFeatureGate_CACHED_MAY_BE_STALE').mockImplementation(name => name === 'tengu_streaming_tool_execution2' && streaming))
+  let calls = 0
+  const requests: Message[][] = []
+  spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* ({ messages }) {
+    requests.push([...messages])
+    if (++calls === 1) yield assistant([{ type: 'tool_use', id: 'supplemental-call', name: probe.name, input: {} }])
+    else {
+      yield assistant([{ type: 'text', text: 'done' }])
+    }
+  }))
+  await drain(engine([probe]).submitMessage('exercise supplemental rows'))
+  expect(calls).toBe(2)
+  expect(requests[1]!.find(m => m.uuid === command.uuid)).toEqual(command)
+  expect(requests[1]!.some(m => m.uuid === virtual.uuid)).toBe(false)
 })

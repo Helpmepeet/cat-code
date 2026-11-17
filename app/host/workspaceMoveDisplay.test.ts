@@ -39,18 +39,23 @@ test('accepted targets and durable location drive display, independently of cont
   expect(oversized.path?.length).toBe(4096)
 })
 
-test('the display projects durable continuation dispatch and outcome', () => {
+test('held destination completion never claims readiness without current execution evidence', () => {
   const base = upgradeWorkspaceJumpState(state)
   const arrived = { ...base, phase: 'settled' as const, location: 'destination' as const,
-    continuation: { ...base.continuation, dispatch: 'unknown' as const } }
-  expect(workspaceJumpDisplay(arrived, [seam])?.continuation).toBe('waiting')
-  expect(workspaceJumpDisplay({ ...arrived, continuation: { ...arrived.continuation, dispatch: 'consumed' } }, [seam])?.continuation).toBe('dispatched')
-  for (const outcome of ['success', 'failed', 'interrupted', 'not_started', 'unknown'] as const) {
-    expect(workspaceJumpDisplay({ ...arrived, continuation: { ...arrived.continuation, outcome } }, [seam])?.continuation).toBe('finished')
-  }
-  expect(workspaceJumpDisplay({ ...arrived, review: { ...arrived.review, required: true } }, [seam])?.continuation).toBe('finished')
-  expect(workspaceJumpDisplay({ ...arrived, continuation: { ...arrived.continuation, dispatch: 'none' } }, [seam])?.continuation).toBe('finished')
-  expect(workspaceJumpDisplay({ ...arrived, cancellation: { cancelId: 'cancel', requestedBy: 'stop', application: 'abort_signalled' } }, [seam])?.continuation).toBe('finished')
+    continuation: { ...base.continuation, dispatch: 'consumed' as const, outcome: 'unknown' as const } }
+  expect(workspaceJumpDisplay(arrived, [seam])).toMatchObject({ completion: 'checking', continuation: 'waiting' })
+  const status = { operationId: state.operationId, observerGeneration: 'current-generation', execution: 'unconfirmed',
+    settled: false, failure: null, recoveryId: null, record: { kind: 'valid', record: { consumed: true, notice: null, terminal: null } }, gate: { mode: 'held' } } as import('../shared/workspaceHandoff.js').WorkspaceHandoffSnapshot
+  expect(workspaceJumpDisplay(arrived, [seam], undefined, status)).toMatchObject({ completion: 'checking' })
+  expect(workspaceJumpDisplay(arrived, [seam], undefined, { ...status, settled: true })).toMatchObject({
+    completion: 'blocked', recoveryGeneration: status.observerGeneration, continuation: 'waiting',
+  })
+  const running = workspaceJumpDisplay(arrived, [seam], undefined, { ...status, execution: 'running' })
+  expect(running?.completion).toBeUndefined()
+  expect(running?.recoveryGeneration).toBeUndefined()
+  const preparing = workspaceJumpDisplay(arrived, [seam], undefined, { ...status, settled: true, recoveryId: 'prepared' })
+  expect(preparing?.completion).toBe('blocked')
+  expect(preparing?.recoveryGeneration).toBe(status.observerGeneration)
 })
 
 test('saved project names do not replace the underlying folder location', () => {

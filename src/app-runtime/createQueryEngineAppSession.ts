@@ -102,6 +102,10 @@ export function createQueryEngineAppSession(
       if (!engine.recoverHandoffReconciliation) return Promise.resolve(null)
       return engine.recoverHandoffReconciliation(notice)
     },
+    async verifyWorkspaceRecoveryArchive() {
+      if (!engine.verifyWorkspaceRecoveryArchive) throw new Error('Recovery verification unavailable')
+      await engine.verifyWorkspaceRecoveryArchive()
+    },
     sealResumeCheckpoint() {
       if (!engine.sealResumeCheckpoint) throw new Error('Resume checkpoint sealing unavailable')
       return engine.sealResumeCheckpoint()

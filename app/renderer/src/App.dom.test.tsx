@@ -708,3 +708,38 @@ test.each(['unsent', 'uncertain', 'failed'] as const)('held %s message recovery 
   await act(async () => cancel!.click())
   expect(choices).toEqual(['resend', 'cancel'])
 })
+
+test('held completion keeps draft and image editable, refuses submit, and coalesces recovery clicks', async () => {
+  let submits = 0, recoveries = 0
+  const pending = Promise.withResolvers<import('../../shared/hostApi.js').HostResult<void>>()
+  const previous = window.catcode
+  window.catcode = { ...previous, recoverHandoff: async () => { recoveries++; return pending.promise } }
+  const descriptor: SessionDescriptor = { ...moveDescriptor(false), workspaceMove: { id: '27fb239f-5035-4d37-a14c-b991910a4f10', phase: 'arrived',
+    target: { kind: 'project', name: 'project', path: '/tmp/project' }, agentJump: true, continuation: 'waiting', completion: 'blocked',
+    recoveryGeneration: '0f7cb19a-45c1-4983-bac2-6570902c9594' } }
+  const pane = (status: 'ready' | 'failed' = 'ready') => <SessionPane {...idleSessionPaneProps()} activeDescriptor={descriptor} activeConnection={{ status, inputEnabled: status === 'ready' }}
+    prompt="draft after failed completion" images={[{ id: 1, mediaType: 'image/png', data: 'aGVsbG8=', name: 'sketch.png' }]}
+    submit={() => { submits++ }} />
+  try {
+    const tree = await harness.mount(pane())
+    const composer = composerOf(tree)
+    expect(composer.textContent).toBe('draft after failed completion')
+    expect(tree.container.querySelector('[aria-label="Remove sketch.png"]')).not.toBeNull()
+    expect(tree.container.querySelector<HTMLButtonElement>('[aria-label="Send prompt"]')!.disabled).toBe(true)
+    await act(async () => { tree.container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
+    expect(submits).toBe(0)
+    const recover = Array.from(tree.container.querySelectorAll('button')).find(button => button.textContent === 'Recover Chat')!
+    await act(async () => { recover.click(); recover.click() })
+    expect(recoveries).toBe(1)
+    await tree.render(pane())
+    expect(composerOf(tree)).toBe(composer)
+    expect(composer.textContent).toBe('draft after failed completion')
+    pending.resolve({ ok: false, error: { code: 'session_unreachable', message: 'Work is still active' } })
+    await act(async () => { await pending.promise })
+    expect(composer.textContent).toBe('draft after failed completion')
+    expect(tree.container.querySelector('[aria-label="Remove sketch.png"]')).not.toBeNull()
+    await tree.render(pane('failed'))
+    expect(composerOf(tree)).toBe(composer)
+    expect(composer.textContent).toBe('draft after failed completion')
+  } finally { window.catcode = previous }
+})

@@ -33,7 +33,7 @@ test.each([savedV1, v2])('receiving record/snapshot validators accept checkpoint
     reconciliation: { noticeUuid: id(7), inputUuid: id(9), contextUuid: id(10), checkpoint },
   }
   const snapshot: WorkspaceHandoffSnapshot = { ...identity, observerGeneration: id(11), statusSeq: 1,
-    execution: 'terminal', record: { kind: 'valid', record },
+    settled: true, failure: null, recoveryId: null, execution: 'terminal', record: { kind: 'valid', record },
     gate: { mode: 'open', reservationOperationId: null, requiresUserReconciliation: false } }
   expect(isWorkspaceHandoffExecutionRecord(JSON.parse(JSON.stringify(record)))).toBe(true)
   expect(isWorkspaceHandoffSnapshot(JSON.parse(JSON.stringify(snapshot)))).toBe(true)

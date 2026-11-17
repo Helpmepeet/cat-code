@@ -529,7 +529,7 @@ test('unreadable operation is retained before registry launch and refuses capabi
 function snapshot(h: ReturnType<typeof harness>, sequence: number, record?: Partial<WorkspaceHandoffExecutionRecord>, gate: WorkspaceHandoffSnapshot['gate'] = { mode: 'held', reservationOperationId: h.operationId, requiresUserReconciliation: false }): WorkspaceHandoffSnapshot {
   const state = h.coordinator.snapshot(h.appSessionId)!
   const identity = { appSessionId: h.appSessionId, engineSessionId: state.engineSessionId, operationId: state.operationId, continuationId: state.continuation.id, sourceGeneration: state.sourceGeneration, admissionGeneration: state.continuation.admissionGeneration, operationSha256: workspaceJumpOperationSha256(state) }
-  return { ...identity, observerGeneration: h.generation(), statusSeq: sequence, execution: record?.terminal ? 'terminal' : 'idle', gate,
+  return { ...identity, settled: true, failure: null, recoveryId: null, observerGeneration: h.generation(), statusSeq: sequence, execution: record?.terminal ? 'terminal' : 'idle', gate,
     record: record ? { kind: 'valid', record: { ...identity, version: 1, origin: 'fresh', revision: sequence, consumed: true, inputCommitted: true, cancellation: null, terminal: null, notice: null, reconciliation: null, ...record } } : { kind: 'absent' } }
 }
 const checkpoint = () => ({ version: 1 as const, prefixBytes: 10, prefixSha256: 'a'.repeat(64), projectionSha256: 'b'.repeat(64), activeTipUuid: randomUUID(), messageCount: 1 })

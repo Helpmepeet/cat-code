@@ -99,6 +99,8 @@ export type WorkspaceMoveDisplay = {
   phase: 'moving' | 'arrived' | 'failed' | 'stopped'
   /** Agent jump execution summary from the durable host record. */
   continuation?: 'waiting' | 'dispatched' | 'finished'
+  completion?: 'blocked' | 'checking' | 'review'
+  recoveryGeneration?: string
   target: { kind: 'project' | 'chat'; name: string; path: string | null; displayPath?: string }
   transitionId?: string
   afterFrameId?: string | null

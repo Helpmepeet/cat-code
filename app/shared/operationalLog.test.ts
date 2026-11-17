@@ -374,3 +374,16 @@ test('a usage worker failure carries its category and magnitudes, and still no f
     { launchId: 'launch', processInstanceId: 'process' },
   )).toThrow('unsafe field limit')
 })
+
+test('handoff failure diagnostics accept bounded evidence and reject content in every field', () => {
+  const fields = { operationId: '2d14475a-018e-44d0-9c96-d07b7bbf3b04', generation: '73d7cda2-f9c2-4f9a-bb45-4178548ac891',
+    phase: 'checkpoint_seal', reason: 'duplicate_message_identity', messageId: '2d14475a-018e-44d0-9c96-d07b7bbf3b05', kind: 'attachment', code: 'EIO' }
+  const record = createOperationalRecord({ level: 'warn', event: 'workspace.handoff.failed', process: 'main', fields },
+    { launchId: 'launch', processInstanceId: 'process' })
+  expect(parseOperationalRecord(record)?.fields).toEqual(fields)
+  for (const key of Object.keys(fields)) {
+    expect(() => createOperationalRecord({ level: 'warn', event: 'workspace.handoff.failed', process: 'main',
+      fields: { ...fields, [key]: 'private arbitrary content' } }, { launchId: 'launch', processInstanceId: 'process' })).toThrow()
+    expect(parseOperationalRecord({ ...record, fields: { ...fields, [key]: 'private arbitrary content' } })).toBeNull()
+  }
+})

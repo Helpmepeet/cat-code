@@ -1497,14 +1497,14 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // The composer's three consumers all read the SAME gate object, so
   // "typeable" can never drift apart from "sendable" again.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'const composerReadOnly = branchSwitchPending || managedFolderUnavailable || !composerGate.editable',
+    'const composerReadOnly = branchSwitchPending || managedFolderUnavailable || (!composerGate.editable && !completionBlocked)',
   )
   expect(paneSource).toContain('readOnly={composerReadOnly}')
   // Whitespace-normalised: the assertion is about which gate the send button
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
-    'disabled={ railCommand ? !railCommandReady : desktopCommand ? !canExecuteDesktopCommand : projectRoute !== null || branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
+    'disabled={completionBlocked || recoveryPending || ( railCommand ? !railCommandReady : desktopCommand ? !canExecuteDesktopCommand : projectRoute !== null || branchSwitchPending || managedFolderUnavailable || !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null) }',
   )
   expect(paneSource.replace(/\s+/g, ' ')).toContain(
     'attachDisabled={ !composerGate.editable || managedFolderUnavailable || preparingImage || pickingFile }',
