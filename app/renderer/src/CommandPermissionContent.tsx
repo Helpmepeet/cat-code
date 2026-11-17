@@ -109,7 +109,10 @@ const PermissionShellBlock = memo(function PermissionShellBlock({ command, bash 
       <code ref={sourceRef} id={sourceId} className="hljs command-permission-source">{lines ? lines.map((line, index) => <span key={index} className="inline-command-line">{line.prompt ? <span className="inline-command-prompt" aria-hidden>$</span> : null}{line.tokens.map((token, index) => <span key={index} className={`shell-token-${token.kind}`}>{token.text}</span>)}</span>) : command.split(/(\s+)/).map((text, index) => <span key={index} className={text.startsWith('-') ? 'command-permission-flag' : undefined}>{text}</span>)}</code>
     </pre>
     <CodeCopyButton code={command} />
-    {moreLines > 0 ? <button type="button" className="command-permission-fold" aria-controls={sourceId} aria-expanded={expanded} onClick={() => setExpanded(current => !current)}>
+    {moreLines > 0 ? <button type="button" className="command-permission-fold" aria-controls={sourceId} aria-expanded={expanded} onClick={() => {
+      if (expanded && preRef.current) preRef.current.scrollTop = 0
+      setExpanded(current => !current)
+    }}>
       {expanded ? 'Show less' : `Show ${moreLines} more ${moreLines === 1 ? 'line' : 'lines'}`}
     </button> : null}
   </div>

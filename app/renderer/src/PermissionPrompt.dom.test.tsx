@@ -156,7 +156,10 @@ test('folding measures wrapped rendered height, survives expansion and resizes w
     expect(button(tree.container, 'Show less').getAttribute('aria-expanded')).toBe('true')
     expect(tree.container.querySelector('pre code')!.textContent).toContain('a'.repeat(1200))
     await resize(540)
+    const pre = tree.container.querySelector('pre')!
+    pre.scrollTop = 180
     await act(async () => { button(tree.container, 'Show less').click() })
+    expect(pre.scrollTop).toBe(0)
     expect(button(tree.container, 'Show 15 more lines')).toBeDefined()
     await harness.nextFrame()
     const before = measurements
