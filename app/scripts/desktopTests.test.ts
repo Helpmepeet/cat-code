@@ -37,7 +37,7 @@ test('area selection and Bun reporter arguments reach the intended test invocati
 test('full-suite lanes cover every file once and native checks wait for the workers', () => {
   const [routine, workspace, native] = fullSuiteLanes(5)
   const heavy = [...slowDesktopTests.workspace, ...slowDesktopTests.native]
-  expect(routine).toEqual({ name: 'routine', args: ['test', './app', '--parallel=5', ...heavy.flatMap(path => ['--path-ignore-patterns', path])] })
+  expect(routine).toEqual({ name: 'routine', args: ['test', './app', '--parallel=5', '--timeout=20000', ...heavy.flatMap(path => ['--path-ignore-patterns', path])] })
   expect(workspace).toEqual({ name: 'workspace', args: ['test', ...slowDesktopTests.workspace.map(path => `./${path}`)] })
   expect(native).toEqual({ name: 'native', args: ['test', ...slowDesktopTests.native.map(path => `./${path}`)], after: 'routine' })
   expect([4, 8, 12, 32].map(cores => fullSuiteWorkers(cores))).toEqual([1, 3, 5, 5])

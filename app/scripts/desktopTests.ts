@@ -70,6 +70,11 @@ export function desktopTestArgs(suite = 'fast', args: string[] = []): string[] {
   return ['test', ...slowFiles.map(path => `./${path}`), ...args]
 }
 
+// Bun's 5s default cuts off tests that merely wait for a busy machine; each
+// run lost a different one while other sessions shared the CPU. Tests that set
+// their own budget are unaffected.
+const routineTestTimeoutMs = 20_000
+
 export type FullSuiteLane = { name: string; args: string[]; after?: string }
 
 // The full suite gates every local install and took ~11 minutes one file at a
@@ -80,7 +85,7 @@ export type FullSuiteLane = { name: string; args: string[]; after?: string }
 export function fullSuiteLanes(workers = fullSuiteWorkers()): FullSuiteLane[] {
   const workspace = [...slowDesktopTests.workspace], native = [...slowDesktopTests.native]
   return [
-    { name: 'routine', args: ['test', './app', `--parallel=${workers}`, ...[...workspace, ...native].flatMap(path => ['--path-ignore-patterns', path])] },
+    { name: 'routine', args: ['test', './app', `--parallel=${workers}`, `--timeout=${routineTestTimeoutMs}`, ...[...workspace, ...native].flatMap(path => ['--path-ignore-patterns', path])] },
     { name: 'workspace', args: ['test', ...workspace.map(path => `./${path}`)] },
     { name: 'native', args: ['test', ...native.map(path => `./${path}`)], after: 'routine' },
   ]
