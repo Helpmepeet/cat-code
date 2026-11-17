@@ -277,6 +277,9 @@ export type ToolUseContext = {
     messages: readonly Message[]
   }) => Promise<Attachment[]>
   abortController: AbortController
+  /** Instruction-file prefix supplied to the model that authored these calls.
+   * Explicit null means no instruction prefix; undefined is a legacy caller. */
+  autoModeInstructionContext?: string | null
   /** Internal executor hook fired immediately before a permitted tool effect starts. */
   onToolExecutionStart?: () => void
   /** Engine-only audit of the final authorized executable input, before effect. */

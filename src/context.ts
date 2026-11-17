@@ -31,6 +31,12 @@ const GIT_CONTEXT_COMMAND_OPTIONS = {
 
 // System prompt injection for cache breaking (ant-only, ephemeral debugging state)
 let systemPromptInjection: string | null = null
+let userContextRevision = 0
+
+/** Changes only when a caller explicitly invalidates the session prefix. */
+export function getUserContextRevision(): number {
+  return userContextRevision
+}
 
 export function getSystemPromptInjection(): string | null {
   return systemPromptInjection
@@ -282,6 +288,7 @@ export const getUserContext = memoize(
 )
 
 export function clearUserContextCache(): void {
+  userContextRevision++
   getUserContext.cache.clear?.()
   setCachedClaudeMdContent(null)
 }

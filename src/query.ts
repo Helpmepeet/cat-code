@@ -5,6 +5,7 @@ import type {
   ToolUseBlock,
 } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { CanUseToolFn } from './hooks/useCanUseTool.js'
+import { getUserContext, getUserContextRevision } from './context.js'
 import { poolManagesCredentials } from './services/api/codexAccountPool.js'
 import {
   registerCodexLease,
@@ -406,7 +407,6 @@ async function* queryLoop(
   // Immutable params — never reassigned during the query loop.
   const {
     systemPrompt: baseSystemPrompt,
-    userContext,
     systemContext,
     canUseTool,
     fallbackModel,
@@ -415,6 +415,8 @@ async function* queryLoop(
     skipCacheWrite,
     outputFormat,
   } = params
+  let userContext = params.userContext
+  let userContextRevision = getUserContextRevision()
   const deps = params.deps ?? productionDeps()
   const interruptedTools = params.toolUseContext.interruptedToolRun ??
     getInterruptedToolRun(getSessionId(), params.toolUseContext.agentId)
@@ -519,6 +521,16 @@ async function* queryLoop(
     // is reassigned within an iteration (queryTracking, messages updates);
     // the rest are read-only between continue sites.
     let { toolUseContext } = state
+    const nextUserContextRevision = getUserContextRevision()
+    if (nextUserContextRevision !== userContextRevision) {
+      const refreshed = await getUserContext()
+      // Keep per-run context such as coordinator state and the session date.
+      // Only explicitly invalidated instruction files change between requests.
+      const { claudeMd: _previousInstructions, ...otherContext } = userContext
+      userContext = { ...otherContext, ...(refreshed.claudeMd ? { claudeMd: refreshed.claudeMd } : {}) }
+      userContextRevision = nextUserContextRevision
+    }
+    toolUseContext = { ...toolUseContext, autoModeInstructionContext: userContext.claudeMd ?? null }
     const {
       messages,
       autoCompactTracking,

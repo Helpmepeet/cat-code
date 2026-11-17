@@ -6,6 +6,7 @@ import {
   setProjectRoot,
 } from '../../bootstrap/state.js'
 import { clearSystemPromptSections } from '../../constants/systemPromptSections.js'
+import { clearUserContextCache } from '../../context.js'
 import { logEvent } from '../../services/analytics/index.js'
 import type { Tool } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
@@ -143,6 +144,7 @@ function restoreSessionToOriginalCwd(
   saveWorktreeState(null)
   clearSystemPromptSections()
   clearMemoryFileCaches()
+  clearUserContextCache()
   getPlansDirectory.cache.clear?.()
 }
 
