@@ -16,6 +16,8 @@ export const slowDesktopTests = {
     'app/sidecar/workspaceJumpStartup.process.test.ts',
   ],
   native: [
+    // Real filesystem snapshots and watchers must not compete with the worker pool.
+    'app/main/filePreview.test.ts',
     'app/main/previewDocumentRunner.test.ts',
     'app/main/lidClosedMode.test.ts',
     'app/native/lid-closed/native.test.ts',
@@ -72,9 +74,9 @@ export type FullSuiteLane = { name: string; args: string[]; after?: string }
 
 // The full suite gates every local install and took ~11 minutes one file at a
 // time. Routine files share worker processes. Workspace files start real
-// sidecars, so they run one at a time beside the workers. Native files measure
-// real layout and input timing, so they wait for the workers to finish; under
-// load a scroll check saw transient 2px shifts. ~4 minutes on a 12-core Mac.
+// sidecars, so they run one at a time beside the workers. Native files depend on
+// real filesystem, layout and input timing, so they wait for the workers to
+// finish. ~4 minutes on a 12-core Mac.
 export function fullSuiteLanes(workers = fullSuiteWorkers()): FullSuiteLane[] {
   const workspace = [...slowDesktopTests.workspace], native = [...slowDesktopTests.native]
   return [
