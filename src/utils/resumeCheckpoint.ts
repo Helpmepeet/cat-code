@@ -66,6 +66,29 @@ export function resumeProjectionV2Sha256(messages: readonly Message[]): string {
   return createHash('sha256').update(canonicalResumeJson(resumeProjectionV2(messages))).digest('hex')
 }
 
+export class ResumeIdentityError extends Error {
+  constructor(readonly reason: 'invalid_message_identity' | 'duplicate_message_identity', readonly messageUuid?: string,
+    readonly messageType?: string) {
+    super('Invalid or duplicate resume message UUID')
+    this.name = 'ResumeIdentityError'
+  }
+}
+
+function indexResumeRows(messages: readonly Message[]) {
+  const rows = new Map<string, { content: string; index: number }>()
+  resumeProjectionV1(messages).forEach((row, index) => {
+    const message = row as Record<string, unknown>
+    const type = ['user', 'assistant', 'attachment', 'system', 'progress'].includes(message.type as string) ? message.type as string : undefined
+    if (!isHandoffUuid(message.uuid)) throw new ResumeIdentityError('invalid_message_identity', undefined, type)
+    if (rows.has(message.uuid)) throw new ResumeIdentityError('duplicate_message_identity', message.uuid, type)
+    rows.set(message.uuid, { content: canonicalResumeJson(row), index })
+  })
+  return rows
+}
+
+/** Admission preflight, before any checkpoint metadata or marker is written. */
+export function preflightResumeIdentities(messages: readonly Message[]): void { indexResumeRows(messages) }
+
 /**
  * Sealing admission only, not a substitute for prefix/tip verification.
  * Both arguments must be independently obtained, ordered active chains after
@@ -76,17 +99,8 @@ export function verifyResumeProjectionV2(
   intended: readonly Message[],
   archived: readonly Message[],
 ): Pick<import('../../app/shared/workspaceHandoff.js').ResumeCheckpointV2, 'projectionSha256' | 'messageCount'> {
-  const indexRows = (messages: readonly Message[]) => {
-    const rows = new Map<string, { content: string; index: number }>()
-    resumeProjectionV1(messages).forEach((row, index) => {
-      const message = row as Record<string, unknown>
-      if (!isHandoffUuid(message.uuid) || rows.has(message.uuid)) throw new Error('Invalid or duplicate resume message UUID')
-      rows.set(message.uuid, { content: canonicalResumeJson(row), index })
-    })
-    return rows
-  }
-  const expectedRows = indexRows(intended)
-  const archivedRows = indexRows(archived)
+  const expectedRows = indexResumeRows(intended)
+  const archivedRows = indexResumeRows(archived)
   let previousIndex = -1
   for (const [uuid, expected] of expectedRows) {
     const stored = archivedRows.get(uuid)

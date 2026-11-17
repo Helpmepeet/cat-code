@@ -2104,3 +2104,95 @@ test('failed recovery admission remains held across restart despite a surviving 
   expect(calls).toBe(1)
   expect(engine([], { initialMessages: [...next.getMessages()] }).requiresRecoveryReview()).toBe(false)
 })
+
+for (const streaming of [false, true]) for (const allowedTools of [[], ['Read']]) {
+  test(`raw Skill and real hook context survive ${streaming ? 'streaming' : 'ordinary'} continuation with ${allowedTools.length} permission rules`, async () => {
+    process.env.CLAUDE_CODE_SIMPLE = '0'
+    const { SkillTool } = await import('./tools/SkillTool/SkillTool.js')
+    const { normalizeMessagesForAPI, createUserMessage } = await import('./utils/messages.js')
+    const { buildProviderInstructionAssembly } = await import('./services/api/instructionAssembly.js')
+    const { createQueryEngineSessionController } = await import('./app-runtime/createQueryEngineSessionController.js')
+    spies.push(spyOn(growthbook, 'checkStatsigFeatureGate_CACHED_MAY_BE_STALE').mockImplementation(name => name === 'tengu_streaming_tool_execution2' && streaming))
+    const hookMarkers = { PreToolUse: 'RAW_PRE_HOOK_MARKER', PostToolUse: 'RAW_POST_HOOK_MARKER' }
+    const command: import('./commands.js').Command = {
+      name: 'raw-context-fixture', type: 'prompt', description: 'Synthetic context', source: 'builtin',
+      progressMessage: 'loading fixture', contentLength: 30, allowedTools,
+      getPromptForCommand: async () => [{ type: 'text', text: 'RAW_SKILL_INSTRUCTION_MARKER' }],
+      hooks: Object.fromEntries(Object.entries(hookMarkers).map(([event, marker]) => [event, [{ matcher: 'ObserveContext', hooks: [{
+        type: 'command', command: `printf '%s' '{"hookSpecificOutput":{"hookEventName":"${event}","additionalContext":"${marker}"}}'`,
+      }] }]])),
+    }
+    const observe = buildTool({ name: 'ObserveContext', inputSchema: z.object({}), description: async () => 'observe', prompt: async () => 'observe',
+      maxResultSizeChars: 100, renderToolUseMessage: () => null, async call() { return { data: 'observed' } },
+      mapToolResultToToolResultBlockParam: (_data, id) => ({ type: 'tool_result', tool_use_id: id, content: 'observed' }),
+    })
+    const commands = await import('./commands.js')
+    spies.push(spyOn(commands, 'getCommands').mockResolvedValue([command]))
+    const tools = [SkillTool, observe]
+    const requests: Message[][] = []
+    const projected: string[] = []
+    spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* (args) {
+      requests.push([...args.messages])
+      // Use the same production instruction assembly and normalization as the provider.
+      const assembly = buildProviderInstructionAssembly({ provider: 'openai', messages: args.messages,
+        systemPrompt: args.systemPrompt, userContext: {}, systemContext: {} })
+      projected.push(JSON.stringify(normalizeMessagesForAPI(assembly.openAIInstructionAssembly?.inputMessages ?? args.messages, tools, 'openai')))
+      if (requests.length === 1) yield assistant([{ type: 'tool_use', id: 'fixture-skill', name: 'Skill', input: { skill: command.name } }])
+      else if (requests.length === 2) yield assistant([{ type: 'tool_use', id: 'fixture-observe', name: observe.name, input: {} }])
+      else yield assistant([{ type: 'text', text: 'context applied' }])
+    }))
+    const seed = createUserMessage({ content: 'synthetic workspace work' })
+    await storage.recordTranscript([seed])
+    const runtime = engine(tools, { initialMessages: [seed], commands: [command],
+      canUseTool: async (_tool, input) => ({ behavior: 'allow', updatedInput: input }),
+    })
+    const controller = createQueryEngineSessionController(runtime)
+    await controller.configureWorkspaceHandoff(handoffConfiguration())
+    const started = await controller.startHandoffContinuation()
+    await started.completion
+    expect(requests).toHaveLength(3)
+    const rows = runtime.getMessages()
+    const supplemental = rows.filter(m => m.type === 'attachment' && ['command_permissions', 'hook_additional_context'].includes(m.attachment.type))
+    expect(supplemental.map(m => m.type === 'attachment' && m.attachment.type).sort()).toEqual(['command_permissions', 'hook_additional_context', 'hook_additional_context'])
+    expect(new Set(rows.map(m => m.uuid)).size).toBe(rows.length)
+    for (const marker of ['RAW_SKILL_INSTRUCTION_MARKER', ...Object.values(hookMarkers)]) {
+      expect(projected[2]!.split(marker).length - 1).toBe(1)
+    }
+    const snapshot = controller.getWorkspaceHandoffSnapshot()!
+    expect(snapshot.record.kind).toBe('valid')
+    if (snapshot.record.kind !== 'valid' || !snapshot.record.record.terminal) throw new Error('Expected sealed terminal')
+    await storage.verifyResumeCheckpoint(snapshot.record.record.terminal.checkpoint)
+    await controller.releaseWorkspaceHandoff(snapshot.operationId, 'open')
+    await controller.submit('follow-up after context delivery', { uuid: randomUUID() })
+    expect(requests).toHaveLength(4)
+    const checkpoint = await runtime.sealResumeCheckpoint()
+    const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+    const loaded = await storage.loadTranscriptFile(path, { keepAllLeaves: true, strict: true })
+    const active = storage.selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+    for (const row of supplemental) expect(active.messages.filter(m => m.uuid === row.uuid)).toHaveLength(1)
+    const restored = await loadConversationForResume(bootstrap.getSessionId(), path, { interruptedTurn: 'ignore' })
+    expect(restored!.messages.map(m => m.uuid)).toEqual(storage.intendedResumeProjection([...runtime.getMessages()]).map(m => m.uuid))
+    await storage.verifyResumeCheckpoint(checkpoint)
+  }, 30_000)
+}
+
+test('duplicate intended identity fails before checkpoint writes on every attempt', async () => {
+  const { createUserMessage } = await import('./utils/messages.js')
+  const { ResumeIdentityError } = await import('./utils/resumeCheckpoint.js')
+  const seed = createUserMessage({ content: 'synthetic checkpoint intent' })
+  const done = assistant([{ type: 'text', text: 'saved' }])
+  await storage.recordTranscript([seed, done])
+  await storage.flushCurrentTranscriptDurably()
+  const path = storage.getTranscriptPathForSession(bootstrap.getSessionId())
+  const before = await fsPromises.readFile(path)
+  for (const duplicate of [seed, { ...seed, message: { ...seed.message, content: 'conflicting content' } }]) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { await storage.sealResumeCheckpoint([seed, duplicate, done]); throw new Error('Expected rejection') }
+      catch (error) {
+        expect(error).toBeInstanceOf(ResumeIdentityError)
+        expect(error).toMatchObject({ reason: 'duplicate_message_identity', messageUuid: seed.uuid, messageType: 'user' })
+      }
+      expect(await fsPromises.readFile(path)).toEqual(before)
+    }
+  }
+})

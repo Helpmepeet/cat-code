@@ -90,7 +90,7 @@ import { getBranch } from './git.js'
 import { gracefulShutdownSync, isShuttingDown } from './gracefulShutdown.js'
 import { parseJSONL } from './json.js'
 import { canonicalResumeJson, resumeProjectionV1, resumeProjectionSha256, resumeProjectionV2,
-  resumeProjectionV2Sha256, verifyResumeProjectionV2, type ResumeCheckpoint, type ResumeCheckpointV2 } from './resumeCheckpoint.js'
+  resumeProjectionV2Sha256, verifyResumeProjectionV2, preflightResumeIdentities, type ResumeCheckpoint, type ResumeCheckpointV2 } from './resumeCheckpoint.js'
 import { isResumeCheckpoint } from '../../app/shared/workspaceHandoff.js'
 import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
@@ -2794,6 +2794,7 @@ export async function sealResumeCheckpoint(expectedResumeProjection: Message[]):
   const expected = intendedResumeProjection(expectedResumeProjection)
   // Capture independently retained engine state before inspecting the file.
   const intended = JSON.parse(canonicalResumeJson(resumeProjectionV1(expected))) as Message[]
+  preflightResumeIdentities(intended)
   const tip = expected.at(-1)
   if (!tip || (tip.type !== 'user' && tip.type !== 'assistant')) throw new Error('Resume checkpoint has no active tip')
   await flushCurrentTranscriptDurably()

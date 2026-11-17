@@ -60,7 +60,7 @@ import { logAntError, logForDebugging } from './utils/debug.js'
 import {
   createUserMessage,
   createUserInterruptionMessage,
-  normalizeMessagesForAPI,
+  isSystemLocalCommandMessage,
   createSystemMessage,
   createAssistantAPIErrorMessage,
   createCommandInputMessage,
@@ -306,6 +306,12 @@ function getEligibleCodexPartialStreamFailure(
   return failure.provider === 'openai' && failure.automaticContinuationEligible
     ? failure
     : null
+}
+
+// Retained history owns raw identity. Provider projection can omit attachments or
+// mint user rows, so it must only run when preparing a provider request.
+function retainToolOutput(rows: Message[], message: Message): void {
+  if (message.type === 'user' || message.type === 'attachment' || isSystemLocalCommandMessage(message)) rows.push(message)
 }
 
 export type QueryParams = {
@@ -809,7 +815,7 @@ async function* queryLoop(
 
     const assistantMessages: AssistantMessage[] = []
     let attemptOutputEscaped = false
-    const toolResults: (UserMessage | AttachmentMessage)[] = []
+    const toolResults: (UserMessage | AttachmentMessage | import('./types/message.js').SystemLocalCommandMessage)[] = []
     // @see https://docs.claude.com/en/docs/build-with-claude/tool-use
     // Note: stop_reason === 'tool_use' is unreliable -- it's not always set correctly.
     // Set during streaming whenever a tool_use block arrives — the sole
@@ -1228,12 +1234,7 @@ async function* queryLoop(
               for (const result of streamingToolExecutor.getCompletedResults()) {
                 if (result.message) {
                   yield result.message
-                  toolResults.push(
-                    ...normalizeMessagesForAPI(
-                      [result.message],
-                      toolUseContext.options.tools,
-                    ).filter(_ => _.type === 'user'),
-                  )
+                  retainToolOutput(toolResults, result.message)
                 }
               }
             }
@@ -1448,9 +1449,7 @@ async function* queryLoop(
         for await (const update of streamingToolExecutor.getRemainingResults()) {
           if (update.message) {
             yield update.message
-            toolResults.push(...normalizeMessagesForAPI(
-              [update.message], toolUseContext.options.tools, currentProvider,
-            ).filter(message => message.type === 'user'))
+            retainToolOutput(toolResults, update.message)
           }
           if (update.newContext) continuedContext = update.newContext
         }
@@ -1495,7 +1494,7 @@ async function* queryLoop(
         for await (const update of streamingToolExecutor.getRemainingResults()) {
           if (update.message) {
             yield update.message
-            toolResults.push(...normalizeMessagesForAPI([update.message], toolUseContext.options.tools).filter(m => m.type === 'user'))
+            retainToolOutput(toolResults, update.message)
           }
         }
       }
@@ -2240,12 +2239,7 @@ async function* queryLoop(
           shouldPreventContinuation = true
         }
 
-        toolResults.push(
-          ...normalizeMessagesForAPI(
-            [update.message],
-            toolUseContext.options.tools,
-          ).filter(_ => _.type === 'user'),
-        )
+        retainToolOutput(toolResults, update.message)
       }
       if (update.newContext) {
         updatedToolUseContext = {
@@ -2670,17 +2664,16 @@ async function* queryLoop(
     // Circuit-breaker: if every tool result this turn was an unknown-tool error
     // for the same name, increment the counter. Abort after 2 consecutive turns
     // so the user sees an error instead of a silent infinite retry loop.
-    const unknownToolErrors = toolResults.flatMap(r => {
-      if (r.type !== 'user' || !Array.isArray(r.message.content)) return []
-      return r.message.content.filter(
+    const resultBlocks = toolResults.flatMap(r => r.type === 'user' && Array.isArray(r.message.content)
+      ? r.message.content.filter(c => c.type === 'tool_result') : [])
+    const unknownToolErrors = resultBlocks.filter(
         (c): c is { type: 'tool_result'; content: string; is_error: boolean; tool_use_id: string } =>
           c.type === 'tool_result' &&
           c.is_error === true &&
           typeof c.content === 'string' &&
           c.content.includes('No such tool available:'),
       )
-    })
-    if (unknownToolErrors.length > 0 && unknownToolErrors.length === toolResults.filter(r => r.type === 'user').length) {
+    if (unknownToolErrors.length > 0 && unknownToolErrors.length === resultBlocks.length) {
       const names = [...new Set(unknownToolErrors.map(e => {
         const m = e.content.match(/No such tool available: (\S+)/)
         return m ? m[1] : '(unknown)'
