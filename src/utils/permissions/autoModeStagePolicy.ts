@@ -28,11 +28,11 @@ function hasHeadings(text: string, expected: readonly string[]): boolean {
 }
 
 /**
- * Candidate for labeled evals only. Stage 1 ignores intent and exceptions, so
- * omit those two complete sections while preserving all harm rules verbatim.
+ * Stage 1 ignores intent and exceptions, so omit those two complete sections
+ * while preserving all harm rules verbatim. The paired synthetic eval records
+ * the decision check for this policy change.
  * The thinking stage still gets the complete policy. A changed template or
  * custom rule containing structural headings keeps the complete policy too.
- * Production callers must keep the full variant until paired evals pass.
  */
 export function buildReducedAutoModeStagePolicy(
   fullSystemPrompt: string,

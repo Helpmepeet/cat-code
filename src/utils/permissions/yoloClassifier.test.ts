@@ -1026,6 +1026,8 @@ describe('two-stage upstream classifier', () => {
     )
     if (feature('AUTO_MODE_UPSTREAM_PORT')) {
       expect(JSON.stringify(requests[0]?.system)).toContain('Data Exfiltration')
+      expect(system[0]?.text).not.toContain('## User Intent Rule\n')
+      expect(system[0]?.text).not.toContain('## ALLOW (exceptions) if ANY of these apply\n')
     }
     expect(requests[0]?.tools?.[0]?.input_schema).toEqual({
       type: 'object',
@@ -1100,6 +1102,11 @@ describe('two-stage upstream classifier', () => {
 
     expect(requests).toHaveLength(2)
     expect(requests[1]?.max_tokens).toBeGreaterThan(64)
+    if (feature('AUTO_MODE_UPSTREAM_PORT')) {
+      expect(JSON.stringify(requests[0]?.system)).not.toContain('## User Intent Rule')
+      expect(JSON.stringify(requests[1]?.system)).toContain('## User Intent Rule')
+      expect(JSON.stringify(requests[1]?.system)).toContain('## ALLOW (exceptions) if ANY of these apply')
+    }
     expect(result).toMatchObject({
       shouldBlock: true,
       reason: 'Destructive action',
