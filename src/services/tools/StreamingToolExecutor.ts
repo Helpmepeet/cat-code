@@ -17,6 +17,7 @@ import {
   type PtcloveToolStatusTracker,
 } from './ptcloveToolStatus.js'
 import { runToolUse } from './toolExecution.js'
+import { CompletedToolContext } from './completedToolContext.js'
 
 type MessageUpdate = {
   message?: Message
@@ -62,13 +63,15 @@ export class StreamingToolExecutor {
   // Signal to wake up getRemainingResults when progress is available
   private progressAvailableResolve?: () => void
   private ptcloveToolStatus: PtcloveToolStatusTracker
+  private readonly completed: CompletedToolContext
 
   constructor(
     private readonly toolDefinitions: Tools,
-    private readonly canUseTool: CanUseToolFn,
+    canUseTool: CanUseToolFn,
     toolUseContext: ToolUseContext,
   ) {
     this.toolUseContext = toolUseContext
+    this.completed = new CompletedToolContext(canUseTool)
     this.siblingAbortController = createChildAbortController(
       toolUseContext.abortController,
     )
@@ -371,7 +374,7 @@ export class StreamingToolExecutor {
         const generator = runToolUse(
           tool.block,
           tool.assistantMessage,
-          this.canUseTool,
+          this.completed.checkPermission,
           {
             ...this.toolUseContext,
             abortController: toolAbortController,
@@ -442,6 +445,7 @@ export class StreamingToolExecutor {
         }
         tool.results = messages
         tool.contextModifiers = contextModifiers
+        this.completed.record(tool.block, tool.assistantMessage, messages)
         tool.status = 'completed'
         this.updateInterruptibleState()
 

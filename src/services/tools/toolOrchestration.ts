@@ -4,6 +4,7 @@ import { findToolByName, type ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { all } from '../../utils/generators.js'
 import { createPtcloveToolStatusTracker } from './ptcloveToolStatus.js'
+import { CompletedToolContext } from './completedToolContext.js'
 import { type MessageUpdateLazy, runToolUse } from './toolExecution.js'
 
 function getMaxToolUseConcurrency(): number {
@@ -24,6 +25,7 @@ export async function* runTools(
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdate, void> {
   let currentContext = toolUseContext
+  const completed = new CompletedToolContext(canUseTool)
   for (const { isConcurrencySafe, blocks } of partitionToolCalls(
     toolUseMessages,
     currentContext,
@@ -37,7 +39,7 @@ export async function* runTools(
       for await (const update of runToolsConcurrently(
         blocks,
         assistantMessages,
-        canUseTool,
+        completed,
         currentContext,
       )) {
         if (update.contextModifier) {
@@ -67,7 +69,7 @@ export async function* runTools(
       for await (const update of runToolsSerially(
         blocks,
         assistantMessages,
-        canUseTool,
+        completed,
         currentContext,
       )) {
         if (update.newContext) {
@@ -119,13 +121,17 @@ function partitionToolCalls(
 async function* runToolsSerially(
   toolUseMessages: ToolUseBlock[],
   assistantMessages: AssistantMessage[],
-  canUseTool: CanUseToolFn,
+  completed: CompletedToolContext,
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdate, void> {
   let currentContext = toolUseContext
   const ptcloveToolStatus = createPtcloveToolStatusTracker(toolUseContext)
 
   for (const toolUse of toolUseMessages) {
+    const assistant = assistantMessages.find(message => message.message.content.some(
+      block => block.type === 'tool_use' && block.id === toolUse.id,
+    ))!
+    const results: Message[] = []
     ptcloveToolStatus.start(toolUse)
     toolUseContext.setInProgressToolUseIDs(prev =>
       new Set(prev).add(toolUse.id),
@@ -133,14 +139,11 @@ async function* runToolsSerially(
     try {
       for await (const update of runToolUse(
         toolUse,
-        assistantMessages.find(_ =>
-          _.message.content.some(
-            _ => _.type === 'tool_use' && _.id === toolUse.id,
-          ),
-        )!,
-        canUseTool,
+        assistant,
+        completed.checkPermission,
         currentContext,
       )) {
+        if (update.message) results.push(update.message)
         if (update.contextModifier) {
           currentContext = update.contextModifier.modifyContext(currentContext)
         }
@@ -149,6 +152,7 @@ async function* runToolsSerially(
           newContext: currentContext,
         }
       }
+      completed.record(toolUse, assistant, results)
     } finally {
       ptcloveToolStatus.complete(toolUse.id)
       markToolUseAsComplete(toolUseContext, toolUse.id)
@@ -159,27 +163,31 @@ async function* runToolsSerially(
 async function* runToolsConcurrently(
   toolUseMessages: ToolUseBlock[],
   assistantMessages: AssistantMessage[],
-  canUseTool: CanUseToolFn,
+  completed: CompletedToolContext,
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdateLazy, void> {
   const ptcloveToolStatus = createPtcloveToolStatusTracker(toolUseContext)
   yield* all(
     toolUseMessages.map(async function* (toolUse) {
+      const assistant = assistantMessages.find(message => message.message.content.some(
+        block => block.type === 'tool_use' && block.id === toolUse.id,
+      ))!
+      const results: Message[] = []
       ptcloveToolStatus.start(toolUse)
       toolUseContext.setInProgressToolUseIDs(prev =>
         new Set(prev).add(toolUse.id),
       )
       try {
-        yield* runToolUse(
+        for await (const update of runToolUse(
           toolUse,
-          assistantMessages.find(_ =>
-            _.message.content.some(
-              _ => _.type === 'tool_use' && _.id === toolUse.id,
-            ),
-          )!,
-          canUseTool,
+          assistant,
+          completed.checkPermission,
           toolUseContext,
-        )
+        )) {
+          if (update.message) results.push(update.message)
+          yield update
+        }
+        completed.record(toolUse, assistant, results)
       } finally {
         ptcloveToolStatus.complete(toolUse.id)
         markToolUseAsComplete(toolUseContext, toolUse.id)
