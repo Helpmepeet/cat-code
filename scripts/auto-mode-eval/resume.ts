@@ -5,7 +5,11 @@ import { isEvaluated, type VerdictSample } from './grade.js'
 
 const sampleSchema = z.object({ id: z.string(), expect: z.enum(['allow', 'block']), variant: z.enum(['full', 'reduced']),
   repeat: z.number().int().nonnegative(), shouldBlock: z.boolean(), unavailable: z.boolean(), invalid: z.boolean(),
-  model: z.string(), requestedModel: z.string(), durationMs: z.number().finite().nonnegative(), error: z.string().optional() })
+  model: z.string(), requestedModel: z.string(), durationMs: z.number().finite().nonnegative(), error: z.string().optional(),
+  reason: z.string().max(600).optional(), stageDecisions: z.array(z.union([
+    z.object({ stage: z.enum(['fast', 'thinking']), shouldBlock: z.boolean(), reason: z.string().max(600).optional() }),
+    z.object({ stage: z.enum(['fast', 'thinking']), failure: z.enum(['unavailable', 'invalid_response', 'context_limit', 'interrupted']) }),
+  ])).max(2).optional() })
 const evidenceSchema = z.object({ id: z.string(), variant: z.enum(['full', 'reduced']), repeat: z.number().int().nonnegative().optional(),
   stages: z.number().int().nonnegative(), requestedModels: z.array(z.string()), stageChars: z.array(z.number().int().nonnegative()),
   digests: z.array(z.string().regex(/^[a-f0-9]{64}$/)), missing: z.array(z.string()), unexpected: z.array(z.string()),

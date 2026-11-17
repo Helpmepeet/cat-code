@@ -84,7 +84,7 @@ test('resume validates current request hashes without sends, completes only the 
               if (++calls > limit) throw new Error('Fixture budget exceeded');
               return { id: 'fixture-answer', type: 'message', role: 'assistant', model,
                 content: [{ type: 'tool_use', id: 'fixture-verdict', name: options.tool_choice.name, input: calls === 1 ? { shouldBlock: true } :
-                  { shouldBlock: false, thinking: 'The synthetic local build is permitted.', reason: 'The synthetic local build is permitted.' } }],
+                  { shouldBlock: false, thinking: 'PRIVATE_THINKING_MUST_NOT_BE_REPORTED', reason: 'The synthetic local build is permitted.' + ' rationale'.repeat(100) } }],
                 stop_reason: 'tool_use', stop_sequence: null,
                 usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } };
             } };
@@ -114,6 +114,12 @@ test('resume validates current request hashes without sends, completes only the 
       evaluationScope: 'case', pairedComparisonPassed: true, eligibleForReduction: false })
     expect(result.samples).toHaveLength(2)
     expect(result.samples.find((s: { variant: string }) => s.variant === 'full').durationMs).toBe(777)
+    const diagnostic = result.samples.find((s: { variant: string }) => s.variant === 'reduced')
+    expect(diagnostic.reason).toHaveLength(600)
+    expect(diagnostic.reason).toStartWith('The synthetic local build is permitted.')
+    expect(diagnostic.stageDecisions).toMatchObject([{ stage: 'fast', shouldBlock: true },
+      { stage: 'thinking', shouldBlock: false, reason: diagnostic.reason }])
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_THINKING_MUST_NOT_BE_REPORTED')
     expect(result.evidence.find((s: { variant: string }) => s.variant === 'full').components[0].historyChars).toBeLessThan(1000)
     expect(result.resumeHistory[0].failedSamples[0].sample.unavailable).toBe(true)
     expect(result.transportFailures).toEqual([{ code: 'ECONNRESET' }])
@@ -121,7 +127,9 @@ test('resume validates current request hashes without sends, completes only the 
     const replay = Bun.spawnSync([...live, '--resume', completed, '--out', join(root, 'replayed.json')], { cwd: root, env })
     expect(replay.exitCode).toBe(0)
     expect(await Bun.file(budget).text()).toBe('not-constructed')
-    expect(await Bun.file(join(root, 'replayed.json')).json()).toMatchObject({ backendSends: 4, reviewerRequestsAttempted: 4 })
+    const replayed = await Bun.file(join(root, 'replayed.json')).json()
+    expect(replayed).toMatchObject({ backendSends: 4, reviewerRequestsAttempted: 4 })
+    expect(replayed.samples.find((s: { variant: string }) => s.variant === 'reduced').stageDecisions).toEqual(diagnostic.stageDecisions)
     partial.evidence[0].digests[0] = 'a'.repeat(64)
     writeFileSync(previous, JSON.stringify(partial))
     const changedPolicy = Bun.spawnSync([...live, '--resume', previous, '--verify-resume'], { cwd: root, env })

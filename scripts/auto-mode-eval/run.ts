@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { Message } from '../../src/types/message.js'
 import type { PermissionDecisionContext } from '../../src/utils/permissions/permissionDecisionContext.js'
+import type { YoloClassifierStageObserver } from '../../src/utils/permissions/yoloClassifier.js'
 import { EVIDENCE_CASES, type EvidenceCase } from './cases.js'
-import { compareSamples, type VerdictSample } from './grade.js'
+import { compareSamples, type StageDiagnostic, type VerdictSample } from './grade.js'
 import { prepareResume, sampleKey, verifyRetainedRequest, type EvidenceRecord } from './resume.js'
 import { comparePayloadEvidence, inspectPayloadEvidence } from './payloadEvidence.js'
 
@@ -94,6 +95,12 @@ function requestDigest(request: unknown): string {
   return createHash('sha256').update(JSON.stringify(request)).digest('hex')
 }
 
+function boundedReason(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  return value.replace(/\bBearer\s+\S+/gi, 'Bearer [REDACTED]')
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[REDACTED]').slice(0, 600)
+}
+
 const args = parseArgs(process.argv.slice(2))
 if (!feature('TRANSCRIPT_CLASSIFIER') || !feature('AUTO_MODE_UPSTREAM_PORT')) {
   throw new Error('Enable both --feature=TRANSCRIPT_CLASSIFIER and --feature=AUTO_MODE_UPSTREAM_PORT')
@@ -178,13 +185,34 @@ try {
       const messages = await buildMessages(testCase)
       const captured: unknown[] = []
       const requestedModels: string[] = []
+      let activeStage: StageDiagnostic['stage'] = 'fast'
+      const stageReasons = new Map<StageDiagnostic['stage'], string>()
+      const stageDecisions: StageDiagnostic[] = []
+      const observation: YoloClassifierStageObserver = {
+        enterStage(stage) { activeStage = stage },
+        resolveStage(stage, resolution) {
+          if ('should_block' in resolution) {
+            const reason = stageReasons.get(stage)
+            stageDecisions.push({ stage, shouldBlock: resolution.should_block, ...(reason !== undefined && { reason }) })
+          } else stageDecisions.push({ stage, failure: resolution.failure })
+        },
+      }
       const transport: typeof import('../../src/utils/sideQuery.js').sideQuery = async options => {
         captured.push({ model: options.model, system: options.system, messages: options.messages, tools: options.tools })
         requestedModels.push(options.model)
         if (args.live) {
           if (options.model !== args.model) throw new Error('Model fallback is outside this evaluation authorization')
           if (!pinned) throw new Error('No authorized reviewer sends remain')
-          return pinned.send(options)
+          const response = await pinned.send(options)
+          // Capture only the explicit public verdict reason. The observer below
+          // supplies validated decisions; raw model thinking is never reported.
+          if (activeStage === 'thinking') {
+            const verdict = response.content.find(block => block.type === 'tool_use' && block.name === YOLO_CLASSIFIER_TOOL_NAME)
+            const input = verdict?.type === 'tool_use' ? verdict.input : undefined
+            const reason = boundedReason(input && typeof input === 'object' && 'reason' in input ? input.reason : undefined)
+            if (reason !== undefined) stageReasons.set(activeStage, reason)
+          }
+          return response
         }
         // Exercise both request builders. These canned verdicts are never graded.
         return { id: `offline-${captured.length}`, type: 'message', role: 'assistant', model: options.model,
@@ -197,15 +225,19 @@ try {
       try {
         const result = await _forTest.classifyYoloAction(messages,
           formatActionForClassifier(testCase.action.tool, testCase.action.input), tools, permissionContext,
-          AbortSignal.timeout(240_000), { priorAssistantContext: true, inputVariant: variant, sideQuery: transport })
+          AbortSignal.timeout(240_000), { priorAssistantContext: true, inputVariant: variant, sideQuery: transport }, observation)
+        const reason = boundedReason(result.reason)
+        const lastStage = stageDecisions.at(-1)
+        if (result.stage === 'fast' && lastStage && 'shouldBlock' in lastStage && reason !== undefined) lastStage.reason = reason
         if (args.live) samples.push({ id: testCase.id, expect: testCase.expect, variant, repeat, shouldBlock: result.shouldBlock,
           unavailable: result.unavailable === true,
           invalid: result.autoModeOutcome === 'automode-parsing-error' || result.autoModeOutcome === 'interrupted', model: result.model, requestedModel: args.model,
-          durationMs: performance.now() - start })
+          durationMs: performance.now() - start, reason, stageDecisions })
       } catch (error) {
         if (!args.live) throw error
         samples.push({ id: testCase.id, expect: testCase.expect, variant, repeat, shouldBlock: true, unavailable: true, invalid: false,
-          model: args.model!, requestedModel: args.model, durationMs: performance.now() - start, error: error instanceof Error ? error.message : String(error) })
+          model: args.model!, requestedModel: args.model, durationMs: performance.now() - start, stageDecisions,
+          error: boundedReason(error instanceof Error ? error.message : String(error)) })
       }
       const { missing, unexpected, components } = inspectPayloadEvidence(testCase, variant, captured)
       evidenceReports.push({ id: testCase.id, variant, repeat, stages: captured.length, requestedModels, stageChars: captured.map(r => JSON.stringify(r).length),

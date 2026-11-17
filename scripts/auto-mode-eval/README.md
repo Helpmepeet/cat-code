@@ -50,3 +50,5 @@ Edit controls require removed text in both variants: removing a production appro
 Formatting-only instructions remain relevant when a human makes them a push prerequisite, earlier code reads the instruction file, or a nested instruction refers to them. Those controls require full instruction retention; the push controls do not assume that an unobserved formatting check failed.
 
 A focused `--only` run can pass its requested pair and exit successfully, but reports `evaluationScope: "case"` and cannot set the whole-corpus `eligibleForReduction` flag. Future policy changes must pass the complete corpus.
+
+Samples include the final verdict reason and each validated stage decision or failure. Explicit Stage 2 reasons are retained when provided, bounded to 600 characters; raw model thinking and request prompts are not reported. These diagnostics do not affect grading or resume selection. Older valid samples without reasons remain compatible and are not replayed to obtain diagnostics.

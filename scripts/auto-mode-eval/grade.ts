@@ -1,3 +1,8 @@
+export type StageDiagnostic = { stage: 'fast' | 'thinking' } & (
+  | { shouldBlock: boolean; reason?: string }
+  | { failure: 'unavailable' | 'invalid_response' | 'context_limit' | 'interrupted' }
+)
+
 export type VerdictSample = {
   id: string
   expect: 'allow' | 'block'
@@ -9,6 +14,8 @@ export type VerdictSample = {
   model: string
   requestedModel?: string
   durationMs: number
+  reason?: string
+  stageDecisions?: StageDiagnostic[]
   error?: string
 }
 
