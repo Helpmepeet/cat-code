@@ -64,6 +64,7 @@ export class WorkspaceJumpCoordinator {
   private readonly catalogs = new Map<string, { generation: string; fingerprint: string; cursor: string; offset: number; chunk: number; trusted?: string }>()
   private readonly running = new Map<string, Promise<void>>()
   private readonly observations = new Map<string, WorkspaceHandoffSnapshot>()
+  private readonly closeAcknowledgements = new Map<string, { operationId: string; generation: string; cancelId: string }>()
   private readonly effects = new Set<Promise<void>>()
   private readonly redeliveries = new Map<string, number>()
   private readonly effectKeys = new Set<string>()
@@ -100,6 +101,7 @@ export class WorkspaceJumpCoordinator {
     for (const [handle, entry] of this.handles) if (entry.appSessionId === appSessionId) this.handles.delete(handle)
     if (!this.identity(appSessionId)) {
       this.cancellations.delete(appSessionId)
+      this.closeAcknowledgements.delete(appSessionId)
       const pending = this.acceptedTimings.get(appSessionId)
       pending?.end('unavailable'); pending?.received?.('unavailable'); pending?.boundary('unavailable'); pending?.admission?.('unavailable')
       this.acceptedTimings.delete(appSessionId)
@@ -116,6 +118,34 @@ export class WorkspaceJumpCoordinator {
       if (state.continuation.outcome === 'legacy_settled' && !state.review.required) return false
       return !workspaceJumpHasConfirmedGate(state)
     } catch { return true }
+  }
+  isCloseBlocked(appSessionId: string): boolean {
+    return this.isReserved(appSessionId) && !this.hasAcknowledgedFinishedClose(appSessionId)
+  }
+  private hasAcknowledgedFinishedClose(appSessionId: string): boolean {
+    const acknowledgement = this.closeAcknowledgements.get(appSessionId)
+    if (!acknowledgement) return false
+    try {
+      const state = this.snapshot(appSessionId)
+      const identity = this.identity(appSessionId)
+      const row = this.deps.row(appSessionId)
+      const live = this.observations.get(appSessionId)
+      return !!state && !!identity && !!live && identity.engineSessionId === state.engineSessionId &&
+        state.phase === 'settled' && state.location === 'destination' && !this.running.has(appSessionId) &&
+        row?.cwd === state.target.cwd && row.binding?.kind === 'project' &&
+        acknowledgement.operationId === state.operationId && acknowledgement.generation === identity.generation &&
+        state.cancellation?.requestedBy === 'close' && acknowledgement.cancelId === state.cancellation.cancelId &&
+        live.operationId === state.operationId && live.observerGeneration === identity.generation &&
+        live.record.kind === 'valid' && live.record.record.cancellation?.cancelId === acknowledgement.cancelId &&
+        live.record.record.cancellation.application === 'too_late' &&
+        (live.execution === 'terminal' || live.execution === 'unconfirmed')
+    } catch { return false }
+  }
+  private releaseFinishedClose(appSessionId: string): void {
+    if (!this.hasAcknowledgedFinishedClose(appSessionId)) return
+    // Closing needs confirmed engine cancellation and a settled physical move,
+    // not a successful completion proof. Retain unresolved recovery evidence.
+    this.deps.host.releaseWorkspaceJump(appSessionId, this.closeAcknowledgements.get(appSessionId)!.operationId)
   }
   /** Destination work may use project peers without releasing the recovery hold. */
   isPeerAccessBlocked(appSessionId: string): boolean {
@@ -462,6 +492,12 @@ export class WorkspaceJumpCoordinator {
     }).then(delivery => {
       const current = this.snapshot(appSessionId)
       if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation) return
+      if (action.action === 'cancel' && current.cancellation?.requestedBy === 'close' &&
+          current.cancellation.cancelId === action.cancelId && delivery.kind === 'result' &&
+          (delivery.result.disposition === 'accepted' || delivery.result.disposition === 'already_applied')) {
+        this.closeAcknowledgements.set(appSessionId, { operationId: state.operationId, generation, cancelId: action.cancelId })
+        this.releaseFinishedClose(appSessionId)
+      }
       if (action.action === 'continue' && delivery.kind === 'result' && delivery.result.disposition === 'refused') {
         this.refusedContinuations.add(`${state.operationId}:${generation}`)
       }
@@ -554,6 +590,7 @@ export class WorkspaceJumpCoordinator {
     const gateMatches = next.release.authorizedRevision !== null && status.gate.mode === next.release.target && status.gate.reservationOperationId === null && status.gate.requiresUserReconciliation === (next.release.target === 'review')
     if (gateMatches) next = { ...next, release: { ...next.release, confirmed: { generation, mode: status.gate.mode as 'review' | 'open' } } }
     if (JSON.stringify(next) !== JSON.stringify(state)) this.save(next)
+    this.releaseFinishedClose(appSessionId)
     if (gateMatches) {
       this.deps.host.releaseWorkspaceJump(appSessionId, state.operationId)
       if (next.release.target === 'open' &&
@@ -620,6 +657,7 @@ export class WorkspaceJumpCoordinator {
   dispose(): void {
     this.disposed = true
     this.liveMoves.clear()
+    this.closeAcknowledgements.clear()
     for (const id of this.observationRetries.keys()) this.clearObservationRetry(id)
   }
   private async move(appSessionId: string, operationId: string): Promise<void> {

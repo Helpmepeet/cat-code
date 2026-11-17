@@ -48,6 +48,7 @@ const { loadConversationForResume } = await import('../../src/utils/conversation
 const { writeWorkspaceJump, readWorkspaceJump, workspaceJumpOperationSha256 } = await import('../../src/utils/workspaceJumpState.js')
 const { WorkspaceJumpCoordinator } = await import('../main/workspaceJumpCoordinator.js')
 const { WorkspaceHandoffControl } = await import('../main/workspaceHandoffControl.js')
+const { SessionCloseCoordinator } = await import('../main/sessionCloseCoordinator.js')
 const { SidecarServer } = await import('./sidecarServer.js')
 const { FrameDecoder, encodeFrame } = await import('../shared/framing.js')
 const { PROTOCOL_VERSION } = await import('../shared/protocol.js')
@@ -922,7 +923,7 @@ test('acknowledged continuation remains running during a real permission wait be
   expect(calls).toBe(2)
 })
 
-test('a real completion checkpoint failure cannot become main-ledger success', async () => {
+test.each(['transient', 'persistent'] as const)('a %s completion checkpoint failure retries proof without replaying work and permits acknowledged close', async failure => {
   let calls = 0, failed = false
   spies.push(spyOn(claude, 'queryModelWithStreaming').mockImplementation(async function* () {
     calls++; yield assistant([{ type: 'text', text: 'Execution closed before its failing durability barrier.' }])
@@ -935,13 +936,23 @@ test('a real completion checkpoint failure cannot become main-ledger success', a
     if (String(args[0]) === path) {
       const sync = file.sync.bind(file)
       file.sync = async () => {
-        if (calls === 1 && !failed) { failed = true; throw new Error('Isolated checkpoint sync failure') }
+        if (calls === 1 && (failure === 'persistent' || !failed)) { failed = true; throw new Error('Isolated checkpoint sync failure') }
         await sync()
       }
     }
     return file
   }))
   expect((await h.command({ action: 'continue', continuationId: h.state.continuation.id })).kind).toBe('result')
+  if (failure === 'transient') {
+    await until(() => !h.held(), 'retry publishes durable success and releases the hold')
+    const record = h.controller.getWorkspaceHandoffSnapshot()!.record
+    if (record.kind !== 'valid' || !record.record.terminal) throw new Error('Missing completed checkpoint')
+    await storage.verifyResumeCheckpoint(record.record.terminal.checkpoint)
+    expect(record.record.terminal.outcome).toBe('success')
+    expect(failed).toBe(true)
+    expect(calls).toBe(1)
+    return
+  }
   await until(() => h.controller.getWorkspaceHandoffSnapshot()?.execution === 'unconfirmed' && !h.controller.isTurnActive(), 'failed barrier remains unconfirmed')
   expect(failed).toBe(true)
   expect(calls).toBe(1)
@@ -951,6 +962,21 @@ test('a real completion checkpoint failure cannot become main-ledger success', a
   expect(record.record.terminal).toBeNull()
   expect(record.record.notice).toBeNull()
   expect(h.held()).toBe(true)
+  expect(h.controller.canStartAutomaticTurn()).toBe(false)
+  let stopped = false
+  const close = new SessionCloseCoordinator({
+    authorize: async () => ({ ok: true, value: undefined }),
+    blocked: id => h.coordinator.isCloseBlocked(id),
+    cancel: async id => { await h.coordinator.cancel(id, undefined, 'close') },
+    observe: id => h.coordinator.queryStatus(id),
+    close: async () => { stopped = true; expect(h.held()).toBe(false); return { ok: true, value: undefined } },
+    timeoutMs: 100, retryMs: 1,
+  })
+  expect((await close.close(h.appSessionId)).ok).toBe(true)
+  expect(stopped).toBe(true)
+  expect(calls).toBe(1)
+  expect(h.coordinator.snapshot(h.appSessionId)?.continuation.outcome).toBe('unknown')
+  expect(h.coordinator.retains(h.appSessionId)).toBe(true)
   expect(h.controller.canStartAutomaticTurn()).toBe(false)
 })
 

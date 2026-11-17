@@ -94,13 +94,13 @@ function harness() {
   }
 }
 
-test('close cancellation retains uncertain workspace evidence and never kills before a confirmed gate', async () => {
+test('close cancellation retains uncertain workspace evidence and never kills before physical settlement and acknowledgement', async () => {
   const h = harness()
   expect((await h.accept()).ok).toBe(true)
   let killed = false
   const close = new SessionCloseCoordinator({
     authorize: async () => ({ ok: true, value: undefined }),
-    blocked: id => h.coordinator.isReserved(id),
+    blocked: id => h.coordinator.isCloseBlocked(id),
     cancel: async id => { await h.coordinator.cancel(id, undefined, 'close') },
     observe: id => h.coordinator.queryStatus(id),
     close: async () => { killed = true; return { ok: true, value: undefined } },
@@ -881,6 +881,35 @@ test('late cancellation intent remains distinct from durable successful closure'
   expect(state.cancellation).toEqual({ cancelId, requestedBy: 'close', application: 'too_late' })
   await h.coordinator.waitForSettlement(h.appSessionId)
 })
+
+test.each(['accepted', 'lost', 'refused', 'replacement', 'unknown-location', 'different-workspace', 'running'] as const)(
+  'closing without a completion proof requires a current settled cancellation acknowledgement: %s', async delivery => {
+    const h = harness(); await arrive(h)
+    h.deps.control = async (state, action) => {
+      if (action.action === 'cancel') {
+        const observed = snapshot(h, 1, { cancellation: { cancelId: action.cancelId, application: 'too_late', order: 2 } })
+        observed.execution = delivery === 'running' ? 'running' : 'unconfirmed'
+        expect(h.coordinator.observe(h.appSessionId, observed)).toBe(true)
+        // An unsolicited state cannot stand in for acknowledged manual-input cancellation.
+        expect(h.coordinator.isCloseBlocked(h.appSessionId)).toBe(true)
+        if (delivery === 'replacement') h.setGeneration()
+        if (delivery === 'unknown-location') writeWorkspaceJump({ ...h.coordinator.snapshot(h.appSessionId)!, location: 'unknown' }, h.directory)
+        if (delivery === 'different-workspace') h.row.cwd = '/other-workspace'
+        if (delivery === 'lost') return { kind: 'timeout' }
+      }
+      return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId, action: action.action,
+        disposition: delivery === 'refused' ? 'refused' : 'accepted' } }
+    }
+    await h.coordinator.cancel(h.appSessionId, undefined, 'close')
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    expect(h.coordinator.isCloseBlocked(h.appSessionId)).toBe(delivery !== 'accepted')
+    expect(h.held.size).toBe(delivery === 'accepted' ? 0 : 1)
+    expect(h.coordinator.isReserved(h.appSessionId)).toBe(true)
+    expect(h.coordinator.retains(h.appSessionId)).toBe(true)
+    expect(h.coordinator.snapshot(h.appSessionId)?.continuation.outcome).toBe(delivery === 'running' ? 'pending' : 'unknown')
+    expect(canForwardWorkspaceInput(h.appSessionId, { type: 'app.submit', requestId: randomUUID(), prompt: 'more work' }, h.coordinator)).toBe(false)
+  },
+)
 
 test('process replacement observes old admission evidence and never redispatches its attempt', async () => {
   const h = harness(); await arrive(h)

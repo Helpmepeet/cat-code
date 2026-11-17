@@ -1,5 +1,6 @@
 import type { ResumeCheckpoint, WorkspaceHandoffIdentity, WorkspaceHandoffExecutionRecord,
   WorkspaceHandoffExecutionOutcome, WorkspaceHandoffRecordStatus, WorkspaceHandoffSnapshot } from '../../app/shared/workspaceHandoff.js'
+import { logForDebugging } from '../utils/debug.js'
 
 export type WorkspaceHandoffConfiguration = {
   identity: WorkspaceHandoffIdentity
@@ -117,12 +118,20 @@ export class HandoffExecution {
         this.observation = 'finalizing'; this.announce()
         const watchdog = setTimeout(() => { this.observation = 'unconfirmed'; this.announce() }, 30_000)
         try {
-          const checkpoint = await seal()
+          let checkpoint: ResumeCheckpoint
+          try { checkpoint = await seal() }
+          catch (error) {
+            this.logFailure('checkpoint_retry', error)
+            // Retry only the durability proof. The closed execution must never
+            // be replayed, and a second failure still leaves it unconfirmed.
+            checkpoint = await seal()
+          }
           const terminal = { ...this.frozen!, checkpoint }
           await this.publish(record => ({ ...record, terminal }))
           this.observation = 'terminal'; this.announce()
         } finally { clearTimeout(watchdog) }
       } catch (error) {
+        this.logFailure('completion_unconfirmed', error)
         claimFailed(error)
         this.observation = 'unconfirmed'; this.announce()
         throw error
@@ -133,6 +142,16 @@ export class HandoffExecution {
     void this.completion.catch(() => {})
     await acknowledgement
     return { completion: this.completion }
+  }
+  private logFailure(stage: string, error: unknown): void {
+    try {
+      const causes: string[] = []
+      for (let current = error; current && causes.length < 4;
+        current = current instanceof Error ? current.cause : undefined) {
+        causes.push(String(current))
+      }
+      logForDebugging(`[workspace-handoff] ${stage} operation=${this.configuration.identity.operationId}: ${causes.join(' caused by ')}`, { level: 'warn' })
+    } catch { /* Diagnostics must not prevent a failed claim from settling. */ }
   }
   close(outcome: WorkspaceHandoffExecutionOutcome): void {
     if (this.frozen) return

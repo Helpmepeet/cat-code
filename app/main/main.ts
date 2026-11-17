@@ -825,7 +825,7 @@ const closeHostUnavailable = (): HostResult<void> => ({
 })
 const sessionCloseCoordinator = new SessionCloseCoordinator({
   authorize: sessionId => host ? host.authorizeCloseCancellation(sessionId) : Promise.resolve(closeHostUnavailable()),
-  blocked: sessionId => Boolean(switchingSessionIds.has(sessionId) || workspaceJump?.isReserved(sessionId) ||
+  blocked: sessionId => Boolean(switchingSessionIds.has(sessionId) || workspaceJump?.isCloseBlocked(sessionId) ||
     host?.isMoving(sessionId) || host?.isRestoring(sessionId)),
   cancel: async sessionId => {
     projectRouting?.cancel(sessionId)
