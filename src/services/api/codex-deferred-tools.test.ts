@@ -22,7 +22,7 @@ function result(id: string, names: string[]): Item {
     ...names.map(tool_name => ({ type: 'tool_reference', tool_name })),
   ] }] }
 }
-function translate(messages: Item[], tools: Item[] = [search, ordinary, deferred], model = 'gpt-6.1-sol', extra: Item = {}): Item & { input: Item[]; tools: Item[] } {
+function translate(messages: Item[], tools: Item[] = [search, ordinary, deferred], model = 'gpt-6.2-sol', extra: Item = {}): Item & { input: Item[]; tools: Item[] } {
   const { codexBody } = translateToCodexBody({
     model, tools, ...extra,
     _openaiInstructionAssembly: { instructions: 'Help with notes.', inputMessages: messages },
@@ -38,7 +38,7 @@ function native(tool: Item) {
 const discovered = [...initial, call('search_1'), result('search_1', [deferred.name])]
 
 describe('authorized cache-preserving Codex deferred tools', () => {
-  for (const model of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna']) {
+  for (const model of ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna']) {
     test(`${model} places native definitions immediately after the discovering output`, () => {
       const body = translate([...initial, call('search_1'), result('search_1', [deferred.name, custom.name])], [search, ordinary, deferred, custom], model)
       expect(body.tools).toEqual([native(search), native(ordinary)])
@@ -108,7 +108,7 @@ describe('authorized cache-preserving Codex deferred tools', () => {
       expect(body.tools).toContainEqual(native(deferred))
       expect(additions(body)).toEqual([])
     }
-    const forced = translate(discovered, [search, ordinary, deferred], 'gpt-6.1-sol', { tool_choice: { type: 'tool', name: deferred.name } })
+    const forced = translate(discovered, [search, ordinary, deferred], 'gpt-6.2-sol', { tool_choice: { type: 'tool', name: deferred.name } })
     expect(forced.tools).toContainEqual(native(deferred))
     expect(forced.tool_choice).toEqual({ type: 'function', name: deferred.name })
     expect(additions(forced)).toEqual([])

@@ -21,7 +21,7 @@ sel.tasks.forEach((t: any, i: number) => {
     const cap = CAPS[t.id] ?? { minutes: 60, input: 40e6 }
     const cmd = ['bun', join(import.meta.dir, 'harness/harness.ts'), '--live', '--credential', credential,
       '--engine', m.copies[setup].engine, '--copy', dir, '--out', join(STUDY, 'runs', t.id, setup), '--prompt-file', join(dir, 'prompt.txt'),
-      '--model', 'gpt-6.1-sol', '--effort', 'high', '--mode', 'auto',
+      '--model', 'gpt-6.2-sol', '--effort', 'high', '--mode', 'auto',
       '--max-minutes', String(cap.minutes), '--max-input-tokens', String(cap.input)]
     for (const [flag, f] of [['--images', 'images'], ['--bin', 'bin'], ['--abs', 'abs.json']] as const) {
       if (existsSync(join(dir, f))) cmd.push(flag, join(dir, f))
@@ -30,5 +30,5 @@ sel.tasks.forEach((t: any, i: number) => {
   }
 })
 mkdirSync(join(STUDY, 'runs'), { recursive: true })
-writeFileSync(join(STUDY, 'runs/manifest.json'), JSON.stringify({ generated: new Date().toISOString(), model: 'gpt-6.1-sol', effort: 'high', permissionMode: 'auto', fastMode: false, runs }, null, 1))
+writeFileSync(join(STUDY, 'runs/manifest.json'), JSON.stringify({ generated: new Date().toISOString(), model: 'gpt-6.2-sol', effort: 'high', permissionMode: 'auto', fastMode: false, runs }, null, 1))
 console.log(JSON.stringify({ runs: runs.length }))

@@ -79,8 +79,9 @@ describe('migrateRetiredGptModels', () => {
 
   test('remaps every user-owned model surface and de-duplicates the resulting allowlist', () => {
     setUserSettings({
-      model: 'gpt-5.6-sol',
+      model: 'gpt-6.1-sol',
       availableModels: [
+        'gpt-6.1-sol',
         'gpt-6-sol',
         'gpt-5.6-sol',
         'gpt-5.6-luna',
@@ -103,10 +104,10 @@ describe('migrateRetiredGptModels', () => {
     migrateRetiredGptModels()
 
     expect(getSettingsForSource('userSettings')).toEqual({
-      model: 'gpt-6.1-sol',
-      availableModels: ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6.1-terra', 'custom-model'],
+      model: 'gpt-6.2-sol',
+      availableModels: ['gpt-6.2-sol', 'gpt-6-luna', 'gpt-6.1-terra', 'custom-model'],
       modelOverrides: {
-        'gpt-6.1-sol': 'legacy-current-sol-override',
+        'gpt-6.2-sol': 'legacy-current-sol-override',
         'gpt-6-luna': 'legacy-luna-override',
         'gpt-6.1-terra': 'existing-terra-override',
         'custom-model': 'custom-override',
@@ -117,10 +118,11 @@ describe('migrateRetiredGptModels', () => {
   test('preserves current successor overrides when colliding with retired model overrides', () => {
     setUserSettings({
       model: 'gpt-5.6-luna',
-      availableModels: ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna'],
+      availableModels: ['gpt-6-sol', 'gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-5.6-sol', 'gpt-6-luna', 'gpt-5.6-luna'],
       modelOverrides: {
         'gpt-6-sol': 'keep-current-sol',
-        'gpt-6.1-sol': 'keep-current-sol-successor',
+        'gpt-6.1-sol': 'retired-6.1-sol',
+        'gpt-6.2-sol': 'keep-current-sol-successor',
         'gpt-5.6-sol': 'retired-sol',
         'gpt-6-luna': 'keep-current-luna',
         'gpt-5.6-luna': 'retired-luna',
@@ -132,9 +134,9 @@ describe('migrateRetiredGptModels', () => {
 
     expect(getSettingsForSource('userSettings')).toEqual({
       model: 'gpt-6-luna',
-      availableModels: ['gpt-6.1-sol', 'gpt-6-luna'],
+      availableModels: ['gpt-6.2-sol', 'gpt-6-luna'],
       modelOverrides: {
-        'gpt-6.1-sol': 'keep-current-sol-successor',
+        'gpt-6.2-sol': 'keep-current-sol-successor',
         'gpt-6-luna': 'keep-current-luna',
         'custom-model': 'keep-custom',
       },
@@ -147,7 +149,7 @@ describe('migrateRetiredGptModels', () => {
       availableModels: ['gpt-5.5', 'gpt-5.6-terra'],
       modelOverrides: { 'gpt-5.5': 'legacy-terra-override' },
     })
-    mainLoopOverride = 'gpt-5.6-sol[1m]'
+    mainLoopOverride = 'gpt-6-astra[1m]'
 
     migrateRetiredGptModels()
     migrateRetiredGptModels()
@@ -157,8 +159,8 @@ describe('migrateRetiredGptModels', () => {
       availableModels: ['gpt-6.1-terra'],
       modelOverrides: { 'gpt-6.1-terra': 'legacy-terra-override' },
     })
-    expect(mainLoopOverrideWrites).toEqual(['gpt-6.1-sol'])
-    expect(mainLoopOverride).toBe('gpt-6.1-sol')
+    expect(mainLoopOverrideWrites).toEqual(['gpt-6.2-astra'])
+    expect(mainLoopOverride).toBe('gpt-6.2-astra')
   })
 
   test('migrates Terra pins while preserving successor overrides and unrelated settings', () => {

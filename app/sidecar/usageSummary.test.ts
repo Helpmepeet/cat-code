@@ -27,21 +27,22 @@ test('grouping preserves exact daily/model/tool totals and distinguishes reserve
 test('bounded model summaries keep current models ahead of retired and older models', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
-    const current = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna', 'gpt-6.1-terra'];
-    const names = [...Array.from({ length: 10 }, (_, index) => `older-${index}`), 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol', ...current];
+    const current = ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-luna', 'gpt-6.1-terra'];
+    const retired = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-luna', 'gpt-6-sol'];
+    const names = [...Array.from({ length: 10 }, (_, index) => `older-${index}`), ...retired, ...current];
     summary.models = names.map((name, index) => ({ ...usageCategory(name), tokens: { ...emptyTokens(), fresh: index < 10 ? 1000 : 10 } }));
-    summary.tokens.fresh = 10_070;
-    summary.days[0]!.tokens.fresh = 10_070;
+    summary.tokens.fresh = 10_080;
+    summary.days[0]!.tokens.fresh = 10_080;
     summary.days[0]!.models = summary.models.map(model => ({ id: model.id, total: model.tokens.fresh }));
     const grouped = groupUsageSummary(summary);
-    for (const name of [...current, 'gpt-5.6-sol', 'gpt-5.6-luna', 'gpt-6-sol']) {
+    for (const name of [...current, ...retired]) {
         expect(grouped.models.find(model => model.label === name)?.tokens.fresh).toBe(10);
     }
-    expect(grouped.models.reduce((total, model) => total + model.tokens.fresh, 0)).toBe(10_070);
-    expect(grouped.days[0]!.models.reduce((total, model) => total + model.total, 0)).toBe(10_070);
+    expect(grouped.models.reduce((total, model) => total + model.tokens.fresh, 0)).toBe(10_080);
+    expect(grouped.days[0]!.models.reduce((total, model) => total + model.total, 0)).toBe(10_080);
     const tight = groupUsageSummary(summary, 4, 0);
     expect(tight.models.filter(model => model.kind === 'named').map(model => model.label).sort()).toEqual([...current].sort());
-    expect(tight.models.find(model => model.kind === 'other')?.tokens.fresh).toBe(10_030);
+    expect(tight.models.find(model => model.kind === 'other')?.tokens.fresh).toBe(10_040);
 });
 
 test('tool grouping keeps error leaders ahead of high-volume healthy tools and preserves separate edit implementations', async () => {

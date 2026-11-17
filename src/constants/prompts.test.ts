@@ -146,8 +146,8 @@ describe('web research policy delivery', () => {
   afterEach(() => clearSystemPromptSections())
 
   test.each([
-    ['gpt-6.1-sol', 'openai'],
-    ['gpt-6-astra', 'openai'],
+    ['gpt-6.2-sol', 'openai'],
+    ['gpt-6.2-astra', 'openai'],
     ['gpt-5.6-terra', 'openai'],
     ['claude-sonnet-5-5', 'firstParty'],
     ['claude-opus-5-5', 'firstParty'],
@@ -184,7 +184,7 @@ describe('web research policy delivery', () => {
   })
 
   test('updates policy and source-reading instructions when the allowed tool pool changes without clearing caches', async () => {
-    for (const [model, provider] of [['claude-opus-5-5', 'firstParty'], ['gpt-6.1-sol', 'openai']] as const) {
+    for (const [model, provider] of [['claude-opus-5-5', 'firstParty'], ['gpt-6.2-sol', 'openai']] as const) {
       const withFetch = (await getSystemPrompt(tools('WebSearch', 'WebFetch', 'ToolSearch'), model, [], [], provider)).join('\n')
       expect(researchSection(withFetch)).toContain('WebFetch')
       const unavailable = (await getSystemPrompt(tools('Read'), model, [], [], provider)).join('\n')
@@ -207,7 +207,7 @@ describe('web research policy delivery', () => {
         delete process.env.CLAUDE_CODE_REPL
         process.env.CLAUDE_REPL_MODE = '1'
       }
-      for (const [model, provider] of [['claude-opus-5-5', 'firstParty'], ['gpt-6.1-sol', 'openai']] as const) {
+      for (const [model, provider] of [['claude-opus-5-5', 'firstParty'], ['gpt-6.2-sol', 'openai']] as const) {
         const prompt = (await getSystemPrompt(tools('WebSearch', 'ToolSearch'), model, [], [], provider)).join('\n')
         expect(prompt.split(policyHeading)).toHaveLength(2)
       }
@@ -219,7 +219,7 @@ describe('web research policy delivery', () => {
     }
   })
 
-  test.each([['claude-sonnet-5-5', 'firstParty'], ['gpt-6.1-sol', 'openai']] as const)('adds policy to %s workers only when their own pool permits search', async (model, provider) => {
+  test.each([['claude-sonnet-5-5', 'firstParty'], ['gpt-6.2-sol', 'openai']] as const)('adds policy to %s workers only when their own pool permits search', async (model, provider) => {
     const prompt = (await enhanceSystemPromptWithEnvDetails(['Worker task.'], model, [], new Set(['WebSearch', 'ToolSearch']), provider)).join('\n')
     expect(researchSection(prompt)).toContain('select:WebSearch')
     const noSearch = (await enhanceSystemPromptWithEnvDetails(['Worker task.'], model, [], new Set(['Read']), provider)).join('\n')
@@ -611,7 +611,7 @@ describe('available tools in assembled prompts', () => {
     expect(tools.map(tool => tool.name)).toEqual(['Bash'])
 
     for (const provider of ['firstParty', 'openai'] as const) {
-      const model = provider === 'firstParty' ? 'claude-opus-5-5' : 'gpt-6.1-sol'
+      const model = provider === 'firstParty' ? 'claude-opus-5-5' : 'gpt-6.2-sol'
       const prompt = (await getSystemPrompt(tools, model, [], [], provider)).join('\n')
       for (const missing of ['Glob', 'Grep', 'AskUserQuestion']) {
         expect(prompt).not.toMatch(new RegExp(`\\b${missing}\\b`))
@@ -725,7 +725,7 @@ describe('lean Claude assembly', () => {
           ? 'Briefly state your first step'
           : 'Before your first tool call')
       }
-      expect(await build('gpt-6.1-sol', lean)).not.toContain(guidance)
+      expect(await build('gpt-6.2-sol', lean)).not.toContain(guidance)
     }
   })
 

@@ -76,8 +76,11 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
 }
 
 const RETIRED_GPT_MODEL_REPLACEMENTS: Record<string, ModelName> = {
-  'gpt-6-sol': 'gpt-6.1-sol',
-  'gpt-5.6-sol': 'gpt-6.1-sol',
+  'gpt-6-astra': 'gpt-6.2-astra',
+  'gpt-6.1-astra': 'gpt-6.2-astra',
+  'gpt-6.1-sol': 'gpt-6.2-sol',
+  'gpt-6-sol': 'gpt-6.2-sol',
+  'gpt-5.6-sol': 'gpt-6.2-sol',
   'gpt-5.6-terra': 'gpt-6.1-terra',
   'gpt-5.6-luna': 'gpt-6-luna',
   'gpt-5.4': 'gpt-6-luna',
@@ -318,7 +321,7 @@ export function getRuntimeMainLoopModel(params: {
  * honours through `getModelStrings()`.
  */
 export function getDefaultCodexModel(): ModelName {
-  return getModelStrings().gpt61sol
+  return getModelStrings().gpt62sol
 }
 
 /**
@@ -434,6 +437,12 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
     return 'claude-3-haiku'
   }
   // OpenAI GPT models
+  if (name.includes('gpt-6.2-astra')) {
+    return 'gpt-6.2-astra'
+  }
+  if (name.includes('gpt-6.2-sol')) {
+    return 'gpt-6.2-sol'
+  }
   if (name.includes('gpt-6.1-sol')) {
     return 'gpt-6.1-sol'
   }
@@ -484,7 +493,7 @@ export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
   if (isCodexSubscriber()) {
-    return 'GPT-6.1 Sol · Frontier model with 1.05M context'
+    return 'GPT-6.2 Sol · Complex coding and agentic workflows'
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
     if (isOpus1mMergeEnabled()) {
@@ -557,6 +566,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.6-luna') return 'GPT 5.6 Luna'
     if (model === 'gpt-6-astra') return 'GPT 6 Astra'
     if (model === 'gpt-6.1-sol') return 'GPT 6.1 Sol'
+    if (model === 'gpt-6.2-astra') return 'GPT 6.2 Astra'
+    if (model === 'gpt-6.2-sol') return 'GPT 6.2 Sol'
     if (model === 'gpt-6.1-terra') return 'GPT 6.1 Terra'
     if (model === 'gpt-6-sol') return 'GPT 6 Sol'
     if (model === 'gpt-6-luna') return 'GPT 6 Luna'
@@ -623,10 +634,10 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'GPT-6.1 Terra'
     case getModelStrings().gpt56luna:
       return 'GPT-5.6 Luna'
-    case getModelStrings().gpt6astra:
-      return 'GPT-6 Astra'
-    case getModelStrings().gpt61sol:
-      return 'GPT-6.1 Sol'
+    case getModelStrings().gpt62astra:
+      return 'GPT-6.2 Astra'
+    case getModelStrings().gpt62sol:
+      return 'GPT-6.2 Sol'
     case getModelStrings().gpt6luna:
       return 'GPT-6 Luna'
     default:
@@ -892,6 +903,12 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
     return 'Claude 3.5 Haiku'
   }
   // OpenAI Codex models
+  if (canonical.includes('gpt-6.2-astra')) {
+    return 'GPT-6.2 Astra'
+  }
+  if (canonical.includes('gpt-6.2-sol')) {
+    return 'GPT-6.2 Sol'
+  }
   if (canonical.includes('gpt-6.1-sol')) {
     return 'GPT-6.1 Sol'
   }

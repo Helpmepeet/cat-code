@@ -75,7 +75,7 @@ You have been invoked in the following environment:
  - Platform: <platform>
  - Shell: <shell>
  - OS Version: <os-version>
- - You are powered by the model named GPT-6 Astra. The exact model ID is gpt-6-astra.
+ - You are powered by the model named GPT-6.2 Astra. The exact model ID is gpt-6.2-astra.
  - This session is running through the OpenAI Codex provider.
  - Fast mode changes output speed, but it does NOT switch to a different model. It can be toggled with /fast.
 When working with tool results, write down any important information you might need later in your response, as the original tool result may be cleared later.

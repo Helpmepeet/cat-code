@@ -18,7 +18,7 @@ describe('getAgentModel explicit override', () => {
   test('honors an explicit Terra selection when the parent uses Sol', () => {
     expect(
       getCanonicalName(
-        getAgentModel(undefined, 'gpt-6.1-sol', 'gpt-6.1-terra', 'default'),
+        getAgentModel(undefined, 'gpt-6.2-sol', 'gpt-6.1-terra', 'default'),
       ),
     ).toBe('gpt-6.1-terra')
   })
@@ -39,20 +39,20 @@ describe('getAgentModel explicit override', () => {
     ).toBe('gpt-6.1-terra')
   })
 
-  test('remaps a retired Sol subagent request to 6.1 as an upgrade from Terra', () => {
+  test('remaps a retired Sol subagent request to 6.2 as an upgrade from Terra', () => {
     expect(
       getCanonicalName(
         getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-5.6-sol', 'default'),
       ),
-    ).toBe('gpt-6.1-sol')
+    ).toBe('gpt-6.2-sol')
   })
 
   test('honors an explicit Astra selection', () => {
     expect(
       getCanonicalName(
-        getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-6-astra', 'default'),
+        getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-6.2-astra', 'default'),
       ),
-    ).toBe('gpt-6-astra')
+    ).toBe('gpt-6.2-astra')
   })
 
   test('honors an explicit Sonnet selection when the parent uses Opus', () => {

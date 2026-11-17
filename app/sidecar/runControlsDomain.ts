@@ -75,6 +75,7 @@ import {
   getRuntimeMainLoopModel,
   getUserSpecifiedModelSetting,
   normalizeModelStringForAPI,
+  remapRetiredGptModel,
 } from '../../src/utils/model/model.js'
 import {
   getModelOptions,
@@ -449,6 +450,7 @@ export function createSidecarRunControlsDomain(
       }
     },
     setModel(model) {
+      model = model === null ? null : remapRetiredGptModel(model)
       const currentSnapshot = snapshot()
       if (
         currentSnapshot.model.providerSwitchLocked &&

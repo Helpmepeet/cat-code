@@ -13,17 +13,17 @@ type Case = {
 
 const cases: Case[] = [
   // low / medium / high — pass-through on all Codex models
-  { effort: 'low', model: 'gpt-6.1-sol', expect: 'low', note: 'low on Sol' },
+  { effort: 'low', model: 'gpt-6.2-sol', expect: 'low', note: 'low on Sol' },
   { effort: 'low', model: 'gpt-6-luna', expect: 'low', note: 'low on Luna' },
   { effort: 'medium', model: 'gpt-6-luna', expect: 'medium', note: 'medium on Luna' },
   { effort: 'high', model: 'gpt-6-luna', expect: 'high', note: 'high on Luna' },
   { effort: 'low', model: 'gpt-6.1-terra', expect: 'low', note: 'low on Terra' },
   { effort: 'high', model: 'gpt-6.1-terra', expect: 'high', note: 'high on Terra' },
 
-  // Active GPT models support reasoning through max.
-  { effort: 'xhigh', model: 'gpt-6.1-sol', expect: 'xhigh', note: 'xhigh on Sol' },
-  { effort: 'max', model: 'gpt-6.1-sol', expect: 'max', note: 'max on Sol' },
-  { effort: 'ultra', model: 'gpt-6.1-sol', expect: undefined, note: 'ultra on Sol → omit' },
+  // Current GPT models support max; GPT-6.2 also supports ultra.
+  { effort: 'xhigh', model: 'gpt-6.2-sol', expect: 'xhigh', note: 'xhigh on Sol' },
+  { effort: 'max', model: 'gpt-6.2-sol', expect: 'max', note: 'max on Sol' },
+  { effort: 'ultra', model: 'gpt-6.2-sol', expect: 'ultra', note: 'ultra on Sol' },
   { effort: 'max', model: 'gpt-6-luna', expect: 'max', note: 'max on Luna' },
   { effort: 'ultra', model: 'gpt-6-luna', expect: undefined, note: 'ultra on Luna → omit' },
   { effort: 'max', model: 'gpt-5.2-codex', expect: 'xhigh', note: 'max on codex-variant → xhigh' },
@@ -34,7 +34,7 @@ const cases: Case[] = [
 
   // Minimal disables thinking where supported; Sol has a low reasoning floor.
   { effort: 'minimal', model: 'gpt-6.1-terra', expect: 'none', note: 'minimal on Terra → none' },
-  { effort: 'minimal', model: 'gpt-6.1-sol', expect: 'low', note: 'minimal on Sol → low' },
+  { effort: 'minimal', model: 'gpt-6.2-sol', expect: 'low', note: 'minimal on Sol → low' },
   { effort: 'minimal', model: 'gpt-6-luna', expect: 'none', note: 'minimal on Luna → none' },
 
   // undefined / auto / garbage → omit

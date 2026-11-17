@@ -247,7 +247,7 @@ export const EDITABLE_SETTINGS: readonly EditableSettingSpec[] = [
   // Reasoning effort is a property of the MODEL, and this list has no model:
   // `modelSupportsEffort` (src/utils/effort.ts:25) is false for haiku and for
   // sonnet/opus outside 4-6, and `getSupportedEffortLevels` (:82) returns five
-  // or six levels for gpt-6.1-sol/terra against the three this schema can persist
+  // or six levels for GPT models against the three this schema can persist
   // (types.ts:716 + `toPersistableEffort` :127). A fixed enum with a fixed
   // default therefore has to lie about at least one of: whether the knob
   // applies, which levels exist, and what the value is when unset (the real

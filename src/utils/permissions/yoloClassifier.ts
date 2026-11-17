@@ -1024,7 +1024,7 @@ export function getClassifierFallbackModel(
   if (!isClassifierFallbackError(error)) return undefined
 
   switch (model.toLowerCase()) {
-    case 'gpt-6.1-sol':
+    case 'gpt-6.2-sol':
       return 'gpt-6.1-terra'
     case 'gpt-6.1-terra':
       return 'gpt-6-luna'

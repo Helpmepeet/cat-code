@@ -18,7 +18,7 @@ import {
 
 // @[MODEL LAUNCH]: 'claude-opus-5-5' is a deliberate version pin, not an alias.
 // Re-point it (or add the successor beside it) when a newer Opus ships.
-export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'inherit'] as const
+export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
 export type AgentModelSelection = Exclude<AgentModelAlias, 'inherit'>
 
@@ -196,14 +196,14 @@ export function getAgentModelOptions(): AgentModelOption[] {
       description: 'Pinned to Opus 5.5, even when the parent runs something else',
     },
     {
-      value: 'gpt-6-astra',
-      label: 'GPT-6 Astra',
-      description: 'GPT-6 Astra',
+      value: 'gpt-6.2-astra',
+      label: 'GPT-6.2 Astra',
+      description: 'Most capable GPT model for complex work',
     },
     {
-      value: 'gpt-6.1-sol',
-      label: 'GPT-6.1 Sol',
-      description: 'Frontier GPT-6.1 option for complex professional work',
+      value: 'gpt-6.2-sol',
+      label: 'GPT-6.2 Sol',
+      description: 'Complex coding and agentic workflows',
     },
     {
       value: 'gpt-6.1-terra',

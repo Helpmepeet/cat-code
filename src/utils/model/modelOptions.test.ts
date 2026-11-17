@@ -421,10 +421,10 @@ describe('1M-context rows and Sonnet 4.6', () => {
     expect(labels).toContain('Sonnet 5.5')
     expect(labels).toContain('Opus 5.5')
     expect(labels).toContain('Fable 5')
-    expect(labels).toContain('GPT-6.1 Sol')
-    expect(labels).toContain('GPT-6 Astra')
+    expect(labels).toContain('GPT-6.2 Sol')
+    expect(labels).toContain('GPT-6.2 Astra')
     expect(labels).not.toContain('GPT-6 Sol')
-    expect(options.some(option => option.value === 'gpt-6.1-sol')).toBe(true)
+    expect(options.some(option => option.value === 'gpt-6.2-sol')).toBe(true)
     for (const retiredModel of [
       'gpt-6-sol',
       'gpt-5.6-sol',
@@ -435,8 +435,8 @@ describe('1M-context rows and Sonnet 4.6', () => {
     ]) {
       expect(options.some(option => option.value === retiredModel)).toBe(false)
     }
-    expect(labels.indexOf('GPT-6.1 Sol')).toBe(
-      labels.indexOf('GPT-6 Astra') + 1,
+    expect(labels.indexOf('GPT-6.2 Sol')).toBe(
+      labels.indexOf('GPT-6.2 Astra') + 1,
     )
   })
 })

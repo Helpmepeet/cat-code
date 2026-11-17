@@ -169,20 +169,20 @@ export const GPT_5_6_LUNA_CONFIG = {
   openai: 'gpt-5.6-luna',
 } as const satisfies ModelConfig
 
-export const GPT_6_ASTRA_CONFIG = {
-  firstParty: 'gpt-6-astra',
-  bedrock: 'gpt-6-astra',
-  vertex: 'gpt-6-astra',
-  foundry: 'gpt-6-astra',
-  openai: 'gpt-6-astra',
+export const GPT_6_2_ASTRA_CONFIG = {
+  firstParty: 'gpt-6.2-astra',
+  bedrock: 'gpt-6.2-astra',
+  vertex: 'gpt-6.2-astra',
+  foundry: 'gpt-6.2-astra',
+  openai: 'gpt-6.2-astra',
 } as const satisfies ModelConfig
 
-export const GPT_6_1_SOL_CONFIG = {
-  firstParty: 'gpt-6.1-sol',
-  bedrock: 'gpt-6.1-sol',
-  vertex: 'gpt-6.1-sol',
-  foundry: 'gpt-6.1-sol',
-  openai: 'gpt-6.1-sol',
+export const GPT_6_2_SOL_CONFIG = {
+  firstParty: 'gpt-6.2-sol',
+  bedrock: 'gpt-6.2-sol',
+  vertex: 'gpt-6.2-sol',
+  foundry: 'gpt-6.2-sol',
+  openai: 'gpt-6.2-sol',
 } as const satisfies ModelConfig
 
 export const GPT_6_LUNA_CONFIG = {
@@ -216,8 +216,8 @@ export const ALL_MODEL_CONFIGS = {
   gpt56sol: GPT_5_6_SOL_CONFIG,
   gpt61terra: GPT_6_1_TERRA_CONFIG,
   gpt56luna: GPT_5_6_LUNA_CONFIG,
-  gpt6astra: GPT_6_ASTRA_CONFIG,
-  gpt61sol: GPT_6_1_SOL_CONFIG,
+  gpt62astra: GPT_6_2_ASTRA_CONFIG,
+  gpt62sol: GPT_6_2_SOL_CONFIG,
   gpt6luna: GPT_6_LUNA_CONFIG,
 } as const satisfies Record<string, ModelConfig>
 

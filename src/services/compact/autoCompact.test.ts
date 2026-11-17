@@ -116,14 +116,13 @@ describe('autoCompact thresholds', () => {
     expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(900_000)
   })
 
-  test('derives Astra’s threshold from its documented 1.05M context window', () => {
-    expect(getContextWindowForModel('gpt-6-astra')).toBe(1_050_000)
-    expect(getEffectiveContextWindowSize('gpt-6-astra')).toBe(1_030_000)
-    expect(getAutoCompactThreshold('gpt-6-astra')).toBe(977_000)
+  test('compacts GPT-6.2 using the Codex default windows and Cat Code headroom', () => {
+    expect(getAutoCompactThreshold('gpt-6.2-astra')).toBe(228_840)
+    expect(getAutoCompactThreshold('gpt-6.2-sol')).toBe(438_600)
   })
 
-  test('derives GPT-6.1 Sol and Luna thresholds from their 1.05M context window with no special ceiling', () => {
-    for (const model of ['gpt-6.1-sol', 'gpt-6-luna']) {
+  test('derives GPT-6.1 Terra and Luna thresholds from their 1.05M context window with no special ceiling', () => {
+    for (const model of ['gpt-6.1-terra', 'gpt-6-luna']) {
       expect(getContextWindowForModel(model)).toBe(1_050_000)
       expect(getEffectiveContextWindowSize(model)).toBe(1_030_000)
       expect(getAutoCompactThreshold(model)).toBe(977_000)
@@ -171,7 +170,7 @@ describe('autoCompact thresholds', () => {
     for (const model of [
       'gpt-5.6-terra',
       'gpt-5.6-luna',
-      'gpt-6-astra',
+      'gpt-6.2-astra',
       'claude-sonnet-5',
       'claude-opus-5',
       'claude-sonnet-4-6',

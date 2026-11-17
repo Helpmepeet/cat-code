@@ -10,7 +10,7 @@ import { CODEX_CACHE_IDLE_ESTIMATE_MS } from '../shared/promptCacheEstimate.js'
 import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
 import { createSidecarRunControlsDomain } from './runControlsDomain.js'
 
-const MODEL = 'gpt-6.1-sol'
+const MODEL = 'gpt-6.2-sol'
 const AT = Date.parse('2026-10-08T08:00:00.000Z')
 let previousProvider: ReturnType<typeof getSessionProvider>
 beforeEach(() => { previousProvider = getSessionProvider(); setSessionProvider('openai') })

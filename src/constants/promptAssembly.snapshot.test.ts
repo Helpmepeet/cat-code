@@ -256,8 +256,8 @@ describe('assembled system prompt', () => {
   const cases: [name: string, model: string, tools: ToolList][] = [
     ['gpt-5.6-terra.full', 'gpt-5.6-terra', FULL_TOOLS],
     ['gpt-5.6-terra.minimal', 'gpt-5.6-terra', MINIMAL_TOOLS],
-    ['gpt-6-astra.full', 'gpt-6-astra', FULL_TOOLS],
-    ['gpt-6-astra.minimal', 'gpt-6-astra', MINIMAL_TOOLS],
+    ['gpt-6.2-astra.full', 'gpt-6.2-astra', FULL_TOOLS],
+    ['gpt-6.2-astra.minimal', 'gpt-6.2-astra', MINIMAL_TOOLS],
     ['claude-opus-5.full', 'claude-opus-5', FULL_TOOLS],
   ]
 
@@ -296,11 +296,11 @@ describe('assembled system prompt', () => {
 
   // The shipped GPT-6 family templates are identical. Preserve that equivalence while
   // pinning the generation-specific differences from the GPT-5.6 baseline.
-  test('GPT-6 family (Astra, Sol 6.1, Terra 6.1, Luna, and replayed Sol 6) receive byte-identical instructions', async () => {
+  test('active and replayed GPT-6 models share the same prompt family', async () => {
     const astra = normalizeModelIdentity(
-      await assemble(FULL_TOOLS, 'gpt-6-astra'),
+      await assemble(FULL_TOOLS, 'gpt-6.2-astra'),
     )
-    for (const model of ['gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna']) {
+    for (const model of ['gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol']) {
       const prompt = normalizeModelIdentity(await assemble(FULL_TOOLS, model))
       expect({ model, prompt }).toEqual({ model, prompt: astra })
     }
@@ -308,8 +308,8 @@ describe('assembled system prompt', () => {
 
   test('GPT-6 family differs only in task execution, actions and tone from GPT-5.6 baseline, with shared contracts intact', async () => {
     const baseline = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-5.6-terra'))
-    const astra = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6-astra'))
-    const sol = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6.1-sol'))
+    const astra = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6.2-astra'))
+    const sol = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6.2-sol'))
     const replayedSol = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6-sol'))
     const luna = normalizeModelIdentity(await assemble(FULL_TOOLS, 'gpt-6-luna'))
     const sharedSections = (prompt: string) => prompt.split(/(?=^# )/m).filter(
@@ -348,12 +348,12 @@ describe('assembled system prompt', () => {
     clearSystemPromptSections()
     const first = await assemble(FULL_TOOLS, 'gpt-5.6-terra', false)
     // Keep tools identical here: changing them could hide a missing family key.
-    const astra = await assemble(FULL_TOOLS, 'gpt-6-astra', false)
+    const astra = await assemble(FULL_TOOLS, 'gpt-6.2-astra', false)
     const last = await assemble(FULL_TOOLS, 'gpt-5.6-terra', false)
     expect(last).toBe(first)
     expect(first).not.toContain('Infer action intent from context')
     expect(astra).toContain('Infer action intent from context')
-    const minimal = await assemble(MINIMAL_TOOLS, 'gpt-6-astra', false)
+    const minimal = await assemble(MINIMAL_TOOLS, 'gpt-6.2-astra', false)
     // Loaded file/skill instructions can affect work without a current Skill tool.
     expect(minimal).toContain('Check whether a file or skill requirement applies')
     expect(minimal).not.toContain('Work directly unless delegation has a concrete benefit')
@@ -363,19 +363,19 @@ describe('assembled system prompt', () => {
 
   test('family selection matches exact transport identity, including malformed names', async () => {
     for (const model of [
-      'gpt-6-astra',
-      'gpt-6.1-sol',
+      'gpt-6.2-astra',
+      'gpt-6.2-sol',
       'gpt-6.1-terra',
       'gpt-6-sol',
       'gpt-6-luna',
-      'GPT-6-ASTRA',
-      'gpt-6-astra ',
-      'gpt-6-astra-future',
+      'GPT-6.2-ASTRA',
+      'gpt-6.2-astra ',
+      'gpt-6.2-astra-future',
       'gpt-5.6-terra',
       'gpt-5.6-sol',
       'claude-opus-5',
     ]) {
-      const expected = model === 'gpt-6-astra' || model === 'gpt-6.1-sol' || model === 'gpt-6.1-terra' || model === 'gpt-6-sol' || model === 'gpt-6-luna'
+      const expected = model === 'gpt-6.2-astra' || model === 'gpt-6.2-sol' || model === 'gpt-6.1-terra' || model === 'gpt-6-sol' || model === 'gpt-6-luna'
       expect(getGPTPromptFamily(model) === 'gpt-6').toBe(expected)
       const prompt = (await getSystemPrompt(MINIMAL_TOOLS, model, [], [], 'openai')).join('\n')
       expect(prompt.includes('Infer action intent from context')).toBe(expected)
@@ -383,17 +383,17 @@ describe('assembled system prompt', () => {
   })
 
   test('shell inspection supports mutations while patch deletion requires a recorded Read', async () => {
-    const patch = await assemble(toolList('apply_patch', 'Bash'), 'gpt-6-astra')
+    const patch = await assemble(toolList('apply_patch', 'Bash'), 'gpt-6.2-astra')
     expect(patch).toContain('Shell reads can supply this understanding.')
     expect(patch).toContain('Bare apply_patch Delete requires a complete recorded Read and unchanged file identity.')
     for (const mutationTool of ['Edit', 'Write']) {
-      const prompt = await assemble(toolList(mutationTool, 'Read', 'Bash'), 'gpt-6-astra')
+      const prompt = await assemble(toolList(mutationTool, 'Read', 'Bash'), 'gpt-6.2-astra')
       expect(prompt).toContain('Inspect the relevant current contents of an existing file before changing it')
       expect(prompt).toContain('Shell reads can supply this understanding.')
       expect(prompt).not.toContain('recorded Read')
       expect(prompt).not.toContain('mutation tool\'s Read prerequisites')
     }
-    expect(await assemble(MINIMAL_TOOLS, 'gpt-6-astra')).not.toContain('Inspect the relevant current contents of an existing file before changing it')
+    expect(await assemble(MINIMAL_TOOLS, 'gpt-6.2-astra')).not.toContain('Inspect the relevant current contents of an existing file before changing it')
   })
 
   test('task tools retain optional routing without repeating their lifecycle descriptions', async () => {
@@ -405,14 +405,14 @@ describe('assembled system prompt', () => {
   })
 
   test('real family instructions survive final OpenAI request assembly', async () => {
-    for (const model of ['gpt-5.6-terra', 'gpt-6-astra']) {
+    for (const model of ['gpt-5.6-terra', 'gpt-6.2-astra']) {
       const systemPrompt = await getSystemPrompt(MINIMAL_TOOLS, model)
       const assembly = buildProviderInstructionAssembly({
         provider: 'openai', messages: [], systemPrompt,
         userContext: { project: 'fixture user instructions' },
         systemContext: { gitStatus: 'fixture volatile status' },
       }).openAIInstructionAssembly!
-      expect(assembly.instructions.includes('Infer action intent from context')).toBe(model === 'gpt-6-astra')
+      expect(assembly.instructions.includes('Infer action intent from context')).toBe(model === 'gpt-6.2-astra')
       expect(assembly.instructions).toContain(OUTCOME_REPORTING_RULE)
       expect(assembly.instructions).not.toContain('fixture user instructions')
       expect(assembly.instructions).not.toContain('fixture volatile status')
@@ -423,7 +423,7 @@ describe('assembled system prompt', () => {
   test('family defaults preserve Learning pauses and Explanatory formatting', async () => {
     for (const style of ['Learning', 'Explanatory'] as const) {
       outputStyleSpy.mockResolvedValue(outputStyles.OUTPUT_STYLE_CONFIG[style])
-      for (const model of ['gpt-5.6-terra', 'gpt-6-astra']) {
+      for (const model of ['gpt-5.6-terra', 'gpt-6.2-astra']) {
         const prompt = await assemble(MINIMAL_TOOLS, model)
         expect(prompt).toContain(outputStyles.OUTPUT_STYLE_CONFIG[style]!.prompt)
         expect(prompt).toContain('Respect the user\'s requested workflow and intentional pauses in the selected output style')

@@ -6,7 +6,7 @@
 // fake and fails every other network call closed; sandbox-exec denies outbound IP.
 //
 // Usage: bun harness.ts --engine <dir> --copy <dir holding cat-code/> --out <dir> --prompt-file <file>
-//        [--images <dir>] [--bin <dir>] [--model gpt-6.1-sol] [--effort high] [--mode auto]
+//        [--images <dir>] [--bin <dir>] [--model gpt-6.2-sol] [--effort high] [--mode auto]
 // --images: prompt images, sent as the desktop composer sends them (images, then text).
 // --bin: offline CLI stand-ins, staged and put first on PATH.
 // --live --credential <file> [--max-minutes N] [--max-input-tokens N]: a real
@@ -49,7 +49,7 @@ for (const a of args.includes('--abs') ? JSON.parse(readFileSync(resolve(opt('--
   placed.push(a.to)
 }
 process.on('exit', () => { for (const p of placed) rmSync(p, { force: true }) })
-const model = opt('--model', 'gpt-6.1-sol')
+const model = opt('--model', 'gpt-6.2-sol')
 const effort = opt('--effort', 'high')
 const mode = opt('--mode', 'auto')
 const live = args.includes('--live')

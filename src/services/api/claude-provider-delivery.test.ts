@@ -143,7 +143,7 @@ test('regular GPT compaction overrides parent effort while ordinary thinking ret
     const messages = [createUserMessage({ content: 'Remember the work done so far.' })]
     const context = {
       options: {
-        commands: [], debug: false, mainLoopModel: 'gpt-6.1-sol', mainLoopProvider: 'openai',
+        commands: [], debug: false, mainLoopModel: 'gpt-6.2-sol', mainLoopProvider: 'openai',
         tools: [], verbose: false, thinkingConfig: { type: 'adaptive' },
         mcpClients: [], mcpResources: {}, isNonInteractiveSession: true,
         agentDefinitions: { activeAgents: [], allAgents: [] },
@@ -168,12 +168,15 @@ test('regular GPT compaction overrides parent effort while ordinary thinking ret
       openAIInstructionAssembly: { instructions: 'parent instructions', inputMessages: messages },
       thinkingConfig: { type: 'adaptive' }, tools: [], signal: context.abortController.signal,
       options: {
-        model: 'gpt-6.1-sol', provider: 'openai', effortValue: 'max',
+        model: 'gpt-6.2-sol', provider: 'openai', effortValue: 'ultra',
         querySource: 'sdk', getToolPermissionContext: async () => appState.toolPermissionContext,
         isNonInteractiveSession: true, agents: [], mcpTools: [], hasAppendSystemPrompt: false,
       },
     })) { /* Drain the response to observe the emitted request. */ }
-    expect(translateToCodexBody(bodies[1]!).codexBody.reasoning).toMatchObject({ effort: 'max' })
+    expect(translateToCodexBody(bodies[1]!).codexBody).toMatchObject({
+      model: 'gpt-6.2-sol',
+      reasoning: { effort: 'ultra' },
+    })
   } finally {
     clientSpy.mockRestore()
     gateSpy.mockRestore()
@@ -274,7 +277,7 @@ test.each(['fallback', 'delta', 'inline'] as const)(
         openAIInstructionAssembly: assembly.openAIInstructionAssembly,
         thinkingConfig: { type: 'adaptive' }, tools, signal: new AbortController().signal,
         options: {
-          model: 'gpt-6.1-sol', provider: 'openai', querySource: 'sdk',
+          model: 'gpt-6.2-sol', provider: 'openai', querySource: 'sdk',
           getToolPermissionContext: async () => getEmptyToolPermissionContext(),
           isNonInteractiveSession: true, agents: [], mcpTools: [deferredTool, chromeTool],
           hasAppendSystemPrompt: false,
@@ -284,18 +287,18 @@ test.each(['fallback', 'delta', 'inline'] as const)(
       expect(requestBodies.length).toBe(count + 1)
       return requestBodies.at(-1)! as {
         instructions: string
-        input: Array<{ type: string; role?: string; phase?: string; call_id?: string; output?: unknown; content?: unknown }>
+        input: Array<{ type: string; role?: string; phase?: string; call_id?: string; output?: unknown; content?: unknown; tools?: Array<{ name: string }> }>
         tools: Array<{ name: string }>
       }
     }
     try {
       const initialMessages = [createUserMessage({ content: `Inspect tools and continue (${mode}).` })]
       const announcements = [
-        ...getDeferredToolsDeltaAttachment(tools, 'gpt-6.1-sol', initialMessages),
+        ...getDeferredToolsDeltaAttachment(tools, 'gpt-6.2-sol', initialMessages),
         ...getMcpInstructionsDeltaAttachment([
           { type: 'connected', name: 'delivery', instructions: 'Delivery server guidance' },
           { type: 'connected', name: 'claude-in-chrome' },
-        ] as Parameters<typeof getMcpInstructionsDeltaAttachment>[0], tools, 'gpt-6.1-sol', initialMessages),
+        ] as Parameters<typeof getMcpInstructionsDeltaAttachment>[0], tools, 'gpt-6.2-sol', initialMessages),
       ].map(createAttachmentMessage)
       const first = await capture([...initialMessages, ...announcements])
       expect(JSON.stringify(first.input)).toContain('mcp__delivery__read')
@@ -326,8 +329,13 @@ test.each(['fallback', 'delta', 'inline'] as const)(
       ]
       if (mode !== 'inline') {
         const loaded = await capture(loadedMessages)
-        expect(loaded.tools.some(tool => tool.name === 'mcp__delivery__read')).toBe(true)
-        expect(loaded.input.some(item => item.type === 'function_call_output' && item.call_id === 'search')).toBe(true)
+        expect(loaded.tools.some(tool => tool.name === 'mcp__delivery__read')).toBe(false)
+        const searchOutput = loaded.input.findIndex(item => item.type === 'function_call_output' && item.call_id === 'search')
+        expect(searchOutput).toBeGreaterThanOrEqual(0)
+        expect(loaded.input[searchOutput + 1]).toMatchObject({
+          type: 'additional_tools',
+          tools: [expect.objectContaining({ name: 'mcp__delivery__read' })],
+        })
       }
 
       const commentaryBlock = { type: 'text' as const, text: 'Checking restored work', citations: [], phase: 'commentary' as const }

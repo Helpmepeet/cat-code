@@ -217,7 +217,7 @@ const originalSdkDisableBuiltins =
 test.each(['general-purpose', undefined])('an explicit Opus pin from a Codex parent reaches Anthropic with its own prompt and tools (type=%s)', async subagent_type => {
   setSessionProvider('openai')
   const parent = createToolContextForCwd() as ToolUseContext
-  parent.options.mainLoopModel = 'gpt-6.1-sol'
+  parent.options.mainLoopModel = 'gpt-6.2-sol'
   parent.options.mainLoopProvider = 'openai'
   parent.setResponseLength = () => {}
   useRealRunAgent = true
@@ -285,10 +285,10 @@ describe('AgentTool effort input', () => {
   test('accepts Astra as an explicit model override', () => {
     const parsed = inputSchema().safeParse({
       ...baseInput,
-      model: 'gpt-6-astra',
+      model: 'gpt-6.2-astra',
     })
     expect(parsed.success).toBe(true)
-    expect(parsed.success && parsed.data.model).toBe('gpt-6-astra')
+    expect(parsed.success && parsed.data.model).toBe('gpt-6.2-astra')
   })
 
   test('accepts a named effort level from the calling agent', () => {

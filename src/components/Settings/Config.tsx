@@ -362,15 +362,16 @@ export function Config({
     onChange(enabled_0: boolean) {
       clearFastModeCooldown();
       if (enabled_0) {
+        const needsModelSwitch = !isFastModeSupportedByModel(mainLoopModel);
+        const fastModel = needsModelSwitch ? getFastModeModel() : mainLoopModel;
         setAppState(prev_7 => ({
           ...prev_7,
-          mainLoopModel: getFastModeModel(),
-          mainLoopModelForSession: null,
+          ...(needsModelSwitch ? { mainLoopModel: fastModel, mainLoopModelForSession: null } : {}),
           fastMode: true
         }));
         setChanges(prev_8 => ({
           ...prev_8,
-          model: getFastModeModel(),
+          ...(needsModelSwitch ? { model: fastModel } : {}),
           'Fast mode': 'ON'
         }));
       } else {

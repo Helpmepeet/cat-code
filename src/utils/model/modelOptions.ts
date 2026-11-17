@@ -263,21 +263,21 @@ function getHaikuOption(): ModelOption {
 }
 
 // OpenAI Codex model options
-function getGpt6AstraOption(): ModelOption {
+function getGpt62AstraOption(): ModelOption {
   return {
-    value: 'gpt-6-astra',
-    label: 'GPT-6 Astra',
-    description: 'GPT-6 Astra',
-    descriptionForModel: 'GPT-6 Astra',
+    value: 'gpt-6.2-astra',
+    label: 'GPT-6.2 Astra',
+    description: 'GPT-6.2 Astra · Most capable for complex work',
+    descriptionForModel: 'Most capable GPT model for complex work',
   }
 }
 
-function getGpt61SolOption(): ModelOption {
+function getGpt62SolOption(): ModelOption {
   return {
-    value: 'gpt-6.1-sol',
-    label: 'GPT-6.1 Sol',
-    description: 'GPT-6.1 Sol · Complex coding and agentic workflows',
-    descriptionForModel: 'GPT-6.1 Sol - complex coding and agentic workflows',
+    value: 'gpt-6.2-sol',
+    label: 'GPT-6.2 Sol',
+    description: 'GPT-6.2 Sol · Complex coding and agentic workflows',
+    descriptionForModel: 'GPT-6.2 Sol - complex coding and agentic workflows',
   }
 }
 
@@ -370,8 +370,8 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
   if (isCodexSubscriber()) {
     const codexOptions: ModelOption[] = [
       getDefaultOptionForUser(),
-      getGpt6AstraOption(),
-      getGpt61SolOption(),
+      getGpt62AstraOption(),
+      getGpt62SolOption(),
       getGpt61TerraOption(),
       getGpt6LunaOption(),
     ]
@@ -625,8 +625,8 @@ export function getModelOptions(fastMode = false): ModelOption[] {
     hasCodexTokens()
   ) {
     const gptModels = [
-      getGpt6AstraOption(),
-      getGpt61SolOption(),
+      getGpt62AstraOption(),
+      getGpt62SolOption(),
       getGpt61TerraOption(),
       getGpt6LunaOption(),
     ]

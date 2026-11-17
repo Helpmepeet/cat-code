@@ -659,8 +659,8 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
-  { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'GPT-6 Astra' },
-  { id: 'gpt-6.1-sol', label: 'GPT-6.1 Sol', description: 'Frontier model for complex professional work' },
+  { id: 'gpt-6.2-astra', label: 'GPT-6.2 Astra', description: 'Most capable model for complex work' },
+  { id: 'gpt-6.2-sol', label: 'GPT-6.2 Sol', description: 'Frontier model for complex professional work' },
   { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', description: 'Fast visual reasoning, computer use, and writing' },
   { id: 'gpt-6-luna', label: 'GPT-6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
   { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
@@ -698,7 +698,7 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (lower.replace(/\[(?:1m|2m)\]$/, '') === 'claude-opus-5-5') {
     throw new Error('Opus 5.5 requires an Anthropic provider; it cannot run through OpenAI.')
   }
-  if (lower.includes('opus')) return 'gpt-6.1-sol'
+  if (lower.includes('opus')) return 'gpt-6.2-sol'
   if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-6-luna'
   return DEFAULT_CODEX_MODEL
 }
@@ -757,8 +757,8 @@ interface OpenAIInstructionAssemblyPayload {
 // These models use the additional_tools input contract in the Codex harness.
 // Keep older models on their existing top-level declaration path.
 const APPEND_ONLY_TOOL_MODELS = new Set([
-  'gpt-6-astra',
-  'gpt-6.1-sol',
+  'gpt-6.2-astra',
+  'gpt-6.2-sol',
   'gpt-6.1-terra',
   'gpt-6-luna',
 ])
@@ -1739,8 +1739,8 @@ export function mapEffortToCodex(
   if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh') return e
   if (e === 'minimal') {
     const model = codexModel.toLowerCase()
-    if (model === 'gpt-6-astra' || model === 'gpt-6.1-sol') return 'low'
-    // GPT-6 Astra and GPT-6.1 Sol express minimal as low; other listed models
+    if (model === 'gpt-6.2-astra' || model === 'gpt-6.2-sol') return 'low'
+    // GPT-6.2 Astra and GPT-6.2 Sol express minimal as low; other listed models
     // preserve their disabled-thinking path with `none`.
     if (
       model === 'gpt-6-luna' ||
@@ -1752,11 +1752,11 @@ export function mapEffortToCodex(
   if (e === 'max') {
     const model = codexModel.toLowerCase()
     return (
-      model === 'gpt-6.1-sol' ||
+      model === 'gpt-6.2-sol' ||
       model === 'gpt-6-luna' ||
       model === 'gpt-6.1-terra' ||
       model === 'gpt-5.6-luna' ||
-      model === 'gpt-6-astra'
+      model === 'gpt-6.2-astra'
     )
       ? 'max'
       : model.includes('codex')
@@ -1765,6 +1765,7 @@ export function mapEffortToCodex(
   }
   if (e === 'ultra') {
     const model = codexModel.toLowerCase()
+    if (model === 'gpt-6.2-astra' || model === 'gpt-6.2-sol') return 'ultra'
     return model === 'gpt-6.1-terra' ? 'max' : undefined
   }
   return undefined

@@ -28,7 +28,7 @@ describe('auto mode provider ladder', () => {
   test('starts Claude classifiers on the configured Anthropic provider and crosses to GPT', () => {
     expect(getAutoModeClassifierAttempts('sonnet', 4, 'vertex')).toEqual([
       { provider: 'vertex', model: 'sonnet' },
-      { provider: 'openai', model: 'gpt-6.1-sol' },
+      { provider: 'openai', model: 'gpt-6.2-sol' },
       { provider: 'openai', model: 'gpt-6.1-terra' },
       { provider: 'openai', model: 'gpt-6-luna' },
     ])
@@ -44,7 +44,7 @@ describe('auto mode provider ladder', () => {
 
   test('remaps a retired Sol pin before choosing the classifier ladder', () => {
     expect(getAutoModeClassifierAttempts('gpt-6-sol', 4, 'bedrock')).toEqual([
-      { provider: 'openai', model: 'gpt-6.1-sol' },
+      { provider: 'openai', model: 'gpt-6.2-sol' },
       { provider: 'openai', model: 'gpt-6.1-terra' },
       { provider: 'openai', model: 'gpt-6-luna' },
       { provider: 'bedrock', model: 'sonnet' },
@@ -58,26 +58,26 @@ describe('auto mode provider ladder', () => {
     ])
   })
 
-  test('getClassifierFallbackModel steps down gpt-6.1-sol -> gpt-6.1-terra -> gpt-6-luna', () => {
+  test('getClassifierFallbackModel steps down gpt-6.2-sol -> gpt-6.1-terra -> gpt-6-luna', () => {
     const error = Object.assign(new Error('transient rate limit'), { status: 429 })
-    expect(getClassifierFallbackModel('gpt-6.1-sol', error)).toBe('gpt-6.1-terra')
+    expect(getClassifierFallbackModel('gpt-6.2-sol', error)).toBe('gpt-6.1-terra')
     expect(getClassifierFallbackModel('gpt-6.1-terra', error)).toBe('gpt-6-luna')
     expect(getClassifierFallbackModel('gpt-6-luna', error)).toBeUndefined()
     expect(
-      getClassifierFallbackModel('gpt-6.1-sol', {
+      getClassifierFallbackModel('gpt-6.2-sol', {
         code: 'model_unavailable',
         message: 'request failed',
       }),
     ).toBe('gpt-6.1-terra')
     expect(
       getClassifierFallbackModel(
-        'gpt-6.1-sol',
+        'gpt-6.2-sol',
         new Error('Codex API error (503): Service Unavailable'),
       ),
     ).toBe('gpt-6.1-terra')
     expect(
       getClassifierFallbackModel(
-        'gpt-6.1-sol',
+        'gpt-6.2-sol',
         new Error('Codex API error (404): model not found'),
       ),
     ).toBeUndefined()

@@ -360,7 +360,7 @@ test('LIVE: no desktop provider route claims prompt-cache expiry from local sess
   try {
     for (const provider of ['openai', 'firstParty', 'bedrock', 'vertex', 'foundry'] as const) {
       setSessionProvider(provider)
-      for (const model of ['gpt-6.1-sol', 'claude-opus-5', 'custom-deployment']) {
+      for (const model of ['gpt-6.2-sol', 'claude-opus-5', 'custom-deployment']) {
         setMainLoopModelOverride(model)
         const domain = createSidecarRunControlsDomain(makeStore())
         expect(domain.getSnapshot().cacheExpired).toBeNull()
@@ -395,12 +395,13 @@ test('a row resolves its selection to a model id before reading its effort level
 
   // A canonical id needs no resolution and pins the engine's own table, which is
   // keyed on this exact string (`getSupportedEffortLevels`, src/utils/effort.ts).
-  expect(effortOptionsForSelection('gpt-6.1-sol')).toEqual([
+  expect(effortOptionsForSelection('gpt-6.2-sol')).toEqual([
     'low',
     'medium',
     'high',
     'xhigh',
     'max',
+    'ultra',
   ])
   expect(effortOptionsForSelection('gpt-6.1-terra')).toEqual([
     'low', 'medium', 'high', 'xhigh', 'max',
@@ -568,10 +569,12 @@ test('LIVE: a non-interactive Codex sidecar offers Fast and applies the composer
   try {
     setIsInteractive(false)
     setSessionProvider('openai')
-    setMainLoopModelOverride('gpt-6.1-sol')
-    const store = makeStore({ mainLoopModel: 'gpt-6.1-sol' })
+    setMainLoopModelOverride('gpt-6-astra')
+    const store = makeStore({ mainLoopModel: 'gpt-6-astra' })
     const domain = createSidecarRunControlsDomain(store)
 
+    expect(domain.setModel('gpt-6-astra').ok).toBe(true)
+    expect(getMainLoopModelOverride()).toBe('gpt-6.2-astra')
     expect(domain.getSnapshot().fast).toMatchObject({
       active: false,
       supportedByModel: true,
@@ -581,6 +584,7 @@ test('LIVE: a non-interactive Codex sidecar offers Fast and applies the composer
     expect(domain.setFast(true)).toMatchObject({ ok: true, changed: true })
     expect(store.getState().fastMode).toBe(true)
     expect(domain.getSnapshot().fast.active).toBe(true)
+    expect(domain.getSnapshot().model.current).toBe('gpt-6.2-astra')
   } finally {
     setMainLoopModelOverride(previousOverride)
     setSessionProvider(previousProvider)

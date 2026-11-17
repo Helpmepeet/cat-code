@@ -17,12 +17,12 @@ test('current Terra replaces historical Terra in usage status', () => {
     }
 });
 
-test('usage status keeps other current and retired models', () => {
-    for (const label of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna']) {
+test('usage status recognizes GPT-6.2 and retains the old model identities in history', () => {
+    for (const label of ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-luna']) {
         expect(isCurrentUsageModel(named(label))).toBe(true);
         expect(isRetiredUsageModel(named(label))).toBe(false);
     }
-    for (const label of ['gpt-5.6-sol', 'gpt-5.6-luna']) {
+    for (const label of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-sol', 'gpt-5.6-luna']) {
         expect(isCurrentUsageModel(named(label))).toBe(false);
         expect(isRetiredUsageModel(named(label))).toBe(true);
     }

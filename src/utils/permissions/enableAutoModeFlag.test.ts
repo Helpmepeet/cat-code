@@ -112,7 +112,7 @@ describe('auto mode with Codex models', () => {
 
   test('classifier cascades transient failures through the active GPT models', () => {
     const unavailable = new Error('model is temporarily unavailable')
-    expect(getClassifierFallbackModel('gpt-6.1-sol', unavailable)).toBe(
+    expect(getClassifierFallbackModel('gpt-6.2-sol', unavailable)).toBe(
       'gpt-6.1-terra',
     )
     expect(getClassifierFallbackModel('gpt-6.1-terra', unavailable)).toBe(

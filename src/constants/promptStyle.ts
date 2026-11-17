@@ -21,10 +21,12 @@ export type GPTPromptFamily = 'gpt-5.6' | 'gpt-6'
 // adopting another family requires evidence rather than a numeric >= test.
 // Match the transport's exact IDs: differently cased/suffixed names fall back
 // to 5.6 there too, so display-name normalization must not select GPT-6 here.
-// Keep gpt-6-sol in the GPT-6 family for historical session replay; model
-// selection remaps new inputs to gpt-6.1-sol.
+// Keep retired GPT-6 IDs here for historical replay. Active model selection
+// remaps them to their successors before building a prompt.
 export function getGPTPromptFamily(model: string): GPTPromptFamily {
-  return model === 'gpt-6-astra' ||
+  return model === 'gpt-6.2-astra' ||
+    model === 'gpt-6.2-sol' ||
+    model === 'gpt-6-astra' ||
     model === 'gpt-6.1-sol' ||
     model === 'gpt-6.1-terra' ||
     model === 'gpt-6-sol' ||

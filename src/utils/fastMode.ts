@@ -157,17 +157,11 @@ export function getFastModeModelDisplay(): string {
 /**
  * The model fast mode lands on when the current one cannot run it.
  *
- * Both branches name their provider's TOP model, not a mid tier: enabling fast
- * mode asks for speed, never for a downgrade. Codex reads GPT-6.1 Sol for the
- * same reason Anthropic reads Opus. Terra here was harmless only while Terra was
- * also the Codex default, so toggling fast mode was a no-op; once Sol became
- * the default it turned into a silent demotion, and `Config.tsx`'s toggle
- * applies this unconditionally (no `isFastModeSupportedByModel` guard, unlike
- * `applyFastMode`), so it demoted sessions already sitting on GPT-6.1 Sol.
+ * Codex uses the default Sol model as its Fast mode fallback.
  */
 export function getFastModeModel(): string {
   if (getAPIProvider() === 'openai') {
-    return 'gpt-6.1-sol'
+    return 'gpt-6.2-sol'
   }
   return 'opus' + (isOpus1mMergeEnabled() ? '[1m]' : '')
 }
@@ -204,7 +198,8 @@ export function isFastModeSupportedByModel(
     normalizedModel.includes('opus-5') ||
     normalizedModel.includes('opus-4-6') ||
     normalizedModel.includes('fable-5') ||
-    normalizedModel === 'gpt-6.1-sol' ||
+    normalizedModel === 'gpt-6.2-astra' ||
+    normalizedModel === 'gpt-6.2-sol' ||
     normalizedModel === 'gpt-6-luna' ||
     normalizedModel === 'gpt-6.1-terra'
   )

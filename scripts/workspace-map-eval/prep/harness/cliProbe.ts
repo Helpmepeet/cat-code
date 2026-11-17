@@ -13,7 +13,7 @@ const opt = (k: string, d?: string) => { const i = args.indexOf(k); return i >= 
 const engine = resolve(opt('--engine'))
 const copy = resolve(opt('--copy'))
 const out = resolve(opt('--out'))
-const model = opt('--model', 'gpt-6.1-sol')
+const model = opt('--model', 'gpt-6.2-sol')
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out, { recursive: true })
 const stage = join('/Users/Shared/ccw', randomBytes(3).toString('hex'))

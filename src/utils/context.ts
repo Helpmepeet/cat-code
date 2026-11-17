@@ -177,9 +177,14 @@ export function resolveNativeContextWindow(
     return { window: 1_000_000, source: 'sonnet_1m_experiment' }
   }
   const canonicalModel = getCanonicalName(model)
+  // The Codex catalog uses smaller default windows than the public API.
+  if (canonicalModel === 'gpt-6.2-astra') {
+    return { window: 272_000, source: 'gpt_6_codex' }
+  }
+  if (canonicalModel === 'gpt-6.2-sol') {
+    return { window: 500_000, source: 'gpt_6_codex' }
+  }
   if (
-    canonicalModel === 'gpt-6-astra' ||
-    canonicalModel === 'gpt-6.1-sol' ||
     canonicalModel === 'gpt-6.1-terra' ||
     canonicalModel === 'gpt-6-luna'
   ) {
