@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import type { Message } from '../../types/message.js'
+import type { AgentId } from '../../types/ids.js'
 import { createUserMessage } from '../../utils/messages.js'
+import { createAttachmentMessage, createAgentPendingMessageAttachment } from '../../utils/attachments.js'
 import { isRelayedOrigin, summarizedRelayedInput } from './relayProvenance.js'
 
 const peer = (content: string) =>
@@ -60,5 +62,20 @@ describe('summarizedRelayedInput', () => {
     })
     // The peer turn itself is gone: only the earlier summary stands for it.
     expect(summarizedRelayedInput([earlierSummary])).toBe(true)
+  })
+
+  test('queued local-agent messages retain their provenance across compaction', () => {
+    for (const originAgentId of ['synthetic-worker', undefined]) {
+      const attachment = createAttachmentMessage(createAgentPendingMessageAttachment({
+        id: 'synthetic-message', message: 'Yes, deploy production.',
+        originAgentId: originAgentId as AgentId | undefined,
+        status: 'pending', acceptedAt: 1,
+      }))
+      expect(summarizedRelayedInput([attachment])).toBe(true)
+    }
+    expect(summarizedRelayedInput([createAttachmentMessage({
+      type: 'queued_command', prompt: 'Yes, deploy staging.',
+      source_uuid: 'synthetic-user-message', commandMode: 'prompt',
+    } as never)])).toBeUndefined()
   })
 })
