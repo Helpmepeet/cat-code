@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SIDECAR_RUNTIME_ARGS } from '../../app/main/mainDecisions.js'
 
-async function fixture(streaming: boolean, sameResponse: boolean) {
+async function fixture(streaming: boolean, sameResponse: boolean, nestedInstructions = false) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'same-response-')))
   try {
     await mkdir(join(root, 'config'))
@@ -15,7 +15,8 @@ async function fixture(streaming: boolean, sameResponse: boolean) {
         CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
         ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: '0', CLAUDE_CODE_AUTO_MODE_MODEL: 'claude-sonnet-4-5',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1',
-        SAME_RESPONSE_TEST_ROOT: root, SAME_RESPONSE_TEST_BATCH: sameResponse ? '1' : '0', SAME_RESPONSE_TEST_STREAMING: streaming ? '1' : '0' },
+        SAME_RESPONSE_TEST_ROOT: root, SAME_RESPONSE_TEST_BATCH: sameResponse ? '1' : '0', SAME_RESPONSE_TEST_STREAMING: streaming ? '1' : '0',
+        SAME_RESPONSE_NESTED_INSTRUCTIONS: nestedInstructions ? '1' : '0' },
     })
     const timer = setTimeout(() => child.kill(), 25_000)
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
@@ -26,6 +27,32 @@ async function fixture(streaming: boolean, sameResponse: boolean) {
 }
 
 for (const streaming of [false, true]) {
+  test(`new nested instructions reach main and reviewer together after same-response Code Mode discovery: streaming=${streaming}`, async () => {
+    const evidence = await fixture(streaming, true, true)
+    const nestedInstruction = 'NESTED_PERMISSION_BOUNDARY: Do not publish the synthetic package.'
+    expect(evidence.permissions).toEqual([])
+    // The real Code Mode preflight yields before reading; its fence does not
+    // prevent the independent native Bash sibling from reaching permissions.
+    expect(evidence.sibling).toBe('same-response-effect')
+    expect(evidence.nextRound).toBe('next-response-effect')
+    expect(evidence.codeResults[0].status).toBe('yielded')
+    expect(evidence.codeResults[0].calls[0].status).toBe('blocked')
+    expect(JSON.stringify(evidence.modelBodies[0].messages)).not.toContain(nestedInstruction)
+    expect(JSON.stringify(evidence.modelBodies[1].messages)).toContain(nestedInstruction)
+    const siblingReviews = evidence.classifierBodies.filter((body: any) => body.fixtureModelRound === 1 &&
+      JSON.stringify(body.messages.at(-1)?.content.at(-1)).includes('same-response-effect'))
+    const nextReviews = evidence.classifierBodies.filter((body: any) => body.fixtureModelRound === 2 &&
+      JSON.stringify(body.messages.at(-1)?.content.at(-1)).includes('next-response-effect'))
+    expect(siblingReviews.length).toBeGreaterThan(0)
+    expect(nextReviews.length).toBeGreaterThan(0)
+    for (const review of siblingReviews) expect(JSON.stringify(review.messages)).not.toContain(nestedInstruction)
+    for (const review of nextReviews) {
+      expect(JSON.stringify(review.messages)).toContain(nestedInstruction)
+      expect(JSON.stringify(review.messages)).toContain('nested/CLAUDE.md')
+    }
+    expect(JSON.stringify(evidence.classifierBodies)).not.toContain('UNREAD_NESTED_RAW_OUTPUT')
+  }, 60_000)
+
   test(`completed same-response input reaches Auto review without raw output or pending calls: streaming=${streaming}`, async () => {
     for (const sameResponse of [false, true]) {
       const evidence = await fixture(streaming, sameResponse)

@@ -1,5 +1,5 @@
 import { mock, spyOn } from 'bun:test'
-import { readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const root = process.env.SAME_RESPONSE_TEST_ROOT!
@@ -7,7 +7,20 @@ if (!root || process.env.HOME !== root || process.cwd() !== join(root, 'workspac
 globalThis.fetch = (() => { throw new Error('Network forbidden in same-response fixture') }) as unknown as typeof fetch
 ;(globalThis as any).MACRO = { VERSION: 'same-response-test' }
 const sameResponse = process.env.SAME_RESPONSE_TEST_BATCH === '1'
-const calls = [
+const nestedInstructions = process.env.SAME_RESPONSE_NESTED_INSTRUCTIONS === '1'
+if (nestedInstructions) {
+  await mkdir('nested')
+  await writeFile('CLAUDE.md', 'ROOT_INSTRUCTION: Work locally on the synthetic fixture.')
+  await writeFile('nested/CLAUDE.md', 'NESTED_PERMISSION_BOUNDARY: Do not publish the synthetic package.')
+  await writeFile('nested/data.txt', 'UNREAD_NESTED_RAW_OUTPUT')
+}
+const calls = nestedInstructions ? [
+  { type: 'tool_use', id: 'discover-nested', name: 'REPL', input: {
+    code: `try { await tools.call({name:"Read",input:{file_path:${JSON.stringify(join(process.cwd(), 'nested/data.txt'))}}}); } catch { output("preflight stopped"); }`,
+    description: 'Discover synthetic nested instructions',
+  } },
+  { type: 'tool_use', id: 'same-response-probe', name: 'Bash', input: { command: "bash -c 'printf same-response-effect > sibling.txt'", work_lifetime: 'finite', run_in_background: false } },
+] : [
   { type: 'tool_use', id: 'write-script', name: 'Write', input: { file_path: join(process.cwd(), 'ship.cjs'), content: 'require("node:fs").writeFileSync("shipped", "EARLIER_INPUT_MARKER")' } },
   { type: 'tool_use', id: 'read-output', name: 'Read', input: { file_path: join(process.cwd(), 'claims.txt') } },
   { type: 'tool_use', id: 'run-script', name: 'Bash', input: { command: "bash -c 'node ship.cjs'", work_lifetime: 'finite', run_in_background: false } },
@@ -21,7 +34,7 @@ mock.module('../services/api/client.js', () => ({
   resolveCodexOAuthTokensForLeaseOwner: async () => { throw new Error('OAuth forbidden') },
   getAnthropicClient: async () => ({ beta: { messages: { create: (body: any) => {
     if (!body.stream) {
-      classifierBodies.push(JSON.parse(JSON.stringify(body)))
+      classifierBodies.push({ ...JSON.parse(JSON.stringify(body)), fixtureModelRound: modelBodies.length })
       return Promise.resolve({ id: 'classifier', type: 'message', role: 'assistant', model: body.model,
         content: [{ type: 'tool_use', id: 'verdict', name: body.tool_choice.name,
           input: { shouldBlock: false, thinking: 'Offline fixture admission', reason: 'Isolated script' } }],
@@ -30,7 +43,10 @@ mock.module('../services/api/client.js', () => ({
     const index = modelBodies.length
     modelBodies.push(JSON.parse(JSON.stringify(body)))
     if (index > calls.length) throw new Error('Unexpected model request')
-    const blocks = sameResponse ? index === 0 ? calls : [] : calls[index] ? [calls[index]] : []
+    const blocks = nestedInstructions
+      ? index === 0 ? calls : index === 1
+        ? [{ type: 'tool_use', id: 'next-response-probe', name: 'Bash', input: { command: "bash -c 'printf next-response-effect > next-round.txt'", work_lifetime: 'finite', run_in_background: false } }] : []
+      : sameResponse ? index === 0 ? calls : [] : calls[index] ? [calls[index]] : []
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
       for (const [blockIndex, block] of blocks.entries()) {
@@ -59,12 +75,14 @@ const { createQueryEngineSessionController } = await import('./createQueryEngine
 const { BashTool } = await import('../tools/BashTool/BashTool.js')
 const { FileReadTool } = await import('../tools/FileReadTool/FileReadTool.js')
 const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
+const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 enableConfigs()
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
-const session = createQueryEngineAppSession({ cwd: process.cwd(), tools: [BashTool, FileReadTool, FileWriteTool], commands: [], mcpClients: [], agents: [],
+let transcript: any[] = []
+const session = createQueryEngineAppSession({ cwd: process.cwd(), tools: nestedInstructions ? [REPLTool, BashTool, FileReadTool, FileWriteTool] : [BashTool, FileReadTool, FileWriteTool], commands: [], mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => { state = update(state) }, readFileCache: createFileStateCacheWithSizeLimit(20),
-  customSystemPrompt: 'Run the isolated file operations.', userSpecifiedModel: 'claude-sonnet-4-5', recordTranscript: async () => null,
+  customSystemPrompt: 'Run the isolated file operations.', userSpecifiedModel: 'claude-sonnet-4-5', recordTranscript: async messages => { transcript = [...messages]; return null },
 })
 const controller = createQueryEngineSessionController(session)
 const permissions: unknown[] = []
@@ -74,7 +92,11 @@ controller.subscribe(event => {
     controller.respondToPermissionRequest(event.request.requestId, { behavior: 'deny', message: 'Unexpected fixture approval' })
   }
 })
-await controller.submit('Write and inspect the fixture, run its script, then write the remaining file.')
+await controller.submit(nestedInstructions ? 'Read the nested fixture through a script, then run the local probes.' : 'Write and inspect the fixture, run its script, then write the remaining file.')
 await writeFile(join(root, 'evidence.json'), JSON.stringify({ classifierBodies, modelBodies, permissions,
-  shipped: await readFile('shipped', 'utf8'), pending: await readFile('pending.txt', 'utf8') }))
+  ...(nestedInstructions ? {
+    sibling: await readFile('sibling.txt', 'utf8'), nextRound: await readFile('next-round.txt', 'utf8'),
+    codeResults: transcript.filter(message => message.toolUseResult?.kind === 'code-mode').map(message => message.toolUseResult),
+  } : { shipped: await readFile('shipped', 'utf8'), pending: await readFile('pending.txt', 'utf8') }) }))
 session.dispose?.()
+if (nestedInstructions) process.exit(0)

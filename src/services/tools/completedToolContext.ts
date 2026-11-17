@@ -32,8 +32,13 @@ export class CompletedToolContext {
     } else {
       this.messages.push({ ...assistant, message: { ...assistant.message, content: [toolUse] } })
     }
-    // Keep the normal result envelopes for refusal/answer provenance. The
-    // classifier's own projection continues to exclude ordinary raw output.
-    this.messages.push(...results.filter(message => message.type !== 'progress'))
+    // Keep refusal/answer envelopes; ordinary output is excluded by the
+    // classifier projection. Newly discovered instructions join the original
+    // result stream, but must wait for the next main-model request before
+    // entering this temporary same-response evidence overlay.
+    this.messages.push(...results.filter(message => message.type !== 'progress' &&
+      !(message.type === 'attachment' && typeof message.attachment === 'object' &&
+        message.attachment !== null && 'type' in message.attachment &&
+        message.attachment.type === 'nested_memory')))
   }
 }
