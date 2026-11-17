@@ -1,0 +1,75 @@
+import { z } from 'zod/v4'
+import type { EvidenceCase } from './cases.js'
+import { isEvaluated, type VerdictSample } from './grade.js'
+
+const sampleSchema = z.object({ id: z.string(), expect: z.enum(['allow', 'block']), variant: z.enum(['full', 'reduced']),
+  repeat: z.number().int().nonnegative(), shouldBlock: z.boolean(), unavailable: z.boolean(), invalid: z.boolean(),
+  model: z.string(), requestedModel: z.string(), durationMs: z.number().finite().nonnegative(), error: z.string().optional() })
+const evidenceSchema = z.object({ id: z.string(), variant: z.enum(['full', 'reduced']), repeat: z.number().int().nonnegative().optional(),
+  stages: z.number().int().nonnegative(), requestedModels: z.array(z.string()), stageChars: z.array(z.number().int().nonnegative()),
+  digests: z.array(z.string().regex(/^[a-f0-9]{64}$/)), missing: z.array(z.string()), unexpected: z.array(z.string()) })
+export type EvidenceRecord = z.infer<typeof evidenceSchema> & { repeat: number }
+const reportSchema = z.object({ schema: z.literal(1), mode: z.literal('live'), cases: z.number().int().positive(),
+  repeats: z.number().int().positive(), model: z.string(),
+  account: z.object({ reference: z.string(), alias: z.string().nullable(), idPrefix: z.string() }),
+  backendSends: z.number().int().nonnegative(), reviewerRequestsAttempted: z.number().int().nonnegative(),
+  samples: z.array(sampleSchema), evidence: z.array(evidenceSchema), transportFailures: z.array(z.unknown()),
+  stoppedEarly: z.string().nullable(), authorizedMaxRequests: z.number().int().positive().optional(),
+  corpusDigest: z.string().optional(), caseManifest: z.array(z.object({ id: z.string(), expect: z.enum(['allow', 'block']) })).optional(),
+  resumeHistory: z.array(z.unknown()).optional() })
+
+export function sampleKey(sample: Pick<VerdictSample, 'id' | 'repeat' | 'variant'>): string {
+  return `${sample.id}/${sample.repeat}/${sample.variant}`
+}
+
+/** A valid wrong decision is retained too; retries must never select for better scores. */
+export function prepareResume(value: unknown, expected: {
+  cases: readonly EvidenceCase[]; repeats: number; model: string; account: { reference: string; alias: string | null; idPrefix: string };
+  maxRequests: number; corpusDigest: string
+}) {
+  const report = reportSchema.parse(value)
+  const manifest = expected.cases.map(c => ({ id: c.id, expect: c.expect }))
+  if (report.model !== expected.model) throw new Error('Resume model does not match the authorized model')
+  if (JSON.stringify(report.account) !== JSON.stringify(expected.account)) throw new Error('Resume account identity does not match the authorized account')
+  if (report.cases !== expected.cases.length || report.repeats !== expected.repeats) throw new Error('Resume case count or repeats do not match')
+  if (report.caseManifest && JSON.stringify(report.caseManifest) !== JSON.stringify(manifest)) throw new Error('Resume case IDs or labels changed')
+  if (report.corpusDigest && report.corpusDigest !== expected.corpusDigest) throw new Error('Resume corpus changed')
+  if (report.authorizedMaxRequests !== undefined && report.authorizedMaxRequests !== expected.maxRequests) throw new Error('Resume authorization limit changed')
+  if (report.backendSends > expected.maxRequests || report.backendSends > report.reviewerRequestsAttempted) throw new Error('Resume request accounting is invalid')
+  if (report.samples.length !== report.evidence.length) throw new Error('Resume samples and evidence are not aligned')
+  const cases = new Map(expected.cases.map(c => [c.id, c]))
+  const retained = new Map<string, { sample: VerdictSample; evidence: EvidenceRecord }>()
+  const failed: { sample: VerdictSample; evidence: EvidenceRecord }[] = []
+  const seen = new Set<string>()
+  for (let i = 0; i < report.samples.length; i++) {
+    const sample = report.samples[i]!
+    const evidence = { ...report.evidence[i]!, repeat: report.evidence[i]!.repeat ?? sample.repeat }
+    const testCase = cases.get(sample.id)
+    const key = sampleKey(sample)
+    if (!testCase || sample.expect !== testCase.expect || sample.repeat >= expected.repeats || sample.requestedModel !== expected.model) throw new Error('Resume sample identity or label is invalid')
+    if (seen.has(key)) throw new Error('Resume contains a duplicate sample')
+    seen.add(key)
+    if (evidence.id !== sample.id || evidence.variant !== sample.variant || evidence.repeat !== sample.repeat ||
+      evidence.stages !== evidence.digests.length || evidence.stages !== evidence.stageChars.length || evidence.stages !== evidence.requestedModels.length) throw new Error('Resume evidence does not match its sample')
+    if (isEvaluated(sample)) {
+      if (sample.model !== expected.model || evidence.stages === 0 || evidence.missing.length || evidence.unexpected.length ||
+        evidence.requestedModels.some(model => model !== expected.model)) throw new Error('Resume evaluated sample has invalid model or evidence')
+      retained.set(key, { sample, evidence })
+    } else failed.push({ sample, evidence })
+  }
+  const pending = expected.cases.length * expected.repeats * 2 - retained.size
+  const remainingRequests = expected.maxRequests - report.backendSends
+  if (pending && remainingRequests === 0) throw new Error('No authorized backend sends remain for unfinished cases')
+  return { retained, pending, remainingRequests, priorBackendSends: report.backendSends, priorAttempts: report.reviewerRequestsAttempted,
+    priorTransportFailures: report.transportFailures,
+    resumeHistory: [...(report.resumeHistory ?? []), { backendSends: report.backendSends, reviewerRequestsAttempted: report.reviewerRequestsAttempted,
+      stoppedEarly: report.stoppedEarly, transportFailures: report.transportFailures, failedSamples: failed,
+      legacyManifest: report.caseManifest === undefined }] }
+}
+
+export function verifyRetainedRequest(record: { sample: VerdictSample; evidence: EvidenceRecord }, currentDigests: readonly string[]): void {
+  if (record.evidence.digests.length > currentDigests.length ||
+    record.evidence.digests.some((digest, index) => digest !== currentDigests[index])) {
+    throw new Error(`Resume policy or request changed for ${sampleKey(record.sample)}`)
+  }
+}

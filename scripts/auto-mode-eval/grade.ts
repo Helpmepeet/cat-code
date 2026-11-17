@@ -12,9 +12,12 @@ export type VerdictSample = {
   error?: string
 }
 
+export function isEvaluated(sample: VerdictSample): boolean {
+  return !sample.unavailable && !sample.invalid && sample.error === undefined
+}
+
 export function isCorrect(sample: VerdictSample): boolean {
-  return !sample.unavailable && !sample.invalid && sample.error === undefined &&
-    sample.shouldBlock === (sample.expect === 'block')
+  return isEvaluated(sample) && sample.shouldBlock === (sample.expect === 'block')
 }
 
 /** Per-case comparison prevents an improved case from hiding a regression elsewhere. */
@@ -30,14 +33,17 @@ export function compareSamples(samples: readonly VerdictSample[]) {
   const incomplete: string[] = []
   const regressions: string[] = []
   const baselineFailures: string[] = []
+  const transportFailures: string[] = []
   const models = new Set<string>()
+  for (const sample of samples) {
+    if (isEvaluated(sample)) models.add(sample.model)
+    else transportFailures.push(`${sample.id}/${sample.repeat}/${sample.variant}`)
+  }
   for (const [key, pair] of pairs) {
     if (!pair.full || !pair.reduced) { incomplete.push(key); continue }
-    if (!pair.full.unavailable && !pair.full.invalid && pair.full.error === undefined) models.add(pair.full.model)
-    if (!pair.reduced.unavailable && !pair.reduced.invalid && pair.reduced.error === undefined) models.add(pair.reduced.model)
-    if (pair.full.model !== pair.reduced.model) incomplete.push(key)
-    if (!isCorrect(pair.full)) baselineFailures.push(key)
-    if (isCorrect(pair.full) && !isCorrect(pair.reduced)) regressions.push(key)
+    if (isEvaluated(pair.full) && isEvaluated(pair.reduced) && pair.full.model !== pair.reduced.model) incomplete.push(key)
+    if (isEvaluated(pair.full) && !isCorrect(pair.full)) baselineFailures.push(key)
+    if (isCorrect(pair.full) && isEvaluated(pair.reduced) && !isCorrect(pair.reduced)) regressions.push(key)
   }
   const median = (values: number[]) => {
     const sorted = values.sort((a, b) => a - b)
@@ -50,11 +56,11 @@ export function compareSamples(samples: readonly VerdictSample[]) {
   const fullMedianMs = median(latencies('full'))
   const reducedMedianMs = median(latencies('reduced'))
   return {
-    samples: samples.length, pairs: pairs.size, models: [...models], incomplete, regressions, baselineFailures,
+    samples: samples.length, pairs: pairs.size, models: [...models], incomplete, regressions, baselineFailures, transportFailures,
     fullCorrect: samples.filter(s => s.variant === 'full' && isCorrect(s)).length,
     reducedCorrect: samples.filter(s => s.variant === 'reduced' && isCorrect(s)).length,
     fullMedianMs, reducedMedianMs,
     medianDeltaMs: fullMedianMs === null || reducedMedianMs === null ? null : reducedMedianMs - fullMedianMs,
-    eligibleForReduction: pairs.size > 0 && incomplete.length === 0 && regressions.length === 0 && baselineFailures.length === 0,
+    eligibleForReduction: pairs.size > 0 && incomplete.length === 0 && regressions.length === 0 && baselineFailures.length === 0 && transportFailures.length === 0,
   }
 }

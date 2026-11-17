@@ -26,6 +26,12 @@ test('matching fail-closed blocks and invalid verdicts never count as evaluated 
   }
 })
 
+test('transport outages close the gate without being labeled as wrong model decisions', () => {
+  const result = compareSamples([sample('refusal', 'full'), sample('refusal', 'reduced', { unavailable: true, model: 'sonnet' })])
+  expect(result).toMatchObject({ regressions: [], baselineFailures: [], models: ['fixture-model'],
+    transportFailures: ['refusal/0/reduced'], eligibleForReduction: false })
+})
+
 test('paired gate requires complete same-model evidence and reports measured latency', () => {
   const full = sample('allow-build', 'full', { expect: 'allow', shouldBlock: false, durationMs: 180 })
   const reduced = sample('allow-build', 'reduced', { expect: 'allow', shouldBlock: false, durationMs: 120 })

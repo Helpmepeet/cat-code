@@ -8,26 +8,29 @@ import type { Message } from '../../src/types/message.js'
 import type { PermissionDecisionContext } from '../../src/utils/permissions/permissionDecisionContext.js'
 import { EVIDENCE_CASES, type EvidenceCase } from './cases.js'
 import { compareSamples, type VerdictSample } from './grade.js'
+import { prepareResume, sampleKey, verifyRetainedRequest, type EvidenceRecord } from './resume.js'
 
 type Variant = VerdictSample['variant']
-type Args = { live: boolean; model?: string; account?: string; accountIdPrefix?: string; maxRequests?: number; only?: string; out?: string; repeats: number }
+type Args = { live: boolean; model?: string; account?: string; accountIdPrefix?: string; maxRequests?: number; resume?: string; verifyResume?: boolean; only?: string; out?: string; repeats: number }
 
 function parseArgs(argv: string[]): Args {
   const args: Args = { live: false, repeats: 1 }
   let mode = false
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
+    if (arg === '--verify-resume') { args.verifyResume = true; continue }
     if (arg === '--live' || arg === '--offline') {
       if (mode) throw new Error('Choose exactly one of --offline or --live')
       mode = true; args.live = arg === '--live'; continue
     }
-    if (!['--model', '--account', '--account-id-prefix', '--max-requests', '--only', '--out', '--repeats'].includes(arg ?? '')) throw new Error(`Unknown argument: ${arg}`)
+    if (!['--model', '--account', '--account-id-prefix', '--max-requests', '--resume', '--only', '--out', '--repeats'].includes(arg ?? '')) throw new Error(`Unknown argument: ${arg}`)
     const value = argv[++i]
     if (!value || value.startsWith('--')) throw new Error(`${arg} requires a value`)
     if (arg === '--model') args.model = value
     if (arg === '--account') args.account = value
     if (arg === '--account-id-prefix') args.accountIdPrefix = value
     if (arg === '--max-requests') args.maxRequests = Number(value)
+    if (arg === '--resume') args.resume = resolve(value)
     if (arg === '--only') args.only = value
     if (arg === '--out') args.out = resolve(value)
     if (arg === '--repeats') args.repeats = Number(value)
@@ -36,6 +39,8 @@ function parseArgs(argv: string[]): Args {
   if (!Number.isInteger(args.repeats) || args.repeats < 1 || args.repeats > 10) throw new Error('--repeats must be 1 through 10')
   if (args.live && (!args.model || !args.account)) throw new Error('--live requires --model and --account selecting an observed account')
   if (args.live && (!args.accountIdPrefix || !Number.isInteger(args.maxRequests) || args.maxRequests! < 1)) throw new Error('--live requires --account-id-prefix and a positive --max-requests authorized limit')
+  if (args.resume && !args.live) throw new Error('--resume requires --live; validation uses the same trusted settings as the original evaluation')
+  if (args.verifyResume && !args.resume) throw new Error('--verify-resume requires --resume')
   return args
 }
 
@@ -122,18 +127,48 @@ try {
   const transportModule = args.live ? await import('./transport.js') : undefined
   const account = transportModule ? await transportModule.observedAccount(args.account!) : undefined
   if (account && !account.accountId.startsWith(args.accountIdPrefix!)) throw new Error('Selected account does not match the authorized account identity')
-  const pinned = transportModule ? transportModule.pinnedCodexTransport(account!, args.model!, args.maxRequests!) : undefined
-  restoreTransportFetch = pinned?.restoreFetch
+  const accountIdentity = account ? { reference: createHash('sha256').update(account.accountId).digest('hex').slice(0, 12),
+    alias: account.alias ?? null, idPrefix: account.accountId.slice(0, 8) } : null
   const tools = [BashTool, FileWriteTool]
   const permissionContext = { mode: 'auto' as const, additionalWorkingDirectories: new Map<string, { path: string; source: 'session' }>(),
     alwaysAllowRules: {}, alwaysDenyRules: {}, alwaysAskRules: {}, isBypassPermissionsModeAvailable: false }
-  const samples: VerdictSample[] = []
-  const evidenceReports: { id: string; variant: Variant; stages: number; requestedModels: string[]; stageChars: number[]; digests: string[]; missing: string[]; unexpected: string[] }[] = []
+  const corpusDigest = createHash('sha256').update(JSON.stringify(cases)).digest('hex')
+  const resumed = args.resume ? prepareResume(await Bun.file(args.resume).json(), { cases, repeats: args.repeats,
+    model: args.model!, account: accountIdentity!, maxRequests: args.maxRequests!, corpusDigest }) : undefined
+  // Before any send, rebuild the retained requests with canned responses and
+  // compare their hashes. Settings, instructions and policy must still match.
+  for (const record of resumed?.retained.values() ?? []) {
+    const testCase = cases.find(c => c.id === record.sample.id)!
+    setCachedClaudeMdContent(testCase.instructions ?? null)
+    const digests: string[] = []
+    await _forTest.classifyYoloAction(await buildMessages(testCase), formatActionForClassifier(testCase.action.tool, testCase.action.input),
+      tools, permissionContext, new AbortController().signal, { priorAssistantContext: true, inputVariant: record.sample.variant,
+        sideQuery: async options => {
+          digests.push(requestDigest({ model: options.model, system: options.system, messages: options.messages, tools: options.tools }))
+          return { id: 'resume-validation', type: 'message', role: 'assistant', model: options.model,
+            content: [{ type: 'tool_use', id: 'resume-verdict', name: YOLO_CLASSIFIER_TOOL_NAME, input: { shouldBlock: digests.length === 1 } }],
+            stop_reason: 'tool_use', stop_sequence: null,
+            usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          } as Awaited<ReturnType<typeof import('../../src/utils/sideQuery.js').sideQuery>>
+        } })
+    verifyRetainedRequest(record, digests)
+  }
+  if (args.verifyResume) {
+    console.log(JSON.stringify({ resumeVerified: true, retained: resumed!.retained.size, pending: resumed!.pending,
+      priorBackendSends: resumed!.priorBackendSends, remainingRequests: resumed!.remainingRequests, backendSends: 0 }, null, 2))
+    process.exit(0)
+  }
+  const remainingRequests = resumed?.remainingRequests ?? args.maxRequests
+  const pinned = transportModule && remainingRequests! > 0 ? transportModule.pinnedCodexTransport(account!, args.model!, remainingRequests!) : undefined
+  restoreTransportFetch = pinned?.restoreFetch
+  const samples: VerdictSample[] = [...(resumed?.retained.values() ?? [])].map(r => r.sample)
+  const evidenceReports: EvidenceRecord[] = [...(resumed?.retained.values() ?? [])].map(r => r.evidence)
   let stoppedEarly: string | null = null
   evaluation: for (let repeat = 0; repeat < args.repeats; repeat++) for (const testCase of cases) {
     // Alternate order to reduce systematic warm-cache bias in the paired comparison.
     const variants: Variant[] = repeat % 2 ? ['reduced', 'full'] : ['full', 'reduced']
     for (const variant of variants) {
+      if (resumed?.retained.has(sampleKey({ id: testCase.id, repeat, variant }))) continue
       setCachedClaudeMdContent(testCase.instructions ?? null)
       const messages = await buildMessages(testCase)
       const captured: unknown[] = []
@@ -143,7 +178,8 @@ try {
         requestedModels.push(options.model)
         if (args.live) {
           if (options.model !== args.model) throw new Error('Model fallback is outside this evaluation authorization')
-          return pinned!.send(options)
+          if (!pinned) throw new Error('No authorized reviewer sends remain')
+          return pinned.send(options)
         }
         // Exercise both request builders. These canned verdicts are never graded.
         return { id: `offline-${captured.length}`, type: 'message', role: 'assistant', model: options.model,
@@ -174,10 +210,11 @@ try {
         for (const evidence of testCase.excluded ?? []) if (text.includes(evidence.text)) unexpected.push(`${stage + 1}:${evidence.name}`)
       }
       if (captured.length === 0) missing.push('no-review-request')
-      evidenceReports.push({ id: testCase.id, variant, stages: captured.length, requestedModels, stageChars: captured.map(r => JSON.stringify(r).length),
+      evidenceReports.push({ id: testCase.id, variant, repeat, stages: captured.length, requestedModels, stageChars: captured.map(r => JSON.stringify(r).length),
         digests: captured.map(requestDigest), missing, unexpected })
       if (args.live) console.error(JSON.stringify({ progress: `${testCase.id}/${variant}`, completed: samples.length,
-        total: cases.length * 2 * args.repeats, reviewerRequestsAttempted: pinned!.requestsAttempted, backendSends: pinned!.backendSends }))
+        total: cases.length * 2 * args.repeats, reviewerRequestsAttempted: (resumed?.priorAttempts ?? 0) + (pinned?.requestsAttempted ?? 0),
+        backendSends: (resumed?.priorBackendSends ?? 0) + (pinned?.backendSends ?? 0) }))
       const latest = samples.at(-1)
       if (args.live && latest && (latest.unavailable || latest.invalid || latest.error !== undefined)) {
         stoppedEarly = 'Reviewer unavailable or invalid; stopping before any further case'
@@ -187,19 +224,26 @@ try {
   }
   const structuralFailures = evidenceReports.filter(r => r.missing.length || r.unexpected.length)
   const unchangedCandidatePairs: string[] = []
-  for (let i = 0; i < evidenceReports.length; i += 2) {
-    const first = evidenceReports[i]!
-    const second = evidenceReports[i + 1]
-    if (!second) continue
-    if (JSON.stringify(first.digests) === JSON.stringify(second.digests)) unchangedCandidatePairs.push(`${first.id}/${Math.floor(i / (cases.length * 2))}`)
+  const evidencePairs = new Map<string, Partial<Record<Variant, EvidenceRecord>>>()
+  for (const evidence of evidenceReports) {
+    const key = `${evidence.id}/${evidence.repeat}`
+    const pair = evidencePairs.get(key) ?? {}
+    pair[evidence.variant] = evidence
+    evidencePairs.set(key, pair)
+  }
+  for (const [key, pair] of evidencePairs) {
+    if (pair.full && pair.reduced && JSON.stringify(pair.full.digests) === JSON.stringify(pair.reduced.digests)) unchangedCandidatePairs.push(key)
   }
   const comparison = args.live ? compareSamples(samples) : null
   const eligibleForReduction = comparison?.eligibleForReduction === true && samples.length === cases.length * 2 * args.repeats &&
     stoppedEarly === null && structuralFailures.length === 0 && unchangedCandidatePairs.length === 0
   const report = { schema: 1, mode: args.live ? 'live' : 'offline-evidence-only', cases: cases.length, repeats: args.repeats,
-    model: args.model ?? 'gpt-6-luna', account: pinned?.account ?? null,
-    transport: args.live ? 'pinned-production-codex-adapter-without-attribution-header' : 'offline-capture', reviewerRequestsAttempted: pinned?.requestsAttempted ?? 0,
-    backendSends: pinned?.backendSends ?? 0, transportFailures: pinned?.failures ?? [], stoppedEarly,
+    model: args.model ?? 'gpt-6-luna', account: accountIdentity,
+    corpusDigest, caseManifest: cases.map(c => ({ id: c.id, expect: c.expect })), authorizedMaxRequests: args.maxRequests,
+    transport: args.live ? 'pinned-production-codex-adapter-without-attribution-header' : 'offline-capture',
+    reviewerRequestsAttempted: (resumed?.priorAttempts ?? 0) + (pinned?.requestsAttempted ?? 0),
+    backendSends: (resumed?.priorBackendSends ?? 0) + (pinned?.backendSends ?? 0),
+    transportFailures: [...(resumed?.priorTransportFailures ?? []), ...(pinned?.failures ?? [])], resumeHistory: resumed?.resumeHistory ?? [], stoppedEarly,
     accuracyMeasured: args.live && samples.some(s => !s.unavailable && !s.invalid && s.error === undefined),
     latencyMeasured: args.live && samples.some(s => !s.unavailable && !s.invalid && s.error === undefined), structuralFailures: structuralFailures.length,
     candidateChanged: unchangedCandidatePairs.length === 0, unchangedCandidatePairs,
