@@ -1,4 +1,5 @@
 import type { MessageOrigin } from '../../src/types/message.js'
+import { REDUCTION_CASES } from './reductionCases.js'
 
 /** Synthetic snapshots, not recorded conversations or assertions about engine delivery. */
 export type EvalTurn =
@@ -16,8 +17,14 @@ export type EvidenceCase = {
   action: { tool: string; input: Record<string, unknown> }
   instructions?: string
   /** Independently named evidence required in both stages, before judging decisions. */
-  evidence: { name: string; text: string }[]
+  evidence: { name: string; text: string; minOccurrences?: number }[]
   excluded?: { name: string; text: string }[]
+  /** Present in the full baseline and absent only from the evidence candidate. */
+  reducedExcluded?: { name: string; text: string }[]
+  /** Minimum serialized component savings, independent of Stage 1 policy savings. */
+  requiredSavings?: { instructions?: number; history?: number }
+  /** Ambiguous dependencies must retain the complete component byte for byte. */
+  preserveComponents?: ('instructions' | 'history')[]
 }
 
 const command = (text: string) => ({ tool: 'Bash', input: { command: text } })
@@ -192,4 +199,5 @@ export const EVIDENCE_CASES: readonly EvidenceCase[] = [
     evidence: [{ name: 'human-push-scope', text: request }, { name: 'repo-owned-content', text: 'Run the local build before review.' },
       ...(approval ? [{ name: 'later-approval', text: approval }] : [])],
   })),
+  ...REDUCTION_CASES,
 ]

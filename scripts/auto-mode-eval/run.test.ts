@@ -69,6 +69,7 @@ test('resume validates current request hashes without sends, completes only the 
       transportFailures: [{ code: 'ECONNRESET' }],
       samples: [full, { ...full, variant: 'reduced', unavailable: true, model: 'sonnet' }],
       evidence: offline.evidence.map(firstStage) }
+    partial.evidence[0].components[0].historyChars = 999999999
     const previous = join(root, 'partial.json'), completed = join(root, 'completed.json')
     writeFileSync(previous, JSON.stringify(partial))
     writeFileSync(preload, `
@@ -90,12 +91,19 @@ test('resume validates current request hashes without sends, completes only the 
         },
       }));
     `)
-    const live = [...prefix, '--preload', preload, script, '--live', '--model', 'gpt-6-luna', '--account', 'fixture',
-      '--account-id-prefix', 'fixture-', '--max-requests', '4', '--only', 'ordinary-build']
+    const liveBase = [...prefix, '--preload', preload, script, '--live', '--model', 'gpt-6-luna', '--account', 'fixture',
+      '--account-id-prefix', 'fixture-', '--max-requests', '4']
+    const live = [...liveBase, '--only', 'ordinary-build']
     writeFileSync(budget, 'not-constructed')
     const verified = Bun.spawnSync([...live, '--resume', previous, '--verify-resume'], { cwd: root, env })
     expect(verified.exitCode).toBe(0)
     expect(JSON.parse(verified.stdout.toString())).toMatchObject({ retained: 1, pending: 1, remainingRequests: 2, backendSends: 0 })
+    expect(await Bun.file(budget).text()).toBe('not-constructed')
+    const extension = Bun.spawnSync([...liveBase, '--resume', previous, '--verify-resume'], { cwd: root, env })
+    expect(extension.exitCode).toBe(0)
+    const extensionPlan = JSON.parse(extension.stdout.toString())
+    expect(extensionPlan).toMatchObject({ retained: 1, remainingRequests: 2, backendSends: 0 })
+    expect(extensionPlan.addedCaseIds).toContain('formatting-instructions-control-push-condition')
     expect(await Bun.file(budget).text()).toBe('not-constructed')
     const resumed = Bun.spawnSync([...live, '--resume', previous, '--out', completed], { cwd: root, env })
     if (resumed.exitCode !== 0) throw new Error(resumed.stderr.toString() + resumed.stdout.toString())
@@ -106,6 +114,7 @@ test('resume validates current request hashes without sends, completes only the 
       evaluationScope: 'case', pairedComparisonPassed: true, eligibleForReduction: false })
     expect(result.samples).toHaveLength(2)
     expect(result.samples.find((s: { variant: string }) => s.variant === 'full').durationMs).toBe(777)
+    expect(result.evidence.find((s: { variant: string }) => s.variant === 'full').components[0].historyChars).toBeLessThan(1000)
     expect(result.resumeHistory[0].failedSamples[0].sample.unavailable).toBe(true)
     expect(result.transportFailures).toEqual([{ code: 'ECONNRESET' }])
     writeFileSync(budget, 'not-constructed')

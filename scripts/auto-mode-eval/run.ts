@@ -9,6 +9,7 @@ import type { PermissionDecisionContext } from '../../src/utils/permissions/perm
 import { EVIDENCE_CASES, type EvidenceCase } from './cases.js'
 import { compareSamples, type VerdictSample } from './grade.js'
 import { prepareResume, sampleKey, verifyRetainedRequest, type EvidenceRecord } from './resume.js'
+import { comparePayloadEvidence, inspectPayloadEvidence } from './payloadEvidence.js'
 
 type Variant = VerdictSample['variant']
 type Args = { live: boolean; model?: string; account?: string; accountIdPrefix?: string; maxRequests?: number; resume?: string; verifyResume?: boolean; only?: string; out?: string; repeats: number }
@@ -89,12 +90,6 @@ async function buildMessages(testCase: EvidenceCase): Promise<Message[]> {
   return messages
 }
 
-function strings(value: unknown): string[] {
-  if (typeof value === 'string') return [value]
-  if (Array.isArray(value)) return value.flatMap(strings)
-  return value && typeof value === 'object' ? Object.values(value).flatMap(strings) : []
-}
-
 function requestDigest(request: unknown): string {
   return createHash('sha256').update(JSON.stringify(request)).digest('hex')
 }
@@ -119,9 +114,10 @@ if (offlineHome) {
 }
 
 try {
-  const [{ _forTest, formatActionForClassifier, YOLO_CLASSIFIER_TOOL_NAME }, { setCachedClaudeMdContent }, { enableConfigs }, { BashTool }, { FileWriteTool }] = await Promise.all([
+  const [{ _forTest, formatActionForClassifier, YOLO_CLASSIFIER_TOOL_NAME }, { setCachedClaudeMdContent }, { enableConfigs }, { BashTool }, { FileWriteTool }, { FileReadTool }, { FileEditTool }] = await Promise.all([
     import('../../src/utils/permissions/yoloClassifier.js'), import('../../src/bootstrap/state.js'),
     import('../../src/utils/config.js'), import('../../src/tools/BashTool/BashTool.js'), import('../../src/tools/FileWriteTool/FileWriteTool.js'),
+    import('../../src/tools/FileReadTool/FileReadTool.js'), import('../../src/tools/FileEditTool/FileEditTool.js'),
   ])
   enableConfigs()
   const transportModule = args.live ? await import('./transport.js') : undefined
@@ -129,7 +125,7 @@ try {
   if (account && !account.accountId.startsWith(args.accountIdPrefix!)) throw new Error('Selected account does not match the authorized account identity')
   const accountIdentity = account ? { reference: createHash('sha256').update(account.accountId).digest('hex').slice(0, 12),
     alias: account.alias ?? null, idPrefix: account.accountId.slice(0, 8) } : null
-  const tools = [BashTool, FileWriteTool]
+  const tools = [BashTool, FileWriteTool, FileReadTool, FileEditTool]
   const permissionContext = { mode: 'auto' as const, additionalWorkingDirectories: new Map<string, { path: string; source: 'session' }>(),
     alwaysAllowRules: {}, alwaysDenyRules: {}, alwaysAskRules: {}, isBypassPermissionsModeAvailable: false }
   const corpusDigest = createHash('sha256').update(JSON.stringify(cases)).digest('hex')
@@ -141,10 +137,13 @@ try {
     const testCase = cases.find(c => c.id === record.sample.id)!
     setCachedClaudeMdContent(testCase.instructions ?? null)
     const digests: string[] = []
+    const validatedRequests: unknown[] = []
     await _forTest.classifyYoloAction(await buildMessages(testCase), formatActionForClassifier(testCase.action.tool, testCase.action.input),
       tools, permissionContext, new AbortController().signal, { priorAssistantContext: true, inputVariant: record.sample.variant,
         sideQuery: async options => {
-          digests.push(requestDigest({ model: options.model, system: options.system, messages: options.messages, tools: options.tools }))
+          const request = { model: options.model, system: options.system, messages: options.messages, tools: options.tools }
+          validatedRequests.push(request)
+          digests.push(requestDigest(request))
           return { id: 'resume-validation', type: 'message', role: 'assistant', model: options.model,
             content: [{ type: 'tool_use', id: 'resume-verdict', name: YOLO_CLASSIFIER_TOOL_NAME, input: { shouldBlock: digests.length === 1 } }],
             stop_reason: 'tool_use', stop_sequence: null,
@@ -152,10 +151,16 @@ try {
           } as Awaited<ReturnType<typeof import('../../src/utils/sideQuery.js').sideQuery>>
         } })
     verifyRetainedRequest(record, digests)
+    // Counts and evidence checks are derived diagnostics, not trusted results
+    // from the report. Recompute them from the hash-validated request prefix.
+    const verifiedEvidence = inspectPayloadEvidence(testCase, record.sample.variant, validatedRequests.slice(0, record.evidence.stages))
+    if (verifiedEvidence.missing.length || verifiedEvidence.unexpected.length) throw new Error(`Resume evidence contract changed for ${sampleKey(record.sample)}`)
+    Object.assign(record.evidence, verifiedEvidence)
   }
   if (args.verifyResume) {
     console.log(JSON.stringify({ resumeVerified: true, retained: resumed!.retained.size, pending: resumed!.pending,
-      priorBackendSends: resumed!.priorBackendSends, remainingRequests: resumed!.remainingRequests, backendSends: 0 }, null, 2))
+      priorBackendSends: resumed!.priorBackendSends, remainingRequests: resumed!.remainingRequests,
+      addedCaseIds: resumed!.addedCaseIds, backendSends: 0 }, null, 2))
     process.exit(0)
   }
   const remainingRequests = resumed?.remainingRequests ?? args.maxRequests
@@ -202,16 +207,9 @@ try {
         samples.push({ id: testCase.id, expect: testCase.expect, variant, repeat, shouldBlock: true, unavailable: true, invalid: false,
           model: args.model!, requestedModel: args.model, durationMs: performance.now() - start, error: error instanceof Error ? error.message : String(error) })
       }
-      const missing: string[] = []
-      const unexpected: string[] = []
-      for (const [stage, request] of captured.entries()) {
-        const text = strings(request).join('\n')
-        for (const evidence of testCase.evidence) if (!text.includes(evidence.text)) missing.push(`${stage + 1}:${evidence.name}`)
-        for (const evidence of testCase.excluded ?? []) if (text.includes(evidence.text)) unexpected.push(`${stage + 1}:${evidence.name}`)
-      }
-      if (captured.length === 0) missing.push('no-review-request')
+      const { missing, unexpected, components } = inspectPayloadEvidence(testCase, variant, captured)
       evidenceReports.push({ id: testCase.id, variant, repeat, stages: captured.length, requestedModels, stageChars: captured.map(r => JSON.stringify(r).length),
-        digests: captured.map(requestDigest), missing, unexpected })
+        digests: captured.map(requestDigest), missing, unexpected, components })
       if (args.live) console.error(JSON.stringify({ progress: `${testCase.id}/${variant}`, completed: samples.length,
         total: cases.length * 2 * args.repeats, reviewerRequestsAttempted: (resumed?.priorAttempts ?? 0) + (pinned?.requestsAttempted ?? 0),
         backendSends: (resumed?.priorBackendSends ?? 0) + (pinned?.backendSends ?? 0) }))
@@ -235,8 +233,9 @@ try {
     if (pair.full && pair.reduced && JSON.stringify(pair.full.digests) === JSON.stringify(pair.reduced.digests)) unchangedCandidatePairs.push(key)
   }
   const comparison = args.live ? compareSamples(samples) : null
+  const { componentFailures, componentReductions } = comparePayloadEvidence(cases, evidenceReports)
   const pairedComparisonPassed = comparison?.eligibleForReduction === true && samples.length === cases.length * 2 * args.repeats &&
-    stoppedEarly === null && structuralFailures.length === 0 && unchangedCandidatePairs.length === 0
+    stoppedEarly === null && structuralFailures.length === 0 && componentFailures.length === 0 && unchangedCandidatePairs.length === 0
   const evaluationScope = args.only ? 'case' : 'corpus'
   const eligibleForReduction = evaluationScope === 'corpus' && pairedComparisonPassed
   const report = { schema: 1, mode: args.live ? 'live' : 'offline-evidence-only', cases: cases.length, repeats: args.repeats,
@@ -249,10 +248,10 @@ try {
     accuracyMeasured: args.live && samples.some(s => !s.unavailable && !s.invalid && s.error === undefined),
     latencyMeasured: args.live && samples.some(s => !s.unavailable && !s.invalid && s.error === undefined), structuralFailures: structuralFailures.length,
     candidateChanged: unchangedCandidatePairs.length === 0, unchangedCandidatePairs,
-    evaluationScope, pairedComparisonPassed, eligibleForReduction, evidence: evidenceReports, comparison, samples }
+    evaluationScope, pairedComparisonPassed, eligibleForReduction, componentFailures, componentReductions, evidence: evidenceReports, comparison, samples }
   if (args.out) await writeFile(args.out, `${JSON.stringify(report, null, 2)}\n`)
   console.log(JSON.stringify(report, null, 2))
-  process.exitCode = stoppedEarly || structuralFailures.length || unchangedCandidatePairs.length || (args.live && !pairedComparisonPassed) ? 1 : 0
+  process.exitCode = stoppedEarly || structuralFailures.length || componentFailures.length || unchangedCandidatePairs.length || (args.live && !pairedComparisonPassed) ? 1 : 0
 } finally {
   restoreTransportFetch?.()
   process.chdir(previousCwd)
