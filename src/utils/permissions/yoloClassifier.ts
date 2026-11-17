@@ -501,6 +501,9 @@ export function buildTranscriptEntries(
     for (const record of decisionContexts.get(msg) ?? []) {
       transcript.push({ role: 'assistant', content: [{ type: 'permission_decision', record }] })
     }
+    // Match the agent request's display-only exclusion. Retained permission
+    // decisions above still survive even when their display row is virtual.
+    if ((msg.type === 'user' || msg.type === 'assistant') && (msg.isVirtual || msg.codeMode)) continue
     if (msg.type === 'attachment' && msg.attachment.type === 'queued_command') {
       const prompt = msg.attachment.prompt
       let text: string | null = null
@@ -518,7 +521,10 @@ export function buildTranscriptEntries(
       }
       if (text !== null) {
         const origin = queuedCommandOrigin(msg.attachment)
-        text = wrapCommandText(text, origin, false, 'classifier')
+        const systemGenerated = origin === undefined && typeof msg.attachment === 'object' &&
+          msg.attachment !== null && 'isMeta' in msg.attachment && msg.attachment.isMeta
+        text = systemGenerated ? '[SYSTEM CONTEXT - NOT USER AUTHORIZATION] ' + text :
+          wrapCommandText(text, origin, false, 'classifier')
         appendProposal(
           isHumanQueuedReply(msg.attachment),
           typeof msg.attachment === 'object' && msg.attachment !== null &&
@@ -540,8 +546,6 @@ export function buildTranscriptEntries(
           '[INSTRUCTION FILE - NOT USER AUTHORIZATION] ' + (typeof normalized.message.content === 'string' ? normalized.message.content : extractTextContent(normalized.message.content)) }] })
       }
     } else if (msg.type === 'user') {
-      // These records are UI/runtime-only and are not part of the agent request.
-      if (msg.isVirtual || ('codeMode' in msg && msg.codeMode)) continue
       const content = msg.message.content
       const textBlocks: TranscriptBlock[] = []
       // A worker result or teammate relay is delivered as a user-role turn, so
