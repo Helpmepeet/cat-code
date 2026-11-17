@@ -50,7 +50,7 @@ const WORKER: LiveWorkerItem = {
   description: 'Check the failing test',
 }
 
-test('an ordinary request keeps both rows', () => {
+test('an ordinary command offers Run and Deny', () => {
   const html = renderToStaticMarkup(
     <PermissionQueue
       items={[queueItem(BASH)]}
@@ -59,8 +59,8 @@ test('an ordinary request keeps both rows', () => {
       onRestore={() => {}}
     />,
   )
-  expect(html).toContain(ALLOW_ROW)
-  expect(html).toContain(REFUSE_ROW)
+  expect(html).toContain('>Run</span>')
+  expect(html).toContain('>Deny</span>')
 })
 
 test('threads the engine worker snapshot to a relayed card', () => {
@@ -81,7 +81,7 @@ test('threads the engine worker snapshot to a relayed card', () => {
 
   expect(html).toContain('>Vale<')
   expect(html).not.toContain('@Vale')
-  expect(html).toContain('a coding worker. You decide.')
+  expect(html).toContain('Relayed from Vale')
   expect(html).not.toContain('worker-42')
 })
 
@@ -113,8 +113,9 @@ test('a mixed queue restricts only the AskUserQuestion card', () => {
     />,
   )
   // Exactly one allow row (the Bash card) and two refusals.
-  expect(html.split(ALLOW_ROW).length - 1).toBe(1)
-  expect(html.split(REFUSE_ROW).length - 1).toBe(2)
+  expect(html.split('>Run</span>').length - 1).toBe(1)
+  expect(html.split(REFUSE_ROW).length - 1).toBe(1)
+  expect(html.split('>Deny</span>').length - 1).toBe(1)
 })
 
 test('only the keyboard card gets the cursor, and only the head card counts', () => {
@@ -132,7 +133,7 @@ test('only the keyboard card gets the cursor, and only the head card counts', ()
   // The count is the prototype's per-card header element (`Permissions.jsx:452-456`),
   // not a line above the stack — but it belongs to the ONE head card. Printing
   // "2 pending" beside each of two visible cards is an artefact of stacking.
-  expect(html.split('pending').length - 1).toBe(1)
+  expect(html.split('aria-label="2 pending requests"').length - 1).toBe(1)
   expect(html).not.toContain('permission requests pending')
 })
 
@@ -168,11 +169,11 @@ test('the head-card count includes snoozed requests, which are still live', () =
       onRestore={() => {}}
     />,
   )
-  expect(html).toContain('2</b> pending')
+  expect(html).toContain('aria-label="2 pending requests"')
   expect(html).toContain('Snoozed:')
 })
 
-test('the Keep pending lane appears only when the queue offers it', () => {
+test('Later appears only when the queue offers snooze', () => {
   const withLane = renderToStaticMarkup(
     <PermissionQueue
       items={[queueItem(BASH)]}
@@ -182,7 +183,7 @@ test('the Keep pending lane appears only when the queue offers it', () => {
       onSnooze={() => {}}
     />,
   )
-  expect(withLane).toContain('Keep pending')
+  expect(withLane).toContain('>Later<')
 
   const withoutLane = renderToStaticMarkup(
     <PermissionQueue
@@ -192,5 +193,5 @@ test('the Keep pending lane appears only when the queue offers it', () => {
       onRestore={() => {}}
     />,
   )
-  expect(withoutLane).not.toContain('Keep pending')
+  expect(withoutLane).not.toContain('>Later<')
 })

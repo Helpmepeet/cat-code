@@ -1,9 +1,10 @@
-import { useContext, useId, useMemo, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
+import { useContext, useId, useMemo, type ComponentPropsWithoutRef, type ReactNode } from 'react'
 import { inlineCommandSourceKey, isInteractiveShellCommand, type InlineCommandRun, type InlineCommandSource } from '../../shared/inlineCommand.js'
 import { InlineCommandContext } from './inlineCommandState.js'
+import { CodeCopyButton } from './CodeCopyButton.js'
 import { shellPromptLines } from './shellTokens.js'
 import { childrenToText } from './markdownText.js'
-import { ActionCopyIcon, ActionRewindIcon, ActionRunIcon, ActionStopIcon } from './SessionActionIcons.js'
+import { ActionRewindIcon, ActionRunIcon, ActionStopIcon } from './SessionActionIcons.js'
 
 export function MarkdownPre({ children }: ComponentPropsWithoutRef<'pre'>) {
   // The code renderer owns the frame and its <pre>, so do not nest another one.
@@ -132,7 +133,6 @@ export function MarkdownCodeBlock({
   streaming?: boolean
   inlineSource?: InlineCommandSource
 }) {
-  const [copied, setCopied] = useState(false)
   const commands = useContext(InlineCommandContext)
   const sourceKey = inlineSource ? inlineCommandSourceKey(inlineSource) : undefined
   const run = sourceKey ? [...(commands?.runs ?? [])].reverse().find(run => inlineCommandSourceKey(run.source) === sourceKey) : undefined
@@ -152,19 +152,6 @@ export function MarkdownCodeBlock({
     : run?.status === 'stopped' ? 'Stopped' : run?.status === 'interrupted' ? 'Interrupted' : ''
   const promptLines = useMemo(() => inlineSource && (!windowed || displayRange)
     ? shellPromptLines(code, displayRange?.[0], displayRange?.[1]) : null, [code, inlineSource, windowed, displayRange?.[0], displayRange?.[1]])
-  const copy = (): void => {
-    if (streaming) return
-    const clipboard =
-      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-    if (!clipboard) return
-    void clipboard
-      .writeText(code)
-      .then(() => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 1200)
-      })
-      .catch(() => {})
-  }
   // `data-window-ground`: this frame repeats the page ground rather than painting
   // a surface of its own, which is the whole grammar of a fenced block here
   // (`theme.css`: code sits IN the page, not on a coloured slab). Opaque that is
@@ -193,45 +180,13 @@ export function MarkdownCodeBlock({
               }}
             >{running ? <ActionStopIcon /> : action === 'Run again' ? <ActionRewindIcon /> : <ActionRunIcon />}<span>{action}</span></button>
             <span id={descriptionId} className="inline-command-tooltip" role="tooltip">{!running && unavailable ? unavailable : action}</span>
-            <button type="button" className={`inline-command-control ${copied ? 'text-[light-dark(#15803d,#86efac)]' : 'text-text-subtle'}`} onClick={copy} aria-label={copied ? 'Code copied' : 'Copy code'} title={copied ? 'Code copied' : 'Copy code'}>{copied ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden><polyline points="20 6 9 17 4 12" /></svg> : <ActionCopyIcon />}</button>
-            <span className="inline-command-tooltip inline-command-copy-tooltip" role="tooltip">{copied ? 'Code copied' : 'Copy code'}</span>
+            <CodeCopyButton code={code} inline />
           </span>
       ) : null}
         <code className="hljs">{promptLines ? promptLines.map((line, index) => <span key={index} className="inline-command-line">{line.prompt ? <span className="inline-command-prompt" aria-hidden>$</span> : null}{line.tokens.map((token, index) => <span key={index} className={`shell-token-${token.kind}`}>{token.text}</span>)}</span>) : highlighted}</code>
       </pre>
       {!inlineSource ? (
-      <button
-        type="button"
-        onClick={copy}
-        disabled={streaming}
-        title={streaming ? 'Code still writing' : copied ? 'Code copied' : 'Copy code'}
-        aria-label={streaming ? 'Code still writing' : copied ? 'Code copied' : 'Copy code'}
-        className={`absolute right-2 top-1 z-[1] inline-flex size-7 items-center justify-center rounded-md transition-colors ${
-          streaming
-            ? 'cursor-default text-text-ghost'
-            : copied
-              ? 'text-[light-dark(#15803d,#86efac)]'
-              : 'text-text-subtle hover:bg-white/[0.06] hover:text-text-primary'
-        }`}
-      >
-        {copied ? (
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden
-          >
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        ) : (
-          <ActionCopyIcon />
-        )}
-      </button>
+      <CodeCopyButton code={code} streaming={streaming} />
       ) : null}
       {!run && completedAttempt ? <p className="border-t border-shell-seam px-3.5 py-3 text-xs text-text-subtle">Command output is no longer retained.</p> : null}
       {run ? renderOutput?.(run) : null}

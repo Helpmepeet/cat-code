@@ -223,6 +223,33 @@ export function describeSuggestionOption(update: PermissionUpdate): {
   }
 }
 
+/** Command checkboxes describe the engine's update without inventing a scope. */
+export function describeCommandSuggestion(update: PermissionUpdate): {
+  pre: string
+  code: string
+  destination: string
+} {
+  const destination = `in ${destinationLabel(update.destination)}`
+  if (update.type === 'addRules' || update.type === 'replaceRules') {
+    const only = update.rules.length === 1 ? update.rules[0] : undefined
+    if (update.behavior === 'allow' && only?.ruleContent &&
+      (only.toolName === 'Bash' || only.toolName === 'PowerShell') && !only.ruleContent.endsWith(':*')) {
+      return { pre: 'Always allow this exact command', code: '', destination }
+    }
+    return {
+      pre: update.behavior === 'allow' ? 'Always allow' : update.behavior === 'deny' ? 'Always block' : 'Always ask for',
+      code: update.rules.map(rule => (rule.toolName === 'Bash' || rule.toolName === 'PowerShell')
+        ? rule.ruleContent || rule.toolName
+        : rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName).join(', '),
+      destination,
+    }
+  }
+  // Unusual updates remain visible and selectable, with their actual effect.
+  const description = describeSuggestionOption(update)
+  const pre = description.pre.replace(/^Yes, and /, '').trim()
+  return { pre: pre.charAt(0).toUpperCase() + pre.slice(1), code: description.code, destination }
+}
+
 /**
  * One row of the card's select list, in the prototype's option grammar
  * (`Permissions.jsx:86-133`): leading text, an optional mono chip carrying the

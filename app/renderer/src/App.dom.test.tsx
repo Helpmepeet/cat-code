@@ -118,12 +118,12 @@ function cardOf(tree: MountedTree): HTMLElement {
 function optionButtons(tree: MountedTree): HTMLButtonElement[] {
   return [
     ...tree.container.querySelectorAll<HTMLButtonElement>(
-      '[aria-label="Response options"] button',
+      '[aria-label="Response options"] button, .command-permission-actions button',
     ),
   ]
 }
 
-test('a key with nothing focused confirms the row the cursor is on', async () => {
+test('a key with nothing focused runs the command once', async () => {
   const recorded = answers()
   const tree = await mountCard(recorded)
 
@@ -131,8 +131,8 @@ test('a key with nothing focused confirms the row the cursor is on', async () =>
 
   expect(recorded.allow).toHaveLength(1)
   expect(recorded.deny).toBe(0)
-  // The cursor starts on row 1, so this is the row the card paints as current.
-  expect(optionButtons(tree)[0]?.getAttribute('aria-current')).toBe('true')
+  expect(recorded.allow[0]).toEqual([])
+  expect(tree.container.textContent).toContain('↵')
 })
 
 test('Enter aimed at a control on the card never answers as an allow', async () => {
@@ -248,7 +248,7 @@ test('a permission arriving under a modal leaves focus and response keys with th
   await press(harness.document, { key: '1' })
   expect(recorded.allow).toEqual([])
   expect(recorded.deny).toBe(0)
-  expect(tree.container.textContent).not.toContain('↑↓ · 1–9')
+  expect(tree.container.textContent).not.toContain('↵')
   await modal.unmount()
 })
 
@@ -266,7 +266,7 @@ test('a modal opening before delayed permission focus suppresses the takeover an
   expect(harness.document.activeElement?.closest('[aria-modal="true"]') != null).toBe(true)
   await press(harness.document, { key: 'Enter' })
   expect(recorded.allow).toEqual([])
-  expect(tree.container.textContent).not.toContain('↑↓ · 1–9')
+  expect(tree.container.textContent).not.toContain('↵')
   await modal.unmount()
 })
 

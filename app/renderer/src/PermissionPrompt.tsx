@@ -7,6 +7,8 @@ import { agentTypeMeta, resolveAgentIdentity } from './agentIdentity.js'
 import { AgentFace } from './AgentChrome.js'
 import { useAgentFaceRegistry } from './agentFace.js'
 import { Glyph } from './SessionActionIcons.js'
+import { CommandPermissionContent } from './CommandPermissionContent.js'
+import './PermissionPrompt.css'
 import type { PermissionRequest } from './permissionState.js'
 import './codeMode.css'
 import { isModalOverlayOpen, useModalOverlayOpen } from './overlayFocus.js'
@@ -51,32 +53,12 @@ const PREVIEW_LINE_SIGN: Record<PermissionPreviewLine['kind'], string> = {
 }
 
 /**
- * One permission card, in the prototype's form: an uppercase kicker over a
- * headline, the thing being approved, and a keyboard-driven SELECT LIST where
- * "don't ask again" is a ROW rather than a separate button
- * (`Permissions.jsx:10-13`).
+ * Command requests use an explicit Run/Deny footer and opt-in rule checkboxes.
+ * Other families keep their numbered response rows, including deny-only cards.
  *
- * Rows map 1:1 to the S2 §5 payload contract:
- *   Yes                      → allow once (empty selection)
- *   Yes, and don't ask …     → allow + `applySuggestions` (C1 index selection
- *                              into THIS request's engine-minted suggestions;
- *                              a row exists only where the engine minted one)
- *   No                       → deny (the model-visible refusal)
- *
- * `denyOnly` drops both allow rows. An AskUserQuestion whose questions cannot
- * be read falls back to this card, and a bare allow there would run the tool
- * with NO answers — the thing `permissionState.ts`'s `selectVisiblePermission`
- * comment forbids and the keyboard path already refuses
- * (decisions/ASK-USER-QUESTION-ANSWER.md). Mouse and keyboard must agree, which
- * is why they read one list: `buildPermissionOptions` is called exactly once in
- * this app, here, and both the rows below and the keydown listener consume that
- * single array.
- *
- * The cursor and the keyboard both live here for the same reason. They were
- * App-level, which took two copies of the option list to keep in step and made
- * a hover over a row re-render the whole shell. `keyboardTarget` is the entire
- * contract with App: exactly one card is ever given it, so exactly one listener
- * exists and only that card shows a cursor.
+ * The queue gives `keyboardTarget` to exactly one card. Focus ownership and the
+ * sole document listener stay here for both layouts, so a decision cannot also
+ * resolve a request in another pane or a dedicated question/plan flow.
  */
 export function PermissionPrompt({
   request,
@@ -124,6 +106,8 @@ export function PermissionPrompt({
   onSnooze?: () => void
 }) {
   const toolName = request.request.tool_name
+  const commandCard = !denyOnly && (toolName === 'Bash' || toolName === 'PowerShell')
+  const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([])
   // Both fields are optional on the wire AND may arrive empty
   // (`sdk-types.snapshot.d.ts` `title?: string`, `agent_id?: string`). An
   // outbound engine frame has no inbound allowlist, so display degrades:
@@ -156,23 +140,16 @@ export function PermissionPrompt({
   // toggle, and an `Edit` preview runs `diffLines` over the whole change.
   // Both inputs are stable for the life of a request.
   const preview = useMemo(
-    () => selectPermissionPreview(toolName, request.request.input),
-    [toolName, request.request.input],
+    () => commandCard ? null : selectPermissionPreview(toolName, request.request.input),
+    [commandCard, toolName, request.request.input],
   )
   const options = useMemo(
-    () => buildPermissionOptions(request.request, denyOnly === true),
-    [request.request, denyOnly],
+    () => commandCard ? [] : buildPermissionOptions(request.request, denyOnly === true),
+    [commandCard, request.request, denyOnly],
   )
 
-  // The command IS the headline for the command families, exactly as the
-  // prototype writes it (`Permissions.jsx:465-471`). Real `Bash` input is not
-  // the prototype's short mock, so a headline that cannot hold it says so and
-  // the body block below carries the whole thing.
-  //
-  // An engine-supplied title outranks it. The desktop producer never sets one
-  // (`src/app-runtime/appRuntimeCanUseTool.ts:64-73`), but this branch used to
-  // ignore `title` outright, which made "a supplied title wins" true for every
-  // family EXCEPT the two this card is mostly about.
+  // Deny-only command requests retain the legacy headline and preview, like
+  // every other deny-only card. Ordinary commands use the dedicated layout.
   const summary =
     engineTitle === undefined &&
     permissionTitleIsInlineCommand(toolName) &&
@@ -302,6 +279,16 @@ export function PermissionPrompt({
       if (submitted) return
       const intent = permissionKeyIntent(event)
       if (!intent) return
+      if (commandCard) {
+        // Command cards have no row cursor. Leave navigation and digits to
+        // other listeners; only the advertised decision keys belong here.
+        if (intent.kind !== 'confirm' && intent.kind !== 'deny') return
+        if (event.repeat) return
+        event.preventDefault()
+        if (intent.kind === 'deny') onDeny()
+        else onAllow(selectedSuggestions)
+        return
+      }
       const count = options.length
       if (count === 0) return
       // Auto-repeat may walk the list, but must never answer: holding Enter or
@@ -353,7 +340,7 @@ export function PermissionPrompt({
   return (
     <section
       aria-labelledby={titleId}
-      className={`border-l-2 border-accent bg-text-primary/[0.04] px-4 py-3 transition-opacity duration-[var(--motion-fast)] focus:outline-none ${submitted ? 'opacity-55' : ''} ${animateArrival ? 'animate-toast-in' : ''}`}
+      className={`${commandCard ? 'command-permission-card' : 'border-l-2 border-accent px-4 py-3'} bg-text-primary/[0.04] transition-opacity duration-[var(--motion-fast)] focus:outline-none ${submitted ? 'opacity-55' : ''} ${animateArrival ? 'animate-toast-in' : ''}`}
       onAnimationEnd={onArrivalAnimationEnd}
       // Literal because JSX needs a literal attribute name; the reader is
       // `PERMISSION_KEY_HOST_ATTR` in `permissionPromptModel.ts`.
@@ -373,6 +360,22 @@ export function PermissionPrompt({
       role="alertdialog"
       tabIndex={keyboardTarget ? -1 : undefined}
     >
+      {commandCard ? (
+        <CommandPermissionContent
+          request={request.request}
+          titleId={titleId}
+          worker={relayed ? { name: workerName, role: workerRole, face: workerFace } : undefined}
+          scriptSource={scriptSource}
+          pendingCount={pendingCount}
+          submitted={submitted === true}
+          keysLive={hintVisible && !submitted}
+          selectedSuggestions={selectedSuggestions}
+          onSelectionChange={setSelectedSuggestions}
+          onAllow={() => { if (!submitted) onAllow(selectedSuggestions) }}
+          onDeny={() => { if (!submitted) onDeny() }}
+          onSnooze={onSnooze}
+        />
+      ) : <>
       {/* Kicker row — glyph + uppercase family word, worker badge, pending count */}
       <div className="flex items-center gap-2">
         <span className="flex text-accent">
@@ -526,6 +529,7 @@ export function PermissionPrompt({
           </button>
         ) : null}
       </div>
+      </>}
     </section>
   )
 }

@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { LiveWorkerItem } from '../../shared/protocol.js'
@@ -50,66 +49,30 @@ function worker(
   }
 }
 
-test('the command is the headline, and the answer is a numbered select list', () => {
-  const html = renderToStaticMarkup(
-    <PermissionPrompt
-      keyboardTarget
-      onAllow={() => {}}
-      onDeny={() => {}}
-      request={REQUEST}
-    />,
-  )
-
-  // The prototype's headline IS the command (`Permissions.jsx:465-471`). The
-  // dead `request.title` binding used to print a constant instead: the engine's
-  // own producer never sets that field (`appRuntimeCanUseTool.ts:64-73`), so
-  // every card read "Permission required" and named no command anywhere.
-  expect(html).not.toContain('Permission required')
+test('a command uses a title, full shell preview and explicit decisions', () => {
+  const html = renderToStaticMarkup(<PermissionPrompt keyboardTarget onAllow={() => {}} onDeny={() => {}} request={REQUEST} />)
+  expect(html).toContain('>Run command</h2>')
   expect(html).toContain('>date<')
-  expect(html).toContain('Allow')
-  // Kicker row.
-  expect(html).toContain('Permission')
-  // The rows, in the prototype's order and words.
-  expect(html).toContain('>Yes<')
-  expect(html).toContain('>No<')
-  expect(html).not.toContain('tell Cat Code what to do differently')
+  expect(html).toContain('>Run</span>')
+  expect(html).toContain('>Deny</span>')
+  expect(html).toContain('>↵<')
   expect(html).toContain('>esc<')
-  expect(html).toContain('>1<')
-  expect(html).toContain('>2<')
-  // The old discrete buttons are gone: the refusal is a row, not a Deny button
-  // sitting left of Allow.
-  expect(html).not.toContain('>Deny<')
-  // The free-text deny field the prototype never had is gone with it.
-  expect(html).not.toContain('Deny feedback')
-  // The command is the title, so it is not repeated in a body block.
-  expect(html).not.toContain('COMMAND')
-  expect(html).not.toContain('&quot;command&quot;: &quot;date&quot;')
-  // …and the exact input is still one click away, collapsed, in the footer.
-  expect(html).toContain('Show input')
-  expect(html).toContain('aria-expanded="false"')
-  expect(html).toContain('↑↓ · 1–9 · ↵ · esc')
-  // No engine-minted suggestions on this request → no rule row.
-  expect(html).not.toContain("don't ask again")
+  expect(html).toContain('Copy code')
+  expect(html).not.toContain('Response options')
+  expect(html).not.toContain('Show input')
+  expect(html).not.toContain('↑↓')
+  expect(html).not.toContain('type="checkbox"')
 })
 
-test('a long or multi-line command is summarised in the title AND kept in full', () => {
-  const command = `for f in *.ts; do\n  echo "$f"\ndone`
-  const html = renderToStaticMarkup(
-    <PermissionPrompt
-      onAllow={() => {}}
-      onDeny={() => {}}
-      request={{
-        ...REQUEST,
-        request: { ...REQUEST.request, input: { command } },
-      }}
-    />,
-  )
-  // The headline carries the first line with an ellipsis…
-  expect(html).toContain('for f in *.ts; do …')
-  // …and the body block still shows every line, so shortening hides nothing.
-  expect(html).toContain('Command')
-  expect(html).toContain('echo &quot;$f&quot;')
+test('a multi-line command keeps every line in the shell preview', () => {
+  const command = 'for f in *.ts; do\n  echo "$f"\ndone'
+  const html = renderToStaticMarkup(<PermissionPrompt onAllow={() => {}} onDeny={() => {}}
+    request={{ ...REQUEST, request: { ...REQUEST.request, input: { command } } }} />)
+  expect(html).toContain('>Run command</h2>')
+  expect(html).toContain('echo')
+  expect(html).toContain('&quot;$f&quot;')
   expect(html).toContain('done')
+  expect(html).not.toContain('do …')
 })
 
 test('summariseCommandForTitle cuts only what a headline cannot hold', () => {
@@ -217,52 +180,23 @@ test('an engine-supplied title still wins over the derived one', () => {
   expect(html).not.toContain('Allow Read?')
 })
 
-test('an engine title outranks the inline command headline too', () => {
-  // The previous shape read `title` only in the NON-command branch, so "a
-  // supplied title wins" was true for every family except the two the card is
-  // mostly about.
-  const html = renderToStaticMarkup(
-    <PermissionPrompt
-      onAllow={() => {}}
-      onDeny={() => {}}
-      request={{
-        ...REQUEST,
-        request: { ...REQUEST.request, title: 'Run a release script' },
-      }}
-    />,
-  )
-  expect(html).toContain('Run a release script')
-  // The command is still shown, in the body block, so nothing is lost.
-  expect(html).toContain('Command')
+test('a command description is its title, regardless of a separate engine title', () => {
+  const html = renderToStaticMarkup(<PermissionPrompt onAllow={() => {}} onDeny={() => {}}
+    request={{ ...REQUEST, request: { ...REQUEST.request, title: 'Engine title', input: { command: 'date', description: 'Check the current time' } } }} />)
+  expect(html).toContain('>Check the current time</h2>')
+  expect(html).not.toContain('Engine title')
   expect(html).toContain('>date<')
 })
 
-test('a relayed request reads as running another agent command', () => {
-  const html = renderToStaticMarkup(
-    <PermissionPrompt
-      onAllow={() => {}}
-      onDeny={() => {}}
-      request={{
-        ...REQUEST,
-        request: { ...REQUEST.request, agent_id: 'worker-42' },
-      }}
-      workers={[worker()]}
-    />,
-  )
-  // The prototype's own verb and kicker for a relayed ask
-  // (`Permissions.jsx:467`, `PV.worker`).
-  expect(html).toContain('Run')
-  expect(html).not.toContain('>Allow<')
-  expect(html).toContain('Worker request')
-  // Bare name: the at-sign is engine mention syntax and never reaches the screen
-  // (operator ruling, 2026-08-21).
-  expect(html).toContain(
-    '<span class="font-mono text-violet-300">Vale</span>, a coding worker. You decide.',
-  )
-  expect(html).toContain('Relayed from ')
+test('a relayed command keeps the worker face and bare name in its header', () => {
+  const html = renderToStaticMarkup(<PermissionPrompt onAllow={() => {}} onDeny={() => {}}
+    request={{ ...REQUEST, request: { ...REQUEST.request, agent_id: 'worker-42' } }} workers={[worker()]} />)
+  expect(html).toContain('Relayed from Vale')
+  expect(html).toContain('>Vale<')
   expect(html).not.toContain('@Vale')
-  // The relaying worker's own stamp rides beside the name.
+  expect(html).not.toContain('worker-42')
   expect(html).toContain('shape-rendering="crispEdges"')
+  expect(html).not.toContain('Worker request')
 })
 
 test('the relayed card draws from the session registry, not the raw hash', () => {
@@ -327,7 +261,7 @@ test('a relayed request with an unnamed worker names the engine role only', () =
     />,
   )
 
-  expect(html).toContain('Relayed from a coding worker. You decide.')
+  expect(html).toContain('Relayed from a coding worker')
   expect(html).not.toContain('worker-42')
   expect(html).not.toContain('@Vale')
 })
@@ -345,7 +279,7 @@ test('an unmatched relay id degrades to the role-only fallback', () => {
     />,
   )
 
-  expect(html).toContain('Relayed from a coding worker. You decide.')
+  expect(html).toContain('Relayed from a coding worker')
   expect(html).not.toContain('worker-missing')
   expect(html).not.toContain('@Vale')
 })
@@ -372,7 +306,7 @@ test('a rule row never prints a raw engine behavior word', () => {
     />,
   )
   // It used to read "Yes, and deny `Bash(rm:*)`".
-  expect(html).toContain('Yes, and always block ')
+  expect(html).toContain('Always block')
   expect(html).not.toContain('Yes, and deny ')
 })
 
@@ -402,7 +336,7 @@ test('an empty title or agent_id is treated as absent, not as present', () => {
   expect(emptyAgent).not.toContain('Worker request')
   expect(emptyAgent).not.toContain('>worker<')
   expect(emptyAgent).not.toContain('Relayed from worker')
-  expect(emptyAgent).toContain('Allow')
+  expect(emptyAgent).toContain('>Run command</h2>')
 })
 
 test('a relayed card agrees with itself across all four surfaces', () => {
@@ -426,7 +360,7 @@ test('a relayed card agrees with itself across all four surfaces', () => {
   expect(html).toContain('Worker request')
   expect(html).toContain('>worker<')
   expect(html).toContain('Run WebFetch?')
-  expect(html).toContain('Relayed from a coding worker. You decide.')
+  expect(html).toContain('Relayed from a coding worker')
   expect(html).not.toContain('worker-7')
   // …and so does the GLYPH. Fed only the tool name it drew the globe under a
   // "Worker request" caption.
@@ -648,55 +582,26 @@ test('buildPermissionOptions is the one list both mouse and keyboard read', () =
   expect(denyOnly[0]?.effect).toBe('deny')
 })
 
-test('renders worker-relay chrome from the engine request agent_id', () => {
-  const html = renderToStaticMarkup(
-    <PermissionPrompt
-      onAllow={() => {}}
-      onDeny={() => {}}
-      request={{
-        ...REQUEST,
-        request: { ...REQUEST.request, agent_id: 'worker-42' },
-      }}
-      workers={[worker()]}
-    />,
-  )
+test('a non-command worker request keeps its existing relay chrome', () => {
+  const html = renderToStaticMarkup(<PermissionPrompt onAllow={() => {}} onDeny={() => {}}
+    request={{ ...REQUEST, request: { ...REQUEST.request, tool_name: 'Read', input: { file_path: '/repo/a.ts' }, agent_id: 'worker-42' } }} workers={[worker()]} />)
   expect(html).toContain('>worker<')
   expect(html).toContain('Relayed from ')
   expect(html).toContain('>Vale<')
-  expect(html).not.toContain('@Vale')
   expect(html).toContain('a coding worker. You decide.')
-  expect(html).not.toContain('worker-42')
 })
 
-test('renders a rule row per ENGINE-minted suggestion, verbatim', () => {
-  const request: PermissionRequest = {
-    requestId: 'perm-2',
-    request: {
-      ...REQUEST.request,
-      decision_reason: 'rule requires confirmation',
-      permission_suggestions: [
-        {
-          type: 'addRules',
-          rules: [{ toolName: 'Bash', ruleContent: 'date:*' }],
-          behavior: 'allow',
-          destination: 'localSettings',
-        },
-      ],
-    },
-  }
-
-  const html = renderToStaticMarkup(
-    <PermissionPrompt onAllow={() => {}} onDeny={() => {}} request={request} />,
-  )
-
-  // The prototype's own words for this row, with the engine's own rule
-  // serialization in the chip — never a client-side ruleImplication.
-  expect(html).toContain("Yes, and don&#x27;t ask again for ")
-  expect(html).toContain('Bash(date:*)')
-  expect(html).toContain('Project settings (local)')
-  expect(html).toContain('Why: rule requires confirmation')
-  // The rule is a ROW in the list, numbered between Yes and the refusal.
-  expect(html).toContain('>3<')
+test('command suggestions show rules without the repeated tool wrapper and name the real destination', () => {
+  const html = renderToStaticMarkup(<PermissionPrompt onAllow={() => {}} onDeny={() => {}}
+    request={{ ...REQUEST, request: { ...REQUEST.request, decision_reason: 'rule requires confirmation', permission_suggestions: [
+      { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'date:*' }, { toolName: 'Bash', ruleContent: 'git diff:*' }], behavior: 'allow', destination: 'userSettings' },
+    ] } }} />)
+  expect(html).toContain('Always allow')
+  expect(html).toContain('date:*, git diff:*')
+  expect(html).not.toContain('Bash(date:*)')
+  expect(html).toContain('in User settings')
+  expect(html).toContain('rule requires confirmation')
+  expect(html).toContain('type="checkbox"')
 })
 
 test('promotes the field each tool own renderToolUseMessage promotes', () => {
@@ -895,17 +800,6 @@ test('the four shortcuts are live only where no control owns the key', () => {
   expect(permissionKeysAreLive({})).toBe(true)
 })
 
-test('the key listener follows the same keysLive state that paints the cursor and hint', () => {
-  // SSR cannot move focus or dispatch the document listener. Pin the production
-  // guard so a permissive document target cannot confirm an option while the
-  // card still shows no keyboard affordance or highlighted row.
-  const source = readFileSync(new URL('./PermissionPrompt.tsx', import.meta.url), 'utf8')
-  const listenerStart = source.indexOf('function onKeyDown(event: KeyboardEvent)')
-  const listener = source.slice(listenerStart, source.indexOf("document.addEventListener('keydown'", listenerStart))
-  expect(listener).toContain('if (!permissionKeysAreLive(event.target)) return')
-  expect(listener).toContain('if (!keysLive) return')
-})
-
 test('only the card the shortcuts act on hosts them, takes focus, and says so', () => {
   const target = renderToStaticMarkup(
     <PermissionPrompt
@@ -919,7 +813,9 @@ test('only the card the shortcuts act on hosts them, takes focus, and says so', 
   // card be focused at all.
   expect(target).toContain(`${PERMISSION_KEY_HOST_ATTR}=""`)
   expect(target).toContain('tabindex="-1"')
-  expect(target).toContain('↑↓ · 1–9 · ↵ · esc')
+  expect(target).toContain('>↵<')
+  expect(target).toContain('>esc<')
+  expect(target).not.toContain('↑↓')
 
   // Every other card in a stacked queue: the keys do not act on it, so it neither
   // claims them nor advertises them, and it shows no cursor — a highlighted row
@@ -939,6 +835,8 @@ test('the cursor marks the row the keyboard would confirm, and only that row', (
     requestId: 'perm-cursor',
     request: {
       ...REQUEST.request,
+      tool_name: 'Read',
+      input: { file_path: '/repo/a.ts' },
       permission_suggestions: [
         {
           type: 'addRules',
@@ -970,4 +868,45 @@ test('the cursor marks the row the keyboard would confirm, and only that row', (
   // only ever observe its initial position. Cursor MOVEMENT, the clamp on a
   // shrunk list, and every key binding are unreachable without a DOM harness;
   // `permissionKeyIntent` is unit-tested above, and the rest is operator-GUI.
+})
+
+test('command reason text stays verbatim in the appropriate tooltip and hides only the engine default', () => {
+  for (const tool_name of ['Bash', 'PowerShell']) {
+    const render = (description: string | undefined, decision_reason: string) => renderToStaticMarkup(
+      <PermissionPrompt request={{ ...REQUEST, request: { ...REQUEST.request, tool_name, input: { command: 'date', description }, decision_reason } }} onAllow={() => {}} onDeny={() => {}} />,
+    )
+    const reason = 'This command contains multiple operations. Approval is needed for git add, git commit.'
+    const described = render('Commit the changes', reason)
+    expect(described).toContain(`title="${reason}">Commit the changes</h2>`)
+    expect(described).not.toContain('Needs approval:')
+    expect(described).not.toContain(`>${reason}</span>`)
+    const fallback = render(undefined, reason)
+    expect(fallback).toContain('>Run command</h2>')
+    expect(fallback).toContain(`title="${reason}">${reason}</span>`)
+    expect(render(undefined, `Claude requested permissions to use ${tool_name}, but you haven't granted it yet.`)).not.toContain('requested permissions')
+  }
+})
+
+test.each([
+  ['Short', 'bun test app/renderer/src/utils/diff.test.ts', 'Run the diff utility tests', 'bun test:*'],
+  ['Multi-line', 'git add app/renderer/src/utils/diff.ts \\\n  app/renderer/src/utils/diff.test.ts\ngit commit -m "fix(diff): preserve the final line"', 'Commit the diff fix', 'git add:*'],
+  ['Long line', 'cd /Users/pt/cat-code/app && bun run typecheck 2>&1 | tail -40 && bun test renderer/src/utils/diff.test.ts renderer/src/PermissionPrompt.test.tsx --timeout 20000 && git diff --stat', 'Typecheck, run the permission tests, and summarise the diff', 'bun test:*'],
+  ['Script', './scripts/release-check.sh --channel beta --skip-notarize --report tmp/release-check.json', 'Run the beta release check against the built DMG', './scripts/release-check.sh --channel beta --skip-notarize --report tmp/release-check.json'],
+])('%s commands retain a description and use exact-command wording only for exact rules', (_name, command, description, ruleContent) => {
+  const html = renderToStaticMarkup(<PermissionPrompt request={{ ...REQUEST, request: { ...REQUEST.request, input: { command, description }, permission_suggestions: [
+    { type: 'addRules', behavior: 'allow', destination: 'localSettings', rules: [{ toolName: 'Bash', ruleContent }] },
+  ] } }} onAllow={() => {}} onDeny={() => {}} />)
+  expect(html).toContain(`>${description}</h2>`)
+  expect(html).toContain('in Project settings (local)')
+  expect(html.includes('Always allow this exact command')).toBe(!ruleContent.endsWith(':*'))
+  expect(html).not.toContain('Show input')
+})
+
+test('PowerShell displays literal source without Bash token colors', () => {
+  const html = renderToStaticMarkup(<PermissionPrompt request={{ ...REQUEST, request: { ...REQUEST.request, tool_name: 'PowerShell', input: { command: 'Get-ChildItem -Recurse | Where-Object { $_.Name -like "*.ts" }' } } }} onAllow={() => {}} onDeny={() => {}} />)
+  expect(html).toContain('Get-ChildItem')
+  expect(html).toContain('-Recurse')
+  expect(html).toContain('$_.Name')
+  expect(html).not.toContain('shell-token-')
+  expect(html).not.toContain('inline-command-prompt')
 })
