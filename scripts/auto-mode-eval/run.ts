@@ -235,8 +235,10 @@ try {
     if (pair.full && pair.reduced && JSON.stringify(pair.full.digests) === JSON.stringify(pair.reduced.digests)) unchangedCandidatePairs.push(key)
   }
   const comparison = args.live ? compareSamples(samples) : null
-  const eligibleForReduction = comparison?.eligibleForReduction === true && samples.length === cases.length * 2 * args.repeats &&
+  const pairedComparisonPassed = comparison?.eligibleForReduction === true && samples.length === cases.length * 2 * args.repeats &&
     stoppedEarly === null && structuralFailures.length === 0 && unchangedCandidatePairs.length === 0
+  const evaluationScope = args.only ? 'case' : 'corpus'
+  const eligibleForReduction = evaluationScope === 'corpus' && pairedComparisonPassed
   const report = { schema: 1, mode: args.live ? 'live' : 'offline-evidence-only', cases: cases.length, repeats: args.repeats,
     model: args.model ?? 'gpt-6-luna', account: accountIdentity,
     corpusDigest, caseManifest: cases.map(c => ({ id: c.id, expect: c.expect })), authorizedMaxRequests: args.maxRequests,
@@ -247,10 +249,10 @@ try {
     accuracyMeasured: args.live && samples.some(s => !s.unavailable && !s.invalid && s.error === undefined),
     latencyMeasured: args.live && samples.some(s => !s.unavailable && !s.invalid && s.error === undefined), structuralFailures: structuralFailures.length,
     candidateChanged: unchangedCandidatePairs.length === 0, unchangedCandidatePairs,
-    eligibleForReduction, evidence: evidenceReports, comparison, samples }
+    evaluationScope, pairedComparisonPassed, eligibleForReduction, evidence: evidenceReports, comparison, samples }
   if (args.out) await writeFile(args.out, `${JSON.stringify(report, null, 2)}\n`)
   console.log(JSON.stringify(report, null, 2))
-  process.exitCode = stoppedEarly || structuralFailures.length || unchangedCandidatePairs.length || (args.live && !eligibleForReduction) ? 1 : 0
+  process.exitCode = stoppedEarly || structuralFailures.length || unchangedCandidatePairs.length || (args.live && !pairedComparisonPassed) ? 1 : 0
 } finally {
   restoreTransportFetch?.()
   process.chdir(previousCwd)

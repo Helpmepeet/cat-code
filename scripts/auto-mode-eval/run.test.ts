@@ -102,7 +102,8 @@ test('resume validates current request hashes without sends, completes only the 
     expect(resumed.exitCode).toBe(0)
     const result = await Bun.file(completed).json()
     expect(await Bun.file(budget).text()).toBe('2')
-    expect(result).toMatchObject({ backendSends: 4, reviewerRequestsAttempted: 4, eligibleForReduction: true })
+    expect(result).toMatchObject({ backendSends: 4, reviewerRequestsAttempted: 4,
+      evaluationScope: 'case', pairedComparisonPassed: true, eligibleForReduction: false })
     expect(result.samples).toHaveLength(2)
     expect(result.samples.find((s: { variant: string }) => s.variant === 'full').durationMs).toBe(777)
     expect(result.resumeHistory[0].failedSamples[0].sample.unavailable).toBe(true)
