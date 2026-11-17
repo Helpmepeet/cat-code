@@ -96,7 +96,12 @@ export const FileEditTool = buildTool({
     return outputSchema()
   },
   toAutoClassifierInput(input) {
-    return `${input.file_path}: ${input.new_string}`
+    return {
+      file_path: input.file_path,
+      removes: input.old_string,
+      adds: input.new_string,
+      replaceAll: input.replace_all ?? false,
+    }
   },
   getPath(input): string {
     return input.file_path
