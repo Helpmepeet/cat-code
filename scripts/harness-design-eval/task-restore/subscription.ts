@@ -36,13 +36,17 @@ export function subscriptionUsage(records: any[]) {
 }
 
 export async function subscriptionGateway(engine: string, options: { save: (record: any) => void; suite: { input: number; requests: number }; conversationId: string }) {
+  const { mapClaudeModelToCodex, translateToCodexBody, translateCodexStreamToAnthropic } = await import(`${engine}/src/services/api/codex-fetch-adapter.ts`)
+  const effectiveModel = mapClaudeModelToCodex(subscriptionPolicy.model)
+  if (effectiveModel !== subscriptionPolicy.model) {
+    throw Error(`Subscription evaluation requires ${subscriptionPolicy.model}; this engine routes it to ${effectiveModel}`)
+  }
   // Load inventory without startup polling or background refresh of unrelated
   // accounts. The production resolver refreshes the selected account on use.
   const { enableConfigs } = await import(`${engine}/src/utils/config.ts`)
   enableConfigs()
   const { loadPoolForObservation } = await import(`${engine}/src/services/api/codexAccountPool.ts`)
   const { resolveCodexOAuthTokensForLeaseOwner } = await import(`${engine}/src/services/api/client.ts`)
-  const { translateToCodexBody, translateCodexStreamToAnthropic } = await import(`${engine}/src/services/api/codex-fetch-adapter.ts`)
   const { startCodexCredentialSend } = await import(`${engine}/src/services/api/codexCredentialUse.ts`)
   await loadPoolForObservation()
   let phase = 'startup', calls = 0, inputEstimate = 0, stopped: string | null = null, busy = false

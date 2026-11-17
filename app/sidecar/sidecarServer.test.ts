@@ -4311,7 +4311,7 @@ test('P4-24c — a valid model.set switches the model + re-broadcasts run-contro
 })
 
 test('final Codex usage warms the estimate through controller events and outbound snapshots', async () => {
-  const model = 'gpt-6.1-sol'
+  const model = 'gpt-6.2-sol'
   const now = Date.now()
   const base = fakeRunControlsDomain().domain.getSnapshot()
   const domain = createSidecarRunControlsDomain(createStore(getDefaultAppState()), {
@@ -6613,7 +6613,7 @@ test.each(['anthropic identity', 'unavailable identity'])('a successful account 
       return { verb: 'account.switch', result: { ok: true, message: 'Switched.' }, poolChanged: true }
     },
   }
-  const model = 'gpt-6.1-sol'
+  const model = 'gpt-6.2-sol'
   const base = fakeRunControlsDomain().domain.getSnapshot()
   const runControls = createSidecarRunControlsDomain(createStore(getDefaultAppState()), {
     buildSnapshot: () => ({ ...base, model: { ...base.model, current: model, provider: 'openai' } }),
