@@ -15,7 +15,7 @@ import './transcript-scroll-fixture.css'
 
 const root = createRoot(document.getElementById('fixture')!)
 const writes: Array<{ owner: string; value: unknown; stack: string | undefined }> = []
-const samples: Array<{ scrollTop: number; scrollHeight: number; mounted: number; anchorTop: number | null; anchorError: number | null; observers: number; observedTargets: number }> = []
+const samples: Array<{ scenario: string; scrollTop: number; scrollHeight: number; mounted: number; anchorTop: number | null; anchorError: number | null; observers: number; observedTargets: number }> = []
 let useNativeAnchoring = false
 let inputMode: 'script' | 'wheel' = 'script'
 let inputSequence = 0
@@ -140,7 +140,7 @@ async function settle(pane: HTMLElement, count = 12, tracked?: TrackedCharacter,
         throw error
       }
     }
-    samples.push({ scrollTop: pane.scrollTop, scrollHeight: pane.scrollHeight,
+    samples.push({ scenario, scrollTop: pane.scrollTop, scrollHeight: pane.scrollHeight,
       mounted: pane.querySelectorAll('[data-transcript-entry]').length, anchorTop,
       anchorError: anchorTop === null || expectedTop === undefined ? null : anchorTop - expectedTop,
       observers: observed.size, observedTargets: [...observed.values()].reduce((sum, targets) => sum + targets.size, 0) })
@@ -153,6 +153,13 @@ async function movePane(pane: HTMLElement, delta: 2 | -2): Promise<void> {
   }
   if (pendingWheel) throw new Error('A wheel request is already pending')
   const rect = pane.getBoundingClientRect()
+  // Dispatch acknowledgement can precede Chromium applying the wheel. Wait for
+  // the pane's scroll event before sampling the completed input step.
+  let onScroll!: () => void
+  const scrolled = new Promise<void>(resolve => {
+    onScroll = () => resolve()
+    pane.addEventListener('scroll', onScroll, { once: true })
+  })
   await new Promise<void>(resolve => {
     pendingWheel = {
       request: {
@@ -163,6 +170,8 @@ async function movePane(pane: HTMLElement, delta: 2 | -2): Promise<void> {
       taken: false, resolve,
     }
   })
+  try { await scrolled }
+  finally { pane.removeEventListener('scroll', onScroll) }
 }
 function takeWheelRequest(): SyntheticWheelRequest | null {
   if (!pendingWheel || pendingWheel.taken) return null
@@ -629,7 +638,7 @@ async function run(options: { nativeAnchoring?: boolean; inputMode?: 'script' | 
   flushSync(() => root.render(null))
   if (observed.size !== 0) throw new Error(`Observers retained after unmount: ${observed.size}`)
   const peakAnchorError = samples.reduce((peak, sample) => Math.max(peak, Math.abs(sample.anchorError ?? 0)), 0)
-  if (peakAnchorError > 1) throw new Error(`Transient visible-character error: ${peakAnchorError}px`)
+  if (peakAnchorError > 1) throw new Error(`Transient visible-character error: ${peakAnchorError}px: ${JSON.stringify(samples.find(sample => Math.abs(sample.anchorError ?? 0) > 1))}`)
   return { results, writes, samples, wheelEvents, geometryDiagnostics, inputMode, peakAnchorError, userAgent: navigator.userAgent,
     evidence: 'Input delivery and DOM layout geometry, not captured paint.' }
 }
