@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { UUID } from 'node:crypto'
 import {
   createAssistantAPIErrorMessage,
   createAssistantMessage,
@@ -115,30 +116,38 @@ function readTranscript(options: {
   offset?: number
   partial?: boolean
   codeMode?: { cellId: string; generation: string }
-}): Message[] {
-  const toolUseId = `toolu-${options.filePath}`
+  toolUseId?: string
+  finalInput?: Record<string, unknown> | null
+  paired?: boolean
+  failed?: boolean
+}) {
+  const toolUseId = options.toolUseId ?? `toolu-${options.filePath}`
   const numLines = options.partial ? 1 : 2
-  return [
-    createAssistantMessage({
-      ...(options.codeMode ? { isVirtual: true, codeMode: options.codeMode } : {}),
-      content: [
-        {
-          type: 'tool_use',
-          id: toolUseId,
-          name: FILE_READ_TOOL_NAME,
-          input: {
-            file_path: options.filePath,
-            ...(options.offset === undefined ? {} : { offset: options.offset }),
-          },
+  const assistant = createAssistantMessage({
+    ...(options.codeMode ? { isVirtual: true, codeMode: options.codeMode } : {}),
+    content: [
+      {
+        type: 'tool_use',
+        id: toolUseId,
+        name: FILE_READ_TOOL_NAME,
+        input: {
+          file_path: options.filePath,
+          ...(options.offset === undefined ? {} : { offset: options.offset }),
         },
-      ],
-    }),
+      },
+    ],
+  })
+  return [
+    assistant,
     createUserMessage({
       ...(options.codeMode ? { isVirtual: true, codeMode: options.codeMode } : {}),
+      ...(options.paired && { sourceToolAssistantUUID: assistant.uuid as UUID }),
+      ...(options.finalInput !== undefined && { toolExecutionEvidence: { toolUseId, finalInput: options.finalInput } }),
       content: [
         {
           type: 'tool_result',
           tool_use_id: toolUseId,
+          ...(options.failed && { is_error: true }),
           content:
             '     1→alpha' +
             (options.partial
@@ -151,7 +160,7 @@ function readTranscript(options: {
         file: { numLines, totalLines: 2 },
       },
     }),
-  ]
+  ] as const
 }
 
 describe('extractReadFilesFromMessages bare-delete read provenance', () => {
@@ -194,5 +203,32 @@ describe('extractReadFilesFromMessages bare-delete read provenance', () => {
     )
 
     expect(cache.has(filePath)).toBe(false)
+  })
+
+  test('uses the authorized Read target and rejects unknown or bounded replacements', () => {
+    const proposed = '/tmp/proposed.txt'
+    const approved = '/tmp/approved.txt'
+    const cases = [
+      { finalInput: { file_path: approved }, paths: [approved] },
+      { finalInput: { file_path: approved, limit: 1 }, paths: [] },
+      { finalInput: null, paths: [] },
+    ]
+
+    for (const { finalInput, paths } of cases) {
+      const messages = readTranscript({ filePath: proposed, paired: true, finalInput })
+      expect([...extractReadFilesFromMessages(messages, '/tmp').keys()]).toEqual(paths)
+    }
+  })
+
+  test('keeps a reused tool-use ID bound to the Read occurrence that succeeded', () => {
+    const first = '/tmp/first.txt'
+    const second = '/tmp/second.txt'
+    const toolUseId = 'reused-read'
+    const failed = readTranscript({ filePath: second, toolUseId, paired: true, failed: true })
+    const paired = readTranscript({ filePath: first, toolUseId, paired: true })
+    expect([...extractReadFilesFromMessages([...paired, ...failed], '/tmp').keys()]).toEqual([first])
+
+    const unpaired = readTranscript({ filePath: first, toolUseId })
+    expect([...extractReadFilesFromMessages([...unpaired, ...failed], '/tmp').keys()]).toEqual([])
   })
 })

@@ -3494,6 +3494,9 @@ async function* queryModel(
         messagesForAPI,
         deferredTerminalFailure,
       })
+      if (thinkingStreamRetriesExhausted && partialMessage?.id) {
+        assistantError.discardedStreamMessageId = partialMessage.id
+      }
       yield assistantError
       releaseStreamResources()
       return

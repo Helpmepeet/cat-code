@@ -94,7 +94,9 @@ import { parsePluginIdentifier } from 'src/utils/plugins/pluginIdentifier.js'
 import { validateUuid } from 'src/utils/uuid.js'
 import { fromArray } from 'src/utils/generators.js'
 import { ask } from 'src/QueryEngine.js'
-import { CodeModeHost } from '../tools/REPLTool/codeModeHost.js'
+import { CodeModeHost, retryFailedCodeModePublications } from '../tools/REPLTool/codeModeHost.js'
+import { hasUndeliveredCodeModeTasks } from '../tasks/CodeModeTask.js'
+import type { TaskState } from '../tasks/types.js'
 import { restoreCodeModeHistory } from '../tools/REPLTool/codeModeRestoration.js'
 import { RestoreReviewAdmission } from 'src/utils/restoreReviewAdmission.js'
 import { MAX_INPUT_BATCH_SIZE } from 'src/utils/queuedInputReceipts.js'
@@ -1166,6 +1168,10 @@ export function runHeadlessStreaming(
     | 'finally_post_flush'
     | undefined
   let inputClosed = false
+  const inputEof = new AbortController()
+  let finishOutputPromise: Promise<void> | undefined
+  let outputClosed = false
+  const eofResults: StdoutMessage[] = []
   let shutdownPromptInjected = false
   // Holds the turn result back while background agents run, polls until the
   // run is really idle, and fails the run closed when a background result was
@@ -1193,7 +1199,17 @@ export function runHeadlessStreaming(
         tasks: Object.values(state.tasks ?? {}).map(toObservedTask),
       }
     },
-    emit: message => output.enqueue(message),
+    emit: message => {
+      if (message.type === 'result') {
+        if (message.is_error) eofResults.length = 0
+        else if (inputClosed && (eofResults.length || interruptedTools.blocked ||
+          hasUndeliveredCodeModeTasks(getAppState().tasks, getSessionId()))) {
+          eofResults.push(message)
+          return
+        }
+      }
+      output.enqueue(message)
+    },
     getSessionId,
     onHeldResultDiscarded: () => {
       suggestionState.pendingSuggestion = null
@@ -1226,25 +1242,29 @@ export function runHeadlessStreaming(
     flushQueuedSdkEvents(output)
   }
 
+  function executionErrorResult(errors: string[]): StdoutMessage {
+    return {
+      type: 'result',
+      subtype: 'error_during_execution',
+      duration_ms: 0,
+      duration_api_ms: 0,
+      is_error: true,
+      num_turns: 0,
+      stop_reason: null,
+      session_id: getSessionId(),
+      total_cost_usd: 0,
+      usage: EMPTY_USAGE,
+      modelUsage: {},
+      permission_denials: [],
+      uuid: randomUUID(),
+      errors,
+    }
+  }
+
   async function reportExecutionError(error: unknown): Promise<void> {
     // Write directly so a transport failure cannot hide the failure result.
     try {
-      await structuredIO.write({
-        type: 'result',
-        subtype: 'error_during_execution',
-        duration_ms: 0,
-        duration_api_ms: 0,
-        is_error: true,
-        num_turns: 0,
-        stop_reason: null,
-        session_id: getSessionId(),
-        total_cost_usd: 0,
-        usage: EMPTY_USAGE,
-        modelUsage: {},
-        permission_denials: [],
-        uuid: randomUUID(),
-        errors: [errorMessage(error), ...getInMemoryErrors().map(_ => _.error)],
-      })
+      await structuredIO.write(executionErrorResult([errorMessage(error), ...getInMemoryErrors().map(_ => _.error)]))
     } catch {
       // Continue shutdown when the failure result cannot be written.
     }
@@ -1386,7 +1406,10 @@ export function runHeadlessStreaming(
   let codeModeSessionId = getSessionId()
   if (codeModeHost) {
     const restored = restoreCodeModeHistory(mutableMessages, getAppState().tasks)
-    mutableMessages.push(...restored.slice(mutableMessages.length))
+    if (restored !== mutableMessages) {
+      // The same array backs per-input engines and the deferred-attempt caller.
+      for (const [index, message] of restored.entries()) mutableMessages[index] = message
+    }
   }
   const restoreReview = new RestoreReviewAdmission(recoveryReviewRequired)
   const questionRuntime = feature('NONBLOCKING_ASK_USER_QUESTION') ? new PendingQuestionRuntime(() => mutableMessages) : undefined
@@ -2090,6 +2113,88 @@ export function runHeadlessStreaming(
     })
   })
 
+  const eofReceiptError = new Error('Could not save all tool results before input closed. Resume the conversation to review the recorded history before retrying.')
+
+  function waitForToolReceipts(signal: AbortSignal): Promise<void> {
+    if (!interruptedTools.blocked || signal.aborted) return Promise.resolve()
+    return new Promise(resolve => {
+      const finish = () => {
+        unsubscribe()
+        signal.removeEventListener('abort', finish)
+        resolve()
+      }
+      const unsubscribe = interruptedTools.subscribe(() => {
+        if (!interruptedTools.blocked) finish()
+      })
+      signal.addEventListener('abort', finish, { once: true })
+    })
+  }
+
+  async function withinReceiptDeadline<T>(operation: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const timer = new AbortController()
+    try {
+      return await Promise.race([
+        operation(timer.signal),
+        sleep(5000, timer.signal).then(() => { throw eofReceiptError }),
+      ])
+    } finally {
+      timer.abort()
+    }
+  }
+
+  async function waitForEofReceipts(): Promise<void> {
+    if (!inputClosed) return
+    const sessionId = getSessionId()
+    const hasPendingReceipts = () => interruptedTools.blocked || Object.values<TaskState>(getAppState().tasks).some(task =>
+      task.type === 'code_mode' && task.owner.sessionId === sessionId && task.settled && task.delivery !== 'delivered',
+    )
+    if (!hasPendingReceipts()) return
+    interruptedTools.retryDelivery()
+    void retryFailedCodeModePublications(sessionId).catch(logError)
+    // The generic task-notification loop tolerates slow agent handovers. A
+    // settled Script needs its EOF deadline before that longer notification
+    // wait. AppState covers receipts owned by both this host and its workers.
+    await withinReceiptDeadline(async signal => {
+      while (!signal.aborted && hasPendingReceipts()) await sleep(100, signal)
+    })
+  }
+
+  function finishOutput(receiptWaitExpired = false): Promise<void> {
+    return finishOutputPromise ??= (async () => {
+      try {
+        // The suggestion and hook streams can still emit while input is closed.
+        if (suggestionState.inflightPromise) {
+          await Promise.race([suggestionState.inflightPromise, sleep(5000)])
+        }
+        suggestionState.abortController?.abort()
+        suggestionState.abortController = null
+        await finalizePendingAsyncHooks()
+        unsubscribeSkillChanges()
+        unsubscribeAuthStatus?.()
+        statusListeners.delete(rateLimitListener)
+
+        const closeHost = codeModeHost?.close()
+        if (receiptWaitExpired) {
+          void closeHost?.catch(logError)
+          throw eofReceiptError
+        }
+        interruptedTools.retryDelivery()
+        await withinReceiptDeadline(async signal => {
+          await Promise.all([closeHost, waitForToolReceipts(signal)])
+        })
+        if (hasUndeliveredCodeModeTasks(getAppState().tasks, getSessionId())) throw eofReceiptError
+        for (const result of eofResults) output.enqueue(result)
+      } catch (error) {
+        logError(error)
+        output.enqueue(executionErrorResult([error === eofReceiptError ? error.message : `${eofReceiptError.message} ${errorMessage(error)}`]))
+      } finally {
+        eofResults.length = 0
+        outputClosed = true
+        output.done()
+      }
+    })()
+  }
+
   // Proactive mode: schedule a tick to keep the model looping autonomously.
   // setTimeout(0) yields to the event loop so pending stdin messages
   // (interrupts, user messages) are processed before the tick fires.
@@ -2126,7 +2231,7 @@ export function runHeadlessStreaming(
   })
 
   const run = async () => {
-    if (running) {
+    if (running || finishOutputPromise) {
       return
     }
 
@@ -2428,8 +2533,10 @@ export function runHeadlessStreaming(
               pendingQuestionRuntime: questionRuntime,
               codeModeHost,
               publishLateToolMessage: async message => {
+                if (outputClosed) throw eofReceiptError
                 if (publishLateToolMessage) await publishLateToolMessage(message)
                 else output.enqueue(message)
+                if (outputClosed) throw eofReceiptError
                 forwardMessagesToBridge()
               },
               origin: cmd.origin,
@@ -2542,14 +2649,8 @@ export function runHeadlessStreaming(
           // Keep the session writer alive and queued inputs untouched while an
           // escaped effect is unknown. Never close output or replay the input
           // merely because the foreground iterator returned.
-          while (interruptedTools.blocked) {
-            await new Promise<void>(resolve => {
-              const unsubscribe = interruptedTools.subscribe(() => {
-                if (!interruptedTools.blocked) { unsubscribe(); resolve() }
-              })
-              if (!interruptedTools.blocked) { unsubscribe(); resolve() }
-            })
-          }
+          await waitForToolReceipts(inputEof.signal)
+          await waitForEofReceipts()
 
           for (const uuid of batchUuids) {
             notifyCommandLifecycle(uuid, 'completed')
@@ -2669,6 +2770,7 @@ export function runHeadlessStreaming(
           logQueryProfileReport()
           headlessProfilerStartTurn()
         }
+        await waitForEofReceipts()
       }
 
       await waitLoop.runWaitLoop({
@@ -2697,7 +2799,8 @@ export function runHeadlessStreaming(
         },
       })
     } catch (error) {
-      await reportExecutionError(error)
+      if (error === eofReceiptError) await finishOutput(true)
+      else await reportExecutionError(error)
       return
     } finally {
       await finalizeHeadlessRun({
@@ -2707,7 +2810,7 @@ export function runHeadlessStreaming(
           runPhase = 'finally_post_flush'
         },
         goIdle: () => {
-          if (!isShuttingDown()) {
+          if (!outputClosed && !isShuttingDown()) {
             notifySessionStateChanged('idle')
             // Final task bookends must reach SDK output before waiting for input.
             flushSdkEvents()
@@ -2923,18 +3026,7 @@ export function runHeadlessStreaming(
         })
         void run()
       } else {
-        // Wait for any in-flight push suggestion before closing the output stream.
-        if (suggestionState.inflightPromise) {
-          await Promise.race([suggestionState.inflightPromise, sleep(5000)])
-        }
-        suggestionState.abortController?.abort()
-        suggestionState.abortController = null
-        await finalizePendingAsyncHooks()
-        unsubscribeSkillChanges()
-        unsubscribeAuthStatus?.()
-        statusListeners.delete(rateLimitListener)
-        await codeModeHost?.close().catch(logError)
-        output.done()
+        await finishOutput()
       }
     }
   }
@@ -4408,21 +4500,10 @@ export function runHeadlessStreaming(
       void run()
     }
     inputClosed = true
+    inputEof.abort()
     cronScheduler?.stop()
     if (!running) {
-      // If a push-suggestion is in-flight, wait for it to emit before closing
-      // the output stream (5 s safety timeout to prevent hanging).
-      if (suggestionState.inflightPromise) {
-        await Promise.race([suggestionState.inflightPromise, sleep(5000)])
-      }
-      suggestionState.abortController?.abort()
-      suggestionState.abortController = null
-      await finalizePendingAsyncHooks()
-      unsubscribeSkillChanges()
-      unsubscribeAuthStatus?.()
-      statusListeners.delete(rateLimitListener)
-      await codeModeHost?.close().catch(logError)
-      output.done()
+      await finishOutput()
     }
   })()
 

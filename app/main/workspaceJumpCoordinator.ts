@@ -122,6 +122,13 @@ export class WorkspaceJumpCoordinator {
   isCloseBlocked(appSessionId: string): boolean {
     return this.isReserved(appSessionId) && !this.hasAcknowledgedFinishedClose(appSessionId)
   }
+  private awaitsDestinationClose(state: WorkspaceJumpStateV2, generation: string): boolean {
+    if (state.location !== 'destination' || state.continuation.admissionGeneration !== generation ||
+        state.cancellation?.requestedBy !== 'close') return false
+    const acknowledgement = this.closeAcknowledgements.get(state.appSessionId)
+    return acknowledgement?.operationId !== state.operationId || acknowledgement.generation !== generation ||
+      acknowledgement.cancelId !== state.cancellation.cancelId
+  }
   private hasAcknowledgedFinishedClose(appSessionId: string): boolean {
     const acknowledgement = this.closeAcknowledgements.get(appSessionId)
     if (!acknowledgement) return false
@@ -462,6 +469,7 @@ export class WorkspaceJumpCoordinator {
     if (this.effectKeys.has(key)) return
     this.effectKeys.add(key)
     let sent = false
+    let dispatchedClose = false
     const task = Promise.resolve().then(async () => {
       if (action.action !== 'cancel' && this.deps.waitForControlSlot) {
         do {
@@ -472,7 +480,7 @@ export class WorkspaceJumpCoordinator {
       const identity = this.identity(appSessionId)
       const row = this.deps.row(appSessionId)
       if (this.disposed || !current || current.operationId !== state.operationId || identity?.generation !== generation ||
-          action.action === 'release' && current.release.authorizedRevision !== action.authorizationRevision ||
+          action.action === 'release' && (current.release.authorizedRevision !== action.authorizationRevision || this.awaitsDestinationClose(current, generation)) ||
           action.action === 'continue' && (current.engineSessionId !== state.engineSessionId || identity.engineSessionId !== state.engineSessionId ||
             current.sourceGeneration !== state.sourceGeneration || current.continuation.id !== state.continuation.id ||
             current.target.cwd !== state.target.cwd || row?.cwd !== state.target.cwd || row.binding?.kind !== 'project' ||
@@ -490,11 +498,14 @@ export class WorkspaceJumpCoordinator {
         this.liveMoves.delete(appSessionId)
       }
       sent = true
+      dispatchedClose = action.action === 'cancel' && current.cancellation?.requestedBy === 'close'
       return this.deps.control(current, action)
     }).then(delivery => {
       const current = this.snapshot(appSessionId)
       if (!current || current.operationId !== state.operationId || this.identity(appSessionId)?.generation !== generation) return
-      if (action.action === 'cancel' && current.cancellation?.requestedBy === 'close' &&
+      // Close may upgrade the ledger while an earlier Stop is still in flight.
+      // Only a dispatched Close proves the sidecar fenced and retracted input.
+      if (dispatchedClose && action.action === 'cancel' && current.cancellation?.requestedBy === 'close' &&
           current.cancellation.cancelId === action.cancelId && delivery.kind === 'result' &&
           (delivery.result.disposition === 'accepted' || delivery.result.disposition === 'already_applied')) {
         this.closeAcknowledgements.set(appSessionId, { operationId: state.operationId, generation, cancelId: action.cancelId })
@@ -589,7 +600,10 @@ export class WorkspaceJumpCoordinator {
     this.observations.set(appSessionId, status)
     if (next.release.target !== state.release.target) next = { ...next, release: { ...next.release, authorizedRevision: null, confirmed: null } }
     if (next.release.target !== 'held' && next.release.authorizedRevision === null) next = { ...next, release: { ...next.release, authorizedRevision: next.revision + 1 } }
-    const gateMatches = next.release.authorizedRevision !== null && status.gate.mode === next.release.target && status.gate.reservationOperationId === null && status.gate.requiresUserReconciliation === (next.release.target === 'review')
+    // A Stop can settle the continuation while its upgraded Close still needs
+    // to retract queued input. Keep even a confirmed ordinary gate reserved.
+    const awaitsClose = this.awaitsDestinationClose(next, generation)
+    const gateMatches = !awaitsClose && next.release.authorizedRevision !== null && status.gate.mode === next.release.target && status.gate.reservationOperationId === null && status.gate.requiresUserReconciliation === (next.release.target === 'review')
     if (gateMatches) next = { ...next, release: { ...next.release, confirmed: { generation, mode: status.gate.mode as 'review' | 'open' } } }
     if (JSON.stringify(next) !== JSON.stringify(state)) this.save(next)
     this.deps.onStateChanged?.(next, status)
@@ -600,7 +614,7 @@ export class WorkspaceJumpCoordinator {
           (state.release.confirmed?.generation !== generation || state.release.confirmed.mode !== 'open')) {
         this.deps.onPeerInputOpen?.(appSessionId)
       }
-    } else if (next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
+    } else if (!awaitsClose && next.release.target !== 'held' && next.release.authorizedRevision !== null) this.effect(appSessionId, { action: 'release', authorizationRevision: next.release.authorizedRevision })
     else if (status.settled && !status.failure && !status.recoveryId && status.execution === 'unconfirmed' && next.continuation.outcome !== 'success' && !next.review.noticeUuid) this.effect(appSessionId, { action: 'settle', outcome: 'uncertain' })
     else if (status.settled && !status.failure && !status.recoveryId && ['idle','terminal'].includes(status.execution) && next.continuation.outcome !== 'success' && !next.review.noticeUuid && (next.cancellation || next.continuation.outcome !== 'pending')) this.settleWarning(appSessionId, next.cancellation?.application === 'prevented_start' || next.cancellation?.application === 'abort_signalled' ? 'cancelled' : next.continuation.dispatch === 'none' ? 'failed' : 'uncertain')
     else this.retryContinuation(appSessionId)

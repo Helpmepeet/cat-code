@@ -24,6 +24,7 @@ export type FocusedSummary = {
   stoppedCount: number
   /** Top-level calls auto mode refused before they ran; not failures and not in the per-family counts. */
   blockedCount: number
+  detachedScriptStatus: string
   summary: string
   /** The same counts as `summary` in a short `verb n · verb n` form for the turn head. */
   compact: string
@@ -96,6 +97,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   const reads = new Set<string>(), edits = new Set<string>(), searches = new Set<string>()
   const other: Partial<Record<ToolFamily, number>> = {}
   let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0, stoppedCount = 0, blockedCount = 0, questions = 0, recalls = 0
+  let runningScripts = 0, unknownScripts = 0
   let activeCall: FocusedSummary['activeCall'] = null
   for (const row of rows) {
     if (rowHasError(row)) errorCount++
@@ -104,7 +106,9 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     if ((cell && cell.cellId === row.toolUseId) || row.toolName === 'REPL') {
       const calls = cell?.calls ?? []
       toolCalls += calls.filter(codeModeCallCompleted).length
-      if (row.status === 'pending' && !runningDetachedScript(cell) && activeCall === null) activeCall = { toolUseId: row.toolUseId, target: cell?.description ?? (typeof row.input.description === 'string' ? row.input.description : 'Script') }
+      if (runningDetachedScript(cell)) runningScripts++
+      else if (cell?.status === 'unknown') unknownScripts++
+      else if (row.status === 'pending' && activeCall === null) activeCall = { toolUseId: row.toolUseId, target: cell?.description ?? (typeof row.input.description === 'string' ? row.input.description : 'Script') }
       let innerErrors = 0, innerBlocked = 0, innerStopped = 0
       for (const call of calls) {
         if (call.status === 'blocked') innerBlocked++
@@ -204,10 +208,18 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     compact.push(`${label} ${n}`)
   }
   const refusedAll = blockedCount > 0 && blockedCount === toolCalls
+  const detachedScriptStatus = [
+    runningScripts > 0 ? `${runningScripts} ${runningScripts === 1 ? 'script' : 'scripts'} running` : '',
+    unknownScripts > 0 ? `unknown outcome for ${unknownScripts} ${unknownScripts === 1 ? 'script' : 'scripts'}` : '',
+  ].filter(Boolean).join(' · ')
+  if (detachedScriptStatus) {
+    parts.push(detachedScriptStatus)
+    compact.push(detachedScriptStatus)
+  }
   const summary = parts.join(', ') || (refusedAll ? `blocked ${blockedCount} call${blockedCount === 1 ? '' : 's'}`
     : toolCalls ? `used ${toolCalls} tool${toolCalls === 1 ? '' : 's'}` : 'Reasoned')
   return { readPaths: [...reads], editedPaths: [...edits], searchedPatterns: [...searches], commands,
-    otherFamilies: other, toolCalls, additions, deletions, hasErrors: errorCount > 0, errorCount, stoppedCount, blockedCount, summary,
+    otherFamilies: other, toolCalls, additions, deletions, hasErrors: errorCount > 0, errorCount, stoppedCount, blockedCount, detachedScriptStatus, summary,
     compact: compact.join(' · ') || (refusedAll ? '' : summary), activeCall }
 }
 

@@ -13,6 +13,7 @@ import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import {
   createAssistantMessage,
   createCompactBoundaryMessage,
+  createUserMessage,
 } from '../../src/utils/messages.js'
 
 import { stampSubagentFrames, toSDKMessages } from '../../src/utils/messages/mappers.js'
@@ -492,6 +493,44 @@ describe('restored subagent history availability', () => {
     expect(read.messages.some(message => message.parent_tool_use_id === 'tu-older')).toBe(true)
     expect(read.messages.some(message => message.parent_tool_use_id === 'tu-tail')).toBe(false)
     expect(read.messages.at(-1)?.uuid).toBe(tail)
+  })
+
+  test('deeper history and nested restoration report an unconfirmed Script outcome without claiming it failed', async () => {
+    const makeLaunch = (cellId: string) => {
+      const input = { code: '1 + 1', description: 'Saved Script', run_in_background: true }
+      const call = createAssistantMessage({ content: [{ type: 'tool_use', id: cellId, name: 'REPL', input }] })
+      const audit = { kind: 'code-mode', ...input, cellId, taskId: `${cellId}-task`, generation: 'prior-runtime',
+        status: 'running', output: 'Background script started', calls: [], changedFiles: [] }
+      const receipt = createUserMessage({ content: [{ type: 'tool_result', tool_use_id: cellId, content: audit.output }],
+        sourceToolAssistantUUID: call.uuid as `${string}-${string}-${string}-${string}-${string}`, toolUseResult: audit })
+      return { call, receipt, audit }
+    }
+    const storage = { sessionId, cwd: directory, version: 'test' }
+    const script = makeLaunch('older-script')
+    const worker = makeLaunch('worker-script')
+    const workerSpawn = createAssistantMessage({ content: [{ type: 'tool_use', id: 'tu-worker', name: 'Agent', input: {} }] })
+    const current = createUserMessage({ content: 'current turn' })
+    const agentId = asAgentId('script-worker')
+    await writeAgentMetadata(agentId, { agentType: 'Explore', parentSessionId: sessionId, parentToolUseId: 'tu-worker', spawnedAt: '2026-10-09T00:00:00.000Z' })
+    const writeBranch = (path: string, messages: Array<{ uuid: string }>, extra: object) => {
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, messages.map((message, index) => JSON.stringify({
+        ...message, ...storage, ...extra, parentUuid: index === 0 ? null : messages[index - 1]!.uuid,
+      })).join('\n') + '\n')
+    }
+    writeBranch(getAgentTranscriptPathForSession(sessionId, agentId), [worker.call, worker.receipt], { agentId, isSidechain: true })
+    writeBranch(join(directory, `${sessionId}.jsonl`), [script.call, script.receipt, workerSpawn, current], { isSidechain: false })
+
+    const earlier = await readEarlierDisplayHistory(undefined, { maxBytes: 1024 * 1024, beforeUuid: current.uuid })
+    const nested = await withRestoredSubagentHistory(sessionId, [spawnFrame('tu-worker', workerSpawn.uuid)])
+    for (const frames of [earlier.messages, nested.history]) {
+      expect(frames.find(message => message.uuid === worker.receipt.uuid)).toMatchObject({
+        parent_tool_use_id: 'tu-worker', tool_use_result: { status: 'unknown', output: worker.audit.output },
+      })
+    }
+    expect(earlier.messages.find(message => message.uuid === script.receipt.uuid)).toMatchObject({
+      tool_use_result: { status: 'unknown', output: script.audit.output },
+    })
   })
 
   test('empty workers and unreachable branches are not reported as omitted steps', async () => {

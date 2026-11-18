@@ -12,6 +12,21 @@ export type ToolExecutionEvidence = {
   approvalFeedback?: string
 }
 
+function readToolExecutionEvidence(value: unknown): ToolExecutionEvidence | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return
+  const { toolUseId, finalInput, approvalFeedback } = value as Partial<ToolExecutionEvidence>
+  if (typeof toolUseId !== 'string' || toolUseId.length === 0 || toolUseId.length > 1_024) return
+  if (approvalFeedback !== undefined &&
+      (typeof approvalFeedback !== 'string' || approvalFeedback.length > MAX_APPROVAL_FEEDBACK_CHARS)) return
+  if (finalInput !== undefined && finalInput !== null) {
+    if (typeof finalInput !== 'object' || Array.isArray(finalInput)) return
+    try {
+      if (JSON.stringify(finalInput).length > MAX_FINAL_INPUT_CHARS) return
+    } catch { return }
+  }
+  return { toolUseId, finalInput, approvalFeedback }
+}
+
 export function captureToolExecutionEvidence(
   toolUseId: string,
   proposedInput: unknown,
@@ -56,7 +71,8 @@ export function positionToolExecutionEvidence(messages: readonly Message[]): Pos
     if (message.type !== 'user' || message.isVirtual || message.codeMode || message.isMeta ||
         message.isCompactSummary || message.origin !== undefined || !message.sourceToolAssistantUUID ||
         !message.toolExecutionEvidence || !Array.isArray(message.message.content)) continue
-    const evidence = message.toolExecutionEvidence
+    const evidence = readToolExecutionEvidence(message.toolExecutionEvidence)
+    if (!evidence) continue
     const call = calls.get(message.sourceToolAssistantUUID)?.get(evidence.toolUseId)
     if (!call || !message.message.content.some(block =>
       block.type === 'tool_result' && block.tool_use_id === evidence.toolUseId)) continue

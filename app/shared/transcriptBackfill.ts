@@ -10,6 +10,7 @@
  */
 
 import { isAbsolute, basename } from 'node:path'
+import type { SDKMessage } from './sdk-types.snapshot.js'
 import { isCacheExpiryTimestamp } from './promptCacheEstimate.js'
 import { isUnavailableParentToolUseIds } from './historyAvailability.js'
 
@@ -75,6 +76,19 @@ export type TranscriptBackfillResult =
   | TranscriptBackfillSessionResult
   | TranscriptBackfillFailureResult
   | TranscriptBackfillDoneResult
+
+/** An archived launch proves it started, but cannot establish current task
+ * ownership. Preserve its identity so a matching terminal receipt still wins. */
+export function markHistoricalScriptOutcome(message: SDKMessage): SDKMessage {
+  if (message.type !== 'user') return message
+  const content = message.message?.content
+  if (!Array.isArray(content)) return message
+  const receipt = message.tool_use_result
+  if (!isRecord(receipt) || receipt.kind !== 'code-mode' || receipt.status !== 'running' ||
+      typeof receipt.cellId !== 'string' || typeof receipt.taskId !== 'string' || !receipt.taskId ||
+      !content.some(block => isRecord(block) && block.type === 'tool_result' && block.tool_use_id === receipt.cellId)) return message
+  return { ...message, tool_use_result: { ...receipt, status: 'unknown' } }
+}
 
 export function parseTranscriptBackfillRequest(
   value: unknown,

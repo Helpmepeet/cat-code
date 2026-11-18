@@ -29,7 +29,7 @@ function observedCall(child: NestedToolUseRow): CodeModeCall {
  * remain authoritative. */
 export function codeModeLiveView(row: NestedToolUseRow): CodeModeEnvelope | undefined {
   const audit = codeModeForRow(row)
-  if (audit && audit.status !== 'running') return audit
+  if (audit && audit.status !== 'running' && audit.status !== 'unknown') return audit
   if (!audit && (row.toolName !== 'REPL' || row.status !== 'pending' || row.result || !row.children.length)) return undefined
   const cached = views.get(row)
   if (cached) return cached

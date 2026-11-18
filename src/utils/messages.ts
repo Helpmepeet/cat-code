@@ -361,7 +361,7 @@ export function isSyntheticMessage(message: Message): boolean {
  */
 export function isInternalNoResponseSentinel(
   message: Message,
-): message is AssistantMessage {
+): boolean {
   if (message.type !== 'assistant') return false
   if (message.isInternalNoResponseSentinel) return true
   if (!message.isApiErrorMessage || message.message.content.length !== 1) {

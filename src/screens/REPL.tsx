@@ -170,7 +170,7 @@ import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js';
 import { resolveAgentTools } from '../tools/AgentTool/agentToolUtils.js';
 import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
 import { CodeModeHost } from '../tools/REPLTool/codeModeHost.js';
-import { CODE_MODE_CONVERSATION_CHANGE_PENDING, hasUndeliveredCodeModeTasks } from '../tasks/CodeModeTask.js';
+import { beginCodeModeConversationChange, CODE_MODE_CONVERSATION_CHANGE_PENDING, hasUndeliveredCodeModeTasks } from '../tasks/CodeModeTask.js';
 import { restoreCodeModeHistory } from '../tools/REPLTool/codeModeRestoration.js';
 import { displayNameForAgent } from '../tools/AgentTool/resolveAgentTarget.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
@@ -1952,6 +1952,9 @@ export function REPL({
     fileHistory: fileHistoryState
   })));
   const resume = useCallback(async (sessionId: UUID, log: LogOption, entrypoint: ResumeEntrypoint) => {
+    const sourceSessionId = getSessionId();
+    if (sessionId === sourceSessionId) throw new Error('This conversation is already active.');
+    const endConversationChange = beginCodeModeConversationChange(store.getState().tasks, sourceSessionId);
     const resumeStart = performance.now();
     let deferredResumeGuard: DeferredContinuationLockGuard | undefined;
     try {
@@ -2018,6 +2021,7 @@ export function REPL({
         agentType: mainThreadAgentDefinition?.agentType,
         model: mainLoopModel
       });
+      if (getSessionId() !== sourceSessionId) throw new Error('The active conversation changed while preparing to resume.');
 
       // Append hook messages to the conversation
       messages.push(...hookMessages);
@@ -2182,9 +2186,13 @@ export function REPL({
       });
       throw error;
     } finally {
-      await deferredResumeGuard?.release();
+      try {
+        await deferredResumeGuard?.release();
+      } finally {
+        endConversationChange();
+      }
     }
-  }, [resetLoadingState, setAppState]);
+  }, [resetLoadingState, setAppState, store]);
 
   // Lazy init: useRef(createX()) would call createX on every render and
   // discard the result. LRUCache construction inside FileStateCache is

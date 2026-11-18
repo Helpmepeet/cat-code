@@ -23,12 +23,17 @@ function fixture(sessionId: string) {
     writing() {
       for (const entry of [{ type: 'message_start', message: { id: 'phase-message', role: 'assistant', content: [] } }, { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'script', name: 'REPL', input: {} } }, { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"description":"Inspect phases","code":"await tools.call(' } }]) message({ type: 'stream_event', event: entry })
     },
-    submitted() { message({ type: 'assistant', message: { id: 'phase-message', role: 'assistant', content: [{ type: 'tool_use', id: 'script', name: 'REPL', input: { code, description: 'Inspect phases' } }] } }) },
+    submitted(toolUseId = 'script') { message({ type: 'assistant', message: { id: toolUseId === 'script' ? 'phase-message' : `phase-message:${toolUseId}`, role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'REPL', input: { code, description: 'Inspect phases' } }] } }) },
     activity(phase: 'reviewing' | 'executing', toolUseId = 'script') { event({ type: 'tool.activity', toolUseId, phase, startedAt: 1000 }) },
     review() { event({ type: 'tool.review', toolUseId: 'script', attemptId: 'phase-review', outcome: 'reviewing', startedAt: 1000 }) },
     approval(toolUseId = 'script') { event({ type: 'permission.requested', request: { requestId: `approval-${toolUseId}`, request: { subtype: 'can_use_tool', tool_use_id: toolUseId, tool_name: toolUseId === 'script' ? 'REPL' : 'Read', input: toolUseId === 'script' ? { code } : { file_path: '/repo/a' } } } }) },
     child() { message({ type: 'assistant', isVirtual: true, code_mode: { cellId: 'script', generation: 'phase-generation', line: 1 }, message: { id: 'phase-child', role: 'assistant', content: [{ type: 'tool_use', id: 'inner', name: 'Read', input: { file_path: '/repo/a' } }] } }) },
-    receipt(status: 'running' | 'completed' | 'failed', taskId?: string) { message({ type: 'user', tool_use_result: { kind: 'code-mode', cellId: 'script', generation: 'phase-generation', code, description: 'Inspect phases', status, calls: [], changedFiles: [], output: '', ...(taskId ? { taskId } : {}), ...(status === 'failed' ? { error: 'SyntaxError: invalid script' } : {}) }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'script', content: 'Selected output' }] } }) },
+    receipt(status: 'running' | 'completed' | 'failed' | 'unknown', taskId?: string, toolUseId = 'script', notification = false) {
+      const tool_use_result = { kind: 'code-mode', cellId: toolUseId, generation: 'phase-generation', code, description: 'Inspect phases', status, calls: [], changedFiles: [], output: '', ...(taskId ? { taskId } : {}), ...(status === 'failed' ? { error: 'SyntaxError: invalid script' } : {}) }
+      message(notification
+        ? { type: 'user', tool_use_result, isSynthetic: true, origin: { kind: 'task-notification', taskType: 'code_mode', toolUseId, taskId }, message: { role: 'user', content: 'Selected output' } }
+        : { type: 'user', tool_use_result, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'Selected output' }] } })
+    },
     finishTurn() { message({ type: 'result', subtype: 'success', is_error: false, errors: [], duration_ms: 100 }) },
     rows: () => selectNestedTranscriptRows(state, sessionId),
     raw: () => state.sessions[sessionId]!.rows,
@@ -130,6 +135,44 @@ test('Focused keeps a detached Script running after its launch turn finishes', a
   expect(step.textContent).toContain('Running script')
   expect(step.textContent).toContain('Inspect phases')
   expect(step.textContent).not.toContain('Stopped')
+})
+
+test('the collapsed Focused group shows both detached Scripts still running after the turn ends', async () => {
+  const data = fixture('focused-detached-group')
+  data.submitted()
+  data.receipt('running', 'first-task')
+  data.submitted('second-script')
+  data.receipt('running', 'second-task', 'second-script')
+  data.finishTurn()
+  const tree = await harness.mount(view(data, 'focused', false))
+  const turn = tree.container.querySelector<HTMLButtonElement>('.focused-fold-head')!
+  expect(turn.textContent).toContain('2 scripts running')
+  if (turn.getAttribute('aria-expanded') === 'false') await act(async () => { turn.click() })
+  const step = tree.container.querySelector('.focused-step-head')!
+  expect(step.getAttribute('aria-expanded')).toBe('false')
+  expect(step.textContent).toContain('2 scripts running')
+
+  data.receipt('completed', 'second-task', 'second-script')
+  await tree.render(view(data, 'focused', false))
+  expect(turn.textContent).toContain('1 script running')
+  expect(step.textContent).toContain('1 script running')
+})
+
+test('a historical launch shows an unknown outcome until a matching terminal receipt is available', async () => {
+  const data = fixture('historical-script')
+  data.submitted()
+  data.receipt('unknown', 'historical-task')
+  data.finishTurn()
+  const tree = await harness.mount(view(data, 'full', false))
+  expect(label(tree.container)).toBe('Outcome unknown')
+  data.receipt('completed', 'different-task', 'script', true)
+  await tree.render(view(data, 'full', false))
+  expect(label(tree.container)).toBe('Outcome unknown')
+  await tree.render(view(data, 'focused', false))
+  expect(tree.container.querySelector('.focused-fold-head')?.textContent).toContain('unknown outcome for 1 script')
+  data.receipt('completed', 'historical-task', 'script', true)
+  await tree.render(view(data, 'full', false))
+  expect(label(tree.container)).toBe('completed')
 })
 
 test('foreground Script card and inspector show child calls before the final receipt', async () => {

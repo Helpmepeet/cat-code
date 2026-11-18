@@ -756,7 +756,14 @@ export async function loadConversationForResume(
       // Copy file history for resume
       if (!sourceJsonlFile) void copyFileHistoryForResume(log)
 
-      messages = log.messages
+      // An explicitly imported transcript may contain engine-only fields.
+      // Resume by session ID retains evidence from the local transcript owner.
+      messages = sourceJsonlFile ? log.messages.map(message => {
+        if (message.type !== 'user' || message.toolExecutionEvidence === undefined) return message
+        const sanitized = { ...message }
+        delete sanitized.toolExecutionEvidence
+        return sanitized
+      }) : log.messages
       threadGoal = log.threadGoal
       checkResumeConsistency(messages)
     }

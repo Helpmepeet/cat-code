@@ -176,6 +176,8 @@ export type AssistantMessage<TContentBlock = BetaContentBlock | ContentBlock | C
     stop_sequence?: string | null
   }
   isApiErrorMessage?: boolean
+  /** Unfinished provider preview that was abandoned before the terminal error. */
+  discardedStreamMessageId?: string
   apiError?: unknown
   error?: unknown
   errorDetails?: unknown

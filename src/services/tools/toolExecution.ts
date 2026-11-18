@@ -1728,6 +1728,18 @@ async function checkPermissionsAndCallTool(
   let executionEnded = false
   let toolExecutionEvidence: ToolExecutionEvidence | undefined
   let sessionActivityStarted = false
+  const approvalBlocks: ContentBlockParam[] = []
+  if ('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) {
+    approvalBlocks.push({ type: 'text', text: permissionDecision.acceptFeedback })
+  }
+  if ('contentBlocks' in permissionDecision && permissionDecision.contentBlocks) {
+    approvalBlocks.push(...permissionDecision.contentBlocks)
+  }
+  const imageCount = count(approvalBlocks, block => block.type === 'image')
+  const startImageId = imageCount ? getNextImagePasteId(toolUseContext.messages) : 0
+  const approvalImageIds = imageCount
+    ? Array.from({ length: imageCount }, (_, i) => startImageId + i) : undefined
+  let feedbackFenced = false
   const recordExecutionEnd = (
     outcome: ModelAttemptOutcome,
     elapsedMs = performance.now() - executionStarted,
@@ -1779,6 +1791,7 @@ async function checkPermissionsAndCallTool(
       )
     }
     if (toolUseContext.onToolFinalInput) {
+      const permissionPolicyIsCurrent = captureCodeModePermissionPolicy(toolUseContext)
       await toolUseContext.onToolFinalInput(toolUseID, tool.name, callInput, executionContext)
       // A preflight can await while the user stops work or workspace ownership changes.
       if (toolUseContext.abortController.signal.aborted) throw new AbortError(CANCEL_MESSAGE)
@@ -1791,6 +1804,9 @@ async function checkPermissionsAndCallTool(
       const fence = toolUseContext.getCodeModeDispatchFence?.()
       if (fence) throw new Error(fence)
       assertLidWorkAdmission()
+      if (!permissionPolicyIsCurrent()) {
+        throw new Error('Tool permissions changed during preparation. Review the current permissions and try again.')
+      }
     }
     if (staleInstructionContext(toolUseContext, tool)) {
       recordExecutionEnd('cancelled')
@@ -1798,9 +1814,9 @@ async function checkPermissionsAndCallTool(
       endToolSpan()
       return [...resultingMessages, { message: createStaleInstructionResult(toolUseID, assistantMessage) }]
     }
-    if (('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) ||
-        ('contentBlocks' in permissionDecision && permissionDecision.contentBlocks?.length)) {
+    if (approvalBlocks.length) {
       toolUseContext.codeModeHost?.fenceForInstructions('New approval feedback requires a new script before further dispatch')
+      feedbackFenced = true
     }
     const workspaceReset = !tool.isMcp && ['JumpToProject', 'EnterWorktree', 'ExitWorktree'].includes(tool.name)
       ? toolUseContext.codeModeHost?.prepareWorkspaceChange() : undefined
@@ -1810,9 +1826,11 @@ async function checkPermissionsAndCallTool(
     startSessionActivity('tool_exec')
     sessionActivityStarted = true
     if (!toolUseContext.agentId) recordToolActivity(toolUseID, 'executing')
-    toolExecutionEvidence = captureToolExecutionEvidence(
-      toolUseID, parsedInput.data, callInput, userApprovalFeedback,
-    )
+    if (!assistantMessage.isVirtual && !assistantMessage.codeMode) {
+      toolExecutionEvidence = captureToolExecutionEvidence(
+        toolUseID, parsedInput.data, callInput, userApprovalFeedback,
+      )
+    }
     const rawResult = await tool.call(
       callInput,
       executionContext,
@@ -2044,6 +2062,7 @@ async function checkPermissionsAndCallTool(
     const hookResults = []
     const toolContextModifier = result.contextModifier
     let mcpMeta = result.mcpMeta
+    let pairedMessage: UserMessage | undefined
 
     async function addToolResult(
       toolUseResult: unknown,
@@ -2060,63 +2079,19 @@ async function checkPermissionsAndCallTool(
           )
         : await processToolResultBlock(tool, toolUseResult, toolUseID)
 
-      // Build content blocks - tool result first, then optional feedback
-      const contentBlocks: ContentBlockParam[] = [toolResultBlock]
-      // Add accept feedback if user provided feedback when approving
-      // (acceptFeedback only exists on PermissionAllowDecision, which is guaranteed here)
-      if (
-        'acceptFeedback' in permissionDecision &&
-        permissionDecision.acceptFeedback
-      ) {
-        contentBlocks.push({
-          type: 'text',
-          text: permissionDecision.acceptFeedback,
-        })
-      }
-
-      // Add content blocks (e.g., pasted images) from the permission decision
-      const allowContentBlocks =
-        'contentBlocks' in permissionDecision
-          ? permissionDecision.contentBlocks
-          : undefined
-      if (allowContentBlocks?.length) {
-        contentBlocks.push(...allowContentBlocks)
-      }
-
-      // Generate sequential imagePasteIds so each image renders with a distinct label
-      let allowImageIds: number[] | undefined
-      if (allowContentBlocks?.length) {
-        const imageCount = count(
-          allowContentBlocks,
-          (b: ContentBlockParam) => b.type === 'image',
-        )
-        if (imageCount > 0) {
-          const startId = getNextImagePasteId(toolUseContext.messages)
-          allowImageIds = Array.from(
-            { length: imageCount },
-            (_, i) => startId + i,
-          )
-        }
-      }
-
-      const pairedMessage = createUserMessage({
-          content: contentBlocks,
-          imagePasteIds: allowImageIds,
-          toolUseResult:
-            toolUseContext.agentId && !toolUseContext.preserveToolUseResults
-              ? undefined
-              : toolUseResult,
-          mcpMeta: toolUseContext.agentId
-            ? (toolUseContext.getCodeModeDispatchFence && mcpMeta?.structuredContent ? { structuredContent: mcpMeta.structuredContent } : undefined)
-            : mcpMeta,
-          sourceToolAssistantUUID: assistantMessage.uuid as UUID,
-          toolExecutionEvidence,
-        })
-      if (('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) ||
-          allowContentBlocks?.length ||
-          (!tool.isMcp && tool.name === REPL_TOOL_NAME && toolUseContext.codeModeHost?.needsContextRegistration)) {
-        toolUseContext.codeModeHost?.requireModelMessages([pairedMessage])
-      }
+      pairedMessage = createUserMessage({
+        content: [toolResultBlock, ...approvalBlocks],
+        imagePasteIds: approvalImageIds,
+        toolUseResult:
+          toolUseContext.agentId && !toolUseContext.preserveToolUseResults
+            ? undefined
+            : toolUseResult,
+        mcpMeta: toolUseContext.agentId
+          ? (toolUseContext.getCodeModeDispatchFence && mcpMeta?.structuredContent ? { structuredContent: mcpMeta.structuredContent } : undefined)
+          : mcpMeta,
+        sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+        toolExecutionEvidence,
+      })
       resultingMessages.push({
         message: pairedMessage,
         contextModifier: toolContextModifier
@@ -2248,6 +2223,10 @@ async function checkPermissionsAndCallTool(
       resultingMessages.push(hookResult)
     }
     if (toolUseContext.codeModeHost) {
+      if (pairedMessage && (approvalBlocks.length ||
+          (!tool.isMcp && tool.name === REPL_TOOL_NAME && toolUseContext.codeModeHost.needsContextRegistration))) {
+        toolUseContext.codeModeHost.requireModelMessages([pairedMessage])
+      }
       const authoritativeSupplemental = !tool.isMcp && !tool.mcpInfo &&
         (['Skill', AGENT_TOOL_NAME, 'ResumeAgent', REPL_TOOL_NAME].includes(tool.name) || workspaceReset === 'reset')
       const supplemental = new Set(authoritativeSupplemental ? result.newMessages?.map(message => message.uuid) : [])
@@ -2411,29 +2390,34 @@ async function checkPermissionsAndCallTool(
     // produces. Aborts are included too: the hook already ran, its context is
     // real, and the existing code already returns PostToolUseFailure messages
     // on an interrupt.
+    const pairedErrorMessage = createUserMessage({
+      content: [
+        {
+          type: 'tool_result',
+          content: errorResult.modelContent,
+          is_error: true,
+          tool_use_id: toolUseID,
+        },
+        ...approvalBlocks,
+      ],
+      imagePasteIds: approvalImageIds,
+      toolUseResult: errorResult.persistedResult,
+      mcpMeta: toolUseContext.agentId
+        ? undefined
+        : error instanceof
+            McpToolCallError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
+          ? error.mcpMeta
+          : undefined,
+      sourceToolAssistantUUID: assistantMessage.uuid,
+      toolExecutionEvidence,
+    })
+    if (approvalBlocks.length && toolUseContext.codeModeHost) {
+      if (feedbackFenced) toolUseContext.codeModeHost.requireModelMessages([pairedErrorMessage])
+      else toolUseContext.codeModeHost.commitModelContext([pairedErrorMessage])
+    }
     return [
       ...resultingMessages.slice(0, preCallMessageCount),
-      {
-        message: createUserMessage({
-          content: [
-            {
-              type: 'tool_result',
-              content: errorResult.modelContent,
-              is_error: true,
-              tool_use_id: toolUseID,
-            },
-          ],
-          toolUseResult: errorResult.persistedResult,
-          mcpMeta: toolUseContext.agentId
-            ? undefined
-            : error instanceof
-                McpToolCallError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
-              ? error.mcpMeta
-              : undefined,
-          sourceToolAssistantUUID: assistantMessage.uuid,
-          toolExecutionEvidence,
-        }),
-      },
+      { message: pairedErrorMessage },
       ...hookMessages,
     ]
   } finally {

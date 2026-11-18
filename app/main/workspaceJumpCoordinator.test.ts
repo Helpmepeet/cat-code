@@ -882,6 +882,39 @@ test('late cancellation intent remains distinct from durable successful closure'
   await h.coordinator.waitForSettlement(h.appSessionId)
 })
 
+test.each(['held', 'review'] as const)('Close stays blocked until a Close command has acknowledged an in-flight Stop upgrade (%s gate)', async gate => {
+  const h = harness(); await arrive(h)
+  const stopArrived = Promise.withResolvers<void>()
+  const stopReply = Promise.withResolvers<void>()
+  h.deps.control = async (state, action) => {
+    if (action.action === 'cancel' && state.cancellation?.requestedBy === 'stop') {
+      stopArrived.resolve()
+      await stopReply.promise
+      const notice = gate === 'review' ? { displayUuid: randomUUID(), contextUuid: randomUUID(), outcome: 'cancelled' as const, checkpoint: checkpoint() } : undefined
+      const observed = snapshot(h, 1, {
+        cancellation: { cancelId: action.cancelId, application: 'abort_signalled', order: 1 },
+        ...(notice ? { notice } : {}),
+      }, notice ? { mode: 'review', reservationOperationId: null, requiresUserReconciliation: true } : undefined)
+      observed.execution = 'unconfirmed'
+      h.coordinator.observe(h.appSessionId, observed)
+    }
+    return { kind: 'result', result: { requestId: randomUUID(), operationId: state.operationId, action: action.action, disposition: 'accepted' } }
+  }
+  await h.coordinator.cancel(h.appSessionId)
+  await stopArrived.promise
+  await h.coordinator.cancel(h.appSessionId, undefined, 'close')
+  stopReply.resolve()
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  expect(h.coordinator.isCloseBlocked(h.appSessionId)).toBe(true)
+  expect(h.held.size).toBe(1)
+
+  // The normal Close loop retries once the Stop command slot is free.
+  await h.coordinator.cancel(h.appSessionId, undefined, 'close')
+  await h.coordinator.waitForSettlement(h.appSessionId)
+  expect(h.coordinator.isCloseBlocked(h.appSessionId)).toBe(false)
+  expect(h.held.size).toBe(0)
+})
+
 test.each(['accepted', 'lost', 'refused', 'replacement', 'unknown-location', 'different-workspace', 'running'] as const)(
   'closing without a completion proof requires a current settled cancellation acknowledgement: %s', async delivery => {
     const h = harness(); await arrive(h)

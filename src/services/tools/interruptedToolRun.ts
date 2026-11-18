@@ -26,6 +26,10 @@ export class InterruptedToolRun {
     ))
   }
   get ownPending(): boolean { return this.pending }
+  isAttachedToSession(sessionId: string): boolean {
+    return !!this.sink && !!this.sessionKey && JSON.parse(this.sessionKey)[0] === sessionId
+  }
+
   subscribe = (listener: () => void): (() => void) => {
     sessionListeners.add(listener)
     return () => { sessionListeners.delete(listener) }

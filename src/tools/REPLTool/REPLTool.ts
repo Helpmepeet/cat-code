@@ -2,6 +2,7 @@ import { z } from 'zod/v4'
 import { buildTool, type ToolDef, type ToolResult } from '../../Tool.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { lazySchema } from '../../utils/lazySchema.js'
+import { SCRIPT_BASH_DIRECTORY_GUIDANCE } from '../BashTool/prompt.js'
 import { consumeCodeModeWrapperApproval } from './codeModeAdmission.js'
 import { isReplModeEnabled, REPL_TOOL_NAME } from './constants.js'
 import type { CodeModeResult } from './codeModeHost.js'
@@ -38,6 +39,7 @@ export const REPLTool = buildTool({
   async prompt() {
     return `Execute JavaScript in an isolated interpreter with persistent live variables. No ambient filesystem, network, process, or imports are available. Use await tools.call({name:"Read",input:{file_path:"/absolute/path"}}) to invoke a currently granted tool. Calls use normal validation, hooks, permissions, and serialization. A child returns {content,isError,contentPolicy}; content is effective tool-result text or text blocks after output hooks. Eligible MCP results may also include structuredContent and structuredContentComplete, bounded to 128 KiB; oversized structured content is explicitly unavailable. Post-hook replacement invalidates original structured metadata. Raw MCP _meta is never exposed. Ordinary failed commands throw and can be caught. Refusal, cancellation, and new instructions fence later calls even if caught.
 Use await tools.discover({op:"search",query:"keywords",max:5}) to search the current eligible pool. Search is bounded and declares completeness; inputKeys is only a preview. Use await tools.discover({op:"describe",name:"ToolName"}) for the complete input schema before calling an unfamiliar tool. Discovery does not grant authority or register native model tools.
+${SCRIPT_BASH_DIRECTORY_GUIDANCE}
 Write short standalone comments above major operations so progress has useful step labels. Do not number the comments or include tool-call tallies.
 Auto mode reviews the complete final submitted script before execution. Its escaped script projection must fit 32,000 characters; split larger scripts into smaller persistent cells. Oversized Auto source is rejected, never silently truncated for review. Each child call still goes through its own tool permissions, including applicable Auto review of the arguments it will use.
 Ordinary results may include data and dataComplete, bounded to 96 KiB. These completeness flags describe guest delivery, not an exhaustive filesystem/search enumeration; honor the underlying data.truncated and pagination semantics. Content delivery is separately bounded and declares contentComplete. Returned structured data is not the selected model output.

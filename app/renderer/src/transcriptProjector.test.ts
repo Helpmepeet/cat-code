@@ -2745,6 +2745,24 @@ test.each([false, true])('an abandoned stream disappears during retry and stays 
     .toEqual(['Earlier committed thinking', 'Recovered thinking'])
 })
 
+test('a terminal transport error discards only the abandoned thinking preview without adding a retry', () => {
+  const sessionId = 'session-1'
+  let state = projectServerFrame(createTranscriptState(), ready(sessionId))
+  const play = (message: unknown) => { state = projectServerFrame(state, messageFrame(sessionId, message as SDKMessage)) }
+  play({ type: 'assistant', uuid: 'kept-thinking', parent_tool_use_id: null,
+    message: { id: 'kept', role: 'assistant', content: [{ type: 'thinking', thinking: 'Completed thinking' }] } })
+  play({ type: 'stream_event', uuid: 'last-start', event: { type: 'message_start', message: { id: 'last' } } })
+  play({ type: 'stream_event', uuid: 'last-delta', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Abandoned thinking' } } })
+  play({ type: 'assistant', uuid: 'last-error', error: 'connection_error', discarded_stream_message_id: 'last', parent_tool_use_id: null,
+    message: { id: 'provider-error', role: 'assistant', content: [{ type: 'text', text: 'Connection lost before a response was produced.' }] } })
+  play({ type: 'result', subtype: 'error_during_execution', uuid: 'failed-result', is_error: true, errors: [] })
+
+  const rows = selectTranscriptRows(state, sessionId)
+  expect(rows.filter(row => row.kind === 'thinking').map(row => row.content)).toEqual(['Completed thinking'])
+  expect(rows.some(row => row.kind === 'system-notice' && row.noticeType === 'api_retry')).toBe(false)
+  expect(rows.find(row => row.kind === 'result')).toMatchObject({ providerMessage: 'Connection lost before a response was produced.' })
+})
+
 test('recovered retries fold deterministically and failed results absorb provider notices without moving live rows', () => {
   const messages = [
     { type: 'system', subtype: 'api_retry', uuid: 'r1', attempt: 1, max_retries: 2, retry_delay_ms: 1000, error_status: 529, error: 'rate_limit' },

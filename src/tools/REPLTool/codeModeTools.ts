@@ -3,6 +3,8 @@ import { zodToJsonSchema } from '../../utils/zodToJsonSchema.js'
 import { createHash } from 'node:crypto'
 import { encode } from './runtime/protocol.js'
 import { isCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
+import { getBashPrompt } from '../BashTool/prompt.js'
+import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
 
 export const MAX_CODE_MODE_TOOL_NAME_CHARS = 512
 
@@ -26,10 +28,14 @@ function currentToolDescription(tool: Tool, context: ToolUseContext): Promise<st
   const cached = entries.get(options)
   if (cached && cached.policy === policy && cached.tools === options.tools &&
       cached.agents === agents && cached.allowed === allowed && cached.provider === options.mainLoopProvider) return cached.value
-  const value = Promise.resolve().then(() => tool.prompt({
-    getToolPermissionContext: async () => policy, tools: options.tools, agents,
-    allowedAgentTypes: allowed, provider: options.mainLoopProvider,
-  })).catch(error => { entries!.delete(options); throw error })
+  const value = Promise.resolve().then(() =>
+    tool.name === BASH_TOOL_NAME && !tool.isMcp && !tool.mcpInfo
+      ? getBashPrompt(options.mainLoopProvider, 'script')
+      : tool.prompt({
+        getToolPermissionContext: async () => policy, tools: options.tools, agents,
+        allowedAgentTypes: allowed, provider: options.mainLoopProvider,
+      }),
+  ).catch(error => { entries!.delete(options); throw error })
   entries.set(options, { policy, tools: options.tools, agents, allowed, provider: options.mainLoopProvider, value })
   return value
 }

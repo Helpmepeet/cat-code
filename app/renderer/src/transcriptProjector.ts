@@ -811,7 +811,8 @@ export function selectTranscriptRows(
     if (row.kind !== 'tool-use') return [isHidden ? markHidden(row) : row]
     const rawResult = session.toolResultsByUseId[row.toolUseId] ?? null
     let storedResult: ToolResultProjection | null = rawResult?.codeModeCompletionPending ? null : rawResult
-    if (row.toolName === 'REPL' && storedResult?.codeMode?.status === 'running' && storedResult.codeMode.taskId) {
+    if (row.toolName === 'REPL' && storedResult?.codeMode?.taskId &&
+        (storedResult.codeMode.status === 'running' || storedResult.codeMode.status === 'unknown')) {
       const initial = storedResult.codeMode
       const completion = storedResult.codeModeCompletions?.find(candidate => candidate.cellId === initial.cellId &&
         candidate.generation === initial.generation && candidate.taskId === initial.taskId)
@@ -2315,7 +2316,7 @@ function foldBackgroundCodeModeCompletion(draft: SessionDraft, message: Extract<
   if (!nonEmptyString(message.uuid) || message.isSynthetic !== true || message.origin?.kind !== 'task-notification') return false
   const receipt = parseCodeMode(message.tool_use_result)
   const toolUseId = nonEmptyString(message.origin.toolUseId)
-  if (!receipt || !receipt.taskId || receipt.status === 'running' || !toolUseId || receipt.cellId !== toolUseId) return false
+  if (!receipt || !receipt.taskId || receipt.status === 'running' || receipt.status === 'unknown' || !toolUseId || receipt.cellId !== toolUseId) return false
   const existing = draft.session.toolResultsByUseId[toolUseId]
   const completions = existing?.codeModeCompletions ?? []
   if (completions.some(value => value.cellId === receipt.cellId && value.generation === receipt.generation && value.taskId === receipt.taskId)) return false
@@ -2356,6 +2357,10 @@ function projectAssistantFrame(
   // The engine authors this text for the user, so it is surfaced as a notice
   // rather than dropped.
   if (typeof message.error === 'string') {
+    const discardedStream = nonEmptyString(message.discarded_stream_message_id)
+    if (discardedStream !== null && recoveryInsertAt === null) {
+      discardStreamingThinking(draft, discardedStream)
+    }
     const text = body.content
       .filter((block): block is { type: 'text'; text: string } =>
         isRecord(block) && block.type === 'text' && typeof block.text === 'string',

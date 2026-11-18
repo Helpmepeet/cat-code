@@ -20,6 +20,7 @@ import { formatTaskNotificationText, toTaskNotificationOrigin } from '../../util
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { updateTaskState } from '../../utils/task/framework.js'
 import { hasCompactedToolReceiptSource } from '../../utils/sessionStorage.js'
+import { assertCodeModeBackgroundAdmission } from '../../tasks/CodeModeTask.js'
 
 const FOREGROUND_WALL_TIME_MS = 10 * 60_000
 const BACKGROUND_WALL_TIME_MS = 2 * 60 * 60_000
@@ -297,10 +298,15 @@ export class CodeModeHost {
   runBackground(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, policyIsCurrent: () => boolean, assistantUuid: string): CodeModeResult {
     const receiptOwner = context.interruptedToolRun
     if (!receiptOwner) throw new Error('Background scripts require a durable execution owner')
+    const sessionId = getSessionId()
+    if (!receiptOwner.isAttachedToSession(sessionId)) {
+      throw new Error('This Script runtime cannot save results in the current conversation. Start the Script from the active conversation.')
+    }
+    assertCodeModeBackgroundAdmission(sessionId)
     if (this.disposed) throw new Error('Code Mode runtime incarnation has ended')
     if (!this.isModelContextCurrent(context.codeModeModelEpoch)) throw new Error('New instructions require a fresh model request before another script can execute')
     if (this.backgroundDeliveries.size >= 8) throw new Error('At most eight background cells may await delivery in this incarnation. Finish or collect existing work before launching more.')
-    const owner: CodeModeOwner = { sessionId: getSessionId(), agentId: context.agentId, workerRunId: context.agentRunId ?? this.incarnation }
+    const owner: CodeModeOwner = { sessionId, agentId: context.agentId, workerRunId: context.agentRunId ?? this.incarnation }
     const undelivered = Object.values(context.getAppState().tasks).filter(task => task && typeof task === 'object' &&
       'type' in task && task.type === 'code_mode' && 'delivery' in task && task.delivery !== 'delivered' &&
       'owner' in task && task.owner && typeof task.owner === 'object' &&
@@ -472,11 +478,13 @@ export class CodeModeHost {
     const cellContext = { ...context, abortController: controller, codeModeBackgroundCell: background }
     const dispatch = new CodeModeDispatch(cellContext, canUseTool, { cellId, generation: this.generation },
       async message => {
+        let changedPaths: string[] = []
         if (message.type === 'user' && Array.isArray(message.message.content)) {
           const paired = message.message.content.find(block => block.type === 'tool_result')
           const call = paired?.type === 'tool_result' ? dispatch.calls.find(call => call.toolUseId === paired.tool_use_id) : undefined
           if (paired?.type === 'tool_result' && !paired.is_error && call) {
-            for (const path of codeModeChangedFilePaths(call.name, message.toolUseResult)) {
+            changedPaths = codeModeChangedFilePaths(call.name, message.toolUseResult)
+            for (const path of changedPaths) {
               changedFiles.set(path, { path })
             }
           }
@@ -485,7 +493,10 @@ export class CodeModeHost {
         const bytes = Buffer.byteLength(JSON.stringify(message))
         if (message.type === 'user' && auditBytes + bytes > 512 * 1024) {
           receipt = {
-            ...message, toolUseResult: { omitted: true, reason: 'Cumulative Code Mode audit payload limit', originalBytes: bytes },
+            ...message, toolUseResult: {
+              omitted: true, reason: 'Cumulative Code Mode audit payload limit', originalBytes: bytes,
+              ...(changedPaths.length ? { changedFilePaths: changedPaths } : {}),
+            },
             mcpMeta: undefined,
             message: { ...message.message, content: Array.isArray(message.message.content)
               ? message.message.content.map(block => block.type === 'tool_result'

@@ -2462,6 +2462,12 @@ export class SidecarServer {
         else this.drainOneQueuedPrompt(true)
       } else if (message.action === 'release') {
         if (state.release.authorizedRevision !== message.authorizationRevision || state.release.target === 'held') throw new Error()
+        // A release already in flight must not drain the queue ahead of the
+        // destination's Close command and its manual-input cancellation.
+        if (state.cancellation?.requestedBy === 'close' && state.continuation.admissionGeneration === this.generation && !this.manualCloseRequested) {
+          disposition = 'busy'
+          throw new Error()
+        }
         this.inFlightDurableWrites++
         let applied: 'applied' | 'already_applied' | 'refused'
         try { applied = await this.controller.releaseWorkspaceHandoff(message.operationId, state.release.target) }

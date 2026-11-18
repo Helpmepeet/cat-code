@@ -10,6 +10,16 @@ test('ToolSearch recovery text names the actual guest discovery API', () => {
   expect(reason).toContain('tools.discover({op:"describe",name:"..."})')
 })
 
+test('Bash discovery gives directory guidance that Script accepts', async () => {
+  const context = { options: {
+    tools: [BashTool], mcpClients: [],
+    agentDefinitions: { activeAgents: [], allowedAgentTypes: [] },
+  }, getAppState: () => ({ toolPermissionContext: { mode: 'default' } }) } as unknown as ToolUseContext
+  const discovered = await describeCodeModeTool(context, BashTool.name)
+  expect(discovered).toMatchObject({ description: expect.stringContaining('A directory change must be a standalone Bash call.') })
+  expect(JSON.stringify(discovered)).not.toContain('cd <directory> && <command>')
+})
+
 test('computer compatibility uses current MCP identity even with unprefixed names and aliases', () => {
   for (const name of ['computer_use_status', 'js', 'js_complete', 'js_reset']) {
     const tool = { ...BashTool, name, aliases: ['friendly_alias'], mcpInfo: { serverName: 'codex-computer-use', toolName: name } } as Tool

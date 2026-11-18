@@ -1160,6 +1160,24 @@ test('resolvePreview never reads disk for an id the host does not vouch for', ()
   expect(readCalls).toBe(1)
 })
 
+test('opening a previously cached Script launch reports an unknown outcome without changing disk', () => {
+  const dir = tempDir()
+  const launch: ServerFrame = {
+    kind: 'event', protocolVersion: PROTOCOL_VERSION, sessionId: SID,
+    event: { type: 'message', message: {
+      type: 'user', uuid: '44e49729-617c-4f93-bd0c-9f35742a2d3b', session_id: 'engine-abc',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'saved-script', content: 'Background script started' }] },
+      tool_use_result: { kind: 'code-mode', cellId: 'saved-script', taskId: 'saved-task', generation: 'prior-runtime',
+        status: 'running', code: '1 + 1', description: 'Saved Script', calls: [], changedFiles: [], output: 'Background script started' },
+    } },
+  }
+  writeCache(dir, distill([readyFrame(), launch]))
+  const read = (id: SessionId) => readCache(dir, id)
+  const preview = resolvePreview({ canPreview: () => true, readCache: read }, SID)
+  expect(preview?.frames).toMatchObject([{ event: { message: { tool_use_result: { status: 'unknown', taskId: 'saved-task' } } } }])
+  expect(read(SID)?.frames).toMatchObject([{ event: { message: { tool_use_result: { status: 'running', taskId: 'saved-task' } } } }])
+})
+
 /* --- helpers --- */
 
 function header() {

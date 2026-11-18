@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { feature } from 'bun:bundle'
+import type { UUID } from 'node:crypto'
 import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -171,7 +172,7 @@ describe('compactConversation', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  test('restores file content when only a Script-private Read survives compaction', async () => {
+  test('restores file content unless a complete Read of that file survives compaction', async () => {
     const { createPostCompactFileAttachments } = await import('./compact.js')
     const workspace = realpathSync(tempDir)
     const filePath = join(workspace, 'retained-file.txt')
@@ -198,6 +199,19 @@ describe('compactConversation', () => {
       )
     }
     expect(await restore([readUse, readResult])).toEqual([])
+
+    const retargetedResult = {
+      ...readResult,
+      sourceToolAssistantUUID: readUse.uuid as UUID,
+      toolExecutionEvidence: { toolUseId: 'read-file', finalInput: { file_path: join(workspace, 'approved-elsewhere.txt') } },
+    }
+    expect(await restore([readUse, retargetedResult])).toHaveLength(1)
+
+    const rangedResult = {
+      ...retargetedResult,
+      toolExecutionEvidence: { toolUseId: 'read-file', finalInput: { file_path: filePath, limit: 1 } },
+    }
+    expect(await restore([readUse, rangedResult])).toHaveLength(1)
 
     const codeMode = { cellId: 'script', generation: 'guest' }
     const preserved = [

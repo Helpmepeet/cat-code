@@ -1548,7 +1548,7 @@ test('cancelling a foreground lane waiter settles its receipt while a background
   }
 })
 
-test('abort during asynchronous final-input preflight prevents the tool effect', async () => {
+test.each(['abort', 'permission change'] as const)('%s during asynchronous final-input preflight prevents the tool effect', async change => {
   const preflight = Promise.withResolvers<void>()
   const resume = Promise.withResolvers<void>()
   let effect = false
@@ -1560,10 +1560,55 @@ test('abort during asynchronous final-input preflight prevents the tool effect',
     createAssistantMessage(), async (_, input) => ({ behavior: 'allow', updatedInput: input }), context,
   ))
   await preflight.promise
-  context.abortController.abort('interrupt')
+  if (change === 'abort') context.abortController.abort('interrupt')
+  else context.setAppState(state => ({
+    ...state,
+    toolPermissionContext: { ...state.toolPermissionContext, mode: 'plan' },
+  }))
   resume.resolve()
   await running
   expect(effect).toBe(false)
+})
+
+test('a failed approved tool delivers the approval note and releases Script context registration', async () => {
+  const { CodeModeHost } = await import('../../tools/REPLTool/codeModeHost.js')
+  const tool = makeTool('ApprovedFailureFixture', async () => { throw new Error('Fixture failed') })
+  const context = createToolUseContext([tool])
+  const host = new CodeModeHost()
+  context.codeModeHost = host
+  try {
+    const assistant = createAssistantMessage()
+    const call = { type: 'tool_use' as const, id: 'approved-failure', name: tool.name, input: { value: 'fixture' }, caller: { type: 'direct' as const } }
+    assistant.message.content = [call]
+    const updates = await Array.fromAsync(runToolUse(call, assistant, async (_, input) => ({
+      behavior: 'allow', updatedInput: input, acceptFeedback: 'Please report the failure.',
+    }), context))
+    const paired = updates.find(update => update.message?.type === 'user')?.message
+    expect(paired).toMatchObject({ message: { content: [
+      { type: 'tool_result', tool_use_id: call.id, is_error: true },
+      { type: 'text', text: 'Please report the failure.' },
+    ] } })
+    expect(host.needsContextRegistration).toBe(false)
+    expect(host.isModelContextCurrent(host.modelEpochForContext([assistant, paired!]))).toBe(true)
+  } finally { host.dispose() }
+})
+
+test.each([false, true])('execution keeps reviewer evidence only for native results (virtual=%s)', async isVirtual => {
+  const tool = makeTool('EvidenceFixture', async input => ({ data: input.value }))
+  const assistant = {
+    ...createAssistantMessage(),
+    ...(isVirtual ? { isVirtual: true as const } : {}),
+  }
+  const call = { type: 'tool_use' as const, id: 'evidence', name: tool.name, input: { value: 'proposed' }, caller: { type: 'direct' as const } }
+  assistant.message.content = [call]
+  const updates = await Array.fromAsync(runToolUse(call, assistant, async () => ({
+    behavior: 'allow', updatedInput: { value: 'approved' },
+  }), createToolUseContext([tool])))
+  const result = updates.find(update => update.message?.type === 'user')?.message
+  expect(result).toMatchObject({ toolUseResult: 'approved' })
+  expect(result?.type === 'user' ? result.toolExecutionEvidence : undefined).toEqual(
+    isVirtual ? undefined : { toolUseId: call.id, finalInput: { value: 'approved' } },
+  )
 })
 
 test('a sibling refusal after a Script aborts the original streaming turn', async () => {

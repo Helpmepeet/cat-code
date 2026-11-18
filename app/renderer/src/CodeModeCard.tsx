@@ -64,7 +64,7 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
   const phase = focusedCallPhase({ ...row, awaitingApproval: waitingForApproval ? true : undefined }, true)
   const status = phase === 'preparing' ? 'writing' : phase === 'reviewing' ? 'reviewing' : phase === 'approval' ? 'approval' : phase === 'queued' ? 'waiting' :
     cell?.status ?? (row.status === 'cancelled' ? 'cancelled' : row.status === 'error' ? row.autoModeReview?.outcome === 'blocked' ? 'blocked' : 'failed' : row.status === 'success' ? 'completed' : 'running')
-  const statusLabel = status === 'writing' ? 'Writing' : status === 'reviewing' ? 'Reviewing' : status === 'approval' ? 'Waiting for approval' : status === 'waiting' ? 'Waiting' : status === 'running' ? 'Running' : status === 'yielded' ? 'Paused' : status
+  const statusLabel = status === 'writing' ? 'Writing' : status === 'reviewing' ? 'Reviewing' : status === 'approval' ? 'Waiting for approval' : status === 'waiting' ? 'Waiting' : status === 'running' ? 'Running' : status === 'yielded' ? 'Paused' : status === 'unknown' ? 'Outcome unknown' : status
   const showApproval = phase === 'approval'
   const partial = !!cell?.changedFiles.length && ['failed', 'cancelled', 'blocked', 'yielded'].includes(status)
   const changedKeys = useMemo(() => cell?.changedFiles.map((file, index) => `${index}:${file.path}`) ?? [], [cell])

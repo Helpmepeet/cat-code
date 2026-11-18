@@ -72,7 +72,7 @@ import {
   isPreviewReplayTruncationFrame,
   isReplayTruncationFrame,
 } from './replayBuffer.js'
-import { parseTranscriptRunFacts } from '../shared/transcriptBackfill.js'
+import { markHistoricalScriptOutcome, parseTranscriptRunFacts } from '../shared/transcriptBackfill.js'
 import { isCacheExpiryTimestamp, PROMPT_CACHE_ROUTE_FACTS_VERSION } from '../shared/promptCacheEstimate.js'
 
 /**
@@ -845,7 +845,17 @@ export function resolvePreview(
 ): TranscriptCache | null {
   if (typeof id !== 'string' || id.length === 0) return null
   if (!deps.canPreview(id)) return null
-  return deps.readCache(id)
+  const cache = deps.readCache(id)
+  if (!cache) return null
+  let changed = false
+  const frames = cache.frames.map(frame => {
+    if (frame.kind !== 'event' || frame.event.type !== 'message') return frame
+    const message = markHistoricalScriptOutcome(frame.event.message)
+    if (message === frame.event.message) return frame
+    changed = true
+    return { ...frame, event: { ...frame.event, message } }
+  })
+  return changed ? { ...cache, frames } : cache
 }
 
 function discard(filePath: string): null {

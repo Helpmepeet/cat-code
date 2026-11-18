@@ -33,7 +33,7 @@ import { getEmailToolIdentity } from './emailToolPresentation.js'
 import { codeModeDigest, codeModeForRow } from './codeMode.js'
 import { codeModeLiveView } from './codeModeLiveView.js'
 
-export type FocusedCallPhase = 'preparing' | 'queued' | 'reviewing' | 'approval' | 'running' | 'done' | 'failed' | 'stopped' | 'blocked'
+export type FocusedCallPhase = 'preparing' | 'queued' | 'reviewing' | 'approval' | 'running' | 'done' | 'failed' | 'stopped' | 'blocked' | 'unknown'
 
 export type FocusedCallContext = {
   /** Whether live activity reports have started arriving; before that a pending call counts as running. */
@@ -71,6 +71,7 @@ export function focusedCallPhase(call: FocusedCall, signalled: boolean): Focused
   if (cellStatus === 'cancelled') return 'stopped'
   if (cellStatus === 'failed') return 'failed'
   if (cellStatus === 'completed') return 'done'
+  if (cellStatus === 'unknown') return 'unknown'
   if (cellStatus !== 'running') {
     if (call.preparing) return 'preparing'
     if (call.status === 'success' || isDeclinedQuestion(call)) return 'done'
@@ -262,6 +263,7 @@ function phaseVerb(phase: FocusedCallPhase, words: Words, asking: boolean): read
     case 'approval': return ['Waiting for approval', 'warn']
     case 'stopped': return ['Stopped', null]
     case 'blocked': return ['Blocked', null]
+    case 'unknown': return ['Outcome unknown', null]
     case 'done': case 'failed': return [words.past, null]
     // The question is waiting on the user, so no engine phase changes that.
     default: return asking ? ['Waiting for your answer', 'queued']

@@ -40,6 +40,7 @@ import {
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
 } from '../shared/limits.js'
+import { markHistoricalScriptOutcome } from '../shared/transcriptBackfill.js'
 import { projectResumedHistory } from './historyProjection.js'
 import { withRestoredSubagentHistory } from './subagentHistory.js'
 
@@ -81,7 +82,7 @@ export const readEarlierDisplayHistory: HistoryLoadEarlierReader = async (
     // A temporary read failure must stay retryable, not look like a proven gap.
     throwOnReadError: true,
   })
-  const history = projectResumedHistory(display.messages)
+  const history = projectResumedHistory(display.messages).map(markHistoricalScriptOutcome)
   const anchorIndex = options?.beforeUuid
     ? history.findIndex(message => message.uuid === options.beforeUuid)
     : history.length

@@ -16,6 +16,7 @@ import {
   MAX_TRANSCRIPT_BACKFILL_INPUT_BYTES,
   MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES,
   TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,
+  markHistoricalScriptOutcome,
   parseTranscriptBackfillRequest,
   parseTranscriptBackfillResult,
   type TranscriptBackfillFailureResult,
@@ -192,7 +193,7 @@ async function main(): Promise<void> {
       // transcripts, depending only on which path produced the frames.
       const nested = await withRestoredSubagentHistory(
         item.engineSessionId,
-        merged.history,
+        merged.history.map(markHistoricalScriptOutcome),
         message => process.stderr.write(`${message}\n`),
       )
       const frames = buildBoundedFrames(

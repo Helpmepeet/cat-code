@@ -17,10 +17,6 @@ import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
 import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { FileReadTool } from '../../tools/FileReadTool/FileReadTool.js'
-import {
-  FILE_READ_TOOL_NAME,
-  FILE_UNCHANGED_STUB,
-} from '../../tools/FileReadTool/prompt.js'
 import { ToolSearchTool } from '../../tools/ToolSearchTool/ToolSearchTool.js'
 import type { AgentId } from '../../types/ids.js'
 import type {
@@ -69,6 +65,7 @@ import {
   isCompactBoundaryMessage,
   normalizeMessagesForAPI,
 } from '../../utils/messages.js'
+import { deliveredRead, successfulFileToolResults } from '../../utils/fileToolTranscript.js'
 import { expandPath } from '../../utils/path.js'
 import { getPlan, getPlanFilePath } from '../../utils/plans.js'
 import {
@@ -1912,58 +1909,10 @@ export async function createAsyncAgentAttachmentsIfNeeded(
  * Script child records are filtered out of the model request.
  */
 function collectReadToolFilePaths(messages: Message[]): Set<string> {
-  const deliveredReadIds = new Set<string>()
-  for (const message of messages) {
-    if (
-      message.type !== 'user' ||
-      message.isVirtual ||
-      message.codeMode ||
-      message.toolResultStatus === 'cancelled' ||
-      !Array.isArray(message.message.content)
-    ) {
-      continue
-    }
-    for (const block of message.message.content) {
-      if (
-        block.type === 'tool_result' &&
-        block.is_error !== true &&
-        (typeof block.content === 'string'
-          ? !block.content.startsWith(FILE_UNCHANGED_STUB) && block.content.length > 0
-          : (block.content?.length ?? 0) > 0)
-      ) {
-        deliveredReadIds.add(block.tool_use_id)
-      }
-    }
-  }
-
   const paths = new Set<string>()
-  for (const message of messages) {
-    if (
-      message.type !== 'assistant' ||
-      message.isVirtual ||
-      message.codeMode ||
-      !Array.isArray(message.message.content)
-    ) {
-      continue
-    }
-    for (const block of message.message.content) {
-      if (
-        block.type !== 'tool_use' ||
-        block.name !== FILE_READ_TOOL_NAME ||
-        !deliveredReadIds.has(block.id)
-      ) {
-        continue
-      }
-      const input = block.input
-      if (
-        input &&
-        typeof input === 'object' &&
-        'file_path' in input &&
-        typeof input.file_path === 'string'
-      ) {
-        paths.add(expandPath(input.file_path))
-      }
-    }
+  for (const result of successfulFileToolResults(messages)) {
+    const read = deliveredRead(result)
+    if (read?.complete) paths.add(read.path)
   }
   return paths
 }

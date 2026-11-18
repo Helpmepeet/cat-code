@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { randomUUID } from 'crypto'
+import { randomUUID, type UUID } from 'crypto'
 import { mkdtempSync, rmSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -9,6 +9,7 @@ import { PROJECT_JUMP_ACCEPTED_MESSAGE, handoffContinuationPrompt } from '../app
 import {
   deserializeMessagesWithInterruptDetection,
   isSelectableUserMessage,
+  loadConversationForResume,
   loadMessagesFromJsonlPath,
   resolveSelectableUserMessageByProducerPrefix,
 } from './conversationRecovery.js'
@@ -193,6 +194,28 @@ describe('manual compact recovery', () => {
       firstUser,
       firstAssistant,
     ])
+  })
+
+  test('explicit JSONL resume keeps the tool result and drops private execution evidence', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'conversation-import-'))
+    tempDirs.push(tempDir)
+    const sessionId = randomUUID()
+    const path = join(tempDir, `${sessionId}.jsonl`)
+    const user = createUserMessage({ content: 'Read the fixture.' })
+    const assistant = createAssistantMessage({ content: [{ type: 'tool_use', id: 'read-test', name: 'Read', input: { file_path: '/fixture.txt' } }] })
+    const result = createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: 'read-test', content: 'fixture text' }],
+      sourceToolAssistantUUID: assistant.uuid as UUID,
+      toolExecutionEvidence: { toolUseId: 'read-test', approvalFeedback: 'Fixture approval note.' },
+    })
+    const messages = [user, assistant, result, createAssistantMessage({ content: 'Read complete.' })]
+    await writeFile(path, `${messages.map((message, i) => JSON.stringify({
+      ...message, sessionId, parentUuid: messages[i - 1]?.uuid ?? null, isSidechain: false,
+      cwd: tempDir, userType: 'external', version: 'test',
+    })).join('\n')}\n`, { mode: 0o600 })
+    const loaded = await loadConversationForResume(sessionId, path, { mutable: false, interruptedTurn: 'ignore' })
+    expect(loaded?.messages.find(message => message.uuid === result.uuid)).toMatchObject({ message: result.message })
+    expect(loaded?.messages.find(message => message.uuid === result.uuid)).not.toHaveProperty('toolExecutionEvidence')
   })
 })
 

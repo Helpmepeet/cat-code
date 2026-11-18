@@ -31,6 +31,7 @@ const { query } = await import('../../query.js')
 const state = await import('../../bootstrap/state.js')
 const { buildTool, getEmptyToolPermissionContext } = await import('../../Tool.js')
 const { createUserMessage } = await import('../../utils/messages.js')
+const { normalizeMessage } = await import('../../utils/queryHelpers.js')
 const { asSystemPrompt } = await import('../../utils/systemPromptType.js')
 const { queryModelWithStreaming } = await import('./claude.js')
 const { StreamIdleError } = await import('./streamIdle.js')
@@ -140,14 +141,18 @@ for (const failures of [1, 2]) {
   })
 }
 
-test('retry exhaustion stops after three streaming requests without non-streaming replay', async () => {
-  const result = await collect(attempt => response([start(`failed-${attempt}`), ...thinking], reset()))
+test.each(['socket reset', 'premature EOF'] as const)('retry exhaustion reports the last discarded attempt after %s', async failure => {
+  const result = await collect(attempt => response([start(`failed-${attempt}`), ...thinking], failure === 'socket reset' ? reset() : undefined))
   expect(result.requests).toHaveLength(3)
   expect(result.requests.every(request => request.stream === true)).toBe(true)
   expect(waits).toEqual([1000, 2000])
   expect(JSON.stringify(result.persisted)).not.toContain('unfinished private thought')
   expect(JSON.stringify(result.persisted)).not.toContain('verbose: true')
   expect(JSON.stringify(result.persisted)).toContain('isApiErrorMessage')
+  expect(result.rows.filter(row => (row as { subtype?: string }).subtype === 'transport_recovery')).toHaveLength(2)
+  expect(result.persisted.flatMap(message => [...normalizeMessage(message)])).toContainEqual(expect.objectContaining({
+    type: 'assistant', error: expect.any(String), discarded_stream_message_id: 'failed-3',
+  }))
 })
 
 test('premature EOF during thinking recovers within the streaming retry budget', async () => {

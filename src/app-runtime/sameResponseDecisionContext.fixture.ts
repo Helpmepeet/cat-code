@@ -8,6 +8,7 @@ globalThis.fetch = (() => { throw new Error('Network forbidden in same-response 
 ;(globalThis as any).MACRO = { VERSION: 'same-response-test' }
 const sameResponse = process.env.SAME_RESPONSE_TEST_BATCH === '1'
 const nestedInstructions = process.env.SAME_RESPONSE_NESTED_INSTRUCTIONS === '1'
+const laterContext = process.env.SAME_RESPONSE_LATER_CONTEXT === '1'
 const approvalEvidence = process.env.SAME_RESPONSE_APPROVAL_EVIDENCE
 if (nestedInstructions) {
   await mkdir('nested')
@@ -45,7 +46,7 @@ mock.module('../services/api/client.js', () => ({
     modelBodies.push(JSON.parse(JSON.stringify(body)))
     if (index > calls.length) throw new Error('Unexpected model request')
     const blocks = nestedInstructions
-      ? index === 0 ? calls : index === 1
+      ? index === 0 ? (laterContext ? calls.slice(1) : calls) : index === 1
         ? [{ type: 'tool_use', id: 'next-response-probe', name: 'Bash', input: { command: "bash -c 'printf next-response-effect > next-round.txt'", work_lifetime: 'finite', run_in_background: false } }] : []
       : sameResponse ? index === 0 ? calls : [] : calls[index] ? [calls[index]] : []
     const stream = Object.assign((async function* () {
@@ -77,6 +78,22 @@ const { BashTool } = await import('../tools/BashTool/BashTool.js')
 const { FileReadTool } = await import('../tools/FileReadTool/FileReadTool.js')
 const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
+if (laterContext) {
+  const { CodeModeHost } = await import('../tools/REPLTool/codeModeHost.js')
+  const { createUserMessage } = await import('../utils/messages.js')
+  const capture = CodeModeHost.prototype.missingRequiredModelMessages
+  let published = false
+  spyOn(CodeModeHost.prototype, 'missingRequiredModelMessages').mockImplementation(function (this: InstanceType<typeof CodeModeHost>, messages) {
+    const snapshot = capture.call(this, messages)
+    if (!published) {
+      published = true
+      this.fenceForInstructions('Authoritative context arrived after the snapshot', [createUserMessage({
+        content: 'NEW_CONTEXT_AFTER_SNAPSHOT', isMeta: true,
+      })])
+    }
+    return snapshot
+  })
+}
 enableConfigs()
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: {

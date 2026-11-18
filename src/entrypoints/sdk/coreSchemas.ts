@@ -1509,6 +1509,7 @@ export const SDKAssistantMessageSchema = lazySchema(() =>
     agent_name: z.string().optional(),
     agent_cwd: z.string().max(4096).regex(/^\/[^\0]*$/).optional(),
     error: SDKAssistantErrorCodeSchema().optional(),
+    discarded_stream_message_id: z.string().min(1).optional(),
     uuid: UUIDPlaceholder(),
     session_id: z.string(),
   }),

@@ -5,17 +5,12 @@ import {
   getSessionId,
   isSessionPersistenceDisabled,
 } from 'src/bootstrap/state.js'
-import type { SDKMessage } from 'src/entrypoints/agentSdkTypes.js'
+import type { SDKAssistantErrorCode, SDKMessage } from 'src/entrypoints/agentSdkTypes.js'
 import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import { runTools } from '../services/tools/toolOrchestration.js'
 import { findToolByName, type Tool, type Tools } from '../Tool.js'
 import { BASH_TOOL_NAME } from '../tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
-import type { Input as FileReadInput } from '../tools/FileReadTool/FileReadTool.js'
-import {
-  FILE_READ_TOOL_NAME,
-  FILE_UNCHANGED_STUB,
-} from '../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../tools/FileWriteTool/prompt.js'
 import type { Message } from '../types/message.js'
 import type { OrphanedPermission } from '../types/textInputTypes.js'
@@ -24,6 +19,7 @@ import { isEnvTruthy } from './envUtils.js'
 import { isFsInaccessible } from './errors.js'
 import { getFileModificationTime, stripLineNumberPrefix } from './file.js'
 import { readFileSyncWithMetadata } from './fileRead.js'
+import { deliveredRead, successfulFileToolResults } from './fileToolTranscript.js'
 import {
   createFileStateCacheWithSizeLimit,
   type FileStateCache,
@@ -133,7 +129,10 @@ export function* normalizeMessage(message: Message): Generator<SDKMessage> {
           parent_tool_use_id: null,
           session_id: getSessionId(),
           uuid: _.uuid,
-          error: _.error,
+          error: _.error as SDKAssistantErrorCode | undefined,
+          ...(message.isApiErrorMessage && message.discardedStreamMessageId && {
+            discarded_stream_message_id: message.discardedStreamMessageId,
+          }),
           ...toSDKCodeModeProps(message),
         }
       }
@@ -382,181 +381,62 @@ export async function* handleOrphanedPermission(
 
 // Create a function to extract read files from messages
 export function extractReadFilesFromMessages(
-  messages: Message[],
+  messages: readonly Message[],
   cwd: string,
   maxSize: number = ASK_READ_FILE_STATE_CACHE_SIZE,
 ): FileStateCache {
   const cache = createFileStateCacheWithSizeLimit(maxSize)
 
-  // Model-visible Reads seed read provenance. Hidden mutations still refresh
-  // the cache's disk state without implying the model received those bytes.
-  const fileReadToolUseIds = new Map<string, string>() // toolUseId -> filePath
-  const fileWriteToolUseIds = new Map<
-    string,
-    { filePath: string; content: string }
-  >() // toolUseId -> { filePath, content }
-  const fileEditToolUseIds = new Map<string, string>() // toolUseId -> filePath
-
-  for (const message of messages) {
-    if (
-      message.type === 'assistant' &&
-      Array.isArray(message.message.content)
-    ) {
-      for (const content of message.message.content) {
-        if (
-          content.type === 'tool_use' &&
-          content.name === FILE_READ_TOOL_NAME &&
-          !message.isVirtual &&
-          !message.codeMode
-        ) {
-          // Extract file_path from the tool use input
-          const input = content.input as FileReadInput | undefined
-          // Ranged reads are not added to the cache. An explicit offset of 1
-          // with no limit is still an unbounded read from the beginning.
-          if (
-            input?.file_path &&
-            (input.offset === undefined || input.offset === 1) &&
-            input?.limit === undefined
-          ) {
-            // Normalize to absolute path for consistent cache lookups
-            const absolutePath = expandPath(input.file_path, cwd)
-            fileReadToolUseIds.set(content.id, absolutePath)
-          }
-        } else if (
-          content.type === 'tool_use' &&
-          content.name === FILE_WRITE_TOOL_NAME
-        ) {
-          // Extract file_path and content from the Write tool use input
-          const input = content.input as
-            | { file_path?: string; content?: string }
-            | undefined
-          if (input?.file_path && typeof input.content === 'string') {
-            // Normalize to absolute path for consistent cache lookups
-            const absolutePath = expandPath(input.file_path, cwd)
-            fileWriteToolUseIds.set(content.id, {
-              filePath: absolutePath,
-              content: input.content,
-            })
-          }
-        } else if (
-          content.type === 'tool_use' &&
-          content.name === FILE_EDIT_TOOL_NAME
-        ) {
-          // Edit's input has old_string/new_string, not the resulting content.
-          // Track the path so the second pass can read current disk state.
-          const input = content.input as { file_path?: string } | undefined
-          if (input?.file_path) {
-            const absolutePath = expandPath(input.file_path, cwd)
-            fileEditToolUseIds.set(content.id, absolutePath)
-          }
-        }
-      }
+  for (const result of successfulFileToolResults(messages)) {
+    const read = deliveredRead(result, cwd)
+    if (read?.cacheableText && typeof read.content === 'string' && result.message.timestamp) {
+      const fileContent = read.content
+        .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+        .split('\n')
+        .map(stripLineNumberPrefix)
+        .join('\n')
+        .trim()
+      cache.set(read.path, {
+        content: fileContent,
+        timestamp: new Date(result.message.timestamp).getTime(),
+        offset: 1,
+        limit: undefined,
+        isWriteAuthorizedRead: true,
+        ...(read.truncated ? { isTruncatedView: true } : {}),
+      })
+      continue
     }
-  }
 
-  // Second pass: find corresponding tool results and extract content
-  for (const message of messages) {
-    if (message.type === 'user' && Array.isArray(message.message.content)) {
-      for (const content of message.message.content) {
-        if (
-          content.type === 'tool_result' &&
-          content.tool_use_id &&
-          content.is_error !== true &&
-          message.toolResultStatus !== 'cancelled'
-        ) {
-          // Handle Read tool results
-          const readFilePath = fileReadToolUseIds.get(content.tool_use_id)
-          if (
-            readFilePath &&
-            !message.isVirtual &&
-            !message.codeMode &&
-            typeof content.content === 'string' &&
-            // Dedup stubs contain no file content — the earlier real Read
-            // already cached it. Chronological last-wins would otherwise
-            // overwrite the real entry with stub text.
-            !content.content.startsWith(FILE_UNCHANGED_STUB)
-          ) {
-            const rawReadResult = message.toolUseResult as
-              | {
-                  type?: string
-                  file?: { numLines?: number; totalLines?: number }
-                }
-              | undefined
-            const isTruncatedView =
-              (rawReadResult?.type === 'text' &&
-                typeof rawReadResult.file?.numLines === 'number' &&
-                typeof rawReadResult.file.totalLines === 'number' &&
-                rawReadResult.file.numLines < rawReadResult.file.totalLines) ||
-              content.content.includes('This is a partial view.')
-
-            // Remove system-reminder blocks from the content
-            const processedContent = content.content.replace(
-              /<system-reminder>[\s\S]*?<\/system-reminder>/g,
-              '',
-            )
-
-            // Extract the actual file content from the tool result
-            // Tool results for text files contain line numbers, we need to strip those
-            const fileContent = processedContent
-              .split('\n')
-              .map(stripLineNumberPrefix)
-              .join('\n')
-              .trim()
-
-            // Cache the file content with the message timestamp
-            if (message.timestamp) {
-              const timestamp = new Date(message.timestamp).getTime()
-              cache.set(readFilePath, {
-                content: fileContent,
-                timestamp,
-                offset: 1,
-                limit: undefined,
-                isWriteAuthorizedRead: true,
-                ...(isTruncatedView ? { isTruncatedView: true } : {}),
-              })
-            }
-          }
-
-          // Handle Write tool results - use content from the tool input
-          const writeToolData = fileWriteToolUseIds.get(content.tool_use_id)
-          if (writeToolData && message.timestamp) {
-            const timestamp = new Date(message.timestamp).getTime()
-            cache.set(writeToolData.filePath, {
-              content: writeToolData.content,
-              timestamp,
-              offset: undefined,
-              limit: undefined,
-            })
-          }
-
-          // Handle Edit tool results — post-edit content isn't in the
-          // tool_use input (only old_string/new_string) nor fully in the
-          // result (only a snippet). Read from disk now, using actual mtime
-          // so getChangedFiles's mtime check passes on the next turn.
-          //
-          // Callers seed the cache once at process start (print.ts --resume,
-          // Cowork cold-restart per turn), so disk content at extraction time
-          // IS the post-edit state. No dedup: processing every Edit preserves
-          // last-wins semantics when Read/Write interleave (Edit→Read→Edit).
-          const editFilePath = fileEditToolUseIds.get(content.tool_use_id)
-          if (editFilePath) {
-            try {
-              const { content: diskContent } =
-                readFileSyncWithMetadata(editFilePath)
-              cache.set(editFilePath, {
-                content: diskContent,
-                timestamp: getFileModificationTime(editFilePath),
-                offset: undefined,
-                limit: undefined,
-              })
-            } catch (e: unknown) {
-              if (!isFsInaccessible(e)) {
-                throw e
-              }
-              // File deleted or inaccessible since the Edit — skip
-            }
-          }
-        }
+    // Mutation results refresh disk state without granting Read provenance.
+    const { name } = result.call.block
+    if (name !== FILE_WRITE_TOOL_NAME && name !== FILE_EDIT_TOOL_NAME) continue
+    const input = result.input as { file_path?: string; content?: string } | undefined
+    const data = result.data as { filePath?: string; content?: string } | undefined
+    const path = data?.filePath ?? input?.file_path
+    if (typeof path !== 'string' || !path) continue
+    const filePath = expandPath(path, cwd)
+    if (name === FILE_WRITE_TOOL_NAME) {
+      const content = data?.content ?? input?.content
+      if (typeof content !== 'string' || !result.message.timestamp) continue
+      cache.set(filePath, {
+        content,
+        timestamp: new Date(result.message.timestamp).getTime(),
+        offset: undefined,
+        limit: undefined,
+      })
+    } else {
+      // Edit records contain only a snippet. Read disk with its actual mtime
+      // so the next turn's getChangedFiles check compares the right version.
+      try {
+        const { content } = readFileSyncWithMetadata(filePath)
+        cache.set(filePath, {
+          content,
+          timestamp: getFileModificationTime(filePath),
+          offset: undefined,
+          limit: undefined,
+        })
+      } catch (error: unknown) {
+        if (!isFsInaccessible(error)) throw error
       }
     }
   }

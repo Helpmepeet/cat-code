@@ -4,6 +4,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { getOriginalCwd, getSessionId } from '../../bootstrap/state.js'
 import type { LocalJSXCommandContext } from '../../commands.js'
 import { logEvent } from '../../services/analytics/index.js'
+import { beginCodeModeConversationChange } from '../../tasks/CodeModeTask.js'
 import type { LocalJSXCommandOnDone } from '../../types/command.js'
 import type {
   ContentReplacementEntry,
@@ -297,8 +298,10 @@ export async function call(
   const customTitle = args?.trim() || undefined
 
   const originalSessionId = getSessionId()
+  let endConversationChange: (() => void) | undefined
 
   try {
+    endConversationChange = beginCodeModeConversationChange(context.getAppState().tasks, originalSessionId)
     const {
       sessionId,
       title,
@@ -354,5 +357,7 @@ export async function call(
       error instanceof Error ? error.message : 'Unknown error occurred'
     onDone(`Failed to branch conversation: ${message}`)
     return null
+  } finally {
+    endConversationChange?.()
   }
 }

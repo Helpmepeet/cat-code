@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SIDECAR_RUNTIME_ARGS } from '../../app/main/mainDecisions.js'
 
-async function fixture(streaming: boolean, sameResponse: boolean, nestedInstructions = false, approvalEvidence = '') {
+async function fixture(streaming: boolean, sameResponse: boolean, nestedInstructions = false, approvalEvidence = '', laterContext = false) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'same-response-')))
   try {
     await mkdir(join(root, 'config'))
@@ -17,7 +17,7 @@ async function fixture(streaming: boolean, sameResponse: boolean, nestedInstruct
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1',
         SAME_RESPONSE_TEST_ROOT: root, SAME_RESPONSE_TEST_BATCH: sameResponse ? '1' : '0', SAME_RESPONSE_TEST_STREAMING: streaming ? '1' : '0',
         SAME_RESPONSE_NESTED_INSTRUCTIONS: nestedInstructions ? '1' : '0',
-        SAME_RESPONSE_APPROVAL_EVIDENCE: approvalEvidence },
+        SAME_RESPONSE_APPROVAL_EVIDENCE: approvalEvidence, SAME_RESPONSE_LATER_CONTEXT: laterContext ? '1' : '0' },
     })
     const timer = setTimeout(() => child.kill(), 25_000)
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
@@ -26,6 +26,14 @@ async function fixture(streaming: boolean, sameResponse: boolean, nestedInstruct
     return JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8'))
   } finally { await rm(root, { recursive: true, force: true }) }
 }
+
+test('native tools wait for instructions registered after the model history snapshot', async () => {
+  const evidence = await fixture(true, true, true, '', true)
+  expect(evidence.sibling).toBeNull()
+  expect(evidence.nextRound).toBe('next-response-effect')
+  expect(JSON.stringify(evidence.modelBodies[0].messages)).not.toContain('NEW_CONTEXT_AFTER_SNAPSHOT')
+  expect(JSON.stringify(evidence.modelBodies[1].messages)).toContain('NEW_CONTEXT_AFTER_SNAPSHOT')
+}, 60_000)
 
 for (const streaming of [false, true]) {
   test(`new nested instructions reach main and reviewer together after same-response Code Mode discovery: streaming=${streaming}`, async () => {

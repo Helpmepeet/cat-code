@@ -34,6 +34,26 @@ export function hasUndeliveredCodeModeTasks(tasks: Record<string, TaskState>, se
     task.owner.sessionId === sessionId && task.delivery !== 'delivered')
 }
 
+const conversationChanges = new Map<string, number>()
+
+/** Keep detached Script admission closed until the saved history and its owner agree. */
+export function beginCodeModeConversationChange(tasks: Record<string, TaskState>, sessionId: string): () => void {
+  if (hasUndeliveredCodeModeTasks(tasks, sessionId)) {
+    throw new Error(CODE_MODE_CONVERSATION_CHANGE_PENDING)
+  }
+  // /branch holds the fence around snapshot creation and then calls /resume.
+  conversationChanges.set(sessionId, (conversationChanges.get(sessionId) ?? 0) + 1)
+  return () => {
+    const remaining = (conversationChanges.get(sessionId) ?? 1) - 1
+    if (remaining) conversationChanges.set(sessionId, remaining)
+    else conversationChanges.delete(sessionId)
+  }
+}
+
+export function assertCodeModeBackgroundAdmission(sessionId: string): void {
+  if (conversationChanges.has(sessionId)) throw new Error('Wait for the conversation change before starting a background Script.')
+}
+
 /** Shared allowlist for live TaskOutput and its disk-backed terminal projection. */
 export function projectCodeModeTaskOutput(task: CodeModeTaskState) {
   const receipt = task.receipt
@@ -123,6 +143,7 @@ export function registerCodeModeTask<T>(options: {
 }) {
   const { setAppState, owner: inputOwner, cellId, generation, description, toolUseId, completion } = options
   let cancelAction: (() => void | Promise<void>) | undefined = options.cancel
+  assertCodeModeBackgroundAdmission(inputOwner.sessionId)
   if (closedOwners.has(ownerKey(inputOwner))) throw new Error('Code Mode owner is closed')
   if (inputOwner.agentId && !inputOwner.workerRunId) throw new Error('Worker Code Mode tasks require a worker incarnation')
   if ([...runs.values()].some(run => sameCodeModeOwner(run.owner, inputOwner) && run.cellId === cellId && run.generation === generation)) throw new Error('Code Mode cell is already owned')

@@ -183,6 +183,25 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
     `${mixedEntries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
   )
 
+  const archived = sessions[1]!
+  const archivedPath = archived.transcriptPath!
+  const last = readFileSync(archivedPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+    .findLast(entry => entry.type === 'user' || entry.type === 'assistant')!
+  const scriptAssistant = randomUUID()
+  const scriptReceipt = randomUUID()
+  const scriptInput = { code: '1 + 1', description: 'Archived Script', run_in_background: true }
+  appendFileSync(archivedPath, [
+    { type: 'assistant', uuid: scriptAssistant, parentUuid: last.uuid, message: {
+      role: 'assistant', content: [{ type: 'tool_use', id: 'saved-script', name: 'REPL', input: scriptInput }],
+    } },
+    { type: 'user', uuid: scriptReceipt, parentUuid: scriptAssistant, sourceToolAssistantUUID: scriptAssistant,
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'saved-script', content: 'Background script started' }] },
+      toolUseResult: { kind: 'code-mode', cellId: 'saved-script', generation: 'prior-runtime', taskId: 'saved-task', ...scriptInput,
+        status: 'running', calls: [], changedFiles: [], output: 'Background script started' },
+    },
+  ].map(entry => JSON.stringify({ ...entry, sessionId: archived.engineSessionId, cwd: archived.cwd,
+    timestamp: new Date().toISOString(), version: 'test', isSidechain: false })).join('\n') + '\n')
+
   const control = await spawnAndCollect(
     ['bun', 'run', hookControl, sessions[0]!.engineSessionId],
     {
@@ -258,6 +277,13 @@ test('serialized bare worker switches two sessions, suppresses a real SessionSta
     // backfilled session before this wiring existed.
     expect(result!.runFacts.model).toBeTruthy()
     expect(result!.runFacts.contextWindow).toBeGreaterThan(0)
+    if (expected === archived) {
+      expect(result!.frames).toContainEqual(expect.objectContaining({
+        kind: 'event', event: { type: 'message', message: expect.objectContaining({
+          uuid: scriptReceipt, tool_use_result: expect.objectContaining({ status: 'unknown', output: 'Background script started' }),
+        }) },
+      }))
+    }
     for (const frame of result!.frames) {
       if (frame.kind === 'event' && frame.event.type === 'message') {
         expect((frame.event.message as { session_id?: string }).session_id).toBe(

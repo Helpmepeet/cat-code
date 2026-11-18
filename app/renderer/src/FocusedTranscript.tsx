@@ -56,7 +56,7 @@ export const FocusedTranscript = memo(function FocusedTranscript({ turn, renderR
   const settled = useMemo(() => headLive
     ? summarizeFocusedWork(turn.rows.filter(row => row.kind === 'tool-use' && (row.status !== 'pending' || row.toolName === 'REPL')))
     : turn, [turn, headLive])
-  const detail = [time, settled.toolCalls === 0 ? '' : settled.compact].filter(Boolean).join(' · ')
+  const detail = [time, settled.toolCalls > 0 || settled.detachedScriptStatus ? settled.compact : ''].filter(Boolean).join(' · ')
   const preparingId = preparing[0]?.toolUseId
   const segments = useMemo(() => {
     const result = turn.segments.filter(segment => segment.kind !== 'stretch' || segment.toolCalls > 0 ||
@@ -206,7 +206,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
   const [key, text] = liveHead && headLine
     ? [`run:${liveHead.toolUseId}:${headLine.phase}:${headLine.verb}`, <CallWords line={headLine} call={liveHead} kind="head" />]
     : stopped
-      ? [`stop:${stopped.toolUseId}`, <>Stopped <span className={(stoppedLine?.targetFace ?? 'mono') === 'mono' ? 'focused-step-target' : 'focused-step-title'}>{stoppedLine?.target ?? stopped.target}</span></>]
+      ? [`stop:${stopped.toolUseId}:${summary.detachedScriptStatus}`, <>Stopped <span className={(stoppedLine?.targetFace ?? 'mono') === 'mono' ? 'focused-step-target' : 'focused-step-title'}>{stoppedLine?.target ?? stopped.target}</span>{summary.detachedScriptStatus ? ` · ${summary.detachedScriptStatus}` : ''}</>]
       : named
         ? [`named:${named.line.verb}:${named.line.target}`, <CallWords line={named.line} call={null} kind="named" />]
         : [`sum:${summary.summary}`, capitalize(summary.summary)]

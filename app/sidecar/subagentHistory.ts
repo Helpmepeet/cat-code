@@ -35,6 +35,7 @@ import {
 import { stampSubagentFrames } from '../../src/utils/messages/mappers.js'
 
 import { MAX_HISTORY_REPLAY_BYTES, MAX_HISTORY_REPLAY_FRAMES } from '../shared/limits.js'
+import { markHistoricalScriptOutcome } from '../shared/transcriptBackfill.js'
 import { projectResumedHistory } from './historyProjection.js'
 
 /** One subagent's restored frames, already stamped with their parent id. */
@@ -188,7 +189,7 @@ export function projectBranchFrames(
 ): SDKMessage[] {
   // Same stamping as live publication (`runAgent`'s display publisher), so a
   // restore over live frames lands on the same identities.
-  return stampSubagentFrames(projectResumedHistory(messages), parentToolUseId, agentName, agentCwd)
+  return stampSubagentFrames(projectResumedHistory(messages).map(markHistoricalScriptOutcome), parentToolUseId, agentName, agentCwd)
     .filter(frame => typeof frame.uuid !== 'string' || !seenUuids.has(frame.uuid))
 }
 

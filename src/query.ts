@@ -821,12 +821,14 @@ async function* queryLoop(
     }
     const roundInstructionRevision = userContextRevision
     const roundCodeModeInstructionRevision = codeModeHost?.instructionRevision
+    const codeModeModelEpoch = codeModeHost?.modelEpochForContext(messagesForQuery)
     //TODO: no need to set toolUseContext.messages during set-up since it is updated here
     toolUseContext = {
       ...toolUseContext,
       messages: messagesForQuery,
-      codeModeModelEpoch: codeModeHost?.modelEpochForContext(messagesForQuery),
-      isInstructionContextCurrent: () => getUserContextRevision() === roundInstructionRevision &&
+      codeModeModelEpoch,
+      isInstructionContextCurrent: () => codeModeModelEpoch !== -1 &&
+        getUserContextRevision() === roundInstructionRevision &&
         codeModeHost?.instructionRevision === roundCodeModeInstructionRevision,
     }
 

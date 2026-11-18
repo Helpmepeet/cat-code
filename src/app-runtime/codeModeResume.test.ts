@@ -36,6 +36,12 @@ test('real persisted background receipt becomes uncertain after process death; r
     clearTimeout(timer)
     const source = await readFile(ready.sourcePath, 'utf8')
     expect(source).toContain('"status":"running"')
+    const rows = source.trim().split('\n').map(line => JSON.parse(line))
+    const writeRequest = rows.find(row => row.type === 'assistant' && row.codeMode &&
+      row.message.content.some((block: any) => block.type === 'tool_use' && block.name === 'Write'))
+    const writeReceipt = rows.find(row => row.sourceToolAssistantUUID === writeRequest?.uuid && row.type === 'user')
+    expect(writeReceipt?.toolUseResult).toMatchObject({ omitted: true, reason: 'Cumulative Code Mode audit payload limit' })
+    expect(await readFile(join(root, 'workspace', 'finished.txt'), 'utf8')).toBe('written before interruption '.repeat(1800))
     await mkdir(join(root, 'fork-source'))
     const forkSource = join(root, 'fork-source', basename(ready.sourcePath))
     await writeFile(forkSource, source)
@@ -52,9 +58,9 @@ test('real persisted background receipt becomes uncertain after process death; r
       const oldReceipts = evidence.restoredBeforeTurn.filter((message: any) => message.toolUseResult?.cellId === 'crash-cell')
       expect(oldReceipts.at(-1).toolUseResult.status).toBe('failed')
       expect(oldReceipts.at(-1).toolUseResult.output).toContain('final outcome is unknown')
-      const attempt = oldReceipts.at(-1).toolUseResult.calls[0]
-      expect(attempt?.name).toBe('Bash')
+      const attempt = oldReceipts.at(-1).toolUseResult.calls.find((call: any) => call.name === 'Bash')
       expect(attempt?.error).toContain('Outcome unknown')
+      expect(oldReceipts.at(-1).toolUseResult.changedFiles).toEqual([{ path: join(root, 'workspace', 'finished.txt') }])
       expect(JSON.stringify(evidence.bodies[0].messages)).not.toContain(attempt.toolUseId)
       expect(JSON.stringify(evidence.bodies[0].messages)).toContain('empty interpreter variables and functions')
       const final = evidence.transcript.find((message: any) => message.toolUseResult?.cellId === 'restored-cell').toolUseResult
@@ -69,6 +75,31 @@ test('real persisted background receipt becomes uncertain after process death; r
     await rm(root, { recursive: true, force: true })
   }
 }, 65_000)
+
+for (const phase of ['headless-eof-fault', 'headless-legacy']) {
+  test(`structured headless ${phase === 'headless-legacy' ? 'replays legacy Script provenance' : 'ends with a failure when late receipt acknowledgement fails'}`, async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-headless-')))
+    try {
+      await mkdir(join(root, 'config'))
+      await mkdir(join(root, 'workspace'))
+      const child = launch(root, phase)
+      const timer = setTimeout(() => child.kill('SIGKILL'), 13_000)
+      const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+      clearTimeout(timer)
+      if (code !== 0) throw new Error(`${phase} failed (${code}): ${stderr}\n${stdout}`)
+      const evidence = JSON.parse(await readFile(join(root, `${phase}-evidence.json`), 'utf8'))
+      if (phase === 'headless-legacy') {
+        const row = evidence.projected.find((frame: any) => frame.uuid === evidence.legacyUuid)
+        expect(row.origin).toMatchObject({ kind: 'task-notification', summary: 'Background Script outcome unknown', toolUseId: 'legacy-script' })
+      } else {
+        expect(evidence.writeAttempts).toBeGreaterThan(0)
+        const results = evidence.frames.filter((frame: any) => frame.type === 'result')
+        expect(results.map((frame: any) => frame.subtype)).toEqual(['error_during_execution'])
+        expect(results[0].errors[0]).toContain('Could not save all tool results before input closed')
+      }
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }, 16_000)
+}
 
 test('real resume preserves virtual child call/result and authenticated refusal ancestry', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-audit-resume-')))

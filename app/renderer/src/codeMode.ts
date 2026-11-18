@@ -1,4 +1,4 @@
-export type CodeModeStatus = 'completed' | 'failed' | 'cancelled' | 'blocked' | 'yielded' | 'running'
+export type CodeModeStatus = 'completed' | 'failed' | 'cancelled' | 'blocked' | 'yielded' | 'running' | 'unknown'
 export type CodeModeCall = { toolUseId: string; name: string; input: unknown; inputOmission?: { bytes: number }; status: string; line?: number; result?: unknown; error?: string }
 export type CodeModeEnvelope = {
   kind: 'code-mode'; cellId: string; generation: string; description: string; code: string
@@ -13,7 +13,7 @@ export function codeModeForRow(row: { toolName: string; toolUseId: string; resul
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const line = (value: unknown) => value === undefined || (Number.isSafeInteger(value) && (value as number) > 0)
 const count = (value: unknown) => value === undefined || (Number.isSafeInteger(value) && (value as number) >= 0)
-const statuses = new Set(['completed', 'failed', 'cancelled', 'blocked', 'yielded', 'running'])
+const statuses = new Set(['completed', 'failed', 'cancelled', 'blocked', 'yielded', 'running', 'unknown'])
 const callStatuses = new Set(['completed', 'failed', 'cancelled', 'blocked', 'running'])
 function validInputOmission(value: unknown): value is { bytes: number } {
   return object(value) && Object.keys(value).length === 1 && Object.hasOwn(value, 'bytes') &&

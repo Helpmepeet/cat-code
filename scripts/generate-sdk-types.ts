@@ -301,15 +301,21 @@ function syncToolResultStatus(contents: string): string {
 
 function syncDiscardedStreamId(contents: string): string {
   const field = '  discarded_stream_message_id?: string\n'
-  const hasStreamIdSchema =
-    /discarded_stream_message_id:\s*z\.string\(\)\.min\(1\)\.optional\(\)/.test(schemas)
-  return replaceTypeDeclaration(contents, 'SDKSystemMessage', declaration => {
+  const fieldSchema = /discarded_stream_message_id:\s*z\.string\(\)\.min\(1\)\.optional\(\)/
+  const assistantSchema = schemas.match(/export const SDKAssistantMessageSchema =[\s\S]*?\nexport const/)?.[0] ?? ''
+  const retrySchema = schemas.match(/export const SDKAPIRetryMessageSchema =[\s\S]*?\nexport const/)?.[0] ?? ''
+  const withRetryField = replaceTypeDeclaration(contents, 'SDKSystemMessage', declaration => {
     const withoutField = declaration.replace(field, '')
-    if (!hasStreamIdSchema) return withoutField
+    if (!fieldSchema.test(retrySchema)) return withoutField
     return withoutField.replace(
       '  retry_delay_ms?: number\n',
       `  retry_delay_ms?: number\n${field}`,
     )
+  })
+  return replaceTypeDeclaration(withRetryField, 'SDKAssistantMessage', declaration => {
+    const withoutField = declaration.replace(field, '')
+    if (!fieldSchema.test(assistantSchema)) return withoutField
+    return withoutField.replace('  error?: SDKAssistantErrorCode\n', `  error?: SDKAssistantErrorCode\n${field}`)
   })
 }
 

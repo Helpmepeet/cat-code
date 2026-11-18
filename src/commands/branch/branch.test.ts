@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs'
-import { writeFile } from 'fs/promises'
+import { readdir, writeFile } from 'fs/promises'
 import { homedir, tmpdir } from 'os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import {
@@ -22,7 +22,10 @@ import {
   loadTranscriptFromFile,
   resetProjectForTesting,
 } from '../../utils/sessionStorage.js'
-import { createFork, createForkBeforeUserMessage } from './branch.js'
+import { call, createFork, createForkBeforeUserMessage } from './branch.js'
+import { createTaskStateBase } from '../../Task.js'
+import { getDefaultAppState } from '../../state/AppStateStore.js'
+import type { CodeModeTaskState } from '../../tasks/CodeModeTask.js'
 
 describe('conversation branching', () => {
   const originalSessionId = getSessionId()
@@ -145,6 +148,33 @@ describe('conversation branching', () => {
       expect(pathIsWithin(fork.forkPath, realConfigDir)).toBe(false)
       expect((await loadTranscriptFromFile(fork.forkPath)).forked).toBe(true)
     }
+  })
+
+  test('the branch command refuses a Script with an unsaved receipt before writing a fork', async () => {
+    await writeTranscript([
+      messageEntry('user', randomUUID(), null, '2026-08-24T00:00:00.000Z', {
+        role: 'user',
+        content: 'retained prompt',
+      }),
+    ])
+    const task: CodeModeTaskState = {
+      ...createTaskStateBase('script-fixture', 'code_mode', 'Pending Script'),
+      type: 'code_mode', owner: { sessionId }, cellId: 'cell', generation: 'generation',
+      settled: true, cancellationRequested: false, delivery: 'failed',
+    }
+    const state = getDefaultAppState()
+    state.tasks[task.id] = task
+    let resumed = false
+    const notices: string[] = []
+    const context = {
+      getAppState: () => state,
+      async resume() { resumed = true },
+    } as unknown as Parameters<typeof call>[1]
+    await call(message => { if (message) notices.push(message) }, context, '')
+    expect(resumed).toBe(false)
+    expect(notices.join('\n')).toContain('Their results must be saved first')
+    const names = await readdir(dirname(getTranscriptPathForSession(sessionId)))
+    expect(names.filter(name => name.endsWith('.jsonl'))).toEqual([`${sessionId}.jsonl`])
   })
 
   test('a branch of a legacy large managed prompt remains a managed catalog entry', async () => {

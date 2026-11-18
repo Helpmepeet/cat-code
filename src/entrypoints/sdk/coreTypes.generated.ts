@@ -111,6 +111,7 @@ export type SDKAssistantMessage = SDKBaseMessage & {
   agent_name?: string
   agent_cwd?: string
   error?: SDKAssistantErrorCode
+  discarded_stream_message_id?: string
   requestId?: string | null
   timestamp?: string
 }

@@ -114,6 +114,27 @@ function engine(tools: ReturnType<typeof buildTool>[], overrides: Partial<QueryE
   return new QueryEngine(engineConfig(tools, overrides))
 }
 
+test('a preserved worker cannot launch a detached Script after its receipt session changes', async () => {
+  const { createAgentInterruptedTools } = await import('./services/tools/agentInterruptedTools.js')
+  const config = engineConfig([])
+  const context = {
+    ...config, options: { tools: [] }, agentId: asAgentId('preserved-script-worker'),
+    abortController: new AbortController(),
+  } as unknown as ToolUseContext
+  const worker = createAgentInterruptedTools(context, { getParent: () => null, setParent: () => {} })
+  bootstrap.regenerateSessionId({ setCurrentAsParent: true })
+  try {
+    expect(() => context.codeModeHost!.runBackground(
+      { code: 'output("benign worker fixture")', description: 'Detached after clear' },
+      'preserved-worker-cell', context, config.canUseTool!, () => true, randomUUID(),
+    )).toThrow('cannot save results in the current conversation')
+    expect(Object.values(config.getAppState().tasks)).toHaveLength(0)
+  } finally {
+    // The pre-fix path leaves an undeliverable task whose owner cannot close.
+    if (!Object.keys(config.getAppState().tasks).length) await worker.finish()
+  }
+})
+
 const encoder = new TextEncoder()
 const sse = (event: Record<string, unknown>) => encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r }); return { promise, resolve } }

@@ -295,7 +295,10 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
             session_id: getSessionId(),
             parent_tool_use_id: null,
             uuid: message.uuid,
-            error: message.error,
+            error: message.error as SDKAssistantErrorCode | undefined,
+            ...(message.isApiErrorMessage && message.discardedStreamMessageId && {
+              discarded_stream_message_id: message.discardedStreamMessageId,
+            }),
             ...toSDKCodeModeProps(message),
           },
         ]
