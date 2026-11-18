@@ -31,7 +31,7 @@ import { deriveTarget, peerTargetFragment, toolSearchCardView } from './transcri
 import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
 import { getEmailToolIdentity } from './emailToolPresentation.js'
 import { codeModeDigest, codeModeForRow } from './codeMode.js'
-import { codeModeLiveView } from './codeModeLiveView.js'
+import { codeModeReviewingChild, codeModeLiveView } from './codeModeLiveView.js'
 
 export type FocusedCallPhase = 'preparing' | 'queued' | 'reviewing' | 'approval' | 'running' | 'done' | 'failed' | 'stopped' | 'blocked' | 'unknown'
 
@@ -80,6 +80,7 @@ export function focusedCallPhase(call: FocusedCall, signalled: boolean): Focused
   }
   // A blocking question reaches the user through the permission queue; it waits on an answer, not an approval.
   if (call.awaitingApproval && call.toolName !== 'AskUserQuestion') return 'approval'
+  if (codeModeReviewingChild(call)) return 'reviewing'
   if (cellStatus === 'running') return 'running'
   if (call.activity?.phase === 'reviewing') return 'reviewing'
   if (call.activity?.phase !== 'executing' && call.autoModeReview?.outcome === 'reviewing') return 'reviewing'

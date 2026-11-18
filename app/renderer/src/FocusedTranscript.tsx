@@ -14,6 +14,7 @@ import { TranscriptMotionContext } from './transcriptMotion.js'
 import { FocusedNamedCallContext } from './transcriptMode.js'
 import { AutoModeReviewMark } from './AutoModeReviewMark.js'
 import { summarizeAutoModeReviews } from './autoModeReview.js'
+import { codeModeReviewingChild } from './codeModeLiveView.js'
 import './focusedTranscript.css'
 
 type RowRenderer = (rows: readonly NestedTranscriptRow[], narration: boolean) => ReactNode
@@ -197,6 +198,8 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
   const headCall = finishedHead ? undefined : activeCall
   const liveHead = live ? headCall : undefined
   const headLine = liveHead ? focusedCallLine(liveHead, callContext) : null
+  const reviewingChild = liveHead && headLine?.phase === 'reviewing' ? codeModeReviewingChild(liveHead) : undefined
+  const reviewStartedAt = reviewingChild?.activity?.startedAt ?? reviewingChild?.autoModeReview?.startedAt
   const summary = finishedHead ? summarizeFocusedWork(finished) : segment
   const named = !rollingNow && segment.activeCall === null ? focusedNamedCall(segment.rows, callContext) : rollingNow && finished.length === calls.length ? focusedNamedCall(finished, callContext) : null
   // A turn stopped mid-call names the call it was making, from its row so the path is trimmed like any other.
@@ -236,7 +239,7 @@ function FocusedStep({ segment, live, rolling, preparing, liveState, callContext
         <AutoModeReviewMark summary={summarizeAutoModeReviews(calls.map(call => call.autoModeReview))} />
         <DiffTotals summary={summary} />
         <FailureMark summary={summary} omit={noteOmitted} />
-        {liveHead && headLine ? <CallMeta call={liveHead} line={headLine} /> : headNames && headNames.line.phase !== 'failed' ? <BackgroundMeta background={headNames.line.background} /> : null}
+        {liveHead && headLine ? <CallMeta call={liveHead} line={headLine} reviewStartedAt={reviewStartedAt} /> : headNames && headNames.line.phase !== 'failed' ? <BackgroundMeta background={headNames.line.background} /> : null}
       </button>
       {liveHead ? <LiveOutput call={liveHead} className="focused-head-out" /> : null}
       {agentHead ? <RollingCalls calls={childCalls} callContext={{ ...callContext, signalled: false }} /> : null}
@@ -272,11 +275,11 @@ function CallWords({ line, call, kind }: { line: FocusedCallLine; call: FocusedC
   </>
 }
 
-function CallMeta({ call, line }: { call: FocusedCall; line: FocusedCallLine }) {
+function CallMeta({ call, line, reviewStartedAt }: { call: FocusedCall; line: FocusedCallLine; reviewStartedAt?: number }) {
   const now = useContext(FocusedClockContext)
   if (line.phase === 'failed') return <span className="focused-meta focused-meta-fail">failed</span>
   if (call.status === 'pending' && call.activity && !call.preparing && !call.awaitingApproval) {
-    const elapsed = now - call.activity.startedAt
+    const elapsed = now - (reviewStartedAt ?? call.activity.startedAt)
     if (elapsed >= 2000) {
       const timeout = call.activity.timeoutMs ?? (typeof call.input.timeout === 'number' ? call.input.timeout : null)
       const limit = call.toolFamily === 'bash' && call.activity.phase === 'executing' && !call.input.run_in_background && timeout !== null && elapsed > timeout / 2

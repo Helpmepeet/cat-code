@@ -3,7 +3,7 @@ import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { deriveToolFamily } from './transcriptProjector.js'
 import { codeModeCallCompleted, codeModeForRow, codeModeInput, type CodeModeEnvelope } from './codeMode.js'
-import { codeModeLiveView } from './codeModeLiveView.js'
+import { codeModeLiveView, codeModeReviewingChild } from './codeModeLiveView.js'
 import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
 import { selectToolDiffs } from './toolDiffs.js'
 import { isMemoryRecall } from './memoryRecall.js'
@@ -97,7 +97,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   const reads = new Set<string>(), edits = new Set<string>(), searches = new Set<string>()
   const other: Partial<Record<ToolFamily, number>> = {}
   let commands = 0, toolCalls = 0, additions = 0, deletions = 0, errorCount = 0, stoppedCount = 0, blockedCount = 0, questions = 0, recalls = 0
-  let runningScripts = 0, unknownScripts = 0
+  let runningScripts = 0, reviewingScripts = 0, unknownScripts = 0
   let activeCall: FocusedSummary['activeCall'] = null
   for (const row of rows) {
     if (rowHasError(row)) errorCount++
@@ -106,8 +106,10 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     if ((cell && cell.cellId === row.toolUseId) || row.toolName === 'REPL') {
       const calls = cell?.calls ?? []
       toolCalls += calls.filter(codeModeCallCompleted).length
-      if (runningDetachedScript(cell)) runningScripts++
-      else if (cell?.status === 'unknown') unknownScripts++
+      if (runningDetachedScript(cell)) {
+        if (codeModeReviewingChild(row)) reviewingScripts++
+        else runningScripts++
+      } else if (cell?.status === 'unknown') unknownScripts++
       else if (row.status === 'pending' && activeCall === null) activeCall = { toolUseId: row.toolUseId, target: cell?.description ?? (typeof row.input.description === 'string' ? row.input.description : 'Script') }
       let innerErrors = 0, innerBlocked = 0, innerStopped = 0
       for (const call of calls) {
@@ -209,6 +211,7 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
   }
   const refusedAll = blockedCount > 0 && blockedCount === toolCalls
   const detachedScriptStatus = [
+    reviewingScripts > 0 ? `${reviewingScripts} ${reviewingScripts === 1 ? 'script' : 'scripts'} reviewing` : '',
     runningScripts > 0 ? `${runningScripts} ${runningScripts === 1 ? 'script' : 'scripts'} running` : '',
     unknownScripts > 0 ? `unknown outcome for ${unknownScripts} ${unknownScripts === 1 ? 'script' : 'scripts'}` : '',
   ].filter(Boolean).join(' · ')

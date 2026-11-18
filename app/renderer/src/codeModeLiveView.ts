@@ -8,6 +8,20 @@ const childViews = new WeakMap<readonly NestedTranscriptRow[], {
 const childCalls = new WeakMap<NestedToolUseRow, CodeModeCall>()
 const canonicalCalls = new WeakMap<CodeModeCall, WeakMap<CodeModeCall, CodeModeCall>>()
 
+export function codeModeChildIsReviewing(row: NestedToolUseRow): boolean {
+  return row.status === 'pending' && (row.autoModeReview
+    ? row.autoModeReview.outcome === 'reviewing'
+    : row.activity?.phase === 'reviewing')
+}
+
+export function codeModeReviewingChild(row: NestedToolUseRow): NestedToolUseRow | undefined {
+  if (row.toolName !== 'REPL' || row.status !== 'pending') return undefined
+  const generation = codeModeForRow(row)?.generation
+  return row.children.find((child): child is NestedToolUseRow => child.kind === 'tool-use' && child.sessionId === row.sessionId &&
+    child.codeMode?.cellId === row.toolUseId && (!generation || child.codeMode.generation === generation) &&
+    codeModeChildIsReviewing(child))
+}
+
 function observedCall(child: NestedToolUseRow): CodeModeCall {
   const cached = childCalls.get(child)
   if (cached) return cached

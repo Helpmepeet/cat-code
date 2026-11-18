@@ -24,10 +24,10 @@ function fixture(sessionId: string) {
       for (const entry of [{ type: 'message_start', message: { id: 'phase-message', role: 'assistant', content: [] } }, { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'script', name: 'REPL', input: {} } }, { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"description":"Inspect phases","code":"await tools.call(' } }]) message({ type: 'stream_event', event: entry })
     },
     submitted(toolUseId = 'script') { message({ type: 'assistant', message: { id: toolUseId === 'script' ? 'phase-message' : `phase-message:${toolUseId}`, role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'REPL', input: { code, description: 'Inspect phases' } }] } }) },
-    activity(phase: 'reviewing' | 'executing', toolUseId = 'script') { event({ type: 'tool.activity', toolUseId, phase, startedAt: 1000 }) },
-    review() { event({ type: 'tool.review', toolUseId: 'script', attemptId: 'phase-review', outcome: 'reviewing', startedAt: 1000 }) },
+    activity(phase: 'reviewing' | 'executing', toolUseId = 'script', startedAt = 1000) { event({ type: 'tool.activity', toolUseId, phase, startedAt }) },
+    review(toolUseId = 'script', outcome: 'reviewing' | 'allowed' = 'reviewing') { event({ type: 'tool.review', toolUseId, attemptId: `phase-review:${toolUseId}`, outcome, startedAt: 1000, ...(outcome === 'allowed' ? { completedAt: 2000 } : {}) }) },
     approval(toolUseId = 'script') { event({ type: 'permission.requested', request: { requestId: `approval-${toolUseId}`, request: { subtype: 'can_use_tool', tool_use_id: toolUseId, tool_name: toolUseId === 'script' ? 'REPL' : 'Read', input: toolUseId === 'script' ? { code } : { file_path: '/repo/a' } } } }) },
-    child() { message({ type: 'assistant', isVirtual: true, code_mode: { cellId: 'script', generation: 'phase-generation', line: 1 }, message: { id: 'phase-child', role: 'assistant', content: [{ type: 'tool_use', id: 'inner', name: 'Read', input: { file_path: '/repo/a' } }] } }) },
+    child(toolUseId = 'inner', line = 1) { message({ type: 'assistant', isVirtual: true, code_mode: { cellId: 'script', generation: 'phase-generation', line }, message: { id: `phase-child:${toolUseId}`, role: 'assistant', content: [{ type: 'tool_use', id: toolUseId, name: 'Read', input: { file_path: '/repo/a' } }] } }) },
     receipt(status: 'running' | 'completed' | 'failed' | 'unknown', taskId?: string, toolUseId = 'script', notification = false) {
       const tool_use_result = { kind: 'code-mode', cellId: toolUseId, generation: 'phase-generation', code, description: 'Inspect phases', status, calls: [], changedFiles: [], output: '', ...(taskId ? { taskId } : {}), ...(status === 'failed' ? { error: 'SyntaxError: invalid script' } : {}) }
       message(notification
@@ -123,6 +123,48 @@ test('Focused Script uses common writing, reviewing and outer approval phases', 
   expect(head()).toContain('Running script')
 })
 
+for (const mode of ['full', 'focused'] as const) {
+  test(`${mode} Script shows child Auto review before the child executes`, async () => {
+    const data = fixture(`child-review-${mode}`)
+    data.submitted()
+    data.activity('executing')
+    if (mode === 'focused') data.receipt('running')
+    data.child()
+    const tree = await harness.mount(view(data, mode))
+    const headline = () => mode === 'full' ? label(tree.container)
+      : tree.container.querySelector('.focused-step-text > span:last-child')?.textContent
+    const childLabel = () => tree.container.querySelector('.code-mode-member-status')?.textContent
+    expect(headline()).toContain('Running')
+    data.activity('reviewing', 'inner', Date.now())
+    await tree.render(view(data, mode))
+    expect(headline()).toContain('Reviewing')
+    if (mode === 'full') expect(childLabel()).toBe('Reviewing')
+    else expect(tree.container.querySelector('.focused-step-head .focused-meta')).toBeNull()
+    data.activity('executing', 'inner')
+    await tree.render(view(data, mode))
+    expect(headline()).toContain('Running')
+
+    data.child('deep')
+    data.activity('reviewing', 'deep')
+    data.review('deep')
+    await tree.render(view(data, mode))
+    expect(headline()).toContain('Reviewing')
+    data.review('deep', 'allowed')
+    await tree.render(view(data, mode))
+    expect(headline()).toContain('Running')
+    data.activity('executing', 'deep')
+    data.child('manual')
+    data.activity('reviewing', 'manual')
+    data.approval('manual')
+    await tree.render(view(data, mode))
+    expect(headline()).toContain('Waiting for approval')
+    data.receipt('failed')
+    await tree.render(view(data, mode))
+    expect(headline()).not.toContain('Reviewing')
+    expect(headline()).not.toContain('Waiting for approval')
+  })
+}
+
 test('Focused keeps a detached Script running after its launch turn finishes', async () => {
   const data = fixture('focused-detached-script')
   data.submitted()
@@ -152,6 +194,12 @@ test('the collapsed Focused group shows both detached Scripts still running afte
   expect(step.getAttribute('aria-expanded')).toBe('false')
   expect(step.textContent).toContain('2 scripts running')
 
+  data.child()
+  data.activity('reviewing', 'inner')
+  await tree.render(view(data, 'focused', false))
+  expect(turn.textContent).toContain('1 script reviewing · 1 script running')
+  expect(step.textContent).toContain('1 script reviewing · 1 script running')
+  data.activity('executing', 'inner')
   data.receipt('completed', 'second-task', 'second-script')
   await tree.render(view(data, 'focused', false))
   expect(turn.textContent).toContain('1 script running')
@@ -206,4 +254,11 @@ test('phase evidence invalidates only the Script row and leaves ordinary activit
   expect(reviewing.find(row => row.kind === 'tool-use' && row.toolUseId === 'script')).toHaveProperty('activity.phase', 'reviewing')
   data.activity('executing')
   expect(data.rows().find(row => row.kind === 'tool-use' && row.toolUseId === 'unrelated')).toBe(sibling)
+  data.child()
+  data.activity('reviewing', 'inner')
+  expect(data.rows().find(row => row.kind === 'tool-use' && row.toolUseId === 'unrelated')).toBe(sibling)
+  data.activity('executing', 'inner')
+  const executing = data.rows()
+  data.event({ type: 'tool.activity', toolUseId: 'inner', phase: 'executing', startedAt: 1000, output: 'More output', totalLines: 1 })
+  expect(data.rows()).toBe(executing)
 })

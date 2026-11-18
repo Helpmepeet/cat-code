@@ -4,7 +4,7 @@ import { ToolOutputContext } from './toolOutputPanel.js'
 import { ToolCardStyleContext } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import { codeModeForRow, codeModeDigest, codeModeStepDigest, type CodeModeCall } from './codeMode.js'
-import { codeModeLiveView } from './codeModeLiveView.js'
+import { codeModeChildIsReviewing, codeModeLiveView } from './codeModeLiveView.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'
 import { codeModeChildView } from './codeModeChildView.js'
 import './codeMode.css'
@@ -98,8 +98,12 @@ export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, rende
         const lineLink = step.line && open ? <button className="code-mode-line" aria-label={`Show line ${step.line} in the script`} title={`Show line ${step.line} in the script`} onClick={() => { selectCodeModeLine(row.sessionId, row.toolUseId, step.line!); open(row) }}>L{step.line}</button> : null
         if (step.calls.length === 1) return <div className={`code-mode-step${selected ? ' is-selected' : ''}`}><div className="code-mode-single">{renderMember(step.calls[0]!)}{lineLink}</div></div>
         const running = step.calls.some(call => call.status === 'running' || call.status === 'pending')
+        const reviewing = status === 'reviewing' && step.calls.some(call => {
+          const child = childrenByCall.get(call.toolUseId)
+          return child && codeModeChildIsReviewing(child)
+        })
         const settled = step.calls.filter(call => call.status !== 'running' && call.status !== 'pending').length
-        return <CodeModeGroup id={`${row.sessionId}:${row.toolUseId}:${step.key}`} selected={selected} errors={errors.length > 0} label={step.calls[0]?.name === 'Read' ? `${step.calls.length} files` : `${step.calls.length} ${step.calls[0]?.name ?? 'tool'} calls`} digest={running ? `${settled} of ${step.calls.length}` : codeModeStepDigest(step.calls)} issue={issue ?? (running ? 'Running' : null)} family={FAMILY_STYLE[deriveToolFamily(step.calls[0]!.name)]} onSelect={() => { if (step.line) revealCodeModeLine(row.sessionId, row.toolUseId, step.line) }} lineLink={lineLink}>
+        return <CodeModeGroup id={`${row.sessionId}:${row.toolUseId}:${step.key}`} selected={selected} errors={errors.length > 0} label={step.calls[0]?.name === 'Read' ? `${step.calls.length} files` : `${step.calls.length} ${step.calls[0]?.name ?? 'tool'} calls`} digest={running ? `${settled} of ${step.calls.length}` : codeModeStepDigest(step.calls)} issue={issue ?? (reviewing ? 'Reviewing' : running ? 'Running' : null)} family={FAMILY_STYLE[deriveToolFamily(step.calls[0]!.name)]} onSelect={() => { if (step.line) revealCodeModeLine(row.sessionId, row.toolUseId, step.line) }} lineLink={lineLink}>
           <BoundedChildList keys={step.calls.map(call => call.toolUseId)} estimatedChildHeight={38} renderChild={callIndex => renderMember(step.calls[callIndex]!)} />
         </CodeModeGroup>
       }} />

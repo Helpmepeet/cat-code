@@ -836,8 +836,7 @@ export function selectTranscriptRows(
       }
     }
     const autoModeReview = session.autoModeReviews[row.toolUseId]
-    const activity = row.toolName === 'REPL' && (!storedResult || storedResult.codeMode?.status === 'running')
-      ? session.activities[row.toolUseId] : undefined
+    const activity = scriptRowActivity(row, storedResult, session.activities[row.toolUseId])
     const resumedAgentId =
       row.toolName === 'ResumeAgent' && typeof row.input.agentId === 'string'
         ? row.input.agentId
@@ -1106,12 +1105,14 @@ function sameScriptActivities(a: TranscriptSessionState, b: TranscriptSessionSta
   if (a.activities === b.activities) return true
   const ids = new Set([...Object.keys(a.activities), ...Object.keys(b.activities)])
   for (const id of ids) {
-    if (a.activities[id] === b.activities[id]) continue
+    const before = a.activities[id]
+    const after = b.activities[id]
+    if (before === after) continue
     for (let index = b.rows.length - 1; index >= 0; index--) {
       const row = b.rows[index]!
       if (row.kind !== 'tool-use' || row.toolUseId !== id) continue
       const result = b.toolResultsByUseId[id]
-      if (row.toolName === 'REPL' && (!result || result.codeMode?.status === 'running')) return false
+      if (scriptRowActivity(row, result, before) !== scriptRowActivity(row, result, after)) return false
       break
     }
   }
@@ -1156,6 +1157,12 @@ const historyBoundaryRowByFirstRow = new WeakMap<TranscriptRow | TranscriptSessi
 
 function sameReferences<T>(left: readonly T[], right: readonly T[]) {
   return left.length === right.length && left.every((item, index) => item === right[index])
+}
+
+function scriptRowActivity(row: ToolUseRow, result: ToolResultProjection | null | undefined, activity: ToolActivity | undefined): ToolActivity | undefined {
+  if (row.toolName === 'REPL' && (!result || result.codeMode?.status === 'running')) return activity
+  // The Script headline needs the child's review phase, not its streaming output.
+  if (row.codeMode && !result && activity?.phase === 'reviewing') return activity
 }
 
 export function selectNestedTranscriptRows(

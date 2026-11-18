@@ -43,6 +43,7 @@ import './computerPane.css'
 import { AutoModeReviewMark, AutoModeReviewReason } from './AutoModeReviewMark.js'
 import { EmailToolResult } from './EmailToolResult.js'
 import { CodeModeCard } from './CodeModeCard.js'
+import { codeModeChildIsReviewing } from './codeModeLiveView.js'
 import { EmailToolDiscovery } from './EmailToolChrome.js'
 import { emailToolDiscovery, requestedEmailToolDiscovery } from './emailToolDiscovery.js'
 import { getEmailToolIdentity } from './emailToolPresentation.js'
@@ -2831,7 +2832,7 @@ function CodeModeMember({ row }: { row: ToolUseNestedRow }) {
       <span className={`code-mode-member-mark ${family.color}`} aria-hidden>{family.mark}</span>
       <span className="code-mode-member-target">{deriveTarget(row)}</span>
       <AutoModeReviewMark review={row.autoModeReview} />
-      {row.status !== 'success' ? <span className={`code-mode-member-status ${status.color}`}>{status.word}</span> : null}
+      {row.status !== 'success' ? <span className={`code-mode-member-status ${status.color}`}>{!approvals?.[row.toolUseId] && codeModeChildIsReviewing(row) ? 'Reviewing' : status.word}</span> : null}
     </button>
     {open ? <div className="code-mode-member-body"><AutoModeReviewReason review={row.autoModeReview} /><ToolCardBody row={row} content={row.result?.content ?? ''} ack={toolAckForResult(row.result)} /></div> : null}
   </div>
