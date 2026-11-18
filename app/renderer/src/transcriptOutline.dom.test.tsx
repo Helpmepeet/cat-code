@@ -29,9 +29,9 @@ const button = (root: HTMLElement, selector: string) => root.querySelector<HTMLB
 async function key(target: Element, key: string) {
   await act(async () => { target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })) })
 }
-async function pointer(target: Element, type: string) {
+async function pointer(target: Element, type: string, clientY = 0) {
   const eventType = type === 'pointerenter' ? 'pointerover' : type === 'pointerleave' ? 'pointerout' : type
-  await act(async () => { target.dispatchEvent(new PointerEvent(eventType, { bubbles: true })) })
+  await act(async () => { target.dispatchEvent(new PointerEvent(eventType, { bubbles: true, clientY })) })
 }
 async function pause(ms: number) { await act(async () => { await new Promise(resolve => setTimeout(resolve, ms)) }) }
 async function click(target: HTMLElement) { await act(async () => { target.click() }) }
@@ -66,6 +66,56 @@ test('hover magnifies nearby ticks, previews the right answer, and crosses into 
   await pause(180)
   expect(card(tree.container) === null).toBe(true)
   tree.scroller.remove()
+})
+
+test('a 300-prompt outline fits the pane and spreads around pointer and keyboard targets', async () => {
+  const data = Array.from({ length: 300 }, (_, index) => prompt(`long:${index}`))
+  const getRect = HTMLElement.prototype.getBoundingClientRect
+  HTMLElement.prototype.getBoundingClientRect = function () {
+    if (this.matches('.transcript-outline-rail')) return new DOMRect(2, 16, 20, 528)
+    return getRect.call(this)
+  }
+  try {
+    const tree = await mountOutline(data)
+    const marks = ticks(tree.container)
+    const y = (index: number) => {
+      const style = marks[index]!.style
+      return parseFloat(style.getPropertyValue('--outline-tick-top')) + parseFloat(style.getPropertyValue('--outline-mark-y'))
+    }
+    const gap = (index: number) => y(index + 1) - y(index)
+    const first = y(0)
+    const middle = y(149)
+    const last = y(299)
+    expect(marks).toHaveLength(300)
+    expect(first).toBeCloseTo(0.88, 2)
+    expect(last).toBeCloseTo(528 - first, 2)
+    expect(gap(149)).toBeCloseTo(1.76, 2)
+    const rail = marks[0]!.parentElement!
+    expect(rail.hasAttribute('data-dense')).toBe(true)
+
+    await pointer(marks[149]!, 'pointerenter', middle + 16)
+    await pointer(marks[149]!, 'pointermove', middle + 16)
+    await act(async () => { await harness.nextFrame() })
+    expect(y(149)).toBeCloseTo(middle, 2)
+    expect(gap(149)).toBeGreaterThan(9)
+    expect(y(0)).toBeCloseTo(first, 2)
+    expect(y(299)).toBeCloseTo(last, 2)
+    expect(gap(0)).toBeGreaterThan(1)
+    expect(gap(298)).toBeGreaterThan(1)
+    await tree.update([...data, answer('streamed')])
+    expect(gap(149)).toBeGreaterThan(9)
+    await pointer(marks[149]!, 'pointerleave')
+    expect(gap(149)).toBeCloseTo(1.76, 2)
+
+    await act(async () => { marks[0]!.focus() })
+    await key(marks[0]!, 'ArrowDown')
+    expect(document.activeElement).toBe(marks[1]!)
+    expect(gap(1)).toBeGreaterThan(9)
+    expect(y(0)).toBeCloseTo(first, 2)
+    expect(y(299)).toBeCloseTo(last, 2)
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = getRect
+  }
 })
 
 test('bookmark changes only its prompt and survives streaming and earlier-history insertion', async () => {

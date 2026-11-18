@@ -1,3 +1,5 @@
+.session-transcript-region { container: session-transcript / inline-size; }
+
 .transcript-outline {
   position: absolute;
   inset: 0;
@@ -8,29 +10,24 @@
 .transcript-outline-rail {
   position: absolute;
   left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
+  top: 16px;
   width: 24px;
-  max-height: calc(100% - 32px);
-  padding: 8px 0;
-  overflow-y: auto;
-  scrollbar-width: none;
+  height: min(var(--outline-ideal-height, 0px), max(0px, 100% - 32px));
+  overflow: clip;
   pointer-events: auto;
 }
 
-.transcript-outline-rail::-webkit-scrollbar { display: none; }
 .transcript-outline-rail:hover,
 .transcript-outline-rail:focus-within { width: 42px; }
 
 .transcript-outline-tick {
   all: unset;
   display: block;
-  flex: none;
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: var(--outline-tick-top, 0px);
   width: 100%;
-  height: 10px;
+  height: var(--outline-tick-height, 0px);
   cursor: pointer;
 }
 
@@ -38,22 +35,27 @@
   content: '';
   position: absolute;
   left: 6px;
-  top: 4px;
-  width: 6px;
-  height: 2px;
+  top: var(--outline-mark-y, 50%);
+  transform: translateY(-50%);
+  width: var(--outline-mark-width, 6px);
+  height: var(--outline-mark-height, 2px);
   border-radius: 1px;
   background: var(--text-ghost);
   opacity: .55;
   transition: width .12s, background-color .12s, opacity .12s;
 }
 
+.transcript-outline-rail[data-dense] { --outline-mark-height: 1px; }
+.transcript-outline-rail[data-releasing] .transcript-outline-tick { transition: top 120ms ease-out, height 120ms ease-out; }
+.transcript-outline-rail[data-releasing] .transcript-outline-tick::before { transition: top 120ms ease-out, width .12s, background-color .12s, opacity .12s; }
 .transcript-outline-tick[data-in-view]::before { background: var(--text-muted); opacity: .8; }
 .transcript-outline-tick[aria-current="location"]::before { background: var(--text-primary); opacity: 1; }
-.transcript-outline-tick[data-distance="3"]::before { width: 10px; }
-.transcript-outline-tick[data-distance="2"]::before { width: 15px; }
-.transcript-outline-tick[data-distance="1"]::before { width: 21px; }
+.transcript-outline-tick[data-distance="3"] { --outline-mark-width: 10px; }
+.transcript-outline-tick[data-distance="2"] { --outline-mark-width: 15px; }
+.transcript-outline-tick[data-distance="1"] { --outline-mark-width: 21px; }
+.transcript-outline-tick[data-distance="0"] { --outline-mark-width: 28px; }
 .transcript-outline-tick[data-bookmarked]::before { background: var(--accent); opacity: 1; }
-.transcript-outline-tick[data-distance="0"]::before { width: 28px; background: var(--text-primary); opacity: 1; }
+.transcript-outline-tick[data-distance="0"]::before { background: var(--text-primary); opacity: 1; }
 .transcript-outline-tick[data-distance="0"][data-bookmarked]::before { background: var(--accent); }
 .transcript-outline-tick:focus-visible::before { box-shadow: 0 0 0 2px rgb(var(--accent-rgb) / .45); }
 
@@ -141,6 +143,30 @@
 .transcript-outline-bookmark:focus-visible,
 .transcript-outline-jump:focus-visible { outline: 2px solid rgb(var(--accent-rgb) / .6); outline-offset: -2px; }
 
+/* Allow for the expanded 52px rail and a classic scrollbar before using the
+ * narrow rail. Its right edge is 22px; the 24px inset clears the full focused
+ * hit box (26px hang + 6px hit inset). Reuse any existing column margin. */
+@container session-transcript (width < 1024px) {
+  .session-transcript-region:has(> .transcript-outline) .session-transcript-column {
+    padding-left: max(32px, calc(56px - max(0px, (100% - var(--transcript-width)) / 2)));
+  }
+
+  .transcript-outline-rail,
+  .transcript-outline-rail:is(:hover, :focus-within) {
+    left: 2px;
+    width: 20px;
+  }
+
+  .transcript-outline-tick::before { max-width: 14px; }
+  .transcript-outline-tick[data-distance="3"] { --outline-mark-width: 8px; }
+  .transcript-outline-tick[data-distance="2"] { --outline-mark-width: 10px; }
+  .transcript-outline-tick[data-distance="1"] { --outline-mark-width: 12px; }
+  .transcript-outline-tick[data-distance="0"] { --outline-mark-width: 14px; }
+  .transcript-outline-preview { left: 28px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .transcript-outline-rail[data-releasing] .transcript-outline-tick,
+  .transcript-outline-rail[data-releasing] .transcript-outline-tick::before,
   .transcript-outline-tick::before { transition: none; }
 }

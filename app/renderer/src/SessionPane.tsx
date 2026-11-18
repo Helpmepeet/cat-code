@@ -2097,7 +2097,7 @@ export function SessionPane({
             * the controls remain outside it and are not re-announced as news.
             */}
           {queuedPrompts.length > 0 ? (
-            <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col items-end gap-1.5 px-8 pt-2.5">
+            <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col items-end gap-1.5 px-8 session-transcript-column pt-2.5">
               <div className="flex w-full flex-col items-end gap-1.5" role="status">
                 <span className="pr-1 text-[11px] text-text-ghost">Queued</span>
                 {queuedPrompts.map(queued => (
@@ -2162,7 +2162,7 @@ export function SessionPane({
           ) : null}
           <RecoveredInputReview inputs={recoveredPrompts} total={recoveredPromptCount} onReview={onReviewRecoveredPrompt} onRemove={onRemoveRecoveredPrompt} />
           {projectRoute ? (
-            <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pb-3 pt-2.5">
+            <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 session-transcript-column pb-3 pt-2.5">
               <div className="flex flex-col items-end" aria-label="Pending message">
                 <QueuedRow text={projectRoute.text} />
               </div>

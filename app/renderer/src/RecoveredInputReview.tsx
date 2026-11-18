@@ -9,7 +9,7 @@ export function RecoveredInputReview({ inputs, total, onReview, onRemove }: {
   if (total === 0 && inputs.length === 0) return null
   const remainder = Math.max(0, total - inputs.length)
   return (
-    <section aria-label="Recovered inputs for review" className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2 px-8 py-3">
+    <section aria-label="Recovered inputs for review" className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2 px-8 session-transcript-column py-3">
       <div className="flex items-center gap-2 text-xs">
         <h3 className="font-medium text-text-primary">Recovered inputs</h3>
         <span className="rounded border border-shell-seam px-1.5 py-0.5 text-text-subtle">Delivery unknown</span>

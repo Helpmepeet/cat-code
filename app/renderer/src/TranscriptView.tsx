@@ -967,7 +967,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
             accounts={accounts}
             accountsUsagePending={accountsUsagePending}
           />
-          <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 workspace-transcript-column">
+          <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 session-transcript-column workspace-transcript-column">
             {entries.flatMap(entry => entry.kind === 'transition' ? [renderTransition(entry.transition)] : [])}
           </div>
         </>
@@ -1018,7 +1018,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         containerRef={columnRef}
         dataCardStyle={cardStyle}
         transcriptEntries
-        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-0 px-8 pt-6 transcript-col-slide workspace-transcript-column transcript-virtual-column"
+        className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-0 px-8 session-transcript-column pt-6 transcript-col-slide workspace-transcript-column transcript-virtual-column"
         footer={<>
           {preparingScripts.length ? <ToolOutputContext.Provider value={null}>
             {preparingScripts.map(row => <ToolCard key={row.toolUseId} row={row} />)}
@@ -1118,7 +1118,7 @@ const SKELETON_BAR_WIDTHS = ['w-3/4', 'w-full', 'w-5/6', 'w-2/3', 'w-4/5'] as co
 function PreviewSkeleton() {
   return (
     <div
-      className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-3 px-8 pt-6"
+      className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-3 px-8 session-transcript-column pt-6"
       role="status"
       aria-live="polite"
       aria-busy="true"

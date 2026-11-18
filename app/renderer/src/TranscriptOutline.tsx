@@ -6,6 +6,7 @@ import { readTranscriptRowOffset } from './transcriptRowNavigation.js'
 import { TRANSCRIPT_OUTLINE_MIN_PROMPTS, deriveTranscriptOutline, type TranscriptOutlineEntry } from './transcriptOutlineModel.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
 import { transcriptOutlineBookmarks } from './transcriptOutlineBookmarks.js'
+import { mountTranscriptOutlineLens } from './transcriptOutlineLens.js'
 import './transcriptOutline.css'
 
 type Viewport = { first: number; last: number; reading: number }
@@ -54,6 +55,30 @@ class ExcerptBoundary extends Component<{ fallback: string; children: ReactNode 
   render() { return this.state.failed ? this.props.fallback : this.props.children }
 }
 
+const OutlineTick = memo(function OutlineTick({ index, prompt, bookmarked, tabbable, current, inView, distance, previewId }: {
+  index: number
+  prompt: string
+  bookmarked: boolean
+  tabbable: boolean
+  current: boolean
+  inView: boolean
+  distance: number
+  previewId: string
+}) {
+  return <button type="button" className="transcript-outline-tick" data-index={index} tabIndex={tabbable ? 0 : -1}
+    aria-label={`Prompt ${index + 1}${bookmarked ? ', bookmarked' : ''}: ${prompt}`}
+    aria-current={current ? 'location' : undefined}
+    aria-expanded={distance === 0} aria-controls={distance === 0 ? previewId : undefined}
+    data-distance={distance < 4 ? distance : undefined}
+    data-in-view={inView ? '' : undefined}
+    data-bookmarked={bookmarked ? '' : undefined} />
+})
+
+function tickIndex(target: EventTarget | null) {
+  if (target instanceof HTMLElement && target.classList.contains('transcript-outline-tick')) return Number(target.dataset.index)
+  return -1
+}
+
 export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrollerRef, onJump, minPrompts = TRANSCRIPT_OUTLINE_MIN_PROMPTS }: {
   rows: readonly NestedTranscriptRow[]
   scrollerRef: RefObject<HTMLDivElement | null>
@@ -61,6 +86,8 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
   minPrompts?: number
 }) {
   const entries = useMemo(() => deriveTranscriptOutline(rows), [rows])
+  const roster = useMemo(() => entries.map(entry => entry.id).join('\n'), [entries])
+  const visible = entries.length >= Math.max(1, minPrompts)
   const entriesRef = useRef(entries)
   entriesRef.current = entries
   const [state, dispatch] = useReducer(reduceOutline, {
@@ -75,7 +102,7 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
   const cardRef = useRef<HTMLDivElement>(null)
   const jumpRef = useRef<HTMLButtonElement>(null)
   const focusPreview = useRef(false)
-  const ticksRef = useRef(new Map<string, HTMLButtonElement>())
+  const lensRef = useRef<ReturnType<typeof mountTranscriptOutlineLens> | null>(null)
   const keyboard = useRef(true)
   const openTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -97,40 +124,44 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
       if (!keyboard.current || !rootRef.current?.contains(document.activeElement)) dispatch({ type: 'hide' })
     }, 160)
   }
-  const keepTickVisible = (id: string) => {
-    const tick = ticksRef.current.get(id)
-    const nav = navRef.current
-    if (!tick || !nav) return
-    if (tick.offsetTop < nav.scrollTop) nav.scrollTop = tick.offsetTop
-    else if (tick.offsetTop + tick.offsetHeight > nav.scrollTop + nav.clientHeight) {
-      nav.scrollTop = tick.offsetTop + tick.offsetHeight - nav.clientHeight
-    }
-  }
   const focusTick = (index: number) => {
-    const entry = entries[index]
-    if (!entry) return
-    dispatch({ type: 'tab', id: entry.id })
-    ticksRef.current.get(entry.id)?.focus({ preventScroll: true })
-    keepTickVisible(entry.id)
+    const tick = navRef.current?.children[index] as HTMLButtonElement | undefined
+    tick?.focus({ preventScroll: true })
   }
   positionRef.current = () => {
     const root = rootRef.current
     const card = cardRef.current
-    const tick = preview ? ticksRef.current.get(preview.id) : null
+    const rail = navRef.current
+    // A preview keeps its position during the short trip from rail to card.
+    if (rail?.hasAttribute('data-releasing') && card?.style.getPropertyValue('--outline-preview-top')) return
+    const tick = rail?.children[previewIndex] as HTMLElement | undefined
     if (!root || !card || !tick) return
     const box = root.getBoundingClientRect()
     const target = tick.getBoundingClientRect()
-    const top = target.top + target.height / 2 - box.top - card.offsetHeight / 2
+    const markY = parseFloat(tick.style.getPropertyValue('--outline-mark-y')) || target.height / 2
+    const top = target.top + markY - box.top - card.offsetHeight / 2
     card.style.setProperty('--outline-preview-top', `${Math.max(8, Math.min(top, box.height - card.offsetHeight - 8))}px`)
   }
+  useLayoutEffect(() => {
+    const rail = navRef.current
+    if (!visible || !rail) return
+    const lens = mountTranscriptOutlineLens(rail, () => positionRef.current())
+    lensRef.current = lens
+    const active = document.activeElement
+    if (keyboard.current && rail.contains(active) && tickIndex(active) >= 0) lens.focus(tickIndex(active))
+    return () => {
+      lens.dispose()
+      lensRef.current = null
+    }
+  }, [roster, visible])
   useLayoutEffect(() => {
     positionRef.current()
     if (focusPreview.current && jumpRef.current) {
       focusPreview.current = false
       jumpRef.current.focus({ preventScroll: true })
     }
-  }, [preview?.id, preview?.answer, preview?.prompt])
-  useEffect(() => { scheduleRef.current() }, [entries])
+  }, [preview?.id, preview?.answer, preview?.prompt, previewIndex])
+  useEffect(() => { scheduleRef.current() }, [roster, visible])
   useEffect(() => {
     const scroller = scrollerRef.current
     if (!scroller) return
@@ -167,7 +198,6 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
         first: last < 0 ? -1 : Math.max(0, first), last,
         reading: items.length === 0 ? -1 : Math.max(0, at(scroller.scrollTop + 72)),
       } })
-      positionRef.current()
     }
     const schedule = () => {
       if (frame !== 0) return
@@ -187,9 +217,6 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
     }
   }, [scrollerRef])
   useEffect(() => {
-    if (!preview && entries[state.viewport.reading]) keepTickVisible(entries[state.viewport.reading]!.id)
-  }, [state.viewport.reading, preview?.id, entries.length])
-  useEffect(() => {
     if (!preview) return
     const outside = (event: PointerEvent) => {
       if (event.target instanceof Node && !rootRef.current?.contains(event.target)) hide()
@@ -198,8 +225,11 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
     return () => document.removeEventListener('pointerdown', outside, true)
   }, [preview?.id])
 
-  if (entries.length === 0 || entries.length < minPrompts) return null
+  if (!visible) return null
   return <div className="transcript-outline" ref={rootRef} onPointerDownCapture={() => { keyboard.current = false }}
+    onBlur={event => {
+      if (keyboard.current && !event.currentTarget.contains(event.relatedTarget)) lensRef.current?.release()
+    }}
     onKeyDown={event => {
       if (event.key === 'Escape') {
         event.preventDefault()
@@ -210,43 +240,56 @@ export const TranscriptOutline = memo(function TranscriptOutline({ rows, scrolle
         focusTick(previewIndex)
       }
     }}>
-    <nav className="transcript-outline-rail" aria-label="Conversation outline" ref={navRef} onScroll={() => positionRef.current()}>
-      {entries.map((entry, index) => {
-        const distance = preview ? Math.abs(index - previewIndex) : -1
-        const bookmarked = bookmarks.has(entry.id)
-        return <button key={entry.id} type="button" ref={node => {
-          if (node) ticksRef.current.set(entry.id, node)
-          else ticksRef.current.delete(entry.id)
-        }} className="transcript-outline-tick" tabIndex={entry.id === tabId ? 0 : -1}
-          aria-label={`Prompt ${index + 1}${bookmarked ? ', bookmarked' : ''}: ${entry.prompt}`}
-          aria-current={index === state.viewport.reading ? 'location' : undefined}
-          aria-expanded={distance === 0} aria-controls={distance === 0 ? previewId : undefined}
-          data-distance={distance >= 0 && distance <= 3 ? distance : undefined}
-          data-in-view={index >= state.viewport.first && index <= state.viewport.last ? '' : undefined}
-          data-bookmarked={bookmarked ? '' : undefined}
-          onPointerEnter={() => {
-            keyboard.current = false
-            clearTimers()
-            if (preview) show(entry.id)
-            else openTimer.current = setTimeout(() => show(entry.id), 90)
-          }} onPointerLeave={hideSoon}
-          onFocus={() => { dispatch({ type: 'tab', id: entry.id }); show(entry.id) }} onBlur={hideSoon}
-          onClick={() => { show(entry.id); onJump(entry) }}
-          onKeyDown={event => {
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-              event.preventDefault()
-              focusTick(Math.max(0, Math.min(entries.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))))
-            } else if (event.key === 'Home' || event.key === 'End') {
-              event.preventDefault()
-              focusTick(event.key === 'Home' ? 0 : entries.length - 1)
-            } else if (event.key === 'ArrowRight') {
-              event.preventDefault()
-              show(entry.id)
-              if (jumpRef.current) jumpRef.current.focus({ preventScroll: true })
-              else focusPreview.current = true
-            }
-          }} />
-      })}
+    <nav className="transcript-outline-rail" aria-label="Conversation outline" ref={navRef}
+      onPointerMove={event => lensRef.current?.pointerAt(event.clientY)}
+      onPointerOver={event => {
+        const entry = entries[tickIndex(event.target)]
+        if (!entry) return
+        keyboard.current = false
+        lensRef.current?.pointerAt(event.clientY)
+        clearTimers()
+        if (preview) show(entry.id)
+        else openTimer.current = setTimeout(() => show(entry.id), 90)
+      }}
+      onPointerOut={hideSoon}
+      onPointerLeave={() => { if (!keyboard.current) lensRef.current?.release() }}
+      onFocus={event => {
+        const index = tickIndex(event.target)
+        const entry = entries[index]
+        if (!entry) return
+        if (keyboard.current) lensRef.current?.focus(index)
+        dispatch({ type: 'tab', id: entry.id })
+        show(entry.id)
+      }}
+      onBlur={hideSoon}
+      onClick={event => {
+        const entry = entries[tickIndex(event.target)]
+        if (!entry) return
+        show(entry.id)
+        onJump(entry)
+      }}
+      onKeyDown={event => {
+        const index = tickIndex(event.target)
+        const entry = entries[index]
+        if (!entry) return
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          focusTick(Math.max(0, Math.min(entries.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1))))
+        } else if (event.key === 'Home' || event.key === 'End') {
+          event.preventDefault()
+          focusTick(event.key === 'Home' ? 0 : entries.length - 1)
+        } else if (event.key === 'ArrowRight') {
+          event.preventDefault()
+          lensRef.current?.focus(index)
+          show(entry.id)
+          if (jumpRef.current) jumpRef.current.focus({ preventScroll: true })
+          else focusPreview.current = true
+        }
+      }}>
+      {entries.map((entry, index) => <OutlineTick key={entry.id} index={index} prompt={entry.prompt}
+        bookmarked={bookmarks.has(entry.id)} tabbable={entry.id === tabId}
+        current={index === state.viewport.reading} inView={index >= state.viewport.first && index <= state.viewport.last}
+        distance={preview ? Math.min(4, Math.abs(index - previewIndex)) : 4} previewId={previewId} />)}
     </nav>
     {preview ? <div id={previewId} className="transcript-outline-preview" role="group" aria-label="Prompt preview" ref={cardRef}
       onPointerEnter={() => { keyboard.current = false; clearTimers() }} onPointerLeave={hideSoon}
