@@ -10,7 +10,7 @@ type Evidence = {
 }
 
 for (const conditional of [false, true]) {
-  test(`real engine keeps exact instructions for the main model and ${conditional ? 'retains conditional' : 'reduces independent'} reviewer context`, async () => {
+  test(`unqualified reviewer and main model retain ${conditional ? 'conditional' : 'independent'} instructions`, async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'instruction-reduction-')))
     const workspace = join(root, 'workspace')
     try {
@@ -55,8 +55,7 @@ for (const conditional of [false, true]) {
       for (const review of evidence.reviews) {
         expect(review.model).toBe('gpt-6-luna')
         expect(review.instructions).toContain(join(workspace, 'CLAUDE.md'))
-        if (conditional) expect(review.instructions).toContain(style)
-        else expect(review.instructions).not.toContain('Use two spaces for indentation.')
+        expect(review.instructions).toContain(style)
       }
     } finally {
       await rm(root, { recursive: true, force: true })

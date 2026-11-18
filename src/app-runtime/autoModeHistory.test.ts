@@ -24,7 +24,7 @@ async function fixture(scenario: string) {
   } finally { await rm(root, { recursive: true, force: true }) }
 }
 
-test('real artifact review drops independent history while preserving provenance, refusals, imports and bound approval scope', async () => {
+test('unqualified artifact review keeps history, provenance, refusals, imports and bound approval scope', async () => {
   for (const scenario of ['independent', 'copied', 'refusal', 'import', 'proposal']) {
     const evidence = await fixture(scenario)
     expect(evidence.noiseContent).toContain('NOISE_HISTORY_MARKER')
@@ -32,7 +32,7 @@ test('real artifact review drops independent history while preserving provenance
     expect(evidence.classifierBodies.length).toBeGreaterThan(0)
     for (const request of evidence.classifierBodies) {
       const history = JSON.stringify(request.messages)
-      expect(history.includes('NOISE_HISTORY_MARKER')).toBe(scenario === 'import' || scenario === 'proposal')
+      expect(history).toContain('NOISE_HISTORY_MARKER')
       if (scenario === 'copied') {
         expect(history).toContain('source.txt')
         expect(history).toContain('COPIED_PROVENANCE_MARKER')
@@ -53,13 +53,13 @@ test('real artifact review drops independent history while preserving provenance
   }
 }, 120_000)
 
-test('an unvalidated reviewer fallback receives full history after Luna receives the reduced artifact history', async () => {
+test('Luna and the fallback reviewer both receive full history without qualification', async () => {
   const evidence = await fixture('fallback')
   const luna = evidence.classifierBodies.filter((request: any) => request.model === 'gpt-6-luna')
   const sonnet = evidence.classifierBodies.filter((request: any) => request.model.includes('sonnet'))
   expect(luna.length).toBeGreaterThan(0)
   expect(sonnet.length).toBeGreaterThan(0)
-  for (const request of luna) expect(JSON.stringify(request.messages).includes('NOISE_HISTORY_MARKER')).toBe(false)
+  for (const request of luna) expect(JSON.stringify(request.messages)).toContain('NOISE_HISTORY_MARKER')
   for (const request of sonnet) expect(JSON.stringify(request.messages).includes('NOISE_HISTORY_MARKER')).toBe(true)
   expect(evidence.mainHistoryRetainsNoise).toBe(true)
   expect(evidence.permissions).toEqual([])
