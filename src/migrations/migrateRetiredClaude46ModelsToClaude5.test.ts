@@ -47,6 +47,8 @@ const ENV_KEYS = [
   'ANTHROPIC_DEFAULT_SONNET_MODEL',
   'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX',
+  'CLAUDE_CODE_USE_FOUNDRY',
 ] as const
 const envSnapshot = new Map<string, string | undefined>()
 
@@ -115,7 +117,7 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
 
     expect(getSettingsForSource('userSettings')).toEqual({
       model: 'claude-sonnet-5',
-      availableModels: ['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5'],
+      availableModels: ['claude-sonnet-5', 'claude-opus-5', 'claude-fable-5-2'],
       modelOverrides: {
         'claude-sonnet-5': 'keep-current-sonnet-override',
         'claude-opus-5': 'legacy-opus-override',
@@ -131,6 +133,52 @@ describe('migrateRetiredClaude46ModelsToClaude5', () => {
 
     provider = 'bedrock'
     expect(parseUserSpecifiedModel('claude-sonnet-4-6')).toBe('claude-sonnet-4-6')
+  })
+
+  test('retires Fable 5 user selections even after an OpenAI session and leaves the second run unchanged', () => {
+    provider = 'openai'
+    setUserSettings({
+      model: 'claude-fable-5',
+      availableModels: ['claude-fable-5', 'claude-fable-5-2'],
+      modelOverrides: {
+        'claude-fable-5': 'legacy-fable-override',
+        'claude-fable-5-2': 'keep-current-fable-override',
+      },
+    })
+    mainLoopOverride = 'claude-fable-5'
+
+    expect(migrateRetiredClaude46ModelsToClaude5()).toBeNull()
+    expect(getSettingsForSource('userSettings')).toEqual({
+      model: 'claude-fable-5-2',
+      availableModels: ['claude-fable-5-2'],
+      modelOverrides: { 'claude-fable-5-2': 'keep-current-fable-override' },
+    })
+    const settingsPath = join(settingsDir, 'settings.json')
+    const migrated = readFileSync(settingsPath, 'utf8')
+
+    expect(migrateRetiredClaude46ModelsToClaude5()).toBeNull()
+    expect(readFileSync(settingsPath, 'utf8')).toBe(migrated)
+    expect(mainLoopOverrideWrites).toEqual(['claude-fable-5-2'])
+  })
+
+  test.each([
+    ['CLAUDE_CODE_USE_BEDROCK', '1', 'us.anthropic.claude-fable-5-v1'],
+    ['CLAUDE_CODE_USE_VERTEX', '1', 'claude-fable-5'],
+    ['CLAUDE_CODE_USE_FOUNDRY', '1', 'claude-fable-5'],
+    ['ANTHROPIC_BASE_URL', 'https://my-gateway.example.com', 'anthropic/claude-fable-5'],
+  ])('preserves Fable 5 pins with %s configured', (envKey, value, pin) => {
+    process.env[envKey] = value
+    const settings = {
+      model: pin,
+      availableModels: [pin],
+      modelOverrides: { [pin]: 'keep-provider-override' },
+    }
+    setUserSettings(settings)
+    mainLoopOverride = pin
+
+    expect(migrateRetiredClaude46ModelsToClaude5()).toBeNull()
+    expect(getSettingsForSource('userSettings')).toEqual(settings)
+    expect(mainLoopOverrideWrites).toEqual([])
   })
 
   test('remaps old first-party default-model environment pins', () => {

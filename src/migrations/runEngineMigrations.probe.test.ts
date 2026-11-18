@@ -143,7 +143,7 @@ describe('runEngineMigrations process ownership', () => {
     }
   }, 25_000)
 
-  test.each([18, 19])('two version-%i contenders upgrade GPT pins and preserve unrelated settings', async initialVersion => {
+  test.each([18, 19])('two version-%i contenders upgrade retired model selections and preserve unrelated settings', async initialVersion => {
     const root = mkdtempSync(join(tmpdir(), 'cat-code-engine-migrations-'))
     probeRoots.push(root)
     const configHome = join(root, 'config')
@@ -171,10 +171,19 @@ describe('runEngineMigrations process ownership', () => {
     writeFileSync(
       join(configHome, 'settings.json'),
       JSON.stringify({
-        model: 'gpt-6.1-sol',
-        availableModels: ['gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-6-astra', 'custom-model'],
+        model: 'claude-fable-5',
+        availableModels: [
+          'gpt-6.1-sol',
+          'gpt-6.2-sol',
+          'gpt-6-astra',
+          'claude-fable-5',
+          'claude-fable-5-2',
+          'custom-model',
+        ],
         modelOverrides: {
           'gpt-6-astra': 'legacy-override',
+          'claude-fable-5': 'legacy-fable-override',
+          'claude-fable-5-2': 'keep-current-fable-override',
           'custom-model': 'keep-override',
         },
         env: { UNRELATED_ENV: 'keep-user' },
@@ -199,6 +208,10 @@ describe('runEngineMigrations process ownership', () => {
     delete childEnv.USE_LOCAL_OAUTH
     delete childEnv.USE_STAGING_OAUTH
     delete childEnv.USER_TYPE
+    delete childEnv.ANTHROPIC_BASE_URL
+    delete childEnv.CLAUDE_CODE_USE_BEDROCK
+    delete childEnv.CLAUDE_CODE_USE_VERTEX
+    delete childEnv.CLAUDE_CODE_USE_FOUNDRY
     childEnv.CLAUDE_CONFIG_DIR = configHome
     childEnv.MIGRATION_PROBE_ROOT = root
     childEnv.NODE_ENV = 'production'
@@ -282,10 +295,16 @@ describe('runEngineMigrations process ownership', () => {
       readFileSync(join(configHome, 'settings.json'), 'utf8'),
     )
     expect(userSettings).toMatchObject({
-      model: 'gpt-6.2-sol',
-      availableModels: ['gpt-6.2-sol', 'gpt-6.2-astra', 'custom-model'],
+      model: 'claude-fable-5-2',
+      availableModels: [
+        'gpt-6.2-sol',
+        'gpt-6.2-astra',
+        'claude-fable-5-2',
+        'custom-model',
+      ],
       modelOverrides: {
         'gpt-6.2-astra': 'legacy-override',
+        'claude-fable-5-2': 'keep-current-fable-override',
         'custom-model': 'keep-override',
       },
       env: {
@@ -294,6 +313,7 @@ describe('runEngineMigrations process ownership', () => {
         ...(versioned && { DISABLE_AUTOUPDATER: '1' }),
       },
     })
+    expect(userSettings.modelOverrides).not.toHaveProperty('claude-fable-5')
 
     const localSettings = JSON.parse(
       readFileSync(join(workspace, '.cat-code', 'settings.local.json'), 'utf8'),

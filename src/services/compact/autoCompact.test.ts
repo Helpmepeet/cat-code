@@ -89,6 +89,7 @@ describe('autoCompact thresholds', () => {
       'claude-sonnet-5',
       'claude-opus-5',
       'claude-fable-5',
+      'claude-fable-5-2',
     ]) {
       expect(getContextWindowForModel(model)).toBe(1_000_000)
       // StatusLine uses this same effective window as its percentage denominator.

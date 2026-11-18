@@ -361,7 +361,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     return standardOptions
   }
 
-  // PAYG 1P API: Default + Fable 5 + Opus 5.5 + Opus 1M + Sonnet 5.5 + Haiku
+  // PAYG 1P API: Default + Fable + Opus 5.5 + Opus 1M + Sonnet 5.5 + Haiku
   if (getAPIProvider() === 'firstParty') {
     const payg1POptions = [getDefaultOptionForUser(fastMode)]
     payg1POptions.push(getCurrentClaudeOption('fable'))

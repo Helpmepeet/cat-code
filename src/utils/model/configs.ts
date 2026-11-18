@@ -144,6 +144,14 @@ export const CLAUDE_FABLE_5_CONFIG = {
   openai: 'claude-fable-5',
 } as const satisfies ModelConfig
 
+export const CLAUDE_FABLE_5_2_CONFIG = {
+  firstParty: 'claude-fable-5-2',
+  bedrock: 'global.anthropic.claude-fable-5-2',
+  vertex: 'claude-fable-5-2',
+  foundry: 'claude-fable-5-2',
+  openai: 'claude-fable-5-2',
+} as const satisfies ModelConfig
+
 type CodexEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra'
 
 type CodexRelease = {
@@ -386,6 +394,7 @@ type ClaudeRelease = {
   cloudFallback?: string
   codexTranslation?: 'reject'
   retireFirstPartyTo?: string
+  strictThinkingPrefix?: boolean
   priceAs?: string
 }
 
@@ -495,10 +504,17 @@ const CLAUDE_RELEASES = {
     publicLabel: 'Haiku 3.5', attributionId: 'claude-haiku-3-5', vertexRegionEnv: 'VERTEX_REGION_CLAUDE_3_5_HAIKU',
     outputTokens: { default: 8_192, upperLimit: 8_192 },
   },
+  fable52: {
+    ...frontier, wire: CLAUDE_FABLE_5_2_CONFIG, family: 'fable', label: 'Fable 5.2',
+    knowledgeCutoff: 'June 2026', effort: 'xhigh', subscriberMediumEffort: true,
+    fastMode: true, vertexRegionEnv: 'VERTEX_REGION_CLAUDE_5_FABLE',
+    requiredAdaptiveThinking: true, strictThinkingPrefix: true, codexTranslation: 'reject',
+  },
   fable5: {
     ...frontier, wire: CLAUDE_FABLE_5_CONFIG, family: 'fable', label: 'Fable 5',
     knowledgeCutoff: 'January 2026', effort: 'max', subscriberMediumEffort: true,
     fastMode: true, vertexRegionEnv: 'VERTEX_REGION_CLAUDE_5_FABLE', cachedCompaction: true,
+    retireFirstPartyTo: 'fable',
   },
 } as const
 
@@ -516,7 +532,7 @@ const CLAUDE_FAMILIES = {
   sonnet: { current: 'sonnet55', cloud: 'sonnet45' },
   opus: { current: 'opus55', cloud: 'opus46' },
   haiku: { current: 'haiku55', cloud: 'haiku45' },
-  fable: { current: 'fable5', cloud: 'fable5' },
+  fable: { current: 'fable52', cloud: 'fable52' },
 } as const satisfies Record<ClaudeFamily, Record<'current' | 'cloud', ClaudeReleaseKey>>
 
 export function getClaudeFamilyKey(family: ClaudeFamily, cloud = false): ClaudeReleaseKey {
@@ -604,8 +620,10 @@ export function getClaudeMarketingName(model: string): string | undefined {
 }
 
 export function remapRetiredClaudeSelection(model: string): string {
-  let release = matchClaudeRelease(model.trim().toLowerCase().replace(/\[1m\]$/, ''))
+  const id = model.trim().toLowerCase().replace(/\[1m\]$/, '')
+  let release = matchClaudeRelease(id)
   if (!release?.retireFirstPartyTo) return model
+  if (release.family === 'fable' && id !== release.wire.firstParty) return model
   const visited = new Set<ClaudeRelease>()
   while (release.retireFirstPartyTo) {
     if (visited.has(release)) throw new Error(`Cyclic Claude model retirement for ${model}`)

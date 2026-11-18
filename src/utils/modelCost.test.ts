@@ -5,6 +5,21 @@ import { firstPartyNameToCanonical } from './model/model.js'
 import { calculateUSDCost } from './modelCost.js'
 import { getConfiguredStandardModelCosts, ratesForPrompt } from './modelCostRates.js'
 
+test('prices Fable 5.2 without rewriting Fable 5 history', () => {
+  expect(getConfiguredStandardModelCosts('claude-fable-5-2')).toMatchObject({
+    inputTokens: 8,
+    outputTokens: 40,
+    promptCacheWriteTokens: 10,
+    promptCacheReadTokens: 0.2,
+  })
+  expect(getConfiguredStandardModelCosts('global.anthropic.claude-fable-5-2'))
+    .toEqual(getConfiguredStandardModelCosts('claude-fable-5-2'))
+  expect(getConfiguredStandardModelCosts('claude-fable-5')).toMatchObject({
+    inputTokens: 10,
+    outputTokens: 50,
+  })
+})
+
 describe('calculateUSDCost', () => {
   const model = firstPartyNameToCanonical(
     CLAUDE_SONNET_4_5_CONFIG.firstParty,

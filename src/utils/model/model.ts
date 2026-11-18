@@ -229,7 +229,8 @@ export function getDefaultHaikuModel(provider = getAPIProvider()): ModelName {
 }
 
 export function getDefaultFableModel(provider = getAPIProvider()): ModelName {
-  return process.env.ANTHROPIC_DEFAULT_FABLE_MODEL || getBestModel(provider)
+  const override = process.env.ANTHROPIC_DEFAULT_FABLE_MODEL
+  return override ? remapFirstPartyClaudeSelection(override, provider) : getBestModel(provider)
 }
 
 /**

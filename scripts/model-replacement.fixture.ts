@@ -180,7 +180,9 @@ async function verifyClaude() {
     assert.equal(parseUserSpecifiedModel('sonnet'), successor)
     assert.equal(parseUserSpecifiedModel('opus'), 'claude-opus-5-5')
     assert.equal(parseUserSpecifiedModel('haiku'), 'claude-haiku-5-5')
-    assert.equal(parseUserSpecifiedModel('best'), 'claude-fable-5')
+    assert.equal(parseUserSpecifiedModel('best'), 'claude-fable-5-2')
+    assert.equal(parseUserSpecifiedModel('claude-fable-5'), 'claude-fable-5-2')
+    assert.equal(getModelOptions().find(row => row.value === 'fable')?.label, 'Fable 5.2')
     assert.equal(parseUserSpecifiedModel('claude-sonnet-5-5'), 'claude-sonnet-5-5')
     const price = getConfiguredStandardModelCosts(successor)
     assert.equal(price?.inputTokens, 2)
@@ -239,7 +241,8 @@ async function verifyClaude() {
     assert.equal(parseUserSpecifiedModel('sonnet[1m]'), 'claude-sonnet-4-5@20250929[1m]')
     assert.equal(parseUserSpecifiedModel('opus'), 'claude-opus-4-6')
     assert.equal(parseUserSpecifiedModel('haiku'), 'claude-haiku-4-5@20251001')
-    assert.equal(parseUserSpecifiedModel('fable'), 'claude-fable-5')
+    assert.equal(parseUserSpecifiedModel('fable'), 'claude-fable-5-2')
+    assert.equal(parseUserSpecifiedModel('claude-fable-5'), 'claude-fable-5')
     process.env.VERTEX_REGION_CLAUDE_4_5_SONNET = 'europe-west1'
     process.env.CLOUD_ML_REGION = 'europe-west4'
     assert.equal(getVertexRegionForModel('claude-sonnet-4-5@20250929'), 'europe-west1')
@@ -248,6 +251,7 @@ async function verifyClaude() {
     setSessionProvider('foundry')
     assert.equal(parseUserSpecifiedModel('sonnet'), 'claude-sonnet-4-5')
     assert.equal(parseUserSpecifiedModel('haiku'), 'claude-haiku-4-5')
+    assert.equal(parseUserSpecifiedModel('fable'), 'claude-fable-5-2')
     process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'CustomDeployment'
     assert.equal(parseUserSpecifiedModel('sonnet'), 'CustomDeployment')
     delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
@@ -266,7 +270,8 @@ async function verifyClaude() {
     assert.equal(parseUserSpecifiedModel('sonnet'), 'eu.anthropic.claude-sonnet-4-5-20250929-v1:0')
     assert.equal(parseUserSpecifiedModel('opus'), 'us.anthropic.claude-opus-4-6-v1')
     assert.equal(parseUserSpecifiedModel('haiku'), 'us.anthropic.claude-haiku-4-5-20251001-v1:0')
-    assert.equal(parseUserSpecifiedModel('fable'), 'us.anthropic.claude-fable-5-v1')
+    assert.equal(parseUserSpecifiedModel('fable'), 'global.anthropic.claude-fable-5-2')
+    assert.equal(parseUserSpecifiedModel('us.anthropic.claude-fable-5-v1'), 'us.anthropic.claude-fable-5-v1')
     setMainLoopModelOverride('opusplan')
     assert.deepEqual(resolveAgentModel('inherit', successor, undefined, 'plan', 'firstParty'), {
       model: 'claude-opus-5-5', provider: 'firstParty',

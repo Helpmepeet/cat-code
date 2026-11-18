@@ -3,6 +3,7 @@ import {
   CLAUDE_3_5_V2_SONNET_CONFIG,
   CLAUDE_3_7_SONNET_CONFIG,
   CLAUDE_FABLE_5_CONFIG,
+  CLAUDE_FABLE_5_2_CONFIG,
   CLAUDE_HAIKU_4_5_CONFIG,
   CLAUDE_HAIKU_5_5_CONFIG,
   CLAUDE_OPUS_4_1_CONFIG,
@@ -55,6 +56,7 @@ export const COST_HAIKU_55 = {
   },
 } as const satisfies ModelCosts
 export const COST_FABLE_10_50 = { inputTokens: 10, outputTokens: 50, promptCacheWriteTokens: 12.5, promptCacheReadTokens: 1, webSearchRequests: 0.01 } as const satisfies ModelCosts
+const COST_FABLE_52 = { inputTokens: 8, outputTokens: 40, promptCacheWriteTokens: 10, promptCacheReadTokens: 0.2, webSearchRequests: 0.01 } as const satisfies ModelCosts
 
 export const COST_SONNET_55 = { inputTokens: 2, outputTokens: 10, promptCacheWriteTokens: 2.5, promptCacheReadTokens: 0.2, webSearchRequests: 0.01 } as const satisfies ModelCosts
 export const COST_OPUS_55 = { inputTokens: 4, outputTokens: 20, promptCacheWriteTokens: 5, promptCacheReadTokens: 0.4, webSearchRequests: 0.01 } as const satisfies ModelCosts
@@ -92,6 +94,7 @@ const STANDARD_CONFIG_COSTS = [
   [CLAUDE_SONNET_5_5_CONFIG, COST_SONNET_55],
   [CLAUDE_OPUS_5_5_CONFIG, COST_OPUS_55],
   [CLAUDE_FABLE_5_CONFIG, COST_FABLE_10_50],
+  [CLAUDE_FABLE_5_2_CONFIG, COST_FABLE_52],
   [GPT_6_1_TERRA_CONFIG, COST_GPT_61_TERRA],
 ] as const satisfies readonly (readonly [ModelConfig, ModelCosts])[]
 

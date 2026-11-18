@@ -12,6 +12,7 @@ import type {
   BetaRawMessageStreamEvent,
   BetaRequestDocumentBlock,
   BetaStopReason,
+  BetaToolChoiceAny,
   BetaToolChoiceAuto,
   BetaToolChoiceTool,
   BetaToolResultBlockParam,
@@ -861,7 +862,7 @@ export type Options = {
   getToolPermissionContext: () => Promise<ToolPermissionContext>
   model: string
   provider?: APIProvider
-  toolChoice?: BetaToolChoiceTool | BetaToolChoiceAuto | undefined
+  toolChoice?: BetaToolChoiceTool | BetaToolChoiceAuto | BetaToolChoiceAny | undefined
   isNonInteractiveSession: boolean
   extraToolSchemas?: BetaToolUnion[]
   maxOutputTokensOverride?: number
@@ -1054,6 +1055,7 @@ export async function* executeNonStreamingRequest(
     onCodexAccountSwitch?: () => void
     isCodexRequest?: boolean
     isClaudeOAuthRequest?: boolean
+    repairRejectedThinkingPrefix?: (error: unknown) => boolean
   },
   paramsFromContext: (context: RetryContext) => BetaMessageStreamParams,
   onAttempt: (attempt: number, start: number, maxOutputTokens: number) => void,
@@ -1149,6 +1151,7 @@ export async function* executeNonStreamingRequest(
       onCodexAccountSwitch: retryOptions.onCodexAccountSwitch,
       isCodexRequest: retryOptions.isCodexRequest,
       isClaudeOAuthRequest: retryOptions.isClaudeOAuthRequest,
+      repairRejectedThinkingPrefix: retryOptions.repairRejectedThinkingPrefix,
     },
   )
 
@@ -1914,6 +1917,42 @@ async function* queryModel(
   // were dynamically added, so we can log and send it to telemetry.
   let lastRequestBetas: string[] | undefined
 
+  const claudeRelease = requestProvider !== 'openai'
+    ? matchClaudeRelease(getCanonicalName(options.model))
+    : undefined
+  let lastThinkingPrefixMessages: BetaMessageStreamParams['messages'] | undefined
+  let rejectedThinkingPosition: { message: number; block: number } | undefined
+  function repairRejectedThinkingPrefix(error: unknown): boolean {
+    if (rejectedThinkingPosition || !lastThinkingPrefixMessages ||
+        !(error instanceof APIError) || error.status !== 400 ||
+        !error.message.includes('The block is bound to a different conversation')) return false
+    const position = /messages\.(\d+)\.content\.(\d+): Invalid `signature`/.exec(error.message)
+    if (!position) return false
+    const message = Number(position[1])
+    const block = Number(position[2])
+    const turn = lastThinkingPrefixMessages[message]
+    if (turn?.role !== 'assistant' || !Array.isArray(turn.content)) return false
+    const type = turn.content[block]?.type
+    if (type !== 'thinking' && type !== 'redacted_thinking') return false
+    rejectedThinkingPosition = { message, block }
+    return true
+  }
+
+  function stripRejectedThinkingSuffix(messages: BetaMessageStreamParams['messages']) {
+    const position = rejectedThinkingPosition
+    if (!position) return messages
+    // Anything signed after this block depends on it. Keep the visible
+    // conversation and tool calls, and leave the stored transcript alone.
+    return messages.flatMap((turn, index) => {
+      if (index < position.message || turn.role !== 'assistant' ||
+          !Array.isArray(turn.content)) return [turn]
+      const start = index === position.message ? position.block : 0
+      const content = turn.content.filter((block, i) =>
+        i < start || (block.type !== 'thinking' && block.type !== 'redacted_thinking'))
+      return content.length ? [{ ...turn, content }] : []
+    })
+  }
+
   const paramsFromContext = (retryContext: RetryContext) => {
     const openAIInstructionAssemblyPayload =
       requestProvider === 'openai' && openAIInstructionAssembly
@@ -1989,9 +2028,7 @@ async function* queryModel(
       options.maxOutputTokensOverride ||
       getMaxOutputTokensForModel(options.model)
 
-    const canonicalModel = getCanonicalName(options.model)
-    const requiresAdaptiveThinking = requestProvider !== 'openai' &&
-      matchClaudeRelease(canonicalModel)?.requiredAdaptiveThinking === true
+    const requiresAdaptiveThinking = claudeRelease?.requiredAdaptiveThinking === true
     const hasThinking = requiresAdaptiveThinking || (
       thinkingConfig.type !== 'disabled' &&
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
@@ -2003,8 +2040,7 @@ async function* queryModel(
       thinking = { type: 'disabled' }
     }
 
-    // Claude 5.5 rejects manual thinking budgets. Opus requires thinking on
-    // every request; summarized display preserves visible progress updates.
+    // Models with always-on adaptive thinking reject manual budgets.
     if (hasThinking && (requiresAdaptiveThinking || modelSupportsThinking(options.model))) {
       if (
         requiresAdaptiveThinking || (
@@ -2103,22 +2139,26 @@ async function* queryModel(
 
     lastRequestBetas = betasParams
 
+    const requestMessages = addCacheBreakpoints(
+      messagesForAPI,
+      enablePromptCaching,
+      options.querySource,
+      useCachedMC,
+      consumedCacheEdits,
+      consumedPinnedEdits,
+      options.skipCacheWrite,
+    )
+    if (claudeRelease?.strictThinkingPrefix) lastThinkingPrefixMessages = requestMessages
+
     return {
       model: normalizeModelStringForAPI(options.model),
-      messages: addCacheBreakpoints(
-        messagesForAPI,
-        enablePromptCaching,
-        options.querySource,
-        useCachedMC,
-        consumedCacheEdits,
-        consumedPinnedEdits,
-        options.skipCacheWrite,
-      ),
+      messages: stripRejectedThinkingSuffix(requestMessages),
       system,
       tools: allTools,
       ...openAIInstructionAssemblyPayload,
       tool_choice:
-        requiresAdaptiveThinking && options.toolChoice?.type === 'tool'
+        requiresAdaptiveThinking &&
+        (options.toolChoice?.type === 'tool' || options.toolChoice?.type === 'any')
           ? { type: 'auto' as const }
           : options.toolChoice,
       ...(useBetas && { betas: betasParams }),
@@ -2311,6 +2351,7 @@ async function* queryModel(
         isCodexRequest: requestProvider === 'openai',
         isClaudeOAuthRequest:
           requestProvider === 'firstParty' && isClaudeAISubscriber(),
+        repairRejectedThinkingPrefix,
       },
     )
     stream = yield* createStreamingRequest()
@@ -3216,6 +3257,7 @@ async function* queryModel(
           isCodexRequest: requestProvider === 'openai',
           isClaudeOAuthRequest:
             requestProvider === 'firstParty' && isClaudeAISubscriber(),
+          repairRejectedThinkingPrefix,
         },
         paramsFromContext,
         (attempt, _startTime, tokens) => {
@@ -3332,6 +3374,7 @@ async function* queryModel(
             isCodexRequest: requestProvider === 'openai',
             isClaudeOAuthRequest:
               requestProvider === 'firstParty' && isClaudeAISubscriber(),
+            repairRejectedThinkingPrefix,
           },
           paramsFromContext,
           (attempt, _startTime, tokens) => {

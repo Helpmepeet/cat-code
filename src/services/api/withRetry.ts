@@ -352,6 +352,7 @@ interface RetryOptions {
   onCodexAccountSwitch?: () => void
   isCodexRequest?: boolean
   isClaudeOAuthRequest?: boolean
+  repairRejectedThinkingPrefix?: (error: unknown) => boolean
   /**
    * Pre-seed the consecutive 529 counter. Used when this retry loop is a
    * non-streaming fallback after a streaming 529 — the streaming 529 should
@@ -735,6 +736,11 @@ export async function* withRetry<T, Client = Anthropic>(
         `API error (attempt ${attempt}/${maxRetries + 1}): ${error instanceof APIError ? `${error.status} ${error.message}` : errorMessage(error)}`,
         { level: 'error' },
       )
+
+      if (attempt <= maxRetries && !options.signal?.aborted &&
+          options.repairRejectedThinkingPrefix?.(error)) {
+        continue
+      }
 
       const longContextEntitlementError = getLongContextEntitlementError(error)
       if (longContextEntitlementError) {

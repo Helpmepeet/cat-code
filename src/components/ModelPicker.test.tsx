@@ -186,7 +186,8 @@ describe('ModelPicker current-model fallback', () => {
     expect(
       optionRows(frame).filter(row => row.description === 'Current model'),
     ).toHaveLength(1)
-    expect(labelCount(frame, 'Fable 5')).toBe(1)
+    expect(labelCount(frame, 'Fable 5.2')).toBe(1)
+    expect(labelCount(frame, 'Fable')).toBe(1)
   })
 
   test('an unrelated pinned model still gets its own row', async () => {
