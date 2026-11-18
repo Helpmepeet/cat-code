@@ -137,7 +137,12 @@ const BLOCKED_DEVICE_PATHS = new Set([
   '/dev/fd/2',
 ])
 
-const userMentionedFileReads = new WeakSet<object>()
+type FileReadDeliveryOptions = {
+  userMentioned?: boolean
+  requireContents?: boolean
+}
+
+const fileReadDeliveryOptions = new WeakMap<object, FileReadDeliveryOptions>()
 
 function isBlockedDevicePath(filePath: string): boolean {
   if (BLOCKED_DEVICE_PATHS.has(filePath)) return true
@@ -547,7 +552,7 @@ export const FileReadTool = buildTool({
     const appState = context.getAppState()
     const prepared = getPreparedFileRead(context, FILE_READ_TOOL_NAME, input)
     const isUserMentionedRead =
-      prepared !== undefined && userMentionedFileReads.has(prepared)
+      prepared !== undefined && fileReadDeliveryOptions.get(prepared)?.userMentioned
     if (isUserMentionedRead) {
       const denyRule = getDenyRuleForTool(
         appState.toolPermissionContext,
@@ -804,6 +809,7 @@ export const FileReadTool = buildTool({
       throw new Error('FileRead requires a prepared filesystem capability')
     }
     const { readFileState, fileReadingLimits } = context
+    const delivery = fileReadDeliveryOptions.get(prepared)
 
     const defaults = getDefaultFileReadingLimits()
     const maxSizeBytes =
@@ -844,20 +850,22 @@ export const FileReadTool = buildTool({
     const existingState = dedupKillswitch
       ? undefined
       : readFileState.get(fullFilePath)
+    const requiresModelProvenance = parentMessage !== undefined || delivery?.userMentioned
     // Only dedup entries that came from a prior Read (offset is always set
     // by Read). Edit/Write store offset=undefined — their readFileState
     // entry reflects post-edit mtime, so deduping against it would wrongly
     // point the model at the pre-edit Read content.
     if (
       existingState &&
+      !delivery?.requireContents &&
       prepared.capability !== undefined &&
       !existingState.isPartialView &&
       existingState.offset !== undefined &&
       existingState.fileIdentity !== undefined &&
-      // An internal refresh may populate the shared cache without returning
-      // the contents to the model. A later model-invoked Read must not dedup
-      // against that invisible result.
-      (parentMessage === undefined || existingState.isWriteAuthorizedRead)
+      // An internal refresh may populate the cache without delivering the
+      // contents. Model Reads and explicit mentions need model-visible evidence.
+      (!requiresModelProvenance || existingState.isWriteAuthorizedRead) &&
+      (!delivery?.userMentioned || !existingState.isTruncatedView)
     ) {
       const rangeMatch =
         existingState.offset === offset && existingState.limit === limit
@@ -1079,14 +1087,16 @@ export async function callFileReadToolWithPreparedCapability(
   context: ToolUseContext,
   canUseTool?: Parameters<typeof FileReadTool.call>[2],
   parentMessage?: Parameters<typeof FileReadTool.call>[3],
-  options: { userMentioned?: boolean } = {},
+  options: FileReadDeliveryOptions = {},
 ): Promise<Awaited<ReturnType<typeof FileReadTool.call>>> {
   if (getPreparedFileRead(context, FILE_READ_TOOL_NAME, input)) {
     return FileReadTool.call(input, context, canUseTool, parentMessage)
   }
 
   const prepared = await FileReadTool.prepareExecution!(input)
-  if (options.userMentioned) userMentionedFileReads.add(prepared.state as object)
+  if (options.userMentioned || options.requireContents) {
+    fileReadDeliveryOptions.set(prepared.state as object, options)
+  }
   const preparedContext: ToolUseContext = {
     ...context,
     preparedExecution: {
@@ -1116,7 +1126,7 @@ export async function callFileReadToolWithPreparedCapability(
       parentMessage,
     )
   } finally {
-    userMentionedFileReads.delete(prepared.state as object)
+    fileReadDeliveryOptions.delete(prepared.state as object)
     await prepared.cleanup()
   }
 }

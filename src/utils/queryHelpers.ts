@@ -388,7 +388,8 @@ export function extractReadFilesFromMessages(
 ): FileStateCache {
   const cache = createFileStateCacheWithSizeLimit(maxSize)
 
-  // First pass: find all FileReadTool/FileWriteTool/FileEditTool uses in assistant messages
+  // Model-visible Reads seed read provenance. Hidden mutations still refresh
+  // the cache's disk state without implying the model received those bytes.
   const fileReadToolUseIds = new Map<string, string>() // toolUseId -> filePath
   const fileWriteToolUseIds = new Map<
     string,
@@ -404,7 +405,9 @@ export function extractReadFilesFromMessages(
       for (const content of message.message.content) {
         if (
           content.type === 'tool_use' &&
-          content.name === FILE_READ_TOOL_NAME
+          content.name === FILE_READ_TOOL_NAME &&
+          !message.isVirtual &&
+          !message.codeMode
         ) {
           // Extract file_path from the tool use input
           const input = content.input as FileReadInput | undefined
@@ -427,7 +430,7 @@ export function extractReadFilesFromMessages(
           const input = content.input as
             | { file_path?: string; content?: string }
             | undefined
-          if (input?.file_path && input?.content) {
+          if (input?.file_path && typeof input.content === 'string') {
             // Normalize to absolute path for consistent cache lookups
             const absolutePath = expandPath(input.file_path, cwd)
             fileWriteToolUseIds.set(content.id, {
@@ -455,11 +458,18 @@ export function extractReadFilesFromMessages(
   for (const message of messages) {
     if (message.type === 'user' && Array.isArray(message.message.content)) {
       for (const content of message.message.content) {
-        if (content.type === 'tool_result' && content.tool_use_id) {
+        if (
+          content.type === 'tool_result' &&
+          content.tool_use_id &&
+          content.is_error !== true &&
+          message.toolResultStatus !== 'cancelled'
+        ) {
           // Handle Read tool results
           const readFilePath = fileReadToolUseIds.get(content.tool_use_id)
           if (
             readFilePath &&
+            !message.isVirtual &&
+            !message.codeMode &&
             typeof content.content === 'string' &&
             // Dedup stubs contain no file content — the earlier real Read
             // already cached it. Chronological last-wins would otherwise
@@ -529,7 +539,7 @@ export function extractReadFilesFromMessages(
           // IS the post-edit state. No dedup: processing every Edit preserves
           // last-wins semantics when Read/Write interleave (Edit→Read→Edit).
           const editFilePath = fileEditToolUseIds.get(content.tool_use_id)
-          if (editFilePath && content.is_error !== true) {
+          if (editFilePath) {
             try {
               const { content: diskContent } =
                 readFileSyncWithMetadata(editFilePath)

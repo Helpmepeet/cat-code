@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { feature } from 'bun:bundle'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs'
+import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -10,13 +10,17 @@ import {
 } from '../../bootstrap/state.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
-import type { ToolUseContext } from '../../Tool.js'
+import { getEmptyToolPermissionContext, type ToolUseContext } from '../../Tool.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import {
   createUserMessage,
   createAssistantMessage as makeAssistant,
   normalizeAttachmentForAPI,
+  normalizeMessagesForAPI,
 } from '../../utils/messages.js'
+import { runWithCwdOverride } from '../../utils/cwd.js'
+import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
+import { FileReadTool } from '../../tools/FileReadTool/FileReadTool.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { TodoWriteTool } from '../../tools/TodoWriteTool/TodoWriteTool.js'
@@ -165,6 +169,44 @@ describe('compactConversation', () => {
     mock.restore()
     switchSession(originalSessionId, originalProjectDir)
     rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('restores file content when only a Script-private Read survives compaction', async () => {
+    const { createPostCompactFileAttachments } = await import('./compact.js')
+    const workspace = realpathSync(tempDir)
+    const filePath = join(workspace, 'retained-file.txt')
+    const fileContents = 'restored file bytes'
+    writeFileSync(filePath, fileContents)
+    const readUse = makeAssistant({
+      content: [{ type: 'tool_use', id: 'read-file', name: FileReadTool.name, input: { file_path: filePath } }],
+    })
+    const readResult = createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: 'read-file', content: fileContents }],
+    })
+    const snapshot = {
+      [filePath]: { content: fileContents, timestamp: 1, offset: 1, limit: undefined, isWriteAuthorizedRead: true },
+    }
+    const restore = async (preserved: Message[]) => {
+      const context = createToolUseContext(preserved)
+      context.readFileState = createFileStateCacheWithSizeLimit(10)
+      Object.assign(context.getAppState().toolPermissionContext, {
+        ...getEmptyToolPermissionContext(),
+        additionalWorkingDirectories: new Map([[workspace, { path: workspace, source: 'session' }]]),
+      })
+      return runWithCwdOverride(workspace, () =>
+        createPostCompactFileAttachments(snapshot, context, 1, preserved),
+      )
+    }
+    expect(await restore([readUse, readResult])).toEqual([])
+
+    const codeMode = { cellId: 'script', generation: 'guest' }
+    const preserved = [
+      { ...readUse, isVirtual: true as const, codeMode },
+      { ...readResult, isVirtual: true as const, codeMode },
+    ]
+    const restored = await restore(preserved)
+    const providerMessages = normalizeMessagesForAPI([...preserved, ...restored], [FileReadTool], 'firstParty')
+    expect(JSON.stringify(providerMessages)).toContain(fileContents)
   })
 
   for (const strategy of ['full', 'manual', 'auto', 'session-memory', 'partial-from', 'partial-up-to', ...(feature('REACTIVE_COMPACT') ? ['reactive' as const] : [])] as const) {

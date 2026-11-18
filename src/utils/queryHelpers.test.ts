@@ -114,11 +114,13 @@ function readTranscript(options: {
   filePath: string
   offset?: number
   partial?: boolean
+  codeMode?: { cellId: string; generation: string }
 }): Message[] {
   const toolUseId = `toolu-${options.filePath}`
   const numLines = options.partial ? 1 : 2
   return [
     createAssistantMessage({
+      ...(options.codeMode ? { isVirtual: true, codeMode: options.codeMode } : {}),
       content: [
         {
           type: 'tool_use',
@@ -132,6 +134,7 @@ function readTranscript(options: {
       ],
     }),
     createUserMessage({
+      ...(options.codeMode ? { isVirtual: true, codeMode: options.codeMode } : {}),
       content: [
         {
           type: 'tool_result',
@@ -181,5 +184,15 @@ describe('extractReadFilesFromMessages bare-delete read provenance', () => {
 
     expect(cache.get(filePath)?.isTruncatedView).toBe(true)
     expect(isCompleteUnboundedRead(cache.get(filePath))).toBe(false)
+  })
+
+  test('ignores a Script child Read whose output was private to the interpreter', () => {
+    const filePath = '/tmp/restored-guest-read.txt'
+    const cache = extractReadFilesFromMessages(
+      readTranscript({ filePath, codeMode: { cellId: 'script', generation: 'guest' } }),
+      '/tmp',
+    )
+
+    expect(cache.has(filePath)).toBe(false)
   })
 })

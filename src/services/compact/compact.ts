@@ -49,7 +49,7 @@ import {
 } from '../../utils/contextAnalysis.js'
 import { logForDebugging } from '../../utils/debug.js'
 import { hasExactErrorMessage } from '../../utils/errors.js'
-import { cacheToObject } from '../../utils/fileStateCache.js'
+import { cacheToObject, type FileState } from '../../utils/fileStateCache.js'
 import {
   type CacheSafeParams,
   runForkedAgent,
@@ -1709,10 +1709,9 @@ export async function streamCompactSummary({
  * Re-reads files using FileReadTool to get fresh content with proper validation.
  * Files are selected based on recency, but constrained by both file count and token budget limits.
  *
- * Files already present as Read tool results in preservedMessages are skipped —
- * re-injecting identical content the model can already see in the preserved tail
- * is pure waste (up to 25K tok/compact). Mirrors the diff-against-preserved
- * pattern that getDeferredToolsDeltaAttachment uses at the same call sites.
+ * Skip files whose current model Read still has a visible result in
+ * preservedMessages. A newer mutation cache entry needs fresh content even
+ * if the preserved tail has an older Read.
  *
  * @param readFileState The current file state tracking recently read files
  * @param toolUseContext The tool use context for calling FileReadTool
@@ -1721,7 +1720,7 @@ export async function streamCompactSummary({
  * @returns Array of attachment messages for the most recently accessed files that fit within token budget
  */
 export async function createPostCompactFileAttachments(
-  readFileState: Record<string, { content: string; timestamp: number }>,
+  readFileState: Record<string, FileState>,
   toolUseContext: ToolUseContext,
   maxFiles: number,
   preservedMessages: Message[] = [],
@@ -1734,7 +1733,8 @@ export async function createPostCompactFileAttachments(
         !shouldExcludeFromPostCompactRestore(
           file.filename,
           toolUseContext.agentId,
-        ) && !preservedReadPaths.has(expandPath(file.filename)),
+        ) &&
+        !(file.isWriteAuthorizedRead && preservedReadPaths.has(expandPath(file.filename))),
     )
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, maxFiles)
@@ -1907,27 +1907,31 @@ export async function createAsyncAgentAttachmentsIfNeeded(
 }
 
 /**
- * Scan messages for Read tool_use blocks and collect their file_path inputs
- * (normalized via expandPath). Used to dedup post-compact file restoration
- * against what's already visible in the preserved tail.
- *
- * Skips Reads whose tool_result is a dedup stub — the stub points at an
- * earlier full Read that may have been compacted away, so we want
- * createPostCompactFileAttachments to re-inject the real content.
+ * Collect file paths whose successful Read content still reaches the model.
+ * A stub points to an earlier result that compaction may have removed, and
+ * Script child records are filtered out of the model request.
  */
 function collectReadToolFilePaths(messages: Message[]): Set<string> {
-  const stubIds = new Set<string>()
+  const deliveredReadIds = new Set<string>()
   for (const message of messages) {
-    if (message.type !== 'user' || !Array.isArray(message.message.content)) {
+    if (
+      message.type !== 'user' ||
+      message.isVirtual ||
+      message.codeMode ||
+      message.toolResultStatus === 'cancelled' ||
+      !Array.isArray(message.message.content)
+    ) {
       continue
     }
     for (const block of message.message.content) {
       if (
         block.type === 'tool_result' &&
-        typeof block.content === 'string' &&
-        block.content.startsWith(FILE_UNCHANGED_STUB)
+        block.is_error !== true &&
+        (typeof block.content === 'string'
+          ? !block.content.startsWith(FILE_UNCHANGED_STUB) && block.content.length > 0
+          : (block.content?.length ?? 0) > 0)
       ) {
-        stubIds.add(block.tool_use_id)
+        deliveredReadIds.add(block.tool_use_id)
       }
     }
   }
@@ -1936,6 +1940,8 @@ function collectReadToolFilePaths(messages: Message[]): Set<string> {
   for (const message of messages) {
     if (
       message.type !== 'assistant' ||
+      message.isVirtual ||
+      message.codeMode ||
       !Array.isArray(message.message.content)
     ) {
       continue
@@ -1944,7 +1950,7 @@ function collectReadToolFilePaths(messages: Message[]): Set<string> {
       if (
         block.type !== 'tool_use' ||
         block.name !== FILE_READ_TOOL_NAME ||
-        stubIds.has(block.id)
+        !deliveredReadIds.has(block.id)
       ) {
         continue
       }

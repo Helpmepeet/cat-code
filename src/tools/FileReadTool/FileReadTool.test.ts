@@ -24,7 +24,8 @@ import {
   isCompleteUnboundedRead,
   withCodeModeRead,
 } from '../../utils/fileStateCache.js'
-import { createAssistantMessage } from '../../utils/messages.js'
+import { createAssistantMessage, normalizeMessagesForAPI } from '../../utils/messages.js'
+import { createAttachmentMessage, generateFileAttachment } from '../../utils/attachments.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
 import { hasPermissionsToUseTool } from '../../utils/permissions/permissions.js'
 import {
@@ -282,6 +283,32 @@ describe('missing-file exact function recovery', () => {
     const workerState = context.readFileState.get(file)
     expect(JSON.stringify(await guest())).toContain('changed bytes')
     expect(context.readFileState.get(file)).toBe(workerState)
+  })
+
+  test('an explicit file mention delivers bytes after a Script-private Write', async () => {
+    const filePath = join(tmpDir, 'mention-after-write.txt')
+    const writtenText = 'new file bytes from the script'
+    const context = createLifecycleContext([FileWriteTool, FileReadTool]) as ToolUseContext
+    await runWithCwdOverride(tmpDir, () =>
+      runRealToolUse(FileWriteTool, { file_path: filePath, content: writtenText }, context),
+    )
+    expect(readFileSync(filePath, 'utf8')).toBe(writtenText)
+
+    const mention = () => runWithCwdOverride(tmpDir, () =>
+      generateFileAttachment(filePath, context, 'test_attachment_ok', 'test_attachment_error', 'at-mention'),
+    )
+    const project = (attachment: Awaited<ReturnType<typeof mention>>) => normalizeMessagesForAPI(
+      attachment ? [createAttachmentMessage(attachment)] : [],
+      [FileReadTool],
+      'firstParty',
+    )
+    expect(JSON.stringify(project(await mention()))).toContain(writtenText)
+    expect(JSON.stringify(project(await mention()))).toContain(writtenText)
+
+    await runWithCwdOverride(tmpDir, () =>
+      runRealToolUse(FileReadTool, { file_path: filePath }, context),
+    )
+    expect(project(await mention())).toEqual([])
   })
 
   function fixture(name: string, source = 'export function TasksStrip() {\n  return <div />\n}') {

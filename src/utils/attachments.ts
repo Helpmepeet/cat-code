@@ -19,7 +19,6 @@ import {
 } from '../tools/FileReadTool/FileReadTool.js'
 import { FileTooLargeError, readFileInRange } from './readFileInRange.js'
 import { expandPath } from './path.js'
-import { countCharInString } from './stringUtils.js'
 import { count, uniq } from './array.js'
 import { getFsImplementation } from './fsOperations.js'
 import { readdir, stat } from 'fs/promises'
@@ -3202,51 +3201,6 @@ export async function generateFileAttachment(
     }
   }
 
-  // Check if file is already in context with latest version
-  const existingFileState = toolUseContext.readFileState.get(filename)
-  if (existingFileState && mode === 'at-mention') {
-    try {
-      // Check if the file has been modified since we last read it
-      const mtimeMs = await getFileModificationTimeAsync(filename)
-
-      // Handle timestamp format inconsistency:
-      // - FileReadTool stores Date.now() (current time when read)
-      // - FileEdit/WriteTools store mtimeMs (file modification time)
-      //
-      // If timestamp > mtimeMs, it was stored by FileReadTool using Date.now()
-      // In this case, we should not use the optimization since we can't reliably
-      // compare modification times. Only use optimization when timestamp <= mtimeMs,
-      // indicating it was stored by FileEdit/WriteTool with actual mtimeMs.
-
-      if (
-        existingFileState.timestamp <= mtimeMs &&
-        mtimeMs === existingFileState.timestamp
-      ) {
-        // File hasn't been modified, return already_read_file attachment
-        // This tells the system the file is already in context and doesn't need to be sent to API
-        logEvent(successEventName, {})
-        return {
-          type: 'already_read_file',
-          filename,
-          displayPath: relative(getCwd(), filename),
-          content: {
-            type: 'text',
-            file: {
-              filePath: filename,
-              content: existingFileState.content,
-              numLines: countCharInString(existingFileState.content, '\n') + 1,
-              startLine: offset ?? 1,
-              totalLines:
-                countCharInString(existingFileState.content, '\n') + 1,
-            },
-          },
-        }
-      }
-    } catch {
-      // If we can't stat the file, proceed with normal reading
-    }
-  }
-
   try {
     const fileInput = {
       file_path: filename,
@@ -3286,7 +3240,7 @@ export async function generateFileAttachment(
           toolUseContext,
           undefined,
           undefined,
-          { userMentioned: mode === 'at-mention' },
+          { userMentioned: true, requireContents: true },
         )
         logEvent(successEventName, {})
 
@@ -3315,11 +3269,11 @@ export async function generateFileAttachment(
         toolUseContext,
         undefined,
         undefined,
-        { userMentioned: mode === 'at-mention' },
+        { userMentioned: mode === 'at-mention', requireContents: mode === 'compact' },
       )
       logEvent(successEventName, {})
       return {
-        type: 'file',
+        type: result.data.type === 'file_unchanged' ? 'already_read_file' : 'file',
         filename,
         content: result.data,
         displayPath: relative(getCwd(), filename),
