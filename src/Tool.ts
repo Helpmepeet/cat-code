@@ -280,10 +280,17 @@ export type ToolUseContext = {
   /** Instruction-file prefix supplied to the model that authored these calls.
    * Explicit null means no instruction prefix; undefined is a legacy caller. */
   autoModeInstructionContext?: string | null
+  /** Whether the tool's authoring response still reflects the current instructions. */
+  isInstructionContextCurrent?: () => boolean
   /** Internal executor hook fired immediately before a permitted tool effect starts. */
   onToolExecutionStart?: () => void
   /** Engine-only audit of the final authorized executable input, before effect. */
-  onToolFinalInput?: (toolUseId: string, toolName: string, input: Record<string, unknown>) => void | Promise<void>
+  onToolFinalInput?: (
+    toolUseId: string,
+    toolName: string,
+    input: Record<string, unknown>,
+    executionContext: ToolUseContext,
+  ) => void | Promise<void>
   /** Session-owned late receipts and admission fence for interrupted foreground effects. */
   interruptedToolRun?: import('./services/tools/interruptedToolRun.js').InterruptedToolRun
   /** Called only after a provider has returned a valid response to a request

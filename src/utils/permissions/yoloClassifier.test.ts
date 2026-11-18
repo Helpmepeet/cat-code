@@ -1175,7 +1175,7 @@ describe('two-stage upstream classifier', () => {
     })
   })
 
-  test('admits complete evidence above the old cap according to the selected model window', async () => {
+  test('skips a small local window and admits complete evidence on an eligible fallback', async () => {
     const content = 'Synthetic scope. '.repeat(40_000)
     const messages = [{ type: 'user', message: { content } }] as Parameters<typeof _forTest.classifyYoloAction>[0]
     for (const model of ['sonnet', 'gpt-6-luna']) {
@@ -1188,14 +1188,11 @@ describe('two-stage upstream classifier', () => {
           return response('capacity', 'capacity', { shouldBlock: false })
         }) as unknown as typeof sideQuery,
       )
-      if (model === 'sonnet') {
-        expect(requests).toHaveLength(0)
-        expect(result).toMatchObject({ shouldBlock: true, unavailable: true, transcriptTooLong: true })
-      } else {
-        expect(requests).toHaveLength(1)
-        expect(JSON.stringify(requests[0]?.messages).includes(content)).toBe(true)
-        expect(result.shouldBlock).toBe(false)
-      }
+      expect(requests.map(request => request.model)).toEqual([
+        model === 'sonnet' ? 'gpt-6.2-sol' : 'gpt-6-luna',
+      ])
+      expect(JSON.stringify(requests[0]?.messages)).toContain(content)
+      expect(result.shouldBlock).toBe(false)
     }
   })
 
@@ -1216,22 +1213,31 @@ describe('two-stage upstream classifier', () => {
     expect(result.shouldBlock).toBe(true)
   })
 
-  test('classifies provider overflow as context_limit without retry', async () => {
-    for (const message of [
-      'context_length_exceeded: synthetic input exceeds context window',
-      'Prompt is too long: 200001 tokens > 200000 maximum',
-    ]) {
-    let calls = 0
+  test('tries another eligible reviewer with the same evidence after provider overflow', async () => {
+    const requests: Parameters<typeof sideQuery>[0][] = []
+    const result = await classify(async request => {
+      requests.push(request)
+      if (requests.length === 1) {
+        throw new Error('context_length_exceeded: synthetic input exceeds context window')
+      }
+      return response('fallback', 'fallback', { shouldBlock: false })
+    })
+    expect(requests.map(request => request.model)).toEqual(['gpt-6-luna', 'sonnet'])
+    expect(requests[1]?.messages).toEqual(requests[0]?.messages)
+    expect(result.shouldBlock).toBe(false)
+  })
+
+  test('reports the context limit when every eligible reviewer overflows', async () => {
+    const requests: string[] = []
     const resolutions: unknown[] = []
-    const result = await classify(async () => {
-      calls++
-      throw new Error(message)
+    const result = await classify(async request => {
+      requests.push(request.model)
+      throw new Error('Prompt is too long: 200001 tokens > 200000 maximum')
     }, { enterStage() {}, resolveStage: (_stage, resolution) => resolutions.push(resolution) })
-    expect(calls).toBe(1)
+    expect(requests).toEqual(['gpt-6-luna', 'sonnet'])
     expect(resolutions).toEqual([{ failure: 'context_limit' }])
     expect(result).toMatchObject({ shouldBlock: true, unavailable: true, transcriptTooLong: true })
     expect(result.errorDumpPath).toBeUndefined()
-    }
   })
 
   test('reports user cancellation without marking the classifier unavailable', async () => {

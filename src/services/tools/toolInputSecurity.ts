@@ -111,6 +111,7 @@ export type FinalToolInputResult =
       context: ToolUseContext
       decision: PermissionDecision
       trustedSedEdit?: TrustedSedEdit
+      userApprovalFeedback?: string
     }
   | {
       allowed: false
@@ -292,6 +293,7 @@ export async function authorizeFinalToolInput(
   }
 
   let decision = previousDecision
+  let humanApprovedFinalInput = approvalReceiptSource === 'user'
   if (!isDeepStrictEqual(candidate, authorized)) {
     let currentPolicyDecision: PermissionDecision | null
     try {
@@ -343,6 +345,7 @@ export async function authorizeFinalToolInput(
         freshDecision.updatedInput === undefined
           ? undefined
           : consumeUserApprovalReceipt(tool, returnedInput, toolUseID)
+      humanApprovedFinalInput = freshReceiptSource === 'user'
       try {
         const canonicalReturnedInput = tool.inputSchema.parse(
           cloneInput(returnedInput),
@@ -439,5 +442,7 @@ export async function authorizeFinalToolInput(
     context: preparedContext,
     decision,
     ...(trustedSedEdit ? { trustedSedEdit } : {}),
+    ...(humanApprovedFinalInput && decision.behavior === 'allow' && decision.acceptFeedback
+      ? { userApprovalFeedback: decision.acceptFeedback } : {}),
   }
 }

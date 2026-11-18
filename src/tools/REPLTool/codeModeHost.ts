@@ -4,11 +4,11 @@ import type { ToolUseContext } from '../../Tool.js'
 import type { Message, AssistantMessage, UserMessage, AttachmentMessage, SystemMessage } from '../../types/message.js'
 import { createRuntime, type JsonValue, type PersistentRuntime } from './runtime/index.js'
 import { CodeModeDispatch, type CodeModeCall } from './codeModeDispatch.js'
-import { describeCodeModeTool, searchCodeModeTools, captureCodeModeToolPrincipals } from './codeModeTools.js'
-import { admitCodeModeCell, beginCodeModeCell, createCodeModeAdmissionOwner, revokeCodeModeAdmission, withCodeModeAdmission, type CodeModeAdmissionOwner } from './codeModeAdmission.js'
+import { codeModeChangedFilePaths } from './codeModeChangedFiles.js'
+import { captureCodeModeToolPrincipals } from './codeModeTools.js'
 import { backgroundCodeModeCell, closeCodeModeOwner, type CodeModeOwner, type CodeModeHostCompletion } from './codeModeBackground.js'
-import { getSessionId } from '../../bootstrap/state.js'
-import { createUserMessage } from '../../utils/messages.js'
+import { getSessionId, isSessionPersistenceDisabled } from '../../bootstrap/state.js'
+import { createUserMessage, isCompactBoundaryMessage } from '../../utils/messages.js'
 import { logError } from '../../utils/log.js'
 import { ownBackgroundToolLane } from '../../services/tools/codeModeToolScheduling.js'
 import type { Attachment } from '../../utils/attachments.js'
@@ -19,9 +19,21 @@ import { getCwd } from '../../utils/cwd.js'
 import { formatTaskNotificationText, toTaskNotificationOrigin } from '../../utils/taskNotification.js'
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { updateTaskState } from '../../utils/task/framework.js'
+import { hasCompactedToolReceiptSource } from '../../utils/sessionStorage.js'
 
 const FOREGROUND_WALL_TIME_MS = 10 * 60_000
 const BACKGROUND_WALL_TIME_MS = 2 * 60 * 60_000
+const detachedReceipts = new WeakSet<Message>()
+
+/** Late delivery can recover an exact host receipt's source from compacted history. */
+export async function assertToolReceiptSource(message: Message, history: readonly Message[]): Promise<void> {
+  if (message.type !== 'user' || !message.sourceToolAssistantUUID) return
+  if (history.some(row => row.uuid === message.sourceToolAssistantUUID)) return
+  if (detachedReceipts.has(message) && history.some(isCompactBoundaryMessage) &&
+      (isSessionPersistenceDisabled() || await hasCompactedToolReceiptSource(message.sourceToolAssistantUUID))) return
+  throw new Error('The original tool request is unavailable')
+}
+
 // Failed worker finalizers remain reachable from their parent session's retry
 // path without keeping healthy background work behind an interruption fence.
 const failedPublications = new Map<string, { sessionId: string; retry: () => Promise<void> }>()
@@ -55,12 +67,10 @@ export class CodeModeHost {
   generation = randomUUID()
   private runtime?: PersistentRuntime
   private disposed = false
-  private busy = false
   private lane: Promise<void> = Promise.resolve()
   private queued = 0
-  private epoch = 0
-  private activeAdmission?: CodeModeAdmissionOwner
   private instructionEpoch = 0
+  private authoritativeContextRevision = 0
   private fenceActive?: (reason: string) => void
   private stopActive?: () => void
   private incarnation = randomUUID()
@@ -78,7 +88,6 @@ export class CodeModeHost {
   dispose(): void {
     this.disposed = true
     for (const owner of this.backgroundOwners.values()) closeCodeModeOwner(owner)
-    this.revokeAdmissions()
     for (const cancel of this.backgroundCancellations.values()) cancel()
     for (const controller of this.controllers.values()) controller.abort()
     this.stopActive?.()
@@ -86,15 +95,14 @@ export class CodeModeHost {
     this.runtime = undefined
   }
 
-  revokeAdmissions(): void {
-    this.epoch++
-    if (this.activeAdmission) revokeCodeModeAdmission(this.activeAdmission)
+  get instructionRevision(): number {
+    return this.authoritativeContextRevision
   }
 
   fenceForInstructions(reason: string, messages?: readonly Message[]): void {
+    this.authoritativeContextRevision++
     this.instructionEpoch++
     this.awaitingContextRegistration = true
-    this.revokeAdmissions()
     this.fenceActive?.(reason)
     if (messages?.length) this.requireModelMessages(messages)
   }
@@ -116,8 +124,8 @@ export class CodeModeHost {
     if (existing?.type === 'nested_memory' && sameMemoryContext(existing.content, file)) return
     const message = createAttachmentMessage({ type: 'nested_memory', path: file.path, content: file, displayPath: relative(getCwd(), file.path) })
     this.pendingMemoryMessages.set(file.path, message)
+    this.authoritativeContextRevision++
     this.instructionEpoch++
-    this.revokeAdmissions()
     this.fenceActive?.('New applicable durable instructions require a new script before further dispatch')
     this.requireModelMessages([message])
   }
@@ -209,7 +217,6 @@ export class CodeModeHost {
     const stopping = this.queued > 0 || this.backgroundDeliveries.size > 0
     const hadState = !!this.runtime
     this.instructionEpoch++
-    this.revokeAdmissions()
     this.fenceActive?.('Workspace transition ended this script incarnation')
     this.pendingContextModifiers = []
     this.requiredModelMessages.clear()
@@ -241,25 +248,23 @@ export class CodeModeHost {
     return Promise.all([...this.backgroundDeliveries.values()]).then(() => {})
   }
 
-  run(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, background = false): Promise<CodeModeHostCompletion> {
+  run(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, policyIsCurrent: () => boolean, background = false): Promise<CodeModeHostCompletion> {
     if (!this.isModelContextCurrent(context.codeModeModelEpoch)) return Promise.reject(new Error('New instructions require a fresh model request before another script can execute'))
     if (this.controllers.has(cellId)) return Promise.reject(new Error('This Code Mode cell identity is already in flight'))
     if (this.queued >= 8) return Promise.reject(new Error('Code Mode runtime queue is full'))
-    this.revokeAdmissions()
-    const epoch = this.epoch
     const generation = this.generation
     const instructionEpoch = this.instructionEpoch
     const principals = captureCodeModeToolPrincipals(context.options.tools, context)
     const controller = new AbortController()
     let started = false
-    const cancelled = (): CodeModeHostCompletion => ({
+    const beforeStart = (status: 'cancelled' | 'blocked', output: string): CodeModeHostCompletion => ({
       result: {
-        kind: 'code-mode', cellId, generation, ...input, status: 'cancelled',
-        output: '[Code Mode] Cancelled before interpreter evaluation started. No child tools ran.',
+        kind: 'code-mode', cellId, generation, ...input, status, output,
         calls: [], changedFiles: [],
       },
-      messages: [], context,
+      messages: [],
     })
+    const cancelled = () => beforeStart('cancelled', '[Code Mode] Cancelled before interpreter evaluation started. No child tools ran.')
     let cancelQueued!: () => void
     const cancellation = new Promise<CodeModeHostCompletion>(resolve => {
       cancelQueued = () => { if (!started) resolve(cancelled()) }
@@ -272,16 +277,14 @@ export class CodeModeHost {
     this.queued++
     const operation = this.lane.then(() => {
       if (controller.signal.aborted) return cancelled()
-      if (generation !== this.generation || instructionEpoch !== this.instructionEpoch) return {
-        result: {
-          kind: 'code-mode' as const, cellId, generation, ...input, status: 'blocked' as const,
-          output: 'Interpreter state or applicable instructions changed before this queued script started. Author a new script; no queued code was replayed.',
-          calls: [], changedFiles: [],
-        },
-        messages: [] as Message[], context,
+      if (generation !== this.generation || instructionEpoch !== this.instructionEpoch) {
+        return beforeStart('blocked', 'Interpreter state or applicable instructions changed before this queued script started. Author a new script; no queued code was replayed.')
+      }
+      if (!policyIsCurrent()) {
+        return beforeStart('blocked', 'Script permission changed while this script was queued. Submit it again for a new decision.')
       }
       started = true
-      return this.execute(input, cellId, context, canUseTool, epoch, controller, background, principals)
+      return this.execute(input, cellId, context, canUseTool, controller, background, principals)
     }).finally(() => {
       this.controllers.delete(cellId)
       context.abortController.signal.removeEventListener('abort', abortParent)
@@ -291,17 +294,19 @@ export class CodeModeHost {
     return Promise.race([operation, cancellation])
   }
 
-  runBackground(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, assistantUuid: string): CodeModeResult {
+  runBackground(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, policyIsCurrent: () => boolean, assistantUuid: string): CodeModeResult {
     const receiptOwner = context.interruptedToolRun
     if (!receiptOwner) throw new Error('Background scripts require a durable execution owner')
     if (this.disposed) throw new Error('Code Mode runtime incarnation has ended')
     if (!this.isModelContextCurrent(context.codeModeModelEpoch)) throw new Error('New instructions require a fresh model request before another script can execute')
     if (this.backgroundDeliveries.size >= 8) throw new Error('At most eight background cells may await delivery in this incarnation. Finish or collect existing work before launching more.')
+    const owner: CodeModeOwner = { sessionId: getSessionId(), agentId: context.agentId, workerRunId: context.agentRunId ?? this.incarnation }
     const undelivered = Object.values(context.getAppState().tasks).filter(task => task && typeof task === 'object' &&
-      'type' in task && task.type === 'code_mode' && 'delivery' in task && task.delivery !== 'delivered')
+      'type' in task && task.type === 'code_mode' && 'delivery' in task && task.delivery !== 'delivered' &&
+      'owner' in task && task.owner && typeof task.owner === 'object' &&
+      'sessionId' in task.owner && task.owner.sessionId === owner.sessionId)
     if (undelivered.length >= 32) throw new Error('Background script receipts are awaiting delivery. Resolve existing tasks before starting more background scripts.')
     const generation = this.generation
-    const owner: CodeModeOwner = { sessionId: getSessionId(), agentId: context.agentId, workerRunId: context.agentRunId ?? this.incarnation }
     if (undelivered.filter(task => task && typeof task === 'object' && 'owner' in task &&
         JSON.stringify(task.owner) === JSON.stringify(owner)).length >= 8) {
       throw new Error('Eight background cells in this incarnation still await delivery. Resolve their receipts before launching more.')
@@ -317,13 +322,13 @@ export class CodeModeHost {
     let auditDelivery: Promise<void> = Promise.resolve()
     let taskId = ''
     const releaseToolLane = ownBackgroundToolLane(detached)
-    const completion = this.run(input, cellId, detached, canUseTool, true).catch(error => ({
+    const completion = this.run(input, cellId, detached, canUseTool, policyIsCurrent, true).catch(error => ({
       result: {
         kind: 'code-mode' as const, cellId, generation, ...input, status: 'failed' as const,
         output: `Background script failed before execution: ${error instanceof Error ? error.message : String(error)}`,
         calls: [], changedFiles: [],
       } as CodeModeResult,
-      messages: [] as Message[], context: detached,
+      messages: [] as Message[],
     })).finally(releaseToolLane).then(value => {
       value.result.taskId = taskId
       // Keep guest-selected text inside a JSON string, including tag delimiters.
@@ -340,6 +345,7 @@ export class CodeModeHost {
         }),
         sourceToolAssistantUUID: assistantUuid as `${string}-${string}-${string}-${string}-${string}`,
       })
+      detachedReceipts.add(notification)
       this.pendingModelMessages.set(notification.uuid, notification)
       if (this.awaitingContextRegistration) this.requireModelMessages([notification])
       return {
@@ -377,6 +383,7 @@ export class CodeModeHost {
     }
     taskId = task.taskId
     detached.onCodeModeAudit = message => {
+      detachedReceipts.add(message)
       bufferedAudit.push(message)
       if (context.agentId && context.publishCodeModeActivity) {
         try { void Promise.resolve(context.publishCodeModeActivity(message)).catch(logError) }
@@ -456,31 +463,21 @@ export class CodeModeHost {
     }
   }
 
-  private async execute(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, epoch: number, controller: AbortController, background: boolean, principals: ReadonlyMap<string, string>): Promise<CodeModeHostCompletion> {
+  private async execute(input: { code: string; description: string }, cellId: string, context: ToolUseContext, canUseTool: CanUseToolFn, controller: AbortController, background: boolean, principals: ReadonlyMap<string, string>): Promise<CodeModeHostCompletion> {
     if (this.disposed) throw new Error('Code Mode runtime incarnation has ended')
-    if (this.busy) throw new Error('Code Mode runtime is busy')
-    this.busy = true
     const audit: Message[] = []
     let auditBytes = 0
     const changedFiles = new Map<string, { path: string }>()
     const following: Message[] = []
     const cellContext = { ...context, abortController: controller, codeModeBackgroundCell: background }
-    const admissionOwner = createCodeModeAdmissionOwner(cellContext, this)
-    this.activeAdmission = admissionOwner
-    const cell = beginCodeModeCell(admissionOwner, { cellId, code: input.code })
-    // REPL.call is reached only after normal final-input authorization.
-    if (epoch === this.epoch) admitCodeModeCell(cell)
     const dispatch = new CodeModeDispatch(cellContext, canUseTool, { cellId, generation: this.generation },
       async message => {
         if (message.type === 'user' && Array.isArray(message.message.content)) {
           const paired = message.message.content.find(block => block.type === 'tool_result')
           const call = paired?.type === 'tool_result' ? dispatch.calls.find(call => call.toolUseId === paired.tool_use_id) : undefined
-          const data = message.toolUseResult
-          if (paired?.type === 'tool_result' && !paired.is_error && call &&
-              ['Edit', 'Write', 'NotebookEdit', 'apply_patch'].includes(call.name) && data && typeof data === 'object') {
-            if ('filePath' in data && typeof data.filePath === 'string') changedFiles.set(data.filePath, { path: data.filePath })
-            if ('files' in data && Array.isArray(data.files)) for (const file of data.files) {
-              if (file && typeof file.path === 'string') changedFiles.set(file.path, { path: file.path })
+          if (paired?.type === 'tool_result' && !paired.is_error && call) {
+            for (const path of codeModeChangedFilePaths(call.name, message.toolUseResult)) {
+              changedFiles.set(path, { path })
             }
           }
         }
@@ -519,11 +516,10 @@ export class CodeModeHost {
       }, principals)
     const stop = () => {
       dispatch.stop('Code Mode execution cancelled')
-      revokeCodeModeAdmission(admissionOwner)
       controller.abort()
     }
     this.stopActive = stop
-    this.fenceActive = reason => { dispatch.stop(reason); revokeCodeModeAdmission(admissionOwner) }
+    this.fenceActive = reason => dispatch.stop(reason)
     const deadline = setTimeout(stop, background ? BACKGROUND_WALL_TIME_MS : FOREGROUND_WALL_TIME_MS)
     context.abortController.signal.addEventListener('abort', stop, { once: true })
     if (context.abortController.signal.aborted) stop()
@@ -535,7 +531,7 @@ export class CodeModeHost {
     }
     try {
       this.runtime ??= createRuntime({ limits: { wallTimeMs: BACKGROUND_WALL_TIME_MS } })
-      const outcome = await withCodeModeAdmission(cell, () => this.runtime!.run({
+      const outcome = await this.runtime.run({
         cellId, source: input.code, signal: controller.signal,
         onOutput: event => { output.push(typeof event.value === 'string' ? event.value : JSON.stringify(event.value)) },
         dispatch: async (request, signal) => {
@@ -549,20 +545,20 @@ export class CodeModeHost {
             if (signal.aborted) stop()
             try {
               const line = request.sourceCellId && request.sourceCellId !== cellId ? undefined : request.line
-              return await withCodeModeAdmission(cell, () => dispatch.call(payload.name as string, payload.input, line, payload.nothrow === true)) as JsonValue
+              return await dispatch.call(payload.name as string, payload.input, line, payload.nothrow === true) as JsonValue
             } finally { signal.removeEventListener('abort', abortChild) }
           }
           if (dispatch.blockedReason || controller.signal.aborted) throw new Error(dispatch.blockedReason ?? 'Cell has ended')
           try {
-            if (payload.op === 'describe' && typeof payload.name === 'string') return JSON.parse(JSON.stringify(await describeCodeModeTool(dispatch.currentContext, payload.name))) as JsonValue
-            if (payload.op === 'search' && typeof payload.query === 'string') return JSON.parse(JSON.stringify(await searchCodeModeTools(dispatch.currentContext, payload.query, typeof payload.max === 'number' ? payload.max : 5))) as JsonValue
+            if (payload.op === 'describe' && typeof payload.name === 'string') return JSON.parse(JSON.stringify(await dispatch.describe(payload.name))) as JsonValue
+            if (payload.op === 'search' && typeof payload.query === 'string') return JSON.parse(JSON.stringify(await dispatch.search(payload.query, typeof payload.max === 'number' ? payload.max : 5))) as JsonValue
           } catch (error) {
             lastBridgeError = error instanceof Error ? error.message : String(error)
             throw error
           }
           throw new Error('Unknown discovery operation')
         },
-      }))
+      })
       // VM termination is not settlement of host effects. Keep consuming original
       // tool iterators and retain their real receipts before returning this cell.
       await dispatch.settle()
@@ -601,17 +597,14 @@ export class CodeModeHost {
       ].join('\n')
       const boundedNotice = notice.length <= 16_384 ? notice : `${notice.slice(0, 16_256)}\n[Additional receipt details omitted from output; see the call ledger.]`
       result.output = [selectedOutput.slice(0, 240 * 1024), boundedNotice].filter(Boolean).join('\n\n')
-      revokeCodeModeAdmission(admissionOwner)
       context.abortController.signal.removeEventListener('abort', stop)
-      if (this.activeAdmission === admissionOwner) this.activeAdmission = undefined
       this.stopActive = undefined
       this.fenceActive = undefined
-      this.busy = false
     }
     return {
       result,
       messages: context.onCodeModeAudit ? following : [...audit, ...following],
-      context: { ...dispatch.currentContext, abortController: context.abortController, onCodeModeAudit: undefined },
+      contextModifier: background ? undefined : dispatch.contextModifier,
     }
   }
 }

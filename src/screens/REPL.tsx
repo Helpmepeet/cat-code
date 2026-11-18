@@ -170,6 +170,7 @@ import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js';
 import { resolveAgentTools } from '../tools/AgentTool/agentToolUtils.js';
 import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
 import { CodeModeHost } from '../tools/REPLTool/codeModeHost.js';
+import { CODE_MODE_CONVERSATION_CHANGE_PENDING, hasUndeliveredCodeModeTasks } from '../tasks/CodeModeTask.js';
 import { restoreCodeModeHistory } from '../tools/REPLTool/codeModeRestoration.js';
 import { displayNameForAgent } from '../tools/AgentTool/resolveAgentTarget.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
@@ -1618,8 +1619,13 @@ export function REPL({
   const [isMessageSelectorVisible, setIsMessageSelectorVisible] = useState(false);
   const [messageSelectorPreselect, setMessageSelectorPreselect] = useState<UserMessage | undefined>(undefined);
   const [showCostDialog, setShowCostDialog] = useState(false);
-  const [conversationId, setConversationId] = useState(randomUUID());
-  const codeModeHost = useMemo(() => new CodeModeHost(), [conversationId]);
+  const [conversationId, setConversationViewId] = useState<string>(randomUUID());
+  const [codeModeConversationId, setCodeModeConversationId] = useState(conversationId);
+  const setConversationId = useCallback((id: string) => {
+    setConversationViewId(id);
+    setCodeModeConversationId(id);
+  }, []);
+  const codeModeHost = useMemo(() => new CodeModeHost(), [codeModeConversationId]);
   useEffect(() => {
     setMessages(previous => restoreCodeModeHistory(previous, store.getState().tasks));
     return () => { void codeModeHost.close().catch(logError); };
@@ -2961,7 +2967,7 @@ export function REPL({
         }
         // Bump conversationId so Messages.tsx row keys change and
         // stale memoized rows remount with post-compact content.
-        setConversationId(randomUUID());
+        setConversationViewId(randomUUID());
         // Compaction succeeded — clear the context-blocked flag so ticks resume
         if (feature('PROACTIVE') || feature('KAIROS')) {
           proactiveModule?.setContextBlocked(false);
@@ -3118,7 +3124,7 @@ export function REPL({
       if (newMessages.some(isCompactBoundaryMessage)) {
         // Bump conversationId so Messages.tsx row keys change and
         // stale memoized rows remount with post-compact content.
-        setConversationId(randomUUID());
+        setConversationViewId(randomUUID());
         if (feature('PROACTIVE') || feature('KAIROS')) {
           proactiveModule?.setContextBlocked(false);
         }
@@ -4300,7 +4306,11 @@ export function REPL({
   const rewindConversationTo = useCallback((message: UserMessage) => {
     const prev = messagesRef.current;
     const messageIndex = prev.lastIndexOf(message);
-    if (messageIndex === -1) return;
+    if (messageIndex === -1) return false;
+    if (hasUndeliveredCodeModeTasks(store.getState().tasks, getSessionId())) {
+      addNotification({ key: 'script-receipt-rewind', text: CODE_MODE_CONVERSATION_CHANGE_PENDING, priority: 'immediate' });
+      return false;
+    }
     logEvent('tengu_conversation_rewind', {
       preRewindMessageCount: prev.length,
       postRewindMessageCount: messageIndex,
@@ -4343,13 +4353,14 @@ export function REPL({
         generationRequestId: null
       }
     }));
-  }, [setMessages, setAppState]);
+    return true;
+  }, [setMessages, setConversationId, setAppState, store, addNotification]);
 
   // Synchronous rewind + input population. Used directly by auto-restore on
   // interrupt (so React batches with the abort's setMessages → single render,
   // no flicker). MessageSelector wraps this in setImmediate via handleRestoreMessage.
   const restoreMessageSync = useCallback((message: UserMessage) => {
-    rewindConversationTo(message);
+    if (!rewindConversationTo(message)) return;
     const r = textForResubmit(message);
     if (r) {
       setInputValue(r.text);
@@ -5734,7 +5745,7 @@ export function REPL({
             if (feature('PROACTIVE') || feature('KAIROS')) {
               proactiveModule?.setContextBlocked(false);
             }
-            setConversationId(randomUUID());
+            setConversationViewId(randomUUID());
             runPostCompactCleanup(context.options.querySource);
             if (direction === 'from') {
               const r = textForResubmit(message);

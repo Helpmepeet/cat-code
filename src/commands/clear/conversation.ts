@@ -16,12 +16,14 @@ import {
   logEvent,
 } from '../../services/analytics/index.js'
 import type { AppState } from '../../state/AppState.js'
+import { CODE_MODE_CONVERSATION_CHANGE_PENDING, hasUndeliveredCodeModeTasks } from '../../tasks/CodeModeTask.js'
 import { isInProcessTeammateTask } from '../../tasks/InProcessTeammateTask/types.js'
 import {
   isLocalAgentTask,
   type LocalAgentTaskState,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { isLocalShellTask } from '../../tasks/LocalShellTask/guards.js'
+import type { TaskState } from '../../tasks/types.js'
 import { asAgentId } from '../../types/ids.js'
 import type { Message } from '../../types/message.js'
 import { createEmptyAttributionState } from '../../utils/commitAttribution.js'
@@ -64,6 +66,13 @@ export async function clearConversation({
   setAppState?: (f: (prev: AppState) => AppState) => void
   setConversationId?: (id: UUID) => void
 }): Promise<void> {
+  const oldSessionId = getSessionId()
+  const assertScriptsSettled = () => {
+    if (getAppState && hasUndeliveredCodeModeTasks(getAppState().tasks, oldSessionId)) {
+      throw new Error(CODE_MODE_CONVERSATION_CHANGE_PENDING)
+    }
+  }
+  assertScriptsSettled()
   // Execute SessionEnd hooks before clearing (bounded by
   // CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS, default 1.5s)
   const sessionEndTimeoutMs = getSessionEndHookTimeoutMs()
@@ -73,6 +82,7 @@ export async function clearConversation({
     signal: AbortSignal.timeout(sessionEndTimeoutMs),
     timeoutMs: sessionEndTimeoutMs,
   })
+  assertScriptsSettled()
 
   // Signal to inference that this conversation's cache can be evicted.
   const lastRequestId = getLastMainRequestId()
@@ -142,7 +152,8 @@ export async function clearConversation({
       // Partition tasks using the same predicate computed above:
       // kill+remove foreground tasks, preserve everything else.
       const nextTasks: AppState['tasks'] = {}
-      for (const [taskId, task] of Object.entries(prev.tasks)) {
+      for (const [taskId, task] of Object.entries<TaskState>(prev.tasks)) {
+        if (task.type === 'code_mode' && task.owner.sessionId === oldSessionId) continue
         if (!shouldKillTask(task)) {
           nextTasks[taskId] = task
           continue

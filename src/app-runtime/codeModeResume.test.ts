@@ -1,6 +1,5 @@
 import { expect, test } from 'bun:test'
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
-import { watch } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -25,11 +24,13 @@ test('real persisted background receipt becomes uncertain after process death; r
     const child = crashed
     const timer = setTimeout(() => child.kill('SIGKILL'), 20_000)
     const ready = await Promise.race([
-      new Promise<any>(resolve => {
-        const attempt = () => { void readFile(join(root, 'ready.json'), 'utf8').then(text => { try { const value = JSON.parse(text); watcher.close(); resolve(value) } catch {} }, () => {}) }
-        const watcher = watch(root, (_event, name) => { if (name === 'ready.json') attempt() })
-        attempt()
-      }),
+      (async () => {
+        while (child.exitCode === null) {
+          try { return JSON.parse(await readFile(join(root, 'ready.json'), 'utf8')) }
+          catch { await Bun.sleep(20) }
+        }
+        throw new Error(`Crash fixture exited (${child.exitCode}) before its persisted audit was ready`)
+      })(),
       child.exited.then(async code => { throw new Error(`Crash fixture exited (${code}): ${await new Response(child.stderr).text()}`) }),
     ])
     clearTimeout(timer)
@@ -51,6 +52,10 @@ test('real persisted background receipt becomes uncertain after process death; r
       const oldReceipts = evidence.restoredBeforeTurn.filter((message: any) => message.toolUseResult?.cellId === 'crash-cell')
       expect(oldReceipts.at(-1).toolUseResult.status).toBe('failed')
       expect(oldReceipts.at(-1).toolUseResult.output).toContain('final outcome is unknown')
+      const attempt = oldReceipts.at(-1).toolUseResult.calls[0]
+      expect(attempt?.name).toBe('Bash')
+      expect(attempt?.error).toContain('Outcome unknown')
+      expect(JSON.stringify(evidence.bodies[0].messages)).not.toContain(attempt.toolUseId)
       expect(JSON.stringify(evidence.bodies[0].messages)).toContain('empty interpreter variables and functions')
       const final = evidence.transcript.find((message: any) => message.toolUseResult?.cellId === 'restored-cell').toolUseResult
       expect(final.status).toBe('completed')

@@ -8,6 +8,7 @@ globalThis.fetch = (() => { throw new Error('Network forbidden') }) as unknown a
 const hooked = process.env.CODE_MODE_MCP_HOOK === '1'
 const generationTest = process.env.CODE_MODE_MCP_GENERATION === '1'
 const principalTest = process.env.CODE_MODE_MCP_PRINCIPAL === '1'
+const latePrincipalTest = process.env.CODE_MODE_MCP_LATE_PRINCIPAL === '1'
 if (hooked) await writeFile(join(root, 'config', 'settings.json'), JSON.stringify({ hooks: { PostToolUse: [{
   matcher: 'mcp__fixture__.*', hooks: [{ type: 'command', command: `printf '%s' '${JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostToolUse', updatedMCPToolOutput: [{ type: 'text', text: 'EFFECTIVE_SELECTED_MARKER' }] } })}'` }],
 }] } }))
@@ -18,6 +19,11 @@ var record = await tools.call({name:"mcp__fixture__records",input:{key:"sample"}
 var saved = await tools.call({name:"mcp__fixture__save",input:{key:"sample"}});
 var rejected = []; for (var name of ["mcp__fixture__unknown","records","mcp__revoked__records"]) { try { await tools.call({name:name,input:{key:"sample"}}); rejected.push(false); } catch(e) { rejected.push(true); } }
 output({search,descriptionSearch,schema,record,saved,rejected});`
+if (latePrincipalTest) script = `await tools.call({name:"mcp__fixture__save",input:{key:"sample"}});
+var reviewed = await tools.discover({op:"describe",name:"mcp__fixture__records"});
+if (reviewed.schemaComplete) output("first principal discovered");
+await tools.call({name:"mcp__fixture__save",input:{key:"sample"}});
+await tools.call({name:"mcp__fixture__records",input:{key:"sample"}});`
 if (principalTest) script = script.replaceAll('mcp__fixture__', 'mcp__fixture_a__')
 let requests = 0
 const modelBodies: unknown[] = []
@@ -77,30 +83,40 @@ if (generationTest) {
 }
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'default', alwaysAllowRules: { session: principalTest
-  ? ['REPL', buildMcpPermissionRuleName('fixture.a', 'records'), buildMcpPermissionRuleName('fixture.a', 'save')]
+  ? ['REPL', buildMcpPermissionRuleName('fixture.a', 'records'), buildMcpPermissionRuleName('fixture.a', 'save'),
+    ...(latePrincipalTest ? [buildMcpPermissionRuleName('fixture_a', 'records')] : [])]
   : ['REPL', 'mcp__fixture__*'] } } }
 let transcript: any[] = []
-let currentPool = assembleToolPool(state.toolPermissionContext, tools, [REPLTool])
+const saves = tools.filter(tool => tool.mcpInfo?.toolName === 'save')
+let currentPool = assembleToolPool(state.toolPermissionContext, latePrincipalTest ? saves : tools, [REPLTool])
+let publishedFirstPrincipal = false
 let refreshed = false
 let refreshedSchema: unknown
 let refreshedPrincipal: unknown
 const session = createQueryEngineAppSession({
   cwd: process.cwd(), tools: [REPLTool], commands: [], mcpClients: [client], agents: [],
   getMcpRuntimeSnapshot: () => ({
-    clients: [replacementClient ?? client], tools: currentPool.filter(tool => tool.isMcp), commands: [], resources: {},
+    clients: latePrincipalTest ? [client, ...(refreshed && replacementClient ? [replacementClient] : [])] : [replacementClient ?? client],
+    tools: currentPool.filter(tool => tool.isMcp), commands: [], resources: {},
   }),
   getAppState: () => state, setAppState: update => { state = update(state) },
   readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'Run the synthetic integration script.', userSpecifiedModel: 'claude-sonnet-4-5',
   recordTranscript: async messages => {
     transcript = JSON.parse(JSON.stringify(messages))
-    if (generationTest && !refreshed && messages.some(message =>
+    const childResults = messages.filter(message =>
       message.type === 'user' && message.codeMode && Array.isArray(message.message.content) &&
-      message.message.content.some(block => block.type === 'tool_result'))) {
+      message.message.content.some(block => block.type === 'tool_result')).length
+    if (latePrincipalTest && !publishedFirstPrincipal && childResults === 1) {
+      publishedFirstPrincipal = true
+      currentPool = assembleToolPool(state.toolPermissionContext, tools, [REPLTool])
+    }
+    if (generationTest && !refreshed && childResults >= (latePrincipalTest ? 2 : 1)) {
       refreshed = true
       const replacementTools = preparedReplacement
       refreshedSchema = replacementTools.find(tool => tool.mcpInfo?.toolName === 'records')?.inputJSONSchema
       refreshedPrincipal = replacementTools.find(tool => tool.mcpInfo?.toolName === 'records')?.mcpInfo
-      const assembled = assembleToolPool(state.toolPermissionContext, replacementTools, [REPLTool])
+      const assembled = assembleToolPool(state.toolPermissionContext, latePrincipalTest
+        ? [...saves, ...replacementTools.filter(tool => tool.mcpInfo?.toolName === 'records')] : replacementTools, [REPLTool])
       currentPool = assembled
     }
     return null

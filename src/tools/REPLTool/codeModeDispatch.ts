@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
-import type { ToolUseContext } from '../../Tool.js'
+import { findToolByName, type ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
 import { runToolUse } from '../../services/tools/toolExecution.js'
-import { resolveCodeModeTool, codeModeToolPrincipal, captureCodeModeToolPrincipals, MAX_CODE_MODE_TOOL_NAME_CHARS } from './codeModeTools.js'
+import { resolveCodeModeTool, codeModeToolPrincipal, captureCodeModeToolPrincipals, describeCodeModeTool, searchCodeModeTools, MAX_CODE_MODE_TOOL_NAME_CHARS } from './codeModeTools.js'
 import { encode } from './runtime/protocol.js'
 import { withCodeModeRead } from '../../utils/fileStateCache.js'
 import { preflightCodeModeInstructions } from './codeModeInstructions.js'
@@ -38,6 +38,8 @@ export class CodeModeDispatch {
   private fence?: string
   private inputBytes = 0
   private resultBytes = 0
+  private readonly principals: Map<string, string>
+  private readonly contextModifiers: ((context: ToolUseContext) => ToolUseContext)[] = []
   permissionBlocked = false
   readonly calls: CodeModeCall[] = []
 
@@ -47,8 +49,8 @@ export class CodeModeDispatch {
     private readonly identity: CodeModeIdentity,
     private readonly deliver: (message: Message) => Promise<void>,
     private readonly following: (message: Message) => Promise<void>,
-    private readonly principals: ReadonlyMap<string, string> = captureCodeModeToolPrincipals(context.options.tools, context),
-  ) {}
+    principals: ReadonlyMap<string, string> = captureCodeModeToolPrincipals(context.options.tools, context),
+  ) { this.principals = new Map(principals) }
 
   stop(reason: string): void { this.fence ??= reason }
   get blockedReason(): string | undefined { return this.fence }
@@ -65,6 +67,43 @@ export class CodeModeDispatch {
       if (tools !== this.context.options.tools) this.context = { ...this.context, options: { ...this.context.options, tools } }
     }
     return this.context
+  }
+
+  private rememberDiscovered(context: ToolUseContext, names: readonly string[]): void {
+    for (const name of names) {
+      const tool = findToolByName(context.options.tools, name)
+      if (tool) this.bindPrincipal(name, codeModeToolPrincipal(tool, context))
+    }
+  }
+
+  private bindPrincipal(name: string, principal: string): void {
+    const original = this.principals.get(name)
+    if (original !== undefined && original !== principal) {
+      this.stop('This tool name now resolves to a different principal. Author a new script for the refreshed pool.')
+      this.context.codeModeHost?.fenceForInstructions(this.fence!)
+      throw new Error(this.fence)
+    }
+    if (original === undefined) this.principals.set(name, principal)
+  }
+
+  async describe(name: string) {
+    const context = this.currentContext
+    const result = await describeCodeModeTool(context, name)
+    if (result.schemaComplete) this.rememberDiscovered(context, [name, result.name])
+    return result
+  }
+
+  async search(query: string, max: number) {
+    const context = this.currentContext
+    const result = await searchCodeModeTools(context, query, max)
+    this.rememberDiscovered(context, result.matches.map(match => match.name))
+    return result
+  }
+
+  get contextModifier(): ((context: ToolUseContext) => ToolUseContext) | undefined {
+    if (this.contextModifiers.length === 0) return undefined
+    const modifiers = this.contextModifiers.slice()
+    return context => modifiers.reduce((current, modify) => modify(current), context)
   }
 
   /**
@@ -97,6 +136,19 @@ export class CodeModeDispatch {
 
   async settle(): Promise<void> { await this.tail }
 
+  private assertCurrentPrincipal(name: string, principal: string) {
+    if (this.fence || this.context.abortController.signal.aborted) {
+      throw new Error(this.fence ?? 'Code Mode execution cancelled')
+    }
+    const current = resolveCodeModeTool(this.currentContext, name)
+    if (codeModeToolPrincipal(current, this.context) !== principal) {
+      this.stop('Tool principal changed before execution. Author a new script for the refreshed pool.')
+      this.context.codeModeHost?.fenceForInstructions(this.fence!)
+      throw new Error(this.fence)
+    }
+    return current
+  }
+
   private async execute(call: CodeModeCall, nothrow: boolean): Promise<unknown> {
     const { name, input, line, toolUseId } = call
     if (this.fence || this.context.abortController.signal.aborted) {
@@ -104,12 +156,8 @@ export class CodeModeDispatch {
     }
     const tool = resolveCodeModeTool(this.currentContext, name)
     const dispatchedPrincipal = codeModeToolPrincipal(tool, this.context)
-    const originalPrincipal = this.principals.get(name)
-    if (originalPrincipal && originalPrincipal !== dispatchedPrincipal) {
-      this.stop('This tool name now resolves to a different principal. Author a new script for the refreshed pool.')
-      this.context.codeModeHost?.fenceForInstructions(this.fence!)
-      throw new Error(this.fence)
-    }
+    this.bindPrincipal(name, dispatchedPrincipal)
+    if (name !== tool.name) this.bindPrincipal(tool.name, dispatchedPrincipal)
     call.name = tool.name
     const identity = { ...this.identity, ...(line === undefined ? {} : { line }) }
     const assistant = Object.assign(createAssistantMessage({
@@ -120,6 +168,7 @@ export class CodeModeDispatch {
     let result: unknown
     let failed = false
     let received = false
+    this.context.loadedNestedMemoryPaths ??= new Set()
     return withCodeModeRead(toolUseId, async () => {
     try {
       for await (const update of runToolUse(
@@ -142,15 +191,9 @@ export class CodeModeDispatch {
           ...this.context, inlineCommand: undefined, preserveToolUseResults: true,
           getCodeModeDispatchFence: () => this.fence ?? (this.context.abortController.signal.aborted ? 'Code Mode execution cancelled' : undefined),
           messages: [...this.context.messages, assistant],
-          onToolFinalInput: async (id, finalName, finalInput) => {
+          onToolFinalInput: async (id, finalName, finalInput, executionContext) => {
             if (id !== toolUseId) return
-            if (this.fence || this.context.abortController.signal.aborted) throw new Error(this.fence ?? 'Code Mode execution cancelled')
-            const current = resolveCodeModeTool(this.currentContext, name)
-            if (codeModeToolPrincipal(current, this.context) !== dispatchedPrincipal) {
-              this.stop('Tool principal changed before execution. Author a new script for the refreshed pool.')
-              this.context.codeModeHost?.fenceForInstructions(this.fence!)
-              throw new Error(this.fence)
-            }
+            const current = this.assertCurrentPrincipal(name, dispatchedPrincipal)
             call.name = finalName
             const bytes = Buffer.byteLength(JSON.stringify(finalInput))
             call.input = bytes <= 64 * 1024 ? finalInput : { omitted: true, reason: 'Final executable input display limit', bytes }
@@ -158,17 +201,22 @@ export class CodeModeDispatch {
             else delete call.inputOmission
             const qualifiedPath = current.getPath?.(finalInput)
             const instructions = !current.isMcp && !current.mcpInfo || qualifiedPath
-              ? await preflightCodeModeInstructions(this.context, finalName, finalInput, qualifiedPath) : []
+              ? await preflightCodeModeInstructions(executionContext, finalName, finalInput, qualifiedPath) : []
             if (instructions.length) {
               this.stop('Final executable input activates instructions; author a new script')
               this.context.codeModeHost?.requireModelMessages(instructions)
               for (const message of instructions) await this.following(message)
               throw new Error(this.fence)
             }
+            this.assertCurrentPrincipal(name, dispatchedPrincipal)
           },
         },
       )) {
-        if (update.contextModifier) this.context = update.contextModifier.modifyContext(this.context)
+        if (update.contextModifier) {
+          const modify = update.contextModifier.modifyContext
+          this.context = modify(this.context)
+          this.contextModifiers.push(modify)
+        }
         const message = update.message
         if (!message) continue
         const attachment = message.type === 'attachment' ? message.attachment as Attachment : undefined

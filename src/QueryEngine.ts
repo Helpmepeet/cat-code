@@ -39,7 +39,8 @@ import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from './services/tools/interruptedToolRun.js'
-import { CodeModeHost, retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
+import { assertToolReceiptSource, CodeModeHost, retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
+import { CODE_MODE_CONVERSATION_CHANGE_PENDING, hasUndeliveredCodeModeTasks } from './tasks/CodeModeTask.js'
 import { logError } from './utils/log.js'
 import { restoreCodeModeHistory } from './tools/REPLTool/codeModeRestoration.js'
 import { categorizeRetryableAPIError } from './services/api/errors.js'
@@ -174,6 +175,8 @@ const snipProjection = feature('HISTORY_SNIP')
 
 export type QueryEngineConfig = {
   pendingQuestionRuntime?: PendingQuestionRuntime
+  /** A structured-input session owns its interpreter and restores history once. */
+  codeModeHost?: CodeModeHost
   cwd: string
   tools: Tools
   commands: Command[]
@@ -346,7 +349,7 @@ export class QueryEngine {
   private discoveredSkillNames = new Set<string>()
   private loadedNestedMemoryPaths = new Set<string>()
   private transcriptLane: Promise<void> = Promise.resolve()
-  private readonly codeModeHost = new CodeModeHost()
+  private readonly codeModeHost: CodeModeHost
   private inlineExecutionOwner: InlineCommandOperation | null = null
   private inlineSettlements = 0
   private tailRecoveryHold = false
@@ -363,15 +366,15 @@ export class QueryEngine {
 
   constructor(config: QueryEngineConfig) {
     this.config = config
-    this.mutableMessages = restoreCodeModeHistory(config.initialMessages ?? [], config.getAppState().tasks)
+    this.codeModeHost = config.codeModeHost ?? new CodeModeHost()
+    const initialMessages = config.initialMessages ?? []
+    this.mutableMessages = config.codeModeHost ? initialMessages : restoreCodeModeHistory(initialMessages, config.getAppState().tasks)
     this.interruptedToolLease = this.interruptedTools.attach(async (message, isCurrent) => {
       const release = await this.acquireTranscriptLane()
       try {
         if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
-        if (message.type === 'user' && message.sourceToolAssistantUUID &&
-            !this.mutableMessages.some(row => row.uuid === message.sourceToolAssistantUUID)) {
-          throw new Error('The original tool request is unavailable')
-        }
+        await assertToolReceiptSource(message, this.mutableMessages)
+        if (!isCurrent() || getSessionId() !== this.toolOwnerSessionId) throw new Error('Tool receipt owner changed')
         const snapshot = this.mutableMessages.some(row => row.uuid === message.uuid)
           ? this.mutableMessages : [...this.mutableMessages, message]
         if (!isSessionPersistenceDisabled()) {
@@ -551,7 +554,6 @@ export class QueryEngine {
   ): AsyncGenerator<SDKMessage, void, unknown> {
     // This wrapper runs at acceptance, not at the generator's first next().
     // Queue delivery must supply its original binding, including explicit null.
-    this.codeModeHost.revokeAdmissions()
     return this.submitAcceptedMessage(prompt, {
       ...options,
       uuid: options?.uuid ?? randomUUID(),
@@ -2106,42 +2108,49 @@ export class QueryEngine {
   async rewindBeforeUserMessage(
     targetUuid: string,
   ): Promise<ConversationRewindResult> {
-    this.assertToolEffectsSettled()
-    if (this.inlineSettlements) throw new Error('An inline command is still active')
-    const { message: prompt, index } =
-      resolveSelectableUserMessageByProducerPrefix(
-        this.mutableMessages,
-        targetUuid,
+    const release = await this.acquireTranscriptLane()
+    try {
+      this.assertToolEffectsSettled()
+      if (this.inlineSettlements) throw new Error('An inline command is still active')
+      if (hasUndeliveredCodeModeTasks(this.config.getAppState().tasks, this.toolOwnerSessionId)) {
+        throw new Error(CODE_MODE_CONVERSATION_CHANGE_PENDING)
+      }
+      const { message: prompt, index } =
+        resolveSelectableUserMessageByProducerPrefix(
+          this.mutableMessages,
+          targetUuid,
+        )
+      const retainedMessages = this.mutableMessages.slice(0, index)
+      const retainedTip =
+        retainedMessages.findLast(
+          message => message.type === 'user' || message.type === 'assistant',
+        )?.uuid ?? null
+      await (this.config.markActiveConversationTip ?? markActiveConversationTip)(
+        retainedTip as UUID | null,
       )
-    const retainedMessages = this.mutableMessages.slice(0, index)
-    const retainedTip =
-      retainedMessages.findLast(
-        message => message.type === 'user' || message.type === 'assistant',
-      )?.uuid ?? null
-    await (this.config.markActiveConversationTip ?? markActiveConversationTip)(
-      retainedTip as UUID | null,
-    )
-    this.mutableMessages = retainedMessages
-    await this.questionRuntime?.restore()
-    this.config.setAppState(prev => ({
-      ...prev,
-      toolPermissionContext:
-        prompt.permissionMode &&
-        prev.toolPermissionContext.mode !== prompt.permissionMode
-          ? {
-              ...prev.toolPermissionContext,
-              mode: prompt.permissionMode as PermissionMode,
-            }
-          : prev.toolPermissionContext,
-      promptSuggestion: {
-        text: null,
-        promptId: null,
-        shownAt: 0,
-        acceptedAt: 0,
-        generationRequestId: null,
-      },
-    }))
-    return { prompt, retainedMessages }
+      this.codeModeHost.prepareWorkspaceChange()
+      this.mutableMessages = retainedMessages
+      await this.questionRuntime?.restore()
+      this.config.setAppState(prev => ({
+        ...prev,
+        toolPermissionContext:
+          prompt.permissionMode &&
+          prev.toolPermissionContext.mode !== prompt.permissionMode
+            ? {
+                ...prev.toolPermissionContext,
+                mode: prompt.permissionMode as PermissionMode,
+              }
+            : prev.toolPermissionContext,
+        promptSuggestion: {
+          text: null,
+          promptId: null,
+          shownAt: 0,
+          acceptedAt: 0,
+          generationRequestId: null,
+        },
+      }))
+      return { prompt, retainedMessages }
+    } finally { release() }
   }
 
   getReadFileState(): FileStateCache {
@@ -2202,11 +2211,13 @@ export async function* ask({
   resumeHooksDeferred,
   onResumeHooksApplied,
   pendingQuestionRuntime,
+  codeModeHost,
   publishLateToolMessage,
   origin,
 }: {
   publishLateToolMessage?: QueryEngineConfig['publishLateToolMessage']
   pendingQuestionRuntime?: PendingQuestionRuntime
+  codeModeHost?: CodeModeHost
   origin?: MessageOrigin
   commands: Command[]
   prompt: string | Array<ContentBlockParam>
@@ -2247,6 +2258,7 @@ export async function* ask({
 }): AsyncGenerator<SDKMessage, void, unknown> {
   const engine = new QueryEngine({
     pendingQuestionRuntime,
+    codeModeHost,
     publishLateToolMessage: async frame => {
       const retained = engine.getMessages()
       if (retained !== mutableMessages) mutableMessages.splice(0, mutableMessages.length, ...retained)
@@ -2302,6 +2314,8 @@ export async function* ask({
       onResumeHooksApplied,
     })
   } finally {
+    const retained = engine.getMessages()
+    if (codeModeHost && retained !== mutableMessages) mutableMessages.splice(0, mutableMessages.length, ...retained)
     setReadFileCache(engine.getReadFileState())
   }
 }

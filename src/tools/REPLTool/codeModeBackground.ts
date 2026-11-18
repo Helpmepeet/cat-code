@@ -5,7 +5,11 @@ import type { CodeModeResult } from './codeModeHost.js'
 
 export { closeCodeModeOwner, drainCodeModeTasks, sameCodeModeOwner } from '../../tasks/CodeModeTask.js'
 export type { CodeModeOwner, CodeModeTaskState } from '../../tasks/CodeModeTask.js'
-export type CodeModeHostCompletion = { result: CodeModeResult; messages: Message[]; context: ToolUseContext }
+export type CodeModeHostCompletion = {
+  result: CodeModeResult
+  messages: Message[]
+  contextModifier?: (context: ToolUseContext) => ToolUseContext
+}
 
 /** The promise must include host effect settlement, not just VM evaluation. The caller retains
  * worker resources until drain resolves and uses its existing interrupted-effect fence only

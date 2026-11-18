@@ -26,15 +26,18 @@ mock.module('../services/api/client.js', () => ({
         stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 20, output_tokens: 10 } })
     }
     const round = models.length + 1
-    if (round > 3) throw new Error('Unexpected model request')
+    if (round > 5) throw new Error('Unexpected model request')
     models.push({ modelRound: round, prefix: JSON.stringify(messages.find(message => JSON.stringify(message).includes('# claudeMd'))), cwd: process.cwd() })
+    const bash = (name: string) => ({ name: 'Bash', input: {
+      command: `bash -c 'printf fixture > ${name}.txt'`, work_lifetime: 'finite', run_in_background: false,
+    } })
     const calls = round === 1
-      ? [{ name: 'EnterWorktree', input: { name: 'instructions' } },
-          { name: 'Bash', input: { command: "bash -c 'printf first > first.txt'", work_lifetime: 'finite', run_in_background: false } }]
+      ? [{ name: 'EnterWorktree', input: { name: 'instructions' } }, bash('stale-first')]
       : round === 2
-        ? [{ name: 'ExitWorktree', input: { action: 'keep' } },
-            { name: 'Bash', input: { command: "bash -c 'printf second > second.txt'", work_lifetime: 'finite', run_in_background: false } }]
-        : []
+        ? [bash('fresh-first')]
+        : round === 3
+          ? [{ name: 'ExitWorktree', input: { action: 'keep' } }, bash('stale-second')]
+          : round === 4 ? [bash('fresh-second')] : []
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${round}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
       if (calls.length) for (const [index, call] of calls.entries()) {

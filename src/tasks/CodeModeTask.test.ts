@@ -97,7 +97,7 @@ test('owner drain delivery failure retains ownership and can retry', async () =>
   expect(f.state().delivery).toBe('delivered')
 })
 
-test('background adapter adopts real host promise and preserves messages/context on delivery', async () => {
+test('background adapter adopts the host promise and preserves messages on delivery', async () => {
   const { backgroundCodeModeCell } = await import('../tools/REPLTool/codeModeBackground.js')
   let state = getDefaultAppState()
   const context = { setAppState: (update: (s: AppState) => AppState) => { state = update(state) } } as ToolUseContext
@@ -109,10 +109,9 @@ test('background adapter adopts real host promise and preserves messages/context
   expect(state.tasks[handle.taskId]?.status).toBe('running')
   const result: CodeModeResult = { kind: 'code-mode', cellId: 'c', generation: 'g', description: 'adopt', code: 'effect()', status: 'completed', output: 'done', calls: [], changedFiles: [] }
   const messages: import('../types/message.js').Message[] = []
-  resolve({ result, messages, context })
+  resolve({ result, messages })
   await handle.deliver(async value => {
     expect(value.messages).toBe(messages)
-    expect(value.context).toBe(context)
     expect(value.result.output).toBe('done')
   })
 })

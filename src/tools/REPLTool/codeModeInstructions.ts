@@ -5,6 +5,10 @@ import type { ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
 import { getNestedMemoryAttachmentsForFile, createAttachmentMessage } from '../../utils/attachments.js'
 import { getCwd } from '../../utils/cwd.js'
+import { expandPath } from '../../utils/path.js'
+import { getPreparedFileMutation, getPreparedFileMutationSet, getPreparedFileRead } from '../../utils/fileAuthorization.js'
+import { splitCommand_DEPRECATED } from '../../utils/bash/commands.js'
+import { isNormalizedCdCommand } from '../BashTool/bashPermissions.js'
 import { getPatchMutationPaths } from '../FilePatchTool/parser.js'
 
 function addTarget(paths: Set<string>, path: string): void {
@@ -14,11 +18,15 @@ function addTarget(paths: Set<string>, path: string): void {
 
 function literalShellPaths(command: string, base: string, paths: Set<string>, depth = 0): void {
   if (depth > 3) throw new Error('Shell nesting exceeds the instruction preflight limit. Use simpler commands or explicit file tools.')
+  const commands = splitCommand_DEPRECATED(command)
+  if (commands.length > 1 && commands.some(isNormalizedCdCommand)) {
+    throw new Error('Script Bash cannot preflight paths after a compound directory change. Use explicit file paths or run the directory change separately.')
+  }
   let executable = ''
   let argument = 0
   let redirected = false
   let shellSource = false
-  for (const token of parse(command, () => '')) {
+  for (const token of parse(command, name => '$' + name)) {
     if (typeof token !== 'string') {
       if ('op' in token && ['>', '>>', '<', '>|'].includes(token.op)) redirected = true
       else if ('op' in token && [';', '&&', '||', '|', '&', '\n'].includes(token.op)) { executable = ''; argument = 0 }
@@ -48,10 +56,20 @@ export async function preflightCodeModeInstructions(context: ToolUseContext, nam
   if (!qualifiedPath && !['Read', 'Write', 'Edit', 'Glob', 'Grep', 'Bash', 'PowerShell', 'apply_patch', 'NotebookEdit', 'LSP'].includes(name)) return []
   const args = input as Record<string, unknown>
   const paths = new Set<string>()
-  const base = typeof args.cwd === 'string' ? resolve(getCwd(), args.cwd) : getCwd()
-  if (qualifiedPath) addTarget(paths, resolve(base, qualifiedPath))
+  const base = typeof args.cwd === 'string' ? expandPath(args.cwd) : getCwd()
+  const read = getPreparedFileRead(context, name, args)
+  const mutation = getPreparedFileMutation(context, name, args)
+  const mutationSet = getPreparedFileMutationSet(context, name, args)
+  const preparedPaths = [read, read?.alternate?.capability ? read.alternate : undefined, mutation, ...(mutationSet?.byPath.values() ?? [])]
+  for (const file of preparedPaths) {
+    if (!file) continue
+    addTarget(paths, file.originalPath)
+    addTarget(paths, file.canonicalPath)
+    if (file.actualPath) addTarget(paths, file.actualPath)
+  }
+  if (qualifiedPath) addTarget(paths, expandPath(qualifiedPath, base))
   for (const key of ['file_path', 'filePath', 'path', 'notebook_path', 'cwd']) {
-    if (typeof args[key] === 'string') addTarget(paths, key === 'cwd' ? base : resolve(base, args[key] as string))
+    if (typeof args[key] === 'string') addTarget(paths, key === 'cwd' ? base : expandPath(args[key], base))
   }
   if (['Glob', 'Grep', 'Bash', 'PowerShell'].includes(name)) addTarget(paths, resolve(base, '__code_mode_instruction_preflight__'))
   if (name === 'Bash' && typeof args.command === 'string') {
@@ -59,10 +77,11 @@ export async function preflightCodeModeInstructions(context: ToolUseContext, nam
     // destinations are not interpreted as authority or guessed filesystem targets.
     literalShellPaths(args.command, base, paths)
   }
-  if (name === 'apply_patch') for (const path of getPatchMutationPaths(input)) addTarget(paths, resolve(base, path))
+  if (name === 'apply_patch' && !mutationSet) for (const path of getPatchMutationPaths(input)) addTarget(paths, expandPath(path, base))
   context.loadedNestedMemoryPaths ??= new Set()
   const messages: Message[] = []
   for (const path of paths) {
+    if (process.platform === 'win32' && (path.startsWith('\\\\') || path.startsWith('//'))) continue
     const attachments = await getNestedMemoryAttachmentsForFile(path, context, context.getAppState())
     messages.push(...attachments.map(createAttachmentMessage))
     if (messages.length) return messages

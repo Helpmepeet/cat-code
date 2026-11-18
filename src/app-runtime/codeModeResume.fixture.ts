@@ -16,7 +16,7 @@ mock.module('../services/api/client.js', () => ({
     bodies.push(JSON.parse(JSON.stringify(body)))
     if (index > 1) throw new Error('Unexpected resume model request')
     const tool = index === 0 ? { name: 'REPL', input: {
-      code: phase === 'crash' ? 'var retainedCrash = "must-reset"; await new Promise(() => {});' : phase === 'foreground'
+      code: phase === 'crash' ? 'var retainedCrash = "must-reset"; await tools.call({name:"Bash",input:{command:"printf crash-child",work_lifetime:"finite",run_in_background:false}});' : phase === 'foreground'
         ? 'var retainedCrash = "must-reset"; await tools.call({name:"Bash",input:{command:"printf must-not-run",work_lifetime:"finite",run_in_background:false},nothrow:true}); output("foreground-seed");'
         : 'output({prior:typeof retainedCrash});',
       description: 'Isolated incarnation fixture', ...(phase === 'crash' ? { run_in_background: true } : {}),
@@ -58,15 +58,21 @@ if (phase !== 'crash' && phase !== 'foreground') {
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'bypassPermissions', isBypassPermissionsModeAvailable: true } }
 if (phase === 'foreground') state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, alwaysDenyRules: { session: ['Bash'] } } }
+if (phase === 'crash') state = { ...state, toolPermissionContext: {
+  ...state.toolPermissionContext, mode: 'default', alwaysAskRules: { session: ['Bash'] },
+} }
 let transcript: any[] = []
+const crashChildRecorded = Promise.withResolvers<void>()
 const session = createQueryEngineAppSession({
   initialMessages, cwd: process.cwd(), tools: [REPLTool, BashTool], commands: [], mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => { state = update(state) },
   readFileCache: createFileStateCacheWithSizeLimit(20), customSystemPrompt: 'Run the isolated incarnation script.', userSpecifiedModel: 'claude-sonnet-4-5',
   recordTranscript: async messages => { transcript = JSON.parse(JSON.stringify(messages)); return storage.recordTranscript(messages) },
+  publishLateToolMessage: frame => { if (frame.type === 'assistant' && 'code_mode' in frame) crashChildRecorded.resolve() },
 })
 const restoredBeforeTurn = JSON.parse(JSON.stringify(session.getMessages()))
 await createQueryEngineSessionController(session).submit('Inspect this interpreter incarnation.')
+if (phase === 'crash') await crashChildRecorded.promise
 await storage.flushSessionStorage()
 const sourcePath = storage.getTranscriptPathForSession(getSessionId())
 // Crash between ordinary transcript-lease release and runtime cleanup, avoiding

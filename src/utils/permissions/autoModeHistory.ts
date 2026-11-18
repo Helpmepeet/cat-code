@@ -93,6 +93,7 @@ export function selectAutoModeHistory(
       message.type === 'system' ||
       message.type === 'user' && message.isCompactSummary) return full()
     if (message.type === 'user') {
+      if (message.toolExecutionEvidence) return full()
       const content = message.message.content
       if (Array.isArray(content)) {
         for (const block of content) if (block.type === 'tool_result' && block.is_error !== true &&

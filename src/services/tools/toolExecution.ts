@@ -1,5 +1,5 @@
 import { basename } from 'path'
-import { withoutCodeModeAdmission } from '../../tools/REPLTool/codeModeAdmission.js'
+import { bindCodeModeWrapperApproval, captureCodeModePermissionPolicy } from '../../tools/REPLTool/codeModeAdmission.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
 import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
 import { acquireCodeModeToolLane } from './codeModeToolScheduling.js'
@@ -84,6 +84,7 @@ import type {
   Message,
   ProgressMessage,
   StopHookInfo,
+  UserMessage,
 } from '../../types/message.js'
 import { count } from '../../utils/array.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
@@ -111,6 +112,7 @@ import type {
   PermissionResult,
 } from '../../utils/permissions/PermissionResult.js'
 import { recordAutoModeOutcome } from '../../utils/permissions/autoModeMeta.js'
+import { captureToolExecutionEvidence, type ToolExecutionEvidence } from '../../utils/permissions/toolExecutionEvidence.js'
 import { permissionRefusalOutcome, type PermissionDecisionContext } from '../../utils/permissions/permissionDecisionContext.js'
 import { discardQuestionSelections } from '../../utils/questionSelections.js'
 import {
@@ -499,6 +501,23 @@ function getMcpServerBaseUrlFromToolName(
   return getLoggingSafeMcpBaseUrl(serverConnection.config)
 }
 
+const STALE_INSTRUCTION_RESULT = 'New instructions arrived after this tool call was authored. Review the updated context before calling the tool again.'
+
+function staleInstructionContext(context: ToolUseContext, tool: Tool | undefined): boolean {
+  // Task controls must remain available to observe or settle existing work.
+  if (tool && !tool.isMcp && !tool.mcpInfo &&
+      (tool.name === 'TaskStop' || tool.name === 'TaskOutput')) return false
+  return context.isInstructionContextCurrent?.() === false
+}
+
+function createStaleInstructionResult(toolUseID: string, assistantMessage: AssistantMessage): UserMessage {
+  return createUserMessage({
+    content: [{ type: 'tool_result', tool_use_id: toolUseID, is_error: true, content: STALE_INSTRUCTION_RESULT }],
+    sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+    toolResultStatus: 'cancelled',
+  })
+}
+
 export async function* runToolUse(
   toolUse: ToolUseBlock,
   assistantMessage: AssistantMessage,
@@ -511,6 +530,15 @@ export async function* runToolUse(
   const control = builtin && (canonicalName === REPL_TOOL_NAME || canonicalName === 'TaskStop' || canonicalName === 'TaskOutput' ||
     canonicalName === 'JumpToProject' || canonicalName === 'EnterWorktree' || canonicalName === 'ExitWorktree')
   const release = control ? () => {} : await acquireCodeModeToolLane(toolUseContext)
+  if (!release) {
+    const content = createToolResultStopMessage(toolUse.id)
+    content.content = withMemoryCorrectionHint(CANCEL_MESSAGE)
+    yield { message: createUserMessage({
+      content: [content], toolUseResult: CANCEL_MESSAGE, toolResultStatus: 'cancelled',
+      sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+    }) }
+    return
+  }
   try { yield* runToolUseUnscheduled(toolUse, assistantMessage, canUseTool, toolUseContext) }
   finally { release() }
 }
@@ -532,6 +560,10 @@ async function* runToolUseUnscheduled(
       content: [{ type: 'tool_result', tool_use_id: toolUse.id, is_error: true, content: `${UNRESOLVED_TOOL_MESSAGE} End this turn and wait for the results.` }],
       sourceToolAssistantUUID: assistantMessage.uuid as UUID,
     }) }
+    return
+  }
+  if (staleInstructionContext(toolUseContext, resolvedTool)) {
+    yield { message: createStaleInstructionResult(toolUse.id, assistantMessage) }
     return
   }
   const codeModeFence = toolUseContext.getCodeModeDispatchFence?.()
@@ -1268,6 +1300,8 @@ async function checkPermissionsAndCallTool(
   // Check whether we have permission to use the tool,
   // and ask the user for permission if we don't
   const permissionMode = toolUseContext.getAppState().toolPermissionContext.mode
+  const scriptPolicyIsCurrent = !tool.isMcp && tool.name === REPL_TOOL_NAME
+    ? captureCodeModePermissionPolicy(toolUseContext) : undefined
   const permissionStart = Date.now()
 
   const resolved = await resolveHookPermissionDecision(
@@ -1345,6 +1379,7 @@ async function checkPermissionsAndCallTool(
   }
 
   let trustedSedEdit: import('../../tools/BashTool/sedEditCapability.js').TrustedSedEdit | undefined
+  let userApprovalFeedback: string | undefined
   if (permissionDecision.behavior === 'allow') {
     const finalInput = await authorizeFinalToolInput(
       tool,
@@ -1371,6 +1406,7 @@ async function checkPermissionsAndCallTool(
     if (finalInput.allowed) {
       toolUseContext = finalInput.context
       trustedSedEdit = finalInput.trustedSedEdit
+      userApprovalFeedback = finalInput.userApprovalFeedback
       if (toolUseContext.inlineCommand &&
         (tool.name !== BASH_TOOL_NAME ||
           trustedSedEdit !== undefined ||
@@ -1671,7 +1707,6 @@ async function checkPermissionsAndCallTool(
   const startTime = Date.now()
 
   // Permission and pre-tool hooks can await while a sibling accepts transfer.
-  // This is the last gate before effects, shared by batch and stream execution.
   if (isHandoffExecutionFenced(toolUseContext)) {
     await preparation.dispose()
     return [{ message: createHandoffSkippedResult(toolUseID, assistantMessage) }]
@@ -1679,9 +1714,6 @@ async function checkPermissionsAndCallTool(
 
   try { assertLidWorkAdmission() }
   catch (error) { await preparation.dispose(); throw error }
-  startSessionActivity('tool_exec')
-  toolUseContext.onToolExecutionStart?.()
-  if (!toolUseContext.agentId) recordToolActivity(toolUseID, 'executing')
   callInput = processedInput
   // Everything accumulated so far is pre-call: PreToolUse hook output,
   // hookSpecificOutput.additionalContext, and the PermissionRequest-hook
@@ -1694,6 +1726,8 @@ async function checkPermissionsAndCallTool(
   const preCallMessageCount = resultingMessages.length
   const executionStarted = performance.now()
   let executionEnded = false
+  let toolExecutionEvidence: ToolExecutionEvidence | undefined
+  let sessionActivityStarted = false
   const recordExecutionEnd = (
     outcome: ModelAttemptOutcome,
     elapsedMs = performance.now() - executionStarted,
@@ -1729,10 +1763,6 @@ async function checkPermissionsAndCallTool(
     // Measurement must never change tool execution or cancellation.
   }
   try {
-    if (('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) ||
-        ('contentBlocks' in permissionDecision && permissionDecision.contentBlocks?.length)) {
-      toolUseContext.codeModeHost?.fenceForInstructions('New approval feedback requires a new script before further dispatch')
-    }
     const executionContext = {
       ...toolUseContext,
       ...((!tool.isMcp && (tool.name === AGENT_TOOL_NAME || tool.name === 'ResumeAgent')) ? { onCodeModeAudit: undefined, getCodeModeDispatchFence: undefined, publishCodeModeActivity: undefined } : {}),
@@ -1748,11 +1778,42 @@ async function checkPermissionsAndCallTool(
         trustedSedEdit,
       )
     }
-    await toolUseContext.onToolFinalInput?.(toolUseID, tool.name, callInput)
+    if (toolUseContext.onToolFinalInput) {
+      await toolUseContext.onToolFinalInput(toolUseID, tool.name, callInput, executionContext)
+      // A preflight can await while the user stops work or workspace ownership changes.
+      if (toolUseContext.abortController.signal.aborted) throw new AbortError(CANCEL_MESSAGE)
+      if (isHandoffExecutionFenced(toolUseContext)) {
+        recordExecutionEnd('cancelled')
+        endToolExecutionSpan({ success: false, error: 'Workspace ownership changed during tool preflight' })
+        endToolSpan()
+        return [...resultingMessages, { message: createHandoffSkippedResult(toolUseID, assistantMessage) }]
+      }
+      const fence = toolUseContext.getCodeModeDispatchFence?.()
+      if (fence) throw new Error(fence)
+      assertLidWorkAdmission()
+    }
+    if (staleInstructionContext(toolUseContext, tool)) {
+      recordExecutionEnd('cancelled')
+      endToolExecutionSpan({ success: false, error: STALE_INSTRUCTION_RESULT })
+      endToolSpan()
+      return [...resultingMessages, { message: createStaleInstructionResult(toolUseID, assistantMessage) }]
+    }
+    if (('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) ||
+        ('contentBlocks' in permissionDecision && permissionDecision.contentBlocks?.length)) {
+      toolUseContext.codeModeHost?.fenceForInstructions('New approval feedback requires a new script before further dispatch')
+    }
     const workspaceReset = !tool.isMcp && ['JumpToProject', 'EnterWorktree', 'ExitWorktree'].includes(tool.name)
       ? toolUseContext.codeModeHost?.prepareWorkspaceChange() : undefined
     if (workspaceReset === 'stopping') throw new Error('Background scripts are stopping and their results must arrive before changing projects. Script variables were reset. End this turn and wait for those results before retrying.')
-    const invokeTool = () => tool.call(
+    if (scriptPolicyIsCurrent) bindCodeModeWrapperApproval(executionContext, callInput, scriptPolicyIsCurrent)
+    toolUseContext.onToolExecutionStart?.()
+    startSessionActivity('tool_exec')
+    sessionActivityStarted = true
+    if (!toolUseContext.agentId) recordToolActivity(toolUseID, 'executing')
+    toolExecutionEvidence = captureToolExecutionEvidence(
+      toolUseID, parsedInput.data, callInput, userApprovalFeedback,
+    )
+    const rawResult = await tool.call(
       callInput,
       executionContext,
       canUseTool,
@@ -1764,11 +1825,6 @@ async function checkPermissionsAndCallTool(
         })
       },
     )
-    // The Agent invocation is authorized in its parent's cell, but the worker's
-    // independent model loop must not inherit that script's admission scope.
-    const rawResult = await (!tool.isMcp && (tool.name === AGENT_TOOL_NAME || tool.name === 'ResumeAgent')
-      ? withoutCodeModeAdmission(invokeTool)
-      : invokeTool())
     let result = workspaceReset === 'reset' ? {
       ...rawResult,
       newMessages: [...(rawResult.newMessages ?? []), createUserMessage({ content: '[Code Mode] Script variables and functions were reset for the workspace transition. No earlier script was replayed.', isMeta: true })],
@@ -2054,6 +2110,7 @@ async function checkPermissionsAndCallTool(
             ? (toolUseContext.getCodeModeDispatchFence && mcpMeta?.structuredContent ? { structuredContent: mcpMeta.structuredContent } : undefined)
             : mcpMeta,
           sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+          toolExecutionEvidence,
         })
       if (('acceptFeedback' in permissionDecision && permissionDecision.acceptFeedback) ||
           allowContentBlocks?.length ||
@@ -2374,12 +2431,13 @@ async function checkPermissionsAndCallTool(
               ? error.mcpMeta
               : undefined,
           sourceToolAssistantUUID: assistantMessage.uuid,
+          toolExecutionEvidence,
         }),
       },
       ...hookMessages,
     ]
   } finally {
-    stopSessionActivity('tool_exec')
+    if (sessionActivityStarted) stopSessionActivity('tool_exec')
     // Clean up decision info after logging
     if (decisionInfo) {
       toolUseContext.toolDecisions?.delete(toolUseID)

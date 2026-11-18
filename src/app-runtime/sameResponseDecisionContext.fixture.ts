@@ -8,6 +8,7 @@ globalThis.fetch = (() => { throw new Error('Network forbidden in same-response 
 ;(globalThis as any).MACRO = { VERSION: 'same-response-test' }
 const sameResponse = process.env.SAME_RESPONSE_TEST_BATCH === '1'
 const nestedInstructions = process.env.SAME_RESPONSE_NESTED_INSTRUCTIONS === '1'
+const approvalEvidence = process.env.SAME_RESPONSE_APPROVAL_EVIDENCE
 if (nestedInstructions) {
   await mkdir('nested')
   await writeFile('CLAUDE.md', 'ROOT_INSTRUCTION: Work locally on the synthetic fixture.')
@@ -21,7 +22,7 @@ const calls = nestedInstructions ? [
   } },
   { type: 'tool_use', id: 'same-response-probe', name: 'Bash', input: { command: "bash -c 'printf same-response-effect > sibling.txt'", work_lifetime: 'finite', run_in_background: false } },
 ] : [
-  { type: 'tool_use', id: 'write-script', name: 'Write', input: { file_path: join(process.cwd(), 'ship.cjs'), content: 'require("node:fs").writeFileSync("shipped", "EARLIER_INPUT_MARKER")' } },
+  { type: 'tool_use', id: 'write-script', name: 'Write', input: { file_path: join(process.cwd(), 'ship.cjs'), content: 'require("node:fs").writeFileSync("shipped", "' + (approvalEvidence ? 'PROPOSED_INPUT_MARKER' : 'EARLIER_INPUT_MARKER') + '")' } },
   { type: 'tool_use', id: 'read-output', name: 'Read', input: { file_path: join(process.cwd(), 'claims.txt') } },
   { type: 'tool_use', id: 'run-script', name: 'Bash', input: { command: "bash -c 'node ship.cjs'", work_lifetime: 'finite', run_in_background: false } },
   { type: 'tool_use', id: 'pending-write', name: 'Write', input: { file_path: join(process.cwd(), 'pending.txt'), content: 'PENDING_INPUT_MARKER' } },
@@ -78,7 +79,10 @@ const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js'
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 enableConfigs()
 let state = getDefaultAppState()
-state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto' } }
+state = { ...state, toolPermissionContext: {
+  ...state.toolPermissionContext, mode: approvalEvidence ? 'default' : 'auto',
+  ...(approvalEvidence ? { alwaysAskRules: { session: ['Write'] } } : {}),
+} }
 let transcript: any[] = []
 const session = createQueryEngineAppSession({ cwd: process.cwd(), tools: nestedInstructions ? [REPLTool, BashTool, FileReadTool, FileWriteTool] : [BashTool, FileReadTool, FileWriteTool], commands: [], mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => { state = update(state) }, readFileCache: createFileStateCacheWithSizeLimit(20),
@@ -89,13 +93,26 @@ const permissions: unknown[] = []
 controller.subscribe(event => {
   if (event.type === 'permission.requested') {
     permissions.push(event.request)
-    controller.respondToPermissionRequest(event.request.requestId, { behavior: 'deny', message: 'Unexpected fixture approval' })
+    const { requestId, request } = event.request
+    const input = request.input as { file_path?: string; content?: string }
+    if (approvalEvidence && request.tool_name === 'Write') {
+      const first = input.file_path === join(process.cwd(), 'ship.cjs')
+      if (first) state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto', alwaysAskRules: {} } }
+      controller.respondToPermissionRequest(requestId, {
+        behavior: 'allow',
+        updatedInput: first ? { ...input, content: input.content!.replace('PROPOSED_INPUT_MARKER', 'EARLIER_INPUT_MARKER') } : input,
+        ...(first && approvalEvidence === 'feedback' ? { acceptFeedback: 'APPROVAL_SCOPE_NOTE: inspect only the local fixture.' } : {}),
+      })
+    } else controller.respondToPermissionRequest(requestId, { behavior: 'deny', message: 'Unexpected fixture approval' })
   }
 })
 await controller.submit(nestedInstructions ? 'Read the nested fixture through a script, then run the local probes.' : 'Write and inspect the fixture, run its script, then write the remaining file.')
 await writeFile(join(root, 'evidence.json'), JSON.stringify({ classifierBodies, modelBodies, permissions,
   ...(nestedInstructions ? {
-    sibling: await readFile('sibling.txt', 'utf8'), nextRound: await readFile('next-round.txt', 'utf8'),
+    sibling: await readFile('sibling.txt', 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    }), nextRound: await readFile('next-round.txt', 'utf8'),
     codeResults: transcript.filter(message => message.toolUseResult?.kind === 'code-mode').map(message => message.toolUseResult),
   } : { shipped: await readFile('shipped', 'utf8'), pending: await readFile('pending.txt', 'utf8') }) }))
 session.dispose?.()

@@ -294,6 +294,7 @@ export function deserializeMessagesWithInterruptDetection(
     // Filter out unresolved tool uses and any synthetic messages that follow them
     const filteredToolUses = filterUnresolvedToolUses(
       migratedMessages,
+      { preserveCodeModeAudit: true },
     ) as NormalizedMessage[]
 
     // Filter out orphaned thinking-only assistant messages that can cause API errors

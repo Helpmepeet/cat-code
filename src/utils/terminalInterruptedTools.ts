@@ -2,6 +2,7 @@ import type { Message } from '../types/message.js'
 import { getSessionId, isSessionPersistenceDisabled } from '../bootstrap/state.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from '../services/tools/interruptedToolRun.js'
 import { recordTranscript, flushCurrentTranscriptDurably } from './sessionStorage.js'
+import { assertToolReceiptSource } from '../tools/REPLTool/codeModeHost.js'
 import type { QueryGuard } from './QueryGuard.js'
 
 /** The terminal caller owns late receipts, not the already-finished query generator. */
@@ -31,8 +32,8 @@ export function createTerminalInterruptedTools(options: {
     }
     if (!isCurrent() || getSessionId() !== options.sessionId) throw new Error('Tool receipt owner changed')
     const history = options.getMessages()
-    if (message.type === 'user' && message.sourceToolAssistantUUID &&
-        !history.some(row => row.uuid === message.sourceToolAssistantUUID)) throw new Error('The original tool request is unavailable')
+    await assertToolReceiptSource(message, history)
+    if (!isCurrent() || getSessionId() !== options.sessionId) throw new Error('Tool receipt owner changed')
     if (!isSessionPersistenceDisabled()) {
       await recordTranscript(history.some(row => row.uuid === message.uuid) ? history : [...history, message])
       await flushCurrentTranscriptDurably(message.uuid)

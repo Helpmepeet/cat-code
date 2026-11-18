@@ -94,6 +94,8 @@ import { parsePluginIdentifier } from 'src/utils/plugins/pluginIdentifier.js'
 import { validateUuid } from 'src/utils/uuid.js'
 import { fromArray } from 'src/utils/generators.js'
 import { ask } from 'src/QueryEngine.js'
+import { CodeModeHost } from '../tools/REPLTool/codeModeHost.js'
+import { restoreCodeModeHistory } from '../tools/REPLTool/codeModeRestoration.js'
 import { RestoreReviewAdmission } from 'src/utils/restoreReviewAdmission.js'
 import { MAX_INPUT_BATCH_SIZE } from 'src/utils/queuedInputReceipts.js'
 const automaticInputIds = new WeakMap<StructuredIO, Set<string>>()
@@ -1380,6 +1382,12 @@ export function runHeadlessStreaming(
   // include Assistant, User, Attachment, and Progress messages.
   // TODO: Clean up this code to avoid passing around a mutable array.
   const mutableMessages: Message[] = initialMessages
+  let codeModeHost = feature('CODE_MODE') ? new CodeModeHost() : undefined
+  let codeModeSessionId = getSessionId()
+  if (codeModeHost) {
+    const restored = restoreCodeModeHistory(mutableMessages, getAppState().tasks)
+    mutableMessages.push(...restored.slice(mutableMessages.length))
+  }
   const restoreReview = new RestoreReviewAdmission(recoveryReviewRequired)
   const questionRuntime = feature('NONBLOCKING_ASK_USER_QUESTION') ? new PendingQuestionRuntime(() => mutableMessages) : undefined
   const questionInitialization = restoreReview.required ? Promise.resolve() :
@@ -2410,9 +2418,15 @@ export function runHeadlessStreaming(
           const cmd = command
           // Explicit ephemeral mode has no durable acceptance contract.
           if (isSessionPersistenceDisabled() && !restoreReview.required) acknowledgeBatch()
+          if (codeModeHost && codeModeSessionId !== getSessionId()) {
+            await codeModeHost.close()
+            codeModeHost = new CodeModeHost()
+            codeModeSessionId = getSessionId()
+          }
           await runWithWorkload(cmd.workload ?? options.workload, async () => {
             for await (const message of ask({
               pendingQuestionRuntime: questionRuntime,
+              codeModeHost,
               publishLateToolMessage: async message => {
                 if (publishLateToolMessage) await publishLateToolMessage(message)
                 else output.enqueue(message)
@@ -2919,6 +2933,7 @@ export function runHeadlessStreaming(
         unsubscribeSkillChanges()
         unsubscribeAuthStatus?.()
         statusListeners.delete(rateLimitListener)
+        await codeModeHost?.close().catch(logError)
         output.done()
       }
     }
@@ -4406,6 +4421,7 @@ export function runHeadlessStreaming(
       unsubscribeSkillChanges()
       unsubscribeAuthStatus?.()
       statusListeners.delete(rateLimitListener)
+      await codeModeHost?.close().catch(logError)
       output.done()
     }
   })()

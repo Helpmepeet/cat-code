@@ -819,11 +819,15 @@ async function* queryLoop(
       for (const message of requiredCodeModeMessages) if (!existing.has(message.uuid)) yield message
       messagesForQuery = [...messagesForQuery, ...requiredCodeModeMessages]
     }
+    const roundInstructionRevision = userContextRevision
+    const roundCodeModeInstructionRevision = codeModeHost?.instructionRevision
     //TODO: no need to set toolUseContext.messages during set-up since it is updated here
     toolUseContext = {
       ...toolUseContext,
       messages: messagesForQuery,
       codeModeModelEpoch: codeModeHost?.modelEpochForContext(messagesForQuery),
+      isInstructionContextCurrent: () => getUserContextRevision() === roundInstructionRevision &&
+        codeModeHost?.instructionRevision === roundCodeModeInstructionRevision,
     }
 
     const assistantMessages: AssistantMessage[] = []

@@ -20,7 +20,6 @@ import { shouldUseSandbox } from '../../tools/BashTool/shouldUseSandbox.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { POWERSHELL_TOOL_NAME } from '../../tools/PowerShellTool/toolName.js'
 import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
-import { getCodeModeAdmission } from '../../tools/REPLTool/codeModeAdmission.js'
 import type { AssistantMessage } from '../../types/message.js'
 import { extractOutputRedirections } from '../bash/commands.js'
 import { getCwd } from '../cwd.js'
@@ -647,8 +646,6 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     context,
     observation ?? null,
   )
-  // Observe policy/mode transitions even when this call takes a base allow path.
-  const codeModeAdmission = getCodeModeAdmission(context)
   observation?.markRoute('base')
   if (
     result.behavior === 'deny' &&
@@ -766,23 +763,10 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         return result
       }
 
-      // Script admission replaces only semantic Auto adjudication. The base
-      // pipeline and mandatory Auto guards above still own their decisions.
-      // This seam is shared by initial and final-input permission evaluation.
-      if (codeModeAdmission !== undefined) {
-        const retainedAsk =
-          result.decisionReason?.type === 'rule' ||
-          result.decisionReason?.type === 'safetyCheck'
-        if (codeModeAdmission && !retainedAsk) {
-          return {
-            behavior: 'allow',
-            updatedInput: input,
-            decisionReason: {
-              type: 'other',
-              reason: 'Current Code Mode script admission',
-            },
-          }
-        }
+      // Explicit asks and safety prompts on Script child calls still require
+      // interaction. Other children enter the ordinary per-tool Auto path.
+      if (context.getCodeModeDispatchFence &&
+          (result.decisionReason?.type === 'rule' || result.decisionReason?.type === 'safetyCheck')) {
         if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
           const hookDecision = await runPermissionRequestHooksForHeadlessAgent(
             tool,

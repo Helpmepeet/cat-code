@@ -3,8 +3,8 @@ import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wrapper']) {
-  test(`real-engine Auto Code Mode ${scenario}: one script admission retains final-input policy`, async () => {
+for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wrapper', 'computed-child', 'queued-policy', 'queued-unchanged', 'background-disabled']) {
+  test(`Code Mode permission lifecycle: ${scenario}`, async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-auto-')))
     try {
       await mkdir(join(root, 'config'))
@@ -15,7 +15,9 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
           CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
           ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: '0',
           CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
-          NODE_ENV: 'test', CLAUDE_CODE_AUTO_MODE_MODEL: 'sonnet', CODE_MODE_TEST_ROOT: root, CODE_MODE_AUTO_SCENARIO: scenario },
+          NODE_ENV: 'test', CLAUDE_CODE_AUTO_MODE_MODEL: 'sonnet', CODE_MODE_TEST_ROOT: root, CODE_MODE_AUTO_SCENARIO: scenario,
+          ...(scenario === 'background-disabled' ? { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1' } : {}),
+          ...(scenario.startsWith('queued-') ? { TEST_ENABLE_SESSION_PERSISTENCE: '1' } : {}) },
       })
       const timer = setTimeout(() => child.kill(), 30_000)
       const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
@@ -23,6 +25,30 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
       if (exit !== 0) throw new Error(`Auto fixture failed (${exit}): ${stderr}\n${stdout}`)
       const evidence = JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8'))
       const results = evidence.transcript.filter((message: any) => message.toolUseResult?.kind === 'code-mode').map((message: any) => message.toolUseResult)
+      if (scenario.startsWith('queued-')) {
+        const launch = results.find((result: any) => result.cellId === 'second-script' && result.status === 'running')
+        const completion = results.find((result: any) => result.taskId === launch?.taskId && result.status !== 'running')
+        expect(launch).toBeDefined()
+        expect(results.find((result: any) => result.cellId === 'submitted-script' && result.status === 'completed')?.output).toContain('first script finished')
+        if (scenario === 'queued-policy') {
+          expect(completion?.status).toBe('blocked')
+          expect(completion?.output).toContain('Script permission changed')
+        } else {
+          expect(completion?.status).toBe('completed')
+          expect(completion?.output).toContain('second script finished')
+        }
+        return
+      }
+      if (scenario === 'background-disabled') {
+        expect(results).toHaveLength(1)
+        expect(results[0].status).toBe('completed')
+        expect(await readFile(join(root, 'workspace', 'foreground.txt'), 'utf8')).toBe('foreground')
+        expect(evidence.scriptPrompt).not.toContain('run_in_background')
+        const rejection = evidence.transcript.flatMap((message: any) => message.type === 'user' && Array.isArray(message.message.content) ? message.message.content : [])
+          .find((block: any) => block.type === 'tool_result' && block.tool_use_id === 'second-script')
+        expect(rejection?.is_error).toBe(true)
+        return
+      }
       if (scenario.startsWith('budget')) {
         const effect = await readFile(join(root, 'workspace', 'budget.txt'), 'utf8').catch(() => null)
         // A review-size guard may reject before REPL.call, so no host result is
@@ -56,23 +82,21 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
       if (!evidence.classifierBodies.length) throw new Error(`Expected script Auto admission; observed zero classifier requests, wrapper status=${results[0].status}, child statuses=${results[0].calls.map((call: any) => call.status).join(',')}`)
       // Request fast-stage escalation so the real thinking-stage review lifecycle
       // is observable. HTTP attempts are not logical permission occurrences.
-      expect([...new Set(evidence.reviews.map((review: any) => review.toolUseId))]).toEqual(['submitted-script'])
       expect(evidence.reviews.some((review: any) => review.toolUseId === 'submitted-script' && review.outcome === 'reviewing')).toBe(true)
       expect(evidence.reviews.some((review: any) => review.toolUseId === 'submitted-script' && review.outcome === 'allowed')).toBe(true)
-      for (const body of evidence.classifierBodies) {
-        // The final block identifies the prospective action separately from
-        // history. Verify its entire source inside the engine envelope.
-        const blocks = body.messages.at(-1).content
-        const action = blocks.at(-1).text
-        const projectedCode = /[\r\n\v\f\u0085\u2028\u2029<]/.test(evidence.code)
-          ? JSON.stringify(evidence.code).replaceAll('<', '\\u003c').replaceAll('\u0085', '\\u0085').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029')
-          : evidence.code
-        expect(action).toBe(`<pending_action>\nREPL ${projectedCode}\n</pending_action>\n`)
-      }
-      const children = evidence.transcript.filter((message: any) => message.type === 'assistant' && message.codeMode)
-      const reviewedIdentities = new Set(children.flatMap((message: any) => message.message.content.filter((block: any) => block.type === 'tool_use').map((block: any) => block.id)).filter((id: string) => evidence.reviews.some((review: any) => review.toolUseId === id)))
-      expect([...reviewedIdentities]).toEqual([])
-      if (scenario === 'admit' || scenario === 'wrapper') {
+      const actions: string[] = evidence.classifierBodies.map((body: any) => body.messages.at(-1).content.at(-1).text)
+      const projectedCode = /[\r\n\v\f\u0085\u2028\u2029<]/.test(evidence.code)
+        ? JSON.stringify(evidence.code).replaceAll('<', '\\u003c').replaceAll('\u0085', '\\u0085').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029')
+        : evidence.code
+      expect([...new Set(actions.filter(action => action.startsWith('<pending_action>\nREPL ')))]).toEqual([
+        `<pending_action>\nREPL ${projectedCode}\n</pending_action>\n`,
+      ])
+      if (scenario === 'computed-child') {
+        expect(actions.some(action => action.startsWith('<pending_action>\nBash ') && action.includes('computed.txt'))).toBe(true)
+        expect(results[0].status).toBe('blocked')
+        expect(await readFile(join(root, 'workspace', 'computed.txt'), 'utf8').catch(() => null)).toBeNull()
+      } else if (scenario === 'admit' || scenario === 'wrapper') {
+        expect(actions.some(action => action.startsWith('<pending_action>\nBash ') && action.includes('third.txt'))).toBe(true)
         expect(results[0].status).toBe('completed')
         expect(results[0].output).toContain('onetwothree')
         expect(results[0].calls).toHaveLength(5)
@@ -80,6 +104,7 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
         expect(await readFile(join(root, 'workspace', 'written.txt'), 'utf8')).toBe('actual-write')
         if (scenario === 'wrapper') expect(results[0].output).not.toContain('unmodified-source')
       } else {
+        expect(actions.some(action => action.startsWith('<pending_action>\nBash '))).toBe(false)
         for (const path of ['original.txt', 'forbidden.txt', 'later.txt']) expect(await readFile(join(root, 'workspace', path), 'utf8').catch(() => null)).toBeNull()
         expect(results[0].status).not.toBe('completed')
         expect(results[0].calls.some((call: any) => ['denied', 'failed', 'blocked'].includes(call.status))).toBe(true)

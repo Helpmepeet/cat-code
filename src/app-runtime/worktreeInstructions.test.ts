@@ -42,21 +42,27 @@ test('worktree transitions change main and reviewer instructions at the next mod
     clearTimeout(timer)
     if (exit !== 0) throw new Error(`Worktree fixture failed (${exit}): ${stderr}\n${stdout}`)
     const evidence = JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8')) as Evidence
-    expect(evidence.failures).toEqual([])
-    expect(evidence.models.map(request => request.modelRound)).toEqual([1, 2, 3])
+    expect(evidence.failures).toHaveLength(2)
+    for (const failure of evidence.failures) expect(failure).toContain('New instructions')
+    expect(evidence.models.map(request => request.modelRound)).toEqual([1, 2, 3, 4, 5])
     for (const request of [...evidence.models, ...evidence.reviews]) {
-      const expected = request.modelRound === 2 ? 'WORKTREE_POLICY' : 'ROOT_POLICY'
-      const absent = request.modelRound === 2 ? 'ROOT_POLICY' : 'WORKTREE_POLICY'
+      const expected = request.modelRound === 2 || request.modelRound === 3 ? 'WORKTREE_POLICY' : 'ROOT_POLICY'
+      const absent = expected === 'WORKTREE_POLICY' ? 'ROOT_POLICY' : 'WORKTREE_POLICY'
       expect(request.prefix).toContain(expected)
       expect(request.prefix).not.toContain(absent)
       expect(request.prefix).toContain('CLAUDE.md')
     }
-    // Both post-transition shell calls were emitted in the same response as
-    // the transition. Their reviews must use the prefix that model saw.
-    expect(evidence.models[1]!.cwd).not.toBe(workspace)
-    expect(evidence.models[2]!.cwd).toBe(workspace)
-    expect(evidence.reviews.some(request => request.modelRound === 1 && request.cwd !== workspace)).toBe(true)
-    expect(evidence.reviews.some(request => request.modelRound === 2 && request.cwd === workspace)).toBe(true)
+    const worktree = evidence.models[1]!.cwd
+    expect(worktree).not.toBe(workspace)
+    expect(evidence.models[3]!.cwd).toBe(workspace)
+    expect(evidence.reviews.some(request => request.modelRound === 1 && request.cwd === worktree)).toBe(false)
+    expect(evidence.reviews.some(request => request.modelRound === 3 && request.cwd === workspace)).toBe(false)
+    expect(evidence.reviews.some(request => request.modelRound === 2 && request.cwd === worktree)).toBe(true)
+    expect(evidence.reviews.some(request => request.modelRound === 4 && request.cwd === workspace)).toBe(true)
+    expect(await readFile(join(worktree, 'fresh-first.txt'), 'utf8')).toBe('fixture')
+    expect(await readFile(join(workspace, 'fresh-second.txt'), 'utf8')).toBe('fixture')
+    await expect(readFile(join(worktree, 'stale-first.txt'), 'utf8')).rejects.toThrow('ENOENT')
+    await expect(readFile(join(workspace, 'stale-second.txt'), 'utf8')).rejects.toThrow('ENOENT')
   } finally {
     await rm(root, { recursive: true, force: true })
   }

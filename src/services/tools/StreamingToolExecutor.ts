@@ -50,6 +50,7 @@ type TrackedTool = {
 export class StreamingToolExecutor {
   private tools: TrackedTool[] = []
   private toolUseContext: ToolUseContext
+  private readonly turnAbortController: AbortController
   private hasErrored = false
   private erroredToolDescription = ''
   // Child of toolUseContext.abortController. Fires when a Bash tool errors
@@ -71,6 +72,7 @@ export class StreamingToolExecutor {
     toolUseContext: ToolUseContext,
   ) {
     this.toolUseContext = toolUseContext
+    this.turnAbortController = toolUseContext.abortController
     this.completed = new CompletedToolContext(canUseTool)
     this.siblingAbortController = createChildAbortController(
       toolUseContext.abortController,
@@ -266,11 +268,11 @@ export class StreamingToolExecutor {
     if (this.hasErrored) {
       return 'sibling_error'
     }
-    if (this.toolUseContext.abortController.signal.aborted) {
+    if (this.turnAbortController.signal.aborted) {
       // 'interrupt' means the user typed a new message while tools were
       // running. Only cancel tools whose interruptBehavior is 'cancel';
       // 'block' tools shouldn't reach here (abort isn't fired).
-      if (this.toolUseContext.abortController.signal.reason === 'interrupt') {
+      if (this.turnAbortController.signal.reason === 'interrupt') {
         return this.getToolInterruptBehavior(tool) === 'cancel'
           ? 'user_interrupted'
           : null
@@ -360,10 +362,10 @@ export class StreamingToolExecutor {
             if (
               toolAbortController.signal.reason !== 'sibling_error' &&
               toolAbortController.signal.reason !== 'stream_interrupted' &&
-              !this.toolUseContext.abortController.signal.aborted &&
+              !this.turnAbortController.signal.aborted &&
               !this.discarded
             ) {
-              this.toolUseContext.abortController.abort(
+              this.turnAbortController.abort(
                 toolAbortController.signal.reason,
               )
             }
@@ -419,7 +421,8 @@ export class StreamingToolExecutor {
             // Only Bash errors cancel siblings. Bash commands often have implicit
             // dependency chains (e.g. mkdir fails → subsequent commands pointless).
             // Read/WebFetch/etc are independent — one failure shouldn't nuke the rest.
-            if (tool.block.name === BASH_TOOL_NAME) {
+            if (tool.block.name === BASH_TOOL_NAME &&
+                !(update.message.type === 'user' && update.message.toolResultStatus === 'cancelled')) {
               this.hasErrored = true
               this.erroredToolDescription = this.getToolDescription(tool)
               this.siblingAbortController.abort('sibling_error')

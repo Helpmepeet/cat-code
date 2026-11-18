@@ -131,6 +131,8 @@ export type UserMessage = {
    * cancellation from a failed invocation without parsing its model-facing body.
    */
   toolResultStatus?: 'cancelled'
+  /** Engine-owned execution evidence paired to this tool result. */
+  toolExecutionEvidence?: import('../utils/permissions/toolExecutionEvidence.js').ToolExecutionEvidence
   /** Engine-owned negative decision evidence; never parsed from tool output. */
   permissionDecision?: import('../utils/permissions/permissionDecisionContext.js').PermissionDecisionContext
   mcpMeta?: {

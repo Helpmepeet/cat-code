@@ -63,6 +63,7 @@ import { buildReducedAutoModeStagePolicy } from './autoModeStagePolicy.js'
 import { hasQualifiedAutoModeReduction } from './autoModeReductionQualification.js'
 import { selectAutoModeInstructionContext } from './autoModeInstructionSelection.js'
 import { selectAutoModeHistory } from './autoModeHistory.js'
+import { positionToolExecutionEvidence } from './toolExecutionEvidence.js'
 import { getAutoModeClassifierAttempts, GPT_CLASSIFIER_FALLBACKS } from './autoModeProviderLadder.js'
 import { positionPermissionDecisionContexts, type PermissionDecisionContext } from './permissionDecisionContext.js'
 import {
@@ -402,7 +403,7 @@ type TranscriptBlock =
       name: string
       input: unknown
       id?: string
-      /** Engine-resolved projection for the pending action only; never set from history. */
+      /** Engine-resolved projection or a bounded final-input marker. */
       classifierInput?: unknown
     }
   /**
@@ -412,6 +413,7 @@ type TranscriptBlock =
    */
   | { type: 'outcome'; record: AutoModeOutcomeRecord }
   | { type: 'permission_decision'; record: PermissionDecisionContext }
+  | { type: 'approval_feedback'; assistantUuid: string; toolUseId: string; text: string }
 
 export type TranscriptEntry = {
   role: 'user' | 'assistant'
@@ -490,6 +492,7 @@ export function buildTranscriptEntries(
 ): TranscriptEntry[] {
   const transcript: TranscriptEntry[] = []
   const decisionContexts = positionPermissionDecisionContexts(messages)
+  const executionEvidence = positionToolExecutionEvidence(messages)
   const decidedCalls = new Set([...decisionContexts.values()].flat().map(record =>
     JSON.stringify([record.assistantUuid, record.toolUseId])))
   const proposals = new Map<string, ReturnType<typeof readAssistantProposal>>()
@@ -586,6 +589,13 @@ export function buildTranscriptEntries(
           }
         }
       }
+      const evidence = executionEvidence.byResult.get(msg)
+      if (evidence?.approvalFeedback && msg.sourceToolAssistantUUID) {
+        textBlocks.push({
+          type: 'approval_feedback', assistantUuid: msg.sourceToolAssistantUUID,
+          toolUseId: evidence.toolUseId, text: evidence.approvalFeedback,
+        })
+      }
       if (textBlocks.length > 0) {
         // This fork's keyboard turns have no origin. Tool outputs, summaries,
         // relays, and injected context must not borrow that legacy convention.
@@ -632,10 +642,12 @@ export function buildTranscriptEntries(
           }
           // The complete evaluated call is emitted once, at its result position.
           if (decidedCalls.has(JSON.stringify([msg.uuid, block.id]))) continue
+          const executed = executionEvidence.byCall.get(msg)?.get(block.id)?.finalInput
           blocks.push({
             type: 'tool_use',
             name: block.name,
-            input: block.input,
+            input: executed === undefined ? block.input : executed,
+            ...(executed === null && { classifierInput: '[Final tool input unavailable]' }),
             // Upstream gates the call-line id on the same flag as the outcome
             // lines: the id exists only to correlate the two.
             ...(outcomeCodesEnabled &&
@@ -747,6 +759,12 @@ function toCompactBlock(
       : `${/^[\w.-]+$/.test(record.toolName) ? record.toolName : classifierData(record.toolName)}[${classifierText(id)}] ${classifierData(record.input)}\n`
     return call + classifierData({ outcome: record.outcome, id, assistantUuid: record.assistantUuid }) + '\n'
   }
+  if (block.type === 'approval_feedback') {
+    const { type: _type, ...feedback } = block
+    return classifierData({ prior_tool_approval_feedback: {
+      ...feedback, scope: 'The recorded call only',
+    } }) + '\n'
+  }
   if (block.type === 'text') {
     return isJsonlTranscriptEnabled()
       ? classifierData({ [role]: block.text }) + '\n'
@@ -764,6 +782,7 @@ function harnessSafeToolName(name: string, idPrinted: boolean): string {
   if (name === 'user' || name === 'assistant') return `[${name}]`
   if (name === 'outcome') return '[outcome]'
   if (name === 'meta') return '[meta]'
+  if (name === 'prior_tool_approval_feedback') return '[prior_tool_approval_feedback]'
   if (name === 'id' && idPrinted) return '[id]'
   return name
 }
@@ -1408,9 +1427,22 @@ async function classifyYoloActionWithOverrides(
     if (gatedAttempts[0]) model = gatedAttempts[0].model
     const attemptedAttempts: string[] = []
 
+    const advance = (skipProviderFamily = false): boolean => {
+      do {
+        attemptIndex++
+      } while (skipProviderFamily && gatedAttempts[attemptIndex]?.provider === provider)
+      const next = gatedAttempts[attemptIndex]
+      if (!next) return false
+      provider = next.provider
+      model = next.model
+      return true
+    }
+
     for (;;) {
-      attemptsMade++
-      attemptedAttempts.push(`${provider ?? 'default'}/${model}`)
+      if (signal.aborted) return {
+        ok: false, error: signal.reason, model, provider, attemptedAttempts,
+        tooLong: undefined, aborted: true,
+      }
       const [disableThinking, thinkingPadding, reasoningEffort] =
         getClassifierThinkingConfig(model)
       const isFast = stage === 'fast'
@@ -1464,7 +1496,8 @@ async function classifyYoloActionWithOverrides(
         tool_choice: sideQueryOpts.tool_choice, max_tokens: sideQueryOpts.max_tokens })
       classifierChars = serializedRequest.length
       classifierTokensEst = roughTokenCountEstimationForContent(serializedRequest, 3)
-      const localLimit = classifierChars > MAX_CLASSIFIER_CONTEXT_CHARS || classifierTokensEst > inputBudgetTokens
+      const hardLimit = classifierChars > MAX_CLASSIFIER_CONTEXT_CHARS
+      const localLimit = hardLimit || classifierTokensEst > inputBudgetTokens
       const measuredComponents = { ...activeInputs.componentChars,
         policy: JSON.stringify(stagePolicy).length,
         schemas: JSON.stringify(sideQueryOpts.tools).length,
@@ -1474,9 +1507,16 @@ async function classifyYoloActionWithOverrides(
         contextWindowTokens, inputBudgetTokens, hardCeilingChars: MAX_CLASSIFIER_CONTEXT_CHARS,
         componentChars: measuredComponents, selection: activeInputs.selection,
         historyComplete: activeInputs.selection.droppedCalls === 0 })}`)
-      if (localLimit) return { ok: false, error: new Error('Classifier context exceeded local model capacity'),
-        model, provider, attemptedAttempts, tooLong: { actualTokens: undefined, limitTokens: inputBudgetTokens },
-        aborted: false, localLimit: true }
+      if (localLimit) {
+        // A model's nominal window does not consume a provider request. The
+        // shared allocation limit still applies regardless of available models.
+        if (!hardLimit && advance()) continue
+        return { ok: false, error: new Error('Classifier context exceeded local model capacity'),
+          model, provider, attemptedAttempts, tooLong: { actualTokens: undefined, limitTokens: inputBudgetTokens },
+          aborted: false, localLimit: true }
+      }
+      attemptsMade++
+      attemptedAttempts.push(`${provider ?? 'default'}/${model}`)
       const requestIndex = stage === 'thinking' ? 1 : 0
       classifierRequests[requestIndex] = sideQueryOpts
       setLastClassifierRequests([...classifierRequests])
@@ -1505,37 +1545,21 @@ async function classifyYoloActionWithOverrides(
           }
         }
         const tooLong = detectPromptTooLong(error)
-        if (
-          !tooLong &&
-          attemptsMade < configuredMaxRetries + 1 &&
-          isClassifierAttemptFallbackError(error, provider)
-        ) {
-          const failedProvider = provider
-          const skipProviderFamily = isProviderAuthenticationErrorForTest(
-            error,
-            provider,
+        const failedModel = model
+        const failedProvider = provider
+        if (attemptsMade < configuredMaxRetries + 1 &&
+            (tooLong || isClassifierAttemptFallbackError(error, provider)) &&
+            advance(!tooLong && isProviderAuthenticationErrorForTest(error, provider))) {
+          logForDebugging(
+            `Auto mode classifier ${failedProvider}/${failedModel} could not review, trying ${provider}/${model}: ${errorMessage(error)}`,
+            { level: 'warn' },
           )
-          do {
-            attemptIndex++
-          } while (
-            skipProviderFamily &&
-            gatedAttempts[attemptIndex]?.provider === failedProvider
-          )
-          const fallbackAttempt = gatedAttempts[attemptIndex]
-          if (fallbackAttempt) {
-            logForDebugging(
-              `Auto mode classifier ${provider}/${model} unavailable, retrying with ${fallbackAttempt.provider}/${fallbackAttempt.model}: ${errorMessage(error)}`,
-              { level: 'warn' },
-            )
-            logAutoModeOutcome('fallback', model, {
-              classifierType: stage,
-              failureKind: 'classifier_provider_unavailable',
-              provider,
-            })
-            provider = fallbackAttempt.provider
-            model = fallbackAttempt.model
-            continue
-          }
+          logAutoModeOutcome('fallback', failedModel, {
+            classifierType: stage,
+            failureKind: tooLong ? 'provider_model_capacity' : 'classifier_provider_unavailable',
+            provider: failedProvider,
+          })
+          continue
         }
         return {
           ok: false,
@@ -2026,8 +2050,8 @@ function logAutoModeOutcome(
 /**
  * Detect API 400 "prompt is too long: N tokens > M maximum" errors and
  * parse the token counts. Returns undefined for any other error.
- * These are deterministic (same transcript → same error) so retrying
- * won't help — unlike 429/5xx which sideQuery already retries internally.
+ * The same reviewer cannot fit the request. A later eligible model or provider
+ * can still evaluate the complete evidence under the normal retry budget.
  */
 function detectPromptTooLong(
   error: unknown,

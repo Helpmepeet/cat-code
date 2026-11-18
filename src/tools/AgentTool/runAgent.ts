@@ -1,5 +1,4 @@
 import { createAgentInterruptedTools } from '../../services/tools/agentInterruptedTools.js'
-import { withoutCodeModeAdmission } from '../REPLTool/codeModeAdmission.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from '../../services/tools/interruptedToolRun.js'
 import { feature } from 'bun:bundle'
 import type { BetaJSONOutputFormat } from '@anthropic-ai/sdk/resources/index.mjs'
@@ -371,15 +370,8 @@ export async function* runAgent(
   params: Parameters<typeof runAgentInCleanupScope>[0],
 ): AsyncGenerator<Message, void> {
   const setupCleanups: SetupCleanup[] = []
-  const worker = runAgentInCleanupScope(params, setupCleanups)
-  const isolated = {
-    [Symbol.asyncIterator]() { return this },
-    next: (value?: unknown) => withoutCodeModeAdmission(() => worker.next(value)),
-    return: () => withoutCodeModeAdmission(() => worker.return(undefined)),
-    throw: (error?: unknown) => withoutCodeModeAdmission(() => worker.throw(error)),
-  }
   try {
-    yield* isolated
+    yield* runAgentInCleanupScope(params, setupCleanups)
   } finally {
     for (const release of setupCleanups.splice(0)) {
       try {

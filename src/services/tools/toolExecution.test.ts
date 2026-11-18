@@ -23,6 +23,8 @@ import {
 } from './toolExecution.js'
 import { runTools } from './toolOrchestration.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js'
+import { ownBackgroundToolLane } from './codeModeToolScheduling.js'
+import { InterruptedToolRun, toolUpdatesUntilAbort } from './interruptedToolRun.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
 import { FilePatchError, serializeFilePatchError } from '../../tools/FilePatchTool/types.js'
 import { asAgentId } from '../../types/ids.js'
@@ -1497,6 +1499,98 @@ describe('streaming terminal handoff', () => {
     }
     expect(effectCalls).toBe(0)
   })
+})
+
+test('cancelling a foreground lane waiter settles its receipt while a background effect still owns the lane', async () => {
+  const started = Promise.withResolvers<void>()
+  const held = Promise.withResolvers<void>()
+  const effects: string[] = []
+  const tool = makeTool('LaneFixture', async input => {
+    const value = String(input.value)
+    effects.push(value)
+    if (value === 'background') { started.resolve(); await held.promise }
+    return { data: value }
+  })
+  const context = createToolUseContext([tool])
+  const owner = new InterruptedToolRun()
+  context.interruptedToolRun = owner
+  owner.attach(async () => {})
+  const releaseLane = ownBackgroundToolLane(context)
+  const allow: Parameters<typeof runToolUse>[2] = async (_, input) => ({ behavior: 'allow', updatedInput: input })
+  const execute = (value: string, abortController = new AbortController()) => runToolUse(
+    { type: 'tool_use', id: value, name: tool.name, input: { value }, caller: { type: 'direct' } },
+    createAssistantMessage(), allow, { ...context, abortController },
+  )
+  const collect = async (iterator: AsyncIterable<unknown>) => {
+    for await (const _ of iterator) { /* drain real results */ }
+  }
+  const background = collect(execute('background'))
+  await started.promise
+  const abort = new AbortController()
+  const cancelled = collect(toolUpdatesUntilAbort(execute('cancelled', abort), owner, abort.signal, () => {}))
+  abort.abort('interrupt')
+  try {
+    await cancelled
+    const settled = await Promise.race([owner.whenSettled().then(() => true), Bun.sleep(400).then(() => false)])
+    expect(settled).toBe(true)
+    expect(owner.blocked).toBe(false)
+    const successor = collect(execute('successor'))
+    await Bun.sleep(20)
+    expect(effects).toEqual(['background'])
+    held.resolve()
+    await successor
+    expect(effects).toEqual(['background', 'successor'])
+  } finally {
+    held.resolve()
+    await background
+    releaseLane()
+    await owner.whenSettled()
+  }
+})
+
+test('abort during asynchronous final-input preflight prevents the tool effect', async () => {
+  const preflight = Promise.withResolvers<void>()
+  const resume = Promise.withResolvers<void>()
+  let effect = false
+  const tool = makeTool('FinalInputFixture', async () => { effect = true; return { data: 'executed' } })
+  const context = createToolUseContext([tool])
+  context.onToolFinalInput = () => { preflight.resolve(); return resume.promise }
+  const running = Array.fromAsync(runToolUse(
+    { type: 'tool_use', id: 'preflight', name: tool.name, input: { value: 'safe' }, caller: { type: 'direct' } },
+    createAssistantMessage(), async (_, input) => ({ behavior: 'allow', updatedInput: input }), context,
+  ))
+  await preflight.promise
+  context.abortController.abort('interrupt')
+  resume.resolve()
+  await running
+  expect(effect).toBe(false)
+})
+
+test('a sibling refusal after a Script aborts the original streaming turn', async () => {
+  const { CodeModeHost } = await import('../../tools/REPLTool/codeModeHost.js')
+  const { REPLTool } = await import('../../tools/REPLTool/REPLTool.js')
+  const sibling = makeTool('RefusedFixture', async () => { throw new Error('Effect must not start') })
+  const context = createToolUseContext([REPLTool, sibling])
+  const host = new CodeModeHost()
+  context.codeModeHost = host
+  const assistant = createAssistantMessage()
+  const script = { type: 'tool_use' as const, id: 'script', name: REPLTool.name, input: { code: 'output("script completed")', description: 'Run isolated Script' }, caller: { type: 'direct' as const } }
+  const next = { type: 'tool_use' as const, id: 'sibling', name: sibling.name, input: { value: 'x' }, caller: { type: 'direct' as const } }
+  assistant.message.content = [script, next]
+  const executor = new StreamingToolExecutor(context.options.tools, async (tool, input, callContext) => {
+    if (tool === sibling) {
+      callContext.abortController.abort('refused')
+      return { behavior: 'deny', message: 'User refused this action.', decisionReason: { type: 'other', reason: 'Fixture refusal' } }
+    }
+    return { behavior: 'allow', updatedInput: input }
+  }, context)
+  try {
+    executor.addTool(script, assistant)
+    executor.addTool(next, assistant)
+    const updates = await Array.fromAsync(executor.getRemainingResults())
+    expect(JSON.stringify(updates.map(update => update.message))).toContain('script completed')
+    expect(context.abortController.signal.reason).toBe('refused')
+  } finally { host.dispose() }
 })
 
 describe('toolExecution modelResultContent handling', () => {

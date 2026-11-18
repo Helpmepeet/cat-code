@@ -52,7 +52,13 @@ jobs:
         run: bun run scripts/packaged-code-mode-smoke.ts cli ./cli-dev
 
       - name: Check Code Mode in the real engine
-        run: bun test --isolate src/app-runtime/codeMode.test.ts src/app-runtime/codeModeMcp.test.ts src/app-runtime/codeModeMcpGeneration.test.ts
+        run: >-
+          bun test --isolate
+          src/app-runtime/codeMode.test.ts
+          src/app-runtime/codeModeLifecycle.test.ts
+          src/app-runtime/codeModeResume.test.ts
+          src/app-runtime/codeModeMcp.test.ts
+          src/app-runtime/codeModeMcpGeneration.test.ts
 
       - name: Verify Auto Mode input qualification offline
         run: bun --feature=TRANSCRIPT_CLASSIFIER --feature=AUTO_MODE_UPSTREAM_PORT scripts/auto-mode-eval/run.ts --offline --verify-qualification

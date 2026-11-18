@@ -5,6 +5,7 @@ import { writeFileAtomicDurable } from '../utils/atomicFile.js'
 import { createHash } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
 import { open } from 'node:fs/promises'
+import type { TaskState } from './types.js'
 
 export type CodeModeOwner = Readonly<{ sessionId: string; agentId?: string; workerRunId?: string }>
 export type CodeModeTaskState = TaskStateBase & {
@@ -24,6 +25,14 @@ export type CodeModeTaskState = TaskStateBase & {
   error?: string
 }
 export type CodeModeCompletion<T> = { result: CodeModeResult; value: T }
+
+export const CODE_MODE_CONVERSATION_CHANGE_PENDING =
+  'Finish or stop background Scripts before changing the conversation. Their results must be saved first.'
+
+export function hasUndeliveredCodeModeTasks(tasks: Record<string, TaskState>, sessionId: string): boolean {
+  return Object.values(tasks).some(task => task.type === 'code_mode' &&
+    task.owner.sessionId === sessionId && task.delivery !== 'delivered')
+}
 
 /** Shared allowlist for live TaskOutput and its disk-backed terminal projection. */
 export function projectCodeModeTaskOutput(task: CodeModeTaskState) {

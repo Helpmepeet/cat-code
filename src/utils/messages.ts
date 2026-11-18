@@ -537,6 +537,7 @@ export function createUserMessage({
   toolUseResult,
   toolResultStatus,
   permissionDecision,
+  toolExecutionEvidence,
   mcpMeta,
   uuid,
   timestamp,
@@ -557,6 +558,7 @@ export function createUserMessage({
   toolUseResult?: unknown // Matches tool's `Output` type
   toolResultStatus?: 'cancelled'
   permissionDecision?: UserMessage['permissionDecision']
+  toolExecutionEvidence?: UserMessage['toolExecutionEvidence']
   /** MCP protocol metadata to pass through to SDK consumers (never sent to model) */
   mcpMeta?: {
     _meta?: Record<string, unknown>
@@ -596,6 +598,7 @@ export function createUserMessage({
     toolUseResult,
     toolResultStatus,
     permissionDecision,
+    ...(toolExecutionEvidence && { toolExecutionEvidence }),
     mcpMeta,
     imagePasteIds,
     sourceToolAssistantUUID,
@@ -2965,7 +2968,7 @@ export function getToolUseID(message: NormalizedMessage): string | null {
   }
 }
 
-export function filterUnresolvedToolUses(messages: Message[]): Message[] {
+export function filterUnresolvedToolUses(messages: Message[], options?: { preserveCodeModeAudit?: boolean }): Message[] {
   // Collect all tool_use IDs and tool_result IDs directly from message content blocks.
   // This avoids calling normalizeMessages() which generates new UUIDs — if those
   // normalized messages were returned and later recorded to the transcript JSONL,
@@ -2999,6 +3002,7 @@ export function filterUnresolvedToolUses(messages: Message[]): Message[] {
   // Filter out assistant messages whose tool_use blocks are all unresolved
   return messages.filter(msg => {
     if (msg.type !== 'assistant') return true
+    if (options?.preserveCodeModeAudit && msg.isVirtual && msg.codeMode) return true
     const content = msg.message.content
     if (!Array.isArray(content)) return true
     const toolUseBlockIds: string[] = []

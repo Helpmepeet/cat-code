@@ -24,8 +24,9 @@ async function scenario(name: string) {
   } finally { await rm(root, { recursive: true, force: true }) }
 }
 
-test('new applicable instructions preflight before Read and cannot be caught away', async () => {
-  const evidence = await scenario('instructions')
+for (const [name, pathKind] of [['instructions', 'an absolute'], ['instructions-home', 'a home-relative']] as const) {
+test(`new applicable instructions preflight before ${pathKind} Read and cannot be caught away`, async () => {
+  const evidence = await scenario(name)
   const results = evidence.transcript.filter((message: any) => message.toolUseResult?.kind === 'code-mode').map((message: any) => message.toolUseResult)
   expect(results[0].status).toBe('yielded')
   expect(results[0].calls).toHaveLength(2)
@@ -34,6 +35,15 @@ test('new applicable instructions preflight before Read and cannot be caught awa
   expect(evidence.transcript.some((message: any) => message.type === 'attachment' && message.attachment.type === 'nested_memory')).toBe(true)
   expect(JSON.stringify(evidence.transcript.filter((message: any) => message.codeMode))).not.toContain('must-not-be-read')
   expect(results[1].status).toBe('completed')
+}, 30_000)
+}
+
+test('Script Bash requires precise paths for compound commands that change directories', async () => {
+  const evidence = await scenario('instructions-shell')
+  const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
+  expect(result.status).toBe('failed')
+  expect(result.calls[0].error).toContain('compound directory change')
+  expect(JSON.stringify(result)).not.toContain('nested-file-content')
 }, 30_000)
 
 test('guest-launched Agent has ordinary Auto review and model-visible worker Read delivery', async () => {
@@ -45,6 +55,18 @@ test('guest-launched Agent has ordinary Auto review and model-visible worker Rea
   expect(JSON.stringify(evidence.workerRequests[1].messages)).toContain('model-visible-worker-read-marker')
   expect(evidence.workerOutput).toBe('ordinary-worker')
   expect(evidence.classifiers.some((request: any) => JSON.stringify(request.messages).includes('printf ordinary-worker > worker.txt'))).toBe(true)
+}, 30_000)
+
+test('an explicit worker permission mode permits consecutive scripts under an equivalent policy', async () => {
+  const evidence = await scenario('worker-equivalent-policy')
+  expect(evidence.workerRequests).toHaveLength(3)
+  for (const index of [0, 1]) {
+    const results = evidence.workerRequests[index + 1].messages.flatMap((message: any) =>
+      Array.isArray(message.content) ? message.content.filter((block: any) => block.type === 'tool_result' && block.tool_use_id === `worker-${index}`) : [])
+    expect(results).toHaveLength(1)
+    expect(results[0].is_error).not.toBe(true)
+    expect(results[0].content).toContain(`worker-policy-cell-${index}`)
+  }
 }, 30_000)
 
 test('Skill following instructions survive filtering and fence later operations with model change ordered', async () => {
@@ -131,7 +153,7 @@ test('healthy background script returns a task receipt, permits a new turn, and 
   const frame = /<background-code-mode-data>\n([^\n]*)\n<\/background-code-mode-data>/
   expect(JSON.parse(selected.message.content.match(frame)[1])).toBe(selected.toolUseResult.output)
   expect(selected.message.content.match(/<\/background-code-mode-data>/g)).toHaveLength(1)
-  expect(evidence.classifierHistory).toContain('User: "[SYSTEM NOTIFICATION - NOT USER INPUT] SYSTEM NOTIFICATION')
+  expect(evidence.classifierHistory).not.toContain('Background Code Mode selected output follows as JSON-encoded')
   expect(evidence.classifierHistory).toContain('User: HUMAN-FOLLOW-UP: explain the result, not approval.')
   const human = evidence.transcript.find((message: any) => message.message?.content === 'HUMAN-FOLLOW-UP: explain the result, not approval.')
   expect(human.origin).toBeUndefined()
@@ -185,6 +207,63 @@ test('failed worker archive remains reachable from the parent retry after worker
   expect(task.outputArchived).toBe(true)
   expect(task.receipt).toBeUndefined()
   expect(task.owner.agentId).toBeTruthy()
+}, 30_000)
+
+for (const mode of ['durable', 'ephemeral']) {
+  test(`background Script receipts still settle after compaction in a ${mode} session`, async () => {
+    const evidence = await scenario(mode === 'ephemeral' ? 'background-compaction-ephemeral' : 'background-compaction')
+    const task = Object.values(evidence.tasks).find((task: any) => task.type === 'code_mode') as any
+    expect(evidence.compactedLauncher).toBe(true)
+    expect(evidence.effects).toBe('x')
+    expect(task.delivery).toBe('delivered')
+    expect(evidence.selectedSinkDeliveries).toBe(1)
+    expect(evidence.postCompactionTurnFailure).toBeUndefined()
+  }, 30_000)
+}
+
+test('worker saves each background Script receipt once when its query loop already recorded it', async () => {
+  const evidence = await scenario('worker-background-ancestry')
+  expect(evidence.workerEffects).toBe('x')
+  expect(evidence.workerRequests).toHaveLength(3)
+  expect(JSON.stringify(evidence.workerRequests[2].messages)).toContain('worker background finished')
+  expect(evidence.workerDuplicateRows).toBe(0)
+  expect(evidence.workerChainHitCycle).toBe(false)
+  expect(evidence.workerAuditChain.some((row: any) => row.type === 'assistant' &&
+    row.message.content.some((block: any) => block.type === 'tool_use' && block.id === 'worker-0'))).toBe(true)
+  expect(evidence.recoveredLegacyWorkerLaunch).toBe(true)
+}, 30_000)
+
+test('rewinding a desktop conversation discards the old Script bindings', async () => {
+  const evidence = await scenario('rewind')
+  const result = evidence.transcript.find((row: any) => row.toolUseResult?.cellId === 'cell-2').toolUseResult
+  expect(result.status).toBe('completed')
+  expect(result.output).toContain('{"value":null}')
+  expect(evidence.transcript.some((row: any) => row.toolUseResult?.cellId === 'cell-0')).toBe(false)
+}, 30_000)
+
+test('rewind and Clear preserve the running Script until its outcome is saved', async () => {
+  const evidence = await scenario('background-rewind')
+  expect(evidence.backgroundRewindRefusal).toContain('Finish or stop background Scripts')
+  expect(evidence.backgroundClearRefusal).toContain('Finish or stop background Scripts')
+  expect(evidence.effects).toBe('x')
+  expect(evidence.selectedSinkDeliveries).toBe(1)
+}, 30_000)
+
+test('background quota ignores legacy receipts from an earlier session and still limits the current session', async () => {
+  const foreign = await scenario('background-quota-foreign')
+  expect(foreign.selectedSinkDeliveries).toBe(1)
+  const current = await scenario('background-quota-current')
+  expect(current.selectedSinkDeliveries).toBe(0)
+  expect(JSON.stringify(current.transcript)).toContain('Background script receipts are awaiting delivery')
+}, 30_000)
+
+test('separate stream-json inputs share one Script interpreter in the same headless session', async () => {
+  const evidence = await scenario('headless-persistence')
+  const results = evidence.frames.flatMap((frame: any) => frame.tool_use_result?.kind === 'code-mode' ? [frame.tool_use_result] : [])
+  expect(evidence.frames.filter((frame: any) => frame.type === 'result')).toHaveLength(2)
+  expect(results).toHaveLength(2)
+  expect(results[1].output).toContain('{"value":"saved"}')
+  expect(results[1].generation).toBe(results[0].generation)
 }, 30_000)
 
 for (const recovery of ['retry', 'newturn', 'close']) {

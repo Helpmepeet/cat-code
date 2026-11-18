@@ -2,6 +2,7 @@ import { findToolByName, type Tool, type ToolUseContext, type Tools } from '../.
 import { zodToJsonSchema } from '../../utils/zodToJsonSchema.js'
 import { createHash } from 'node:crypto'
 import { encode } from './runtime/protocol.js'
+import { isCuaDriverToolCall } from '../../utils/cuaDriver/guard.js'
 
 export const MAX_CODE_MODE_TOOL_NAME_CHARS = 512
 
@@ -58,10 +59,13 @@ const directOnly = new Map<string, string>([
   ['GenerateImage', 'Generated media requires direct delivery'],
 ])
 
-export function codeModeExclusion(tool: Tool): string | undefined {
+export function codeModeExclusion(tool: Tool, context?: ToolUseContext): string | undefined {
   if (tool.name.length > MAX_CODE_MODE_TOOL_NAME_CHARS) return 'Tool identity exceeds the isolated bridge name limit'
   const server = tool.mcpInfo?.serverName.toLowerCase()
   if (server && ['codex-computer-use', 'claude-in-chrome', 'computer', 'cua'].includes(server)) {
+    return 'Configured computer/browser integration requires direct interaction and media delivery'
+  }
+  if (isCuaDriverToolCall(tool.name, undefined, { tool, clients: context?.options.mcpClients ?? [] })) {
     return 'Configured computer/browser integration requires direct interaction and media delivery'
   }
   const reason = !tool.isMcp && !tool.mcpInfo ? directOnly.get(tool.name) : undefined
@@ -80,7 +84,7 @@ export function codeModeExclusion(tool: Tool): string | undefined {
 export function resolveCodeModeTool(context: ToolUseContext, name: string): Tool {
   const tool = findToolByName(context.options.tools, name)
   if (!tool) throw new Error(`Tool is not available in this execution: ${name}`)
-  const reason = codeModeExclusion(tool)
+  const reason = codeModeExclusion(tool, context)
   if (reason) throw new Error(`${tool.name} is direct-only: ${reason}`)
   return tool
 }
@@ -115,7 +119,7 @@ export async function describeCodeModeTool(context: ToolUseContext, name: string
   if (!name || name.length > MAX_CODE_MODE_TOOL_NAME_CHARS) return { name: name.slice(0, MAX_CODE_MODE_TOOL_NAME_CHARS), schemaComplete: false, error: 'Tool name exceeds the bridge limit' }
   const tool = findToolByName(context.options.tools, name)
   if (!tool) return { name, schemaComplete: false, error: 'Tool is not available in the current executable pool' }
-  const reason = codeModeExclusion(tool)
+  const reason = codeModeExclusion(tool, context)
   if (reason) return { name, schemaComplete: false, error: reason, directOnly: true }
   let serialized: string
   try { serialized = JSON.stringify(tool.inputJSONSchema ?? zodToJsonSchema(tool.inputSchema)) }
@@ -148,7 +152,7 @@ export async function searchCodeModeTools(context: ToolUseContext, query: string
   if (!Number.isInteger(max) || max < 1 || max > 20) throw new Error('Search limit must be an integer from 1 to 20')
   const words = [...new Set(query.toLowerCase().split(/\s+/).filter(Boolean))]
   if (words.length > 32) throw new Error('Use at most 32 tool-search terms')
-  const eligible = context.options.tools.filter(tool => !codeModeExclusion(tool))
+  const eligible = context.options.tools.filter(tool => !codeModeExclusion(tool, context))
   let indexComplete = true
   const ranked = (await Promise.all(eligible.map(async tool => {
     let keys: string[] = []
@@ -188,7 +192,7 @@ export async function searchCodeModeTools(context: ToolUseContext, query: string
     indexComplete,
     searchFields: 'name, description, aliases, searchHint, inputKeys',
     directOnly: context.options.tools.flatMap(tool => {
-      const reason = codeModeExclusion(tool)
+      const reason = codeModeExclusion(tool, context)
       const name = tool.name.slice(0, MAX_CODE_MODE_TOOL_NAME_CHARS)
       return reason && (words.length === 0 || words.some(word => name.toLowerCase().includes(word)))
         ? [{ name, nameComplete: name.length === tool.name.length, reason }] : []

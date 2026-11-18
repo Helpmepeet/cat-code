@@ -55,7 +55,7 @@ export function restoreCodeModeHistory(
       'type' in task && task.type === 'code_mode' &&
       'cellId' in task && task.cellId === result.cellId &&
       'generation' in task && task.generation === result.generation &&
-      (!result.taskId || task.id === result.taskId) &&
+      (!result.taskId || ('id' in task && task.id === result.taskId)) &&
       'delivery' in task && task.delivery !== 'delivered')
     if (live) continue
     const auditCalls = new Map(result.calls.map(call => [call.toolUseId, { ...call }]))

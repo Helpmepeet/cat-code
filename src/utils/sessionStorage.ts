@@ -2682,6 +2682,33 @@ export async function flushCurrentTranscriptDurably(
   })
 }
 
+/** Recover a late tool result's owner through compaction on the active branch only. */
+export async function hasCompactedToolReceiptSource(sourceUuid: UUID): Promise<boolean> {
+  const sessionId = getSessionId()
+  await flushSessionStorage()
+  const path = getOwnedTranscriptPath()
+  if (!path) return false
+  return withTranscriptReadGuard(path, async () => {
+    const loaded = await loadTranscriptFile(path, { keepAllLeaves: true, keepCompactedHistory: true, strict: true })
+    if (loaded.sourceTruncated) return false
+    const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+    const seen = new Set<string>()
+    let cursor: TranscriptMessage | undefined = active.tip ?? undefined
+    let crossedCompaction = false
+    while (cursor && cursor.sessionId === sessionId && !cursor.isSidechain && !seen.has(cursor.uuid)) {
+      if (cursor.uuid === sourceUuid) {
+        return crossedCompaction && cursor.type === 'assistant' && cursor.message.content.some(block => block.type === 'tool_use')
+      }
+      seen.add(cursor.uuid)
+      const compactBoundary = isCompactBoundaryMessage(cursor)
+      crossedCompaction ||= compactBoundary
+      const parent = cursor.parentUuid ?? (compactBoundary ? cursor.logicalParentUuid : undefined)
+      cursor = parent ? loaded.messages.get(parent) : undefined
+    }
+    return false
+  })
+}
+
 /** Verify the live chain, not UUIDs left behind by rewind or tombstones. */
 export async function verifyHandoffTranscriptDurably(
   expected: { tip_uuid: string; tool_use_id: string; exchange_uuids: string[] },
@@ -5283,6 +5310,15 @@ export async function loadTranscriptFile(
         continue
       }
       if (isTranscriptMessage(entry)) {
+        const recorded = messages.get(entry.uuid as UUID)
+        if (recorded?.isSidechain && entry.isSidechain && recorded.sessionId === entry.sessionId &&
+            recorded.agentId === entry.agentId && recorded.type === entry.type &&
+            ((entry.type === 'assistant' || entry.type === 'user') && entry.isVirtual && entry.codeMode ||
+              entry.type === 'user' && entry.origin?.kind === 'task-notification' && entry.origin.taskType === 'code_mode')) {
+          // Older workers could append the same Script receipt twice with a
+          // new parent. Keep the original edge to recover the recorded chain.
+          continue
+        }
         if (entry.parentUuid && progressBridge.has(entry.parentUuid)) {
           entry.parentUuid = progressBridge.get(entry.parentUuid) ?? null
         }

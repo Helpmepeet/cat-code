@@ -3,10 +3,11 @@ import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-for (const scenario of ['compatible', 'narrow', 'principal'] as const) {
+for (const scenario of ['compatible', 'narrow', 'principal', 'late-principal'] as const) {
 const narrowing = scenario === 'narrow'
-const principal = scenario === 'principal'
-test(principal ? 'a colliding model-facing name cannot inherit a different MCP principal grant' : `a current MCP schema ${narrowing ? 'surfaces server validation without performing a stale-input effect' : 'accepts still-valid input after a compatible refresh'}`, async () => {
+const latePrincipal = scenario === 'late-principal'
+const principal = scenario === 'principal' || latePrincipal
+test(latePrincipal ? 'a principal first discovered during a cell stays bound across a later refresh' : principal ? 'a colliding model-facing name cannot inherit a different MCP principal grant' : `a current MCP schema ${narrowing ? 'surfaces server validation without performing a stale-input effect' : 'accepts still-valid input after a compatible refresh'}`, async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-mcp-generation-')))
   try {
     await mkdir(join(root, 'config'))
@@ -17,7 +18,8 @@ test(principal ? 'a colliding model-facing name cannot inherit a different MCP p
         CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
         ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: '0',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', CODE_MODE_TEST_ROOT: root,
-        CODE_MODE_MCP_GENERATION: '1', CODE_MODE_MCP_NARROW: narrowing ? '1' : '0', CODE_MODE_MCP_PRINCIPAL: principal ? '1' : '0' },
+        CODE_MODE_MCP_GENERATION: '1', CODE_MODE_MCP_NARROW: narrowing ? '1' : '0', CODE_MODE_MCP_PRINCIPAL: principal ? '1' : '0',
+        CODE_MODE_MCP_LATE_PRINCIPAL: latePrincipal ? '1' : '0' },
     })
     const timer = setTimeout(() => child.kill(), 30_000)
     const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
@@ -31,7 +33,9 @@ test(principal ? 'a colliding model-facing name cannot inherit a different MCP p
     if (principal) {
       expect(evidence.tools.find((tool: any) => tool.mcpInfo.toolName === 'records')).toMatchObject({ name: 'mcp__fixture_a__records', mcpInfo: { serverName: 'fixture.a', toolName: 'records' } })
       expect(evidence.refreshedPrincipal).toEqual({ serverName: 'fixture_a', toolName: 'records' })
-      expect(calls.map(call => ({ name: call.name, principal: call.serverPrincipal })), JSON.stringify({ outer, permissions: evidence.permissions })).toEqual([{ name: 'save', principal: 'fixture.a' }])
+      const first = { name: 'save', principal: 'fixture.a' }
+      expect(calls.map(call => ({ name: call.name, principal: call.serverPrincipal })), JSON.stringify({ outer, permissions: evidence.permissions })).toEqual(latePrincipal ? [first, first] : [first])
+      if (latePrincipal) expect(outer.output).toContain('first principal discovered')
       expect(outer.status).not.toBe('completed')
       if (evidence.permissions.length === 0) expect(JSON.stringify(outer)).toContain('principal')
       else expect(evidence.permissions).toHaveLength(1)
