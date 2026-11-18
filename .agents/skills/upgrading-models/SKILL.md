@@ -28,7 +28,9 @@ Search the old/new IDs, display names, config symbols, and aliases across releva
 
 Use the guide to cover applicable catalog, picker, agent/tool schema, routing/default, capability, prompt-family, and saved-selection owners. Trace derived routes such as secondary calls, classifier fallback ladders, image requests, startup, and desktop controls when they consume the changed contract. Update generated contracts through their generators when affected. Check build/runtime feature wiring only if the change introduces or changes a feature, not merely because a model ID changed.
 
-For a replacement, keep one active successor choice, route legacy selections through the existing remapper, and extend the existing startup migration/version when persisted state needs rewriting. Preserve successor overrides, deduplicate allowlists, and keep a second migration run a no-op. Keep historical identity separate from current selection: old transcript labels, cost history, and replay fixtures are not stale just because they name the predecessor. Do not blindly replace every old-ID match or rewrite third-party provider IDs without evidence.
+For a routine replacement within an existing family, edit only `src/utils/model/configs.ts`. Add a Codex release at the head of its family and set `wireId` when the provider expects a different ID. For Claude, add the release, set the family's `current` key, and record each provider's ID. Change the `cloud` key only when those providers should move. Keep one active successor choice and retain the predecessor's exact record. Declare Claude first-party retirement with `retireFirstPartyTo` when applicable.
+
+Startup reads user settings for retired selections even when the migration version is current. Preserve successor override precedence, allowlist deduplication, and a second startup with no settings write. Preserve historical identities in transcripts, prices, and replay fixtures. Exact evaluation pins must reject substitutions. Reviewer stage policy and evidence reduction require qualification for the exact release. Leave third-party IDs in place unless provider evidence supports changing them.
 
 Update existing pricing metadata if requested or already part of the affected contract. If pricing requires new billing or analytics machinery, make that scope explicit rather than silently adding a subsystem. Do not bundle unrelated cleanup or fix another session's slice. Delegate only an independent, bounded implementation slice that saves work; do not investigate the same slice alongside its worker.
 
@@ -43,6 +45,8 @@ Keep a short in-memory checklist, not a new plan file:
 - [ ] Final diff contains only intended work; documentation and commit follow repository policy.
 
 Start with the lowest-layer tests for the changed behavior. Exercise request translation and receiving-boundary validation where affected, plus process-level startup/migration or desktop checks when that boundary matters. A regression test must distinguish the old behavior from the intended replacement, not merely repeat the new constant.
+
+Run `bun run verify:model-replacement` to exercise the catalog-only change in a disposable copy. It checks the visible picker and desktop controls, child-agent routing, startup migration, prompt identity, and the wire ID and effort using independent expectations. Keep shared prompt snapshots keyed by template family and check exact model identity separately. The `bun run build:dev:full` gate scans engine and desktop source for release-specific routing outside the catalog.
 
 Read the test's invocation requirements before running it. Use isolated settings and credentials; offline fixtures are not permission for a live quota-consuming probe.
 
