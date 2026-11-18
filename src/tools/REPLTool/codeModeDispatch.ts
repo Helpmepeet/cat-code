@@ -11,6 +11,7 @@ import { preflightCodeModeInstructions } from './codeModeInstructions.js'
 import type { Attachment } from '../../utils/attachments.js'
 import { hasScriptReadHooks } from '../../utils/hooks.js'
 import { GlobTool } from '../GlobTool/GlobTool.js'
+import { getScriptToolConcurrency } from './constants.js'
 
 export type CodeModeCall = {
   toolUseId: string
@@ -23,8 +24,6 @@ export type CodeModeCall = {
   error?: string
 }
 export type CodeModeIdentity = { cellId: string; generation: string; line?: number }
-
-const MAX_PARALLEL_READS = 3
 
 function canOverlapGlob(context: ToolUseContext, name: string, input: unknown): boolean {
   if (name !== GlobTool.name || findToolByName(context.options.tools, name) !== GlobTool) return false
@@ -49,6 +48,7 @@ function projectGuestData(value: unknown, limit: number): { complete: boolean; v
 export class CodeModeDispatch {
   private tail: Promise<void> = Promise.resolve()
   private readonly activeReads = new Set<Promise<void>>()
+  private readonly readConcurrency = getScriptToolConcurrency()
   private fence?: string
   private inputBytes = 0
   private resultBytes = 0
@@ -182,7 +182,7 @@ export class CodeModeDispatch {
       canOverlap = canOverlapGlob(this.currentContext, name, input)
       if (!this.activeReads.size) break
       if (!canOverlap) await Promise.all(this.activeReads)
-      else if (this.activeReads.size >= MAX_PARALLEL_READS) await Promise.race(this.activeReads)
+      else if (this.activeReads.size >= this.readConcurrency) await Promise.race(this.activeReads)
       else break
     }
     if (this.fence || this.context.abortController.signal.aborted) {

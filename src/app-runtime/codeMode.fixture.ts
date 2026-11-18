@@ -10,6 +10,8 @@ globalThis.fetch = (() => { throw new Error('Network forbidden') }) as unknown a
 const scenario = process.env.CODE_MODE_TEST_SCENARIO ?? 'coding'
 const isInstructions = scenario === 'instructions' || scenario === 'instructions-home'
 const isParallelGlob = scenario.startsWith('parallel-glob')
+const expectedGlobOverlap = Number(process.env.CODE_MODE_TEST_EXPECTED_GLOB_OVERLAP)
+const globPatterns = Array.from({ length: 11 }, (_, index) => index === 1 ? 'fail.txt' : `file-${index}.txt`)
 if (scenario === 'parallel-glob-fence') {
   await mkdir('nested')
   await writeFile('nested/CLAUDE.md', 'PARALLEL-GLOB-INSTRUCTIONS: do not list this directory.')
@@ -79,11 +81,11 @@ const scripts = scenario === 'auto-limit' ? [
     tools.call({name:"Write",input:{file_path:${JSON.stringify(join(process.cwd(), 'forbidden.txt'))},content:"forbidden"}})
   ]);`,
 ] : isParallelGlob ? [
-  `const calls = ["a.txt","fail.txt","b.txt","c.txt"].map(pattern => tools.call({name:"Glob",input:{pattern},nothrow:true}));
+  `const calls = ${JSON.stringify(globPatterns)}.map(pattern => tools.call({name:"Glob",input:{pattern},nothrow:true}));
   calls.push(tools.call({name:"Write",input:{file_path:${JSON.stringify(join(process.cwd(), 'created.txt'))},content:"created"}}));
   calls.push(tools.call({name:"Glob",input:{pattern:"created.txt"}}));
   const results = await Promise.all(calls);
-  output({failed:results[1].isError, found:results[5].data.filenames});`,
+  output({failed:results[1].isError, found:results.at(-1).data.filenames});`,
 ] : isInstructions ? [
   `try { await tools.call({name:"Read",input:{file_path:${JSON.stringify(scenario === 'instructions-home' ? '~/workspace/nested/secret.txt' : join(root, 'workspace', 'nested', 'secret.txt'))}}}); } catch(e) { output("caught"); } try { await tools.call({name:"Bash",input:{command:"printf forbidden > forbidden.txt",work_lifetime:"finite",run_in_background:false}}); } catch(e) { output("fenced"); }`,
   `output("instructions received");`,
@@ -154,14 +156,15 @@ if (isParallelGlob) {
   const globModule = await import('../utils/glob.js')
   const realGlob = globModule.glob
   const entered = Promise.withResolvers<void>()
+  const initialPatterns = new Set(globPatterns.slice(0, expectedGlobOverlap))
   let active = 0
   spyOn(globModule, 'glob').mockImplementation(async (...args) => {
     const [pattern] = args
     globTrace.push(`start:${pattern}`)
     peakGlob = Math.max(peakGlob, ++active)
-    if (active === 3) entered.resolve()
+    if (active === expectedGlobOverlap) entered.resolve()
     try {
-      if (scenario === 'parallel-glob' && ['a.txt', 'fail.txt', 'b.txt'].includes(pattern)) {
+      if (scenario === 'parallel-glob' && initialPatterns.has(pattern)) {
         const timer = setTimeout(() => entered.reject(new Error('Glob calls did not overlap')), 3_000)
         try { await entered.promise } finally { clearTimeout(timer) }
       }

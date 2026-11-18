@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-async function withCodingEvidence(scenario: string, check: (evidence: any, workspace: string) => Promise<void>): Promise<void> {
+async function withCodingEvidence(scenario: string, check: (evidence: any, workspace: string) => Promise<void>, env: Record<string, string> = {}): Promise<void> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-host-')))
   try {
     await mkdir(join(root, 'config'))
@@ -15,7 +15,7 @@ async function withCodingEvidence(scenario: string, check: (evidence: any, works
         CLAUDE_CONFIG_DIR: join(root, 'config'), XDG_CONFIG_HOME: join(root, 'config'),
         ANTHROPIC_API_KEY: 'isolated-fixture-not-a-credential', CLAUDE_CODE_USE_OPENAI: '0',
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', CODE_MODE_TEST_ROOT: root,
-        CODE_MODE_TEST_SCENARIO: scenario },
+        CODE_MODE_TEST_SCENARIO: scenario, ...env },
     })
     const timer = setTimeout(() => child.kill(), 30_000)
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
@@ -54,22 +54,32 @@ test('real-engine Code Mode catches Bash failure, executes the next effect, and 
   })
 }, 35_000)
 
-test('Script overlaps at most three built-in Glob calls, keeps ordinary failures local, and drains before a write', async () => {
-  await withCodingEvidence('parallel-glob', async (evidence, workspace) => {
-    expect(evidence.peakGlob).toBe(3)
-    expect(evidence.globTrace.slice(0, 3)).toEqual(['start:a.txt', 'start:fail.txt', 'start:b.txt'])
-    expect(evidence.globTrace.indexOf('start:c.txt')).toBeGreaterThan(3)
-    expect(evidence.globTrace.at(-2)).toBe('start:created.txt')
-    expect(await readFile(join(workspace, 'created.txt'), 'utf8')).toBe('created')
-    const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
-    expect(result.status).toBe('completed')
-    expect(result.calls.map((call: any) => call.status)).toEqual(['completed', 'failed', 'completed', 'completed', 'completed', 'completed'])
-    expect(JSON.parse(result.output.split('\n\n[Code Mode]')[0])).toEqual({ failed: true, found: ['created.txt'] })
-    const audit = evidence.transcript.filter((message: any) => message.codeMode)
-    const writeStart = audit.findIndex((message: any) => message.type === 'assistant' && message.message.content[0].name === 'Write')
-    expect(audit.slice(0, writeStart).filter((message: any) => message.type === 'user')).toHaveLength(4)
-  })
-}, 35_000)
+for (const [setting, expectedPeak] of [[undefined, 10], ['2', 2], ['20', 10], ['0', 10]] as const) {
+  test(`Script limits parallel Glob calls to ${expectedPeak} with concurrency setting ${setting ?? 'unset'}`, async () => {
+    await withCodingEvidence('parallel-glob', async (evidence, workspace) => {
+      expect(evidence.peakGlob).toBe(expectedPeak)
+      expect(evidence.globTrace.slice(0, expectedPeak)).toEqual(Array.from(
+        { length: expectedPeak }, (_, index) => index === 1 ? 'start:fail.txt' : `start:file-${index}.txt`,
+      ))
+      expect(evidence.globTrace.indexOf(`start:file-${expectedPeak}.txt`)).toBeGreaterThan(expectedPeak)
+      expect(evidence.globTrace.at(-2)).toBe('start:created.txt')
+      expect(await readFile(join(workspace, 'created.txt'), 'utf8')).toBe('created')
+      const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
+      expect(result.status).toBe('completed')
+      expect(result.calls).toHaveLength(13)
+      expect(result.calls.filter((call: any) => call.status !== 'completed')).toMatchObject([
+        { name: 'Glob', input: { pattern: 'fail.txt' }, status: 'failed' },
+      ])
+      expect(JSON.parse(result.output.split('\n\n[Code Mode]')[0])).toEqual({ failed: true, found: ['created.txt'] })
+      const audit = evidence.transcript.filter((message: any) => message.codeMode)
+      const writeStart = audit.findIndex((message: any) => message.type === 'assistant' && message.message.content[0].name === 'Write')
+      expect(audit.slice(0, writeStart).filter((message: any) => message.type === 'user')).toHaveLength(11)
+    }, {
+      CODE_MODE_TEST_EXPECTED_GLOB_OVERLAP: String(expectedPeak),
+      ...(setting === undefined ? {} : { CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY: setting }),
+    })
+  }, 35_000)
+}
 
 test('final-input instructions fence queued Glob and Write calls before their effects', async () => {
   await withCodingEvidence('parallel-glob-fence', async evidence => {
