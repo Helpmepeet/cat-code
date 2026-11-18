@@ -2399,8 +2399,11 @@ async function* queryModel(
     > {
       for (let retry = 0; ; retry++) {
         try {
-          const events = requestProvider === 'openai' ? stream! : withStreamIdleDeadline(
-            stream!, signal, streamIdleTimeoutMs(), error => {
+          const attemptStream = stream!
+          let endedWithoutAbort = false
+          const events = requestProvider === 'openai' ? attemptStream : withStreamIdleDeadline(
+            attemptStream, signal, streamIdleTimeoutMs(), error => {
+              endedWithoutAbort = error === undefined && !attemptStream.controller.signal.aborted
               if (error && attemptOutputEscaped &&
                   (requestProvider !== 'firstParty' || !thinkingOnlyReplaySafe)) options.onStreamInterrupted?.()
               releaseStreamResources()
@@ -2409,6 +2412,13 @@ async function* queryModel(
             () => lastNetworkProgress,
           )
           yield* events
+          // The raw SDK iterator also returns normally for a truncated SSE
+          // body. Reuse the bounded retry only after a message started and
+          // before a completed block or possible tool effect.
+          if (requestProvider === 'firstParty' && endedWithoutAbort &&
+              partialMessage && thinkingOnlyReplaySafe && !signal.aborted) {
+            throw new APIConnectionError({ message: 'Claude stream ended before the response completed' })
+          }
           return
         } catch (error) {
           if (requestProvider !== 'firstParty' || !thinkingOnlyReplaySafe ||
@@ -2435,6 +2445,7 @@ async function* queryModel(
             'Connection lost. Retrying.',
             retry + 1,
             CLAUDE_THINKING_STREAM_RETRIES,
+            partialMessage?.id,
           )
           await sleep(1000 * 2 ** retry, signal, { abortError: () => new APIUserAbortError() })
           stream = yield* createStreamingRequest()

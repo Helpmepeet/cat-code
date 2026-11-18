@@ -215,16 +215,16 @@ export type SystemAPIErrorMessage = SystemMessage & {
 }
 
 /**
- * A transport failure the engine recovered from inside the same turn: the
- * request was not replayed, the partial response was kept, and the turn
- * continued over a different path. Surfaced through the SDK's existing retry
- * vocabulary rather than a frame of its own.
+ * A transport failure the engine is recovering from inside the same turn.
+ * A continuation keeps completed output. A thinking-only replay identifies
+ * the abandoned stream so transient previews can be cleared.
  */
 export type SystemTransportRecoveryMessage = SystemMessage & {
   subtype: 'transport_recovery'
   content: string
   attempt: number
   maxAttempts: number
+  discardedStreamMessageId?: string
 }
 
 export type SystemInformationalMessage = SystemMessage & {

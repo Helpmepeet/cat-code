@@ -2741,6 +2741,26 @@ function recordAgentCompletion(
   draft.session.agentCompletionsByToolUseId[toolUseId] = completion
 }
 
+function discardStreamingThinking(draft: SessionDraft, messageId: string): void {
+  const session = draft.session
+  const keys = Object.keys(session.streamingThinkingBlocks).filter(
+    key => session.streamingThinkingBlocks[key]?.messageId === messageId,
+  )
+  if (keys.length > 0) {
+    ensureOwnedStreamingThinkingBlocks(draft)
+    for (const key of keys) delete session.streamingThinkingBlocks[key]
+    session.rows = session.rows.filter(row =>
+      row.kind !== 'thinking' || !row.isStreaming || row.messageId !== messageId,
+    )
+    draft.rowsOwned = true
+    draft.rowIndexes = null
+  }
+  if (session.currentStreamMessageId === messageId) {
+    session.currentStreamMessageId = null
+    session.currentStreamBlockIndex = null
+  }
+}
+
 function finalizeStreamingTurn(draft: SessionDraft): boolean {
   const hasStreamingRows = draft.session.rows.some(
     isStreamingProjectionRow,
@@ -2911,6 +2931,10 @@ function projectSystemFrame(
     case 'api_retry': {
       const text = retryNoticeText(message.error)
       if (text === null) return false
+      const discardedStream = nonEmptyString(message.discarded_stream_message_id)
+      if (discardedStream !== null && recoveryInsertAt === null) {
+        discardStreamingThinking(draft, discardedStream)
+      }
       const raw: Record<string, unknown> = message
       const parent = nonEmptyString(raw.parent_tool_use_id)
       const existing = currentScopeRows(draft, parent, recoveryInsertAt).reverse().find(

@@ -2703,6 +2703,48 @@ test('transport recovery retries read as one reason, not two sentences', () => {
   })
 })
 
+test.each([false, true])('an abandoned stream disappears during retry and stays gone after recovery (buffered=%s)', replay => {
+  const sessionId = 'session-1'
+  let state = projectServerFrame(createTranscriptState(), ready(sessionId))
+  const play = (message: unknown, buffered = false) => {
+    const frame = messageFrame(sessionId, message as SDKMessage)
+    state = projectServerFrame(state, buffered ? { ...frame, replay: true } : frame)
+  }
+  const think = (id: string, thinking: string) => {
+    play({ type: 'stream_event', uuid: `${id}-start`, event: { type: 'message_start', message: { id } } })
+    play({ type: 'stream_event', uuid: `${id}-delta`, event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking } } })
+  }
+  play({
+    type: 'assistant', uuid: 'earlier-thinking', parent_tool_use_id: null,
+    message: { id: 'earlier', role: 'assistant', content: [{ type: 'thinking', thinking: 'Earlier committed thinking' }] },
+  })
+  const earlier = selectTranscriptRows(state, sessionId)[0]
+  think('failed-attempt', 'Abandoned thinking')
+  expect(selectTranscriptRows(state, sessionId)).toContainEqual(expect.objectContaining({
+    kind: 'thinking', content: 'Abandoned thinking', isStreaming: true,
+  }))
+
+  play({
+    type: 'system', subtype: 'api_retry', uuid: 'retry', attempt: 1, max_retries: 2,
+    retry_delay_ms: 0, error_status: null, error: 'connection_error',
+    discarded_stream_message_id: 'failed-attempt',
+  }, replay)
+  expect(selectTranscriptRows(state, sessionId)).toMatchObject([
+    { kind: 'thinking', content: 'Earlier committed thinking' },
+    { kind: 'system-notice', noticeType: 'api_retry' },
+  ])
+  expect(selectTranscriptRows(state, sessionId)[0]).toBe(earlier)
+
+  think('next-attempt', 'Recovered thinking')
+  play({
+    type: 'assistant', uuid: 'recovered-answer', parent_tool_use_id: null,
+    message: { id: 'next-attempt', role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
+  })
+  play({ type: 'result', subtype: 'success', uuid: 'turn-result', is_error: false })
+  expect(selectTranscriptRows(state, sessionId).filter(row => row.kind === 'thinking').map(row => row.content))
+    .toEqual(['Earlier committed thinking', 'Recovered thinking'])
+})
+
 test('recovered retries fold deterministically and failed results absorb provider notices without moving live rows', () => {
   const messages = [
     { type: 'system', subtype: 'api_retry', uuid: 'r1', attempt: 1, max_retries: 2, retry_delay_ms: 1000, error_status: 529, error: 'rate_limit' },

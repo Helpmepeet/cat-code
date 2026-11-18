@@ -299,6 +299,20 @@ function syncToolResultStatus(contents: string): string {
   })
 }
 
+function syncDiscardedStreamId(contents: string): string {
+  const field = '  discarded_stream_message_id?: string\n'
+  const hasStreamIdSchema =
+    /discarded_stream_message_id:\s*z\.string\(\)\.min\(1\)\.optional\(\)/.test(schemas)
+  return replaceTypeDeclaration(contents, 'SDKSystemMessage', declaration => {
+    const withoutField = declaration.replace(field, '')
+    if (!hasStreamIdSchema) return withoutField
+    return withoutField.replace(
+      '  retry_delay_ms?: number\n',
+      `  retry_delay_ms?: number\n${field}`,
+    )
+  })
+}
+
 for (const path of effortSnapshotPaths) {
   const contents = readFileSync(path, 'utf-8')
   const nextContents = syncCodeModeFields(syncAgentCwdField(syncAgentNameField(contents)))
@@ -319,11 +333,11 @@ for (const path of effortSnapshotPaths) {
 
 for (const path of effortSnapshotPaths) {
   const contents = readFileSync(path, 'utf-8')
-  const nextContents = syncToolResultStatus(
-    syncPeerOrigin(syncInterruptionOrigin(contents)),
+  const nextContents = syncDiscardedStreamId(
+    syncToolResultStatus(syncPeerOrigin(syncInterruptionOrigin(contents))),
   )
   if (nextContents !== contents) {
     writeFileSync(path, nextContents, 'utf-8')
-    console.log(`Synced user-turn status fields in ${path.slice(repoRoot.length + 1)}.`)
+    console.log(`Synced transcript message fields in ${path.slice(repoRoot.length + 1)}.`)
   }
 }

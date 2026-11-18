@@ -15,6 +15,7 @@ import {
   createSystemTransportRecoveryMessage,
   createUserMessage,
 } from './utils/messages.js'
+import { toSDKMessages } from './utils/messages/mappers.js'
 import type { Message } from './types/message.js'
 
 let stubsActive = false
@@ -151,12 +152,13 @@ test('an interrupted result prefers its string abort reason over a stale assista
   })
 })
 
-test('a transport recovery message becomes an api_retry frame the desktop can read', async () => {
+test.each([undefined, 'abandoned-stream'])('a transport recovery projects the same way live and from history (abandoned=%s)', async discardedStreamMessageId => {
   queryMessages = [
     createSystemTransportRecoveryMessage(
       'Connection interrupted. Continuing automatically.',
       1,
       2,
+      discardedStreamMessageId,
     ),
   ]
 
@@ -166,9 +168,7 @@ test('a transport recovery message becomes an api_retry frame the desktop can re
   )
 
   expect(retry).toBeDefined()
-  // The projector requires `error` to be a record carrying a string `message`;
-  // a bare code is dropped on the floor. That is the whole reason this frame
-  // is emitted in the object form.
+  expect([retry]).toEqual(toSDKMessages(queryMessages))
   expect(retry).toMatchObject({
     type: 'system',
     subtype: 'api_retry',
@@ -181,6 +181,11 @@ test('a transport recovery message becomes an api_retry frame the desktop can re
       message: 'Connection interrupted. Continuing automatically.',
     },
   })
+  if (discardedStreamMessageId) {
+    expect(retry).toHaveProperty('discarded_stream_message_id', discardedStreamMessageId)
+  } else {
+    expect(retry).not.toHaveProperty('discarded_stream_message_id')
+  }
 })
 
 test('an api error message becomes an api_retry frame the desktop can read', async () => {

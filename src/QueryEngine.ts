@@ -1647,21 +1647,7 @@ export class QueryEngine {
             }
           }
           if (message.subtype === 'transport_recovery') {
-            yield {
-              type: 'system',
-              subtype: 'api_retry' as const,
-              attempt: message.attempt,
-              max_retries: message.maxAttempts,
-              retry_delay_ms: 0,
-              error_status: null,
-              error: {
-                type: 'assistant_error' as const,
-                message: message.content,
-                error: 'connection_error',
-              },
-              session_id: getSessionId(),
-              uuid: message.uuid,
-            }
+            yield* toSDKMessages([message as SystemMessage])
           }
           // Don't yield other system messages in headless mode
           break

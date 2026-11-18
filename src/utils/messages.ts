@@ -4923,6 +4923,7 @@ export function createSystemTransportRecoveryMessage(
   content: string,
   attempt: number,
   maxAttempts: number,
+  discardedStreamMessageId?: string,
 ): SystemTransportRecoveryMessage {
   return {
     type: 'system',
@@ -4931,6 +4932,7 @@ export function createSystemTransportRecoveryMessage(
     content,
     attempt,
     maxAttempts,
+    ...(discardedStreamMessageId ? { discardedStreamMessageId } : {}),
     timestamp: new Date().toISOString(),
     uuid: randomUUID(),
   }

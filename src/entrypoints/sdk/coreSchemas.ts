@@ -1775,6 +1775,8 @@ export const SDKAPIRetryMessageSchema = lazySchema(() =>
       max_retries: z.number(),
       retry_delay_ms: z.number(),
       error_status: z.number().nullable(),
+      discarded_stream_message_id: z.string().min(1).optional()
+        .describe('The abandoned unfinished stream to discard from live previews.'),
       error: z.union([
         SDKAssistantErrorCodeSchema(),
         SDKAssistantMessageErrorSchema(),

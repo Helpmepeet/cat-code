@@ -146,6 +146,7 @@ type RetryNoticeFields = {
   error?: APIError
   attempt?: unknown
   maxAttempts?: unknown
+  discardedStreamMessageId?: unknown
 }
 
 function readRetryNoticeFields(message: SystemMessage): RetryNoticeFields {
@@ -343,11 +344,7 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
             },
           ]
         }
-        // Both retry subtypes leave the engine as one `api_retry` frame
-        // (QueryEngine's live yields). Emitting them here too is what makes a
-        // resumed or backfilled transcript show the retries the live one
-        // showed; a frame that differs from the live one would read as a
-        // different event, so the field mapping is kept identical.
+        // Emit the same notice for restored and live retries.
         if (message.subtype === 'api_error') {
           const fields = readRetryNoticeFields(message)
           const attempt = retryNumber(fields.retryAttempt)
@@ -394,6 +391,10 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
               max_retries: maxAttempts,
               retry_delay_ms: 0,
               error_status: null,
+              ...(typeof fields.discardedStreamMessageId === 'string' &&
+                fields.discardedStreamMessageId.length > 0 && {
+                  discarded_stream_message_id: fields.discardedStreamMessageId,
+                }),
               error: {
                 type: 'assistant_error' as const,
                 message: message.content,

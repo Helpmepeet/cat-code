@@ -272,6 +272,7 @@ export type SDKSystemMessage = SDKBaseMessage & {
   attempt?: number
   max_retries?: number
   retry_delay_ms?: number
+  discarded_stream_message_id?: string
   hook_id?: string
   hook_name?: string
   hook_event?: string

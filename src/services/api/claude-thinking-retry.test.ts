@@ -150,6 +150,32 @@ test('retry exhaustion stops after three streaming requests without non-streamin
   expect(JSON.stringify(result.persisted)).toContain('isApiErrorMessage')
 })
 
+test('premature EOF during thinking recovers within the streaming retry budget', async () => {
+  const result = await collect(attempt => attempt === 1
+    ? response([start('eof'), ...thinking])
+    : response([start('recovered'), ...answer()]))
+  expect(result.requests.map(request => request.stream)).toEqual([true, true])
+  expect(waits).toEqual([1000])
+  expect(result.interrupted).toBe(0)
+  expect(result.rows).toContainEqual(expect.objectContaining({
+    subtype: 'transport_recovery',
+    discardedStreamMessageId: 'eof',
+  }))
+  expect(JSON.stringify(result.persisted)).toContain('Recovered answer')
+  expect(JSON.stringify(result.persisted)).not.toContain('unfinished private thought')
+})
+
+test('premature EOF after a tool starts does not replay the request', async () => {
+  const result = await collect(() => response([
+    start('unsafe-eof'),
+    ...thinking,
+    { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'call-1', name: 'Read', input: {} } },
+  ]))
+  expect(result.requests.map(request => request.stream)).toEqual([true])
+  expect(waits).toEqual([])
+  expect(JSON.stringify(result.persisted)).toContain('isApiErrorMessage')
+})
+
 for (const [name, events] of [
   ['empty text start', [{ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }]],
   ['text delta', [...thinking, { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Partial answer' } }]],
