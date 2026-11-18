@@ -22,12 +22,14 @@ test('pinned evaluator sends the chosen account and policy through the real adap
         if (prepared.status !== 'applied') throw new Error('fixture lifecycle preparation failed');
         codexCredentialLifecycle.commitLogin(permit, { expectedGeneration: prepared.record.credentialGeneration });
       });
-      const sends = [];
+      const sends = []; let reservations = 0;
       globalThis.fetch = async (url, init) => {
+        if (reservations !== sends.length + 1) throw new Error('Missing reservation before fetch');
         sends.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
         return new Response('quota exhausted fixture-access', { status: 429 });
       };
-      const pinned = pinnedCodexTransport(account, 'gpt-6-luna', 1);
+      const reserve = async () => { reservations++; };
+      const pinned = pinnedCodexTransport(account, 'gpt-6-luna', 1, reserve);
       const options = { model: 'gpt-6-luna', provider: 'openai', max_tokens: 64,
         system: [{ type: 'text', text: 'Synthetic classifier policy' }], messages: [{ role: 'user', content: 'Synthetic action' }],
         tools: [{ name: 'fixture_verdict', description: 'fixture', input_schema: { type: 'object', properties: { shouldBlock: { type: 'boolean' } } } }],
@@ -40,9 +42,9 @@ test('pinned evaluator sends the chosen account and policy through the real adap
       let rejectedOtherModel = false;
       try { await pinned.send({ ...options, model: 'gpt-6.1-sol' }); } catch { rejectedOtherModel = true; }
       let rejectedExpired = false;
-      try { pinnedCodexTransport({ ...account, expiresAt: Date.now() }, 'gpt-6-luna', 1); } catch { rejectedExpired = true; }
+      try { pinnedCodexTransport({ ...account, expiresAt: Date.now() }, 'gpt-6-luna', 1, reserve); } catch { rejectedExpired = true; }
       let rejectedUnbound = false;
-      try { pinnedCodexTransport({ ...account, credentialGeneration: 0 }, 'gpt-6-luna', 1); } catch { rejectedUnbound = true; }
+      try { pinnedCodexTransport({ ...account, credentialGeneration: 0 }, 'gpt-6-luna', 1, reserve); } catch { rejectedUnbound = true; }
       let rejectedOtherEndpoint = false;
       try { await globalThis.fetch('https://auth.example.test/token'); } catch { rejectedOtherEndpoint = true; }
       console.log(JSON.stringify({ rejectedQuota, rejectedBudget, rejectedOtherModel, rejectedExpired, rejectedUnbound,

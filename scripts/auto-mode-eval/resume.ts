@@ -32,7 +32,7 @@ export function sampleKey(sample: Pick<VerdictSample, 'id' | 'repeat' | 'variant
 /** A valid wrong decision is retained too; retries must never select for better scores. */
 export function prepareResume(value: unknown, expected: {
   cases: readonly EvidenceCase[]; repeats: number; model: string; account: { reference: string; alias: string | null; idPrefix: string };
-  maxRequests: number; corpusDigest: string
+  maxRequests: number; corpusDigest: string; reservedBackendSends?: number
 }) {
   const report = reportSchema.parse(value)
   const cases = new Map(expected.cases.map(c => [c.id, c]))
@@ -58,6 +58,8 @@ export function prepareResume(value: unknown, expected: {
   const addedCaseIds = expected.cases.filter(c => !previousIds.has(c.id)).map(c => c.id)
   if (report.authorizedMaxRequests !== expected.maxRequests) throw new Error('Resume authorization limit changed')
   if (report.backendSends > expected.maxRequests || report.backendSends > report.reviewerRequestsAttempted) throw new Error('Resume request accounting is invalid')
+  const reservedBackendSends = expected.reservedBackendSends ?? report.backendSends
+  if (reservedBackendSends < report.backendSends || reservedBackendSends > expected.maxRequests) throw new Error('Durable request accounting is invalid')
   if (report.samples.length !== report.evidence.length) throw new Error('Resume samples and evidence are not aligned')
   const retained = new Map<string, { sample: VerdictSample; evidence: EvidenceRecord }>()
   const failed: { sample: VerdictSample; evidence: EvidenceRecord }[] = []
@@ -79,7 +81,7 @@ export function prepareResume(value: unknown, expected: {
     } else failed.push({ sample, evidence })
   }
   const pending = expected.cases.length * expected.repeats * 2 - retained.size
-  const remainingRequests = expected.maxRequests - report.backendSends
+  const remainingRequests = expected.maxRequests - reservedBackendSends
   if (pending && remainingRequests === 0) throw new Error('No authorized backend sends remain for unfinished cases')
   return { retained, pending, remainingRequests, addedCaseIds, priorBackendSends: report.backendSends, priorAttempts: report.reviewerRequestsAttempted,
     priorTransportFailures: report.transportFailures,

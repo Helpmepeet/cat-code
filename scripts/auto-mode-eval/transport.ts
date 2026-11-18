@@ -4,9 +4,8 @@ import { isWithinCodexRefreshSkew } from '../../src/constants/codex-oauth.js'
 import { createCodexFetch } from '../../src/services/api/codex-fetch-adapter.js'
 import { getPoolStatus, loadPoolForObservation, type PoolAccount } from '../../src/services/api/codexAccountPool.js'
 import { createCodexCredentialHandle } from '../../src/services/api/codexCredentialUse.js'
-import { isFastModeSupportedByModel } from '../../src/utils/fastMode.js'
-import { getInitialSettings } from '../../src/utils/settings/settings.js'
 import type { sideQuery } from '../../src/utils/sideQuery.js'
+import { buildPinnedReviewRequest } from './request.js'
 
 export async function observedAccounts() {
   await loadPoolForObservation()
@@ -29,8 +28,8 @@ export async function observedAccount(selection: string): Promise<PoolAccount> {
 }
 
 /** Explicit credential binding: no pool resolver, token refresh, SDK retry, or account failover. */
-export function pinnedCodexTransport(account: PoolAccount, model: string, maxRequests: number) {
-  if (!Number.isInteger(maxRequests) || maxRequests < 1) throw new Error('A positive authorized reviewer request limit is required')
+export function pinnedCodexTransport(account: PoolAccount, model: string, maxRequests: number, reserveBackendSend: () => Promise<void>) {
+  if (!Number.isSafeInteger(maxRequests) || maxRequests < 1) throw new Error('A positive authorized reviewer request limit is required')
   if (!model.startsWith('gpt-')) throw new Error('Pinned evaluation transport currently supports GPT models only')
   if (account.status !== 'healthy' || account.credentialGeneration <= 0) throw new Error('Selected account is unavailable or requires credential lifecycle migration')
   if (isWithinCodexRefreshSkew(account.expiresAt)) throw new Error('Selected account requires token refresh; this runner will not refresh credentials')
@@ -44,7 +43,11 @@ export function pinnedCodexTransport(account: PoolAccount, model: string, maxReq
     if (url !== 'https://chatgpt.com/backend-api/codex/responses') throw new Error('Evaluation blocked an unauthorized network destination')
     if (new Headers(init?.headers).get('chatgpt-account-id') !== account.accountId) throw new Error('Evaluation blocked an unauthorized account')
     if (backendSends >= maxRequests) throw new Error('Authorized backend send limit reached')
+    // This local claim is synchronous. A live run additionally requires a
+    // durable cross-process reservation before the network can be reached.
     backendSends++
+    try { await reserveBackendSend() }
+    catch (error) { backendSends--; throw error }
     return originalFetch(input, init)
   }, { preconnect: originalFetch.preconnect })
   globalThis.fetch = guardedFetch
@@ -65,20 +68,9 @@ export function pinnedCodexTransport(account: PoolAccount, model: string, maxReq
     if (options.model !== model || (options.provider !== undefined && options.provider !== 'openai')) throw new Error('Model or provider fallback is outside this evaluation authorization')
     if (isWithinCodexRefreshSkew(handle.expiresAt)) throw new Error('Selected account requires token refresh; stopping without refreshing')
     if (options.skipSystemPromptPrefix !== true) throw new Error('Evaluation expects classifier-owned system instructions')
-    const system = typeof options.system === 'string' ? [{ type: 'text' as const, text: options.system }] : options.system ?? []
-    const request = {
-      model, max_tokens: options.max_tokens ?? 1024, system, messages: options.messages,
-      _openaiInstructionAssembly: { instructions: system.map(block => block.text).join('\n\n'), inputMessages: options.messages },
-      ...(options.tools && { tools: options.tools }), ...(options.tool_choice && { tool_choice: options.tool_choice }),
-      ...(options.temperature !== undefined && { temperature: options.temperature }),
-      ...(options.reasoningEffort && { output_config: { effort: options.reasoningEffort } }),
-      ...(getInitialSettings().autoModeFastMode === true && isFastModeSupportedByModel(model) && { speed: 'fast' as const }),
-      ...(options.thinking === false ? { thinking: { type: 'disabled' as const } } : options.thinking === undefined ? {} :
-        { thinking: { type: 'enabled' as const, budget_tokens: Math.min(options.thinking, (options.max_tokens ?? 1024) - 1) } }),
-    }
     if (requestsAttempted >= maxRequests) throw new Error('Authorized reviewer request limit reached')
     requestsAttempted++
-    try { return await client.beta.messages.create(request, { signal: options.signal }) }
+    try { return await client.beta.messages.create(buildPinnedReviewRequest(options), { signal: options.signal }) }
     catch (error) { failures.push(boundedError(error)); throw error }
   }
   return { send, get requestsAttempted() { return requestsAttempted }, get backendSends() { return backendSends }, failures,

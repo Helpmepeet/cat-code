@@ -54,6 +54,9 @@ jobs:
       - name: Check Code Mode in the real engine
         run: bun test --isolate src/app-runtime/codeMode.test.ts src/app-runtime/codeModeMcp.test.ts src/app-runtime/codeModeMcpGeneration.test.ts
 
+      - name: Verify Auto Mode input qualification offline
+        run: bun --feature=TRANSCRIPT_CLASSIFIER --feature=AUTO_MODE_UPSTREAM_PORT scripts/auto-mode-eval/run.ts --offline --verify-qualification
+
       - name: Check desktop types
         run: bun run --cwd app typecheck
 
