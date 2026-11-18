@@ -1,4 +1,4 @@
-import { constants, closeSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, writeSync } from 'node:fs'
+import { constants, closeSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, readSync, realpathSync, writeSync, type BigIntStats } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { lock, lockSync } from './lockfile.js'
 import { sleep } from './sleep.js'
@@ -9,6 +9,20 @@ export type TranscriptFraming = { boundary: number; suffix: Buffer; needsSeparat
 export const canonicalTranscriptPath = (path: string) => join(realpathSync(dirname(path)), basename(path))
 const held = new Map<string, { dev: number; ino: number }>()
 const readHolders = new Set<string>()
+
+export function sameTranscriptFileVersion(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size &&
+    left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs
+}
+
+// One active archive proof per process. Only completed local guarded appends
+// can carry the proof forward to a different file version.
+let watchedAppend: { path: string; version: BigIntStats } | undefined
+export function watchTranscriptAppends(path: string, version: BigIntStats): (version: BigIntStats) => boolean {
+  const watch = { path, version }
+  watchedAppend = watch
+  return current => watchedAppend === watch && sameTranscriptFileVersion(watch.version, current)
+}
 
 export function assertTranscriptAppendGuard(path: string): void {
   const key = canonicalTranscriptPath(path)
@@ -256,11 +270,22 @@ export function appendFramedTranscriptWithinGuard(path: string, data: string): v
   }
   try {
     const framing = inspectTranscriptAppendBoundary(fd)
+    const watch = watchedAppend?.path === path ? watchedAppend : undefined
+    const before = watch && fstatSync(fd, { bigint: true })
     assertTranscriptAppendGuard(path)
     if (framing.needsSeparator) {
       writeTranscriptBytes(fd, Buffer.from('\n'))
       fsyncSync(fd)
     }
-    writeTranscriptBytes(fd, Buffer.from(data))
+    const payload = Buffer.from(data)
+    writeTranscriptBytes(fd, payload)
+    if (watch && before && sameTranscriptFileVersion(watch.version, before)) {
+      try {
+        const after = fstatSync(fd, { bigint: true })
+        if (after.size === before.size + BigInt(payload.length + Number(framing.needsSeparator))) watch.version = after
+      } catch {
+        watchedAppend = undefined
+      }
+    }
   } finally { closeSync(fd) }
 }

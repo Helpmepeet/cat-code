@@ -4,7 +4,7 @@ import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { randomUUID, createHash } from 'crypto'
 import type { UUID } from 'crypto'
-import { constants as fsConstants, type Dirent } from 'fs'
+import { constants as fsConstants, type BigIntStats, type Dirent } from 'fs'
 // Sync fs primitives for readFileTailSync — separate from fs/promises
 // imports above. Named (not wildcard) per CLAUDE.md style; no collisions
 // with the async-suffixed names.
@@ -17,6 +17,7 @@ import {
   stat,
   unlink,
   writeFile,
+  type FileHandle,
 } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, join } from 'path'
@@ -121,7 +122,7 @@ import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { ContentReplacementRecord } from './toolResultStorage.js'
 import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
-import { appendFramedTranscript, appendFramedTranscriptSync, replacePrivateTranscriptWithinGuard, withTranscriptAppendGuard, withTranscriptReadGuard } from './transcriptAppendGuard.js'
+import { appendFramedTranscript, appendFramedTranscriptSync, replacePrivateTranscriptWithinGuard, sameTranscriptFileVersion, watchTranscriptAppends, withTranscriptAppendGuard, withTranscriptReadGuard } from './transcriptAppendGuard.js'
 import { prepareOwnedTranscriptTail, type TailRecoveryState } from './transcriptTailRecovery.js'
 import { isAcceptedInputBatch } from './queuedInputReceipts.js'
 
@@ -2659,12 +2660,15 @@ export async function flushCurrentTranscriptDurably(
   )
   try {
     if (expectedUuid) {
-      const info = await handle.stat()
-      const loaded = await loadTranscriptFile(transcriptPath, {
-        keepAllLeaves: true, strict: true, prefixBytes: info.size,
-      })
-      if (loaded.sourceTruncated || !loaded.messages.has(expectedUuid as UUID)) {
-        throw new Error('Deferred continuation UUID is not durable')
+      const info = await handle.stat({ bigint: true })
+      const cached = await extendCompactedReceiptIndex(transcriptPath, getSessionId(), handle, info)
+      if (!cached?.appendedUuids.has(expectedUuid)) {
+        const loaded = await loadTranscriptFile(transcriptPath, {
+          keepAllLeaves: true, strict: true, prefixBytes: Number(info.size),
+        })
+        if (loaded.sourceTruncated || !loaded.messages.has(expectedUuid as UUID)) {
+          throw new Error('Deferred continuation UUID is not durable')
+        }
       }
     }
     // The final sync must follow observation of the expected record. A sync
@@ -2682,6 +2686,88 @@ export async function flushCurrentTranscriptDurably(
   })
 }
 
+type CompactedReceiptIndex = {
+  path: string
+  sessionId: string
+  leafPruning: boolean
+  matchesFile: (version: BigIntStats) => boolean
+  offset: number
+  sources: Set<string>
+  knownUuids: Set<string>
+  appendedUuids: Set<string>
+  relinkAnchors: Set<string>
+  tip: string
+  tail: string
+  competingLeafTime: number
+}
+
+let compactedReceiptIndex: CompactedReceiptIndex | undefined
+const MAX_RECEIPT_INDEX_APPEND_BYTES = 2 * 1024 * 1024
+const usesReceiptLeafPruning = () => getFeatureValue_CACHED_MAY_BE_STALE('tengu_pebble_leaf_prune', false)
+
+/** Reuse the archive proof only across a small, validated extension of the same branch. */
+async function extendCompactedReceiptIndex(
+  path: string,
+  sessionId: string,
+  handle: FileHandle,
+  info: BigIntStats,
+): Promise<CompactedReceiptIndex | undefined> {
+  const cached = compactedReceiptIndex
+  if (!cached || cached.path !== path || cached.sessionId !== sessionId ||
+      cached.leafPruning !== usesReceiptLeafPruning() || !cached.matchesFile(info)) return
+  const size = Number(info.size)
+  const appendedBytes = size - cached.offset
+  if (!appendedBytes) return cached
+  if (appendedBytes < 0 || appendedBytes > MAX_RECEIPT_INDEX_APPEND_BYTES) return
+  const tailBuffer = Buffer.allocUnsafe(appendedBytes)
+  let read = 0
+  while (read < appendedBytes) {
+    const { bytesRead } = await handle.read(tailBuffer, read, appendedBytes - read, cached.offset + read)
+    if (!bytesRead) return
+    read += bytesRead
+  }
+  if (tailBuffer.at(-1) !== 10 || !sameTranscriptFileVersion(info, await handle.stat({ bigint: true })) ||
+      cached.leafPruning !== usesReceiptLeafPruning()) return
+
+  let { tip, tail } = cached
+  const added = new Set<string>()
+  const newMessageUuids = new Set<string>()
+  try {
+    for (const line of tailBuffer.toString('utf8').split('\n')) {
+      if (!line.trim()) continue
+      const entry = JSON.parse(line) as Entry
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry) ||
+          isLegacyProgressEntry(entry) || entry.type === ACTIVE_CONVERSATION_TIP_TYPE || 'snipMetadata' in entry) return
+      if (!isTranscriptMessage(entry)) continue
+      const uuid = validateUuid(entry.uuid)
+      if (!uuid || cached.knownUuids.has(uuid) || added.has(uuid) || isCompactBoundaryMessage(entry)) return
+      added.add(uuid)
+      // Detached system diagnostics have no effect on conversation selection.
+      if (entry.type === 'system' && entry.parentUuid === undefined) continue
+      if (entry.sessionId !== sessionId || entry.isSidechain ||
+          (entry.parentUuid && cached.relinkAnchors.has(entry.parentUuid)) ||
+          (entry.parentUuid !== tail && entry.parentUuid !== tip)) return
+      tail = uuid
+      if (entry.type === 'assistant' || entry.type === 'user') {
+        const content = entry.message?.content
+        if (Array.isArray(content) ? content.some(block => !block) : entry.type === 'assistant' || typeof content !== 'string') return
+        const time = Date.parse(entry.timestamp)
+        // Legacy selection breaks timestamp ties by insertion order. When a
+        // child supersedes this tip, a tied sibling leaf could become active.
+        if (!Number.isFinite(time) || time <= cached.competingLeafTime) return
+        tip = uuid
+      }
+      newMessageUuids.add(uuid)
+    }
+  } catch {
+    return
+  }
+  for (const uuid of added) cached.knownUuids.add(uuid)
+  for (const uuid of newMessageUuids) cached.appendedUuids.add(uuid)
+  Object.assign(cached, { offset: size, tip, tail })
+  return cached
+}
+
 /** Recover a late tool result's owner through compaction on the active branch only. */
 export async function hasCompactedToolReceiptSource(sourceUuid: UUID): Promise<boolean> {
   const sessionId = getSessionId()
@@ -2689,23 +2775,70 @@ export async function hasCompactedToolReceiptSource(sourceUuid: UUID): Promise<b
   const path = getOwnedTranscriptPath()
   if (!path) return false
   return withTranscriptReadGuard(path, async () => {
-    const loaded = await loadTranscriptFile(path, { keepAllLeaves: true, keepCompactedHistory: true, strict: true })
-    if (loaded.sourceTruncated) return false
-    const active = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
-    const seen = new Set<string>()
-    let cursor: TranscriptMessage | undefined = active.tip ?? undefined
-    let crossedCompaction = false
-    while (cursor && cursor.sessionId === sessionId && !cursor.isSidechain && !seen.has(cursor.uuid)) {
-      if (cursor.uuid === sourceUuid) {
-        return crossedCompaction && cursor.type === 'assistant' && cursor.message.content.some(block => block.type === 'tool_use')
+    const handle = await fsOpen(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+    try {
+      const info = await handle.stat({ bigint: true })
+      const cached = await extendCompactedReceiptIndex(path, sessionId, handle, info)
+      if (cached) return cached.sources.has(sourceUuid)
+
+      const leafPruning = usesReceiptLeafPruning()
+      const loaded = await loadTranscriptFile(path, { keepAllLeaves: true, keepCompactedHistory: true, strict: true })
+      if (loaded.sourceTruncated) return false
+      const { tip } = selectActiveConversation(loaded.messages, loaded.leafUuids, loaded.activeConversationTip)
+      const seen = new Set<string>()
+      const sources = new Set<string>()
+      let cursor: TranscriptMessage | undefined = tip ?? undefined
+      let crossedCompaction = false
+      while (cursor && cursor.sessionId === sessionId && !cursor.isSidechain && !seen.has(cursor.uuid)) {
+        if (crossedCompaction && cursor.type === 'assistant' && cursor.message.content.some(block => block.type === 'tool_use')) {
+          sources.add(cursor.uuid)
+        }
+        seen.add(cursor.uuid)
+        const compactBoundary = isCompactBoundaryMessage(cursor)
+        crossedCompaction ||= compactBoundary
+        const parent = cursor.parentUuid ?? (compactBoundary ? cursor.logicalParentUuid : undefined)
+        cursor = parent ? loaded.messages.get(parent) : undefined
       }
-      seen.add(cursor.uuid)
-      const compactBoundary = isCompactBoundaryMessage(cursor)
-      crossedCompaction ||= compactBoundary
-      const parent = cursor.parentUuid ?? (compactBoundary ? cursor.logicalParentUuid : undefined)
-      cursor = parent ? loaded.messages.get(parent) : undefined
+      if (crossedCompaction && leafPruning === usesReceiptLeafPruning() && tip && Number.isFinite(Date.parse(tip.timestamp)) &&
+          ![...loaded.messages.values()].some(row => 'snipMetadata' in row)) {
+        const size = Number(info.size)
+        const last = Buffer.allocUnsafe(1)
+        if (size && (await handle.read(last, 0, 1, size - 1)).bytesRead === 1 && last[0] === 10 &&
+            sameTranscriptFileVersion(info, await handle.stat({ bigint: true }))) {
+          const knownUuids = new Set<string>(loaded.messages.keys())
+          for (const uuid of loaded.legacyProgressUuids ?? []) knownUuids.add(uuid)
+          const relinkAnchors = new Set<string>()
+          const explicitlySelected = loaded.activeConversationTip?.tipUuid === tip.uuid &&
+            loaded.activeConversationTip.sessionId === tip.sessionId
+          let competingLeafTime = -Infinity
+          for (const row of loaded.messages.values()) {
+            if (row.parentUuid) knownUuids.add(row.parentUuid)
+            if (row.logicalParentUuid) knownUuids.add(row.logicalParentUuid)
+            if (!explicitlySelected && !row.isSidechain && row.uuid !== tip.uuid && loaded.leafUuids.has(row.uuid as UUID)) {
+              const time = Date.parse(row.timestamp)
+              if (Number.isFinite(time)) competingLeafTime = Math.max(competingLeafTime, time)
+            }
+            if (!isCompactBoundaryMessage(row)) continue
+            // The display reader can reparent new children of an old anchor.
+            // Also reserve endpoints so appends cannot repair an old missing segment.
+            const explicitSegment = resolvePreservedSegment(row)
+            for (const segment of [explicitSegment, row.compactMetadata?.preservedSegment]) {
+              if (!segment) continue
+              relinkAnchors.add(segment.anchorUuid)
+              knownUuids.add(segment.anchorUuid)
+              knownUuids.add(segment.headUuid)
+              knownUuids.add(segment.tailUuid)
+            }
+            for (const uuid of explicitSegment?.durableUuids ?? []) knownUuids.add(uuid)
+          }
+          compactedReceiptIndex = { path, sessionId, leafPruning, offset: size, sources, knownUuids, appendedUuids: new Set(),
+            relinkAnchors, tip: tip.uuid, tail: tip.uuid, competingLeafTime, matchesFile: watchTranscriptAppends(path, info) }
+        }
+      }
+      return sources.has(sourceUuid)
+    } finally {
+      await handle.close()
     }
-    return false
   })
 }
 
@@ -5115,6 +5248,7 @@ export async function loadTranscriptFile(
   sourceTruncated: boolean
   sourceBytesRead: number
   activeConversationTip: ActiveConversationTipEntry | undefined
+  legacyProgressUuids?: ReadonlySet<UUID>
 }> {
   const relocationId = basename(filePath, '.jsonl')
   if (validateUuid(relocationId)) assertSessionNotMoving(relocationId)
@@ -5150,6 +5284,7 @@ export async function loadTranscriptFile(
   let sourceBytesRead = 0
   let activeConversationTip: ActiveConversationTipEntry | undefined
   let activeConversationRoot: UUID | null | undefined
+  let legacyProgressUuids: Set<UUID> | undefined
   const activeConversationDescendants = new Set<UUID>()
 
   // Session-scoped metadata entries. Both passes below read them — the
@@ -5297,6 +5432,7 @@ export async function loadTranscriptFile(
       // progress is not in the Entry union, so checking it after TypeScript
       // has narrowed `entry` intersects to `never`.
       if (isLegacyProgressEntry(entry)) {
+        if (opts?.strict && opts.keepCompactedHistory) (legacyProgressUuids ??= new Set()).add(entry.uuid)
         // Chain-resolve through consecutive progress entries so a later
         // message pointing at the tail of a progress run bridges to the
         // nearest non-progress ancestor in one lookup.
@@ -5575,6 +5711,7 @@ export async function loadTranscriptFile(
     sourceTruncated,
     sourceBytesRead,
     activeConversationTip,
+    legacyProgressUuids,
   }
 }
 

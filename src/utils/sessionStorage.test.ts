@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { feature } from 'bun:bundle'
 import { randomUUID, type UUID } from 'crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'fs'
-import { writeFile } from 'fs/promises'
+import { open, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
 import { getAPISessionId, getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
@@ -11,10 +11,10 @@ import { asAgentId, asSessionId } from '../types/ids.js'
 import type { AssistantMessage } from '../types/message.js'
 import { createAttachmentMessage, getQueuedCommandAttachments } from './attachments.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
-import { createUserMessage, ensureToolResultPairing, normalizeMessagesForAPI } from './messages.js'
+import { createAssistantMessage, createCompactBoundaryMessage, createUserMessage, ensureToolResultPairing, normalizeMessagesForAPI } from './messages.js'
 import { assertSessionNotMoving } from './sessionRelocationState.js'
 import { activateTranscriptLease, releaseActiveTranscriptLease } from './transcriptLease.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, verifyHandoffTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordAutoModeObservation, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, verifyHandoffTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, hasCompactedToolReceiptSource, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordAutoModeObservation, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
 
 function createRewindContinuationFixture(
   sessionId: string,
@@ -1975,6 +1975,81 @@ describe('session storage', () => {
     await expect(flushCurrentTranscriptDurably(randomUUID())).rejects.toThrow(
       'UUID is not durable',
     )
+  })
+
+  test.each(['plain', 'preserved'] as const)('late receipt ownership and durability read only new rows after %s compaction', async kind => {
+    const start = Date.now() - 1000
+    const at = (step: number) => new Date(start + step).toISOString()
+    const prompt = createUserMessage({ content: 'Archived prompt '.repeat(480_000) })
+    const original = createAssistantMessage({ content: [{ type: 'tool_use', name: 'Read', id: 'original-call', input: {} }] })
+    const kept = kind === 'preserved' ? [createUserMessage({ content: 'Preserved tail' })] : []
+    const prior = [prompt, original, ...kept]
+    prompt.timestamp = at(0)
+    original.timestamp = at(1)
+    if (kept[0]) kept[0].timestamp = at(2)
+    await recordTranscript(prior)
+    const summary = createUserMessage({ content: 'Summary', isCompactSummary: true })
+    summary.timestamp = at(3)
+    const rawBoundary = createCompactBoundaryMessage('manual', 100, prior.at(-1)!.uuid as UUID)
+    const { annotateBoundaryWithPreservedSegment } = await import('../services/compact/compact.js')
+    const boundary = annotateBoundaryWithPreservedSegment(rawBoundary, summary.uuid as UUID, kept, prior)
+    await recordTranscript([boundary, summary, ...kept])
+    expect(await hasCompactedToolReceiptSource(original.uuid as UUID)).toBe(true)
+
+    const handle = await open(getTranscriptPathForSession(sessionId), 'r')
+    const read = spyOn(Object.getPrototypeOf(handle) as typeof handle, 'read')
+    await handle.close()
+    let last = kept[0] ?? summary
+    try {
+      for (let index = 0; index < 4; index++) {
+        const result = createUserMessage({ content: `Script receipt ${index}` })
+        result.timestamp = at(4 + index)
+        await recordTranscript([last, result])
+        await flushCurrentTranscriptDurably(result.uuid as UUID)
+        expect(await hasCompactedToolReceiptSource(original.uuid as UUID)).toBe(true)
+        last = result
+      }
+      const reads = await Promise.all(read.mock.results.map(result => result.value as Promise<{ bytesRead: number }>))
+      const bytes = reads.reduce((total, result) => total + result.bytesRead, 0)
+      expect(bytes).toBeLessThan(64 * 1024)
+    } finally {
+      read.mockRestore()
+    }
+
+    const newer = createAssistantMessage({ content: [{ type: 'tool_use', name: 'Read', id: 'newer-call', input: {} }] })
+    newer.timestamp = at(8)
+    await recordTranscript([last, newer])
+    expect(await hasCompactedToolReceiptSource(newer.uuid as UUID)).toBe(false)
+    const secondBoundary = createCompactBoundaryMessage('manual', 200, newer.uuid as UUID)
+    const secondSummary = createUserMessage({ content: 'Later summary', isCompactSummary: true })
+    secondSummary.timestamp = at(9)
+    await recordTranscript([secondBoundary, secondSummary])
+    expect(await hasCompactedToolReceiptSource(newer.uuid as UUID)).toBe(true)
+    expect(await hasCompactedToolReceiptSource(original.uuid as UUID)).toBe(true)
+
+    await markActiveConversationTip(summary.uuid as UUID)
+    expect(await hasCompactedToolReceiptSource(newer.uuid as UUID)).toBe(false)
+    expect(await hasCompactedToolReceiptSource(original.uuid as UUID)).toBe(true)
+    await removeTranscriptMessage(original.uuid as UUID)
+    expect(await hasCompactedToolReceiptSource(original.uuid as UUID)).toBe(false)
+  })
+
+  test.each(['absent', 'invalid'] as const)('a tied leaf supersedes cached compacted ownership with a %s active marker', async marker => {
+    const prompt = createUserMessage({ content: 'Start' })
+    const source = createAssistantMessage({ content: [{ type: 'tool_use', name: 'Read', id: 'original-call', input: {} }] })
+    source.timestamp = '2026-11-01T00:00:00.000Z'
+    await recordTranscript([prompt, source])
+    const boundary = createCompactBoundaryMessage('manual', 100, source.uuid as UUID)
+    const summary = createUserMessage({ content: 'Summary' })
+    const otherLeaf = createUserMessage({ content: 'Other branch' })
+    const next = createUserMessage({ content: 'New continuation' })
+    summary.timestamp = otherLeaf.timestamp = next.timestamp = '2026-11-01T00:00:01.000Z'
+    await recordTranscript([boundary, summary])
+    await recordTranscript([prompt, otherLeaf])
+    if (marker === 'invalid') await markActiveConversationTip(randomUUID())
+    expect(await hasCompactedToolReceiptSource(source.uuid as UUID)).toBe(true)
+    await recordTranscript([summary, next])
+    expect(await hasCompactedToolReceiptSource(source.uuid as UUID)).toBe(false)
   })
 
   // Under `cleanupPeriodDays: 0` / `--no-session-persistence` (and the test env)
