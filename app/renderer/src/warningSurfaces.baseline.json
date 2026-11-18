@@ -1,0 +1,172 @@
+{
+  "AccountsPage.tsx": {
+    "<span className=\"text-tone-warn\">": 1,
+    "<p className=\"mt-3 text-[12px] text-tone-warn\">Close older Cat Code versions before signing out or deleting accounts.</p>": 2,
+    "FAILED: 'text-tone-danger',": 1,
+    "<div role=\"alert\" className=\"text-[12.5px] text-tone-danger\">": 1,
+    "? 'text-tone-danger hover:bg-tone-danger/10'": 1,
+    "{transitionLabel || expired || !usable || pressured ? <div className={`accounts-sub ${expired ? 'text-tone-danger' : labelTone.text}`}>": 1,
+    "className=\"block w-full rounded-[7px] px-2.5 py-[7px] text-left text-[12.5px] text-tone-danger transition-colors hover:bg-tone-danger/10\"": 1,
+    "{needsSignIn ? <div className=\"accounts-sub text-tone-danger\" title={credentialLabel ?? undefined}>Sign-in expired</div> : null}": 1
+  },
+  "AgentsPage.tsx": {
+    "<div className=\"mb-5 rounded-lg border border-tone-warn/25 bg-tone-warn/10 px-3 py-2 text-[12px] text-tone-warn\">": 1,
+    "? 'border-tone-warn/25 bg-tone-warn/10 text-tone-warn'": 1
+  },
+  "App.tsx": {
+    "<div data-window-chrome role=\"alert\" className=\"border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger\">": 1,
+    "<div data-window-chrome className=\"flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger\">": 1
+  },
+  "CommandPalette.tsx": {
+    "return 'text-tone-warn'": 1,
+    "return 'text-tone-danger'": 1
+  },
+  "CommandPermissionContent.tsx": {
+    "{sandboxOverride ? <p className=\"text-tone-warn\">Requested to run outside the Bash sandbox.</p> : null}": 1
+  },
+  "ComposerActionsBar.tsx": {
+    "{fast === true ? <span className=\"flex shrink-0 text-tone-warn\"><FastGlyph active /></span> : null}": 1,
+    "<span className={snapshot.fast.active ? 'text-tone-warn' : 'text-text-ghost'}><FastGlyph active /></span>": 1,
+    "className=\"flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn\"": 1,
+    "<span className=\"inline-flex text-tone-warn\">": 1,
+    "<span className=\"font-mono text-tone-warn\">/compact</span> to": 1
+  },
+  "CreateProjectDialog.tsx": {
+    "{error && <div className=\"create-project-error\" role=\"alert\">{error}</div>}": 1
+  },
+  "MarkdownElements.tsx": {
+    "{outcome ? <span className=\"inline-command-meta\"><span className={`inline-command-dot ${run?.status === 'failed' ? 'text-tone-danger' : 'text-tone-warn'}`} aria-hidden />{outcome}</span> : null}": 1,
+    "<button type=\"button\" className={`inline-command-action ${running ? 'text-tone-danger' : action === 'Run' || pending ? 'text-accent' : 'text-text-subtle'}`}": 1,
+    "{error ? <p role=\"alert\" className=\"border-t border-shell-seam px-3.5 py-2 text-xs text-text-muted\">{error}</p> : null}": 1
+  },
+  "MetadataInspector.tsx": {
+    "<span className=\"text-tone-warn\" key={`${index}:${item}`}>": 1
+  },
+  "PlanPanel.tsx": {
+    "<span className=\"font-mono text-[9.5px] text-tone-warn\">": 1
+  },
+  "RemoteSettingsPage.tsx": {
+    "<p className=\"mt-2 text-[11.5px] text-tone-danger\">{bridge.error}</p>": 1,
+    "? 'border-tone-danger/40 bg-tone-danger/10 text-tone-danger'": 1
+  },
+  "RoutingStorageRecovery.tsx": {
+    "return <section className=\"routing-storage-recovery\" role=\"alert\" aria-label=\"Saved message recovery\">": 1
+  },
+  "SAModal.tsx": {
+    "warn: 'bg-tone-warn/[0.11] text-tone-warn',": 1,
+    "danger: 'border-tone-danger/30 bg-transparent text-tone-danger hover:bg-tone-danger/10',": 1
+  },
+  "ScheduledTasksPage.tsx": {
+    "warn: 'text-tone-warn',": 1,
+    "danger: 'text-tone-danger',": 1,
+    "<div role=\"alert\" className=\"mb-5 max-w-[680px] rounded-[10px] border border-tone-danger/30 bg-tone-danger/[0.06] px-3.5 py-2.5 text-[12.5px] text-tone-danger\">": 1,
+    "<div role=\"alert\" className={`mb-5 flex max-w-[680px] items-center gap-3 text-[12.5px] ${options ? 'text-tone-warn' : 'text-tone-danger'}`}>": 1,
+    "<span className={`mt-px block truncate text-[11.5px] ${tone === 'warn' ? 'text-tone-warn' : 'text-text-subtle'}`}>{subtitle}</span>": 1,
+    "{preset && !task.enabled ? <p className=\"mt-2.5 text-[12.5px] text-tone-warn\">Pause the previous map-refresh schedule outside Cat Code before turning this on.</p> : null}": 1,
+    "{error ? <p role=\"alert\" className=\"mt-2.5 text-[12.5px] text-tone-danger\">{error}</p> : null}": 1,
+    "<button type=\"button\" role=\"menuitem\" className={`${item} text-tone-danger`} onClick={() => choose(onDelete)}>Delete</button>": 1,
+    "{pickerError ? <p role=\"alert\" className=\"mt-2 text-[12.5px] text-tone-danger\">{pickerError}</p> : null}": 1,
+    "{error ? <p role=\"alert\" className=\"mt-2 text-[12.5px] text-tone-danger\">{error}</p> : null}": 1,
+    "{missing ? <p role=\"alert\" className=\"mt-2.5 text-[12.5px] text-tone-danger\">This task was deleted. Cancel to discard the draft.</p> : null}": 1,
+    "{error ? <p role=\"alert\" className=\"mt-4 text-[12.5px] text-tone-danger\">{error}</p> : null}": 1,
+    "{problem ? <p className=\"mt-[5px] text-[11.5px] text-tone-danger\">{problem}</p> : hint ? <p className=\"mt-[5px] text-[11.5px] text-text-subtle\">{hint}</p> : null}": 1
+  },
+  "SessionActionsMenu.tsx": {
+    "? 'text-tone-danger hover:bg-tone-danger/10'": 1
+  },
+  "SessionPane.tsx": {
+    "<div role=\"status\" className=\"flex items-center gap-3 text-[12px] text-tone-danger\">": 1,
+    "? 'border-tone-warn/50 bg-shell-chrome/90 text-tone-warn'": 1,
+    "<div className=\"flex items-center gap-3 text-sm text-tone-danger\">": 1,
+    "<div className=\"text-sm text-tone-danger\">{transportError}</div>": 1,
+    "<div className=\"text-sm text-tone-warn\" role=\"alert\">": 1,
+    "<div className=\"text-sm text-tone-danger\">{transportErrorFromImage}</div>": 1,
+    "className=\"flex h-[30px] w-[30px] shrink-0 items-center justify-center self-end rounded-lg text-tone-danger transition-colors hover:bg-tone-danger/10\"": 1,
+    "const tone = paused ? 'text-tone-warn' : 'text-accent'": 1,
+    "<span className=\"shrink-0 text-[11px] text-tone-danger\">{stopError}</span>": 1
+  },
+  "SettingsEditors.tsx": {
+    "<span className=\"text-[11px] text-tone-danger\">{error}</span>": 1
+  },
+  "SettingsExtensions.tsx": {
+    "<div className=\"mt-1 font-mono text-[11px] text-tone-danger\">": 1,
+    "<span className=\"font-mono text-[11px] text-tone-warn\">": 1
+  },
+  "SettingsField.tsx": {
+    "<div className=\"mt-1.5 flex items-center gap-1.5 text-[12px] text-tone-danger\">": 1
+  },
+  "SettingsShell.tsx": {
+    "className={`mt-2 text-[12px] ${writeStatus.kind === 'failed' ? 'text-tone-warn' : 'text-text-subtle'}`}": 1,
+    "role={writeStatus.kind === 'failed' ? 'alert' : 'status'}": 1,
+    "<p className=\"mt-2 text-[12px] text-tone-warn\" role=\"alert\">{projectPickError}</p>": 1,
+    "<p role=\"alert\" className=\"text-[13px] leading-5 text-tone-warn\">{inventoryError}</p>": 1
+  },
+  "StartupSurfaces.tsx": {
+    "role=\"alert\"": 2,
+    "className=\"mb-4 rounded-[9px] border border-tone-danger/25 bg-tone-danger/10 px-3.5 py-2.5 text-[12.5px] text-tone-danger\"": 1,
+    ": 'bg-tone-danger/12 text-tone-danger'": 1,
+    "<p role=\"alert\" className=\"mb-1.5 text-[12px] text-tone-danger\">": 1,
+    "<p role=\"alert\" className=\"mt-2 break-words text-[12px] text-tone-danger\">": 2,
+    "className=\"-mt-3 break-words rounded-[10px] bg-tone-danger/[0.07] px-3.5 py-3 text-[12.5px] leading-relaxed text-tone-danger\"": 1
+  },
+  "TabBar.tsx": {
+    "className=\"flex h-[18px] shrink-0 items-center rounded px-1.5 text-[10px] font-medium uppercase tracking-wide text-tone-warn transition-colors hover:bg-tone-warn/15\"": 1
+  },
+  "TasksDialog.tsx": {
+    "className=\"whitespace-nowrap text-tone-warn\"": 1,
+    "(agent.note.tone === 'stranded' ? 'text-tone-danger' : 'text-text-subtle')": 1,
+    "className=\"shrink-0 rounded-md px-2 py-1 text-[11px] text-tone-danger hover:bg-tone-danger/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent\"": 1
+  },
+  "ToolInspector.tsx": {
+    "if (failed) facts.push(<span key=\"failed\" className=\"text-tone-danger\">Failed</span>)": 1
+  },
+  "TranscriptView.tsx": {
+    "<span className=\"text-[11px] text-tone-danger\">{failure}</span>": 1,
+    "color: 'text-tone-danger',": 1,
+    "color: 'text-tone-warn',": 1,
+    "<div className=\"text-[11.5px] leading-normal text-tone-warn\">": 1,
+    "? 'border-t border-shell-seam px-3 py-1.5 text-xs text-tone-warn'": 1,
+    ": 'ml-6 border-l border-shell-seam py-1 pl-3 text-xs text-tone-warn'": 1,
+    "<span className={delivery === 'not_delivered' ? 'text-tone-danger' : 'text-text-subtle/70'}>{' · '}{state}</span>": 1,
+    "<div className=\"whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-tone-danger\">": 1,
+    "<span className=\"block truncate font-mono text-[11px] leading-relaxed text-tone-danger\">": 1,
+    "? { text: `${failedCount} failed`, tone: 'text-tone-danger' }": 1,
+    "ack.ok ? 'text-text-subtle/80' : 'text-tone-danger'": 1,
+    "ack.ok ? 'text-text-muted' : 'text-tone-danger'": 1,
+    "<pre className=\"overflow-hidden text-ellipsis whitespace-pre font-mono text-[11px] leading-relaxed text-tone-danger\">{failure}</pre>": 1,
+    "className={`${INLINE_OUTPUT_SCROLLER} whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-tone-danger`}": 1,
+    "const toneClass = isError ? 'text-tone-danger' : 'text-text-muted'": 1,
+    "api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },": 1,
+    "account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },": 1,
+    "provider_error: { glyph: '!', glyphTone: 'text-tone-warn' },": 1,
+    "danger: 'text-tone-danger',": 1
+  },
+  "WelcomeScreen.tsx": {
+    "{sessionBranchStale ? <span className=\"text-tone-warn\" title={`This chat started on ${branch}. Start a fresh chat to use ${branches?.current ?? 'this checkout'}.`}>!</span> : null}": 1,
+    "<p className=\"branch-picker-heading text-tone-warn\">Commit or stash local changes before switching.</p>": 1,
+    "<p className=\"branch-picker-heading text-tone-warn\">Close {otherChats.map((chat, index) => (": 1,
+    "<p className=\"branch-picker-heading text-tone-warn\">This chat started on {branch}. Select {branches?.current ?? 'the current branch'} to open a fresh chat on the current checkout.</p>": 1,
+    "<p className=\"branch-picker-heading text-tone-danger\">{error ?? switchError}</p>": 1,
+    "<span className=\"text-[12.5px] text-tone-danger\">": 1,
+    "<span className=\"shrink-0 rounded border border-tone-warn/20 bg-tone-warn/10 px-[5px] py-px text-[8.5px] font-bold uppercase tracking-wide text-tone-warn\">": 1
+  },
+  "agentChromeModel.ts": {
+    "danger: { text: 'text-tone-danger', dot: 'bg-tone-danger', border: 'border-tone-danger', soft: 'bg-tone-danger/10', line: 'border-tone-danger/30' },": 1,
+    "warning: { text: 'text-tone-warn', dot: 'bg-tone-warn', border: 'border-tone-warn', soft: 'bg-tone-warn/10', line: 'border-tone-warn/30' },": 1,
+    "warn: 'text-tone-warn',": 1,
+    "danger: 'border-tone-danger/30 text-tone-danger',": 1
+  },
+  "composerDom.ts": {
+    "'inline-flex h-[17px] w-[17px] shrink-0 items-center justify-center rounded-[5px] border-none bg-transparent p-0 text-text-subtle transition-colors hover:bg-tone-danger/10 hover:text-tone-danger'": 1
+  },
+  "goalsPageModel.ts": {
+    "blocked: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',": 1,
+    "stalled: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',": 1,
+    "budget_limited: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',": 1,
+    "usage_limited: 'border-tone-warn/30 bg-tone-warn/10 text-tone-warn',": 1,
+    "failed: 'border-tone-danger/30 bg-tone-danger/10 text-tone-danger',": 1
+  },
+  "toolCardPalette.ts": {
+    "del: 'text-tone-danger',": 1
+  }
+}

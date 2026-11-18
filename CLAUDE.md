@@ -92,3 +92,7 @@ or alters rendering, timers, subscriptions, or streaming updates:
 No em dashes or engineering notes. Status and helper text must change what the user
 does or how they read the data. `§7-ok` marks a justified exception to
 `app/renderer/src/userVisibleText.test.ts`.
+
+Warnings and notices use the kinds in `docs/migration/decisions/WARNINGS.md`.
+`app/renderer/src/warningSurfaces.test.ts` fails on new hand-built ones;
+`warning-ok: <reason>` marks a line that is not a warning.
