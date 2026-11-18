@@ -1,5 +1,5 @@
 import { mock } from 'bun:test'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CodeModeTaskState } from '../tasks/CodeModeTask.js'
 
@@ -16,6 +16,13 @@ const wrapper = scenario === 'wrapper' || scenario === 'budget-wrapper'
 const queued = scenario === 'queued-policy' || scenario === 'queued-unchanged'
 const disabled = scenario === 'background-disabled'
 const computed = scenario === 'computed-child'
+const sensitive = scenario.startsWith('sensitive-edit-')
+const directEdit = scenario === 'sensitive-edit-direct'
+const sensitiveEdit = { file_path: join(process.cwd(), '.cat-code', 'preview.html'), old_string: '<h1>Before</h1>', new_string: '<h1>After</h1>' }
+if (sensitive) {
+  await mkdir(join(process.cwd(), '.cat-code'))
+  await writeFile(sensitiveEdit.file_path, sensitiveEdit.old_string)
+}
 const waitInLane = `${bash("bash -c 'while [ ! -f release-lane ]; do /bin/sleep 0.02; done'")}; output("first script finished");`
 const computedCommand = `var leaf = "computed" + ".txt"; await tools.call({name:"Bash",input:{command:"bash -c 'printf fixture > " + leaf + "'",work_lifetime:"finite",run_in_background:false}});`
 const disabledForeground = `await tools.call({name:"Bash",input:{command:"bash -c 'printf foreground > foreground.txt'",work_lifetime:"finite"}}); output("foreground completed");`
@@ -23,7 +30,11 @@ const disabledForeground = `await tools.call({name:"Bash",input:{command:"bash -
 // schema maximum. ASCII avoids conflating source size with encoding expansion.
 const large = `/*source-budget-start:${'a'.repeat(48_000)}:distinct-middle:${'b'.repeat(48_000)}:distinct-suffix*/ await tools.call({name:"Write",input:{file_path:${JSON.stringify(join(root, 'workspace', 'budget.txt'))},content:"complete-source-executed"}}); output("budget-selected-output");`
 const code = queued ? waitInLane : disabled ? disabledForeground : computed ? computedCommand :
+  sensitive ? `await tools.call({name:"Edit",input:${JSON.stringify(sensitiveEdit)}});` :
   budget ? large : scenario === 'admit' || scenario === 'wrapper' ? success : refused
+const firstUse = directEdit
+  ? { id: 'direct-edit', name: 'Edit', input: sensitiveEdit }
+  : { id: 'submitted-script', name: 'REPL', input: { code: wrapper ? 'output("unmodified-source")' : code, description: 'Isolated Auto script', ...(queued ? { run_in_background: true } : {}) } }
 if (wrapper || scenario === 'deny' || scenario === 'ask') {
   const matcher = wrapper ? 'REPL' : 'Bash'
   const updatedInput = wrapper ? { code, description: 'Hook replacement' } : { command: "bash -c 'printf forbidden > forbidden.txt'", work_lifetime: 'finite', run_in_background: false }
@@ -38,9 +49,10 @@ mock.module('../services/api/client.js', () => ({
   getAnthropicClient: async () => ({ beta: { messages: { create: (body: any) => {
     if (!body.stream) {
       classifierBodies.push(JSON.parse(JSON.stringify(body)))
+      const action = body.messages.at(-1)?.content.at(-1)?.text
       return Promise.resolve({ id: 'classifier', type: 'message', role: 'assistant', model: body.model,
         content: [{ type: 'tool_use', id: 'verdict', name: body.tool_choice.name,
-          input: { shouldBlock: classifierBodies.length % 2 === 1 || (computed && body.messages.at(-1)?.content.at(-1)?.text.includes('\nBash ')), thinking: 'Offline fixture second-stage admission', reason: 'Isolated workspace script' } }],
+          input: { shouldBlock: classifierBodies.length % 2 === 1 || (computed && action?.includes('\nBash ')) || (scenario === 'sensitive-edit-block' && action?.startsWith('<pending_action>\nEdit ')), thinking: 'Offline fixture second-stage verdict', reason: 'Isolated workspace action' } }],
         stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 20, output_tokens: 10 } })
     }
     modelBodies.push(JSON.parse(JSON.stringify(body)))
@@ -49,8 +61,8 @@ mock.module('../services/api/client.js', () => ({
     const invocation = index === 0
     const stream = Object.assign((async function* () {
       yield { type: 'message_start', message: { id: `response-${index}`, type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 20, output_tokens: 0 } } }
-      yield { type: 'content_block_start', index: 0, content_block: invocation ? { type: 'tool_use', id: 'submitted-script', name: 'REPL', input: {} } : { type: 'text', text: '' } }
-      yield { type: 'content_block_delta', index: 0, delta: invocation ? { type: 'input_json_delta', partial_json: JSON.stringify({ code: wrapper ? 'output("unmodified-source")' : code, description: 'Isolated Auto script', ...(queued ? { run_in_background: true } : {}) }) } : { type: 'text_delta', text: 'Finished.' } }
+      yield { type: 'content_block_start', index: 0, content_block: invocation ? { type: 'tool_use', id: firstUse.id, name: firstUse.name, input: {} } : { type: 'text', text: '' } }
+      yield { type: 'content_block_delta', index: 0, delta: invocation ? { type: 'input_json_delta', partial_json: JSON.stringify(firstUse.input) } : { type: 'text_delta', text: 'Finished.' } }
       yield { type: 'content_block_stop', index: 0 }
       if (invocation && (queued || disabled)) {
         yield { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'second-script', name: 'REPL', input: {} } }
@@ -69,6 +81,7 @@ const { createFileStateCacheWithSizeLimit } = await import('../utils/fileStateCa
 const { createQueryEngineAppSession } = await import('./createQueryEngineAppSession.js')
 const { createQueryEngineSessionController } = await import('./createQueryEngineSessionController.js')
 const { BashTool } = await import('../tools/BashTool/BashTool.js')
+const { FileEditTool } = await import('../tools/FileEditTool/FileEditTool.js')
 const { FileReadTool } = await import('../tools/FileReadTool/FileReadTool.js')
 const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
@@ -88,7 +101,8 @@ let transcript: any[] = []
 let retained: Message[] = []
 let resolveDeliveries!: () => void
 const delivered = new Promise<void>(resolve => { resolveDeliveries = resolve })
-const session = createQueryEngineAppSession({ cwd: process.cwd(), tools: [REPLTool, BashTool, FileReadTool, FileWriteTool], commands: [], mcpClients: [], agents: [],
+const tools = [REPLTool, BashTool, FileReadTool, FileWriteTool, ...(sensitive ? [FileEditTool] : [])]
+const session = createQueryEngineAppSession({ cwd: process.cwd(), tools, commands: [], mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => {
     state = update(state)
     if (queued && scriptTasks().filter(task => task.delivery === 'delivered').length === 2) resolveDeliveries()
@@ -126,7 +140,7 @@ const authentication = [retained, restored].map(messages => ({
   positioned: [...positionPermissionDecisionContexts(messages)].map(([owner, records]) => ({ ownerUuid: owner.uuid, index: messages.indexOf(owner), records })),
   // Normalization keeps host metadata on envelope objects. Provider serialization
   // sends their message bodies, not toolUseResult's structured UI/audit receipts.
-  normalized: normalizeMessagesForAPI(messages, [REPLTool, BashTool, FileReadTool, FileWriteTool], 'firstParty').map(message => message.message),
+  normalized: normalizeMessagesForAPI(messages, tools, 'firstParty').map(message => message.message),
   normalizedChildren: normalizeMessagesForAPI(messages.filter(message => (message.type === 'assistant' || message.type === 'user') && message.codeMode), [BashTool], 'firstParty'),
 }))
 await writeFile(join(root, 'evidence.json'), JSON.stringify({ transcript, classifierBodies, modelBodies, permissions, reviews, code, authentication,

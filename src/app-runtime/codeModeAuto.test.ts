@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wrapper', 'computed-child', 'queued-policy', 'queued-unchanged', 'background-disabled']) {
+for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wrapper', 'computed-child', 'sensitive-edit-direct', 'sensitive-edit-script', 'sensitive-edit-block', 'queued-policy', 'queued-unchanged', 'background-disabled']) {
   test(`Code Mode permission lifecycle: ${scenario}`, async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'code-mode-auto-')))
     try {
@@ -25,6 +25,29 @@ for (const scenario of ['admit', 'deny', 'ask', 'wrapper', 'budget', 'budget-wra
       if (exit !== 0) throw new Error(`Auto fixture failed (${exit}): ${stderr}\n${stdout}`)
       const evidence = JSON.parse(await readFile(join(root, 'evidence.json'), 'utf8'))
       const results = evidence.transcript.filter((message: any) => message.toolUseResult?.kind === 'code-mode').map((message: any) => message.toolUseResult)
+      if (scenario.startsWith('sensitive-edit-')) {
+        const path = join(root, 'workspace', '.cat-code', 'preview.html')
+        const blocked = scenario === 'sensitive-edit-block'
+        expect(evidence.permissions).toEqual([])
+        expect(await readFile(path, 'utf8')).toBe(blocked ? '<h1>Before</h1>' : '<h1>After</h1>')
+        const actions: string[] = evidence.classifierBodies.map((body: any) => body.messages.at(-1).content.at(-1).text)
+        const edits = actions.filter(action => action.startsWith('<pending_action>\nEdit '))
+        expect(edits.length).toBeGreaterThan(0)
+        for (const edit of edits) {
+          expect(edit).toContain(path)
+          expect(edit).toContain('Before')
+          expect(edit).toContain('After')
+        }
+        if (scenario === 'sensitive-edit-direct') {
+          expect(results).toHaveLength(0)
+        } else {
+          expect(results).toHaveLength(1)
+          expect(results[0].status).toBe(blocked ? 'blocked' : 'completed')
+          expect(results[0].calls).toHaveLength(1)
+          expect(results[0].calls[0].name).toBe('Edit')
+        }
+        return
+      }
       if (scenario.startsWith('queued-')) {
         const launch = results.find((result: any) => result.cellId === 'second-script' && result.status === 'running')
         const completion = results.find((result: any) => result.taskId === launch?.taskId && result.status !== 'running')

@@ -763,10 +763,12 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         return result
       }
 
-      // Explicit asks and safety prompts on Script child calls still require
-      // interaction. Other children enter the ordinary per-tool Auto path.
-      if (context.getCodeModeDispatchFence &&
-          (result.decisionReason?.type === 'rule' || result.decisionReason?.type === 'safetyCheck')) {
+      // Preserve explicit asks for Script children. Mandatory safety prompts
+      // were handled above; classifier-approvable checks use ordinary Auto review.
+      if (
+        context.getCodeModeDispatchFence &&
+        result.decisionReason?.type === 'rule'
+      ) {
         if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
           const hookDecision = await runPermissionRequestHooksForHeadlessAgent(
             tool,
