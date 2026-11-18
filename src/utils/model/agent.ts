@@ -1,24 +1,32 @@
+import { CURRENT_CODEX_RELEASES, currentClaudeRelease, matchClaudeRelease } from './configs.js'
+import { isModelAlias } from './aliases.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { capitalize } from '../stringUtils.js'
 import { applyBedrockRegionPrefix, getBedrockRegionPrefix } from './bedrock.js'
 import {
   getCanonicalName,
-  getDefaultOpusModel,
-  getDefaultSonnetModel,
   getPublicModelDisplayName,
   getRuntimeMainLoopModel,
   parseUserSpecifiedModel,
 } from './model.js'
 import {
   getAPIProvider,
+  isAnthropicCloudProvider,
   resolveModelSelectionProvider,
   resolveRequestProvider,
   type APIProvider,
 } from './providers.js'
 
-// @[MODEL LAUNCH]: 'claude-opus-5-5' is a deliberate version pin, not an alias.
-// Re-point it (or add the successor beside it) when a newer Opus ships.
-export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'inherit'] as const
+// The independent Opus choice is an exact selection, even on an Opus parent.
+const independentOpus = currentClaudeRelease('opus')
+const CODEX_AGENT_CHOICES = CURRENT_CODEX_RELEASES.map(release => release.id)
+export const AGENT_TOOL_MODEL_OPTIONS = [
+  'sonnet', 'opus', independentOpus.wire.firstParty, ...CODEX_AGENT_CHOICES,
+] as const
+export const AGENT_MODEL_OPTIONS = [
+  'sonnet', 'opus', independentOpus.wire.firstParty, 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan',
+  ...CODEX_AGENT_CHOICES, 'inherit',
+] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
 export type AgentModelSelection = Exclude<AgentModelAlias, 'inherit'>
 
@@ -54,7 +62,7 @@ export function resolveAgentModel(
   return {
     model,
     provider: selection && selection !== 'inherit'
-      ? resolveModelSelectionProvider(model, provider)
+      ? resolveModelSelectionProvider(isModelAlias(selection.toLowerCase()) ? selection : model, provider)
       : resolveRequestProvider(model, provider),
   }
 }
@@ -74,14 +82,22 @@ export function getAgentModel(
   permissionMode?: PermissionMode,
   parentProvider?: APIProvider,
 ): string {
-  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
-    return parseUserSpecifiedModel(process.env.CLAUDE_CODE_SUBAGENT_MODEL)
-  }
-
+  const sessionProvider = getAPIProvider()
   const effectiveParentProvider = resolveRequestProvider(
     parentModel,
-    parentProvider ?? getAPIProvider(),
+    parentProvider ?? sessionProvider,
   )
+  const baseProvider = isAnthropicCloudProvider(effectiveParentProvider)
+    ? effectiveParentProvider : sessionProvider
+  const providerForSpec = (spec: string) =>
+    isModelAlias(spec.trim().toLowerCase())
+      ? resolveModelSelectionProvider(spec, baseProvider)
+      : baseProvider
+
+  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
+    const override = process.env.CLAUDE_CODE_SUBAGENT_MODEL
+    return parseUserSpecifiedModel(override, providerForSpec(override))
+  }
 
   // Extract Bedrock region prefix from parent model to inherit for subagents.
   // This ensures subagents use the same cross-region inference profile (e.g., "eu.", "us.")
@@ -105,15 +121,8 @@ export function getAgentModel(
     return resolvedModel
   }
 
-  const resolveSubagentModel = (modelSpec: string): string => {
-    if (modelSpec.toLowerCase() === 'sonnet') {
-      return getDefaultSonnetModel()
-    }
-    if (modelSpec.toLowerCase() === 'opus') {
-      return getDefaultOpusModel()
-    }
-    return parseUserSpecifiedModel(modelSpec)
-  }
+  const resolveSubagentModel = (modelSpec: string): string =>
+    parseUserSpecifiedModel(modelSpec, providerForSpec(modelSpec))
 
   // Prioritize tool-specified model if provided
   if (toolSpecifiedModel) {
@@ -158,11 +167,12 @@ export function getAgentModel(
  */
 function aliasMatchesParentTier(alias: string, parentModel: string): boolean {
   const canonical = getCanonicalName(parentModel)
+  const family = matchClaudeRelease(canonical)?.family
   switch (alias.toLowerCase()) {
     case 'opus':
-      return canonical.includes('opus')
+      return family === 'opus' || canonical.includes('opus')
     case 'sonnet':
-      return canonical.includes('sonnet')
+      return family === 'sonnet' || canonical.includes('sonnet')
     default:
       return false
   }
@@ -191,30 +201,15 @@ export function getAgentModelOptions(): AgentModelOption[] {
       description: 'Most capable for complex reasoning tasks',
     },
     {
-      value: 'claude-opus-5-5',
-      label: 'Opus 5.5',
-      description: 'Pinned to Opus 5.5, even when the parent runs something else',
+      value: independentOpus.wire.firstParty,
+      label: independentOpus.label,
+      description: `Pinned to ${independentOpus.label}, even when the parent runs something else`,
     },
-    {
-      value: 'gpt-6.2-astra',
-      label: 'GPT-6.2 Astra',
-      description: 'Most capable GPT model for complex work',
-    },
-    {
-      value: 'gpt-6.2-sol',
-      label: 'GPT-6.2 Sol',
-      description: 'Complex coding and agentic workflows',
-    },
-    {
-      value: 'gpt-6.1-terra',
-      label: 'GPT-6.1 Terra',
-      description: 'Fast visual reasoning, computer use, and writing',
-    },
-    {
-      value: 'gpt-6-luna',
-      label: 'GPT-6 Luna',
-      description: 'Fast GPT-6 option for agentic coding (preview)',
-    },
+    ...CURRENT_CODEX_RELEASES.map(release => ({
+      value: release.id,
+      label: release.label,
+      description: release.agentDescription,
+    })),
     {
       value: 'inherit',
       label: 'Inherit from parent',

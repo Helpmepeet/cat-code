@@ -1,3 +1,4 @@
+import { matchClaudeRelease } from './model/configs.js'
 import { createHash, randomUUID, type UUID } from 'crypto'
 import { stat } from 'fs/promises'
 import { isAbsolute, join, relative, sep } from 'path'
@@ -152,23 +153,8 @@ export function sanitizeSurfaceKey(surfaceKey: string): string {
  * Maps internal variants to their public names based on model family.
  */
 export function sanitizeModelName(shortName: string): string {
-  // Map internal variants to public equivalents based on model family
-  if (shortName.includes('fable-5')) return 'claude-fable-5'
-  if (shortName.includes('opus-5')) return 'claude-opus-5'
-  if (shortName.includes('sonnet-5')) return 'claude-sonnet-5'
-  if (shortName.includes('opus-4-6')) return 'claude-opus-4-6'
-  if (shortName.includes('opus-4-5')) return 'claude-opus-4-5'
-  if (shortName.includes('opus-4-1')) return 'claude-opus-4-1'
-  if (shortName.includes('opus-4')) return 'claude-opus-4'
-  if (shortName.includes('sonnet-4-6')) return 'claude-sonnet-4-6'
-  if (shortName.includes('sonnet-4-5')) return 'claude-sonnet-4-5'
-  if (shortName.includes('sonnet-4')) return 'claude-sonnet-4'
-  if (shortName.includes('sonnet-3-7')) return 'claude-sonnet-3-7'
-  if (shortName.includes('haiku-5-5')) return 'claude-haiku-5-5'
-  if (shortName.includes('haiku-4-5')) return 'claude-haiku-4-5'
-  if (shortName.includes('haiku-3-5')) return 'claude-haiku-3-5'
-  // Unknown models get a generic name
-  return 'claude'
+  const release = matchClaudeRelease(shortName) ?? matchClaudeRelease(`claude-${shortName}`)
+  return release?.attributionId ?? release?.wire.foundry ?? 'claude'
 }
 
 /**

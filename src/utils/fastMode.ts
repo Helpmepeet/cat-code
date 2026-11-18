@@ -1,3 +1,4 @@
+import { CODEX_ROUTES, currentClaudeRelease, currentCodexRelease, getCodexRelease, matchClaudeRelease } from './model/configs.js'
 import axios from 'axios'
 import { getOauthConfig, OAUTH_BETA_HEADER } from 'src/constants/oauth.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
@@ -144,8 +145,8 @@ export function getFastModeUnavailableReason(): string | null {
   return null
 }
 
-// @[MODEL LAUNCH]: Update supported Fast Mode models.
-export const FAST_MODE_MODEL_DISPLAY = 'Opus 5'
+const fastModeOpus = currentClaudeRelease('opus')
+export const FAST_MODE_MODEL_DISPLAY = fastModeOpus.fastModeLabel ?? fastModeOpus.label
 
 export function getFastModeModelDisplay(): string {
   if (getAPIProvider() === 'openai') {
@@ -161,7 +162,7 @@ export function getFastModeModelDisplay(): string {
  */
 export function getFastModeModel(): string {
   if (getAPIProvider() === 'openai') {
-    return 'gpt-6.2-sol'
+    return currentCodexRelease(CODEX_ROUTES.fastMode).id
   }
   return 'opus' + (isOpus1mMergeEnabled() ? '[1m]' : '')
 }
@@ -185,24 +186,13 @@ export function isFastModeSupportedByModel(
   if (!isFastModeEnabled()) {
     return false
   }
-  if (modelSetting === 'gpt-5.6-luna') {
-    return false
-  }
+  if (modelSetting && getCodexRelease(modelSetting)?.fastMode === false) return false
   const model = modelSetting ?? getDefaultMainLoopModelSetting()
   const parsedModel = parseUserSpecifiedModel(model)
   const normalizedModel = parsedModel.toLowerCase()
-  if (normalizedModel === 'gpt-5.6-luna') {
-    return false
-  }
-  return (
-    normalizedModel.includes('opus-5') ||
-    normalizedModel.includes('opus-4-6') ||
-    normalizedModel.includes('fable-5') ||
-    normalizedModel === 'gpt-6.2-astra' ||
-    normalizedModel === 'gpt-6.2-sol' ||
-    normalizedModel === 'gpt-6-luna' ||
-    normalizedModel === 'gpt-6.1-terra'
-  )
+  const codex = getCodexRelease(normalizedModel)
+  if (codex) return codex.fastMode === true
+  return matchClaudeRelease(normalizedModel)?.fastMode === true
 }
 
 // --- Fast mode runtime state ---

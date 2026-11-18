@@ -11,6 +11,7 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { ROUTABLE_CODEX_RELEASES } from '../../src/utils/model/configs.js'
 
 import { MAX_REGISTRY_SESSIONS } from './registry.js'
 import {
@@ -67,12 +68,7 @@ test('the pool avoids vocabulary the product itself shows the operator', () => {
   // used to hold the model label, so a session named Sol would render
   // "2h ago · Sol" exactly where "GPT-5.6 Sol" used to be. Read the model labels
   // out of their real source, so a future model called Garnet fails here.
-  const adapter = readFileSync(
-    join(import.meta.dir, '../../src/services/api/codex-fetch-adapter.ts'),
-    'utf8',
-  )
-  const labels = [...adapter.matchAll(/label: '([^']+)'/g)].map(match => match[1]!)
-  expect(labels.length).toBeGreaterThan(4)
+  const labels = ROUTABLE_CODEX_RELEASES.map(release => release.label)
   // Each label's distinguishing word ("GPT-5.6 Sol" → "Sol"), which is what a
   // reader actually tells apart.
   const labelWords = new Set(

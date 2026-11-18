@@ -1,3 +1,5 @@
+import { getProviderForModel } from '../model/providerForModel.js'
+import { CODEX_ROUTES, currentCodexRelease } from '../model/configs.js'
 import type { APIProvider } from '../model/providers.js'
 import { remapRetiredGptModel } from '../model/model.js'
 
@@ -6,11 +8,9 @@ export type AutoModeClassifierAttempt = {
   model: string
 }
 
-const GPT_CLASSIFIER_FALLBACKS = [
-  'gpt-6.2-sol',
-  'gpt-6.1-terra',
-  'gpt-6-luna',
-] as const
+export const GPT_CLASSIFIER_FALLBACKS: readonly string[] = CODEX_ROUTES.classifierFallbacks.map(
+  family => currentCodexRelease(family).id,
+)
 
 export function getAutoModeClassifierAttempts(
   configuredModel: string,
@@ -18,10 +18,8 @@ export function getAutoModeClassifierAttempts(
   anthropicProvider: Exclude<APIProvider, 'openai'>,
 ): AutoModeClassifierAttempt[] {
   const selectedModel = remapRetiredGptModel(configuredModel)
-  const configuredGptIndex = GPT_CLASSIFIER_FALLBACKS.indexOf(
-    selectedModel as (typeof GPT_CLASSIFIER_FALLBACKS)[number],
-  )
-  const attempts: AutoModeClassifierAttempt[] = selectedModel.startsWith('gpt-')
+  const configuredGptIndex = GPT_CLASSIFIER_FALLBACKS.indexOf(selectedModel)
+  const attempts: AutoModeClassifierAttempt[] = getProviderForModel(selectedModel) === 'openai'
     ? [
         { provider: 'openai', model: selectedModel },
         ...GPT_CLASSIFIER_FALLBACKS.slice(

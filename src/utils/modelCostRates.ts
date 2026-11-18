@@ -16,6 +16,7 @@ import {
   CLAUDE_SONNET_4_CONFIG,
   CLAUDE_SONNET_5_CONFIG,
   CLAUDE_SONNET_5_5_CONFIG,
+  getExactClaudeRelease,
   GPT_6_1_TERRA_CONFIG,
   type ModelConfig,
 } from './model/configs.js'
@@ -119,7 +120,8 @@ function standardCanonicalId(model: string): string {
  */
 export function getConfiguredStandardModelCosts(model: string): ModelCosts | undefined {
   const configuredId = model.trim().toLowerCase().replace(/\[1m\]$/i, '')
-  return CONFIGURED_STANDARD_MODEL_COSTS.get(configuredId)
+  return CONFIGURED_STANDARD_MODEL_COSTS.get(configuredId) ??
+    CONFIGURED_STANDARD_MODEL_COSTS.get(getExactClaudeRelease(configuredId)?.priceAs ?? '')
 }
 
 /** The rates that apply to one request, given its prompt size in tokens. */

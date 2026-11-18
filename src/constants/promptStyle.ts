@@ -1,3 +1,4 @@
+import { getCodexRelease } from '../utils/model/configs.js'
 import {
   getAPIProvider,
   type APIProvider,
@@ -24,13 +25,5 @@ export type GPTPromptFamily = 'gpt-5.6' | 'gpt-6'
 // Keep retired GPT-6 IDs here for historical replay. Active model selection
 // remaps them to their successors before building a prompt.
 export function getGPTPromptFamily(model: string): GPTPromptFamily {
-  return model === 'gpt-6.2-astra' ||
-    model === 'gpt-6.2-sol' ||
-    model === 'gpt-6-astra' ||
-    model === 'gpt-6.1-sol' ||
-    model === 'gpt-6.1-terra' ||
-    model === 'gpt-6-sol' ||
-    model === 'gpt-6-luna'
-    ? 'gpt-6'
-    : 'gpt-5.6'
+  return getCodexRelease(model)?.promptFamily ?? 'gpt-5.6'
 }

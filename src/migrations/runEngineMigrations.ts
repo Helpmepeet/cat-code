@@ -20,6 +20,8 @@ import { migrateOpusToOpus1m } from './migrateOpusToOpus1m.js'
 import { migrateReplBridgeEnabledToRemoteControlAtStartup } from './migrateReplBridgeEnabledToRemoteControlAtStartup.js'
 import { migrateRetiredClaude46ModelsToClaude5 } from './migrateRetiredClaude46ModelsToClaude5.js'
 import { migrateRetiredGptModels } from './migrateRetiredGptModels.js'
+import { migrateRetiredModelsWith } from './migrateRetiredModels.js'
+import { remapFirstPartyClaudeSelectionForMigration, remapRetiredGptModel } from '../utils/model/model.js'
 import { migrateSonnet1mToSonnet45 } from './migrateSonnet1mToSonnet45.js'
 import { migrateSonnet45ToSonnet46 } from './migrateSonnet45ToSonnet46.js'
 import { resetAutoModeOptInForDefaultOffer } from './resetAutoModeOptInForDefaultOffer.js'
@@ -131,6 +133,12 @@ export async function runEngineMigrations(): Promise<void> {
         logError(migrationError)
         return
       }
+    } else {
+      const retirementError = migrateRetiredModelsWith(
+        model => remapFirstPartyClaudeSelectionForMigration(remapRetiredGptModel(model)),
+        true,
+      )
+      if (retirementError) logError(retirementError)
     }
 
     await migrateChangelogFromConfig().catch(() => {})

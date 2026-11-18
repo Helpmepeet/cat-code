@@ -1,5 +1,6 @@
 import type { BetaUsage as Usage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 'src/services/analytics/index.js'
+import { getConfiguredStandardModelCosts } from './modelCostRates.js'
 import { logEvent } from 'src/services/analytics/index.js'
 import { EMPTY_USAGE } from '../services/api/emptyUsage.js'
 import { setHasUnknownModelCost } from '../bootstrap/state.js'
@@ -100,7 +101,7 @@ export function getModelCosts(model: string, usage: Usage): ModelCosts {
     return getOpus46CostTier(isFastMode)
   }
 
-  const costs = MODEL_COSTS[shortName]
+  const costs = MODEL_COSTS[shortName] ?? getConfiguredStandardModelCosts(shortName)
   if (!costs) {
     trackUnknownModelCost(model, shortName)
     return (
@@ -185,7 +186,7 @@ export function formatModelPricing(costs: ModelCosts): string {
  */
 export function getModelPricingString(model: string): string | undefined {
   const shortName = getCanonicalName(model)
-  const costs = MODEL_COSTS[shortName]
+  const costs = MODEL_COSTS[shortName] ?? getConfiguredStandardModelCosts(shortName)
   if (!costs) return undefined
   return formatModelPricing(costs)
 }

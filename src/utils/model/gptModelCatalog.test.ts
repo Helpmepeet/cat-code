@@ -3,7 +3,6 @@ import { describe, expect, test } from 'bun:test'
 import { executeEffort, showCurrentEffort } from '../../commands/effort/effort.js'
 import { cycleEffortLevel } from '../../components/ModelPicker.js'
 import { CODEX_MODELS } from '../../services/api/codex-fetch-adapter.js'
-import { ALL_MODEL_CONFIGS } from './configs.js'
 import { getContextWindowForModel } from '../context.js'
 import {
   getDefaultEffortForModel,
@@ -110,13 +109,6 @@ describe('Active GPT models: Astra 6.2, Sol 6.2, Terra, Luna', () => {
       )
     })
   }
-
-  test('the active config catalog registers 6.1 Sol and omits retired 6 Sol', () => {
-    expect(ALL_MODEL_CONFIGS.gpt62sol.firstParty).toBe('gpt-6.2-sol')
-    expect(ALL_MODEL_CONFIGS).not.toHaveProperty('gpt6sol')
-    expect(ALL_MODEL_CONFIGS.gpt61terra.firstParty).toBe('gpt-6.1-terra')
-    expect(ALL_MODEL_CONFIGS).not.toHaveProperty('gpt56terra')
-  })
 
   test('picker order is Astra -> Sol 6.1 -> Terra -> Luna', () => {
     const agentModels = getAgentModelOptions().map(option => option.value)

@@ -1,3 +1,4 @@
+import { matchClaudeRelease } from './model/configs.js'
 import { feature } from 'bun:bundle'
 import memoize from 'lodash-es/memoize.js'
 import {
@@ -106,19 +107,13 @@ export function modelSupportsISP(model: string): boolean {
   if (provider === 'firstParty') {
     return !canonical.includes('claude-3-')
   }
-  return (
-    canonical.includes('claude-opus-4') || canonical.includes('claude-sonnet-4')
-  )
+  return matchClaudeRelease(canonical)?.cloudInterleavedThinking ?? false
 }
 
 function vertexModelSupportsWebSearch(model: string): boolean {
   const canonical = getCanonicalName(model)
   // Web search only supported on Claude 4.0+ models on Vertex
-  return (
-    canonical.includes('claude-opus-4') ||
-    canonical.includes('claude-sonnet-4') ||
-    canonical.includes('claude-haiku-4')
-  )
+  return matchClaudeRelease(canonical)?.vertexWebSearch ?? false
 }
 
 // Context management is supported on Claude 4+ models
@@ -131,14 +126,9 @@ export function modelSupportsContextManagement(model: string): boolean {
   if (provider === 'firstParty') {
     return !canonical.includes('claude-3-')
   }
-  return (
-    canonical.includes('claude-opus-4') ||
-    canonical.includes('claude-sonnet-4') ||
-    canonical.includes('claude-haiku-4')
-  )
+  return matchClaudeRelease(canonical)?.cloudContextManagement ?? false
 }
 
-// @[MODEL LAUNCH]: Add the new model ID to this list if it supports structured outputs.
 export function modelSupportsStructuredOutputs(model: string): boolean {
   const canonical = getCanonicalName(model)
   const provider = getAPIProvider()
@@ -146,21 +136,9 @@ export function modelSupportsStructuredOutputs(model: string): boolean {
   if (provider !== 'firstParty' && provider !== 'foundry') {
     return false
   }
-  return (
-    canonical.includes('claude-fable-5') ||
-    canonical.includes('claude-opus-5') ||
-    canonical.includes('claude-sonnet-5') ||
-    canonical.includes('claude-sonnet-4-6') ||
-    canonical.includes('claude-sonnet-4-5') ||
-    canonical.includes('claude-opus-4-1') ||
-    canonical.includes('claude-opus-4-5') ||
-    canonical.includes('claude-opus-4-6') ||
-    canonical.includes('claude-haiku-4-5') ||
-    canonical.includes('claude-haiku-5-5')
-  )
+  return matchClaudeRelease(canonical)?.structuredOutputs ?? false
 }
 
-// @[MODEL LAUNCH]: Add the new model if it supports auto mode (specifically PI probes) — ask in #proj-claude-code-safety-research.
 export function modelSupportsAutoMode(model: string): boolean {
   if (feature('TRANSCRIPT_CLASSIFIER')) {
     const m = getCanonicalName(model)
@@ -197,7 +175,7 @@ export function modelSupportsAutoMode(model: string): boolean {
     }
     // External allowlist (firstParty already checked above). Include the current
     // Claude defaults and the Claude 5 IDs retained by saved sessions.
-    return /^claude-(opus|sonnet)-(4-6|5|5-5)$/.test(m)
+    return matchClaudeRelease(m)?.autoMode ?? false
   }
   return false
 }

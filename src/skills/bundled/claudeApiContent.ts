@@ -1,3 +1,4 @@
+import { currentClaudeRelease, getClaudeFamilyKey, getClaudeRelease } from '../../utils/model/configs.js'
 // Content for the claude-api bundled skill.
 // Each .md file is inlined as a string at build time via Bun's text loader.
 
@@ -28,20 +29,18 @@ import typescriptClaudeApiReadme from './claude-api/typescript/claude-api/README
 import typescriptClaudeApiStreaming from './claude-api/typescript/claude-api/streaming.md'
 import typescriptClaudeApiToolUse from './claude-api/typescript/claude-api/tool-use.md'
 
-// @[MODEL LAUNCH]: Update the model IDs/names below. These are substituted into {{VAR}}
-// placeholders in the .md files at runtime before the skill prompt is sent.
-// After updating these constants, manually update the two files that still hardcode models:
-//   - claude-api/SKILL.md (Current Models pricing table)
-//   - claude-api/shared/models.md (full model catalog with legacy versions and alias mappings)
+const opus = currentClaudeRelease('opus')
+const sonnet = currentClaudeRelease('sonnet')
+const haiku = getClaudeRelease(getClaudeFamilyKey('haiku', true))
+
 export const SKILL_MODEL_VARS = {
-  OPUS_ID: 'claude-opus-5-5',
-  OPUS_NAME: 'Claude Opus 5.5',
-  SONNET_ID: 'claude-sonnet-5-5',
-  SONNET_NAME: 'Claude Sonnet 5.5',
-  HAIKU_ID: 'claude-haiku-4-5',
-  HAIKU_NAME: 'Claude Haiku 4.5',
-  // Previous Sonnet ID — used in "do not append date suffixes" example in SKILL.md.
-  PREV_SONNET_ID: 'claude-sonnet-4-6',
+  OPUS_ID: opus.wire.firstParty,
+  OPUS_NAME: `Claude ${opus.label}`,
+  SONNET_ID: sonnet.wire.firstParty,
+  SONNET_NAME: `Claude ${sonnet.label}`,
+  HAIKU_ID: haiku.wire.foundry,
+  HAIKU_NAME: `Claude ${haiku.label}`,
+  PREV_SONNET_ID: getClaudeRelease('sonnet46').wire.firstParty,
 } satisfies Record<string, string>
 
 export const SKILL_PROMPT: string = skillPrompt

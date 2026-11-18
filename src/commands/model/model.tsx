@@ -1,3 +1,4 @@
+import { getClaudeRelease, matchClaudeRelease } from '../../utils/model/configs.js'
 import { c as _c } from "react/compiler-runtime";
 import chalk from 'chalk';
 import * as React from 'react';
@@ -197,13 +198,13 @@ function SetModelAndClose({
 
       // @[MODEL LAUNCH]: Update check for 1M access.
       if (model && isOpus1mUnavailable(model)) {
-        onDone(`Opus 5 with 1M context is not available for your account. Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m`, {
+        onDone(`Opus with 1M context is not available for your account. Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m`, {
           display: 'system'
         });
         return;
       }
       if (model && isSonnet1mUnavailable(model)) {
-        onDone(`Sonnet 5 with 1M context is not available for your account. Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m`, {
+        onDone(`Sonnet with 1M context is not available for your account. Learn more: https://code.claude.com/docs/en/model-config#extended-context-with-1m`, {
           display: 'system'
         });
         return;
@@ -304,7 +305,7 @@ function isSonnet1mUnavailable(model: string): boolean {
   const m = model.toLowerCase();
   // Warn about Sonnet and Sonnet 4.6, but not Sonnet 4.5 since that had
   // a different access criteria.
-  return !checkSonnet1mAccess() && (m.includes('sonnet[1m]') || m.includes('sonnet-4-6[1m]'));
+  return !checkSonnet1mAccess() && (m.includes('sonnet[1m]') || (m.endsWith('[1m]') && matchClaudeRelease(m) === getClaudeRelease('sonnet46')));
 }
 function ShowModelAndClose(t0) {
   const {

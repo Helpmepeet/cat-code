@@ -1,3 +1,4 @@
+import { getClaudeRelease, getCodexRelease, matchClaudeRelease } from './model/configs.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { resolveAntModel } from './model/antModels.js'
 import { CONTEXT_1M_BETA_HEADER } from '../constants/betas.js'
@@ -45,7 +46,6 @@ function has1mSuffix(model: string, disabled: boolean): boolean {
   return getProviderForModel(base) !== 'openai'
 }
 
-// @[MODEL LAUNCH]: Update this pattern if the new model supports 1M context
 export function modelSupports1M(model: string): boolean {
   return supports1M(model, is1mContextDisabled())
 }
@@ -54,8 +54,7 @@ function supports1M(model: string, disabled: boolean): boolean {
   if (disabled) {
     return false
   }
-  const canonical = getCanonicalName(model)
-  return canonical.includes('claude-sonnet-4') || canonical.includes('opus-4-6') || canonical.includes('claude-sonnet-5') || canonical.includes('claude-opus-5') || canonical.includes('claude-fable-5')
+  return matchClaudeRelease(getCanonicalName(model))?.longContext !== undefined
 }
 
 /**
@@ -71,12 +70,7 @@ function uses1MByDefault(model: string, disabled: boolean): boolean {
   if (disabled) {
     return false
   }
-  const canonical = getCanonicalName(model)
-  return (
-    canonical.includes('claude-sonnet-5') ||
-    canonical.includes('claude-opus-5') ||
-    canonical.includes('claude-fable-5')
-  )
+  return matchClaudeRelease(getCanonicalName(model))?.longContext === 'default'
 }
 
 /**
@@ -178,33 +172,8 @@ export function resolveNativeContextWindow(
     return { window: 1_000_000, source: 'sonnet_1m_experiment' }
   }
   const canonicalModel = getCanonicalName(model)
-  // The Codex catalog uses smaller default windows than the public API.
-  if (canonicalModel === 'gpt-6.2-astra') {
-    return { window: 272_000, source: 'gpt_6_codex' }
-  }
-  if (canonicalModel === 'gpt-6.2-sol') {
-    return { window: 500_000, source: 'gpt_6_codex' }
-  }
-  if (
-    canonicalModel === 'gpt-6.1-terra' ||
-    canonicalModel === 'gpt-6-luna'
-  ) {
-    return { window: 1_050_000, source: 'gpt_6_codex' }
-  }
-  // GPT-5.6 Sol runs a 1M Codex context window. It shares the `gpt_5_6_codex`
-  // source with its 372k siblings on purpose: the source is what exempts a
-  // Codex window from the Anthropic long-context entitlement cap (see
-  // isLongContextEntitlementScoped), and that exemption is not about the size.
-  // For the same reason it is not routed through the 1M branches above —
-  // CLAUDE_CODE_DISABLE_1M_CONTEXT is a first-party compliance switch and has
-  // never narrowed a Codex window.
-  if (canonicalModel === 'gpt-5.6-sol') {
-    return { window: 1_000_000, source: 'gpt_5_6_codex' }
-  }
-  // GPT-5.6 Terra and Luna have a 372k Codex context window.
-  if (canonicalModel === 'gpt-5.6-terra' || canonicalModel === 'gpt-5.6-luna') {
-    return { window: 372_000, source: 'gpt_5_6_codex' }
-  }
+  const codexWindow = getCodexRelease(canonicalModel)?.context
+  if (codexWindow) return codexWindow
   // GPT/Codex models: 272k max input tokens (400k total budget minus 128k output reserve)
   if (canonicalModel.startsWith('gpt-')) {
     return { window: 272_000, source: 'gpt_default' }
@@ -262,7 +231,7 @@ function sonnet1mExpTreatmentEnabled(model: string, disabled: boolean): boolean 
   if (has1mSuffix(model, disabled)) {
     return false
   }
-  if (!getCanonicalName(model).includes('sonnet-4-6')) {
+  if (matchClaudeRelease(getCanonicalName(model)) !== getClaudeRelease('sonnet46')) {
     return false
   }
   return getGlobalConfig().clientDataCache?.['coral_reef_sonnet'] === 'true'
@@ -409,25 +378,10 @@ export function getModelMaxOutputTokens(model: string): {
     return { default: 32_000, upperLimit }
   }
 
-  if (m.includes('fable-5') || m.includes('opus-5') || m.includes('sonnet-5')) {
-    defaultTokens = 64_000
-    upperLimit = 128_000
-  } else if (m.includes('opus-4-6')) {
-    defaultTokens = 64_000
-    upperLimit = 128_000
-  } else if (m.includes('sonnet-4-6')) {
-    defaultTokens = 32_000
-    upperLimit = 128_000
-  } else if (
-    m.includes('opus-4-5') ||
-    m.includes('sonnet-4') ||
-    m.includes('haiku-4')
-  ) {
-    defaultTokens = 32_000
-    upperLimit = 64_000
-  } else if (m.includes('opus-4-1') || m.includes('opus-4')) {
-    defaultTokens = 32_000
-    upperLimit = 32_000
+  const configuredOutput = matchClaudeRelease(m)?.outputTokens
+  if (configuredOutput) {
+    defaultTokens = configuredOutput.default
+    upperLimit = configuredOutput.upperLimit
   } else if (m.includes('claude-3-opus')) {
     defaultTokens = 4_096
     upperLimit = 4_096
@@ -437,12 +391,6 @@ export function getModelMaxOutputTokens(model: string): {
   } else if (m.includes('claude-3-haiku')) {
     defaultTokens = 4_096
     upperLimit = 4_096
-  } else if (m.includes('3-5-sonnet') || m.includes('3-5-haiku')) {
-    defaultTokens = 8_192
-    upperLimit = 8_192
-  } else if (m.includes('3-7-sonnet')) {
-    defaultTokens = 32_000
-    upperLimit = 64_000
   } else {
     defaultTokens = MAX_OUTPUT_TOKENS_DEFAULT
     upperLimit = MAX_OUTPUT_TOKENS_UPPER_LIMIT

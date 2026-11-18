@@ -1,13 +1,14 @@
+import { getCodexUsageStatus } from '../../src/utils/model/configs.js';
 import type { UsageCategory } from './usageDashboard.js';
 
 export function isRetiredUsageModel(model: UsageCategory): boolean {
-    return model.kind === 'named' && /^gpt-(?:5\.6-(?:sol|luna|terra)|6-astra|6\.1-sol)(?:-|$)/i.test(model.label);
+    return model.kind === 'named' && getCodexUsageStatus(model.label).retired;
 }
 
 export function isCurrentSolLunaUsageModel(model: UsageCategory): boolean {
-    return model.kind === 'named' && /^gpt-6-(?:sol|luna)(?:-|$)/i.test(model.label);
+    return model.kind === 'named' && getCodexUsageStatus(model.label).legacySolLuna;
 }
 
 export function isCurrentUsageModel(model: UsageCategory): boolean {
-    return model.kind === 'named' && /^gpt-(?:6\.2-(?:astra|sol)|6\.1-terra|6-luna)(?:-|$)/i.test(model.label);
+    return model.kind === 'named' && getCodexUsageStatus(model.label).current;
 }

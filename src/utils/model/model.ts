@@ -22,12 +22,12 @@ import {
 } from '../context.js'
 import { isEnvTruthy } from '../envUtils.js'
 import { getModelStrings, resolveOverriddenModel } from './modelStrings.js'
-import { remapRetiredGptModel } from './gptModelRetirement.js'
 import { formatModelPricing, getOpus46CostTier } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import {
   getAPIProvider,
+  type APIProvider,
   getConfiguredAnthropicProvider,
   isAnthropicCloudProvider,
   isFirstPartyAnthropicBaseUrl,
@@ -36,6 +36,23 @@ import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
 import { type ModelAlias, isModelAlias } from './aliases.js'
 import { capitalize } from '../stringUtils.js'
+import {
+  ALL_MODEL_CONFIGS,
+  CODEX_ROUTES,
+  currentClaudeRelease,
+  currentCodexRelease,
+  getClaudeFamilyKey,
+  getClaudeMarketingName,
+  getClaudeRelease,
+  getCodexRelease,
+  isLegacyOpusFirstParty,
+  matchClaudeRelease,
+  matchCodexRelease,
+  remapRetiredClaudeSelection,
+  remapRetiredCodexSelection,
+  type ClaudeFamily,
+  type ModelKey,
+} from './configs.js'
 
 export type ModelShortName = string
 export type ModelName = string
@@ -51,8 +68,7 @@ export function getSmallFastModel(): ModelName {
  *
  * While the active session is routed through Codex/OpenAI, the default Haiku
  * model would be sent through the wrong provider. Route provider-neutral
- * secondary calls to GPT-5.6 Luna, mirroring
- * getDefaultMainLoopModelSetting()'s Codex branch.
+ * secondary calls through the Codex small/fast route.
  *
  * Anthropic-billing consumers (token estimation, claudeAiLimits) keep calling
  * getSmallFastModel() directly so the ANTHROPIC_SMALL_FAST_MODEL env var and
@@ -60,49 +76,29 @@ export function getSmallFastModel(): ModelName {
  */
 export function getSmallFastModelForProvider(): ModelName {
   if (isCodexSubscriber()) {
-    return getModelStrings().gpt6luna
+    return getModelStrings()[CODEX_ROUTES.smallFast]
   }
   return getSmallFastModel()
 }
 
 export function isNonCustomOpusModel(model: ModelName): boolean {
-  return (
-    model === getModelStrings().opus40 ||
-    model === getModelStrings().opus41 ||
-    model === getModelStrings().opus45 ||
-    model === getModelStrings().opus46 ||
-    model === getModelStrings().opus55 ||
-    model === getModelStrings().opus5
+  const strings = getModelStrings()
+  return (Object.keys(ALL_MODEL_CONFIGS) as ModelKey[]).some(key =>
+    strings[key] === model && matchClaudeRelease(ALL_MODEL_CONFIGS[key].firstParty)?.family === 'opus',
   )
 }
 
-export { remapRetiredGptModel }
+export const remapRetiredGptModel = remapRetiredCodexSelection
 
-const RETIRED_CLAUDE_46_MODEL_REPLACEMENTS: Record<string, ModelName> = {
-  'claude-sonnet-4-6': 'claude-sonnet-5',
-  'claude-opus-4-6': 'claude-opus-5',
-}
-
-function remapRetiredClaude46ModelById(model: ModelName): ModelName {
-  const base = model.trim().replace(/\[1m\]$/i, '')
-  // Do not resolve settings-based model overrides here: an override keyed by
-  // the retired ID must itself be migrated rather than hiding that ID.
-  const replacement = RETIRED_CLAUDE_46_MODEL_REPLACEMENTS[firstPartyNameToCanonical(base)]
-  return replacement ?? model
-}
-
-/**
- * Retire first-party Claude 4.6 model pins in favor of Claude 5.
- *
- * Third-party providers keep their 4.6 identifiers because their availability
- * does not necessarily track the first-party retirement. The Claude 5 models
- * have 1M context by default, so an old `[1m]` suffix is intentionally dropped.
- */
-export function remapRetiredClaude46Model(model: ModelName): ModelName {
-  if (getAPIProvider() !== 'firstParty') {
+// Cloud provider pins keep their own availability and retirement policy.
+export function remapFirstPartyClaudeSelection(
+  model: ModelName,
+  provider = getAPIProvider(),
+): ModelName {
+  if (provider !== 'firstParty') {
     return model
   }
-  return remapRetiredClaude46ModelById(model)
+  return remapRetiredClaudeSelection(model)
 }
 
 /**
@@ -130,14 +126,14 @@ export function remapRetiredClaude46Model(model: ModelName): ModelName {
  * embedded in that namespaced string, silently dropping the gateway prefix
  * the persisted value is written back with.
  */
-export function remapRetiredClaude46ModelForMigration(model: ModelName): ModelName {
+export function remapFirstPartyClaudeSelectionForMigration(model: ModelName): ModelName {
   if (
     getConfiguredAnthropicProvider() !== 'firstParty' ||
     !isFirstPartyAnthropicBaseUrl()
   ) {
     return model
   }
-  return remapRetiredClaude46ModelById(model)
+  return remapRetiredClaudeSelection(model)
 }
 
 /**
@@ -205,58 +201,35 @@ export function getMainLoopModel(): ModelName {
   return getDefaultMainLoopModel()
 }
 
-export function getBestModel(): ModelName {
-  return getModelStrings().fable5
+export function getCatalogClaudeModel(family: ClaudeFamily, cloud = false, provider?: APIProvider): ModelName {
+  return getModelStrings(provider)[getClaudeFamilyKey(family, cloud)]
 }
 
-// @[MODEL LAUNCH]: Update the default Opus model (3P providers may lag so keep defaults unchanged).
-export function getDefaultOpusModel(): ModelName {
-  if (process.env.ANTHROPIC_DEFAULT_OPUS_MODEL) {
-    return remapRetiredClaude46Model(process.env.ANTHROPIC_DEFAULT_OPUS_MODEL)
-  }
-  // 3P providers (Bedrock, Vertex, Foundry) — kept as a separate branch
-  // even when values match, since 3P availability lags firstParty and
-  // these will diverge again at the next model launch. The Codex session
-  // provider ('openai') is NOT one of them and takes the current default;
-  // see isAnthropicCloudProvider().
-  if (isAnthropicCloudProvider()) {
-    return getModelStrings().opus46
-  }
-  return getModelStrings().opus55
+export function getBestModel(provider = getAPIProvider()): ModelName {
+  return getCatalogClaudeModel('fable', isAnthropicCloudProvider(provider), provider)
 }
 
-// @[MODEL LAUNCH]: Update the default Sonnet model (3P providers may lag so keep defaults unchanged).
-export function getDefaultSonnetModel(): ModelName {
-  if (process.env.ANTHROPIC_DEFAULT_SONNET_MODEL) {
-    return remapRetiredClaude46Model(process.env.ANTHROPIC_DEFAULT_SONNET_MODEL)
-  }
-  // Default to Sonnet 4.5 for 3P since they may not have 4.6 yet
-  if (isAnthropicCloudProvider()) {
-    return getModelStrings().sonnet45
-  }
-  return getModelStrings().sonnet55
+export function getDefaultOpusModel(provider = getAPIProvider()): ModelName {
+  const override = process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
+  return override
+    ? remapFirstPartyClaudeSelection(override, provider)
+    : getCatalogClaudeModel('opus', isAnthropicCloudProvider(provider), provider)
 }
 
-// @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
+export function getDefaultSonnetModel(provider = getAPIProvider()): ModelName {
+  const override = process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+  return override
+    ? remapFirstPartyClaudeSelection(override, provider)
+    : getCatalogClaudeModel('sonnet', isAnthropicCloudProvider(provider), provider)
+}
+
 export function getDefaultHaikuModel(provider = getAPIProvider()): ModelName {
-  if (process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
-  }
-
-  // Haiku 4.5 is available on all platforms (first-party, Foundry, Bedrock, Vertex);
-  // 3P providers keep it until Haiku 5.5 is confirmed there.
-  if (isAnthropicCloudProvider(provider)) {
-    return getModelStrings().haiku45
-  }
-  return getModelStrings().haiku55
+  return process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL ||
+    getCatalogClaudeModel('haiku', isAnthropicCloudProvider(provider), provider)
 }
 
-// @[MODEL LAUNCH]: Update the default Fable model (3P providers may lag so keep defaults unchanged).
-export function getDefaultFableModel(): ModelName {
-  if (process.env.ANTHROPIC_DEFAULT_FABLE_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_FABLE_MODEL
-  }
-  return getModelStrings().fable5
+export function getDefaultFableModel(provider = getAPIProvider()): ModelName {
+  return process.env.ANTHROPIC_DEFAULT_FABLE_MODEL || getBestModel(provider)
 }
 
 /**
@@ -300,7 +273,7 @@ export function getRuntimeMainLoopModel(params: {
  * honours through `getModelStrings()`.
  */
 export function getDefaultCodexModel(): ModelName {
-  return getModelStrings().gpt62sol
+  return getModelStrings()[CODEX_ROUTES.chat]
 }
 
 /**
@@ -348,7 +321,6 @@ export function getDefaultMainLoopModel(): ModelName {
   return parseUserSpecifiedModel(getDefaultMainLoopModelSetting())
 }
 
-// @[MODEL LAUNCH]: Add a canonical name mapping for the new model below.
 /**
  * Pure string-match that strips date/provider suffixes from a first-party model
  * name. Input must already be a 1P-format ID (e.g. 'claude-3-7-sonnet-20250219',
@@ -357,55 +329,8 @@ export function getDefaultMainLoopModel(): ModelName {
  */
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   name = name.toLowerCase()
-  if (name.includes('claude-opus-5-5')) return 'claude-opus-5-5'
-  if (name.includes('claude-sonnet-5-5')) return 'claude-sonnet-5-5'
-  if (name.includes('claude-haiku-5-5')) return 'claude-haiku-5-5'
-  // Special cases for Claude 5+ models — check before 4.x to avoid false matches
-  if (name.includes('claude-fable-5')) {
-    return 'claude-fable-5'
-  }
-  if (name.includes('claude-opus-5')) {
-    return 'claude-opus-5'
-  }
-  if (name.includes('claude-sonnet-5')) {
-    return 'claude-sonnet-5'
-  }
-  // Special cases for Claude 4+ models to differentiate versions
-  // Order matters: check more specific versions first (4-5 before 4)
-  if (name.includes('claude-opus-4-6')) {
-    return 'claude-opus-4-6'
-  }
-  if (name.includes('claude-opus-4-5')) {
-    return 'claude-opus-4-5'
-  }
-  if (name.includes('claude-opus-4-1')) {
-    return 'claude-opus-4-1'
-  }
-  if (name.includes('claude-opus-4')) {
-    return 'claude-opus-4'
-  }
-  if (name.includes('claude-sonnet-4-6')) {
-    return 'claude-sonnet-4-6'
-  }
-  if (name.includes('claude-sonnet-4-5')) {
-    return 'claude-sonnet-4-5'
-  }
-  if (name.includes('claude-sonnet-4')) {
-    return 'claude-sonnet-4'
-  }
-  if (name.includes('claude-haiku-4-5')) {
-    return 'claude-haiku-4-5'
-  }
-  // Claude 3.x models use a different naming scheme (claude-3-{family})
-  if (name.includes('claude-3-7-sonnet')) {
-    return 'claude-3-7-sonnet'
-  }
-  if (name.includes('claude-3-5-sonnet')) {
-    return 'claude-3-5-sonnet'
-  }
-  if (name.includes('claude-3-5-haiku')) {
-    return 'claude-3-5-haiku'
-  }
+  const release = matchClaudeRelease(name)
+  if (release) return release.wire.foundry
   if (name.includes('claude-3-opus')) {
     return 'claude-3-opus'
   }
@@ -415,37 +340,8 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('claude-3-haiku')) {
     return 'claude-3-haiku'
   }
-  // OpenAI GPT models
-  if (name.includes('gpt-6.2-astra')) {
-    return 'gpt-6.2-astra'
-  }
-  if (name.includes('gpt-6.2-sol')) {
-    return 'gpt-6.2-sol'
-  }
-  if (name.includes('gpt-6.1-sol')) {
-    return 'gpt-6.1-sol'
-  }
-  if (name.includes('gpt-6.1-terra')) {
-    return 'gpt-6.1-terra'
-  }
-  if (name.includes('gpt-6-astra')) {
-    return 'gpt-6-astra'
-  }
-  if (name.includes('gpt-6-sol')) {
-    return 'gpt-6-sol'
-  }
-  if (name.includes('gpt-6-luna')) {
-    return 'gpt-6-luna'
-  }
-  if (name.includes('gpt-5.6-sol')) {
-    return 'gpt-5.6-sol'
-  }
-  if (name.includes('gpt-5.6-terra')) {
-    return 'gpt-5.6-terra'
-  }
-  if (name.includes('gpt-5.6-luna')) {
-    return 'gpt-5.6-luna'
-  }
+  const codex = matchCodexRelease(name)
+  if (codex) return codex.id
   const match = name.match(/(claude-(\d+-\d+-)?\w+)/)
   if (match && match[1]) {
     return match[1]
@@ -467,27 +363,26 @@ export function getCanonicalName(fullModelName: ModelName): ModelShortName {
   return firstPartyNameToCanonical(resolveOverriddenModel(fullModelName))
 }
 
-// @[MODEL LAUNCH]: Update the default model description strings shown to users.
 export function getClaudeAiUserDefaultModelDescription(
   fastMode = false,
 ): string {
   if (isCodexSubscriber()) {
-    return 'GPT-6.2 Sol · Complex coding and agentic workflows'
+    const release = currentCodexRelease(CODEX_ROUTES.chat)
+    return `${release.label} · ${release.pickerDescription}`
   }
   if (isMaxSubscriber() || isTeamPremiumSubscriber()) {
-    if (isOpus1mMergeEnabled()) {
-      return `Opus 5.5 with 1M context · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
-    }
-    return `Opus 5.5 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
+    const { label } = currentClaudeRelease('opus')
+    const context = isOpus1mMergeEnabled() ? ' with 1M context' : ''
+    return `${label}${context} · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`
   }
-  return 'Sonnet 5.5 · Best for everyday tasks'
+  return `${currentClaudeRelease('sonnet').label} · Best for everyday tasks`
 }
 
 export function renderDefaultModelSetting(
   setting: ModelName | ModelAlias,
 ): string {
   if (setting === 'opusplan') {
-    return 'Opus 4.6 in plan mode, else Sonnet 4.6'
+    return `${getClaudeRelease(getClaudeFamilyKey('opus', true)).label} in plan mode, else ${getClaudeRelease('sonnet46').label}`
   }
   return renderModelName(parseUserSpecifiedModel(setting))
 }
@@ -529,99 +424,22 @@ export function renderModelSetting(setting: ModelName | ModelAlias): string {
   return renderModelName(setting)
 }
 
-// @[MODEL LAUNCH]: Add display name cases for the new model (base + [1m] variant if applicable).
 /**
  * Returns a human-readable display name for known public models, or null
  * if the model is not recognized as a public model.
  */
 export function getPublicModelDisplayName(model: ModelName): string | null {
-  if (model.includes('gpt-') || model.includes('codex')) {
-    if (model === 'gpt-5.2-codex') return 'Codex 5.2'
-    if (model === 'gpt-5.1-codex') return 'Codex 5.1'
-    if (model === 'gpt-5.1-codex-mini') return 'Codex 5.1 Mini'
-    if (model === 'gpt-5.1-codex-max') return 'Codex 5.1 Max'
-    if (model === 'gpt-5.6-sol') return 'GPT 5.6 Sol'
-    if (model === 'gpt-5.6-terra') return 'GPT 5.6 Terra'
-    if (model === 'gpt-5.6-luna') return 'GPT 5.6 Luna'
-    if (model === 'gpt-6-astra') return 'GPT 6 Astra'
-    if (model === 'gpt-6.1-sol') return 'GPT 6.1 Sol'
-    if (model === 'gpt-6.2-astra') return 'GPT 6.2 Astra'
-    if (model === 'gpt-6.2-sol') return 'GPT 6.2 Sol'
-    if (model === 'gpt-6.1-terra') return 'GPT 6.1 Terra'
-    if (model === 'gpt-6-sol') return 'GPT 6 Sol'
-    if (model === 'gpt-6-luna') return 'GPT 6 Luna'
-    if (model === 'gpt-5.2') return 'GPT 5.2'
-    return model
-  }
+  const codex = getCodexRelease(model)
+  if (codex?.label) return codex.publicLabel ?? codex.label.replace('GPT-', 'GPT ')
+  if (model.includes('gpt-') || model.includes('codex')) return model
 
-  switch (model) {
-    case getModelStrings().fable5:
-      return 'Fable 5'
-    case getModelStrings().fable5 + '[1m]':
-      return 'Fable 5 (1M context)'
-    case getModelStrings().opus55:
-      return 'Opus 5.5'
-    case getModelStrings().opus55 + '[1m]':
-      return 'Opus 5.5 (1M context)'
-    case getModelStrings().sonnet55:
-      return 'Sonnet 5.5'
-    case getModelStrings().sonnet55 + '[1m]':
-      return 'Sonnet 5.5 (1M context)'
-    case getModelStrings().opus5:
-      return 'Opus 5'
-    case getModelStrings().opus5 + '[1m]':
-      return 'Opus 5 (1M context)'
-    case getModelStrings().sonnet5:
-      return 'Sonnet 5'
-    case getModelStrings().sonnet5 + '[1m]':
-      return 'Sonnet 5 (1M context)'
-    case getModelStrings().opus46:
-      return 'Opus 4.6'
-    case getModelStrings().opus46 + '[1m]':
-      return 'Opus 4.6 (1M context)'
-    case getModelStrings().opus45:
-      return 'Opus 4.5'
-    case getModelStrings().opus41:
-      return 'Opus 4.1'
-    case getModelStrings().opus40:
-      return 'Opus 4'
-    case getModelStrings().sonnet46 + '[1m]':
-      return 'Sonnet 4.6 (1M context)'
-    case getModelStrings().sonnet46:
-      return 'Sonnet 4.6'
-    case getModelStrings().sonnet45 + '[1m]':
-      return 'Sonnet 4.5 (1M context)'
-    case getModelStrings().sonnet45:
-      return 'Sonnet 4.5'
-    case getModelStrings().sonnet40:
-      return 'Sonnet 4'
-    case getModelStrings().sonnet40 + '[1m]':
-      return 'Sonnet 4 (1M context)'
-    case getModelStrings().sonnet37:
-      return 'Sonnet 3.7'
-    case getModelStrings().sonnet35:
-      return 'Sonnet 3.5'
-    case getModelStrings().haiku55:
-      return 'Haiku 5.5'
-    case getModelStrings().haiku45:
-      return 'Haiku 4.5'
-    case getModelStrings().haiku35:
-      return 'Haiku 3.5'
-    case getModelStrings().gpt56sol:
-      return 'GPT-5.6 Sol'
-    case getModelStrings().gpt61terra:
-      return 'GPT-6.1 Terra'
-    case getModelStrings().gpt56luna:
-      return 'GPT-5.6 Luna'
-    case getModelStrings().gpt62astra:
-      return 'GPT-6.2 Astra'
-    case getModelStrings().gpt62sol:
-      return 'GPT-6.2 Sol'
-    case getModelStrings().gpt6luna:
-      return 'GPT-6 Luna'
-    default:
-      return null
-  }
+  const long = model.endsWith('[1m]')
+  const id = long ? model.slice(0, -4) : model
+  const strings = getModelStrings()
+  const key = (Object.keys(strings) as ModelKey[]).find(key => strings[key] === id)
+  const release = key && matchClaudeRelease(ALL_MODEL_CONFIGS[key].firstParty)
+  if (!release || (long && !release.longContext)) return null
+  return (release.publicLabel ?? release.label) + (long ? ' (1M context)' : '')
 }
 
 function maskModelCodename(baseName: string): string {
@@ -688,9 +506,10 @@ export function getPublicModelName(model: ModelName): string {
  */
 export function parseUserSpecifiedModel(
   modelInput: ModelName | ModelAlias,
+  provider = getAPIProvider(),
 ): ModelName {
   const modelInputTrimmed = modelInput.trim()
-  const remappedClaudeModel = remapRetiredClaude46Model(modelInputTrimmed)
+  const remappedClaudeModel = remapFirstPartyClaudeSelection(modelInputTrimmed, provider)
   if (remappedClaudeModel !== modelInputTrimmed) {
     return remappedClaudeModel
   }
@@ -708,17 +527,17 @@ export function parseUserSpecifiedModel(
   if (isModelAlias(modelString)) {
     switch (modelString) {
       case 'opusplan':
-        return getDefaultSonnetModel() + (has1mTag ? '[1m]' : '') // Sonnet is default, Opus in plan mode
+        return getDefaultSonnetModel(provider) + (has1mTag ? '[1m]' : '') // Sonnet is default, Opus in plan mode
       case 'sonnet':
-        return getDefaultSonnetModel() + (has1mTag ? '[1m]' : '')
+        return getDefaultSonnetModel(provider) + (has1mTag ? '[1m]' : '')
       case 'haiku':
-        return getDefaultHaikuModel() + (has1mTag ? '[1m]' : '')
+        return getDefaultHaikuModel(provider) + (has1mTag ? '[1m]' : '')
       case 'opus':
-        return getDefaultOpusModel() + (has1mTag ? '[1m]' : '')
+        return getDefaultOpusModel(provider) + (has1mTag ? '[1m]' : '')
       case 'fable':
-        return getDefaultFableModel() + (has1mTag ? '[1m]' : '')
+        return getDefaultFableModel(provider) + (has1mTag ? '[1m]' : '')
       case 'best':
-        return getBestModel()
+        return getBestModel(provider)
       default:
     }
   }
@@ -729,11 +548,11 @@ export function parseUserSpecifiedModel(
   // strings pinned them in settings/env/--model/SDK before 4.5 launched.
   // 3P providers may not yet have 4.6 capacity, so pass through unchanged.
   if (
-    getAPIProvider() === 'firstParty' &&
+    provider === 'firstParty' &&
     isLegacyOpusFirstParty(modelString) &&
     isLegacyModelRemapEnabled()
   ) {
-    return getDefaultOpusModel() + (has1mTag ? '[1m]' : '')
+    return getDefaultOpusModel(provider) + (has1mTag ? '[1m]' : '')
   }
 
   if (process.env.USER_TYPE === 'ant') {
@@ -789,17 +608,6 @@ export function resolveSkillModelOverride(
   return skillModel
 }
 
-const LEGACY_OPUS_FIRSTPARTY = [
-  'claude-opus-4-20250514',
-  'claude-opus-4-1-20250805',
-  'claude-opus-4-0',
-  'claude-opus-4-1',
-]
-
-function isLegacyOpusFirstParty(model: string): boolean {
-  return LEGACY_OPUS_FIRSTPARTY.includes(model)
-}
-
 /**
  * Opt-out for the legacy Opus 4.0/4.1 → current Opus remap.
  */
@@ -820,98 +628,19 @@ export function modelDisplayString(model: ModelSetting): string {
   return model === resolvedModel ? resolvedModel : `${model} (${resolvedModel})`
 }
 
-// @[MODEL LAUNCH]: Add a marketing name mapping for the new model below.
 export function getMarketingNameForModel(modelId: string): string | undefined {
   if (getAPIProvider() === 'foundry') {
     // deployment ID is user-defined in Foundry, so it may have no relation to the actual model
     return undefined
   }
 
-  const has1m = modelId.toLowerCase().includes('[1m]')
   const canonical = getCanonicalName(modelId)
-
-  if (canonical.includes('claude-fable-5')) {
-    return has1m ? 'Fable 5 (with 1M context)' : 'Fable 5'
-  }
-  if (canonical.includes('claude-opus-5-5')) {
-    return has1m ? 'Opus 5.5 (with 1M context)' : 'Opus 5.5'
-  }
-  if (canonical.includes('claude-sonnet-5-5')) {
-    return has1m ? 'Sonnet 5.5 (with 1M context)' : 'Sonnet 5.5'
-  }
-  if (canonical.includes('claude-opus-5')) {
-    return has1m ? 'Opus 5 (with 1M context)' : 'Opus 5'
-  }
-  if (canonical.includes('claude-sonnet-5')) {
-    return has1m ? 'Sonnet 5 (with 1M context)' : 'Sonnet 5'
-  }
-  if (canonical.includes('claude-opus-4-6')) {
-    return has1m ? 'Opus 4.6 (with 1M context)' : 'Opus 4.6'
-  }
-  if (canonical.includes('claude-opus-4-5')) {
-    return 'Opus 4.5'
-  }
-  if (canonical.includes('claude-opus-4-1')) {
-    return 'Opus 4.1'
-  }
-  if (canonical.includes('claude-opus-4')) {
-    return 'Opus 4'
-  }
-  if (canonical.includes('claude-sonnet-4-6')) {
-    return has1m ? 'Sonnet 4.6 (with 1M context)' : 'Sonnet 4.6'
-  }
-  if (canonical.includes('claude-sonnet-4-5')) {
-    return has1m ? 'Sonnet 4.5 (with 1M context)' : 'Sonnet 4.5'
-  }
-  if (canonical.includes('claude-sonnet-4')) {
-    return has1m ? 'Sonnet 4 (with 1M context)' : 'Sonnet 4'
-  }
-  if (canonical.includes('claude-3-7-sonnet')) {
-    return 'Claude 3.7 Sonnet'
-  }
-  if (canonical.includes('claude-3-5-sonnet')) {
-    return 'Claude 3.5 Sonnet'
-  }
-  if (canonical.includes('claude-haiku-5-5')) {
-    return 'Haiku 5.5'
-  }
-  if (canonical.includes('claude-haiku-4-5')) {
-    return 'Haiku 4.5'
-  }
-  if (canonical.includes('claude-3-5-haiku')) {
-    return 'Claude 3.5 Haiku'
-  }
-  // OpenAI Codex models
-  if (canonical.includes('gpt-6.2-astra')) {
-    return 'GPT-6.2 Astra'
-  }
-  if (canonical.includes('gpt-6.2-sol')) {
-    return 'GPT-6.2 Sol'
-  }
-  if (canonical.includes('gpt-6.1-sol')) {
-    return 'GPT-6.1 Sol'
-  }
-  if (canonical.includes('gpt-6.1-terra')) {
-    return 'GPT-6.1 Terra'
-  }
-  if (canonical.includes('gpt-6-astra')) {
-    return 'GPT-6 Astra'
-  }
-  if (canonical.includes('gpt-6-sol')) {
-    return 'GPT-6 Sol'
-  }
-  if (canonical.includes('gpt-6-luna')) {
-    return 'GPT-6 Luna'
-  }
-  if (canonical.includes('gpt-5.6-sol')) {
-    return 'GPT-5.6 Sol'
-  }
-  if (canonical.includes('gpt-5.6-terra')) {
-    return 'GPT-5.6 Terra'
-  }
-  if (canonical.includes('gpt-5.6-luna')) {
-    return 'GPT-5.6 Luna'
-  }
+  const claude = getClaudeMarketingName(
+    canonical + (modelId.toLowerCase().includes('[1m]') ? '[1m]' : ''),
+  )
+  if (claude) return claude
+  const codex = getCodexRelease(canonical)
+  if (codex?.context || codex?.promptFamily) return codex.label
   return undefined
 }
 

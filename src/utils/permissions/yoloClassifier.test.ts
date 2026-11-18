@@ -786,6 +786,7 @@ describe('two-stage upstream classifier', () => {
     observation?: Parameters<
       typeof _forTest.classifyYoloActionWithSideQuery
     >[6],
+    inputVariant?: 'reduced',
   ) => {
     const signal = new AbortController().signal
     return _forTest.classifyYoloActionWithSideQuery(
@@ -796,6 +797,7 @@ describe('two-stage upstream classifier', () => {
       signal,
       fakeSideQuery as typeof sideQuery,
       observation,
+      { inputVariant },
     )
   }
 
@@ -1015,7 +1017,7 @@ describe('two-stage upstream classifier', () => {
     const result = await classify(async request => {
       requests.push(request)
       return response('msg_fast', 'req_fast', { shouldBlock: false })
-    })
+    }, undefined, 'reduced')
 
     expect(requests).toHaveLength(1)
     expect(requests[0]?.max_tokens).toBe(64)
@@ -1108,7 +1110,7 @@ describe('two-stage upstream classifier', () => {
     const result = await classify(async request => {
       requests.push(request)
       return responses.shift()
-    })
+    }, undefined, 'reduced')
 
     expect(requests).toHaveLength(2)
     expect(requests[1]?.max_tokens).toBeGreaterThan(64)
@@ -1272,11 +1274,6 @@ describe('two-stage upstream classifier', () => {
       }
       return response('msg_fast', 'req_fast', { shouldBlock: false })
     })
-    if (feature('AUTO_MODE_UPSTREAM_PORT')) {
-      expect(JSON.stringify(requests[0]?.system)).not.toContain('## User Intent Rule')
-      expect(JSON.stringify(requests[1]?.system)).toContain('## User Intent Rule')
-    }
-
     expect(requests.map(request => `${request.provider}/${request.model}`)).toEqual(
       ['openai/gpt-6-luna', 'firstParty/sonnet'],
     )

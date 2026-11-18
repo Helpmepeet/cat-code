@@ -143,7 +143,7 @@ describe('runEngineMigrations process ownership', () => {
     }
   }, 25_000)
 
-  test('two version-18 contenders upgrade GPT pins and preserve unrelated settings', async () => {
+  test.each([18, 19])('two version-%i contenders upgrade GPT pins and preserve unrelated settings', async initialVersion => {
     const root = mkdtempSync(join(tmpdir(), 'cat-code-engine-migrations-'))
     probeRoots.push(root)
     const configHome = join(root, 'config')
@@ -155,7 +155,7 @@ describe('runEngineMigrations process ownership', () => {
     writeFileSync(
       join(configHome, '.cat-code.json'),
       JSON.stringify({
-        migrationVersion: 18,
+        migrationVersion: initialVersion,
         autoUpdates: false,
         unrelatedGlobal: 'keep-global',
         projects: {
@@ -259,7 +259,7 @@ describe('runEngineMigrations process ownership', () => {
     ).toEqual(results.map(({ role, pid }) => ({ role, pid })))
     expect(
       childResults.map(result => result.cachedMigrationVersionBefore),
-    ).toEqual([18, 18])
+    ).toEqual([initialVersion, initialVersion])
     expect(new Set(spawnedPids).size).toBe(2)
 
     const globalConfig = JSON.parse(
@@ -267,9 +267,15 @@ describe('runEngineMigrations process ownership', () => {
     )
     expect(globalConfig.migrationVersion).toBe(19)
     expect(globalConfig.unrelatedGlobal).toBe('keep-global')
-    expect(globalConfig.autoUpdates).toBeUndefined()
+    const versioned = initialVersion === 18
+    expect(globalConfig.autoUpdates).toBe(versioned ? undefined : false)
     expect(globalConfig.projects[canonicalWorkspace]).toEqual({
       hasTrustDialogAccepted: true,
+      ...(!versioned && {
+        enableAllProjectMcpServers: true,
+        enabledMcpjsonServers: ['project-server'],
+        disabledMcpjsonServers: ['blocked-server'],
+      }),
     })
 
     const userSettings = JSON.parse(
@@ -285,7 +291,7 @@ describe('runEngineMigrations process ownership', () => {
       env: {
         UNRELATED_ENV: 'keep-user',
         CONTENDER_ROLE: 'migration-contender',
-        DISABLE_AUTOUPDATER: '1',
+        ...(versioned && { DISABLE_AUTOUPDATER: '1' }),
       },
     })
 
@@ -293,10 +299,12 @@ describe('runEngineMigrations process ownership', () => {
       readFileSync(join(workspace, '.cat-code', 'settings.local.json'), 'utf8'),
     )
     expect(localSettings).toEqual({
-      enabledMcpjsonServers: ['existing-server', 'project-server'],
+      enabledMcpjsonServers: versioned ? ['existing-server', 'project-server'] : ['existing-server'],
       permissions: { allow: ['Read'] },
-      enableAllProjectMcpServers: true,
-      disabledMcpjsonServers: ['blocked-server'],
+      ...(versioned && {
+        enableAllProjectMcpServers: true,
+        disabledMcpjsonServers: ['blocked-server'],
+      }),
     })
   }, 20_000)
 })

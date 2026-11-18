@@ -1,3 +1,4 @@
+import { CODEX_ROUTES, currentCodexRelease, getCodexRelease } from '../model/configs.js'
 import { feature } from 'bun:bundle'
 import type Anthropic from '@anthropic-ai/sdk'
 import type { BetaToolUnion } from '@anthropic-ai/sdk/resources/beta/messages.js'
@@ -62,7 +63,7 @@ import { buildReducedAutoModeStagePolicy } from './autoModeStagePolicy.js'
 import { hasQualifiedAutoModeReduction } from './autoModeReductionQualification.js'
 import { selectAutoModeInstructionContext } from './autoModeInstructionSelection.js'
 import { selectAutoModeHistory } from './autoModeHistory.js'
-import { getAutoModeClassifierAttempts } from './autoModeProviderLadder.js'
+import { getAutoModeClassifierAttempts, GPT_CLASSIFIER_FALLBACKS } from './autoModeProviderLadder.js'
 import { positionPermissionDecisionContexts, type PermissionDecisionContext } from './permissionDecisionContext.js'
 import {
   buildAutoModeMetaLines,
@@ -1031,14 +1032,8 @@ export function getClassifierFallbackModel(
 ): string | undefined {
   if (!isClassifierFallbackError(error)) return undefined
 
-  switch (model.toLowerCase()) {
-    case 'gpt-6.2-sol':
-      return 'gpt-6.1-terra'
-    case 'gpt-6.1-terra':
-      return 'gpt-6-luna'
-  }
-
-  return undefined
+  const index = GPT_CLASSIFIER_FALLBACKS.indexOf(model.toLowerCase())
+  return index < 0 ? undefined : GPT_CLASSIFIER_FALLBACKS[index + 1]
 }
 
 // Transient HTTP statuses that should fall the classifier model back from
@@ -1185,7 +1180,12 @@ export const MAX_CLASSIFIER_CONTEXT_CHARS = 4_000_000
 
 // The complete labeled corpus validates these selectors on Luna. Other models
 // and provider fallbacks keep full evidence until independently evaluated.
+const STAGE_POLICY_MODELS: ReadonlySet<string> = new Set(['gpt-6-luna'])
 const EVIDENCE_REDUCTION_MODELS: ReadonlySet<string> = new Set(['gpt-6-luna'])
+
+function hasExactInputQualification(models: ReadonlySet<string>, model: string): boolean {
+  return models.has(model) && (getCodexRelease(model)?.wireId ?? model) === model
+}
 
 async function classifyYoloActionWithOverrides(
   messages: Message[],
@@ -1221,7 +1221,7 @@ async function classifyYoloActionWithOverrides(
     // The labeled comparison covers Luna. A fallback must not inherit an
     // input reduction validated only on the model it replaced.
     const useStagePolicy = overrides?.inputVariant === 'reduced' ||
-      (overrides?.inputVariant !== 'full' && model === 'gpt-6-luna')
+      (overrides?.inputVariant !== 'full' && hasExactInputQualification(STAGE_POLICY_MODELS, model))
     return useStagePolicy && qualifiesForReduction(model)
       ? buildReducedAutoModeStagePolicy(systemPrompt, stage) : systemPrompt
   }
@@ -1323,7 +1323,7 @@ async function classifyYoloActionWithOverrides(
   let reducedInputs: typeof fullInputs | undefined
   const inputsFor = (model: string): typeof fullInputs => {
     const reduceEvidence = overrides?.inputVariant === 'reduced' ||
-      (overrides?.inputVariant !== 'full' && EVIDENCE_REDUCTION_MODELS.has(model))
+      (overrides?.inputVariant !== 'full' && hasExactInputQualification(EVIDENCE_REDUCTION_MODELS, model))
     if (!reduceEvidence || !qualifiesForReduction(model)) return fullInputs
     if (reducedInputs) return reducedInputs
     const pending = action.content.length === 1 && action.content[0]?.type === 'tool_use' ? action.content[0] : null
@@ -1895,7 +1895,7 @@ function getClassifierModel(): string {
   if (envModel) return envModel
   // Keep Luna for Codex accounts, including temporarily capped accounts.
   // Claude-only installs should not spend an attempt on missing Codex auth.
-  return getAutoModeConfig()?.model ?? (hasCodexTokens() ? 'gpt-6-luna' : 'sonnet')
+  return getAutoModeConfig()?.model ?? (hasCodexTokens() ? currentCodexRelease(CODEX_ROUTES.classifier).id : 'sonnet')
 }
 
 function getClassifierMaxRetries(): number {

@@ -44,7 +44,7 @@ test('legacy model override keys keep source precedence and leave settings files
     writeFileSync(projectSettingsPath, projectSettings)
 
     expect(getDefaultCodexModel()).toBe('gpt-6.1-terra')
-    expect(getModelStrings().gpt62astra).toBe('gpt-6.2-sol')
+    expect(getModelStrings().astra).toBe('gpt-6.2-sol')
     expect(readFileSync(projectSettingsPath, 'utf8')).toBe(projectSettings)
   } finally {
     if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR

@@ -1,3 +1,4 @@
+import { matchClaudeRelease } from '../../utils/model/configs.js'
 import { StreamIdleError, withStreamIdleDeadline, streamIdleTimeoutMs } from './streamIdle.js'
 import type {
   BetaContentBlock,
@@ -1989,11 +1990,9 @@ async function* queryModel(
       getMaxOutputTokensForModel(options.model)
 
     const canonicalModel = getCanonicalName(options.model)
-    const isClaude55 = requestProvider !== 'openai' && (
-      canonicalModel === 'claude-opus-5-5' ||
-      canonicalModel === 'claude-sonnet-5-5'
-    )
-    const hasThinking = isClaude55 || (
+    const requiresAdaptiveThinking = requestProvider !== 'openai' &&
+      matchClaudeRelease(canonicalModel)?.requiredAdaptiveThinking === true
+    const hasThinking = requiresAdaptiveThinking || (
       thinkingConfig.type !== 'disabled' &&
       !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING)
     )
@@ -2006,9 +2005,9 @@ async function* queryModel(
 
     // Claude 5.5 rejects manual thinking budgets. Opus requires thinking on
     // every request; summarized display preserves visible progress updates.
-    if (hasThinking && (isClaude55 || modelSupportsThinking(options.model))) {
+    if (hasThinking && (requiresAdaptiveThinking || modelSupportsThinking(options.model))) {
       if (
-        isClaude55 || (
+        requiresAdaptiveThinking || (
           !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING) &&
           modelSupportsAdaptiveThinking(options.model)
         )
@@ -2017,7 +2016,7 @@ async function* queryModel(
         // thinking without a budget.
         thinking = {
           type: 'adaptive',
-          ...(isClaude55 && { display: 'summarized' as const }),
+          ...(requiresAdaptiveThinking && { display: 'summarized' as const }),
         } satisfies BetaMessageStreamParams['thinking']
       } else {
         // For models that do not support adaptive thinking, use the default
@@ -2119,7 +2118,7 @@ async function* queryModel(
       tools: allTools,
       ...openAIInstructionAssemblyPayload,
       tool_choice:
-        isClaude55 && options.toolChoice?.type === 'tool'
+        requiresAdaptiveThinking && options.toolChoice?.type === 'tool'
           ? { type: 'auto' as const }
           : options.toolChoice,
       ...(useBetas && { betas: betasParams }),

@@ -78,7 +78,14 @@ import { getAllBaseTools } from '../../tools.js'
 import { isFilePatchToolName } from '../../tools/FilePatchTool/constants.js'
 import { findToolByName } from '../../Tool.js'
 import { safeParseJSON } from '../../utils/json.js'
-import { remapRetiredGptModel } from '../../utils/model/model.js'
+import {
+  CODEX_ROUTES,
+  ROUTABLE_CODEX_RELEASES,
+  currentCodexRelease,
+  getCodexRelease,
+  getExactClaudeRelease,
+  remapRetiredCodexSelection,
+} from '../../utils/model/configs.js'
 
 // ── Session-level IDs for cache routing ───────────────────────────────
 // OpenAI's ChatGPT backend uses these headers to route requests to the
@@ -658,19 +665,18 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 }
 
 // ── Available Codex models ──────────────────────────────────────────
-export const CODEX_MODELS = [
-  { id: 'gpt-6.2-astra', label: 'GPT-6.2 Astra', description: 'Most capable model for complex work' },
-  { id: 'gpt-6.2-sol', label: 'GPT-6.2 Sol', description: 'Frontier model for complex professional work' },
-  { id: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', description: 'Fast visual reasoning, computer use, and writing' },
-  { id: 'gpt-6-luna', label: 'GPT-6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', description: 'Frontier agentic coding model' },
-  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', description: 'Codex coding model' },
-  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', description: 'Fast Codex model' },
-  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max', description: 'Max Codex model' },
-  { id: 'gpt-5.2', label: 'GPT-5.2', description: 'GPT-5.2' },
-] as const
+export const CODEX_MODELS = ROUTABLE_CODEX_RELEASES.map(release => ({
+  id: release.id,
+  label: release.label,
+  description: release.adapterDescription,
+}))
 
-export const DEFAULT_CODEX_MODEL = 'gpt-6.1-terra'
+function wireModelForRoute(route: 'adapterFallback' | 'fromOpus' | 'fromHaikuOrSonnet'): string {
+  const release = currentCodexRelease(CODEX_ROUTES[route])
+  return release.wireId ?? release.id
+}
+
+export const DEFAULT_CODEX_MODEL = wireModelForRoute('adapterFallback')
 
 /**
  * Maps legacy provider-local Claude tier names to corresponding Codex models.
@@ -692,15 +698,25 @@ export const DEFAULT_CODEX_MODEL = 'gpt-6.1-terra'
  */
 export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
-  const remapped = remapRetiredGptModel(claudeModel)
-  if (isCodexModel(remapped)) return remapped
+  const remapped = remapRetiredCodexSelection(claudeModel)
+  const codex = getCodexRelease(remapped)
+  if (codex && isCodexModel(codex.id)) return codex.wireId ?? codex.id
   const lower = remapped.toLowerCase()
-  if (lower.replace(/\[(?:1m|2m)\]$/, '') === 'claude-opus-5-5') {
-    throw new Error('Opus 5.5 requires an Anthropic provider; it cannot run through OpenAI.')
+  const exact = lower.replace(/\[(?:1m|2m)\]$/, '')
+  const release = getExactClaudeRelease(exact)
+  if (release?.codexTranslation === 'reject' && exact === release.wire.firstParty) {
+    throw new Error(`${release.label} requires an Anthropic provider; it cannot run through OpenAI.`)
   }
-  if (lower.includes('opus')) return 'gpt-6.2-sol'
-  if (lower.includes('haiku') || lower.includes('sonnet')) return 'gpt-6-luna'
+  if (lower.includes('opus')) return wireModelForRoute('fromOpus')
+  if (lower.includes('haiku') || lower.includes('sonnet')) return wireModelForRoute('fromHaikuOrSonnet')
   return DEFAULT_CODEX_MODEL
+}
+
+export function requireExactCodexModel(model: string): void {
+  const effective = mapClaudeModelToCodex(model)
+  if (effective !== model) {
+    throw new Error(`Expected exact Codex model ${model}; this engine routes it to ${effective}`)
+  }
 }
 
 /**
@@ -753,15 +769,6 @@ interface OpenAIInstructionAssemblyPayload {
   inputMessages: AnthropicMessage[]
   developerContext?: string
 }
-
-// These models use the additional_tools input contract in the Codex harness.
-// Keep older models on their existing top-level declaration path.
-const APPEND_ONLY_TOOL_MODELS = new Set([
-  'gpt-6.2-astra',
-  'gpt-6.2-sol',
-  'gpt-6.1-terra',
-  'gpt-6-luna',
-])
 
 // ── Tool translation: Anthropic → Codex ─────────────────────────────
 
@@ -1567,7 +1574,7 @@ export function translateToCodexBody(anthropicBody: Record<string, unknown>): {
     ? translateTools(anthropicTools)
     : []
   const deferredTools = new Map<string, Record<string, unknown>>()
-  if (APPEND_ONLY_TOOL_MODELS.has(codexModel)) {
+  if (getCodexRelease(codexModel)?.appendOnlyTools) {
     const forcedToolName =
       isRecord(toolChoice) && typeof toolChoice.name === 'string'
         ? toolChoice.name
@@ -1737,37 +1744,11 @@ export function mapEffortToCodex(
   if (!effort) return undefined
   const e = effort.toLowerCase()
   if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh') return e
-  if (e === 'minimal') {
-    const model = codexModel.toLowerCase()
-    if (model === 'gpt-6.2-astra' || model === 'gpt-6.2-sol') return 'low'
-    // GPT-6.2 Astra and GPT-6.2 Sol express minimal as low; other listed models
-    // preserve their disabled-thinking path with `none`.
-    if (
-      model === 'gpt-6-luna' ||
-      model === 'gpt-6.1-terra' ||
-      model === 'gpt-5.6-luna'
-    ) return 'none'
-    return 'minimal'
-  }
-  if (e === 'max') {
-    const model = codexModel.toLowerCase()
-    return (
-      model === 'gpt-6.2-sol' ||
-      model === 'gpt-6-luna' ||
-      model === 'gpt-6.1-terra' ||
-      model === 'gpt-5.6-luna' ||
-      model === 'gpt-6.2-astra'
-    )
-      ? 'max'
-      : model.includes('codex')
-        ? 'xhigh'
-        : 'high'
-  }
-  if (e === 'ultra') {
-    const model = codexModel.toLowerCase()
-    if (model === 'gpt-6.2-astra' || model === 'gpt-6.2-sol') return 'ultra'
-    return model === 'gpt-6.1-terra' ? 'max' : undefined
-  }
+  const model = codexModel.toLowerCase()
+  const release = getCodexRelease(model)
+  if (e === 'minimal') return release?.minimalOnWire ?? 'minimal'
+  if (e === 'max') return release?.maxOnWire ?? (model.includes('codex') ? 'xhigh' : 'high')
+  if (e === 'ultra') return release?.ultraOnWire
   return undefined
 }
 

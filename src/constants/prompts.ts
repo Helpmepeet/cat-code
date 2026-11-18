@@ -1,3 +1,4 @@
+import { CLAUDE_CURRENT_LINEUP_LABEL, currentClaudeRelease, matchClaudeRelease } from '../utils/model/configs.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { getAntModelOverrideConfig } from '../utils/model/antModels.js'
 import { type as osType, version as osVersion, release as osRelease } from 'os'
@@ -141,12 +142,11 @@ import {
 export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY =
   '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__'
 
-// @[MODEL LAUNCH]: Update the model IDs below to the latest in each tier.
-const LATEST_CLAUDE_MODEL_IDS = {
-  opus: 'claude-opus-5-5',
-  sonnet: 'claude-sonnet-5-5',
-  haiku: 'claude-haiku-5-5',
-}
+const latestClaudeModels = (['fable', 'opus', 'sonnet', 'haiku'] as const)
+  .map(family => {
+    const { label, wire } = currentClaudeRelease(family)
+    return `${label}: '${wire.firstParty}'`
+  }).join(', ')
 
 function getConversationCompressionInstruction(): string {
   return 'When the conversation grows long, some or all of the current context is summarized; the summary, along with any remaining unsummarized context, is provided in the next context window so work can continue. You do not need to wrap up early or hand off mid-task.'
@@ -464,7 +464,7 @@ function getSimpleToneAndStyleSection(): string {
 
 /**
  * Lean assembly for the Claude style, the default for the models in
- * LEAN_PROMPT_MODELS; CAT_CODE_LEAN_SYSTEM_PROMPT=0 restores the full one.
+ * the model catalog; CAT_CODE_LEAN_SYSTEM_PROMPT=0 restores the full one.
  * Modelled on upstream's lean path
  * for its newest models. Upstream's lean block drops the prompt-injection and
  * tool-output-is-data rules along with `# System`; this one carries every
@@ -476,13 +476,12 @@ export const LEAN_SYSTEM_PROMPT_ENV = 'CAT_CODE_LEAN_SYSTEM_PROMPT'
 
 // Upstream keeps its full prompt for Sonnet, Haiku and older Opus models; lean
 // is limited to the models it has been reviewed against.
-const LEAN_PROMPT_MODELS = new Set(['claude-opus-5', 'claude-opus-5-5'])
 
 function isLeanClaudePrompt(gpt: boolean, model: string): boolean {
   return (
     !gpt &&
     !isEnvDefinedFalsy(process.env[LEAN_SYSTEM_PROMPT_ENV]) &&
-    LEAN_PROMPT_MODELS.has(getCanonicalName(model))
+    matchClaudeRelease(getCanonicalName(model))?.leanPrompt === true
   )
 }
 
@@ -1015,7 +1014,7 @@ export async function computeSimpleEnvInfo(
     apiProvider === 'openai' ||
     (process.env.USER_TYPE === 'ant' && isUndercover())
       ? null
-      : `The most recent Claude models are the Claude 5 family. Model IDs — Fable 5: 'claude-fable-5', Opus 5.5: '${LATEST_CLAUDE_MODEL_IDS.opus}', Sonnet 5.5: '${LATEST_CLAUDE_MODEL_IDS.sonnet}', Haiku 5.5: '${LATEST_CLAUDE_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
+      : `The most recent Claude models are the ${CLAUDE_CURRENT_LINEUP_LABEL}. Model IDs — ${latestClaudeModels}. When building AI applications, default to the latest and most capable Claude models.`,
     `This session is running through the ${apiProvider === 'openai' ? 'OpenAI Codex' : 'Anthropic'} provider.`,
     process.env.USER_TYPE === 'ant' && isUndercover()
       ? null
@@ -1029,32 +1028,8 @@ export async function computeSimpleEnvInfo(
   ].join(`\n`)
 }
 
-// @[MODEL LAUNCH]: Add the official reliable knowledge cutoff date for the new model.
 function getKnowledgeCutoff(modelId: string): string | null {
-  const canonical = getCanonicalName(modelId)
-  if (canonical.includes('claude-opus-5-5') || canonical.includes('claude-sonnet-5-5')) {
-    return 'June 2026'
-  } else if (canonical.includes('claude-fable-5')) {
-    return 'January 2026'
-  } else if (canonical.includes('claude-opus-5')) {
-    return 'May 2026'
-  } else if (canonical.includes('claude-sonnet-5')) {
-    return 'January 2026'
-  } else if (canonical.includes('claude-sonnet-4-6')) {
-    return 'August 2025'
-  } else if (canonical.includes('claude-opus-4-6')) {
-    return 'May 2025'
-  } else if (canonical.includes('claude-opus-4-5')) {
-    return 'May 2025'
-  } else if (canonical.includes('claude-haiku-4')) {
-    return 'February 2025'
-  } else if (
-    canonical.includes('claude-opus-4') ||
-    canonical.includes('claude-sonnet-4')
-  ) {
-    return 'January 2025'
-  }
-  return null
+  return matchClaudeRelease(getCanonicalName(modelId))?.knowledgeCutoff ?? null
 }
 
 function getShellInfoLine(): string {

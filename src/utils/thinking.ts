@@ -1,3 +1,4 @@
+import { matchClaudeRelease } from './model/configs.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { resolveAntModel } from './model/antModels.js'
 import type { Theme } from './theme.js'
@@ -107,20 +108,17 @@ export function modelSupportsThinking(model: string): boolean {
     return !canonical.includes('claude-3-')
   }
   // 3P (Bedrock/Vertex): only Opus 4+ and Sonnet 4+
-  return canonical.includes('sonnet-4') || canonical.includes('opus-4')
+  return matchClaudeRelease(canonical)?.cloudThinking ?? false
 }
 
-// @[MODEL LAUNCH]: Add the new model to the allowlist if it supports adaptive thinking.
 export function modelSupportsAdaptiveThinking(model: string): boolean {
   const supported3P = get3PModelCapabilityOverride(model, 'adaptive_thinking')
   if (supported3P !== undefined) {
     return supported3P
   }
   const canonical = getCanonicalName(model)
-  // Supported by a subset of Claude 4 models
-  if (canonical.includes('fable-5') || canonical.includes('opus-5') || canonical.includes('sonnet-5') || canonical.includes('opus-4-6') || canonical.includes('sonnet-4-6')) {
-    return true
-  }
+  const release = matchClaudeRelease(canonical)
+  if (release) return release.effort !== undefined || release.fastMode === true
   // Exclude any other known legacy models (allowlist above catches 4-6 variants first)
   if (
     canonical.includes('opus') ||

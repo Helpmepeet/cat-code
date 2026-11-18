@@ -1,3 +1,4 @@
+import { currentCodexRelease } from '../../utils/model/configs.js'
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as claudePoolModule from '../../services/api/claudeAccountPool.js'
 import * as codexPoolModule from '../../services/api/codexAccountPool.js'
@@ -457,7 +458,7 @@ describe('/switch-account', () => {
 
     expect(result).toEqual({ type: 'text', value: 'Switched to codexone' })
     expect(getSessionProvider()).toBe('openai')
-    expect(getMainLoopModelOverride()).toBe('gpt-6.2-sol')
+    expect(getMainLoopModelOverride()).toBe(currentCodexRelease('sol').id)
   })
 
   // This used to assert the effort was cleared. Crossing to Claude sets the

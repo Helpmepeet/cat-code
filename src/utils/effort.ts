@@ -1,3 +1,4 @@
+import { getCodexRelease, matchClaudeRelease } from './model/configs.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { getAntModelOverrideConfig, resolveAntModel } from './model/antModels.js'
 import { isUltrathinkEnabled } from './thinking.js'
@@ -40,7 +41,6 @@ export function reconcileEffortForModel(
     : undefined
 }
 
-// @[MODEL LAUNCH]: Add the new model to the allowlist if it supports the effort parameter.
 export function modelSupportsEffort(model: string): boolean {
   const m = model.toLowerCase()
   if (isEnvTruthy(process.env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT)) {
@@ -56,10 +56,8 @@ export function modelSupportsEffort(model: string): boolean {
   if (getAPIProvider() === 'openai' && m.startsWith('gpt-')) {
     return true
   }
-  // Supported by a subset of Claude 4 models and Claude 5 models
-  if (m.includes('fable-5') || m.includes('opus-5') || m.includes('sonnet-5') || m.includes('opus-4-6') || m.includes('sonnet-4-6')) {
-    return true
-  }
+  const release = matchClaudeRelease(m)
+  if (release) return release.effort !== undefined
   // Exclude any other known legacy models (haiku, older opus/sonnet variants)
   if (m.includes('haiku') || m.includes('sonnet') || m.includes('opus')) {
     return false
@@ -75,29 +73,16 @@ export function modelSupportsEffort(model: string): boolean {
   return getAPIProvider() === 'firstParty'
 }
 
-// @[MODEL LAUNCH]: Add models that support the named 'max' effort level.
 export function modelSupportsMaxEffort(model: string): boolean {
   const supported3P = get3PModelCapabilityOverride(model, 'max_effort')
   if (supported3P !== undefined) {
     return supported3P
   }
   const m = model.toLowerCase()
-  if (m.includes('fable-5') || m.includes('opus-5') || m.includes('sonnet-5-5')) {
-    return true
-  }
-  if (m.includes('opus-4-6')) {
-    return true
-  }
-  if (
-    m === 'gpt-6.2-sol' ||
-    m === 'gpt-6.1-terra' ||
-    m === 'gpt-6-luna' ||
-    m === 'gpt-5.6-terra' ||
-    m === 'gpt-5.6-luna' ||
-    m === 'gpt-6.2-astra'
-  ) {
-    return true
-  }
+  const effort = matchClaudeRelease(m)?.effort
+  if (effort === 'max' || effort === 'xhigh') return true
+  const codex = getCodexRelease(m)
+  if (codex?.efforts) return codex.efforts.includes('max')
   if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
     return true
   }
@@ -106,16 +91,12 @@ export function modelSupportsMaxEffort(model: string): boolean {
 
 export function getSupportedEffortLevels(model: string): readonly EffortLevel[] {
   const m = model.toLowerCase()
-  if (m === 'gpt-6.2-astra' || m === 'gpt-6.2-sol' || m === 'gpt-5.6-terra') {
-    return EFFORT_LEVELS
-  }
-  if (m === 'gpt-6.1-terra' || m === 'gpt-6-luna' || m === 'gpt-5.6-luna') {
-    return ['low', 'medium', 'high', 'xhigh', 'max']
-  }
+  const codex = getCodexRelease(m)
+  if (codex?.efforts) return codex.efforts
   if (m.includes('codex')) {
     return ['low', 'medium', 'high', 'xhigh']
   }
-  if (m.includes('opus-5-5') || m.includes('sonnet-5-5')) {
+  if (matchClaudeRelease(m)?.effort === 'xhigh') {
     return ['low', 'medium', 'high', 'xhigh', 'max']
   }
   if (modelSupportsMaxEffort(model)) {
@@ -381,7 +362,6 @@ export function getOpusDefaultEffortConfig(): OpusDefaultEffortConfig {
   }
 }
 
-// @[MODEL LAUNCH]: Update the default effort levels for new models
 export function getDefaultEffortForModel(
   model: string,
 ): EffortValue | undefined {
@@ -410,43 +390,13 @@ export function getDefaultEffortForModel(
   // the model launch DRI and research. Default effort is a sensitive setting
   // that can greatly affect model quality and bashing.
 
-  // Sol and Terra default to medium reasoning. Luna stays low to preserve the
-  // fast/cost-sensitive slot's low-latency intent.
-  const lowerModel = model.toLowerCase()
-  if (
-    lowerModel === 'gpt-6.2-sol' ||
-    lowerModel === 'gpt-6.1-terra' ||
-    lowerModel === 'gpt-5.6-terra'
-  ) {
-    return 'medium'
-  }
-  if (lowerModel === 'gpt-6-luna' || lowerModel === 'gpt-5.6-luna') return 'low'
+  const codexEffort = getCodexRelease(model.toLowerCase())?.defaultEffort
+  if (codexEffort !== undefined) return codexEffort
 
-  // Opus 5 and Fable 5 default to medium effort
-  if (model.toLowerCase().includes('opus-5') || model.toLowerCase().includes('fable-5')) {
-    if (isProSubscriber()) {
-      return 'medium'
-    }
-    if (
-      getOpusDefaultEffortConfig().enabled &&
-      (isMaxSubscriber() || isTeamSubscriber())
-    ) {
-      return 'medium'
-    }
-  }
-
-  // Sonnet 5 follows the ultrathink default below
-
-  // Default effort on Opus 4.6 to medium for Pro.
-  // Max/Team also get medium when the tengu_grey_step2 config is enabled.
-  if (model.toLowerCase().includes('opus-4-6')) {
-    if (isProSubscriber()) {
-      return 'medium'
-    }
-    if (
-      getOpusDefaultEffortConfig().enabled &&
-      (isMaxSubscriber() || isTeamSubscriber())
-    ) {
+  if (matchClaudeRelease(model.toLowerCase())?.subscriberMediumEffort) {
+    if (isProSubscriber() || (
+      getOpusDefaultEffortConfig().enabled && (isMaxSubscriber() || isTeamSubscriber())
+    )) {
       return 'medium'
     }
   }

@@ -1,3 +1,4 @@
+import { currentClaudeRelease } from '../utils/model/configs.js'
 import { c as _c } from "react/compiler-runtime";
 import figures from 'figures';
 import { join } from 'path';
@@ -151,7 +152,7 @@ export function Doctor(t0) {
       upperLimit: TASK_MAX_OUTPUT_UPPER_LIMIT
     }, {
       name: "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-      ...getModelMaxOutputTokens("claude-opus-5")
+      ...getModelMaxOutputTokens(currentClaudeRelease("opus").wire.firstParty)
     }];
     t4 = envVars.map(_temp8).filter(_temp9);
     $[5] = t4;

@@ -14,8 +14,10 @@
   "scripts": {
     "build": "bun run ./scripts/build.ts",
     "build:dev": "bun run ./scripts/build.ts --dev",
-    "build:dev:full": "bun run maps:lint && bun run lint:undefined-names && bun run lint && bun run ./scripts/build.ts --dev --feature-set=dev-full && ./cli-dev --version",
+    "build:dev:full": "bun run maps:lint && bun run lint:model-catalog && bun run lint:undefined-names && bun run lint && bun run ./scripts/build.ts --dev --feature-set=dev-full && ./cli-dev --version",
     "lint": "files=$(git diff --name-only --diff-filter=d main...HEAD -- '*.ts' '*.tsx' | while IFS= read -r file; do [ -f \"$file\" ] && printf '%s\\n' \"$file\"; done); [ -z \"$files\" ] || eslint --suppressions-location eslint-suppressions.json --suppress-rule react-hooks/rules-of-hooks --suppress-rule react-hooks/exhaustive-deps --suppress-rule custom-rules/prefer-use-terminal-size $files",
+    "lint:model-catalog": "bun run ./scripts/check-model-catalog.ts",
+    "verify:model-replacement": "bun run ./scripts/verify-model-replacement.ts",
     "maps:lint": "bun run ./scripts/workspaceMapLint.ts",
     "test:bounded": "bun ./scripts/test-bounded.ts",
     "lint:undefined-names": "bun run ./scripts/undefinedNamesLint.ts",

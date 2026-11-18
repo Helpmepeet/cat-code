@@ -115,52 +115,22 @@ const updateBedrockModelStrings = sequential(async () => {
   }
 })
 
-function initModelStrings(): void {
-  const ms = getModelStringsState()
-  if (ms !== null) {
-    // Already initialized
-    return
-  }
-  // Initial with default values for non-Bedrock providers
-  if (getAPIProvider() !== 'bedrock') {
-    setModelStringsState(getBuiltinModelStrings(getAPIProvider()))
-    return
-  }
-  // On Bedrock, update model strings in the background without blocking.
-  // Don't set the state in this case so that we can use `sequential` on
-  // `updateBedrockModelStrings` and check for existing state on multiple
-  // calls.
-  void updateBedrockModelStrings()
+const builtinModelStrings = {
+  firstParty: getBuiltinModelStrings('firstParty'),
+  bedrock: getBuiltinModelStrings('bedrock'),
+  vertex: getBuiltinModelStrings('vertex'),
+  foundry: getBuiltinModelStrings('foundry'),
+  openai: getBuiltinModelStrings('openai'),
 }
 
-export function getModelStrings(): ModelStrings {
-  const ms = getModelStringsState()
-  if (ms === null) {
-    initModelStrings()
-    // Bedrock path falls through here while the profile fetch runs in the
-    // background — still honor overrides on the interim defaults.
-    return applyModelOverrides(getBuiltinModelStrings(getAPIProvider()))
-  }
-  return applyModelOverrides(ms)
+export function getModelStrings(provider: APIProvider = getAPIProvider()): ModelStrings {
+  if (provider !== 'bedrock') return applyModelOverrides(builtinModelStrings[provider])
+  const profiles = getModelStringsState()
+  if (!profiles) void updateBedrockModelStrings()
+  return applyModelOverrides(profiles ?? builtinModelStrings.bedrock)
 }
 
-/**
- * Ensure model strings are fully initialized.
- * For Bedrock users, this waits for the profile fetch to complete.
- * Call this before generating model options to ensure correct region strings.
- */
+/** Wait for Bedrock profiles before creating provider-sensitive picker rows. */
 export async function ensureModelStringsInitialized(): Promise<void> {
-  const ms = getModelStringsState()
-  if (ms !== null) {
-    return
-  }
-
-  // For non-Bedrock, initialize synchronously
-  if (getAPIProvider() !== 'bedrock') {
-    setModelStringsState(getBuiltinModelStrings(getAPIProvider()))
-    return
-  }
-
-  // For Bedrock, wait for the profile fetch
-  await updateBedrockModelStrings()
+  if (getAPIProvider() === 'bedrock') await updateBedrockModelStrings()
 }

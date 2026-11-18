@@ -1,4 +1,4 @@
-import { remapRetiredClaude46ModelForMigration } from '../utils/model/model.js'
+import { remapFirstPartyClaudeSelectionForMigration } from '../utils/model/model.js'
 import { migrateRetiredModelsWith } from './migrateRetiredModels.js'
 
 /**
@@ -7,5 +7,5 @@ import { migrateRetiredModelsWith } from './migrateRetiredModels.js'
  * managed, CLI, and environment pins without mutating those sources.
  */
 export function migrateRetiredClaude46ModelsToClaude5(): Error | null {
-  return migrateRetiredModelsWith(remapRetiredClaude46ModelForMigration)
+  return migrateRetiredModelsWith(remapFirstPartyClaudeSelectionForMigration)
 }

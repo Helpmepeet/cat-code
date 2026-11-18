@@ -1,3 +1,4 @@
+import { CODEX_ROUTES, currentCodexRelease } from '../../../utils/model/configs.js'
 import { BASH_TOOL_NAME } from 'src/tools/BashTool/toolName.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from 'src/tools/ExitPlanModeTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from 'src/tools/FileEditTool/constants.js'
@@ -104,9 +105,9 @@ export const EXPLORE_AGENT: BuiltInAgentDefinition = {
   ],
   source: 'built-in',
   baseDir: 'built-in',
-  // Ants get inherit to use the main agent's model; external users get GPT-6 Luna.
+  // Ants get inherit to use the main agent's model; external users get the Codex exploration model.
   // Note: For ants, getAgentModel() checks tengu_explore_agent GrowthBook flag at runtime
-  model: process.env.USER_TYPE === 'ant' ? 'inherit' : 'gpt-6-luna',
+  model: process.env.USER_TYPE === 'ant' ? 'inherit' : currentCodexRelease(CODEX_ROUTES.explore).id,
   // Explore is a fast read-only search agent — it doesn't need commit/PR/lint
   // rules from CLAUDE.md. The main agent has full context and interprets results.
   omitClaudeMd: true,

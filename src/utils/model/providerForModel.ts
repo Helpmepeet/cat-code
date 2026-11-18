@@ -1,3 +1,5 @@
+import { getCodexRelease } from './configs.js'
+
 export type ModelImpliedProvider = 'openai'
 
 /**
@@ -6,6 +8,6 @@ export type ModelImpliedProvider = 'openai'
  */
 export function getProviderForModel(model: string | null | undefined): ModelImpliedProvider | null {
   if (!model) return null
-  if (model.startsWith('gpt-')) return 'openai'
+  if (model.startsWith('gpt-') || getCodexRelease(model)) return 'openai'
   return null
 }

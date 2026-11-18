@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createHash, randomUUID } from 'node:crypto'
 import { isWithinCodexRefreshSkew } from '../../src/constants/codex-oauth.js'
-import { createCodexFetch } from '../../src/services/api/codex-fetch-adapter.js'
+import { createCodexFetch, requireExactCodexModel } from '../../src/services/api/codex-fetch-adapter.js'
 import { getPoolStatus, loadPoolForObservation, type PoolAccount } from '../../src/services/api/codexAccountPool.js'
 import { createCodexCredentialHandle } from '../../src/services/api/codexCredentialUse.js'
 import type { sideQuery } from '../../src/utils/sideQuery.js'
@@ -31,6 +31,7 @@ export async function observedAccount(selection: string): Promise<PoolAccount> {
 export function pinnedCodexTransport(account: PoolAccount, model: string, maxRequests: number, reserveBackendSend: () => Promise<void>) {
   if (!Number.isSafeInteger(maxRequests) || maxRequests < 1) throw new Error('A positive authorized reviewer request limit is required')
   if (!model.startsWith('gpt-')) throw new Error('Pinned evaluation transport currently supports GPT models only')
+  requireExactCodexModel(model)
   if (account.status !== 'healthy' || account.credentialGeneration <= 0) throw new Error('Selected account is unavailable or requires credential lifecycle migration')
   if (isWithinCodexRefreshSkew(account.expiresAt)) throw new Error('Selected account requires token refresh; this runner will not refresh credentials')
   const handle = createCodexCredentialHandle({ accountId: account.accountId, accessToken: account.accessToken,

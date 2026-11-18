@@ -1,3 +1,4 @@
+import { CODEX_ROUTES, currentCodexRelease } from '../../../utils/model/configs.js'
 import { BASH_TOOL_NAME } from 'src/tools/BashTool/toolName.js'
 import { FILE_READ_TOOL_NAME } from 'src/tools/FileReadTool/prompt.js'
 import { GLOB_TOOL_NAME } from 'src/tools/GlobTool/prompt.js'
@@ -142,7 +143,7 @@ export const CLAUDE_CODE_GUIDE_AGENT: BuiltInAgentDefinition = {
   source: 'built-in',
   baseDir: 'built-in',
   get model() {
-    return hasCodexTokens() ? 'gpt-6-luna' : getDefaultSonnetModel()
+    return hasCodexTokens() ? currentCodexRelease(CODEX_ROUTES.guide).id : getDefaultSonnetModel()
   },
   permissionMode: 'dontAsk',
   getSystemPrompt({ toolUseContext }) {

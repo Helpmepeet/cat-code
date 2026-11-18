@@ -1,3 +1,4 @@
+import { getCachedCompactionClaudeModels } from '../../utils/model/configs.js'
 export type CachedMCConfig = {
   enabled: boolean
   triggerThreshold: number
@@ -10,7 +11,7 @@ const DEFAULT_CACHED_MC_CONFIG: CachedMCConfig = {
   enabled: false,
   triggerThreshold: 12,
   keepRecent: 3,
-  supportedModels: ['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5'],
+  supportedModels: getCachedCompactionClaudeModels(),
   systemPromptSuggestSummaries: false,
 }
 

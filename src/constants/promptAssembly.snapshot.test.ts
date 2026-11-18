@@ -22,6 +22,7 @@ import { join } from 'node:path'
 import { getSystemPrompt, LEAN_SYSTEM_PROMPT_ENV } from './prompts.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 import * as outputStyles from './outputStyles.js'
+import { currentClaudeRelease, currentCodexRelease } from '../utils/model/configs.js'
 import { getGPTPromptFamily } from './promptStyle.js'
 import { mapClaudeModelToCodex } from '../services/api/codex-fetch-adapter.js'
 import { buildProviderInstructionAssembly } from '../services/api/instructionAssembly.js'
@@ -94,6 +95,9 @@ beforeAll(() => {
   mkdirSync(home)
   mkdirSync(config)
   mkdirSync(managed)
+  const skillDir = join(config, 'skills', 'snapshot-fixture')
+  mkdirSync(skillDir, { recursive: true })
+  writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: snapshot-fixture\ndescription: Offline prompt fixture.\n---\nFixture instructions.')
   process.env.HOME = home
   process.env.CLAUDE_CONFIG_DIR = config
   process.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH = managed
@@ -171,6 +175,8 @@ function normalizeMachine(prompt: string): string {
 function normalizeModelIdentity(prompt: string): string {
   return prompt
     .replace(/You are powered by the model[^\n]*/g, 'You are powered by <model>.')
+    .replace(/The most recent Claude models are the [^\n]*?\. Model IDs — [^\n]*?\. When building/g,
+      'The most recent Claude models are the <lineup>. Model IDs — <models>. When building')
     .replace(/Assistant knowledge cutoff is[^\n]*/g, 'Assistant knowledge cutoff is <cutoff>.')
 }
 
@@ -253,37 +259,34 @@ describe('assembled system prompt', () => {
     clearSystemPromptSections()
   })
 
+  const opus = currentClaudeRelease('opus').wire.firstParty
+  const astra = currentCodexRelease('astra').id
   const cases: [name: string, model: string, tools: ToolList][] = [
-    ['gpt-5.6-terra.full', 'gpt-5.6-terra', FULL_TOOLS],
-    ['gpt-5.6-terra.minimal', 'gpt-5.6-terra', MINIMAL_TOOLS],
-    ['gpt-6.2-astra.full', 'gpt-6.2-astra', FULL_TOOLS],
-    ['gpt-6.2-astra.minimal', 'gpt-6.2-astra', MINIMAL_TOOLS],
-    ['claude-opus-5.full', 'claude-opus-5', FULL_TOOLS],
+    ['gpt-5.6.full', 'gpt-5.6-terra', FULL_TOOLS],
+    ['gpt-5.6.minimal', 'gpt-5.6-terra', MINIMAL_TOOLS],
+    ['gpt-6.full', astra, FULL_TOOLS],
+    ['gpt-6.minimal', astra, MINIMAL_TOOLS],
+    ['claude.full', opus, FULL_TOOLS],
+    ['claude.lean', opus, FULL_TOOLS],
   ]
 
   for (const [name, model, tools] of cases) {
     test(`${name} matches its checked-in snapshot`, async () => {
-      // claude-opus-5.full pins the full assembly, which lean replaced as the default.
       const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
-      if (name === 'claude-opus-5.full') process.env[LEAN_SYSTEM_PROMPT_ENV] = '0'
+      if (name === 'claude.full') process.env[LEAN_SYSTEM_PROMPT_ENV] = '0'
+      if (name === 'claude.lean') delete process.env[LEAN_SYSTEM_PROMPT_ENV]
       try {
-        checkAgainstSnapshot(name, await assemble(tools, model))
+        checkAgainstSnapshot(name, normalizeModelIdentity(await assemble(tools, model)))
       } finally {
-        if (saved === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
-        else process.env[LEAN_SYSTEM_PROMPT_ENV] = saved
+        restore(LEAN_SYSTEM_PROMPT_ENV, saved)
       }
     })
   }
 
-  test('claude-opus-5.lean matches its checked-in snapshot', async () => {
-    const saved = process.env[LEAN_SYSTEM_PROMPT_ENV]
-    delete process.env[LEAN_SYSTEM_PROMPT_ENV]
-    try {
-      checkAgainstSnapshot('claude-opus-5.lean', await assemble(FULL_TOOLS, 'claude-opus-5'))
-    } finally {
-      if (saved === undefined) delete process.env[LEAN_SYSTEM_PROMPT_ENV]
-      else process.env[LEAN_SYSTEM_PROMPT_ENV] = saved
-    }
+  test('historical prompt keeps the release label and exact ID', async () => {
+    expect(await assemble(MINIMAL_TOOLS, 'gpt-5.6-terra')).toContain(
+      'You are powered by the model named GPT-5.6 Terra. The exact model ID is gpt-5.6-terra.',
+    )
   })
 
   // A normalization gap would otherwise show up as a snapshot that churns on

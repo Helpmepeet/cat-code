@@ -8,7 +8,6 @@ import {
   getAutoCompactThreshold,
   getBlockingLimit,
   getEffectiveContextWindowSize,
-  GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD,
   isAutoCompactEnabled,
   MANUAL_COMPACT_BUFFER_TOKENS,
   measureNonMessageOverheadTokens,
@@ -110,9 +109,6 @@ describe('autoCompact thresholds', () => {
     // The buffer math alone would land on 927,000 here, exactly as it does for
     // the Claude 5 models above. Sol stops earlier because Codex publishes its
     // own limit for this model.
-    expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(
-      GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD,
-    )
     expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(900_000)
   })
 
@@ -175,9 +171,7 @@ describe('autoCompact thresholds', () => {
       'claude-opus-5',
       'claude-sonnet-4-6',
     ]) {
-      expect(getAutoCompactThreshold(model)).not.toBe(
-        GPT_5_6_SOL_AUTOCOMPACT_THRESHOLD,
-      )
+      expect(getAutoCompactThreshold(model)).not.toBe(900_000)
     }
   })
 

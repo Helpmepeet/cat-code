@@ -1,6 +1,6 @@
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import { isModelAlias, isModelFamilyAlias } from './aliases.js'
-import { parseUserSpecifiedModel, remapRetiredGptModel } from './model.js'
+import { parseUserSpecifiedModel, remapFirstPartyClaudeSelection, remapRetiredGptModel } from './model.js'
 import { resolveOverriddenModel } from './modelStrings.js'
 
 /**
@@ -108,8 +108,10 @@ export function isModelAllowed(model: string): boolean {
   }
 
   const resolvedModel = resolveOverriddenModel(model)
-  const normalizedModel = remapRetiredGptModel(resolvedModel).trim().toLowerCase()
-  const normalizedAllowlist = availableModels.map(m => remapRetiredGptModel(m).trim().toLowerCase())
+  const normalize = (selection: string) =>
+    remapFirstPartyClaudeSelection(remapRetiredGptModel(selection)).trim().toLowerCase()
+  const normalizedModel = normalize(resolvedModel)
+  const normalizedAllowlist = availableModels.map(normalize)
 
   // Direct match (alias-to-alias or full-name-to-full-name)
   // Skip family aliases that have been narrowed by specific entries —
