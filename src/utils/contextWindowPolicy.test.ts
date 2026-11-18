@@ -272,6 +272,13 @@ describe('long-context entitlement clamp', () => {
     }
   })
 
+  test.each([
+    ['gpt-6.2-astra', 272_000],
+    ['gpt-6.2-sol', 500_000],
+  ] as const)('%s keeps its native context window with a [1m] pin', (model, window) => {
+    expect(getContextWindowForModel(model + '[1m]')).toBe(window)
+  })
+
   test('a different active Claude account regains its full window', () => {
     saveGlobalConfig(current => ({
       ...current,

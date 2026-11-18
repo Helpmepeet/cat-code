@@ -3,8 +3,9 @@ import { resolveAntModel } from './model/antModels.js'
 import { CONTEXT_1M_BETA_HEADER } from '../constants/betas.js'
 import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
-import { getCanonicalName } from './model/model.js'
+import { getCanonicalName, normalizeModelStringForAPI } from './model/model.js'
 import { getModelCapability } from './model/modelCapabilities.js'
+import { getProviderForModel } from './model/providerForModel.js'
 
 // Model context window size (200k tokens for all models right now)
 export const MODEL_CONTEXT_WINDOW_DEFAULT = 200_000
@@ -38,10 +39,10 @@ export function has1mContext(model: string): boolean {
 }
 
 function has1mSuffix(model: string, disabled: boolean): boolean {
-  if (disabled) {
-    return false
-  }
-  return /\[1m\]/i.test(model)
+  if (disabled || !/\[1m\]/i.test(model)) return false
+  const base = normalizeModelStringForAPI(model).trim().toLowerCase()
+  // Codex models use their native context window; [1m] opts in to a Claude beta.
+  return getProviderForModel(base) !== 'openai'
 }
 
 // @[MODEL LAUNCH]: Update this pattern if the new model supports 1M context

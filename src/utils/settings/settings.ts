@@ -34,6 +34,7 @@ import * as lockfile from '../lockfile.js'
 import { logError } from '../log.js'
 import { getPlatform } from '../platform.js'
 import { clone, jsonStringify } from '../slowOperations.js'
+import { remapRetiredGptModel } from '../model/gptModelRetirement.js'
 import { profileCheckpoint } from '../startupProfiler.js'
 import {
   type EditableSettingSource,
@@ -117,7 +118,7 @@ export function loadManagedFileSettings(): {
       instructionFilesOption = option
     }
     if (settings && Object.keys(settings).length > 0) {
-      merged = mergeWith(merged, settings, settingsMergeCustomizer)
+      merged = mergeSettingsLayer(merged, settings)
       found = true
     }
   }
@@ -880,6 +881,26 @@ export function settingsMergeCustomizer(
   return undefined
 }
 
+function mergeSettingsLayer(target: SettingsJson, source: SettingsJson): SettingsJson {
+  // Canonicalize a layer before merging so its legacy key still takes
+  // precedence over a lower layer's current key. Leave the saved files alone.
+  const modelOverrides = source.modelOverrides
+  if (!modelOverrides) return mergeWith(target, source, settingsMergeCustomizer)
+  const normalized = { ...modelOverrides }
+  for (const [id, value] of Object.entries(modelOverrides)) {
+    const successor = remapRetiredGptModel(id)
+    if (successor !== id) {
+      normalized[successor] ??= value
+      delete normalized[id]
+    }
+  }
+  return mergeWith(
+    target,
+    { ...source, modelOverrides: normalized },
+    settingsMergeCustomizer,
+  )
+}
+
 /**
  * Get a list of setting keys from managed settings for logging purposes.
  * For certain nested settings (permissions, sandbox, hooks), expands to show
@@ -994,11 +1015,7 @@ function loadSettingsFromDisk(): SettingsWithErrors {
     const pluginSettings = getPluginSettingsBase()
     let mergedSettings: SettingsJson = {}
     if (pluginSettings) {
-      mergedSettings = mergeWith(
-        mergedSettings,
-        pluginSettings,
-        settingsMergeCustomizer,
-      )
+      mergedSettings = mergeSettingsLayer(mergedSettings, pluginSettings)
     }
     const allErrors: ValidationError[] = []
     const seenErrors = new Set<string>()
@@ -1055,11 +1072,7 @@ function loadSettingsFromDisk(): SettingsWithErrors {
 
         // Merge the winning policy source into the settings chain
         if (policySettings) {
-          mergedSettings = mergeWith(
-            mergedSettings,
-            policySettings,
-            settingsMergeCustomizer,
-          )
+          mergedSettings = mergeSettingsLayer(mergedSettings, policySettings)
         }
         for (const error of policyErrors) {
           const errorKey = `${error.file}:${error.path}:${error.message}`
@@ -1092,11 +1105,7 @@ function loadSettingsFromDisk(): SettingsWithErrors {
           }
 
           if (settings) {
-            mergedSettings = mergeWith(
-              mergedSettings,
-              settings,
-              settingsMergeCustomizer,
-            )
+            mergedSettings = mergeSettingsLayer(mergedSettings, settings)
           }
         }
       }
@@ -1107,11 +1116,7 @@ function loadSettingsFromDisk(): SettingsWithErrors {
         if (inlineSettings) {
           const parsed = SettingsSchema().safeParse(inlineSettings)
           if (parsed.success) {
-            mergedSettings = mergeWith(
-              mergedSettings,
-              parsed.data,
-              settingsMergeCustomizer,
-            )
+            mergedSettings = mergeSettingsLayer(mergedSettings, parsed.data)
           }
         }
       }

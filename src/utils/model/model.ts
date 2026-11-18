@@ -22,6 +22,7 @@ import {
 } from '../context.js'
 import { isEnvTruthy } from '../envUtils.js'
 import { getModelStrings, resolveOverriddenModel } from './modelStrings.js'
+import { remapRetiredGptModel } from './gptModelRetirement.js'
 import { formatModelPricing, getOpus46CostTier } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
@@ -75,29 +76,7 @@ export function isNonCustomOpusModel(model: ModelName): boolean {
   )
 }
 
-const RETIRED_GPT_MODEL_REPLACEMENTS: Record<string, ModelName> = {
-  'gpt-6-astra': 'gpt-6.2-astra',
-  'gpt-6.1-astra': 'gpt-6.2-astra',
-  'gpt-6.1-sol': 'gpt-6.2-sol',
-  'gpt-6-sol': 'gpt-6.2-sol',
-  'gpt-5.6-sol': 'gpt-6.2-sol',
-  'gpt-5.6-terra': 'gpt-6.1-terra',
-  'gpt-5.6-luna': 'gpt-6-luna',
-  'gpt-5.4': 'gpt-6-luna',
-  'gpt-5.3-codex': 'gpt-6-luna',
-  'gpt-5.4-mini': 'gpt-6-luna',
-  'gpt-5.5': 'gpt-6.1-terra',
-}
-
-/**
- * Keep explicitly pinned legacy GPT values runnable while the settings
- * migration rewrites user settings. These replacements do not support a
- * `[1m]` suffix in Cat Code's model-selection syntax.
- */
-export function remapRetiredGptModel(model: ModelName): ModelName {
-  const base = model.trim().replace(/\[1m\]$/i, '').toLowerCase()
-  return RETIRED_GPT_MODEL_REPLACEMENTS[base] ?? model
-}
+export { remapRetiredGptModel }
 
 const RETIRED_CLAUDE_46_MODEL_REPLACEMENTS: Record<string, ModelName> = {
   'claude-sonnet-4-6': 'claude-sonnet-5',
