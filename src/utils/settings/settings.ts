@@ -34,7 +34,7 @@ import * as lockfile from '../lockfile.js'
 import { logError } from '../log.js'
 import { getPlatform } from '../platform.js'
 import { clone, jsonStringify } from '../slowOperations.js'
-import { remapRetiredGptModel } from '../model/gptModelRetirement.js'
+import { remapRetiredCodexSelection } from '../model/configs.js'
 import { profileCheckpoint } from '../startupProfiler.js'
 import {
   type EditableSettingSource,
@@ -888,7 +888,7 @@ function mergeSettingsLayer(target: SettingsJson, source: SettingsJson): Setting
   if (!modelOverrides) return mergeWith(target, source, settingsMergeCustomizer)
   const normalized = { ...modelOverrides }
   for (const [id, value] of Object.entries(modelOverrides)) {
-    const successor = remapRetiredGptModel(id)
+    const successor = remapRetiredCodexSelection(id)
     if (successor !== id) {
       normalized[successor] ??= value
       delete normalized[id]
