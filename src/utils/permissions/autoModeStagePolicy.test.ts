@@ -39,3 +39,12 @@ test('candidate removes only stage 1 intent and exceptions and preserves unfamil
     }),
   ]) expect(buildReducedAutoModeStagePolicy(altered, 'fast')).toBe(altered)
 })
+
+test('an inline section reference leaves the entire rule inventory intact', () => {
+  const full = assembleUpstreamSystemPrompt(base, permissions, {
+    soft_deny: ['Compare this rule with ## ALLOW (exceptions) if ANY of these apply', 'Keep design drafts in their project.'],
+  })
+  const inventory = full.slice(full.indexOf('## Environment'), full.lastIndexOf('## ALLOW (exceptions) if ANY of these apply'))
+  expect(inventory).toContain('Keep design drafts in their project.')
+  expect(buildReducedAutoModeStagePolicy(full, 'fast').includes(inventory)).toBe(true)
+})

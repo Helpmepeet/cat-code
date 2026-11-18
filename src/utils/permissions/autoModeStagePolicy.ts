@@ -21,10 +21,11 @@ const PERMISSIONS_HEADINGS = [
   ALLOW_HEADING,
 ]
 
-function hasHeadings(text: string, expected: readonly string[]): boolean {
-  const headings = text.match(/^## .+$/gm) ?? []
-  return headings.length === expected.length &&
-    headings.every((heading, index) => heading === expected[index])
+function headingOffsets(text: string, expected: readonly string[]): Map<string, number> | undefined {
+  const headings = [...text.matchAll(/^## .+$/gm)]
+  if (headings.length !== expected.length ||
+      headings.some((heading, index) => heading[0] !== expected[index])) return
+  return new Map(headings.map(heading => [heading[0], heading.index]))
 }
 
 /**
@@ -50,14 +51,14 @@ export function buildReducedAutoModeStagePolicy(
   const after = fullSystemPrompt.slice(end + PERMISSIONS_END.length)
   // Do not infer section boundaries from user rule text. Unexpected, missing,
   // or duplicate headings make reduction inapplicable rather than losing rules.
-  if (!hasHeadings(before, BASE_HEADINGS) ||
-    !hasHeadings(permissions, PERMISSIONS_HEADINGS) ||
-    !hasHeadings(after, ['## Classification Process', '## Output Format'])) return fullSystemPrompt
+  const baseHeadings = headingOffsets(before, BASE_HEADINGS)
+  const permissionHeadings = headingOffsets(permissions, PERMISSIONS_HEADINGS)
+  if (!baseHeadings || !permissionHeadings ||
+    !headingOffsets(after, ['## Classification Process', '## Output Format'])) return fullSystemPrompt
 
-  const intent = before.indexOf(`${INTENT_HEADING}\n`)
-  const evaluation = before.indexOf(`${EVALUATION_HEADING}\n`)
-  const allow = permissions.indexOf(`${ALLOW_HEADING}\n`)
-  if (intent < 0 || evaluation < intent || allow < 0) return fullSystemPrompt
+  const intent = baseHeadings.get(INTENT_HEADING)!
+  const evaluation = baseHeadings.get(EVALUATION_HEADING)!
+  const allow = permissionHeadings.get(ALLOW_HEADING)!
   return before.slice(0, intent) + before.slice(evaluation) +
     PERMISSIONS_START + permissions.slice(0, allow) + PERMISSIONS_END + after
 }
