@@ -36,7 +36,8 @@ test('uncertain move times out without killing and permits explicit retry', asyn
   let reserved = true
   const h = fixture({ blocked: () => reserved })
   const result = await h.coordinator.close('id')
-  expect(result.ok).toBe(false)
+  // Nothing was asked to stop, so this is a refusal, not an unknown outcome.
+  expect(result).toMatchObject({ ok: false, error: { code: 'session_unreachable' } })
   expect(h.calls).not.toContain('close')
   reserved = false
   expect(await h.coordinator.close('id')).toEqual(ok)
@@ -48,7 +49,11 @@ test.each(['cancel', 'close'] as const)('throwing %s reports failed stop and per
     if (fail) throw new Error('controlled failure')
     return stage === 'close' ? ok : undefined
   } } as Partial<SessionCloseDependencies>)
-  expect((await h.coordinator.close('id')).ok).toBe(false)
+  // A throw before the host is asked to stop stopped nothing. A throw inside
+  // the host's close leaves the engine's state unknown.
+  expect(await h.coordinator.close('id')).toMatchObject({
+    ok: false, error: { code: stage === 'close' ? 'stop_unconfirmed' : 'session_unreachable' },
+  })
   fail = false
   expect((await h.coordinator.close('id')).ok).toBe(true)
 })
@@ -56,7 +61,7 @@ test.each(['cancel', 'close'] as const)('throwing %s reports failed stop and per
 test('stalled cancellation is bounded and cannot later kill after timeout', async () => {
   let release!: () => void
   const h = fixture({ cancel: () => new Promise<void>(resolve => { release = resolve }) })
-  expect((await h.coordinator.close('id')).ok).toBe(false)
+  expect(await h.coordinator.close('id')).toMatchObject({ ok: false, error: { code: 'session_unreachable' } })
   release()
   await Promise.resolve()
   await Promise.resolve()
@@ -67,7 +72,7 @@ test('stalled host cleanup returns an honest bounded failure', async () => {
   const h = fixture({ close: () => new Promise<HostResult<void>>(() => {}) })
   const pending = h.coordinator.close('id')
   expect(h.coordinator.isPending('id')).toBe(true)
-  expect((await pending).ok).toBe(false)
+  expect(await pending).toMatchObject({ ok: false, error: { code: 'stop_unconfirmed' } })
   expect(h.coordinator.isPending('id')).toBe(false)
 })
 

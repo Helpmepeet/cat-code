@@ -11,6 +11,16 @@ export type SessionCloseDependencies = {
   retryMs?: number
 }
 
+const STILL_BUSY: HostResult<void> = {
+  ok: false, error: { code: 'session_unreachable', message: 'This Chat is still busy. Try closing it again shortly.' },
+}
+const NOT_CLOSED: HostResult<void> = {
+  ok: false, error: { code: 'session_unreachable', message: 'This Chat could not be closed. Try again.' },
+}
+const STOP_UNCONFIRMED: HostResult<void> = {
+  ok: false, error: { code: 'stop_unconfirmed', message: 'Stop is not confirmed. Open the chat to review it or retry stop.' },
+}
+
 /** Cancellation never grants permission to kill across an unsettled filesystem move. */
 export class SessionCloseCoordinator {
   private readonly pending = new Map<string, Promise<HostResult<void>>>()
@@ -35,11 +45,14 @@ export class SessionCloseCoordinator {
   private async run(id: string): Promise<HostResult<void>> {
     const deadline = Date.now() + (this.deps.timeoutMs ?? 10_000)
     let expired = false
+    // Until the host is asked to stop, a failure means nothing was stopped and
+    // the user can be told why. Once it is asked, the outcome is unknown.
+    let stopping = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const timeout = new Promise<HostResult<void>>(resolve => {
       timer = setTimeout(() => {
         expired = true
-        resolve({ ok: false, error: { code: 'session_unreachable', message: 'Stop is not confirmed. Open the chat to review it or retry stop.' } })
+        resolve(stopping ? STOP_UNCONFIRMED : STILL_BUSY)
       }, this.deps.timeoutMs ?? 10_000)
     })
     const cleanup = (async (): Promise<HostResult<void>> => {
@@ -55,11 +68,12 @@ export class SessionCloseCoordinator {
           this.deps.observe(id)
           await new Promise(resolve => setTimeout(resolve, Math.min(this.deps.retryMs ?? 100, Math.max(0, deadline - Date.now()))))
         }
-        if (expired) return { ok: false, error: { code: 'session_unreachable', message: 'Stop is not confirmed. Retry stop.' } }
+        if (expired) return STILL_BUSY
+        stopping = true
         return await this.deps.close(id)
       } catch (error) {
         this.deps.onFailure?.(id, error)
-        return { ok: false, error: { code: 'session_unreachable', message: 'Stop failed. Open the chat to review it or retry stop.' } }
+        return stopping ? STOP_UNCONFIRMED : NOT_CLOSED
       }
     })()
     try {

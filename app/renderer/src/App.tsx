@@ -63,8 +63,16 @@ import {
   reduceShellState,
   selectPaneSessions,
   selectPeerOpenUnseen,
+  withReloadedStopAttempts,
   type ShellState,
 } from './shellState.js'
+import {
+  classifyStopResult,
+  NO_STOP_ATTEMPTS,
+  selectStopNotices,
+  type StopAttemptAction,
+  type StopOutcome,
+} from './stopAttempts.js'
 import { readPeerOpensSeen, writePeerOpensSeen } from './peerOpensSeen.js'
 import {
   attemptRosterBootstrap,
@@ -99,7 +107,6 @@ import {
   supersedeForegroundSelection,
   type PageTab,
 } from './pageTabNavigation.js'
-import { tabLabel } from './tabBarModel.js'
 import { Sidebar } from './Sidebar.js'
 import { CreateProjectDialog } from './CreateProjectDialog.js'
 import { createProjectsState, reduceProjectsState } from './projectsState.js'
@@ -1105,6 +1112,15 @@ export function App() {
     shellRef.current = reduceShellState(shellRef.current, action)
     dispatchShell(action)
   }, [dismissalSeed.error])
+  const stopAttemptCounterRef = useRef(0)
+  const requestStopAttempt = useCallback((sessionId: SessionId): number => {
+    const attempt = ++stopAttemptCounterRef.current
+    dispatchShell({ type: 'stop-requested', sessionId, attempt })
+    return attempt
+  }, [])
+  const settleStopAttempt = useCallback((sessionId: SessionId, attempt: number, outcome: StopOutcome) => {
+    dispatchShell({ type: 'stop-settled', sessionId, attempt, outcome })
+  }, [])
   const deliberatelyReopen = useCallback((session: SessionDescriptor) => {
     cancelledRestoresRef.current.delete(session.appSessionId)
     updateDismissals(reopenSession(shellRef.current.dismissals ?? [], session))
@@ -2265,6 +2281,14 @@ export function App() {
     accountHealthBanner && accountHealthBanner.id !== dismissedAccountHealthId
       ? [accountHealthBanner]
       : EMPTY_BANNERS
+  const stopNotices = useMemo(
+    () => selectStopNotices(shell.stopAttempts ?? NO_STOP_ATTEMPTS, shell.byId, shell.dismissals ?? []),
+    [shell.stopAttempts, shell.byId, shell.dismissals],
+  )
+  const stopBanners = useMemo(
+    () => stopNotices.length === 0 ? EMPTY_BANNERS : stopNotices.map(notice => notice.banner),
+    [stopNotices],
+  )
 
   // First-run and Accounts share one app-owned OAuth flow across tab changes.
   const beginOAuth = useCallback(
@@ -2921,23 +2945,28 @@ export function App() {
       }
       // Saved conversations become restore offers; unused rows are removed.
       // Neither path deletes files. Dismissal is independent of stop completion.
+      // The stop's outcome is reported by its own warning (`stopAttempts.ts`),
+      // never the shell error line, which holds one unrelated error at a time.
       const bridge = getBridge()
+      const attempt = requestStopAttempt(sessionId)
       try {
         const result = await bridge.closeSession(sessionId)
+        settleStopAttempt(sessionId, attempt, classifyStopResult(result))
         if (!result.ok) {
           pendingCloseRequestsRef.current.delete(sessionId)
-          setShellError(hostErrorMessage(result.error))
           return false
         }
         disposeFilePaneSession(sessionId)
         return true
       } catch (error) {
         pendingCloseRequestsRef.current.delete(sessionId)
-        setShellError(errorMessage(error))
+        // The request may or may not have reached the host.
+        console.warn('Stop request could not be delivered', error)
+        settleStopAttempt(sessionId, attempt, { kind: 'unconfirmed' })
         return false
       }
     })
-  }, [navigateAfterClosedSession, releasePendingSubmit, updateDismissals])
+  }, [navigateAfterClosedSession, releasePendingSubmit, updateDismissals, requestStopAttempt, settleStopAttempt])
 
   const archiveSession = (row: MergedSessionRow) => {
     const archivedAt = Date.now()
@@ -3062,10 +3091,15 @@ export function App() {
               isSessionDismissed(shellRef.current.dismissals ?? [], result.value)) {
             lazyRestoreClaimsRef.current.delete(sessionId)
             releasePendingSubmit(sessionId)
-            const closeResult = await bridge.closeSession(sessionId)
-            if (!closeResult.ok) {
-              setShellError(hostErrorMessage(closeResult.error))
-            } else disposeFilePaneSession(sessionId)
+            // The restore spawned a chat the user had already closed. Its stop
+            // reports through the same per-attempt warning as any other close.
+            const attempt = requestStopAttempt(sessionId)
+            const closeResult = await bridge.closeSession(sessionId).catch((error: unknown) => {
+              console.warn('Stop request could not be delivered', error)
+              return null
+            })
+            settleStopAttempt(sessionId, attempt, closeResult ? classifyStopResult(closeResult) : { kind: 'unconfirmed' })
+            if (closeResult?.ok) disposeFilePaneSession(sessionId)
             return
           }
           // `focus: false` is the idle-park drain: the user typed into a pane
@@ -3100,7 +3134,7 @@ export function App() {
         setShellError(errorMessage(error))
       }
     },
-    [releasePendingSubmit, captureBeforePaneSwitch],
+    [releasePendingSubmit, captureBeforePaneSwitch, requestStopAttempt, settleStopAttempt],
   )
 
   const engagePreview = useCallback(
@@ -5137,16 +5171,21 @@ export function App() {
             />
           ) : null}
 
-          {selectShellDescriptors(shell).filter(session =>
-            isSessionDismissed(shell.dismissals ?? [], session) &&
-            session.status !== 'exited',
-          ).map(session => (
-            <div data-window-chrome key={session.appSessionId} role="status" className="flex items-center gap-3 border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs">
-              <span className="min-w-0 flex-1">Stop not confirmed for {tabLabel(session)}. The chat is closed.</span>
-              <button type="button" onClick={() => void closeTab(session.appSessionId)}>Retry stop</button>
-              <button type="button" onClick={() => selectTab(session.appSessionId)}>Open chat</button>
-            </div>
-          ))}
+          {/* App bars (WARNINGS.md): a closed chat whose stop was refused or
+           * could not be confirmed. Each bar belongs to one stop attempt. */}
+          <BannerStack
+            banners={stopBanners}
+            onAction={(banner, action) => {
+              const notice = stopNotices.find(entry => entry.banner.id === banner.id)
+              if (!notice) return
+              if (action.key === 'retry') void closeTab(notice.sessionId)
+              else selectTab(notice.sessionId)
+            }}
+            onDismiss={banner => {
+              const notice = stopNotices.find(entry => entry.banner.id === banner.id)
+              if (notice) dispatchShell({ type: 'stop-notice-dismissed', sessionId: notice.sessionId, attempt: notice.attempt })
+            }}
+          />
           {dismissalPreferenceError ? (
             <div data-window-chrome role="alert" className="border-b border-shell-seam bg-shell-chrome px-6 py-1.5 text-xs text-tone-danger">
               {dismissalPreferenceError}
@@ -5475,6 +5514,7 @@ type ShellAction =
   | { type: 'preview-close'; sessionId: SessionId }
   | { type: 'session-dismissals'; dismissals: SessionDismissals }
   | { type: 'peer-opens-seen'; sessionIds: readonly SessionId[] }
+  | StopAttemptAction
 
 function reduceShell(state: ShellState, action: ShellAction): ShellState {
   if (action.type === 'hydrate') {
@@ -5487,7 +5527,7 @@ function reduceShell(state: ShellState, action: ShellAction): ShellState {
     //    `lastAttachedAt` (a live status that superseded the snapshot wins; a
     //    snapshot row never rolls a live update backwards);
     //  - a genuinely new id (only in the snapshot) is added.
-    return mergeRosterSnapshot(state, action.sessions, action.removed)
+    return withReloadedStopAttempts(mergeRosterSnapshot(state, action.sessions, action.removed))
   }
   if (action.type === 'event') return reduceShellState(state, action.event)
   return reduceShellState(state, action)

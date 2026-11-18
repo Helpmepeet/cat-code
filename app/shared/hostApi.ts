@@ -272,6 +272,12 @@ export type HostErrorCode =
    * clears the state. One code that means "stop waiting, this one is stuck".
    */
   | 'session_unreachable'
+  /**
+   * A close tried to stop the engine and could not confirm that it stopped, so
+   * it may still be running. A close that refuses before trying to stop uses
+   * `session_unreachable` instead, so the user can be told why nothing stopped.
+   */
+  | 'stop_unconfirmed'
   /** Git branch inspection or a safe checkout was refused. */
   | 'branch_unavailable'
   | 'managed_storage_missing'

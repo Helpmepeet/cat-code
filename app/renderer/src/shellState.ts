@@ -13,6 +13,14 @@ import type { SessionId } from '../../shared/protocol.js'
 import type { HostEvent, SessionDescriptor } from '../../shared/hostApi.js'
 import type { PeerOpensSeen } from './peerOpensSeen.js'
 import { isSessionDismissed, reconcileSessionDismissals, reopenSession, type SessionDismissals } from './sessionDismissal.js'
+import {
+  NO_STOP_ATTEMPTS,
+  pruneStopAttempts,
+  reduceStopAttempts,
+  seedUnconfirmedStops,
+  type StopAttemptAction,
+  type StopAttempts,
+} from './stopAttempts.js'
 
 /**
  * The shell's session roster: a stable id order plus the descriptor map. Order
@@ -39,6 +47,8 @@ export type ShellState = {
   previews: Record<SessionId, true>
   /** Each session's `peerOpenedAt` the user has already been shown (`peerOpensSeen.ts`). */
   peerOpensSeen?: PeerOpensSeen
+  /** The latest stop each closed chat requested (`stopAttempts.ts`). */
+  stopAttempts?: StopAttempts
 }
 
 export function createShellState(): ShellState {
@@ -51,18 +61,46 @@ export type ShellStateAction =
   | { type: 'peer-opens-seen'; sessionIds: readonly SessionId[] }
   | { type: 'preview-open'; sessionId: SessionId }
   | { type: 'preview-close'; sessionId: SessionId }
+  | StopAttemptAction
 
 /**
  * Fold one `HostEvent` into the roster. `added` appends (idempotent — a
  * re-added id refreshes in place, never duplicates the tab); `status` replaces
  * the descriptor without reordering; `removed` drops the id from both order and
  * map. Opening a restorable preview appends it like any other newly-opened tab.
+ *
+ * Any change to the roster or the closed set drops stop attempts that no longer
+ * apply, so a late exit or a reopened chat clears its stop warning.
  */
 export function reduceShellState(
   state: ShellState,
   event: ShellStateAction,
 ): ShellState {
+  const next = reduceShellRoster(state, event)
+  if (!next.stopAttempts || (next.byId === state.byId && next.dismissals === state.dismissals)) return next
+  const stopAttempts = pruneStopAttempts(next.stopAttempts, next.byId, next.dismissals ?? [])
+  return stopAttempts === next.stopAttempts ? next : { ...next, stopAttempts }
+}
+
+/** After a reload, closed chats that are still running get an unconfirmed stop. */
+export function withReloadedStopAttempts(state: ShellState): ShellState {
+  const current = state.stopAttempts ?? NO_STOP_ATTEMPTS
+  const stopAttempts = seedUnconfirmedStops(current, state.byId, state.dismissals ?? [])
+  return stopAttempts === current ? state : { ...state, stopAttempts }
+}
+
+function reduceShellRoster(
+  state: ShellState,
+  event: ShellStateAction,
+): ShellState {
   switch (event.type) {
+    case 'stop-requested':
+    case 'stop-settled':
+    case 'stop-notice-dismissed': {
+      const current = state.stopAttempts ?? NO_STOP_ATTEMPTS
+      const stopAttempts = reduceStopAttempts(current, event)
+      return stopAttempts === current ? state : { ...state, stopAttempts }
+    }
     case 'session-dismissals': {
       const tabs = { ...state.tabs }
       const previews = { ...state.previews }

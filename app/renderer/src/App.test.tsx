@@ -2834,12 +2834,16 @@ test('P4-50: the account-health bar sits above the workspace and cannot gate a s
   expect(paneStart).toBeGreaterThan(-1)
   expect(paneSource.slice(paneStart)).not.toContain('accountHealth')
 
-  const mount = source.indexOf('<BannerStack')
+  // App bars and chat bars both mount `BannerStack` (WARNINGS.md), so the
+  // account-health bar is found by its banners prop and must be the only mount
+  // fed them.
+  const mount = source.indexOf('banners={accountHealthBanners}')
   expect(mount).toBeGreaterThan(-1)
+  expect(source.indexOf('banners={accountHealthBanners}', mount + 1)).toBe(-1)
+  expect(source.slice(source.lastIndexOf('<BannerStack', mount), mount)).not.toContain('/>')
   // "Above the workspace, never inside a pane" is structural since the pane
   // moved to its own file: the bar is mounted in the shell and absent there.
   expect(paneSource).not.toContain('<BannerStack')
-  expect(source.indexOf('<BannerStack', mount + 1)).toBe(-1)
   expect(source.indexOf('{shownPane.content}', mount)).toBeGreaterThan(mount)
 
   // The dismissal is in-memory for the run: #12 deleted the persisted keys.
@@ -2883,8 +2887,16 @@ test('P4-54: shell lifecycle failures persist until the dismiss control clears t
     expect(operations).toContain(writer)
   }
   expect(operations).toContain('setShellError(hostErrorMessage(result.error))')
-  expect(operations).toContain('setShellError(hostErrorMessage(closeResult.error))')
   expect(operations).toContain('setShellError(errorMessage(error))')
+  // A failed stop reports through its own per-attempt warning (`stopAttempts.ts`),
+  // so it can never replace an unrelated shell error.
+  const closeStart = operations.indexOf('const closeTab = useCallback(')
+  const closeEnd = operations.indexOf('\n  const ', closeStart + 1)
+  expect(closeEnd).toBeGreaterThan(closeStart)
+  expect(operations.slice(closeStart, closeEnd)).not.toContain('setShellError')
+  expect(operations).toContain('settleStopAttempt(sessionId, attempt, classifyStopResult(result))')
+  expect(operations).toContain('settleStopAttempt(sessionId, attempt, closeResult ? classifyStopResult(closeResult)')
+  expect(operations).not.toContain('hostErrorMessage(closeResult.error)')
   expect(operations).not.toContain('setShellError(null)')
 
   expect(source.match(/setShellError\(null\)/g)).toHaveLength(1)

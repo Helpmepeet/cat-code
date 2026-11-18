@@ -2881,7 +2881,7 @@ test('closeSession awaits stop confirmation, preserves an unconfirmed row, and p
   expect(recovery.ok).toBe(false)
   expect(prepares).toBe(0)
   expect(unconfirmed.ok).toBe(false)
-  if (!unconfirmed.ok) expect(unconfirmed.error.message).toContain('not confirmed')
+  if (!unconfirmed.ok) expect(unconfirmed.error).toMatchObject({ code: 'stop_unconfirmed', message: expect.stringContaining('not confirmed') })
   expect(h.evicted).not.toContain(id)
   expect(h.registry.findSession(id)).toEqual(before)
   expect(h.host.listSessions().find(s => s.appSessionId === id)?.status).not.toBe('exited')
