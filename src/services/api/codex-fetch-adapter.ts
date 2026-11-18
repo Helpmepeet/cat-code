@@ -1745,7 +1745,7 @@ export function mapEffortToCodex(
   const e = effort.toLowerCase()
   if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh') return e
   const model = codexModel.toLowerCase()
-  const release = getCodexRelease(model)
+  const release = getCodexRelease(codexModel) ?? getCodexRelease(model)
   if (e === 'minimal') return release?.minimalOnWire ?? 'minimal'
   if (e === 'max') return release?.maxOnWire ?? (model.includes('codex') ? 'xhigh' : 'high')
   if (e === 'ultra') return release?.ultraOnWire

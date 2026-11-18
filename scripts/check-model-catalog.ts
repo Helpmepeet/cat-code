@@ -1,12 +1,19 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import ts from 'typescript'
+import { getCatalogModelIds } from '../src/utils/model/configs.js'
 
 const root = join(import.meta.dir, '..')
 const sourceFiles = new Bun.Glob('**/*.{ts,tsx,js,jsx,mjs,cjs}')
-const releasePattern = /\bgpt[- ](?:[3-9](?:[.-]\d+)+(?:-(?:astra|sol|terra|luna|codex))?|[3-9]-(?:astra|sol|terra|luna|codex)|catalog-fixture-[\w-]+)\b|\b(?:claude[- ])?(?:opus|sonnet|haiku|fable)[- _][3456789](?:[.\-_]\d+)*\b|\bclaude-3-(?:[57]-)?(?:opus|sonnet|haiku)\b|\bgpt(?:[3-9]\d*)?(?:astra|sol|terra|luna)\d*\b|\bGPT_\d+_[A-Z_0-9]+\b/gi
+const releasePattern = /\bgpt[- ](?:\d+(?:[.-]\d+)+(?:-(?:astra|sol|terra|luna|codex))?|\d+-(?:astra|sol|terra|luna|codex)|catalog-fixture-[\w-]+)\b|\b(?:claude[- ])?(?:opus|sonnet|haiku|fable)[- _]\d+(?:[.\-_]\d+)*\b|\bclaude-3-(?:[57]-)?(?:opus|sonnet|haiku)\b|\bgpt(?:\d+)?(?:astra|sol|terra|luna)\d*\b|\bGPT_\d+_[A-Z_0-9]+\b/gi
 const versionedKey = /^(?:sonnet|opus|haiku|fable)\d{1,3}$/i
 const displayPattern = /\bGPT[- ]\d+(?:\.\d+)? (?:Astra|Sol|Terra|Luna)\b/gi
+const usualRelease = new RegExp(releasePattern.source, 'i')
+const additionalIds = getCatalogModelIds().filter(id => !usualRelease.test(id))
+  .map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+const additionalIdPattern = additionalIds.length
+  ? new RegExp(`\\b(?:${additionalIds.join('|')})\\b`, 'gi')
+  : undefined
 
 // The exact tokens in these owners are historical records, protocol examples,
 // or releases that have independent qualification. Keep route defaults and
@@ -16,7 +23,6 @@ const exceptions: Readonly<Record<string, readonly string[]>> = {
   'src/constants/promptStyle.ts': ['gpt-5.6'],
   'src/utils/context.ts': ['gpt_5_6_codex', 'gpt_6_codex', 'claude-3-haiku', 'claude-3-opus', 'claude-3-sonnet', 'sonnet46'],
   // Independent reviewer qualifications and exact legacy compatibility.
-  'src/utils/permissions/yoloClassifier.ts': ['gpt-6-luna'],
   'src/components/messages/AssistantTextMessage.tsx': ['Opus 4'],
   'src/utils/pdfUtils.ts': ['claude-3-haiku'],
   'src/utils/model/model.ts': ['claude-3-haiku', 'claude-3-opus', 'claude-3-sonnet', 'sonnet46'],
@@ -29,7 +35,7 @@ const exceptions: Readonly<Record<string, readonly string[]>> = {
   // Ordered legacy migrations and their notifications.
   'src/migrations/migrateSonnet1mToSonnet45.ts': ['sonnet-4-5-20250929'],
   'src/migrations/migrateSonnet45ToSonnet46.ts': ['claude-sonnet-4-5-20250929', 'sonnet-4-5-20250929'],
-  'src/hooks/notifs/useModelMigrationNotifications.tsx': ['Opus 4.6', 'Sonnet 4.6'],
+  'src/hooks/notifs/useModelMigrationNotifications.tsx': ['Opus 4.6', 'Sonnet 4.6', 'sonnet-46'],
   // Public API examples, historical UI attribution, and captured test data.
   'src/entrypoints/sdk/coreSchemas.ts': ['Opus 4.6', 'claude-opus-4-5'],
   'src/schemas/hooks.ts': ['claude-sonnet-5'],
@@ -56,6 +62,17 @@ function literalText(node: ts.Node): string | undefined {
   return undefined
 }
 
+function isExactReviewerQualification(path: string, node: ts.Node, match: string): boolean {
+  if (path !== 'src/utils/permissions/yoloClassifier.ts' || match !== 'gpt-6-luna') return false
+  const array = node.parent
+  if (!ts.isStringLiteral(node) || !ts.isArrayLiteralExpression(array) || array.elements.length !== 1) return false
+  const initializer = array.parent
+  if (!ts.isNewExpression(initializer) || initializer.expression.getText() !== 'Set') return false
+  const declaration = initializer.parent
+  return ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name) &&
+    ['STAGE_POLICY_MODELS', 'EVIDENCE_REDUCTION_MODELS'].includes(declaration.name.text)
+}
+
 let count = 0
 let failed = false
 for (const directory of ['src', 'app']) {
@@ -70,12 +87,17 @@ for (const directory of ['src', 'app']) {
     const source = ts.createSourceFile(path, readFileSync(join(root, path), 'utf8'), ts.ScriptTarget.Latest, true)
     const visit = (node: ts.Node): void => {
       const raw = literalText(node)
-      const token = ts.isRegularExpressionLiteral(node) ? raw?.replace(/\\([.-])/g, '$1') : raw
+      const token = ts.isRegularExpressionLiteral(node)
+        ? raw?.replace(/\\([.-])/g, '$1').replace(/\((?:\?:)?(\d+)(?:\|\d+)+\)/g, '$1')
+        : raw
       const matches = token ? [
         ...token.matchAll(releasePattern), ...token.matchAll(displayPattern),
+        ...(additionalIdPattern ? token.matchAll(additionalIdPattern) : []),
       ].map(([match]) => match) : []
       if (token && versionedKey.test(token)) matches.push(token)
-      const violations = [...new Set(matches)].filter(match => !exceptions[path]?.includes(match))
+      const violations = [...new Set(matches)].filter(match =>
+        !exceptions[path]?.includes(match) && !isExactReviewerQualification(path, node, match),
+      )
       if (violations.length) {
         const { line, character } = source.getLineAndCharacterOfPosition(node.getStart(source))
         console.error(`${path}:${line + 1}:${character + 1} Move release selection or capability data to the model catalog: ${violations.join(', ')}`)

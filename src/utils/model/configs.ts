@@ -166,6 +166,7 @@ type CodexRelease = {
   autoCompactCeiling?: number
   fastMode?: boolean
   usage?: 'retired' | 'solLuna'
+  priceAs?: string
 }
 
 const codexMax = ['low', 'medium', 'high', 'xhigh', 'max'] as const
@@ -302,8 +303,11 @@ const codexFamilies: readonly (readonly [CodexRelease, ...CodexRelease[]])[] = O
 for (const [current, ...older] of codexFamilies) {
   for (const release of older) {
     codexById.set(release.id, release)
-    if (release.wireId) codexById.set(release.wireId, release)
     codexRetirementTargets.set(release.id, current.id)
+    if (release.wireId) {
+      codexById.set(release.wireId, release)
+      codexRetirementTargets.set(release.wireId, current.id)
+    }
   }
 }
 for (const release of ROUTABLE_CODEX_RELEASES) {
@@ -325,8 +329,8 @@ export function matchCodexRelease(model: string): CodexRelease | undefined {
 }
 
 export function remapRetiredCodexSelection(model: string): string {
-  const base = model.trim().replace(/\[1m\]$/i, '').toLowerCase()
-  return codexRetirementTargets.get(base) ?? model
+  const base = model.trim().replace(/\[1m\]$/i, '')
+  return codexRetirementTargets.get(base) ?? codexRetirementTargets.get(base.toLowerCase()) ?? model
 }
 
 function codexConfig<Id extends string>(id: Id) {
@@ -341,7 +345,7 @@ export function getCodexUsageStatus(model: string): {
   retired: boolean
 } {
   const lower = model.toLowerCase()
-  const release = codexById.get(lower) ?? codexIdentityPrefixes.find(entry =>
+  const release = codexById.get(model) ?? codexById.get(lower) ?? codexIdentityPrefixes.find(entry =>
     lower.startsWith(entry.id + '-'),
   )
   const current = release !== undefined && CURRENT_CODEX_RELEASES.some(current => current === release)
@@ -532,9 +536,18 @@ const claudeReleases = Object.values(claudeReleaseRecords)
 const claudeById = new Map(claudeReleases.flatMap(release =>
   Object.values(release.wire).map(id => [id, release] as const),
 ))
+
+export function getCatalogModelIds(): string[] {
+  return [...new Set([...codexById.keys(), ...claudeById.keys()])]
+}
+
 const claudePrefixes = [...claudeReleases].sort(
   (a, b) => b.wire.foundry.length - a.wire.foundry.length,
 )
+const claudeCapabilityMarkers = claudePrefixes.map(release => ({
+  release, marker: release.wire.foundry.replace(/^claude-/, ''),
+}))
+const vertexRegionPrefixes = claudePrefixes.filter(release => release.vertexRegionEnv)
 
 export function getCachedCompactionClaudeModels(): string[] {
   return (['fable', 'opus', 'sonnet'] as const).flatMap(family =>
@@ -564,8 +577,22 @@ export function getExactClaudeRelease(model: string): ClaudeRelease | undefined 
 }
 
 export function matchClaudeRelease(model: string): ClaudeRelease | undefined {
-  return getExactClaudeRelease(model) ??
-    claudePrefixes.find(release => model.includes(release.wire.foundry))
+  const base = model.replace(/\[(?:1|2)m\]$/i, '')
+  return getExactClaudeRelease(base) ??
+    claudePrefixes.find(release => base.includes(release.wire.foundry))
+}
+
+// These capability heuristics also support custom deployment names such as
+// 'team-opus-5-prod'. Exact identity and provider routing use stricter matches.
+export function matchClaudeCapability(model: string): ClaudeRelease | undefined {
+  return matchClaudeRelease(model) ??
+    claudeCapabilityMarkers.find(({ marker }) => model.includes(marker))?.release
+}
+
+export function getClaudeVertexRegionEnv(model: string): string | undefined {
+  const exact = getExactClaudeRelease(model)
+  if (exact) return exact.vertexRegionEnv
+  return vertexRegionPrefixes.find(release => model.startsWith(release.wire.foundry))?.vertexRegionEnv
 }
 
 export function getClaudeMarketingName(model: string): string | undefined {

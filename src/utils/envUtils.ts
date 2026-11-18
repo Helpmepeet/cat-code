@@ -1,4 +1,4 @@
-import { matchClaudeRelease } from './model/configs.js'
+import { getClaudeVertexRegionEnv } from './model/configs.js'
 import memoize from 'lodash-es/memoize.js'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -165,9 +165,6 @@ export function isInProtectedNamespace(): boolean {
 export function getVertexRegionForModel(
   model: string | undefined,
 ): string | undefined {
-  if (model) {
-    const envVar = matchClaudeRelease(model)?.vertexRegionEnv
-    if (envVar) return process.env[envVar] || getDefaultVertexRegion()
-  }
-  return getDefaultVertexRegion()
+  const envVar = model && getClaudeVertexRegionEnv(model)
+  return (envVar && process.env[envVar]) || getDefaultVertexRegion()
 }

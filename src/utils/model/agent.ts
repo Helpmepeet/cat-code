@@ -1,5 +1,4 @@
 import { CURRENT_CODEX_RELEASES, currentClaudeRelease, matchClaudeRelease } from './configs.js'
-import { isModelAlias } from './aliases.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { capitalize } from '../stringUtils.js'
 import { applyBedrockRegionPrefix, getBedrockRegionPrefix } from './bedrock.js'
@@ -54,102 +53,41 @@ export function resolveAgentModel(
   permissionMode?: PermissionMode,
   parentProvider?: APIProvider,
 ): AgentModelRoute {
-  const provider = resolveRequestProvider(parentModel, parentProvider)
-  const model = getAgentModel(
-    agentModel, parentModel, toolSpecifiedModel, permissionMode, provider,
-  )
-  const selection = process.env.CLAUDE_CODE_SUBAGENT_MODEL || toolSpecifiedModel || agentModel
-  return {
-    model,
-    provider: selection && selection !== 'inherit'
-      ? resolveModelSelectionProvider(isModelAlias(selection.toLowerCase()) ? selection : model, provider)
-      : resolveRequestProvider(model, provider),
-  }
-}
-
-/**
- * Get the effective model string for an agent.
- *
- * For Bedrock, if the parent model uses a cross-region inference prefix (e.g., "eu.", "us."),
- * that prefix is inherited by subagents using alias models (e.g., "sonnet", "opus").
- * This ensures subagents use the same region as the parent, which is necessary when
- * IAM permissions are scoped to specific cross-region inference profiles.
- */
-export function getAgentModel(
-  agentModel: string | undefined,
-  parentModel: string,
-  toolSpecifiedModel?: AgentModelSelection,
-  permissionMode?: PermissionMode,
-  parentProvider?: APIProvider,
-): string {
   const sessionProvider = getAPIProvider()
   const effectiveParentProvider = resolveRequestProvider(
-    parentModel,
-    parentProvider ?? sessionProvider,
+    parentModel, parentProvider ?? sessionProvider,
   )
-  const baseProvider = isAnthropicCloudProvider(effectiveParentProvider)
-    ? effectiveParentProvider : sessionProvider
-  const providerForSpec = (spec: string) =>
-    isModelAlias(spec.trim().toLowerCase())
-      ? resolveModelSelectionProvider(spec, baseProvider)
-      : baseProvider
-
-  if (process.env.CLAUDE_CODE_SUBAGENT_MODEL) {
-    const override = process.env.CLAUDE_CODE_SUBAGENT_MODEL
-    return parseUserSpecifiedModel(override, providerForSpec(override))
-  }
-
-  // Extract Bedrock region prefix from parent model to inherit for subagents.
-  // This ensures subagents use the same cross-region inference profile (e.g., "eu.", "us.")
-  // as the parent, which is required when IAM permissions only allow specific regions.
-  const parentRegionPrefix = getBedrockRegionPrefix(parentModel)
-
-  // Helper to apply parent region prefix for Bedrock models.
-  // `originalSpec` is the raw model string before resolution (alias or full ID).
-  // If the user explicitly specified a full model ID that already carries its own
-  // region prefix (e.g., "eu.anthropic.…"), we preserve it instead of overwriting
-  // with the parent's prefix. This prevents silent data-residency violations when
-  // an agent config intentionally pins to a different region than the parent.
-  const applyParentRegionPrefix = (
-    resolvedModel: string,
-    originalSpec: string,
-  ): string => {
-    if (parentRegionPrefix && effectiveParentProvider === 'bedrock') {
-      if (getBedrockRegionPrefix(originalSpec)) return resolvedModel
-      return applyBedrockRegionPrefix(resolvedModel, parentRegionPrefix)
-    }
-    return resolvedModel
-  }
-
-  const resolveSubagentModel = (modelSpec: string): string =>
-    parseUserSpecifiedModel(modelSpec, providerForSpec(modelSpec))
-
-  // Prioritize tool-specified model if provided
-  if (toolSpecifiedModel) {
-    if (aliasMatchesParentTier(toolSpecifiedModel, parentModel)) {
-      return parentModel
-    }
-    const model = resolveSubagentModel(toolSpecifiedModel)
-    return applyParentRegionPrefix(model, toolSpecifiedModel)
-  }
-
-  const agentModelWithExp = agentModel ?? getDefaultSubagentModel()
-
-  if (agentModelWithExp === 'inherit') {
-    // Apply runtime model resolution for inherit to get the effective model
-    // This ensures agents using 'inherit' get opusplan→Opus resolution in plan mode
-    return getRuntimeMainLoopModel({
+  const override = process.env.CLAUDE_CODE_SUBAGENT_MODEL
+  const spec = (override || (toolSpecifiedModel ?? agentModel ?? getDefaultSubagentModel())).trim()
+  if (!override && spec === 'inherit') {
+    const model = getRuntimeMainLoopModel({
       permissionMode: permissionMode ?? 'default',
       mainLoopModel: parentModel,
       exceeds200kTokens: false,
+      provider: effectiveParentProvider,
     })
+    return { model, provider: resolveRequestProvider(model, effectiveParentProvider) }
+  }
+  if (!override && aliasMatchesParentTier(spec, parentModel)) {
+    return { model: parentModel, provider: effectiveParentProvider }
   }
 
-  if (aliasMatchesParentTier(agentModelWithExp, parentModel)) {
-    return parentModel
+  const selectionProvider = resolveModelSelectionProvider(
+    spec.replace(/\[1m\]$/i, '').trim(), effectiveParentProvider,
+  )
+  const providerForSpec = effectiveParentProvider === 'openai' &&
+    selectionProvider === 'firstParty' && isAnthropicCloudProvider(sessionProvider)
+    ? sessionProvider
+    : selectionProvider
+  let model = parseUserSpecifiedModel(spec, providerForSpec)
+  // A family override can resolve to an explicit Codex model.
+  const provider = resolveRequestProvider(model, providerForSpec)
+  if (!override && provider === 'bedrock' && !getBedrockRegionPrefix(spec)) {
+    // Preserve the parent's IAM-scoped region unless the selection pins one.
+    const parentRegion = getBedrockRegionPrefix(parentModel)
+    if (parentRegion) model = applyBedrockRegionPrefix(model, parentRegion)
   }
-  const model = resolveSubagentModel(agentModelWithExp)
-  return applyParentRegionPrefix(model, agentModelWithExp)
+  return { model, provider }
 }
 
 /**

@@ -1,4 +1,4 @@
-import { CODEX_ROUTES, currentClaudeRelease, currentCodexRelease, getCodexRelease, matchClaudeRelease } from './model/configs.js'
+import { CODEX_ROUTES, currentClaudeRelease, currentCodexRelease, getCodexRelease, matchClaudeCapability } from './model/configs.js'
 import axios from 'axios'
 import { getOauthConfig, OAUTH_BETA_HEADER } from 'src/constants/oauth.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/growthbook.js'
@@ -190,9 +190,9 @@ export function isFastModeSupportedByModel(
   const model = modelSetting ?? getDefaultMainLoopModelSetting()
   const parsedModel = parseUserSpecifiedModel(model)
   const normalizedModel = parsedModel.toLowerCase()
-  const codex = getCodexRelease(normalizedModel)
+  const codex = getCodexRelease(parsedModel) ?? getCodexRelease(normalizedModel)
   if (codex) return codex.fastMode === true
-  return matchClaudeRelease(normalizedModel)?.fastMode === true
+  return matchClaudeCapability(normalizedModel)?.fastMode === true
 }
 
 // --- Fast mode runtime state ---

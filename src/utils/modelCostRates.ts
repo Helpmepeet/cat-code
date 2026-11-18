@@ -16,6 +16,7 @@ import {
   CLAUDE_SONNET_4_CONFIG,
   CLAUDE_SONNET_5_CONFIG,
   CLAUDE_SONNET_5_5_CONFIG,
+  getCodexRelease,
   getExactClaudeRelease,
   GPT_6_1_TERRA_CONFIG,
   type ModelConfig,
@@ -119,9 +120,12 @@ function standardCanonicalId(model: string): string {
  * model versions remain unpriced instead of inheriting a substring match.
  */
 export function getConfiguredStandardModelCosts(model: string): ModelCosts | undefined {
-  const configuredId = model.trim().toLowerCase().replace(/\[1m\]$/i, '')
-  return CONFIGURED_STANDARD_MODEL_COSTS.get(configuredId) ??
-    CONFIGURED_STANDARD_MODEL_COSTS.get(getExactClaudeRelease(configuredId)?.priceAs ?? '')
+  const id = model.trim().replace(/\[1m\]$/i, '')
+  const normalized = id.toLowerCase()
+  const codex = getCodexRelease(id) ?? getCodexRelease(normalized)
+  const priceAs = codex?.priceAs ?? getExactClaudeRelease(normalized)?.priceAs
+  return CONFIGURED_STANDARD_MODEL_COSTS.get((codex?.id ?? normalized).toLowerCase()) ??
+    (priceAs ? CONFIGURED_STANDARD_MODEL_COSTS.get(priceAs.toLowerCase()) : undefined)
 }
 
 /** The rates that apply to one request, given its prompt size in tokens. */

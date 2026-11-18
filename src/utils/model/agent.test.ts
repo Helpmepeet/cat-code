@@ -5,10 +5,13 @@ import {
   resetModelStringsForTestingOnly,
   setSessionProvider,
 } from '../../bootstrap/state.js'
-import { AGENT_MODEL_OPTIONS, getAgentModel, getAgentModelOptions } from './agent.js'
+import { AGENT_MODEL_OPTIONS, getAgentModelOptions, resolveAgentModel } from './agent.js'
+import { currentCodexRelease } from './configs.js'
 import { getCanonicalName } from './model.js'
 import { getModelStrings } from './modelStrings.js'
 import type { APIProvider } from './providers.js'
+
+const getAgentModel = (...args: Parameters<typeof resolveAgentModel>) => resolveAgentModel(...args).model
 
 describe('getAgentModel explicit override', () => {
   beforeAll(() => {
@@ -18,9 +21,9 @@ describe('getAgentModel explicit override', () => {
   test('honors an explicit Terra selection when the parent uses Sol', () => {
     expect(
       getCanonicalName(
-        getAgentModel(undefined, 'gpt-6.2-sol', 'gpt-6.1-terra', 'default'),
+        getAgentModel(undefined, currentCodexRelease('sol').id, currentCodexRelease('terra').id, 'default'),
       ),
-    ).toBe('gpt-6.1-terra')
+    ).toBe(currentCodexRelease('terra').id)
   })
 
   test('honors an explicit Luna selection when the parent uses Terra', () => {
@@ -28,31 +31,31 @@ describe('getAgentModel explicit override', () => {
       getCanonicalName(
         getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-5.6-luna', 'default'),
       ),
-    ).toBe('gpt-6-luna')
+    ).toBe(currentCodexRelease('luna').id)
   })
 
   test('honors a Terra subagent request as an upgrade from Luna', () => {
     expect(
       getCanonicalName(
-        getAgentModel(undefined, 'gpt-6-luna', 'gpt-6.1-terra', 'default'),
+        getAgentModel(undefined, currentCodexRelease('luna').id, currentCodexRelease('terra').id, 'default'),
       ),
-    ).toBe('gpt-6.1-terra')
+    ).toBe(currentCodexRelease('terra').id)
   })
 
-  test('remaps a retired Sol subagent request to 6.2 as an upgrade from Terra', () => {
+  test('remaps a retired Sol subagent request to current Sol as an upgrade from Terra', () => {
     expect(
       getCanonicalName(
         getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-5.6-sol', 'default'),
       ),
-    ).toBe('gpt-6.2-sol')
+    ).toBe(currentCodexRelease('sol').id)
   })
 
   test('honors an explicit Astra selection', () => {
     expect(
       getCanonicalName(
-        getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-6.2-astra', 'default'),
+        getAgentModel(undefined, 'gpt-5.6-terra', currentCodexRelease('astra').id, 'default'),
       ),
-    ).toBe('gpt-6.2-astra')
+    ).toBe(currentCodexRelease('astra').id)
   })
 
   test('honors an explicit Sonnet selection when the parent uses Opus', () => {
@@ -79,14 +82,14 @@ describe('getAgentModel explicit override', () => {
 
   test('agent-file model pins are unaffected (Explore keeps its Luna pin)', () => {
     expect(getAgentModel('gpt-5.6-luna', 'gpt-5.6-terra', undefined, 'default')).toBe(
-      'gpt-6-luna',
+      currentCodexRelease('luna').id,
     )
   })
 
   test('tool-specified model takes precedence over an agent-file pin', () => {
     expect(
       getAgentModel('gpt-5.6-terra', 'gpt-5.6-sol', 'gpt-5.6-luna', 'default'),
-    ).toBe('gpt-6-luna')
+    ).toBe(currentCodexRelease('luna').id)
   })
 })
 

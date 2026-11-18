@@ -1,4 +1,4 @@
-import { getClaudeRelease, getCodexRelease, matchClaudeRelease } from './model/configs.js'
+import { getClaudeRelease, getCodexRelease, matchClaudeCapability, matchClaudeRelease } from './model/configs.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { resolveAntModel } from './model/antModels.js'
 import { CONTEXT_1M_BETA_HEADER } from '../constants/betas.js'
@@ -54,7 +54,11 @@ function supports1M(model: string, disabled: boolean): boolean {
   if (disabled) {
     return false
   }
-  return matchClaudeRelease(getCanonicalName(model))?.longContext !== undefined
+  const canonical = getCanonicalName(model)
+  const release = matchClaudeRelease(canonical)
+  if (release) return release.longContext !== undefined
+  const capability = matchClaudeCapability(canonical)
+  return capability?.family === 'opus' && capability.longContext === 'optional'
 }
 
 /**
@@ -231,7 +235,7 @@ function sonnet1mExpTreatmentEnabled(model: string, disabled: boolean): boolean 
   if (has1mSuffix(model, disabled)) {
     return false
   }
-  if (matchClaudeRelease(getCanonicalName(model)) !== getClaudeRelease('sonnet46')) {
+  if (matchClaudeCapability(getCanonicalName(model)) !== getClaudeRelease('sonnet46')) {
     return false
   }
   return getGlobalConfig().clientDataCache?.['coral_reef_sonnet'] === 'true'
@@ -378,7 +382,7 @@ export function getModelMaxOutputTokens(model: string): {
     return { default: 32_000, upperLimit }
   }
 
-  const configuredOutput = matchClaudeRelease(m)?.outputTokens
+  const configuredOutput = matchClaudeCapability(m)?.outputTokens
   if (configuredOutput) {
     defaultTokens = configuredOutput.default
     upperLimit = configuredOutput.upperLimit

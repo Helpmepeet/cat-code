@@ -27,10 +27,13 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { createAttemptWorkspace } from '../attemptWorkspace.ts'
 import { copyPrivateSeed } from '../privateModes.ts'
 import { runtimeAllowances } from './runtimeAllowances.ts'
+import { requireEngineModelPin } from './modelPin.ts'
 
 const args = process.argv.slice(2)
 const opt = (k: string, d?: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1]! : d! }
 const engine = resolve(opt('--engine'))
+const model = opt('--model', 'gpt-6.2-sol')
+await requireEngineModelPin(engine, model)
 const copy = resolve(opt('--copy'))
 const stage = join('/Users/Shared/ccw', randomBytes(3).toString('hex'))
 const attempt = createAttemptWorkspace(resolve(opt('--out')), stage, copy)
@@ -49,7 +52,6 @@ for (const a of args.includes('--abs') ? JSON.parse(readFileSync(resolve(opt('--
   placed.push(a.to)
 }
 process.on('exit', () => { for (const p of placed) rmSync(p, { force: true }) })
-const model = opt('--model', 'gpt-6.2-sol')
 const effort = opt('--effort', 'high')
 const mode = opt('--mode', 'auto')
 const live = args.includes('--live')

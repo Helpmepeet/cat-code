@@ -31,6 +31,7 @@ import {
   getConfiguredAnthropicProvider,
   isAnthropicCloudProvider,
   isFirstPartyAnthropicBaseUrl,
+  type APIProvider,
 } from './providers.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'
@@ -43,8 +44,8 @@ import {
   currentCodexRelease,
   getClaudeFamilyKey,
   getClaudeMarketingName,
-  getClaudeRelease,
   getCodexRelease,
+  getExactClaudeRelease,
   isLegacyOpusFirstParty,
   matchClaudeRelease,
   matchCodexRelease,
@@ -241,8 +242,9 @@ export function getRuntimeMainLoopModel(params: {
   permissionMode: PermissionMode
   mainLoopModel: string
   exceeds200kTokens?: boolean
+  provider?: APIProvider
 }): ModelName {
-  const { permissionMode, mainLoopModel, exceeds200kTokens = false } = params
+  const { permissionMode, mainLoopModel, exceeds200kTokens = false, provider } = params
 
   // opusplan uses Opus in plan mode without [1m] suffix.
   if (
@@ -250,12 +252,12 @@ export function getRuntimeMainLoopModel(params: {
     permissionMode === 'plan' &&
     !exceeds200kTokens
   ) {
-    return getDefaultOpusModel()
+    return getDefaultOpusModel(provider)
   }
 
   // sonnetplan by default
   if (getUserSpecifiedModelSetting() === 'haiku' && permissionMode === 'plan') {
-    return getDefaultSonnetModel()
+    return getDefaultSonnetModel(provider)
   }
 
   return mainLoopModel
@@ -328,6 +330,11 @@ export function getDefaultMainLoopModel(): ModelName {
  * module top-level (see MODEL_COSTS in modelCost.ts).
  */
 export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
+  const id = name.replace(/\[(?:1|2)m\]$/i, '')
+  const exactCodex = getCodexRelease(id)
+  if (exactCodex) return exactCodex.id
+  const exactClaude = getExactClaudeRelease(id)
+  if (exactClaude) return exactClaude.wire.foundry
   name = name.toLowerCase()
   const release = matchClaudeRelease(name)
   if (release) return release.wire.foundry
@@ -382,7 +389,7 @@ export function renderDefaultModelSetting(
   setting: ModelName | ModelAlias,
 ): string {
   if (setting === 'opusplan') {
-    return `${getClaudeRelease(getClaudeFamilyKey('opus', true)).label} in plan mode, else ${getClaudeRelease('sonnet46').label}`
+    return `${renderModelName(getDefaultOpusModel())} in plan mode, else ${renderModelName(getDefaultSonnetModel())}`
   }
   return renderModelName(parseUserSpecifiedModel(setting))
 }
@@ -437,7 +444,7 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
   const id = long ? model.slice(0, -4) : model
   const strings = getModelStrings()
   const key = (Object.keys(strings) as ModelKey[]).find(key => strings[key] === id)
-  const release = key && matchClaudeRelease(ALL_MODEL_CONFIGS[key].firstParty)
+  const release = key ? getExactClaudeRelease(ALL_MODEL_CONFIGS[key].firstParty) : getExactClaudeRelease(id)
   if (!release || (long && !release.longContext)) return null
   return (release.publicLabel ?? release.label) + (long ? ' (1M context)' : '')
 }

@@ -3,10 +3,11 @@
 // the dev-full feature set that cli-dev is compiled with, same isolation,
 // interceptor, and sandbox as harness.ts.
 // Usage: bun cliProbe.ts --engine <dir> --copy <dir holding cat-code/> --out <dir> --prompt-file <file>
-import { cpSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { sandboxProfile, probeScratch } from './sandbox.ts'
 import { randomBytes } from 'node:crypto'
+import { requireEngineModelPin } from './modelPin.ts'
 
 const args = process.argv.slice(2)
 const opt = (k: string, d?: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1]! : d! }
@@ -14,6 +15,7 @@ const engine = resolve(opt('--engine'))
 const copy = resolve(opt('--copy'))
 const out = resolve(opt('--out'))
 const model = opt('--model', 'gpt-6.2-sol')
+await requireEngineModelPin(engine, model)
 rmSync(out, { recursive: true, force: true })
 mkdirSync(out, { recursive: true })
 const stage = join('/Users/Shared/ccw', randomBytes(3).toString('hex'))
@@ -56,6 +58,12 @@ try {
   writeFileSync(join(out, 'features.json'), JSON.stringify(features))
   cpSync(home, join(out, 'home'), { recursive: true })
   cpSync(join(scratch.dir, 'stub'), join(out, 'stub'), { recursive: true })
+  const requests = join(scratch.dir, 'stub', 'requests')
+  const mainRequests = readdirSync(requests).filter(file => /^\d+-\d+-(?:http|ws)-main-/.test(file))
+  const actualModels = mainRequests.map(file => JSON.parse(readFileSync(join(requests, file), 'utf8')).body.model)
+  if (code !== 0 || actualModels.length === 0 || actualModels.some(actual => actual !== model)) {
+    throw new Error(`CLI probe requires ${model}; exit ${code}, observed models ${JSON.stringify(actualModels)}`)
+  }
   console.log(JSON.stringify({ code, features: features.length, stdout: stdout.slice(0, 300), stderr: stderr.slice(0, 500) }, null, 1))
 } finally {
   renameSync(cwd, join(copy, 'cat-code'))

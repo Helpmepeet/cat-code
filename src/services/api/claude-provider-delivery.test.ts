@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { currentCodexRelease } from '../../utils/model/configs.js'
 import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -143,7 +144,7 @@ test('regular GPT compaction overrides parent effort while ordinary thinking ret
     const messages = [createUserMessage({ content: 'Remember the work done so far.' })]
     const context = {
       options: {
-        commands: [], debug: false, mainLoopModel: 'gpt-6.2-sol', mainLoopProvider: 'openai',
+        commands: [], debug: false, mainLoopModel: currentCodexRelease('sol').id, mainLoopProvider: 'openai',
         tools: [], verbose: false, thinkingConfig: { type: 'adaptive' },
         mcpClients: [], mcpResources: {}, isNonInteractiveSession: true,
         agentDefinitions: { activeAgents: [], allAgents: [] },
@@ -168,13 +169,13 @@ test('regular GPT compaction overrides parent effort while ordinary thinking ret
       openAIInstructionAssembly: { instructions: 'parent instructions', inputMessages: messages },
       thinkingConfig: { type: 'adaptive' }, tools: [], signal: context.abortController.signal,
       options: {
-        model: 'gpt-6.2-sol', provider: 'openai', effortValue: 'ultra',
+        model: currentCodexRelease('sol').id, provider: 'openai', effortValue: 'ultra',
         querySource: 'sdk', getToolPermissionContext: async () => appState.toolPermissionContext,
         isNonInteractiveSession: true, agents: [], mcpTools: [], hasAppendSystemPrompt: false,
       },
     })) { /* Drain the response to observe the emitted request. */ }
     expect(translateToCodexBody(bodies[1]!).codexBody).toMatchObject({
-      model: 'gpt-6.2-sol',
+      model: currentCodexRelease('sol').id,
       reasoning: { effort: 'ultra' },
     })
   } finally {

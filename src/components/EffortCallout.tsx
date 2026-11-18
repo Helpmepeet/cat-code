@@ -1,4 +1,4 @@
-import { getClaudeRelease, matchClaudeRelease } from '../utils/model/configs.js'
+import { getClaudeRelease, matchClaudeCapability } from '../utils/model/configs.js'
 import { c as _c } from "react/compiler-runtime";
 import React, { useCallback, useEffect, useRef } from 'react';
 import { Box, Text } from '../ink.js';
@@ -220,7 +220,7 @@ function EffortOptionLabel(t0) {
 export function shouldShowEffortCallout(model: string): boolean {
   // Only show for Opus 4.6 for now
   const parsed = parseUserSpecifiedModel(model);
-  if (matchClaudeRelease(parsed.toLowerCase()) !== getClaudeRelease('opus46')) {
+  if (matchClaudeCapability(parsed.toLowerCase()) !== getClaudeRelease('opus46')) {
     return false;
   }
   const config = getGlobalConfig();

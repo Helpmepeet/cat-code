@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { emptyTokens, groupUsageSummary, usageCategory } from './usageSummary.js';
+import { CURRENT_CODEX_RELEASES } from '../../src/utils/model/configs.js';
 import { collectRetainedUsage } from '../../src/utils/statsUsage.js';
 import type { UsageRangeSummary, UsageParallel, UsageEffort } from '../shared/usageDashboard.js';
 const emptyParallel = (): UsageParallel => ({ state: 'unavailable', minutes: [0, 0, 0], peak: 0 });
@@ -27,7 +28,7 @@ test('grouping preserves exact daily/model/tool totals and distinguishes reserve
 test('bounded model summaries keep current models ahead of retired and older models', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
-    const current = ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-luna', 'gpt-6.1-terra'];
+    const current = CURRENT_CODEX_RELEASES.map(release => release.id);
     const retired = ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-5.6-luna', 'gpt-6-sol'];
     const names = [...Array.from({ length: 10 }, (_, index) => `older-${index}`), ...retired, ...current];
     summary.models = names.map((name, index) => ({ ...usageCategory(name), tokens: { ...emptyTokens(), fresh: index < 10 ? 1000 : 10 } }));

@@ -8,6 +8,15 @@ import {
   setSessionProvider,
 } from '../../bootstrap/state.js'
 
+import { currentClaudeRelease, currentCodexRelease } from './configs.js'
+
+const sonnetRelease = currentClaudeRelease('sonnet')
+const opusRelease = currentClaudeRelease('opus')
+const haikuRelease = currentClaudeRelease('haiku')
+const fableRelease = currentClaudeRelease('fable')
+const solRelease = currentCodexRelease('sol')
+const astraRelease = currentCodexRelease('astra')
+
 // The desktop picker rendered TWO identical "Sonnet 5.5" rows. The Max/Team
 // Premium list offers Sonnet under the family alias `sonnet` (MaxSonnet55Option),
 // but a Codex session persists the canonical `claude-sonnet-5-5` (getSonnet55Option's
@@ -136,8 +145,8 @@ describe('stable first-party model roster', () => {
       setInitialMainLoopModel(null)
       setMainLoopModelOverride(null)
       const roster = getModelOptions(false)
-      const sonnet = roster.find(option => option.label === 'Sonnet 5.5')
-      const opus = roster.find(option => option.label === 'Opus 5.5')
+      const sonnet = roster.find(option => option.label === sonnetRelease.label)
+      const opus = roster.find(option => option.label === opusRelease.label)
       expect(sonnet).toBeDefined()
       expect(opus).toBeDefined()
 
@@ -152,8 +161,8 @@ describe('stable first-party model roster', () => {
         setMainLoopModelOverride(selection)
         const options = getModelOptions(false)
         expect(options).toEqual(roster)
-        expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
-        expect(labelCount(options, 'Opus 5.5')).toBe(1)
+        expect(labelCount(options, sonnetRelease.label)).toBe(1)
+        expect(labelCount(options, opusRelease.label)).toBe(1)
         expect(new Set(options.map(option => option.value)).size).toBe(
           options.length,
         )
@@ -181,14 +190,14 @@ describe('stable first-party model roster', () => {
   test('canonical Sonnet selection uses the standard roster row rather than adding a duplicate', async () => {
     const { getModelOptions } = await import('./modelOptions.js')
     tier = 'pro'
-    setMainLoopModelOverride('claude-sonnet-5-5')
+    setMainLoopModelOverride(sonnetRelease.wire.firstParty)
     const sonnetRoster = getModelOptions(false)
     expect(sonnetRoster.find(option => option.value === 'sonnet')?.label).toBe(
-      'Sonnet 5.5',
+      sonnetRelease.label,
     )
-    expect(labelCount(sonnetRoster, 'Sonnet 5.5')).toBe(1)
+    expect(labelCount(sonnetRoster, sonnetRelease.label)).toBe(1)
 
-    setMainLoopModelOverride('claude-opus-5-5')
+    setMainLoopModelOverride(opusRelease.wire.firstParty)
     expect(getModelOptions(false)).toEqual(sonnetRoster)
   })
 
@@ -202,8 +211,8 @@ describe('stable first-party model roster', () => {
       label: 'custom-pinned-model',
       description: 'Custom model',
     })
-    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
-    expect(labelCount(options, 'Opus 5.5')).toBe(1)
+    expect(labelCount(options, sonnetRelease.label)).toBe(1)
+    expect(labelCount(options, opusRelease.label)).toBe(1)
   })
 
   test('third-party PAYG keeps its destination catalog and custom Sonnet row', async () => {
@@ -223,8 +232,8 @@ describe('stable first-party model roster', () => {
       setInitialMainLoopModel(null)
       const { getModelOptions } = await import('./modelOptions.js')
       const roster = getModelOptions(false)
-      expect(labelCount(roster, 'Sonnet 5.5')).toBe(0)
-      expect(labelCount(roster, 'Opus 5.5')).toBe(0)
+      expect(labelCount(roster, sonnetRelease.label)).toBe(0)
+      expect(labelCount(roster, opusRelease.label)).toBe(0)
       expect(roster.some(option => option.label === 'Opus 4.1')).toBe(true)
 
       process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'custom-bedrock-sonnet'
@@ -247,7 +256,7 @@ describe('stable first-party model roster', () => {
   })
 })
 
-describe('Haiku 5.5', () => {
+describe('Haiku picker', () => {
   test('Codex cross-provider Haiku uses the configured destination catalog and custom metadata', async () => {
     const keys = ['CLAUDE_CODE_USE_BEDROCK', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME', 'ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION'] as const
     const saved = keys.map(key => process.env[key])
@@ -269,19 +278,19 @@ describe('Haiku 5.5', () => {
     }
   })
 
-  test('the haiku alias resolves to Haiku 5.5 and the picker offers it once', async () => {
+  test('the haiku alias resolves to the current Haiku and the picker offers it once', async () => {
     const { getModelOptions } = await import('./modelOptions.js')
     const { parseUserSpecifiedModel, getMarketingNameForModel } = await import(
       './model.js'
     )
 
-    expect(parseUserSpecifiedModel('haiku')).toBe('claude-haiku-5-5')
-    expect(getMarketingNameForModel('claude-haiku-5-5')).toBe('Haiku 5.5')
+    expect(parseUserSpecifiedModel('haiku')).toBe(haikuRelease.wire.firstParty)
+    expect(getMarketingNameForModel(haikuRelease.wire.firstParty)).toBe(haikuRelease.label)
 
     const options = getModelOptions(false)
-    expect(labelCount(options, 'Haiku 5.5')).toBe(1)
+    expect(labelCount(options, haikuRelease.label)).toBe(1)
     expect(labelCount(options, 'Haiku 4.5')).toBe(0)
-    expect(options.find(option => option.label === 'Haiku 5.5')?.value).toBe(
+    expect(options.find(option => option.label === haikuRelease.label)?.value).toBe(
       'haiku',
     )
   })
@@ -292,20 +301,20 @@ describe('Haiku 5.5', () => {
 
     const options = getModelOptions(false)
     expect(labelCount(options, 'Haiku 4.5')).toBe(1)
-    expect(labelCount(options, 'Haiku 5.5')).toBe(1)
+    expect(labelCount(options, haikuRelease.label)).toBe(1)
   })
 })
 
 describe('getModelOptions duplicate-row fallback', () => {
   test('a canonical model id already offered under its alias does not add a second row', async () => {
     const { getModelOptions } = await import('./modelOptions.js')
-    setMainLoopModelOverride('claude-sonnet-5-5')
+    setMainLoopModelOverride(sonnetRelease.wire.firstParty)
 
     const options = getModelOptions(false)
 
-    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
+    expect(labelCount(options, sonnetRelease.label)).toBe(1)
     expect(options.some(option => option.value === 'sonnet')).toBe(true)
-    expect(options.some(option => option.value === 'claude-sonnet-5-5')).toBe(
+    expect(options.some(option => option.value === sonnetRelease.wire.firstParty)).toBe(
       false,
     )
   })
@@ -315,9 +324,9 @@ describe('getModelOptions duplicate-row fallback', () => {
     // Selecting "Default (recommended)" writes a null override, so the fallback
     // reads getInitialMainLoopModel() instead — a ghost row must not appear there.
     setMainLoopModelOverride(null)
-    setInitialMainLoopModel('claude-sonnet-5-5')
+    setInitialMainLoopModel(sonnetRelease.wire.firstParty)
 
-    expect(labelCount(getModelOptions(false), 'Sonnet 5.5')).toBe(1)
+    expect(labelCount(getModelOptions(false), sonnetRelease.label)).toBe(1)
   })
 
   test('opusplan keeps its own row even though it resolves to the Sonnet default', async () => {
@@ -332,7 +341,7 @@ describe('getModelOptions duplicate-row fallback', () => {
 
     const options = getModelOptions(false)
     expect(options.some(option => option.value === 'opusplan')).toBe(true)
-    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
+    expect(labelCount(options, sonnetRelease.label)).toBe(1)
   })
 
   test('best keeps its own row even though it resolves to Fable', async () => {
@@ -346,7 +355,7 @@ describe('getModelOptions duplicate-row fallback', () => {
 
     const options = getModelOptions(false)
     expect(options.some(option => option.value === 'best')).toBe(true)
-    expect(labelCount(options, 'Fable 5')).toBe(1)
+    expect(labelCount(options, fableRelease.label)).toBe(1)
   })
 
   test('a 1M variant stays distinct from its base model', async () => {
@@ -354,17 +363,16 @@ describe('getModelOptions duplicate-row fallback', () => {
       './modelOptions.js'
     )
 
-    expect(optionCoversModelSetting('sonnet', 'claude-sonnet-5-5[1m]')).toBe(false)
-    expect(optionCoversModelSetting('sonnet[1m]', 'claude-sonnet-5-5[1m]')).toBe(
-      true,
-    )
+    const longSonnet = sonnetRelease.wire.firstParty + '[1m]'
+    expect(optionCoversModelSetting('sonnet', longSonnet)).toBe(false)
+    expect(optionCoversModelSetting('sonnet[1m]', longSonnet)).toBe(true)
 
-    setMainLoopModelOverride('claude-sonnet-5-5[1m]')
+    setMainLoopModelOverride(longSonnet)
     const options = getModelOptions(false)
     // Not swallowed by the plain Sonnet row: the 1M setting still gets a row.
-    expect(labelCount(options, 'Sonnet 5.5')).toBe(1)
+    expect(labelCount(options, sonnetRelease.label)).toBe(1)
     expect(
-      options.some(option => option.value === 'claude-sonnet-5-5[1m]'),
+      options.some(option => option.value === longSonnet),
     ).toBe(true)
   })
 
@@ -372,11 +380,11 @@ describe('getModelOptions duplicate-row fallback', () => {
     const { optionCoversModelSetting } = await import('./modelOptions.js')
 
     expect(optionCoversModelSetting('sonnet', 'opusplan')).toBe(false)
-    expect(optionCoversModelSetting('opusplan', 'claude-sonnet-5-5')).toBe(false)
+    expect(optionCoversModelSetting('opusplan', sonnetRelease.wire.firstParty)).toBe(false)
     expect(optionCoversModelSetting('fable', 'best')).toBe(false)
     expect(optionCoversModelSetting('opusplan', 'opusplan')).toBe(true)
     // The Default row (null) never covers a concrete setting.
-    expect(optionCoversModelSetting(null, 'claude-sonnet-5-5')).toBe(false)
+    expect(optionCoversModelSetting(null, sonnetRelease.wire.firstParty)).toBe(false)
   })
 })
 
@@ -418,13 +426,13 @@ describe('1M-context rows and Sonnet 4.6', () => {
     const options = getModelOptions(false)
     const labels = options.map(option => option.label)
 
-    expect(labels).toContain('Sonnet 5.5')
-    expect(labels).toContain('Opus 5.5')
-    expect(labels).toContain('Fable 5')
-    expect(labels).toContain('GPT-6.2 Sol')
-    expect(labels).toContain('GPT-6.2 Astra')
+    expect(labels).toContain(sonnetRelease.label)
+    expect(labels).toContain(opusRelease.label)
+    expect(labels).toContain(fableRelease.label)
+    expect(labels).toContain(solRelease.label)
+    expect(labels).toContain(astraRelease.label)
     expect(labels).not.toContain('GPT-6 Sol')
-    expect(options.some(option => option.value === 'gpt-6.2-sol')).toBe(true)
+    expect(options.some(option => option.value === solRelease.id)).toBe(true)
     for (const retiredModel of [
       'gpt-6-sol',
       'gpt-5.6-sol',
@@ -435,8 +443,8 @@ describe('1M-context rows and Sonnet 4.6', () => {
     ]) {
       expect(options.some(option => option.value === retiredModel)).toBe(false)
     }
-    expect(labels.indexOf('GPT-6.2 Sol')).toBe(
-      labels.indexOf('GPT-6.2 Astra') + 1,
+    expect(labels.indexOf(solRelease.label)).toBe(
+      labels.indexOf(astraRelease.label) + 1,
     )
   })
 })

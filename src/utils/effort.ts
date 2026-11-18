@@ -1,4 +1,4 @@
-import { getCodexRelease, matchClaudeRelease } from './model/configs.js'
+import { getCodexRelease, matchClaudeCapability } from './model/configs.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { getAntModelOverrideConfig, resolveAntModel } from './model/antModels.js'
 import { isUltrathinkEnabled } from './thinking.js'
@@ -53,10 +53,10 @@ export function modelSupportsEffort(model: string): boolean {
   // Codex (OpenAI Responses API via our fetch adapter) — GPT-5 family all
   // accept reasoning.effort. Adapter reads output_config.effort and translates
   // to the Codex reasoning object. See codex-fetch-adapter.ts:translateToCodexBody.
-  if (getAPIProvider() === 'openai' && m.startsWith('gpt-')) {
+  if (getAPIProvider() === 'openai' && (m.startsWith('gpt-') || getCodexRelease(model))) {
     return true
   }
-  const release = matchClaudeRelease(m)
+  const release = matchClaudeCapability(m)
   if (release) return release.effort !== undefined
   // Exclude any other known legacy models (haiku, older opus/sonnet variants)
   if (m.includes('haiku') || m.includes('sonnet') || m.includes('opus')) {
@@ -79,9 +79,9 @@ export function modelSupportsMaxEffort(model: string): boolean {
     return supported3P
   }
   const m = model.toLowerCase()
-  const effort = matchClaudeRelease(m)?.effort
+  const effort = matchClaudeCapability(m)?.effort
   if (effort === 'max' || effort === 'xhigh') return true
-  const codex = getCodexRelease(m)
+  const codex = getCodexRelease(model) ?? getCodexRelease(m)
   if (codex?.efforts) return codex.efforts.includes('max')
   if (process.env.USER_TYPE === 'ant' && resolveAntModel(model)) {
     return true
@@ -91,12 +91,12 @@ export function modelSupportsMaxEffort(model: string): boolean {
 
 export function getSupportedEffortLevels(model: string): readonly EffortLevel[] {
   const m = model.toLowerCase()
-  const codex = getCodexRelease(m)
+  const codex = getCodexRelease(model) ?? getCodexRelease(m)
   if (codex?.efforts) return codex.efforts
   if (m.includes('codex')) {
     return ['low', 'medium', 'high', 'xhigh']
   }
-  if (matchClaudeRelease(m)?.effort === 'xhigh') {
+  if (matchClaudeCapability(m)?.effort === 'xhigh') {
     return ['low', 'medium', 'high', 'xhigh', 'max']
   }
   if (modelSupportsMaxEffort(model)) {
@@ -215,7 +215,7 @@ export function resolveAppliedEffort(
  *
  * The per-call override is what the calling agent selected on this spawn, so it
  * is the most specific signal and outranks the definition pin — mirroring how a
- * tool-specified model outranks `agentModel` in getAgentModel().
+ * tool-specified model outranks `agentModel` in resolveAgentModel().
  *
  * No clamping happens here: resolveAppliedEffort() clamps whatever lands in
  * AppState.effortValue against the subagent's own resolved model at request
@@ -390,10 +390,10 @@ export function getDefaultEffortForModel(
   // the model launch DRI and research. Default effort is a sensitive setting
   // that can greatly affect model quality and bashing.
 
-  const codexEffort = getCodexRelease(model.toLowerCase())?.defaultEffort
+  const codexEffort = (getCodexRelease(model) ?? getCodexRelease(model.toLowerCase()))?.defaultEffort
   if (codexEffort !== undefined) return codexEffort
 
-  if (matchClaudeRelease(model.toLowerCase())?.subscriberMediumEffort) {
+  if (matchClaudeCapability(model.toLowerCase())?.subscriberMediumEffort) {
     if (isProSubscriber() || (
       getOpusDefaultEffortConfig().enabled && (isMaxSubscriber() || isTeamSubscriber())
     )) {

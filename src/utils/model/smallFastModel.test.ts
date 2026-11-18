@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
+import { currentCodexRelease } from './configs.js'
+
 const skillImprovementSource = await Bun.file(
   new URL('../hooks/skillImprovement.ts', import.meta.url),
 ).text()
@@ -61,10 +63,10 @@ describe('getSmallFastModelForProvider', () => {
     expect(skillImprovementSource).not.toContain('getSmallFastModel()')
   })
 
-  test('uses GPT-6.2 Sol as the Codex main-loop default', async () => {
+  test('uses the current Sol as the Codex main-loop default', async () => {
     codexSubscriber = true
     const { getDefaultMainLoopModelSetting } = await import('./model.js')
-    expect(getDefaultMainLoopModelSetting()).toBe('gpt-6.2-sol')
+    expect(getDefaultMainLoopModelSetting()).toBe(currentCodexRelease('sol').id)
   })
 
   test('leaves the non-Codex main-loop default alone', async () => {
@@ -77,10 +79,10 @@ describe('getSmallFastModelForProvider', () => {
     expect(getDefaultMainLoopModelSetting()).not.toStartWith('gpt-')
   })
 
-  test('returns GPT-6 Luna on the Codex fork', async () => {
+  test('returns the current Luna on the Codex fork', async () => {
     codexSubscriber = true
     const { getSmallFastModelForProvider } = await import('./model.js')
-    expect(getSmallFastModelForProvider()).toBe('gpt-6-luna')
+    expect(getSmallFastModelForProvider()).toBe(currentCodexRelease('luna').id)
   })
 
   test('falls back to the Anthropic Haiku default off the Codex fork', async () => {
@@ -102,6 +104,6 @@ describe('getSmallFastModelForProvider', () => {
     codexSubscriber = true
     process.env.ANTHROPIC_SMALL_FAST_MODEL = 'claude-custom-small'
     const { getSmallFastModelForProvider } = await import('./model.js')
-    expect(getSmallFastModelForProvider()).toBe('gpt-6-luna')
+    expect(getSmallFastModelForProvider()).toBe(currentCodexRelease('luna').id)
   })
 })

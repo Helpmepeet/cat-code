@@ -1,4 +1,4 @@
-import { matchClaudeRelease } from './model/configs.js'
+import { matchClaudeCapability } from './model/configs.js'
 import type { BetaUsage } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../services/analytics/growthbook.js'
 import { shouldIncludeFirstPartyOnlyBetas } from './betas.js'
@@ -87,11 +87,11 @@ export function getExperimentAdvisorModels():
 
 // Checks whether the main loop model supports calling the advisor tool.
 export function modelSupportsAdvisor(model: string): boolean {
-  return process.env.USER_TYPE === 'ant' || matchClaudeRelease(model.toLowerCase())?.advisor === true
+  return process.env.USER_TYPE === 'ant' || matchClaudeCapability(model.toLowerCase())?.advisor === true
 }
 
 export function isValidAdvisorModel(model: string): boolean {
-  return process.env.USER_TYPE === 'ant' || matchClaudeRelease(model.toLowerCase())?.advisor === true
+  return process.env.USER_TYPE === 'ant' || matchClaudeCapability(model.toLowerCase())?.advisor === true
 }
 
 export function getInitialAdvisorSetting(): string | undefined {

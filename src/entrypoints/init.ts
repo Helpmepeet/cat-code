@@ -53,10 +53,6 @@ export const init = memoize(async (): Promise<void> => {
   try {
     const configsStart = Date.now()
     enableConfigs()
-    const { runEngineMigrations } = await import(
-      '../migrations/runEngineMigrations.js'
-    )
-    await runEngineMigrations()
     logForDiagnosticsNoPII('info', 'init_configs_enabled', {
       duration_ms: Date.now() - configsStart,
     })
@@ -76,6 +72,13 @@ export const init = memoize(async (): Promise<void> => {
       duration_ms: Date.now() - envVarsStart,
     })
     profileCheckpoint('init_safe_env_vars_applied')
+
+    // Retirement checks need the configured provider and gateway before
+    // deciding whether to rewrite saved Claude selections.
+    const { runEngineMigrations } = await import(
+      '../migrations/runEngineMigrations.js'
+    )
+    await runEngineMigrations()
 
     // Make sure things get flushed on exit
     setupGracefulShutdown()

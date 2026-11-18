@@ -32,7 +32,7 @@ try {
   writeFileSync(catalog, original.replace(activeSol, activeSol + `    {
       ...codex6,
       id: 'gpt-catalog-fixture-sol',
-      wireId: 'catalog-fixture.responses',
+      wireId: 'Catalog-Fixture.Responses',
       label: 'Catalog Fixture Sol',
       pickerDescription: 'Synthetic catalog verification',
       agentDescription: 'Synthetic catalog verification',
@@ -41,6 +41,10 @@ try {
       efforts: ['low', 'medium'],
       defaultEffort: 'low',
       minimalOnWire: 'none',
+    },
+    {
+      id: 'gpt-catalog-prior-sol', wireId: 'Catalog-Prior.Responses',
+      label: 'Catalog Prior Sol', promptFamily: 'gpt-6', usage: 'retired',
     },
 `))
   console.log(`Synthetic replacement edits only ${catalogPath}`)
@@ -66,11 +70,14 @@ try {
   )
   const before = JSON.stringify(snapshotContents())
   const codex = run('codex', ['scripts/model-replacement.fixture.ts', 'codex'])
-  const unchangedTests = run('tests', [
+  const unchangedSuites = [
     'test', '--isolate', 'src/constants/promptAssembly.snapshot.test.ts',
     'src/commands/switch-account/switch-account.test.ts', 'app/host/peerNames.test.ts',
-    'src/utils/model/modelOverridePrecedence.test.ts',
-  ])
+    'src/utils/model/modelOverridePrecedence.test.ts', 'src/utils/model/modelOptions.test.ts',
+    'src/utils/model/smallFastModel.test.ts', 'src/utils/model/agent.test.ts',
+    'app/sidecar/usageSummary.test.ts',
+  ]
+  const codexTests = run('codex-tests', unchangedSuites)
 
   const cloudSonnet = /sonnet: \{ current: '[^']+', cloud: '([^']+)' \}/
   if (!cloudSonnet.test(original)) throw new Error('Cannot locate the Claude Sonnet default')
@@ -80,15 +87,27 @@ try {
   sonnetFixture: {
     ...frontier, family: 'sonnet', label: 'Catalog Fixture Sonnet',
     wire: {
-      firstParty: 'claude-sonnet-9-9-fixture', bedrock: 'anthropic.claude-sonnet-9-9-fixture-v1',
+      firstParty: 'claude-catalog-sonnet', bedrock: 'anthropic.claude-sonnet-9-9-fixture-v1',
       vertex: 'claude-sonnet-9-9@fixture', foundry: 'claude-sonnet-9-9',
-      openai: 'claude-sonnet-9-9-fixture',
+      openai: 'claude-catalog-sonnet',
     },
     effort: 'xhigh', requiredAdaptiveThinking: true, priceAs: 'claude-sonnet-5-5',
   },`,
   ).replace(cloudSonnet, "sonnet: { current: 'sonnetFixture', cloud: '$1' }"))
   console.log(`Claude replacement edits only ${catalogPath}`)
   const claude = run('claude', ['scripts/model-replacement.fixture.ts', 'claude'])
+  const claudeTests = run('claude-tests', unchangedSuites)
+  const startup = run('startup', ['scripts/model-replacement.fixture.ts', 'startup'])
+
+  writeFileSync(catalog, original.replace('  terra: [\n', `  terra: [
+    {
+      ...codex6, id: 'gpt-catalog-fixture-terra', priceAs: terra61Id,
+      label: 'Catalog Fixture Terra', pickerDescription: 'Synthetic pricing verification',
+      agentDescription: 'Synthetic pricing verification', adapterDescription: 'Synthetic pricing verification',
+      context: codexWindow(1_050_000), efforts: codexMax,
+    },
+`))
+  const terra = run('terra', ['scripts/model-replacement.fixture.ts', 'terra'])
 
   writeFileSync(catalog, original.replace('  luna: [\n', `  luna: [
     {
@@ -105,7 +124,7 @@ try {
 
   if (before !== JSON.stringify(snapshotContents())) throw new Error('Prompt snapshots changed during verification')
   console.log('Replacement proof used unchanged tests and prompt snapshots')
-  process.exitCode = codex && unchangedTests && claude && reviewer ? 0 : 1
+  process.exitCode = codex && codexTests && claude && claudeTests && startup && terra && reviewer ? 0 : 1
 } finally {
   rmSync(fixture, { recursive: true, force: true })
 }
