@@ -279,6 +279,21 @@ assert(
   inventoryText.slice(0, 400),
 )
 
+// Run a complete engine turn to exercise the embedded Script Worker and its result delivery.
+const scriptSmoke = spawnSync(process.execPath, [
+  'run', join(appRoot, '..', 'scripts', 'packaged-code-mode-smoke.ts'), 'sidecar', sidecar,
+], {
+  encoding: 'utf8',
+  cwd: workDir,
+  env: { PATH: NO_BUN_PATH, HOME: configHome, CLAUDE_CONFIG_DIR: configHome },
+  timeout: 60_000,
+})
+assert(
+  scriptSmoke.status === 0,
+  'compiled sidecar Script runs the bundled interpreter and delivers its result',
+  `${scriptSmoke.error ?? ''}${scriptSmoke.stderr ?? ''}${scriptSmoke.stdout ?? ''}`.trim().slice(0, 900),
+)
+
 if (process.argv.includes('--headless-only')) {
   if (failed > 0) {
     process.stderr.write(`\n[packaged-launch-smoke] ${failed} assertion(s) failed\n`)

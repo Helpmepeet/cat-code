@@ -48,6 +48,12 @@ jobs:
       - name: Check and build the engine
         run: bun run build:dev:full
 
+      - name: Exercise Code Mode through the compiled CLI
+        run: bun run scripts/packaged-code-mode-smoke.ts cli ./cli-dev
+
+      - name: Check Code Mode in the real engine
+        run: bun test --isolate src/app-runtime/codeMode.test.ts src/app-runtime/codeModeMcp.test.ts src/app-runtime/codeModeMcpGeneration.test.ts
+
       - name: Check desktop types
         run: bun run --cwd app typecheck
 

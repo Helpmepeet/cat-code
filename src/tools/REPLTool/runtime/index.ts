@@ -10,8 +10,8 @@ export function createRuntime(options: RuntimeOptions = {}): PersistentRuntime {
     const ceiling = key === 'wallTimeMs' ? 2 * 60 * 60_000 : DEFAULT_LIMITS[key as keyof RuntimeLimits] * 8
     if (!Number.isSafeInteger(value) || value <= 0 || value > ceiling) throw new Error(`Invalid runtime limit: ${key}`)
   }
-  // Packaging must include worker.ts as an additional Bun entrypoint. Bun emits
-  // it as worker.js, including inside the standalone executable filesystem.
+  // The CLI and sidecar compile the Worker entry as worker.js beside the host
+  // at the root of Bun's embedded filesystem.
   const worker = new Worker(new URL(import.meta.url.endsWith('.ts') ? './worker.ts' : './worker.js', import.meta.url).href)
   let dead = false
   const usedCells = new Set<string>()

@@ -178,7 +178,9 @@ const cmd = [
   'bun',
   'build',
   './src/entrypoints/cli.tsx',
-  ...(features.includes('CODE_MODE') ? ['./src/tools/REPLTool/runtime/worker.ts'] : []),
+  ...(features.includes('CODE_MODE')
+    ? ['./src/tools/REPLTool/runtime/worker.ts', '--entry-naming=[name].[ext]']
+    : []),
   '--compile',
   '--target',
   'bun',
