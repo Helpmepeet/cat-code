@@ -35,11 +35,10 @@ export type SideQueryOptions = {
   /** Model to use for the query */
   model: string
   /**
-   * System prompt - string or array of text blocks (will be prefixed with CLI attribution).
+   * System prompt as a string or an array of text blocks.
    *
    * The attribution header is always placed in its own TextBlockParam block to ensure
-   * server-side parsing correctly extracts the cc_entrypoint value without including
-   * system prompt content.
+   * the Anthropic server can extract cc_entrypoint separately from the prompt.
    */
   system?: string | TextBlockParam[]
   /** Messages to send (supports cache_control on content blocks) */
@@ -56,7 +55,7 @@ export type SideQueryOptions = {
   maxRetries?: number
   /** Abort signal */
   signal?: AbortSignal
-  /** Skip CLI system prompt prefix (keeps attribution header for OAuth). For internal classifiers that provide their own prompt. */
+  /** Skip the CLI system prompt prefix for queries with their own instructions. */
   skipSystemPromptPrefix?: boolean
   /** Temperature override */
   temperature?: number
@@ -101,6 +100,59 @@ function extractFirstUserMessageText(messages: MessageParam[]): string {
   return textBlock?.type === 'text' ? textBlock.text : ''
 }
 
+/** Request inputs shared by side queries and the pinned offline reviewer tools. */
+export function buildSideQueryRequest(opts: SideQueryOptions, provider: APIProvider) {
+  const { model, system, messages, tools, tool_choice, output_format,
+    max_tokens = 1024, skipSystemPromptPrefix, temperature, thinking,
+    reasoningEffort, stop_sequences } = opts
+
+  // The classifier supplies the complete Codex model instructions. Anthropic
+  // billing attribution belongs to the Anthropic OAuth request path.
+  const codexClassifier = provider === 'openai' && opts.querySource === 'auto_mode' && skipSystemPromptPrefix
+  const attributionHeader = codexClassifier ? '' : getAttributionHeader(
+    computeFingerprint(extractFirstUserMessageText(messages), MACRO.VERSION),
+  )
+  const systemBlocks: TextBlockParam[] = [
+    attributionHeader ? { type: 'text', text: attributionHeader } : null,
+    ...(skipSystemPromptPrefix ? [] : [{
+      type: 'text' as const,
+      text: getCLISyspromptPrefix({ isNonInteractive: false, hasAppendSystemPrompt: false }),
+    }]),
+    ...(Array.isArray(system) ? system : system ? [{ type: 'text' as const, text: system }] : []),
+  ].filter((block): block is TextBlockParam => block !== null)
+
+  let thinkingConfig: BetaThinkingConfigParam | undefined
+  if (thinking === false) {
+    thinkingConfig = { type: 'disabled' }
+  } else if (thinking !== undefined) {
+    thinkingConfig = { type: 'enabled', budget_tokens: Math.min(thinking, max_tokens - 1) }
+  }
+  const normalizedModel = normalizeModelStringForAPI(model)
+  const fastAutoModeReview = opts.querySource === 'auto_mode' && provider === 'openai' &&
+    normalizedModel.startsWith('gpt-') && getInitialSettings().autoModeFastMode === true &&
+    isFastModeSupportedByModel(normalizedModel)
+  return {
+    model: normalizedModel,
+    max_tokens,
+    system: systemBlocks,
+    messages,
+    ...(provider === 'openai' && { _openaiInstructionAssembly: {
+      instructions: systemBlocks.map(block => block.text).join('\n\n'),
+      inputMessages: messages,
+    } }),
+    ...(fastAutoModeReview && { speed: 'fast' as const }),
+    ...(tools && { tools }),
+    ...(tool_choice && { tool_choice }),
+    ...((output_format || reasoningEffort) && { output_config: {
+      ...(output_format && { format: output_format }),
+      ...(reasoningEffort && { effort: reasoningEffort }),
+    } }),
+    ...(temperature !== undefined && { temperature }),
+    ...(stop_sequences && { stop_sequences }),
+    ...(thinkingConfig && { thinking: thinkingConfig }),
+  }
+}
+
 /**
  * Lightweight API wrapper for "side queries" outside the main conversation loop.
  *
@@ -130,19 +182,11 @@ function extractFirstUserMessageText(messages: MessageParam[]): string {
 export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
   const {
     model,
-    system,
-    messages,
-    tools,
-    tool_choice,
     output_format,
     max_tokens = 1024,
     maxRetries = 2,
     signal,
-    skipSystemPromptPrefix,
-    temperature,
     thinking,
-    reasoningEffort,
-    stop_sequences,
   } = opts
 
   const provider = resolveRequestProvider(model, opts.provider)
@@ -164,81 +208,8 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     betas.push(STRUCTURED_OUTPUTS_BETA_HEADER)
   }
 
-  // Extract first user message text for fingerprint
-  const messageText = extractFirstUserMessageText(messages)
-
-  // Compute fingerprint for OAuth attribution
-  const fingerprint = computeFingerprint(messageText, MACRO.VERSION)
-  const attributionHeader = getAttributionHeader(fingerprint)
-
-  // Build system as array to keep attribution header in its own block
-  // (prevents server-side parsing from including system content in cc_entrypoint)
-  const systemBlocks: TextBlockParam[] = [
-    attributionHeader ? { type: 'text', text: attributionHeader } : null,
-    // Skip CLI system prompt prefix for internal classifiers that provide their own prompt
-    ...(skipSystemPromptPrefix
-      ? []
-      : [
-          {
-            type: 'text' as const,
-            text: getCLISyspromptPrefix({
-              isNonInteractive: false,
-              hasAppendSystemPrompt: false,
-            }),
-          },
-        ]),
-    ...(Array.isArray(system)
-      ? system
-      : system
-        ? [{ type: 'text' as const, text: system }]
-        : []),
-  ].filter((block): block is TextBlockParam => block !== null)
-
-  let thinkingConfig: BetaThinkingConfigParam | undefined
-  if (thinking === false) {
-    thinkingConfig = { type: 'disabled' }
-  } else if (thinking !== undefined) {
-    thinkingConfig = {
-      type: 'enabled',
-      budget_tokens: Math.min(thinking, max_tokens - 1),
-    }
-  }
-
-  const normalizedModel = normalizeModelStringForAPI(model)
-  // Review speed is independent of the chat and is re-evaluated on provider fallback.
-  const fastAutoModeReview =
-    opts.querySource === 'auto_mode' &&
-    provider === 'openai' &&
-    normalizedModel.startsWith('gpt-') &&
-    getInitialSettings().autoModeFastMode === true &&
-    isFastModeSupportedByModel(normalizedModel)
-  const openAIInstructionAssembly =
-    provider === 'openai'
-      ? {
-          _openaiInstructionAssembly: {
-            instructions: systemBlocks.map(block => block.text).join('\n\n'),
-            inputMessages: messages,
-          },
-        }
-      : {}
   const request = {
-    model: normalizedModel,
-    max_tokens,
-    system: systemBlocks,
-    messages,
-    ...openAIInstructionAssembly,
-    ...(fastAutoModeReview && { speed: 'fast' as const }),
-    ...(tools && { tools }),
-    ...(tool_choice && { tool_choice }),
-    ...((output_format || reasoningEffort) && {
-      output_config: {
-        ...(output_format && { format: output_format }),
-        ...(reasoningEffort && { effort: reasoningEffort }),
-      },
-    }),
-    ...(temperature !== undefined && { temperature }),
-    ...(stop_sequences && { stop_sequences }),
-    ...(thinkingConfig && { thinking: thinkingConfig }),
+    ...buildSideQueryRequest(opts, provider),
     ...(betas.length > 0 && { betas }),
     metadata: getAPIMetadata(),
   }
@@ -302,7 +273,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
     querySource:
       opts.querySource as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     model:
-      normalizedModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      request.model as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     inputTokens: usage.input_tokens,
     outputTokens: usage.output_tokens,
     cachedInputTokens: usage.cache_read_input_tokens ?? 0,

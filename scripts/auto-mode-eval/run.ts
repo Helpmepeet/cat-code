@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import type { Message } from '../../src/types/message.js'
 import type { PermissionDecisionContext } from '../../src/utils/permissions/permissionDecisionContext.js'
 import type { YoloClassifierStageObserver } from '../../src/utils/permissions/yoloClassifier.js'
+import type { SideQueryOptions } from '../../src/utils/sideQuery.js'
 import { EVIDENCE_CASES, type EvidenceCase } from './cases.js'
 import { compareSamples, type StageDiagnostic, type VerdictSample } from './grade.js'
 import { prepareResume, sampleKey, verifyRetainedRequest, type EvidenceRecord } from './resume.js'
@@ -149,9 +150,15 @@ try {
   ])
   if (offlineHome) setPromptCache1hEligible(false)
   enableConfigs()
-  const { autoModePolicyDigest } = await import('../../src/utils/permissions/autoModeReductionQualification.js')
+  const { autoModePolicyDigest, autoModeReviewStageProfile, fingerprintAutoModeReviewRequest } =
+    await import('../../src/utils/permissions/autoModeReductionQualification.js')
   const policyDigest = autoModePolicyDigest(buildAutoModeCritiqueSystemPrompt())
-  const { pinnedReviewRequestDigest } = await import('./request.js')
+  const stageProfiles: Partial<Record<StageDiagnostic['stage'], string>> = {}
+  function recordStageProfile(stage: StageDiagnostic['stage'], options: SideQueryOptions): void {
+    const profile = autoModeReviewStageProfile(options)
+    if (stageProfiles[stage] && stageProfiles[stage] !== profile) throw new Error(`Auto Mode ${stage} reviewer changed during the evaluation`)
+    stageProfiles[stage] = profile
+  }
   const transportModule = args.live ? await import('./transport.js') : undefined
   const account = transportModule ? await transportModule.observedAccount(args.account!) : undefined
   if (account && !account.accountId.startsWith(args.accountIdPrefix!)) throw new Error('Selected account does not match the authorized account identity')
@@ -181,7 +188,10 @@ try {
         sideQuery: async options => {
           const request = { model: options.model, system: options.system, messages: options.messages, tools: options.tools }
           validatedRequests.push(request)
-          digests.push(pinnedReviewRequestDigest(options))
+          digests.push(fingerprintAutoModeReviewRequest(options))
+          if (record.sample.variant === 'reduced' && digests.length <= record.evidence.stages) {
+            recordStageProfile(digests.length === 1 ? 'fast' : 'thinking', options)
+          }
           return { id: 'resume-validation', type: 'message', role: 'assistant', model: options.model,
             content: [{ type: 'tool_use', id: 'resume-verdict', name: YOLO_CLASSIFIER_TOOL_NAME, input: { shouldBlock: digests.length === 1 } }],
             stop_reason: 'tool_use', stop_sequence: null,
@@ -210,7 +220,7 @@ try {
     schema: 1, evaluationId: ledger?.id, mode: args.live ? 'live' : 'offline-evidence-only', cases: cases.length, repeats: args.repeats,
     model: args.model ?? 'gpt-6-luna', account: accountIdentity,
     corpusDigest, caseManifest: cases.map(c => ({ id: c.id, expect: c.expect })), authorizedMaxRequests: args.maxRequests,
-    transport: args.live ? 'pinned-production-codex-adapter-without-attribution-header' : 'offline-capture',
+    transport: args.live ? 'pinned-production-codex-review' : 'offline-capture',
     reviewerRequestsAttempted: (resumed?.priorAttempts ?? 0) + (pinned?.requestsAttempted ?? 0),
     backendSends: (resumed?.priorBackendSends ?? 0) + (pinned?.backendSends ?? 0), reservedBackendSends: ledger?.reservedBackendSends,
     transportFailures: [...(resumed?.priorTransportFailures ?? []), ...(pinned?.failures ?? [])], resumeHistory: resumed?.resumeHistory ?? [],
@@ -259,12 +269,15 @@ try {
       }
       const transport: typeof import('../../src/utils/sideQuery.js').sideQuery = async options => {
         const request = { model: options.model, system: options.system, messages: options.messages, tools: options.tools }
-        digests.push(pinnedReviewRequestDigest(options))
+        digests.push(fingerprintAutoModeReviewRequest(options))
         captured.push(request)
         requestedModels.push(options.model)
         if (args.live) {
           if (options.model !== args.model) throw new Error('Model fallback is outside this evaluation authorization')
           if (!pinned) throw new Error('No authorized reviewer sends remain')
+        }
+        if (variant === 'reduced') recordStageProfile(activeStage, options)
+        if (pinned) {
           const response = await pinned.send(options)
           // Capture only the explicit public verdict reason. The observer below
           // supplies validated decisions; raw model thinking is never reported.
@@ -332,10 +345,11 @@ try {
   const pairedComparisonPassed = comparison?.eligibleForReduction === true && samples.length === cases.length * 2 * args.repeats &&
     stoppedEarly === null && structuralFailures.length === 0 && componentFailures.length === 0 && unchangedCandidatePairs.length === 0
   const evaluationScope = args.only ? 'case' : 'corpus'
-  const eligibleForReduction = evaluationScope === 'corpus' && pairedComparisonPassed
+  const eligibleForReduction = evaluationScope === 'corpus' && pairedComparisonPassed &&
+    stageProfiles.fast !== undefined && stageProfiles.thinking !== undefined
   if (qualification) {
     if (structuralFailures.length || componentFailures.length || unchangedCandidatePairs.length) throw new Error('Auto Mode qualification evidence checks failed')
-    verifyQualification(qualification, { cases, corpusDigest, policyDigest, evidence: evidenceReports })
+    verifyQualification(qualification, { cases, corpusDigest, policyDigest, stageProfiles, evidence: evidenceReports })
     await writeReportToStdout({ qualification: 'verified', model: qualification.model, cases: cases.length })
   } else {
     const report = { ...buildCheckpoint(stoppedEarly),
@@ -343,8 +357,8 @@ try {
       latencyMeasured: args.live && samples.some(s => !s.unavailable && !s.invalid && s.error === undefined), structuralFailures: structuralFailures.length,
       candidateChanged: unchangedCandidatePairs.length === 0, unchangedCandidatePairs,
       evaluationScope, pairedComparisonPassed, eligibleForReduction, componentFailures, componentReductions, evidence: evidenceReports, comparison, samples,
-      policyDigest, ...(eligibleForReduction && { qualification: {
-        schema: 1, model: args.model, corpusDigest, policyDigest, repeats: args.repeats,
+      policyDigest, stageProfiles, ...(eligibleForReduction && { qualification: {
+        schema: 2, model: args.model, corpusDigest, policyDigest, stageProfiles, repeats: args.repeats,
         requests: samples.map((sample, index) => ({ id: sample.id, variant: sample.variant, repeat: sample.repeat,
           shouldBlock: sample.shouldBlock, digests: evidenceReports[index]!.digests })),
       } }),

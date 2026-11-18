@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { join } from 'node:path'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { EVIDENCE_CASES } from './cases.js'
 
@@ -57,9 +57,26 @@ function liveFixture(root: string, limit: number) {
   const preload = join(root, 'transport-preload.ts')
   const budget = join(root, 'budget.txt')
   const release = join(root, 'release')
+  const checkpointReady = join(root, 'checkpoint-ready')
   writeFileSync(preload, `
     import { mock } from 'bun:test'; import { existsSync, writeFileSync } from 'node:fs';
     globalThis.fetch = async () => { throw new Error('Unexpected real network in fixture'); };
+    if (process.env.CATCODE_EVAL_FIXTURE_PASS === 'stale-save') {
+      const atomic = { ...(await import(${JSON.stringify(join(import.meta.dir, '../../src/utils/atomicFile.ts'))})) };
+      const pauseSave = write => async (path, content, options) => {
+        if (path.includes('/checkpoint') && typeof content === 'string' &&
+          JSON.parse(content).samples?.length === 1 && !existsSync(${JSON.stringify(checkpointReady)})) {
+          writeFileSync(${JSON.stringify(checkpointReady)}, '');
+          while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(20);
+        }
+        return write(path, content, options);
+      };
+      mock.module(${JSON.stringify(join(import.meta.dir, '../../src/utils/atomicFile.ts'))}, () => ({
+        ...atomic,
+        writeFileAtomicDurable: pauseSave(atomic.writeFileAtomicDurable),
+        writeFileAtomicDurableIfAbsent: pauseSave(atomic.writeFileAtomicDurableIfAbsent),
+      }));
+    }
     mock.module(${JSON.stringify(join(import.meta.dir, 'transport.ts'))}, () => ({
       observedAccount: async () => ({ accountId: 'fixture-approved-account', alias: 'fixture' }),
       pinnedCodexTransport: (account, model, limit, reserve) => {
@@ -93,7 +110,7 @@ function liveFixture(root: string, limit: number) {
   const env = { ...process.env, CLAUDE_CONFIG_DIR: root, ANTHROPIC_API_KEY: 'fixture-key' }
   const run = (args: string[], pass = 'resume') => Bun.spawnSync([...base, ...args], { cwd: root,
     env: { ...env, CATCODE_EVAL_FIXTURE_PASS: pass } })
-  return { base, budget, release, env, run }
+  return { base, budget, release, checkpointReady, env, run }
 }
 
 test('resume uses the durable latest checkpoint, verifies changed request settings, and never replays completed cases', async () => {
@@ -192,6 +209,39 @@ test('a second process cannot spend an active evaluation budget from a copy of i
   }
 }, 15_000)
 
+test.skipIf(process.platform === 'win32')('a writer paused past lease takeover cannot discard paid checkpoints', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'auto-eval-stale-save-'))
+  const out = join(root, 'original.json')
+  const { run, base, release, checkpointReady, env } = liveFixture(root, 3)
+  const only = ['--only', 'ordinary-build']
+  const stale = Bun.spawn([...base, ...only, '--out', out], {
+    cwd: root, env: { ...env, CATCODE_EVAL_FIXTURE_PASS: 'stale-save' }, stdout: 'ignore', stderr: 'ignore',
+  })
+  try {
+    const expiresAt = Date.now() + 5_000
+    while (!existsSync(checkpointReady) && Date.now() < expiresAt) await Bun.sleep(20)
+    expect(existsSync(checkpointReady)).toBe(true)
+    process.kill(stale.pid, 'SIGSTOP')
+    const { evaluationId } = await Bun.file(out).json()
+    const lock = join(root, 'auto-mode-evaluations', evaluationId + '.lock')
+    const past = new Date(Date.now() - 20_000)
+    utimesSync(lock, past, past)
+    const advanced = run([...only, '--resume', out], 'takeover')
+    if (advanced.exitCode !== 0) throw new Error(advanced.stderr.toString())
+    expect(await Bun.file(out).json()).toMatchObject({ reservedBackendSends: 3 })
+    writeFileSync(release, '')
+    process.kill(stale.pid, 'SIGCONT')
+    await stale.exited
+    const verified = run([...only, '--resume', out, '--verify-resume'], 'verify')
+    if (verified.exitCode !== 0) throw new Error(verified.stderr.toString())
+    expect(JSON.parse(verified.stdout.toString())).toMatchObject({ retained: 2, pending: 0, remainingRequests: 0 })
+  } finally {
+    stale.kill('SIGKILL')
+    await stale.exited
+    rmSync(root, { recursive: true, force: true })
+  }
+}, 15_000)
+
 test('offline emits a complete full-corpus JSON report to stdout', async () => {
   const child = Bun.spawn([...runner, script, '--offline'], { stdout: 'pipe', stderr: 'pipe' })
   const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
@@ -218,12 +268,18 @@ test('offline qualification rejects drift and treats an empty active manifest as
     expect(offline.exitCode).toBe(0)
     const report = JSON.parse(offline.stdout.toString())
     const byId = new Map(EVIDENCE_CASES.map(test => [test.id, test.expect]))
-    const candidate = { schema: 1, model: report.model, repeats: 1, corpusDigest: report.corpusDigest, policyDigest: report.policyDigest,
+    const candidate = { schema: 2, model: report.model, repeats: 1, corpusDigest: report.corpusDigest, policyDigest: report.policyDigest,
+      stageProfiles: report.stageProfiles,
       requests: report.evidence.map((entry: typeof report.evidence[number]) => ({ ...entry, shouldBlock: byId.get(entry.id) === 'block' })) }
     writeFileSync(candidatePath, JSON.stringify(candidate))
     const matched = Bun.spawnSync([...runner, script, ...verify, '--qualification', candidatePath])
     if (matched.exitCode !== 0) throw new Error(matched.stderr.toString())
     expect(JSON.parse(matched.stdout.toString())).toMatchObject({ qualification: 'verified', cases: EVIDENCE_CASES.length })
+
+    writeFileSync(candidatePath, JSON.stringify({ ...candidate, stageProfiles: { ...candidate.stageProfiles, fast: 'a'.repeat(64) } }))
+    const staleProfile = Bun.spawnSync([...runner, script, ...verify, '--qualification', candidatePath])
+    expect(staleProfile.exitCode).not.toBe(0)
+    expect(staleProfile.stderr.toString()).toContain('Auto Mode reduction qualification reviewer profile changed')
 
     candidate.requests[0].digests[0] = 'a'.repeat(64)
     writeFileSync(candidatePath, JSON.stringify(candidate))

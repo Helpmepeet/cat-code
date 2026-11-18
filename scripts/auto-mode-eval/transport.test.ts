@@ -25,7 +25,7 @@ test('pinned evaluator sends the chosen account and policy through the real adap
       const sends = []; let reservations = 0;
       globalThis.fetch = async (url, init) => {
         if (reservations !== sends.length + 1) throw new Error('Missing reservation before fetch');
-        sends.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body) });
+        sends.push({ url: String(url), headers: Object.fromEntries(new Headers(init.headers)), body: JSON.parse(init.body), redirect: init.redirect });
         return new Response('quota exhausted fixture-access', { status: 429 });
       };
       const reserve = async () => { reservations++; };
@@ -47,22 +47,35 @@ test('pinned evaluator sends the chosen account and policy through the real adap
       try { pinnedCodexTransport({ ...account, credentialGeneration: 0 }, 'gpt-6-luna', 1, reserve); } catch { rejectedUnbound = true; }
       let rejectedOtherEndpoint = false;
       try { await globalThis.fetch('https://auth.example.test/token'); } catch { rejectedOtherEndpoint = true; }
+      pinned.restoreFetch();
+      let rotated = false;
+      const rotating = pinnedCodexTransport(account, 'gpt-6-luna', 1, async () => {
+        await codexCredentialLifecycle.withTransaction(account.accountId, { operationKind: 'login', operationId: 'fixture-rotation' }, permit => {
+          const prepared = codexCredentialLifecycle.prepareLogin(permit);
+          if (prepared.status !== 'applied') throw new Error('fixture rotation preparation failed');
+          const result = codexCredentialLifecycle.commitLogin(permit, { expectedGeneration: prepared.record.credentialGeneration });
+          rotated = result.status === 'applied' && result.record.credentialGeneration > account.credentialGeneration;
+        });
+        reservations++;
+      });
+      try { await rotating.send(options); } catch {}
+      rotating.restoreFetch();
       console.log(JSON.stringify({ rejectedQuota, rejectedBudget, rejectedOtherModel, rejectedExpired, rejectedUnbound,
-        rejectedOtherEndpoint, secretsRedacted: !JSON.stringify(pinned.failures).includes('fixture-access'),
+        rejectedOtherEndpoint, rotated, sendsAfterRotation: rotating.backendSends, secretsRedacted: !JSON.stringify(pinned.failures).includes('fixture-access'),
         backendSends: pinned.backendSends, attempts: pinned.requestsAttempted, firstFailureStatus: pinned.failures[0]?.status, sends: sends.map(s => ({
         url: s.url, account: s.headers['chatgpt-account-id'], policy: s.body.instructions,
-        toolChoice: s.body.tool_choice, tools: s.body.tools.map(t => t.name), reasoningEffort: s.body.reasoning.effort,
+        toolChoice: s.body.tool_choice, tools: s.body.tools.map(t => t.name), reasoningEffort: s.body.reasoning.effort, redirect: s.redirect,
       })) }));
     `)
     const result = Bun.spawnSync([process.execPath, probe], { env: { ...process.env, CLAUDE_CONFIG_DIR: root } })
     expect(result.exitCode).toBe(0)
     expect(JSON.parse(result.stdout.toString())).toEqual({
       rejectedQuota: true, rejectedBudget: true, rejectedOtherModel: true, rejectedExpired: true, rejectedUnbound: true,
-      rejectedOtherEndpoint: true, secretsRedacted: true,
+      rejectedOtherEndpoint: true, rotated: true, sendsAfterRotation: 0, secretsRedacted: true,
       backendSends: 1, attempts: 1, firstFailureStatus: 429,
       sends: [{ url: 'https://chatgpt.com/backend-api/codex/responses', account: 'fixture-pinned-account',
         policy: 'Synthetic classifier policy', toolChoice: { type: 'function', name: 'fixture_verdict' },
-        tools: ['fixture_verdict'], reasoningEffort: 'medium' }],
+        tools: ['fixture_verdict'], reasoningEffort: 'medium', redirect: 'error' }],
     })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

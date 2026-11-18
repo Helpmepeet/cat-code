@@ -102,3 +102,83 @@ test('Claude-only Auto defaults and missing-account fallback cross the real retr
     await rm(root, { recursive: true, force: true })
   }
 }, 30_000)
+
+test('a stage profile mismatch keeps full inputs for both reviewer stages', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'classifier-profile-'))
+  const permissionsRoot = import.meta.dir
+  const script = `
+    import { expect, mock } from 'bun:test'
+    globalThis.fetch = () => { throw new Error('Unexpected network call') }
+    const manifest = { schema: 2, model: 'gpt-6-luna', requests: [{}], stageProfiles: {} }
+    mock.module(${JSON.stringify(join(permissionsRoot, 'autoModeReductionQualification.json'))}, () => ({ default: manifest }))
+    const { _forTest, buildAutoModeCritiqueSystemPrompt, YOLO_CLASSIFIER_TOOL_NAME } =
+      await import(${JSON.stringify(join(permissionsRoot, 'yoloClassifier.ts'))})
+    const { autoModePolicyDigest, autoModeReviewStageProfile } =
+      await import(${JSON.stringify(join(permissionsRoot, 'autoModeReductionQualification.ts'))})
+    const { z } = await import(${JSON.stringify(join(permissionsRoot, '../../../node_modules/zod/v4/index.js'))})
+    const tool = { name: 'Write', inputSchema: z.object({ file_path: z.string(), content: z.string() }),
+      toAutoClassifierInput: ({ file_path, content }) => file_path + ' ' + content }
+    const messages = [
+      { type: 'user', uuid: 'user-test', message: { content: 'Write Build complete. to reports/status.txt.' } },
+      { type: 'assistant', uuid: 'assistant-test', message: { content: [{ type: 'tool_use',
+        name: tool.name, id: 'toolu_archive', input: { file_path: 'notes/archive.txt', content: 'Quince log. Amber sunlight.' } }] } },
+      { type: 'user', uuid: 'result-test', sourceToolAssistantUUID: 'assistant-test', message: { content: [
+        { type: 'tool_result', tool_use_id: 'toolu_archive', content: 'Saved' }] } },
+    ]
+    const action = { role: 'assistant', content: [{ type: 'tool_use', name: tool.name,
+      id: 'toolu_pending', input: { file_path: 'reports/status.txt', content: 'Build complete.' } }] }
+    const context = { mode: 'auto', additionalWorkingDirectories: new Map(), alwaysAllowRules: {},
+      alwaysDenyRules: {}, alwaysAskRules: {}, isBypassPermissionsModeAvailable: false }
+    const capture = async inputVariant => {
+      const requests = []
+      await _forTest.classifyYoloAction(messages, action, [tool], context, new AbortController().signal,
+        { inputVariant, sideQuery: async options => {
+          requests.push(options)
+          return { id: 'synthetic', model: options.model, content: [{ type: 'tool_use',
+            name: YOLO_CLASSIFIER_TOOL_NAME, input: { shouldBlock: requests.length === 1 } }],
+            usage: { input_tokens: 1, output_tokens: 1 } }
+        } })
+      expect(requests).toHaveLength(2)
+      return requests
+    }
+    const [reducedFast, reducedThinking] = await capture('reduced')
+    const [fullFast, fullThinking] = await capture('full')
+    expect(fullFast.system).not.toEqual(reducedFast.system)
+    expect(fullThinking.messages).not.toEqual(reducedThinking.messages)
+    manifest.policyDigest = autoModePolicyDigest(buildAutoModeCritiqueSystemPrompt())
+    manifest.stageProfiles.fast = autoModeReviewStageProfile(reducedFast)
+    manifest.stageProfiles.thinking = autoModeReviewStageProfile(reducedThinking)
+    const [matchingFast, matchingThinking] = await capture()
+    expect(matchingFast.system).toEqual(reducedFast.system)
+    expect(matchingThinking.messages).toEqual(reducedThinking.messages)
+
+    for (const stage of ['fast', 'thinking']) {
+      const previous = manifest.stageProfiles[stage]
+      manifest.stageProfiles[stage] = '0'.repeat(64)
+      const [driftedFast, driftedThinking] = await capture()
+      expect(driftedFast.system).toEqual(fullFast.system)
+      expect(driftedThinking.messages).toEqual(fullThinking.messages)
+      manifest.stageProfiles[stage] = previous
+    }
+  `
+  try {
+    const child = Bun.spawn([
+      process.execPath, '--feature=TRANSCRIPT_CLASSIFIER', '--feature=AUTO_MODE_UPSTREAM_PORT',
+      '--eval', script,
+    ], {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH, HOME: root, NODE_ENV: 'test', CLAUDE_CONFIG_DIR: root,
+        CLAUDE_CODE_AUTO_MODE_MODEL: 'gpt-6-luna', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
+        ANTHROPIC_API_KEY: 'synthetic-test-key',
+      },
+      stdout: 'pipe', stderr: 'pipe',
+    })
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+    ])
+    expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 })
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+}, 30_000)

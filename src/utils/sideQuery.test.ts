@@ -150,6 +150,41 @@ describe('sideQuery', () => {
     ).toContain('Use structured output.')
   })
 
+  test('Codex Auto sends the evaluator policy as native instructions and preserves Anthropic OAuth attribution', async () => {
+    resetCaptures()
+    const oldAttribution = process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
+    const oldApiKey = process.env.ANTHROPIC_API_KEY
+    const globals = globalThis as typeof globalThis & { MACRO?: { VERSION: string } }
+    const oldMacro = globals.MACRO
+    process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = '1'
+    process.env.ANTHROPIC_API_KEY = 'synthetic-test-key'
+    globals.MACRO = { VERSION: 'test' }
+    try {
+      const { sideQuery } = await import('./sideQuery.js')
+      const options = {
+        system: 'Synthetic reviewer policy.', messages: [{ role: 'user' as const, content: 'Review the fixture.' }],
+        skipSystemPromptPrefix: true, querySource: 'auto_mode' as const, reasoningEffort: 'medium' as const,
+      }
+      await sideQuery({ ...options, model: 'gpt-6-luna', provider: 'openai' })
+      const { codexBody } = translateToCodexBody(capturedBody!)
+      expect(codexBody.instructions).toBe(options.system)
+      expect(codexBody.reasoning).toMatchObject({ effort: 'medium' })
+
+      await sideQuery({ ...options, model: 'claude-sonnet-4-6', provider: 'firstParty' })
+      expect(capturedBody?.system).toMatchObject([
+        { type: 'text', text: expect.stringContaining('x-anthropic-billing-header:') },
+        { type: 'text', text: options.system },
+      ])
+    } finally {
+      if (oldAttribution === undefined) delete process.env.CLAUDE_CODE_ATTRIBUTION_HEADER
+      else process.env.CLAUDE_CODE_ATTRIBUTION_HEADER = oldAttribution
+      if (oldApiKey === undefined) delete process.env.ANTHROPIC_API_KEY
+      else process.env.ANTHROPIC_API_KEY = oldApiKey
+      if (oldMacro === undefined) Reflect.deleteProperty(globals, 'MACRO')
+      else globals.MACRO = oldMacro
+    }
+  })
+
   test('respects explicit provider override for Claude models', async () => {
     resetCaptures()
     process.env.ANTHROPIC_API_KEY = 'test-key'

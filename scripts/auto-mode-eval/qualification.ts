@@ -1,9 +1,11 @@
 import { z } from 'zod/v4'
+import type { AutoModeReviewStage } from '../../src/utils/permissions/autoModeReductionQualification.js'
 import type { EvidenceCase } from './cases.js'
 import { sampleKey, type EvidenceRecord } from './resume.js'
 
 const digest = z.string().regex(/^[a-f0-9]{64}$/)
-const recordSchema = z.object({ schema: z.literal(1), model: z.string().startsWith('gpt-'), corpusDigest: digest, policyDigest: digest,
+const recordSchema = z.object({ schema: z.literal(2), model: z.string().startsWith('gpt-'), corpusDigest: digest, policyDigest: digest,
+  stageProfiles: z.object({ fast: digest, thinking: digest }),
   repeats: z.number().int().min(1).max(10), requests: z.array(z.object({ id: z.string(), variant: z.enum(['full', 'reduced']),
     repeat: z.number().int().nonnegative(), shouldBlock: z.boolean(), digests: z.array(digest).min(1).max(2) })) })
 
@@ -13,9 +15,13 @@ export function parseQualification(value: unknown) {
 
 export function verifyQualification(record: NonNullable<ReturnType<typeof parseQualification>>, expected: {
   cases: readonly EvidenceCase[]; corpusDigest: string; policyDigest: string; evidence: readonly EvidenceRecord[]
+  stageProfiles: Partial<Record<AutoModeReviewStage, string>>
 }) {
   if (record.corpusDigest !== expected.corpusDigest || record.policyDigest !== expected.policyDigest ||
     record.requests.length !== expected.cases.length * record.repeats * 2) throw new Error('Auto Mode reduction qualification is stale or incomplete')
+  if (record.stageProfiles.fast !== expected.stageProfiles.fast || record.stageProfiles.thinking !== expected.stageProfiles.thinking) {
+    throw new Error('Auto Mode reduction qualification reviewer profile changed')
+  }
   const evaluated = new Set<string>()
   const cases = new Map(expected.cases.map(testCase => [testCase.id, testCase]))
   const currentEvidence = new Map(expected.evidence.map(record => [sampleKey(record), record]))

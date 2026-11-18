@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readdir } from 'node:fs/promises'
+import { mkdir, readdir, truncate } from 'node:fs/promises'
 import { join } from 'node:path'
-import { writeFileAtomicDurable, writeFileAtomicDurableIfAbsent } from '../../src/utils/atomicFile.js'
+import { writeFileAtomicDurableIfAbsent } from '../../src/utils/atomicFile.js'
 import { getClaudeConfigHomeDir } from '../../src/utils/envUtils.js'
 import { lock } from '../../src/utils/lockfile.js'
 
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SLOT_PREFIX = 'send-'
+const CHECKPOINT_REVISION = /^checkpoint-([1-9]\d*)\.json$/
 
 export function evaluationIdFromReport(report: unknown): string {
   const id = report && typeof report === 'object' && 'evaluationId' in report ? report.evaluationId : undefined
@@ -21,8 +22,11 @@ export function evaluationIdFromReport(report: unknown): string {
 export async function openEvaluationLedger(id: string | undefined, verifyOnly: boolean) {
   const runId = id ?? randomUUID()
   const directory = join(getClaudeConfigHomeDir(), 'auto-mode-evaluations', runId)
-  const checkpoint = Bun.file(join(directory, 'checkpoint.json'))
-  if (id && !(await checkpoint.exists())) throw new Error('Durable evaluation checkpoint unavailable in this configuration directory')
+  const resumePath = join(directory, 'checkpoint.json')
+  const checkpointPath = (revision: number) => revision === 0
+    ? resumePath
+    : join(directory, `checkpoint-${revision}.json`)
+  if (id && !(await Bun.file(resumePath).exists())) throw new Error('Durable evaluation checkpoint unavailable in this configuration directory')
   if (!id) await mkdir(directory, { recursive: true, mode: 0o700 })
   let leaseError: Error | undefined
   const release = verifyOnly ? undefined : await lock(directory, {
@@ -33,18 +37,50 @@ export async function openEvaluationLedger(id: string | undefined, verifyOnly: b
     if (verifyOnly) throw new Error('Verification cannot mutate an evaluation ledger')
     if (leaseError) throw new Error('Evaluation ownership was lost', { cause: leaseError })
   }
+  const countReservations = (entries: readonly string[]) => entries.filter(entry => /^send-[1-9]\d*$/.test(entry)).length
   let used = 0
-  try { used = (await readdir(directory)).filter(entry => /^send-[1-9]\d*$/.test(entry)).length }
+  try { used = countReservations(await readdir(directory)) }
   catch (error) { await release?.(); throw error }
+  let revision = id ? 0 : -1
   return {
     id: runId,
-    path: checkpoint.name!,
+    path: resumePath,
     get reservedBackendSends() { return used },
     close: async () => { await release?.() },
-    readCheckpoint: () => checkpoint.json(),
+    async readCheckpoint(): Promise<unknown> {
+      let unreadable: { revision: number; error: unknown } | undefined
+      for (;;) {
+        const entries = await readdir(directory)
+        const latest = entries.reduce((max, entry) => {
+          const entryRevision = Number(CHECKPOINT_REVISION.exec(entry)?.[1])
+          return Number.isSafeInteger(entryRevision) ? Math.max(max, entryRevision) : max
+        }, 0)
+        if (unreadable && latest <= unreadable.revision) throw unreadable.error
+        let report: unknown
+        try {
+          report = await Bun.file(checkpointPath(latest)).json()
+        } catch (error) {
+          // A reader can race with cleanup of a superseded checkpoint. Only
+          // retry when a newer revision exists; reject a corrupt latest file.
+          unreadable = { revision: latest, error }
+          continue
+        }
+        revision = latest
+        if (verifyOnly) used = countReservations(await readdir(directory))
+        return report
+      }
+    },
     async saveCheckpoint(report: object) {
       assertLease()
-      await writeFileAtomicDurable(checkpoint.name!, JSON.stringify(report), { mode: 0o600 })
+      const next = revision + 1
+      // Never advance from a competing writer's progress. Even a process
+      // paused past a lease takeover can only publish its exact next revision.
+      const published = await writeFileAtomicDurableIfAbsent(checkpointPath(next), JSON.stringify(report), { mode: 0o600 })
+      if (!published) throw new Error('Evaluation checkpoint advanced during a lease change; resume again')
+      revision = next
+      // Keep occupied revision names as fences. Only the two newest reports
+      // need their bodies, plus the original resume handle for compatibility.
+      if (next > 2) await truncate(checkpointPath(next - 2), 0).catch(() => {})
     },
     async reserveBackendSend(maxRequests: number) {
       for (let slot = used + 1; slot <= maxRequests; slot++) {

@@ -1,11 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, randomUUID } from 'node:crypto'
 import { isWithinCodexRefreshSkew } from '../../src/constants/codex-oauth.js'
 import { createCodexFetch, requireExactCodexModel } from '../../src/services/api/codex-fetch-adapter.js'
 import { getPoolStatus, loadPoolForObservation, type PoolAccount } from '../../src/services/api/codexAccountPool.js'
 import { createCodexCredentialHandle } from '../../src/services/api/codexCredentialUse.js'
-import type { sideQuery } from '../../src/utils/sideQuery.js'
-import { buildPinnedReviewRequest } from './request.js'
+import { buildSideQueryRequest, type sideQuery } from '../../src/utils/sideQuery.js'
 
 export async function observedAccounts() {
   await loadPoolForObservation()
@@ -38,18 +38,25 @@ export function pinnedCodexTransport(account: PoolAccount, model: string, maxReq
     refreshToken: account.refreshToken, expiresAt: account.expiresAt, credentialGeneration: account.credentialGeneration,
     credentialSource: account.source, credentialPath: account.vaultFilePath })
   const originalFetch = globalThis.fetch
+  const sendReservation = new AsyncLocalStorage<{ available: boolean }>()
   let backendSends = 0
-  const guardedFetch: typeof fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const guardedFetch: typeof fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
     const url = input instanceof Request ? input.url : String(input)
-    if (url !== 'https://chatgpt.com/backend-api/codex/responses') throw new Error('Evaluation blocked an unauthorized network destination')
-    if (new Headers(init?.headers).get('chatgpt-account-id') !== account.accountId) throw new Error('Evaluation blocked an unauthorized account')
-    if (backendSends >= maxRequests) throw new Error('Authorized backend send limit reached')
-    // This local claim is synchronous. A live run additionally requires a
-    // durable cross-process reservation before the network can be reached.
+    if (url !== 'https://chatgpt.com/backend-api/codex/responses') {
+      return Promise.reject(new Error('Evaluation blocked an unauthorized network destination'))
+    }
+    if (new Headers(init?.headers).get('chatgpt-account-id') !== account.accountId) {
+      return Promise.reject(new Error('Evaluation blocked an unauthorized account'))
+    }
+    const reservation = sendReservation.getStore()
+    if (!reservation?.available) {
+      return Promise.reject(new Error('Evaluation blocked a send without an unused reservation'))
+    }
+    reservation.available = false
     backendSends++
-    try { await reserveBackendSend() }
-    catch (error) { backendSends--; throw error }
-    return originalFetch(input, init)
+    // The adapter holds credential-send authority only while invoking this
+    // callback. Native fetch must start in the same synchronous call stack.
+    return originalFetch(input, { ...init, redirect: 'error' })
   }, { preconnect: originalFetch.preconnect })
   globalThis.fetch = guardedFetch
   const client = new Anthropic({ apiKey: 'codex-adapter', maxRetries: 0, timeout: 240_000,
@@ -71,8 +78,21 @@ export function pinnedCodexTransport(account: PoolAccount, model: string, maxReq
     if (options.skipSystemPromptPrefix !== true) throw new Error('Evaluation expects classifier-owned system instructions')
     if (requestsAttempted >= maxRequests) throw new Error('Authorized reviewer request limit reached')
     requestsAttempted++
-    try { return await client.beta.messages.create(buildPinnedReviewRequest(options), { signal: options.signal }) }
-    catch (error) { failures.push(boundedError(error)); throw error }
+    try {
+      options.signal?.throwIfAborted()
+      const request = buildSideQueryRequest(options, 'openai')
+      await reserveBackendSend()
+      options.signal?.throwIfAborted()
+      const reservation = { available: true }
+      try {
+        return await sendReservation.run(reservation, async () => client.beta.messages.create(request, { signal: options.signal }))
+      } finally {
+        reservation.available = false
+      }
+    } catch (error) {
+      failures.push(boundedError(error))
+      throw error
+    }
   }
   return { send, get requestsAttempted() { return requestsAttempted }, get backendSends() { return backendSends }, failures,
     restoreFetch() { if (globalThis.fetch === guardedFetch) globalThis.fetch = originalFetch },
