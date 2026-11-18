@@ -110,6 +110,7 @@ export type AppState = DeepImmutable<{
   // (CompanionSprite in REPL.tsx) can read their own focused state.
   footerSelection: FooterItem | null
   toolPermissionContext: ToolPermissionContext
+  codeModeFirstSessionId?: string
   spinnerTip?: string
   // Agent name from --agent CLI flag or settings (for logo display)
   agent: string | undefined

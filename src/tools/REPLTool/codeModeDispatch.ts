@@ -9,6 +9,8 @@ import { encode } from './runtime/protocol.js'
 import { withCodeModeRead } from '../../utils/fileStateCache.js'
 import { preflightCodeModeInstructions } from './codeModeInstructions.js'
 import type { Attachment } from '../../utils/attachments.js'
+import { hasScriptReadHooks } from '../../utils/hooks.js'
+import { GlobTool } from '../GlobTool/GlobTool.js'
 
 export type CodeModeCall = {
   toolUseId: string
@@ -21,6 +23,17 @@ export type CodeModeCall = {
   error?: string
 }
 export type CodeModeIdentity = { cellId: string; generation: string; line?: number }
+
+const MAX_PARALLEL_READS = 3
+
+function canOverlapGlob(context: ToolUseContext, name: string, input: unknown): boolean {
+  if (name !== GlobTool.name || findToolByName(context.options.tools, name) !== GlobTool) return false
+  const pattern = (input as { pattern?: unknown } | null)?.pattern
+  // Keep the search root in getPath's final-input preflight. Patterns that
+  // can choose another root stay on the ordinary serial path.
+  return typeof pattern === 'string' && !/[/\\:]/.test(pattern) &&
+    !context.nestedMemoryAttachmentTriggers?.size && !hasScriptReadHooks(context)
+}
 
 function projectGuestData(value: unknown, limit: number): { complete: boolean; value?: unknown } {
   try {
@@ -35,6 +48,7 @@ function projectGuestData(value: unknown, limit: number): { complete: boolean; v
 /** A cell-local fail-closed fence. Guest catch only handles ordinary tool errors. */
 export class CodeModeDispatch {
   private tail: Promise<void> = Promise.resolve()
+  private readonly activeReads = new Set<Promise<void>>()
   private fence?: string
   private inputBytes = 0
   private resultBytes = 0
@@ -107,9 +121,9 @@ export class CodeModeDispatch {
   }
 
   /**
-   * Serial dispatch deliberately honors even unsafe tools and context modifiers.
-   * The outer wrapper must not hold an inner scheduler permit. Ordinary failures
-   * never pass through StreamingToolExecutor's Bash sibling-abort branch.
+   * Prepare children in submission order. Only a known read that has passed the
+   * normal effect boundary can release the lane early; everything else drains
+   * those reads before running. No StreamingToolExecutor sibling-abort policy.
    */
   call(name: string, input: unknown, line?: number, nothrow = false): Promise<unknown> {
     if (!name || name.length > MAX_CODE_MODE_TOOL_NAME_CHARS) return Promise.reject(new Error('Tool name exceeds the isolated bridge limit'))
@@ -125,16 +139,28 @@ export class CodeModeDispatch {
     this.inputBytes += inputBytes
     const call: CodeModeCall = { toolUseId: `code_${randomUUID()}`, name, input, status: 'running', ...(line === undefined ? {} : { line }) }
     this.calls.push(call)
-    const operation = this.tail.then(() => this.execute(call, nothrow)).catch(error => {
+    const lane = Promise.withResolvers<void>()
+    const operation = this.tail.then(() => this.execute(call, nothrow, () => {
+      this.activeReads.add(settled)
+      lane.resolve()
+    })).catch(error => {
       if (call.status === 'running') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence ? 'blocked' : 'failed'
       call.error = (error instanceof Error ? error.message : String(error)).slice(0, 2048)
       throw error
     })
-    this.tail = operation.then(() => undefined, () => undefined)
+    const finish = () => {
+      this.activeReads.delete(settled)
+      lane.resolve()
+    }
+    const settled = operation.then(finish, finish)
+    this.tail = lane.promise
     return operation
   }
 
-  async settle(): Promise<void> { await this.tail }
+  async settle(): Promise<void> {
+    await this.tail
+    await Promise.all(this.activeReads)
+  }
 
   private assertCurrentPrincipal(name: string, principal: string) {
     if (this.fence || this.context.abortController.signal.aborted) {
@@ -149,12 +175,20 @@ export class CodeModeDispatch {
     return current
   }
 
-  private async execute(call: CodeModeCall, nothrow: boolean): Promise<unknown> {
+  private async execute(call: CodeModeCall, nothrow: boolean, releaseReadLane: () => void): Promise<unknown> {
     const { name, input, line, toolUseId } = call
+    let canOverlap = false
+    while (!this.fence && !this.context.abortController.signal.aborted) {
+      canOverlap = canOverlapGlob(this.currentContext, name, input)
+      if (!this.activeReads.size) break
+      if (!canOverlap) await Promise.all(this.activeReads)
+      else if (this.activeReads.size >= MAX_PARALLEL_READS) await Promise.race(this.activeReads)
+      else break
+    }
     if (this.fence || this.context.abortController.signal.aborted) {
       throw new Error(this.fence ?? 'Code Mode execution cancelled')
     }
-    const tool = resolveCodeModeTool(this.currentContext, name)
+    const tool = resolveCodeModeTool(this.context, name)
     const dispatchedPrincipal = codeModeToolPrincipal(tool, this.context)
     this.bindPrincipal(name, dispatchedPrincipal)
     if (name !== tool.name) this.bindPrincipal(tool.name, dispatchedPrincipal)
@@ -168,6 +202,8 @@ export class CodeModeDispatch {
     let result: unknown
     let failed = false
     let received = false
+    let preparedGlob: unknown
+    let overlapping = false
     this.context.loadedNestedMemoryPaths ??= new Set()
     return withCodeModeRead(toolUseId, async () => {
     try {
@@ -191,9 +227,21 @@ export class CodeModeDispatch {
           ...this.context, inlineCommand: undefined, preserveToolUseResults: true,
           getCodeModeDispatchFence: () => this.fence ?? (this.context.abortController.signal.aborted ? 'Code Mode execution cancelled' : undefined),
           messages: [...this.context.messages, assistant],
+          onToolExecutionStart: () => {
+            this.context.onToolExecutionStart?.()
+            if (preparedGlob && canOverlapGlob(this.context, name, preparedGlob)) {
+              overlapping = true
+              releaseReadLane()
+            }
+          },
           onToolFinalInput: async (id, finalName, finalInput, executionContext) => {
             if (id !== toolUseId) return
             const current = this.assertCurrentPrincipal(name, dispatchedPrincipal)
+            if (this.activeReads.size &&
+                (!canOverlap || current !== GlobTool || !canOverlapGlob(executionContext, finalName, finalInput))) {
+              await Promise.all(this.activeReads)
+              this.assertCurrentPrincipal(name, dispatchedPrincipal)
+            }
             call.name = finalName
             const bytes = Buffer.byteLength(JSON.stringify(finalInput))
             call.input = bytes <= 64 * 1024 ? finalInput : { omitted: true, reason: 'Final executable input display limit', bytes }
@@ -208,7 +256,10 @@ export class CodeModeDispatch {
               for (const message of instructions) await this.following(message)
               throw new Error(this.fence)
             }
-            this.assertCurrentPrincipal(name, dispatchedPrincipal)
+            const finalTool = this.assertCurrentPrincipal(name, dispatchedPrincipal)
+            if (canOverlap && finalTool === GlobTool && canOverlapGlob(executionContext, finalName, finalInput)) {
+              preparedGlob = finalInput
+            }
           },
         },
       )) {
@@ -309,7 +360,7 @@ export class CodeModeDispatch {
         }
       }
       if (!received) throw new Error('Child execution ended without a result receipt')
-      call.status = this.context.abortController.signal.aborted ? 'cancelled' : failed ? (this.fence ? 'blocked' : 'failed') : 'completed'
+      call.status = this.context.abortController.signal.aborted ? 'cancelled' : failed ? (this.fence && !overlapping ? 'blocked' : 'failed') : 'completed'
       const resultBytes = Buffer.byteLength(JSON.stringify(result))
       call.result = this.resultBytes + resultBytes <= 128 * 1024
         ? result : { omitted: true, reason: 'Cumulative cell display-result limit', bytes: resultBytes }
@@ -317,7 +368,7 @@ export class CodeModeDispatch {
       if (failed && !nothrow) throw new Error(JSON.stringify(result).slice(0, 16_384))
       return result
     } catch (error) {
-      call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence ? 'blocked' : 'failed'
+      call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence && !overlapping ? 'blocked' : 'failed'
       call.error = error instanceof Error ? error.message : String(error)
       throw error
     }

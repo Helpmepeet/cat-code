@@ -1601,6 +1601,15 @@ function hasHookForEvent(
   return false
 }
 
+/** Parallel Script reads require the full set of hook sources to be empty. */
+export function hasScriptReadHooks(context: ToolUseContext): boolean {
+  const state = context.getAppState()
+  const sessionId = context.agentId ?? getSessionId()
+  return (['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest',
+    'PermissionDenied', 'InstructionsLoaded'] as const)
+    .some(event => getHooksConfig(state, sessionId, event).length > 0)
+}
+
 /**
  * Get hook commands that match the given query
  * @param appState The current app state (optional for backwards compatibility)

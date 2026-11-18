@@ -53,6 +53,7 @@ import type {
 } from './types/message.js'
 import { logError } from './utils/log.js'
 import { retryFailedCodeModePublications } from './tools/REPLTool/codeModeHost.js'
+import { codeModeModelTools } from './tools/REPLTool/codeModeModelTools.js'
 import {
   PROMPT_TOO_LONG_ERROR_MESSAGE,
   isPromptTooLongMessage,
@@ -833,6 +834,10 @@ async function* queryLoop(
     }
 
     const assistantMessages: AssistantMessage[] = []
+    const modelTools = codeModeModelTools(
+      toolUseContext.options.tools,
+      !!codeModeHost && !toolUseContext.agentId && appState.codeModeFirstSessionId === getSessionId(),
+    )
     let attemptOutputEscaped = false
     const toolResults: (UserMessage | AttachmentMessage | import('./types/message.js').SystemLocalCommandMessage)[] = []
     // @see https://docs.claude.com/en/docs/build-with-claude/tool-use
@@ -1032,7 +1037,7 @@ async function* queryLoop(
             systemPrompt: instructionAssembly.systemPrompt,
             openAIInstructionAssembly: instructionAssembly.openAIInstructionAssembly,
             thinkingConfig: toolUseContext.options.thinkingConfig,
-            tools: toolUseContext.options.tools,
+            tools: modelTools,
             signal: requestController?.signal ?? toolUseContext.abortController.signal,
             options: {
               async getToolPermissionContext() {

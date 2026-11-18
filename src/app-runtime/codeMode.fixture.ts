@@ -9,6 +9,12 @@ globalThis.fetch = (() => { throw new Error('Network forbidden') }) as unknown a
 ;(globalThis as any).MACRO = { VERSION: 'code-mode-test' }
 const scenario = process.env.CODE_MODE_TEST_SCENARIO ?? 'coding'
 const isInstructions = scenario === 'instructions' || scenario === 'instructions-home'
+const isParallelGlob = scenario.startsWith('parallel-glob')
+if (scenario === 'parallel-glob-fence') {
+  await mkdir('nested')
+  await writeFile('nested/CLAUDE.md', 'PARALLEL-GLOB-INSTRUCTIONS: do not list this directory.')
+  await writeFile('nested/hidden.txt', 'must not be listed')
+}
 const notebookPath = join(root, 'workspace', 'analysis.ipynb')
 const unreadNotebookPath = join(root, 'workspace', 'unread.ipynb')
 if (scenario === 'notebook') {
@@ -66,6 +72,18 @@ const scripts = scenario === 'auto-limit' ? [
 ] : isBackground ? [
   `var retainedBG = "background-state"; await tools.call({name:"Bash",input:{command:${JSON.stringify(backgroundCommand)},work_lifetime:"finite",run_in_background:false}}); output(${JSON.stringify(selectedBackground)});`,
   `output({retained:retainedBG});`,
+] : scenario === 'parallel-glob-fence' ? [
+  `await Promise.allSettled([
+    tools.call({name:"Glob",input:{pattern:"*.txt",path:"nested"}}),
+    tools.call({name:"Glob",input:{pattern:"*.txt"}}),
+    tools.call({name:"Write",input:{file_path:${JSON.stringify(join(process.cwd(), 'forbidden.txt'))},content:"forbidden"}})
+  ]);`,
+] : isParallelGlob ? [
+  `const calls = ["a.txt","fail.txt","b.txt","c.txt"].map(pattern => tools.call({name:"Glob",input:{pattern},nothrow:true}));
+  calls.push(tools.call({name:"Write",input:{file_path:${JSON.stringify(join(process.cwd(), 'created.txt'))},content:"created"}}));
+  calls.push(tools.call({name:"Glob",input:{pattern:"created.txt"}}));
+  const results = await Promise.all(calls);
+  output({failed:results[1].isError, found:results[5].data.filenames});`,
 ] : isInstructions ? [
   `try { await tools.call({name:"Read",input:{file_path:${JSON.stringify(scenario === 'instructions-home' ? '~/workspace/nested/secret.txt' : join(root, 'workspace', 'nested', 'secret.txt'))}}}); } catch(e) { output("caught"); } try { await tools.call({name:"Bash",input:{command:"printf forbidden > forbidden.txt",work_lifetime:"finite",run_in_background:false}}); } catch(e) { output("fenced"); }`,
   `output("instructions received");`,
@@ -84,7 +102,9 @@ mock.module('../services/api/client.js', () => ({
   getAnthropicClient: async () => ({ beta: { messages: { create: (body: any) => {
     modelBodies.push(JSON.parse(JSON.stringify(body)))
     const index = requests++
-    const script = ['skill-same-turn', 'skill-queued'].includes(scenario)
+    const script = scenario === 'code-first'
+      ? index === 0 ? scripts[0] : undefined
+      : ['skill-same-turn', 'skill-queued'].includes(scenario)
       ? index < 2 ? scripts[index] : undefined
       : index % 2 === 0 && !((isBackgroundCompaction || ['background-cancel', 'background-direct'].includes(scenario)) && index === 2) ? scripts[index / 2] : undefined
     const notebookInvocation = index === 0 ? { name: 'Read', input: { file_path: notebookPath } }
@@ -127,6 +147,32 @@ const { BashTool } = await import('../tools/BashTool/BashTool.js')
 const { FileReadTool } = await import('../tools/FileReadTool/FileReadTool.js')
 const { FileWriteTool } = await import('../tools/FileWriteTool/FileWriteTool.js')
 const { FileEditTool } = await import('../tools/FileEditTool/FileEditTool.js')
+const parallelGlobTools = isParallelGlob ? [(await import('../tools/GlobTool/GlobTool.js')).GlobTool] : []
+const globTrace: string[] = []
+let peakGlob = 0
+if (isParallelGlob) {
+  const globModule = await import('../utils/glob.js')
+  const realGlob = globModule.glob
+  const entered = Promise.withResolvers<void>()
+  let active = 0
+  spyOn(globModule, 'glob').mockImplementation(async (...args) => {
+    const [pattern] = args
+    globTrace.push(`start:${pattern}`)
+    peakGlob = Math.max(peakGlob, ++active)
+    if (active === 3) entered.resolve()
+    try {
+      if (scenario === 'parallel-glob' && ['a.txt', 'fail.txt', 'b.txt'].includes(pattern)) {
+        const timer = setTimeout(() => entered.reject(new Error('Glob calls did not overlap')), 3_000)
+        try { await entered.promise } finally { clearTimeout(timer) }
+      }
+      if (pattern === 'fail.txt') throw new Error('Isolated Glob failure')
+      return await realGlob(...args)
+    } finally {
+      active--
+      globTrace.push(`end:${pattern}`)
+    }
+  })
+}
 const { REPLTool } = await import('../tools/REPLTool/REPLTool.js')
 const notebookTools = scenario === 'notebook'
   ? [(await import('../tools/NotebookEditTool/NotebookEditTool.js')).NotebookEditTool]
@@ -155,7 +201,8 @@ if (isBackgroundCompaction) {
   })
 }
 enableConfigs()
-const commands = isSkillCase ? await (await import('../commands.js')).getCommands(process.cwd()) : []
+const commands = isSkillCase || scenario === 'code-first'
+  ? await (await import('../commands.js')).getCommands(process.cwd()) : []
 let state = getDefaultAppState()
 if (isBackgroundQuota) {
   const { getSessionId } = await import('../bootstrap/state.js')
@@ -246,7 +293,7 @@ const session = createQueryEngineAppSession({
     engine = new QueryEngine(config)
     return engine
   },
-  cwd: process.cwd(), tools: [REPLTool, BashTool, FileReadTool, FileWriteTool, FileEditTool, SkillTool, TaskStopTool, ...notebookTools], commands, mcpClients: [], agents: [],
+  cwd: process.cwd(), tools: [REPLTool, BashTool, FileReadTool, FileWriteTool, FileEditTool, SkillTool, TaskStopTool, ...notebookTools, ...parallelGlobTools], commands, mcpClients: [], agents: [],
   getAppState: () => state, setAppState: update => {
     state = update(state)
     if (Object.values(state.tasks).some((task: any) => task.type === 'code_mode' && task.delivery === 'delivered')) backgroundDelivered()
@@ -316,10 +363,15 @@ let sawFence = false
 let fenceEntered!: () => void
 const fenced = new Promise<void>(resolve => { fenceEntered = resolve })
 const unsubscribe = effectsOwner.subscribe(() => { if (effectsOwner.blocked) { sawFence = true; fenceEntered() } })
+if (scenario === 'code-first') await controller.submit('/code-mode on')
 try { await controller.submit('Run the coding fixture.') }
 catch (error) {
   if (scenario !== 'background-delivery-failure' || !(error instanceof Error) || !error.message.includes('Isolated receipt storage failure')) throw error
   storageTurnFailure = error.message
+}
+if (scenario === 'code-first') {
+  await controller.submit('/code-mode off')
+  await controller.submit('Check the ordinary tool surface again.')
 }
 const firstTurnFenced = session.hasUnresolvedToolEffects()
 firstTurnEnded = true
@@ -405,7 +457,7 @@ if (scenario === 'rewind') {
   await next
 } else if (isBackgroundQuota) {
   if (Object.keys(state.tasks).length > 32) await backgroundDelivery
-} else if (scenario !== 'auto-limit' && !['skill-same-turn', 'skill-queued'].includes(scenario) && !storageTurnFailure) {
+} else if (!['auto-limit', 'code-first', 'skill-same-turn', 'skill-queued'].includes(scenario) && !storageTurnFailure) {
   try { await controller.submit('Inspect retained variables.') }
   catch (error) {
     if (scenario !== 'background-delivery-failure' || !(error instanceof Error) || !error.message.includes('Isolated receipt storage failure')) throw error
@@ -440,6 +492,7 @@ const history = transcript as Parameters<typeof normalizeMessagesForAPI>[0]
 const normalized = Object.fromEntries((['firstParty', 'openai'] as const).map(provider =>
   [provider, normalizeMessagesForAPI(history, [REPLTool, BashTool], provider).map(message => message.message)]))
 await writeFile(join(root, 'evidence.json'), JSON.stringify({
+  globTrace, peakGlob,
   selectedBackground, normalized, classifierHistory: buildTranscriptForClassifier(history, [REPLTool, BashTool]),
   compactedLauncher, postCompactionTurnFailure,
   backgroundRewindRefusal, backgroundClearRefusal,

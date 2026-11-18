@@ -54,6 +54,34 @@ test('real-engine Code Mode catches Bash failure, executes the next effect, and 
   })
 }, 35_000)
 
+test('Script overlaps at most three built-in Glob calls, keeps ordinary failures local, and drains before a write', async () => {
+  await withCodingEvidence('parallel-glob', async (evidence, workspace) => {
+    expect(evidence.peakGlob).toBe(3)
+    expect(evidence.globTrace.slice(0, 3)).toEqual(['start:a.txt', 'start:fail.txt', 'start:b.txt'])
+    expect(evidence.globTrace.indexOf('start:c.txt')).toBeGreaterThan(3)
+    expect(evidence.globTrace.at(-2)).toBe('start:created.txt')
+    expect(await readFile(join(workspace, 'created.txt'), 'utf8')).toBe('created')
+    const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
+    expect(result.status).toBe('completed')
+    expect(result.calls.map((call: any) => call.status)).toEqual(['completed', 'failed', 'completed', 'completed', 'completed', 'completed'])
+    expect(JSON.parse(result.output.split('\n\n[Code Mode]')[0])).toEqual({ failed: true, found: ['created.txt'] })
+    const audit = evidence.transcript.filter((message: any) => message.codeMode)
+    const writeStart = audit.findIndex((message: any) => message.type === 'assistant' && message.message.content[0].name === 'Write')
+    expect(audit.slice(0, writeStart).filter((message: any) => message.type === 'user')).toHaveLength(4)
+  })
+}, 35_000)
+
+test('final-input instructions fence queued Glob and Write calls before their effects', async () => {
+  await withCodingEvidence('parallel-glob-fence', async evidence => {
+    expect(evidence.globTrace).toEqual([])
+    expect(evidence.forbidden).toBeNull()
+    const result = evidence.transcript.find((message: any) => message.toolUseResult?.kind === 'code-mode').toolUseResult
+    expect(result.status).toBe('yielded')
+    expect(result.calls.map((call: any) => call.status)).toEqual(['blocked', 'blocked', 'blocked'])
+    expect(JSON.stringify(evidence.modelBodies)).toContain('PARALLEL-GLOB-INSTRUCTIONS')
+  })
+}, 35_000)
+
 test('partial Code Mode receipt lists the real notebook edit and excludes the failed one', async () => {
   await withCodingEvidence('notebook', async (evidence, workspace) => {
     const notebookPath = join(workspace, 'analysis.ipynb')
@@ -65,5 +93,21 @@ test('partial Code Mode receipt lists the real notebook edit and excludes the fa
       calls: [{ name: 'NotebookEdit', status: 'completed' }, { name: 'NotebookEdit', status: 'failed' }],
       changedFiles: [{ path: notebookPath }],
     })
+  })
+}, 35_000)
+
+test('/code-mode changes model declarations but Script retains the real coding tools', async () => {
+  await withCodingEvidence('code-first', async (evidence, workspace) => {
+    const names = evidence.modelBodies.map((body: { tools: { name: string }[] }) =>
+      body.tools.map(tool => tool.name))
+    expect(names).toHaveLength(3)
+    for (const request of names.slice(0, 2)) {
+      expect(request).toContain('REPL')
+      expect(request).toContain('TaskStop')
+      for (const name of ['Bash', 'Read', 'Write', 'Edit']) expect(request).not.toContain(name)
+    }
+    for (const name of ['Bash', 'Read', 'Write', 'Edit', 'REPL']) expect(names[2]).toContain(name)
+    expect(await readFile(join(workspace, 'sample.txt'), 'utf8')).toBe('after\n')
+    expect(await readFile(join(workspace, 'survived.txt'), 'utf8')).toBe('survived')
   })
 }, 35_000)
