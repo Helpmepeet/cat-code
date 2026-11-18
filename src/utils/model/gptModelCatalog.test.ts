@@ -60,7 +60,7 @@ describe('Exact Codex release facts', () => {
       id: 'gpt-6.2-astra',
       publicDisplay: 'GPT 6.2 Astra',
       marketingName: 'GPT-6.2 Astra',
-      window: 272_000,
+      window: 500_000,
       defaultEffort: undefined,
       supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
     },

@@ -260,7 +260,7 @@ describe('long-context entitlement clamp', () => {
     noteLongContextEntitlementRefused()
 
     for (const [model, window] of [
-      ['gpt-6.2-astra', 272_000],
+      ['gpt-6.2-astra', 500_000],
       ['gpt-6.2-sol', 500_000],
       ['gpt-6-luna', 1_050_000],
     ] as const) {
@@ -273,7 +273,7 @@ describe('long-context entitlement clamp', () => {
   })
 
   test.each([
-    ['gpt-6.2-astra', 272_000],
+    ['gpt-6.2-astra', 500_000],
     ['gpt-6.2-sol', 500_000],
   ] as const)('%s keeps its native context window with a [1m] pin', (model, window) => {
     expect(getContextWindowForModel(model + '[1m]')).toBe(window)

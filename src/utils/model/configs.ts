@@ -189,7 +189,7 @@ const CODEX_FAMILIES = {
       pickerDescription: 'Most capable for complex work',
       pickerDetail: 'Most capable GPT model for complex work',
       agentDescription: 'Most capable GPT model for complex work',
-      context: codexWindow(272_000),
+      context: codexWindow(500_000),
       efforts: codexUltra,
       minimalOnWire: 'low',
       maxOnWire: 'max',

@@ -112,8 +112,8 @@ describe('autoCompact thresholds', () => {
     expect(getAutoCompactThreshold('gpt-5.6-sol')).toBe(900_000)
   })
 
-  test('compacts GPT-6.2 using the Codex default windows and Cat Code headroom', () => {
-    expect(getAutoCompactThreshold('gpt-6.2-astra')).toBe(228_840)
+  test('compacts GPT-6.2 Astra and Sol at the same threshold', () => {
+    expect(getAutoCompactThreshold('gpt-6.2-astra')).toBe(438_600)
     expect(getAutoCompactThreshold('gpt-6.2-sol')).toBe(438_600)
   })
 
