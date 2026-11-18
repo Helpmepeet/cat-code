@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../Tool.js'
-import type { AssistantMessage } from '../types/message.js'
+import type { AssistantMessage, CodeModeMetadata } from '../types/message.js'
 import type { PermissionDecision } from '../utils/permissions/PermissionResult.js'
 import {
   permissionPromptToolResultToPermissionDecision,
@@ -19,9 +19,12 @@ import type {
   AppPermissionResponse,
 } from './sessionEvents.js'
 
+export type BackgroundScriptApprovalOwner = Pick<CodeModeMetadata, 'cellId' | 'generation'>
+
 export type AppPermissionRequestHandler = (
   request: AppPermissionRequest,
   signal?: AbortSignal,
+  backgroundScript?: BackgroundScriptApprovalOwner,
 ) => Promise<AppPermissionResponse>
 
 export type AppRuntimeCanUseToolOptions = {
@@ -79,6 +82,10 @@ export function createAppRuntimeCanUseTool({
     }
 
     const updatedInput = permissionResult.updatedInput ?? input
+    // This owner is for work accounting inside the controller, outside the wire request.
+    const backgroundScript = toolUseContext.codeModeBackgroundCell && assistantMessage.isVirtual
+      ? assistantMessage.codeMode
+      : undefined
     const result = await handler({
       requestId: createRequestId(),
       request: {
@@ -91,7 +98,7 @@ export function createAppRuntimeCanUseTool({
         tool_use_id: toolUseID,
         agent_id: toolUseContext.agentId,
       },
-    }, toolUseContext.abortController?.signal)
+    }, toolUseContext.abortController?.signal, backgroundScript)
 
     const decision = permissionPromptToolResultToPermissionDecision(
       normalizePermissionResponse(result, updatedInput, toolUseID),

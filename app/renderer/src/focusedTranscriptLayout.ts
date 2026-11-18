@@ -2,7 +2,7 @@ import { backgroundAgentState, focusedCallLine, isDeclinedQuestion, type Focused
 import { isPeerSpeechCall } from './peerSurfaces.js'
 import type { NestedToolUseRow, NestedTranscriptRow, ToolFamily } from './transcriptProjector.js'
 import { deriveToolFamily } from './transcriptProjector.js'
-import { codeModeCallCompleted, codeModeInput } from './codeMode.js'
+import { codeModeCallCompleted, codeModeForRow, codeModeInput, type CodeModeEnvelope } from './codeMode.js'
 import { codeModeLiveView } from './codeModeLiveView.js'
 import { patchFilePaths, toolCardFilePath } from './transcriptToolTarget.js'
 import { selectToolDiffs } from './toolDiffs.js'
@@ -68,11 +68,15 @@ export function latestComputerScreenshot(rows: readonly NestedTranscriptRow[]): 
   return null
 }
 
-/** A settled stretch of exactly one call is named by its line instead of counted. */
+const runningDetachedScript = (cell: CodeModeEnvelope | undefined): boolean =>
+  cell?.status === 'running' && !!cell.taskId
+
+/** A single settled or detached call uses its own line instead of a count. */
 export function focusedNamedCall(rows: readonly NestedTranscriptRow[], ctx: Omit<FocusedCallContext, 'signalled'>): { line: FocusedCallLine; toolUseId: string } | null {
   const calls = rows.filter(row => row.kind === 'tool-use')
   const call = calls[0]
-  if (calls.length !== 1 || call?.kind !== 'tool-use' || call.status === 'pending') return null
+  if (calls.length !== 1 || call?.kind !== 'tool-use' ||
+      call.status === 'pending' && !runningDetachedScript(codeModeForRow(call))) return null
   return { line: focusedCallLine(call, { ...ctx, signalled: false }), toolUseId: call.toolUseId }
 }
 
@@ -98,12 +102,9 @@ export function summarizeFocusedWork(rows: readonly NestedTranscriptRow[]): Focu
     if (row.kind !== 'tool-use' || isPeerSpeechCall(row.toolName)) continue
     const cell = codeModeLiveView(row)
     if ((cell && cell.cellId === row.toolUseId) || row.toolName === 'REPL') {
-      const calls = cell?.calls ?? row.children.flatMap(child => child.kind === 'tool-use' ? [{
-        toolUseId: child.toolUseId, name: child.toolName, input: child.input, status: isBlocked(child) ? 'blocked' : child.status,
-        ...(child.result?.isError ? { error: child.result.content } : {}),
-      }] : [])
+      const calls = cell?.calls ?? []
       toolCalls += calls.filter(codeModeCallCompleted).length
-      if (row.status === 'pending' && activeCall === null) activeCall = { toolUseId: row.toolUseId, target: cell?.description ?? (typeof row.input.description === 'string' ? row.input.description : 'Script') }
+      if (row.status === 'pending' && !runningDetachedScript(cell) && activeCall === null) activeCall = { toolUseId: row.toolUseId, target: cell?.description ?? (typeof row.input.description === 'string' ? row.input.description : 'Script') }
       let innerErrors = 0, innerBlocked = 0, innerStopped = 0
       for (const call of calls) {
         if (call.status === 'blocked') innerBlocked++

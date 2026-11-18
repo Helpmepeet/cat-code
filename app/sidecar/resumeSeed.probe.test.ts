@@ -369,10 +369,10 @@ test('PR1: a loader rejection releases ownership while the failed reader stays a
 test('F1/F2 projection wiring: archival display replay preserves the exact visible engine-seed tail', () => {
   // Source-level guarantee (mainSource.test idiom): model context is seeded
   // only from resumedMessages. Display history is loaded separately, then the
-  // visible resumedMessages projection replaces its aligned tail byte-for-byte.
+  // visible engine seed, including recovery outcomes, replaces its aligned tail.
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
   expect(source).toContain('initialMessages: resumedMessages')
-  expect(source).toContain('projectCurrentDisplayHistory(resumedMessages)')
+  expect(source).toContain('projectCurrentDisplayHistory(controller.getMessages() ?? resumedMessages, true)')
   expect(source).toContain('projectResumedHistory(retainedMessages)')
   expect(source).toContain('loadDisplayTranscriptFromJsonlPath(')
   expect(source).toContain('mergeDisplayHistoryWithSeed(')

@@ -40,9 +40,12 @@ export type SidecarTasksDomain = {
   subscribe(listener: () => void): () => void
 }
 
+type TaskPermissionController = Pick<AppSessionController,
+  'isTurnActive' | 'getPendingAgentPermissionRequests' | 'getPendingBackgroundScriptApprovals'>
+
 export function createSidecarTasksDomain(
   appStateStore: AppStateStore,
-  controller?: Pick<AppSessionController, 'isTurnActive' | 'getPendingAgentPermissionRequests' | 'subscribe'>,
+  controller?: TaskPermissionController & Pick<AppSessionController, 'subscribe'>,
 ): SidecarTasksDomain {
   const getSnapshot = (): TasksSnapshot => {
     const state = appStateStore.getState()
@@ -60,7 +63,7 @@ export function createSidecarTasksDomain(
       const state = appStateStore.getState()
       const pending = controller?.getPendingAgentPermissionRequests() ?? []
       const actors = new Set(pending.map(({ request }) => request.agent_id ?? ''))
-      return deriveUnfinishedTaskFacts(state.tasks, actors)
+      return deriveUnfinishedTaskFacts(state.tasks, actors, controller?.getPendingBackgroundScriptApprovals())
     },
     hasLiveWork() {
       // Explicit type (the same `tasksSnapshot` accepts) so `Object.values`
@@ -90,9 +93,10 @@ export function createSidecarTasksDomain(
 
 function hasOperationalWork(
   tasks: Record<string, TaskState>,
-  controller: Pick<AppSessionController, 'isTurnActive' | 'getPendingAgentPermissionRequests'>,
+  controller: TaskPermissionController,
 ): boolean {
   const pending = controller.getPendingAgentPermissionRequests()
+  const blockedScripts = controller.getPendingBackgroundScriptApprovals()
   const blockedActors = new Set(pending.flatMap(({ request }) => request.agent_id ? [request.agent_id] : []))
   const live = Object.entries(tasks).filter(([, task]) =>
     (task.status === 'running' || task.status === 'pending' || hasUnfinishedCodeModeTask(task)) && !isMainSessionTask(task))
@@ -100,8 +104,8 @@ function hasOperationalWork(
     task.type !== 'local_agent' || !blockedActors.has(task.agentId)))
   const standalone = live.some(([, task]) =>
     task.type === 'local_bash' && task.kind !== 'monitor' || task.type === 'dream' ||
-    (task.type === 'code_mode' && hasUnfinishedCodeModeTask(task) && !pending.some(({ request }) =>
-      request.agent_id === task.owner.agentId)))
+    (task.type === 'code_mode' && hasUnfinishedCodeModeTask(task) && !blockedScripts.some(owner =>
+      owner.cellId === task.cellId && owner.generation === task.generation)))
   // A foreground tool owns the parent turn until it settles. Count that tool,
   // not the parent's still-active flag, while its worker awaits permission.
   const foreground = live.some(([, task]) =>

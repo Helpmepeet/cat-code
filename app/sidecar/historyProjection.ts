@@ -9,6 +9,7 @@ import {
 import { toSDKMessages } from '../../src/utils/messages/mappers.js'
 import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { RECOVERY_WARNING } from '../../src/utils/transcriptTailRecovery.js'
+import { restoreCodeModeHistory } from '../../src/tools/REPLTool/codeModeRestoration.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { isHandoffUuid } from '../shared/workspaceHandoff.js'
 
@@ -88,7 +89,7 @@ function restoreQueuedMessageRow(message: Message): Message {
  * but are not assistant-authored content. Explicit provenance plus the legacy
  * API-error shape keeps genuine assistant text with identical words visible.
  */
-export function projectResumedHistory(messages: Message[]): SDKMessage[] {
+export function projectResumedHistory(messages: readonly Message[]): SDKMessage[] {
   // A saved user entry wins if a historical transcript contains both forms.
   // Only reconstructed rows are deduplicated; ordinary SDK mapping is intact.
   const userUuids = new Set(
@@ -144,6 +145,7 @@ export function projectResumedHistory(messages: Message[]): SDKMessage[] {
 export function mergeDisplayHistoryWithSeed(
   displayMessages: Message[],
   seedHistory: SDKMessage[],
+  coldSeed?: readonly Message[],
 ): { history: SDKMessage[]; truncated: boolean } {
   const displayHistory = projectResumedHistory(displayMessages)
   if (seedHistory.length === 0) {
@@ -177,8 +179,26 @@ export function mergeDisplayHistoryWithSeed(
     }
   }
   if (prefixLength < 0) return { history: seedHistory, truncated: true }
-  return {
-    history: [...displayHistory.slice(0, prefixLength), ...seedHistory],
-    truncated: false,
+  const prefix = displayHistory.slice(0, prefixLength)
+  const history = [...prefix, ...seedHistory]
+  if (coldSeed === undefined || !prefix.some(message => message.type === 'assistant' &&
+      message.message.content.some(block => isRecord(block) && block.type === 'tool_use' && block.name === 'REPL'))) {
+    return { history, truncated: false }
   }
+
+  // On process startup only, an unfinished Script can appear in the archive
+  // outside the engine's compacted seed. Recover just the displayed history,
+  // including seed completions so an existing result always wins.
+  const retainedArchive = new Set(prefix.map(message => message.uuid))
+  const sources = [...displayMessages.filter(message => retainedArchive.has(message.uuid)), ...coldSeed]
+  const restored = restoreCodeModeHistory(sources, {}, { includeRuntimeReset: false })
+  if (restored === sources) return { history, truncated: false }
+  const recovery = new Map(projectResumedHistory(restored.filter((message, index) => message !== sources[index]))
+    .map(message => [message.uuid, message]))
+  const reconciled = history.map(message => {
+    const replacement = recovery.get(message.uuid)
+    recovery.delete(message.uuid)
+    return replacement ?? message
+  })
+  return { history: [...reconciled, ...recovery.values()], truncated: false }
 }

@@ -197,7 +197,8 @@ type SidecarArgs = {
 }
 
 async function projectCurrentDisplayHistory(
-  retainedMessages: Message[],
+  retainedMessages: readonly Message[],
+  coldResume = false,
 ): Promise<{
   history: ReturnType<typeof projectResumedHistory>
   truncated: boolean
@@ -213,6 +214,7 @@ async function projectCurrentDisplayHistory(
   const merged = mergeDisplayHistoryWithSeed(
     display.messages,
     seedHistoryEvents,
+    coldResume ? retainedMessages : undefined,
   )
   displayEnd()
   const restored = await timing.span(activeTimingIdentity, 'subagent_history', () => withRestoredSubagentHistory(
@@ -596,7 +598,7 @@ async function main(): Promise<void> {
   let historySourceTruncated = false
   let unavailableParentToolUseIds: string[] = []
   if (resumedMessages !== undefined) {
-    const projected = await projectCurrentDisplayHistory(resumedMessages)
+    const projected = await projectCurrentDisplayHistory(controller.getMessages() ?? resumedMessages, true)
     const recovery = resumed?.tailRecovery
     if (recovery?.reviewRequired &&
         (!projected.history.some(message => message.uuid === recovery.warningUuid) ||

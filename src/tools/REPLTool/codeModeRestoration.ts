@@ -1,15 +1,34 @@
-import type { Message } from '../../types/message.js'
+import type { Message, UserMessage } from '../../types/message.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { createUserMessage } from '../../utils/messages.js'
+import { toTaskNotificationOrigin } from '../../utils/taskNotification.js'
+import { codeModeChangedFilePaths } from './codeModeChangedFiles.js'
 import type { CodeModeResult } from './codeModeHost.js'
 
+const UNKNOWN_OUTCOME = 'This runtime incarnation does not own or continue the prior background execution, which has no terminal receipt here. Its final outcome is unknown; recorded completed effects remain valid. No continuation was resumed or replayed.'
+
+function unknownOutcomeOrigin(result: CodeModeResult) {
+  return toTaskNotificationOrigin({
+    summary: 'Background Script outcome unknown',
+    status: 'failed',
+    taskType: 'code_mode',
+    taskId: result.taskId,
+    toolUseId: result.cellId,
+  })
+}
+
 /** Reconstructs outcome evidence, never interpreter state or executable continuations. */
-export function restoreCodeModeHistory(messages: Message[], tasks: ReturnType<ToolUseContext['getAppState']>['tasks']): Message[] {
+export function restoreCodeModeHistory(
+  messages: Message[],
+  tasks: ReturnType<ToolUseContext['getAppState']>['tasks'],
+  { includeRuntimeReset = true }: { includeRuntimeReset?: boolean } = {},
+): Message[] {
   const calls = new Map<string, { uuid: string; name: string }>()
   for (const message of messages) if (message.type === 'assistant') {
     for (const block of message.message.content) if (block.type === 'tool_use') calls.set(block.id, { uuid: message.uuid, name: block.name })
   }
   const latest = new Map<string, { result: CodeModeResult; source: string }>()
+  const converted = new Map<Message, UserMessage>()
   for (const message of messages) {
     if (message.type !== 'user' || message.isVirtual || !message.sourceToolAssistantUUID) continue
     const data = message.toolUseResult
@@ -19,7 +38,14 @@ export function restoreCodeModeHistory(messages: Message[], tasks: ReturnType<To
         !('changedFiles' in data) || !Array.isArray(data.changedFiles)) continue
     const parent = calls.get(data.cellId)
     if (parent?.name !== 'REPL' || parent.uuid !== message.sourceToolAssistantUUID) continue
-    latest.set(data.cellId, { result: data as CodeModeResult, source: parent.uuid })
+    const result = data as CodeModeResult
+    latest.set(JSON.stringify([result.cellId, result.generation, result.taskId ?? null]), { result, source: parent.uuid })
+    // A previous incarnation may have persisted its recovery before it carried
+    // structured task provenance. Preserve the old message identity.
+    if (result.taskId && result.status === 'failed' && result.error === UNKNOWN_OUTCOME &&
+        message.isMeta && message.origin === undefined && message.message.content === result.output) {
+      converted.set(message, { ...message, origin: unknownOutcomeOrigin(result) })
+    }
   }
   if (!latest.size) return messages
   const additions: Message[] = []
@@ -29,6 +55,7 @@ export function restoreCodeModeHistory(messages: Message[], tasks: ReturnType<To
       'type' in task && task.type === 'code_mode' &&
       'cellId' in task && task.cellId === result.cellId &&
       'generation' in task && task.generation === result.generation &&
+      (!result.taskId || task.id === result.taskId) &&
       'delivery' in task && task.delivery !== 'delivered')
     if (live) continue
     const auditCalls = new Map(result.calls.map(call => [call.toolUseId, { ...call }]))
@@ -44,25 +71,29 @@ export function restoreCodeModeHistory(messages: Message[], tasks: ReturnType<To
         const call = auditCalls.get(block.tool_use_id)
         if (!call || calls.get(block.tool_use_id)?.uuid !== message.sourceToolAssistantUUID) continue
         call.status = block.is_error ? 'failed' : 'completed'
-        const data = message.toolUseResult
-        if (!block.is_error && ['Edit', 'Write', 'NotebookEdit', 'apply_patch'].includes(call.name) && data && typeof data === 'object') {
-          if ('filePath' in data && typeof data.filePath === 'string') changedFiles.set(data.filePath, { path: data.filePath })
-          if ('files' in data && Array.isArray(data.files)) for (const file of data.files) if (file && typeof file.path === 'string') changedFiles.set(file.path, { path: file.path })
+        if (!block.is_error) {
+          for (const path of codeModeChangedFilePaths(call.name, message.toolUseResult)) {
+            changedFiles.set(path, { path })
+          }
         }
       }
     }
-    const error = 'This runtime incarnation does not own or continue the prior background execution, which has no terminal receipt here. Its final outcome is unknown; recorded completed effects remain valid. No continuation was resumed or replayed.'
     const restored: CodeModeResult = {
-      ...result, status: 'failed', error,
-      output: `[Code Mode] Prior background execution is no longer owned. ${error}`,
+      ...result, status: 'failed', error: UNKNOWN_OUTCOME,
+      output: `[Code Mode] Prior background execution is no longer owned. ${UNKNOWN_OUTCOME}`,
       calls: [...auditCalls.values()].map(call => call.status === 'running' ? { ...call, status: 'failed', error: 'Outcome unknown in this runtime incarnation; effects may have occurred' } : call),
       changedFiles: [...changedFiles.values()],
     }
-    additions.push(createUserMessage({ content: restored.output, isMeta: true, toolUseResult: restored, sourceToolAssistantUUID: source as `${string}-${string}-${string}-${string}-${string}` }))
+    additions.push(createUserMessage({
+      content: restored.output, isMeta: true, toolUseResult: restored,
+      ...(restored.taskId ? { origin: unknownOutcomeOrigin(restored) } : {}),
+      sourceToolAssistantUUID: source as `${string}-${string}-${string}-${string}-${string}`,
+    }))
   }
-  additions.push(createUserMessage({
+  if (includeRuntimeReset) additions.push(createUserMessage({
     content: '[Code Mode] A new runtime incarnation has empty interpreter variables and functions. Prior scripts were not replayed, and no prior background continuation was resumed. Retained audit and file-change receipts are historical evidence, not live interpreter state.',
     isMeta: true,
   }))
-  return [...messages, ...additions]
+  if (!converted.size && !additions.length) return messages
+  return [...(converted.size ? messages.map(message => converted.get(message) ?? message) : messages), ...additions]
 }

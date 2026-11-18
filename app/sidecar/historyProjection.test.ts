@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { UUID } from 'node:crypto'
 import { compactResumeFixture } from '../../src/utils/conversationRecovery.fixture.js'
 import { deserializeMessagesWithInterruptDetection } from '../../src/utils/conversationRecovery.js'
 import { createAttachmentMessage, getQueuedCommandAttachments } from '../../src/utils/attachments.js'
@@ -17,8 +18,60 @@ import {
 import { RECOVERY_WARNING, RECOVERY_CONTEXT } from '../../src/utils/transcriptTailRecovery.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import { createTranscriptState, projectServerFrames, selectTranscriptRows } from '../renderer/src/transcriptProjector.js'
+import { restoreCodeModeHistory } from '../../src/tools/REPLTool/codeModeRestoration.js'
 
 describe('restored history projection', () => {
+  test('replays an unknown background Script outcome against its original task and retains the notebook effect', () => {
+    const notebookPath = '/repo/analysis.ipynb'
+    const cellId = 'script'
+    const generation = 'original-runtime'
+    const taskId = 'script-task'
+    const input = { code: 'await tools.call({name:"NotebookEdit", input:{}})', description: 'Update notebook', run_in_background: true }
+    const outer = createAssistantMessage({
+      content: [{ type: 'tool_use', id: cellId, name: 'REPL', input }],
+    })
+    const launch = createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: cellId, content: 'Background started' }],
+      sourceToolAssistantUUID: outer.uuid as UUID,
+      toolUseResult: { kind: 'code-mode', cellId, generation, taskId, ...input, status: 'running', output: 'Background started', calls: [], changedFiles: [] },
+    })
+    const child = { ...createAssistantMessage({
+      content: [{ type: 'tool_use', id: 'child', name: 'NotebookEdit', input: { notebook_path: notebookPath } }],
+      isVirtual: true,
+    }), codeMode: { cellId, generation, line: 1 } }
+    const result = { ...createUserMessage({
+      content: [{ type: 'tool_result', tool_use_id: 'child', content: 'Updated notebook' }],
+      sourceToolAssistantUUID: child.uuid as UUID,
+      isVirtual: true,
+      toolUseResult: { notebook_path: notebookPath, error: '' },
+    }), codeMode: { cellId, generation } }
+    const retained = createUserMessage({ content: 'Continue after the Script launch' })
+    const archived = [outer, launch, child, result, retained]
+    for (const rawSeed of [archived, [retained]]) {
+      // The launch may be retained by the engine or visible only in the
+      // archival prefix after compaction.
+      const seed = restoreCodeModeHistory(rawSeed, {})
+      const { history, truncated } = mergeDisplayHistoryWithSeed(archived, projectResumedHistory(seed), seed)
+      expect(truncated).toBe(false)
+      expect(history.filter(message => message.type === 'user' && message.origin?.kind === 'task-notification')).toHaveLength(1)
+      const sessionId = 'script-crash-replay'
+      const state = projectServerFrames(createTranscriptState(), [{
+        kind: 'ready', protocolVersion: PROTOCOL_VERSION, sessionId, engineSessionId: 'script-engine',
+        payload: { type: 'app.ready', protocolVersion: 1, activeTurn: false, inputEnabled: true, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [] },
+      }, ...history.map(message => ({
+        kind: 'event' as const, protocolVersion: PROTOCOL_VERSION, sessionId, replay: true as const,
+        event: { type: 'message' as const, message },
+      })), { kind: 'history.replay.complete', protocolVersion: PROTOCOL_VERSION, sessionId }])
+      const script = selectTranscriptRows(state, sessionId).find(row => row.kind === 'tool-use' && row.toolName === 'REPL')
+      expect(script).toMatchObject({
+        status: 'error', result: { codeMode: {
+          cellId, generation, taskId, status: 'failed', error: expect.stringContaining('final outcome is unknown'),
+          calls: [{ toolUseId: 'child', status: 'completed' }], changedFiles: [{ path: notebookPath }],
+        } },
+      })
+    }
+  })
+
   test('stored tail disclosure renders once in order with its stable UUID, not as a new model prompt', () => {
     const before = createUserMessage({ content: 'saved progress' })
     const warning = createSystemMessage(RECOVERY_WARNING, 'warning', undefined, true)

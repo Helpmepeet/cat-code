@@ -3,7 +3,7 @@ import { BoundedChildList } from './BoundedChildList.js'
 import { ToolOutputContext } from './toolOutputPanel.js'
 import { ToolCardStyleContext } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
-import { codeModeForRow, codeModeDigest, codeModeStepDigest, type CodeModeCall, type CodeModeEnvelope } from './codeMode.js'
+import { codeModeForRow, codeModeDigest, codeModeStepDigest, type CodeModeCall } from './codeMode.js'
 import { codeModeLiveView } from './codeModeLiveView.js'
 import type { NestedToolUseRow } from './transcriptProjector.js'
 import { codeModeChildView } from './codeModeChildView.js'
@@ -26,19 +26,7 @@ function CodeModeGroup({ id, selected, errors, label, digest, issue, family, onS
 }
 
 export const CodeModeCard = memo(function CodeModeCard({ row, renderChild, renderCall, waitingForApproval = false }: { row: NestedToolUseRow; renderChild: (row: NestedToolUseRow['children'][number]) => ReactNode; renderCall?: (row: NestedToolUseRow) => ReactNode; waitingForApproval?: boolean }) {
-  const cell = useMemo<CodeModeEnvelope | undefined>(() => {
-    const audit = codeModeLiveView(row)
-    if (audit) return audit
-    if (row.result) return undefined
-    const calls = row.children.flatMap(child => child.kind === 'tool-use' ? [{
-      toolUseId: child.toolUseId, name: child.toolName, input: child.input,
-      status: child.status, line: child.codeMode?.line,
-      ...(child.result?.isError ? { error: child.result.content } : {}),
-    }] : [])
-    if (!calls.length) return undefined
-    return { kind: 'code-mode', cellId: row.toolUseId, generation: '', description: typeof row.input.description === 'string' ? row.input.description : 'Script',
-      code: typeof row.input.code === 'string' ? row.input.code : '', status: 'running', output: '', calls, changedFiles: [] }
-  }, [row.result, row.children, row.input, row.toolUseId, row.toolName, row.sessionId])
+  const cell = codeModeLiveView(row)
   const open = useContext(ToolOutputContext)
   const selection = useCodeModeSelection(row.sessionId, row.toolUseId)
   const style = useContext(ToolCardStyleContext)

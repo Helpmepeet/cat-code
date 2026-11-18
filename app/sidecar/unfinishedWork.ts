@@ -1,4 +1,5 @@
 import { isMainSessionTask } from '../../src/tasks/LocalMainSessionTask.js'
+import type { BackgroundScriptApprovalOwner } from '../../src/app-runtime/appRuntimeCanUseTool.js'
 
 export type UnfinishedTaskFacts = {
   available: boolean
@@ -22,7 +23,8 @@ type RuntimeTask = {
   shutdownRequested?: unknown
   settled?: unknown
   delivery?: unknown
-  owner?: { agentId?: unknown }
+  cellId?: unknown
+  generation?: unknown
 }
 
 /** A terminal receipt still owns work until durable delivery succeeds. */
@@ -37,6 +39,7 @@ export function hasUnfinishedCodeModeTask(task: RuntimeTask): boolean {
 export function deriveUnfinishedTaskFacts(
   tasks: Record<string, unknown> | undefined,
   permissionActorIds: ReadonlySet<string> = new Set(),
+  blockedScripts: readonly BackgroundScriptApprovalOwner[] = [],
 ): UnfinishedTaskFacts {
   if (!tasks || typeof tasks !== 'object' || Array.isArray(tasks)) {
     return {
@@ -58,9 +61,9 @@ export function deriveUnfinishedTaskFacts(
     const task = value as RuntimeTask
     if (hasUnfinishedCodeModeTask(task)) {
       activeBackgroundTasks++
-      const actorId = task.owner?.agentId
-      if ((typeof actorId === 'string' && permissionActorIds.has(actorId)) ||
-        (actorId === undefined && permissionActorIds.has(''))) waitingForApproval = true
+      if (blockedScripts.some(owner => owner.cellId === task.cellId && owner.generation === task.generation)) {
+        waitingForApproval = true
+      }
       continue
     }
     if (task.status === 'completed' || task.status === 'failed' || task.status === 'killed') continue

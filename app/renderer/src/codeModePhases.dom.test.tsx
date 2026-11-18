@@ -5,6 +5,7 @@ import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
 import { createTranscriptState, projectServerFrames, selectFocusedLiveState, selectNestedTranscriptRows, selectTranscriptRows } from './transcriptProjector.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import { TranscriptModeContext } from './transcriptMode.js'
+import { ToolInspector } from './ToolInspector.js'
 
 let harness: DomTestHarness
 beforeAll(async () => { harness = await createDomTestHarness() })
@@ -27,15 +28,16 @@ function fixture(sessionId: string) {
     review() { event({ type: 'tool.review', toolUseId: 'script', attemptId: 'phase-review', outcome: 'reviewing', startedAt: 1000 }) },
     approval(toolUseId = 'script') { event({ type: 'permission.requested', request: { requestId: `approval-${toolUseId}`, request: { subtype: 'can_use_tool', tool_use_id: toolUseId, tool_name: toolUseId === 'script' ? 'REPL' : 'Read', input: toolUseId === 'script' ? { code } : { file_path: '/repo/a' } } } }) },
     child() { message({ type: 'assistant', isVirtual: true, code_mode: { cellId: 'script', generation: 'phase-generation', line: 1 }, message: { id: 'phase-child', role: 'assistant', content: [{ type: 'tool_use', id: 'inner', name: 'Read', input: { file_path: '/repo/a' } }] } }) },
-    receipt(status: 'running' | 'completed' | 'failed') { message({ type: 'user', tool_use_result: { kind: 'code-mode', cellId: 'script', generation: 'phase-generation', code, description: 'Inspect phases', status, calls: [], changedFiles: [], output: '', ...(status === 'failed' ? { error: 'SyntaxError: invalid script' } : {}) }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'script', content: 'Selected output' }] } }) },
+    receipt(status: 'running' | 'completed' | 'failed', taskId?: string) { message({ type: 'user', tool_use_result: { kind: 'code-mode', cellId: 'script', generation: 'phase-generation', code, description: 'Inspect phases', status, calls: [], changedFiles: [], output: '', ...(taskId ? { taskId } : {}), ...(status === 'failed' ? { error: 'SyntaxError: invalid script' } : {}) }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'script', content: 'Selected output' }] } }) },
+    finishTurn() { message({ type: 'result', subtype: 'success', is_error: false, errors: [], duration_ms: 100 }) },
     rows: () => selectNestedTranscriptRows(state, sessionId),
     raw: () => state.sessions[sessionId]!.rows,
     selected: () => selectTranscriptRows(state, sessionId),
     live: () => selectFocusedLiveState(state, sessionId),
   }
 }
-function view(data: ReturnType<typeof fixture>, mode: 'full' | 'focused' = 'full') {
-  return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptRowsView rows={data.rows()} focusedLiveState={data.live()} turnLive /></TranscriptModeContext.Provider>
+function view(data: ReturnType<typeof fixture>, mode: 'full' | 'focused' = 'full', turnLive = true) {
+  return <TranscriptModeContext.Provider value={{ mode, setMode() {} }}><TranscriptRowsView rows={data.rows()} focusedLiveState={data.live()} turnLive={turnLive} /></TranscriptModeContext.Provider>
 }
 const label = (root: ParentNode) => root.querySelector('.code-mode-header .code-mode-status')?.textContent
 
@@ -114,6 +116,37 @@ test('Focused Script uses common writing, reviewing and outer approval phases', 
   data.activity('executing', 'inner')
   await tree.render(view(data, 'focused'))
   expect(head()).toContain('Running script')
+})
+
+test('Focused keeps a detached Script running after its launch turn finishes', async () => {
+  const data = fixture('focused-detached-script')
+  data.submitted()
+  data.receipt('running', 'detached-task')
+  data.finishTurn()
+  const tree = await harness.mount(view(data, 'focused', false))
+  const turn = tree.container.querySelector<HTMLButtonElement>('.focused-fold-head')!
+  if (turn.getAttribute('aria-expanded') === 'false') await act(async () => { turn.click() })
+  const step = tree.container.querySelector('.focused-step-head')!
+  expect(step.textContent).toContain('Running script')
+  expect(step.textContent).toContain('Inspect phases')
+  expect(step.textContent).not.toContain('Stopped')
+})
+
+test('foreground Script card and inspector show child calls before the final receipt', async () => {
+  const data = fixture('foreground-inspector')
+  data.submitted()
+  const inspectorView = () => {
+    const script = data.rows().find(row => row.kind === 'tool-use' && row.toolName === 'REPL')
+    if (script?.kind !== 'tool-use') throw new Error('Missing Script row')
+    return <>{view(data)}<ToolInspector row={script} /></>
+  }
+  const tree = await harness.mount(inspectorView())
+  expect(tree.container.querySelector('button[aria-label="Select line 1, executed"]')).toBeNull()
+  data.child()
+  await tree.render(inspectorView())
+  expect(tree.container.querySelector('.code-mode-member')?.textContent).toContain('/repo/a')
+  expect(tree.container.querySelector('.code-mode-panel-facts')?.textContent).toContain('1 call')
+  expect(tree.container.querySelector<HTMLButtonElement>('button[aria-label="Select line 1, executed"]')?.title).toContain('running')
 })
 
 test('phase evidence invalidates only the Script row and leaves ordinary activity outside the row graph', () => {

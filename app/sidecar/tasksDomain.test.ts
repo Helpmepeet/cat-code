@@ -21,6 +21,9 @@ import { DesktopPower } from '../main/desktopPower.js'
 import { unknownPowerObservation } from '../main/powerObservation.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { CodeModeTaskState } from '../../src/tasks/CodeModeTask.js'
+import { createAppRuntimeCanUseTool, type AppPermissionRequestHandler } from '../../src/app-runtime/appRuntimeCanUseTool.js'
+import type { Tool, ToolUseContext } from '../../src/Tool.js'
+import type { AssistantMessage } from '../../src/types/message.js'
 
 test('Code Mode retains terminal undelivered receipts in snapshot and idle-park accounting', () => {
   const cell: CodeModeTaskState = {
@@ -590,6 +593,59 @@ test('a background permission does not suppress the runnable parent turn', async
   } finally {
     h.controller.respondToPermissionRequest('worker-permission', { behavior: 'deny', message: 'test cleanup' })
     await turn; h.dispose()
+  }
+})
+
+test('a detached Script approval blocks only its own task while a new turn or sibling Script runs', async () => {
+  const finishTurn = Promise.withResolvers<void>()
+  const cell: CodeModeTaskState = {
+    ...createTaskStateBase('c-owner', 'code_mode', 'Run background Script'),
+    type: 'code_mode', status: 'running', owner: { sessionId: 'session' },
+    cellId: 'script-cell', generation: 'generation', settled: false,
+    cancellationRequested: false, delivery: 'pending',
+  }
+  let requestPermission!: AppPermissionRequestHandler
+  const h = powerDomain({ [cell.id]: cell }, undefined, {
+    async *runTurn({ prompt, onPermissionRequest }) {
+      if (prompt === 'launch Script') requestPermission = onPermissionRequest
+      else await finishTurn.promise
+    },
+  })
+  await h.controller.submit('launch Script')
+  const turn = h.controller.submit('stream independently')
+  const requested = Promise.withResolvers<void>()
+  const unsubscribe = h.controller.subscribe(event => {
+    if (event.type === 'permission.requested') requested.resolve()
+  })
+  const request = createAppRuntimeCanUseTool({
+    baseCanUseTool: async () => ({ behavior: 'ask', message: 'Approve fixture Read' }),
+    getPermissionRequestHandler: () => requestPermission,
+    createRequestId: () => 'script-permission',
+  })
+  const owner = new AbortController()
+  const response = request(
+    { name: 'Read' } as Tool, {},
+    { abortController: owner, codeModeBackgroundCell: true, getAppState: h.store.getState } as ToolUseContext,
+    { type: 'assistant', isVirtual: true, codeMode: { cellId: cell.cellId, generation: cell.generation } } as AssistantMessage,
+    'script-child-read',
+  )
+  try {
+    await requested.promise
+    expect(h.controller.isTurnActive()).toBe(true)
+    expect(h.power.read().assertion.desired).toBe(true)
+    finishTurn.resolve()
+    await turn
+    expect(h.power.read().assertion.desired).toBe(false)
+    expect(h.domain.readUnfinishedWork()).toMatchObject({ activeBackgroundTasks: 1, waitingForApproval: true })
+    const sibling = { ...cell, id: 'c-sibling', cellId: 'sibling-cell' }
+    h.store.setState(state => ({ ...state, tasks: { ...state.tasks, [sibling.id]: sibling } }))
+    expect(h.power.read().assertion.desired).toBe(true)
+  } finally {
+    owner.abort('Fixture completed')
+    finishTurn.resolve()
+    await Promise.all([turn, response])
+    unsubscribe()
+    h.dispose()
   }
 })
 

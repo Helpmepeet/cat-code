@@ -14,10 +14,7 @@ import {
   type AppSessionPrompt,
   type AppSessionControllerAdapter,
 } from './AppSessionController.js'
-import type {
-  AppPermissionRequest,
-  AppPermissionResponse,
-} from './sessionEvents.js'
+import type { AppPermissionRequestHandler } from './appRuntimeCanUseTool.js'
 
 export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
   /** Minted only inside the fresh execution claim, never by app input. */
@@ -31,10 +28,7 @@ export type QueryEngineSessionOptions = HandoffTurnLifecycleOptions & {
   handoffContinuation?: { operationId: string }
   /** Internal controller admission requirement, never renderer input. */
   handoffReconciliationAdmission?: true
-  onPermissionRequest?: (
-    request: AppPermissionRequest,
-    signal?: AbortSignal,
-  ) => Promise<AppPermissionResponse>
+  onPermissionRequest?: AppPermissionRequestHandler
 }
 
 export type QueryEngineSessionLike = {
@@ -128,8 +122,8 @@ export function createQueryEngineSessionController(
   session: QueryEngineSessionLike,
 ): AppSessionController {
   const controller = new AppSessionController(createQueryEngineSessionAdapter(session))
-  session.setBackgroundPermissionHandler?.((request, signal) => signal
-    ? controller.requestOwnedPermission(request, signal)
+  session.setBackgroundPermissionHandler?.((request, signal, backgroundScript) => signal
+    ? controller.requestOwnedPermission(request, signal, backgroundScript)
     : Promise.resolve({ behavior: 'deny', message: 'Background approval requires a live execution owner.' }))
   return controller
 }

@@ -16,6 +16,7 @@ import { withStreamJsonAccountDiagnosticHook } from '../services/api/accountDiag
 import { canonicalResumeJson } from '../utils/resumeCheckpoint.js'
 import { markPermissionRequestCancelled } from '../utils/permissions/permissionDecisionContext.js'
 import { HandoffExecution, type WorkspaceHandoffConfiguration } from './handoffExecution.js'
+import type { AppPermissionRequestHandler, BackgroundScriptApprovalOwner } from './appRuntimeCanUseTool.js'
 import type { ResumeCheckpoint, WorkspaceHandoffSnapshot } from '../../app/shared/workspaceHandoff.js'
 import { handoffContinuationPrompt, type HandoffTerminalOutcome, type HandoffTurnLifecycleOptions } from './handoff.js'
 import {
@@ -71,10 +72,7 @@ export type AppSessionControllerAdapter = {
       handoffReconciliationAdmission?: true
     } & HandoffTurnLifecycleOptions
     signal: AbortSignal
-    onPermissionRequest: (
-      request: AppPermissionRequest,
-      signal?: AbortSignal,
-    ) => Promise<AppPermissionResponse>
+    onPermissionRequest: AppPermissionRequestHandler
   }): AsyncIterable<SDKMessage>
   persistHandoffOutcome?: (operationId: string, outcome: HandoffTerminalOutcome) => Promise<SDKMessage[]>
   readHandoffOutcome?: (operationId: string) => Promise<HandoffTerminalOutcome | null>
@@ -105,6 +103,7 @@ type AppSessionEventListener = (event: AppSessionEvent) => void
 type PendingPermissionRequest = {
   request: AppPermissionRequest
   source: 'agent' | 'inline-command'
+  backgroundScript?: BackgroundScriptApprovalOwner
   resolve: (response: AppPermissionResponse) => void
   signal?: AbortSignal
   cleanup?: () => void
@@ -191,11 +190,17 @@ export class AppSessionController {
     return Array.from(this.pendingPermissionRequests.values(), value => value.request)
   }
 
-  /** Independent Run commands do not block the model or its delegated workers. */
+  /** Only permissions that block the model or a delegated worker. */
   getPendingAgentPermissionRequests(): AppPermissionRequest[] {
     return Array.from(this.pendingPermissionRequests.values())
-      .filter(value => value.source === 'agent')
+      .filter(value => value.source === 'agent' && !value.backgroundScript)
       .map(value => value.request)
+  }
+
+  getPendingBackgroundScriptApprovals(): BackgroundScriptApprovalOwner[] {
+    return Array.from(this.pendingPermissionRequests.values()).flatMap(
+      request => request.backgroundScript ? [request.backgroundScript] : [],
+    )
   }
 
   hasUnresolvedToolEffects(): boolean { return this.adapter.hasUnresolvedToolEffects?.() === true }
@@ -441,8 +446,12 @@ export class AppSessionController {
     return true
   }
 
-  requestOwnedPermission(request: AppPermissionRequest, signal: AbortSignal): Promise<AppPermissionResponse> {
-    return this.waitForPermissionResponse(request, signal)
+  requestOwnedPermission(
+    request: AppPermissionRequest,
+    signal: AbortSignal,
+    backgroundScript?: BackgroundScriptApprovalOwner,
+  ): Promise<AppPermissionResponse> {
+    return this.waitForPermissionResponse(request, signal, 'agent', backgroundScript)
   }
 
   abort(
@@ -484,6 +493,10 @@ export class AppSessionController {
     } else {
       this.adapter.abort?.(adapterIntent)
     }
+  }
+
+  getMessages(): readonly Message[] | undefined {
+    return this.adapter.getMessages?.()
   }
 
   rewindBeforeUserMessage(
@@ -658,7 +671,8 @@ export class AppSessionController {
               },
             },
             signal: this.abortController.signal,
-            onPermissionRequest: (request, signal) => this.waitForPermissionResponse(request, signal),
+            onPermissionRequest: (request, signal, backgroundScript) =>
+              this.waitForPermissionResponse(request, signal, 'agent', backgroundScript),
           })
 
           for await (const message of messages) {
@@ -748,6 +762,7 @@ export class AppSessionController {
     request: AppPermissionRequest,
     signal?: AbortSignal,
     source: PendingPermissionRequest['source'] = 'agent',
+    backgroundScript?: BackgroundScriptApprovalOwner,
   ): Promise<AppPermissionResponse> {
     const ownerSignal = signal ?? this.abortController?.signal
     if (ownerSignal?.aborted) {
@@ -765,6 +780,7 @@ export class AppSessionController {
       this.pendingPermissionRequests.set(request.requestId, {
         request,
         source,
+        backgroundScript,
         resolve,
         signal,
         cleanup: () => ownerSignal?.removeEventListener('abort', cancel),

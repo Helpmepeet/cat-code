@@ -66,8 +66,10 @@ test('Code Mode owns background work through settlement and durable delivery', (
   }).activeBackgroundTasks).toBe(0)
 })
 
-test('Code Mode approval attribution uses its real worker owner', () => {
-  expect(deriveUnfinishedTaskFacts({
-    cell: task('code_mode', 'running', { owner: { agentId: 'worker' } }),
-  }, new Set(['worker']))).toMatchObject({ activeBackgroundTasks: 1, waitingForApproval: true })
+test('an approval for an earlier Script generation does not block the new task', () => {
+  const tasks = {
+    cell: task('code_mode', 'running', { cellId: 'cell', generation: 'current' }),
+  }
+  expect(deriveUnfinishedTaskFacts(tasks, undefined, [{ cellId: 'cell', generation: 'previous' }]).waitingForApproval).toBe(false)
+  expect(deriveUnfinishedTaskFacts(tasks, undefined, [{ cellId: 'cell', generation: 'current' }]).waitingForApproval).toBe(true)
 })
