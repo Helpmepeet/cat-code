@@ -11,12 +11,14 @@ import {
 } from '../bootstrap/state.js'
 import { render, ThemeProvider } from '../ink.js'
 import { AppStateProvider, getDefaultAppState } from '../state/AppState.js'
+import { currentClaudeRelease } from '../utils/model/configs.js'
+import { escapeRegExp } from '../utils/stringUtils.js'
 
-// The picker listed the same model twice. Its "current model is not offered,
-// append it" fallback compared RAW strings, so a saved canonical id
-// (`claude-sonnet-5`, what a Codex session persists) failed to match the row
-// that already offers it under the family alias (`sonnet`, what the first-party
-// tier lists carry) and a second, identically labelled row was appended.
+// A saved canonical ID must match the offered family alias without adding
+// another row or losing the selection.
+const sonnet = currentClaudeRelease('sonnet')
+const fable = currentClaudeRelease('fable')
+const haiku = currentClaudeRelease('haiku')
 
 // A first-party Max fixture: isClaudeAISubscriber/isMaxSubscriber are the only
 // auth reads getModelOptionsBase branches on for this tier, and real OAuth
@@ -132,7 +134,7 @@ async function renderPicker(initial: string | null): Promise<string> {
   return lastFrame === -1 ? plain : plain.slice(lastFrame)
 }
 
-/** Numbered option rows, e.g. `❯ 3. Sonnet 5 ✔   Sonnet 5 · Best for …`. */
+/** Numbered option rows, including the selection marker when present. */
 function optionRows(frame: string): { label: string; description: string }[] {
   const rows: { label: string; description: string }[] = []
   for (const line of frame.split('\n')) {
@@ -149,24 +151,14 @@ function labelCount(frame: string, label: string): number {
 }
 
 describe('ModelPicker current-model fallback', () => {
-  test('a canonical model id already offered under its alias does not add a second row', async () => {
-    const frame = await renderPicker('claude-sonnet-5')
+  test('a canonical model ID marks and focuses its offered alias without duplicating it', async () => {
+    const frame = await renderPicker(sonnet.wire.firstParty)
 
-    // The Max tier offers Sonnet 5 as the alias `sonnet`; the saved setting is
-    // the canonical id. Exactly one row, and it is the offered one.
-    expect(labelCount(frame, 'Sonnet 5')).toBe(1)
+    expect(labelCount(frame, sonnet.label)).toBe(1)
     expect(optionRows(frame).map(row => row.description)).not.toContain(
       'Current model',
     )
-  })
-
-  test('the surviving row is the marked and focused one', async () => {
-    const frame = await renderPicker('claude-sonnet-5')
-
-    // Select marks and focuses by plain string equality, so dropping the
-    // duplicate must not leave the picker opening on Default with nothing
-    // marked. `[>❯]` / `[✔√]` cover the non-unicode figure fallbacks.
-    expect(frame).toMatch(/[>❯]\s*\d+\.\s+Sonnet 5\s+[✔√]/)
+    expect(frame).toMatch(new RegExp(`[>❯]\\s*\\d+\\.\\s+${escapeRegExp(sonnet.label)}\\s+[✔√]`))
   })
 
   test('opusplan keeps its own row even though it resolves to the Sonnet default', async () => {
@@ -177,7 +169,7 @@ describe('ModelPicker current-model fallback', () => {
     expect(
       optionRows(frame).filter(row => row.description === 'Current model'),
     ).toHaveLength(1)
-    expect(labelCount(frame, 'Sonnet 5')).toBe(1)
+    expect(labelCount(frame, sonnet.label)).toBe(1)
   })
 
   test('best keeps its own row even though it resolves to Fable', async () => {
@@ -186,7 +178,7 @@ describe('ModelPicker current-model fallback', () => {
     expect(
       optionRows(frame).filter(row => row.description === 'Current model'),
     ).toHaveLength(1)
-    expect(labelCount(frame, 'Fable 5.2')).toBe(1)
+    expect(labelCount(frame, fable.label)).toBe(1)
     expect(labelCount(frame, 'Fable')).toBe(1)
   })
 
@@ -199,6 +191,6 @@ describe('ModelPicker current-model fallback', () => {
       optionRows(frame).filter(row => row.description === 'Current model'),
     ).toHaveLength(1)
     expect(labelCount(frame, 'claude-3-5-haiku-20241022')).toBe(1)
-    expect(labelCount(frame, 'Haiku 5.5')).toBe(1)
+    expect(labelCount(frame, haiku.label)).toBe(1)
   })
 })

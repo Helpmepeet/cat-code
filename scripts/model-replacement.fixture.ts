@@ -1,5 +1,6 @@
 // Run via verify-model-replacement.ts, which supplies disposable settings and a
-// catalog-only source mutation. Literal expectations are the external contract.
+// catalog-only source mutation. Pin the substituted release and exact wire
+// behavior; unrelated families follow the catalog.
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,7 +23,7 @@ import { getFastModeModel } from '../src/utils/fastMode.js'
 import { createUserMessage } from '../src/utils/messages.js'
 import { AGENT_MODEL_OPTIONS, resolveAgentModel } from '../src/utils/model/agent.js'
 import { getBedrockInferenceProfiles } from '../src/utils/model/bedrock.js'
-import { currentCodexRelease } from '../src/utils/model/configs.js'
+import { currentClaudeRelease, currentCodexRelease, getClaudeFamilyKey, getClaudeRelease } from '../src/utils/model/configs.js'
 import { ensureModelStringsInitialized } from '../src/utils/model/modelStrings.js'
 import {
   getDefaultCodexModel, getMarketingNameForModel, getRuntimeMainLoopModel,
@@ -176,13 +177,16 @@ async function verifyCodex() {
 
 async function verifyClaude() {
   const successor = 'claude-catalog-sonnet'
+  const opus = currentClaudeRelease('opus')
+  const haiku = currentClaudeRelease('haiku')
+  const fable = currentClaudeRelease('fable')
+  const cloudFableWire = getClaudeRelease(getClaudeFamilyKey('fable', true)).wire
   await check('Claude picker, first-party defaults, and independent pin', async () => {
     assert.equal(parseUserSpecifiedModel('sonnet'), successor)
-    assert.equal(parseUserSpecifiedModel('opus'), 'claude-opus-5-5')
-    assert.equal(parseUserSpecifiedModel('haiku'), 'claude-haiku-5-5')
-    assert.equal(parseUserSpecifiedModel('best'), 'claude-fable-5-2')
-    assert.equal(parseUserSpecifiedModel('claude-fable-5'), 'claude-fable-5-2')
-    assert.equal(getModelOptions().find(row => row.value === 'fable')?.label, 'Fable 5.2')
+    assert.equal(parseUserSpecifiedModel('opus'), opus.wire.firstParty)
+    assert.equal(parseUserSpecifiedModel('haiku'), haiku.wire.firstParty)
+    assert.equal(parseUserSpecifiedModel('best'), fable.wire.firstParty)
+    assert.equal(getModelOptions().find(row => row.value === 'fable')?.label, fable.label)
     assert.equal(parseUserSpecifiedModel('claude-sonnet-5-5'), 'claude-sonnet-5-5')
     const price = getConfiguredStandardModelCosts(successor)
     assert.equal(price?.inputTokens, 2)
@@ -190,12 +194,12 @@ async function verifyClaude() {
     assert.equal(getModelOptions().find(row => row.value === 'sonnet')?.label, 'Catalog Fixture Sonnet')
     assert.equal(buildRunControlsSnapshot(getDefaultAppState()).model.currentLabel, 'Catalog Fixture Sonnet')
     assert.equal(parseUserSpecifiedModel('opusplan'), successor)
-    assert.equal(renderDefaultModelSetting('opusplan'), 'Opus 5.5 in plan mode, else Catalog Fixture Sonnet')
+    assert.equal(renderDefaultModelSetting('opusplan'), `${opus.label} in plan mode, else Catalog Fixture Sonnet`)
     assert.equal(getMarketingNameForModel(successor + '[1m]'), 'Catalog Fixture Sonnet (with 1M context)')
     setMainLoopModelOverride('opusplan')
-    assert.equal(getRuntimeMainLoopModel({ permissionMode: 'plan', mainLoopModel: successor }), 'claude-opus-5-5')
+    assert.equal(getRuntimeMainLoopModel({ permissionMode: 'plan', mainLoopModel: successor }), opus.wire.firstParty)
     setMainLoopModelOverride(undefined)
-    const child = resolveAgentModel('sonnet', 'claude-opus-5-5', undefined, 'default', 'firstParty')
+    const child = resolveAgentModel('sonnet', opus.wire.firstParty, undefined, 'default', 'firstParty')
     assert.deepEqual(child, { model: successor, provider: 'firstParty' })
     assert.equal(resolveAgentModel('sonnet', 'claude-sonnet-5-5[1m]').model, 'claude-sonnet-5-5[1m]')
     const prompt = (await getSystemPrompt([], successor, [], [], 'firstParty')).join('\n')
@@ -241,8 +245,7 @@ async function verifyClaude() {
     assert.equal(parseUserSpecifiedModel('sonnet[1m]'), 'claude-sonnet-4-5@20250929[1m]')
     assert.equal(parseUserSpecifiedModel('opus'), 'claude-opus-4-6')
     assert.equal(parseUserSpecifiedModel('haiku'), 'claude-haiku-4-5@20251001')
-    assert.equal(parseUserSpecifiedModel('fable'), 'claude-fable-5-2')
-    assert.equal(parseUserSpecifiedModel('claude-fable-5'), 'claude-fable-5')
+    assert.equal(parseUserSpecifiedModel('fable'), cloudFableWire.vertex)
     process.env.VERTEX_REGION_CLAUDE_4_5_SONNET = 'europe-west1'
     process.env.CLOUD_ML_REGION = 'europe-west4'
     assert.equal(getVertexRegionForModel('claude-sonnet-4-5@20250929'), 'europe-west1')
@@ -251,7 +254,7 @@ async function verifyClaude() {
     setSessionProvider('foundry')
     assert.equal(parseUserSpecifiedModel('sonnet'), 'claude-sonnet-4-5')
     assert.equal(parseUserSpecifiedModel('haiku'), 'claude-haiku-4-5')
-    assert.equal(parseUserSpecifiedModel('fable'), 'claude-fable-5-2')
+    assert.equal(parseUserSpecifiedModel('fable'), cloudFableWire.foundry)
     process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'CustomDeployment'
     assert.equal(parseUserSpecifiedModel('sonnet'), 'CustomDeployment')
     delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
@@ -270,11 +273,10 @@ async function verifyClaude() {
     assert.equal(parseUserSpecifiedModel('sonnet'), 'eu.anthropic.claude-sonnet-4-5-20250929-v1:0')
     assert.equal(parseUserSpecifiedModel('opus'), 'us.anthropic.claude-opus-4-6-v1')
     assert.equal(parseUserSpecifiedModel('haiku'), 'us.anthropic.claude-haiku-4-5-20251001-v1:0')
-    assert.equal(parseUserSpecifiedModel('fable'), 'global.anthropic.claude-fable-5-2')
-    assert.equal(parseUserSpecifiedModel('us.anthropic.claude-fable-5-v1'), 'us.anthropic.claude-fable-5-v1')
+    assert.equal(parseUserSpecifiedModel('fable'), cloudFableWire.bedrock)
     setMainLoopModelOverride('opusplan')
     assert.deepEqual(resolveAgentModel('inherit', successor, undefined, 'plan', 'firstParty'), {
-      model: 'claude-opus-5-5', provider: 'firstParty',
+      model: opus.wire.firstParty, provider: 'firstParty',
     })
     setMainLoopModelOverride(undefined)
     setSessionProvider('openai')
@@ -285,11 +287,11 @@ async function verifyClaude() {
     assert.deepEqual(resolveAgentModel('haiku[1m]', 'gpt-6.2-sol', undefined, 'default', 'openai'), {
       model: 'us.anthropic.claude-haiku-4-5-20251001-v1:0[1m]', provider: 'bedrock',
     })
-    assert.deepEqual(resolveAgentModel('sonnet', 'claude-opus-5-5', undefined, 'default', 'firstParty'), {
+    assert.deepEqual(resolveAgentModel('sonnet', opus.wire.firstParty, undefined, 'default', 'firstParty'), {
       model: successor, provider: 'firstParty',
     })
     process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'gpt-6.2-sol'
-    assert.deepEqual(resolveAgentModel('sonnet', 'claude-opus-5-5', undefined, 'default', 'firstParty'), {
+    assert.deepEqual(resolveAgentModel('sonnet', opus.wire.firstParty, undefined, 'default', 'firstParty'), {
       model: 'gpt-6.2-sol', provider: 'openai',
     })
     delete process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
