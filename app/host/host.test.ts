@@ -2850,7 +2850,10 @@ test('closeSession releases its fence if supervisor shutdown throws', async () =
 })
 
 test('closeSession awaits stop confirmation, preserves an unconfirmed row, and permits explicit retry', async () => {
-  const h = makeHost()
+  let prepares = 0
+  const h = makeHost({
+    prepareWorkspaceRecovery: async () => { prepares++; return { ok: false, reason: 'invalid_state' } },
+  })
   const created = await h.host.createSession({ cwd: h.cwd })
   expect(created.ok).toBe(true)
   if (!created.ok) return
@@ -2872,8 +2875,11 @@ test('closeSession awaits stop confirmation, preserves an unconfirmed row, and p
   expect(h.host.listSessions().find(s => s.appSessionId === id)?.status).not.toBe('exited')
   expect((await h.host.restoreSession(id)).ok).toBe(false)
   expect((await h.host.closeSession(id)).ok).toBe(false)
+  const recovery = await h.host.recoverWorkspaceHandoff(id, randomUUID(), h.host.getSessionGeneration(id)!)
   release(false)
   const unconfirmed = await closing
+  expect(recovery.ok).toBe(false)
+  expect(prepares).toBe(0)
   expect(unconfirmed.ok).toBe(false)
   if (!unconfirmed.ok) expect(unconfirmed.error.message).toContain('not confirmed')
   expect(h.evicted).not.toContain(id)
@@ -5119,7 +5125,7 @@ test('failed account authority persistence is visible and identical snapshots ca
   expect(registry.getAccountSelection(id)?.openai).toBe('codex-b')
 })
 
-test.each(['prepared', 'refused', 'stale', 'restart failure'] as const)('held recovery %s retains ownership and ordinary restart refusal', async outcome => {
+test.each(['prepared', 'after abandoned close', 'refused', 'stale', 'restart failure'] as const)('held recovery %s retains ownership and ordinary restart refusal', async outcome => {
   const root = tempDir()
   const managedStorage = new ManagedStorage({ appDataBase: join(root, 'data'), ownershipDir: join(root, 'ownership') })
   const gate = Promise.withResolvers<import('../shared/workspaceHandoff.js').WorkspaceRecoveryPreparation>()
@@ -5139,22 +5145,28 @@ test.each(['prepared', 'refused', 'stale', 'restart failure'] as const)('held re
   const generation = h.host.getSessionGeneration(id)!
   expect((await h.host.reserveWorkspaceJump(id, operation, generation)).ok).toBe(true)
   expect((await h.host.restartSession(id)).ok).toBe(false)
+  if (outcome === 'after abandoned close') h.host.releaseWorkspaceJump(id, operation)
   const pid = h.supervisor.getSessionProcessId(id)
   const first = h.host.recoverWorkspaceHandoff(id, operation, generation)
   const second = h.host.recoverWorkspaceHandoff(id, operation, generation)
   expect(second).toBe(first)
   await settle(() => prepares === 1)
   expect(h.supervisor.getSessionProcessId(id)).toBe(pid)
+  const cancelClose = outcome === 'after abandoned close' ? await h.host.authorizeCloseCancellation(id) : undefined
+  const close = outcome === 'after abandoned close' ? await h.host.closeSession(id) : undefined
   if (outcome === 'stale') h.supervisor.records.get(id)!.generation = randomUUID()
   if (outcome === 'restart failure') h.supervisor.restartSession = async () => { throw new Error('synthetic restart failure') }
   gate.resolve(outcome !== 'refused' ? { ok: true } : { ok: false, reason: 'live_tasks' })
   const result = await first
-  expect(result.ok).toBe(outcome === 'prepared')
+  const restarted = outcome === 'prepared' || outcome === 'after abandoned close'
+  if (cancelClose) expect(cancelClose.ok).toBe(false)
+  if (close) expect(close.ok).toBe(false)
+  expect(result.ok).toBe(restarted)
   if (outcome === 'refused' && result.ok === false) expect(result.error.message).toContain('Background work is still active')
   expect(prepares).toBe(1)
   expect(cleanups).toBe(1)
-  expect(recovered).toBe(outcome === 'prepared' || outcome === 'restart failure' ? 1 : 0)
+  expect(recovered).toBe(restarted || outcome === 'restart failure' ? 1 : 0)
   expect(h.host.isWorkspaceJumpReserved(id)).toBe(true)
-  if (outcome === 'prepared') expect(h.supervisor.records.get(id)?.resumeEngineSessionId).toBe(engine)
+  if (restarted) expect(h.supervisor.records.get(id)?.resumeEngineSessionId).toBe(engine)
   else if (outcome !== 'restart failure') expect(h.supervisor.getSessionProcessId(id)).toBe(pid)
 })

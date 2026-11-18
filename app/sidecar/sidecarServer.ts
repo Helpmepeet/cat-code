@@ -2251,8 +2251,11 @@ export class SidecarServer {
     if (this.tasks.hasLiveWork()) return 'live_tasks'
     if (this.hasQueuedParentPrompt() || this.hasQueuedParentTaskNotification() || this.stagedPrompts.size || this.pendingPeerAnnouncements.size) return 'queued_input'
     if (this.controller.hasUnresolvedToolEffects()) return 'pending_receipts'
-    if (this.inFlightDurableWrites || this.questionWritesInFlight || this.conversationMutationInFlight || this.pendingHostRequests.size) return 'pending_writes'
-    if (this.parking || this.manualCloseRequested || !this.isParkGateOpen()) return 'unresolved_effects'
+    if (this.inFlightDurableWrites || this.questionWritesInFlight || this.conversationMutationInFlight ||
+        this.pendingHostRequests.size || this.closeCancelledManualCommands.size) return 'pending_writes'
+    // An abandoned Close still fences input. Explicit recovery can verify and
+    // replace this process once its effects and durable input writes settle.
+    if (this.parking || !this.isParkGateOpen()) return 'unresolved_effects'
     return undefined
   }
 
@@ -2347,6 +2350,7 @@ export class SidecarServer {
         reason = 'conflict'; throw new Error()
       }
       if (message.action === 'cancel' && state.cancellation?.requestedBy === 'close') {
+        if (this.recoveryPreparation) throw new Error()
         if (state.cancellation.cancelId !== message.cancelId) throw new Error()
         // Fence before configure/cancellation storage can yield. Aborting also
         // stops an engine queue snapshot still preparing its attachments.

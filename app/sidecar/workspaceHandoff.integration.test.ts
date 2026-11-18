@@ -986,6 +986,47 @@ test.each(['transient', 'persistent'] as const)('a %s completion checkpoint fail
   expect(h.controller.canStartAutomaticTurn()).toBe(false)
 })
 
+test.each(['close', 'recover'] as const)('a settled abort with a failed checkpoint can %s without replay', async action => {
+  const h = await heldContinuationWithQueuedManual()
+  const seal = spyOn(storage, 'sealResumeCheckpoint').mockRejectedValue(new Error('Isolated completion seal failure'))
+  spies.push(seal)
+  let stopped = false
+  const close = new SessionCloseCoordinator({
+    authorize: async () => ({ ok: true, value: undefined }),
+    blocked: id => h.coordinator.isCloseBlocked(id),
+    cancel: async id => { await h.coordinator.cancel(id, undefined, 'close') },
+    observe: id => h.coordinator.queryStatus(id),
+    close: async () => { stopped = true; return { ok: true, value: undefined } },
+    timeoutMs: action === 'close' ? 500 : 100, retryMs: 5,
+  })
+  const closing = close.close(h.appSessionId)
+  try {
+    await until(() => h.coordinator.snapshot(h.appSessionId)?.cancellation?.application === 'abort_signalled',
+      'cancellation was durably applied during the active continuation')
+    expect(h.coordinator.isCloseBlocked(h.appSessionId)).toBe(true)
+    if (action === 'recover') {
+      expect((await closing).ok).toBe(false)
+      expect(stopped).toBe(false)
+    }
+  } finally { h.release() }
+  await until(() => h.controller.getWorkspaceHandoffSnapshot()?.settled === true, 'actual checkpoint failure settled')
+  expect(h.controller.getWorkspaceHandoffSnapshot()).toMatchObject({ execution: 'unconfirmed', settled: true,
+    failure: { stage: 'checkpoint_seal' }, record: { kind: 'valid', record: { terminal: null } } })
+  if (action === 'close') {
+    expect((await closing).ok).toBe(true)
+    expect(stopped).toBe(true)
+    expect(h.held()).toBe(false)
+  } else {
+    seal.mockRestore()
+    const recoveryId = randomUUID()
+    expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, h.generation, recoveryId)).toEqual({ ok: true })
+    expect(await h.coordinator.cancelRecovery(h.appSessionId, h.operationId, h.generation, recoveryId)).toBe(true)
+    h.submit('must not run after abandoned close')
+    expect(h.received.some(frame => frame.kind === 'error' && frame.message === 'This chat is stopping.')).toBe(true)
+  }
+  expect(h.calls()).toBe(1)
+})
+
 test('real W/R seals complete actual parallel tool outputs through the transport and main ledger', async () => {
   const outputs = ['actual-left-' + 'L'.repeat(4096), 'actual-right-' + 'R'.repeat(4096)]
   let calls = 0
@@ -1142,6 +1183,11 @@ test('watchdog unconfirmed cannot authorize replacement while the actual seal is
     expect(await h.coordinator.prepareRecovery(h.appSessionId, h.operationId, h.generation, randomUUID())).toMatchObject({ ok: false })
     const attempt = await h.command({ action: 'prepare_recovery', recoveryId: randomUUID() })
     expect(attempt.kind === 'result' && attempt.result.disposition).toBe('refused')
+    await h.coordinator.cancel(h.appSessionId, undefined, 'close')
+    await h.coordinator.waitForSettlement(h.appSessionId)
+    expect(h.coordinator.snapshot(h.appSessionId)?.cancellation?.application).toBe('too_late')
+    expect(h.coordinator.isCloseBlocked(h.appSessionId)).toBe(true)
+    expect(h.held()).toBe(true)
   } finally { blocked.resolve() }
   await until(() => !h.held(), 'original seal finishes without replacement')
 })

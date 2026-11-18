@@ -136,15 +136,17 @@ export class WorkspaceJumpCoordinator {
         acknowledgement.operationId === state.operationId && acknowledgement.generation === identity.generation &&
         state.cancellation?.requestedBy === 'close' && acknowledgement.cancelId === state.cancellation.cancelId &&
         live.operationId === state.operationId && live.observerGeneration === identity.generation &&
+        live.continuationId === state.continuation.id && live.admissionGeneration === state.continuation.admissionGeneration &&
+        live.settled && !live.recoveryId &&
         live.record.kind === 'valid' && live.record.record.cancellation?.cancelId === acknowledgement.cancelId &&
-        live.record.record.cancellation.application === 'too_late' &&
+        (live.record.record.cancellation.application === 'too_late' || live.record.record.cancellation.application === 'abort_signalled') &&
         (live.execution === 'terminal' || live.execution === 'unconfirmed')
     } catch { return false }
   }
   private releaseFinishedClose(appSessionId: string): void {
     if (!this.hasAcknowledgedFinishedClose(appSessionId)) return
-    // Closing needs confirmed engine cancellation and a settled physical move,
-    // not a successful completion proof. Retain unresolved recovery evidence.
+    // The move, execution, and cancel command have all settled. A failed
+    // completion proof still belongs to recovery and remains on disk.
     this.deps.host.releaseWorkspaceJump(appSessionId, this.closeAcknowledgements.get(appSessionId)!.operationId)
   }
   /** Destination work may use project peers without releasing the recovery hold. */

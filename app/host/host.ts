@@ -1346,6 +1346,9 @@ export class Host implements HostApi {
     if (!this.isLive(appSessionId) && !this.registry.findSession(appSessionId)) {
       return hostError('session_not_found', `unknown session ${appSessionId}`)
     }
+    if (this.workspaceRecoveries.has(appSessionId)) {
+      return hostError('session_unreachable', 'This Chat is recovering. Try closing it again shortly.')
+    }
     return { ok: true, value: undefined }
   }
 
@@ -1358,7 +1361,7 @@ export class Host implements HostApi {
     }
     // Refuse rather than report success while a restore can still publish or
     // spawn. Hold the reciprocal fence through all asynchronous close cleanup.
-    if (this.restoring.has(appSessionId) || this.closing.has(appSessionId)) {
+    if (this.restoring.has(appSessionId) || this.closing.has(appSessionId) || this.workspaceRecoveries.has(appSessionId)) {
       return hostError('session_unreachable', 'This Chat is opening or closing. Try closing it again shortly.')
     }
     if (!this.registry.refreshSharedState()) {
@@ -2065,6 +2068,9 @@ export class Host implements HostApi {
     const task = (async (): Promise<HostResult<void>> => {
       await this.launched
       try {
+        if (this.closing.has(appSessionId)) {
+          return hostError('session_unreachable', 'This Chat is closing. Try recovering it again shortly.')
+        }
         const reserved = this.workspaceJumpReservations.get(appSessionId)
         if (reserved && reserved.operationId !== operationId || this.getSessionGeneration(appSessionId) !== generation) {
           return hostError('session_unreachable', workspaceRecoveryRefusalText('wrong_identity'))
