@@ -64,7 +64,7 @@ export function permissionKeyIntent(event: KeyLike): PermissionKeyIntent | null 
  * suppresses the browser's Enter → click.
  */
 const FOCUSED_KEY_OWNER_SELECTOR =
-  'a[href], button, input, select, textarea, [contenteditable], ' +
+  'a[href], button, input, select, textarea, summary, pre[tabindex], [contenteditable], ' +
   '[role="button"], [role="menu"], [role="menuitem"], [role="menuitemradio"], ' +
   '[role="menuitemcheckbox"], [role="option"], [role="listbox"], ' +
   '[role="dialog"], [role="alertdialog"]'
@@ -231,11 +231,6 @@ export function describeCommandSuggestion(update: PermissionUpdate): {
 } {
   const destination = `in ${destinationLabel(update.destination)}`
   if (update.type === 'addRules' || update.type === 'replaceRules') {
-    const only = update.rules.length === 1 ? update.rules[0] : undefined
-    if (update.behavior === 'allow' && only?.ruleContent &&
-      (only.toolName === 'Bash' || only.toolName === 'PowerShell') && !only.ruleContent.endsWith(':*')) {
-      return { pre: 'Always allow this exact command', code: '', destination }
-    }
     return {
       pre: update.behavior === 'allow' ? 'Always allow' : update.behavior === 'deny' ? 'Always block' : 'Always ask for',
       code: update.rules.map(rule => (rule.toolName === 'Bash' || rule.toolName === 'PowerShell')

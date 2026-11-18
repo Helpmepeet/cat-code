@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
+import { MAX_SUGGESTION_SELECTIONS } from '../../shared/limits.js'
 import { PermissionPrompt } from './PermissionPrompt.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import { createDomTestHarness, type DomTestHarness } from './domTestHarness.js'
@@ -45,7 +46,7 @@ test('Run applies precisely the checked engine suggestion indices by mouse and k
   const boxes = [...tree.container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
   expect(boxes).toHaveLength(3)
   expect(boxes.map(box => box.getAttribute('aria-label'))).toEqual([
-    'Always allow this exact command in Project settings (local)',
+    `Always allow ${command} in Project settings (local)`,
     'Always allow git add:*, git commit:* in User settings',
     'Switch to Accept edits in This session',
   ])
@@ -58,6 +59,36 @@ test('Run applies precisely the checked engine suggestion indices by mouse and k
   await act(async () => { boxes[0]!.click(); boxes[1]!.click(); tree.container.querySelector<HTMLElement>('section')!.focus() })
   await key(harness.document, 'Enter')
   expect(allowed).toEqual([[0, 2], [1, 2]])
+})
+
+test('a command can save up to the transport limit, and can change its selection before Run', async () => {
+  const allowed: number[][] = []
+  const permission: PermissionRequest = {
+    ...request,
+    request: {
+      ...request.request,
+      tool_name: 'PowerShell',
+      permission_suggestions: Array.from({ length: MAX_SUGGESTION_SELECTIONS + 1 }, (_, index) => ({
+        type: 'addRules',
+        behavior: 'allow',
+        destination: 'localSettings',
+        rules: [{ toolName: 'PowerShell', ruleContent: `Get-Item report-${index}.txt` }],
+      })),
+    },
+  }
+  const tree = await harness.mount(<PermissionPrompt request={permission} onAllow={indices => allowed.push(indices)} onDeny={() => {}} />)
+  const boxes = [...tree.container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+  const lastBox = boxes[MAX_SUGGESTION_SELECTIONS]!
+  await act(async () => { for (const box of boxes.slice(0, MAX_SUGGESTION_SELECTIONS)) box.click() })
+  expect(lastBox.disabled).toBe(true)
+  expect(tree.container.querySelector('[role="status"]')?.textContent).toContain(String(MAX_SUGGESTION_SELECTIONS))
+  await act(async () => { lastBox.click() })
+  expect(lastBox.checked).toBe(false)
+  await act(async () => { boxes[0]!.click() })
+  expect(lastBox.disabled).toBe(false)
+  await act(async () => { lastBox.click() })
+  await act(async () => { button(tree.container, 'Run').click() })
+  expect(allowed).toEqual([Array.from({ length: MAX_SUGGESTION_SELECTIONS }, (_, index) => index + 1)])
 })
 
 test('decision keys deny, repeat and unrelated navigation pass through, and checkbox focus owns its keys', async () => {
@@ -96,8 +127,8 @@ test('Deny never applies checked suggestions and submitted decisions disable eve
   expect(snoozed).toBe(1)
   await tree.render(view(true))
   expect([...tree.container.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, .command-permission-actions button, .command-permission-later')].every(node => node.disabled)).toBe(true)
-  expect(tree.container.textContent).not.toContain('↵')
-  expect(tree.container.textContent).not.toContain('esc')
+  expect(button(tree.container, 'Run').textContent).not.toContain('↵')
+  expect(button(tree.container, 'Deny').textContent).not.toContain('esc')
   await key(harness.document, 'Enter')
   await key(harness.document, 'Escape')
   expect(allowed).toEqual([])
@@ -172,33 +203,23 @@ test('folding measures wrapped rendered height, survives expansion and resizes w
   } finally { globalThis.ResizeObserver = previousObserver; style.mockRestore(); bounds.mockRestore() }
 })
 
-test('destination disappears before the rule truncates and returns on widening; tooltip stays complete', async () => {
-  const originalObserver = globalThis.ResizeObserver
-  const observers: { callback: ResizeObserverCallback; target: Element | null }[] = []
-  globalThis.ResizeObserver = class {
-    entry: typeof observers[number]
-    constructor(callback: ResizeObserverCallback) { this.entry = { callback, target: null }; observers.push(this.entry) }
-    observe(target: Element) { this.entry.target = target }
-    disconnect() { this.entry.target = null }
-    unobserve() {}
-  } as unknown as typeof ResizeObserver
-  try {
-    const tree = await harness.mount(<PermissionPrompt request={request} onAllow={() => {}} onDeny={() => {}} />)
-    const label = tree.container.querySelectorAll('label')[1]!
-    const rule = label.querySelector('code')!
-    const destination = label.querySelector<HTMLElement>('.command-permission-destination')!
-    let available = 100
-    Object.defineProperty(rule, 'scrollWidth', { configurable: true, get: () => 160 })
-    Object.defineProperty(rule, 'clientWidth', { configurable: true, get: () => destination.hidden ? 180 : available })
-    const resize = async () => { await act(async () => { for (const observer of observers) if (observer.target === label) observer.callback([], {} as ResizeObserver) }) }
-    await resize()
-    expect(destination.hidden).toBe(true)
-    expect(label.title).toBe('Always allow git add:*, git commit:* in User settings')
-    expect(rule.textContent).toBe('git add:*, git commit:*')
-    available = 200
-    await resize()
-    expect(destination.hidden).toBe(false)
-  } finally { globalThis.ResizeObserver = originalObserver }
+test('opening full command input with the keyboard does not approve the sandbox override', async () => {
+  const input = { command, description: 'Check the beta build', dangerouslyDisableSandbox: true }
+  const approval = { ...request, request: { ...request.request, input } }
+  let allowed = 0
+  const tree = await harness.mount(<PermissionPrompt keyboardTarget request={approval} onAllow={() => { allowed++ }} onDeny={() => {}} />)
+  await settleFocus()
+  expect(tree.container.textContent).toContain('Requested to run outside the Bash sandbox.')
+  const summary = tree.container.querySelector('summary')!
+  await act(async () => { summary.focus() })
+  expect(harness.document.activeElement).toBe(summary)
+  expect((await key(summary, 'Enter')).defaultPrevented).toBe(false)
+  expect(allowed).toBe(0)
+  // Happy DOM does not synthesize native keyboard activation from keydown.
+  await act(async () => { summary.click() })
+  const details = summary.closest('details')!
+  expect(details.open).toBe(true)
+  expect(JSON.parse(details.querySelector('pre')!.textContent!)).toEqual(input)
 })
 
 test('copy uses the complete original command and the shared copied check state', async () => {

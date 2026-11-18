@@ -825,7 +825,7 @@ test('only the card the shortcuts act on hosts them, takes focus, and says so', 
     <PermissionPrompt onAllow={() => {}} onDeny={() => {}} request={REQUEST} />,
   )
   expect(other).not.toContain(PERMISSION_KEY_HOST_ATTR)
-  expect(other).not.toContain('tabindex')
+  expect(other.match(/^<section[^>]*>/)?.[0]).not.toContain('tabindex')
   expect(other).not.toContain('↑↓ · 1–9')
   expect(other).not.toContain('>↵<')
 })
@@ -870,19 +870,19 @@ test('the cursor marks the row the keyboard would confirm, and only that row', (
   // `permissionKeyIntent` is unit-tested above, and the rest is operator-GUI.
 })
 
-test('command reason text stays verbatim in the appropriate tooltip and hides only the engine default', () => {
+test('command decision reasons and blocked paths are visible even with a description', () => {
   for (const tool_name of ['Bash', 'PowerShell']) {
     const render = (description: string | undefined, decision_reason: string) => renderToStaticMarkup(
-      <PermissionPrompt request={{ ...REQUEST, request: { ...REQUEST.request, tool_name, input: { command: 'date', description }, decision_reason } }} onAllow={() => {}} onDeny={() => {}} />,
+      <PermissionPrompt request={{ ...REQUEST, request: { ...REQUEST.request, tool_name, input: { command: 'date', description }, decision_reason, blocked_path: '/reports/today.txt' } }} onAllow={() => {}} onDeny={() => {}} />,
     )
     const reason = 'This command contains multiple operations. Approval is needed for git add, git commit.'
     const described = render('Commit the changes', reason)
-    expect(described).toContain(`title="${reason}">Commit the changes</h2>`)
-    expect(described).not.toContain('Needs approval:')
-    expect(described).not.toContain(`>${reason}</span>`)
+    expect(described).toContain('>Commit the changes</h2>')
+    expect(described).toContain(`>${reason}</p>`)
+    expect(described).toContain('/reports/today.txt</code>')
     const fallback = render(undefined, reason)
     expect(fallback).toContain('>Run command</h2>')
-    expect(fallback).toContain(`title="${reason}">${reason}</span>`)
+    expect(fallback).toContain(`>${reason}</p>`)
     expect(render(undefined, `Claude requested permissions to use ${tool_name}, but you haven't granted it yet.`)).not.toContain('requested permissions')
   }
 })
@@ -890,16 +890,17 @@ test('command reason text stays verbatim in the appropriate tooltip and hides on
 test.each([
   ['Short', 'bun test app/renderer/src/utils/diff.test.ts', 'Run the diff utility tests', 'bun test:*'],
   ['Multi-line', 'git add app/renderer/src/utils/diff.ts \\\n  app/renderer/src/utils/diff.test.ts\ngit commit -m "fix(diff): preserve the final line"', 'Commit the diff fix', 'git add:*'],
-  ['Long line', 'cd /Users/pt/cat-code/app && bun run typecheck 2>&1 | tail -40 && bun test renderer/src/utils/diff.test.ts renderer/src/PermissionPrompt.test.tsx --timeout 20000 && git diff --stat', 'Typecheck, run the permission tests, and summarise the diff', 'bun test:*'],
+  ['Wildcard', 'ls /reports/today.txt', 'List the daily report', 'ls /reports/*.txt'],
+  ['Subcommand', 'date && pwd', 'Show the date and working directory', 'date'],
   ['Script', './scripts/release-check.sh --channel beta --skip-notarize --report tmp/release-check.json', 'Run the beta release check against the built DMG', './scripts/release-check.sh --channel beta --skip-notarize --report tmp/release-check.json'],
-])('%s commands retain a description and use exact-command wording only for exact rules', (_name, command, description, ruleContent) => {
+])('%s commands show the saved rule and its destination', (_name, command, description, ruleContent) => {
   const html = renderToStaticMarkup(<PermissionPrompt request={{ ...REQUEST, request: { ...REQUEST.request, input: { command, description }, permission_suggestions: [
     { type: 'addRules', behavior: 'allow', destination: 'localSettings', rules: [{ toolName: 'Bash', ruleContent }] },
   ] } }} onAllow={() => {}} onDeny={() => {}} />)
   expect(html).toContain(`>${description}</h2>`)
   expect(html).toContain('in Project settings (local)')
-  expect(html.includes('Always allow this exact command')).toBe(!ruleContent.endsWith(':*'))
-  expect(html).not.toContain('Show input')
+  expect(html).toContain(`>${ruleContent}</code>`)
+  expect(html).not.toContain('Always allow this exact command')
 })
 
 test('PowerShell displays literal source without Bash token colors', () => {

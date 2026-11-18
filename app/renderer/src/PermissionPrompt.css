@@ -6,7 +6,7 @@
 .command-permission-header { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .command-permission-mark { flex: none; width: 14px; font: 500 13.5px var(--font-mono); text-align: center; }
 .command-permission-title { min-width: 0; font-size: 13.5px; line-height: 20px; font-weight: 600; overflow-wrap: anywhere; text-wrap: pretty; }
-.command-permission-reason { flex: 0 1000 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--text-subtle); }
+.command-permission-context { display: grid; gap: 3px; margin-top: 6px; font-size: 12px; color: var(--text-subtle); overflow-wrap: anywhere; }
 .command-permission-header-actions { display: flex; flex: none; align-items: baseline; gap: 8px; margin-left: auto; }
 .command-permission-count { font: 10px var(--font-mono); font-variant-numeric: tabular-nums; color: var(--text-faint); }
 .command-permission-later { font-size: 12px; color: var(--text-subtle); }
@@ -21,15 +21,18 @@
 .command-permission-shell .shell-token-flag, .command-permission-flag { white-space: nowrap; }
 .command-permission-fold { display: block; width: 100%; border-top: 1px solid var(--shell-seam); padding: 6px 14px; text-align: left; font-size: 12px; color: var(--text-subtle); }
 .command-permission-fold:hover { color: var(--text-primary); background: var(--shell-hover); }
-.command-permission-footer { display: flex; align-items: center; gap: 16px; margin-top: 12px; }
-.command-permission-suggestions { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
-.command-permission-suggestion { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; font-size: 12.5px; line-height: 20px; color: var(--text-muted); cursor: pointer; }
-.command-permission-suggestion input { flex: none; width: 14px; height: 14px; padding: 0; margin: 0 2px 0 0; accent-color: var(--accent); cursor: pointer; }
-.command-permission-suggestion-lead { flex: none; }
-.command-permission-suggestion code { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font: 12px var(--font-mono); color: var(--text-primary); }
-.command-permission-destination { flex: none; color: var(--text-faint); }
-.command-permission-destination[hidden] { display: none; }
+.command-permission-input { margin-top: 6px; font-size: 12px; color: var(--text-subtle); }
+.command-permission-input summary { width: fit-content; cursor: pointer; }
+.command-permission-input pre { max-height: 9rem; margin-top: 6px; padding: 8px; border: 1px solid var(--shell-seam); border-radius: 8px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.command-permission-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; }
+.command-permission-suggestions { flex: 1 1 14rem; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.command-permission-suggestion { display: flex; align-items: flex-start; gap: 6px; min-width: 0; font-size: 12.5px; line-height: 20px; color: var(--text-muted); cursor: pointer; }
+.command-permission-suggestion input { flex: none; width: 14px; height: 14px; padding: 0; margin: 3px 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+.command-permission-suggestion-body { min-width: 0; overflow-wrap: anywhere; }
+.command-permission-suggestion code { white-space: pre-wrap; font: 12px var(--font-mono); color: var(--text-primary); }
+.command-permission-destination { color: var(--text-subtle); }
 .command-permission-suggestion:hover { color: var(--text-primary); }
+.command-permission-selection-limit { font-size: 12px; color: var(--text-subtle); }
 .command-permission-actions { display: flex; flex: none; align-items: center; gap: 8px; margin-left: auto; }
 .command-permission-button { display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 12px; font-size: 12.5px; line-height: 16px; white-space: nowrap; }
 .command-permission-run { padding-inline: 16px; }
@@ -38,4 +41,4 @@
 .command-permission-run:hover:not(:disabled) { filter: brightness(1.08); }
 .command-permission-deny:hover:not(:disabled) { background: var(--shell-hover); color: var(--text-primary); }
 .command-permission-key { font: 10.5px var(--font-mono); opacity: .65; }
-.command-permission-card button:focus-visible, .command-permission-card input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.command-permission-card :is(button, input, summary, pre[tabindex]):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

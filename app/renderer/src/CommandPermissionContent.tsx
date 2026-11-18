@@ -1,4 +1,5 @@
-import { memo, useEffect, useLayoutEffect, useId, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { MAX_SUGGESTION_SELECTIONS } from '../../shared/limits.js'
 import { AgentFace } from './AgentChrome.js'
 import type { AgentFaceIdentity } from './agentFace.js'
 import { CodeCopyButton } from './CodeCopyButton.js'
@@ -22,7 +23,7 @@ export function CommandPermissionContent({
   submitted: boolean
   keysLive: boolean
   selectedSuggestions: number[]
-  onSelectionChange: (indices: number[]) => void
+  onSelectionChange: (index: number, checked: boolean) => void
   onAllow: () => void
   onDeny: () => void
   onSnooze?: () => void
@@ -33,12 +34,15 @@ export function CommandPermissionContent({
   const reason = request.decision_reason && request.decision_reason !==
     `Claude requested permissions to use ${request.tool_name}, but you haven't granted it yet.`
     ? request.decision_reason : undefined
-  const command = typeof input?.command === 'string' ? input.command : formatPermissionInput(request.input)
+  const formattedInput = useMemo(() => formatPermissionInput(request.input), [request.input])
+  const command = typeof input?.command === 'string' ? input.command : formattedInput
+  const sandboxOverride = request.tool_name === 'Bash' && input?.dangerouslyDisableSandbox === true
+  const atSelectionLimit = selectedSuggestions.length >= MAX_SUGGESTION_SELECTIONS
+  const suggestions = request.permission_suggestions ?? []
   return <>
     <div className="command-permission-header">
       <span className={`command-permission-mark ${FAMILY_STYLE.bash.color}`} aria-hidden>{FAMILY_STYLE.bash.mark}</span>
-      <h2 className="command-permission-title" id={titleId} title={description ? reason : undefined}>{description ?? 'Run command'}</h2>
-      {!description && reason ? <span className="command-permission-reason" title={reason}>{reason}</span> : null}
+      <h2 className="command-permission-title" id={titleId}>{description ?? 'Run command'}</h2>
       {worker ? <span className="command-permission-worker" title={`Relayed from ${worker.name ?? `a ${worker.role}`}`}>
         <AgentFace axes={worker.face.axes} fill={worker.face.fill} size={13} />
         <span>{worker.name ?? worker.role}</span>
@@ -49,19 +53,33 @@ export function CommandPermissionContent({
         {onSnooze ? <button type="button" className="command-permission-later" disabled={submitted} onClick={onSnooze}>Later</button> : null}
       </span>
     </div>
+    {reason || request.blocked_path || sandboxOverride ? (
+      <div className="command-permission-context">
+        {reason ? <p>{reason}</p> : null}
+        {request.blocked_path ? <p>Blocked path <code>{request.blocked_path}</code></p> : null}
+        {sandboxOverride ? <p className="text-tone-warn">Requested to run outside the Bash sandbox.</p> : null}
+      </div>
+    ) : null}
     <PermissionShellBlock command={command} bash={request.tool_name === 'Bash' && typeof input?.command === 'string'} />
+    {typeof input?.command === 'string' ? (
+      <details className="command-permission-input">
+        <summary>Full input</summary>
+        <pre aria-label="Command input" tabIndex={0}>{formattedInput}</pre>
+      </details>
+    ) : null}
     <div className="command-permission-footer">
-      <div className="command-permission-suggestions">
-        {(request.permission_suggestions ?? []).map((suggestion, index) => <CommandSuggestion
+      {suggestions.length > 0 ? <div className="command-permission-suggestions">
+        {suggestions.map((suggestion, index) => <CommandSuggestion
           key={index}
           suggestion={suggestion}
           checked={selectedSuggestions.includes(index)}
-          disabled={submitted}
-          onChange={checked => onSelectionChange(checked
-            ? [...selectedSuggestions, index].sort((a, b) => a - b)
-            : selectedSuggestions.filter(selected => selected !== index))}
+          disabled={submitted || (atSelectionLimit && !selectedSuggestions.includes(index))}
+          onChange={checked => onSelectionChange(index, checked)}
         />)}
-      </div>
+        {atSelectionLimit && suggestions.length > MAX_SUGGESTION_SELECTIONS ? (
+          <p className="command-permission-selection-limit" role="status">Up to {MAX_SUGGESTION_SELECTIONS} suggestions per approval. Deselect one to choose another.</p>
+        ) : null}
+      </div> : null}
       <div className="command-permission-actions">
         <button type="button" className="command-permission-button command-permission-deny rounded-md border border-shell-seam text-text-muted disabled:opacity-40" disabled={submitted} onClick={onDeny}>
           <ActionCloseIcon /><span>Deny</span>{keysLive ? <span className="command-permission-key">esc</span> : null}
@@ -125,32 +143,13 @@ function CommandSuggestion({ suggestion, checked, disabled, onChange }: {
   onChange: (checked: boolean) => void
 }) {
   const { pre, code, destination } = useMemo(() => describeCommandSuggestion(suggestion), [suggestion])
-  const labelRef = useRef<HTMLLabelElement>(null)
-  const destinationRef = useRef<HTMLSpanElement>(null)
-  useLayoutEffect(() => {
-    const label = labelRef.current
-    const where = destinationRef.current
-    if (!label || !where) return
-    let active = true
-    const measure = () => {
-      if (!active) return
-      // Measure with the destination present, then remove it as a whole before
-      // permitting any ellipsis on the rule. This also restores it on widening.
-      where.hidden = false
-      const rule = label.querySelector('code')
-      where.hidden = label.scrollWidth > label.clientWidth || !!rule && rule.scrollWidth > rule.clientWidth
-    }
-    measure()
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
-    observer?.observe(label)
-    void document.fonts?.ready.then(measure)
-    return () => { active = false; observer?.disconnect() }
-  }, [pre, code, destination])
   const sentence = [pre, code, destination].filter(Boolean).join(' ')
-  return <label ref={labelRef} className="command-permission-suggestion" title={sentence}>
+  return <label className="command-permission-suggestion">
     <input type="checkbox" checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} aria-label={sentence} />
-    <span className="command-permission-suggestion-lead">{pre}</span>
-    {code ? <code>{code}</code> : null}
-    <span ref={destinationRef} className="command-permission-destination">{destination}</span>
+    <span className="command-permission-suggestion-body">
+      {pre}{' '}
+      {code ? <><code>{code}</code>{' '}</> : null}
+      <span className="command-permission-destination">{destination}</span>
+    </span>
   </label>
 }

@@ -2,6 +2,7 @@ import {
   useEffect, useMemo, useRef, useState,
   type AnimationEventHandler, type ReactNode, type RefCallback,
 } from 'react'
+import { MAX_SUGGESTION_SELECTIONS } from '../../shared/limits.js'
 import type { LiveWorkerItem } from '../../shared/protocol.js'
 import { agentTypeMeta, resolveAgentIdentity } from './agentIdentity.js'
 import { AgentFace } from './AgentChrome.js'
@@ -108,6 +109,14 @@ export function PermissionPrompt({
   const toolName = request.request.tool_name
   const commandCard = !denyOnly && (toolName === 'Bash' || toolName === 'PowerShell')
   const [selectedSuggestions, setSelectedSuggestions] = useState<number[]>([])
+
+  function changeCommandSuggestion(index: number, checked: boolean) {
+    setSelectedSuggestions(previous => {
+      if (!checked) return previous.filter(selected => selected !== index)
+      if (previous.length >= MAX_SUGGESTION_SELECTIONS || previous.includes(index)) return previous
+      return [...previous, index].sort((a, b) => a - b)
+    })
+  }
   // Both fields are optional on the wire AND may arrive empty
   // (`sdk-types.snapshot.d.ts` `title?: string`, `agent_id?: string`). An
   // outbound engine frame has no inbound allowlist, so display degrades:
@@ -370,7 +379,7 @@ export function PermissionPrompt({
           submitted={submitted === true}
           keysLive={hintVisible && !submitted}
           selectedSuggestions={selectedSuggestions}
-          onSelectionChange={setSelectedSuggestions}
+          onSelectionChange={changeCommandSuggestion}
           onAllow={() => { if (!submitted) onAllow(selectedSuggestions) }}
           onDeny={() => { if (!submitted) onDeny() }}
           onSnooze={onSnooze}

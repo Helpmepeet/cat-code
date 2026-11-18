@@ -1,6 +1,6 @@
 import { isHandoffUuid } from '../shared/workspaceHandoff.js'
 import { selectAttachmentFile } from './attachmentFileSelection.js'
-import { coercePermissionResponse } from './permissionResponse.js'
+import { preparePermissionResponse } from './permissionResponse.js'
 import { createPreviewDocumentHost } from './previewDocumentHost.js'
 import { createPreviewDocumentRunner } from './previewDocumentRunner.js'
 import { CH_FILE_PREVIEW_DOCUMENT_READ } from '../shared/ipcChannels.js'
@@ -2982,13 +2982,13 @@ function registerIpcHandlers(): void {
     CH_PERMISSION,
     (_e, arg: { sessionId: SessionId; requestId: string; response: unknown }) => {
       if (typeof arg?.sessionId !== 'string' || typeof arg?.requestId !== 'string') return
-      const response = coercePermissionResponse(arg.response)
-      if (!response) return
-      forward(arg.sessionId, {
-        type: 'permission.response',
-        requestId: arg.requestId,
-        response,
-      })
+      if (!SESSION_ID_RE.test(arg.sessionId)) return
+      const message = preparePermissionResponse(arg.sessionId, arg.requestId, arg.response)
+      if ('kind' in message) {
+        deliver(attachmentGate.onFrame(arg.sessionId, message))
+      } else {
+        forward(arg.sessionId, message)
+      }
     },
   )
 
