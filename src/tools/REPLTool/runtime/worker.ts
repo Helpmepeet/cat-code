@@ -182,10 +182,18 @@ scope.onmessage = async ({ data }) => {
   try {
     if (data.type === 'init') { await initialize(data.limits); send({ type: 'ready' }); return }
     if (data.type === 'run') {
+      let source: string
+      try {
+        source = transform(data.source)
+      } catch (error) {
+        // Parsing and profile validation run before guest state can change.
+        send({ type: 'done', cellId: data.cellId, error: String(error).slice(0, 2048) })
+        return
+      }
       current = data.cellId
       deadline = Date.now() + limits.wallTimeMs
       running = true; settled = false; failure = undefined; requests = 0; outputBytes = 0
-      const result = ctx.evalCode(transform(data.source), `cell-${current}.js`, { type: 'global' })
+      const result = ctx.evalCode(source, `cell-${current}.js`, { type: 'global' })
       if (result.error) {
         failure = String(ctx.dump(result.error)?.message ?? 'Guest exception').slice(0, 2048)
         result.error.dispose(); settled = true

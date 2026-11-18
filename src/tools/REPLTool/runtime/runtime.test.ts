@@ -23,6 +23,29 @@ test('persistent declarations, top-level await, output and retained helper ident
     expect(h.outputs[0]?.line).toBe(2)
   } finally { h.runtime.dispose() }
 })
+test('redeclared functions are available from the start of a cell, including to retained helpers', async () => {
+  const h = harness()
+  try {
+    expect((await h.run('function helper(){ return "old"; } function retained(){ return helper(); }')).status).toBe('ok')
+    expect((await h.run(`output(await retained());
+async function helper(){
+  return tools.call({name: helper.name});
+}`, 'b')).status).toBe('ok')
+    expect(h.outputs.map(output => output.value)).toEqual([{ answer: 42 }])
+    expect(h.requests[0]).toMatchObject({ line: 3, sourceCellId: 'b', payload: { name: 'helper' } })
+  } finally { h.runtime.dispose() }
+})
+test('a syntax error evaluates no code and preserves state for the next cell', async () => {
+  const h = harness()
+  try {
+    expect((await h.run('const saved = 17;')).status).toBe('ok')
+    const failed = await h.run('output("unreachable"); let broken = ;', 'malformed')
+    expect(failed.status).toBe('error')
+    expect(failed.error).toContain('Unexpected token')
+    expect((await h.run('output(saved);', 'later')).status).toBe('ok')
+    expect(h.outputs.map(output => output.value)).toEqual([17])
+  } finally { h.runtime.dispose() }
+})
 test('no ambient host access or modules', async () => {
   const h = harness()
   try {
@@ -112,11 +135,13 @@ for (const source of [
 test('eval, constructor escape routes and stack manipulation cannot bypass fencing', async () => {
   const h = harness()
   try {
-    expect((await h.run(`const constructors = [Function, (()=>{}).constructor, (async()=>{}).constructor, (function*(){}).constructor, (async function*(){}).constructor];
+    const outcome = await h.run(`const constructors = [Function, (()=>{}).constructor, (async()=>{}).constructor, (function*(){}).constructor];
       for (const make of constructors) { let denied=false; try { make("return 1") } catch { denied=true } if(!denied) throw Error("escape"); }
       let denied=false; try { eval("1") } catch { denied=true } if(!denied) throw Error("eval escape");
       Error.prototype.stack = "cell-later.js:1"; Error.prepareStackTrace = () => "cell-later.js:1";
-      let release; new Promise(resolve=>release=resolve).then(()=>globalThis.shared.call({stale:true}));`)).status).toBe('limit')
+      let release; new Promise(resolve=>release=resolve).then(()=>globalThis.shared.call({stale:true}));`)
+    expect(outcome.status).toBe('limit')
+    expect(outcome.error).toContain('Unresolved guest continuation')
     expect((await h.run('globalThis.shared=tools; release();', 'later')).status).toBe('disposed')
     expect(h.requests).toEqual([])
   } finally { h.runtime.dispose() }
@@ -125,7 +150,7 @@ test('dynamic scope cannot shadow inserted promise tracking through computed key
   const h = harness()
   try {
     const result = await h.run('var release; with ({["__cmAdopt"]: value => value}) { (async () => { await {then(resolve){release=resolve}}; globalThis.shared.call({stale:true}); })(); }')
-    expect(result.status).toBe('limit')
+    expect(result.status).toBe('error')
     expect(result.error).toContain('Dynamic scope')
     expect(h.requests).toEqual([])
   } finally { h.runtime.dispose() }
@@ -165,12 +190,13 @@ test('retained async and arrow helpers bind new invocation across awaits', async
     expect(h.requests.map(r => r.cellId)).toEqual(['b', 'b'])
   } finally { h.runtime.dispose() }
 })
-test('multiline declaration source attribution is preserved', async () => {
+test('parenthesized multiline declaration source attribution is preserved', async () => {
   const h = harness()
   try {
-    expect((await h.run('const\n result =\n await tools.call({});\noutput(result);')).status).toBe('ok')
+    expect((await h.run('const\n result = (\n await tools.call({})\n );\noutput(result);')).status).toBe('ok')
     expect(h.requests[0]?.line).toBe(3)
-    expect(h.outputs[0]?.line).toBe(4)
+    expect(h.outputs[0]?.line).toBe(5)
+    expect(h.outputs[0]?.value).toEqual({ answer: 42 })
   } finally { h.runtime.dispose() }
 })
 test('request and pending caps, retained heap cap, and session isolation', async () => {

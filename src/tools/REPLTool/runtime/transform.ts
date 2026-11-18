@@ -37,23 +37,33 @@ function instrument(source: string): string {
 // No guest program is replayed.
 export function transform(source: string): string {
   source = instrument(source)
-  const ast = parse(source, { ecmaVersion: 'latest', allowAwaitOutsideFunction: true, locations: true })
+  const ast = parse(source, { ecmaVersion: 'latest', allowAwaitOutsideFunction: true })
   const edits: { start: number; end: number; text: string }[] = []
+  const hoisted = new Map<string, string>()
+  let directiveEnd = 0
   for (const node of ast.body) {
-    if (node.type === 'VariableDeclaration') {
+    if (node.type === 'ExpressionStatement' && node.directive !== undefined) {
+      directiveEnd = node.end
+    } else if (node.type === 'VariableDeclaration') {
       const text = source.slice(node.start, node.declarations[0]!.start).replace(/\S/g, ' ') + node.declarations.map((d, index) => {
-        const init = d.init ? source.slice(d.init.start, d.init.end) : 'undefined'
-        const expression = d.init ? source.slice(d.start, d.init.start) + init : source.slice(d.start, d.end) + ' = undefined'
+        const expression = source.slice(d.start, d.end) + (d.init ? '' : ' = undefined')
         const next = node.declarations[index + 1]
-        const separator = next ? source.slice(d.end, next.start) : source.slice(d.end, node.end).replace(';', '')
+        const separator = source.slice(d.end, next?.start ?? node.end)
         return `(${expression})${separator}`
-      }).join('') + ';'
+      }).join('') + (source[node.end - 1] === ';' ? '' : ';')
       edits.push({ start: node.start, end: node.end, text })
-    } else if ((node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') && node.id) {
-      edits.push({ start: node.start, end: node.start, text: `globalThis[${JSON.stringify(node.id.name)}] = ` })
-      edits.push({ start: node.end, end: node.end, text: ';' })
+    } else if (node.type === 'FunctionDeclaration' && node.id) {
+      // Native hoisting makes the factory callable at entry while keeping the
+      // named function body on its original lines and its binding in the notebook.
+      const factory = `__cmFunction${edits.length}`
+      hoisted.set(node.id.name, factory)
+      edits.push({ start: node.start, end: node.end, text: `function ${factory}(){return ${source.slice(node.start, node.end)};}` })
+    } else if (node.type === 'ClassDeclaration' && node.id) {
+      edits.push({ start: node.start, end: node.end, text: `globalThis[${JSON.stringify(node.id.name)}] = ${source.slice(node.start, node.end)};` })
     }
   }
   for (const edit of edits.sort((a, b) => b.start - a.start)) source = source.slice(0, edit.start) + edit.text + source.slice(edit.end)
+  const declarations = [...hoisted].map(([name, factory]) => `globalThis[${JSON.stringify(name)}]=${factory}();`).join('')
+  if (declarations) source = source.slice(0, directiveEnd) + ';' + declarations + source.slice(directiveEnd)
   return `(async function({tools,output,console}){${source}\n})(__cellBindings())`
 }
