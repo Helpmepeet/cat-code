@@ -80,10 +80,10 @@ import { findToolByName } from '../../Tool.js'
 import { safeParseJSON } from '../../utils/json.js'
 import {
   CODEX_ROUTES,
-  ROUTABLE_CODEX_RELEASES,
   currentCodexRelease,
   getCodexRelease,
   getExactClaudeRelease,
+  isRoutableCodexModelId,
   remapRetiredCodexSelection,
 } from '../../utils/model/configs.js'
 
@@ -664,13 +664,6 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
   })
 }
 
-// ── Available Codex models ──────────────────────────────────────────
-export const CODEX_MODELS = ROUTABLE_CODEX_RELEASES.map(release => ({
-  id: release.id,
-  label: release.label,
-  description: release.adapterDescription,
-}))
-
 function wireModelForRoute(route: 'adapterFallback' | 'fromOpus' | 'fromHaikuOrSonnet'): string {
   const release = currentCodexRelease(CODEX_ROUTES[route])
   return release.wireId ?? release.id
@@ -700,7 +693,7 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
   if (!claudeModel) return DEFAULT_CODEX_MODEL
   const remapped = remapRetiredCodexSelection(claudeModel)
   const codex = getCodexRelease(remapped)
-  if (codex && isCodexModel(codex.id)) return codex.wireId ?? codex.id
+  if (codex && isRoutableCodexModelId(codex.id)) return codex.wireId ?? codex.id
   const lower = remapped.toLowerCase()
   const exact = lower.replace(/\[(?:1m|2m)\]$/, '')
   const release = getExactClaudeRelease(exact)
@@ -717,15 +710,6 @@ export function requireExactCodexModel(model: string): void {
   if (effective !== model) {
     throw new Error(`Expected exact Codex model ${model}; this engine routes it to ${effective}`)
   }
-}
-
-/**
- * Checks if a given model string is a valid Codex model.
- * @param model - The model string to check
- * @returns True if the model is a Codex model, false otherwise
- */
-export function isCodexModel(model: string): boolean {
-  return CODEX_MODELS.some(m => m.id === model)
 }
 
 // ── Types ───────────────────────────────────────────────────────────

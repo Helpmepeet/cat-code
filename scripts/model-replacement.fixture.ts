@@ -32,6 +32,7 @@ import { getModelCosts } from '../src/utils/modelCost.js'
 import { EMPTY_USAGE } from '../src/services/api/emptyUsage.js'
 import { getConfiguredStandardModelCosts } from '../src/utils/modelCostRates.js'
 import { getModelOptions } from '../src/utils/model/modelOptions.js'
+import { validateModel } from '../src/utils/model/validateModel.js'
 import { _forTest as classifier, YOLO_CLASSIFIER_TOOL_NAME } from '../src/utils/permissions/yoloClassifier.js'
 import { getAutoModeClassifierAttempts } from '../src/utils/permissions/autoModeProviderLadder.js'
 import { updateSettingsForSource } from '../src/utils/settings/settings.js'
@@ -83,11 +84,12 @@ async function verifyCodex() {
   const astra = currentCodexRelease('astra')
   const terra = currentCodexRelease('terra')
   const luna = currentCodexRelease('luna')
-  await check('new Codex chat and terminal picker', () => {
+  await check('new Codex chat and terminal model selection', async () => {
     assert.equal(getDefaultCodexModel(), model)
     assert.deepEqual(getModelOptions().slice(1, 5).map(({ value, label }) => [value, label]), [
       [astra.id, astra.label], [model, label], [terra.id, terra.label], [luna.id, luna.label],
     ])
+    assert.deepEqual(await validateModel(model), { valid: true })
   })
 
   await check('desktop run controls', () => {
@@ -133,13 +135,14 @@ async function verifyCodex() {
     ])
   })
 
-  await check('prompt identity and historical replay', async () => {
+  await check('recorded model identity in prompts and Usage', async () => {
     assert.equal(getMarketingNameForModel(predecessor), 'GPT-6.2 Sol')
     assert.equal(getMarketingNameForModel(priorWire), 'Catalog Prior Sol')
     const usage = (id: string) => ({ id, kind: 'named' as const, label: id })
     assert.ok(isCurrentUsageModel(usage(model)))
     assert.ok(isCurrentUsageModel(usage(wire)))
-    assert.ok(isRetiredUsageModel(usage(predecessor)))
+    assert.ok(isRetiredUsageModel(usage('gpt-6.1-sol')))
+    assert.equal(isRetiredUsageModel(usage(priorWire)), false)
     const prompt = (await getSystemPrompt([], model, [], [], 'openai')).join('\n')
     assert.match(prompt, /You are powered by the model named Catalog Fixture Sol\. The exact model ID is gpt-catalog-fixture-sol\./)
     const historical = (await getSystemPrompt([], predecessor, [], [], 'openai')).join('\n')

@@ -154,7 +154,6 @@ type CodexRelease = {
   pickerDescription?: string
   pickerDetail?: string
   agentDescription?: string
-  adapterDescription?: string
   promptFamily?: 'gpt-5.6' | 'gpt-6'
   context?: { window: number; source: 'gpt_6_codex' | 'gpt_5_6_codex' }
   efforts?: readonly CodexEffort[]
@@ -177,6 +176,8 @@ const codex56Window = (window: number) => ({ window, source: 'gpt_5_6_codex' } a
 
 // The first release in each family is selectable. Earlier releases retain
 // their facts for replay and usage, and follow the family for new selections.
+// Set usage: 'retired' on older releases that belong under the Usage dashboard's
+// retired-model filter. The 'solLuna' tag preserves its separate Usage priority.
 const terra61Id = 'gpt-6.1-terra'
 
 const CODEX_FAMILIES = {
@@ -188,7 +189,6 @@ const CODEX_FAMILIES = {
       pickerDescription: 'Most capable for complex work',
       pickerDetail: 'Most capable GPT model for complex work',
       agentDescription: 'Most capable GPT model for complex work',
-      adapterDescription: 'Most capable model for complex work',
       context: codexWindow(272_000),
       efforts: codexUltra,
       minimalOnWire: 'low',
@@ -205,7 +205,6 @@ const CODEX_FAMILIES = {
       label: 'GPT-6.2 Sol',
       pickerDescription: 'Complex coding and agentic workflows',
       agentDescription: 'Complex coding and agentic workflows',
-      adapterDescription: 'Frontier model for complex professional work',
       context: codexWindow(500_000),
       efforts: codexUltra,
       defaultEffort: 'medium',
@@ -224,7 +223,6 @@ const CODEX_FAMILIES = {
       label: 'GPT-6.1 Terra',
       pickerDescription: 'Fast visual reasoning, computer use, and writing',
       agentDescription: 'Fast visual reasoning, computer use, and writing',
-      adapterDescription: 'Fast visual reasoning, computer use, and writing',
       context: codexWindow(1_050_000),
       efforts: codexMax,
       defaultEffort: 'medium',
@@ -245,7 +243,6 @@ const CODEX_FAMILIES = {
       label: 'GPT-6 Luna',
       pickerDescription: 'Efficient model for focused/high-volume work',
       agentDescription: 'Fast GPT-6 option for agentic coding (preview)',
-      adapterDescription: 'Fast and affordable agentic coding model (preview)',
       context: codexWindow(1_050_000),
       efforts: codexMax,
       defaultEffort: 'low',
@@ -279,11 +276,11 @@ export const CODEX_ROUTES = {
 } as const satisfies Record<string, CodexFamily | readonly CodexFamily[]>
 
 const CODEX_ADAPTER_ONLY = [
-  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', publicLabel: 'Codex 5.2', adapterDescription: 'Frontier agentic coding model' },
-  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', publicLabel: 'Codex 5.1', adapterDescription: 'Codex coding model' },
-  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', publicLabel: 'Codex 5.1 Mini', adapterDescription: 'Fast Codex model' },
-  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max', publicLabel: 'Codex 5.1 Max', adapterDescription: 'Max Codex model' },
-  { id: 'gpt-5.2', label: 'GPT-5.2', adapterDescription: 'GPT-5.2' },
+  { id: 'gpt-5.2-codex', label: 'GPT-5.2 Codex', publicLabel: 'Codex 5.2' },
+  { id: 'gpt-5.1-codex', label: 'GPT-5.1 Codex', publicLabel: 'Codex 5.1' },
+  { id: 'gpt-5.1-codex-mini', label: 'GPT-5.1 Codex Mini', publicLabel: 'Codex 5.1 Mini' },
+  { id: 'gpt-5.1-codex-max', label: 'GPT-5.1 Codex Max', publicLabel: 'Codex 5.1 Max' },
+  { id: 'gpt-5.2', label: 'GPT-5.2' },
 ] as const satisfies readonly CodexRelease[]
 
 export function currentCodexRelease<F extends CodexFamily>(family: F): (typeof CODEX_FAMILIES)[F][0] & CodexRelease {
@@ -291,11 +288,13 @@ export function currentCodexRelease<F extends CodexFamily>(family: F): (typeof C
 }
 
 export const CURRENT_CODEX_RELEASES: readonly ((typeof CODEX_FAMILIES)[CodexFamily][0] & CodexRelease)[] = Object.values(CODEX_FAMILIES).map(([release]) => release)
-export const ROUTABLE_CODEX_RELEASES: readonly (
-  CodexRelease & { label: string; adapterDescription: string }
-)[] = [
+export const ROUTABLE_CODEX_RELEASES: readonly (CodexRelease & { label: string })[] = [
   ...CURRENT_CODEX_RELEASES, ...CODEX_ADAPTER_ONLY,
 ]
+
+export function isRoutableCodexModelId(id: string): boolean {
+  return ROUTABLE_CODEX_RELEASES.some(release => release.id === id)
+}
 
 const codexRetirementTargets = new Map<string, string>()
 const codexById = new Map<string, CodexRelease>()
@@ -352,7 +351,7 @@ export function getCodexUsageStatus(model: string): {
   return {
     current,
     legacySolLuna: release?.usage === 'solLuna',
-    retired: release?.usage === 'retired' || (!current && release?.pickerDescription !== undefined),
+    retired: release?.usage === 'retired',
   }
 }
 

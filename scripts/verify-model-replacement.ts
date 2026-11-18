@@ -36,7 +36,6 @@ try {
       label: 'Catalog Fixture Sol',
       pickerDescription: 'Synthetic catalog verification',
       agentDescription: 'Synthetic catalog verification',
-      adapterDescription: 'Synthetic catalog verification',
       context: codexWindow(618_000),
       efforts: ['low', 'medium'],
       defaultEffort: 'low',
@@ -44,7 +43,8 @@ try {
     },
     {
       id: 'gpt-catalog-prior-sol', wireId: 'Catalog-Prior.Responses',
-      label: 'Catalog Prior Sol', promptFamily: 'gpt-6', usage: 'retired',
+      label: 'Catalog Prior Sol', promptFamily: 'gpt-6',
+      pickerDescription: 'Description retained from its picker entry',
     },
 `))
   console.log(`Synthetic replacement edits only ${catalogPath}`)
@@ -75,7 +75,9 @@ try {
     'src/commands/switch-account/switch-account.test.ts', 'app/host/peerNames.test.ts',
     'src/utils/model/modelOverridePrecedence.test.ts', 'src/utils/model/modelOptions.test.ts',
     'src/utils/model/smallFastModel.test.ts', 'src/utils/model/agent.test.ts',
-    'app/sidecar/usageSummary.test.ts',
+    'src/utils/model/gptModelCatalog.test.ts',
+    'src/services/api/codex-fetch-adapter.test.ts',
+    'app/shared/usageModelStatus.test.ts', 'app/sidecar/usageSummary.test.ts',
   ]
   const codexTests = run('codex-tests', unchangedSuites)
 
@@ -103,7 +105,7 @@ try {
     {
       ...codex6, id: 'gpt-catalog-fixture-terra', priceAs: terra61Id,
       label: 'Catalog Fixture Terra', pickerDescription: 'Synthetic pricing verification',
-      agentDescription: 'Synthetic pricing verification', adapterDescription: 'Synthetic pricing verification',
+      agentDescription: 'Synthetic pricing verification',
       context: codexWindow(1_050_000), efforts: codexMax,
     },
 `))
@@ -113,7 +115,7 @@ try {
     {
       ...codex6, id: 'gpt-catalog-fixture-luna', label: 'Catalog Fixture Luna',
       pickerDescription: 'Synthetic reviewer verification', agentDescription: 'Synthetic reviewer verification',
-      adapterDescription: 'Synthetic reviewer verification', context: codexWindow(1_050_000),
+      context: codexWindow(1_050_000),
       efforts: codexMax, defaultEffort: 'low', minimalOnWire: 'none', maxOnWire: 'max',
     },
 `))

@@ -31,7 +31,6 @@ import {
   getConfiguredAnthropicProvider,
   isAnthropicCloudProvider,
   isFirstPartyAnthropicBaseUrl,
-  type APIProvider,
 } from './providers.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
 import { isModelAllowed } from './modelAllowlist.js'

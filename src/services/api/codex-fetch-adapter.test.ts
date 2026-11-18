@@ -3,6 +3,7 @@ import { APIConnectionError } from '@anthropic-ai/sdk'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { currentCodexRelease } from '../../utils/model/configs.js'
 import * as sessionStorage from '../../utils/sessionStorage.js'
 import {
   _setWebSocketFactoryForTest,
@@ -1103,35 +1104,25 @@ describe('codex-fetch-adapter', () => {
   })
 
 
-  test('translateToCodexBody remaps retired Terra and disabled thinking to its successor', () => {
-    const { codexBody } = translateToCodexBody({
-      model: 'gpt-5.6-terra',
-      thinking: false,
-      _openaiInstructionAssembly: {
-        instructions: 'test instructions',
-        inputMessages: [],
-      },
-    })
-
-    expect(codexBody.reasoning).toEqual({ effort: 'none' })
-    expect(codexBody.model).toBe('gpt-6.1-terra')
-  })
-
-
   test.each([
-    ['gpt-6.1-sol', 'gpt-6.2-sol'],
-    ['gpt-6-astra', 'gpt-6.2-astra'],
-  ])('translateToCodexBody upgrades %s to %s and maps disabled thinking to low', (legacy, successor) => {
+    ['gpt-5.6-terra', 'terra', false],
+    ['gpt-6.1-sol', 'sol', { type: 'disabled' }],
+    ['gpt-6-astra', 'astra', { type: 'disabled' }],
+  ] as const)('translates %s to current %s and uses its disabled-thinking effort', (legacy, family, thinking) => {
+    const release = currentCodexRelease(family)
     const { codexBody } = translateToCodexBody({
       model: legacy,
-      thinking: { type: 'disabled' },
+      thinking,
       _openaiInstructionAssembly: {
         instructions: 'test instructions',
         inputMessages: [],
       },
     })
 
-    expect(codexBody).toMatchObject({ model: successor, reasoning: { effort: 'low' } })
+    expect(codexBody).toMatchObject({
+      model: release.wireId ?? release.id,
+      reasoning: { effort: release.minimalOnWire ?? 'minimal' },
+    })
   })
 
   test('mapEffortToCodex maps explicit minimal to none for Luna and GPT-5.6 models', () => {
@@ -4823,23 +4814,27 @@ describe('codex request-start diagnostic', () => {
 // provider), which makes it the thing that decides which GPT actually serves a
 // subagent pinned to a Claude tier.
 describe('mapClaudeModelToCodex', () => {
+  const sol = currentCodexRelease('sol')
+  const luna = currentCodexRelease('luna')
+  const terra = currentCodexRelease('terra')
+
   test('rejects an exact Opus 5.5 pin instead of substituting a GPT model', () => {
     for (const model of ['claude-opus-5-5', 'claude-opus-5-5[1m]']) {
       expect(() => mapClaudeModelToCodex(model)).toThrow('cannot run through OpenAI')
     }
   })
-  test('maps the top Claude tier to the top Codex tier', () => {
+  test('maps the top Claude tier to current Sol', () => {
     // The regression this locks: `opus` used to land on Terra, the MIDDLE rung,
     // so naming the most capable model got you less than naming nothing (which
     // inherits the session default, Sol).
-    expect(mapClaudeModelToCodex('opus')).toBe('gpt-6.2-sol')
-    expect(mapClaudeModelToCodex('claude-opus-5')).toBe('gpt-6.2-sol')
-    expect(mapClaudeModelToCodex('claude-opus-4-6[1m]')).toBe('gpt-6.2-sol')
+    for (const model of ['opus', 'claude-opus-5', 'claude-opus-4-6[1m]']) {
+      expect(mapClaudeModelToCodex(model)).toBe(sol.wireId ?? sol.id)
+    }
   })
 
   test('maps the cheaper Claude tiers to Luna', () => {
     for (const model of ['sonnet', 'claude-sonnet-5', 'haiku', 'claude-haiku-4-5']) {
-      expect(mapClaudeModelToCodex(model)).toBe('gpt-6-luna')
+      expect(mapClaudeModelToCodex(model)).toBe(luna.wireId ?? luna.id)
     }
   })
 
@@ -4847,30 +4842,26 @@ describe('mapClaudeModelToCodex', () => {
   // auxiliary call, so making this "consistent" with the top rung would move
   // that traffic onto the frontier model.
   test('keeps both fallbacks mid tier', () => {
-    expect(mapClaudeModelToCodex(null)).toBe('gpt-6.1-terra')
-    expect(mapClaudeModelToCodex('')).toBe('gpt-6.1-terra')
-    expect(mapClaudeModelToCodex('some-unrecognized-model')).toBe('gpt-6.1-terra')
+    for (const model of [null, '', 'some-unrecognized-model']) {
+      expect(mapClaudeModelToCodex(model)).toBe(terra.wireId ?? terra.id)
+    }
   })
 
-  test('passes a recognized Codex model through untouched', () => {
-    for (const model of [
-      'gpt-6.2-astra',
-      'gpt-6.2-sol',
-      'gpt-6.1-terra',
-      'gpt-6-luna',
-    ]) {
-      expect(mapClaudeModelToCodex(model)).toBe(model)
+  test('maps current selections to their provider IDs', () => {
+    for (const release of [currentCodexRelease('astra'), sol, terra, luna]) {
+      expect(mapClaudeModelToCodex(release.id)).toBe(release.wireId ?? release.id)
     }
   })
 
   test('remaps retired GPT models before checking recognized Codex models', () => {
-    expect(mapClaudeModelToCodex('gpt-6-sol')).toBe('gpt-6.2-sol')
-    expect(mapClaudeModelToCodex('gpt-5.6-sol')).toBe('gpt-6.2-sol')
-    expect(mapClaudeModelToCodex('gpt-5.6-luna')).toBe('gpt-6-luna')
-    expect(mapClaudeModelToCodex('gpt-5.4')).toBe('gpt-6-luna')
-    expect(mapClaudeModelToCodex('gpt-5.3-codex')).toBe('gpt-6-luna')
-    expect(mapClaudeModelToCodex('gpt-5.4-mini')).toBe('gpt-6-luna')
-    expect(mapClaudeModelToCodex('gpt-5.5')).toBe('gpt-6.1-terra')
-    expect(mapClaudeModelToCodex('gpt-5.6-terra')).toBe('gpt-6.1-terra')
+    for (const [release, retired] of [
+      [sol, ['gpt-6-sol', 'gpt-5.6-sol']],
+      [luna, ['gpt-5.6-luna', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.4-mini']],
+      [terra, ['gpt-5.5', 'gpt-5.6-terra']],
+    ] as const) {
+      for (const id of retired) {
+        expect(mapClaudeModelToCodex(id)).toBe(release.wireId ?? release.id)
+      }
+    }
   })
 })

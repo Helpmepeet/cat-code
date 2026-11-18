@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 
 import { executeEffort, showCurrentEffort } from '../../commands/effort/effort.js'
 import { cycleEffortLevel } from '../../components/ModelPicker.js'
-import { CODEX_MODELS } from '../../services/api/codex-fetch-adapter.js'
 import { getContextWindowForModel } from '../context.js'
 import {
   getDefaultEffortForModel,
@@ -12,51 +11,51 @@ import {
   modelSupportsMaxEffort,
 } from '../effort.js'
 import { getAgentModelOptions } from './agent.js'
+import { currentCodexRelease, isRoutableCodexModelId } from './configs.js'
 import {
   getMarketingNameForModel,
   getPublicModelDisplayName,
   parseUserSpecifiedModel,
 } from './model.js'
 
-describe('GPT retirement replacements', () => {
+const families = ['astra', 'sol', 'terra', 'luna'] as const
+
+describe('Codex selection', () => {
   test('replaces every retired GPT selection with its designated successor model', () => {
-    expect(parseUserSpecifiedModel('gpt-6-astra')).toBe('gpt-6.2-astra')
-    expect(parseUserSpecifiedModel(' GPT-6.1-ASTRA[1m] ')).toBe('gpt-6.2-astra')
-    expect(parseUserSpecifiedModel('gpt-6.1-sol')).toBe('gpt-6.2-sol')
-    expect(parseUserSpecifiedModel('gpt-6-sol')).toBe('gpt-6.2-sol')
-    expect(parseUserSpecifiedModel('gpt-5.6-sol')).toBe('gpt-6.2-sol')
-    expect(parseUserSpecifiedModel('gpt-5.6-luna')).toBe('gpt-6-luna')
-    expect(parseUserSpecifiedModel('gpt-5.4')).toBe('gpt-6-luna')
-    expect(parseUserSpecifiedModel('gpt-5.3-codex')).toBe('gpt-6-luna')
-    expect(parseUserSpecifiedModel('gpt-5.4-mini')).toBe('gpt-6-luna')
-    expect(parseUserSpecifiedModel('gpt-5.5')).toBe('gpt-6.1-terra')
-    expect(parseUserSpecifiedModel('gpt-5.6-terra')).toBe('gpt-6.1-terra')
-    expect(parseUserSpecifiedModel(' GPT-5.6-TERRA[1m] ')).toBe('gpt-6.1-terra')
-
-    for (const retiredModel of [
-      'gpt-6-astra',
-      'gpt-6.1-astra',
-      'gpt-6.1-sol',
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-6-sol',
-      'gpt-5.6-luna',
-      'gpt-5.4',
-      'gpt-5.3-codex',
-      'gpt-5.4-mini',
-      'gpt-5.5',
-    ]) {
-      expect(
-        getAgentModelOptions().some(option => option.value === retiredModel),
-      ).toBe(false)
-      expect(CODEX_MODELS.some(model => model.id === retiredModel)).toBe(false)
+    const retiredByFamily = {
+      astra: ['gpt-6-astra', 'gpt-6.1-astra'],
+      sol: ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol'],
+      terra: ['gpt-5.5', 'gpt-5.6-terra'],
+      luna: ['gpt-5.6-luna', 'gpt-5.4', 'gpt-5.3-codex', 'gpt-5.4-mini'],
     }
+    const choices = getAgentModelOptions().map(option => option.value)
+    for (const family of families) {
+      const current = currentCodexRelease(family).id
+      for (const retired of retiredByFamily[family]) {
+        expect(parseUserSpecifiedModel(retired)).toBe(current)
+        expect(choices).not.toContain(retired)
+        expect(isRoutableCodexModelId(retired)).toBe(false)
+      }
+    }
+    expect(parseUserSpecifiedModel(' GPT-6.1-ASTRA[1m] ')).toBe(currentCodexRelease('astra').id)
+    expect(parseUserSpecifiedModel(' GPT-5.6-TERRA[1m] ')).toBe(currentCodexRelease('terra').id)
+  })
 
+  test('offers the current releases in Astra, Sol, Terra, Luna order', () => {
+    const expected = families.map(family => {
+      const { id, label } = currentCodexRelease(family)
+      expect(isRoutableCodexModelId(id)).toBe(true)
+      return { value: id, label }
+    })
+    const choices = getAgentModelOptions().map(({ value, label }) => ({ value, label }))
+    const start = choices.findIndex(choice => choice.value === expected[0]!.value)
+    expect(start).toBeGreaterThanOrEqual(0)
+    expect(choices.slice(start, start + expected.length)).toEqual(expected)
   })
 })
 
-describe('Active GPT models: Astra 6.2, Sol 6.2, Terra, Luna', () => {
-  const activeModels = [
+describe('Exact Codex release facts', () => {
+  const releases = [
     {
       id: 'gpt-6.2-astra',
       publicDisplay: 'GPT 6.2 Astra',
@@ -91,16 +90,10 @@ describe('Active GPT models: Astra 6.2, Sol 6.2, Terra, Luna', () => {
     },
   ] as const
 
-  for (const item of activeModels) {
-    test(`${item.marketingName} is selectable and uses its configured limits`, () => {
+  for (const item of releases) {
+    test(`${item.marketingName} retains its labels and limits`, () => {
       expect(getPublicModelDisplayName(item.id)).toBe(item.publicDisplay)
       expect(getMarketingNameForModel(item.id)).toBe(item.marketingName)
-      expect(
-        getAgentModelOptions().find(option => option.value === item.id)?.label,
-      ).toBe(item.marketingName)
-      expect(CODEX_MODELS.find(entry => entry.id === item.id)?.label).toBe(
-        item.marketingName,
-      )
       expect(getContextWindowForModel(item.id)).toBe(item.window)
       expect(getDefaultEffortForModel(item.id)).toBe(item.defaultEffort)
       expect(modelSupportsMaxEffort(item.id)).toBe(true)
@@ -109,30 +102,6 @@ describe('Active GPT models: Astra 6.2, Sol 6.2, Terra, Luna', () => {
       )
     })
   }
-
-  test('picker order is Astra -> Sol 6.1 -> Terra -> Luna', () => {
-    const agentModels = getAgentModelOptions().map(option => option.value)
-    const astraIdx = agentModels.indexOf('gpt-6.2-astra')
-    const solIdx = agentModels.indexOf('gpt-6.2-sol')
-    const terraIdx = agentModels.indexOf('gpt-6.1-terra')
-    const lunaIdx = agentModels.indexOf('gpt-6-luna')
-
-    expect(astraIdx).toBeGreaterThanOrEqual(0)
-    expect(solIdx).toBe(astraIdx + 1)
-    expect(terraIdx).toBe(solIdx + 1)
-    expect(lunaIdx).toBe(terraIdx + 1)
-
-    const codexModels = CODEX_MODELS.map(entry => entry.id)
-    const cAstraIdx = codexModels.indexOf('gpt-6.2-astra')
-    const cSolIdx = codexModels.indexOf('gpt-6.2-sol')
-    const cTerraIdx = codexModels.indexOf('gpt-6.1-terra')
-    const cLunaIdx = codexModels.indexOf('gpt-6-luna')
-
-    expect(cAstraIdx).toBeGreaterThanOrEqual(0)
-    expect(cSolIdx).toBe(cAstraIdx + 1)
-    expect(cTerraIdx).toBe(cSolIdx + 1)
-    expect(cLunaIdx).toBe(cTerraIdx + 1)
-  })
 
   test('uses Codex CLI reasoning labels', () => {
     expect(getEffortLevelLabel('xhigh')).toBe('Extra high')

@@ -1,13 +1,15 @@
 import { expect, test } from 'bun:test';
+import { currentCodexRelease } from '../../src/utils/model/configs.js';
 import type { UsageCategory } from './usageDashboard.js';
-import { isCurrentUsageModel, isRetiredUsageModel } from './usageModelStatus.js';
+import { isCurrentSolLunaUsageModel, isCurrentUsageModel, isRetiredUsageModel } from './usageModelStatus.js';
 
 function named(label: string): UsageCategory {
     return { id: label, kind: 'named', label };
 }
 
 test('current Terra replaces historical Terra in usage status', () => {
-    for (const label of ['gpt-6.1-terra', 'GPT-6.1-Terra', 'gpt-6.1-terra-20261027']) {
+    const terra = currentCodexRelease('terra').id;
+    for (const label of [terra, terra.toUpperCase(), `${terra}-20261027`]) {
         expect(isCurrentUsageModel(named(label))).toBe(true);
         expect(isRetiredUsageModel(named(label))).toBe(false);
     }
@@ -17,8 +19,9 @@ test('current Terra replaces historical Terra in usage status', () => {
     }
 });
 
-test('usage status recognizes GPT-6.2 and retains the old model identities in history', () => {
-    for (const label of ['gpt-6.2-astra', 'gpt-6.2-sol', 'gpt-6-luna']) {
+test('usage status distinguishes current choices from retained releases', () => {
+    for (const family of ['astra', 'sol', 'luna'] as const) {
+        const label = currentCodexRelease(family).id;
         expect(isCurrentUsageModel(named(label))).toBe(true);
         expect(isRetiredUsageModel(named(label))).toBe(false);
     }
@@ -26,6 +29,8 @@ test('usage status recognizes GPT-6.2 and retains the old model identities in hi
         expect(isCurrentUsageModel(named(label))).toBe(false);
         expect(isRetiredUsageModel(named(label))).toBe(true);
     }
+    expect(isCurrentSolLunaUsageModel(named('gpt-6-sol'))).toBe(true);
+    expect(isRetiredUsageModel(named('gpt-6-sol'))).toBe(false);
 });
 
 test('usage status rejects non-named categories and model prefix collisions', () => {

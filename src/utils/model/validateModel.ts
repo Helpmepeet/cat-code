@@ -1,4 +1,4 @@
-import { getClaudeCloudFallbackKey } from './configs.js'
+import { getClaudeCloudFallbackKey, isRoutableCodexModelId } from './configs.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { MODEL_ALIASES } from './aliases.js'
 import { isModelAllowed } from './modelAllowlist.js'
@@ -44,8 +44,7 @@ export async function validateModel(
 
   // Check if it's a known Codex/OpenAI model (skip Anthropic API validation)
   const { isCodexSubscriber } = await import('../auth.js')
-  const { isCodexModel } = await import('../../services/api/codex-fetch-adapter.js')
-  if (isCodexSubscriber() && isCodexModel(normalizedModel)) {
+  if (isCodexSubscriber() && isRoutableCodexModelId(normalizedModel)) {
     validModelCache.set(normalizedModel, true)
     return { valid: true }
   }
