@@ -54,6 +54,15 @@ async function run() {
     const actual = await snapshot()
     assert(actual.draft === value, `${label}: expected ${JSON.stringify(value)}, got ${JSON.stringify(actual)}`)
   }
+  const expectOtherValue = async (expected: string, label: string) => {
+    const deadline = Date.now() + 2_000
+    let actual: string | undefined
+    do {
+      actual = await call('otherValue')
+      if (actual === expected) return
+    } while (Date.now() < deadline)
+    throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`)
+  }
   try {
     await window.loadFile(resolve(process.argv[2]!))
     wc.debugger.attach('1.3')
@@ -215,10 +224,11 @@ async function run() {
     results.push('native menu dispatch with no native edit entries')
     await call('otherEditor')
     await type('other editor')
+    await expectOtherValue('other editor', 'other editor typing')
     await dispatchComposerEdit(wc, 'undo')
-    assert(await call('otherValue') === '', 'other editor native undo was stolen')
+    await expectOtherValue('', 'other editor native undo')
     await dispatchComposerEdit(wc, 'redo')
-    assert(await call('otherValue') === 'other editor', 'other editor native redo was stolen')
+    await expectOtherValue('other editor', 'other editor native redo')
     results.push('other text fields keep native history')
     await call('reset')
     await type('command')
