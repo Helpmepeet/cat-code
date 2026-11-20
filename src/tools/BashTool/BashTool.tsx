@@ -324,6 +324,20 @@ function isAutobackgroundingAllowed(command: string): boolean {
   return !DISALLOWED_AUTO_BACKGROUND_COMMANDS.includes(baseCommand);
 }
 
+/** Settings shared by shell dispatch and the held-action review. */
+export function getBashExecutionSettings(input: BashToolInput, inline: boolean, isMainThread: boolean) {
+  const background = !inline && !isBackgroundTasksDisabled && input.run_in_background === true
+  return {
+    timeoutMs: input.timeout || getDefaultTimeoutMs(),
+    sandbox: shouldUseSandbox(input),
+    background,
+    canBackground: !inline && !isBackgroundTasksDisabled,
+    automaticBackgroundOnTimeout: !inline && !isBackgroundTasksDisabled && isAutobackgroundingAllowed(input.command),
+    automaticBackgroundAfterMs: feature('KAIROS') && getKairosActive() && isMainThread &&
+      !inline && !isBackgroundTasksDisabled && input.run_in_background !== true ? ASSISTANT_BLOCKING_BUDGET_MS : null,
+  }
+}
+
 /**
  * Detect standalone or leading `sleep N` patterns that should use Monitor
  * instead. Catches `sleep 5`, `sleep 5 && check`, `sleep 5; check` — but
@@ -997,11 +1011,10 @@ async function* runShellCommand({
 }, ExecResult, void> {
   const {
     command,
-    description,
-    timeout,
-    run_in_background
+    description
   } = input;
-  const timeoutMs = timeout || getDefaultTimeoutMs();
+  const settings = getBashExecutionSettings(input, Boolean(inlineCommand), isMainThread === true);
+  const { timeoutMs, automaticBackgroundOnTimeout: shouldAutoBackground } = settings;
   recordToolTimeout(toolUseId, timeoutMs);
   let fullOutput = '';
   let lastProgressOutput = '';
@@ -1033,7 +1046,6 @@ async function* runShellCommand({
   // Determine if auto-backgrounding should be enabled
   // Only enable for commands that are allowed to be auto-backgrounded
   // and when background tasks are not disabled
-  const shouldAutoBackground = !inlineCommand && !isBackgroundTasksDisabled && isAutobackgroundingAllowed(command);
   const shellCommand = await exec(command, abortController.signal, 'bash', {
     timeout: timeoutMs,
     onProgress(lastLines, allLines, totalLines, totalBytes, isIncomplete) {
@@ -1054,7 +1066,7 @@ async function* runShellCommand({
     cwd: inlineCommand?.cwd,
     requireExactCommand: Boolean(inlineCommand),
     stdin: inlineCommand ? 'ignore' : undefined,
-    shouldUseSandbox: shouldUseSandbox(input),
+    shouldUseSandbox: settings.sandbox,
     shouldAutoBackground,
     // Already carried this far to attribute background tasks to their agent.
     // exec needs the same fact to decide whether the child gets the worker
@@ -1172,18 +1184,18 @@ async function* runShellCommand({
     // In assistant mode, the main agent should stay responsive. Auto-background
     // blocking commands after ASSISTANT_BLOCKING_BUDGET_MS so the agent can keep
     // coordinating instead of waiting. The command keeps running — no state loss.
-    if (feature('KAIROS') && getKairosActive() && isMainThread && !inlineCommand && !isBackgroundTasksDisabled && run_in_background !== true) {
+    if (settings.automaticBackgroundAfterMs !== null) {
       setTimeout(() => {
         if (shellCommand.status === 'running' && backgroundShellId === undefined) {
           assistantAutoBackgrounded = true;
           startBackgrounding('tengu_bash_command_assistant_auto_backgrounded');
         }
-      }, ASSISTANT_BLOCKING_BUDGET_MS).unref();
+      }, settings.automaticBackgroundAfterMs).unref();
     }
 
     // Explicit backgrounding must not re-register a process already handed off
     // by an interrupt delivered during exec startup.
-    if (run_in_background === true && !inlineCommand && !isBackgroundTasksDisabled && !backgrounding && !backgroundShellId) {
+    if (settings.background && !backgrounding && !backgroundShellId) {
       const shellId = await spawnBackgroundTask();
       logEvent('tengu_bash_command_explicitly_backgrounded', {
         command_type: getCommandTypeForLogging(command)

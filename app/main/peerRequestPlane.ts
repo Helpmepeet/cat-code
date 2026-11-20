@@ -237,7 +237,7 @@ const VERB_ARG_KEYS: Record<
   'browser.describe': { required: [], optional: [] },
   'peers.list': { required: [], optional: ['cursor'] },
   'peer.announce': { required: ['doing'], optional: ['touches', 'note'] },
-  'peer.create': { required: ['prompt'], optional: ['model', 'effort'] },
+  'peer.create': { required: ['prompt'], optional: ['model', 'effort', 'assignmentUserMessageId'] },
   // `expectCreatorId` is optional and is checked exactly like `model` /
   // `effort`: a string, bounded by `MAX_HOST_REQUEST_ARG_CHARS`. It narrows a
   // delivery and can never widen one (F17, ruling 11; see `handlePeerDeliver`).
@@ -303,7 +303,7 @@ export type ValidatedHostRequest =
   | BrowserHostRequest
   | { verb: 'peers.list'; cursor?: string }
   | { verb: 'peer.announce'; notice: PeerNoticeInput }
-  | { verb: 'peer.create'; prompt: string; model?: string; effort?: string }
+  | { verb: 'peer.create'; prompt: string; model?: string; effort?: string; assignmentUserMessageId?: string }
   | {
       verb: 'peer.deliver'
       to: string
@@ -444,6 +444,7 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
           prompt: strings.prompt as string,
           ...(strings.model !== undefined ? { model: strings.model } : {}),
           ...(strings.effort !== undefined ? { effort: strings.effort } : {}),
+          ...(strings.assignmentUserMessageId !== undefined ? { assignmentUserMessageId: strings.assignmentUserMessageId } : {}),
         },
       }
     case 'peer.deliver':
@@ -1243,6 +1244,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       fromSessionId: sessionId,
       text: request.prompt,
       // PEER-SESSIONS §5 — the one message that is not framed as peer-sent.
+      ...(request.assignmentUserMessageId && requesterRow.engineSessionId && {
+        assignment: { parentSessionId: requesterRow.engineSessionId, userMessageId: request.assignmentUserMessageId },
+      }),
       untagged: true,
     }
     // The named row is already reachable while the host call is settling, so

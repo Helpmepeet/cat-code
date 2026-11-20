@@ -10,6 +10,8 @@ let ctx: ReturnType<typeof runtime.newContext>
 let limits: RuntimeLimits
 let current: string | undefined
 let deadline = 0
+let waitRevision: number | undefined
+let waitStarted: number | undefined
 let nextRequest = 0
 let requests = 0
 let outputBytes = 0
@@ -45,13 +47,18 @@ function pump() {
   pumpScheduled = true
   setTimeout(() => {
     pumpScheduled = false
-    if (!running) return
+    if (!running || waitStarted !== undefined) return
     try {
       const result = runtime.executePendingJobs(64)
       if (result.error) { result.error.dispose(); throw new Error('Guest microtask failed') }
       if (heapOverLimit()) throw new Error('Retained heap limit')
-      if (Date.now() > deadline) throw new Error('Cell computation limit')
+      if (performance.now() >= deadline) throw new Error('Cell computation limit')
       if (runtime.hasPendingJob()) { pump(); return }
+      if (waitRevision !== undefined && pending.size > 0) {
+        waitStarted = performance.now()
+        send({ type: 'human-wait', cellId: current, revision: waitRevision })
+        return
+      }
       if (settled && pending.size === 0) {
         if (unresolvedContinuations()) throw new Error('Unresolved guest continuation: runtime fenced; retained state discarded')
         running = false
@@ -75,7 +82,7 @@ async function initialize(l: RuntimeLimits) {
   runtime.setMaxStackSize(l.stackBytes)
   // The allocator limit alone does not account for every retained array resize
   // in this WASM build. Measure live guest storage as well, including across cells.
-  runtime.setInterruptHandler(() => running && (Date.now() > deadline || heapOverLimit()))
+  runtime.setInterruptHandler(() => running && (performance.now() >= deadline || heapOverLimit()))
   runtime.removeModuleLoader()
   ctx = runtime.newContext()
   const watch = ctx.newFunction('__cmWatch', value => {
@@ -191,10 +198,17 @@ scope.onmessage = async ({ data }) => {
         return
       }
       current = data.cellId
-      deadline = Date.now() + limits.wallTimeMs
+      deadline = performance.now() + limits.wallTimeMs
+      waitRevision = undefined
+      waitStarted = undefined
       running = true; settled = false; failure = undefined; requests = 0; outputBytes = 0
       const result = ctx.evalCode(source, `cell-${current}.js`, { type: 'global' })
       if (result.error) {
+        if (performance.now() >= deadline || heapExceeded) {
+          result.error.dispose()
+          send({ type: 'fatal', error: heapExceeded ? 'Retained heap limit' : 'Cell computation limit' })
+          return
+        }
         failure = String(ctx.dump(result.error)?.message ?? 'Guest exception').slice(0, 2048)
         result.error.dispose(); settled = true
       } else {
@@ -205,6 +219,16 @@ scope.onmessage = async ({ data }) => {
           settled = true; pump()
         })
         handle.dispose()
+      }
+      pump()
+    } else if (data.type === 'set-human-wait') {
+      if (current !== data.cellId || !running) return
+      if (data.waiting) {
+        waitRevision = data.revision
+      } else {
+        waitRevision = undefined
+        if (waitStarted !== undefined) deadline += performance.now() - waitStarted
+        waitStarted = undefined
       }
       pump()
     } else if (data.type === 'response') {

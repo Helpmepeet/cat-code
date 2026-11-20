@@ -1,3 +1,4 @@
+import { activeDeadline } from './runtime/activeDeadline.js'
 import { randomUUID } from 'node:crypto'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { ToolUseContext } from '../../Tool.js'
@@ -85,6 +86,12 @@ export class CodeModeHost {
   private pendingMemoryMessages = new Map<string, AttachmentMessage>()
   private awaitingContextRegistration = false
   private pendingContextModifiers: ((context: ToolUseContext) => ToolUseContext)[] = []
+
+  constructor(private readonly timeLimits = {
+    foregroundMs: FOREGROUND_WALL_TIME_MS,
+    backgroundMs: BACKGROUND_WALL_TIME_MS,
+    runtimeMs: BACKGROUND_WALL_TIME_MS,
+  }) {}
 
   dispose(): void {
     this.disposed = true
@@ -475,7 +482,11 @@ export class CodeModeHost {
     let auditBytes = 0
     const changedFiles = new Map<string, { path: string }>()
     const following: Message[] = []
-    const cellContext = { ...context, abortController: controller, codeModeBackgroundCell: background }
+    const cellContext = {
+      ...context, abortController: controller, codeModeBackgroundCell: background,
+      contextualParentScriptSource: input.code,
+      onHumanPermissionWait: (waiting: boolean) => this.runtime?.setHumanWait(cellId, waiting),
+    }
     const dispatch = new CodeModeDispatch(cellContext, canUseTool, { cellId, generation: this.generation },
       async message => {
         let changedPaths: string[] = []
@@ -531,7 +542,13 @@ export class CodeModeHost {
     }
     this.stopActive = stop
     this.fenceActive = reason => dispatch.stop(reason)
-    const deadline = setTimeout(stop, background ? BACKGROUND_WALL_TIME_MS : FOREGROUND_WALL_TIME_MS)
+    let hostTimedOut = false
+    const deadline = activeDeadline(background ? this.timeLimits.backgroundMs : this.timeLimits.foregroundMs, () => {
+      hostTimedOut = true
+      dispatch.stop('Script execution time limit reached')
+      controller.abort('Script execution time limit reached')
+    })
+    deadline.resume()
     context.abortController.signal.addEventListener('abort', stop, { once: true })
     if (context.abortController.signal.aborted) stop()
     const output: string[] = []
@@ -541,9 +558,13 @@ export class CodeModeHost {
       status: 'running', output: '', calls: dispatch.calls, changedFiles: [],
     }
     try {
-      this.runtime ??= createRuntime({ limits: { wallTimeMs: BACKGROUND_WALL_TIME_MS } })
+      this.runtime ??= createRuntime({ limits: { wallTimeMs: this.timeLimits.runtimeMs } })
       const outcome = await this.runtime.run({
         cellId, source: input.code, signal: controller.signal,
+        onHumanWaitChange: waiting => {
+          if (waiting) deadline.pause()
+          else deadline.resume()
+        },
         onOutput: event => { output.push(typeof event.value === 'string' ? event.value : JSON.stringify(event.value)) },
         dispatch: async (request, signal) => {
           if (request.cellId !== cellId) throw new Error('Cell identity has ended')
@@ -573,10 +594,16 @@ export class CodeModeHost {
       // VM termination is not settlement of host effects. Keep consuming original
       // tool iterators and retain their real receipts before returning this cell.
       await dispatch.settle()
-      result.status = dispatch.blockedReason ? (controller.signal.aborted ? 'cancelled' : dispatch.permissionBlocked ? 'blocked' : 'yielded') : outcome.status === 'ok' ? 'completed' : outcome.status === 'cancelled' ? 'cancelled' : 'failed'
-      if (outcome.error) result.error = outcome.error
-      if (outcome.error === 'Host request failed' && lastBridgeError) result.error = lastBridgeError
-      if (dispatch.blockedReason) result.error = dispatch.blockedReason
+      if (hostTimedOut || outcome.status === 'limit') {
+        result.status = 'failed'
+        result.error = hostTimedOut ? 'Script execution time limit reached' : outcome.error ?? 'Script runtime limit reached'
+      } else {
+        result.status = dispatch.blockedReason
+          ? (controller.signal.aborted ? 'cancelled' : dispatch.permissionBlocked ? 'blocked' : 'yielded')
+          : outcome.status === 'ok' ? 'completed' : outcome.status === 'cancelled' ? 'cancelled'
+          : outcome.status === 'error' && dispatch.permissionBlocked ? 'blocked' : 'failed'
+        result.error = dispatch.blockedReason ?? (outcome.error === 'Host request failed' ? lastBridgeError ?? outcome.error : outcome.error)
+      }
       if (outcome.status !== 'ok' && outcome.status !== 'error') {
         this.runtime?.dispose()
         this.runtime = undefined
@@ -595,7 +622,7 @@ export class CodeModeHost {
       dispatch.stop('Cell execution ended')
       result.calls = structuredClone(dispatch.calls)
       result.changedFiles = [...changedFiles.values()]
-      clearTimeout(deadline)
+      deadline.dispose()
       const selectedOutput = output.join('\n')
       const failed = result.calls.filter(call => call.status !== 'completed')
       const notice = [

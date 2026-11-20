@@ -19,9 +19,9 @@ export function evaluationIdFromReport(report: unknown): string {
 
 /** The original report remains a resume handle. Progress and budget live under
  * a shared, per-run ID so copies and stale reports observe the same state. */
-export async function openEvaluationLedger(id: string | undefined, verifyOnly: boolean) {
+export async function openEvaluationLedger(id: string | undefined, verifyOnly: boolean, root = join(getClaudeConfigHomeDir(), 'auto-mode-evaluations')) {
   const runId = id ?? randomUUID()
-  const directory = join(getClaudeConfigHomeDir(), 'auto-mode-evaluations', runId)
+  const directory = join(root, runId)
   const resumePath = join(directory, 'checkpoint.json')
   const checkpointPath = (revision: number) => revision === 0
     ? resumePath

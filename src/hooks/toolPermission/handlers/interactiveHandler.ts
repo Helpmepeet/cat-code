@@ -1,3 +1,4 @@
+import { recordContextualHumanApproval } from '../../../utils/permissions/contextualAuthorization.js'
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 import { randomUUID } from 'crypto'
@@ -64,11 +65,18 @@ function handleInteractivePermission(
     description,
     result,
     awaitAutomatedChecksBeforeDialog,
-    bridgeCallbacks,
-    channelCallbacks,
+    bridgeCallbacks: bridgeRoute,
+    channelCallbacks: channelRoute,
   } = params
 
-  const { resolve: resolveOnce, isResolved, claim } = createResolveOnce(resolve)
+  const humanOnly = result.humanOnly === true
+  const bridgeCallbacks = humanOnly ? undefined : bridgeRoute
+  const channelCallbacks = humanOnly ? undefined : channelRoute
+  ctx.toolUseContext.onHumanPermissionWait?.(true)
+  const { resolve: resolveOnce, isResolved, claim } = createResolveOnce<PermissionDecision>(decision => {
+    ctx.toolUseContext.onHumanPermissionWait?.(false)
+    resolve(decision)
+  })
   let userInteracted = false
   let checkmarkTransitionTimer: ReturnType<typeof setTimeout> | undefined
   // Hoisted so onDismissCheckmark (Esc during checkmark window) can also
@@ -170,10 +178,11 @@ function handleInteractivePermission(
       }
       channelUnsubscribe?.()
 
+      if (humanOnly) recordContextualHumanApproval(ctx.toolUseContext, ctx.toolUseID, updatedInput)
       resolveOnce(
         await ctx.handleUserAllow(
           updatedInput,
-          permissionUpdates,
+          humanOnly ? [] : permissionUpdates,
           feedback,
           permissionPromptStartTimeMs,
           contentBlocks,
@@ -200,10 +209,14 @@ function handleInteractivePermission(
         },
         { permissionPromptStartTimeMs },
       )
-      resolveOnce(markHumanPermissionRefusal(ctx.cancelAndAbort(feedback, undefined, contentBlocks)))
+      if (humanOnly && ctx.assistantMessage.codeMode && !feedback && !contentBlocks?.length) {
+        resolveOnce(markHumanPermissionRefusal({ behavior: 'ask', message: 'The user skipped this action.' }, 'skip'))
+      } else {
+        resolveOnce(markHumanPermissionRefusal(ctx.cancelAndAbort(feedback, undefined, contentBlocks), humanOnly ? 'correction' : true, humanOnly ? feedback : undefined))
+      }
     },
     async recheckPermission() {
-      if (isResolved()) return
+      if (isResolved() || humanOnly) return
       const freshResult = await hasPermissionsToUseTool(
         ctx.tool,
         ctx.input,
@@ -409,7 +422,7 @@ function handleInteractivePermission(
   }
 
   // Skip hooks if they were already awaited in the coordinator branch above
-  if (!awaitAutomatedChecksBeforeDialog) {
+  if (humanOnly || !awaitAutomatedChecksBeforeDialog) {
     // Execute PermissionRequest hooks asynchronously
     // If hook returns a decision before user responds, apply it
     void (async () => {
@@ -420,6 +433,7 @@ function handleInteractivePermission(
         result.suggestions,
         result.updatedInput,
         permissionPromptStartTimeMs,
+        humanOnly,
       )
       if (!hookDecision || !claim()) return
       if (bridgeCallbacks && bridgeRequestId) {
@@ -433,7 +447,7 @@ function handleInteractivePermission(
 
   // Execute bash classifier check asynchronously (if applicable)
   if (
-    feature('BASH_CLASSIFIER') &&
+    !humanOnly && feature('BASH_CLASSIFIER') &&
     result.pendingClassifierCheck &&
     ctx.tool.name === BASH_TOOL_NAME &&
     !awaitAutomatedChecksBeforeDialog

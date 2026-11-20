@@ -1,3 +1,6 @@
+import { issueUserApprovalReceipt } from '../services/tools/toolInputSecurity.js'
+import { recordContextualHumanApproval } from '../utils/permissions/contextualAuthorization.js'
+import { markHumanPermissionRefusal, markPermissionRequestCancelled } from '../utils/permissions/permissionDecisionContext.js'
 import { feature } from 'bun:bundle'
 import type {
   ElicitResult,
@@ -146,6 +149,7 @@ export class StructuredIO {
     Promise.resolve(null)
 
   private inputClosed = false
+  private humanOnlyPermissionPrompts = false
   private unexpectedResponseCallback?: (
     response: SDKControlResponse,
   ) => Promise<void>
@@ -528,6 +532,7 @@ export class StructuredIO {
           reject,
           schema,
         })
+        if (signal?.aborted) aborted()
       })
     } finally {
       if (signal) {
@@ -535,6 +540,10 @@ export class StructuredIO {
       }
       this.pendingRequests.delete(requestId)
     }
+  }
+
+  enableHumanOnlyPermissionPrompts(): void {
+    this.humanOnlyPermissionPrompts = true
   }
 
   createCanUseTool(
@@ -578,6 +587,31 @@ export class StructuredIO {
         return mainPermissionResult
       }
 
+      const humanOnly = mainPermissionResult.humanOnly === true
+      if (humanOnly && !this.humanOnlyPermissionPrompts) return {
+        ...mainPermissionResult, message: mainPermissionResult.message + ' This SDK host cannot resolve a human-only request.',
+      }
+      const heldInput = mainPermissionResult.updatedInput ?? input
+      const resolveSdkReply = (result: PermissionToolOutput) => {
+        if (humanOnly && (result.toolUseID && result.toolUseID !== toolUseID ||
+            (result.behavior === 'allow' ? result.decisionClassification !== 'user_temporary'
+              : result.decisionClassification !== 'user_reject'))) {
+          return { ...mainPermissionResult, message: 'The SDK host did not return a human decision for this action.' }
+        }
+        const decision = permissionPromptToolResultToPermissionDecision(
+          humanOnly && result.behavior === 'allow' ? { ...result, updatedPermissions: undefined } : result,
+          tool, heldInput, toolUseContext,
+        )
+        if (humanOnly && decision.behavior === 'allow' && decision.updatedInput) {
+          recordContextualHumanApproval(toolUseContext, toolUseID, decision.updatedInput)
+          issueUserApprovalReceipt(tool.name, decision.updatedInput, toolUseID)
+        }
+        if (humanOnly && result.behavior === 'deny' && !result.interrupt) {
+          markHumanPermissionRefusal(decision, result.message.trim() ? 'correction' : 'skip', result.message)
+        }
+        return decision
+      }
+
       // Run PermissionRequest hooks in parallel with the SDK permission
       // prompt.  In the terminal CLI, hooks race against the interactive
       // prompt so that e.g. a hook with --delay 20 doesn't block the UI.
@@ -591,30 +625,33 @@ export class StructuredIO {
       // Forward parent abort to our local controller
       const onParentAbort = () => hookAbortController.abort()
       parentSignal.addEventListener('abort', onParentAbort, { once: true })
-
+      if (parentSignal.aborted) onParentAbort()
+      toolUseContext.onHumanPermissionWait?.(true)
       try {
         // Start the hook evaluation (runs in background)
         const hookPromise = executePermissionRequestHooksForSDK(
           tool.name,
           toolUseID,
-          input,
+          heldInput,
           toolUseContext,
           mainPermissionResult.suggestions,
+          humanOnly,
         ).then(decision => ({ source: 'hook' as const, decision }))
 
         // Start the SDK permission prompt immediately (don't wait for hooks)
         const requestId = randomUUID()
         onPermissionPrompt?.(
-          buildRequiresActionDetails(tool, input, toolUseID, requestId),
+          buildRequiresActionDetails(tool, heldInput, toolUseID, requestId),
         )
         const sdkPromise = this.sendRequest<PermissionToolOutput>(
           {
             subtype: 'can_use_tool',
             tool_name: tool.name,
-            input,
+            input: heldInput,
+            ...(humanOnly && { human_only: true }),
             permission_suggestions: mainPermissionResult.suggestions,
             blocked_path: mainPermissionResult.blockedPath,
-            decision_reason: serializeDecisionReason(
+            decision_reason: humanOnly ? mainPermissionResult.message : serializeDecisionReason(
               mainPermissionResult.decisionReason,
             ),
             tool_use_id: toolUseID,
@@ -640,23 +677,17 @@ export class StructuredIO {
           }
           // Hook passed through (no decision) — wait for the SDK prompt
           const sdkResult = await sdkPromise
-          return permissionPromptToolResultToPermissionDecision(
-            sdkResult.result,
-            tool,
-            input,
-            toolUseContext,
-          )
+          return resolveSdkReply(sdkResult.result)
         }
 
         // SDK prompt responded first — use its result (hook still running
         // in background but its result will be ignored)
-        return permissionPromptToolResultToPermissionDecision(
-          winner.result,
-          tool,
-          input,
-          toolUseContext,
-        )
+        return resolveSdkReply(winner.result)
       } catch (error) {
+        if (humanOnly) {
+          const unresolved = { ...mainPermissionResult, message: parentSignal.aborted ? 'Approval was cancelled.' : 'Interactive SDK approval is unavailable.' }
+          return parentSignal.aborted ? markPermissionRequestCancelled(unresolved) : unresolved
+        }
         return permissionPromptToolResultToPermissionDecision(
           {
             behavior: 'deny',
@@ -673,6 +704,7 @@ export class StructuredIO {
         if (this.getPendingPermissionRequests().length === 0) {
           notifySessionStateChanged('running')
         }
+        toolUseContext.onHumanPermissionWait?.(false)
         parentSignal.removeEventListener('abort', onParentAbort)
       }
     }
@@ -810,6 +842,7 @@ async function executePermissionRequestHooksForSDK(
   input: Record<string, unknown>,
   toolUseContext: ToolUseContext,
   suggestions: PermissionUpdate[] | undefined,
+  humanOnly: boolean,
 ): Promise<PermissionDecision | undefined> {
   const appState = toolUseContext.getAppState()
   const permissionMode = appState.toolPermissionContext.mode
@@ -833,6 +866,7 @@ async function executePermissionRequestHooksForSDK(
     ) {
       const decision = hookResult.permissionRequestResult
       if (decision.behavior === 'allow') {
+        if (humanOnly) continue
         const finalInput = decision.updatedInput || input
 
         // Apply permission updates if provided by hook ("always allow")

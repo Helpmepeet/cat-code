@@ -64,6 +64,8 @@ export type MessageOrigin =
       name: string
       appSessionId: string
       creationPrompt?: true
+      /** Set by the host for CreatePeer. The receiving engine verifies the parent record. */
+      assignment?: { parentSessionId: string; userMessageId: string }
     }
 
 export type DeferredTerminalFailureV1 = {

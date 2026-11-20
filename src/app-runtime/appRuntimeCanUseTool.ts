@@ -1,3 +1,4 @@
+import { recordContextualHumanApproval } from '../utils/permissions/contextualAuthorization.js'
 import { randomUUID } from 'crypto'
 import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../Tool.js'
@@ -86,11 +87,13 @@ export function createAppRuntimeCanUseTool({
     const backgroundScript = toolUseContext.codeModeBackgroundCell && assistantMessage.isVirtual
       ? assistantMessage.codeMode
       : undefined
+    toolUseContext.onHumanPermissionWait?.(true)
     const result = await handler({
       requestId: createRequestId(),
       request: {
         subtype: 'can_use_tool',
         tool_name: tool.name,
+        ...(permissionResult.humanOnly && { human_only: true }),
         input: updatedInput,
         permission_suggestions: permissionResult.suggestions,
         blocked_path: permissionResult.blockedPath,
@@ -98,20 +101,25 @@ export function createAppRuntimeCanUseTool({
         tool_use_id: toolUseID,
         agent_id: toolUseContext.agentId,
       },
-    }, toolUseContext.abortController?.signal, backgroundScript)
+    }, toolUseContext.abortController?.signal, backgroundScript).finally(() => toolUseContext.onHumanPermissionWait?.(false))
 
     const decision = permissionPromptToolResultToPermissionDecision(
-      normalizePermissionResponse(result, updatedInput, toolUseID),
+      normalizePermissionResponse(result.behavior === 'allow' && permissionResult.humanOnly
+        ? { ...result, updatedPermissions: undefined } : result, updatedInput, toolUseID),
       tool,
       input,
       toolUseContext,
     )
     if (decision.behavior === 'deny') {
       if (isPermissionRequestCancelled(result)) markPermissionRequestCancelled(decision)
-      else markHumanPermissionRefusal(decision)
+      else markHumanPermissionRefusal(decision, result.behavior === 'deny' && permissionResult.humanOnly
+        ? (!result.interrupt && (!result.message.trim() || result.message === 'Denied by user') ? 'skip' : 'correction')
+        : true, result.behavior === 'deny' && permissionResult.humanOnly && result.message !== 'Denied by user'
+          ? result.message : undefined)
     }
     if (decision.behavior === 'allow' && decision.updatedInput !== undefined) {
       // The receipt must bind the normalized object returned to tool execution.
+      if (permissionResult.humanOnly) recordContextualHumanApproval(toolUseContext, toolUseID, decision.updatedInput)
       issueUserApprovalReceipt(tool.name, decision.updatedInput, toolUseID)
     }
     return decision

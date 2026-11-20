@@ -1,3 +1,4 @@
+import { activeDeadline } from './activeDeadline'
 import { DEFAULT_LIMITS, encode, type PersistentRuntime, type RuntimeCell, type RuntimeLimits, type RuntimeOptions, type RuntimeOutcome } from './protocol'
 export type * from './protocol'
 
@@ -15,7 +16,18 @@ export function createRuntime(options: RuntimeOptions = {}): PersistentRuntime {
   const worker = new Worker(new URL(import.meta.url.endsWith('.ts') ? './worker.ts' : './worker.js', import.meta.url).href)
   let dead = false
   const usedCells = new Set<string>()
-  let active: { cell: RuntimeCell; finish: (outcome: RuntimeOutcome) => void; controller: AbortController; calls: number; pending: number; output: number } | undefined
+  let active: {
+    cell: RuntimeCell
+    finish: (outcome: RuntimeOutcome) => void
+    controller: AbortController
+    calls: number
+    pending: number
+    output: number
+    waitRevision: number
+    waiting: boolean
+    requestedWait: boolean
+    deadline: ReturnType<typeof activeDeadline>
+  } | undefined
   let readyResolve: () => void
   let readyReject: (e: Error) => void
   const ready = new Promise<void>((resolve, reject) => { readyResolve = resolve; readyReject = reject })
@@ -39,7 +51,13 @@ export function createRuntime(options: RuntimeOptions = {}): PersistentRuntime {
     const owner = active
     if (!owner || data.cellId !== owner.cell.cellId) { stop('error', 'Stale runtime message'); return }
     try {
-      if (data.type === 'done') {
+      if (data.type === 'human-wait') {
+        if (owner.requestedWait && data.revision === owner.waitRevision && !owner.waiting) {
+          if (!owner.deadline.pause()) return
+          owner.waiting = true
+          owner.cell.onHumanWaitChange?.(true)
+        }
+      } else if (data.type === 'done') {
         if (owner.pending) throw new Error('Runtime completed with pending requests')
         owner.controller.abort()
         owner.finish({ cellId: owner.cell.cellId, status: data.error ? 'error' : 'ok', ...(data.error ? { error: String(data.error).slice(0, 2048) } : {}) })
@@ -78,18 +96,31 @@ export function createRuntime(options: RuntimeOptions = {}): PersistentRuntime {
       if (usedCells.size >= 10_000) { stop('limit', 'Runtime cell count limit'); return { cellId: cell.cellId, status: 'limit', error: 'Runtime cell count limit' } }
       usedCells.add(cell.cellId)
       return new Promise<RuntimeOutcome>(resolve => {
-        const timer = setTimeout(() => stop('limit', 'Cell wall time limit'), limits.wallTimeMs)
+        const deadline = activeDeadline(limits.wallTimeMs, () => stop('limit', 'Cell wall time limit'))
         const abort = () => stop('cancelled', 'Cell cancelled')
         const owner = {
           cell, controller: new AbortController(), calls: 0, pending: 0, output: 0,
-          finish(outcome: RuntimeOutcome) { clearTimeout(timer); cell.signal.removeEventListener('abort', abort); resolve(outcome) },
+          waitRevision: 0, waiting: false, requestedWait: false, deadline,
+          finish(outcome: RuntimeOutcome) { deadline.dispose(); cell.signal.removeEventListener('abort', abort); resolve(outcome) },
         }
         active = owner
+        deadline.resume()
         cell.signal.addEventListener('abort', abort, { once: true })
         void ready.then(() => {
           if (!dead && active === owner) worker.postMessage({ type: 'run', cellId: cell.cellId, source: cell.source })
         }).catch(() => stop('error', 'Runtime unavailable'))
       })
+    },
+    setHumanWait(cellId, waiting) {
+      const owner = active
+      if (dead || !owner || owner.cell.cellId !== cellId || owner.requestedWait === waiting) return
+      owner.requestedWait = waiting
+      worker.postMessage({ type: 'set-human-wait', cellId, waiting, revision: ++owner.waitRevision })
+      if (!waiting && owner.waiting) {
+        owner.waiting = false
+        owner.deadline.resume()
+        owner.cell.onHumanWaitChange?.(false)
+      }
     },
     dispose() { stop('disposed') },
   }

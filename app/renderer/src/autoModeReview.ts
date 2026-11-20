@@ -12,6 +12,7 @@ export function summarizeAutoModeReviews(reviews: readonly (AutoModeReview | und
   const blocked = calls.find(review => review.outcome === 'blocked')
   if (blocked) return { outcome: 'blocked', count: 1, text: `Blocked after ${duration((blocked.completedAt ?? blocked.startedAt) - blocked.startedAt)}` }
   if (calls.some(review => review.outcome === 'reviewing')) return { outcome: 'reviewing', count: calls.length, text: 'Auto mode is reviewing this' }
+  if (calls.some(review => review.outcome === 'asking')) return { outcome: 'asking', count: calls.length, text: 'Auto mode requested your decision' }
   if (calls.some(review => review.outcome === 'inconclusive')) return { outcome: 'inconclusive', count: calls.length, text: 'Auto mode review ended without a decision' }
   const elapsed = calls.reduce((sum, review) => sum + (review.completedAt ?? review.startedAt) - review.startedAt, 0)
   return { outcome: 'allowed', count: calls.length, text: calls.length > 1 ? `Reviewed ${calls.length} commands for ${duration(elapsed)}` : `Reviewed for ${duration(elapsed)}` }

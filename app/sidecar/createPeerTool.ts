@@ -20,6 +20,7 @@
 // differ are two type identities, which makes `tsc` exhaust its heap rather
 // than report an error. See the same note in `listPeersTool.ts` for the full
 // reason.
+import { findContextualAssignmentAnchor } from '../../src/utils/permissions/contextualAuthority.js'
 import { z } from '../../node_modules/zod/v4'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../src/Tool.js'
 import { lazySchema } from '../../src/utils/lazySchema.js'
@@ -224,7 +225,9 @@ export function createCreatePeerTool(
       const effort =
         input.effort ?? inheritedEffort(context.getAppState().effortValue)
 
+      const assignmentUserMessageId = findContextualAssignmentAnchor(context)
       const outcome = await requestHost('peer.create', {
+        ...(assignmentUserMessageId && { assignmentUserMessageId }),
         prompt: input.prompt,
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),

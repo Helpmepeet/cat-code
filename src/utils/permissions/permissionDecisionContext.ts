@@ -4,12 +4,20 @@ import type { PermissionDecision } from '../../types/permissions.js'
 import { getRecordedAutoModeOutcome } from './autoModeMeta.js'
 
 // These marks cannot be supplied through a tool argument or a permission wire response.
-const humanRefusals = new WeakSet<object>()
+type HumanRefusal = { disposition?: 'skip' | 'correction'; feedback?: string }
+const humanRefusals = new WeakMap<object, HumanRefusal>()
 const cancelledRequests = new WeakSet<object>()
 
-export function markHumanPermissionRefusal<T extends PermissionDecision>(decision: T): T {
-  humanRefusals.add(decision)
+export function markHumanPermissionRefusal<T extends PermissionDecision>(decision: T, disposition: 'skip' | 'correction' | true = true, feedback?: string): T {
+  humanRefusals.set(decision, {
+    disposition: disposition === true ? undefined : disposition,
+    feedback: feedback?.slice(0, 16_384),
+  })
   return decision
+}
+
+export function getHumanPermissionRefusal(decision: PermissionDecision): HumanRefusal | undefined {
+  return humanRefusals.get(decision)
 }
 
 export function markPermissionRequestCancelled<T extends object>(response: T): T {
@@ -26,7 +34,8 @@ export function permissionRefusalOutcome(decision: PermissionDecision, toolUseId
   if (humanRefusals.has(decision)) return 'rejected-by-user'
   if (decision.decisionReason?.type === 'classifier') {
     const outcome = getRecordedAutoModeOutcome(toolUseId)?.outcome
-    return outcome === 'automode-unavailable' || outcome === 'automode-parsing-error' || outcome === 'interrupted'
+    return outcome === 'automode-unavailable' || outcome === 'automode-parsing-error' || outcome === 'interrupted' ||
+        (decision.behavior === 'ask' && decision.humanOnly && outcome === 'unanswered')
       ? outcome : 'automode-blocked'
   }
   return decision.behavior === 'ask' ? 'unanswered' : 'blocked-by-permissions'
@@ -38,6 +47,9 @@ const permissionDecisionContextSchema = z.strictObject({
   assistantUuid: z.string().min(1),
   toolName: z.string().min(1),
   input: z.record(z.string(), z.unknown()),
+  humanDisposition: z.enum(['skip', 'correction']).optional(),
+  humanFeedback: z.string().max(16_384).optional(),
+  contextual: z.literal(true).optional(),
   outcome: z.enum(['rejected-by-user', 'unanswered', 'blocked-by-permissions', 'automode-blocked', 'automode-unavailable', 'automode-parsing-error', 'interrupted']),
 })
 

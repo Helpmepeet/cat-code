@@ -2795,6 +2795,7 @@ export function REPL({
       getAppState: () => store.getState(),
       setAppState,
       messages,
+      getCurrentAutoModeMessages: () => messagesRef.current,
       setMessages,
       updateFileHistoryState(updater: (prev: FileHistoryState) => FileHistoryState) {
         // Perf: skip the setState when the updater returns the same reference

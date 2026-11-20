@@ -347,3 +347,21 @@ for (const path of effortSnapshotPaths) {
     console.log(`Synced transcript message fields in ${path.slice(repoRoot.length + 1)}.`)
   }
 }
+
+const controls = readFileSync(join(repoRoot, 'src/entrypoints/sdk/controlSchemas.ts'), 'utf-8')
+for (const path of effortSnapshotPaths) {
+  const contents = readFileSync(path, 'utf-8')
+  let nextContents = contents
+  for (const [type, anchor, field, present] of [
+    ['SDKControlInitializeRequest', "  subtype: 'initialize'\n", '  humanOnlyPermissionPrompts?: boolean\n',
+      controls.includes('humanOnlyPermissionPrompts: z.boolean().optional()')],
+    ['SDKControlPermissionRequest', "  subtype: 'can_use_tool'\n", '  human_only?: true\n',
+      controls.includes('human_only: z.literal(true).optional()')],
+  ] as const) {
+    nextContents = replaceTypeDeclaration(nextContents, type, declaration => {
+      const withoutField = declaration.replace(field, '')
+      return present ? withoutField.replace(anchor, anchor + field) : withoutField
+    })
+  }
+  if (nextContents !== contents) writeFileSync(path, nextContents, 'utf-8')
+}

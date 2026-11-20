@@ -966,6 +966,7 @@ export type PeerDeliverMessage = {
    * sidecar infers from "is this the first message", because inferring it would
    * make the classifier's posture depend on a race.
    */
+  assignment?: { parentSessionId: string; userMessageId: string }
   untagged?: boolean
 }
 

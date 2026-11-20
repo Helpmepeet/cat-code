@@ -377,6 +377,13 @@ export async function resolveHookPermissionDecision(
       toolUseContext,
     )
     if (ruleCheck === null) {
+      if (toolUseContext.contextualAutoAttempt?.mode === 'experimental' &&
+          toolUseContext.contextualAutoAttempt.delegatedMutation) {
+        return {
+          decision: await canUseTool(tool, hookInput, toolUseContext, assistantMessage, toolUseID),
+          input: hookInput,
+        }
+      }
       if (interactionSatisfied) {
         issueHookInteractionReceipt(tool.name, hookInput, toolUseID)
       }
@@ -416,8 +423,11 @@ export async function resolveHookPermissionDecision(
 
   // No hook decision or 'ask' — normal permission flow, possibly with
   // forceDecision so the dialog shows the hook's ask message.
-  const forceDecision =
-    hookPermissionResult?.behavior === 'ask' ? hookPermissionResult : undefined
+  const forceDecision = hookPermissionResult?.behavior === 'ask'
+    ? toolUseContext.contextualAutoAttempt?.mode === 'experimental'
+      ? toolUseContext.contextualAutoAttempt.requireHuman(hookPermissionResult.message)
+      : hookPermissionResult
+    : undefined
   const askInput =
     hookPermissionResult?.behavior === 'ask' &&
     hookPermissionResult.updatedInput

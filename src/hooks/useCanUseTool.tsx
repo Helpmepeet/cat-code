@@ -103,7 +103,7 @@ function useCanUseTool(setToolUseConfirmQueue, setToolPermissionContext) {
             }
           case "ask":
             {
-              if (appState.toolPermissionContext.awaitAutomatedChecksBeforeDialog) {
+              if (!result.humanOnly && appState.toolPermissionContext.awaitAutomatedChecksBeforeDialog) {
                 const coordinatorDecision = await handleCoordinatorPermission({
                   ctx,
                   ...(feature("BASH_CLASSIFIER") ? {
@@ -121,7 +121,7 @@ function useCanUseTool(setToolUseConfirmQueue, setToolPermissionContext) {
               if (ctx.resolveIfAborted(resolve)) {
                 return;
               }
-              const swarmDecision = await handleSwarmWorkerPermission({
+              const swarmDecision = result.humanOnly ? null : await handleSwarmWorkerPermission({
                 ctx,
                 description,
                 ...(feature("BASH_CLASSIFIER") ? {
@@ -134,7 +134,7 @@ function useCanUseTool(setToolUseConfirmQueue, setToolPermissionContext) {
                 resolve(swarmDecision);
                 return;
               }
-              if (feature("BASH_CLASSIFIER") && result.pendingClassifierCheck && tool.name === BASH_TOOL_NAME && !appState.toolPermissionContext.awaitAutomatedChecksBeforeDialog) {
+              if (!result.humanOnly && feature("BASH_CLASSIFIER") && result.pendingClassifierCheck && tool.name === BASH_TOOL_NAME && !appState.toolPermissionContext.awaitAutomatedChecksBeforeDialog) {
                 const speculativePromise = peekSpeculativeClassifierCheck((input as {
                   command: string;
                 }).command);

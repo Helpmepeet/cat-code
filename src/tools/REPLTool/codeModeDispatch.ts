@@ -1,3 +1,4 @@
+import { mayChangeState } from '../../utils/permissions/contextualAuthorization.js'
 import { randomUUID } from 'node:crypto'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import { findToolByName, type ToolUseContext } from '../../Tool.js'
@@ -18,7 +19,7 @@ export type CodeModeCall = {
   name: string
   input: unknown
   inputOmission?: { bytes: number }
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'blocked'
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'blocked' | 'skipped'
   line?: number
   result?: unknown
   error?: string
@@ -48,6 +49,9 @@ function projectGuestData(value: unknown, limit: number): { complete: boolean; v
 export class CodeModeDispatch {
   private tail: Promise<void> = Promise.resolve()
   private readonly activeReads = new Set<Promise<void>>()
+  private readonly queued = new Set<CodeModeCall>()
+  private readonly activeCalls = new Set<CodeModeCall>()
+  private readonly waitingCalls = new Set<CodeModeCall>()
   private readonly readConcurrency = getScriptToolConcurrency()
   private fence?: string
   private inputBytes = 0
@@ -65,6 +69,18 @@ export class CodeModeDispatch {
     private readonly following: (message: Message) => Promise<void>,
     principals: ReadonlyMap<string, string> = captureCodeModeToolPrincipals(context.options.tools, context),
   ) { this.principals = new Map(principals) }
+
+  private syncHumanWait(): void {
+    this.context.onHumanPermissionWait?.(this.activeCalls.size > 0 && this.activeCalls.size === this.waitingCalls.size)
+  }
+
+  private cancelQueuedAfterSkip(): void {
+    for (const child of this.queued) {
+      if (!mayChangeState(findToolByName(this.context.options.tools, child.name))) continue
+      child.status = 'cancelled'
+      child.error = 'Queued action cancelled after the user skipped an earlier action.'
+    }
+  }
 
   stop(reason: string): void { this.fence ??= reason }
   get blockedReason(): string | undefined { return this.fence }
@@ -139,17 +155,32 @@ export class CodeModeDispatch {
     this.inputBytes += inputBytes
     const call: CodeModeCall = { toolUseId: `code_${randomUUID()}`, name, input, status: 'running', ...(line === undefined ? {} : { line }) }
     this.calls.push(call)
+    this.queued.add(call)
     const lane = Promise.withResolvers<void>()
-    const operation = this.tail.then(() => this.execute(call, nothrow, () => {
-      this.activeReads.add(settled)
-      lane.resolve()
-    })).catch(error => {
+    const operation = this.tail.then(() => {
+      this.queued.delete(call)
+      if (call.status === 'cancelled') {
+        const result = { content: call.error, isError: true, permission: 'cancelled' }
+        call.result = result
+        if (!nothrow) throw new Error(JSON.stringify(result))
+        return result
+      }
+      this.activeCalls.add(call)
+      this.syncHumanWait()
+      return this.execute(call, nothrow, () => {
+        this.activeReads.add(settled)
+        lane.resolve()
+      })
+    }).catch(error => {
       if (call.status === 'running') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence ? 'blocked' : 'failed'
       call.error = (error instanceof Error ? error.message : String(error)).slice(0, 2048)
       throw error
     })
     const finish = () => {
       this.activeReads.delete(settled)
+      this.activeCalls.delete(call)
+      this.waitingCalls.delete(call)
+      this.syncHumanWait()
       lane.resolve()
     }
     const settled = operation.then(finish, finish)
@@ -215,7 +246,7 @@ export class CodeModeDispatch {
           if (args[4] === toolUseId && decision.behavior === 'allow' && (decision.acceptFeedback || decision.contentBlocks?.length)) {
             this.stop('Approval feedback requires a new model decision before execution')
             this.context.codeModeHost?.fenceForInstructions('Approval feedback requires a new model decision before execution')
-            await this.following(createUserMessage({ content: [
+            await this.following(createUserMessage({ origin: { kind: 'human' }, content: [
               ...(decision.acceptFeedback ? [{ type: 'text' as const, text: decision.acceptFeedback }] : []),
               ...(decision.contentBlocks ?? []),
             ] }))
@@ -225,6 +256,11 @@ export class CodeModeDispatch {
         },
         {
           ...this.context, inlineCommand: undefined, preserveToolUseResults: true,
+          onHumanPermissionWait: waiting => {
+            if (waiting) this.waitingCalls.add(call)
+            else this.waitingCalls.delete(call)
+            this.syncHumanWait()
+          },
           getCodeModeDispatchFence: () => this.fence ?? (this.context.abortController.signal.aborted ? 'Code Mode execution cancelled' : undefined),
           messages: [...this.context.messages, assistant],
           onToolExecutionStart: () => {
@@ -325,13 +361,23 @@ export class CodeModeDispatch {
             }
             const auditMessage = Object.assign({ ...message, isVirtual: true as const }, { codeMode: identity })
             if ('permissionDecision' in message && message.permissionDecision) {
+              const { outcome, contextual, humanDisposition } = message.permissionDecision
               if (!this.fence?.startsWith('Approval feedback')) this.permissionBlocked = true
-              this.stop('Child permission decision requires a new model decision')
-              if (message.permissionDecision.outcome === 'rejected-by-user') {
-                const words = typeof paired.content === 'string' ? paired.content : JSON.stringify(content)
-                const refusal = createUserMessage({ content: `User refused a scripted ${tool.name} action. Feedback for that action:\n${words}`, isMeta: true })
-                this.context.codeModeHost?.fenceForInstructions('Human refusal requires a new model decision', [assistant, auditMessage, refusal])
-                await this.following(refusal)
+              if (humanDisposition === 'skip') {
+                this.cancelQueuedAfterSkip()
+                call.status = 'skipped'
+                result = { ...(result as Record<string, unknown>), permission: 'skipped' }
+              } else if (contextual && outcome === 'automode-blocked') {
+                this.cancelQueuedAfterSkip()
+                result = { ...(result as Record<string, unknown>), permission: 'denied' }
+              } else {
+                this.stop('Child permission decision requires a new model decision')
+                if (outcome === 'rejected-by-user') {
+                  const words = typeof paired.content === 'string' ? paired.content : JSON.stringify(content)
+                  const refusal = createUserMessage({ content: `User refused a scripted ${tool.name} action. Feedback for that action:\n${words}`, isMeta: true })
+                  this.context.codeModeHost?.fenceForInstructions('Human refusal requires a new model decision', [assistant, auditMessage, refusal])
+                  await this.following(refusal)
+                }
               }
             }
             await this.deliver(auditMessage)
@@ -360,7 +406,7 @@ export class CodeModeDispatch {
         }
       }
       if (!received) throw new Error('Child execution ended without a result receipt')
-      call.status = this.context.abortController.signal.aborted ? 'cancelled' : failed ? (this.fence && !overlapping ? 'blocked' : 'failed') : 'completed'
+      if (call.status !== 'skipped') call.status = this.context.abortController.signal.aborted ? 'cancelled' : failed ? (this.fence && !overlapping ? 'blocked' : 'failed') : 'completed'
       const resultBytes = Buffer.byteLength(JSON.stringify(result))
       call.result = this.resultBytes + resultBytes <= 128 * 1024
         ? result : { omitted: true, reason: 'Cumulative cell display-result limit', bytes: resultBytes }
@@ -368,7 +414,7 @@ export class CodeModeDispatch {
       if (failed && !nothrow) throw new Error(JSON.stringify(result).slice(0, 16_384))
       return result
     } catch (error) {
-      call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence && !overlapping ? 'blocked' : 'failed'
+      if (call.status !== 'skipped') call.status = this.context.abortController.signal.aborted ? 'cancelled' : this.fence && !overlapping ? 'blocked' : 'failed'
       call.error = error instanceof Error ? error.message : String(error)
       throw error
     }

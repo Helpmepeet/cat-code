@@ -23,6 +23,7 @@ export interface RuntimeCell {
   signal: AbortSignal
   dispatch: (request: RuntimeRequest, signal: AbortSignal) => Promise<JsonValue>
   onOutput?: (output: RuntimeOutput) => void
+  onHumanWaitChange?: (waiting: boolean) => void
 }
 // Host scheduling owns background receipts and worker/session identity. A runtime
 // admits only one active cell, requires unique IDs, and drains unawaited host calls.
@@ -32,7 +33,11 @@ export interface RuntimeCell {
 // are unsupported so every async assimilation point can be tracked.
 // wallTimeMs defaults to 10 minutes; background owners may select up to 2 hours.
 export interface RuntimeOptions { limits?: Partial<RuntimeLimits> }
-export interface PersistentRuntime { run(cell: RuntimeCell): Promise<RuntimeOutcome>; dispose(): void }
+export interface PersistentRuntime {
+  run(cell: RuntimeCell): Promise<RuntimeOutcome>
+  setHumanWait(cellId: string, waiting: boolean): void
+  dispose(): void
+}
 
 // Validate descriptors before serialization: do not invoke getters or toJSON in host data.
 export function encode(value: unknown, cap: number): string {

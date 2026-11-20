@@ -1,3 +1,4 @@
+import { createContextualAttempt } from '../../utils/permissions/contextualAuthorization.js'
 import { basename } from 'path'
 import { bindCodeModeWrapperApproval, captureCodeModePermissionPolicy } from '../../tools/REPLTool/codeModeAdmission.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
@@ -98,7 +99,7 @@ import {
 } from '../../utils/errors.js'
 import { executePermissionDeniedHooks } from '../../utils/hooks.js'
 import { logError } from '../../utils/log.js'
-import { checkRuleBasedPermissions } from '../../utils/permissions/permissions.js'
+import { checkRuleBasedPermissions, getEffectiveAutoMode } from '../../utils/permissions/permissions.js'
 import {
   CANCEL_MESSAGE,
   createProgressMessage,
@@ -113,7 +114,7 @@ import type {
 } from '../../utils/permissions/PermissionResult.js'
 import { recordAutoModeOutcome } from '../../utils/permissions/autoModeMeta.js'
 import { captureToolExecutionEvidence, type ToolExecutionEvidence } from '../../utils/permissions/toolExecutionEvidence.js'
-import { permissionRefusalOutcome, type PermissionDecisionContext } from '../../utils/permissions/permissionDecisionContext.js'
+import { getHumanPermissionRefusal, markHumanPermissionRefusal, permissionRefusalOutcome, type PermissionDecisionContext } from '../../utils/permissions/permissionDecisionContext.js'
 import { discardQuestionSelections } from '../../utils/questionSelections.js'
 import {
   startSessionActivity,
@@ -1302,6 +1303,9 @@ async function checkPermissionsAndCallTool(
   const permissionMode = toolUseContext.getAppState().toolPermissionContext.mode
   const scriptPolicyIsCurrent = !tool.isMcp && tool.name === REPL_TOOL_NAME
     ? captureCodeModePermissionPolicy(toolUseContext) : undefined
+  const contextualAttempt = getEffectiveAutoMode(toolUseContext.getAppState().toolPermissionContext) === null
+    ? undefined : await createContextualAttempt(tool, processedInput, toolUseContext, assistantMessage, toolUseID)
+  if (contextualAttempt) toolUseContext = { ...toolUseContext, contextualAutoAttempt: contextualAttempt }
   const permissionStart = Date.now()
 
   const resolved = await resolveHookPermissionDecision(
@@ -1421,9 +1425,17 @@ async function checkPermissionsAndCallTool(
     }
   }
 
+  if (contextualAttempt?.mode === 'experimental' && permissionDecision.behavior === 'allow' && userApprovalFeedback) {
+    permissionDecision = markHumanPermissionRefusal({
+      behavior: 'ask',
+      message: 'The user added instructions to this approval. Reconsider the action with their feedback.',
+      contentBlocks: [{ type: 'text', text: userApprovalFeedback }],
+    }, 'correction', userApprovalFeedback)
+  }
   if (permissionDecision.behavior !== 'allow') {
     await preparation.dispose()
     const outcome = permissionRefusalOutcome(permissionDecision, toolUseID)
+    const human = getHumanPermissionRefusal(permissionDecision)
     recordAutoModeOutcome(toolUseID, outcome)
     const requestedCall = assistantMessage.message.content.find(block =>
       block.type === 'tool_use' && block.id === toolUseID)
@@ -1434,6 +1446,10 @@ async function checkPermissionsAndCallTool(
       toolName: requestedCall?.type === 'tool_use' ? requestedCall.name : tool.name,
       input: structuredClone(processedInput),
       outcome,
+      ...(contextualAttempt?.mode === 'experimental' && { contextual: true as const }),
+      ...(human?.disposition && { humanDisposition: human.disposition }),
+      ...(human?.feedback && { humanFeedback: human.feedback }),
+
     }
     logForDebugging(`${tool.name} tool permission denied`)
     const decisionInfo = toolUseContext.toolDecisions?.get(toolUseID)
@@ -1821,7 +1837,9 @@ async function checkPermissionsAndCallTool(
     const workspaceReset = !tool.isMcp && ['JumpToProject', 'EnterWorktree', 'ExitWorktree'].includes(tool.name)
       ? toolUseContext.codeModeHost?.prepareWorkspaceChange() : undefined
     if (workspaceReset === 'stopping') throw new Error('Background scripts are stopping and their results must arrive before changing projects. Script variables were reset. End this turn and wait for those results before retrying.')
-    if (scriptPolicyIsCurrent) bindCodeModeWrapperApproval(executionContext, callInput, scriptPolicyIsCurrent)
+    if (scriptPolicyIsCurrent) bindCodeModeWrapperApproval(executionContext, callInput,
+      () => scriptPolicyIsCurrent() && (contextualAttempt?.mode !== 'experimental' ||
+        contextualAttempt.isCurrent(callInput, executionContext)))
     toolUseContext.onToolExecutionStart?.()
     startSessionActivity('tool_exec')
     sessionActivityStarted = true
@@ -1830,6 +1848,9 @@ async function checkPermissionsAndCallTool(
       toolExecutionEvidence = captureToolExecutionEvidence(
         toolUseID, parsedInput.data, callInput, userApprovalFeedback,
       )
+    }
+    if (contextualAttempt?.mode === 'experimental' && !contextualAttempt.release(callInput, executionContext)) {
+      throw new Error('The approval no longer matches the current action, assignment or permissions.')
     }
     const rawResult = await tool.call(
       callInput,

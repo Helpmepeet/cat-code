@@ -220,6 +220,7 @@ function createPermissionContext(
       suggestions: PermissionUpdate[] | undefined,
       updatedInput?: Record<string, unknown>,
       permissionPromptStartTimeMs?: number,
+      humanOnly = false,
     ): Promise<PermissionDecision | null> {
       for await (const hookResult of executePermissionRequestHooks(
         tool.name,
@@ -233,6 +234,7 @@ function createPermissionContext(
         if (hookResult.permissionRequestResult) {
           const decision = hookResult.permissionRequestResult
           if (decision.behavior === 'allow') {
+            if (humanOnly) continue
             const finalInput = decision.updatedInput ?? updatedInput ?? input
             return await this.handleHookAllow(
               finalInput,

@@ -28,7 +28,7 @@ export async function observedAccount(selection: string): Promise<PoolAccount> {
 }
 
 /** Explicit credential binding: no pool resolver, token refresh, SDK retry, or account failover. */
-export function pinnedCodexTransport(account: PoolAccount, model: string, maxRequests: number, reserveBackendSend: () => Promise<void>) {
+export function pinnedCodexTransport(account: PoolAccount, model: string, maxRequests: number, reserveBackendSend: () => Promise<void>, observeNative?: (body: string) => void) {
   if (!Number.isSafeInteger(maxRequests) || maxRequests < 1) throw new Error('A positive authorized reviewer request limit is required')
   if (!model.startsWith('gpt-')) throw new Error('Pinned evaluation transport currently supports GPT models only')
   requireExactCodexModel(model)
@@ -53,6 +53,7 @@ export function pinnedCodexTransport(account: PoolAccount, model: string, maxReq
       return Promise.reject(new Error('Evaluation blocked a send without an unused reservation'))
     }
     reservation.available = false
+    if (typeof init?.body === 'string') observeNative?.(init.body)
     backendSends++
     // The adapter holds credential-send authority only while invoking this
     // callback. Native fetch must start in the same synchronous call stack.

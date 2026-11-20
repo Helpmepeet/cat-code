@@ -200,6 +200,8 @@ export type PermissionAskDecision<
   Input extends { [key: string]: unknown } = { [key: string]: unknown },
 > = {
   behavior: 'ask'
+  /** Only the engine's interactive reply path can authorize this held action. */
+  humanOnly?: true
   message: string
   updatedInput?: Input
   decisionReason?: PermissionDecisionReason

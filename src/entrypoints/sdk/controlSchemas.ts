@@ -69,6 +69,7 @@ export const SDKControlInitializeRequestSchema = lazySchema(() =>
       agents: z.record(z.string(), AgentDefinitionSchema()).optional(),
       promptSuggestions: z.boolean().optional(),
       agentProgressSummaries: z.boolean().optional(),
+      humanOnlyPermissionPrompts: z.boolean().optional(),
     })
     .describe(
       'Initializes the SDK session with hooks, MCP servers, and agent configuration.',
@@ -111,6 +112,7 @@ export const SDKControlPermissionRequestSchema = lazySchema(() =>
       tool_name: z.string(),
       input: z.record(z.string(), z.unknown()),
       permission_suggestions: z.array(PermissionUpdateSchema()).optional(),
+      human_only: z.literal(true).optional(),
       blocked_path: z.string().optional(),
       decision_reason: z.string().optional(),
       title: z.string().optional(),

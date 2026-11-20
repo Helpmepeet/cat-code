@@ -280,6 +280,13 @@ export type ToolUseContext = {
   /** Instruction-file prefix supplied to the model that authored these calls.
    * Explicit null means no instruction prefix; undefined is a legacy caller. */
   autoModeInstructionContext?: string | null
+  /** Live session evidence for a review held across an asynchronous boundary. */
+  getCurrentAutoModeMessages?: () => readonly Message[]
+  contextualWorkerAssignment?: import('./utils/permissions/contextualAuthority.js').ContextualWorkerAssignment
+  contextualParentScriptSource?: string
+  contextualAutoAttempt?: import('./utils/permissions/contextualAuthorization.js').ContextualAutoAttempt
+  onHumanPermissionWait?: (waiting: boolean) => void
+
   /** Whether the tool's authoring response still reflects the current instructions. */
   isInstructionContextCurrent?: () => boolean
   /** Internal executor hook fired immediately before a permitted tool effect starts. */

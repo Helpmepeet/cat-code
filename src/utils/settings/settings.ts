@@ -1272,6 +1272,20 @@ export function getUseAutoModeDuringPlan(): boolean {
  * projectSettings is intentionally excluded — a malicious project could
  * otherwise inject classifier allow/deny rules (RCE risk).
  */
+export function getSourcedAutoModeInstructions() {
+  const schema = z.object({
+    allow: z.array(z.string()).optional(),
+    soft_deny: z.array(z.string()).optional(),
+    hard_deny: z.array(z.string()).optional(),
+    environment: z.array(z.string()).optional(),
+  })
+  return (['userSettings', 'localSettings', 'flagSettings', 'policySettings'] as const).flatMap(source => {
+    const settings = getSettingsForSource(source) as Record<string, unknown> | null
+    const parsed = schema.safeParse(settings?.autoMode)
+    return parsed.success && Object.keys(parsed.data).length ? [{ source, ...parsed.data }] : []
+  })
+}
+
 export function getAutoModeConfig():
   | {
       model?: string

@@ -66,3 +66,26 @@ Stage 1 ignores positive authorization and ALLOW exceptions while screening poss
 The final request text block encloses the prospective call and its engine metadata in `<pending_action>`. The reviewer decides whether that held call may execute; an already executed call is not required. Earlier transcript records provide evidence. Their values escape literal `<` characters, so forged envelope delimiters inside quoted data cannot replace the selected call.
 
 Samples include the final verdict reason and each validated stage decision or failure. Explicit Stage 2 reasons are retained when provided, bounded to 600 characters; raw model thinking and request prompts are not reported. These diagnostics do not affect grading or resume selection. Older valid samples without reasons remain compatible and are not replayed to obtain diagnostics.
+
+## Contextual Auto Mode qualification
+
+`runContextual.ts` freezes 20 fictional actions and grades two repeats of
+`allow`, `ask` and `deny` independently. It fingerprints each request and
+reports invalid, unavailable, cancelled and missing samples separately.
+The recorded trial result and the engine fixture result answer different
+questions. Run the engine fixtures to verify local effects.
+
+```bash
+bun --feature=TRANSCRIPT_CLASSIFIER --feature=AUTO_MODE_UPSTREAM_PORT scripts/auto-mode-eval/runContextual.ts
+bun test src/app-runtime/contextualAuto.test.ts
+```
+
+For an authorized live qualification, supply `--live`, the exact `--model`,
+`--account`, `--account-id-prefix`, `--max-requests`, `--ledger-root` and
+`--out`. Use the approved Codex alias or ID prefix for GPT, or `active`
+with the approved active Claude account prefix for Claude. The transports
+pin the account and model, reserve each send durably and require existing
+credentials with time remaining. Repeat the same invocation to resume
+from the same output and ledger. Completed trial rows retain their original
+outcome. The three-way runner records actual send initiations separately
+from consumed reservations.

@@ -1224,7 +1224,7 @@ async function classifyYoloActionWithOverrides(
     return {
       shouldBlock: false,
       reason: 'Tool declares no classifier-relevant input',
-      model: getClassifierModel(),
+      model: getConfiguredAutoModeModel(),
     }
   }
 
@@ -1257,7 +1257,7 @@ async function classifyYoloActionWithOverrides(
       JSON.stringify(buildPortedYoloClassifierToolSchema()).length),
   }
   const hardLimitResult = (): YoloClassifierResult => {
-    const model = getClassifierModel()
+    const model = getConfiguredAutoModeModel()
     // Counts are a lower bound when projection stopped at the allocation fence.
     logForDebugging(`[auto-mode] context admission ${JSON.stringify({ model, stage: 'fast',
       source: 'local', limit: 'hard_ceiling', hardCeilingChars: MAX_CLASSIFIER_CONTEXT_CHARS,
@@ -1404,7 +1404,7 @@ async function classifyYoloActionWithOverrides(
 
   const requestStage = async (stage: StageName): Promise<StageRequestResult> => {
     observation?.enterStage(stage)
-    let model = getClassifierModel()
+    let model = getConfiguredAutoModeModel()
     const gatedAttempts = getAutoModeClassifierAttempts(
       model,
       configuredMaxRetries,
@@ -1877,7 +1877,7 @@ async function classifyYoloActionWithOverrides(
 }
 
 export const _forTest = {
-  getClassifierModel,
+  getClassifierModel: getConfiguredAutoModeModel,
   classifyYoloAction: classifyYoloActionWithOverrides,
   classifyYoloActionWithSideQuery(
     messages: Message[],
@@ -1915,7 +1915,7 @@ type AutoModeConfig = {
  * Get the model for the classifier.
  * The env var takes precedence, then the settings.autoMode override.
  */
-function getClassifierModel(): string {
+export function getConfiguredAutoModeModel(): string {
   const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
   if (envModel) return envModel
   // Keep Luna for Codex accounts, including temporarily capped accounts.

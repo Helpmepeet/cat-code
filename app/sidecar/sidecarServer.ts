@@ -6419,7 +6419,10 @@ export class SidecarServer {
       kind: 'peer',
       name: delivered.from,
       appSessionId: delivered.fromSessionId,
-      ...(delivered.untagged === true ? { creationPrompt: true as const } : {}),
+      ...(delivered.untagged === true ? {
+        creationPrompt: true as const,
+        ...(delivered.assignment && { assignment: delivered.assignment }),
+      } : {}),
     }
     const value = delivered.untagged === true
       ? delivered.text
@@ -7548,6 +7551,7 @@ const peerDeliverMessageSchema = z.object({
     value => new TextEncoder().encode(value).byteLength <= MAX_PEER_TEXT_BYTES,
     { message: 'text is too long' },
   ),
+  assignment: z.object({ parentSessionId: z.uuid(), userMessageId: z.uuid() }).strict().optional(),
   untagged: z.boolean().optional(),
 })
 

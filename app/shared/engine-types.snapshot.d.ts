@@ -233,7 +233,7 @@ export type AppSessionEvent =
       attemptId: string
       startedAt: number
       completedAt?: number
-      outcome: 'reviewing' | 'allowed' | 'blocked' | 'inconclusive'
+      outcome: 'reviewing' | 'allowed' | 'blocked' | 'asking' | 'inconclusive'
       reason?: string
     }
   | {

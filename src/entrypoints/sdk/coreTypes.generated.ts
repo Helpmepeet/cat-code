@@ -509,6 +509,7 @@ export type SDKHookCallbackMatcher = {
 
 export type SDKControlInitializeRequest = {
   subtype: 'initialize'
+  humanOnlyPermissionPrompts?: boolean
   hooks?: Partial<Record<HookEvent, SDKHookCallbackMatcher[]>>
   sdkMcpServers?: string[]
   jsonSchema?: Record<string, unknown>
@@ -550,6 +551,7 @@ export type SDKControlInterruptRequest = {
 
 export type SDKControlPermissionRequest = {
   subtype: 'can_use_tool'
+  human_only?: true
   tool_name: string
   input: Record<string, unknown>
   permission_suggestions?: PermissionUpdate[]

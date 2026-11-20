@@ -766,6 +766,7 @@ export class QueryEngine {
       turnHandoff,
       pendingQuestions: this.questionRuntime?.registry,
       messages: this.mutableMessages,
+      getCurrentAutoModeMessages: () => this.mutableMessages,
       // Slash commands that mutate the message array (e.g. /force-snip)
       // call setMessages(fn).  In interactive mode this writes back to
       // AppState; in print mode we write back to mutableMessages so the

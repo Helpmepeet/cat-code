@@ -53,6 +53,8 @@ export type SideQueryOptions = {
   max_tokens?: number
   /** Max retries (default: 2) */
   maxRetries?: number
+  /** Contextual review qualifies the provider default request profile. */
+  contextualAutoReview?: boolean
   /** Abort signal */
   signal?: AbortSignal
   /** Skip the CLI system prompt prefix for queries with their own instructions. */
@@ -128,7 +130,7 @@ export function buildSideQueryRequest(opts: SideQueryOptions, provider: APIProvi
     thinkingConfig = { type: 'enabled', budget_tokens: Math.min(thinking, max_tokens - 1) }
   }
   const normalizedModel = normalizeModelStringForAPI(model)
-  const fastAutoModeReview = opts.querySource === 'auto_mode' && provider === 'openai' &&
+  const fastAutoModeReview = !opts.contextualAutoReview && opts.querySource === 'auto_mode' && provider === 'openai' &&
     normalizedModel.startsWith('gpt-') && getInitialSettings().autoModeFastMode === true &&
     isFastModeSupportedByModel(normalizedModel)
   return {
@@ -234,7 +236,7 @@ export async function sideQuery(opts: SideQueryOptions): Promise<BetaMessage> {
 
   const start = Date.now()
   let response: BetaMessage
-  if (provider === 'openai') {
+  if (provider === 'openai' && !opts.contextualAutoReview) {
     const generator = withRetry(
       createClient,
       createMessage,

@@ -1,3 +1,4 @@
+import { workerAssignment } from '../../utils/permissions/contextualAuthority.js'
 import { createAgentInterruptedTools } from '../../services/tools/agentInterruptedTools.js'
 import { getInterruptedToolRun, UNRESOLVED_TOOL_MESSAGE } from '../../services/tools/interruptedToolRun.js'
 import { feature } from 'bun:bundle'
@@ -1104,6 +1105,15 @@ async function* runAgentInCleanupScope({
       agentDefinition.criticalSystemReminder_EXPERIMENTAL,
     contentReplacementState,
   })
+
+  agentToolUseContext.getCurrentAutoModeMessages = undefined
+  agentToolUseContext.contextualWorkerAssignment = workerAssignment(
+    toolUseContext, initialMessages, promptMessages.flatMap(message =>
+      message.type !== 'user' ? [] : typeof message.message.content === 'string'
+        ? [message.message.content]
+        : message.message.content.flatMap(block => block.type === 'text' ? [block.text] : []),
+    ).join('\n'),
+  )
 
   // A prior worker run can finish before a delivery outcome addressed to this
   // worker is observed. Put those reports into the first resumed request so a

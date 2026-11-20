@@ -646,6 +646,23 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     context,
     observation ?? null,
   )
+  const attempt = context.contextualAutoAttempt?.id === toolUseID ? context.contextualAutoAttempt : undefined
+  if (attempt?.mode === 'experimental' && result.behavior !== 'deny') {
+    const mustAsk = result.behavior === 'ask' && (
+      result.decisionReason?.type === 'rule' ||
+      (result.decisionReason?.type === 'safetyCheck' && !result.decisionReason.classifierApprovable) ||
+      tool.requiresUserInteraction?.() ||
+      (feature('POWERSHELL_AUTO_MODE') ? false : tool.name === POWERSHELL_TOOL_NAME)
+    )
+    if (mustAsk && result.behavior === 'ask') {
+      // Dedicated interactive tools must continue to receive their typed answer.
+      if (tool.requiresUserInteraction?.() && !attempt.delegatedMutation) return result
+      return attempt.requireHuman(result.message)
+    }
+    // Delegate coverage through the held-action gate even when normal tool
+    // permissions already returned an allow.
+    if (attempt.delegatedMutation) return await attempt.review()
+  }
   observation?.markRoute('base')
   if (
     result.behavior === 'deny' &&
@@ -907,6 +924,24 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
             mode: 'auto',
           },
         }
+      }
+
+      if (attempt?.mode === 'experimental') {
+        const decision = await attempt.review()
+        if (decision.behavior === 'allow') persistDenialState(context, recordSuccess(denialState))
+        else if (decision.behavior === 'deny' && decision.decisionReason?.type === 'classifier') {
+          const updated = recordDenial(denialState)
+          persistDenialState(context, updated)
+          if (shouldFallbackToPrompting(updated)) {
+            // Escalate repeated denials through the existing user-facing approval surface.
+            return attempt.requireHuman('Auto Mode repeatedly denied actions in this chat. ' + decision.message)
+          }
+        }
+        return decision
+      }
+      if (attempt?.mode === 'shadow') {
+        const candidate = await attempt.review()
+        logForDebugging(`[contextual-auto-review] shadow disposition=${candidate.behavior}`)
       }
 
       // Run the auto mode classifier

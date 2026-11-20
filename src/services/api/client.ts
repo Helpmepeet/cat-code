@@ -1,6 +1,7 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import { assertSessionAccountRouteAvailable, SessionAccountRouteUnavailableError } from './sessionAccountRouting.js'
+import { readClaudeAccountAuthority } from './claudeAccountAuthority.js'
 import { createClaudeCredentialFetch } from './claudeCredentialUse.js'
 import {
   getActiveAccount,
@@ -390,6 +391,7 @@ export async function getAnthropicClient({
   codexLeaseOwnerType,
   codexConversationIdOverride,
   codexCredentialUse,
+  pinnedClaudeAccountId,
 }: {
   apiKey?: string
   maxRetries: number
@@ -401,6 +403,8 @@ export async function getAnthropicClient({
   codexLeaseOwnerType?: 'main' | 'subagent'
   codexConversationIdOverride?: string
   codexCredentialUse?: CodexCredentialUseOptions
+  /** Require this existing OAuth account without refreshing or falling back. */
+  pinnedClaudeAccountId?: string
 }): Promise<Anthropic> {
   const resolvedProvider = resolveRequestProvider(model, provider)
   if (resolvedProvider === 'openai' || resolvedProvider === 'firstParty') {
@@ -449,7 +453,15 @@ export async function getAnthropicClient({
   const usesStoredClaudeOAuth = canUseClaudeOAuth && hasSelectedStoredClaudeOAuthRoute()
   const usesClaudeOAuth = canUseClaudeOAuth && (usesStoredClaudeOAuth || isClaudeAISubscriber())
   let preparedOAuth: Extract<ClaudeOAuthPreparationResult, { status: 'ready' }> | undefined
-  if (usesStoredClaudeOAuth) {
+  if (pinnedClaudeAccountId) {
+    if (!canUseClaudeOAuth || maxRetries !== 0) throw new Error('Pinned Claude OAuth route unavailable')
+    const authority = readClaudeAccountAuthority(pinnedClaudeAccountId)
+    if (authority.status !== 'ready' || !authority.record.credentials ||
+        authority.record.credentials.expiresAt <= Date.now() + 300_000) {
+      throw new Error('Pinned Claude credentials unavailable without refresh')
+    }
+    preparedOAuth = { status: 'ready', handle: authority.handle, credentials: authority.record.credentials }
+  } else if (usesStoredClaudeOAuth) {
     logForDebugging('[API:auth] OAuth token check starting')
     const preparation = await prepareClaudeOAuthRequest()
     if (preparation.status !== 'ready') {

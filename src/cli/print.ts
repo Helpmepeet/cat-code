@@ -3222,6 +3222,7 @@ export function runHeadlessStreaming(
           sendControlResponseSuccess(message)
           break // exits for-await → falls through to inputClosed=true drain below
         } else if (message.request.subtype === 'initialize') {
+          if (!initialized && message.request.humanOnlyPermissionPrompts === true) structuredIO.enableHumanOnlyPermissionPrompts()
           // SDK MCP server names from the initialize message
           // Populated by both browser and ProcessTransport sessions
           if (Array.isArray(message.request.sdkMcpServers)) {
@@ -4554,6 +4555,10 @@ export function createCanUseToolWithPermissionPrompt(
       mainPermissionResult.behavior === 'deny'
     ) {
       return mainPermissionResult
+    }
+
+    if (mainPermissionResult.humanOnly) return {
+      ...mainPermissionResult, message: mainPermissionResult.message + ' This MCP permission tool cannot resolve a human-only request.',
     }
 
     // Race the permission prompt tool against the abort signal.
