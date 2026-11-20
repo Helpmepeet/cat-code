@@ -52,11 +52,7 @@ for (const state of ['matching', 'script', 'other-child', 'conflicting', 'no-anc
     expect(proof.postedNotices).toHaveLength(matching ? 1 : 0)
     expect(proof.prompts.map((p: any) => p.tool_name)).toEqual(matching || state === 'queued' ? ['Edit'] : ['Announce', 'Edit'])
     expect(proof.files.a).toBe('old')
-    const notice = proof.requests.find((row: any) => row.tool === 'Announce')
-    if (matching) expect(notice.content.assignment.parent).toContainEqual(expect.objectContaining({
-      id: notice.content.assignment.parentAnchor, origin: 'operator', text: 'Have a helper inspect a.txt. Leave it untouched.',
-    }))
-    else expect(notice).toBeUndefined()
+    expect(proof.requests.some((row: any) => row.tool === 'Announce')).toBe(false)
   }, 30_000)
 }
 
@@ -196,12 +192,41 @@ for (const delegated of [false, true]) {
   }, 30_000)
 }
 
-for (const scenario of ['native-browser-read', 'native-browser-screenshot']) test(`${scenario} runs without an Auto Mode review`, async () => {
+for (const scenario of ['native-browser-read', 'native-browser-screenshot', 'native-browser-scroll']) test(`${scenario} runs without an Auto Mode review`, async () => {
   const proof = await run(scenario)
   expect(proof.prompts).toHaveLength(0)
   expect(proof.requests).toHaveLength(0)
   expect(proof.browserCalls).toBe(1)
 }, 30_000)
+
+for (const scenario of ['mcp-browser-select', 'mcp-browser-extra', 'mcp-browser-impostor', 'mcp-browser-used']) {
+  test(scenario, async () => {
+    const proof = await run(scenario)
+    expect(proof.requests).toHaveLength(scenario === 'mcp-browser-used' ? 2 : scenario === 'mcp-browser-select' ? 0 : 1)
+    expect(proof.prompts).toHaveLength(0)
+    expect(proof.mcpCalls).toHaveLength(scenario === 'mcp-browser-used' ? 2 : 1)
+  }, 30_000)
+}
+
+for (const scenario of ['native-scope-notice', 'native-scope-notice-sensitive', 'native-scope-notice-private',
+  'native-fingerprint', 'native-fingerprint-rule', 'native-scope-notice-ask', 'native-fingerprint-write', 'native-helper-goal', 'native-helper-symbol']) {
+  test(scenario, async () => {
+    const proof = await run(scenario)
+    const held = ['native-scope-notice-sensitive', 'native-fingerprint-write'].includes(scenario)
+    expect(proof.requests.length).toBe(held ? 1 : 0)
+    expect(proof.prompts).toHaveLength(scenario === 'native-scope-notice-ask' ? 1 : 0)
+    if (scenario === 'native-scope-notice') expect(proof.postedNotices).toHaveLength(1)
+    if (scenario === 'native-scope-notice-private' || scenario === 'native-scope-notice-ask') expect(proof.postedNotices).toHaveLength(0)
+    if (scenario.startsWith('native-fingerprint') && scenario !== 'native-fingerprint-write') {
+      const result = proof.transcript.find((row: any) =>
+        row.message?.content?.some?.((block: any) => block.tool_use_id === 'action-0'))
+      expect(Boolean(result?.message.content[0].is_error)).toBe(scenario === 'native-fingerprint-rule')
+      if (scenario === 'native-fingerprint') expect(result.toolUseResult.stdout.trim()).toMatch(/^[a-f0-9]{40}$/)
+    }
+    if (scenario.startsWith('native-helper-')) expect(proof.transcript.some((row: any) =>
+      row.sourceToolAssistantUUID && row.message?.content?.some?.((block: any) => block.type === 'tool_result'))).toBe(true)
+  }, 30_000)
+}
 
 test('desktop Auto Mode loads an ordinary skill without optional arguments or a review', async () => {
   const proof = await run('native-skill')

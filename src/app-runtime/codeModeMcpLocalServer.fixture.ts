@@ -5,8 +5,12 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 const root = process.env.CODE_MODE_TEST_ROOT!
 if (!root || process.env.HOME !== root) throw new Error('Isolated MCP server required')
-const server = new Server({ name: 'isolated-records', version: '1' }, { capabilities: { tools: {} } })
+const browser = process.env.FIXTURE_BROWSER === '1'
+const server = new Server({ name: browser ? 'codex-computer-use-mcp' : 'isolated-records', version: '1' }, { capabilities: { tools: {} } })
 server.setRequestHandler(ListToolsRequestSchema, async () => {
+  if (browser) return { tools: [{ name: 'js', inputSchema: {
+    type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
+  } }] }
   const refreshed = await readFile(join(root, 'schema-refreshed'), 'utf8').then(() => true, () => false)
   return { tools: ['records', 'save'].map(name => ({
   name, description: `Synthetic ${name} integration tool`,
@@ -15,6 +19,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 })) }
 })
 server.setRequestHandler(CallToolRequestSchema, async request => {
+  if (browser && request.params.name === 'js') {
+    await appendFile(join(root, 'mcp-calls.jsonl'), JSON.stringify(request.params) + '\n')
+    return { content: [{ type: 'text', text: 'Fixture browser handle' }] }
+  }
   const narrowed = process.env.CODE_MODE_MCP_NARROW === '1' &&
     await readFile(join(root, 'schema-refreshed'), 'utf8').then(() => true, () => false)
   if (narrowed && request.params.arguments?.key !== 'replacement') {

@@ -1,3 +1,8 @@
+import { statSync } from 'node:fs'
+import { resolve } from 'node:path'
+import type { ToolPermissionContext } from '../../Tool.js'
+import { checkReadPermissionForTool, pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js'
+import { FileReadTool } from '../FileReadTool/FileReadTool.js'
 import type { z } from 'zod/v4'
 import { getOriginalCwd } from '../../bootstrap/state.js'
 import {
@@ -21,7 +26,7 @@ import {
   RIPGREP_READ_ONLY_COMMANDS,
   validateFlags,
 } from '../../utils/shell/readOnlyCommandValidation.js'
-import type { BashTool } from './BashTool.js'
+import type { BashTool, BashToolInput } from './BashTool.js'
 import { isNormalizedGitCommand } from './bashPermissions.js'
 import { bashCommandIsSafe_DEPRECATED } from './bashSecurity.js'
 import {
@@ -1872,6 +1877,26 @@ function commandWritesToGitInternalPaths(command: string): boolean {
   return false
 }
 
+/** A single literal file, with no object writes, filters, expansions or redirections. */
+export function checkWorkspaceFingerprint(
+  input: BashToolInput,
+  compoundCommandHasCd: boolean,
+  policy: ToolPermissionContext,
+): PermissionResult | undefined {
+  if (input.dangerouslyDisableSandbox || input.run_in_background || input.work_lifetime === 'service') return
+  const match = /^git hash-object --no-filters -- (?:([A-Za-z0-9_./-]+)|'([^'\r\n]+)'|"([A-Za-z0-9_./ -]+)")$/u.exec(input.command)
+  if (!match || match[0] !== input.command) return
+  const file = resolve(getCwd(), (match[1] ?? match[2] ?? match[3])!)
+  const read = checkReadPermissionForTool(FileReadTool, { file_path: file }, policy)
+  if (read.behavior === 'deny' || (read.behavior === 'ask' && read.decisionReason?.type === 'rule')) return read
+  if (read.behavior !== 'allow' || !pathInAllowedWorkingPath(file, policy)) return
+  try {
+    if (!statSync(file).isFile()) return
+  } catch { return }
+  // All the normal shell and git-environment checks still apply to this literal.
+  return checkCommandConstraints(input, compoundCommandHasCd, true)
+}
+
 /**
  * Checks read-only constraints for bash commands.
  * This is the single exported function that validates whether a command is read-only.
@@ -1885,6 +1910,14 @@ function commandWritesToGitInternalPaths(command: string): boolean {
 export function checkReadOnlyConstraints(
   input: z.infer<typeof BashTool.inputSchema>,
   compoundCommandHasCd: boolean,
+): PermissionResult {
+  return checkCommandConstraints(input, compoundCommandHasCd, false)
+}
+
+function checkCommandConstraints(
+  input: z.infer<typeof BashTool.inputSchema>,
+  compoundCommandHasCd: boolean,
+  literalFingerprint: boolean,
 ): PermissionResult {
   const { command } = input
 
@@ -1980,7 +2013,7 @@ export function checkReadOnlyConstraints(
       if (bashCommandIsSafe_DEPRECATED(subcmd).behavior !== 'passthrough') {
         return false
       }
-      return isCommandReadOnly(subcmd)
+      return (literalFingerprint && subcmd === command) || isCommandReadOnly(subcmd)
     },
   )
 

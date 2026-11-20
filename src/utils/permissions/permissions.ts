@@ -667,6 +667,14 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       if (tool.requiresUserInteraction?.() && !attempt.delegatedMutation) return result
       return attempt.requireHuman(result.message)
     }
+    if (result.behavior === 'ask') {
+      const notice = attempt.routineNoticeDecision()
+      if (notice) {
+        observation?.markRoute(notice.behavior === 'allow' ? 'allowlist' : 'guard')
+        return notice
+      }
+      if (tool.name === 'LSP' && !tool.isMcp && !tool.mcpInfo) return reviewContextually()
+    }
     // These tools can affect another session even when their own checks return
     // allow. Only an explicit permission rule can skip review for the lead.
     const changesPeerSession = !tool.isMcp && !tool.mcpInfo &&

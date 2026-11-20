@@ -1,3 +1,4 @@
+import { admitBrowserSelection, bindBrowserSelection, checkBrowserDispatch } from './browserSelection.js'
 import { createCombinedAbortSignal } from '../../utils/combinedAbortSignal.js'
 import { feature } from 'bun:bundle'
 import { isCuaDriverMcpServer } from '../../utils/cuaDriver/guard.js'
@@ -1987,7 +1988,12 @@ export const fetchToolsForClient = memoizeWithLRU(
               return classifyMcpToolForCollapse(client.name, tool.name)
             },
             inputJSONSchema: tool.inputSchema as Tool['inputJSONSchema'],
-            async checkPermissions() {
+            async checkPermissions(input, context) {
+              const attempt = context.contextualAutoAttempt
+              if (attempt?.mode === 'experimental' && !attempt.delegatedMutation &&
+                  admitBrowserSelection(client, tool.name, input, attempt)) {
+                return { behavior: 'allow' as const, updatedInput: input }
+              }
               return {
                 behavior: 'passthrough' as const,
                 message: 'MCPTool requires permission.',
@@ -2020,6 +2026,8 @@ export const fetchToolsForClient = memoizeWithLRU(
               const meta = toolUseId
                 ? { 'claudecode/toolUseId': toolUseId }
                 : {}
+
+              bindBrowserSelection(context.contextualAutoAttempt, meta)
 
               // Emit progress when tool starts
               if (onProgress && toolUseId) {
@@ -3314,6 +3322,7 @@ async function callMCPTool({
 
     const dispatch = (nativeTool: string, nativeArgs: Record<string, unknown>) => {
       requestAbort.signal.throwIfAborted()
+      checkBrowserDispatch(connection, nativeTool, nativeArgs, meta)
       return client.callTool(
         {
           name: nativeTool,

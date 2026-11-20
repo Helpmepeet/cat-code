@@ -20,17 +20,24 @@ const mainEditScript = scenario === 'native-edit-script'
 const directPatch = scenario === 'native-patch'
 const loadSkill = scenario === 'native-skill'
 const browserAction = scenario.startsWith('native-browser')
+const scopeNotice = scenario.startsWith('native-scope-notice')
+const fingerprint = scenario.startsWith('native-fingerprint')
+const helperRead = scenario === 'native-helper-goal' || scenario === 'native-helper-symbol'
 const browserPeer = scenario === 'native-browser-peer'
 const browserRead = scenario === 'native-browser-read' || scenario === 'native-browser-screenshot'
 const browserReadTool = scenario === 'native-browser-screenshot' ? 'BrowserScreenshot' : 'BrowserRead'
-const browserTarget = 'click button Save changes on localhost:3000'
+const browserScroll = scenario === 'native-browser-scroll'
+const browserTarget = browserScroll ? 'scroll on localhost:3000' : 'click button Save changes on localhost:3000'
 const nativeAction = browserAction
-  ? browserRead ? { name: browserReadTool, input: {} } : { name: 'BrowserAct', input: { action: 'click', ref: 'g1-e12' } }
+  ? browserRead ? { name: browserReadTool, input: {} } : { name: 'BrowserAct', input: browserScroll ? { action: 'scroll', ref: 'g1-e12', deltaY: 120 } : { action: 'click', ref: 'g1-e12' } }
   : directPatch
     ? { name: 'apply_patch', input: { input: '*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch' } }
     : undefined
 const localMcp = scenario.startsWith('mcp-')
-const mcpAction = { name: 'mcp__fixture__records', input: { key: 'sample' } }
+const selectBrowser = scenario.startsWith('mcp-browser-')
+const mcpAction = selectBrowser ? { name: 'mcp__codex-computer-use__js', input: {
+  code: 'let iab = await cua.getBrowser({ id: "iab" });' + (scenario === 'mcp-browser-extra' ? ' await iab.tabs.list();' : ''),
+} } : { name: 'mcp__fixture__records', input: { key: 'sample' } }
 const mcpWithdrawal = scenario === 'mcp-withdrawal'
 const peerAction = scenario === 'main-peer-create'
   ? { name: 'CreatePeer', input: { prompt: 'Update the file.' } }
@@ -79,7 +86,12 @@ const code = scenario === 'skip-queued'
     : mainEditScript ? `await ${call('a')};`
     : routed ? `const pending = ${JSON.stringify(candidate)}; await tools.call(pending); output("helper completed");`
     : `await tools.call(${JSON.stringify(command)}); output("after approval");`
-const submitted = localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
+const submitted = scopeNotice ? { name: 'Announce', input: {
+  doing: 'Fix native Chrome launches from sandboxed tests; may edit test helpers.', touches: ['a.txt'],
+  ...(scenario === 'native-scope-notice-sensitive' && { note: 'Personal information for the work log' }),
+} } : helperRead ? scenario === 'native-helper-goal' ? { name: 'GetGoal', input: {} } :
+  { name: 'LSP', input: { operation: 'documentSymbol', filePath: 'a.txt', line: 1, character: 1 } } :
+  fingerprint ? { name: 'Bash', input: { command: scenario === 'native-fingerprint-write' ? 'git hash-object -w -- a.txt' : 'git hash-object --no-filters -- a.txt' } } : localMcp ? mcpAction : loadSkill ? { name: 'Skill', input: { skill: 'fixture-auto-skill' } }
   : nativeAction ?? peerAction ?? (questionReply ? question
   : routed && scenario.endsWith('-direct') || scenario.startsWith('direct-') || compacted || (mainEdit && !mainEditScript) || scenario.startsWith('trial-')
     ? (scenario.startsWith('direct-') || scenario.startsWith('trial-') ? command : candidate)
@@ -184,8 +196,9 @@ mock.module('../services/api/client.js', () => ({
     }
     const index = modelCalls++
     const cleanupCall = cleanup ? cleanupPlan[index] : undefined
-    const invocation = repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply) && index === 1
-    const main = repeatedDenials ? command : cleanupCall || (legacyNotice
+    const invocation = repeatedDenials ? index < 5 : cleanup ? Boolean(cleanupCall) : index === 0 || (scenario === 'skip-queued' || legacyNotice || questionReply || scenario === 'mcp-browser-used') && index === 1
+    const main = scenario === 'mcp-browser-used' ? (index === 0
+      ? { name: mcpAction.name, input: { code: 'await cua.getState()' } } : mcpAction) : repeatedDenials ? command : cleanupCall || (legacyNotice
       ? index === 0 ? { name: 'Announce', input: { doing: 'Working on a.txt', touches: ['a.txt'] } } : action('a')
       : index === 0 ? submitted
       : questionReply ? command
@@ -227,6 +240,8 @@ if ((routed && scenario.endsWith('-direct')) || backgroundWithdrawal || lateCorr
 }
 let state = getDefaultAppState()
 state = { ...state, toolPermissionContext: { ...state.toolPermissionContext, mode: 'auto', isAutoModeAvailable: true,
+  ...(scenario === 'native-fingerprint-rule' && { alwaysDenyRules: { session: ['Read(./a.txt)'] } }),
+  ...(scenario === 'native-scope-notice-ask' && { alwaysAskRules: { session: ['Announce'] } }),
   ...(scenario.startsWith('skip-') && { alwaysAskRules: { session: ['Edit'] } }),
 } }
 const assignment = candidate.name === 'Edit' ? 'Update a.txt from old to new.' : 'Append one effect marker to effects.txt.'
@@ -301,10 +316,17 @@ if (nativeAction || cleanup) {
 let cleanupMcp: (() => Promise<void>) | undefined
 if (localMcp) {
   const { connectToServer, fetchToolsForClient } = await import('../services/mcp/client.js')
-  const client = await connectToServer('fixture', {
-    type: 'stdio', command: process.execPath,
-    args: [new URL('./codeModeMcpLocalServer.fixture.ts', import.meta.url).pathname],
-    env: { HOME: root, CODE_MODE_TEST_ROOT: root }, scope: 'local',
+  const fixtureServer = new URL('./codeModeMcpLocalServer.fixture.ts', import.meta.url)
+  const adapter = join(root, '.local/share/codex-computer-use-mcp/local/dist/mcp-server.js')
+  if (selectBrowser) {
+    await mkdir(dirname(adapter), { recursive: true })
+    await writeFile(adapter, `import(${JSON.stringify(fixtureServer.href)});`)
+  }
+  const client = await connectToServer(selectBrowser ? 'codex-computer-use' : 'fixture', {
+    type: 'stdio', command: selectBrowser ? Bun.which('node')! : process.execPath,
+    args: [selectBrowser ? adapter : fixtureServer.pathname],
+    env: { HOME: root, CODE_MODE_TEST_ROOT: root, ...(selectBrowser && { FIXTURE_BROWSER: '1' }) },
+    scope: selectBrowser && scenario !== 'mcp-browser-impostor' ? 'user' : 'local',
   })
   if (client.type !== 'connected') throw new Error('Local MCP fixture failed to connect')
   cleanupMcp = client.cleanup
@@ -320,6 +342,19 @@ if (peerAction) {
     return { ok: false, error: { code: 'unavailable', message: 'Unexpected peer request' } }
   }
   config.tools = [...config.tools, createCreatePeerTool(host), createSendToPeerTool(host)]
+}
+if (scopeNotice) {
+  const { createAnnounceTool } = await import('../../app/sidecar/announceTool.js')
+  config.tools = [...config.tools, createAnnounceTool(async (_verb, args) => {
+    postedNotices.push(args)
+    return { ok: true, value: { postedAt: Date.now() } } as never
+  })]
+}
+if (helperRead) {
+  const { GetGoalTool } = await import('../tools/GetGoalTool/GetGoalTool.js')
+  const { LSPTool } = await import('../tools/LSPTool/LSPTool.js')
+  config.tools = [...config.tools, GetGoalTool, LSPTool]
+  config.peerCreatorAppSessionId = creatorAppId
 }
 if (legacyNotice) {
   const { getTranscriptPathForSession } = await import('../utils/sessionStorage.js')
@@ -423,12 +458,17 @@ async function awaitHook() {
 }
 
 if (surface === 'desktop') {
-  if (cleanup) await controller.submit('yep. up to you')
+  if (helperRead) await controller.submit('Inspect the goal and symbols.', {
+    origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId, creationPrompt: true },
+  })
+  else if (scopeNotice) await controller.submit(scenario === 'native-scope-notice-private' ?
+    'Investigate the Chrome crash. Keep this investigation private.' : 'Investigate and fix the Chrome crash.')
+  else if (cleanup) await controller.submit('yep. up to you')
   else if (localMcp) await controller.submit('Look up the sample record.', scenario === 'mcp-peer-only' ? {
     origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId },
   } : undefined)
   else if (nativeAction) await controller.submit(browserAction
-    ? browserRead ? 'Read the browser page.' : 'Click Save in the browser.'
+    ? browserRead ? 'Read the browser page.' : browserScroll ? 'Scroll down in the browser.' : 'Click Save in the browser.'
     : 'Update a.txt from old to new.',
     browserPeer ? { origin: { kind: 'peer', name: 'Lead', appSessionId: creatorAppId } } : undefined)
   else if (legacyNotice) await controller.submit('Inspect a.txt.', { origin: {

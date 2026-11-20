@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve, relative, isAbsolute } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { feature } from 'bun:bundle'
 import type { Tool, ToolPermissionContext, ToolUseContext } from '../../Tool.js'
@@ -32,14 +32,14 @@ import { getConfiguredAutoModeModel } from './yoloClassifier.js'
 type Input = Record<string, unknown>
 type ReviewMode = 'shadow' | 'experimental'
 const readOnlyTools = new Set(['Read', 'Glob', 'Grep', 'LS', 'ListPeers', 'ReadPeer',
-  'ListProjects', 'TaskList', 'TaskGet', 'TaskOutput', 'ToolSearch', 'BrowserRead', 'BrowserScreenshot'])
+  'GetGoal', 'CronList', 'LSP', 'ListProjects', 'TaskList', 'TaskGet', 'TaskOutput', 'ToolSearch', 'BrowserRead', 'BrowserScreenshot'])
 
 function isMcpTool(tool: Tool): boolean {
   return Boolean(tool.isMcp || tool.mcpInfo)
 }
 
-export function mayChangeState(tool: Tool | undefined): boolean {
-  return !tool || isMcpTool(tool) || !readOnlyTools.has(tool.name)
+export function mayChangeState(tool: Tool | undefined, input?: Input): boolean {
+  return !tool || isMcpTool(tool) || (!readOnlyTools.has(tool.name) && !(tool.name === 'BrowserAct' && input?.action === 'scroll'))
 }
 
 const toolEffects: Readonly<Record<string, string>> = {
@@ -103,6 +103,42 @@ function containsCredentialMaterial(value: string): boolean {
     scanForSecrets(value).length > 0
 }
 
+// Roster text is visible to other sessions. Only ordinary development vocabulary
+// and workspace paths take the automatic route; open-ended prose goes to review.
+const scopeWords = new Set((
+  'a the this and or for to of in on with from under before after only may will ' +
+  'work working inspect inspecting investigate investigating check checking read reading review reviewing ' +
+  'fix fixing update updating change changing add adding remove removing edit editing implement implementing ' +
+  'run running verify verifying test testing debug debugging build building clean cleaning refactor refactoring ' +
+  'docs documentation source code project workspace shared local native sandbox sandboxed browser chrome codex cat ' +
+  'launch launches layout renderer desktop app ui api tool tools script scripts runner helper helpers ' +
+  'regression tests checks file files config configuration component components module modules permission permissions'
+).split(' '))
+
+function routineScopeNotice(input: Input, cwd: string): boolean {
+  if (input.note !== undefined || typeof input.doing !== 'string' ||
+      !/^[a-z0-9_ .,;/-]+$/iu.test(input.doing) || containsCredentialMaterial(JSON.stringify(input))) return false
+  const namedPaths = Array.isArray(input.touches) ? input.touches : []
+  if (!input.doing.split(/[ ,;]+/u).every(word => !word || scopeWords.has(word.toLowerCase().replace(/\.$/u, '')) ||
+      namedPaths.includes(word) || word.split(/[-/]/u).every(part => scopeWords.has(part.toLowerCase())))) return false
+  if (input.touches === undefined) return true
+  if (!Array.isArray(input.touches)) return false
+  return input.touches.every(touch => {
+    if (typeof touch !== 'string' || isAbsolute(touch) || touch.split('/').some(part => part.startsWith('.')) ||
+        !/^[a-z0-9_./ -]+$/iu.test(touch)) return false
+    // A scope can name an area, e.g. "app/renderer browser test files".
+    const inWorkspace = (path: string) => {
+      try {
+        const rel = relative(realpathSync(cwd), realpathSync(resolve(cwd, path)))
+        return rel !== '..' && !rel.startsWith('../') && !isAbsolute(rel)
+      } catch { return false }
+    }
+    if (inWorkspace(touch)) return true
+    const [area, ...words] = touch.split(/ +/u)
+    return words.length > 0 && inWorkspace(area!) && words.every(word => scopeWords.has(word.toLowerCase()))
+  })
+}
+
 function readMode(): ReviewMode | undefined {
   if (!feature('AUTO_MODE_CONTEXTUAL_REVIEW')) return undefined
   const value = process.env.CLAUDE_CODE_CONTEXTUAL_AUTO_MODE
@@ -139,14 +175,14 @@ export async function createContextualAttempt(
   const { cellId, generation } = assistant.codeMode ?? {}
   // Script admission grants the isolated interpreter a single invocation.
   // The calls it submits carry their own delegated mutation gate.
-  const delegatedMutation = authority.delegated && mayChangeState(tool) && (mcp || tool.name !== 'REPL')
+  const delegatedMutation = authority.delegated && mayChangeState(tool, snapshot) && (mcp || tool.name !== 'REPL')
   const latestOperator = authority.conversation.findLast(row => row.origin === 'operator' && row.id)
   const newOperatorTurn = latestOperator && !context.messages.some(row => row.uuid === latestOperator.id)
   let reviewedInstructions = false
   let attemptId = randomUUID()
   let startedAt = Date.now()
   let review: Promise<PermissionDecision> | undefined
-  let modelAllowed = false
+  let actionAllowed = false
   let requiresHuman = false
   let humanAllowed = false
   let used = false
@@ -194,7 +230,9 @@ export async function createContextualAttempt(
   }
 
   function needsInstructionReview(): boolean {
-    return (!reviewedInstructions && (newOperatorTurn || authority.pendingConversation.length > 0)) ||
+    // A busy prompt drains at the end of the tool round. Reads already allowed
+    // under this snapshot may finish it; later authority changes still fence release.
+    return (mayChangeState(tool, snapshot) && !reviewedInstructions && (newOperatorTurn || authority.pendingConversation.length > 0)) ||
       !isDeepStrictEqual(readContextualAuthority(context, peerParent), authority)
   }
 
@@ -207,6 +245,29 @@ export async function createContextualAttempt(
       ...(reason && { reason }) }
     persistAutoModeReview(event)
     recordToolReview(event)
+  }
+
+  function routineNoticeDecision(): PermissionDecision | undefined {
+    if (mcp || tool.name !== 'Announce' || !authority.verifiedSource ||
+        (authority.delegated && !authority.assignment?.parentAnchor) ||
+        authority.stopped || authority.pendingOperatorInput || needsInstructionReview()) return undefined
+    const operatorText = [...(authority.assignment?.parent ?? []), ...authority.conversation]
+      .filter(row => row.origin === 'operator').map(row => row.text)
+    const restrictions = instructions.flatMap(row => [...(row.soft_deny ?? []), ...(row.hard_deny ?? [])])
+    if (/(?:^|[.!?]\s+)(?:keep (?:this|this (?:task|work|investigation)) private|(?:do not|don't) (?:announce (?:this|this task)|post (?:a |the )?scope notice))[.!]?$/iu.test(operatorText.at(-1) ?? '')) {
+      const reason = 'You asked to keep this work off the workspace roster.'
+      return { behavior: 'deny', message: reason, decisionReason: { type: 'other', reason } }
+    }
+    // Other audience constraints may depend on the task. The ordinary GUI
+    // posting policy concerns a different destination from the workspace roster.
+    const audience = /\b(?:privat\w*|confidential\w*|secret\w*|disclos\w*|announc\w*|roster|peers?|share|sharing|broadcast|notify|quiet\w*|tell|mention|between us|to yourself)\b/iu
+    const workspace = workspaceInstructionsForReview(context.autoModeInstructionContext) ?? ''
+    const standingNoticeRule = /(?:do not|never|must not|avoid|ask before|only|don't)[^.!?\n]{0,100}\b(?:announc\w*|roster|post to peers|share with peers)\b|\b(?:announc\w*|roster)\b[^.!?\n]{0,80}(?:forbidden|prohibited|approval|private)/iu
+    if ([...operatorText, authority.assignment?.text ?? ''].some(text => audience.test(text) || /\bpost(?:ing)?\b/iu.test(text)) ||
+        restrictions.some(text => audience.test(text)) || standingNoticeRule.test(workspace) ||
+        !routineScopeNotice(input, action.cwd)) return undefined
+    actionAllowed = true
+    return { behavior: 'allow', updatedInput: input, decisionReason: { type: 'mode', mode: 'auto' } }
   }
 
   function ask(reason: string, outcome: 'asking' | 'inconclusive' = 'asking'): PermissionDecision {
@@ -240,7 +301,7 @@ export async function createContextualAttempt(
       reviewer = { kind: 'contextual', version: CONTEXTUAL_REVIEW_VERSION }
       lastOutcome = undefined
     }
-    modelAllowed = false
+    actionAllowed = false
   }
 
   async function reviewHeldAction(canRefresh = true): Promise<PermissionDecision> {
@@ -316,12 +377,12 @@ export async function createContextualAttempt(
       if (mode === 'experimental') recordAutoModeOutcome(toolUseId, 'automode-blocked')
       return { behavior: 'deny', message: reason, decisionReason }
     }
-    modelAllowed = true
+    actionAllowed = true
     return { behavior: 'allow', updatedInput: input, decisionReason }
   }
 
   return {
-    id: toolUseId, mode, delegatedMutation,
+    id: toolUseId, mode, delegatedMutation, routineNoticeDecision,
     get requiresHuman() { return requiresHuman },
     review: () => review ??= reviewHeldAction(),
     needsInstructionReview,
@@ -336,7 +397,7 @@ export async function createContextualAttempt(
     isCurrent: current,
     release(candidate: Input, releasedContext: ToolUseContext): boolean {
       if (used) return false
-      if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation && !modelAllowed)) {
+      if (!current(candidate, releasedContext) || (requiresHuman ? !humanAllowed : delegatedMutation && !actionAllowed)) {
         stale('The approval no longer matches the current action, assignment or permissions.')
         return false
       }

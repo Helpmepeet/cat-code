@@ -1,3 +1,4 @@
+import { checkWorkspaceFingerprint } from './readOnlyValidation.js'
 import { feature } from 'bun:bundle'
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import type { z } from 'zod/v4'
@@ -54,6 +55,7 @@ import { permissionRuleValueToString } from '../../utils/permissions/permissionR
 import {
   createPermissionRequestMessage,
   getRuleByContentsForTool,
+  getEffectiveAutoMode,
 } from '../../utils/permissions/permissions.js'
 import {
   parsePermissionRule,
@@ -2602,6 +2604,10 @@ export async function bashToolHasPermission(
       compoundCommandHasCd,
       astSubcommands !== null,
     )
+    if (result.behavior === 'passthrough' && getEffectiveAutoMode(appState.toolPermissionContext)) {
+      const fingerprint = checkWorkspaceFingerprint(input, compoundCommandHasCd, appState.toolPermissionContext)
+      if (fingerprint) return fingerprint
+    }
     // If command wasn't allowed, attach pending classifier check.
     // At this point, 'ask' can only come from bashCommandIsSafe (security check inside
     // checkCommandAndSuggestRules), NOT from explicit ask rules - those were already
